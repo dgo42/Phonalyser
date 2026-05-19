@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — FFT analyser</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>FFT analyser</h1>
+  <p>Real-time spectrum + harmonic-distortion / noise-floor measurements.
+     The analyser reads samples from the same shared capture buffer the
+     oscilloscope uses; pressing the FFT's red record button doesn't
+     change the scope's recording state.  Analysis cadence scales with
+     overlap — at 87.5 % overlap the spectrum refreshes ~8× per FFT
+     window.</p>
+
+  <p><img src="img/FFT Analyser.png" alt="FFT analyser view"/></p>
+
+  <h2 id="fft-buttons">Header buttons</h2>
+  <p>Row of square buttons at the top-left of the spectrum canvas.</p>
+
+  <h3 id="fft-channel-pick">L / R channel pick</h3>
+  <p>Toggle buttons that pick which channel feeds the analyser.  The
+     selected channel's button takes a coloured background.  Switching
+     the channel resets the averaging buffer (see
+     <a href="#fft-reset">Reset</a>) so the new channel's spectrum
+     starts clean.</p>
+
+  <h3 id="fft-autosetup">Auto-Setup</h3>
+  <p>Arrows-to-circle icon.  Frames the spectrum around the detected
+     fundamental: frequency range ±1 decade, magnitude top =
+     fundamental + 10 dB, bottom = noise floor − 20 dB.  Requires at
+     least one published analysis.</p>
+
+  <h3 id="fft-maximize">Maximise</h3>
+  <p>Arrows-from-circle icon (the inverse of Auto-Setup).  Sets the
+     widest sensible view: frequency 0 .. Nyquist, top = +20 dB,
+     bottom = noise floor − 30 dB.  The top is signal-independent so
+     the visible range stays stable even when the signal changes.
+     Works with or without a current analysis (falls back to default
+     bottom when no result yet).</p>
+
+  <h3 id="fft-distortion-toggle">Distortion table</h3>
+  <p>Chart-column icon.  Shows / hides the
+     <a href="#fft-thd-table">THD info table</a> overlay in the
+     top-left of the canvas.  When the table is extracted to the
+     external window (see below) this toggle still works — it
+     controls whether the table is visible at all.</p>
+
+  <h3 id="fft-reset">Reset averaging buffer</h3>
+  <p>Red rotate-left icon.  Wipes the averaging buffer + retained
+     spectrum and rearms the gauge.  The next analysis starts from
+     zero — and clamps to fresh samples only, so old pre-reset
+     audio doesn't bleed into the new average.</p>
+
+  <h3 id="fft-external">External-window toggle</h3>
+  <p>Window-restore icon.  Pops the THD info table out into a
+     separate tool window so it can sit alongside the spectrum
+     without occupying canvas space.  Closing the tool window
+     returns the table to the main view.</p>
+
+  <h2 id="fft-plot">Plot region</h2>
+
+  <h3 id="fft-spectrum-trace">Spectrum trace</h3>
+  <p>Polyline of the FFT magnitude across the visible frequency
+     range.  Trace colour, line width, and chart background are
+     configurable in Preferences → FFT.  At high zoom levels the
+     trace stays continuous: per-pixel envelopes collapse multiple
+     bins into one vertical line, with adjacent known columns
+     connected by a polyline segment.</p>
+
+  <h3 id="fft-harmonic-dots">Harmonic dots</h3>
+  <p>Red dots painted at the detected fundamental and harmonic
+     frequencies.  Their diameter is configurable.  When the
+     <a href="#fft-manual-fund">manual-fundamental override</a> is
+     enabled, only the fundamental dot lifts to the override value;
+     the rest stay on the calibrated dBV scale.</p>
+
+  <h3 id="fft-distortion-band-dim">Distortion-band dimming</h3>
+  <p>Light-grey overlay covering frequencies outside the active
+     <a href="#fft-dist-min">distortion HP</a> /
+     <a href="#fft-dist-max">distortion LP</a> window.  Shows at a
+     glance which bands are excluded from the SNR / THD+N
+     integration.</p>
+
+  <h3 id="fft-crosshair">Crosshair</h3>
+  <p>Hovering shows a dashed grey cross at the pointer.  The
+     floating readout near the cursor lists the frequency (<code>f =
+     …</code>) and the magnitude at that bin in the active unit
+     (<code>|m| = …</code>).  Suppressed when the pointer is over a
+     header button.</p>
+
+  <h3 id="fft-scrollbar-freq">Horizontal scrollbar (frequency)</h3>
+  <p>Pans/zooms the visible frequency range.  Drag the thumb to pan;
+     resize the thumb to zoom.  The thumb width reflects the visible
+     fraction of the full range.</p>
+
+  <h3 id="fft-scrollbar-mag">Vertical scrollbar (magnitude)</h3>
+  <p>Same behaviour for the magnitude axis.  Ctrl+wheel inside the
+     canvas zooms the magnitude axis around the cursor; the
+     scrollbar updates accordingly.</p>
+
+  <h2 id="fft-thd-table">THD info table</h2>
+  <p>Compact overlay in the top-left of the canvas (or in the
+     external tool window when extracted).  All values use the
+     current magnitude unit.  Hidden by the
+     <a href="#fft-distortion-toggle">distortion-table toggle</a>.</p>
+
+  <h3 id="fft-thd-header">Header row</h3>
+  <p>Bold first row: fundamental frequency (4-decimal Hz), dBFS, dBV.
+     The dBV column uses the manual override when set; otherwise the
+     ADC calibration anchor.</p>
+
+  <h3 id="fft-thd-span">Span row</h3>
+  <p><code>Span: 900 .. 9500 Hz</code> — the band over which SNR /
+     THD+N integrate.  <code>Span: full</code> when both distortion
+     bounds are disabled.</p>
+
+  <h3 id="fft-thd-clock">Clock-difference row (ΔF / Δosc)</h3>
+  <p><code>ΔF: +0.001 Hz (+0.97 ppm)  Δosc: +23.79 Hz @ 24.576 MHz</code>.
+     Shows the measured fundamental's deviation from the expected
+     value (from the generator) — both in absolute Hz and ppm, and
+     translated back to the master oscillator if the sample rate is
+     a recognised 44.1 / 48 kHz family.  Visible only when
+     <a href="#fft-fund-from-gen">"Get fundamental from generator"</a>
+     is on AND the generator is actually running.</p>
+
+  <h3 id="fft-thd-nplusd">N+D (noise + distortion)</h3>
+  <p>Total non-fundamental power, A-weighted.  The "A" suffix flags
+     the A-weighting.</p>
+
+  <h3 id="fft-thd-n">N (noise-only)</h3>
+  <p>Noise power with the detected harmonics removed from the band.</p>
+
+  <h3 id="fft-thd-snr">SNR</h3>
+  <p>Signal-to-noise ratio in dB.  Defined against the noise-only
+     band (above).</p>
+
+  <h3 id="fft-thd-thd">THD H2..N</h3>
+  <p>Total harmonic distortion as a percentage of the fundamental,
+     summed over harmonics 2 through N (where N =
+     <a href="#fft-max-harmonic-thd">Max harmonic for THD</a>).</p>
+
+  <h3 id="fft-thd-thdpn">THD+N</h3>
+  <p>Total harmonic distortion + noise.  Same numerator as N+D,
+     normalised to the fundamental.</p>
+
+  <h3 id="fft-thd-enob">ENOB</h3>
+  <p>Effective number of bits = (SINAD − 1.76) / 6.02.  Reflects the
+     ADC + capture chain's combined dynamic range.</p>
+
+  <h3 id="fft-thd-harmonics">Harmonic rows (H2 .. HN)</h3>
+  <p>Two harmonics per row.  Each entry shows the harmonic's dBV
+     level and its percentage of the fundamental.  Number of rows is
+     governed by
+     <a href="#fft-max-harmonic-calc">Max harmonic to calculate</a>.</p>
+
+  <h2 id="fft-toolbar">Top toolbar (above the tab strip)</h2>
+
+  <h3 id="fft-fill-percent">Fill percent</h3>
+  <p>Small percentage label (e.g. <code>100%</code>) showing how
+     much of the next FFT window has accumulated since the previous
+     analysis.  Reaches 100 % at the moment the analyser fires.</p>
+
+  <h3 id="fft-averages-count">Averages count</h3>
+  <p>e.g. <code>32 average(s)</code>.  Number of frames currently
+     contributing to the displayed average.  Caps at the configured
+     <a href="#fft-averages">Averages</a> in fixed-window mode;
+     keeps climbing in "forever" mode.</p>
+
+  <h3 id="fft-mag-unit">Magnitude unit</h3>
+  <p>Combo at the top-right with four choices:
+     <code>V</code>, <code>V/√Hz</code>, <code>dBV</code>, <code>dBFS</code>.
+     Switching unit converts the axis labels and scrollbar bounds in
+     place — the visible signal stays at the same screen Y.</p>
+
+  <h3 id="fft-record-button">Record button</h3>
+  <p>Red round toggle, anchored to the right end of the toolbar row.
+     Pressing it acquires a reference on the shared capture device
+     and starts the FFT worker.  The scope's record state is
+     independent — both panes can record together.  The button
+     stays visible even when the toolbar tabs are collapsed.</p>
+
+  <h2 id="fft-tabs">Toolbar tabs</h2>
+
+  <h3 id="fft-tab-settings">FFT settings tab</h3>
+  <p><img src="img/FFT - FFT settings.png" alt="FFT settings tab"/></p>
+
+  <h4 id="fft-length">FFT length</h4>
+  <p>Power-of-two combo from 8 k to 4 M.  Bigger windows give finer
+     bin resolution but slower update rate and more memory.  1 M at
+     384 kHz gives ~0.37 Hz/bin.</p>
+
+  <h4 id="fft-window">Window</h4>
+  <p>Combo: Rectangular, Hann, Blackman-Harris 4, Blackman-Harris 7,
+     Flat-top, Dolph-Chebyshev 150, Dolph-Chebyshev 200.  Each
+     trades main-lobe width against side-lobe level.  Use Hann or
+     Blackman-Harris for general work; Flat-top for accurate
+     amplitude readout of an isolated tone; the DC150 / DC200
+     variants for very deep side-lobe suppression.</p>
+
+  <h4 id="fft-overlap">Overlap</h4>
+  <p>0 %, 50 %, 75 %, 87.5 %, 92.75 %.  Increases the update rate at
+     the cost of CPU — successive analyses share that fraction of
+     samples.  87.5 % is a common sweet spot.</p>
+
+  <h4 id="fft-averages">Averages</h4>
+  <p>Step selector — 2, 4, 8, 16, 32, ∞ (forever).  Number of
+     overlapped frames averaged per published spectrum.  Higher
+     values reduce noise variance but slow response.  "Forever"
+     accumulates indefinitely — combine with
+     <a href="#fft-stop-after">Stop after</a> to cap.</p>
+
+  <h4 id="fft-stop-after">Stop after N</h4>
+  <p>Checkbox + numeric field.  When the checkbox is on, the
+     analyser pauses after N analyses (Forever averages mode only).
+     Reset re-arms it.</p>
+
+  <h4 id="fft-fund-from-gen">Get fundamental from generator</h4>
+  <p>When on, the analyser locks onto the generator's current
+     frequency instead of auto-detecting the loudest peak.  Lets you
+     measure deeply notched fundamentals where a louder mains spur
+     would otherwise win the detection.  Automatically ignored when
+     the generator isn't running.</p>
+
+  <h4 id="fft-log-freq-axis">Logarithmic frequency axis</h4>
+  <p>Frequency axis switches between log and linear.  Log is
+     traditional for audio (constant pixel-per-octave); linear is
+     useful for spotting evenly-spaced spurs.</p>
+
+  <h3 id="fft-tab-thd">THD settings tab</h3>
+  <p><img src="img/FFT - THD settings.png" alt="THD settings tab"/></p>
+
+  <h4 id="fft-dist-min">Enable distortion HP + frequency</h4>
+  <p>Checkbox + frequency field.  Sets the lower bound of the band
+     used for SNR / N+D integration.  Below this frequency, noise
+     and spurs are excluded — useful for ignoring mains hum and
+     DC-near artifacts.</p>
+
+  <h4 id="fft-dist-max">Enable distortion LP + frequency</h4>
+  <p>Same, for the upper bound.  Excludes high-frequency noise above
+     the band of interest (e.g. above 20 kHz for audio).</p>
+
+  <h4 id="fft-manual-fund">Manual fundamental</h4>
+  <p>Checkbox + value + unit.  When on, the analyser treats this
+     value as the fundamental's TRUE dBV instead of inferring it
+     from the calibrated ADC.  The chart's fundamental dot and the
+     <a href="#fft-thd-header">THD-table header dBV column</a> shift
+     to this value; other bins and the harmonic-row dBV values stay
+     on the calibrated scale.  Useful when an external twin-T notch
+     attenuates the fundamental but you know its true level.</p>
+
+  <h4 id="fft-max-harmonic-thd">Max harmonic for THD</h4>
+  <p>Numeric (2 .. 9).  Upper bound of the harmonics summed into the
+     THD ratio.  THD H2..N uses harmonics 2 through this number.</p>
+
+  <h4 id="fft-max-harmonic-calc">Max harmonic to calculate</h4>
+  <p>Numeric (≥ <a href="#fft-max-harmonic-thd">Max harmonic for
+     THD</a>).  How many harmonics to detect and list in the
+     <a href="#fft-thd-harmonics">harmonic rows</a> — independent of
+     how many feed the THD ratio.</p>
+
+  <h4 id="fft-coherent-avg">Coherent averaging</h4>
+  <p>Checkbox.  When on, complex spectra are averaged (so random-
+     phase noise cancels across frames, lowering the noise floor
+     ~3 dB per doubling of frame count).  When off, power spectra
+     are averaged (noise variance reduces but the floor doesn't
+     drop).  Coherent requires phase-stable signals — sweeps and
+     impulse responses use power averaging instead.</p>
+
+  <h3 id="fft-tab-presets">Presets tab</h3>
+  <p><img src="img/FFT - Presets.png" alt="Presets tab"/></p>
+  <p>Editable combo + Save / Load / Delete buttons.  Save captures
+     every FFT setting plus every THD setting plus the channel,
+     magnitude unit, freq/mag axis ranges and log/lin flag.  Load
+     restores them.  Delete asks for confirmation.</p>
+
+  <h3 id="fft-tab-utility">Utility tab</h3>
+  <p><img src="img/FFT - Utility.png" alt="Utility tab"/></p>
+
+  <h4 id="fft-utility-screenshot">Screenshot</h4>
+  <p>Camera icon.  Renders the FFT pane to a PNG at a chosen
+     resolution.  Same offscreen-shell trick the oscilloscope uses,
+     so the snapshot is a real layout (no bitmap scaling).</p>
+
+  <h4 id="fft-utility-calibrate">ADC calibration</h4>
+  <p>Crosshair icon.  Opens the same calibration dialog the scope's
+     Utility tab uses.</p>
+
+  <h3 id="fft-tab-save">Save to… tab</h3>
+  <p><img src="img/FFT - Save to.png" alt="Save to tab"/></p>
+  <p>Writes the current spectrum to a CSV.  Path field + browse + Save.
+     Format: <code>frequency_hz;magnitude_dBV;phase_deg</code>, one row
+     per bin.</p>
+
+  <h3 id="fft-tab-load">Load from… tab</h3>
+  <p>Reads a previously-saved CSV and renders it as a static
+     spectrum overlay.  Useful for comparing measurements taken at
+     different times or under different conditions.</p>
+
+  <h2 id="fft-tiles">Tab tiles</h2>
+  <p>Each tab's label has a row of small pill-shaped tiles below it
+     showing the live state of the tab's main controls.  Tiles are
+     passive but their tooltips describe the value.</p>
+
+  <h3 id="fft-tile-length">FFT-length tile</h3>
+  <p>Short form on the <b>FFT settings</b> tab — e.g. <code>1M</code>,
+     <code>64k</code>.</p>
+
+  <h3 id="fft-tile-window">Window tile</h3>
+  <p>3-letter abbreviation — <code>RECT</code>, <code>HANN</code>,
+     <code>BH4</code>, <code>BH7</code>, <code>FLAT</code>,
+     <code>DC150</code>, <code>DC200</code>.</p>
+
+  <h3 id="fft-tile-overlap">Overlap tile</h3>
+  <p>Percentage (<code>87.5%</code>).</p>
+
+  <h3 id="fft-tile-averages">Averages tile</h3>
+  <p>Number with × suffix (<code>32×</code>) or <code>∞</code> in
+     forever mode.</p>
+
+  <h3 id="fft-tile-coherent">Coherent-averaging tile</h3>
+  <p><code>coh</code> when coherent averaging is on,
+     <code>inc</code> when incoherent.</p>
+
+  <h3 id="fft-tile-distrange">Distortion-range tile</h3>
+  <p>On the <b>THD settings</b> tab.  Shows the active band
+     (<code>900-10k</code>) when both bounds are enabled, or a single
+     bound (<code>&gt;900</code> / <code>&lt;10k</code>) when only
+     one is enabled.  Absent when neither is set.</p>
+
+  <h3 id="fft-tile-maxharmonic">Max-harmonic tile</h3>
+  <p><code>H9</code> — the max harmonic for the THD ratio.</p>
+
+  <h3 id="fft-tile-manfund">Manual-fundamental tile</h3>
+  <p><code>manF</code>.  Visible only when the manual-fundamental
+     override is enabled.</p>
+
+  <hr/>
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+</body>
+</html>

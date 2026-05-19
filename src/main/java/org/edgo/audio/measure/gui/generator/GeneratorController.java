@@ -1,0 +1,350 @@
+package org.edgo.audio.measure.gui.generator;
+
+import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.generator.SignalGenerator.SignalForm;
+import org.edgo.audio.measure.gui.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.DeviceRef;
+
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/**
+ * Lifecycle manager for the GUI generator's playback thread.  Mirrors
+ * {@code OscilloscopeController}'s pattern: {@link #start()} resolves the
+ * current output device + sample rate + bit depth from {@link Preferences},
+ * constructs a {@link SignalGenerator} from the generator pane's saved
+ * settings, opens an {@link AudioPlayback} on a background thread, and
+ * runs continuously until {@link #stop()} is called.
+ *
+ * <p>The pane checks {@link #isRunning()} when toggling its Play button
+ * and reads {@link #getLastStartError()} on a failed start so it can
+ * display the reason in a MessageBox.
+ */
+@Log4j2
+public final class GeneratorController {
+
+    private volatile Thread          playThread;
+    private volatile SignalGenerator generator;
+    private volatile AudioPlayback   playback;
+    private final    AtomicBoolean   stopFlag    = new AtomicBoolean(false);
+    private volatile boolean         running;
+    private volatile String          lastStartError;
+
+    /**
+     * Reads the current generator settings + output device from {@link
+     * Preferences}, opens the playback line and starts streaming on a
+     * background thread.  No-op if already running.  On any failure
+     * {@link #isRunning()} returns {@code false} and {@link
+     * #getLastStartError()} carries a human-readable message.
+     */
+    public synchronized void start() {
+        if (running) return;
+        lastStartError = null;
+
+        Preferences prefs = Preferences.instance();
+        Preferences.BackendPrefs bp = prefs.current();
+        String deviceName = bp.getOutputDeviceName();
+        if (deviceName == null || deviceName.isEmpty()) {
+            lastStartError = "No output device selected.  Pick one in Preferences first.";
+            return;
+        }
+        DeviceRef device = findOutputDevice(deviceName);
+        if (device == null) {
+            lastStartError = "Output device \"" + deviceName + "\" is no longer available.";
+            return;
+        }
+
+        final int    sampleRate    = bp.getOutputSampleRate();
+        final int    bitDepth      = bp.getOutputBitDepth();
+        final int    ditherBits    = prefs.getGenDitherBits();
+        final double rawFrequency  = prefs.getGenFrequencyHz();
+        final double amplitudeVRms = prefs.getGenAmplitudeVrms();
+        final SignalForm form      = parseForm(prefs.getGenSignalForm());
+        // Snap the emitted frequency to the nearest FFT bin when the
+        // user enabled "snap to FFT bin" with a SINE waveform.  Done
+        // here (not in GeneratorPane) so the snap doesn't have to live
+        // in prefs.getGenFrequencyHz — the field keeps the raw user
+        // value (e.g. 1000 Hz), the controller emits the snapped value
+        // (e.g. 999.987 Hz at 1M FFT / 48 kHz).
+        final double frequency = snapToFftBinIfEnabled(prefs, form, sampleRate, rawFrequency);
+
+        // The WASAPI exclusive-mode driver sometimes refuses to start the
+        // render stream on the first attempt when a sibling capture stream
+        // is already running in the same process (the in-built scope view).
+        // External recording works because cross-process contention is
+        // mediated by Windows' session manager; in-process, the first start
+        // can lose the race.  We retry once after a brief delay before
+        // reporting failure to the user.
+        final int    MAX_ATTEMPTS  = 2;
+        final long   RETRY_PAUSE_MS = 500;
+        final long   READY_TIMEOUT_S = 5;
+        String       attemptError  = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            attemptError = tryStartOnce(prefs, device, sampleRate, bitDepth, ditherBits,
+                    form, frequency, amplitudeVRms, READY_TIMEOUT_S);
+            if (attemptError == null) {
+                running = true;
+                log.info("Generator started (attempt {}): device={}, form={}, freq={} Hz, amp={} Vrms, rate={} Hz, depth={} bit, dither={} bit",
+                        attempt, device.displayName(), form, frequency, amplitudeVRms, sampleRate, bitDepth, ditherBits);
+                return;
+            }
+            log.warn("Generator start attempt {}/{} failed: {}", attempt, MAX_ATTEMPTS, attemptError);
+            if (attempt < MAX_ATTEMPTS) {
+                try { Thread.sleep(RETRY_PAUSE_MS); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+            }
+        }
+        lastStartError = attemptError;
+    }
+
+    /**
+     * One open + play attempt.  Returns {@code null} on success (controller
+     * left in the running state — caller flips {@link #running}); a
+     * non-null string carries the failure reason and guarantees any
+     * partially-opened resources are torn down before returning.
+     */
+    private String tryStartOnce(Preferences prefs, DeviceRef device,
+                                int sampleRate, int bitDepth, int ditherBits,
+                                SignalForm form, double frequency, double amplitudeVRms,
+                                long readyTimeoutSeconds) {
+        SignalGenerator gen;
+        try {
+            if (form == SignalForm.SINE_COMPENSATED) {
+                String csv = prefs.getGenCorrectionsCsv();
+                if (csv == null || csv.isEmpty()) {
+                    return "Sine (compensated) needs a harmonics-correction CSV.  Pick one with the … button.";
+                }
+                gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms, csv);
+            } else if (form == SignalForm.LINEAR_SWEEP || form == SignalForm.LOG_SWEEP) {
+                double f0 = prefs.getGenSweepFreqStartHz();
+                double f1 = prefs.getGenSweepFreqEndHz();
+                int durationSamples = Math.max(2,
+                        (int) Math.round(prefs.getGenSweepDurationSec() * sampleRate));
+                if (form == SignalForm.LINEAR_SWEEP) {
+                    gen = new SignalGenerator(f0, f1, sampleRate, durationSamples, amplitudeVRms);
+                } else {
+                    // No lead-in for the GUI-driven sweep — that's a CLI-
+                    // measurement feature, not a music-style sweep control.
+                    gen = new SignalGenerator(f0, f1, durationSamples, 0, sampleRate, amplitudeVRms);
+                }
+            } else {
+                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms);
+            }
+        } catch (Exception ex) {
+            return "Could not build the signal generator: " + ex.getMessage();
+        }
+        // Apply any waveform-specific live-tunables before we hand the
+        // generator off to the audio thread.
+        gen.setRectangleDuty(prefs.getGenRectangleDuty());
+        gen.setTriangleDuty (prefs.getGenTriangleDuty());
+        if (form == SignalForm.LINEAR_SWEEP || form == SignalForm.LOG_SWEEP) {
+            int fadeIn  = Math.max(0, (int) Math.round(prefs.getGenSweepFadeInSec()  * sampleRate));
+            int fadeOut = Math.max(0, (int) Math.round(prefs.getGenSweepFadeOutSec() * sampleRate));
+            gen.setSweepParams(prefs.isGenSweepLoop(), fadeIn, fadeOut);
+        }
+        this.generator = gen;
+        final SignalGenerator generator = gen;
+
+        AudioPlayback ag;
+        try {
+            ag = AudioBackend.instance().openPlayback(device, sampleRate, bitDepth, ditherBits);
+            ag.open();
+        } catch (Exception ex) {
+            log.warn("Playback open failed", ex);
+            this.generator = null;
+            return "Could not open the output device: " + ex.getMessage();
+        }
+        this.playback = ag;
+        stopFlag.set(false);
+
+        final CountDownLatch readyLatch = new CountDownLatch(1);
+        Thread t = new Thread(() -> {
+            try {
+                ag.play(generator, stopFlag, readyLatch);
+            } catch (Exception ex) {
+                log.warn("Playback thread terminated abnormally", ex);
+            } finally {
+                try { ag.close(); } catch (Exception ignored) {}
+            }
+        }, "generator-play");
+        t.setDaemon(true);
+        // Exclusive-mode WASAPI / WDM-KS underruns the moment the audio
+        // thread misses an event tick; bump to MAX_PRIORITY so Java's
+        // scheduler keeps it ahead of GC helpers and the GUI thread.
+        // This is the canonical fix for the "brief mid-plateau dip on a
+        // square wave" artifact you get when a buffer's worth of audio
+        // is replaced by silence during a stall.
+        t.setPriority(Thread.MAX_PRIORITY);
+        t.start();
+        this.playThread = t;
+
+        try {
+            if (!readyLatch.await(readyTimeoutSeconds, TimeUnit.SECONDS)) {
+                // Tear down so a retry starts from a clean slate.
+                stop();
+                return "Output device opened but did not start streaming within "
+                        + readyTimeoutSeconds + " s.";
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            stop();
+            return "Interrupted while waiting for the output to start.";
+        }
+        return null;
+    }
+
+    /**
+     * Stops the playback thread (idempotent).  Waits up to 2 s for the
+     * thread to exit and the output line to drain / close before returning.
+     */
+    public synchronized void stop() {
+        stopFlag.set(true);
+        Thread t = playThread;
+        if (t != null) {
+            try {
+                t.join(2_000);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        playThread = null;
+        generator  = null;
+        playback   = null;
+        running    = false;
+    }
+
+    /** Live-applies the dither bit count to the running playback.  No-op if not running. */
+    public void setDitherBits(int bits) {
+        AudioPlayback ag = playback;
+        if (ag != null) ag.setDitherBits(bits);
+    }
+
+    /** Live-applies a duty-cycle (fraction in [0.001, 0.999]) to the running rectangle generator. */
+    public void setRectangleDuty(double dutyFrac) {
+        SignalGenerator g = generator;
+        if (g != null) g.setRectangleDuty(dutyFrac);
+    }
+
+    /** Live-applies a duty-cycle (fraction in [0.001, 0.999]) to the running triangle generator. */
+    public void setTriangleDuty(double dutyFrac) {
+        SignalGenerator g = generator;
+        if (g != null) g.setTriangleDuty(dutyFrac);
+    }
+
+    /**
+     * Live-applies a new waveform to the running generator.  No-op if the
+     * generator isn't running.  Switching to / from {@link SignalForm#SINE_COMPENSATED}
+     * or any sweep form requires a stop+start because their state machines
+     * aren't safely live-mutable; this method skips them.
+     */
+    public void setForm(SignalForm form) {
+        SignalGenerator g = generator;
+        if (g == null || form == null) return;
+        if (form == SignalForm.LINEAR_SWEEP || form == SignalForm.LOG_SWEEP) return;
+        if (form == SignalForm.SINE_COMPENSATED) return;
+        g.setForm(form);
+    }
+
+    /** Returns {@code raw} rounded to the nearest FFT bin centre when
+     *  the user has enabled snap-to-FFT-bin with a SINE waveform.
+     *  Otherwise returns {@code raw} unchanged.  Bin width is derived
+     *  from the active output sample rate and {@code fftLength} pref.
+     *  Shared with {@code GeneratorPane} (which uses the same math to
+     *  show the bracketed correction next to the field). */
+    public static double snapToFftBinIfEnabled(Preferences prefs, SignalForm form,
+                                               int sampleRate, double raw) {
+        if (form != SignalForm.SINE) return raw;
+        if (!prefs.isGenSnapToFftBin()) return raw;
+        int fftSize = prefs.getFftLength();
+        if (fftSize < 8 || sampleRate <= 0) return raw;
+        double binHz = (double) sampleRate / fftSize;
+        if (binHz <= 0) return raw;
+        return Math.round(raw / binHz) * binHz;
+    }
+
+    /** Live-applies a new frequency (Hz) to the running generator.  No-op if not running. */
+    public void setFrequency(double hz) {
+        SignalGenerator g = generator;
+        if (g != null) g.setFrequency(hz);
+    }
+
+    /** Live-applies a new amplitude (V RMS) to the running generator.  No-op if not running. */
+    public void setAmplitudeVrms(double vrms) {
+        SignalGenerator g = generator;
+        if (g != null) g.setAmplitudeVrms(vrms);
+    }
+
+    /** Live-applies sweep start frequency (Hz). */
+    public void setSweepFreqStart(double hz) {
+        SignalGenerator g = generator;
+        if (g != null) g.setSweepFreqStart(hz);
+    }
+
+    /** Live-applies sweep stop frequency (Hz). */
+    public void setSweepFreqEnd(double hz) {
+        SignalGenerator g = generator;
+        if (g != null) g.setSweepFreqEnd(hz);
+    }
+
+    /** Live-applies sweep duration (seconds) by converting to samples
+     *  via the current sample rate. */
+    public void setSweepDurationSeconds(double seconds) {
+        SignalGenerator g = generator;
+        if (g == null || !Double.isFinite(seconds) || seconds <= 0) return;
+        int rate = Preferences.instance().current().getOutputSampleRate();
+        int samples = Math.max(2, (int) Math.round(seconds * rate));
+        g.setSweepDurationSamples(samples);
+    }
+
+    /** Live-applies sweep fade-in length (seconds). */
+    public void setSweepFadeInSeconds(double seconds) {
+        SignalGenerator g = generator;
+        if (g == null || !Double.isFinite(seconds) || seconds < 0) return;
+        int rate = Preferences.instance().current().getOutputSampleRate();
+        g.setSweepFadeInSamples(Math.max(0, (int) Math.round(seconds * rate)));
+    }
+
+    /** Live-applies sweep fade-out length (seconds). */
+    public void setSweepFadeOutSeconds(double seconds) {
+        SignalGenerator g = generator;
+        if (g == null || !Double.isFinite(seconds) || seconds < 0) return;
+        int rate = Preferences.instance().current().getOutputSampleRate();
+        g.setSweepFadeOutSamples(Math.max(0, (int) Math.round(seconds * rate)));
+    }
+
+    /** Live-applies the sweep loop flag. */
+    public void setSweepLoop(boolean loop) {
+        SignalGenerator g = generator;
+        if (g != null) g.setSweepLoop(loop);
+    }
+
+    /** True when the running generator can accept live form updates for the given target. */
+    public boolean canLiveSwitchForm(SignalForm target) {
+        if (target == null || generator == null) return false;
+        if (target == SignalForm.LINEAR_SWEEP || target == SignalForm.LOG_SWEEP) return false;
+        if (target == SignalForm.SINE_COMPENSATED) return false;
+        return true;
+    }
+
+    public boolean isRunning()         { return running; }
+    public String  getLastStartError() { return lastStartError; }
+
+    private static DeviceRef findOutputDevice(String name) {
+        List<DeviceRef> devices = AudioBackend.instance().listOutputDevices();
+        for (DeviceRef d : devices) {
+            if (name.equals(d.name())) return d;
+        }
+        return null;
+    }
+
+    private static SignalForm parseForm(String s) {
+        if (s == null) return SignalForm.SINE;
+        try { return SignalForm.valueOf(s); }
+        catch (IllegalArgumentException ex) { return SignalForm.SINE; }
+    }
+}

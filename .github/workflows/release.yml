@@ -1,0 +1,127 @@
+name: Build installers
+
+# Triggers:
+#   * push a tag named v* (e.g. v1.0.0) -> build all OSes and attach to a GitHub release.
+#   * workflow_dispatch -> manual run from the Actions tab, useful for testing the matrix.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  # ============================================================== Windows x64
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # csjsound-provider.jar and the native DLLs are not on Maven Central -
+      # they must already live under lib/windows/.  Fail loudly if a checkout
+      # is missing them instead of producing a half-built installer.
+      - name: Verify Windows natives present
+        shell: pwsh
+        run: |
+          $required = @(
+            "lib/windows/csjsound-provider.jar",
+            "lib/windows/csjsound_amd64.dll",
+            "lib/windows/portaudio_x64.dll"
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            Write-Error "Missing required Windows natives: $($missing -join ', '). See lib/windows/README.md."
+            exit 1
+          }
+
+      # `mvn package` builds the fat JAR, stages it into target/jpackage-input/,
+      # and runs jpackage — all in one go (see <executions> in pom.xml).
+      - name: Build fat JAR + MSI installer
+        run: mvn -B -DskipTests package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phonalyser-windows
+          path: |
+            target/installer/*.msi
+            target/phonalyser-*-windows.jar
+
+  # ============================================================== Linux x64
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Install fakeroot (needed by jpackage for .deb)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fakeroot
+
+      - name: Build fat JAR + .deb installer
+        run: mvn -B -DskipTests package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phonalyser-linux
+          path: |
+            target/installer/*.deb
+            target/phonalyser-*-linux.jar
+
+  # ============================================================== macOS (Apple Silicon)
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # The macos-aarch64 profile already appends -XstartOnFirstThread to
+      # jpackage's javaOptions; no extra args needed here.
+      - name: Build fat JAR + .dmg installer
+        run: mvn -B -DskipTests package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phonalyser-macos
+          path: |
+            target/installer/*.dmg
+            target/phonalyser-*-macos.jar
+
+  # ============================================================== Release
+  release:
+    needs: [build-windows, build-linux, build-macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/phonalyser-windows/*
+            artifacts/phonalyser-linux/*
+            artifacts/phonalyser-macos/*
+          draft: true

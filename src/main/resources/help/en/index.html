@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Help</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <h1>Phonalyser</h1>
+  <p class="small">Precision audio measurement workbench: signal generator, oscilloscope, FFT analyser.</p>
+
+  <p>Press <kbd>F1</kbd> anywhere in the application to open this help.
+     Press <kbd>Ctrl</kbd>+<kbd>F1</kbd> to jump directly to the section
+     covering the control that currently has focus.</p>
+
+  <h2>Modules</h2>
+  <div class="toc">
+    <a href="generator.html"><b>Generator</b> — tone generation, sweep, noise, WAV-file playback</a>
+    <a href="oscilloscope.html"><b>Oscilloscope</b> — live time-domain view, trigger, measurement table</a>
+    <a href="fft.html"><b>FFT analyser</b> — spectrum, harmonics, THD / SNR / ENOB</a>
+  </div>
+
+  <h2>Layout</h2>
+  <div class="pane">
+    <p>The main window is split into a fixed-width <b>Generator</b> pane on the
+       left and a vertical sash between <b>Oscilloscope</b> (top) and
+       <b>FFT analyser</b> (bottom) on the right.  Each pane can be collapsed
+       to its title strip by double-clicking the title bar; double-clicking
+       again restores it.</p>
+    <p>Each module has its own toolbar — a <code>CTabFolder</code> below the
+       main view with tabs for the per-module settings.  The tab strip can
+       be collapsed in turn (double-click the strip) to reclaim vertical
+       space for the visible chart.</p>
+  </div>
+
+  <h2>Conventions</h2>
+  <div class="pane">
+    <ul>
+      <li><b>Step selectors</b> — fields like <code>V/div</code>,
+          <code>t/div</code>, <code>FFT length</code> have small up/down
+          arrows.  The mouse wheel scrolls through standard values
+          (1-2-5-10) and a manual typed value is accepted when it makes
+          sense for the field.</li>
+      <li><b>Numeric fields</b> — accept typed values plus mouse-wheel
+          stepping.  The wheel step is per-field (5 % for frequency,
+          ±1 unit for harmonic numbers, etc.).</li>
+      <li><b>Tab tiles</b> — the small badges painted under each tab
+          label show the active value for that tab's most important
+          controls at a glance, even when the tab body is collapsed.</li>
+      <li><b>Crosshair</b> — hovering inside a chart shows a dashed
+          cross with a floating readout box near the cursor.</li>
+    </ul>
+  </div>
+
+  <hr/>
+  <p class="small">Help → About Phonalyser shows the version and links to
+     the project repository.  Use Help → Report a problem to file an issue
+     on GitHub.</p>
+
+</body>
+</html>

@@ -1,0 +1,39 @@
+body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px; line-height: 1.55;
+    color: #222; background: #fcfcfc;
+    margin: 0; padding: 24px 32px;
+}
+h1 { font-size: 22px; margin: 0 0 6px; }
+h2 { font-size: 17px; margin: 26px 0 6px; color: #335;
+     border-bottom: 1px solid #dde; padding-bottom: 2px; }
+h3 { font-size: 14px; margin: 18px 0 4px; color: #335; }
+h4 { font-size: 13px; margin: 14px 0 4px; color: #335; }
+p, ul, ol { margin: 6px 0; }
+code, kbd { font-family: Consolas, Menlo, monospace; font-size: 13px;
+            background: #eef; padding: 1px 5px; border-radius: 3px; }
+.pane { border-left: 3px solid #88a; padding-left: 12px; margin: 12px 0; }
+.toc a { display: block; padding: 2px 0;
+         text-decoration: none; color: #224; }
+.toc a:hover { text-decoration: underline; }
+hr { border: 0; border-top: 1px solid #ddd; margin: 18px 0; }
+.small { color: #777; font-size: 12px; }
+.tile { display: inline-block;
+        background: #e0e0e0; color: #202020;
+        font-family: Consolas, Menlo, monospace; font-size: 12px;
+        padding: 1px 6px; border-radius: 3px; margin: 0 2px; }
+.led { display: inline-block; width: 8px; height: 8px;
+       background: #ff2020; border-radius: 50%;
+       vertical-align: middle; margin: 0 4px; }
+.back { font-size: 12px; }
+.back a { color: #335; text-decoration: none; }
+.back a:hover { text-decoration: underline; }
+table.controls { border-collapse: collapse; margin: 8px 0; }
+table.controls th, table.controls td {
+    border: 1px solid #dde; padding: 4px 8px;
+    text-align: left; vertical-align: top;
+    font-size: 13px;
+}
+table.controls th { background: #eef; }
+.note { background: #fff8d8; border-left: 3px solid #cc9;
+        padding: 6px 10px; margin: 8px 0; font-size: 13px; }

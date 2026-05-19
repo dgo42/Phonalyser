@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Oscilloscope</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>Oscilloscope</h1>
+  <p>Live time-domain view of the captured signal.  Two independent
+     channels (L / R) share the trigger; each has its own V/div,
+     coupling, interpolation, and vertical offset.  The capture rate
+     readout in the top-right corner (<code>cap/s</code>) shows how
+     many frames per second the view is rendering.</p>
+
+  <p><img src="img/Oscilloscope.png" alt="Oscilloscope view"/></p>
+
+  <h2 id="scope-buttons">Header buttons</h2>
+  <p>Row of square buttons at the top-left of the scope canvas.
+     L / R always shown; the rest appear once measurements have
+     been computed.</p>
+
+  <h3 id="scope-channel-pick">L / R channel pick</h3>
+  <p>Toggle buttons that select which channel drives the
+     <a href="#scope-meas-table">measurement table</a> and the active
+     V/div tab below.  The button background takes the channel's
+     trace colour when selected.  L and R can be active independently
+     — pressing one doesn't deselect the other.</p>
+
+  <h3 id="scope-autosetup">Auto-Setup</h3>
+  <p>Arrows-to-circle icon.  One-shot: adjusts the time base so
+     roughly 1.5 periods fit on screen, and the V/div so the trace
+     spans ~75 % of the vertical area.  Uses the currently-selected
+     channel's measured period and Vpp.</p>
+
+  <h3 id="scope-gauge">Gauge (measurement-table toggle)</h3>
+  <p>Toggles the entire measurement table overlay on and off.  When
+     hidden, only the trace and the L / R buttons remain.</p>
+
+  <h3 id="scope-external">External-window toggle</h3>
+  <p>Pops the measurement table out into a separate tool window so
+     it can sit alongside the main shell.  Visible only when the
+     table itself is visible.  Closing the tool window returns the
+     table to the main view.</p>
+
+  <h3 id="scope-stats-toggle">Stats columns toggle</h3>
+  <p>Chart-column icon.  Shows / hides the
+     <code>avg / min / max / σ</code> columns of the measurement
+     table.  The worker keeps computing them regardless; the toggle
+     only affects rendering.</p>
+
+  <h3 id="scope-reset">Reset statistics</h3>
+  <p>Red rotate-left icon.  Clears the rolling-window history that
+     feeds the stats columns, so the next frame starts a fresh
+     averaging window.  Useful after changing test conditions.</p>
+
+  <h2 id="scope-meas-table">Measurement table</h2>
+  <p>Compact mono-spaced grid in the top-left of the canvas.  Eight
+     rows, up to five value columns (<code>cur</code> + the four
+     stats columns).</p>
+
+  <table class="controls">
+    <tr><th>Row</th><th>Meaning</th></tr>
+    <tr><td id="scope-meas-vpp">Vpp</td><td>Peak-to-peak voltage (max − min over the visible frame).</td></tr>
+    <tr><td id="scope-meas-vrms">Vrms</td><td>Root-mean-square voltage of the frame.</td></tr>
+    <tr><td id="scope-meas-vmean">Vmean</td><td>DC mean — useful for spotting offsets.</td></tr>
+    <tr><td id="scope-meas-tp">Tp</td><td>Period (seconds).  Estimated from zero-crossings of the trigger-channel signal.</td></tr>
+    <tr><td id="scope-meas-tr">Tr</td><td>Rise time (10 % → 90 % of Vpp).</td></tr>
+    <tr><td id="scope-meas-tf">Tf</td><td>Fall time (90 % → 10 %).</td></tr>
+    <tr><td id="scope-meas-f">f</td><td>Frequency = 1 / Tp, displayed in Hz with high precision for clean sines.</td></tr>
+    <tr><td id="scope-meas-duty">Duty</td><td>Duty cycle as % of period — high-time / period.</td></tr>
+  </table>
+
+  <h3 id="scope-meas-stats">Stats columns (avg / min / max / σ)</h3>
+  <p>Rolling-window statistics over a configurable averaging window
+     (see <a href="#scope-tab-presets">Preferences → Oscilloscope →
+     Measurement average</a>).  σ is the population standard
+     deviation.  The window is ~33 s at 30 fps by default; the
+     <a href="#scope-reset">Reset</a> button wipes the slate.</p>
+
+  <h2>Canvas overlays</h2>
+
+  <h3 id="scope-trigger-handle">Trigger-level handle</h3>
+  <p>Yellow horizontal marker at the right edge of the canvas
+     showing the current trigger level (in volts) for the active
+     trigger channel.  Drag vertically to set a new level;
+     double-click to centre.</p>
+
+  <h3 id="scope-position-handle">Trigger-position handle</h3>
+  <p>Yellow arrow at the bottom edge marking the trigger time
+     (<code>0 s</code> by default).  Drag horizontally to offset the
+     visible window before / after the trigger point;
+     double-click to centre.</p>
+
+  <h3 id="scope-offset-sliders">Channel offset sliders</h3>
+  <p>Each channel has a thin slider down the side of the canvas
+     (left edge for L, right edge for R) showing the channel's
+     vertical zero-line position.  The active channel (per
+     <a href="#scope-channel-pick">L/R pick</a>) is the one the
+     slider moves; the inactive channel is shown for reference but
+     can't be dragged from here.</p>
+
+  <h3 id="scope-crosshair">Crosshair</h3>
+  <p>Hovering over the canvas shows a dashed grey cross at the
+     cursor; the readout box near the cursor lists the time-axis
+     value (<code>t = ...</code>) and the voltage at that point.</p>
+
+  <h2 id="scope-tabs">Toolbar tabs</h2>
+  <p>The CTabFolder at the bottom of the pane holds per-channel,
+     trigger and utility settings.  Each tab's <b>tile</b> row
+     (painted under the tab label) shows the live state for that
+     tab's key controls so you don't have to switch tabs to see
+     what's set.</p>
+
+  <h3 id="scope-tab-left">Left tab</h3>
+  <p><img src="img/Oscilloscope - Left.png" alt="Left channel tab"/></p>
+  <p>Controls for the left channel.  Contains the channel toggle,
+     V/div selector, AC/DC button, and Sin/Lin checkbox.  Same
+     layout for the <a href="#scope-tab-right">Right</a> tab.</p>
+
+  <h4 id="scope-channel-toggle">L (channel enable)</h4>
+  <p>Square toggle that enables / disables the channel.  When off,
+     the trace isn't drawn and the channel can't be picked as the
+     trigger source.</p>
+
+  <h4 id="scope-vdiv">V/div</h4>
+  <p>Step selector with standard 1-2-5-10 values.  Mouse wheel
+     scrolls through the list; typing a value accepts any unit
+     (<code>1m</code>, <code>20m</code>, <code>500m</code>, etc.).
+     Independent per channel.</p>
+
+  <h4 id="scope-acdc">AC / DC</h4>
+  <p>AC mode subtracts the running DC mean from the displayed trace
+     so a small AC component on top of a large DC offset is visible.
+     The underlying measurements are still computed on the raw
+     samples — only the displayed trace is shifted.</p>
+
+  <h4 id="scope-sinc-interp">Sin / Lin (sinc interpolation)</h4>
+  <p>Per-channel checkbox shown with a small sinc-shape image.
+     When checked, the trace is rendered with Lanczos sinc
+     interpolation (proper bandlimited reconstruction); when
+     unchecked, straight-line interpolation between samples.
+     Sinc costs more CPU and only matters when adjacent samples are
+     visibly far apart on screen.</p>
+
+  <h3 id="scope-tab-right">Right tab</h3>
+  <p>Identical layout to the Left tab — channel toggle, V/div,
+     AC/DC and Sin/Lin, but for the right channel.</p>
+
+  <h3 id="scope-tab-horizontal">Horizontal tab</h3>
+  <p><img src="img/Oscilloscope - Horizontal.png" alt="Horizontal tab"/></p>
+
+  <h4 id="scope-tdiv">Time / div</h4>
+  <p>Step selector with the standard 1-2-5-10 series spanning
+     ns/div .. s/div.  The trace centre stays put on a t/div change
+     — only the visible window's width changes.</p>
+
+  <h3 id="scope-tab-trigger">Trigger tab</h3>
+  <p><img src="img/Oscilloscope - Trigger.png" alt="Trigger tab"/></p>
+
+  <h4 id="scope-trigger-channel">Channel</h4>
+  <p>Pair of L / R toggles picking which channel drives the trigger
+     comparator.</p>
+
+  <h4 id="scope-trigger-edge">Edge</h4>
+  <p>↑ / ↓ pair.  Rising edge triggers when the signal crosses the
+     trigger level going up; falling edge for going down.</p>
+
+  <h4 id="scope-trigger-mode">Mode</h4>
+  <p>A / N / S — Auto, Normal, Single.</p>
+  <ul>
+    <li><b>Auto</b> — runs free, displays the trace whether or not
+        the trigger condition is met.</li>
+    <li><b>Normal</b> — only updates on a trigger event; freezes the
+        last triggered frame if no new event arrives.</li>
+    <li><b>Single</b> — one-shot.  Arm with the play button to its
+        right; captures the next trigger event and stops.</li>
+  </ul>
+
+  <h4 id="scope-trigger-start">Start (Single re-arm)</h4>
+  <p>Small play icon.  Only active when the mode is <b>Single</b>.
+     Pressing it arms the next single-shot capture.</p>
+
+  <h4 id="scope-trigger-hysteresis">Hysteresis</h4>
+  <p>Checkbox + step selector in division units (0.0 .. 5.0 in 0.1
+     steps).  Schmitt-style trigger hysteresis: a rising-edge
+     trigger fires only when the signal first dropped below
+     <code>(level − hyst)</code> and then crossed above
+     <code>(level + hyst)</code>.  Suppresses false triggers on
+     noisy signals.  The hysteresis selector greys out when the
+     checkbox is off; the value is preserved when toggled.</p>
+
+  <h3 id="scope-tab-presets">Presets tab</h3>
+  <p><img src="img/Oscilloscope - Presets.png" alt="Presets tab"/></p>
+  <p>Editable combo + Save / Load / Delete buttons.  Save snapshots
+     every per-channel and per-trigger control (V/div, AC/DC,
+     Sin/Lin, t/div, trigger channel / edge / mode, hysteresis
+     enable + value).  Load applies a snapshot.  Delete asks for
+     confirmation.</p>
+
+  <h3 id="scope-tab-utility">Utility tab</h3>
+  <p><img src="img/Oscilloscope - Utility.png" alt="Utility tab"/></p>
+
+  <h4 id="scope-utility-screenshot">Screenshot</h4>
+  <p>Camera icon.  Renders the scope pane to a PNG at a chosen
+     resolution.  The render uses an offscreen replica of the pane,
+     so the visible window's size doesn't constrain the output.</p>
+
+  <h4 id="scope-utility-calibrate">ADC calibration</h4>
+  <p>Crosshair icon.  Opens the calibration dialog which derives the
+     ADC's full-scale voltage from a known reference signal (a
+     calibrator or a precision generator) and saves it in
+     preferences.  Disabled until a capture is running.</p>
+
+  <h3 id="scope-tab-save">Save to… tab</h3>
+  <p><img src="img/Oscilloscope - Save to.png" alt="Save to tab"/></p>
+  <p>Writes the last N seconds of capture to a file.  The folder
+     button picks the destination; the step field selects the
+     duration; the floppy-disk button writes.</p>
+
+  <h3 id="scope-tab-play">Load signal tab</h3>
+  <p><img src="img/Oscilloscope - Load signal.png" alt="Load signal tab"/></p>
+  <p>Loads a previously-recorded file as the scope's data source
+     instead of the live ADC.  Useful for offline analysis: the
+     same trigger / measurement / FFT pipeline runs over the
+     recorded samples.  Folder button picks the file.</p>
+
+  <h2 id="scope-tiles">Tab tiles</h2>
+  <p>Each tab's label has a row of small pill-shaped tiles below it
+     showing the active value of that tab's main controls.  Tiles
+     are passive — they're never interactive, but their tooltips
+     describe what each value means.  Visible even when the tab
+     body is collapsed.</p>
+
+  <h3 id="scope-tile-led">Channel-enabled LED</h3>
+  <p>Red filled circle on the <b>Left</b> / <b>Right</b> tab when
+     the channel is enabled.  Empty / hidden when disabled.</p>
+
+  <h3 id="scope-tile-vdiv">V/div tile</h3>
+  <p>Short SI value (<code>1m</code>, <code>500m</code>, <code>1</code>)
+     showing the channel's volts-per-division.</p>
+
+  <h3 id="scope-tile-acdc">AC/DC tile</h3>
+  <p>Two-letter pill — <code>ac</code> or <code>dc</code> — for the
+     channel's coupling mode.</p>
+
+  <h3 id="scope-tile-interp">Interpolation tile</h3>
+  <p><code>sin</code> when sinc interpolation is on, <code>lin</code>
+     when off.</p>
+
+  <h3 id="scope-tile-tdiv">Time/div tile</h3>
+  <p>Short value on the <b>Horizontal</b> tab — e.g. <code>200u</code>,
+     <code>1m</code>, <code>20m</code>.</p>
+
+  <h3 id="scope-tile-trigger-channel">Trigger-channel tile</h3>
+  <p><code>L</code> or <code>R</code> on the <b>Trigger</b> tab.</p>
+
+  <h3 id="scope-tile-trigger-edge">Trigger-edge tile</h3>
+  <p>↑ for rising, ↓ for falling.</p>
+
+  <h3 id="scope-tile-trigger-mode">Trigger-mode tile</h3>
+  <p><code>A</code>, <code>N</code> or <code>S</code> — Auto, Normal, Single.</p>
+
+  <h3 id="scope-tile-trigger-hysteresis">Hysteresis tile</h3>
+  <p><code>H&nbsp;X.X</code> (e.g. <code>H&nbsp;2.0</code>).  Visible
+     only when hysteresis is enabled — the absence of this tile
+     means hysteresis is off.</p>
+
+  <hr/>
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+</body>
+</html>

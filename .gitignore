@@ -1,4 +1,17 @@
+.claude
+Claude.md
+preferences.yaml
+.vscode
+branding/
+deps/
+docs/
+download/
+logs/
+results/
+plans/
 target/
+test.*
+.deps_classpath
 pom.xml.tag
 pom.xml.releaseBackup
 pom.xml.versionsBackup

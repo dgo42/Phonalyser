@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Generator</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>Generator</h1>
+  <p>Produces test signals routed to the configured output device.
+     Two engines coexist in this pane and are mutually exclusive:
+     the <b>tone generator</b> (sine / sweep / noise / etc.) and the
+     <b>WAV-file player</b>.  Starting one stops the other.</p>
+
+  <p><img src="img/Generator.png" alt="Generator pane"/></p>
+
+  <h2>Header</h2>
+
+  <h3 id="generator-form">Signal form</h3>
+  <p>Drop-down combo with nine waveforms.  Each entry has a small
+     pictogram showing the waveform shape.  Changing the form
+     reconfigures the surrounding controls — the duty-cycle field
+     enables for <code>Rectangle</code> and <code>Triangle</code>,
+     the sweep controls appear for <code>Linear sweep</code> and
+     <code>Log sweep</code>, the frequency field disables for the
+     noise variants.</p>
+  <table class="controls">
+    <tr><th>Form</th><th>Notes</th></tr>
+    <tr><td>Sine</td><td>Pure tone, DDS-driven.</td></tr>
+    <tr><td>Sine compensated</td><td>DDS-corrected so the actual emitted frequency exactly matches the requested value.</td></tr>
+    <tr><td>Triangle</td><td>Adjustable duty cycle (asymmetric ramp).</td></tr>
+    <tr><td>Rectangle</td><td>Adjustable duty cycle (high-time fraction).</td></tr>
+    <tr><td>White noise</td><td>Uniform-random samples.</td></tr>
+    <tr><td>Pink noise</td><td>Gaussian source via Voss–McCartney.</td></tr>
+    <tr><td>Pink noise linear</td><td>Flat-amplitude white source via Voss–McCartney.</td></tr>
+    <tr><td>Linear sweep</td><td>Chirp with linear-in-time frequency ramp.</td></tr>
+    <tr><td>Log sweep</td><td>Farina logarithmic chirp — equal energy per octave.</td></tr>
+  </table>
+
+  <h3 id="generator-onair">ON&nbsp;AIR indicator</h3>
+  <p>The dot beside the label <b>ON&nbsp;AIR</b> is a 14&nbsp;px red LED
+     that lights whenever either the tone generator OR the WAV-file
+     player is producing audio.  The label text blinks between bright
+     and dim red at ~1&nbsp;Hz while audio is being emitted, and fades
+     to grey when both engines stop.</p>
+
+  <h2>Frequency</h2>
+
+  <h3 id="generator-frequency">Frequency</h3>
+  <p>Periodic waveforms only.  Type a value or use the up/down arrows
+     to step.  The mouse wheel scrolls ±5 % of the current value;
+     the arrow buttons step ±1 Hz.</p>
+  <p>The label may show a bracketed annotation — e.g.
+     <code>Frequency (1000.122 Hz)</code> — when the snap-to-FFT-bin
+     correction or DDS quantisation produces an emitted frequency
+     slightly different from what you typed.  The bracketed value is
+     the <em>actual</em> emitted frequency.</p>
+
+  <h3 id="generator-snap-fft-bin">Snap frequency to nearest</h3>
+  <p>Checkbox.  When on, the emitted frequency snaps to the nearest
+     FFT bin for the current FFT-analyser length.  Useful for clean
+     spectrum measurements: with snap on, the fundamental sits
+     exactly on a bin and window-leakage doesn't pollute the
+     harmonic estimates.</p>
+
+  <h3 id="generator-duty">Duty cycle</h3>
+  <p>Active only for <code>Rectangle</code> and <code>Triangle</code>.
+     Expressed as a percentage (1 % .. 99 %, three decimal places).
+     Each waveform remembers its own value independently, so
+     switching between Rectangle and Triangle restores their last
+     duty.</p>
+
+  <h2 id="generator-sweep">Sweep / chirp</h2>
+
+  <p>Visible only when <code>Linear sweep</code> or <code>Log sweep</code>
+     is selected.  Replaces the single frequency field with a block of
+     sweep parameters.</p>
+
+  <p><img src="img/Generator - sweep mode.png" alt="Generator in sweep mode"/></p>
+
+  <h3 id="generator-sweep-start">Start frequency</h3>
+  <p>Hz.  The chirp begins here.  Wheel ±5 %, arrows ±1 Hz.</p>
+
+  <h3 id="generator-sweep-stop">Stop frequency</h3>
+  <p>Hz.  The chirp ends here.  Same stepping as start frequency.</p>
+
+  <h3 id="generator-sweep-duration">Duration</h3>
+  <p>Seconds.  Total chirp length.  Wheel ±5 %, arrows ±1 s.</p>
+
+  <h3 id="generator-sweep-fadein">Fade in</h3>
+  <p>Seconds.  Amplitude ramp at the start of the chirp, suppressing
+     the click that an abrupt amplitude step would cause.  Wheel and
+     arrows step ±0.001 s.</p>
+
+  <h3 id="generator-sweep-fadeout">Fade out</h3>
+  <p>Seconds.  Same as fade-in but at the chirp's end.</p>
+
+  <h3 id="generator-sweep-loop">Loop</h3>
+  <p>Checkbox.  When on, the sweep restarts as soon as it ends, in a
+     continuous loop.</p>
+
+  <h2>Amplitude</h2>
+
+  <h3 id="generator-amplitude">Amplitude (RMS)</h3>
+  <p>The output level.  Accepted units: <code>µV</code>, <code>mV</code>,
+     <code>V</code>, <code>dBV</code>, <code>dBFS</code> (case-insensitive).
+     Wheel: ±5 % of the current value.  Arrows: ±1 unit step.
+     For the metric units (µV / mV / V) the display auto-rescales as
+     you cross decade boundaries so the number stays readable.</p>
+  <p class="note"><b>Note:</b> the dBFS unit references the output
+     device's full-scale level; 0 dBFS is the maximum the DAC can
+     produce.  dBV is referenced to 1 V RMS regardless of device.</p>
+
+  <h3 id="generator-dither">Dither</h3>
+  <p>Read-only drop-down (rebuilt to match the output bit-depth on
+     open).  Selects how many LSBs of triangular dither are added
+     before quantisation.  <code>Off</code> disables dither;
+     1 .. <i>N</i> add 1 .. <i>N</i> LSBs (<i>N</i> = output bit-depth).
+     Dither breaks up periodic quantisation patterns at very low
+     output levels.</p>
+
+  <h2 id="generator-corrections">Corrections</h2>
+  <h3>Harmonics CSV</h3>
+  <p>Optional CSV file describing DAC harmonic compensation: each
+     row gives a frequency, harmonic number, and a complex
+     correction coefficient.  The generator pre-distorts the output
+     so the chosen harmonics cancel at the analyser side.  Use the
+     folder button to browse for a file; clear the path field to
+     disable.</p>
+
+  <h2 id="generator-export">WAV export</h2>
+
+  <h3 id="generator-duration">Duration</h3>
+  <p>Seconds.  Length of audio to write when using <i>Save to</i>.
+     Independent of the live emission — the file is rendered in one
+     pass using current generator settings.</p>
+
+  <h3 id="generator-save-to">Save to…</h3>
+  <p>Read-only path + floppy-disk button.  Clicking the button opens
+     a file dialog; the selected file's extension picks the format
+     (<code>.wav</code> / <code>.flac</code> / <code>.aiff</code> /
+     <code>.aif</code>).  Confirming the dialog writes the file
+     immediately using the current generator settings and the
+     duration above.</p>
+
+  <h2 id="generator-playback">WAV playback</h2>
+
+  <h3 id="generator-load-from">Load from… + In loop</h3>
+  <p>Reads an existing WAV/FLAC/AIFF file and plays it back to the
+     output device.  The folder button opens a file dialog; the
+     <b>In&nbsp;loop</b> checkbox repeats the file on EOF.  The loop
+     toggle is live — flipping it during playback takes effect at the
+     next EOF.</p>
+
+  <h3 id="generator-play-file">Play / Stop file</h3>
+  <p>Small play LED next to the path field.  Lit while the file is
+     playing, dim otherwise.  Starting file playback stops the tone
+     generator if it was running (and vice versa for the main play
+     button).</p>
+
+  <h2>Main play button</h2>
+
+  <h3 id="generator-play">Play / Stop</h3>
+  <p>Large play button anchored to the bottom-right of the pane.
+     Starts the tone generator with the current form / frequency /
+     amplitude.  While running, the icon shows the lit play state and
+     the <span id="generator-onair-ref"><a href="#generator-onair">ON&nbsp;AIR</a></span>
+     indicator blinks.  Pressing it again stops emission.
+     Starting the main player stops the WAV-file player if it was
+     running.</p>
+
+  <hr/>
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+</body>
+</html>
