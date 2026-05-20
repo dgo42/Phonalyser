@@ -7,6 +7,7 @@ import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.config.LoggerConfig;
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -65,6 +66,9 @@ public final class GuiMain {
         // Apply the persisted ADC calibration (full-scale RMS voltage) so
         // all voltage readouts reflect the user's last calibration result.
         AudioBackend.setAdcFsVoltageRms(Preferences.instance().getAdcFsVoltageRms());
+        // Apply the persisted DAC calibration (full-scale RMS voltage) so the
+        // generator pane outputs at the user's last calibrated level.
+        SignalGenerator.FS_VOLTAGE = Preferences.instance().getDacFsVoltageRms();
 
         Display display = new Display();
         boolean recreate;

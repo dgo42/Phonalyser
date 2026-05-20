@@ -17,6 +17,7 @@ import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.enums.GenSignalForm;
@@ -112,6 +113,7 @@ public final class GeneratorPane {
     private final Image           playLitImg;
     private final Image           floppyDiskIcon;
     private final Image           folderOpenIcon;
+    private final Image           calibrateDacIcon;
     private final FilePlayController filePlayer = new FilePlayController();
     private final Button          playBtn;
 
@@ -161,6 +163,7 @@ public final class GeneratorPane {
         this.tinyPlayLitImg = icons.renderAtHeight(d, SvgPaths.PLAY, TINY_LED_SIZE,  greenLit);
         this.floppyDiskIcon = icons.renderAtHeight(d, SvgPaths.FLOPPY_DISK, FILE_ICON_HEIGHT, null);
         this.folderOpenIcon = icons.renderAtHeight(d, SvgPaths.FOLDER_OPEN, FILE_ICON_HEIGHT, null);
+        this.calibrateDacIcon = icons.renderAtHeight(d, SvgPaths.CROSSHAIR, PLAY_LED_SIZE, null);
 
         // Composite + SWT.BORDER replaces the legacy Group widget — the
         // Group's GtkFrame label widget on GTK consumes title-bar mouse
@@ -652,14 +655,22 @@ public final class GeneratorPane {
         // will live in the same area in a later iteration).  Size of
         // the button itself is unchanged.
         Composite playRow = new Composite(group, SWT.NONE);
-        GridLayout playGl = new GridLayout(1, false);
+        GridLayout playGl = new GridLayout(2, false);
         playGl.marginWidth = 0; playGl.marginHeight = 0;
+        playGl.horizontalSpacing = 8;
         playRow.setLayout(playGl);
-        GridData playRowGd = new GridData(SWT.RIGHT, SWT.CENTER, true, false);
+        GridData playRowGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         playRowGd.verticalIndent = 8;
         playRow.setLayoutData(playRowGd);
 
+        Button calibrateDacBtn = new Button(playRow, SWT.PUSH);
+        calibrateDacBtn.setImage(calibrateDacIcon);
+        calibrateDacBtn.setToolTipText(I18n.t("generator.calibrateDac.tooltip"));
+        calibrateDacBtn.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, true, false));
+        calibrateDacBtn.addListener(SWT.Selection, e -> openDacCalibrationDialog());
+
         playBtn = new Button(playRow, SWT.PUSH);
+        playBtn.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false));
         playBtn.setImage(playDimImg);                                  // start dim
         playBtn.setToolTipText(I18n.t("generator.play.start"));
         playBtn.addListener(SWT.Selection, e -> {
@@ -901,6 +912,35 @@ public final class GeneratorPane {
      *  in a signal. */
     public boolean isRunning() {
         return controller.isRunning() || filePlayer.isRunning();
+    }
+
+    /**
+     * Opens the DAC calibration dialog.  The dialog shows the
+     * currently-commanded full-scale Vrms and lets the user enter the
+     * voltage actually measured at the DAC output.  On accept, the new
+     * full-scale is stored in {@link SignalGenerator#FS_VOLTAGE} and
+     * persisted to {@link Preferences}.
+     */
+    private void openDacCalibrationDialog() {
+        Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
+        if (parent == null) return;
+        final double configuredVrms = Preferences.instance().getGenAmplitudeVrms();
+        final double oldFs          = SignalGenerator.FS_VOLTAGE;
+        new DacCalibrationDialog(parent, configuredVrms, measuredVrms -> {
+            // The DAC was commanded to output `configuredVrms` (computed
+            // against the OLD FS_VOLTAGE) and the user measured `measuredVrms`
+            // at the output.  Output RMS scales linearly with FS, so the
+            // true FS satisfies measured/configured = FS_true/FS_old.
+            double newFs = oldFs * (measuredVrms / configuredVrms);
+            SignalGenerator.FS_VOLTAGE = newFs;
+            Preferences.instance().setDacFsVoltageRms(newFs);
+            Preferences.instance().save();
+            // The running SignalGenerator captured its normalised `amplitude`
+            // at start time using the OLD FS_VOLTAGE.  Re-applying the
+            // user's requested Vrms recomputes it against the new FS so
+            // the calibration takes effect immediately, without a restart.
+            controller.setAmplitudeVrms(configuredVrms);
+        }).open();
     }
 
     // -------------------------------------------------------------------------

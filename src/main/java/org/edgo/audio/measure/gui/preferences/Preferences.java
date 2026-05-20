@@ -137,6 +137,11 @@ public final class Preferences {
     @Getter @Setter private boolean oscShowMeasurementTable = true;
     /** ADC full-scale RMS voltage — calibration constant used to translate normalised samples into volts.  Persisted across launches. */
     @Getter @Setter private double adcFsVoltageRms = 1.7931;
+    /** DAC full-scale RMS voltage — the voltage the DAC outputs at digital
+     *  full-scale.  Calibrated by the user via the "Calibrate DAC" button in
+     *  the generator pane.  Persisted across launches.  Default 2.79351
+     *  matches the original hard-coded {@code SignalGenerator.FS_VOLTAGE}. */
+    @Getter @Setter private double dacFsVoltageRms = 2.79351;
 
     /** Path to the most recently chosen scope "Save to…" file (last N seconds of capture). */
     @Getter @Setter private String oscSavePath;
@@ -402,6 +407,7 @@ public final class Preferences {
         root.put("oscShowStats",                 oscShowStats);
         root.put("oscShowMeasurementTable",      oscShowMeasurementTable);
         root.put("adcFsVoltageRms",              adcFsVoltageRms);
+        root.put("dacFsVoltageRms",              dacFsVoltageRms);
         root.put("genSignalForm",                genSignalForm);
         root.put("genFrequencyHz",               genFrequencyHz);
         root.put("genAmplitudeVrms",             genAmplitudeVrms);
@@ -592,6 +598,7 @@ public final class Preferences {
         if (root.get("oscShowStats")                 instanceof Boolean b) oscShowStats         = b;
         if (root.get("oscShowMeasurementTable")      instanceof Boolean b) oscShowMeasurementTable = b;
         if (root.get("adcFsVoltageRms")              instanceof Number n) adcFsVoltageRms      = n.doubleValue();
+        if (root.get("dacFsVoltageRms")              instanceof Number n) dacFsVoltageRms      = n.doubleValue();
         if (root.get("genSignalForm")                instanceof String s) genSignalForm        = s;
         if (root.get("genFrequencyHz")               instanceof Number n) genFrequencyHz       = n.doubleValue();
         if (root.get("genAmplitudeVrms")             instanceof Number n) genAmplitudeVrms     = n.doubleValue();
