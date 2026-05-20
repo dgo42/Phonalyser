@@ -26,4 +26,6 @@ public final class SvgPaths {
     public static final String CARET_UP            = "/icons/caret-up.svg";
     public static final String CARET_DOWN          = "/icons/caret-down.svg";
     public static final String RECTANGLE_XMARK     = "/icons/rectangle-xmark.svg";
+    public static final String SWISS_ARMY_KNIFE    = "/icons/swiss-army-knife.svg";
+    public static final String RIAA_IEC_CURVE      = "/icons/riaa-iec-curve.svg";
 }

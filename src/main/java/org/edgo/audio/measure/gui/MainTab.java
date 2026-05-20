@@ -1,356 +1,273 @@
 package org.edgo.audio.measure.gui;
 
-import java.util.function.Consumer;
-
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.SashForm;
+import org.eclipse.swt.custom.StackLayout;
 import org.eclipse.swt.events.ControlListener;
-import org.eclipse.swt.events.MouseEvent;
-import org.eclipse.swt.events.MouseTrackAdapter;
+import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.Font;
+import org.eclipse.swt.graphics.FontData;
+import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.graphics.Transform;
 import org.eclipse.swt.layout.FillLayout;
+import org.eclipse.swt.layout.GridData;
+import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.Listener;
-import org.eclipse.swt.widgets.Sash;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.TabFolder;
 import org.eclipse.swt.widgets.TabItem;
-import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.IconUtils;
+import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.fft.FftPane;
 import org.edgo.audio.measure.gui.generator.GeneratorPane;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.OscilloscopeController;
-import org.edgo.audio.measure.gui.scope.OscilloscopePane;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 
-import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Tab-folder content for the main window — owns the three measurement
- * panes ({@link GeneratorPane}, {@link OscilloscopePane}, {@link FftPane})
- * inside two nested {@link SashForm SashForms}, the per-pane collapse
- * helpers, persistence of pane layout state, and the pane-level callbacks
- * (screenshot dialogs, ADC-calibration dialog, shared-capture
- * acquire / release for the FFT pane).
+ * Top-level tab host for the main window.  Owns one
+ * {@link MultifunctionalTab} (the three-pane SashForm layout) and one
+ * {@link FrequencyResponseTab} (placeholder for the FR measurement UI),
+ * and chooses between two presentations depending on
+ * {@link Preferences#getTabOrientation()}:
  *
- * <p>Lives under the application's main {@link Shell}; uses the shell only
- * for the few dialogs that need a parent.  Everything else is layout +
- * widget wiring inside its own TabFolder.
+ * <ul>
+ *   <li>{@code "TOP"} — conventional SWT {@link TabFolder} with text
+ *       labels and a small icon per tab.</li>
+ *   <li>{@code "LEFT"} — custom vertical sidebar of large 48×48 icon
+ *       buttons with the label rendered underneath.  The selected tab's
+ *       content is shown in a {@link StackLayout} to the right.  SWT
+ *       offers no built-in left-tab widget, so this is composed by hand.</li>
+ * </ul>
+ *
+ * <p>Switching orientation re-creates the shell (see
+ * {@link MainWindow#requestRecreate()}) so the layout takes effect
+ * immediately.  All shell-bound resources allocated here register their
+ * dispose listeners against the host shell.
  */
 @Log4j2
 public final class MainTab {
 
-    /** Approximate pixel size of a pane's title bar — used as the SashForm
-     *  weight for the collapsed pane. */
-    private static final int COLLAPSED_PANE_SIZE  = 28;
+    /** Sidebar tab icon size in pixels — 48 normally, 24 when the user
+     *  ticks "Small icons in main tab" in Look &amp; Feel preferences. */
+    private static final int ICON_BIG_PX   = 48;
+    private static final int ICON_SMALL_PX = 24;
+    /** Top-tab icon sizes are smaller — the SWT TabFolder enforces a
+     *  height around the system font metric, and asking for a 48 px icon
+     *  would force the runtime to stretch it (visibly distorting the
+     *  aspect since the tab is taller-than-wide on most platforms). */
+    private static final int TOP_ICON_BIG_PX   = 24;
+    private static final int TOP_ICON_SMALL_PX = 16;
+    /** Width of the left sidebar — sized for an icon centred on top with
+     *  a vertically-rotated label underneath (label width = its line
+     *  height once rotated, not its run length). */
+    private static final int LEFT_BAR_WIDTH_BIG_PX   = 72;
+    private static final int LEFT_BAR_WIDTH_SMALL_PX = 48;
 
     private final Display display;
     private final Shell   shell;
 
-    private SashForm hSplit;     // generator | (osc / fft)
-    private SashForm vSplit;     // osc / fft
-    @Getter private OscilloscopeController oscController;
-    @Getter private GeneratorPane          genPane;
-    @Getter private FftPane                fftPane;
-    private OscilloscopePane                oscPane;
-
-    /** SashForm weights snapshot at collapse time so toggle helpers can
-     *  restore them on expand. */
-    private int[]   preCollapseVSplitWeights;
-
-    /** Bus subscriptions for pane title-bar clicks.  Each subscriber
-     *  receives the NEW collapsed state as the payload.  Stored as
-     *  fields so the shell-dispose listener can unsubscribe the SAME
-     *  instances (method references compare by identity). */
-    private Consumer<Boolean> onGeneratorToggle;
-    private Consumer<Boolean> onScopeToggle;
-    private Consumer<Boolean> onFftToggle;
+    private MultifunctionalTab    multifunctional;
+    @SuppressWarnings("unused") // Tab class instances are created for their UI; we don't need to keep a method reference yet.
+    private FrequencyResponseTab  frequencyResponse;
 
     public MainTab(Shell shell) {
         this.shell   = shell;
         this.display = shell.getDisplay();
-
-        buildPanes();
+        // Eager init of the SharedCapture singleton so its MessageBus
+        // responder is registered BEFORE any pane fires a CAPTURE_ACQUIRE
+        // request — otherwise the request returns null and the user
+        // thinks the device failed to open.
+        SharedCapture.instance();
+        buildHost();
     }
 
     /** Two-phase setup: {@link MainWindow} calls this after it has read
      *  the natural shell size (and clamped the shell's minimum to it).
-     *  Collapsing a pane changes the SashForm weights to {@code {weight,
-     *  28}}, which makes {@link Shell#computeSize} balloon the natural
-     *  size to whatever total honours that ratio — so the saved-collapse
-     *  restore MUST happen after the minimum-size pass, otherwise a
-     *  shutdown with a collapsed pane reopens the window many thousands
-     *  of pixels tall / wide. */
+     *  See {@link MultifunctionalTab#applySavedLayoutState()} for the
+     *  rationale around ordering. */
     public void applySavedLayoutState() {
-        applySavedSashWeights();
-        applySavedCollapseStates();
-        registerStatePersistence();
+        if (multifunctional != null) multifunctional.applySavedLayoutState();
+        registerWindowSizePersistence();
     }
 
-    /** Smallest shell size that fits the panes' natural layout — used by
-     *  {@link MainWindow} to set the shell's minimum size. */
+    /** Smallest shell size that fits the contained tabs' natural layout
+     *  — used by {@link MainWindow} to set the shell's minimum size. */
     public Point computeNaturalShellSize() {
         return shell.computeSize(SWT.DEFAULT, SWT.DEFAULT, true);
     }
 
-    /** Pauses live capture + generator playback for the lifetime of a
-     *  modal dialog (e.g. Preferences).  Returns a {@link Runnable} that
-     *  resumes both when the dialog closes. */
     public Runnable pauseForDialog() {
-        boolean oscWasRunning = oscController != null && oscController.isRunning();
-        if (oscWasRunning) oscController.stop();
-        Runnable resumeGen = (genPane != null) ? genPane.pauseAroundDialog() : () -> {};
-        return () -> {
-            if (oscWasRunning) oscController.start();
-            resumeGen.run();
-        };
+        return (multifunctional != null) ? multifunctional.pauseForDialog() : () -> {};
     }
 
-    /** Stops running playback / capture in preparation for a shell
-     *  recreate (language switch).  Discards any resume hook — the next
-     *  instance restores state from {@link Preferences}. */
     public void stopForRecreate() {
-        if (oscController != null && oscController.isRunning()) oscController.stop();
-        if (genPane != null) genPane.pauseAroundDialog();
+        if (multifunctional != null) multifunctional.stopForRecreate();
+    }
+
+    public OscilloscopeController getOscController() {
+        return (multifunctional != null) ? multifunctional.getOscController() : null;
+    }
+
+    public GeneratorPane getGenPane() {
+        return (multifunctional != null) ? multifunctional.getGenPane() : null;
+    }
+
+    public FftPane getFftPane() {
+        return (multifunctional != null) ? multifunctional.getFftPane() : null;
     }
 
     // -------------------------------------------------------------------------
-    // Pane construction
+    // Host construction — top tabs vs. left sidebar
     // -------------------------------------------------------------------------
 
-    private void buildPanes() {
-        // Eager init of the SharedCapture singleton so its MessageBus
-        // responder is registered BEFORE the first pane fires a
-        // CAPTURE_ACQUIRE request (otherwise the request returns null
-        // and the user thinks the device failed to open).
-        SharedCapture.instance();
+    private void buildHost() {
+        String orientation = Preferences.instance().getTabOrientation();
+        if ("LEFT".equalsIgnoreCase(orientation)) {
+            buildLeftSidebar();
+        } else {
+            buildTopTabs();
+        }
+    }
 
-        // Top-level TabFolder hosts the panes — currently a single
-        // "Multifunctional" tab carrying the original three-pane layout
-        // (generator on the left, oscilloscope / FFT split on the right).
-        // Wrapping everything in a tab keeps room for dedicated single-
-        // function tabs (FRF, distortion, etc.) without rewiring the
-        // SashForm geometry.
+    private void buildTopTabs() {
+        int iconPx = Preferences.instance().isSmallIconsInMainTab()
+                ? TOP_ICON_SMALL_PX
+                : TOP_ICON_BIG_PX;
         TabFolder tabFolder = new TabFolder(shell, SWT.NONE);
-        TabItem multiTab = new TabItem(tabFolder, SWT.NONE);
-        multiTab.setText(I18n.t("tab.multifunctional"));
+
+        TabItem multiItem = new TabItem(tabFolder, SWT.NONE);
+        multiItem.setText(I18n.t("tab.multifunctional"));
+        multiItem.setImage(renderTabIcon(SvgPaths.SWISS_ARMY_KNIFE, iconPx));
         Composite multiContent = new Composite(tabFolder, SWT.NONE);
         multiContent.setLayout(new FillLayout());
-        multiTab.setControl(multiContent);
+        multiItem.setControl(multiContent);
+        multifunctional = new MultifunctionalTab(multiContent, shell);
 
-        // SWT.SMOOTH on a SashForm makes the contained Sash widgets update
-        // the content live while the user drags — without it you get the
-        // rubber-band ghost outline and the panes only reflow on release.
-        hSplit = new SashForm(multiContent, SWT.HORIZONTAL | SWT.SMOOTH);
-        hSplit.setSashWidth(4);
+        TabItem frItem = new TabItem(tabFolder, SWT.NONE);
+        frItem.setText(I18n.t("tab.frequencyResponse"));
+        frItem.setImage(renderTabIcon(SvgPaths.RIAA_IEC_CURVE, iconPx));
+        Composite frContent = new Composite(tabFolder, SWT.NONE);
+        frItem.setControl(frContent);
+        frequencyResponse = new FrequencyResponseTab(frContent);
 
-        genPane = new GeneratorPane(hSplit);
-
-        vSplit = new SashForm(hSplit, SWT.VERTICAL | SWT.SMOOTH);
-        vSplit.setSashWidth(4);
-        this.oscPane = new OscilloscopePane(vSplit, true);
-        this.oscController = oscPane.getController();
-
-        fftPane = new FftPane(vSplit, true);
-
-        // Title-bar collapse clicks are now broadcast through the
-        // MessageBus by each pane.  Store the handlers as fields so the
-        // matching unsubscribe in the shell-dispose listener (below)
-        // removes the exact same instances (method references compare
-        // by identity, not value).
-        MessageBus bus = MessageBus.instance();
-        onGeneratorToggle = this::toggleGenCollapse;
-        onScopeToggle     = this::toggleOscCollapse;
-        onFftToggle       = this::toggleFftCollapse;
-        bus.subscribe(Events.paneTitleClick(Events.PANE_ID_GENERATOR), onGeneratorToggle);
-        bus.subscribe(Events.paneTitleClick(Events.PANE_ID_SCOPE),     onScopeToggle);
-        bus.subscribe(Events.paneTitleClick(Events.PANE_ID_FFT),       onFftToggle);
+        // Restore the last-selected tab; default to Multifunctional.
+        int sel = clampSelection(Preferences.instance().getActiveTabIndex(), tabFolder.getItemCount());
+        tabFolder.setSelection(sel);
+        // Persist selection on dispose so the next launch reopens the
+        // same tab regardless of orientation.
         shell.addDisposeListener(e -> {
-            bus.unsubscribe(Events.paneTitleClick(Events.PANE_ID_GENERATOR), onGeneratorToggle);
-            bus.unsubscribe(Events.paneTitleClick(Events.PANE_ID_SCOPE),     onScopeToggle);
-            bus.unsubscribe(Events.paneTitleClick(Events.PANE_ID_FFT),       onFftToggle);
-        });
-
-        vSplit.setWeights(new int[]{1, 1});
-        hSplit.setWeights(new int[]{1, 3});
-
-        // Tint just the splitter bars #808080 with a #C8C8C8 hover state.
-        // We do NOT call setBackground on the SashForm itself — that
-        // would propagate the dark tint to every child Composite that
-        // hasn't set its own background, producing dark panes on GTK.
-        //
-        // The wiring is deferred to the first event-loop tick because
-        // SashForm creates its Sash children lazily during the first
-        // layout pass (which happens after shell.open()).
-        Color sashColor      = new Color(display, 0x80, 0x80, 0x80);
-        Color sashHoverColor = new Color(display, 0xC8, 0xC8, 0xC8);
-        display.asyncExec(() -> {
-            if (hSplit == null || hSplit.isDisposed()) return;
-            for (Control c : hSplit.getChildren()) {
-                if (c instanceof Sash s) tintSash(s, sashColor, sashHoverColor);
-            }
-            if (vSplit == null || vSplit.isDisposed()) return;
-            for (Control c : vSplit.getChildren()) {
-                if (c instanceof Sash s) tintSash(s, sashColor, sashHoverColor);
+            if (!tabFolder.isDisposed()) {
+                Preferences.instance().setActiveTabIndex(tabFolder.getSelectionIndex());
+                Preferences.instance().save();
             }
         });
+    }
+
+    private void buildLeftSidebar() {
+        int iconPx = iconSizePx();
+        int barWidth = Preferences.instance().isSmallIconsInMainTab()
+                ? LEFT_BAR_WIDTH_SMALL_PX
+                : LEFT_BAR_WIDTH_BIG_PX;
+        Composite root = new Composite(shell, SWT.NONE);
+        GridLayout rootLayout = new GridLayout(2, false);
+        rootLayout.marginWidth = 0;
+        rootLayout.marginHeight = 0;
+        rootLayout.horizontalSpacing = 0;
+        rootLayout.verticalSpacing = 0;
+        root.setLayout(rootLayout);
+
+        Composite sidebar = new Composite(root, SWT.NONE);
+        GridData sidebarGd = new GridData(SWT.LEFT, SWT.FILL, false, true);
+        sidebarGd.widthHint = barWidth;
+        sidebar.setLayoutData(sidebarGd);
+        GridLayout sbLayout = new GridLayout(1, false);
+        sbLayout.marginWidth  = 4;
+        sbLayout.marginHeight = 4;
+        sbLayout.verticalSpacing = 4;
+        sidebar.setLayout(sbLayout);
+
+        Composite contentHost = new Composite(root, SWT.NONE);
+        contentHost.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        StackLayout stack = new StackLayout();
+        contentHost.setLayout(stack);
+
+        Composite multiContent = new Composite(contentHost, SWT.NONE);
+        multiContent.setLayout(new FillLayout());
+        multifunctional = new MultifunctionalTab(multiContent, shell);
+
+        Composite frContent = new Composite(contentHost, SWT.NONE);
+        frequencyResponse = new FrequencyResponseTab(frContent);
+
+        Color hoverBg    = new Color(display, 0xE6, 0xEE, 0xF8);
+        Color selectedBg = new Color(display, 0xCD, 0xDD, 0xF5);
         shell.addDisposeListener(e -> {
-            sashColor.dispose();
-            sashHoverColor.dispose();
+            hoverBg.dispose();
+            selectedBg.dispose();
         });
 
-        // While either osc or fft is collapsed the SashForm only knows its
-        // weights, not its pixel size — so a window resize would scale the
-        // collapsed pane proportionally.  Re-pin the weights to
-        // {COLLAPSED_PANE_SIZE, remaining-pixels} on every resize so the
-        // collapsed pane stays at roughly the title-bar height.
-        vSplit.addControlListener(ControlListener.controlResizedAdapter(e -> {
-            boolean oscC = oscPane != null && oscPane.isCollapsed();
-            boolean fftC = fftPane != null && fftPane.isCollapsed();
-            if (oscC || fftC) {
-                int total = Math.max(2, vSplit.getSize().y);
-                int oscW  = oscC ? COLLAPSED_PANE_SIZE
-                                 : Math.max(1, total - COLLAPSED_PANE_SIZE);
-                int fftW  = fftC ? COLLAPSED_PANE_SIZE
-                                 : Math.max(1, total - oscW);
-                if (oscC && !fftC) fftW = Math.max(1, total - oscW);
-                if (fftC && !oscC) oscW = Math.max(1, total - fftW);
-                vSplit.setWeights(new int[]{ oscW, fftW });
-            }
-        }));
+        SidebarButton[] buttons = new SidebarButton[2];
+        buttons[0] = new SidebarButton(sidebar,
+                renderTabIcon(SvgPaths.SWISS_ARMY_KNIFE, iconPx),
+                I18n.t("tab.multifunctional"),
+                multiContent, hoverBg, selectedBg);
+        buttons[1] = new SidebarButton(sidebar,
+                renderTabIcon(SvgPaths.RIAA_IEC_CURVE, iconPx),
+                I18n.t("tab.frequencyResponse"),
+                frContent, hoverBg, selectedBg);
 
-        // Generator pane = fixed pixel width.  Display.addFilter(SWT.Selection)
-        // fires BEFORE the Sash widget's own listener chain — the only spot
-        // we can mutate e.x before SashForm's internal handler reads it.
-        // hSplit.controlResized then recomputes weights to preserve the
-        // tracked pixel width on window resize.
-        Listener sashFilter = e -> {
-            if (!(e.widget instanceof Sash sash)) return;
-            if (sash.getParent() == hSplit) {
-                // Collapsed generator: disallow drag so the user can't
-                // accidentally grow it via the splitter — they must click
-                // the title Label to expand.
-                if (genPane != null && genPane.isCollapsed()) { e.doit = false; return; }
-                if (e.x < GeneratorPane.MIN_WIDTH_PX) e.x = GeneratorPane.MIN_WIDTH_PX;
-                if (genPane != null) genPane.setPaneWidthPx(e.x);
-            } else if (sash.getParent() == vSplit) {
-                // Collapsed osc or fft locks the divider until the user
-                // expands the pane again.
-                if ((oscPane != null && oscPane.isCollapsed())
-                        || (fftPane != null && fftPane.isCollapsed())) {
-                    e.doit = false;
+        for (SidebarButton b : buttons) {
+            b.setSiblings(buttons);
+            b.setStack(stack, contentHost);
+        }
+
+        // Restore the last-selected tab; default to Multifunctional.
+        int sel = clampSelection(Preferences.instance().getActiveTabIndex(), buttons.length);
+        buttons[sel].select();
+
+        // Persist active-tab selection on dispose.
+        shell.addDisposeListener(e -> {
+            for (int i = 0; i < buttons.length; i++) {
+                if (buttons[i].isSelected()) {
+                    Preferences.instance().setActiveTabIndex(i);
+                    Preferences.instance().save();
+                    return;
                 }
             }
-        };
-        display.addFilter(SWT.Selection, sashFilter);
-        shell.addDisposeListener(e -> display.removeFilter(SWT.Selection, sashFilter));
-
-        hSplit.addControlListener(ControlListener.controlResizedAdapter(e -> {
-            int total = hSplit.getSize().x;
-            if (total <= 0) return;
-            int sashW = hSplit.getSashWidth();
-            int avail = Math.max(2, total - sashW);
-            boolean genC = genPane != null && genPane.isCollapsed();
-            if (avail < GeneratorPane.MIN_WIDTH_PX * 2 && !genC) return;
-
-            // First real resize after construction with no persisted width:
-            // derive an initial pixel width from the SashForm's current
-            // weights so the proportion isn't lost on the first paint.
-            if (genPane != null && genPane.getPaneWidthPx() < 0) {
-                int[] w = hSplit.getWeights();
-                long sum = (long) w[0] + (long) w[1];
-                int derived = sum > 0
-                        ? (int) ((long) avail * w[0] / sum)
-                        : GeneratorPane.MIN_WIDTH_PX;
-                genPane.setPaneWidthPx(Math.max(GeneratorPane.MIN_WIDTH_PX, derived));
-            }
-
-            int gen;
-            if (genC) {
-                gen = Math.min(COLLAPSED_PANE_SIZE, Math.max(1, avail - 1));
-            } else {
-                int desired = (genPane != null) ? genPane.getPaneWidthPx() : GeneratorPane.MIN_WIDTH_PX;
-                gen = Math.max(GeneratorPane.MIN_WIDTH_PX,
-                               Math.min(desired, avail - GeneratorPane.MIN_WIDTH_PX));
-            }
-            int osc = Math.max(1, avail - gen);
-            hSplit.setWeights(new int[]{ gen, osc });
-        }));
-    }
-
-    /** Paints a SashForm splitter bar with the resting tint and swaps to
-     *  the hover tint while the mouse is over it. */
-    private void tintSash(Sash sash, Color rest, Color hover) {
-        sash.setBackground(rest);
-        boolean[] hovered = { false };
-        sash.addListener(SWT.Paint, e -> {
-            Point sz = sash.getSize();
-            e.gc.setBackground(hovered[0] ? hover : rest);
-            e.gc.fillRectangle(0, 0, sz.x, sz.y);
-        });
-        sash.addMouseTrackListener(new MouseTrackAdapter() {
-            @Override
-            public void mouseEnter(MouseEvent e) {
-                if (sash.isDisposed()) return;
-                hovered[0] = true;
-                sash.setBackground(hover);
-                sash.redraw();
-            }
-            @Override
-            public void mouseExit(MouseEvent e) {
-                if (sash.isDisposed()) return;
-                hovered[0] = false;
-                sash.setBackground(rest);
-                sash.redraw();
-            }
         });
     }
 
-    // -------------------------------------------------------------------------
-    // Persistence
-    // -------------------------------------------------------------------------
-
-    /** Applies the Multifunctional tab's vertical split weights from prefs. */
-    private void applySavedSashWeights() {
-        int[] vw = Preferences.instance().getMultiVSplitWeights();
-        if (isValidWeights(vw, 2)) vSplit.setWeights(vw);
+    private static int clampSelection(int v, int n) {
+        if (v < 0) return 0;
+        if (v >= n) return n - 1;
+        return v;
     }
 
-    /** Restores the persisted collapse state of each pane.  Called after
-     *  panes are built and saved sash weights are applied so the toggle
-     *  helpers see a clean baseline. */
-    private void applySavedCollapseStates() {
-        Preferences prefs = Preferences.instance();
-        // Defensive: both osc and fft collapsed isn't a valid state — prefer osc.
-        boolean wantOsc = prefs.isOscPaneCollapsed();
-        boolean wantFft = prefs.isFftPaneCollapsed() && !wantOsc;
-        if (prefs.isGenPaneCollapsed())    toggleGenCollapse(true);
-        if (wantOsc)                       toggleOscCollapse(true);
-        else if (wantFft)                  toggleFftCollapse(true);
+    /** Left-sidebar icon size driven by the "Small icons in main tab" preference. */
+    private static int iconSizePx() {
+        return Preferences.instance().isSmallIconsInMainTab() ? ICON_SMALL_PX : ICON_BIG_PX;
     }
 
-    private boolean isValidWeights(int[] arr, int expectedLen) {
-        if (arr == null || arr.length != expectedLen) return false;
-        int sum = 0;
-        for (int v : arr) {
-            if (v < 0) return false;
-            sum += v;
+    /** Lazily renders an SVG icon to an {@link Image} at the requested
+     *  pixel height through {@link IconUtils}.  Returns {@code null} if the
+     *  icon is missing so the caller can fall back to a label-only tab. */
+    private Image renderTabIcon(String svgPath, int heightPx) {
+        try {
+            return IconUtils.instance().renderAtHeightColored(display, svgPath, heightPx);
+        } catch (RuntimeException ex) {
+            log.warn("Tab icon {} failed to render: {}", svgPath, ex.getMessage());
+            return null;
         }
-        return sum > 0;
     }
 
-    /** Writes the final pane geometry (window size, sash weights, collapse
-     *  flags, generator pane pixel width) to {@link Preferences} when the
-     *  shell is disposed.  Window size is tracked on every resize so we
-     *  always know the latest non-maximised dimensions; sash weights are
-     *  read straight from the SashForms at dispose time. */
-    private void registerStatePersistence() {
+    private void registerWindowSizePersistence() {
         Point initial = shell.getSize();
         int[] lastNormal = { initial.x, initial.y };
 
@@ -363,118 +280,152 @@ public final class MainTab {
         }));
 
         shell.addDisposeListener(e -> {
-            Preferences prefs = Preferences.instance();
-            prefs.setWindowWidth (lastNormal[0]);
-            prefs.setWindowHeight(lastNormal[1]);
-            if (genPane != null && genPane.getPaneWidthPx() >= GeneratorPane.MIN_WIDTH_PX) {
-                prefs.setGenPaneWidth(genPane.getPaneWidthPx());
-            }
-            boolean oscC = oscPane != null && oscPane.isCollapsed();
-            boolean fftC = fftPane != null && fftPane.isCollapsed();
-            boolean genC = genPane != null && genPane.isCollapsed();
-            if (vSplit != null && !vSplit.isDisposed() && !oscC && !fftC) {
-                // Only save the vertical split weights when neither pane is
-                // collapsed — saving the collapsed weights ({28, N-28}) would
-                // overwrite the user's actual desired split.
-                prefs.setMultiVSplitWeights(vSplit.getWeights());
-            }
-            prefs.setGenPaneCollapsed(genC);
-            prefs.setOscPaneCollapsed(oscC);
-            prefs.setFftPaneCollapsed(fftC);
-            prefs.save();
+            Preferences.instance().setWindowWidth (lastNormal[0]);
+            Preferences.instance().setWindowHeight(lastNormal[1]);
+            Preferences.instance().save();
         });
     }
 
-    // -------------------------------------------------------------------------
-    // Collapse helpers — own only the SashForm-level work (vSplit / hSplit
-    // weights, mutual exclusion).  Each pane owns its own child-hide /
-    // restore + title-text swap via setCollapsed(boolean).
-    // -------------------------------------------------------------------------
+    /** One row in the left sidebar — a {@link Canvas} that paints the
+     *  icon centered horizontally with the label wrapped underneath.
+     *  Using a Canvas (instead of nested Labels with a paint listener)
+     *  means our background fill is the only paint that runs for this
+     *  widget, so the icon and text are guaranteed to land on top
+     *  regardless of platform-specific Label paint order. */
+    private static final class SidebarButton extends Canvas {
+        private static final int PAD_X = 6;
+        private static final int PAD_Y = 8;
+        private static final int GAP_Y = 4;
 
-    /** Applies the requested collapsed state to the Oscilloscope pane
-     *  and rebalances the vertical {@link SashForm}.  Saves the current
-     *  {@code vSplit} weights on the way down so the user's pre-
-     *  collapse proportion can be restored on expand.  Called from the
-     *  bus subscription (click) and from
-     *  {@link #applySavedCollapseStates()}. */
-    private void toggleOscCollapse(Boolean newCollapsed) {
-        if (vSplit == null || vSplit.isDisposed()) return;
-        if (oscPane == null) return;
-        boolean collapsing = newCollapsed != null && newCollapsed;
-        // Only one of osc / fft can be collapsed at a time.
-        if (collapsing && fftPane != null && fftPane.isCollapsed()) {
-            toggleFftCollapse(false);
+        private final Image icon;
+        private final String label;
+        private final Color hoverBg;
+        private final Color selectedBg;
+        private final Composite content;
+        private final Font labelFont;
+        private SidebarButton[] siblings;
+        private StackLayout stack;
+        private Composite contentHost;
+        private boolean selected;
+        private boolean hovered;
+
+        SidebarButton(Composite parent, Image icon, String label,
+                      Composite content, Color hoverBg, Color selectedBg) {
+            super(parent, SWT.DOUBLE_BUFFERED);
+            this.icon       = icon;
+            this.label      = label;
+            this.hoverBg    = hoverBg;
+            this.selectedBg = selectedBg;
+            this.content    = content;
+
+            FontData fd = getFont().getFontData()[0];
+            this.labelFont = new Font(parent.getDisplay(), fd.getName(),
+                                      Math.max(8, fd.getHeight() - 1), SWT.NORMAL);
+            addDisposeListener(e -> { if (!labelFont.isDisposed()) labelFont.dispose(); });
+
+            GridData gd = new GridData(SWT.FILL, SWT.TOP, true, false);
+            gd.heightHint = computePreferredHeight();
+            setLayoutData(gd);
+
+            addPaintListener(this::onPaint);
+            addListener(SWT.MouseDown,  e -> select());
+            addListener(SWT.MouseEnter, e -> setHovered(true));
+            addListener(SWT.MouseExit,  e -> setHovered(false));
         }
-        if (collapsing) preCollapseVSplitWeights = vSplit.getWeights();
-        oscPane.setCollapsed(collapsing);
-        if (collapsing) {
-            int total = Math.max(2, vSplit.getSize().y);
-            int oscW  = Math.max(1, COLLAPSED_PANE_SIZE);
-            int fftW  = Math.max(1, total - oscW);
-            vSplit.setWeights(new int[]{ oscW, fftW });
-        } else {
-            int[] restore = preCollapseVSplitWeights;
-            if (restore != null && restore.length == 2 && restore[0] > 0 && restore[1] > 0) {
-                vSplit.setWeights(restore);
-            } else {
-                vSplit.setWeights(new int[]{ 1, 1 });
+
+        void setSiblings(SidebarButton[] siblings) {
+            this.siblings = siblings;
+        }
+
+        void setStack(StackLayout stack, Composite host) {
+            this.stack = stack;
+            this.contentHost = host;
+        }
+
+        boolean isSelected() {
+            return selected;
+        }
+
+        void select() {
+            if (siblings != null) {
+                for (SidebarButton b : siblings) {
+                    if (b != this && b.selected) {
+                        b.selected = false;
+                        b.redraw();
+                    }
+                }
             }
-            preCollapseVSplitWeights = null;
+            selected = true;
+            redraw();
+            if (stack != null && contentHost != null && !contentHost.isDisposed()) {
+                stack.topControl = content;
+                contentHost.layout();
+            }
         }
-        vSplit.layout(true);
+
+        private void setHovered(boolean h) {
+            if (hovered == h) return;
+            hovered = h;
+            redraw();
+        }
+
+        private int computePreferredHeight() {
+            int iconH = (icon != null) ? icon.getBounds().height : 0;
+            // Rotated label occupies its full text run vertically; estimate
+            // generously so the longest expected tab name (e.g.
+            // "Frequency response") fits without clipping.
+            int labelLen = 14 + label.length() * 7;
+            return PAD_Y + iconH + GAP_Y + labelLen + PAD_Y;
+        }
+
+        private void onPaint(PaintEvent e) {
+            Point size = getSize();
+            // Antialias + high-quality bitmap scaling so the icon stays
+            // crisp even when the host slightly resizes the tile.
+            e.gc.setAntialias(SWT.ON);
+            e.gc.setInterpolation(SWT.HIGH);
+            e.gc.setTextAntialias(SWT.ON);
+
+            if (selected) {
+                e.gc.setBackground(selectedBg);
+            } else if (hovered) {
+                e.gc.setBackground(hoverBg);
+            } else {
+                e.gc.setBackground(getDisplay().getSystemColor(SWT.COLOR_WIDGET_BACKGROUND));
+            }
+            e.gc.fillRectangle(0, 0, size.x, size.y);
+
+            int iconH = 0;
+            if (icon != null && !icon.isDisposed()) {
+                Rectangle ib = icon.getBounds();
+                int ix = Math.max(0, (size.x - ib.width) / 2);
+                int iy = PAD_Y;
+                e.gc.drawImage(icon, ix, iy);
+                iconH = ib.height;
+            }
+
+            // Label — painted vertically (rotated 90° counter-clockwise)
+            // so it reads bottom-to-top below the icon.  Mirrors the
+            // collapsed PaneTitle treatment in narrow strips so the
+            // sidebar feels consistent with the rest of the app.
+            e.gc.setFont(labelFont);
+            e.gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_WIDGET_FOREGROUND));
+            Point textExt = e.gc.textExtent(label);
+            int areaTop    = PAD_Y + iconH + GAP_Y;
+            int areaHeight = size.y - areaTop - PAD_Y;
+            float cx = size.x / 2f;
+            float cy = areaTop + areaHeight / 2f;
+            Transform tr = new Transform(getDisplay());
+            try {
+                tr.translate(cx, cy);
+                tr.rotate(-90);
+                tr.translate(-textExt.x / 2f, -textExt.y / 2f);
+                e.gc.setTransform(tr);
+                e.gc.drawText(label, 0, 0, true);
+                e.gc.setTransform(null);
+            } finally {
+                tr.dispose();
+            }
+        }
     }
-
-    /** Applies the requested collapsed state to the FFT pane and
-     *  rebalances the vertical {@link SashForm}. */
-    private void toggleFftCollapse(Boolean newCollapsed) {
-        if (vSplit == null || vSplit.isDisposed()) return;
-        if (fftPane == null) return;
-        boolean collapsing = newCollapsed != null && newCollapsed;
-        if (collapsing && oscPane != null && oscPane.isCollapsed()) {
-            toggleOscCollapse(false);
-        }
-        fftPane.setCollapsed(collapsing);
-        int total = Math.max(2, vSplit.getSize().y);
-        if (collapsing) {
-            int fftW = Math.max(1, COLLAPSED_PANE_SIZE);
-            int oscW = Math.max(1, total - fftW);
-            vSplit.setWeights(new int[]{ oscW, fftW });
-        } else {
-            vSplit.setWeights(new int[]{ 1, 1 });
-        }
-        vSplit.layout(true);
-    }
-
-    /** Applies the requested collapsed state to the Generator pane and
-     *  rebalances the horizontal {@link SashForm}.  Shrinks the pane's
-     *  WIDTH (not height) since it lives in the horizontal split.  The
-     *  pane itself owns its pre-collapse / restored width — this method
-     *  only reads the resulting {@link GeneratorPane#getPaneWidthPx()}
-     *  to apply the matching SashForm weights. */
-    private void toggleGenCollapse(Boolean newCollapsed) {
-        if (hSplit == null || hSplit.isDisposed()) return;
-        if (genPane == null) return;
-        boolean collapsing = newCollapsed != null && newCollapsed;
-        genPane.setCollapsed(collapsing);
-        int total = Math.max(2, hSplit.getSize().x);
-        int sashW = hSplit.getSashWidth();
-        int avail = Math.max(2, total - sashW);
-        int gen;
-        if (collapsing) {
-            gen = Math.min(COLLAPSED_PANE_SIZE, Math.max(1, avail - 1));
-        } else {
-            int desired = genPane.getPaneWidthPx();
-            gen = Math.max(GeneratorPane.MIN_WIDTH_PX,
-                           Math.min(desired, avail - GeneratorPane.MIN_WIDTH_PX));
-        }
-        int osc = Math.max(1, avail - gen);
-        hSplit.setWeights(new int[]{ gen, osc });
-        hSplit.layout(true);
-    }
-
-    // -------------------------------------------------------------------------
-    // Capture sharing — FFT pane consumes from the scope's SignalBuffer
-    // -------------------------------------------------------------------------
-
-
 }

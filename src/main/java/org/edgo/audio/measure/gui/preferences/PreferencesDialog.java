@@ -92,9 +92,47 @@ public final class PreferencesDialog {
         // helpers to know which backend's prefs to read/write.
         AudioBackendType[] active = { originalBackend };
 
-        // --- Tab folder: Audio + Oscilloscope -----------------------------
+        // Snapshot the Look & Feel prefs too so Cancel rolls them back.
+        final String originalTabOrientation = prefs.getTabOrientation();
+        final boolean originalSmallIcons    = prefs.isSmallIconsInMainTab();
+
+        // --- Tab folder: Look & Feel + Audio + Oscilloscope + FFT -----------
         TabFolder tabs = new TabFolder(dialog, SWT.TOP);
         tabs.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+
+        // --- Look & Feel tab (first) ---------------------------------------
+        TabItem lookFeelTabItem = new TabItem(tabs, SWT.NONE);
+        lookFeelTabItem.setText(I18n.t("preferences.tab.lookAndFeel"));
+        Composite lookFeelTab = new Composite(tabs, SWT.NONE);
+        GridLayout lfLayout = new GridLayout(2, false);
+        lfLayout.marginWidth  = 8;
+        lfLayout.marginHeight = 8;
+        lfLayout.verticalSpacing = 8;
+        lookFeelTab.setLayout(lfLayout);
+        lookFeelTabItem.setControl(lookFeelTab);
+
+        new Label(lookFeelTab, SWT.NONE).setText(I18n.t("preferences.lookAndFeel.tabOrientation"));
+        Combo orientationCombo = new Combo(lookFeelTab, SWT.READ_ONLY);
+        orientationCombo.add(I18n.t("preferences.lookAndFeel.tabOrientation.top"));
+        orientationCombo.add(I18n.t("preferences.lookAndFeel.tabOrientation.left"));
+        orientationCombo.select("LEFT".equalsIgnoreCase(originalTabOrientation) ? 1 : 0);
+        orientationCombo.setToolTipText(I18n.t("preferences.lookAndFeel.tabOrientation.tooltip"));
+        orientationCombo.setLayoutData(comboData());
+
+        // Spacer label so the checkbox lines up under the combo (column 2).
+        new Label(lookFeelTab, SWT.NONE);
+        Button smallIconsBtn = new Button(lookFeelTab, SWT.CHECK);
+        smallIconsBtn.setText(I18n.t("preferences.lookAndFeel.smallIcons"));
+        smallIconsBtn.setToolTipText(I18n.t("preferences.lookAndFeel.smallIcons.tooltip"));
+        smallIconsBtn.setSelection(originalSmallIcons);
+        smallIconsBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        // Footer note so the user knows Layout changes trigger a refresh.
+        Label lfNote = new Label(lookFeelTab, SWT.WRAP);
+        lfNote.setText(I18n.t("preferences.lookAndFeel.recreateNote"));
+        GridData noteGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        noteGd.horizontalSpan = 2;
+        lfNote.setLayoutData(noteGd);
 
         TabItem audioTabItem = new TabItem(tabs, SWT.NONE);
         audioTabItem.setText(I18n.t("preferences.tab.audio"));
@@ -419,6 +457,9 @@ public final class PreferencesDialog {
             prefs.setFftFilterResponseColor      (fftFilterColorHolder[0]);
             prefs.setBackend(active[0]);
             AudioBackend.instance().setActive(active[0]);
+            // Look & Feel saves.
+            prefs.setTabOrientation(orientationCombo.getSelectionIndex() == 1 ? "LEFT" : "TOP");
+            prefs.setSmallIconsInMainTab(smallIconsBtn.getSelection());
             BackendPrefs bp = prefs.current();
             log.info("Preferences saved: backend={}, in={} @ {} Hz / {} bits, out={} @ {} Hz / {} bits",
                     prefs.getBackend(),
@@ -438,6 +479,9 @@ public final class PreferencesDialog {
             }
             prefs.setBackend(originalBackend);
             AudioBackend.instance().setActive(originalBackend);
+            // Roll back Look & Feel too.
+            prefs.setTabOrientation(originalTabOrientation);
+            prefs.setSmallIconsInMainTab(originalSmallIcons);
             dialog.close();
         });
 

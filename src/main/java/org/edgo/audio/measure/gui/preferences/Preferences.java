@@ -60,6 +60,23 @@ public final class Preferences {
      *  default (English).  Empty / null → platform default. */
     @Getter @Setter private String uiLanguage = "en";
 
+    /** Where the main window's top-level tab strip sits — {@code "TOP"} for
+     *  a conventional horizontal tab folder, {@code "LEFT"} for a vertical
+     *  sidebar of large icon + label buttons.  Changing this triggers a
+     *  shell recreate so the new layout takes effect immediately. */
+    @Getter @Setter private String tabOrientation = "TOP";
+
+    /** Zero-based index of the most recently selected top-level tab,
+     *  restored on the next launch.  Only honoured by the LEFT sidebar
+     *  layout for now; the standard TabFolder remembers its own
+     *  selection via SWT. */
+    @Getter @Setter private int activeTabIndex = 0;
+
+    /** When true, the main tab strip draws icons at a smaller size — useful
+     *  on dense displays or when the user wants more vertical/horizontal
+     *  real estate for the actual measurement panes. */
+    @Getter @Setter private boolean smallIconsInMainTab = false;
+
     /** When true, the GUI checks GitHub releases for a newer version on
      *  startup.  Stays off by default so the app never makes network
      *  calls without explicit user opt-in. */
@@ -375,6 +392,9 @@ public final class Preferences {
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("backend",                backend.name());
         if (uiLanguage != null) root.put("uiLanguage", uiLanguage);
+        if (tabOrientation != null) root.put("tabOrientation", tabOrientation);
+        root.put("activeTabIndex", activeTabIndex);
+        root.put("smallIconsInMainTab", smallIconsInMainTab);
         root.put("checkForUpdatesOnStartup",  checkForUpdatesOnStartup);
         root.put("includeBetaInUpdateChecks", includeBetaInUpdateChecks);
         root.put("windowWidth",            windowWidth);
@@ -561,6 +581,9 @@ public final class Preferences {
 
     private void fromMap(Map<?, ?> root) {
         if (root.get("uiLanguage") instanceof String s) uiLanguage = s;
+        if (root.get("tabOrientation") instanceof String s) tabOrientation = s;
+        if (root.get("activeTabIndex") instanceof Number n) activeTabIndex = n.intValue();
+        if (root.get("smallIconsInMainTab") instanceof Boolean b) smallIconsInMainTab = b;
         if (root.get("checkForUpdatesOnStartup")  instanceof Boolean b) checkForUpdatesOnStartup  = b;
         if (root.get("includeBetaInUpdateChecks") instanceof Boolean b) includeBetaInUpdateChecks = b;
         if (root.get("backend") instanceof String s) {

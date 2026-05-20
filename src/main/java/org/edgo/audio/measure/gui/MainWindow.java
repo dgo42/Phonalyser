@@ -113,6 +113,14 @@ public final class MainWindow {
         shell.open();
         closeLanguageSwitchDialog();
         log.info("GUI started.");
+        // Fire the silent update check once the shell is up.  The
+        // checker spawns its own daemon thread; doing the check from
+        // open() (rather than during shell construction) means a network
+        // hiccup can't delay window paint.
+        Preferences prefs = Preferences.instance();
+        if (prefs.isCheckForUpdatesOnStartup()) {
+            UpdateChecker.checkOnStartup(shell, prefs.isIncludeBetaInUpdateChecks());
+        }
     }
 
     public boolean isDisposed() {
@@ -222,7 +230,19 @@ public final class MainWindow {
             // down so it doesn't keep using the old backend after the
             // user switched.
             Runnable resume = mainTab.pauseForDialog();
-            new PreferencesDialog(shell).open(resume);
+            final String  origOrientation = Preferences.instance().getTabOrientation();
+            final boolean origSmallIcons  = Preferences.instance().isSmallIconsInMainTab();
+            new PreferencesDialog(shell).open(() -> {
+                resume.run();
+                // Layout-affecting Look & Feel prefs require a shell
+                // rebuild (top tabs ↔ left sidebar ↔ icon size); piggyback
+                // on the existing language-switch recreate mechanism.
+                Preferences prefs = Preferences.instance();
+                if (!origOrientation.equalsIgnoreCase(prefs.getTabOrientation())
+                        || origSmallIcons != prefs.isSmallIconsInMainTab()) {
+                    requestRecreate();
+                }
+            });
         });
 
         MenuItem helpCascade = new MenuItem(menuBar, SWT.CASCADE);
