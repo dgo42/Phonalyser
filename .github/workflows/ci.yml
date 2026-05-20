@@ -1,0 +1,53 @@
+name: CI
+
+# Runs the test suite on every push to main / develop and on every pull
+# request targeting those branches.  The matrix covers Linux, Windows, and
+# macOS so platform-specific regressions (SWT, audio backends, locale
+# defaults) get caught before they reach a release tag.
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same branch / PR when a new push arrives —
+# saves CI minutes on quick consecutive pushes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Don't cancel the rest of the matrix on a single-OS failure — we
+      # want to see all three results in one run, not just the first
+      # failure.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Compile and run tests
+        run: mvn -B -ntp test
+
+      # Upload Surefire reports when tests fail so the failure can be
+      # inspected without having to re-run locally.  `if: failure()` keeps
+      # the green-build artifact list empty.
+      - name: Upload Surefire reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports-${{ matrix.os }}
+          path: target/surefire-reports/
+          retention-days: 14
