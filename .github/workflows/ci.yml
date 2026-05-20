@@ -52,6 +52,10 @@ jobs:
       # installers on every push.  Real installers are still built by the
       # release workflow on tag pushes.
       - name: Compile, test, and build app image
+        # Force bash on every runner — PowerShell (the Windows default)
+        # splits "-Djpackage.type=APP_IMAGE" on the period and Maven
+        # then sees ".type=APP_IMAGE" as a phase name.
+        shell: bash
         run: mvn -B -ntp -Djpackage.type=APP_IMAGE package
 
       - name: Upload app image
