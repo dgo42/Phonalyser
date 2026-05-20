@@ -113,7 +113,8 @@ public final class FilePlayController {
             lastStartError = ex.getMessage();
         } finally {
             if (line != null) {
-                try { line.stop(); } catch (Exception ignored) {}
+                final SourceDataLine fLine = line;
+                Closeables.tryQuietly("SourceDataLine.stop", fLine::stop);
             }
             Closeables.closeQuietly(line);
             Closeables.closeQuietly(in);

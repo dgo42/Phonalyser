@@ -179,7 +179,7 @@ public final class SharedCapture {
         refCount--;
         if (refCount > 0) return;
         if (capture != null) {
-            try { capture.stopRecording(); } catch (Exception ignored) {}
+            Closeables.tryQuietly("capture.stopRecording", capture::stopRecording);
             Closeables.closeQuietly(capture);
             capture = null;
         }

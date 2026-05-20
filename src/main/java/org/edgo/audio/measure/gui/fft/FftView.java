@@ -375,6 +375,7 @@ public final class FftView extends Canvas {
     }
 
     private void disposeResources() {
+        worker.stop();
         if (background          != null) background.dispose();
         gridColor.dispose();
         axisColor.dispose();

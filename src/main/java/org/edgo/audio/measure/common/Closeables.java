@@ -27,4 +27,22 @@ public final class Closeables {
             log.debug("close() failed on {}: {}", c.getClass().getSimpleName(), t.toString());
         }
     }
+
+    /**
+     * Runs {@code action}; logs (debug) on failure and returns.  Use for
+     * non-AutoCloseable cleanup paths — native handle releases, {@code stop()}
+     * / {@code stopRecording()} on a line, JNA {@code Pa_CloseStream}, etc.
+     */
+    public static void tryQuietly(String label, ThrowingRunnable action) {
+        try {
+            action.run();
+        } catch (Throwable t) {
+            log.debug("{} failed: {}", label, t.toString());
+        }
+    }
+
+    @FunctionalInterface
+    public interface ThrowingRunnable {
+        void run() throws Throwable;
+    }
 }

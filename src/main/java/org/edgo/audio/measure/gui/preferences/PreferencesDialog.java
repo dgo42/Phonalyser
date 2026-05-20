@@ -490,8 +490,10 @@ public final class PreferencesDialog {
         // Dispose the previous swatch lazily on widget dispose so we don't
         // leak — the dispose listener fires once, after the last setBackground.
         Color disposeOld = old;
-        btn.addDisposeListener(e -> { if (disposeOld != null && !disposeOld.isDisposed()) disposeOld.dispose(); });
-        btn.addDisposeListener(e -> { if (!c.isDisposed()) c.dispose(); });
+        btn.addDisposeListener(e -> {
+            if (disposeOld != null && !disposeOld.isDisposed()) disposeOld.dispose();
+            if (!c.isDisposed()) c.dispose();
+        });
     }
 
     private RGB unpackRgb(int rgbInt) {

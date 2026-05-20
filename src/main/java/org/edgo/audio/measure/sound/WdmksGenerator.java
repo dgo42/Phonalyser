@@ -6,6 +6,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.generator.SignalGenerator;
 
 import com.sun.jna.NativeLong;
@@ -273,7 +274,7 @@ public class WdmksGenerator implements AudioPlayback {
     @Override
     public void close() {
         if (stream != null) {
-            try { PortAudio.lib().Pa_CloseStream(stream); } catch (Throwable ignored) {}
+            Closeables.tryQuietly("Pa_CloseStream", () -> PortAudio.lib().Pa_CloseStream(stream));
             stream = null;
         }
     }

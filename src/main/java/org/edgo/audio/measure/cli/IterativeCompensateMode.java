@@ -329,8 +329,10 @@ public class IterativeCompensateMode {
                     }
                     Thread.sleep(200);
                 }
-            } catch (Exception ignored) {}
-        }, "keyboard-stop");
+            } catch (Exception e) {
+                log.debug("Keyboard-stop watcher exited: {}", e.toString());
+            }
+        }, "iterative-compensate-keyboard-stop");
         keyboardThread.setDaemon(true);
         keyboardThread.start();
         log.info(">>> Press Enter at any time to stop the iterative loop and save the best result. <<<");

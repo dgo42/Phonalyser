@@ -7,6 +7,7 @@ import java.util.function.Consumer;
 
 import javax.sound.sampled.AudioFormat;
 
+import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.common.StereoSample;
 
 import com.sun.jna.Pointer;
@@ -278,7 +279,7 @@ public class WdmksRecorder implements AudioCapture {
             try { stopRecording(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         }
         if (stream != null) {
-            try { PortAudio.lib().Pa_CloseStream(stream); } catch (Throwable ignored) {}
+            Closeables.tryQuietly("Pa_CloseStream", () -> PortAudio.lib().Pa_CloseStream(stream));
             stream = null;
         }
     }

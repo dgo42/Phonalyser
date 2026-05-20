@@ -506,6 +506,7 @@ public final class OscilloscopeView extends Canvas {
             }
         });
         addDisposeListener(e -> {
+            measWorker.stop();
             background.dispose();
             gridColor.dispose();
             crossColor.dispose();

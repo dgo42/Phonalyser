@@ -430,7 +430,7 @@ public class SignalGenerator {
             case SINE              -> ddsSine();
             case TRIANGLE          -> ddsTriangle();
             case RECTANGLE         -> ddsRectangle();
-            case WHITE_NOISE       -> whiteNoise();
+            case WHITE_NOISE       -> rng.nextGaussian();
             case PINK_NOISE        -> pinkNoise(false);
             case PINK_NOISE_LINEAR -> pinkNoise(true);
             case SINE_COMPENSATED  -> ddsSineCompensated();
@@ -687,11 +687,6 @@ public class SignalGenerator {
     // -------------------------------------------------------------------------
     // Noise generators
     // -------------------------------------------------------------------------
-
-    /** Gaussian white noise; nominally ~99.7 % of samples within [-1, +1]. */
-    private double whiteNoise() {
-        return rng.nextGaussian();
-    }
 
     /**
      * Pink noise via the Voss–McCartney summed-octave algorithm.
