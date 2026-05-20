@@ -45,8 +45,21 @@ jobs:
       - name: Install vendored flac-library
         run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
 
-      - name: Compile and run tests
-        run: mvn -B -ntp test
+      # Runs the full build chain: compile → test → fat JAR → antrun copy
+      # of native libs (Windows) → jpackage.  jpackage.type=APP_IMAGE
+      # produces the runtime image only (no MSI/DEB/DMG wrap), which is
+      # enough to catch packaging regressions and faster than building
+      # installers on every push.  Real installers are still built by the
+      # release workflow on tag pushes.
+      - name: Compile, test, and build app image
+        run: mvn -B -ntp -Djpackage.type=APP_IMAGE package
+
+      - name: Upload app image
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonalyser-${{ matrix.os }}-app-image
+          path: target/installer/
+          retention-days: 14
 
       # Upload Surefire reports when tests fail so the failure can be
       # inspected without having to re-run locally.  `if: failure()` keeps
