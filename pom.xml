@@ -321,7 +321,7 @@
                         <groupId>org.panteleyev</groupId>
                         <artifactId>jpackage-maven-plugin</artifactId>
                         <configuration>
-                            <icon>${project.basedir}/branding/phonalyser.icns</icon>
+                            <icon>${project.basedir}/src/main/resources/icons/phonalyser.icns</icon>
                             <!-- SWT on macOS must run on the main thread. -->
                             <javaOptions combine.children="append">
                                 <option>-XstartOnFirstThread</option>
@@ -364,7 +364,7 @@
                         <groupId>org.panteleyev</groupId>
                         <artifactId>jpackage-maven-plugin</artifactId>
                         <configuration>
-                            <icon>${project.basedir}/branding/phonalyser.icns</icon>
+                            <icon>${project.basedir}/src/main/resources/icons/phonalyser.icns</icon>
                             <!-- SWT on macOS must run on the main thread. -->
                             <javaOptions combine.children="append">
                                 <option>-XstartOnFirstThread</option>
