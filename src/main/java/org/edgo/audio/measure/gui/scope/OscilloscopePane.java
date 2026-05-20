@@ -47,6 +47,7 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
+import org.edgo.audio.measure.gui.sound.SignalBuffer;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.extern.log4j.Log4j2;
@@ -317,36 +318,7 @@ public final class OscilloscopePane {
         vertSlider.addListener(SWT.Selection, e -> onVertSliderMoved());
         // Initial selection from the prefs.
         syncVertSliderFromPrefs();
-        // Mouse wheel on the scope canvas — four modes, matched to the
-        // mental model of a hardware scope's "position" / "scale" knobs:
-        //   plain wheel             → vertical offset (everything in sync)
-        //   Shift + wheel           → horizontal offset (time scroll / trig pos)
-        //   Ctrl  + wheel           → vertical scale (V/div) on both channels
-        //   Shift + Ctrl + wheel    → horizontal scale (t/div)
-        view.addListener(SWT.MouseVerticalWheel, e -> {
-            if (e.count == 0) return;
-            int dir = Integer.signum(e.count);   // wheel up = +1
-            boolean ctrl  = (e.stateMask & SWT.CTRL)  != 0;
-            boolean shift = (e.stateMask & SWT.SHIFT) != 0;
-            Rectangle area = view.getClientArea();
-            if (ctrl && shift) {
-                // Shift + Ctrl + wheel: t/div zoom around the mouse X
-                // (wheel up → step DOWN in t/div since smaller t/div is
-                // finer time resolution).
-                stepTimePerDivAround(-dir, e.x, area.width);
-            } else if (ctrl) {
-                // Ctrl + wheel: V/div zoom around the mouse Y (wheel up →
-                // step DOWN in V/div).
-                stepVoltsPerDivAround(-dir, e.y, area.height);
-            } else if (shift) {
-                // Shift + wheel: horizontal offset.
-                stepHorizontalOffset(dir);
-            } else {
-                // Plain wheel: vertical offset (everything).
-                stepMeasurementChannelOffset(dir);
-            }
-            e.doit = false;
-        });
+        installScopeViewWheelHandler();
 
         // Navigation slider between the main view and the condensed
         // strip.  Selection = how far back from the live writePos the
@@ -461,99 +433,8 @@ public final class OscilloscopePane {
         toolbar.layout(true, true);
         group.layout(true, true);
 
-        // Paint listener fires AFTER CTabFolder's internal renderer has
-        // drawn the default tab strip; we use it to add the tile row under
-        // each custom-tab's label.  Also rebuilds the painted-region map
-        // (label + each tile) so the MouseMove listener below can show a
-        // region-specific tooltip on hover.
-        tabs.addPaintListener(e -> {
-            tabRegions.clear();
-            for (int i = 0; i < NUM_CUSTOM_TABS && i < tabs.getItemCount(); i++) {
-                if (!tabs.getItem(i).isDisposed()) {
-                    drawTabTiles(e.gc, tabs.getItem(i).getBounds(), i);
-                }
-            }
-        });
-        // MouseMove → dynamic tooltip lookup against tabRegions.  Set
-        // the tooltip on the CTabItem the cursor is hovering, because
-        // CTabFolder's built-in tab-tooltip mechanism takes priority over
-        // the widget-level setToolTipText (the latter is suppressed while
-        // the cursor is inside a tab).  Only change the text when the
-        // resolved region actually changes so the OS-native hover delay
-        // isn't reset on every pixel of movement.
-        final String[] currentTip = { null };
-        final int[]    currentIdx = { -1 };
-        tabs.addMouseMoveListener(e -> {
-            // First check tile regions (state-aware tooltips, pre-resolved
-            // at paint time).
-            String tip = null;
-            for (TabRegion r : tabRegions) {
-                if (r.bounds.contains(e.x, e.y)) { tip = r.tooltip; break; }
-            }
-            // Find the hovered tab; if no tile matched, fall back to the
-            // tab-level tooltip so hovering anywhere on the tab header
-            // (curve, margin, label) still shows the tab description.
-            int hoverIdx = -1;
-            for (int i = 0; i < tabs.getItemCount(); i++) {
-                if (!tabs.getItem(i).isDisposed()
-                        && tabs.getItem(i).getBounds().contains(e.x, e.y)) {
-                    hoverIdx = i;
-                    break;
-                }
-            }
-            if (tip == null && hoverIdx >= 0) {
-                String key = tabLabelTooltipKey(hoverIdx);
-                if (key != null) tip = I18n.t(key);
-            }
-            if (hoverIdx != currentIdx[0] || !Objects.equals(currentTip[0], tip)) {
-                currentTip[0] = tip;
-                currentIdx[0] = hoverIdx;
-                if (hoverIdx >= 0) {
-                    tabs.getItem(hoverIdx).setToolTipText(tip);
-                }
-            }
-        });
-        tabs.addListener(SWT.MouseExit, e -> {
-            if (currentIdx[0] >= 0 && currentIdx[0] < tabs.getItemCount()
-                    && !tabs.getItem(currentIdx[0]).isDisposed()) {
-                tabs.getItem(currentIdx[0]).setToolTipText(null);
-            }
-            currentTip[0] = null;
-            currentIdx[0] = -1;
-        });
-        tabs.addDisposeListener(e -> {
-            if (tabTileLedColor != null) tabTileLedColor.dispose();
-            if (tabTileBg       != null) tabTileBg      .dispose();
-            if (tabTileFg       != null) tabTileFg      .dispose();
-            if (tabTileFont     != null) tabTileFont    .dispose();
-            for (Image img : tabSpacerImages) {
-                if (img != null) img.dispose();
-            }
-        });
-
-        // Double-click on the tab strip toggles whether the tab CONTENT area
-        // is visible — the strip itself stays so the user can still swap
-        // tabs.  We detect "strip" by checking the click y is above the tab
-        // folder's client area (which starts below the tab header row).
-        tabs.addListener(SWT.MouseDoubleClick, e -> {
-            Rectangle ca = tabs.getClientArea();
-            if (e.y < ca.y) toggleToolbarTabsCollapse();
-        });
-        // Keyboard navigation when the CTabFolder has focus:
-        //   ←/→        cycle to previous / next tab
-        //   Enter      same as double-click on the tab strip — toggle the
-        //              tab content area's visibility
-        // ARROW_LEFT / ARROW_RIGHT navigation is left to CTabFolder's
-        // built-in traversal — it already moves the selection by exactly
-        // one tab.  Layering our own handler on top double-stepped (the
-        // traversal moved by 1 and the KeyDown handler moved by 1 more).
-        // Only Enter is handled here, to toggle the tab content area.
-        tabs.addListener(SWT.KeyDown, e -> {
-            if (e.keyCode == SWT.CR || e.keyCode == SWT.KEYPAD_CR) {
-                toggleToolbarTabsCollapse();
-                e.doit = false;
-            }
-        });
+        installTabPaintAndTooltips(tabs);
+        installTabCollapseShortcuts(tabs);
 
         recordButton = addToggleButton(toolbar, recordDim, recordLit);
         recordButton.setToolTipText(I18n.t("scope.record.tooltip"));
@@ -572,28 +453,40 @@ public final class OscilloscopePane {
             rgd.verticalAlignment         = SWT.BEGINNING;
         }
 
-        // Capture lifecycle — only on the live pane.  The screenshot pane
-        // mirrors the live Record-button visual state externally via
-        // setRecordingState() but never opens an audio device of its own.
         if (liveCapture) {
             controller = new OscilloscopeController(view, condensed);
             loader     = new ScopeOpenSignal(view, condensed);
-            wireRecordButton();
-            autoSetupListener = this::performAutoSetup;
-            MessageBus.instance().subscribe(Events.SCOPE_AUTO_SETUP, autoSetupListener);
-            group.addDisposeListener(e -> {
-                MessageBus.instance().unsubscribe(Events.SCOPE_AUTO_SETUP, autoSetupListener);
-                loader.clear();
-                controller.stop();
-            });
+            wireLiveCaptureLifecycle();
         } else {
             controller = null;
             loader     = null;
         }
 
-        // Auto-size the condensed strip on every Group resize.  Target
-        // height is 0.9 of one main-scope division (main has 10 divs):
-        // condensed / (main + condensed) = 0.9 / 10.9.
+        installCondensedAutoResize();
+        wireHelpAnchors();
+    }
+
+    /** Live-pane capture wiring: Record button, Auto-Setup bus subscription,
+     *  and a dispose listener that unsubscribes and tears the controller
+     *  down.  Called only when {@code liveCapture} is true — the
+     *  screenshot pane mirrors the Record-button visual state externally
+     *  via {@link #setRecordingState} but never opens an audio device of
+     *  its own. */
+    private void wireLiveCaptureLifecycle() {
+        wireRecordButton();
+        autoSetupListener = this::performAutoSetup;
+        MessageBus.instance().subscribe(Events.SCOPE_AUTO_SETUP, autoSetupListener);
+        group.addDisposeListener(e -> {
+            MessageBus.instance().unsubscribe(Events.SCOPE_AUTO_SETUP, autoSetupListener);
+            loader.clear();
+            controller.stop();
+        });
+    }
+
+    /** Auto-sizes the condensed strip on every Group resize.  Target
+     *  height is 0.9 of one main-scope division (main has 10 divs):
+     *  condensed / (main + condensed) = 0.9 / 10.9. */
+    private void installCondensedAutoResize() {
         group.addControlListener(ControlListener.controlResizedAdapter(e -> {
             int paneH    = group.getSize().y;
             int toolbarH = toolbar.getSize().y;
@@ -604,8 +497,6 @@ public final class OscilloscopePane {
                 group.layout(true, true);
             }
         }));
-
-        wireHelpAnchors();
     }
 
     /** Tags every interactive toolbar widget with a {@code "helpAnchor"}
@@ -749,7 +640,7 @@ public final class OscilloscopePane {
      *  the pane's own scope view (no cross-pane fallback — the FFT pane
      *  has its own calibrate button on the FFT side); aborts with an
      *  info MessageBox when no live Vrms is available.  Rescales
-     *  {@code AudioBackend.adcFsVoltageRms} so the displayed Vrms
+     *  {@code AudioBackend.getAdcFsVoltageRms()} so the displayed Vrms
      *  matches the entered value, and persists the new calibration. */
     private void openCalibrationDialog() {
         Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
@@ -762,8 +653,8 @@ public final class OscilloscopePane {
         final double measuredVrms = currentVrms;
         new AdcCalibrationDialog(parent, measuredVrms, actualVrms -> {
             double scale = actualVrms / measuredVrms;
-            double newFs = AudioBackend.adcFsVoltageRms * scale;
-            AudioBackend.adcFsVoltageRms = newFs;
+            double newFs = AudioBackend.getAdcFsVoltageRms() * scale;
+            AudioBackend.setAdcFsVoltageRms(newFs);
             Preferences.instance().setAdcFsVoltageRms(newFs);
             Preferences.instance().save();
         }).open();
@@ -1059,7 +950,112 @@ public final class OscilloscopePane {
      *    <li>Trigger: channel ({@code L}/{@code R}), edge ({@code ↑}/{@code ↓}),
      *        mode ({@code A}/{@code N}/{@code S}).</li>
      *  </ul> */
-    private void drawTabTiles(GC gc, org.eclipse.swt.graphics.Rectangle bounds, int tabIndex) {
+    /** Installs the paint, mouse-move, mouse-exit and dispose listeners
+     *  that turn the CTabFolder header into a hover-tooltipped tile strip.
+     *  Paint draws the per-tab tile row; mouse-move re-resolves the
+     *  tooltip on movement; mouse-exit clears it; dispose tears down the
+     *  paint resources.  Extracted from the constructor so the wiring
+     *  reads as one call instead of 70 inline lines. */
+    private void installTabPaintAndTooltips(CTabFolder tabs) {
+        // Paint listener fires AFTER CTabFolder's internal renderer has
+        // drawn the default tab strip; we use it to add the tile row under
+        // each custom-tab's label.  Also rebuilds the painted-region map
+        // (label + each tile) so the MouseMove listener below can show a
+        // region-specific tooltip on hover.
+        tabs.addPaintListener(e -> {
+            tabRegions.clear();
+            for (int i = 0; i < NUM_CUSTOM_TABS && i < tabs.getItemCount(); i++) {
+                if (!tabs.getItem(i).isDisposed()) {
+                    drawTabTiles(e.gc, tabs.getItem(i).getBounds(), i);
+                }
+            }
+        });
+        // MouseMove → dynamic tooltip lookup against tabRegions.  Set
+        // the tooltip on the CTabItem the cursor is hovering, because
+        // CTabFolder's built-in tab-tooltip mechanism takes priority over
+        // the widget-level setToolTipText (the latter is suppressed while
+        // the cursor is inside a tab).  Only change the text when the
+        // resolved region actually changes so the OS-native hover delay
+        // isn't reset on every pixel of movement.
+        final String[] currentTip = { null };
+        final int[]    currentIdx = { -1 };
+        tabs.addMouseMoveListener(e -> {
+            // First check tile regions (state-aware tooltips, pre-resolved
+            // at paint time).
+            String tip = null;
+            for (TabRegion r : tabRegions) {
+                if (r.bounds.contains(e.x, e.y)) { tip = r.tooltip; break; }
+            }
+            // Find the hovered tab; if no tile matched, fall back to the
+            // tab-level tooltip so hovering anywhere on the tab header
+            // (curve, margin, label) still shows the tab description.
+            int hoverIdx = -1;
+            for (int i = 0; i < tabs.getItemCount(); i++) {
+                if (!tabs.getItem(i).isDisposed()
+                        && tabs.getItem(i).getBounds().contains(e.x, e.y)) {
+                    hoverIdx = i;
+                    break;
+                }
+            }
+            if (tip == null && hoverIdx >= 0) {
+                String key = tabLabelTooltipKey(hoverIdx);
+                if (key != null) tip = I18n.t(key);
+            }
+            if (hoverIdx != currentIdx[0] || !Objects.equals(currentTip[0], tip)) {
+                currentTip[0] = tip;
+                currentIdx[0] = hoverIdx;
+                if (hoverIdx >= 0) {
+                    tabs.getItem(hoverIdx).setToolTipText(tip);
+                }
+            }
+        });
+        tabs.addListener(SWT.MouseExit, e -> {
+            if (currentIdx[0] >= 0 && currentIdx[0] < tabs.getItemCount()
+                    && !tabs.getItem(currentIdx[0]).isDisposed()) {
+                tabs.getItem(currentIdx[0]).setToolTipText(null);
+            }
+            currentTip[0] = null;
+            currentIdx[0] = -1;
+        });
+        tabs.addDisposeListener(e -> {
+            if (tabTileLedColor != null) tabTileLedColor.dispose();
+            if (tabTileBg       != null) tabTileBg      .dispose();
+            if (tabTileFg       != null) tabTileFg      .dispose();
+            if (tabTileFont     != null) tabTileFont    .dispose();
+            for (Image img : tabSpacerImages) {
+                if (img != null) img.dispose();
+            }
+        });
+    }
+
+    /** Installs the double-click and Enter-key handlers on the tab strip
+     *  that toggle the tab CONTENT area's visibility.  Strip stays so the
+     *  user can still swap tabs; only the content area collapses. */
+    private void installTabCollapseShortcuts(CTabFolder tabs) {
+        // Double-click on the tab strip — detect "strip" by checking the
+        // click y is above the tab folder's client area (which starts
+        // below the tab header row).
+        tabs.addListener(SWT.MouseDoubleClick, e -> {
+            Rectangle ca = tabs.getClientArea();
+            if (e.y < ca.y) toggleToolbarTabsCollapse();
+        });
+        // Keyboard navigation when the CTabFolder has focus:
+        //   ←/→        cycle to previous / next tab (CTabFolder built-in)
+        //   Enter      same as double-click on the tab strip
+        // ARROW_LEFT / ARROW_RIGHT navigation is left to CTabFolder's
+        // built-in traversal — it already moves the selection by exactly
+        // one tab.  Layering our own handler on top double-stepped (the
+        // traversal moved by 1 and the KeyDown handler moved by 1 more).
+        // Only Enter is handled here, to toggle the tab content area.
+        tabs.addListener(SWT.KeyDown, e -> {
+            if (e.keyCode == SWT.CR || e.keyCode == SWT.KEYPAD_CR) {
+                toggleToolbarTabsCollapse();
+                e.doit = false;
+            }
+        });
+    }
+
+    private void drawTabTiles(GC gc, Rectangle bounds, int tabIndex) {
         if (bounds == null || bounds.width <= 0 || bounds.height <= 0) return;
         if (tabIndex < 0 || tabIndex >= NUM_CUSTOM_TABS) return;
         Preferences prefs = Preferences.instance();
@@ -2047,7 +2043,7 @@ public final class OscilloscopePane {
         boolean enable = running && !fileMode;
         if (enable) {
             double vpp = view.getLastVpp();
-            double fsVpp = 2.0 * AudioBackend.adcFsVoltageRms * Math.sqrt(2.0);
+            double fsVpp = 2.0 * AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
             enable = !Double.isNaN(vpp) && fsVpp > 0.0
                   && (vpp / fsVpp) >= CALIBRATE_MIN_VPP_FRACTION;
         }
@@ -2277,6 +2273,42 @@ public final class OscilloscopePane {
      *  zoom).  We re-apply the mouse-anchored offsetFrac AFTER
      *  {@code setValue(...)} so our value wins and the redraw scheduled by
      *  the listener picks it up. */
+    /** Wires the four-mode mouse-wheel handler on the scope canvas.
+     *  Matched to the mental model of a hardware scope's "position" /
+     *  "scale" knobs:
+     *  <ul>
+     *    <li>plain wheel        → vertical offset (everything in sync)</li>
+     *    <li>Shift + wheel      → horizontal offset (time scroll / trig pos)</li>
+     *    <li>Ctrl  + wheel      → vertical scale (V/div) on both channels</li>
+     *    <li>Shift + Ctrl + wheel → horizontal scale (t/div)</li>
+     *  </ul> */
+    private void installScopeViewWheelHandler() {
+        view.addListener(SWT.MouseVerticalWheel, e -> {
+            if (e.count == 0) return;
+            int dir = Integer.signum(e.count);   // wheel up = +1
+            boolean ctrl  = (e.stateMask & SWT.CTRL)  != 0;
+            boolean shift = (e.stateMask & SWT.SHIFT) != 0;
+            Rectangle area = view.getClientArea();
+            if (ctrl && shift) {
+                // Shift + Ctrl + wheel: t/div zoom around the mouse X
+                // (wheel up → step DOWN in t/div since smaller t/div is
+                // finer time resolution).
+                stepTimePerDivAround(-dir, e.x, area.width);
+            } else if (ctrl) {
+                // Ctrl + wheel: V/div zoom around the mouse Y (wheel up →
+                // step DOWN in V/div).
+                stepVoltsPerDivAround(-dir, e.y, area.height);
+            } else if (shift) {
+                // Shift + wheel: horizontal offset.
+                stepHorizontalOffset(dir);
+            } else {
+                // Plain wheel: vertical offset (everything).
+                stepMeasurementChannelOffset(dir);
+            }
+            e.doit = false;
+        });
+    }
+
     private void stepVoltsPerDivAround(int delta, int mouseY, int height) {
         if (height <= 0) { stepVoltsPerDiv(delta); return; }
         Preferences prefs = Preferences.instance();
@@ -2474,7 +2506,7 @@ public final class OscilloscopePane {
      *  collapses back to exactly [0, 1] — there's nothing to scroll. */
     private double[] offsetFracBounds() {
         double vpdiv = measurementChannelVPDiv();
-        double fs    = AudioBackend.adcFsVoltageRms * Math.sqrt(2.0);
+        double fs    = AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
         double half  = (vpdiv <= 0 || fs <= 0)
                 ? 0.5
                 : fs / (OscilloscopeView.DIVISIONS_Y * vpdiv);

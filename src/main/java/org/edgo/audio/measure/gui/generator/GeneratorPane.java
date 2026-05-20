@@ -445,7 +445,7 @@ public final class GeneratorPane {
             // ampField's value is in the current display unit; canonicalise
             // to Vrms before saving so the unit-of-record is consistent.
             double vrms = currentUnit.toVrms(ampField.getValue(),
-                    AudioBackend.adcFsVoltageRms);
+                    AudioBackend.getAdcFsVoltageRms());
             prefs.setGenAmplitudeVrms(vrms);
             prefs.setGenAmplitudeUnit(currentUnit.display);
             prefs.save();
@@ -1178,7 +1178,7 @@ public final class GeneratorPane {
 
     /** Returns {@code vrms} converted into the current display unit. */
     private double amplitudeDisplayValue(double vrms) {
-        double fs = AudioBackend.adcFsVoltageRms;
+        double fs = AudioBackend.getAdcFsVoltageRms();
         return currentUnit.fromVrms(vrms, fs);
     }
 
@@ -1202,7 +1202,7 @@ public final class GeneratorPane {
      */
     private double rescaleAmplitudeUnit(double valueInCurrentUnit) {
         if (!currentUnit.isMetric()) return valueInCurrentUnit;
-        double fs = AudioBackend.adcFsVoltageRms;
+        double fs = AudioBackend.getAdcFsVoltageRms();
         double vrms = currentUnit.toVrms(valueInCurrentUnit, fs);
         if (Math.abs(vrms) < 1e-12) return valueInCurrentUnit;
         AmplitudeUnit best = AmplitudeUnit.bestMetricFor(Math.abs(vrms));

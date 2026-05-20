@@ -36,7 +36,7 @@ import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.generator.GeneratorController;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
-import org.edgo.audio.measure.gui.scope.SignalBuffer;
+import org.edgo.audio.measure.gui.sound.SignalBuffer;
 
 /**
  * Live FFT canvas.  Paints a black-on-white spectrum trace (one channel

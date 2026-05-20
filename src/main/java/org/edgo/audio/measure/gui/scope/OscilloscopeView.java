@@ -27,6 +27,7 @@ import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
+import org.edgo.audio.measure.gui.sound.SignalBuffer;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.extern.log4j.Log4j2;
@@ -1730,7 +1731,7 @@ public final class OscilloscopeView extends Canvas {
         // (typically ≥ 1 V/div); off-screen lines are naturally clipped.
         // Drawn before the offset track so the brighter offset zero-line
         // and triangle stay on top when they overlap.
-        double peakVolts = AudioBackend.adcFsVoltageRms * Math.sqrt(2.0);
+        double peakVolts = AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
         final int[] FS_DASH = { 2, 6 };
         if (showL) {
@@ -2192,7 +2193,7 @@ public final class OscilloscopeView extends Canvas {
         // channel's V/div and its current vertical offset (the channel's
         // zero-line lives at offsetFrac × h on screen).
         double triggerVDiv = (triggerCh == Channel.L) ? leftVDiv : rightVDiv;
-        double triggerPeakVolts = AudioBackend.adcFsVoltageRms * Math.sqrt(2.0);
+        double triggerPeakVolts = AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
         double vScaleTrig = triggerPeakVolts / triggerVDiv * pixelsPerDivY;
         double triggerCenterY = h * ((triggerCh == Channel.L)
@@ -2406,7 +2407,7 @@ public final class OscilloscopeView extends Canvas {
         double leftCenterY  = h * prefs.getOscLeftOffsetFrac();
         double rightCenterY = h * prefs.getOscRightOffsetFrac();
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
-        double peakVolts     = AudioBackend.adcFsVoltageRms * Math.sqrt(2.0);
+        double peakVolts     = AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
         float  lineWidth     = (float) prefs.getOscLineWidth();
         int    dotDiameter   = prefs.getOscDotDiameter();
 

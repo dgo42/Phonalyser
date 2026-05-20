@@ -58,7 +58,7 @@ import org.edgo.audio.measure.gui.preferences.FftPreset;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.AdcCalibrationDialog;
 import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
-import org.edgo.audio.measure.gui.scope.SignalBuffer;
+import org.edgo.audio.measure.gui.sound.SignalBuffer;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -664,8 +664,8 @@ public final class FftPane {
         final double measuredVrms = currentVrms;
         new AdcCalibrationDialog(parent, measuredVrms, actualVrms -> {
             double scale = actualVrms / measuredVrms;
-            double newFs = AudioBackend.adcFsVoltageRms * scale;
-            AudioBackend.adcFsVoltageRms = newFs;
+            double newFs = AudioBackend.getAdcFsVoltageRms() * scale;
+            AudioBackend.setAdcFsVoltageRms(newFs);
             Preferences.instance().setAdcFsVoltageRms(newFs);
             Preferences.instance().save();
         }).open();

@@ -4,6 +4,7 @@ import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
+import org.edgo.audio.measure.gui.sound.SignalBuffer;
 
 import lombok.extern.log4j.Log4j2;
 

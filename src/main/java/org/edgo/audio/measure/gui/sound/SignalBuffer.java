@@ -1,4 +1,4 @@
-package org.edgo.audio.measure.gui.scope;
+package org.edgo.audio.measure.gui.sound;
 
 /**
  * Fixed-capacity stereo ring buffer holding the most recent {@code N} samples
@@ -7,6 +7,13 @@ package org.edgo.audio.measure.gui.scope;
  * calls {@link #readLatest(int, float[], float[])} during paint events.  All
  * mutating / reading methods are synchronised on this instance, which is
  * adequate for a single writer + single reader scenario.
+ *
+ * <p>Lives in {@code gui.sound} (next to its producer
+ * {@link SharedCapture}) so the scope and FFT views can both depend on
+ * the sound package without dragging in scope-specific code.  Was
+ * formerly in {@code gui.scope}; that placement created a cycle —
+ * {@code gui.sound.SharedCapture} produces the buffer and {@code gui.scope.OscilloscopeController}
+ * consumes it.
  */
 public final class SignalBuffer {
 

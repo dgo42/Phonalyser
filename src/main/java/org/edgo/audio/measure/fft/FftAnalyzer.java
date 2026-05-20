@@ -863,7 +863,7 @@ public class FftAnalyzer {
         if (Double.isNaN(fundRefDbV)) {
             refLin = fundLinear;
         } else {
-            double fsV = AudioBackend.adcFsVoltageRms;
+            double fsV = AudioBackend.getAdcFsVoltageRms();
             double trueDbFs = fsV > 0.0 ? fundRefDbV - 20.0 * Math.log10(fsV) : fundRefDbV;
             refLin = Math.pow(10.0, trueDbFs / 20.0);
         }
@@ -1178,7 +1178,7 @@ public class FftAnalyzer {
         if (Double.isNaN(r.fundamentalTrueDbV)) {
             refLin = fundLinear;
         } else {
-            double fsV = AudioBackend.adcFsVoltageRms;
+            double fsV = AudioBackend.getAdcFsVoltageRms();
             double trueDbFs = fsV > 0.0
                     ? r.fundamentalTrueDbV - 20.0 * Math.log10(fsV)
                     : r.fundamentalTrueDbV;

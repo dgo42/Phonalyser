@@ -6,6 +6,7 @@ import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioInputStream;
 
 import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.gui.sound.SignalBuffer;
 import org.edgo.audio.measure.wav.PcmFileLoader;
 
 /**

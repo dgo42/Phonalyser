@@ -115,7 +115,7 @@ import org.edgo.audio.measure.enums.WindowType;
  *         [--bits 8|16|24]             ADC resolution (default 24)
  *         [--scale <V>]                full-scale ADC peak-to-peak voltage (e.g. 5.0 for
  *                                      ±2.5 V_p).  Default: derived from
- *                                      AudioBackend.adcFsVoltageRms as 2·√2·V_rms
+ *                                      AudioBackend.getAdcFsVoltageRms() as 2·√2·V_rms
  *         [--adc-fs-vrms <vrms>]       ADC full-scale RMS voltage; sets the global default
  *                                      for --scale and other dBV-aware modes
  *         [--device <i>]               input device index; auto-selected when only one exists
@@ -160,7 +160,7 @@ import org.edgo.audio.measure.enums.WindowType;
  *         --window <n>                 waveform-plot window size (samples)
  *         --width <px> --height <px>   chart size
  *         [--scale <V>]                full-scale ADC peak-to-peak voltage (default:
- *                                      2·√2·AudioBackend.adcFsVoltageRms)
+ *                                      2·√2·AudioBackend.getAdcFsVoltageRms())
  *         [--adc-fs-vrms <vrms>]       ADC full-scale RMS voltage
  *
  *   ── Analyze histogram (DNL + INL from a captured histogram CSV) ─────────
@@ -200,7 +200,7 @@ import org.edgo.audio.measure.enums.WindowType;
  *         [--fund-dbv <dbv>]           true level of the fundamental in dBV (alternative)
  *         [--adc-fs-vrms <vrms>]       ADC full-scale V_rms; used to derive dBV from dBFS
  *                                      when neither --fund-v nor --fund-dbv is given
- *                                      (defaults to AudioBackend.adcFsVoltageRms)
+ *                                      (defaults to AudioBackend.getAdcFsVoltageRms())
  *         [--sub-harmonics <csv>]      subtract H2+ sinusoids loaded from this fft_harmonics CSV
  *                                      from the time-domain signal before the FFT runs
  *         [--sub-harmonics-reim]       derive subtraction phase from re/im columns of that CSV
@@ -723,7 +723,7 @@ public class Main {
         String bitsArg       = getArgValue(args, "--bits");
         String adcFsArg      = getArgValue(args, "--adc-fs-vrms");
         if (adcFsArg != null) {
-            AudioBackend.adcFsVoltageRms = Double.parseDouble(adcFsArg);
+            AudioBackend.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         boolean loadMode   = (loadArg != null);
@@ -759,11 +759,11 @@ public class Main {
             System.exit(1);
         }
         // --scale is the ADC's full-scale peak-to-peak voltage (e.g. 5.0 for ±2.5 V_p).
-        // Default: derive from AudioBackend.adcFsVoltageRms — for an FS-RMS rating
+        // Default: derive from AudioBackend.getAdcFsVoltageRms() — for an FS-RMS rating
         // of 1.7931 V the peak-to-peak range is 2·√2·V_rms ≈ 5.072 V.
         double scaleVolts = scaleArg != null
                 ? Double.parseDouble(scaleArg)
-                : 2.0 * Math.sqrt(2.0) * AudioBackend.adcFsVoltageRms;
+                : 2.0 * Math.sqrt(2.0) * AudioBackend.getAdcFsVoltageRms();
         if (scaleVolts <= 0) {
             log.error("--scale must be a positive number.");
             System.exit(1);
@@ -920,7 +920,7 @@ public class Main {
         log.info("    [--fund-v <vrms>]         true RMS voltage of the fundamental — anchors dBV scale");
         log.info("    [--fund-dbv <dbv>]        true fundamental level in dBV (alternative to --fund-v)");
         log.info("    [--adc-fs-vrms <vrms>]    ADC full-scale V_rms (sets dBV scale when --fund-v/-dbv");
-        log.info("                              absent; defaults to AudioBackend.adcFsVoltageRms)");
+        log.info("                              absent; defaults to AudioBackend.getAdcFsVoltageRms())");
         log.info("    [--sub-harmonics <csv>]   subtract H2+ sinusoids loaded from this CSV before FFT");
         log.info("    [--sub-harmonics-reim]    use re/im columns of that CSV (default: phase_deg)");
         log.info("    [--no-coherent]           incoherent power averaging across frames");
@@ -1519,7 +1519,7 @@ public class Main {
         String  adcFsArg     = getArgValue(args, "--adc-fs-vrms");
         String  loadWeightedArg = getArgValue(args, "--load-weighted");
         if (adcFsArg != null) {
-            AudioBackend.adcFsVoltageRms = Double.parseDouble(adcFsArg);
+            AudioBackend.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         if (fftSizeArg == null) {
@@ -1914,7 +1914,7 @@ public class Main {
         String loadWeightedArg = getArgValue(args, "--load-weighted");
         String syncPauseArg  = getArgValue(args, "--sync-pause");
         if (adcFsArg != null) {
-            AudioBackend.adcFsVoltageRms = Double.parseDouble(adcFsArg);
+            AudioBackend.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         if (samplerateArg == null) { log.error("--samplerate required"); System.exit(1); }
@@ -2110,7 +2110,7 @@ public class Main {
         double compStep      = compStepArg  != null ? Double.parseDouble(compStepArg)  : 1.0;
         String adcFsArg      = getArgValue(args, "--adc-fs-vrms");
         if (adcFsArg != null) {
-            AudioBackend.adcFsVoltageRms = Double.parseDouble(adcFsArg);
+            AudioBackend.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         if (samplerateArg == null) { log.error("--samplerate required"); System.exit(1); }
@@ -3413,7 +3413,7 @@ public class Main {
         if (samplerateArg == null) { log.error("--samplerate required"); System.exit(1); }
         if (amplitudeArg  == null) { log.error("--amplitude required");  System.exit(1); }
         if (adcFsArg != null) {
-            AudioBackend.adcFsVoltageRms = Double.parseDouble(adcFsArg);
+            AudioBackend.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         int sampleRate = Integer.parseInt(samplerateArg);
@@ -3729,11 +3729,11 @@ public class Main {
             pw.printf(Locale.US, "# sweep_start_hz=%.6f%n", sweepStart);
             pw.printf(Locale.US, "# sweep_end_hz=%.6f%n",   sweepEnd);
             pw.printf(Locale.US, "# sweep_points=%d%n",     sweepPoints);
-            pw.printf(Locale.US, "# adc_fs_voltage_rms=%.6f%n", AudioBackend.adcFsVoltageRms);
+            pw.printf(Locale.US, "# adc_fs_voltage_rms=%.6f%n", AudioBackend.getAdcFsVoltageRms());
             pw.printf(Locale.US, "# dac_drive_v_rms=%.6f%n",    amplitudeVRms);
             pw.printf(Locale.US, "# dac_drive_dbfs=%.6f%n",     dacDriveDbFs);
             pw.println("frequency_hz;magnitude_dbfs;magnitude_dbv;magnitude_db_rel;phase_deg");
-            double dbvScale = AudioBackend.adcFsVoltageRms;
+            double dbvScale = AudioBackend.getAdcFsVoltageRms();
             for (int i = 0; i < cal.freqs.length; i++) {
                 // cal.magLin is the RELATIVE filter response (passband ≈ 1).
                 // Multiply by dacDrivePeak to recover the absolute capture peak
@@ -3929,9 +3929,9 @@ public class Main {
      * DUT/attenuator/filter did between them.  No-op when fundRefDbV is already set.
      */
     private void applyDefaultDbvScaling(FftAnalyzer.Result result) {
-        if (Double.isNaN(result.fundRefDbV) && AudioBackend.adcFsVoltageRms > 0.0) {
+        if (Double.isNaN(result.fundRefDbV) && AudioBackend.getAdcFsVoltageRms() > 0.0) {
             result.fundRefDbV = result.fundamentalDbFs
-                    + 20.0 * Math.log10(AudioBackend.adcFsVoltageRms);
+                    + 20.0 * Math.log10(AudioBackend.getAdcFsVoltageRms());
         }
     }
 

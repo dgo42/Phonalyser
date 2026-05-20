@@ -64,7 +64,7 @@ public final class GuiMain {
         AudioBackend.instance().setActive(saved);
         // Apply the persisted ADC calibration (full-scale RMS voltage) so
         // all voltage readouts reflect the user's last calibration result.
-        AudioBackend.adcFsVoltageRms = Preferences.instance().getAdcFsVoltageRms();
+        AudioBackend.setAdcFsVoltageRms(Preferences.instance().getAdcFsVoltageRms());
 
         Display display = new Display();
         boolean recreate;

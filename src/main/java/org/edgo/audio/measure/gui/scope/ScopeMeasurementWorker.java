@@ -7,6 +7,7 @@ import lombok.extern.log4j.Log4j2;
 
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.gui.sound.SignalBuffer;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 /**
@@ -277,7 +278,7 @@ public final class ScopeMeasurementWorker {
         // paint thread's AC-mode trace offset and AC-mode trigger-level shift.
         int avail = b.readLatest(measN, measLeftBuf, measRightBuf);
         if (avail < 64) return;
-        double peakVolts = AudioBackend.adcFsVoltageRms * Math.sqrt(2.0);
+        double peakVolts = AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
         double leftMean  = sampleMean(measLeftBuf,  avail);
         double rightMean = sampleMean(measRightBuf, avail);
         float[] data = (selected == Channel.L) ? measLeftBuf : measRightBuf;

@@ -11,6 +11,7 @@ import org.edgo.audio.measure.wav.FlacWriter;
 import org.edgo.audio.measure.wav.WavWriter;
 import org.edgo.audio.measure.enums.AudioFileFormat;
 import org.edgo.audio.measure.gui.interfaces.PcmSink;
+import org.edgo.audio.measure.gui.sound.SignalBuffer;
 
 /**
  * Writes the latest {@code durationSeconds} of capture from a

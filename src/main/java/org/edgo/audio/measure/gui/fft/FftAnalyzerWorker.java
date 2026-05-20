@@ -11,7 +11,7 @@ import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.preferences.Preferences;
-import org.edgo.audio.measure.gui.scope.SignalBuffer;
+import org.edgo.audio.measure.gui.sound.SignalBuffer;
 
 /**
  * Background analyser worker that owns the FFT compute thread, its

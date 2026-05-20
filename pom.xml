@@ -393,6 +393,15 @@
                     <encoding>${project.build.sourceEncoding}</encoding>
                 </configuration>
             </plugin>
+            <!-- Surefire 3.x picks up JUnit 5 (junit-jupiter) natively via the
+                 JUnit Platform — without this, Maven falls back to a default
+                 surefire-junit3 provider that doesn't know how to discover
+                 @Test methods on JUnit Jupiter classes. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>

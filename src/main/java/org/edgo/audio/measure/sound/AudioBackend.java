@@ -1,5 +1,7 @@
 package org.edgo.audio.measure.sound;
 
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 import javax.sound.sampled.AudioFormat;
@@ -26,10 +28,14 @@ import org.edgo.audio.measure.enums.AudioBackendType;
 public final class AudioBackend {
 
     /** ADC full-scale voltage in V_RMS.  Read from every render / FFT /
-     *  measurement path, so a static-field access is the cheapest option.
-     *  The calibration dialog updates this in-process; {@code Preferences}
-     *  carries the persisted copy across launches. */
-    public static double adcFsVoltageRms = 1.7931;
+     *  measurement path; encapsulated behind static {@code get}/{@code set}
+     *  accessors (Lombok-generated) so the in-process calibration dialog
+     *  and the CLI can both push fresh values without external callers
+     *  reaching into the field directly.  {@code Preferences} carries the
+     *  persisted copy across launches. */
+    @Getter
+    @Setter
+    private static double adcFsVoltageRms = 1.7931;
 
     private static volatile AudioBackend instance;
 

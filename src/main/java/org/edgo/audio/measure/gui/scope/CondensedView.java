@@ -1,6 +1,7 @@
 package org.edgo.audio.measure.gui.scope;
 
 import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.gui.sound.SignalBuffer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;
