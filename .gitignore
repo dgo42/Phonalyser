@@ -10,6 +10,7 @@ logs/
 results/
 plans/
 target/
+tools/
 test.*
 .deps_classpath
 pom.xml.tag

@@ -6,9 +6,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.function.BooleanSupplier;
-import java.util.function.DoubleSupplier;
-import java.util.function.Supplier;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
@@ -23,6 +20,7 @@ import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.PaletteData;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.FormAttachment;
 import org.eclipse.swt.layout.FormData;
 import org.eclipse.swt.layout.FormLayout;
@@ -37,14 +35,27 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.MessageBox;
+import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
+import org.edgo.audio.measure.enums.FftMagnitudeUnit;
+import org.edgo.audio.measure.enums.FftOverlap;
+import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
-import org.edgo.audio.measure.gui.FlatScrollbar;
-import org.edgo.audio.measure.gui.I18n;
-import org.edgo.audio.measure.gui.PaneTitle;
-import org.edgo.audio.measure.gui.Preferences;
+import org.edgo.audio.measure.gui.MainTab;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.IconUtils;
+import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.generator.NumericStepField;
+import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.interfaces.Stepper;
+import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.gui.scope.AdcCalibrationDialog;
+import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
 import org.edgo.audio.measure.gui.scope.SignalBuffer;
+import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
+import org.edgo.audio.measure.gui.widgets.PaneTitle;
+import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -65,8 +76,8 @@ public final class FftPane {
     private static final String[] FFT_LENGTH_LABELS = {
             "8k", "16k", "32k", "64k", "128k", "256k", "512k", "1M", "2M", "4M"
     };
-    /** Human-readable labels for {@link FftAnalyzer.WindowType} values
-     *  (index-aligned with {@code FftAnalyzer.WindowType.values()}). */
+    /** Human-readable labels for {@link WindowType} values
+     *  (index-aligned with {@code WindowType.values()}). */
     private static final String[] WINDOW_LABELS = {
             "Rectangular",
             "Hann",
@@ -75,19 +86,6 @@ public final class FftPane {
             "Flat top",
             "Dolph-Chebyshev 150",
             "Dolph-Chebyshev 200"
-    };
-    /** Magnitude unit options (combo top-right). */
-    private static final String[] MAG_UNIT_NAMES = {
-            FftMagnitudeUnit.V       .name(),
-            FftMagnitudeUnit.V_SQRT_HZ.name(),
-            FftMagnitudeUnit.DBV     .name(),
-            FftMagnitudeUnit.DBFS    .name()
-    };
-    private static final String[] MAG_UNIT_LABELS = {
-            FftMagnitudeUnit.V       .getLabel(),
-            FftMagnitudeUnit.V_SQRT_HZ.getLabel(),
-            FftMagnitudeUnit.DBV     .getLabel(),
-            FftMagnitudeUnit.DBFS    .getLabel()
     };
     /** Resolution of the FlatScrollbars (any large integer — slider values
      *  are mapped to fractional positions). */
@@ -105,16 +103,26 @@ public final class FftPane {
     };
 
     private final Composite group;
+    private PaneTitle title;
     private FftView         view;
-    private FftController   controller;
     private FlatScrollbar   freqScrollbar;
     private FlatScrollbar   magScrollbar;
-    private final Runnable  onScreenshotRequest;
-    private final Runnable  onCalibrateRequest;
 
-    // Image bundle (record toggle + utility icons) so the FFT pane can
-    // mirror the scope's visual style without re-rendering SVGs.
-    private final Image cameraIcon, crosshairIcon;
+    /** Pixel height of the big record-LED button at the right of the top
+     *  toolbar — matches the scope's record LED so the two panes look
+     *  visually aligned. */
+    private static final int RECORD_LED_SIZE = 33;
+    /** Pixel height of the utility-row icons (camera screenshot, crosshair
+     *  calibrate). */
+    private static final int UTILITY_ICON_HEIGHT = 26;
+
+    // Image references retained so build methods past the constructor can
+    // re-use them; all instances come from the shared IconUtils cache so
+    // disposal is handled centrally.
+    private final Image cameraIcon;
+    private final Image crosshairIcon;
+    private final Image recordDim;
+    private final Image recordLit;
     private Button recordButton;
 
     // ---- Tab-header tile rendering (mirrors the scope's pattern) -----
@@ -137,13 +145,6 @@ public final class FftPane {
     }
 
     // Widget references for preset apply/refresh — captured at build time.
-    private Combo magUnitCombo;
-    /** Top-right "NN%" indicator showing how much of the next FFT
-     *  frame's hop has been collected since the last analysis. */
-    private Label fillPercentLabel;
-    /** Shows the number of FFT analyses completed since the last
-     *  reset / record-start.  Reset returns this to 0. */
-    private Label averagesCountLabel;
     private Combo              fftLengthCombo;
     private Combo              windowCombo;
     private Combo              overlapCombo;
@@ -166,47 +167,49 @@ public final class FftPane {
     private Button             presetLoadBtn;
     private Button             presetDeleteBtn;
 
-    private final Supplier<Boolean> onAcquireCapture;
-    private final Runnable          onReleaseCapture;
-    /** Fired whenever the FFT length changes so the generator can
-     *  re-snap its frequency to a fresh bin.  Null = no-op. */
-    private final Runnable          onFftLengthChanged;
-    /** Set true once acquireCapture has succeeded, false after release.
-     *  Prevents an extra release on a disposed-without-record path. */
+    /** Set true once {@link Events#CAPTURE_ACQUIRE} has succeeded,
+     *  false after release.  Prevents an extra release on a
+     *  disposed-without-record path. */
     private boolean captureHeld;
     /** Cached "turn record OFF" recipe — flips the Record button image,
      *  stops the controller, releases the shared capture.  Called from
      *  the record button (user click) AND from {@link #disengageRecord}
      *  (stop-after fired). */
     private Runnable recordOffAction;
+    /** Subscriber for {@link Events#FFT_RANGE_CHANGED}, stored as a
+     *  field so the dispose listener can unsubscribe the SAME instance
+     *  (method references compare by identity). */
+    private Runnable rangeChangedListener;
+    /** Subscriber for {@link Events#FFT_RECORDING_AUTO_STOPPED} — fires
+     *  when the analyser's stop-after-N counter trips so the pane can
+     *  flip Record back off and release the shared capture. */
+    private Runnable autoStoppedListener;
 
     public FftPane(Composite parent,
-                   boolean liveCapture,
-                   Image recordDim, Image recordLit,
-                   Image cameraIcon, Image crosshairIcon,
-                   Supplier<SignalBuffer> bufferSupplier,
-                   DoubleSupplier generatorFreqSupplier,
-                   BooleanSupplier generatorActiveSupplier,
-                   Runnable onScreenshotRequest,
-                   Runnable onCalibrateRequest,
-                   Supplier<Boolean> onAcquireCapture,
-                   Runnable onReleaseCapture,
-                   Runnable onFftLengthChanged,
-                   Runnable onToggleCollapse) {
-        this.onAcquireCapture = onAcquireCapture;
-        this.onReleaseCapture = onReleaseCapture;
-        this.onFftLengthChanged = onFftLengthChanged;
-        this.cameraIcon        = cameraIcon;
-        this.crosshairIcon     = crosshairIcon;
-        this.onScreenshotRequest = onScreenshotRequest;
-        this.onCalibrateRequest  = onCalibrateRequest;
+                   boolean liveCapture) {
+        // FFT-length changes, capture acquire / release, and the
+        // generator-running query all flow through the MessageBus — no
+        // callback parameters needed for those concerns.  The shared
+        // buffer is fetched on each record-on click via
+        // Events.CAPTURE_ACQUIRE and stored in capturedBuffer for the
+        // controller to poll.
+        IconUtils icons = IconUtils.instance();
+        Display d = parent.getDisplay();
+        this.cameraIcon    = icons.render(d, SvgPaths.CAMERA,
+                (int) Math.round(UTILITY_ICON_HEIGHT * 1.27), UTILITY_ICON_HEIGHT);
+        this.crosshairIcon = icons.render(d, SvgPaths.CROSSHAIR,
+                UTILITY_ICON_HEIGHT, UTILITY_ICON_HEIGHT);
+        this.recordDim     = icons.createRecordLed(d, 200,  40,  40, false, RECORD_LED_SIZE);
+        this.recordLit     = icons.createRecordLed(d, 255,   0,   0, true,  RECORD_LED_SIZE);
 
         group = new Composite(parent, SWT.BORDER);
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth  = 0; gl.marginHeight = 0; gl.verticalSpacing = 2;
         group.setLayout(gl);
-        PaneTitle.install(group, I18n.t("fft.title.expanded"),
-                I18n.t("fft.pane.toggle.tooltip"), onToggleCollapse);
+        title = new PaneTitle(group, Events.PANE_ID_FFT,
+                I18n.t("fft.title.expanded"),
+                I18n.t("fft.title.collapsed"),
+                I18n.t("fft.pane.toggle.tooltip"));
 
         // ---- Plot row: FftView fills the available area, with the vertical
         // magnitude scrollbar pinned to the right edge AND the magnitude-unit
@@ -225,33 +228,6 @@ public final class FftPane {
         magScrollbar.setToolTipText(I18n.t("fft.scrollbar.magnitude.tooltip"));
         magScrollbar.addSelectionListener(e -> applyMagScrollbar());
 
-        magUnitCombo = new Combo(plotRow, SWT.READ_ONLY);
-        magUnitCombo.setItems(MAG_UNIT_LABELS);
-        magUnitCombo.setToolTipText(I18n.t("fft.magUnit.tooltip"));
-        int magIdx = indexOf(MAG_UNIT_NAMES, Preferences.instance().getFftMagUnit());
-        magUnitCombo.select(magIdx < 0 ? 2 : magIdx);
-        magUnitCombo.addListener(SWT.Selection, e -> {
-            int i = magUnitCombo.getSelectionIndex();
-            if (i >= 0) {
-                Preferences prefs = Preferences.instance();
-                FftMagnitudeUnit oldUnit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
-                FftMagnitudeUnit newUnit = FftMagnitudeUnit.fromName(MAG_UNIT_NAMES[i]);
-                // Convert the current magTop / magBottom so the visible
-                // range stays on the SAME signal level — 0 dBV → 1 V on
-                // a log axis, etc.  Without this the user toggling the
-                // unit lands on nonsense values like "10 V to -150 V".
-                double[] conv = convertMagRange(prefs.getFftMagTop(), prefs.getFftMagBottom(),
-                        oldUnit, newUnit);
-                prefs.setFftMagTop(conv[0]);
-                prefs.setFftMagBottom(conv[1]);
-                prefs.setFftMagUnit(MAG_UNIT_NAMES[i]);
-                prefs.save();
-                clampRangesAndSave();
-                syncScrollbarsFromPrefs();
-                view.redraw();
-            }
-        });
-
         FormData vfd = new FormData();
         vfd.top    = new FormAttachment(0, 0);
         vfd.left   = new FormAttachment(0, 0);
@@ -265,50 +241,6 @@ public final class FftPane {
         sbd.bottom = new FormAttachment(100, 0);
         sbd.width  = 18;
         magScrollbar.setLayoutData(sbd);
-
-        // Combo sits inside the plot area (over the spectrum, top-right).
-        // Moved 38 px to the right (from -56 → -18 off the magnitude
-        // scrollbar) so the fill-% indicator can occupy the gap that
-        // used to be wasted between the combo and the scrollbar.
-        FormData cfd = new FormData();
-        cfd.top   = new FormAttachment(0, 4);
-        cfd.right = new FormAttachment(magScrollbar, -18);
-        cfd.width = 60;
-        magUnitCombo.setLayoutData(cfd);
-
-        // Averages-count label: "N" showing how many analyses have
-        // completed since the last reset / record-start.  Sits between
-        // the fill-% gauge and the unit combo.  Reset / Record-start
-        // clears the controller's completedAnalyses, so the label
-        // returns to "0" automatically via the timer below.
-        averagesCountLabel = new Label(plotRow, SWT.NONE);
-        averagesCountLabel.setText("0 average(s)");
-        averagesCountLabel.setForeground(plotRow.getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY));
-        averagesCountLabel.setToolTipText(I18n.t("fft.avgCount.tooltip"));
-        FormData acd = new FormData();
-        acd.top   = new FormAttachment(0, 6);
-        acd.right = new FormAttachment(magUnitCombo, -6);
-        acd.width = 90;
-        averagesCountLabel.setLayoutData(acd);
-        averagesCountLabel.moveAbove(null);
-
-        // Fill-% label: "NN%" showing how much of the next FFT frame's
-        // hop has been captured.  Sits immediately left of the averages
-        // count and updates every analysis-tick via the timer started
-        // below.
-        fillPercentLabel = new Label(plotRow, SWT.NONE);
-        fillPercentLabel.setText("0%");
-        fillPercentLabel.setForeground(plotRow.getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY));
-        fillPercentLabel.setToolTipText(I18n.t("fft.fillPercent.tooltip"));
-        FormData fpd = new FormData();
-        fpd.top   = new FormAttachment(0, 6);
-        fpd.right = new FormAttachment(averagesCountLabel, -6);
-        fpd.width = 36;
-        fillPercentLabel.setLayoutData(fpd);
-        fillPercentLabel.moveAbove(null);
-        // Bring the combo to the front so it visually overlays the FftView
-        // and isn't hidden by Canvas paint.
-        magUnitCombo.moveAbove(null);
 
         // ---- Horizontal frequency scrollbar.  Wrapped in a FormLayout
         // row so its right edge stops 18 px short of the group right —
@@ -469,76 +401,73 @@ public final class FftPane {
         });
 
         recordButton = new Button(toolbarRow, SWT.TOGGLE);
-        if (recordDim != null) recordButton.setImage(recordDim);
+        recordButton.setImage(recordDim);
         recordButton.setToolTipText(I18n.t("fft.record.tooltip"));
         GridData rbGd = new GridData(SWT.END, SWT.BEGINNING, false, false);
         rbGd.widthHint  = 48;
         rbGd.heightHint = 48;
         recordButton.setLayoutData(rbGd);
 
-        // ---- Controller + view wiring.  The FFT controller runs its own
-        // worker thread (independent from the oscilloscope's measurement
-        // thread) and is OFF by default — pressing the FFT record button
-        // starts it.  This way the FFT analyser doesn't burn CPU (and
-        // doesn't compete with the scope's worker) when the user isn't
-        // actually looking at the spectrum.
-        controller = new FftController(group.getDisplay(),
-                bufferSupplier, generatorFreqSupplier, generatorActiveSupplier,
-                this::onAnalysisPublished);
-        view.setController(controller);
-        view.setAutoSetupCallback(this::performAutoSetup);
-        view.setMaximizeCallback(this::performMaximize);
-        view.setRangeChangedCallback(this::syncScrollbarsFromPrefs);
-        controller.setOnStopAfterFired(this::disengageRecord);
+        // ---- View wiring.  The analyser lives inside FftView itself
+        // (was previously a separate FftController); the pane just
+        // drives the lifecycle (start / stop / setBuffer / reset).
+        //
+        // Two MessageBus subscriptions back to FftView:
+        //   - FFT_RANGE_CHANGED: view publishes after pan / zoom or
+        //     auto-setup / maximize → realign the scrollbars.
+        //   - FFT_RECORDING_AUTO_STOPPED: view publishes when its
+        //     stop-after-N counter trips → release record state.
+        rangeChangedListener  = this::syncFftPan;
+        autoStoppedListener   = this::disengageRecord;
+        MessageBus bus = MessageBus.instance();
+        bus.subscribe(Events.FFT_RANGE_CHANGED,           rangeChangedListener);
+        bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED,  autoStoppedListener);
 
-        // Stash the record-image refs so disengageRecord() can flip
-        // the button back to "off" without holding a reference to
-        // both images at the same scope.
-        final Image recordDimImg = recordDim;
-        final Image recordLitImg = recordLit;
         recordOffAction = () -> {
             if (recordButton.isDisposed()) return;
-            controller.stop();
+            view.stop();
+            view.setBuffer(null);
             if (captureHeld) {
-                if (onReleaseCapture != null) onReleaseCapture.run();
+                MessageBus.instance().publish(Events.CAPTURE_RELEASE);
                 captureHeld = false;
             }
             recordButton.setSelection(false);
-            recordButton.setImage(recordDimImg);
+            recordButton.setImage(recordDim);
         };
         recordButton.addListener(SWT.Selection, e -> {
             boolean on = recordButton.getSelection();
             if (on) {
                 // Pressing the FFT record button acquires a reference on
                 // the shared audio capture device — without flipping the
-                // scope's Record-LED.  Scope and FFT consume from the same
-                // SignalBuffer; whichever pane the user records, the device
-                // stays open until the last reference is released.
-                boolean ok = (onAcquireCapture == null) || onAcquireCapture.get();
-                if (!ok) {
+                // scope's Record-LED.  Scope and FFT consume from the
+                // SAME SignalBuffer; whichever pane the user records,
+                // the device stays open until the last reference is
+                // released.
+                SignalBuffer buf = MessageBus.instance().request(Events.CAPTURE_ACQUIRE);
+                if (buf == null) {
                     recordButton.setSelection(false);
                     return;
                 }
                 captureHeld = true;
-                recordButton.setImage(recordLitImg);
-                controller.start();
+                recordButton.setImage(recordLit);
+                view.setBuffer(buf);
+                view.start();
             } else {
                 recordOffAction.run();
             }
         });
 
         group.addDisposeListener(e -> {
-            controller.stop();
+            MessageBus bus2 = MessageBus.instance();
+            bus2.unsubscribe(Events.FFT_RANGE_CHANGED,          rangeChangedListener);
+            bus2.unsubscribe(Events.FFT_RECORDING_AUTO_STOPPED, autoStoppedListener);
+            view.stop();
+            view.setBuffer(null);
             if (captureHeld) {
-                if (onReleaseCapture != null) onReleaseCapture.run();
+                bus2.publish(Events.CAPTURE_RELEASE);
                 captureHeld = false;
             }
         });
-
-        // Drive the fill-% label at ~10 Hz.  Pulled off Display.timerExec
-        // so we don't add another worker thread for a one-line UI update;
-        // the controller's hop progress is just a buffer-position read.
-        startFillPercentTimer();
 
         // Re-layout once the event loop spins up.  At constructor exit
         // the CTabFolder's tab body still reports a smaller natural
@@ -562,9 +491,6 @@ public final class FftPane {
     private void wireHelpAnchors() {
         group              .setData("helpAnchor", "fft.html");
         if (recordButton        != null) recordButton       .setData("helpAnchor", "fft.html#fft-record-button");
-        if (magUnitCombo        != null) magUnitCombo       .setData("helpAnchor", "fft.html#fft-mag-unit");
-        if (fillPercentLabel    != null) fillPercentLabel   .setData("helpAnchor", "fft.html#fft-fill-percent");
-        if (averagesCountLabel  != null) averagesCountLabel .setData("helpAnchor", "fft.html#fft-averages-count");
         if (freqScrollbar       != null) freqScrollbar      .setData("helpAnchor", "fft.html#fft-scrollbar-freq");
         if (magScrollbar        != null) magScrollbar       .setData("helpAnchor", "fft.html#fft-scrollbar-mag");
         if (fftLengthCombo      != null) fftLengthCombo     .setData("helpAnchor", "fft.html#fft-length");
@@ -590,51 +516,16 @@ public final class FftPane {
         if (presetDeleteBtn     != null) presetDeleteBtn    .setData("helpAnchor", "fft.html#fft-tab-presets");
     }
 
-    /** Schedules a recurring ~100 ms timer that updates the
-     *  {@link #fillPercentLabel} from {@link FftController#getNextFrameProgress()}.
-     *  Stops when the pane is disposed. */
-    private void startFillPercentTimer() {
-        Display display = group.getDisplay();
-        Runnable[] tick = new Runnable[1];
-        tick[0] = () -> {
-            if (group.isDisposed() || fillPercentLabel == null || fillPercentLabel.isDisposed()) return;
-            double f = (controller == null) ? 0 : controller.getNextFrameProgress();
-            int pct = (int) Math.round(f * 100);
-            if (pct < 0) pct = 0; else if (pct > 100) pct = 100;
-            String txt = pct + "%";
-            if (!txt.equals(fillPercentLabel.getText())) fillPercentLabel.setText(txt);
-            if (averagesCountLabel != null && !averagesCountLabel.isDisposed()) {
-                // The first capture has nothing to average against, so
-                // it contributes 0 averages.  For a finite N, the count
-                // is capped at N once the moving window is full — each
-                // additional capture drops the oldest, so the effective
-                // average size stops growing.  For "forever" the count
-                // keeps climbing.
-                int done = (controller == null) ? 0 : controller.getCompletedAnalyses();
-                int n = Math.max(0, done - 1);
-                double avgRaw = Preferences.instance().getFftAverages();
-                if (!Double.isInfinite(avgRaw)) {
-                    int N = Math.max(1, (int) avgRaw);
-                    if (n > N) n = N;
-                }
-                String ns = n + " average(s)";
-                if (!ns.equals(averagesCountLabel.getText())) averagesCountLabel.setText(ns);
-            }
-            display.timerExec(100, tick[0]);
-        };
-        display.timerExec(100, tick[0]);
-    }
-
     /** Forces the scrollbar thumb / position and the view to refresh
      *  from the current Preferences.  Needed by the screenshot path
      *  because the offscreen pane's controller never runs an analysis
      *  tick — the usual {@code onAnalysisPublished} pipeline that
-     *  drives {@link #syncScrollbarsFromPrefs()} doesn't fire there.
+     *  drives {@link #syncFftPan()} doesn't fire there.
      *  Call after {@code controller.setLastResult} and
      *  {@code setTabsCollapsed} so the snapshot is fully laid out. */
     public void refreshFromPrefs() {
         if (view != null && !view.isDisposed()) {
-            syncScrollbarsFromPrefs();
+            syncFftPan();
             view.redraw();
         }
     }
@@ -699,16 +590,6 @@ public final class FftPane {
         group.layout(true, true);
     }
 
-    /** Drops every collected sample / averaged spectrum and restarts
-     *  the analysis counter at 0.  Called whenever the user changes
-     *  an FFT-settings knob whose effect would otherwise blend
-     *  incompatible spectra into the moving average (length, window,
-     *  overlap, averages, stop-after, coherent).  No-op when the
-     *  controller isn't running — there's nothing to reset. */
-    private void resetCollectedDataOnSettingChange() {
-        if (controller != null) controller.resetStatistics();
-    }
-
     /** Invoked by the FFT controller on the UI thread when the
      *  stop-after-N counter fires.  Disengages record mode so the
      *  user sees the Record button switch off and the shared capture
@@ -730,18 +611,149 @@ public final class FftPane {
         stopAfterNField .setEnabled(forever && stopAfterNEnable.getSelection());
     }
 
-    /** Invoked on the UI thread after each successful analysis tick.
-     *  Redraws the view + re-syncs the two FlatScrollbars so their
-     *  thumb sizes / positions reflect the latest freq / mag windows
-     *  (which may have been clamped against bin size / Nyquist / FS). */
-    private void onAnalysisPublished() {
-        if (view != null && !view.isDisposed()) view.redraw();
-        syncScrollbarsFromPrefs();
-    }
-
     public Composite getGroup() { return group; }
     public FftView   getView()  { return view; }
-    public FftController getController() { return controller; }
+
+    // -------------------------------------------------------------------------
+    // Pane-owned dialogs
+    // -------------------------------------------------------------------------
+
+    /** Opens the screenshot dialog for this pane.  Initial width/height
+     *  come from preferences (last-used) and fall back to the pane's
+     *  current pixel size; the chosen size + folder are persisted back
+     *  on Copy or Save. */
+    private void openScreenshotDialog() {
+        if (group == null || group.isDisposed()) return;
+        Rectangle b = group.getBounds();
+        Preferences prefs = Preferences.instance();
+        new ScreenshotDialog(
+                group.getShell(),
+                prefs.getScreenshotWidth(),  prefs.getScreenshotHeight(),
+                b.width, b.height,
+                prefs.getScreenshotFolder(),
+                this::renderOffscreen,
+                (w, h) -> {
+                    prefs.setScreenshotWidth(w);
+                    prefs.setScreenshotHeight(h);
+                    prefs.save();
+                },
+                folder -> {
+                    prefs.setScreenshotFolder(folder);
+                    prefs.save();
+                }
+        ).open();
+    }
+
+    /** Opens the ADC-calibration dialog using this pane's fundamental
+     *  Vrms (no fallback — the scope pane has its own calibrate button).
+     *  Aborts with an info MessageBox when no live Vrms is available. */
+    private void openCalibrationDialog() {
+        Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
+        if (parent == null) return;
+        Double currentVrms = (view == null) ? null : view.getLastVrms();
+        if (currentVrms == null || currentVrms <= 0 || Double.isNaN(currentVrms)) {
+            MessageBox mb = new MessageBox(parent, SWT.ICON_INFORMATION | SWT.OK);
+            mb.setText(I18n.t("calibrate.title"));
+            mb.setMessage(I18n.t("calibrate.error.noVrms"));
+            mb.open();
+            return;
+        }
+        final double measuredVrms = currentVrms;
+        new AdcCalibrationDialog(parent, measuredVrms, actualVrms -> {
+            double scale = actualVrms / measuredVrms;
+            double newFs = AudioBackend.adcFsVoltageRms * scale;
+            AudioBackend.adcFsVoltageRms = newFs;
+            Preferences.instance().setAdcFsVoltageRms(newFs);
+            Preferences.instance().save();
+        }).open();
+    }
+
+    /** Renders this FFT pane offscreen at the requested dimensions with
+     *  its toolbar tab body collapsed.  Builds a fresh {@link FftPane} in
+     *  a hidden Shell (no live capture, no controller worker) and copies
+     *  the live controller's last {@link FftAnalyzer.Result} into it, so
+     *  the spectrum + THD table render the same data the user is
+     *  currently seeing. */
+    private Image renderOffscreen(Display d, int targetW, int targetH) {
+        targetW = Math.max(1, targetW);
+        targetH = Math.max(1, targetH);
+        Shell offscreen = new Shell(d, SWT.NO_TRIM);
+        offscreen.setLayout(new FillLayout());
+        FftPane fftPane = new FftPane(offscreen, false);
+        Image output = new Image(d, targetW, targetH);
+        try {
+            fftPane.getView().setLastResult(view.getLastResult());
+            fftPane.setTabsCollapsed(true);
+            fftPane.refreshFromPrefs();
+
+            offscreen.setSize(targetW, targetH);
+            offscreen.setLocation(-10000, -10000);
+            offscreen.open();
+            while (d.readAndDispatch()) { /* drain */ }
+            fftPane.getGroup().redraw();
+            while (d.readAndDispatch()) { /* drain */ }
+            fftPane.getGroup().update();
+
+            GC outGc = new GC(output);
+            try {
+                fftPane.getGroup().print(outGc);
+                fftPane.paintTabTilesInto(outGc);
+            } finally {
+                outGc.dispose();
+            }
+            offscreen.setVisible(false);
+        } finally {
+            offscreen.dispose();
+        }
+        return output;
+    }
+
+    /** True when this pane is collapsed to just its title bar. */
+    public boolean isCollapsed() { return collapsed; }
+
+    /** Hides / shows every child except the title Label so the pane can
+     *  collapse to its title bar (or restore).  Pure pane-internal — the
+     *  parent {@code SashForm}'s weights are owned by {@link MainTab}. */
+    public void setCollapsed(boolean wantCollapsed) {
+        if (collapsed == wantCollapsed) return;
+        if (group == null || group.isDisposed()) return;
+        collapsed = wantCollapsed;
+        Control[] children = group.getChildren();
+        if (collapsed) {
+            preCollapseChildVisible = new boolean[children.length];
+            preCollapseChildExclude = new boolean[children.length];
+            for (int i = 0; i < children.length; i++) {
+                if (children[i] == title) continue;
+                preCollapseChildVisible[i] = children[i].getVisible();
+                if (children[i].getLayoutData() instanceof GridData gd) {
+                    preCollapseChildExclude[i] = gd.exclude;
+                    gd.exclude = true;
+                }
+                children[i].setVisible(false);
+            }
+            title.setCollapsed(true);
+        } else {
+            if (preCollapseChildVisible != null
+                    && preCollapseChildVisible.length == children.length) {
+                for (int i = 0; i < children.length; i++) {
+                    if (children[i] == title) continue;
+                    children[i].setVisible(preCollapseChildVisible[i]);
+                    if (children[i].getLayoutData() instanceof GridData gd) {
+                        gd.exclude = preCollapseChildExclude[i];
+                    }
+                }
+                preCollapseChildVisible = null;
+                preCollapseChildExclude = null;
+            }
+            title.setCollapsed(false);
+        }
+        group.layout(true);
+    }
+
+    /** Collapse state + per-child snapshot.  See {@link #setCollapsed(boolean)}. */
+    private boolean    collapsed;
+    private boolean[]  preCollapseChildVisible;
+    private boolean[]  preCollapseChildExclude;
 
     // =========================================================================
     // Settings tab
@@ -768,10 +780,12 @@ public final class FftPane {
                 prefs.save();
                 refreshTabHeader(TAB_FFT_SETTINGS);
                 // Generator's bin snap is anchored to fftLength via
-                // sampleRate / fftLength — a length change shifts every
-                // bin, so re-snap the running generator (if any).
-                if (onFftLengthChanged != null) onFftLengthChanged.run();
-                resetCollectedDataOnSettingChange();
+                // sampleRate / fftLength — broadcast the change so the
+                // generator pane can re-snap its running tone onto a
+                // fresh bin.  The new length is already in Preferences;
+                // subscribers read it from there.
+                MessageBus.instance().publish(Events.FFT_LENGTH_CHANGED);
+                view.resetStatistics();
             }
         });
 
@@ -779,32 +793,32 @@ public final class FftPane {
         windowCombo = new Combo(g, SWT.READ_ONLY);
         windowCombo.setItems(WINDOW_LABELS);
         windowCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        FftAnalyzer.WindowType currWin =
-                enumOr(FftAnalyzer.WindowType.class, prefs.getFftWindow(), FftAnalyzer.WindowType.HANN);
+        WindowType currWin =
+                enumOr(WindowType.class, prefs.getFftWindow(), WindowType.HANN);
         windowCombo.select(currWin.ordinal());
         windowCombo.addListener(SWT.Selection, e -> {
             int i = windowCombo.getSelectionIndex();
             if (i >= 0) {
-                prefs.setFftWindow(FftAnalyzer.WindowType.values()[i].name());
+                prefs.setFftWindow(WindowType.values()[i].name());
                 prefs.save();
                 refreshTabHeader(TAB_FFT_SETTINGS);
-                resetCollectedDataOnSettingChange();
+                view.resetStatistics();
             }
         });
 
         addLabel(g, I18n.t("fft.settings.overlap"));
         overlapCombo = new Combo(g, SWT.READ_ONLY);
-        for (FftAnalyzer.Overlap ov : FftAnalyzer.Overlap.values()) overlapCombo.add(ov.label);
+        for (FftOverlap ov : FftOverlap.values()) overlapCombo.add(ov.label);
         overlapCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        FftAnalyzer.Overlap currOv = enumOr(FftAnalyzer.Overlap.class, prefs.getFftOverlap(), FftAnalyzer.Overlap.PCT_0);
+        FftOverlap currOv = enumOr(FftOverlap.class, prefs.getFftOverlap(), FftOverlap.PCT_0);
         overlapCombo.select(currOv.ordinal());
         overlapCombo.addListener(SWT.Selection, e -> {
             int i = overlapCombo.getSelectionIndex();
             if (i >= 0) {
-                prefs.setFftOverlap(FftAnalyzer.Overlap.values()[i].name());
+                prefs.setFftOverlap(FftOverlap.values()[i].name());
                 prefs.save();
                 refreshTabHeader(TAB_FFT_SETTINGS);
-                resetCollectedDataOnSettingChange();
+                view.resetStatistics();
             }
         });
 
@@ -812,7 +826,7 @@ public final class FftPane {
         // Cycling stepper: wheel / arrow keys snap to the next /
         // previous preset (2, 4, 8, 16, 32, ∞) while manual typing
         // still accepts any positive integer.
-        NumericStepField.Stepper avgCycle = FftPane::stepAveragesCycle;
+        Stepper avgCycle = FftPane::stepAveragesCycle;
         averagesField = new NumericStepField(g,
                 Math.max(1, prefs.getFftAverages()),
                 FftPane::parseAveragesNumeric,
@@ -831,7 +845,7 @@ public final class FftPane {
             prefs.save();
             refreshTabHeader(TAB_FFT_SETTINGS);
             refreshStopAfterEnable();
-            resetCollectedDataOnSettingChange();
+            view.resetStatistics();
         });
 
         // Stop-after row spans all 4 outer-grid columns and hosts its
@@ -872,12 +886,12 @@ public final class FftPane {
             stopAfterNField.setEnabled(stopAfterNEnable.getSelection()
                     && Double.isInfinite(prefs.getFftAverages()));
             prefs.save();
-            resetCollectedDataOnSettingChange();
+            view.resetStatistics();
         });
         stopAfterNField.addSelectionListener(e -> {
             prefs.setFftStopAfterN((int) Math.round(stopAfterNField.getValue()));
             prefs.save();
-            resetCollectedDataOnSettingChange();
+            view.resetStatistics();
         });
 
         // Three boolean knobs packed onto two rows so the tab content
@@ -919,7 +933,7 @@ public final class FftPane {
             prefs.setFftCoherentAveraging(coherentCheck.getSelection());
             prefs.save();
             refreshTabHeader(TAB_FFT_SETTINGS);
-            resetCollectedDataOnSettingChange();
+            view.resetStatistics();
         });
     }
 
@@ -1280,10 +1294,7 @@ public final class FftPane {
 
     private void syncWidgetsFromPrefs() {
         Preferences prefs = Preferences.instance();
-        if (magUnitCombo != null && !magUnitCombo.isDisposed()) {
-            int i = indexOf(MAG_UNIT_NAMES, prefs.getFftMagUnit());
-            if (i >= 0) magUnitCombo.select(i);
-        }
+        view.refreshFromPrefs();
         if (fftLengthCombo != null && !fftLengthCombo.isDisposed()) {
             int i = indexOfInt(FFT_LENGTH_VALUES, prefs.getFftLength());
             if (i >= 0) fftLengthCombo.select(i);
@@ -1292,12 +1303,12 @@ public final class FftPane {
             averagesField.setValue(Math.max(1, prefs.getFftAverages()));
         }
         if (windowCombo  != null && !windowCombo .isDisposed()) {
-            FftAnalyzer.WindowType wt = enumOr(FftAnalyzer.WindowType.class,
-                    prefs.getFftWindow(), FftAnalyzer.WindowType.HANN);
+            WindowType wt = enumOr(WindowType.class,
+                    prefs.getFftWindow(), WindowType.HANN);
             windowCombo.select(wt.ordinal());
         }
         if (overlapCombo != null && !overlapCombo.isDisposed()) {
-            FftAnalyzer.Overlap ov = enumOr(FftAnalyzer.Overlap.class, prefs.getFftOverlap(), FftAnalyzer.Overlap.PCT_0);
+            FftOverlap ov = enumOr(FftOverlap.class, prefs.getFftOverlap(), FftOverlap.PCT_0);
             overlapCombo.select(ov.ordinal());
         }
         if (stopAfterNEnable != null && !stopAfterNEnable.isDisposed()) {
@@ -1339,20 +1350,14 @@ public final class FftPane {
         g.setLayout(gl);
 
         Button shotBtn = new Button(g, SWT.PUSH);
-        if (cameraIcon != null) shotBtn.setImage(cameraIcon);
-        else                    shotBtn.setText(I18n.t("fft.utility.screenshot"));
+        shotBtn.setImage(cameraIcon);
         shotBtn.setToolTipText(I18n.t("fft.utility.screenshot.tooltip"));
-        shotBtn.addListener(SWT.Selection, e -> {
-            if (onScreenshotRequest != null) onScreenshotRequest.run();
-        });
+        shotBtn.addListener(SWT.Selection, e -> openScreenshotDialog());
 
         Button calBtn = new Button(g, SWT.PUSH);
-        if (crosshairIcon != null) calBtn.setImage(crosshairIcon);
-        else                       calBtn.setText(I18n.t("fft.utility.calibrate"));
+        calBtn.setImage(crosshairIcon);
         calBtn.setToolTipText(I18n.t("fft.utility.calibrate.tooltip"));
-        calBtn.addListener(SWT.Selection, e -> {
-            if (onCalibrateRequest != null) onCalibrateRequest.run();
-        });
+        calBtn.addListener(SWT.Selection, e -> openCalibrationDialog());
     }
 
     // =========================================================================
@@ -1401,7 +1406,7 @@ public final class FftPane {
                 showError(I18n.t("fft.save.pickFirst.title"), I18n.t("fft.save.pickFirst.message"));
                 return;
             }
-            FftAnalyzer.Result r = (controller == null) ? null : controller.getLastResult();
+            FftAnalyzer.Result r = view.getLastResult();
             if (r == null) {
                 showError(I18n.t("fft.save.error.title"), I18n.t("fft.save.noData"));
                 return;
@@ -1473,110 +1478,6 @@ public final class FftPane {
     }
 
     // =========================================================================
-    // Auto-setup
-    // =========================================================================
-
-    /** Sets freq range to centre on the detected fundamental ±1 decade, and
-     *  magnitude range so the fundamental sits at the top with ~150 dB of
-     *  dynamic range below. */
-    private void performAutoSetup() {
-        FftAnalyzer.Result r = (controller == null) ? null : controller.getLastResult();
-        if (r == null) return;
-        Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
-
-        // ── Frequency: one decade either side of the fundamental
-        // (×0.1 .. ×10), clamped to bin size / Nyquist.
-        double f0 = r.fundamentalHzRefined;
-        if (Double.isFinite(f0) && f0 > 0) {
-            double lo = Math.max(currentBinSize(), f0 / 10.0);
-            double hi = Math.min(r.sampleRate / 2.0,  f0 * 10.0);
-            if (hi > lo) {
-                prefs.setFftFreqMinHz(lo);
-                prefs.setFftFreqMaxHz(hi);
-            }
-        }
-
-        // ── Magnitude: top = fundamental + 10 dB, bottom = noise
-        // floor − 20 dB.  Translated to the active unit so the user's
-        // view shows the spectrum sitting comfortably between the
-        // strongest line and ~20 dB below the noise grass.
-        if (Double.isFinite(r.fundamentalDbFs) && Double.isFinite(r.avgNoiseFloorDbFs)) {
-            double topDbFs = r.fundamentalDbFs   + 10;
-            double botDbFs = r.avgNoiseFloorDbFs - 20;
-            double calRefDbV = Double.isNaN(r.fundRefDbV) ? 0
-                    : (r.fundRefDbV - r.fundamentalDbFs);
-            // The fundamental is rendered at the manual-override dBV
-            // when the user supplied one, so the auto-setup ceiling
-            // tracks that value (+10 dB headroom) instead of the
-            // calibrated peak; the noise floor stays on the calibrated
-            // anchor since non-fundamental bins aren't affected.
-            double topRefDbV = (Double.isFinite(r.fundamentalTrueDbV)
-                    && Double.isFinite(r.fundamentalDbFs))
-                    ? r.fundamentalTrueDbV - r.fundamentalDbFs
-                    : calRefDbV;
-            double top = unit.convertFromDbFs(topDbFs, topRefDbV,  r.freqResolution);
-            double bot = unit.convertFromDbFs(botDbFs, calRefDbV, r.freqResolution);
-            if (Double.isFinite(top) && Double.isFinite(bot) && top != bot) {
-                if (top < bot) { double s = top; top = bot; bot = s; }
-                prefs.setFftMagTop(top);
-                prefs.setFftMagBottom(bot);
-            }
-        }
-        prefs.save();
-        syncScrollbarsFromPrefs();
-        view.redraw();
-    }
-
-    /** Maximises the visible spectrum: frequency range spans the full
-     *  capture band ([bin size, Nyquist]) and the magnitude axis runs
-     *  from a fixed +20 dB ceiling down to (noise floor − 30 dB).  The
-     *  top is signal-independent — it doesn't track the fundamental —
-     *  so the chart layout stays stable across signal changes.  Works
-     *  even when no analysis result is published yet (uses fallback
-     *  values for the bottom). */
-    private void performMaximize() {
-        FftAnalyzer.Result r = (controller == null) ? null : controller.getLastResult();
-        Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
-
-        // Frequency span: 0 (clamped to bin size) → Nyquist.  Fall back
-        // to currentNyquist() when no result is available yet — that
-        // helper itself defaults to 192 kHz / 2 = 96 kHz half-rate.
-        double nyquist = (r != null) ? r.sampleRate / 2.0 : currentNyquist();
-        double lo = Math.max(currentBinSize(), 0.0);
-        if (nyquist > lo) {
-            prefs.setFftFreqMinHz(lo);
-            prefs.setFftFreqMaxHz(nyquist);
-        }
-
-        // Fixed +20 dBFS ceiling, noise-floor − 30 dB floor (when
-        // present; otherwise default to −150 dBFS bottom to give a
-        // sensible empty-chart layout).
-        double topDbFs = 20;
-        double botDbFs = (r != null && Double.isFinite(r.avgNoiseFloorDbFs))
-                ? r.avgNoiseFloorDbFs - 30
-                : -150;
-        double calRefDbV = 0;
-        double binBw = 1.0;
-        if (r != null) {
-            calRefDbV = Double.isNaN(r.fundRefDbV) ? 0
-                    : (r.fundRefDbV - r.fundamentalDbFs);
-            binBw = r.freqResolution;
-        }
-        double top = unit.convertFromDbFs(topDbFs, calRefDbV, binBw);
-        double bot = unit.convertFromDbFs(botDbFs, calRefDbV, binBw);
-        if (Double.isFinite(top) && Double.isFinite(bot) && top != bot) {
-            if (top < bot) { double s = top; top = bot; bot = s; }
-            prefs.setFftMagTop(top);
-            prefs.setFftMagBottom(bot);
-        }
-        prefs.save();
-        syncScrollbarsFromPrefs();
-        view.redraw();
-    }
-
-    // =========================================================================
     // Frequency / magnitude limits + scrollbar sync
     // =========================================================================
 
@@ -1584,7 +1485,7 @@ public final class FftPane {
      *  most recent analysis.  Falls back to a conservative estimate when
      *  there's no result yet. */
     private double currentBinSize() {
-        FftAnalyzer.Result r = (controller == null) ? null : controller.getLastResult();
+        FftAnalyzer.Result r = view.getLastResult();
         if (r != null && r.fftSize > 0) return (double) r.sampleRate / r.fftSize;
         // No result yet — assume a typical 384 kHz capture and the
         // configured FFT length.  Worst case the user sees the bin-size
@@ -1596,7 +1497,7 @@ public final class FftPane {
 
     /** Nyquist upper bound on the visible freq range. */
     private double currentNyquist() {
-        FftAnalyzer.Result r = (controller == null) ? null : controller.getLastResult();
+        FftAnalyzer.Result r = view.getLastResult();
         if (r != null) return r.sampleRate / 2.0;
         return 192_000;
     }
@@ -1608,41 +1509,6 @@ public final class FftPane {
      *  on the volts axis (20 dB = ×10), so the user sees the same grid
      *  lines around the same signal levels after the switch.
      *  Returns {@code new double[] {newTop, newBot}}. */
-    private static double[] convertMagRange(double oldTop, double oldBot,
-                                            FftMagnitudeUnit from, FftMagnitudeUnit to) {
-        if (from == to) return new double[] {oldTop, oldBot};
-        // Step 1: take dBV for each side using the active ADC FS as the
-        // anchor.  When the user has no ADC calibration, fall back to
-        // 1 V_rms (= 0 dBV) which keeps the math well-defined.
-        double fs = Preferences.instance().getAdcFsVoltageRms();
-        if (!(fs > 0)) fs = 1.0;
-        double fsDbv = 20 * Math.log10(fs);
-        double topDbv = toDbv(oldTop, from, fsDbv);
-        double botDbv = toDbv(oldBot, from, fsDbv);
-        double newTop = fromDbv(topDbv, to, fsDbv);
-        double newBot = fromDbv(botDbv, to, fsDbv);
-        return new double[] {newTop, newBot};
-    }
-
-    private static double toDbv(double v, FftMagnitudeUnit unit, double fsDbv) {
-        switch (unit) {
-            case DBV:       return v;
-            case DBFS:      return v + fsDbv;
-            case V:         return (v > 0) ? 20 * Math.log10(v) : -300;
-            case V_SQRT_HZ: return (v > 0) ? 20 * Math.log10(v) : -300;
-            default:        return v;
-        }
-    }
-    private static double fromDbv(double dbv, FftMagnitudeUnit unit, double fsDbv) {
-        switch (unit) {
-            case DBV:       return dbv;
-            case DBFS:      return dbv - fsDbv;
-            case V:
-            case V_SQRT_HZ: return Math.pow(10, dbv / 20.0);
-            default:        return dbv;
-        }
-    }
-
     /** Maximum sensible top-of-axis value for a magnitude unit.
      *  Driven by the ADC full-scale calibration so the user can never
      *  scroll above what the hardware could produce. */
@@ -1714,11 +1580,16 @@ public final class FftPane {
         prefs.setFftMagBottom(mBot);
     }
 
-    /** Re-syncs both scrollbar thumb sizes + positions from the
-     *  currently-persisted freq / mag windows.  Thumb is proportional
-     *  to (visible / total) so the user gets immediate visual feedback
-     *  on how much of the spectrum is hidden. */
-    private void syncScrollbarsFromPrefs() {
+    /** Re-aligns the frequency / magnitude scrollbar thumbs and
+     *  selections to the FFT pan window currently persisted in
+     *  {@code Preferences} (freq min/max, mag top/bottom, log-axis
+     *  flag).  Thumb size is proportional to (visible / total) so the
+     *  user gets immediate visual feedback on how much of the spectrum
+     *  is hidden; selection positions the visible slice inside the full
+     *  range.  Called whenever the pan window can have shifted —
+     *  preset apply, autosetup, maximize, range-change from the FFT
+     *  view, FFT length change, and after a fresh analysis. */
+    private void syncFftPan() {
         if (freqScrollbar == null || freqScrollbar.isDisposed()) return;
         if (magScrollbar  == null || magScrollbar .isDisposed()) return;
         clampRangesAndSave();
@@ -2065,21 +1936,21 @@ public final class FftPane {
 
     private static String shortWindow(String name) {
         try {
-            FftAnalyzer.WindowType wt = FftAnalyzer.WindowType.valueOf(name);
+            WindowType wt = WindowType.valueOf(name);
             return WINDOW_SHORT_LABELS[wt.ordinal()];
         } catch (IllegalArgumentException e) { return "Hann"; }
     }
 
     private static String prettyWindow(String name) {
         try {
-            FftAnalyzer.WindowType wt = FftAnalyzer.WindowType.valueOf(name);
+            WindowType wt = WindowType.valueOf(name);
             return WINDOW_LABELS[wt.ordinal()];
         } catch (IllegalArgumentException e) { return "Hann"; }
     }
 
     private static String shortOverlap(String name) {
         try {
-            return FftAnalyzer.Overlap.valueOf(name).label;
+            return FftOverlap.valueOf(name).label;
         } catch (IllegalArgumentException e) { return "0%"; }
     }
 
@@ -2117,11 +1988,6 @@ public final class FftPane {
         l.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
     }
 
-    private static int indexOf(String[] arr, String value) {
-        if (value == null) return -1;
-        for (int i = 0; i < arr.length; i++) if (value.equals(arr[i])) return i;
-        return -1;
-    }
 
     private static int indexOfInt(int[] arr, int value) {
         for (int i = 0; i < arr.length; i++) if (arr[i] == value) return i;

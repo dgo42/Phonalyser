@@ -1,4 +1,4 @@
-package org.edgo.audio.measure.gui;
+package org.edgo.audio.measure.gui.preferences;
 
 import lombok.extern.log4j.Log4j2;
 import org.eclipse.swt.SWT;
@@ -18,7 +18,9 @@ import org.eclipse.swt.widgets.TabFolder;
 import org.eclipse.swt.widgets.TabItem;
 
 import org.edgo.audio.measure.sound.AudioBackend;
-import org.edgo.audio.measure.sound.AudioBackendType;
+import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.widgets.StepSelector;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import javax.sound.sampled.AudioFormat;

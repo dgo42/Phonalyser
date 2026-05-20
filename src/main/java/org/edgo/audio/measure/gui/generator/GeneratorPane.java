@@ -6,6 +6,7 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
+import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
@@ -19,13 +20,19 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.generator.SignalGenerator;
-import org.edgo.audio.measure.generator.SignalGenerator.SignalForm;
-import org.edgo.audio.measure.gui.I18n;
-import org.edgo.audio.measure.gui.PaneTitle;
-import org.edgo.audio.measure.gui.Preferences;
+import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.IconUtils;
+import org.edgo.audio.measure.gui.common.SvgPaths;
+import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.widgets.PaneTitle;
+import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.eclipse.swt.widgets.Display;
 
 import java.io.File;
 import java.util.Locale;
+import org.edgo.audio.measure.enums.AmplitudeUnit;
 
 /**
  * Generator pane — UI mirror of the CLI generator.  Hosts:
@@ -64,6 +71,7 @@ public final class GeneratorPane {
     private int[] ditherBits;
 
     private final Composite       group;
+    private PaneTitle             title;
     private final SignalFormCombo formCombo;
     private final Label           freqLabel;
     private final NumericStepField freqField;
@@ -89,14 +97,20 @@ public final class GeneratorPane {
     private final Text            playFromPathField;
     private final Button          playFromBtn;
     private final Button          playFromLoopBtn;
+    /** Pixel height of the main play button at the bottom of the pane. */
+    private static final int PLAY_LED_SIZE       = 33;
+    /** Pixel height of the small play button in the Load-from row. */
+    private static final int TINY_LED_SIZE       = 16;
+    /** Pixel height of the floppy / folder glyphs that sit next to the
+     *  file-path text fields. */
+    private static final int FILE_ICON_HEIGHT    = 16;
+
     private final Image           tinyPlayDimImg;
     private final Image           tinyPlayLitImg;
     private final Image           playDimImg;
     private final Image           playLitImg;
-    @SuppressWarnings("unused")
-    private final Image           floppyDiskIconImg;
-    @SuppressWarnings("unused")
-    private final Image           folderOpenIconImg;
+    private final Image           floppyDiskIcon;
+    private final Image           folderOpenIcon;
     private final FilePlayController filePlayer = new FilePlayController();
     private final Button          playBtn;
 
@@ -117,11 +131,31 @@ public final class GeneratorPane {
     private Font    onAirFont;
     private boolean onAirActive;
     private boolean onAirBlinkOn;
+    /** Handler for {@link Events#FFT_LENGTH_CHANGED}.  Held as a field
+     *  so the dispose listener can unsubscribe it from the bus — without
+     *  that, the bus would keep this pane alive forever. */
+    private Runnable fftLengthListener;
 
-    public GeneratorPane(Composite parent, Image playDim, Image playLit,
-                         Image tinyPlayDim, Image tinyPlayLit,
-                         Image floppyDiskIcon, Image folderOpenIcon,
-                         Runnable onToggleCollapse) {
+    public GeneratorPane(Composite parent) {
+        // Seed the tracked pane width from prefs BEFORE the host
+        // SashForm's first layout pass — the controlListener that picks
+        // up paneWidthPx fires immediately after construction and we
+        // want it to honour the saved value instead of falling back to
+        // the SashForm's construction-default weights.
+        int savedWidth = Preferences.instance().getGenPaneWidth();
+        if (savedWidth >= MIN_WIDTH_PX) this.paneWidthPx = savedWidth;
+
+        IconUtils icons = IconUtils.instance();
+        Display d = parent.getDisplay();
+        RGB greenDim = new RGB(0x00, 0xAA, 0x00);
+        RGB greenLit = new RGB(0x00, 0xFF, 0x00);
+        this.playDimImg     = icons.renderAtHeight(d, SvgPaths.PLAY, PLAY_LED_SIZE,  greenDim);
+        this.playLitImg     = icons.renderAtHeight(d, SvgPaths.PLAY, PLAY_LED_SIZE,  greenLit);
+        this.tinyPlayDimImg = icons.renderAtHeight(d, SvgPaths.PLAY, TINY_LED_SIZE,  greenDim);
+        this.tinyPlayLitImg = icons.renderAtHeight(d, SvgPaths.PLAY, TINY_LED_SIZE,  greenLit);
+        this.floppyDiskIcon = icons.renderAtHeight(d, SvgPaths.FLOPPY_DISK, FILE_ICON_HEIGHT, null);
+        this.folderOpenIcon = icons.renderAtHeight(d, SvgPaths.FOLDER_OPEN, FILE_ICON_HEIGHT, null);
+
         // Composite + SWT.BORDER replaces the legacy Group widget — the
         // Group's GtkFrame label widget on GTK consumes title-bar mouse
         // clicks, breaking the collapse-on-title-click UX.  Visual frame
@@ -136,8 +170,10 @@ public final class GeneratorPane {
         gl.marginHeight = 2;
         gl.verticalSpacing = 2;
         group.setLayout(gl);
-        PaneTitle.install(group, I18n.t("generator.title.expanded"),
-                I18n.t("generator.pane.toggle.tooltip"), onToggleCollapse);
+        title = new PaneTitle(group, Events.PANE_ID_GENERATOR,
+                I18n.t("generator.title.expanded"),
+                I18n.t("generator.title.collapsed"),
+                I18n.t("generator.pane.toggle.tooltip"));
 
         Preferences prefs = Preferences.instance();
 
@@ -178,7 +214,7 @@ public final class GeneratorPane {
         onAirLabel.setFont(onAirFont);
         onAirLabel.setForeground(onAirGreyColor);
         onAirLabel.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false));
-        SignalForm initialForm = parseForm(prefs.getGenSignalForm());
+        GenSignalForm initialForm = parseForm(prefs.getGenSignalForm());
         formCombo = new SignalFormCombo(group, initialForm);
         formCombo.setLayoutData(fillH());
         formCombo.setToolTipText(I18n.t("generator.signalForm.tooltip"));
@@ -342,8 +378,8 @@ public final class GeneratorPane {
         // freq row + FFT-bin-snap and show the sweep panel up-front when
         // the app starts on a sweep, instead of waiting for the user to
         // poke the form combo.
-        boolean initialIsSweep = initialForm == SignalForm.LINEAR_SWEEP
-                              || initialForm == SignalForm.LOG_SWEEP;
+        boolean initialIsSweep = initialForm == GenSignalForm.LINEAR_SWEEP
+                              || initialForm == GenSignalForm.LOG_SWEEP;
         setNonSweepFreqRowsVisible(!initialIsSweep);
         setSweepPanelVisible(initialIsSweep);
 
@@ -354,13 +390,13 @@ public final class GeneratorPane {
         // mutate on the audio thread — the controller's setForm() returns
         // a hint via canLiveSwitchForm() and we surface that as a tooltip.
         formCombo.addSelectionListener(e -> {
-            SignalForm prevForm = parseForm(prefs.getGenSignalForm());
-            SignalForm f = formCombo.getSelectedForm();
+            GenSignalForm prevForm = parseForm(prefs.getGenSignalForm());
+            GenSignalForm f = formCombo.getSelectedForm();
             prefs.setGenSignalForm(f.name());
             prefs.save();
-            boolean newIsSweep  = f == SignalForm.LINEAR_SWEEP || f == SignalForm.LOG_SWEEP;
-            boolean prevWasSweep = prevForm == SignalForm.LINEAR_SWEEP
-                                || prevForm == SignalForm.LOG_SWEEP;
+            boolean newIsSweep  = f == GenSignalForm.LINEAR_SWEEP || f == GenSignalForm.LOG_SWEEP;
+            boolean prevWasSweep = prevForm == GenSignalForm.LINEAR_SWEEP
+                                || prevForm == GenSignalForm.LOG_SWEEP;
             // Sweep mode hijacks the single-frequency input — hide the
             // regular Frequency row and the FFT-bin-snap checkbox so the
             // user can't confuse a sweep with a single-tone setting.
@@ -419,7 +455,7 @@ public final class GeneratorPane {
         dutyLabel = new Label(group, SWT.NONE);
         dutyLabel.setText(I18n.t("generator.dutyCycle"));
         dutyLabel.setLayoutData(fillH());
-        double initialDutyPct = (initialForm == SignalForm.TRIANGLE)
+        double initialDutyPct = (initialForm == GenSignalForm.TRIANGLE)
                 ? prefs.getGenTriangleDuty()  * 100.0
                 : prefs.getGenRectangleDuty() * 100.0;
         dutyField = new NumericStepField(group,
@@ -435,8 +471,8 @@ public final class GeneratorPane {
         dutyField.setToolTipText(I18n.t("generator.dutyCycle.tooltip"));
         dutyField.addSelectionListener(e -> {
             double frac = dutyField.getValue() / 100.0;
-            SignalForm f = formCombo.getSelectedForm();
-            if (f == SignalForm.TRIANGLE) {
+            GenSignalForm f = formCombo.getSelectedForm();
+            if (f == GenSignalForm.TRIANGLE) {
                 prefs.setGenTriangleDuty(frac);
                 prefs.save();
                 controller.setTriangleDuty(frac);
@@ -533,14 +569,6 @@ public final class GeneratorPane {
         saveTo.setToolTipText(I18n.t("generator.saveTo.tooltip"));
         saveTo.addListener(SWT.Selection, e -> doSaveToBrowseAndWrite());
 
-        // Cache image fields up-front so all the listeners below can read them.
-        this.floppyDiskIconImg = floppyDiskIcon;
-        this.folderOpenIconImg = folderOpenIcon;
-        this.tinyPlayDimImg = tinyPlayDim;
-        this.tinyPlayLitImg = tinyPlayLit;
-        this.playDimImg     = playDim;
-        this.playLitImg     = playLit;
-
         // --------------------------------------------------- Load-from row
         // Header row: "Load from…" label on the left, "In loop" checkbox
         // on the right (same vertical level).  Content row below it is
@@ -592,7 +620,7 @@ public final class GeneratorPane {
         loadFrom.addListener(SWT.Selection, e -> openPlayFromBrowse());
 
         playFromBtn = new Button(playFromRow, SWT.PUSH);
-        playFromBtn.setImage(tinyPlayDim);
+        playFromBtn.setImage(tinyPlayDimImg);
         playFromBtn.setToolTipText(I18n.t("generator.loadFrom.play"));
         playFromBtn.addListener(SWT.Selection, e -> togglePlayFrom());
         // Auto-reset the LED when playback ends naturally (EOF without
@@ -623,14 +651,12 @@ public final class GeneratorPane {
         playRow.setLayoutData(playRowGd);
 
         playBtn = new Button(playRow, SWT.PUSH);
-        playBtn.setImage(playDim);                                    // start dim
+        playBtn.setImage(playDimImg);                                  // start dim
         playBtn.setToolTipText(I18n.t("generator.play.start"));
-        final Image playDimRef = playDim;
-        final Image playLitRef = playLit;
         playBtn.addListener(SWT.Selection, e -> {
             if (controller.isRunning()) {
                 controller.stop();
-                playBtn.setImage(playDimRef);
+                playBtn.setImage(playDimImg);
                 playBtn.setToolTipText(I18n.t("generator.play.start"));
                 stopOnAirBlink();
             } else {
@@ -648,7 +674,7 @@ public final class GeneratorPane {
                 controller.setFrequency(effectiveGeneratorFrequency());
                 controller.start();
                 if (controller.isRunning()) {
-                    playBtn.setImage(playLitRef);
+                    playBtn.setImage(playLitImg);
                     playBtn.setToolTipText(I18n.t("generator.play.stop"));
                     startOnAirBlink();
                 } else {
@@ -661,9 +687,29 @@ public final class GeneratorPane {
             }
         });
 
+        // Listen for FFT length changes published by the FFT pane —
+        // re-snap the running tone onto a fresh bin without the user
+        // having to toggle the snap checkbox.  The new length is read
+        // from Preferences by reapplyFrequencySnap, so the event itself
+        // carries no payload.  Stored as a field so the dispose
+        // listener below can unsubscribe and let the bus release its
+        // reference to this pane.
+        fftLengthListener = this::reapplyFrequencySnap;
+        MessageBus.instance().subscribe(Events.FFT_LENGTH_CHANGED, fftLengthListener);
+
+        // Respond to "is the generator running?" requests from the FFT
+        // controller so it can decide whether to anchor the fundamental
+        // to the generator's frequency.  One responder per event name
+        // — registerResponder replaces any prior registration, so
+        // language-switch shell rebuilds re-bind cleanly.
+        MessageBus.instance().registerResponder(Events.GENERATOR_RUNNING,
+                (java.util.function.Supplier<Boolean>) this::isRunning);
+
         // Dispose-time: stop the playback thread and tear down the icon
         // cache owned by this pane's display.
         group.addDisposeListener(e -> {
+            MessageBus.instance().unsubscribe(Events.FFT_LENGTH_CHANGED, fftLengthListener);
+            MessageBus.instance().unregisterResponder(Events.GENERATOR_RUNNING);
             controller.stop();
             filePlayer.stop();
             SignalFormIcon.disposeAll(group.getDisplay());
@@ -760,6 +806,87 @@ public final class GeneratorPane {
 
     public Composite getGroup() { return group; }
 
+    /** Minimum width (px) the pane will accept in the horizontal split. */
+    public static final int MIN_WIDTH_PX = 200;
+
+    /** True when this pane is collapsed to just its narrow title strip. */
+    public boolean isCollapsed() { return collapsed; }
+
+    /** Current pane pixel width as last reported by the host {@code SashForm}
+     *  (or restored from prefs at construction).  {@code -1} when not yet
+     *  measured. */
+    public int getPaneWidthPx() { return paneWidthPx; }
+
+    /** Records the pane's current pixel width — called by the host
+     *  {@code SashForm} sash filter on every drag.  Values below
+     *  {@link #MIN_WIDTH_PX} are ignored so a transient drag past the
+     *  minimum doesn't corrupt the persisted width. */
+    public void setPaneWidthPx(int px) {
+        if (px >= MIN_WIDTH_PX) paneWidthPx = px;
+    }
+
+    /** Hides / shows every child except the title Label so the pane can
+     *  be collapsed down to the title bar (or restored).  Persists each
+     *  child's pre-collapse {@code visible} / {@code GridData.exclude}
+     *  state so mode-specific visibility (e.g. sweep vs non-sweep fields)
+     *  survives the round-trip.  Also snapshots the current pixel width
+     *  on the way down and restores it on the way up — the parent
+     *  {@code SashForm} reads {@link #getPaneWidthPx()} to apply the
+     *  matching weights. */
+    public void setCollapsed(boolean wantCollapsed) {
+        if (collapsed == wantCollapsed) return;
+        if (group == null || group.isDisposed()) return;
+        collapsed = wantCollapsed;
+        Control[] children = group.getChildren();
+        if (collapsed) {
+            if (paneWidthPx >= MIN_WIDTH_PX) preCollapseWidthPx = paneWidthPx;
+            preCollapseChildVisible = new boolean[children.length];
+            preCollapseChildExclude = new boolean[children.length];
+            for (int i = 0; i < children.length; i++) {
+                // Keep the clickable title visible — without it the
+                // user can no longer expand the pane.
+                if (children[i] == title) continue;
+                preCollapseChildVisible[i] = children[i].getVisible();
+                if (children[i].getLayoutData() instanceof GridData gd) {
+                    preCollapseChildExclude[i] = gd.exclude;
+                    gd.exclude = true;
+                }
+                children[i].setVisible(false);
+            }
+            title.setCollapsed(true);
+        } else {
+            if (preCollapseWidthPx >= MIN_WIDTH_PX) paneWidthPx = preCollapseWidthPx;
+            else if (paneWidthPx < MIN_WIDTH_PX)    paneWidthPx = MIN_WIDTH_PX;
+            if (preCollapseChildVisible != null
+                    && preCollapseChildVisible.length == children.length) {
+                for (int i = 0; i < children.length; i++) {
+                    if (children[i] == title) continue;
+                    children[i].setVisible(preCollapseChildVisible[i]);
+                    if (children[i].getLayoutData() instanceof GridData gd) {
+                        gd.exclude = preCollapseChildExclude[i];
+                    }
+                }
+                preCollapseChildVisible = null;
+                preCollapseChildExclude = null;
+            }
+            title.setCollapsed(false);
+        }
+        group.layout(true);
+    }
+
+    /** True when the pane is collapsed.  See {@link #setCollapsed(boolean)}. */
+    private boolean    collapsed;
+    /** Per-child visibility snapshot taken when the pane collapses,
+     *  restored verbatim on expand. */
+    private boolean[]  preCollapseChildVisible;
+    private boolean[]  preCollapseChildExclude;
+    /** Current pane pixel width as last seen by the sash filter, seeded
+     *  from prefs in the constructor.  {@code -1} = not yet measured. */
+    private int        paneWidthPx = -1;
+    /** Pixel width remembered at collapse time so {@link #setCollapsed}
+     *  can restore it on expand. */
+    private int        preCollapseWidthPx;
+
     /** True when the audio generator is currently producing a signal —
      *  either the tone {@link GeneratorController} or the WAV file
      *  player is running.  Exposed so the FFT controller can fall back
@@ -829,7 +956,7 @@ public final class GeneratorPane {
      *  the raw entered value.  Other waveforms ignore the snap. */
     private double effectiveGeneratorFrequency() {
         if (fftSnapBtn != null && fftSnapBtn.getSelection()
-                && formCombo.getSelectedForm() == SignalForm.SINE) {
+                && formCombo.getSelectedForm() == GenSignalForm.SINE) {
             return correctedFftBinHz();
         }
         return freqField.getValue();
@@ -872,11 +999,11 @@ public final class GeneratorPane {
      * forms show plain "Frequency".
      */
     private void updateFreqLabel() {
-        SignalForm form = formCombo.getSelectedForm();
+        GenSignalForm form = formCombo.getSelectedForm();
         String corrected = null;
-        if (form == SignalForm.RECTANGLE) {
+        if (form == GenSignalForm.RECTANGLE) {
             corrected = formatLabelHz(correctedRectangleHz());
-        } else if (form == SignalForm.SINE && fftSnapBtn.getSelection()) {
+        } else if (form == GenSignalForm.SINE && fftSnapBtn.getSelection()) {
             corrected = formatLabelHz(correctedFftBinHz());
         }
         freqLabel.setText(corrected == null ? "Frequency"
@@ -890,8 +1017,8 @@ public final class GeneratorPane {
      * forms hide the bracket (the field is also disabled in that case).
      */
     private void updateDutyLabel() {
-        SignalForm form = formCombo.getSelectedForm();
-        if (form != SignalForm.RECTANGLE && form != SignalForm.TRIANGLE) {
+        GenSignalForm form = formCombo.getSelectedForm();
+        if (form != GenSignalForm.RECTANGLE && form != GenSignalForm.TRIANGLE) {
             dutyLabel.setText(I18n.t("generator.dutyCycle"));
             dutyLabel.getParent().layout();
             return;
@@ -1133,8 +1260,8 @@ public final class GeneratorPane {
     }
     /** Enables / disables the duty field+label depending on whether {@code form}
      *  is one of the duty-aware shapes (RECTANGLE or TRIANGLE). */
-    private void updateDutyFieldEnabled(SignalForm form) {
-        boolean on = form == SignalForm.RECTANGLE || form == SignalForm.TRIANGLE;
+    private void updateDutyFieldEnabled(GenSignalForm form) {
+        boolean on = form == GenSignalForm.RECTANGLE || form == GenSignalForm.TRIANGLE;
         dutyField.setEnabled(on);
         dutyLabel.setEnabled(on);
     }
@@ -1142,11 +1269,11 @@ public final class GeneratorPane {
     /** Refreshes the duty field's value from whichever preference is current
      *  for {@code form}; called when the user switches between RECTANGLE
      *  and TRIANGLE so each form keeps its own remembered duty. */
-    private void reloadDutyForForm(SignalForm form) {
+    private void reloadDutyForForm(GenSignalForm form) {
         Preferences prefs = Preferences.instance();
-        if (form == SignalForm.TRIANGLE) {
+        if (form == GenSignalForm.TRIANGLE) {
             dutyField.setValue(clampDutyPercent(prefs.getGenTriangleDuty() * 100.0));
-        } else if (form == SignalForm.RECTANGLE) {
+        } else if (form == GenSignalForm.RECTANGLE) {
             dutyField.setValue(clampDutyPercent(prefs.getGenRectangleDuty() * 100.0));
         }
     }
@@ -1350,7 +1477,7 @@ public final class GeneratorPane {
     /** Builds a default file name encoding signal form + sample rate (kHz) + bit width.  WAV by default. */
     private static String buildSuggestedSaveName() {
         Preferences prefs = Preferences.instance();
-        SignalForm form     = parseForm(prefs.getGenSignalForm());
+        GenSignalForm form     = parseForm(prefs.getGenSignalForm());
         int        rateKhz  = prefs.current().getOutputSampleRate() / 1000;
         int        bitDepth = prefs.current().getOutputBitDepth();
         return String.format(Locale.ROOT, "%s_%dkHz_%dbit.wav",
@@ -1368,8 +1495,8 @@ public final class GeneratorPane {
             mb.open();
             return;
         }
-        SignalForm form = parseForm(prefs.getGenSignalForm());
-        if (form == SignalForm.LINEAR_SWEEP || form == SignalForm.LOG_SWEEP) {
+        GenSignalForm form = parseForm(prefs.getGenSignalForm());
+        if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
             MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_ERROR | SWT.OK);
             mb.setText(I18n.t("generator.error.save"));
             mb.setMessage(I18n.t("generator.error.save.sweepUnsupported"));
@@ -1384,7 +1511,7 @@ public final class GeneratorPane {
         double duration      = prefs.getGenWavDurationSeconds();
         try {
             SignalGenerator gen;
-            if (form == SignalForm.SINE_COMPENSATED) {
+            if (form == GenSignalForm.SINE_COMPENSATED) {
                 String csv = prefs.getGenCorrectionsCsv();
                 if (csv == null || csv.isEmpty()) {
                     MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_ERROR | SWT.OK);
@@ -1436,10 +1563,10 @@ public final class GeneratorPane {
         return s;
     }
 
-    private static SignalForm parseForm(String s) {
-        if (s == null) return SignalForm.SINE;
-        try { return SignalForm.valueOf(s); }
-        catch (IllegalArgumentException ex) { return SignalForm.SINE; }
+    private static GenSignalForm parseForm(String s) {
+        if (s == null) return GenSignalForm.SINE;
+        try { return GenSignalForm.valueOf(s); }
+        catch (IllegalArgumentException ex) { return GenSignalForm.SINE; }
     }
 
     private static AmplitudeUnit parseUnit(String s, AmplitudeUnit fallback) {
@@ -1447,7 +1574,7 @@ public final class GeneratorPane {
         return u != null ? u : fallback;
     }
 
-    private static boolean isPeriodic(SignalForm f) {
+    private static boolean isPeriodic(GenSignalForm f) {
         switch (f) {
             case WHITE_NOISE:
             case PINK_NOISE:

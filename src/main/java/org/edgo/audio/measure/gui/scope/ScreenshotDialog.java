@@ -1,6 +1,7 @@
 package org.edgo.audio.measure.gui.scope;
 
-import lombok.extern.log4j.Log4j2;
+import java.io.File;
+
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.dnd.Clipboard;
 import org.eclipse.swt.dnd.ImageTransfer;
@@ -21,9 +22,9 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
-import org.edgo.audio.measure.gui.I18n;
+import org.edgo.audio.measure.gui.i18n.I18n;
 
-import java.io.File;
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Generic "save / copy a screenshot" dialog.  Caller supplies a

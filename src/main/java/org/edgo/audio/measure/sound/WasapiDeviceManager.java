@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import static org.edgo.audio.measure.sound.WasapiNative.*;
+import org.edgo.audio.measure.enums.AudioBackendType;
 
 /**
  * Discovery for the {@link AudioBackendType#WASAPI} backend.  Constructed

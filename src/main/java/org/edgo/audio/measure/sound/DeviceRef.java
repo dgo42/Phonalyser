@@ -1,5 +1,6 @@
 package org.edgo.audio.measure.sound;
 
+import org.edgo.audio.measure.enums.AudioBackendType;
 /**
  * Backend-agnostic handle to an audio device. Used by {@link AudioBackend}
  * to open capture / playback streams.

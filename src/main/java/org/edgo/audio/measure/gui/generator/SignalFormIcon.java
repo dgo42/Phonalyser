@@ -11,14 +11,14 @@ import org.eclipse.swt.graphics.PaletteData;
 import org.eclipse.swt.graphics.Path;
 import org.eclipse.swt.graphics.Transform;
 import org.eclipse.swt.widgets.Display;
-import org.edgo.audio.measure.generator.SignalGenerator.SignalForm;
+import org.edgo.audio.measure.enums.GenSignalForm;
 
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.Random;
 
 /**
- * 24×24 pictogram for each {@link SignalForm}, rendered with SWT primitives
+ * 24×24 pictogram for each {@link GenSignalForm}, rendered with SWT primitives
  * into a transparent-background image at first request and cached for the
  * life of the {@link Display}.  Drawing in code (rather than shipping nine
  * SVG files) keeps the icon set easy to tweak and avoids per-icon resource
@@ -38,9 +38,9 @@ public final class SignalFormIcon {
      *  prevents the glyph from visually overlapping the row's top border. */
     private static final int DROPDOWN_TOP_PAD = 2;
 
-    private static final Map<Display, Map<SignalForm, Image>> CACHES =
+    private static final Map<Display, Map<GenSignalForm, Image>> CACHES =
             new java.util.HashMap<>();
-    private static final Map<Display, Map<SignalForm, Image>> DROPDOWN_CACHES =
+    private static final Map<Display, Map<GenSignalForm, Image>> DROPDOWN_CACHES =
             new java.util.HashMap<>();
 
     private SignalFormIcon() {}
@@ -50,9 +50,9 @@ public final class SignalFormIcon {
      * rendering it on first request.  All icons are 24×24, line-art style,
      * with the foreground colour set to {@link SWT#COLOR_WIDGET_FOREGROUND}.
      */
-    public static synchronized Image get(Display display, SignalForm form) {
-        Map<SignalForm, Image> cache = CACHES.computeIfAbsent(display,
-                d -> new EnumMap<>(SignalForm.class));
+    public static synchronized Image get(Display display, GenSignalForm form) {
+        Map<GenSignalForm, Image> cache = CACHES.computeIfAbsent(display,
+                d -> new EnumMap<>(GenSignalForm.class));
         return cache.computeIfAbsent(form, f -> render(display, f, 0));
     }
 
@@ -60,21 +60,21 @@ public final class SignalFormIcon {
      * Like {@link #get} but with a couple of pixels of transparent padding
      * at the top, so the glyph clears the dropdown row's top border.
      */
-    public static synchronized Image getForDropdown(Display display, SignalForm form) {
-        Map<SignalForm, Image> cache = DROPDOWN_CACHES.computeIfAbsent(display,
-                d -> new EnumMap<>(SignalForm.class));
+    public static synchronized Image getForDropdown(Display display, GenSignalForm form) {
+        Map<GenSignalForm, Image> cache = DROPDOWN_CACHES.computeIfAbsent(display,
+                d -> new EnumMap<>(GenSignalForm.class));
         return cache.computeIfAbsent(form, f -> render(display, f, DROPDOWN_TOP_PAD));
     }
 
     /** Disposes all cached icons for {@code display}; safe to call multiple times. */
     public static synchronized void disposeAll(Display display) {
-        Map<SignalForm, Image> cache = CACHES.remove(display);
+        Map<GenSignalForm, Image> cache = CACHES.remove(display);
         if (cache != null) {
             for (Image img : cache.values()) {
                 if (img != null && !img.isDisposed()) img.dispose();
             }
         }
-        Map<SignalForm, Image> dropCache = DROPDOWN_CACHES.remove(display);
+        Map<GenSignalForm, Image> dropCache = DROPDOWN_CACHES.remove(display);
         if (dropCache != null) {
             for (Image img : dropCache.values()) {
                 if (img != null && !img.isDisposed()) img.dispose();
@@ -82,7 +82,7 @@ public final class SignalFormIcon {
         }
     }
 
-    private static Image render(Display display, SignalForm form, int topPad) {
+    private static Image render(Display display, GenSignalForm form, int topPad) {
         // 32-bit ARGB image started fully transparent — only the strokes
         // we paint pick up alpha=255, untouched pixels stay alpha=0.  This
         // is what makes the dropdown rows read on any background colour

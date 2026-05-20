@@ -41,7 +41,7 @@ import org.edgo.audio.measure.common.StereoSampleFloat;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.sound.AudioBackend;
-import org.edgo.audio.measure.sound.AudioBackendType;
+import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
@@ -67,6 +67,9 @@ import org.jtransforms.fft.DoubleFFT_1D;
 
 import lombok.Value;
 import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.enums.FftOverlap;
+import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.enums.WindowType;
 
 /**
  * Usage:
@@ -420,6 +423,95 @@ public class Main {
 
     private static final int[] VALID_SAMPLE_RATES =
             {44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000};
+
+    /**
+     * Loaded ADC-correction coefficient table.  Each harmonic h ≥ 2 carries K
+     * complex coefficients (one per order in {@link #orders}); the ADC's
+     * predicted contribution to harmonic h's bin (in the rotated frame where
+     * fund → −j) is {@code Σ_k (a_k_re + j·a_k_im) · L^{p_k(h)}}.
+     */
+    @Value
+    private static class AdcCorrection {
+        List<OrderToken>                 orders;
+        Map<Integer, double[]> coeffs;   // h → 2·|orders| doubles (re, im pairs)
+    }
+
+    /**
+     * One harmonic row parsed from an applied_compensation CSV.
+     * {@code re}/{@code im} are in the rotated frame where fundamental → (0, −1),
+     * so they are already the harmonic complex value relative to the fundamental.
+     */
+    @Value
+    private static class CompHarmonic {
+        int    h;
+        double freqHz;
+        double re;
+        double im;
+    }
+
+    /** Parsed CSV: header metadata + h=1 dBFS/freq + list of harmonic rows (h ≥ 2). */
+    @Value
+    private static class CompCsv {
+        SignalGenerator.Metadata meta;
+        double                   fundamentalDbFs;
+        double                   fundamentalHz;
+        List<CompHarmonic>       harmonics;
+    }
+
+    /**
+     * In-memory representation of a filter calibration: a sparse set of measured
+     * magnitude/phase points at log-spaced frequencies, produced by the stepped-sine
+     * sweep in {@link #runFilterSweepMode}.
+     *
+     * <p>All three arrays are the same length N (the number of sweep points) and
+     * {@code freqs} is strictly ascending.  {@code magLin[i]} is the **relative**
+     * filter magnitude |H(freqs[i])| — i.e. the captured peak amplitude divided
+     * by the DAC drive peak fraction, so the pass-band sits at unity (≈ 1.0)
+     * and a notch reads e.g. 1e-4 (−80 dB).  {@code phaseRad[i]} is the filter
+     * phase in radians, with capture-delay linear-phase ramp removed in
+     * {@link #computeFilterCalibrationFromLogSweep}.
+     *
+     * <p>Callers wanting H at an arbitrary frequency interpolate in log-frequency
+     * (dB magnitude, linear phase) between the surrounding two sweep points.
+     */
+    private static class FilterCalibration {
+        final double[] freqs;       // length N, strictly ascending Hz
+        final double[] magLin;      // |H| linear, passband normalised to 1.0
+        final double[] phaseRad;    // phase in radians, unwrapped
+        /** ADC full-scale RMS voltage at the time of measurement, from the CSV header
+         *  ({@code adc_fs_voltage_rms}); {@link Double#NaN} when absent. */
+        double         adcFsVoltageRms = Double.NaN;
+        FilterCalibration(double[] freqs, double[] magLin, double[] phaseRad) {
+            this.freqs      = freqs;
+            this.magLin     = magLin;
+            this.phaseRad   = phaseRad;
+        }
+    }
+
+    /**
+     * Per-iteration snapshot used by iterative-compensate so the user can
+     * pick which iteration's compensation to save when the loop is stopped
+     * manually. For accumulate mode, {@code appliedRe}/{@code appliedIm}
+     * hold the compensation in effect AT THE START of {@code iter}
+     * (zero arrays for iter 0).
+     */
+    @Value
+    static class IterSnapshot {
+        int iter;
+        FftAnalyzer.Result result;
+        double[] appliedRe;
+        double[] appliedIm;
+        double[] hFreqs;
+    }
+
+    /** Order descriptor: literal integer power or {@code h+offset}/{@code h-offset}. */
+    @Value
+    private static class OrderToken {
+        boolean hRelative;   // true → h + offset
+        int     value;       // literal power (hRelative=false) OR offset added to h
+        String  label;       // original textual form
+        int resolve(int h)   { return hRelative ? h + value : value; }
+    }
 
     public static void main(String[] args) throws Exception {
         new Main().run(args);
@@ -1213,7 +1305,7 @@ public class Main {
                     fftSize, harmonics);
             FftAnalyzer fftAnalyzer = new FftAnalyzer();
             FftAnalyzer.Result r = fftAnalyzer.analyze(samples, sampleRate, fftSize, harmonics,
-                    FftAnalyzer.WindowType.HANN, FftAnalyzer.Overlap.PCT_0,
+                    WindowType.HANN, FftOverlap.PCT_0,
                     0.0, 0.0, true, Double.NaN);
             logAdcCorrectedHarmonics(r, adc);
             subtractAdcDistortionPerFrameInPlace(samples, sampleRate, fftSize, r, adc);
@@ -1444,12 +1536,12 @@ public class Main {
         int harmonics    = harmonicsArg != null ? Integer.parseInt(harmonicsArg) : 10;
         int chartWidth   = Integer.parseInt(widthArg);
         int chartHeight  = Integer.parseInt(heightArg);
-        FftAnalyzer.WindowType windowType = windowArg  != null
-                ? FftAnalyzer.WindowType.fromString(windowArg)
-                : FftAnalyzer.WindowType.HANN;
-        FftAnalyzer.Overlap overlap = overlapArg != null
-                ? FftAnalyzer.Overlap.fromString(overlapArg)
-                : FftAnalyzer.Overlap.PCT_0;
+        WindowType windowType = windowArg  != null
+                ? WindowType.fromString(windowArg)
+                : WindowType.HANN;
+        FftOverlap overlap = overlapArg != null
+                ? FftOverlap.fromString(overlapArg)
+                : FftOverlap.PCT_0;
 
         if (Integer.bitCount(fftSize) != 1) {
             log.error("--fft-size must be a power of 2 (e.g. 65536, 131072).");
@@ -1659,13 +1751,13 @@ public class Main {
             System.exit(1);
         }
 
-        SignalGenerator.SignalForm form = SignalGenerator.SignalForm.fromString(signalArg);
+        GenSignalForm form = GenSignalForm.fromString(signalArg);
 
         // --- For sine_compensated: read generator-parameter metadata from the
         //     CSV (sample rate, bit depth, amplitude, exact frequency).  These
         //     take priority as defaults but CLI flags override them.
         SignalGenerator.Metadata csvMeta = null;
-        if (form == SignalGenerator.SignalForm.SINE_COMPENSATED && harmonicsCsv != null) {
+        if (form == GenSignalForm.SINE_COMPENSATED && harmonicsCsv != null) {
             csvMeta = SignalGenerator.readAppliedCompensationMetadata(harmonicsCsv);
             if (csvMeta != null) {
                 log.info("CSV metadata loaded from {}: sr={} Hz, bits={}, amp={} V RMS, freq={} Hz",
@@ -1748,7 +1840,7 @@ public class Main {
         }
 
         SignalGenerator generator;
-        if (form == SignalGenerator.SignalForm.SINE_COMPENSATED) {
+        if (form == GenSignalForm.SINE_COMPENSATED) {
             if (harmonicsCsv == null) {
                 log.error("--harmonics-csv <file> is required for --signal sine_compensated");
                 System.exit(1);
@@ -1839,13 +1931,13 @@ public class Main {
         int    chartWidth  = Integer.parseInt(widthArg);
         int    chartHeight = Integer.parseInt(heightArg);
         String outputDir   = outputDirArg != null ? outputDirArg : "results";
-        SignalGenerator.SignalForm form = signalArg != null
-                ? SignalGenerator.SignalForm.fromString(signalArg)
-                : SignalGenerator.SignalForm.SINE;
-        FftAnalyzer.WindowType windowType = windowArg != null
-                ? FftAnalyzer.WindowType.fromString(windowArg) : FftAnalyzer.WindowType.HANN;
-        FftAnalyzer.Overlap overlap = overlapArg != null
-                ? FftAnalyzer.Overlap.fromString(overlapArg)   : FftAnalyzer.Overlap.PCT_0;
+        GenSignalForm form = signalArg != null
+                ? GenSignalForm.fromString(signalArg)
+                : GenSignalForm.SINE;
+        WindowType windowType = windowArg != null
+                ? WindowType.fromString(windowArg) : WindowType.HANN;
+        FftOverlap overlap = overlapArg != null
+                ? FftOverlap.fromString(overlapArg)   : FftOverlap.PCT_0;
 
         if (!isValidSampleRate(sampleRate)) {
             log.error("--samplerate must be one of the supported rates"); System.exit(1);
@@ -1935,7 +2027,7 @@ public class Main {
         }
 
         SignalGenerator gen;
-        if (form == SignalGenerator.SignalForm.SINE_COMPENSATED) {
+        if (form == GenSignalForm.SINE_COMPENSATED) {
             if (harmonicsCsv == null) {
                 log.error("--harmonics-csv <file> is required for --signal sine_compensated");
                 System.exit(1);
@@ -2037,10 +2129,10 @@ public class Main {
         int    chartWidth  = Integer.parseInt(widthArg);
         int    chartHeight = Integer.parseInt(heightArg);
 
-        FftAnalyzer.WindowType windowType = windowArg  != null
-                ? FftAnalyzer.WindowType.fromString(windowArg)  : FftAnalyzer.WindowType.HANN;
-        FftAnalyzer.Overlap overlap = overlapArg != null
-                ? FftAnalyzer.Overlap.fromString(overlapArg)    : FftAnalyzer.Overlap.PCT_0;
+        WindowType windowType = windowArg  != null
+                ? WindowType.fromString(windowArg)  : WindowType.HANN;
+        FftOverlap overlap = overlapArg != null
+                ? FftOverlap.fromString(overlapArg)    : FftOverlap.PCT_0;
 
         double snrFreqMin = distMinArg != null ? Double.parseDouble(distMinArg) : 0.0;
         double snrFreqMax = distMaxArg != null ? Double.parseDouble(distMaxArg) : sampleRate / 2.0;
@@ -2168,7 +2260,7 @@ public class Main {
         double[] preCorrDbFs0  = null;
         for (int retry = 0; ; retry++) {
             float[] s0 = captureWithGenerator(
-                    new SignalGenerator(SignalGenerator.SignalForm.SINE, frequency, sampleRate, amplitude),
+                    new SignalGenerator(GenSignalForm.SINE, frequency, sampleRate, amplitude),
                     outDevice, inDevice, sampleRate, bitDepth, ditherBits, duration);
             try {
                 result0 = fftAnalyzer.analyze(
@@ -2517,7 +2609,7 @@ public class Main {
      * @param step        LMS step size μ (0 &lt; μ ≤ 1 typical; 1 = full residual
      *                    per iteration, &lt; 1 damps oscillations).
      */
-    private static void accumulateHarmonics(FftAnalyzer.Result r,
+    private void accumulateHarmonics(FftAnalyzer.Result r,
             double[] accRe, double[] accIm, double[] hFreqs,
             double snrMarginDb, double step) {
         double phi1   = Math.atan2(r.im[r.fundamentalBin], r.re[r.fundamentalBin]);
@@ -2553,7 +2645,7 @@ public class Main {
      * Converts each (re, im) pair to (amplitude, phase) and passes them
      * to the array-based SignalGenerator constructor.
      */
-    private static SignalGenerator buildAccumulatedGenerator(
+    private SignalGenerator buildAccumulatedGenerator(
             double frequency, int sampleRate, double amplitude,
             double[] accRe, double[] accIm, double[] hFreqs) {
         int valid = 0;
@@ -2586,7 +2678,7 @@ public class Main {
      * are written as {@code #}-prefixed comment lines at the top so that
      * {@code --signal sine_compensated} can pick them up automatically.
      */
-    private static String exportAppliedCompensationCsv(
+    private String exportAppliedCompensationCsv(
             double[] accRe, double[] accIm, double[] hFreqs,
             double fundamentalHz, double fundamentalDbFs,
             int sampleRate, int bitDepth, double amplitudeVRms,
@@ -2620,32 +2712,10 @@ public class Main {
     }
 
     /**
-     * One harmonic row parsed from an applied_compensation CSV.
-     * {@code re}/{@code im} are in the rotated frame where fundamental → (0, −1),
-     * so they are already the harmonic complex value relative to the fundamental.
-     */
-    @Value
-    private static class CompHarmonic {
-        int    h;
-        double freqHz;
-        double re;
-        double im;
-    }
-
-    /** Parsed CSV: header metadata + h=1 dBFS/freq + list of harmonic rows (h ≥ 2). */
-    @Value
-    private static class CompCsv {
-        SignalGenerator.Metadata meta;
-        double                   fundamentalDbFs;
-        double                   fundamentalHz;
-        List<CompHarmonic>       harmonics;
-    }
-
-    /**
      * Reads an applied_compensation CSV into {@link CompCsv}.  Tolerates German
      * (comma) decimals so it consumes files written by {@link #exportAppliedCompensationCsv}.
      */
-    private static CompCsv readCompensationCsv(String path) throws IOException {
+    private CompCsv readCompensationCsv(String path) throws IOException {
         SignalGenerator.Metadata meta = SignalGenerator.readAppliedCompensationMetadata(path);
         double fundDbFs = Double.NaN;
         double fundHz   = Double.NaN;
@@ -2853,17 +2923,8 @@ public class Main {
         log.info("Wrote ADC correction   : {}", adcOutArg);
     }
 
-    /** Order descriptor: literal integer power or {@code h+offset}/{@code h-offset}. */
-    @Value
-    private static class OrderToken {
-        boolean hRelative;   // true → h + offset
-        int     value;       // literal power (hRelative=false) OR offset added to h
-        String  label;       // original textual form
-        int resolve(int h)   { return hRelative ? h + value : value; }
-    }
-
     /** Parses a comma-separated list of order tokens (integer literal or "h±k"). */
-    private static List<OrderToken> parseOrders(String spec) {
+    private List<OrderToken> parseOrders(String spec) {
         List<OrderToken> out = new ArrayList<>();
         for (String tok : spec.split(",")) {
             String t = tok.trim();
@@ -2880,7 +2941,7 @@ public class Main {
         return out;
     }
 
-    private static String renderOrders(List<OrderToken> orders) {
+    private String renderOrders(List<OrderToken> orders) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < orders.size(); i++) {
             if (i > 0) sb.append(',');
@@ -2894,7 +2955,7 @@ public class Main {
      * equations {@code (AᵀA)·c = Aᵀy}.  System is small (K ≤ ~5); Gaussian
      * elimination with partial pivoting is adequate.
      */
-    private static double[] solveLeastSquares(double[][] a, double[] y) {
+    private double[] solveLeastSquares(double[][] a, double[] y) {
         int    n   = a.length;
         int    k   = a[0].length;
         double[][] ata = new double[k][k];
@@ -2939,7 +3000,7 @@ public class Main {
      * can load it directly.  Metadata (sample rate, bit depth, amplitude, freq)
      * is copied from {@code source}.
      */
-    private static void writeDacCompensationCsv(List<CompHarmonic> rows, CompCsv source,
+    private void writeDacCompensationCsv(List<CompHarmonic> rows, CompCsv source,
                                                 String path) throws IOException {
         SignalGenerator.Metadata meta = source.getMeta();
         try (PrintWriter pw = new PrintWriter(
@@ -2974,7 +3035,7 @@ public class Main {
      * h at fundamental level L is {@code Σ_k (a_k_re + j·a_k_im) · L^{p_k(h)}}
      * in the rotated frame (fund → −j).
      */
-    private static void writeAdcCorrectionCsv(List<Integer> hList, List<Double> freqList,
+    private void writeAdcCorrectionCsv(List<Integer> hList, List<Double> freqList,
                                               List<double[]> coeffs, List<OrderToken> orders,
                                               CompCsv source, String path,
                                               double[] levelsDbFs) throws IOException {
@@ -3014,24 +3075,12 @@ public class Main {
     }
 
     /**
-     * Loaded ADC-correction coefficient table.  Each harmonic h ≥ 2 carries K
-     * complex coefficients (one per order in {@link #orders}); the ADC's
-     * predicted contribution to harmonic h's bin (in the rotated frame where
-     * fund → −j) is {@code Σ_k (a_k_re + j·a_k_im) · L^{p_k(h)}}.
-     */
-    @Value
-    private static class AdcCorrection {
-        List<OrderToken>                 orders;
-        Map<Integer, double[]> coeffs;   // h → 2·|orders| doubles (re, im pairs)
-    }
-
-    /**
      * Parses an adc_correction CSV (kind=adc_correction) written by
      * {@link #runDeembedMode}.  Supports both the multi-order format with an
      * explicit {@code # orders=…} header and the legacy single-order (h-1)
      * format with a 4-column row.
      */
-    private static AdcCorrection loadAdcCorrectionCsv(String path) throws IOException {
+    private AdcCorrection loadAdcCorrectionCsv(String path) throws IOException {
         List<OrderToken> orders = null;
         Map<Integer, double[]> m = new HashMap<>();
         try (BufferedReader br = new BufferedReader(new FileReader(path))) {
@@ -3070,7 +3119,7 @@ public class Main {
      * contribution is {@code [Σ_k c_k · L^{p_k(h)}] · |R_1| · exp(j·h·(φ₁+π/2))},
      * matching the rotated-frame convention used during calibration.
      */
-    private static double[] applyFftAdcCorrection(FftAnalyzer.Result r, AdcCorrection adc,
+    private double[] applyFftAdcCorrection(FftAnalyzer.Result r, AdcCorrection adc,
                                                   double[] outCorrectedAmpLin) {
         double phi1     = Math.atan2(r.im[r.fundamentalBin], r.re[r.fundamentalBin]);
         double r1Amp    = Math.hypot(r.re[r.fundamentalBin], r.im[r.fundamentalBin]);
@@ -3124,7 +3173,7 @@ public class Main {
      * <p>SNR / noise / non-harmonic bins are unaffected because ADC
      * distortion only contributes at exact harmonic bins.
      */
-    private static void applyFftAdcCorrectionInPlace(FftAnalyzer.Result r, AdcCorrection adc) {
+    private void applyFftAdcCorrectionInPlace(FftAnalyzer.Result r, AdcCorrection adc) {
         double phi1     = Math.atan2(r.im[r.fundamentalBin], r.re[r.fundamentalBin]);
         double r1Amp    = Math.hypot(r.re[r.fundamentalBin], r.im[r.fundamentalBin]);
         double L        = r.fundamentalLinear;
@@ -3182,7 +3231,7 @@ public class Main {
     /**
      * Logs raw vs. ADC-corrected harmonic amplitudes and THD for an FFT result.
      */
-    private static void logAdcCorrectedHarmonics(FftAnalyzer.Result r, AdcCorrection adc) {
+    private void logAdcCorrectedHarmonics(FftAnalyzer.Result r, AdcCorrection adc) {
         double[] corrAmp = new double[r.harmonicCount];
         double[] thd     = applyFftAdcCorrection(r, adc, corrAmp);
         double L         = r.fundamentalLinear;
@@ -3210,55 +3259,7 @@ public class Main {
     }
 
     /**
-     * Subtracts the ADC's predicted time-domain distortion from a captured
-     * sine-dominant signal.  Uses the FFT result to extract L, fundamental
-     * frequency and phase, and synthesises sample-by-sample:
-     *
-     *   correction[n] = Σ_h |A_h| · L^h · cos(h·ω·n + arg(A_h) + h·(φ₁+π/2))
-     *
-     * Phase reference: n=0 is the start of {@code samples}, which matches the
-     * frame-0 reference that FftAnalyzer time-shifts every frame back to.
-     */
-    private static void subtractAdcDistortionInPlace(float[] samples, FftAnalyzer.Result r,
-                                                     AdcCorrection adc) {
-        double phi1 = Math.atan2(r.im[r.fundamentalBin], r.re[r.fundamentalBin]);
-        double L    = r.fundamentalLinear;
-        double w    = 2.0 * Math.PI * r.fundamentalHzRefined / r.sampleRate;
-        List<OrderToken> orders = adc.getOrders();
-
-        int hCount = r.harmonicCount;
-        double[] amp   = new double[hCount];
-        double[] phase = new double[hCount];
-        boolean[] used = new boolean[hCount];
-        for (int h = 0; h < hCount; h++) {
-            int n = h + 2;
-            double[] ab = adc.getCoeffs().get(n);
-            if (ab == null || r.harmonicBins[h] <= 0) continue;
-            // Σ_k c_k · L^{p_k(n)} in the rotated frame, then time amp = |Σ|·L,
-            // phase = arg(Σ) + n·(φ₁+π/2).
-            double abSumRe = 0.0, abSumIm = 0.0;
-            for (int k = 0; k < orders.size(); k++) {
-                double lp = Math.pow(L, orders.get(k).resolve(n));
-                abSumRe += ab[2 * k]     * lp;
-                abSumIm += ab[2 * k + 1] * lp;
-            }
-            amp[h]   = Math.hypot(abSumRe, abSumIm) * L;
-            phase[h] = Math.atan2(abSumIm, abSumRe) + n * (phi1 + Math.PI / 2.0);
-            used[h]  = true;
-        }
-        for (int i = 0; i < samples.length; i++) {
-            double corr = 0.0;
-            for (int h = 0; h < hCount; h++) {
-                if (!used[h]) continue;
-                int n = h + 2;
-                corr += amp[h] * Math.cos(n * w * i + phase[h]);
-            }
-            samples[i] = (float) (samples[i] - corr);
-        }
-    }
-
-    /**
-     * Per-frame variant of {@link #subtractAdcDistortionInPlace}: each frame
+     * Per-frame ADC time-domain distortion subtraction: each frame
      * (HANN-windowed, 0 % overlap, same layout as the analysis FFT) extracts
      * its own {@code phi1} and {@code r1Amp}, then synthesises and subtracts
      * a frame-local correction sinusoid.  Tracks per-frame phase / amplitude
@@ -3272,7 +3273,7 @@ public class Main {
      * remain corrected (otherwise a re-FFT covering them would see
      * uncorrected harmonics).
      */
-    private static void subtractAdcDistortionPerFrameInPlace(
+    private void subtractAdcDistortionPerFrameInPlace(
             float[] samples, int sampleRate, int fftSize,
             FftAnalyzer.Result r, AdcCorrection adc) {
         if (samples.length < fftSize) return;
@@ -3376,38 +3377,6 @@ public class Main {
     // =========================================================================
     // Notch / filter calibration (linear sweep)
     // =========================================================================
-
-    /**
-     * In-memory representation of a filter calibration: a sparse set of measured
-     * magnitude/phase points at log-spaced frequencies, produced by the stepped-sine
-     * sweep in {@link #runFilterSweepMode}.
-     *
-     * <p>All three arrays are the same length N (the number of sweep points) and
-     * {@code freqs} is strictly ascending.  {@code magLin[i]} is the **relative**
-     * filter magnitude |H(freqs[i])| — i.e. the captured peak amplitude divided
-     * by the DAC drive peak fraction, so the pass-band sits at unity (≈ 1.0)
-     * and a notch reads e.g. 1e-4 (−80 dB).  {@code phaseRad[i]} is the filter
-     * phase in radians, with capture-delay linear-phase ramp removed in
-     * {@link #computeFilterCalibrationFromLogSweep}.
-     *
-     * <p>Callers wanting H at an arbitrary frequency interpolate in log-frequency
-     * (dB magnitude, linear phase) between the surrounding two sweep points.
-     */
-    private static class FilterCalibration {
-        final int      sampleRate;
-        final double[] freqs;       // length N, strictly ascending Hz
-        final double[] magLin;      // |H| linear, passband normalised to 1.0
-        final double[] phaseRad;    // phase in radians, unwrapped
-        /** ADC full-scale RMS voltage at the time of measurement, from the CSV header
-         *  ({@code adc_fs_voltage_rms}); {@link Double#NaN} when absent. */
-        double         adcFsVoltageRms = Double.NaN;
-        FilterCalibration(int sampleRate, double[] freqs, double[] magLin, double[] phaseRad) {
-            this.sampleRate = sampleRate;
-            this.freqs      = freqs;
-            this.magLin     = magLin;
-            this.phaseRad   = phaseRad;
-        }
-    }
 
     /**
      * Runs a Farina exponential log-sweep through the filter under test and
@@ -3578,7 +3547,7 @@ public class Main {
      *                      DAC fraction so the returned values are the relative
      *                      filter response |H(f)| with passband ≈ 1.0
      */
-    private static FilterCalibration computeFilterCalibrationFromLogSweep(
+    private FilterCalibration computeFilterCalibrationFromLogSweep(
             float[] yRec, float[] sweepRef, int leadInSamples,
             int sampleRate, double[] freqs, double amplitudeVRms) {
         int xLen   = leadInSamples + sweepRef.length;
@@ -3712,11 +3681,11 @@ public class Main {
                     String.format(Locale.US, "%.3f", maxF));
         }
 
-        return new FilterCalibration(sampleRate, freqs, magLin, phaseRad);
+        return new FilterCalibration(freqs, magLin, phaseRad);
     }
 
     /** Smallest power of 2 ≥ {@code x}. Returns 1 for {@code x ≤ 1}. */
-    private static int nextPow2(int x) {
+    private int nextPow2(int x) {
         if (x <= 1) return 1;
         int hi = Integer.highestOneBit(x);
         return hi == x ? x : hi << 1;
@@ -3736,7 +3705,7 @@ public class Main {
      *    magnitude_db_rel).  Computed as {@code magnitude_dbfs − 20·log₁₀(dacDrivePeak)},
      *    where {@code dacDrivePeak = amplitudeVRms·√2 / SignalGenerator.FS_VOLTAGE}.
      */
-    private static void saveFilterCalibrationCsv(FilterCalibration cal, String path,
+    private void saveFilterCalibrationCsv(FilterCalibration cal, String path,
                                                  int sampleRate,
                                                  double sweepStart, double sweepEnd,
                                                  int sweepPoints,
@@ -3785,8 +3754,7 @@ public class Main {
      * {@link #saveFilterCalibrationCsv}.  Reads {@code sample_rate_hz} from header
      * comments; row order defines ascending frequency.
      */
-    private static FilterCalibration loadFilterCalibrationCsv(String path) throws IOException {
-        int    sampleRate      = -1;
+    private FilterCalibration loadFilterCalibrationCsv(String path) throws IOException {
         double adcFsVoltageRms = Double.NaN;
         List<double[]> rows = new ArrayList<>();   // {freq, magLin, phaseRad}
         try (BufferedReader br = new BufferedReader(new FileReader(path))) {
@@ -3800,8 +3768,8 @@ public class Main {
                     if (eq <= 0) continue;
                     String key = body.substring(0, eq).trim();
                     String val = body.substring(eq + 1).trim();
-                    if (key.equals("sample_rate_hz"))      sampleRate      = Integer.parseInt(val);
-                    else if (key.equals("adc_fs_voltage_rms")) adcFsVoltageRms = Double.parseDouble(val.replace(',', '.'));
+                    if (key.equals("adc_fs_voltage_rms"))
+                        adcFsVoltageRms = Double.parseDouble(val.replace(',', '.'));
                     continue;
                 }
                 if (!Character.isDigit(line.charAt(0))) continue;     // skip header row
@@ -3829,7 +3797,7 @@ public class Main {
             magLin[i]   = rows.get(i)[1];
             phaseRad[i] = rows.get(i)[2];
         }
-        FilterCalibration cal = new FilterCalibration(sampleRate, freqs, magLin, phaseRad);
+        FilterCalibration cal = new FilterCalibration(freqs, magLin, phaseRad);
         cal.adcFsVoltageRms = adcFsVoltageRms;
         return cal;
     }
@@ -3843,7 +3811,7 @@ public class Main {
      * <p>Bins outside the swept range {@code [freqs[0], freqs[N-1]]} are left
      * untouched.  The DC bin (k=0) is always skipped.
      */
-    private static void applyFilterCompensationInPlace(FftAnalyzer.Result r, FilterCalibration cal,
+    private void applyFilterCompensationInPlace(FftAnalyzer.Result r, FilterCalibration cal,
                                                         boolean correctAllBins) {
         int half = r.fftSize / 2;
         double binWidth = r.sampleRate / (double) r.fftSize;
@@ -3959,7 +3927,7 @@ public class Main {
      * absolute voltage at the ADC, regardless of what the DAC drove or what a
      * DUT/attenuator/filter did between them.  No-op when fundRefDbV is already set.
      */
-    private static void applyDefaultDbvScaling(FftAnalyzer.Result result) {
+    private void applyDefaultDbvScaling(FftAnalyzer.Result result) {
         if (Double.isNaN(result.fundRefDbV) && AudioBackend.adcFsVoltageRms > 0.0) {
             result.fundRefDbV = result.fundamentalDbFs
                     + 20.0 * Math.log10(AudioBackend.adcFsVoltageRms);
@@ -3973,7 +3941,7 @@ public class Main {
      * {@link #applyFilterCompensationInPlace}).  Returns {@code [freqs, dbFs]};
      * bins with no detected peak are excluded.
      */
-    private static double[][] capturePreCorrectionPeaks(FftAnalyzer.Result result) {
+    private double[][] capturePreCorrectionPeaks(FftAnalyzer.Result result) {
         int count = 1 + result.harmonicCount;
         double[] freqs = new double[count];
         double[] dbFs  = new double[count];
@@ -4004,7 +3972,7 @@ public class Main {
      * <p>Must be called with the pre-correction {@code result} (so {@code
      * harmonicDbFs[0]} still reflects the filter-attenuated measurement).
      */
-    private static double[][] computeCalOverlay(FilterCalibration cal, FftAnalyzer.Result result) {
+    private double[][] computeCalOverlay(FilterCalibration cal, FftAnalyzer.Result result) {
         if (result.harmonicCount == 0 || result.harmonicBins[0] <= 0) return null;
         double h2Freq = result.harmonicHz[0];
         double h2DbFs = result.harmonicDbFs[0];
@@ -4039,7 +4007,7 @@ public class Main {
      *
      * @return {@code [magLin, phaseRad]}
      */
-    private static double[] interpolateFilterCal(FilterCalibration cal, double freq) {
+    private double[] interpolateFilterCal(FilterCalibration cal, double freq) {
         // Binary search for upper bracket
         int lo = 0, hi = cal.freqs.length - 1;
         if (freq <= cal.freqs[lo]) return new double[]{ cal.magLin[lo], cal.phaseRad[lo] };
@@ -4075,7 +4043,7 @@ public class Main {
      *   Series 1 = phase in degrees (right Y axis), unwrapped
      * X axis is logarithmic frequency, matching the FFT chart style.
      */
-    private static void exportFilterCalibrationChart(FilterCalibration cal,
+    private void exportFilterCalibrationChart(FilterCalibration cal,
             int width, int height, String pngPath) throws IOException {
         XYSeries magSeries   = new XYSeries("Magnitude (dB)");
         XYSeries phaseSeries = new XYSeries("Phase (deg)");
@@ -4212,7 +4180,7 @@ public class Main {
      * channels of a stereo frame.  Used to write the ADC-corrected WAV at the
      * same bit depth the recorder captured.
      */
-    private static byte[] floatMonoToStereoPcmBytes(float[] samples, int bitDepth) {
+    private byte[] floatMonoToStereoPcmBytes(float[] samples, int bitDepth) {
         int sampleBytes = bitDepth / 8;
         int frameSize   = sampleBytes * 2;
         byte[] out      = new byte[samples.length * frameSize];
@@ -4353,7 +4321,7 @@ public class Main {
      * Maps the relative drift back to the master oscillator (22.5792 MHz for the
      * 44.1k sample-rate family, 24.576 MHz for the 48k family).
      */
-    private static void logClockMismatch(int iter, double genFreqHz, double measuredHz, int sampleRate) {
+    private void logClockMismatch(int iter, double genFreqHz, double measuredHz, int sampleRate) {
         if (genFreqHz <= 0.0 || measuredHz <= 0.0) return;
         double delta = measuredHz - genFreqHz;
         double ppm   = 1e6 * delta / genFreqHz;
@@ -4418,19 +4386,4 @@ public class Main {
         return out;
     }
 
-    /**
-     * Per-iteration snapshot used by iterative-compensate so the user can
-     * pick which iteration's compensation to save when the loop is stopped
-     * manually. For accumulate mode, {@code appliedRe}/{@code appliedIm}
-     * hold the compensation in effect AT THE START of {@code iter}
-     * (zero arrays for iter 0).
-     */
-    @Value
-    static class IterSnapshot {
-        int iter;
-        FftAnalyzer.Result result;
-        double[] appliedRe;
-        double[] appliedIm;
-        double[] hFreqs;
-    }
 }

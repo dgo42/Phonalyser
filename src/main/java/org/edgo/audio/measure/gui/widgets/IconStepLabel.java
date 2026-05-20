@@ -1,4 +1,4 @@
-package org.edgo.audio.measure.gui;
+package org.edgo.audio.measure.gui.widgets;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Image;
@@ -8,6 +8,7 @@ import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Listener;
+import org.edgo.audio.measure.gui.common.IconUtils;
 
 /**
  * Tiny factory for click-able SVG-icon "arrow" labels used by
@@ -47,10 +48,11 @@ public final class IconStepLabel {
     public static Canvas create(Composite parent, String svgResource,
                                 int normalPx, int pressedPx, RGB tint) {
         Display d = parent.getDisplay();
-        final Image normal  = SvgIcon.renderAtWidth(d, svgResource, normalPx,  tint);
+        IconUtils icons = IconUtils.instance();
+        final Image normal  = icons.renderAtWidth(d, svgResource, normalPx,  tint);
         final Image pressed = (normalPx == pressedPx)
                 ? normal
-                : SvgIcon.renderAtWidth(d, svgResource, pressedPx, tint);
+                : icons.renderAtWidth(d, svgResource, pressedPx, tint);
 
         // Hold the press flag in a single-element array so the paint
         // listener (a lambda) can see the mutating value without us
@@ -88,10 +90,8 @@ public final class IconStepLabel {
             c.addListener(SWT.MouseExit, restore);
         }
 
-        c.addDisposeListener(e -> {
-            if (!normal.isDisposed())  normal.dispose();
-            if (pressed != normal && !pressed.isDisposed()) pressed.dispose();
-        });
+        // Cached Image instances are owned by IconUtils — disposal happens
+        // when the main shell is torn down, not here.
         return c;
     }
 }

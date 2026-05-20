@@ -1,18 +1,12 @@
 package org.edgo.audio.measure.gui.scope;
 
-import org.edgo.audio.measure.sound.AudioBackend;
 import java.io.File;
 import java.util.Locale;
 
-import org.edgo.audio.measure.gui.I18n;
-import org.edgo.audio.measure.gui.PaneTitle;
-import org.edgo.audio.measure.gui.Preferences;
-import org.edgo.audio.measure.gui.StepSelector;
-import org.edgo.audio.measure.gui.SvgIcon;
-import org.edgo.audio.measure.gui.generator.NumericStepField;
-
-import lombok.extern.log4j.Log4j2;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.CTabFolder;
+import org.eclipse.swt.custom.CTabFolderRenderer;
+import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.events.ControlListener;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
@@ -20,6 +14,7 @@ import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.layout.RowData;
@@ -33,11 +28,24 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Shell;
-import org.eclipse.swt.custom.CTabFolder;
-import org.eclipse.swt.custom.CTabFolderRenderer;
-import org.eclipse.swt.custom.CTabItem;
-import org.edgo.audio.measure.gui.FlatScrollbar;
 import org.eclipse.swt.widgets.Text;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.TriggerEdge;
+import org.edgo.audio.measure.enums.TriggerMode;
+import org.edgo.audio.measure.gui.MainWindow;
+import org.edgo.audio.measure.gui.generator.NumericStepField;
+import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
+import org.edgo.audio.measure.gui.widgets.PaneTitle;
+import org.edgo.audio.measure.gui.widgets.StepSelector;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.IconUtils;
+import org.edgo.audio.measure.gui.common.SvgPaths;
+import org.edgo.audio.measure.sound.AudioBackend;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Builds the entire oscilloscope pane (Group frame + main scope view +
@@ -63,28 +71,27 @@ public final class OscilloscopePane {
     public  static final int TOGGLE_BUTTON = 48;
 
     /** Bundle of image resources passed in by the owner (loaded once, shared). */
-    public static final class Images {
-        public final Image recordDim;
-        public final Image recordLit;
-        public final Image bluePlayLit;
-        public final Image cameraIcon;
-        public final Image crosshairIcon;
-        public final Image floppyDiskIcon;
-        public final Image folderOpenIcon;
-        public Images(Image recordDim, Image recordLit, Image bluePlayLit,
-                      Image cameraIcon, Image crosshairIcon,
-                      Image floppyDiskIcon, Image folderOpenIcon) {
-            this.recordDim      = recordDim;
-            this.recordLit      = recordLit;
-            this.bluePlayLit    = bluePlayLit;
-            this.cameraIcon     = cameraIcon;
-            this.crosshairIcon  = crosshairIcon;
-            this.floppyDiskIcon = floppyDiskIcon;
-            this.folderOpenIcon = folderOpenIcon;
-        }
-    }
+    /** Pixel height of the big record-LED button at the top toolbar. */
+    private static final int RECORD_LED_SIZE  = 33;
+    /** Pixel height of the small play-LED inside the Trigger group. */
+    private static final int SMALL_LED_SIZE   = 26;
+    /** Pixel height of the toolbar utility icons (camera / crosshair). */
+    private static final int UTILITY_ICON_HEIGHT = 26;
+    /** Pixel height of the file-row glyphs (floppy disk / folder open). */
+    private static final int FILE_ICON_HEIGHT = 16;
+
+    // Cached references from IconUtils — owned by the shared cache and
+    // disposed centrally when the main shell tears down.
+    private final Image recordDim;
+    private final Image recordLit;
+    private final Image bluePlayLit;
+    private final Image cameraIcon;
+    private final Image crosshairIcon;
+    private final Image floppyDiskIcon;
+    private final Image folderOpenIcon;
 
     private final Composite              group;
+    private PaneTitle                    title;
     private final OscilloscopeView       view;
     private final CondensedView          condensed;
     private final Composite              toolbar;
@@ -230,7 +237,6 @@ public final class OscilloscopePane {
      */
     private double viewCenterFrames = -1.0;
     private final GridData               condensedGd;
-    private final Images                 images;
     /**
      * Capture controller — owned and wired by the live pane.  {@code null}
      * on the screenshot-only pane variant ({@code liveCapture = false}),
@@ -247,23 +253,28 @@ public final class OscilloscopePane {
 
     /**
      * Constructs the pane and all its children.
-     * @param parent              host composite for the pane's Group.
-     * @param images              icon bundle (Record dim/lit, Play, camera).
-     * @param liveCapture         when {@code true}, creates an
-     *                            {@link OscilloscopeController}, wires the
-     *                            Record toggle to it (showing an error
-     *                            MessageBox on capture-open failure), and
-     *                            stops the controller on Group dispose.
-     *                            The screenshot pane variant passes
-     *                            {@code false}.
-     * @param onScreenshotRequest invoked when the user clicks the camera
-     *                            button on the toolbar; the screenshot pane
-     *                            variant passes a no-op runnable here.
+     * @param parent       host composite for the pane's Group.
+     * @param liveCapture  when {@code true}, creates an
+     *                     {@link OscilloscopeController}, wires the Record
+     *                     toggle to it (showing an error MessageBox on
+     *                     capture-open failure), and stops the controller
+     *                     on Group dispose.  The screenshot pane variant
+     *                     passes {@code false} — its camera / calibrate
+     *                     buttons still exist for layout fidelity but are
+     *                     never clicked.
      */
-    public OscilloscopePane(Composite parent, Images images, boolean liveCapture,
-                            Runnable onScreenshotRequest, Runnable onCalibrateRequest,
-                            Runnable onToggleCollapse) {
-        this.images = images;
+    public OscilloscopePane(Composite parent, boolean liveCapture) {
+        IconUtils icons = IconUtils.instance();
+        Display d = parent.getDisplay();
+        this.recordDim      = icons.createRecordLed(d, 200,  40,  40, false, RECORD_LED_SIZE);
+        this.recordLit      = icons.createRecordLed(d, 255,   0,   0, true,  RECORD_LED_SIZE);
+        this.bluePlayLit    = icons.createPlayLed  (d,  60, 130, 230, true,  SMALL_LED_SIZE);
+        this.cameraIcon     = icons.render(d, SvgPaths.CAMERA,
+                (int) Math.round(UTILITY_ICON_HEIGHT * 1.27), UTILITY_ICON_HEIGHT);
+        this.crosshairIcon  = icons.render(d, SvgPaths.CROSSHAIR,
+                UTILITY_ICON_HEIGHT, UTILITY_ICON_HEIGHT);
+        this.floppyDiskIcon = icons.renderAtHeight(d, SvgPaths.FLOPPY_DISK, FILE_ICON_HEIGHT, null);
+        this.folderOpenIcon = icons.renderAtHeight(d, SvgPaths.FOLDER_OPEN, FILE_ICON_HEIGHT, null);
         // Composite + SWT.BORDER instead of Group — on GTK the Group's
         // GtkFrame label widget consumes title-bar clicks, breaking the
         // collapse UX.  Visual frame is preserved by SWT.BORDER.
@@ -273,8 +284,10 @@ public final class OscilloscopePane {
         // native chrome title — GTK's GtkFrame label widget consumes
         // clicks on the chrome title before any SWT listener (or even
         // Display.addFilter) can see them.
-        PaneTitle.install(group, I18n.t("scope.title.expanded"),
-                I18n.t("scope.pane.toggle.tooltip"), onToggleCollapse);
+        title = new PaneTitle(group, Events.PANE_ID_SCOPE,
+                I18n.t("scope.title.expanded"),
+                I18n.t("scope.title.collapsed"),
+                I18n.t("scope.pane.toggle.tooltip"));
 
         view = new OscilloscopeView(group);
         view.setAutoSetupCallback(this::performAutoSetup);
@@ -407,10 +420,9 @@ public final class OscilloscopePane {
         buildLeftGroup(tabs);
         buildRightGroup(tabs);
         buildHorizontalGroup(tabs);
-        buildTriggerGroup(tabs, images.bluePlayLit, view::armSingle);
+        buildTriggerGroup(tabs, bluePlayLit, view::armSingle);
         buildPresetsGroup(tabs);
-        buildScreenshotGroup(tabs, images.cameraIcon, images.crosshairIcon,
-                onScreenshotRequest, onCalibrateRequest);
+        buildScreenshotGroup(tabs, cameraIcon, crosshairIcon);
         if (liveCapture) {
             buildScopeSaveToGroup(tabs);
             buildScopeOpenSignalGroup(tabs);
@@ -535,7 +547,7 @@ public final class OscilloscopePane {
             }
         });
 
-        recordButton = addToggleButton(toolbar, images.recordDim, images.recordLit);
+        recordButton = addToggleButton(toolbar, recordDim, recordLit);
         recordButton.setToolTipText(I18n.t("scope.record.tooltip"));
         // addToggleButton sets grabExcessHorizontalSpace=true to push
         // the record LED to the far right of an old single-row toolbar.
@@ -658,7 +670,7 @@ public final class OscilloscopePane {
                 controller.start();
                 if (!controller.isRunning()) {
                     recordButton.setSelection(false);
-                    recordButton.setImage(images.recordDim);
+                    recordButton.setImage(recordDim);
                     String err = controller.getLastStartError();
                     if (err != null) {
                         Shell parentShell = group.getShell();
@@ -682,7 +694,7 @@ public final class OscilloscopePane {
      */
     public void setRecordingState(boolean recording) {
         recordButton.setSelection(recording);
-        recordButton.setImage(recording ? images.recordLit : images.recordDim);
+        recordButton.setImage(recording ? recordLit : recordDim);
         if (calibrateButton != null && !calibrateButton.isDisposed()) {
             calibrateButton.setEnabled(recording);
         }
@@ -695,6 +707,161 @@ public final class OscilloscopePane {
     public Button                 getRecordButton() { return recordButton; }
     /** Returns the capture controller for the live pane, or {@code null} on the screenshot-only variant. */
     public OscilloscopeController getController()   { return controller; }
+
+    // -------------------------------------------------------------------------
+    // Pane-owned dialogs
+    // -------------------------------------------------------------------------
+
+    /** Opens the screenshot dialog for this pane.  Initial width/height
+     *  come from preferences (last-used) and fall back to the pane's
+     *  current pixel size; the chosen size + folder are persisted back
+     *  on Copy or Save. */
+    private void openScreenshotDialog() {
+        if (group == null || group.isDisposed()) return;
+        Rectangle b = group.getBounds();
+        Preferences prefs = Preferences.instance();
+        new ScreenshotDialog(
+                group.getShell(),
+                prefs.getScreenshotWidth(),  prefs.getScreenshotHeight(),
+                b.width, b.height,
+                prefs.getScreenshotFolder(),
+                this::renderOffscreen,
+                (w, h) -> {
+                    prefs.setScreenshotWidth(w);
+                    prefs.setScreenshotHeight(h);
+                    prefs.save();
+                },
+                folder -> {
+                    prefs.setScreenshotFolder(folder);
+                    prefs.save();
+                }
+        ).open();
+    }
+
+    /** Opens the ADC-calibration dialog.  Reads the current Vrms from
+     *  the pane's own scope view (no cross-pane fallback — the FFT pane
+     *  has its own calibrate button on the FFT side); aborts with an
+     *  info MessageBox when no live Vrms is available.  Rescales
+     *  {@code AudioBackend.adcFsVoltageRms} so the displayed Vrms
+     *  matches the entered value, and persists the new calibration. */
+    private void openCalibrationDialog() {
+        Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
+        if (parent == null) return;
+        Double currentVrms = (view == null) ? null : view.getLastVrms();
+        if (currentVrms == null || currentVrms <= 0 || Double.isNaN(currentVrms)) {
+            MessageBox mb = new MessageBox(parent, SWT.ICON_INFORMATION | SWT.OK);
+            mb.setText(I18n.t("calibrate.title"));
+            mb.setMessage(I18n.t("calibrate.error.noVrms"));
+            mb.open();
+            return;
+        }
+        final double measuredVrms = currentVrms;
+        new AdcCalibrationDialog(parent, measuredVrms, actualVrms -> {
+            double scale = actualVrms / measuredVrms;
+            double newFs = AudioBackend.adcFsVoltageRms * scale;
+            AudioBackend.adcFsVoltageRms = newFs;
+            Preferences.instance().setAdcFsVoltageRms(newFs);
+            Preferences.instance().save();
+        }).open();
+    }
+
+    /** Renders this pane into a fresh image at {@code (targetW, targetH)}
+     *  by constructing a brand-new {@link OscilloscopePane} inside a
+     *  hidden offscreen Shell, copying the live buffer and measurement
+     *  state into it, and printing the result.  Because the chrome is
+     *  laid out by SWT (rather than bitmap-scaled), toolbar buttons stay
+     *  at their native pixel size with extra space distributed by the
+     *  layout. */
+    private Image renderOffscreen(Display d, int targetW, int targetH) {
+        targetW = Math.max(1, targetW);
+        targetH = Math.max(1, targetH);
+        // Hidden Shell sized to the target.  On GTK: setSize BEFORE
+        // setLocation — calling setLocation before the shell has a real
+        // size causes some WMs to ignore the negative offset and place
+        // it at (0,0) anyway.
+        Shell offscreen = new Shell(d, SWT.NO_TRIM);
+        offscreen.setLayout(new FillLayout());
+        OscilloscopePane shotPane = new OscilloscopePane(offscreen, false);
+        Image output = new Image(d, targetW, targetH);
+        try {
+            if (view != null && !view.isDisposed()) {
+                SignalBuffer liveBuffer = view.getBuffer();
+                if (liveBuffer != null) {
+                    shotPane.getView().setBuffer(liveBuffer);
+                    shotPane.getCondensed().setBuffer(liveBuffer);
+                }
+                shotPane.getView().copyMeasurementsFrom(view);
+            }
+            shotPane.setRecordingState(controller != null && controller.isRunning());
+
+            offscreen.setSize(targetW, targetH);
+            offscreen.setLocation(-10000, -10000);
+            offscreen.open();
+            while (d.readAndDispatch()) { /* drain */ }
+            shotPane.getGroup().update();
+
+            GC outGc = new GC(output);
+            try {
+                shotPane.getGroup().print(outGc);
+            } finally {
+                outGc.dispose();
+            }
+            offscreen.setVisible(false);
+        } finally {
+            offscreen.dispose();
+        }
+        return output;
+    }
+
+    /** True when this pane is collapsed to just its title bar. */
+    public boolean isCollapsed() { return collapsed; }
+
+    /** Hides / shows every child except the title Label so the pane can
+     *  collapse to its title bar (or restore).  Snapshots each child's
+     *  pre-collapse {@code visible} / {@code GridData.exclude} on the way
+     *  down so per-child state (e.g. the navSlider's mutually-exclusive
+     *  height spacer) survives the round-trip.  Pure pane-internal — the
+     *  parent {@code SashForm}'s weights are owned by {@link MainTab}. */
+    public void setCollapsed(boolean wantCollapsed) {
+        if (collapsed == wantCollapsed) return;
+        if (group == null || group.isDisposed()) return;
+        collapsed = wantCollapsed;
+        Control[] children = group.getChildren();
+        if (collapsed) {
+            preCollapseChildVisible = new boolean[children.length];
+            preCollapseChildExclude = new boolean[children.length];
+            for (int i = 0; i < children.length; i++) {
+                if (children[i] == title) continue;
+                preCollapseChildVisible[i] = children[i].getVisible();
+                if (children[i].getLayoutData() instanceof GridData gd) {
+                    preCollapseChildExclude[i] = gd.exclude;
+                    gd.exclude = true;
+                }
+                children[i].setVisible(false);
+            }
+            title.setCollapsed(true);
+        } else {
+            if (preCollapseChildVisible != null
+                    && preCollapseChildVisible.length == children.length) {
+                for (int i = 0; i < children.length; i++) {
+                    if (children[i] == title) continue;
+                    children[i].setVisible(preCollapseChildVisible[i]);
+                    if (children[i].getLayoutData() instanceof GridData gd) {
+                        gd.exclude = preCollapseChildExclude[i];
+                    }
+                }
+                preCollapseChildVisible = null;
+                preCollapseChildExclude = null;
+            }
+            title.setCollapsed(false);
+        }
+        group.layout(true);
+    }
+
+    /** Collapse state + per-child snapshot.  See {@link #setCollapsed(boolean)}. */
+    private boolean    collapsed;
+    private boolean[]  preCollapseChildVisible;
+    private boolean[]  preCollapseChildExclude;
 
     /** Custom CTabFolderRenderer for the toolbar tabs.  For the custom-painted
      *  tab indices (Left / Right / Horizontal / Trigger):
@@ -953,7 +1120,7 @@ public final class OscilloscopePane {
             }
             case TAB_TRIGGER: {
                 int wch = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR, triggerChannelLabel());
-                String trigCh = I18n.t(prefs.getOscTriggerChannel() == TriggerChannel.L
+                String trigCh = I18n.t(prefs.getOscTriggerChannel() == Channel.L
                                 ? "scope.tab.left" : "scope.tab.right");
                 addTabRegion(x, y, wch, tileH, I18n.t("scope.tile.trigger.channel", trigCh));
                 x += wch + gap;
@@ -1014,7 +1181,7 @@ public final class OscilloscopePane {
 
     /** Trigger-tile labels — read straight from the current preferences. */
     private static String triggerChannelLabel() {
-        return Preferences.instance().getOscTriggerChannel() == TriggerChannel.L ? "L" : "R";
+        return Preferences.instance().getOscTriggerChannel() == Channel.L ? "L" : "R";
     }
     private static String triggerEdgeLabel() {
         return Preferences.instance().getOscTriggerEdge() == TriggerEdge.RISE ? "↑" : "↓";
@@ -1288,13 +1455,13 @@ public final class OscilloscopePane {
         chR = squareToggle(chSet, "R");
         chL.setToolTipText(I18n.t("scope.trigger.channel.left.tooltip"));
         chR.setToolTipText(I18n.t("scope.trigger.channel.right.tooltip"));
-        chL.setSelection(prefs.getOscTriggerChannel() == TriggerChannel.L);
-        chR.setSelection(prefs.getOscTriggerChannel() == TriggerChannel.R);
+        chL.setSelection(prefs.getOscTriggerChannel() == Channel.L);
+        chR.setSelection(prefs.getOscTriggerChannel() == Channel.R);
         makeDependentGroup(chL, chR);
         chL.addListener(SWT.Selection,
-                e -> { if (chL.getSelection()) { prefs.setOscTriggerChannel(TriggerChannel.L); prefs.save(); refreshTabHeader(TAB_TRIGGER); } });
+                e -> { if (chL.getSelection()) { prefs.setOscTriggerChannel(Channel.L); prefs.save(); refreshTabHeader(TAB_TRIGGER); } });
         chR.addListener(SWT.Selection,
-                e -> { if (chR.getSelection()) { prefs.setOscTriggerChannel(TriggerChannel.R); prefs.save(); refreshTabHeader(TAB_TRIGGER); } });
+                e -> { if (chR.getSelection()) { prefs.setOscTriggerChannel(Channel.R); prefs.save(); refreshTabHeader(TAB_TRIGGER); } });
 
         Composite edgeSet = new Composite(g, SWT.NONE);
         edgeSet.setLayout(flushRowLayoutHorizontal(2));
@@ -1330,10 +1497,11 @@ public final class OscilloscopePane {
                 e -> { if (modeSingle.getSelection()) { prefs.setOscTriggerMode(TriggerMode.SINGLE); prefs.save(); refreshTabHeader(TAB_TRIGGER); } });
 
         Button startBtn = new Button(g, SWT.PUSH);
-        Image triggerPlayIcon = SvgIcon.renderAtHeight(g.getDisplay(), "/icons/play.svg",
-                SQUARE_BUTTON - 12, null);
+        Image triggerPlayIcon = IconUtils.instance().renderAtHeight(g.getDisplay(),
+                SvgPaths.PLAY, SQUARE_BUTTON - 12, null);
         startBtn.setImage(triggerPlayIcon);
-        startBtn.addDisposeListener(e -> triggerPlayIcon.dispose());
+        // Image is cached and owned by IconUtils — disposed when the
+        // main shell tears down, not on button dispose.
         startBtn.setToolTipText(I18n.t("scope.trigger.start.tooltip"));
         startBtn.setLayoutData(new RowData(SQUARE_BUTTON, SQUARE_BUTTON));
         startBtn.setEnabled(modeSingle.getSelection());
@@ -1658,8 +1826,8 @@ public final class OscilloscopePane {
         prefs.setOscTriggerChannel(p.getTriggerChannel());
         prefs.setOscTriggerEdge   (p.getTriggerEdge());
         prefs.setOscTriggerMode   (p.getTriggerMode());
-        if (chL        != null && !chL       .isDisposed()) chL       .setSelection(p.getTriggerChannel() == TriggerChannel.L);
-        if (chR        != null && !chR       .isDisposed()) chR       .setSelection(p.getTriggerChannel() == TriggerChannel.R);
+        if (chL        != null && !chL       .isDisposed()) chL       .setSelection(p.getTriggerChannel() == Channel.L);
+        if (chR        != null && !chR       .isDisposed()) chR       .setSelection(p.getTriggerChannel() == Channel.R);
         if (edgeRise   != null && !edgeRise  .isDisposed()) edgeRise  .setSelection(p.getTriggerEdge()    == TriggerEdge.RISE);
         if (edgeFall   != null && !edgeFall  .isDisposed()) edgeFall  .setSelection(p.getTriggerEdge()    == TriggerEdge.FALL);
         if (modeAuto   != null && !modeAuto  .isDisposed()) modeAuto  .setSelection(p.getTriggerMode()    == TriggerMode.AUTO);
@@ -1687,8 +1855,7 @@ public final class OscilloscopePane {
      * button is square (h = w = SQUARE_BUTTON).  Calibrate starts disabled
      * and is enabled / disabled in {@link #setRecordingState(boolean)}.
      */
-    private void buildScreenshotGroup(CTabFolder folder, Image cameraIcon, Image crosshairIcon,
-                                      Runnable onScreenshotRequest, Runnable onCalibrateRequest) {
+    private void buildScreenshotGroup(CTabFolder folder, Image cameraIcon, Image crosshairIcon) {
         Composite g = groupCell(folder, "Utility");
         g.setLayout(rowLayoutHorizontal(6));
         Button shotBtn = new Button(g, SWT.PUSH);
@@ -1696,14 +1863,14 @@ public final class OscilloscopePane {
         shotBtn.setToolTipText(I18n.t("scope.screenshot.tooltip"));
         int shotW = (int) Math.round(SQUARE_BUTTON * 1.27);
         shotBtn.setLayoutData(new RowData(shotW, SQUARE_BUTTON));
-        shotBtn.addListener(SWT.Selection, e -> onScreenshotRequest.run());
+        shotBtn.addListener(SWT.Selection, e -> openScreenshotDialog());
 
         calibrateButton = new Button(g, SWT.PUSH);
         calibrateButton.setImage(crosshairIcon);
         calibrateButton.setToolTipText(I18n.t("scope.calibrate.tooltip"));
         calibrateButton.setLayoutData(new RowData(SQUARE_BUTTON, SQUARE_BUTTON));
         calibrateButton.setEnabled(false);
-        calibrateButton.addListener(SWT.Selection, e -> onCalibrateRequest.run());
+        calibrateButton.addListener(SWT.Selection, e -> openCalibrationDialog());
         // Periodic gate poll — keeps the button state honest as the
         // recording starts / stops, the file-mode flag flips, and the
         // measured Vpp moves above / below the 25 % threshold.
@@ -1732,7 +1899,7 @@ public final class OscilloscopePane {
         pathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         Button browse = new Button(g, SWT.PUSH);
-        browse.setImage(images.folderOpenIcon);
+        browse.setImage(folderOpenIcon);
         browse.setToolTipText(I18n.t("scope.save.browse.tooltip"));
         browse.addListener(SWT.Selection, e -> openScopeSaveBrowse(pathField));
 
@@ -1752,7 +1919,7 @@ public final class OscilloscopePane {
         });
 
         Button save = new Button(g, SWT.PUSH);
-        save.setImage(images.floppyDiskIcon);
+        save.setImage(floppyDiskIcon);
         save.setToolTipText(I18n.t("scope.save.tooltip"));
         save.addListener(SWT.Selection, e -> doScopeSave(pathField.getText(), durField.getValue()));
     }
@@ -1781,7 +1948,7 @@ public final class OscilloscopePane {
         openSignalPathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         Button browse = new Button(g, SWT.PUSH);
-        browse.setImage(images.folderOpenIcon);
+        browse.setImage(folderOpenIcon);
         browse.setToolTipText(I18n.t("scope.openSignal.browse.tooltip"));
         browse.addListener(SWT.Selection, e -> doOpenSignalBrowse());
     }
@@ -1810,7 +1977,7 @@ public final class OscilloscopePane {
         if (controller != null && controller.isRunning()) {
             controller.stop();
             recordButton.setSelection(false);
-            recordButton.setImage(images.recordDim);
+            recordButton.setImage(recordDim);
             if (calibrateButton != null && !calibrateButton.isDisposed()) {
                 calibrateButton.setEnabled(false);
             }
@@ -2286,11 +2453,11 @@ public final class OscilloscopePane {
      *  channel if the measurement channel is disabled. */
     private double measurementChannelVPDiv() {
         Preferences prefs = Preferences.instance();
-        TriggerChannel selected = prefs.getOscMeasurementChannel();
+        Channel selected = prefs.getOscMeasurementChannel();
         boolean showL = prefs.isOscLeftChannelEnabled();
         boolean showR = prefs.isOscRightChannelEnabled();
-        if (selected == TriggerChannel.R && showR) return prefs.getOscRightVoltsPerDiv();
-        if (selected == TriggerChannel.L && showL) return prefs.getOscLeftVoltsPerDiv();
+        if (selected == Channel.R && showR) return prefs.getOscRightVoltsPerDiv();
+        if (selected == Channel.L && showL) return prefs.getOscLeftVoltsPerDiv();
         if (showR)                                  return prefs.getOscRightVoltsPerDiv();
         return prefs.getOscLeftVoltsPerDiv();
     }
@@ -2325,8 +2492,8 @@ public final class OscilloscopePane {
         double lo = bounds[0], hi = bounds[1];
         double frac = (maxSel <= 0) ? (lo + hi) / 2.0
                                     : lo + (sel / (double) maxSel) * (hi - lo);
-        TriggerChannel ref = prefs.getOscMeasurementChannel();
-        double prevRef = (ref == TriggerChannel.L)
+        Channel ref = prefs.getOscMeasurementChannel();
+        double prevRef = (ref == Channel.L)
                 ? prefs.getOscLeftOffsetFrac()
                 : prefs.getOscRightOffsetFrac();
         if (prevRef == frac) return;
@@ -2381,8 +2548,8 @@ public final class OscilloscopePane {
             if (vertSlider.getPageIncrement() != pageStep)  vertSlider.setPageIncrement(pageStep);
         }
 
-        TriggerChannel selected = prefs.getOscMeasurementChannel();
-        double frac = (selected == TriggerChannel.R)
+        Channel selected = prefs.getOscMeasurementChannel();
+        double frac = (selected == Channel.R)
                 ? prefs.getOscRightOffsetFrac()
                 : prefs.getOscLeftOffsetFrac();
         // Clamp to current bounds — guards against a leftover offset from

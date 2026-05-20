@@ -9,6 +9,8 @@ import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.wav.AiffWriter;
 import org.edgo.audio.measure.wav.FlacWriter;
 import org.edgo.audio.measure.wav.WavWriter;
+import org.edgo.audio.measure.enums.AudioFileFormat;
+import org.edgo.audio.measure.gui.interfaces.PcmSink;
 
 /**
  * Writes the latest {@code durationSeconds} of capture from a
@@ -128,10 +130,10 @@ public final class ScopeFileSaver {
         int bytesPerFrame  = bytesPerSample * CHANNELS;
 
         String name = outFile.getName().toLowerCase(Locale.ROOT);
-        Format fmt =
-                name.endsWith(".flac")                          ? Format.FLAC
-              : name.endsWith(".aiff") || name.endsWith(".aif") ? Format.AIFF
-              :                                                   Format.WAV;
+        AudioFileFormat fmt =
+                name.endsWith(".flac")                          ? AudioFileFormat.FLAC
+              : name.endsWith(".aiff") || name.endsWith(".aif") ? AudioFileFormat.AIFF
+              :                                                   AudioFileFormat.WAV;
 
         try (PcmSink sink = openSink(fmt, outFile, sampleRate, bitDepth)) {
             int chunkFrames = 4096;
@@ -187,17 +189,8 @@ public final class ScopeFileSaver {
         return v;
     }
 
-    private enum Format {
-        WAV, FLAC, AIFF;
-        private Format() {}
-    }
 
-    private interface PcmSink extends AutoCloseable {
-        void writeRaw(byte[] buf, int length) throws IOException;
-        @Override void close() throws IOException;
-    }
-
-    private static PcmSink openSink(Format fmt, File outFile, int sampleRate, int bitDepth)
+    private static PcmSink openSink(AudioFileFormat fmt, File outFile, int sampleRate, int bitDepth)
             throws IOException {
         switch (fmt) {
             case FLAC: {

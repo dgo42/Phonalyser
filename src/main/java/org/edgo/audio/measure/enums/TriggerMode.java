@@ -1,4 +1,4 @@
-package org.edgo.audio.measure.gui.scope;
+package org.edgo.audio.measure.enums;
 
 /** Capture mode for the oscilloscope trigger. */
 public enum TriggerMode {

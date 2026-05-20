@@ -12,10 +12,13 @@ import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Text;
-import org.edgo.audio.measure.gui.IconStepLabel;
+import org.edgo.audio.measure.gui.widgets.IconStepLabel;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.edgo.audio.measure.gui.interfaces.Formatter;
+import org.edgo.audio.measure.gui.interfaces.Parser;
+import org.edgo.audio.measure.gui.interfaces.Stepper;
 
 /**
  * Editable numeric field used for the generator's frequency and amplitude
@@ -37,9 +40,6 @@ import java.util.List;
  */
 public final class NumericStepField extends Composite {
 
-    @FunctionalInterface public interface Parser    { Double parse(String text); }
-    @FunctionalInterface public interface Formatter { String format(double value); }
-    @FunctionalInterface public interface Stepper   { double step(double current, int direction); }
 
     private final Text       field;
     private final Canvas     upBtn;

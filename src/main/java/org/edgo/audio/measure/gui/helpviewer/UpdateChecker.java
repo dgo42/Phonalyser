@@ -6,7 +6,7 @@ import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Shell;
 
-import org.edgo.audio.measure.gui.I18n;
+import org.edgo.audio.measure.gui.i18n.I18n;
 
 /**
  * GitHub-releases update check.  The real implementation (HTTPS GET to

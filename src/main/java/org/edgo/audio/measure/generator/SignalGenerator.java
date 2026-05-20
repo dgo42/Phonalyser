@@ -12,6 +12,7 @@ import org.edgo.audio.measure.fft.FftAnalyzer;
 
 import lombok.Value;
 import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.enums.GenSignalForm;
 
 /**
  * DDS (Direct Digital Synthesis) signal generator with 9th-order Taylor sine correction.
@@ -30,32 +31,6 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public class SignalGenerator {
 
-    // -------------------------------------------------------------------------
-    // Signal form
-    // -------------------------------------------------------------------------
-
-    public enum SignalForm {
-        SINE, TRIANGLE, RECTANGLE, WHITE_NOISE, PINK_NOISE, PINK_NOISE_LINEAR, SINE_COMPENSATED,
-        LINEAR_SWEEP, LOG_SWEEP;
-
-        private SignalForm() {}
-
-        public static SignalForm fromString(String s) {
-            return switch (s.toLowerCase()) {
-                case "sine"                                                 -> SINE;
-                case "triangle", "tri"                                      -> TRIANGLE;
-                case "rectangle", "rect", "square", "pulse"                 -> RECTANGLE;
-                case "white", "white_noise"                                 -> WHITE_NOISE;
-                case "pink", "pink_noise"                                   -> PINK_NOISE;
-                case "pink_linear", "pink_noise_linear"                     -> PINK_NOISE_LINEAR;
-                case "sine_compensated", "sine_hmc"                         -> SINE_COMPENSATED;
-                case "linear_sweep", "sweep", "chirp"                       -> LINEAR_SWEEP;
-                case "log_sweep", "farina"                                  -> LOG_SWEEP;
-                default -> throw new IllegalArgumentException("Unknown signal form: " + s +
-                        ". Valid: sine, triangle, rectangle, white_noise, pink_noise, pink_noise_linear, sine_compensated, linear_sweep, log_sweep");
-            };
-        }
-    }
 
     // -------------------------------------------------------------------------
     // DDS sine lookup table (full wave, 4096 entries)
@@ -102,15 +77,15 @@ public class SignalGenerator {
     // Generator parameters
     // -------------------------------------------------------------------------
 
-    /** Current waveform.  Live-swappable via {@link #setForm(SignalForm)}. */
-    private volatile SignalForm form;
+    /** Current waveform.  Live-swappable via {@link #setForm(GenSignalForm)}. */
+    private volatile GenSignalForm form;
     /** Linear peak amplitude [0..1].  Live-swappable via {@link #setAmplitudeVrms}. */
     private volatile double     amplitude;
     /** Sample rate cached for live frequency / amplitude updates from the GUI. */
     private final    int        sampleRate;
-    /** Duty cycle for {@link SignalForm#RECTANGLE} as a fraction [0.01, 0.99].  Default 50 %. */
+    /** Duty cycle for {@link GenSignalForm#RECTANGLE} as a fraction [0.01, 0.99].  Default 50 %. */
     private volatile double     rectDuty   = 0.5;
-    /** Duty cycle for {@link SignalForm#TRIANGLE} as a fraction [0.001, 0.999] —
+    /** Duty cycle for {@link GenSignalForm#TRIANGLE} as a fraction [0.001, 0.999] —
      *  the rise portion of each period.  0.5 = symmetric triangle; values
      *  near 1.0 / 0.0 produce sawtooth / inverted-sawtooth shapes. */
     private volatile double     triDuty    = 0.5;
@@ -185,7 +160,7 @@ public class SignalGenerator {
      * @param sampleRate      sample rate in Hz
      * @param amplitudeVRms   desired output amplitude in V RMS
      */
-    public SignalGenerator(SignalForm form, double frequency, int sampleRate, double amplitudeVRms) {
+    public SignalGenerator(GenSignalForm form, double frequency, int sampleRate, double amplitudeVRms) {
         this.form       = form;
         this.amplitude  = amplitudeVRms / (FS_VOLTAGE * rawRms(form));
         this.phaseInc   = Math.round(frequency / sampleRate * 4294967296.0);
@@ -195,7 +170,7 @@ public class SignalGenerator {
     }
 
     /**
-     * Constructs a {@link SignalForm#SINE_COMPENSATED} generator.
+     * Constructs a {@link GenSignalForm#SINE_COMPENSATED} generator.
      * Loads H2..Hn harmonic corrections from an {@code fft_harmonics_*.csv} file
      * produced by {@link FftAnalyzer#exportHarmonicsCsv}, or an
      * {@code applied_compensation_*.csv} file from the iterative workflow.
@@ -213,12 +188,12 @@ public class SignalGenerator {
      */
     public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
                            String harmonicsCsvPath) throws IOException {
-        this(SignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms);
+        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms);
         loadHarmonics(frequency, sampleRate, harmonicsCsvPath);
     }
 
     /**
-     * Constructs a {@link SignalForm#SINE_COMPENSATED} generator directly from a
+     * Constructs a {@link GenSignalForm#SINE_COMPENSATED} generator directly from a
      * {@link FftAnalyzer.Result} — no intermediate CSV file is written.
      * Requires coherent averaging ({@code result.coherentAveraging == true}); otherwise
      * phases are unknown and amplitude-only correction is applied with a warning.
@@ -230,12 +205,12 @@ public class SignalGenerator {
      */
     public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
                            FftAnalyzer.Result result) {
-        this(SignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms);
+        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms);
         loadHarmonicsFromResult(frequency, sampleRate, result);
     }
 
     /**
-     * Constructs a {@link SignalForm#SINE_COMPENSATED} generator from pre-computed
+     * Constructs a {@link GenSignalForm#SINE_COMPENSATED} generator from pre-computed
      * accumulated harmonic corrections (amplitude + phase arrays).
      * Used by the iterative compensation workflow where corrections are aggregated
      * across multiple iterations as complex numbers.
@@ -249,7 +224,7 @@ public class SignalGenerator {
      */
     public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
                            double[] ampRatios, double[] phiInits, double[] freqsHz) {
-        this(SignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms);
+        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms);
         int n = ampRatios.length;
         hAmpRatio = new double[n];
         hNum      = new int[n];
@@ -268,7 +243,7 @@ public class SignalGenerator {
     }
 
     /**
-     * Constructs a {@link SignalForm#LINEAR_SWEEP} generator.  Generates a phase-continuous
+     * Constructs a {@link GenSignalForm#LINEAR_SWEEP} generator.  Generates a phase-continuous
      * linear (constant-rate) frequency sweep from {@code freqStart} → {@code freqEnd} over
      * {@code periodSamples} samples, then loops back to the start.  Looping keeps the DAC
      * fed for capture sessions longer than one sweep period.
@@ -281,8 +256,8 @@ public class SignalGenerator {
      */
     public SignalGenerator(double freqStart, double freqEnd, int sampleRate,
                            int periodSamples, double amplitudeVRms) {
-        this.form               = SignalForm.LINEAR_SWEEP;
-        this.amplitude          = amplitudeVRms / (FS_VOLTAGE * rawRms(SignalForm.LINEAR_SWEEP));
+        this.form               = GenSignalForm.LINEAR_SWEEP;
+        this.amplitude          = amplitudeVRms / (FS_VOLTAGE * rawRms(GenSignalForm.LINEAR_SWEEP));
         this.phaseInc           = 0;            // unused for sweep
         this.sampleRate         = sampleRate;
         this.sweepFreqStart     = freqStart;
@@ -300,7 +275,7 @@ public class SignalGenerator {
     }
 
     /**
-     * Constructs a {@link SignalForm#LOG_SWEEP} generator: emits {@code leadInSamples}
+     * Constructs a {@link GenSignalForm#LOG_SWEEP} generator: emits {@code leadInSamples}
      * samples of silence, then a Farina-style exponential sine sweep from {@code f0}
      * to {@code f1} over {@code sweepSamples} samples, then silence forever.
      *
@@ -317,8 +292,8 @@ public class SignalGenerator {
      */
     public SignalGenerator(double f0, double f1, int sweepSamples, int leadInSamples,
                            int sampleRate, double amplitudeVRms) {
-        this.form           = SignalForm.LOG_SWEEP;
-        this.amplitude      = amplitudeVRms / (FS_VOLTAGE * rawRms(SignalForm.LOG_SWEEP));
+        this.form           = GenSignalForm.LOG_SWEEP;
+        this.amplitude      = amplitudeVRms / (FS_VOLTAGE * rawRms(GenSignalForm.LOG_SWEEP));
         this.phaseInc       = 0;            // unused for sweep
         this.sampleRate     = sampleRate;
         this.logSweepBuffer = renderLogSweep(f0, f1, sweepSamples, sampleRate);
@@ -367,7 +342,7 @@ public class SignalGenerator {
      * Deterministic waveforms: exact analytical values.
      * Noise waveforms: approximate, based on the Voss–McCartney structure (PINK_OCTAVES+1 summed terms).
      */
-    private double rawRms(SignalForm form) {
+    private double rawRms(GenSignalForm form) {
         return switch (form) {
             case SINE, SINE_COMPENSATED   -> 1.0 / Math.sqrt(2.0);                       // sine RMS = peak / √2
             case LINEAR_SWEEP             -> 1.0 / Math.sqrt(2.0);                       // sweep is sin(φ(n)); RMS = peak / √2
@@ -387,13 +362,13 @@ public class SignalGenerator {
     /**
      * Live-swaps the waveform.  Phase accumulator is preserved so the
      * transition between phase-continuous forms (sine/saw/triangle) is
-     * smooth.  Switching <em>to</em> {@link SignalForm#SINE_COMPENSATED}
+     * smooth.  Switching <em>to</em> {@link GenSignalForm#SINE_COMPENSATED}
      * without previously loading harmonics simply produces an uncorrected
      * sine — the per-harmonic correction arrays remain {@code null}.
      * Sweep forms expect their own constructor and shouldn't be reached
      * via this setter.
      */
-    public void setForm(SignalForm newForm) {
+    public void setForm(GenSignalForm newForm) {
         if (newForm == null || newForm == form) return;
         // Re-scale amplitude so the new form keeps the same V RMS output —
         // sine and triangle / saw / noise have different peak / RMS ratios.
@@ -553,9 +528,9 @@ public class SignalGenerator {
      *  regeneration since the pre-rendered buffer depends on it. */
     public void setSweepFreqStart(double hz) {
         if (!Double.isFinite(hz) || hz < 0) return;
-        if (form == SignalForm.LINEAR_SWEEP) {
+        if (form == GenSignalForm.LINEAR_SWEEP) {
             sweepFreqStart = hz;
-        } else if (form == SignalForm.LOG_SWEEP) {
+        } else if (form == GenSignalForm.LOG_SWEEP) {
             sweepFreqStart = hz;
             rebuildLogSweepBuffer();
         }
@@ -564,9 +539,9 @@ public class SignalGenerator {
     /** Live-applies sweep stop frequency (Hz). */
     public void setSweepFreqEnd(double hz) {
         if (!Double.isFinite(hz) || hz < 0) return;
-        if (form == SignalForm.LINEAR_SWEEP) {
+        if (form == GenSignalForm.LINEAR_SWEEP) {
             sweepFreqEnd = hz;
-        } else if (form == SignalForm.LOG_SWEEP) {
+        } else if (form == GenSignalForm.LOG_SWEEP) {
             sweepFreqEnd = hz;
             rebuildLogSweepBuffer();
         }
@@ -577,11 +552,11 @@ public class SignalGenerator {
      *  buffer. */
     public void setSweepDurationSamples(int samples) {
         if (samples < 2) samples = 2;
-        if (form == SignalForm.LINEAR_SWEEP) {
+        if (form == GenSignalForm.LINEAR_SWEEP) {
             sweepPeriodSamples = samples;
             if (sweepIdx >= sweepPeriodSamples) sweepIdx = 0;
             reclampFadeToCycle();
-        } else if (form == SignalForm.LOG_SWEEP) {
+        } else if (form == GenSignalForm.LOG_SWEEP) {
             // Allocate a new buffer at the requested length so subsequent
             // logSweepNext() reads see the new size.  Position is reset
             // to the start of the buffer (skip lead-in) so the user
@@ -597,7 +572,7 @@ public class SignalGenerator {
      *  values.  Called after any of those change so the playback sample
      *  source actually reflects the new parameters. */
     private void rebuildLogSweepBuffer() {
-        if (form != SignalForm.LOG_SWEEP) return;
+        if (form != GenSignalForm.LOG_SWEEP) return;
         int len = (logSweepBuffer != null) ? logSweepBuffer.length : 0;
         if (len < 2) return;
         this.logSweepBuffer = renderLogSweep(sweepFreqStart, sweepFreqEnd, len, sampleRate);
@@ -609,8 +584,8 @@ public class SignalGenerator {
     /** Returns the current sweep-cycle length in samples (period for
      *  LINEAR_SWEEP, buffer length for LOG_SWEEP, 0 for non-sweep forms). */
     private int sweepCycleLength() {
-        if (form == SignalForm.LINEAR_SWEEP) return sweepPeriodSamples;
-        if (form == SignalForm.LOG_SWEEP   ) return (logSweepBuffer != null) ? logSweepBuffer.length : 0;
+        if (form == GenSignalForm.LINEAR_SWEEP) return sweepPeriodSamples;
+        if (form == GenSignalForm.LOG_SWEEP   ) return (logSweepBuffer != null) ? logSweepBuffer.length : 0;
         return 0;
     }
 
@@ -798,7 +773,7 @@ public class SignalGenerator {
 
     /**
      * Parses an {@code fft_harmonics_*.csv} file and initialises the per-harmonic
-     * rotating phasors for {@link SignalForm#SINE_COMPENSATED}.
+     * rotating phasors for {@link GenSignalForm#SINE_COMPENSATED}.
      * Skips H1 (fundamental). For each H2..Hn entry the phasor is initialised from
      * the {@code re}/{@code im} columns when present (full double precision), otherwise
      * from {@code phase_deg}.  The correction amplitude is taken from

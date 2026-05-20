@@ -1,28 +1,33 @@
 package org.edgo.audio.measure.gui.scope;
 
-import org.edgo.audio.measure.sound.AudioBackend;
-import org.edgo.audio.measure.gui.I18n;
-import org.edgo.audio.measure.gui.Preferences;
-import org.edgo.audio.measure.gui.SvgIcon;
-
 import java.util.Arrays;
 
-import lombok.extern.log4j.Log4j2;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.LineAttributes;
 import org.eclipse.swt.graphics.Path;
 import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.OscSliderId;
+import org.edgo.audio.measure.enums.TriggerEdge;
+import org.edgo.audio.measure.enums.TriggerMode;
+import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.gui.common.IconUtils;
+import org.edgo.audio.measure.gui.common.SvgPaths;
+import org.edgo.audio.measure.sound.AudioBackend;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Oscilloscope main display.  Renders a black canvas with a 10×10 division
@@ -361,12 +366,7 @@ public final class OscilloscopeView extends Canvas {
     private final Rectangle timeRightLabelBounds = new Rectangle(0, 0, 0, 0);
 
     /** Slider currently being dragged ({@code null} ⇒ no drag in progress). */
-    private SliderId draggingSlider;
-
-    private enum SliderId {
-        OFFSET, TRIGGER_LEVEL, TRIGGER_POSITION;
-        private SliderId() {}
-    }
+    private OscSliderId draggingSlider;
 
     public OscilloscopeView(Composite parent) {
         super(parent, SWT.DOUBLE_BUFFERED);
@@ -401,8 +401,8 @@ public final class OscilloscopeView extends Canvas {
                 // channel) can be flipped even when the target channel
                 // is currently disabled.
                 if (leftChanButtonBounds.contains(ev.x, ev.y)
-                        && prefs.getOscMeasurementChannel() != TriggerChannel.L) {
-                    prefs.setOscMeasurementChannel(TriggerChannel.L);
+                        && prefs.getOscMeasurementChannel() != Channel.L) {
+                    prefs.setOscMeasurementChannel(Channel.L);
                     prefs.save();
                     synchronized (measHistoryLock) {
                         clearMeasHistoryLocked();
@@ -411,8 +411,8 @@ public final class OscilloscopeView extends Canvas {
                     return;
                 }
                 if (rightChanButtonBounds.contains(ev.x, ev.y)
-                        && prefs.getOscMeasurementChannel() != TriggerChannel.R) {
-                    prefs.setOscMeasurementChannel(TriggerChannel.R);
+                        && prefs.getOscMeasurementChannel() != Channel.R) {
+                    prefs.setOscMeasurementChannel(Channel.R);
                     prefs.save();
                     synchronized (measHistoryLock) {
                         clearMeasHistoryLocked();
@@ -459,12 +459,12 @@ public final class OscilloscopeView extends Canvas {
                 // grabbed and the slider value is updated immediately so a
                 // click without a drag still moves the slider.
                 if (offsetSliderBounds.contains(ev.x, ev.y)) {
-                    draggingSlider = SliderId.OFFSET;
+                    draggingSlider = OscSliderId.OFFSET;
                 } else if (!fileMode && triggerLevelBounds.contains(ev.x, ev.y)) {
                     // Trigger has no meaning on a static loaded signal.
-                    draggingSlider = SliderId.TRIGGER_LEVEL;
+                    draggingSlider = OscSliderId.TRIGGER_LEVEL;
                 } else if (!fileMode && triggerPosBounds.contains(ev.x, ev.y)) {
-                    draggingSlider = SliderId.TRIGGER_POSITION;
+                    draggingSlider = OscSliderId.TRIGGER_POSITION;
                 }
                 if (draggingSlider != null) {
                     updateSliderFromMouse(ev.x, ev.y);
@@ -489,7 +489,7 @@ public final class OscilloscopeView extends Canvas {
                 Preferences prefs = Preferences.instance();
                 boolean changed = false;
                 if (offsetSliderBounds.contains(ev.x, ev.y)) {
-                    if (prefs.getOscMeasurementChannel() == TriggerChannel.L) {
+                    if (prefs.getOscMeasurementChannel() == Channel.L) {
                         prefs.setOscLeftOffsetFrac(0.5);
                     } else {
                         prefs.setOscRightOffsetFrac(0.5);
@@ -589,14 +589,8 @@ public final class OscilloscopeView extends Canvas {
             if (filePathBlinkDimColor != null) filePathBlinkDimColor.dispose();
             if (monoFont != null) monoFont.dispose();
             if (chanButtonFont != null) chanButtonFont.dispose();
-            if (gaugeIconLight       != null) gaugeIconLight      .dispose();
-            if (gaugeIconDark        != null) gaugeIconDark       .dispose();
-            if (chartColumnIconLight != null) chartColumnIconLight.dispose();
-            if (chartColumnIconDark  != null) chartColumnIconDark .dispose();
-            if (rotateLeftIcon       != null) rotateLeftIcon      .dispose();
-            if (autoSetupIcon         != null) autoSetupIcon        .dispose();
-            if (windowRestoreIconLight != null) windowRestoreIconLight.dispose();
-            if (windowRestoreIconDark  != null) windowRestoreIconDark .dispose();
+            // Header icons are cached and owned by IconUtils — disposed
+            // when the main shell tears down, not here.
             if (externalMeasurementShell != null && !externalMeasurementShell.isDisposed()) {
                 externalMeasurementShell.dispose();
             }
@@ -980,7 +974,7 @@ public final class OscilloscopeView extends Canvas {
         Preferences prefs = Preferences.instance();
         boolean showL = prefs.isOscLeftChannelEnabled();
         boolean showR = prefs.isOscRightChannelEnabled();
-        TriggerChannel selected = prefs.getOscMeasurementChannel();
+        Channel selected = prefs.getOscMeasurementChannel();
 
         // L / R channel-pick buttons stay visible unconditionally so the
         // measurement channel — and therefore the vertical-offset slider
@@ -1016,15 +1010,15 @@ public final class OscilloscopeView extends Canvas {
         boolean showL = prefs.isOscLeftChannelEnabled();
         boolean showR = prefs.isOscRightChannelEnabled();
         if (!showL && !showR) return null;
-        TriggerChannel selected = prefs.getOscMeasurementChannel();
-        if (selected == TriggerChannel.L && !showL && showR) {
-            prefs.setOscMeasurementChannel(TriggerChannel.R);
+        Channel selected = prefs.getOscMeasurementChannel();
+        if (selected == Channel.L && !showL && showR) {
+            prefs.setOscMeasurementChannel(Channel.R);
             prefs.save();
             synchronized (measHistoryLock) {
                 clearMeasHistoryLocked();
             }
-        } else if (selected == TriggerChannel.R && !showR && showL) {
-            prefs.setOscMeasurementChannel(TriggerChannel.L);
+        } else if (selected == Channel.R && !showR && showL) {
+            prefs.setOscMeasurementChannel(Channel.L);
             prefs.save();
             synchronized (measHistoryLock) {
                 clearMeasHistoryLocked();
@@ -1221,7 +1215,7 @@ public final class OscilloscopeView extends Canvas {
         if (rows == null) return;
         boolean showL = prefs.isOscLeftChannelEnabled();
         boolean showR = prefs.isOscRightChannelEnabled();
-        TriggerChannel selected = prefs.getOscMeasurementChannel();
+        Channel selected = prefs.getOscMeasurementChannel();
 
         ensureIconButtonResources();
         boolean showStats = prefs.isOscShowStats();
@@ -1338,7 +1332,7 @@ public final class OscilloscopeView extends Canvas {
         SignalBuffer b = buffer;
         if (b == null) return;
         Preferences prefs = Preferences.instance();
-        TriggerChannel selected = prefs.getOscMeasurementChannel();
+        Channel selected = prefs.getOscMeasurementChannel();
         int sampleRate = b.getSampleRate();
         // Exclude the first AC_WARMUP_NANOS of captured samples from every
         // read — those contain the ADC's startup transient and would bias
@@ -1363,7 +1357,7 @@ public final class OscilloscopeView extends Canvas {
         double peakVolts = AudioBackend.adcFsVoltageRms * Math.sqrt(2.0);
         double leftMean  = sampleMean(measLeftBuf,  avail);
         double rightMean = sampleMean(measRightBuf, avail);
-        float[] data = (selected == TriggerChannel.L) ? measLeftBuf : measRightBuf;
+        float[] data = (selected == Channel.L) ? measLeftBuf : measRightBuf;
         SignalMeasurements result = SignalMeasurements.compute(data, avail, sampleRate, peakVolts);
         long now = System.nanoTime();
         synchronized (measHistoryLock) {
@@ -1448,7 +1442,7 @@ public final class OscilloscopeView extends Canvas {
      *  matching {@code *Bounds} field; hidden buttons have their bounds
      *  cleared so stale clicks don't fire. */
     private void drawMeasurementHeaderButtons(GC gc, boolean showL, boolean showR,
-                                              TriggerChannel selected, boolean hasSignal) {
+                                              Channel selected, boolean hasSignal) {
         if (monoFont == null) {
             monoFont = new Font(getDisplay(), "Consolas", 9, SWT.NORMAL);
         }
@@ -1474,9 +1468,9 @@ public final class OscilloscopeView extends Canvas {
         int lbX = COL_NAME_X;
         int rbX = lbX + btnW + 2;
         drawChannelButton(gc, lbX, y, btnW, btnH, "L", true,
-                selected == TriggerChannel.L, leftChannelColor, leftChannelMid);
+                selected == Channel.L, leftChannelColor, leftChannelMid);
         drawChannelButton(gc, rbX, y, btnW, btnH, "R", true,
-                selected == TriggerChannel.R, rightChannelColor, rightChannelMid);
+                selected == Channel.R, rightChannelColor, rightChannelMid);
         setBounds(leftChanButtonBounds,  lbX, y, btnW, btnH);
         setBounds(rightChanButtonBounds, rbX, y, btnW, btnH);
         gc.setFont(monoFont);
@@ -1552,7 +1546,7 @@ public final class OscilloscopeView extends Canvas {
     }
 
     private void drawMeasurementTable(GC gc, Row[] rows,
-                                      boolean showL, boolean showR, TriggerChannel selected) {
+                                      boolean showL, boolean showR, Channel selected) {
         // Main-view call site: the button row sits at y ∈ [5, 27), so the
         // table starts one line below.
         drawMeasurementTableAt(gc, rows, showL, showR, selected, 5 + 22 + 2);
@@ -1563,7 +1557,7 @@ public final class OscilloscopeView extends Canvas {
      *  smaller offset (or a button-row offset when the stats/reset
      *  buttons live above the table). */
     private void drawMeasurementTableAt(GC gc, Row[] rows,
-                                        boolean showL, boolean showR, TriggerChannel selected,
+                                        boolean showL, boolean showR, Channel selected,
                                         int startY) {
         if (monoFont == null) {
             monoFont = new Font(getDisplay(), "Consolas", 9, SWT.NORMAL);
@@ -1660,15 +1654,16 @@ public final class OscilloscopeView extends Canvas {
         RGB light = new RGB(235, 235, 235);     // matches overlayColor
         RGB dark  = new RGB(  0,   0,   0);     // matches canvas background
         RGB red   = new RGB(220,  60,  60);     // matches resetColor — red ↻ legacy
-        gaugeIconLight       = SvgIcon.renderAtHeight(d, "/icons/gauge-high.svg",   16, light);
-        gaugeIconDark        = SvgIcon.renderAtHeight(d, "/icons/gauge-high.svg",   16, dark);
-        chartColumnIconLight = SvgIcon.renderAtHeight(d, "/icons/chart-column.svg", 16, light);
-        chartColumnIconDark  = SvgIcon.renderAtHeight(d, "/icons/chart-column.svg", 16, dark);
+        IconUtils icons = IconUtils.instance();
+        gaugeIconLight       = icons.renderAtHeight(d, SvgPaths.GAUGE_HIGH,         16, light);
+        gaugeIconDark        = icons.renderAtHeight(d, SvgPaths.GAUGE_HIGH,         16, dark);
+        chartColumnIconLight = icons.renderAtHeight(d, SvgPaths.CHART_COLUMN,       16, light);
+        chartColumnIconDark  = icons.renderAtHeight(d, SvgPaths.CHART_COLUMN,       16, dark);
         // Reset icon has no frame so it can use the extra 2 px of room.
-        rotateLeftIcon       = SvgIcon.renderAtHeight(d, "/icons/rotate-left.svg",  18, red);
-        autoSetupIcon          = SvgIcon.renderAtHeight(d, "/icons/arrows-to-circle.svg", 16, light);
-        windowRestoreIconLight = SvgIcon.renderAtHeight(d, "/icons/window-restore.svg",   16, light);
-        windowRestoreIconDark  = SvgIcon.renderAtHeight(d, "/icons/window-restore.svg",   16, dark);
+        rotateLeftIcon       = icons.renderAtHeight(d, SvgPaths.ROTATE_LEFT,        18, red);
+        autoSetupIcon          = icons.renderAtHeight(d, SvgPaths.ARROWS_TO_CIRCLE,   16, light);
+        windowRestoreIconLight = icons.renderAtHeight(d, SvgPaths.WINDOW_RESTORE,     16, light);
+        windowRestoreIconDark  = icons.renderAtHeight(d, SvgPaths.WINDOW_RESTORE,     16, dark);
     }
 
     /** Draws a toggleable icon button (outlined when {@code on} is false,
@@ -1870,8 +1865,8 @@ public final class OscilloscopeView extends Canvas {
         Preferences prefs = Preferences.instance();
         boolean showL = prefs.isOscLeftChannelEnabled();
         boolean showR = prefs.isOscRightChannelEnabled();
-        TriggerChannel measCh = prefs.getOscMeasurementChannel();
-        TriggerChannel trigCh = prefs.getOscTriggerChannel();
+        Channel measCh = prefs.getOscMeasurementChannel();
+        Channel trigCh = prefs.getOscTriggerChannel();
         double leftVDiv  = prefs.getOscLeftVoltsPerDiv();
         double rightVDiv = prefs.getOscRightVoltsPerDiv();
         double timePerDiv = prefs.getOscTimePerDiv();
@@ -1905,15 +1900,15 @@ public final class OscilloscopeView extends Canvas {
         // overlap, but the result reads as a clean broken track.
         double levelFrac = clamp01(prefs.getOscTriggerLevelFrac());
         int levelY = (int) Math.round(levelFrac * h);
-        Color levelColor = (trigCh == TriggerChannel.L) ? leftChannelColor : rightChannelColor;
+        Color levelColor = (trigCh == Channel.L) ? leftChannelColor : rightChannelColor;
         // Trigger-channel offset is intentionally NOT clamped to [0, 1] —
         // the trigger-level voltage label needs to track the channel offset
         // out to the extended ±FS-at-centre range the vertical scrollbar
         // can reach.
-        double trigOffsetFrac = (trigCh == TriggerChannel.L)
+        double trigOffsetFrac = (trigCh == Channel.L)
                 ? prefs.getOscLeftOffsetFrac()
                 : prefs.getOscRightOffsetFrac();
-        double trigVDiv  = (trigCh == TriggerChannel.L) ? leftVDiv : rightVDiv;
+        double trigVDiv  = (trigCh == Channel.L) ? leftVDiv : rightVDiv;
         double levelVolts = (trigOffsetFrac - levelFrac) * DIVISIONS_Y * trigVDiv;
         String levelStr = formatVolts(levelVolts, trigVDiv);
         Point lvs = gc.textExtent(levelStr);
@@ -2023,7 +2018,7 @@ public final class OscilloscopeView extends Canvas {
                     peakVolts, pixelsPerDivY, rightChannelMid);
         }
 
-        boolean activeIsL = (measCh == TriggerChannel.L);
+        boolean activeIsL = (measCh == Channel.L);
         boolean activeEnabled = activeIsL ? showL : showR;
         boolean otherEnabled  = activeIsL ? showR : showL;
         if (otherEnabled) {
@@ -2313,7 +2308,7 @@ public final class OscilloscopeView extends Canvas {
         switch (draggingSlider) {
             case OFFSET: {
                 double frac = clamp01((double) mouseY / h);
-                if (prefs.getOscMeasurementChannel() == TriggerChannel.L) {
+                if (prefs.getOscMeasurementChannel() == Channel.L) {
                     prefs.setOscLeftOffsetFrac(frac);
                 } else {
                     prefs.setOscRightOffsetFrac(frac);
@@ -2339,7 +2334,7 @@ public final class OscilloscopeView extends Canvas {
         boolean showR = prefs.isOscRightChannelEnabled();
         if (!showL && !showR) return;
 
-        TriggerChannel triggerCh   = prefs.getOscTriggerChannel();
+        Channel triggerCh   = prefs.getOscTriggerChannel();
         TriggerEdge    triggerEdge = prefs.getOscTriggerEdge();
         TriggerMode    triggerMode = prefs.getOscTriggerMode();
 
@@ -2406,8 +2401,8 @@ public final class OscilloscopeView extends Canvas {
         // When SINGLE is armed, capture both channels so toggling L/R after
         // the freeze still shows real data instead of a stale buffer.
         boolean armedSingle = (triggerMode == TriggerMode.SINGLE) && singleArmed;
-        boolean needL = showL || triggerCh == TriggerChannel.L || armedSingle;
-        boolean needR = showR || triggerCh == TriggerChannel.R || armedSingle;
+        boolean needL = showL || triggerCh == Channel.L || armedSingle;
+        boolean needR = showR || triggerCh == Channel.R || armedSingle;
         if (leftBuf.length < wanted) {
             leftBuf  = new float[wanted];
             rightBuf = new float[wanted];
@@ -2460,21 +2455,21 @@ public final class OscilloscopeView extends Canvas {
         int rightHalf = (int) Math.ceil(displaySamples * (1.0 - triggerPosFrac));
         int searchFrom = Math.max(1, LANCZOS_PADDING + leftHalf + 1);
         int searchTo   = available - rightHalf - LANCZOS_PADDING;
-        float[] triggerData = (triggerCh == TriggerChannel.L) ? leftBuf : rightBuf;
+        float[] triggerData = (triggerCh == Channel.L) ? leftBuf : rightBuf;
         boolean rising = (triggerEdge == TriggerEdge.RISE);
         // Trigger uses the TRIGGER channel's sinc setting for sub-sample
         // interpolation when searching for the zero-crossing.
-        boolean sincEnabled = (triggerCh == TriggerChannel.L) ? sincL : sincR;
+        boolean sincEnabled = (triggerCh == Channel.L) ? sincL : sincR;
         // Trigger level comes from the user-controlled slider (right edge of
         // the canvas).  The slider value is a fraction of canvas height; the
         // corresponding normalised sample value depends on the trigger
         // channel's V/div and its current vertical offset (the channel's
         // zero-line lives at offsetFrac × h on screen).
-        double triggerVDiv = (triggerCh == TriggerChannel.L) ? leftVDiv : rightVDiv;
+        double triggerVDiv = (triggerCh == Channel.L) ? leftVDiv : rightVDiv;
         double triggerPeakVolts = AudioBackend.adcFsVoltageRms * Math.sqrt(2.0);
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
         double vScaleTrig = triggerPeakVolts / triggerVDiv * pixelsPerDivY;
-        double triggerCenterY = h * ((triggerCh == TriggerChannel.L)
+        double triggerCenterY = h * ((triggerCh == Channel.L)
                 ? prefs.getOscLeftOffsetFrac() : prefs.getOscRightOffsetFrac());
         double triggerLevelY = h * prefs.getOscTriggerLevelFrac();
         float triggerLevel = (float) ((triggerCenterY - triggerLevelY) / vScaleTrig);
@@ -2486,14 +2481,14 @@ public final class OscilloscopeView extends Canvas {
         // threshold here.  Without this, a small AC signal sitting on top of
         // a (typical) ~100 µV ADC offset never crosses the user-set zero and
         // the trigger never fires in AC mode.
-        boolean acTrig = (triggerCh == TriggerChannel.L) ? acL : acR;
+        boolean acTrig = (triggerCh == Channel.L) ? acL : acR;
         // AC trigger shift: pull the worker-published, ≥500 ms-averaged DC
         // mean.  The worker waits AC_WARMUP_NANOS before its first publish,
         // so during that initial period the value is 0 (history empty +
         // reset lastXMean) and the AC threshold falls back to the literal
         // user-set level.  Once the worker is publishing, the threshold
         // tracks the channel's true DC bias.
-        double trigDcOffset = acTrig ? acDcMean(triggerCh == TriggerChannel.L) : 0.0;
+        double trigDcOffset = acTrig ? acDcMean(triggerCh == Channel.L) : 0.0;
         float effectiveTriggerLevel = (float) (triggerLevel + trigDcOffset);
         // Hysteresis in normalised sample units (data[] is in [-1, +1]; multiply
         // by peakVolts to get volts).  The trigger channel's V/div sets the

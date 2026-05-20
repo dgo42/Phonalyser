@@ -1,4 +1,4 @@
-package org.edgo.audio.measure.gui;
+package org.edgo.audio.measure.gui.widgets;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Point;
@@ -14,6 +14,8 @@ import org.eclipse.swt.widgets.Text;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.edgo.audio.measure.gui.interfaces.Formatter;
+import org.edgo.audio.measure.gui.interfaces.Parser;
 
 /**
  * A small composite that lets the user step through a fixed list of pre-formatted
@@ -27,19 +29,6 @@ import java.util.List;
  * {@link #getSelectedIndex()} / {@link #getSelectedValue()}.
  */
 public final class StepSelector extends Composite {
-
-    /** Parses both user-typed input and individual list-value strings into a
-     *  canonical scalar (e.g. volts for a V/div selector, seconds for t/div).
-     *  Used so a typed value like "{@code 5m}" can be matched to the nearest
-     *  entry in a pre-formatted list like "{@code 5 mV/div}".  Return
-     *  {@code null} for unparseable input. */
-    @FunctionalInterface
-    public interface Parser    { Double parse(String text); }
-    /** Renders a free-form value into the canonical display string for
-     *  the field; used by the value-mode constructor. */
-    @FunctionalInterface
-    public interface Formatter { String format(double value); }
-
     private final Text       display;
     private final Canvas     upArrow;
     private final Canvas     downArrow;

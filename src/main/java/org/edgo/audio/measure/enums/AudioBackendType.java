@@ -1,4 +1,4 @@
-package org.edgo.audio.measure.sound;
+package org.edgo.audio.measure.enums;
 
 /**
  * Selects which native audio path the application uses for capture and playback.

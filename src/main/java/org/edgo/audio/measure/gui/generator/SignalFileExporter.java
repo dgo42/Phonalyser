@@ -11,6 +11,8 @@ import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.wav.AiffWriter;
 import org.edgo.audio.measure.wav.FlacWriter;
 import org.edgo.audio.measure.wav.WavWriter;
+import org.edgo.audio.measure.enums.AudioFileFormat;
+import org.edgo.audio.measure.gui.interfaces.PcmSink;
 
 /**
  * One-shot exporter for the generator pane's "Save to…" action.
@@ -46,10 +48,10 @@ public final class SignalFileExporter {
         long totalFrames = truncateToFullPeriods(requestedFrames, sampleRate, signalFrequencyHz);
 
         String name = outFile.getName().toLowerCase(Locale.ROOT);
-        Format fmt =
-                name.endsWith(".flac")                          ? Format.FLAC
-              : name.endsWith(".aiff") || name.endsWith(".aif") ? Format.AIFF
-              :                                                   Format.WAV;
+        AudioFileFormat fmt =
+                name.endsWith(".flac")                          ? AudioFileFormat.FLAC
+              : name.endsWith(".aiff") || name.endsWith(".aif") ? AudioFileFormat.AIFF
+              :                                                   AudioFileFormat.WAV;
 
         try (PcmSink sink = openSink(fmt, outFile, sampleRate, bitDepth)) {
             Random rng = ditherBits > 0 ? new Random() : null;
@@ -79,18 +81,8 @@ public final class SignalFileExporter {
         return Math.max(period, n);   // never drop the file to zero frames
     }
 
-    private enum Format {
-        WAV, FLAC, AIFF;
-        private Format() {}
-    }
 
-    /** Tiny common surface for the format-specific writers. */
-    private interface PcmSink extends AutoCloseable {
-        void writeRaw(byte[] buf, int length) throws IOException;
-        @Override void close() throws IOException;
-    }
-
-    private static PcmSink openSink(Format fmt, File outFile, int sampleRate, int bitDepth)
+    private static PcmSink openSink(AudioFileFormat fmt, File outFile, int sampleRate, int bitDepth)
             throws IOException {
         switch (fmt) {
             case FLAC: {

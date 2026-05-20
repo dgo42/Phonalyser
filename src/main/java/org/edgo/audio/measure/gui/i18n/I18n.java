@@ -1,4 +1,4 @@
-package org.edgo.audio.measure.gui;
+package org.edgo.audio.measure.gui.i18n;
 
 import java.net.MalformedURLException;
 import java.net.URI;

@@ -1,4 +1,4 @@
-package org.edgo.audio.measure.gui.generator;
+package org.edgo.audio.measure.enums;
 
 import java.util.Locale;
 

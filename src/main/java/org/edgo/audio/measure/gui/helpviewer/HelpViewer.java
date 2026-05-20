@@ -8,8 +8,9 @@ import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Shell;
 
-import org.edgo.audio.measure.gui.I18n;
-import org.edgo.audio.measure.gui.Preferences;
+import org.edgo.audio.measure.gui.common.ShellIcons;
+import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -168,6 +169,7 @@ public final class HelpViewer {
 
         Shell s = new Shell(parent, SWT.SHELL_TRIM);
         s.setText(I18n.t("help.window.title"));
+        ShellIcons.apply(s);
         s.setLayout(new FillLayout());
         s.setSize(900, 700);
 

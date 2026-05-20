@@ -1,4 +1,4 @@
-package org.edgo.audio.measure.gui;
+package org.edgo.audio.measure.gui.widgets;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;

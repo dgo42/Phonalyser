@@ -12,17 +12,26 @@ import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
+import org.eclipse.swt.layout.FormAttachment;
+import org.eclipse.swt.layout.FormData;
+import org.eclipse.swt.layout.FormLayout;
 import org.eclipse.swt.widgets.Canvas;
+import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.fft.FftAnalyzer;
-import org.edgo.audio.measure.generator.SignalGenerator.SignalForm;
-import org.edgo.audio.measure.gui.I18n;
-import org.edgo.audio.measure.gui.Preferences;
-import org.edgo.audio.measure.gui.SvgIcon;
+import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.gui.common.IconUtils;
+import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.generator.GeneratorController;
-import org.edgo.audio.measure.gui.scope.TriggerChannel;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.FftMagnitudeUnit;
 
 /**
  * Live FFT canvas.  Paints a black-on-white spectrum trace (one channel
@@ -30,9 +39,14 @@ import org.edgo.audio.measure.gui.scope.TriggerChannel;
  * magnitude readout, and a row of header buttons modelled on the
  * oscilloscope view.
  *
- * <p>Data source is an {@link FftController} which publishes a
- * {@link FftAnalyzer.Result} on a 200 ms timer.  This view reads the
- * latest result during {@link PaintEvent} and does no analysis itself.
+ * <p>Owns the analysis pipeline itself: a daemon worker thread reads the
+ * shared {@link SignalBuffer} (supplied via {@link #setBuffer}), runs
+ * {@link FftAnalyzer#analyze}, and publishes the latest
+ * {@link FftAnalyzer.Result} for paint to read.  The owning
+ * {@link FftPane} drives the lifecycle ({@link #start} / {@link #stop} /
+ * {@link #resetStatistics}) and feeds settings via {@code Preferences}.
+ * View → pane communication is purely via {@link MessageBus} broadcasts
+ * ({@link Events#FFT_RANGE_CHANGED}, {@link Events#FFT_RECORDING_AUTO_STOPPED}).
  */
 public final class FftView extends Canvas {
 
@@ -83,14 +97,69 @@ public final class FftView extends Canvas {
     private Image windowRestoreIconLight;
     private Image windowRestoreIconDark;
 
-    // ─── Controller ──────────────────────────────────────────────────────
-    private FftController controller;
-    private Runnable      autoSetupCallback;
-    private Runnable      maximizeCallback;
-    /** Fired after a wheel-driven freq/mag-range change so the owning
-     *  pane can re-clamp the range against hardware limits and refresh
-     *  the scrollbars.  Null = no-op. */
-    private Runnable      rangeChangedCallback;
+    // ─── Top-right overlay widgets ───────────────────────────────────────
+    /** Magnitude unit selector (V / V·√Hz / dBV / dBFS). */
+    private Combo magUnitCombo;
+    /** "NN%" indicator showing the progress of the current FFT frame's
+     *  hop (or full-window fill for the first frame). */
+    private Label fillPercentLabel;
+    /** Count of completed analyses since the last reset / record-start. */
+    private Label averagesCountLabel;
+
+    /** Magnitude-unit option names (Preferences value form). */
+    private static final String[] MAG_UNIT_NAMES = {
+            FftMagnitudeUnit.V       .name(),
+            FftMagnitudeUnit.V_SQRT_HZ.name(),
+            FftMagnitudeUnit.DBV     .name(),
+            FftMagnitudeUnit.DBFS    .name()
+    };
+    /** Magnitude-unit option labels (display text). */
+    private static final String[] MAG_UNIT_LABELS = {
+            FftMagnitudeUnit.V       .getLabel(),
+            FftMagnitudeUnit.V_SQRT_HZ.getLabel(),
+            FftMagnitudeUnit.DBV     .getLabel(),
+            FftMagnitudeUnit.DBFS    .getLabel()
+    };
+
+    // ─── Analyser pipeline (absorbed from the old FftController) ─────────
+    /** Maximum wait while idle (no buffer / not yet enough samples). */
+    private static final int IDLE_TICK_MS = 250;
+    /** Maximum sleep granularity — keeps interrupts responsive even when
+     *  the next hop is several seconds away. */
+    private static final int MAX_SLEEP_MS = 500;
+
+    private final FftAnalyzer analyzer = new FftAnalyzer();
+    /** Latest published result — paint reads, worker writes.  Effectively
+     *  double-buffered: the previous result stays valid for paint while
+     *  the worker computes the next one. */
+    private volatile FftAnalyzer.Result lastResult;
+    /** Shared capture buffer, supplied by {@link FftPane} after a
+     *  {@link Events#CAPTURE_ACQUIRE} request.  {@code null} when not
+     *  recording. */
+    private volatile org.edgo.audio.measure.gui.scope.SignalBuffer buffer;
+    /** Worker-thread state.  {@link java.util.concurrent.atomic.AtomicBoolean}
+     *  so {@link #resetStatistics()} can re-arm it from any thread. */
+    private final java.util.concurrent.atomic.AtomicBoolean paused =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    private volatile int    completedAnalyses;
+    private volatile boolean running;
+    /** Sample buffer write position at the start of the previous analysis
+     *  window — used to compute "how many new samples since last frame". */
+    private volatile long lastAnalysisWritePos = -1;
+    /** Sample buffer write position the moment the FFT pane started
+     *  recording (or was reset).  Samples older than this are treated
+     *  as stale.  Sentinel −1 = "set me on the next tick". */
+    private volatile long startWritePos = -1;
+    /** False until the very first analysis has run since {@link #start}. */
+    private volatile boolean firstFrameDone;
+    /** Tracks generator on/off transitions so the data collection is
+     *  reset whenever the user starts or stops the generator. */
+    private volatile Boolean lastGeneratorActive;
+    /** Reusable per-tick sample buffers — grown lazily, never shrunk.
+     *  Owned by the worker thread only. */
+    private float[] reusableLeftBuf  = new float[0];
+    private float[] reusableRightBuf = new float[0];
+    private Thread worker;
 
     // ─── Mouse / crosshair tracking ──────────────────────────────────────
     private int crossX = -1, crossY = -1;
@@ -178,6 +247,158 @@ public final class FftView extends Canvas {
             }
         });
         addDisposeListener(e -> disposeResources());
+
+        // Top-right overlay widgets — children of this Canvas, positioned
+        // by FormLayout.  The Canvas paint listener draws underneath;
+        // SWT renders child controls on top automatically.
+        setLayout(new FormLayout());
+
+        magUnitCombo = new Combo(this, SWT.READ_ONLY);
+        magUnitCombo.setItems(MAG_UNIT_LABELS);
+        magUnitCombo.setToolTipText(I18n.t("fft.magUnit.tooltip"));
+        magUnitCombo.setData("helpAnchor", "fft.html#fft-mag-unit");
+        int magIdx = indexOf(MAG_UNIT_NAMES, Preferences.instance().getFftMagUnit());
+        magUnitCombo.select(magIdx < 0 ? 2 : magIdx);
+        magUnitCombo.addListener(SWT.Selection, e -> onMagUnitChanged());
+
+        averagesCountLabel = new Label(this, SWT.NONE);
+        averagesCountLabel.setText("0 average(s)");
+        averagesCountLabel.setForeground(d.getSystemColor(SWT.COLOR_DARK_GRAY));
+        averagesCountLabel.setToolTipText(I18n.t("fft.avgCount.tooltip"));
+        averagesCountLabel.setData("helpAnchor", "fft.html#fft-averages-count");
+
+        fillPercentLabel = new Label(this, SWT.NONE);
+        fillPercentLabel.setText("0%");
+        fillPercentLabel.setForeground(d.getSystemColor(SWT.COLOR_DARK_GRAY));
+        fillPercentLabel.setToolTipText(I18n.t("fft.fillPercent.tooltip"));
+        fillPercentLabel.setData("helpAnchor", "fft.html#fft-fill-percent");
+
+        FormData cfd = new FormData();
+        cfd.top   = new FormAttachment(0, 4);
+        cfd.right = new FormAttachment(100, -2);
+        cfd.width = 60;
+        magUnitCombo.setLayoutData(cfd);
+
+        FormData acd = new FormData();
+        acd.top   = new FormAttachment(0, 6);
+        acd.right = new FormAttachment(magUnitCombo, -6);
+        acd.width = 90;
+        averagesCountLabel.setLayoutData(acd);
+
+        FormData fpd = new FormData();
+        fpd.top   = new FormAttachment(0, 6);
+        fpd.right = new FormAttachment(averagesCountLabel, -6);
+        fpd.width = 36;
+        fillPercentLabel.setLayoutData(fpd);
+
+        startFillPercentTimer();
+    }
+
+    /** User picked a new magnitude unit.  Convert the current
+     *  magTop / magBottom into the new unit so the visible range stays
+     *  on the SAME signal level, persist, then publish
+     *  {@link Events#FFT_RANGE_CHANGED} so the pane's scrollbars
+     *  re-align. */
+    private void onMagUnitChanged() {
+        int i = magUnitCombo.getSelectionIndex();
+        if (i < 0) return;
+        Preferences prefs = Preferences.instance();
+        FftMagnitudeUnit oldUnit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
+        FftMagnitudeUnit newUnit = FftMagnitudeUnit.fromName(MAG_UNIT_NAMES[i]);
+        double[] conv = convertMagRange(prefs.getFftMagTop(), prefs.getFftMagBottom(),
+                oldUnit, newUnit);
+        prefs.setFftMagTop(conv[0]);
+        prefs.setFftMagBottom(conv[1]);
+        prefs.setFftMagUnit(MAG_UNIT_NAMES[i]);
+        prefs.save();
+        fireRangeChanged();
+        redraw();
+    }
+
+    /** Re-selects the magnitude-unit combo from the current Preferences
+     *  value.  Called by the pane's syncWidgetsFromPrefs after a preset
+     *  load or screenshot-pane wire-up. */
+    public void refreshFromPrefs() {
+        if (magUnitCombo == null || magUnitCombo.isDisposed()) return;
+        int i = indexOf(MAG_UNIT_NAMES, Preferences.instance().getFftMagUnit());
+        if (i >= 0) magUnitCombo.select(i);
+    }
+
+    /** Schedules a recurring ~100 ms timer that updates the fill-%
+     *  indicator and the averages count from the live analyser state.
+     *  Self-terminates when the canvas is disposed. */
+    private void startFillPercentTimer() {
+        Display d = getDisplay();
+        Runnable[] tick = new Runnable[1];
+        tick[0] = () -> {
+            if (isDisposed() || fillPercentLabel == null || fillPercentLabel.isDisposed()) return;
+            double f = getNextFrameProgress();
+            int pct = (int) Math.round(f * 100);
+            if (pct < 0) pct = 0; else if (pct > 100) pct = 100;
+            String txt = pct + "%";
+            if (!txt.equals(fillPercentLabel.getText())) fillPercentLabel.setText(txt);
+            if (averagesCountLabel != null && !averagesCountLabel.isDisposed()) {
+                // First capture has nothing to average against, so it
+                // contributes 0 averages.  For a finite N the count is
+                // capped at N once the moving window is full.  For
+                // "forever" it keeps climbing.
+                int done = getCompletedAnalyses();
+                int n = Math.max(0, done - 1);
+                double avgRaw = Preferences.instance().getFftAverages();
+                if (!Double.isInfinite(avgRaw)) {
+                    int N = Math.max(1, (int) avgRaw);
+                    if (n > N) n = N;
+                }
+                String ns = n + " average(s)";
+                if (!ns.equals(averagesCountLabel.getText())) averagesCountLabel.setText(ns);
+            }
+            d.timerExec(100, tick[0]);
+        };
+        d.timerExec(100, tick[0]);
+    }
+
+    private static int indexOf(String[] arr, String value) {
+        if (value == null) return -1;
+        for (int i = 0; i < arr.length; i++) if (value.equals(arr[i])) return i;
+        return -1;
+    }
+
+    /** Converts a {@code [top, bottom]} pair from one magnitude unit to
+     *  another so a unit-combo change preserves the visible signal-on-
+     *  the-axis: each dB on the dB axis maps to one factor-of-10^0.05 on
+     *  the volts axis (20 dB = ×10), so the user sees the same grid
+     *  lines around the same signal levels after the switch. */
+    private static double[] convertMagRange(double oldTop, double oldBot,
+                                            FftMagnitudeUnit from, FftMagnitudeUnit to) {
+        if (from == to) return new double[] {oldTop, oldBot};
+        double fs = Preferences.instance().getAdcFsVoltageRms();
+        if (!(fs > 0)) fs = 1.0;
+        double fsDbv = 20 * Math.log10(fs);
+        double topDbv = toDbv(oldTop, from, fsDbv);
+        double botDbv = toDbv(oldBot, from, fsDbv);
+        double newTop = fromDbv(topDbv, to, fsDbv);
+        double newBot = fromDbv(botDbv, to, fsDbv);
+        return new double[] {newTop, newBot};
+    }
+
+    private static double toDbv(double v, FftMagnitudeUnit unit, double fsDbv) {
+        switch (unit) {
+            case DBV:       return v;
+            case DBFS:      return v + fsDbv;
+            case V:         return (v > 0) ? 20 * Math.log10(v) : -300;
+            case V_SQRT_HZ: return (v > 0) ? 20 * Math.log10(v) : -300;
+            default:        return v;
+        }
+    }
+
+    private static double fromDbv(double dbv, FftMagnitudeUnit unit, double fsDbv) {
+        switch (unit) {
+            case DBV:       return dbv;
+            case DBFS:      return dbv - fsDbv;
+            case V:
+            case V_SQRT_HZ: return Math.pow(10, dbv / 20.0);
+            default:        return dbv;
+        }
     }
 
     private void disposeResources() {
@@ -198,13 +419,8 @@ public final class FftView extends Canvas {
         if (monoFont       != null) monoFont.dispose();
         if (monoBoldFont   != null) monoBoldFont.dispose();
         if (chanButtonFont != null) chanButtonFont.dispose();
-        if (chartColumnIconLight  != null) chartColumnIconLight .dispose();
-        if (chartColumnIconDark   != null) chartColumnIconDark  .dispose();
-        if (rotateLeftIcon        != null) rotateLeftIcon       .dispose();
-        if (autoSetupIcon         != null) autoSetupIcon        .dispose();
-        if (maximizeIcon          != null) maximizeIcon         .dispose();
-        if (windowRestoreIconLight != null) windowRestoreIconLight.dispose();
-        if (windowRestoreIconDark  != null) windowRestoreIconDark .dispose();
+        // Header icons are cached and owned by IconUtils — disposed
+        // when the main shell tears down, not here.
         if (externalShell != null && !externalShell.isDisposed()) externalShell.dispose();
         if (traceBuffer   != null && !traceBuffer  .isDisposed()) traceBuffer  .dispose();
     }
@@ -252,44 +468,244 @@ public final class FftView extends Canvas {
     // Public API
     // =========================================================================
 
-    public void setController(FftController c) {
-        this.controller = c;
+    /** Wires the capture buffer.  Called by {@link FftPane} after a
+     *  successful {@link Events#CAPTURE_ACQUIRE}, and again with
+     *  {@code null} after {@link Events#CAPTURE_RELEASE}.  Safe to call
+     *  while the worker is running — reads are volatile. */
+    public void setBuffer(org.edgo.audio.measure.gui.scope.SignalBuffer b) {
+        this.buffer = b;
     }
 
-    public FftController getController() {
-        return controller;
+    /** Latest published analysis result.  {@code null} before the first
+     *  successful tick.  Used by the pane's Save-CSV / screenshot paths
+     *  and by the calibration dialog (via {@link #getLastVrms}). */
+    public FftAnalyzer.Result getLastResult() {
+        return lastResult;
     }
 
-    public void setAutoSetupCallback(Runnable r) {
-        this.autoSetupCallback = r;
+    /** Injects a snapshot result without running the analysis loop.
+     *  Used by the offscreen screenshot pane so it can render the same
+     *  spectrum the live pane is showing. */
+    public void setLastResult(FftAnalyzer.Result r) {
+        this.lastResult = r;
     }
 
-    public void setMaximizeCallback(Runnable r) {
-        this.maximizeCallback = r;
+    /** Number of analyses completed since the last reset. */
+    public int getCompletedAnalyses() {
+        return completedAnalyses;
     }
 
-    /** Fired after a wheel-driven freq / mag range change so the owning
-     *  pane can clamp the new range against hardware limits and refresh
-     *  the scrollbar thumb sizes / positions. */
-    public void setRangeChangedCallback(Runnable r) {
-        this.rangeChangedCallback = r;
+    /** True if the analyser worker is currently running. */
+    public boolean isRunning() {
+        return running;
     }
 
+    /** Starts the analyser on a daemon worker thread.  Idempotent. */
+    public synchronized void start() {
+        if (running) return;
+        running = true;
+        // Re-arm the first-frame regime + drop any stale spectrum so
+        // the chart starts blank.  startWritePos sentinel (−1) means
+        // "set me on the next tick" — recorded against the live buffer's
+        // writePos so the first analysis waits for a FULL fftLength of
+        // FRESH samples captured AFTER this point.
+        firstFrameDone = false;
+        lastAnalysisWritePos = -1;
+        startWritePos = -1;
+        lastResult = null;
+        completedAnalyses = 0;
+        paused.set(false);
+        worker = new Thread(this::workerLoop, "fft-analyzer");
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    /** Stops the analyser and interrupts the worker.  Idempotent. */
+    public synchronized void stop() {
+        running = false;
+        if (worker != null) {
+            worker.interrupt();
+            worker = null;
+        }
+    }
+
+    /** True when the audio generator is currently producing a signal.
+     *  Resolved via {@link MessageBus} — the generator pane registers a
+     *  responder for {@link Events#GENERATOR_RUNNING}.  Defaults to
+     *  {@code true} when no responder is registered.  Used by the THD
+     *  table to decide whether to draw the generator-anchored Δf row. */
+    public boolean isGeneratorActive() {
+        Boolean answer = MessageBus.instance().request(Events.GENERATOR_RUNNING);
+        return answer == null || answer;
+    }
+
+    /** Fraction (0..1) of the data needed for the *current* FFT frame
+     *  that has already been captured.  Drives the "NN%" indicator next
+     *  to the magnitude-unit combo. */
+    public double getNextFrameProgress() {
+        org.edgo.audio.measure.gui.scope.SignalBuffer buf = buffer;
+        if (buf == null) return 0;
+        Preferences prefs = Preferences.instance();
+        int fftLength = prefs.getFftLength();
+        if (fftLength < 8) return 0;
+        long writePos = buf.getWritePos();
+        if (!firstFrameDone) {
+            // First-frame regime: need a complete window of FRESH samples.
+            if (startWritePos < 0) return 0;
+            long fresh = writePos - startWritePos;
+            double f = (double) fresh / fftLength;
+            if (f < 0) f = 0; else if (f > 1) f = 1;
+            return f;
+        }
+        // Hop regime — newSamples toward the next hop.
+        if (lastAnalysisWritePos < 0) return 1;
+        org.edgo.audio.measure.enums.FftOverlap overlap;
+        try { overlap = org.edgo.audio.measure.enums.FftOverlap.valueOf(prefs.getFftOverlap()); }
+        catch (IllegalArgumentException e) { overlap = org.edgo.audio.measure.enums.FftOverlap.PCT_0; }
+        double hop = Math.max(1, fftLength * (1.0 - overlap.fraction));
+        long newSamples = writePos - lastAnalysisWritePos;
+        if (newSamples <= 0) return 0;
+        double f = newSamples / hop;
+        return (f > 1) ? 1 : f;
+    }
+
+    /** Clears the completed-analyses counter, drops the retained
+     *  spectrum, and resumes the loop if it was paused by stop-after-N.
+     *  Forces a redraw so any visible counter refreshes immediately.
+     *  Safe to call from any thread. */
+    public void resetStatistics() {
+        paused.set(false);
+        completedAnalyses = 0;
+        lastResult = null;
+        firstFrameDone = false;
+        lastAnalysisWritePos = -1;
+        startWritePos = -1;
+        Display d = getDisplay();
+        if (d != null && !d.isDisposed()) {
+            d.asyncExec(() -> { if (!isDisposed()) redraw(); });
+        }
+    }
+
+    /** Publishes {@link Events#FFT_RANGE_CHANGED} so the owning pane's
+     *  scrollbars re-align to the (just-mutated) freq / mag window in
+     *  {@code Preferences}.  Called after every view-internal pan /
+     *  zoom and from {@link #autoSetup()} / {@link #maximize()}. */
     private void fireRangeChanged() {
-        if (rangeChangedCallback != null) rangeChangedCallback.run();
+        MessageBus.instance().publish(Events.FFT_RANGE_CHANGED);
+    }
+
+    /** Sets the freq range to one decade either side of the detected
+     *  fundamental and the magnitude range so the fundamental sits
+     *  10 dB below the top with the noise floor 20 dB below the
+     *  bottom.  No-op when no analysis result is published yet. */
+    private void autoSetup() {
+        FftAnalyzer.Result r = lastResult;
+        if (r == null) return;
+        Preferences prefs = Preferences.instance();
+        FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
+
+        // ── Frequency: one decade either side of the fundamental
+        // (×0.1 .. ×10), clamped to bin size / Nyquist.
+        double f0 = r.fundamentalHzRefined;
+        if (Double.isFinite(f0) && f0 > 0) {
+            double lo = Math.max(currentBinSize(), f0 / 10.0);
+            double hi = Math.min(r.sampleRate / 2.0,  f0 * 10.0);
+            if (hi > lo) {
+                prefs.setFftFreqMinHz(lo);
+                prefs.setFftFreqMaxHz(hi);
+            }
+        }
+
+        // ── Magnitude: top = fundamental + 10 dB, bottom = noise
+        // floor − 20 dB.  Translated to the active unit so the user's
+        // view shows the spectrum sitting comfortably between the
+        // strongest line and ~20 dB below the noise grass.
+        if (Double.isFinite(r.fundamentalDbFs) && Double.isFinite(r.avgNoiseFloorDbFs)) {
+            double topDbFs = r.fundamentalDbFs   + 10;
+            double botDbFs = r.avgNoiseFloorDbFs - 20;
+            double calRefDbV = Double.isNaN(r.fundRefDbV) ? 0
+                    : (r.fundRefDbV - r.fundamentalDbFs);
+            // The fundamental is rendered at the manual-override dBV
+            // when the user supplied one, so the auto-setup ceiling
+            // tracks that value (+10 dB headroom) instead of the
+            // calibrated peak; the noise floor stays on the calibrated
+            // anchor since non-fundamental bins aren't affected.
+            double topRefDbV = (Double.isFinite(r.fundamentalTrueDbV)
+                    && Double.isFinite(r.fundamentalDbFs))
+                    ? r.fundamentalTrueDbV - r.fundamentalDbFs
+                    : calRefDbV;
+            double top = unit.convertFromDbFs(topDbFs, topRefDbV,  r.freqResolution);
+            double bot = unit.convertFromDbFs(botDbFs, calRefDbV, r.freqResolution);
+            if (Double.isFinite(top) && Double.isFinite(bot) && top != bot) {
+                if (top < bot) { double s = top; top = bot; bot = s; }
+                prefs.setFftMagTop(top);
+                prefs.setFftMagBottom(bot);
+            }
+        }
+        prefs.save();
+        fireRangeChanged();
+        redraw();
+    }
+
+    /** Maximises the visible spectrum: frequency range spans the full
+     *  capture band ([bin size, Nyquist]) and the magnitude axis runs
+     *  from a fixed +20 dB ceiling down to (noise floor − 30 dB).  The
+     *  top is signal-independent — it doesn't track the fundamental —
+     *  so the chart layout stays stable across signal changes.  Works
+     *  even when no analysis result is published yet (uses fallback
+     *  values for the bottom). */
+    private void maximize() {
+        FftAnalyzer.Result r = lastResult;
+        Preferences prefs = Preferences.instance();
+        FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
+
+        // Frequency span: 0 (clamped to bin size) → Nyquist.  Fall back
+        // to currentNyquist() when no result is available yet — that
+        // helper itself defaults to 192 kHz / 2 = 96 kHz half-rate.
+        double nyquist = (r != null) ? r.sampleRate / 2.0 : currentNyquist();
+        double lo = Math.max(currentBinSize(), 0.0);
+        if (nyquist > lo) {
+            prefs.setFftFreqMinHz(lo);
+            prefs.setFftFreqMaxHz(nyquist);
+        }
+
+        // Fixed +20 dBFS ceiling, noise-floor − 30 dB floor (when
+        // present; otherwise default to −150 dBFS bottom to give a
+        // sensible empty-chart layout).
+        double topDbFs = 20;
+        double botDbFs = (r != null && Double.isFinite(r.avgNoiseFloorDbFs))
+                ? r.avgNoiseFloorDbFs - 30
+                : -150;
+        double calRefDbV = 0;
+        double binBw = 1.0;
+        if (r != null) {
+            calRefDbV = Double.isNaN(r.fundRefDbV) ? 0
+                    : (r.fundRefDbV - r.fundamentalDbFs);
+            binBw = r.freqResolution;
+        }
+        double top = unit.convertFromDbFs(topDbFs, calRefDbV, binBw);
+        double bot = unit.convertFromDbFs(botDbFs, calRefDbV, binBw);
+        if (Double.isFinite(top) && Double.isFinite(bot) && top != bot) {
+            if (top < bot) { double s = top; top = bot; bot = s; }
+            prefs.setFftMagTop(top);
+            prefs.setFftMagBottom(bot);
+        }
+        prefs.save();
+        fireRangeChanged();
+        redraw();
     }
 
     /** Latest fundamental frequency in Hz, or {@code NaN} if no analysis yet.
      *  Used by Auto-Setup to fit 1-2 periods into the view. */
     public double getLastFrequencyHz() {
-        FftAnalyzer.Result r = (controller == null) ? null : controller.getLastResult();
+        FftAnalyzer.Result r = lastResult;
         return (r == null) ? Double.NaN : r.fundamentalHzRefined;
     }
 
     /** Latest fundamental Vrms (linear, calibrated by ADC fs voltage), or
      *  {@code null} when no analysis. */
     public Double getLastVrms() {
-        FftAnalyzer.Result r = (controller == null) ? null : controller.getLastResult();
+        FftAnalyzer.Result r = lastResult;
         if (r == null || Double.isNaN(r.fundamentalLinear)) return null;
         double fs = Preferences.instance().getAdcFsVoltageRms();
         return (fs > 0) ? r.fundamentalLinear * fs : null;
@@ -327,7 +743,7 @@ public final class FftView extends Canvas {
         boolean logFreq = prefs.isFftLogFreqAxis();
         if (logFreq && freqMin < 1) freqMin = 1;
 
-        FftAnalyzer.Result r = (controller == null) ? null : controller.getLastResult();
+        FftAnalyzer.Result r = lastResult;
 
         // ---- Static-layer buffer: blit cached image when nothing
         // affecting the trace / grid / axes has changed.  Mouse-move
@@ -1034,8 +1450,8 @@ public final class FftView extends Canvas {
 
     private void drawHeaderButtons(GC gc, boolean hasData) {
         Preferences prefs = Preferences.instance();
-        boolean isLeft  = prefs.getFftChannel() == TriggerChannel.L;
-        boolean isRight = prefs.getFftChannel() == TriggerChannel.R;
+        boolean isLeft  = prefs.getFftChannel() == Channel.L;
+        boolean isRight = prefs.getFftChannel() == Channel.R;
         boolean distOn  = prefs.isFftDistortionTableVisible();
 
         int y = 5;
@@ -1208,7 +1624,7 @@ public final class FftView extends Canvas {
             // Suppress the row when the generator isn't running — the
             // "expected" frequency would otherwise be a stale value
             // and the ΔF / Δosc readout would be meaningless.
-            boolean genActive = (controller == null) || controller.isGeneratorActive();
+            boolean genActive = isGeneratorActive();
             if (genActive && prefs.isFftFundFromGenerator()) {
                 // Compare against the SNAPPED generator frequency
                 // when snap-to-FFT-bin is on — the field holds the
@@ -1218,7 +1634,7 @@ public final class FftView extends Canvas {
                 // entire snap residual as a clock drift, which is
                 // misleading.
                 double expected = GeneratorController.snapToFftBinIfEnabled(
-                        prefs, SignalForm.SINE,
+                        prefs, GenSignalForm.SINE,
                         r.sampleRate,
                         prefs.getGenFrequencyHz());
                 if (expected > 0 && Double.isFinite(r.fundamentalHzRefined)) {
@@ -1523,8 +1939,7 @@ public final class FftView extends Canvas {
     }
 
     private void paintExternalDistortion(PaintEvent ev) {
-        if (controller == null) return;
-        FftAnalyzer.Result r = controller.getLastResult();
+        FftAnalyzer.Result r = lastResult;
         if (r == null) return;
         GC gc = ev.gc;
         gc.setAntialias(SWT.ON);
@@ -1545,17 +1960,17 @@ public final class FftView extends Canvas {
         if (ev.button != 1) return;
         Preferences prefs = Preferences.instance();
         if (leftChanButtonBounds.contains(ev.x, ev.y)) {
-            prefs.setFftChannel(TriggerChannel.L); prefs.save(); redraw(); return;
+            prefs.setFftChannel(Channel.L); prefs.save(); redraw(); return;
         }
         if (rightChanButtonBounds.contains(ev.x, ev.y)) {
-            prefs.setFftChannel(TriggerChannel.R); prefs.save(); redraw(); return;
+            prefs.setFftChannel(Channel.R); prefs.save(); redraw(); return;
         }
         if (autoSetupButtonBounds.contains(ev.x, ev.y)) {
-            if (autoSetupCallback != null) autoSetupCallback.run();
+            autoSetup();
             return;
         }
         if (maximizeButtonBounds.contains(ev.x, ev.y)) {
-            if (maximizeCallback != null) maximizeCallback.run();
+            maximize();
             return;
         }
         if (distortionButtonBounds.contains(ev.x, ev.y)) {
@@ -1570,7 +1985,7 @@ public final class FftView extends Canvas {
             return;
         }
         if (resetButtonBounds.contains(ev.x, ev.y)) {
-            if (controller != null) controller.resetStatistics();
+            resetStatistics();
             redraw();
             return;
         }
@@ -1590,7 +2005,6 @@ public final class FftView extends Canvas {
         int dir = Integer.signum(e.count);   // wheel up = +1
         boolean ctrl  = (e.stateMask & SWT.CTRL)  != 0;
         boolean shift = (e.stateMask & SWT.SHIFT) != 0;
-        Preferences prefs = Preferences.instance();
         Rectangle area = getClientArea();
         int rightMargin = 2;
         Rectangle plot = new Rectangle(MARGIN_LEFT, MARGIN_TOP,
@@ -1784,7 +2198,7 @@ public final class FftView extends Canvas {
      *  FFT length and sample rate.  Falls back to a wide guess when
      *  no result is yet available. */
     private double currentBinSize() {
-        FftAnalyzer.Result r = (controller == null) ? null : controller.getLastResult();
+        FftAnalyzer.Result r = lastResult;
         if (r != null && r.fftSize > 0) return (double) r.sampleRate / r.fftSize;
         int sr = 384_000;
         int fftLen = Math.max(8, Preferences.instance().getFftLength());
@@ -1793,7 +2207,7 @@ public final class FftView extends Canvas {
 
     /** Nyquist upper bound on the visible freq range (Hz). */
     private double currentNyquist() {
-        FftAnalyzer.Result r = (controller == null) ? null : controller.getLastResult();
+        FftAnalyzer.Result r = lastResult;
         if (r != null) return r.sampleRate / 2.0;
         return 192_000;
     }
@@ -1875,20 +2289,6 @@ public final class FftView extends Canvas {
         double t = magToYFraction(v, top, bot, unit);
         if (t < 0) t = 0;
         if (t > 1) t = 1;
-        return plot.y + (int) Math.round(t * plot.height);
-    }
-
-    /** Unclamped variant of {@link #magToY} — returns the actual y
-     *  (possibly above {@code plot.y} or below {@code plot.y +
-     *  plot.height}).  Used by the spectrum + harmonic-dot draw
-     *  routines so peaks above the visible magnitude range slide off
-     *  the top of the chart cleanly instead of bunching against the
-     *  top edge.  Caller clips to {@code plot} via GC clipping. */
-    private int magToYRaw(double v, Rectangle plot, double top, double bot, FftMagnitudeUnit unit) {
-        double t = magToYFraction(v, top, bot, unit);
-        // Bound to int range so SWT drawLine doesn't trip on overflow.
-        if (t < -100) t = -100;
-        if (t >  100) t =  100;
         return plot.y + (int) Math.round(t * plot.height);
     }
 
@@ -2053,12 +2453,196 @@ public final class FftView extends Canvas {
         RGB light = new RGB(0x20, 0x20, 0x20);
         RGB dark  = new RGB(0xFF, 0xFF, 0xFF);
         RGB red   = new RGB(220,   60,  60);
-        chartColumnIconLight    = SvgIcon.renderAtHeight(d, "/icons/chart-column.svg",    16, light);
-        chartColumnIconDark     = SvgIcon.renderAtHeight(d, "/icons/chart-column.svg",    16, dark);
-        rotateLeftIcon          = SvgIcon.renderAtHeight(d, "/icons/rotate-left.svg",     18, red);
-        autoSetupIcon           = SvgIcon.renderAtHeight(d, "/icons/arrows-to-circle.svg",   16, light);
-        maximizeIcon            = SvgIcon.renderAtHeight(d, "/icons/arrows-from-circle.svg", 16, light);
-        windowRestoreIconLight  = SvgIcon.renderAtHeight(d, "/icons/window-restore.svg",   16, light);
-        windowRestoreIconDark   = SvgIcon.renderAtHeight(d, "/icons/window-restore.svg",   16, dark);
+        IconUtils icons = IconUtils.instance();
+        chartColumnIconLight    = icons.renderAtHeight(d, SvgPaths.CHART_COLUMN,        16, light);
+        chartColumnIconDark     = icons.renderAtHeight(d, SvgPaths.CHART_COLUMN,        16, dark);
+        rotateLeftIcon          = icons.renderAtHeight(d, SvgPaths.ROTATE_LEFT,         18, red);
+        autoSetupIcon           = icons.renderAtHeight(d, SvgPaths.ARROWS_TO_CIRCLE,    16, light);
+        maximizeIcon            = icons.renderAtHeight(d, SvgPaths.ARROWS_FROM_CIRCLE,  16, light);
+        windowRestoreIconLight  = icons.renderAtHeight(d, SvgPaths.WINDOW_RESTORE,      16, light);
+        windowRestoreIconDark   = icons.renderAtHeight(d, SvgPaths.WINDOW_RESTORE,      16, dark);
+    }
+
+    // =========================================================================
+    // Analyser worker loop
+    // =========================================================================
+
+    /** Worker-thread body.  Runs analysis on a background thread, posts
+     *  the redraw via {@link Display#asyncExec} so the SWT thread isn't
+     *  blocked by the FFT compute. */
+    private void workerLoop() {
+        while (running) {
+            int sleepMs = IDLE_TICK_MS;
+            if (!paused.get()) {
+                try {
+                    sleepMs = doAnalysis();
+                } catch (Throwable t) {
+                    sleepMs = IDLE_TICK_MS;
+                }
+            }
+            if (sleepMs <= 0) sleepMs = IDLE_TICK_MS;
+            if (sleepMs > MAX_SLEEP_MS) sleepMs = MAX_SLEEP_MS;
+            try {
+                Thread.sleep(sleepMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+    }
+
+    /** Performs at most one analysis pass.  Returns the suggested sleep
+     *  in milliseconds before the next attempt — derived from the
+     *  configured overlap so the FFT update rate scales with the hop
+     *  size. */
+    private int doAnalysis() {
+        // Generator-state transition: wipe accumulated stats so the next
+        // analysis starts with a clean slate.
+        boolean genActiveNow = isGeneratorActive();
+        if (lastGeneratorActive != null && lastGeneratorActive != genActiveNow) {
+            resetStatistics();
+        }
+        lastGeneratorActive = genActiveNow;
+
+        org.edgo.audio.measure.gui.scope.SignalBuffer buf = buffer;
+        if (buf == null) return IDLE_TICK_MS;
+        int sampleRate = buf.getSampleRate();
+        if (sampleRate <= 0) return IDLE_TICK_MS;
+
+        Preferences prefs = Preferences.instance();
+        int fftLength = prefs.getFftLength();
+        if (fftLength < 8 || (fftLength & (fftLength - 1)) != 0) return IDLE_TICK_MS;
+
+        double avgRaw = prefs.getFftAverages();
+        int averages = Double.isInfinite(avgRaw) ? 2 : Math.max(1, (int) avgRaw);
+
+        org.edgo.audio.measure.enums.WindowType window;
+        try { window = org.edgo.audio.measure.enums.WindowType.valueOf(prefs.getFftWindow()); }
+        catch (IllegalArgumentException e) { window = org.edgo.audio.measure.enums.WindowType.HANN; }
+
+        org.edgo.audio.measure.enums.FftOverlap overlap;
+        try { overlap = org.edgo.audio.measure.enums.FftOverlap.valueOf(prefs.getFftOverlap()); }
+        catch (IllegalArgumentException e) { overlap = org.edgo.audio.measure.enums.FftOverlap.PCT_0; }
+
+        double hop = fftLength * (1.0 - overlap.fraction);
+        if (hop < 1) hop = 1;
+        int hopSamples = (int) Math.max(1, Math.round(hop));
+        int needed = (int) Math.ceil(fftLength + (averages - 1) * hop);
+        needed = Math.min(needed, buf.getCapacity());
+
+        long writePos = buf.getWritePos();
+        if (startWritePos < 0) startWritePos = writePos;
+        long fresh = writePos - startWritePos;
+        if (!firstFrameDone) {
+            if (fresh < fftLength) {
+                int waitMs = msForSamples((int)(fftLength - fresh), sampleRate);
+                return Math.max(20, waitMs);
+            }
+        } else {
+            if (lastAnalysisWritePos < 0) lastAnalysisWritePos = writePos;
+            long newSamples = writePos - lastAnalysisWritePos;
+            if (newSamples < hopSamples) {
+                int waitMs = msForSamples(hopSamples - (int) newSamples, sampleRate);
+                return Math.max(20, waitMs);
+            }
+        }
+        // Clamp read window to fresh-only samples until the full averaging
+        // window has accumulated fresh data.  Without this resetStatistics
+        // clears FFT state but the SignalBuffer still holds old samples,
+        // and readLatest(needed,…) pulls (needed − fresh) of them back
+        // into the average — visible as ghosting after the generator stops.
+        needed = (int) Math.min(needed, fresh);
+
+        Channel channel = prefs.getFftChannel();
+        boolean wantLeft  = (channel == Channel.L);
+        float[] leftBuf  = null;
+        float[] rightBuf = null;
+        if (wantLeft) {
+            if (reusableLeftBuf.length != needed) reusableLeftBuf = new float[needed];
+            leftBuf = reusableLeftBuf;
+        } else {
+            if (reusableRightBuf.length != needed) reusableRightBuf = new float[needed];
+            rightBuf = reusableRightBuf;
+        }
+        int got = buf.readLatest(needed, leftBuf, rightBuf);
+        if (got < fftLength) return IDLE_TICK_MS;
+
+        float[] samples = wantLeft ? leftBuf : rightBuf;
+        if (got < samples.length) {
+            float[] trimmed = new float[got];
+            System.arraycopy(samples, 0, trimmed, 0, got);
+            samples = trimmed;
+        }
+
+        int    calcMaxH = Math.max(9, prefs.getFftCalcMaxHarmonic()) - 1;
+        double distMin  = prefs.isFftDistMinEnabled() ? prefs.getFftDistMinHz() : 0;
+        double distMax  = prefs.isFftDistMaxEnabled() ? prefs.getFftDistMaxHz() : 0;
+        boolean coherent = prefs.isFftCoherentAveraging();
+        boolean genActive = isGeneratorActive();
+        double fundRefDbV = genActive ? resolveFundRefDbV(prefs) : Double.NaN;
+        double expectedFundHz = (genActive && prefs.isFftFundFromGenerator())
+                ? Preferences.instance().getGenFrequencyHz()
+                : Double.NaN;
+
+        FftAnalyzer.Result r;
+        try {
+            r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH,
+                    window, overlap, distMin, distMax, coherent, fundRefDbV,
+                    /*logSummary=*/ false, expectedFundHz);
+        } catch (RuntimeException ex) {
+            return IDLE_TICK_MS;
+        }
+        // Anchor absolute dBV via the ADC full-scale calibration when
+        // available — used as the dBV/dBFS offset for every non-fundamental
+        // bin (harmonics, noise floor, spectrum trace).
+        double fs = prefs.getAdcFsVoltageRms();
+        if (fs > 0 && Double.isFinite(r.fundamentalDbFs)) {
+            r.fundRefDbV = r.fundamentalDbFs + 20.0 * Math.log10(fs);
+        }
+        lastResult = r;
+        completedAnalyses++;
+        lastAnalysisWritePos = buf.getWritePos();
+        firstFrameDone = true;
+        // Stop-after-N only fires when the user is in "forever" averages
+        // AND has explicitly enabled the cap.  Finite N already implements
+        // a moving window so the analysis is continuous.
+        if (Double.isInfinite(avgRaw)
+                && prefs.isFftStopAfterNEnabled()
+                && completedAnalyses >= prefs.getFftStopAfterN()) {
+            paused.set(true);
+            Display d = getDisplay();
+            if (d != null && !d.isDisposed()) {
+                d.asyncExec(() -> {
+                    if (!isDisposed()) {
+                        MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED);
+                    }
+                });
+            }
+        }
+        Display d = getDisplay();
+        if (d != null && !d.isDisposed()) {
+            d.asyncExec(() -> { if (!isDisposed()) redraw(); });
+        }
+        return msForSamples(hopSamples, sampleRate);
+    }
+
+    private static int msForSamples(int samples, int sampleRate) {
+        if (sampleRate <= 0 || samples <= 0) return 0;
+        return (int) Math.ceil(1000.0 * samples / sampleRate);
+    }
+
+    /** Computes the dBV reference anchor passed into {@link FftAnalyzer}.
+     *  In manual-fundamental mode we pass the user's value directly;
+     *  otherwise we pass {@code NaN} so the analyser uses the measured
+     *  {@code fundLinear} as its anchor. */
+    private static double resolveFundRefDbV(Preferences prefs) {
+        if (prefs.isFftManualFundEnabled()) {
+            String unit = prefs.getFftManualFundUnit();
+            double v = prefs.getFftManualFundVrms();
+            if ("dBV".equalsIgnoreCase(unit)) return v;
+            if ("mV" .equalsIgnoreCase(unit)) v *= 0.001;
+            return (v > 0) ? 20.0 * Math.log10(v) : Double.NaN;
+        }
+        return Double.NaN;
     }
 }

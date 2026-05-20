@@ -18,8 +18,8 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.TableColumn;
 import org.eclipse.swt.widgets.TableItem;
-import org.edgo.audio.measure.generator.SignalGenerator.SignalForm;
-import org.edgo.audio.measure.gui.IconStepLabel;
+import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.gui.widgets.IconStepLabel;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -27,7 +27,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Combo-style selector for {@link SignalForm} with per-entry 24×24
+ * Combo-style selector for {@link GenSignalForm} with per-entry 24×24
  * pictograms.  Built from native SWT widgets so it inherits the platform
  * look-and-feel:
  * <ul>
@@ -45,33 +45,33 @@ import java.util.Map;
 public final class SignalFormCombo extends Composite {
 
     /** Display labels in dropdown order. */
-    private static final Map<SignalForm, String> LABELS = new LinkedHashMap<>();
+    private static final Map<GenSignalForm, String> LABELS = new LinkedHashMap<>();
     static {
-        LABELS.put(SignalForm.SINE,              "Sine");
-        LABELS.put(SignalForm.SINE_COMPENSATED,  "Sine (compensated)");
-        LABELS.put(SignalForm.TRIANGLE,          "Triangle");
-        LABELS.put(SignalForm.RECTANGLE,         "Rectangle / pulse");
-        LABELS.put(SignalForm.WHITE_NOISE,       "White noise");
-        LABELS.put(SignalForm.PINK_NOISE,        "Pink noise");
-        LABELS.put(SignalForm.PINK_NOISE_LINEAR, "Pink noise (linear)");
-        LABELS.put(SignalForm.LINEAR_SWEEP,      "Linear sweep");
-        LABELS.put(SignalForm.LOG_SWEEP,         "Log sweep (Farina)");
+        LABELS.put(GenSignalForm.SINE,              "Sine");
+        LABELS.put(GenSignalForm.SINE_COMPENSATED,  "Sine (compensated)");
+        LABELS.put(GenSignalForm.TRIANGLE,          "Triangle");
+        LABELS.put(GenSignalForm.RECTANGLE,         "Rectangle / pulse");
+        LABELS.put(GenSignalForm.WHITE_NOISE,       "White noise");
+        LABELS.put(GenSignalForm.PINK_NOISE,        "Pink noise");
+        LABELS.put(GenSignalForm.PINK_NOISE_LINEAR, "Pink noise (linear)");
+        LABELS.put(GenSignalForm.LINEAR_SWEEP,      "Linear sweep");
+        LABELS.put(GenSignalForm.LOG_SWEEP,         "Log sweep (Farina)");
     }
 
     private final List<Listener> selectionListeners = new ArrayList<>();
     private final Label          iconLabel;
     private final Label          textLabel;
     private final Canvas         dropArrow;
-    private SignalForm           current;
+    private GenSignalForm           current;
     /** Currently-open dropdown popup (null when closed).  Tracked so a
      *  second click on the closed display closes the popup instead of
      *  losing focus to the previously-focused app while a stale popup
      *  lingers. */
     private Shell                popup;
 
-    public SignalFormCombo(Composite parent, SignalForm initial) {
+    public SignalFormCombo(Composite parent, GenSignalForm initial) {
         super(parent, SWT.BORDER);
-        this.current = initial != null ? initial : SignalForm.SINE;
+        this.current = initial != null ? initial : GenSignalForm.SINE;
 
         GridLayout gl = new GridLayout(3, false);
         gl.marginWidth  = 2;
@@ -142,9 +142,9 @@ public final class SignalFormCombo extends Composite {
                          hHint != SWT.DEFAULT ? hHint : h);
     }
 
-    public SignalForm getSelectedForm() { return current; }
+    public GenSignalForm getSelectedForm() { return current; }
 
-    public void setSelectedForm(SignalForm f) {
+    public void setSelectedForm(GenSignalForm f) {
         if (f == null || f == current) return;
         current = f;
         iconLabel.setImage(SignalFormIcon.get(getDisplay(), current));
@@ -179,7 +179,7 @@ public final class SignalFormCombo extends Composite {
         Table table = new Table(popup, SWT.SINGLE | SWT.FULL_SELECTION | SWT.V_SCROLL);
         table.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         TableColumn col = new TableColumn(table, SWT.NONE);
-        SignalForm[] forms = LABELS.keySet().toArray(new SignalForm[0]);
+        GenSignalForm[] forms = LABELS.keySet().toArray(new GenSignalForm[0]);
         int selectedIdx = 0;
         for (int i = 0; i < forms.length; i++) {
             TableItem ti = new TableItem(table, SWT.NONE);
@@ -271,7 +271,7 @@ public final class SignalFormCombo extends Composite {
         table.setFocus();
     }
 
-    public static String labelOf(SignalForm f) {
+    public static String labelOf(GenSignalForm f) {
         return LABELS.getOrDefault(f, f.name());
     }
 

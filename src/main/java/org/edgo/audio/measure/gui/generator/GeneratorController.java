@@ -2,8 +2,8 @@ package org.edgo.audio.measure.gui.generator;
 
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.generator.SignalGenerator;
-import org.edgo.audio.measure.generator.SignalGenerator.SignalForm;
-import org.edgo.audio.measure.gui.Preferences;
+import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
@@ -64,7 +64,7 @@ public final class GeneratorController {
         final int    ditherBits    = prefs.getGenDitherBits();
         final double rawFrequency  = prefs.getGenFrequencyHz();
         final double amplitudeVRms = prefs.getGenAmplitudeVrms();
-        final SignalForm form      = parseForm(prefs.getGenSignalForm());
+        final GenSignalForm form      = parseForm(prefs.getGenSignalForm());
         // Snap the emitted frequency to the nearest FFT bin when the
         // user enabled "snap to FFT bin" with a SINE waveform.  Done
         // here (not in GeneratorPane) so the snap doesn't have to live
@@ -110,22 +110,22 @@ public final class GeneratorController {
      */
     private String tryStartOnce(Preferences prefs, DeviceRef device,
                                 int sampleRate, int bitDepth, int ditherBits,
-                                SignalForm form, double frequency, double amplitudeVRms,
+                                GenSignalForm form, double frequency, double amplitudeVRms,
                                 long readyTimeoutSeconds) {
         SignalGenerator gen;
         try {
-            if (form == SignalForm.SINE_COMPENSATED) {
+            if (form == GenSignalForm.SINE_COMPENSATED) {
                 String csv = prefs.getGenCorrectionsCsv();
                 if (csv == null || csv.isEmpty()) {
                     return "Sine (compensated) needs a harmonics-correction CSV.  Pick one with the … button.";
                 }
                 gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms, csv);
-            } else if (form == SignalForm.LINEAR_SWEEP || form == SignalForm.LOG_SWEEP) {
+            } else if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
                 double f0 = prefs.getGenSweepFreqStartHz();
                 double f1 = prefs.getGenSweepFreqEndHz();
                 int durationSamples = Math.max(2,
                         (int) Math.round(prefs.getGenSweepDurationSec() * sampleRate));
-                if (form == SignalForm.LINEAR_SWEEP) {
+                if (form == GenSignalForm.LINEAR_SWEEP) {
                     gen = new SignalGenerator(f0, f1, sampleRate, durationSamples, amplitudeVRms);
                 } else {
                     // No lead-in for the GUI-driven sweep — that's a CLI-
@@ -142,7 +142,7 @@ public final class GeneratorController {
         // generator off to the audio thread.
         gen.setRectangleDuty(prefs.getGenRectangleDuty());
         gen.setTriangleDuty (prefs.getGenTriangleDuty());
-        if (form == SignalForm.LINEAR_SWEEP || form == SignalForm.LOG_SWEEP) {
+        if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
             int fadeIn  = Math.max(0, (int) Math.round(prefs.getGenSweepFadeInSec()  * sampleRate));
             int fadeOut = Math.max(0, (int) Math.round(prefs.getGenSweepFadeOutSec() * sampleRate));
             gen.setSweepParams(prefs.isGenSweepLoop(), fadeIn, fadeOut);
@@ -238,15 +238,15 @@ public final class GeneratorController {
 
     /**
      * Live-applies a new waveform to the running generator.  No-op if the
-     * generator isn't running.  Switching to / from {@link SignalForm#SINE_COMPENSATED}
+     * generator isn't running.  Switching to / from {@link GenSignalForm#SINE_COMPENSATED}
      * or any sweep form requires a stop+start because their state machines
      * aren't safely live-mutable; this method skips them.
      */
-    public void setForm(SignalForm form) {
+    public void setForm(GenSignalForm form) {
         SignalGenerator g = generator;
         if (g == null || form == null) return;
-        if (form == SignalForm.LINEAR_SWEEP || form == SignalForm.LOG_SWEEP) return;
-        if (form == SignalForm.SINE_COMPENSATED) return;
+        if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) return;
+        if (form == GenSignalForm.SINE_COMPENSATED) return;
         g.setForm(form);
     }
 
@@ -256,9 +256,9 @@ public final class GeneratorController {
      *  from the active output sample rate and {@code fftLength} pref.
      *  Shared with {@code GeneratorPane} (which uses the same math to
      *  show the bracketed correction next to the field). */
-    public static double snapToFftBinIfEnabled(Preferences prefs, SignalForm form,
+    public static double snapToFftBinIfEnabled(Preferences prefs, GenSignalForm form,
                                                int sampleRate, double raw) {
-        if (form != SignalForm.SINE) return raw;
+        if (form != GenSignalForm.SINE) return raw;
         if (!prefs.isGenSnapToFftBin()) return raw;
         int fftSize = prefs.getFftLength();
         if (fftSize < 8 || sampleRate <= 0) return raw;
@@ -324,10 +324,10 @@ public final class GeneratorController {
     }
 
     /** True when the running generator can accept live form updates for the given target. */
-    public boolean canLiveSwitchForm(SignalForm target) {
+    public boolean canLiveSwitchForm(GenSignalForm target) {
         if (target == null || generator == null) return false;
-        if (target == SignalForm.LINEAR_SWEEP || target == SignalForm.LOG_SWEEP) return false;
-        if (target == SignalForm.SINE_COMPENSATED) return false;
+        if (target == GenSignalForm.LINEAR_SWEEP || target == GenSignalForm.LOG_SWEEP) return false;
+        if (target == GenSignalForm.SINE_COMPENSATED) return false;
         return true;
     }
 
@@ -342,9 +342,9 @@ public final class GeneratorController {
         return null;
     }
 
-    private static SignalForm parseForm(String s) {
-        if (s == null) return SignalForm.SINE;
-        try { return SignalForm.valueOf(s); }
-        catch (IllegalArgumentException ex) { return SignalForm.SINE; }
+    private static GenSignalForm parseForm(String s) {
+        if (s == null) return GenSignalForm.SINE;
+        try { return GenSignalForm.valueOf(s); }
+        catch (IllegalArgumentException ex) { return GenSignalForm.SINE; }
     }
 }

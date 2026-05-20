@@ -1,4 +1,4 @@
-package org.edgo.audio.measure.gui.fft;
+package org.edgo.audio.measure.enums;
 
 /**
  * Magnitude unit selector for the FFT view's left axis.

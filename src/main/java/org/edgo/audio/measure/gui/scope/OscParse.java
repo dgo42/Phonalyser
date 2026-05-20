@@ -1,6 +1,6 @@
 package org.edgo.audio.measure.gui.scope;
 
-import org.edgo.audio.measure.gui.Preferences;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 
 /**
  * Converts the user-facing labels from the V/div and t/div pick lists back
@@ -28,6 +28,7 @@ public final class OscParse {
     };
     /** Same content as {@code MainWindow.TIME_PER_DIV}. */
     private static final String[] TIME_PER_DIV = {
+            "1 μs/div", "2 μs/div", "5 μs/div",
             "10 μs/div", "20 μs/div", "50 μs/div",
             "100 μs/div", "200 μs/div", "500 μs/div",
             "1 ms/div", "2 ms/div", "5 ms/div",

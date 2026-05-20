@@ -10,7 +10,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Shell;
 
-import org.edgo.audio.measure.gui.I18n;
+import org.edgo.audio.measure.gui.i18n.I18n;
 
 /**
  * Simple About dialog: app name, version, vendor and a clickable link

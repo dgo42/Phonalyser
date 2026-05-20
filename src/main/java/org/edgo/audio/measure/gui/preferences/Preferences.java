@@ -1,15 +1,4 @@
-package org.edgo.audio.measure.gui;
-
-import lombok.Getter;
-import lombok.Setter;
-import lombok.extern.log4j.Log4j2;
-import org.edgo.audio.measure.gui.scope.OscParse;
-import org.edgo.audio.measure.gui.scope.TriggerChannel;
-import org.edgo.audio.measure.gui.scope.TriggerEdge;
-import org.edgo.audio.measure.gui.scope.TriggerMode;
-import org.edgo.audio.measure.sound.AudioBackendType;
-import org.yaml.snakeyaml.DumperOptions;
-import org.yaml.snakeyaml.Yaml;
+package org.edgo.audio.measure.gui.preferences;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -22,6 +11,17 @@ import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.TriggerEdge;
+import org.edgo.audio.measure.enums.TriggerMode;
+import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.Yaml;
+
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Process-wide GUI preferences.  Singleton — access via {@link #instance()}.
@@ -88,7 +88,7 @@ public final class Preferences {
     @Getter @Setter private double  oscRightVoltsPerDiv = 0.1;
     /** Time per division (seconds).  Free-form double, defaults to 1 ms/div. */
     @Getter @Setter private double  oscTimePerDiv       = 1e-3;
-    @Getter @Setter private TriggerChannel oscTriggerChannel = TriggerChannel.L;
+    @Getter @Setter private Channel oscTriggerChannel = Channel.L;
     @Getter @Setter private TriggerEdge    oscTriggerEdge    = TriggerEdge.RISE;
     @Getter @Setter private TriggerMode    oscTriggerMode    = TriggerMode.AUTO;
     /** Trigger hysteresis in oscilloscope divisions; 0 disables hysteresis. */
@@ -127,7 +127,7 @@ public final class Preferences {
     @Getter @Setter private int    screenshotHeight;
     @Getter @Setter private String screenshotFolder;
     /** Channel whose live samples drive the measurement table (auto-flipped to the other when this one is disabled). */
-    @Getter @Setter private TriggerChannel oscMeasurementChannel = TriggerChannel.L;
+    @Getter @Setter private Channel oscMeasurementChannel = Channel.L;
     /** Toggles the measurement table's stats columns (avg/min/max/σ); the worker keeps computing them in the background regardless. */
     @Getter @Setter private boolean oscShowStats = true;
     /** Master toggle for the measurement table overlay in the scope view —
@@ -221,7 +221,7 @@ public final class Preferences {
     /** Collapse state for the three Multifunctional-tab panes — restored on startup. */
     @Getter @Setter private boolean genPaneCollapsed;
     @Getter @Setter private boolean oscPaneCollapsed;
-    @Getter @Setter private boolean fftPaneCollapsed;
+    @Getter @Setter private boolean fftPaneCollapsed = true;
 
     /** User-saved oscilloscope presets, keyed by display name.  Insertion
      *  order is preserved so the combo box renders them in the order they
@@ -243,9 +243,9 @@ public final class Preferences {
     @Getter @Setter private int     fftStopAfterN        = 10;
     @Getter @Setter private boolean fftFundFromGenerator = false;
     @Getter @Setter private boolean fftLogFreqAxis       = true;
-    /** {@code FftAnalyzer.WindowType} enum name. */
+    /** {@code WindowType} enum name. */
     @Getter @Setter private String  fftWindow            = "HANN";
-    /** {@code FftAnalyzer.Overlap} enum name. */
+    /** {@code FftOverlap} enum name. */
     @Getter @Setter private String  fftOverlap           = "PCT_0";
     @Getter @Setter private boolean fftCoherentAveraging = true;
     @Getter @Setter private double  fftDistMinHz         = 20;
@@ -259,7 +259,7 @@ public final class Preferences {
     @Getter @Setter private String  fftManualFundUnit    = "V";
     @Getter @Setter private boolean fftManualFundEnabled = false;
     /** Active analysis channel (L or R) — only one channel shown at a time. */
-    @Getter @Setter private TriggerChannel fftChannel    = TriggerChannel.L;
+    @Getter @Setter private Channel fftChannel    = Channel.L;
     /** {@code FftMagnitudeUnit} enum name: {@code V}, {@code V_SQRT_HZ}, {@code DBV}, {@code DBFS}. */
     @Getter @Setter private String  fftMagUnit           = "DBV";
     /** Whether the THD overlay table is shown on top of the spectrum view. */
@@ -564,10 +564,6 @@ public final class Preferences {
         if (root.get("windowHeight")           instanceof Integer i) windowHeight           = i;
         if (root.get("genPaneWidth")           instanceof Number n) genPaneWidth           = n.intValue();
         if (root.get("multiVSplitWeights")     instanceof List<?> l) multiVSplitWeights     = listToIntArray(l);
-        // Backward-compat: previous schema stored the same vertical split
-        // under "vSplitWeights".  Read it as a fallback so users don't lose
-        // their oscilloscope / FFT proportion across this upgrade.
-        else if (root.get("vSplitWeights")     instanceof List<?> l) multiVSplitWeights     = listToIntArray(l);
         if (root.get("genPaneCollapsed")       instanceof Boolean b) genPaneCollapsed       = b;
         if (root.get("oscPaneCollapsed")       instanceof Boolean b) oscPaneCollapsed       = b;
         if (root.get("fftPaneCollapsed")       instanceof Boolean b) fftPaneCollapsed       = b;
@@ -580,24 +576,11 @@ public final class Preferences {
         if (root.get("oscLeftVoltsPerDiv")     instanceof Number n) oscLeftVoltsPerDiv  = n.doubleValue();
         if (root.get("oscRightVoltsPerDiv")    instanceof Number n) oscRightVoltsPerDiv = n.doubleValue();
         if (root.get("oscTimePerDiv")          instanceof Number n) oscTimePerDiv       = n.doubleValue();
-        // Legacy fallbacks — earlier versions stored integer indices into
-        // the standard step list.  Convert via the static defaults so
-        // existing prefs files keep their scale across the upgrade.
-        if (root.get("oscLeftVoltsPerDivIdx")  instanceof Integer i) oscLeftVoltsPerDiv  = OscParse.voltsPerDivFromIdx(i);
-        if (root.get("oscRightVoltsPerDivIdx") instanceof Integer i) oscRightVoltsPerDiv = OscParse.voltsPerDivFromIdx(i);
-        if (root.get("oscTimePerDivIdx")       instanceof Integer i) oscTimePerDiv       = OscParse.timePerDivFromIdx(i);
-        if (root.get("oscTriggerChannel")      instanceof String  s) oscTriggerChannel = enumOr(TriggerChannel.class, s, oscTriggerChannel);
+        if (root.get("oscTriggerChannel")      instanceof String  s) oscTriggerChannel = enumOr(Channel.class, s, oscTriggerChannel);
         if (root.get("oscTriggerEdge")         instanceof String  s) oscTriggerEdge    = enumOr(TriggerEdge.class,    s, oscTriggerEdge);
         if (root.get("oscTriggerMode")         instanceof String  s) oscTriggerMode    = enumOr(TriggerMode.class,    s, oscTriggerMode);
         if (root.get("oscTriggerHysteresisDiv")     instanceof Number  n) oscTriggerHysteresisDiv     = n.doubleValue();
         if (root.get("oscTriggerHysteresisEnabled") instanceof Boolean b) oscTriggerHysteresisEnabled = b;
-        // Backward-compat: pre-split schema had a single oscSincInterpEnabled
-        // boolean — seed both per-channel fields from it.  Per-channel keys
-        // (if present) take precedence.
-        if (root.get("oscSincInterpEnabled")   instanceof Boolean b) {
-            oscLeftSincInterpEnabled  = b;
-            oscRightSincInterpEnabled = b;
-        }
         if (root.get("oscLeftSincInterpEnabled")  instanceof Boolean b) oscLeftSincInterpEnabled  = b;
         if (root.get("oscRightSincInterpEnabled") instanceof Boolean b) oscRightSincInterpEnabled = b;
         if (root.get("oscLeftOffsetFrac")      instanceof Number n) oscLeftOffsetFrac      = n.doubleValue();
@@ -605,7 +588,7 @@ public final class Preferences {
         if (root.get("oscTriggerLevelFrac")    instanceof Number n) oscTriggerLevelFrac    = n.doubleValue();
         if (root.get("oscTriggerPositionFrac") instanceof Number n) oscTriggerPositionFrac = n.doubleValue();
         if (root.get("oscMeasurementAverageSeconds") instanceof Number n) oscMeasurementAverageSeconds = n.doubleValue();
-        if (root.get("oscMeasurementChannel")        instanceof String s) oscMeasurementChannel = enumOr(TriggerChannel.class, s, oscMeasurementChannel);
+        if (root.get("oscMeasurementChannel")        instanceof String s) oscMeasurementChannel = enumOr(Channel.class, s, oscMeasurementChannel);
         if (root.get("oscShowStats")                 instanceof Boolean b) oscShowStats         = b;
         if (root.get("oscShowMeasurementTable")      instanceof Boolean b) oscShowMeasurementTable = b;
         if (root.get("adcFsVoltageRms")              instanceof Number n) adcFsVoltageRms      = n.doubleValue();
@@ -667,7 +650,7 @@ public final class Preferences {
                 if (pm.get("rightOffsetFrac")        instanceof Number  n) p.rightOffsetFrac        = n.doubleValue();
                 if (pm.get("timePerDiv")             instanceof Number  n) p.timePerDiv             = n.doubleValue();
                 if (pm.get("triggerPositionFrac")    instanceof Number  n) p.triggerPositionFrac    = n.doubleValue();
-                if (pm.get("triggerChannel")         instanceof String  s) p.triggerChannel = enumOr(TriggerChannel.class, s, p.triggerChannel);
+                if (pm.get("triggerChannel")         instanceof String  s) p.triggerChannel = enumOr(Channel.class, s, p.triggerChannel);
                 if (pm.get("triggerEdge")            instanceof String  s) p.triggerEdge    = enumOr(TriggerEdge.class,    s, p.triggerEdge);
                 if (pm.get("triggerMode")            instanceof String  s) p.triggerMode    = enumOr(TriggerMode.class,    s, p.triggerMode);
                 if (pm.get("triggerLevelFrac")       instanceof Number  n) p.triggerLevelFrac       = n.doubleValue();
@@ -694,7 +677,7 @@ public final class Preferences {
         if (root.get("fftManualFundVrms")         instanceof Number  n) fftManualFundVrms    = n.doubleValue();
         if (root.get("fftManualFundUnit")         instanceof String  s) fftManualFundUnit    = s;
         if (root.get("fftManualFundEnabled")      instanceof Boolean b) fftManualFundEnabled = b;
-        if (root.get("fftChannel")                instanceof String  s) fftChannel           = enumOr(TriggerChannel.class, s, fftChannel);
+        if (root.get("fftChannel")                instanceof String  s) fftChannel           = enumOr(Channel.class, s, fftChannel);
         if (root.get("fftMagUnit")                instanceof String  s) fftMagUnit           = s;
         if (root.get("fftDistortionTableVisible") instanceof Boolean b) fftDistortionTableVisible = b;
         if (root.get("fftFreqMinHz")              instanceof Number  n) fftFreqMinHz         = n.doubleValue();
@@ -726,7 +709,7 @@ public final class Preferences {
                 if (!(e.getKey() instanceof String key)) continue;
                 if (!(e.getValue() instanceof Map<?, ?> pm)) continue;
                 FftPreset p = new FftPreset();
-                if (pm.get("channel")           instanceof String  s) p.channel           = enumOr(TriggerChannel.class, s, p.channel);
+                if (pm.get("channel")           instanceof String  s) p.channel           = enumOr(Channel.class, s, p.channel);
                 if (pm.get("magUnit")           instanceof String  s) p.magUnit           = s;
                 if (pm.get("logFreqAxis")       instanceof Boolean b) p.logFreqAxis       = b;
                 if (pm.get("freqMinHz")         instanceof Number  n) p.freqMinHz         = n.doubleValue();
@@ -855,7 +838,7 @@ public final class Preferences {
     @Getter
     @Setter
     public static class FftPreset {
-        private TriggerChannel channel               = TriggerChannel.L;
+        private Channel channel               = Channel.L;
         private String  magUnit                      = "DBV";
         private boolean logFreqAxis                  = true;
         private double  freqMinHz                    = 20;
@@ -906,7 +889,7 @@ public final class Preferences {
         private double  rightOffsetFrac          = 0.5;
         private double  timePerDiv               = 1e-3;
         private double  triggerPositionFrac      = 0.5;
-        private TriggerChannel triggerChannel    = TriggerChannel.L;
+        private Channel triggerChannel    = Channel.L;
         private TriggerEdge    triggerEdge       = TriggerEdge.RISE;
         private TriggerMode    triggerMode       = TriggerMode.AUTO;
         private double  triggerLevelFrac         = 0.5;

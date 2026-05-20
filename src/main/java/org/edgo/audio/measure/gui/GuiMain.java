@@ -2,13 +2,16 @@ package org.edgo.audio.measure.gui;
 
 import java.util.Locale;
 
-import lombok.extern.log4j.Log4j2;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.config.LoggerConfig;
 import org.eclipse.swt.widgets.Display;
+import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
-import org.edgo.audio.measure.sound.AudioBackendType;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * SWT entry point for the interactive measurement GUI.  Construction of the

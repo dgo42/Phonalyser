@@ -14,7 +14,7 @@ code, kbd { font-family: Consolas, Menlo, monospace; font-size: 13px;
             background: #eef; padding: 1px 5px; border-radius: 3px; }
 .pane { border-left: 3px solid #88a; padding-left: 12px; margin: 12px 0; }
 .toc a { display: block; padding: 2px 0;
-         text-decoration: none; color: #224; }
+         text-decoration: underline; color: #2222CC; }
 .toc a:hover { text-decoration: underline; }
 hr { border: 0; border-top: 1px solid #ddd; margin: 18px 0; }
 .small { color: #777; font-size: 12px; }
@@ -26,7 +26,7 @@ hr { border: 0; border-top: 1px solid #ddd; margin: 18px 0; }
        background: #ff2020; border-radius: 50%;
        vertical-align: middle; margin: 0 4px; }
 .back { font-size: 12px; }
-.back a { color: #335; text-decoration: none; }
+.back a { color: #CC33DD; text-decoration: underline; }
 .back a:hover { text-decoration: underline; }
 table.controls { border-collapse: collapse; margin: 8px 0; }
 table.controls th, table.controls td {

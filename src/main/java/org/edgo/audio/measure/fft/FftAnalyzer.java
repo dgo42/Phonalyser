@@ -44,6 +44,9 @@ import org.jfree.data.xy.XYSeriesCollection;
 
 import lombok.extern.log4j.Log4j2;
 
+import org.edgo.audio.measure.enums.FftOverlap;
+import org.edgo.audio.measure.enums.WindowType;
+
 /**
  * FFT-based audio analyzer: coherent averaging, fundamental detection, THD,
  * THD+N (IEC 61672:2003 A-weighting), SNR.
@@ -80,93 +83,6 @@ public class FftAnalyzer {
 
 
     // =========================================================================
-    // WindowType
-    // =========================================================================
-
-    public enum WindowType {
-        RECTANGULAR,
-        HANN,
-        BLACKMAN_HARRIS_4,
-        BLACKMAN_HARRIS_7,
-        FLAT_TOP,
-        DOLPH_CHEBYSHEV_150,
-        DOLPH_CHEBYSHEV_200;
-
-        private WindowType() {}
-
-        public static WindowType fromString(String s) {
-            switch (s.toUpperCase(Locale.ROOT).replace('-', '_')) {
-                case "RECTANGULAR":
-                case "RECT":
-                    return RECTANGULAR;
-                case "HANN":
-                    return HANN;
-                case "BLACKMAN_HARRIS_4":
-                case "BH4":
-                    return BLACKMAN_HARRIS_4;
-                case "BLACKMAN_HARRIS_7":
-                case "BH7":
-                    return BLACKMAN_HARRIS_7;
-                case "FLAT_TOP":
-                case "FLATTOP":
-                    return FLAT_TOP;
-                case "DOLPH_CHEBYSHEV_150":
-                case "DC150":
-                case "CHEBYSHEV_150":
-                    return DOLPH_CHEBYSHEV_150;
-                case "DOLPH_CHEBYSHEV_200":
-                case "DC200":
-                case "CHEBYSHEV_200":
-                    return DOLPH_CHEBYSHEV_200;
-                default:
-                    throw new IllegalArgumentException("Unknown window type: " + s);
-            }
-        }
-    }
-
-    // =========================================================================
-    // Overlap
-    // =========================================================================
-
-    public enum Overlap {
-        PCT_0(0.0,    "0%"),
-        PCT_50(0.5,   "50%"),
-        PCT_75(0.75,  "75%"),
-        PCT_87_5(0.875,  "87.5%"),
-        PCT_92_75(0.9275, "92.75%");
-
-        public final double fraction;
-        public final String label;
-
-        private Overlap(double fraction, String label) {
-            this.fraction = fraction;
-            this.label    = label;
-        }
-
-        public static Overlap fromString(String s) {
-            String norm = s.trim().replace("%", "").replace(",", ".");
-            switch (norm) {
-                case "0":
-                    return PCT_0;
-                case "50":
-                    return PCT_50;
-                case "75":
-                    return PCT_75;
-                case "87.5":
-                case "87":
-                    return PCT_87_5;
-                case "92.75":
-                case "92":
-                case "93":
-                    return PCT_92_75;
-                default:
-                    throw new IllegalArgumentException(
-                            "Unknown overlap: " + s + " — use 0, 50, 75, 87.5, or 92.75");
-            }
-        }
-    }
-
-    // =========================================================================
     // Result
     // =========================================================================
 
@@ -183,8 +99,8 @@ public class FftAnalyzer {
         public final double freqResolution;
         /** Window function used. */
         public final WindowType windowType;
-        /** Overlap used. */
-        public final Overlap overlap;
+        /** FftOverlap used. */
+        public final FftOverlap overlap;
 
         // Single-sided spectrum, bins 0 … fftSize/2
         public final double[] amplitudeDbFs;
@@ -265,7 +181,7 @@ public class FftAnalyzer {
         public double fundamentalTrueDbV;
 
         Result(int fftSize, int sampleRate, int frameCount, double freqResolution,
-               WindowType windowType, Overlap overlap,
+               WindowType windowType, FftOverlap overlap,
                double[] amplitudeDbFs, double[] phaseDeg, double[] re, double[] im,
                int fundamentalBin, double fundamentalHz, double fundamentalHzRefined,
                double fundamentalDbFs, double fundamentalLinear,
@@ -318,19 +234,19 @@ public class FftAnalyzer {
     public Result analyze(float[] samples, int sampleRate,
                                  int fftSize, int harmonicCount) {
         return analyze(samples, sampleRate, fftSize, harmonicCount,
-                WindowType.HANN, Overlap.PCT_0, 0.0, 0.0, true, Double.NaN);
+                WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN);
     }
 
     public Result analyze(float[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
-                                 WindowType windowType, Overlap overlap) {
+                                 WindowType windowType, FftOverlap overlap) {
         return analyze(samples, sampleRate, fftSize, harmonicCount,
                 windowType, overlap, 0.0, 0.0, true, Double.NaN);
     }
 
     public Result analyze(float[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
-                                 WindowType windowType, Overlap overlap,
+                                 WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
                                  boolean coherentAveraging) {
         return analyze(samples, sampleRate, fftSize, harmonicCount,
@@ -359,7 +275,7 @@ public class FftAnalyzer {
      */
     public Result analyze(float[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
-                                 WindowType windowType, Overlap overlap,
+                                 WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
                                  boolean coherentAveraging, double fundRefDbV) {
         return analyze(samples, sampleRate, fftSize, harmonicCount,
@@ -375,7 +291,7 @@ public class FftAnalyzer {
      */
     public Result analyze(float[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
-                                 WindowType windowType, Overlap overlap,
+                                 WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
                                  boolean coherentAveraging, double fundRefDbV,
                                  boolean logSummary) {
@@ -396,7 +312,7 @@ public class FftAnalyzer {
      */
     public Result analyze(float[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
-                                 WindowType windowType, Overlap overlap,
+                                 WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
                                  boolean coherentAveraging, double fundRefDbV,
                                  boolean logSummary, double expectedFundHz) {
