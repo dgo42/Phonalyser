@@ -23,6 +23,12 @@ jobs:
           java-version: '17'
           cache: maven
 
+      # Project Nayuki's flac-library isn't on Maven Central — it's
+      # vendored under deps/flac-library-java and must be installed to
+      # the runner's local ~/.m2 before the main project resolves it.
+      - name: Install vendored flac-library
+        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+
       # csjsound-provider.jar and the native DLLs are not on Maven Central -
       # they must already live under lib/windows/.  Fail loudly if a checkout
       # is missing them instead of producing a half-built installer.
@@ -65,6 +71,12 @@ jobs:
           java-version: '17'
           cache: maven
 
+      # Project Nayuki's flac-library isn't on Maven Central — it's
+      # vendored under deps/flac-library-java and must be installed to
+      # the runner's local ~/.m2 before the main project resolves it.
+      - name: Install vendored flac-library
+        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+
       - name: Install fakeroot (needed by jpackage for .deb)
         run: |
           sudo apt-get update
@@ -92,6 +104,12 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: maven
+
+      # Project Nayuki's flac-library isn't on Maven Central — it's
+      # vendored under deps/flac-library-java and must be installed to
+      # the runner's local ~/.m2 before the main project resolves it.
+      - name: Install vendored flac-library
+        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
 
       # The macos-aarch64 profile already appends -XstartOnFirstThread to
       # jpackage's javaOptions; no extra args needed here.

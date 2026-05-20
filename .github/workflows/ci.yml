@@ -38,6 +38,13 @@ jobs:
           java-version: '17'
           cache: maven
 
+      # Project Nayuki's flac-library isn't on Maven Central — it's
+      # vendored under deps/flac-library-java and must be installed to
+      # the runner's local ~/.m2 before the main project resolves its
+      # dependency.  Idempotent: on cache hit the install is a no-op.
+      - name: Install vendored flac-library
+        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+
       - name: Compile and run tests
         run: mvn -B -ntp test
 
