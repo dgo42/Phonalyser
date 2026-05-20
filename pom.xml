@@ -202,7 +202,7 @@
                         <groupId>org.panteleyev</groupId>
                         <artifactId>jpackage-maven-plugin</artifactId>
                         <configuration>
-                            <icon>${project.basedir}/branding/phonalyser.ico</icon>
+                            <icon>${project.basedir}/src/main/resources/icons/phonalyser.ico</icon>
                         </configuration>
                     </plugin>
                 </plugins>
@@ -242,7 +242,7 @@
                         <groupId>org.panteleyev</groupId>
                         <artifactId>jpackage-maven-plugin</artifactId>
                         <configuration>
-                            <icon>${project.basedir}/branding/phonalyser.png</icon>
+                            <icon>${project.basedir}/src/main/resources/icons/phonalyser.png</icon>
                         </configuration>
                     </plugin>
                 </plugins>
@@ -282,7 +282,7 @@
                         <groupId>org.panteleyev</groupId>
                         <artifactId>jpackage-maven-plugin</artifactId>
                         <configuration>
-                            <icon>${project.basedir}/branding/phonalyser.png</icon>
+                            <icon>${project.basedir}/src/main/resources/icons/phonalyser.png</icon>
                         </configuration>
                     </plugin>
                 </plugins>
