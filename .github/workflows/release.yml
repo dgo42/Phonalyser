@@ -1,12 +1,14 @@
 name: Build installers
 
 # Triggers:
-#   * push a tag named v* (e.g. v1.0.0) -> build all OSes and attach to a GitHub release.
+#   * push a tag that looks like a version (v1.0.0, 1.0-RC1, 2025.05.20…)
+#     -> build all OSes and attach to a GitHub release.
 #   * workflow_dispatch -> manual run from the Actions tab, useful for testing the matrix.
 on:
   push:
     tags:
       - 'v*'
+      - '[0-9]*'
   workflow_dispatch:
 
 jobs:
@@ -126,7 +128,7 @@ jobs:
   # ============================================================== Release
   release:
     needs: [build-windows, build-linux, build-macos]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
