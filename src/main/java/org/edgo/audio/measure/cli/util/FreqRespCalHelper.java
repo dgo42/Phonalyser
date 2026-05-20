@@ -22,7 +22,7 @@ import java.util.Locale;
 
 @Log4j2
 @UtilityClass
-public class FilterCalHelper {
+public class FreqRespCalHelper {
 
     /**
      * Reconstructs the per-frequency filter calibration H(f) from the captured
@@ -31,7 +31,7 @@ public class FilterCalHelper {
      * located via the impulse-response peak) and normalises magnitude to the DAC
      * drive level so the passband sits at ≈ 1.0.
      */
-    public FilterCalibration computeFromLogSweep(
+    public FreqRespCalibration computeFromLogSweep(
             float[] yRec, float[] sweepRef, int leadInSamples,
             int sampleRate, double[] freqs, double amplitudeVRms) {
         int xLen   = leadInSamples + sweepRef.length;
@@ -150,14 +150,14 @@ public class FilterCalHelper {
                     String.format(Locale.US, "%.3f", maxF));
         }
 
-        return new FilterCalibration(freqs, magLin, phaseRad);
+        return new FreqRespCalibration(freqs, magLin, phaseRad);
     }
 
     /**
      * Writes a filter calibration to CSV.  One row per measured sweep point.
      * Columns: {@code frequency_hz; magnitude_dbfs; magnitude_dbv; magnitude_db_rel; phase_deg}.
      */
-    public void saveCsv(FilterCalibration cal, String path,
+    public void saveCsv(FreqRespCalibration cal, String path,
                         int sampleRate,
                         double sweepStart, double sweepEnd,
                         int sweepPoints,
@@ -200,7 +200,7 @@ public class FilterCalHelper {
      * Loads a per-point filter calibration CSV.  Reads {@code sample_rate_hz}
      * from header comments; row order defines ascending frequency.
      */
-    public FilterCalibration loadCsv(String path) throws IOException {
+    public FreqRespCalibration loadCsv(String path) throws IOException {
         double adcFsVoltageRms = Double.NaN;
         List<double[]> rows = new ArrayList<>();
         try (BufferedReader br = new BufferedReader(new FileReader(path))) {
@@ -239,7 +239,7 @@ public class FilterCalHelper {
             magLin[i]   = rows.get(i)[1];
             phaseRad[i] = rows.get(i)[2];
         }
-        FilterCalibration cal = new FilterCalibration(freqs, magLin, phaseRad);
+        FreqRespCalibration cal = new FreqRespCalibration(freqs, magLin, phaseRad);
         cal.adcFsVoltageRms = adcFsVoltageRms;
         return cal;
     }
@@ -250,7 +250,7 @@ public class FilterCalHelper {
      * {@link FftAnalyzer#recomputeStats} so the fundamental level, harmonic table,
      * THD, THD+N, SNR, and noise stats all reflect the corrected spectrum.
      */
-    public void applyCompensationInPlace(FftAnalyzer.Result r, FilterCalibration cal,
+    public void applyCompensationInPlace(FftAnalyzer.Result r, FreqRespCalibration cal,
                                          boolean correctAllBins) {
         int half = r.fftSize / 2;
         double binWidth = r.sampleRate / (double) r.fftSize;
@@ -362,7 +362,7 @@ public class FilterCalHelper {
      * array {@code [freqs, dbFs]} suitable for the chart's overlay parameters,
      * or {@code null} if there's no H2 reference available.
      */
-    public double[][] computeOverlay(FilterCalibration cal, FftAnalyzer.Result result) {
+    public double[][] computeOverlay(FreqRespCalibration cal, FftAnalyzer.Result result) {
         if (result.harmonicCount == 0 || result.harmonicBins[0] <= 0) return null;
         double h2Freq = result.harmonicHz[0];
         double h2DbFs = result.harmonicDbFs[0];
@@ -386,7 +386,7 @@ public class FilterCalHelper {
      *
      * @return {@code [magLin, phaseRad]}
      */
-    public double[] interpolate(FilterCalibration cal, double freq) {
+    public double[] interpolate(FreqRespCalibration cal, double freq) {
         int lo = 0, hi = cal.freqs.length - 1;
         if (freq <= cal.freqs[lo]) return new double[]{ cal.magLin[lo], cal.phaseRad[lo] };
         if (freq >= cal.freqs[hi]) return new double[]{ cal.magLin[hi], cal.phaseRad[hi] };

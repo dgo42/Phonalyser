@@ -26,8 +26,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * (A-weighted), SNR, ENOB, and the per-harmonic table.  Two optional
  * post-correction passes mutate the result in place: {@code --adc-comp}
  * subtracts the ADC's predicted distortion contribution at each harmonic bin;
- * {@code --cal} divides every FFT bin by the filter calibration's H(f) to
- * undo a downstream filter's response.  Outputs the spectrum chart + CSV
+ * {@code --cal} divides every FFT bin by the frequancy response's H(f) to
+ * undo a downstream frequency response.  Outputs the spectrum chart + CSV
  * and the harmonics CSV (the latter is the input format for
  * {@code --sub-harmonics} and {@code --iterative-compensate}).
  *
@@ -55,7 +55,7 @@ public class FftAnalyzeMode {
         String  commentArg  = ArgParser.getArgValue(args, "--comment");
         String  freqArg     = ArgParser.getArgValue(args, "--freq");
         String  adcCompArg  = ArgParser.getArgValue(args, "--adc-comp");
-        String  filterCalArg = ArgParser.getArgValue(args, "--cal");
+        String  freqRespCalArg = ArgParser.getArgValue(args, "--cal");
         boolean calNoise     = ArgParser.hasArg(args, "--cal-noise");
         String  adcFsArg     = ArgParser.getArgValue(args, "--adc-fs-vrms");
         String  loadWeightedArg = ArgParser.getArgValue(args, "--load-weighted");
@@ -158,7 +158,7 @@ public class FftAnalyzeMode {
             HarmonicsCsv.subtract(trimmed, sampleRate, subHarmArg, subHarmReIm);
         }
 
-        boolean willPostCorrect = adcCompArg != null || filterCalArg != null;
+        boolean willPostCorrect = adcCompArg != null || freqRespCalArg != null;
         double expectedFundHz = genFreqHz != null ? genFreqHz : Double.NaN;
         FftAnalyzer.Result result = fftAnalyzer.analyze(trimmed, sampleRate, fftSize, harmonics,
                 windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbV,
@@ -178,24 +178,24 @@ public class FftAnalyzeMode {
         double[] overlayDbFs   = null;
         double[] preCorrFreqs  = null;
         double[] preCorrDbFs   = null;
-        if (filterCalArg != null) {
-            log.info("Filter cal: {}{}", filterCalArg, calNoise ? "  (--cal-noise: correct all bins)" : "");
-            FilterCalibration cal = FilterCalHelper.loadCsv(filterCalArg);
-            double[][] overlay  = FilterCalHelper.computeOverlay(cal, result);
-            double[][] prePeaks = FilterCalHelper.capturePreCorrectionPeaks(result);
+        if (freqRespCalArg != null) {
+            log.info("Frequency response cal: {}{}", freqRespCalArg, calNoise ? "  (--cal-noise: correct all bins)" : "");
+            FreqRespCalibration cal = FreqRespCalHelper.loadCsv(freqRespCalArg);
+            double[][] overlay  = FreqRespCalHelper.computeOverlay(cal, result);
+            double[][] prePeaks = FreqRespCalHelper.capturePreCorrectionPeaks(result);
             if (overlay != null) {
                 overlayFreqs = overlay[0];
                 overlayDbFs  = overlay[1];
             }
             preCorrFreqs = prePeaks[0];
             preCorrDbFs  = prePeaks[1];
-            FilterCalHelper.applyCompensationInPlace(result, cal, calNoise);
-            log.info("THD   : {}%  ({} dB)  [after filter de-attenuation]",
+            FreqRespCalHelper.applyCompensationInPlace(result, cal, calNoise);
+            log.info("THD   : {}%  ({} dB)  [after frequency response de-attenuation]",
                     String.format(Locale.US, "%.8f", result.thdPct),
                     String.format(Locale.US, "%.2f", result.thdDb));
         }
 
-        FilterCalHelper.applyDefaultDbvScaling(result);
+        FreqRespCalHelper.applyDefaultDbvScaling(result);
 
         fftAnalyzer.exportFftCsv(result, "results");
         HarmonicsCsv.export(result, "results");

@@ -55,9 +55,9 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class MainTab {
 
-    /** Sidebar tab icon size in pixels — 48 normally, 24 when the user
+    /** Sidebar tab icon size in pixels — 2 normally, 24 when the user
      *  ticks "Small icons in main tab" in Look &amp; Feel preferences. */
-    private static final int ICON_BIG_PX   = 48;
+    private static final int ICON_BIG_PX   = 42;
     private static final int ICON_SMALL_PX = 24;
     /** Top-tab icon sizes are smaller — the SWT TabFolder enforces a
      *  height around the system font metric, and asking for a 48 px icon
@@ -68,8 +68,8 @@ public final class MainTab {
     /** Width of the left sidebar — sized for an icon centred on top with
      *  a vertically-rotated label underneath (label width = its line
      *  height once rotated, not its run length). */
-    private static final int LEFT_BAR_WIDTH_BIG_PX   = 72;
-    private static final int LEFT_BAR_WIDTH_SMALL_PX = 48;
+    private static final int LEFT_BAR_WIDTH_BIG_PX   = 56;
+    private static final int LEFT_BAR_WIDTH_SMALL_PX = 42;
 
     private final Display display;
     private final Shell   shell;
@@ -293,9 +293,8 @@ public final class MainTab {
      *  widget, so the icon and text are guaranteed to land on top
      *  regardless of platform-specific Label paint order. */
     private static final class SidebarButton extends Canvas {
-        private static final int PAD_X = 6;
-        private static final int PAD_Y = 8;
-        private static final int GAP_Y = 4;
+        private static final int PAD_Y = 2;
+        private static final int GAP_Y = 2;
 
         private final Image icon;
         private final String label;
@@ -374,7 +373,7 @@ public final class MainTab {
             // Rotated label occupies its full text run vertically; estimate
             // generously so the longest expected tab name (e.g.
             // "Frequency response") fits without clipping.
-            int labelLen = 14 + label.length() * 7;
+            int labelLen = 4 + label.length() * 7;
             return PAD_Y + iconH + GAP_Y + labelLen + PAD_Y;
         }
 

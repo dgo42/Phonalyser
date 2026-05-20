@@ -307,8 +307,8 @@ public final class Preferences {
     @Getter @Setter private int     fftChartBackgroundColor   = 0xFFFFFF;  // white
     /** Packed RGB of the harmonic / fundamental dots. */
     @Getter @Setter private int     fftHarmonicDotColor       = 0xFF0000;  // (255,0,0) blue
-    /** Packed RGB of the filter / cal-overlay response line. */
-    @Getter @Setter private int     fftFilterResponseColor    = 0x009600;  // (0,150,0) blue
+    /** Packed RGB of the frequency response / cal-overlay response line. */
+    @Getter @Setter private int     fftFreqRespColor    = 0x009600;  // (0,150,0) blue
 
     /** User-saved FFT presets, same shape and conventions as {@link #oscPresets}. */
     @Getter private final Map<String, FftPreset> fftPresets = new LinkedHashMap<>();
@@ -525,7 +525,7 @@ public final class Preferences {
         root.put("fftLineColor",              formatHtmlColor(fftLineColor));
         root.put("fftChartBackgroundColor",   formatHtmlColor(fftChartBackgroundColor));
         root.put("fftHarmonicDotColor",       formatHtmlColor(fftHarmonicDotColor));
-        root.put("fftFilterResponseColor",    formatHtmlColor(fftFilterResponseColor));
+        root.put("fftFreqRespColor",          formatHtmlColor(fftFreqRespColor));
 
         if (!fftPresets.isEmpty()) {
             Map<String, Object> fpMap = new LinkedHashMap<>();
@@ -729,9 +729,9 @@ public final class Preferences {
         Object fftDotColorObj    = root.get("fftHarmonicDotColor");
         if (fftDotColorObj    instanceof String s) fftHarmonicDotColor     = parseHtmlColor(s, fftHarmonicDotColor);
         else if (fftDotColorObj    instanceof Number n) fftHarmonicDotColor = n.intValue();
-        Object fftFiltColorObj   = root.get("fftFilterResponseColor");
-        if (fftFiltColorObj   instanceof String s) fftFilterResponseColor  = parseHtmlColor(s, fftFilterResponseColor);
-        else if (fftFiltColorObj   instanceof Number n) fftFilterResponseColor = n.intValue();
+        Object fftFiltColorObj   = root.get("fftFreqRespColor");
+        if (fftFiltColorObj   instanceof String s) fftFreqRespColor  = parseHtmlColor(s, fftFreqRespColor);
+        else if (fftFiltColorObj   instanceof Number n) fftFreqRespColor = n.intValue();
 
         if (root.get("fftPresets") instanceof Map<?, ?> fpMap) {
             fftPresets.clear();

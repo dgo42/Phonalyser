@@ -6,7 +6,7 @@ import org.edgo.audio.measure.cli.util.ArgParser;
 import org.edgo.audio.measure.cli.DeembedMode;
 import org.edgo.audio.measure.cli.util.DeviceSelector;
 import org.edgo.audio.measure.cli.FftAnalyzeMode;
-import org.edgo.audio.measure.cli.FilterSweepMode;
+import org.edgo.audio.measure.cli.FreqRespMode;
 import org.edgo.audio.measure.cli.GenFftMode;
 import org.edgo.audio.measure.cli.GenerateMode;
 import org.edgo.audio.measure.cli.HistogramMode;
@@ -40,7 +40,7 @@ public class Main {
             return;
         }
         if (ArgParser.hasArg(args, "--freq-response")) {
-            FilterSweepMode.run(args);
+            FreqRespMode.run(args);
             return;
         }
         if (ArgParser.getArgValue(args, "--analyze-histogram") != null) {

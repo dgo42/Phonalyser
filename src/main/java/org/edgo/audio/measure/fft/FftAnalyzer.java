@@ -83,7 +83,7 @@ public class FftAnalyzer {
         public final double[] re;
         public final double[] im;
 
-        // Fundamental — non-final so post-processing (e.g. filter compensation) can mutate.
+        // Fundamental — non-final so post-processing (e.g. frequency response compensation) can mutate.
         public final int    fundamentalBin;
         public final double fundamentalHz;
         /** Phase-difference refined frequency in Hz — sub-bin accurate (~1e-5 bin). */
@@ -98,7 +98,7 @@ public class FftAnalyzer {
         public final double[] harmonicDbFs;
         public final double[] harmonicPct;
 
-        // Metrics — non-final so post-processing (e.g. ADC/filter correction) can mutate.
+        // Metrics — non-final so post-processing (e.g. ADC/frequency response correction) can mutate.
         public double thdPct;
         public double thdDb;
         public double thdNDb;
@@ -134,7 +134,7 @@ public class FftAnalyzer {
          *   2. {@code --fund-v}/{@code --fund-dbv}: legacy, treats the fundamental's
          *      dBV as fixed at the user-stated value.  Only used when the calibrated
          *      ADC voltage is unknown.
-         * Mutable so post-processing (e.g. filter compensation) can refresh it once
+         * Mutable so post-processing (e.g. frequency response compensation) can refresh it once
          * the corrected fundamentalDbFs is known.
          */
         public double fundRefDbV;
@@ -806,7 +806,7 @@ public class FftAnalyzer {
         // amount, so amplLinear[fundBin] is unreliable while H2..Hn stay
         // valid as measured), use the user's true fundamental as the anchor.
         // The measured fundDbFs / fundLinear are still stored verbatim into
-        // Result — downstream code (filter-cal scale, chart, cal-CSV anchor)
+        // Result — downstream code (frequency response calibration scale, chart, cal-CSV anchor)
         // depends on those reflecting the actual FFT measurement.
         // Convert dBV → dBFS-equivalent via the ADC full-scale voltage so
         // refLin lives in the same FS-relative units as amplLinear[k];
@@ -956,7 +956,7 @@ public class FftAnalyzer {
      * Recomputes the fundamental level, harmonic table, THD, THD+N, SNR, and noise
      * statistics from the (possibly mutated) {@code amplitudeDbFs}/{@code re}/{@code im}
      * arrays in {@code r}.  Use after any post-processing step that mutates the
-     * spectrum (filter de-embedding, ADC correction) so all derived fields stay
+     * spectrum (frequency response de-embedding, ADC correction) so all derived fields stay
      * consistent with the corrected bins.
      *
      * <p>The caller is responsible for keeping {@code amplitudeDbFs[]} in sync

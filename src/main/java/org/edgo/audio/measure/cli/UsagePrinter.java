@@ -115,7 +115,7 @@ public final class UsagePrinter {
         log.info("    [--comment <str>]         free-form chart comment");
         log.info("    [--adc-comp <csv>]        adc_correction CSV (from --deembed); logs raw vs.");
         log.info("                              ADC-corrected harmonics + THD");
-        log.info("    [--cal <csv>]             filter-cal CSV (from --freq-response); subtracts");
+        log.info("    [--cal <csv>]             frequency response calibration CSV (from --freq-response); subtracts");
         log.info("                              magnitude_db_rel from each FFT bin");
         log.info("    [--cal-noise]             also apply cal correction to noise/non-signal bins");
         log.info("                              (default: only fundamental + harmonic bins +/-4)");
@@ -214,7 +214,7 @@ public final class UsagePrinter {
         log.info("    [--adc-fs-vrms <vrms>]    ADC full-scale V_rms (sets dBV scale when --fund-v/-dbv");
         log.info("                              absent)");
         log.info("    [--no-coherent]           incoherent power averaging");
-        log.info("    [--cal <csv>]             filter calibration (see --freq-response)");
+        log.info("    [--cal <csv>]             frequency response calibration (see --freq-response)");
         log.info("    [--cal-noise]             apply cal to noise bins too (default: signal bins only)");
         log.info("    [--load-weighted <csv>]   weighted-code-map CSV from --analyze-histogram;");
         log.info("                              linearises each captured ADC code through the INL map");
@@ -247,7 +247,7 @@ public final class UsagePrinter {
         log.info("                              (default 10) — prevents random-walk divergence");
         log.info("    [--compensation-step <mu>]  LMS step size, 0 < mu <= 1 (default 1.0); use 0.5");
         log.info("                              to damp oscillations (helpful with --cal)");
-        log.info("    [--cal <csv>]             filter calibration (see --freq-response)");
+        log.info("    [--cal <csv>]             frequency response calibration (see --freq-response)");
         log.info("    [--cal-noise]             apply cal to noise bins too (default: signal bins only)");
         log.info("    Outputs: fft_chart_iter<i>_<ts>.png per iteration; fft_harmonics_<ts>.csv");
         log.info("             on stop (input for --signal sine_compensated and --deembed)");
@@ -268,10 +268,10 @@ public final class UsagePrinter {
         log.info("    [--adc-fs-vrms <vrms>]    ADC full-scale V_rms; written to the cal CSV header");
         log.info("                              for downstream dBV scaling (default 1.7931)");
         log.info("    [--dither <bits>]         generator TPDF dither (default 0)");
-        log.info("    [--output <file>]         cal CSV path (default results/filter_cal_<ts>.csv)");
+        log.info("    [--output <file>]         cal CSV path (default results/freq_resp_cal_<ts>.csv)");
         log.info("    [--sweep-wav <file>]      also dump the raw capture as WAV");
         log.info("    [--width <px>] [--height <px>]   chart size (default 1920x600)");
-        log.info("    Outputs: filter_cal_<ts>.csv (+ matching .png chart). The CSV columns are");
+        log.info("    Outputs: freq_resp_cal_<ts>.csv (+ matching .png chart). The CSV columns are");
         log.info("    frequency_hz; magnitude_dbfs; magnitude_dbv; magnitude_db_rel; phase_deg.");
         log.info("    magnitude_db_rel is what apply paths subtract from each FFT bin");
         log.info("    (corrected_dBFS = raw_dBFS - magnitude_db_rel).");

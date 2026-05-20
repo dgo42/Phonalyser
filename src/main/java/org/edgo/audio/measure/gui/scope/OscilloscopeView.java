@@ -206,8 +206,6 @@ public final class OscilloscopeView extends Canvas {
      *  in {@link #disposeColors()} together with the rest of the palette. */
     private Color filePathBlinkLitColor;
     private Color filePathBlinkDimColor;
-    /** Trigger absolute position counted by the most recent capture-rate update — lets us tell a re-rendered hold-frame from a fresh trigger event. */
-    private long    countedTriggerAbsPos = -1;
 
     /**
      * Cached measurement result.  Recomputed at most once every
@@ -538,7 +536,6 @@ public final class OscilloscopeView extends Canvas {
         measWorker.clearLatest();
         this.captureRate             = 0;
         this.lastNewFrameNanos       = 0;
-        this.countedTriggerAbsPos    = -1;
         this.lastTriggerAbsPos       = -1;
         this.cachedMeasurementRows   = null;
         this.cachedCapsString        = "";
@@ -2091,13 +2088,18 @@ public final class OscilloscopeView extends Canvas {
             }
             lastTriggerAbsPos = bufStartAbs + triggerInt;
             lastTriggerSubSampleOffset = triggerFracOffset;
-            // New triggered frame only if the trigger event itself is new —
-            // re-anchoring on the same absolute sample produces an identical
-            // pixel output and shouldn't count as a fresh capture.
-            if (lastTriggerAbsPos != countedTriggerAbsPos) {
-                lastFrameWasNew = true;
-                countedTriggerAbsPos = lastTriggerAbsPos;
-            }
+            // Every triggered paint counts as a new frame so cap/s tracks
+            // the scope's actual paint rate, independent of the audio
+            // backend's hardware dispatch rate.  Previously this was
+            // gated on whether the trigger position had moved since the
+            // last paint — but the trigger position only advances when a
+            // fresh capture chunk arrives, which made cap/s appear
+            // capped at the buffer-dispatch rate (~20 Hz on WASAPI's
+            // 50 ms buffer vs. ~50-100 Hz on WDM-KS) even though the
+            // SWT timer is already redrawing at the platform's native
+            // ~64 Hz.  The metric now matches user perception of how
+            // responsive the scope feels.
+            lastFrameWasNew = true;
             if (triggerMode == TriggerMode.SINGLE && singleArmed) {
                 captureSingleFrame(dispStart, displaySamples, available, subSampleOffset);
                 singleArmed = false;

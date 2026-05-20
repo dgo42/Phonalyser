@@ -15,7 +15,7 @@ package org.edgo.audio.measure.cli.util;
  * <p>Callers wanting H at an arbitrary frequency interpolate in log-frequency
  * (dB magnitude, linear phase) between the surrounding two sweep points.
  */
-public class FilterCalibration {
+public class FreqRespCalibration {
     public final double[] freqs;       // length N, strictly ascending Hz
     public final double[] magLin;      // |H| linear, passband normalised to 1.0
     public final double[] phaseRad;    // phase in radians, unwrapped
@@ -23,7 +23,7 @@ public class FilterCalibration {
      *  ({@code adc_fs_voltage_rms}); {@link Double#NaN} when absent. */
     public double         adcFsVoltageRms = Double.NaN;
 
-    public FilterCalibration(double[] freqs, double[] magLin, double[] phaseRad) {
+    public FreqRespCalibration(double[] freqs, double[] magLin, double[] phaseRad) {
         this.freqs    = freqs;
         this.magLin   = magLin;
         this.phaseRad = phaseRad;

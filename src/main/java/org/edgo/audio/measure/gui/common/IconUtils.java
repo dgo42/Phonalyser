@@ -461,8 +461,9 @@ public final class IconUtils {
         Path clip = new Path(display);
         clip.addArc(inset, inset, diam, diam, 0, 360);
         gc.setClipping(clip);
-        Color top = new Color(display, lighten(br, 60), lighten(bg, 60), lighten(bb, 60));
-        Color bot = new Color(display, scale(br, 60),   scale(bg, 60),   scale(bb, 60));
+        int pct = 80;
+        Color top = new Color(display, lighten(br, pct), lighten(bg, pct), lighten(bb, pct));
+        Color bot = new Color(display, scale(br, pct),   scale(bg, pct),   scale(bb, pct));
         gc.setForeground(top);
         gc.setBackground(bot);
         gc.fillGradientRectangle(inset, inset, diam, diam, true);

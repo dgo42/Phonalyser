@@ -74,17 +74,17 @@ public final class FftView extends Canvas {
     private final Color dimColor;
     /** Dot colour for fundamental + harmonic markers; user-configurable. */
     private Color harmonicDotColor;
-    /** User-configurable filter / cal-overlay response trace colour.
-     *  Allocated even though the FFT view doesn't yet draw a filter
+    /** User-configurable frequency response / cal-overlay response trace colour.
+     *  Allocated even though the FFT view doesn't yet draw a frequency
      *  response trace — kept in sync so it's ready when that layer is
      *  added. */
-    private Color filterResponseColor;
+    private Color freqRespResponseColor;
     /** Cached packed-RGB values of the last allocated FFT colors; used by
      *  {@link #syncFftColors} to skip reallocation when prefs match. */
     private int currentBgRgb        = -1;
     private int currentSpectrumRgb  = -1;
     private int currentDotRgb       = -1;
-    private int currentFilterRgb    = -1;
+    private int currentFreqRespRgb    = -1;
 
     // ─── Fonts ────────────────────────────────────────────────────────────
     private Font monoFont;
@@ -352,7 +352,7 @@ public final class FftView extends Canvas {
         resetColor.dispose();
         dimColor.dispose();
         if (harmonicDotColor    != null) harmonicDotColor.dispose();
-        if (filterResponseColor != null) filterResponseColor.dispose();
+        if (freqRespResponseColor != null) freqRespResponseColor.dispose();
         if (monoFont       != null) monoFont.dispose();
         if (monoBoldFont   != null) monoBoldFont.dispose();
         if (chanButtonFont != null) chanButtonFont.dispose();
@@ -373,7 +373,7 @@ public final class FftView extends Canvas {
         int bg  = prefs.getFftChartBackgroundColor();
         int sp  = prefs.getFftLineColor();
         int dot = prefs.getFftHarmonicDotColor();
-        int flt = prefs.getFftFilterResponseColor();
+        int flt = prefs.getFftFreqRespColor();
         if (bg  != currentBgRgb) {
             if (background       != null) background.dispose();
             background       = newRgbColor(d, bg);
@@ -390,10 +390,10 @@ public final class FftView extends Canvas {
             harmonicDotColor = newRgbColor(d, dot);
             currentDotRgb    = dot;
         }
-        if (flt != currentFilterRgb) {
-            if (filterResponseColor != null) filterResponseColor.dispose();
-            filterResponseColor = newRgbColor(d, flt);
-            currentFilterRgb    = flt;
+        if (flt != currentFreqRespRgb) {
+            if (freqRespResponseColor != null) freqRespResponseColor.dispose();
+            freqRespResponseColor = newRgbColor(d, flt);
+            currentFreqRespRgb    = flt;
         }
     }
 
@@ -813,7 +813,7 @@ public final class FftView extends Canvas {
         h = 31 * h + prefs.getFftLineColor();
         h = 31 * h + prefs.getFftChartBackgroundColor();
         h = 31 * h + prefs.getFftHarmonicDotColor();
-        h = 31 * h + prefs.getFftFilterResponseColor();
+        h = 31 * h + prefs.getFftFreqRespColor();
         return h;
     }
 

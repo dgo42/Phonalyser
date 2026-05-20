@@ -57,7 +57,7 @@ public final class ChartStyle {
     public static final double ANNOTATION_Y_OFFSET   = 5.0;   // dB above peak
 
     // -------------------------------------------------------------------------
-    // Cal overlay (inverted filter response, series 2) — shown when --cal used
+    // Cal overlay (inverted frequency response, series 2) — shown when --cal used
     // -------------------------------------------------------------------------
     public static final Color       CAL_OVERLAY_COLOR  = new Color(0, 150, 0);
     public static final BasicStroke CAL_OVERLAY_STROKE =

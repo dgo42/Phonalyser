@@ -99,7 +99,7 @@ public class IterativeCompensateMode {
         String targetThdArg  = ArgParser.getArgValue(args, "--target-thd");
         String widthArg      = ArgParser.getArgValue(args, "--width");
         String heightArg     = ArgParser.getArgValue(args, "--height");
-        String filterCalArg  = ArgParser.getArgValue(args, "--cal");
+        String freqRespCalArg  = ArgParser.getArgValue(args, "--cal");
         boolean calNoise     = ArgParser.hasArg(args, "--cal-noise");
         String snrMarginArg  = ArgParser.getArgValue(args, "--compensation-snr-margin");
         String compStepArg   = ArgParser.getArgValue(args, "--compensation-step");
@@ -197,10 +197,10 @@ public class IterativeCompensateMode {
                 String.format(Locale.US, "%.1f", compSnrMargin));
         log.info("Comp. step : {} (LMS μ; 1.0 = full residual per iteration, <1 damps oscillations)",
                 String.format(Locale.US, "%.3f", compStep));
-        if (filterCalArg != null) log.info("Filter cal : {}", filterCalArg);
+        if (freqRespCalArg != null) log.info("Frequency response cal : {}", freqRespCalArg);
 
-        FilterCalibration filterCal = filterCalArg != null
-                ? FilterCalHelper.loadCsv(filterCalArg)
+        FreqRespCalibration freqRespCal = freqRespCalArg != null
+                ? FreqRespCalHelper.loadCsv(freqRespCalArg)
                 : null;
 
         String wfTs = LocalDateTime.now()
@@ -240,25 +240,25 @@ public class IterativeCompensateMode {
                 result0 = fftAnalyzer.analyze(
                         s0, sampleRate, fftSize, harmonics,
                         windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbV,
-                        filterCal == null, frequency);
+                        freqRespCal == null, frequency);
             } catch (IllegalStateException e) {
                 log.warn("Iteration 0 retry {}: {} — signal interrupted, retrying",
                         retry + 1, e.getMessage());
                 continue;
             }
             s0 = null;
-            if (filterCal != null) {
-                double[][] ov = FilterCalHelper.computeOverlay(filterCal, result0);
+            if (freqRespCal != null) {
+                double[][] ov = FreqRespCalHelper.computeOverlay(freqRespCal, result0);
                 if (ov != null) {
                     overlayFreqs0 = ov[0];
                     overlayDbFs0  = ov[1];
                 }
-                double[][] pp = FilterCalHelper.capturePreCorrectionPeaks(result0);
+                double[][] pp = FreqRespCalHelper.capturePreCorrectionPeaks(result0);
                 preCorrFreqs0 = pp[0];
                 preCorrDbFs0  = pp[1];
-                FilterCalHelper.applyCompensationInPlace(result0, filterCal, calNoise);
+                FreqRespCalHelper.applyCompensationInPlace(result0, freqRespCal, calNoise);
             }
-            FilterCalHelper.applyDefaultDbvScaling(result0);
+            FreqRespCalHelper.applyDefaultDbvScaling(result0);
             if (result0.fundamentalDynExclusionHz > MAX_FUND_EXCLUSION_HZ) {
                 log.warn("Iteration 0 retry {}: fundamental exclusion {} Hz > {} Hz — signal interrupted, retrying",
                         retry + 1,
@@ -363,25 +363,25 @@ public class IterativeCompensateMode {
                     result = fftAnalyzer.analyze(
                             s, sampleRate, fftSize, harmonics,
                             windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbV,
-                            filterCal == null, frequency);
+                            freqRespCal == null, frequency);
                 } catch (IllegalStateException e) {
                     log.warn("Iteration {} retry {}: {} — signal interrupted, retrying",
                             iter, retry + 1, e.getMessage());
                     continue;
                 }
                 s = null;
-                if (filterCal != null) {
-                    double[][] ov = FilterCalHelper.computeOverlay(filterCal, result);
+                if (freqRespCal != null) {
+                    double[][] ov = FreqRespCalHelper.computeOverlay(freqRespCal, result);
                     if (ov != null) {
                         overlayFreqs = ov[0];
                         overlayDbFs  = ov[1];
                     }
-                    double[][] pp = FilterCalHelper.capturePreCorrectionPeaks(result);
+                    double[][] pp = FreqRespCalHelper.capturePreCorrectionPeaks(result);
                     preCorrFreqs = pp[0];
                     preCorrDbFs  = pp[1];
-                    FilterCalHelper.applyCompensationInPlace(result, filterCal, calNoise);
+                    FreqRespCalHelper.applyCompensationInPlace(result, freqRespCal, calNoise);
                 }
-                FilterCalHelper.applyDefaultDbvScaling(result);
+                FreqRespCalHelper.applyDefaultDbvScaling(result);
                 if (result.fundamentalDynExclusionHz > MAX_FUND_EXCLUSION_HZ) {
                     log.warn("Iteration {} retry {}: fundamental exclusion {} Hz > {} Hz — signal interrupted, retrying",
                             iter, retry + 1,

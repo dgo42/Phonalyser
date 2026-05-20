@@ -340,19 +340,19 @@ public final class PreferencesDialog {
             }
         });
 
-        // Filter response line colour.
-        int[] fftFilterColorHolder = { prefs.getFftFilterResponseColor() };
+        // Frequency response line colour.
+        int[] fftFreqRespColorHolder = { prefs.getFftFreqRespColor() };
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.filterColor"));
-        Button fftFilterColorBtn = new Button(fftTab, SWT.PUSH);
-        fftFilterColorBtn.setLayoutData(comboData());
-        applyButtonColor(fftFilterColorBtn, fftFilterColorHolder[0]);
-        fftFilterColorBtn.addListener(SWT.Selection, e -> {
+        Button fftFreqRespColorBtn = new Button(fftTab, SWT.PUSH);
+        fftFreqRespColorBtn.setLayoutData(comboData());
+        applyButtonColor(fftFreqRespColorBtn, fftFreqRespColorHolder[0]);
+        fftFreqRespColorBtn.addListener(SWT.Selection, e -> {
             ColorDialog dlg = new ColorDialog(dialog);
-            dlg.setRGB(unpackRgb(fftFilterColorHolder[0]));
+            dlg.setRGB(unpackRgb(fftFreqRespColorHolder[0]));
             RGB picked = dlg.open();
             if (picked != null) {
-                fftFilterColorHolder[0] = packRgb(picked);
-                applyButtonColor(fftFilterColorBtn, fftFilterColorHolder[0]);
+                fftFreqRespColorHolder[0] = packRgb(picked);
+                applyButtonColor(fftFreqRespColorBtn, fftFreqRespColorHolder[0]);
             }
         });
 
@@ -454,7 +454,7 @@ public final class PreferencesDialog {
             prefs.setFftLineColor                (fftLineColorHolder[0]);
             prefs.setFftChartBackgroundColor     (fftBgColorHolder[0]);
             prefs.setFftHarmonicDotColor         (fftDotColorHolder[0]);
-            prefs.setFftFilterResponseColor      (fftFilterColorHolder[0]);
+            prefs.setFftFreqRespColor      (fftFreqRespColorHolder[0]);
             prefs.setBackend(active[0]);
             AudioBackend.instance().setActive(active[0]);
             // Look & Feel saves.

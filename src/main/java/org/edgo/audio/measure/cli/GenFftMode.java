@@ -26,7 +26,7 @@ import java.util.Locale;
  * records on {@code --in-device} for {@code --duration} seconds (defaults to
  * just enough samples for one FFT frame), then runs one FFT pass and writes
  * the spectrum CSV + chart + harmonics CSV.  Optional {@code --cal} applies
- * filter de-embedding before stats are computed; {@code --sync-pause} holds
+ * frequency response de-embedding before stats are computed; {@code --sync-pause} holds
  * the recorder for N seconds after the generator starts so an external
  * phase-locked source can settle.  Logs the DAC↔ADC clock mismatch in ppm.
  *
@@ -60,7 +60,7 @@ public class GenFftMode {
         boolean coherent     = !ArgParser.hasArg(args, "--no-coherent");
         String widthArg      = ArgParser.getArgValue(args, "--width");
         String heightArg     = ArgParser.getArgValue(args, "--height");
-        String filterCalArg  = ArgParser.getArgValue(args, "--cal");
+        String freqRespCalArg  = ArgParser.getArgValue(args, "--cal");
         boolean calNoise     = ArgParser.hasArg(args, "--cal-noise");
         String adcFsArg      = ArgParser.getArgValue(args, "--adc-fs-vrms");
         String commentArg    = ArgParser.getArgValue(args, "--comment");
@@ -133,8 +133,8 @@ public class GenFftMode {
         if (outDevice == null) { log.error("No output device. Use --out-device <index>."); System.exit(1); }
         if (inDevice  == null) { log.error("No input device. Use --in-device <index>.");  System.exit(1); }
 
-        FilterCalibration filterCal = filterCalArg != null
-                ? FilterCalHelper.loadCsv(filterCalArg) : null;
+        FreqRespCalibration freqRespCal = freqRespCalArg != null
+                ? FreqRespCalHelper.loadCsv(freqRespCalArg) : null;
 
         log.info("=== Gen + FFT (single shot) ===");
         log.info("Out device : {}", outDevice.name());
@@ -154,8 +154,8 @@ public class GenFftMode {
         log.info("Overlap    : {}",       overlap.label);
         log.info("SNR range  : {}-{} Hz", snrFreqMin, snrFreqMax);
         log.info("Averaging  : {}",       coherent ? "coherent" : "incoherent");
-        if (filterCalArg != null) {
-            log.info("Filter cal : {}{}", filterCalArg, calNoise ? "  (--cal-noise: correct all bins)" : "");
+        if (freqRespCalArg != null) {
+            log.info("Frequency response cal : {}{}", freqRespCalArg, calNoise ? "  (--cal-noise: correct all bins)" : "");
         }
         if (harmonicsCsv != null) {
             log.info("Harmonics  : {}",   harmonicsCsv);
@@ -202,24 +202,24 @@ public class GenFftMode {
         FftAnalyzer.Result result = fftAnalyzer.analyze(
                 samples, sampleRate, fftSize, harmonics,
                 windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbV,
-                filterCal == null, frequency);
+                freqRespCal == null, frequency);
 
         double[] overlayFreqs = null;
         double[] overlayDbFs  = null;
         double[] preCorrFreqs = null;
         double[] preCorrDbFs  = null;
-        if (filterCal != null) {
-            double[][] ov = FilterCalHelper.computeOverlay(filterCal, result);
+        if (freqRespCal != null) {
+            double[][] ov = FreqRespCalHelper.computeOverlay(freqRespCal, result);
             if (ov != null) { overlayFreqs = ov[0]; overlayDbFs = ov[1]; }
-            double[][] pp = FilterCalHelper.capturePreCorrectionPeaks(result);
+            double[][] pp = FreqRespCalHelper.capturePreCorrectionPeaks(result);
             preCorrFreqs = pp[0];
             preCorrDbFs  = pp[1];
-            FilterCalHelper.applyCompensationInPlace(result, filterCal, calNoise);
-            log.info("THD   : {}%  ({} dB)  [after filter de-attenuation]",
+            FreqRespCalHelper.applyCompensationInPlace(result, freqRespCal, calNoise);
+            log.info("THD   : {}%  ({} dB)  [after frequency response de-attenuation]",
                     String.format(Locale.US, "%.8f", result.thdPct),
                     String.format(Locale.US, "%.2f", result.thdDb));
         }
-        FilterCalHelper.applyDefaultDbvScaling(result);
+        FreqRespCalHelper.applyDefaultDbvScaling(result);
 
         fftAnalyzer.exportFftCsv(result, outputDir);
         HarmonicsCsv.export(result, outputDir);

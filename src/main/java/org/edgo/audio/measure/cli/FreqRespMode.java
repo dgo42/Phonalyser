@@ -58,7 +58,7 @@ import java.util.Locale;
  */
 @Log4j2
 @UtilityClass
-public class FilterSweepMode {
+public class FreqRespMode {
 
     public void run(String[] args) throws Exception {
         String samplerateArg    = ArgParser.getArgValue(args, "--samplerate");
@@ -165,14 +165,14 @@ public class FilterSweepMode {
             log.info("Sweep WAV   : {}", wavOutArg);
         }
 
-        FilterCalibration cal = FilterCalHelper.computeFromLogSweep(
+        FreqRespCalibration cal = FreqRespCalHelper.computeFromLogSweep(
                 yRec, gen.getLogSweepBuffer(), leadInSamples, sampleRate, freqs, amp);
 
         String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
         String csvPath = outputArg != null
                 ? outputArg
                 : new File("results", "filter_cal_" + ts + ".csv").getPath();
-        FilterCalHelper.saveCsv(cal, csvPath, sampleRate, fStart, fEnd, nPoints, amp);
+        FreqRespCalHelper.saveCsv(cal, csvPath, sampleRate, fStart, fEnd, nPoints, amp);
         log.info("Filter cal CSV saved: {}", csvPath);
 
         String chartPath = csvPath.replaceFirst("\\.csv$", "") + ".png";
@@ -185,7 +185,7 @@ public class FilterSweepMode {
      *   Series 0 = magnitude in dB (left Y axis)
      *   Series 1 = phase in degrees (right Y axis), unwrapped
      */
-    private void exportChart(FilterCalibration cal,
+    private void exportChart(FreqRespCalibration cal,
             int width, int height, String pngPath) throws IOException {
         XYSeries magSeries   = new XYSeries("Magnitude (dB)");
         XYSeries phaseSeries = new XYSeries("Phase (deg)");
