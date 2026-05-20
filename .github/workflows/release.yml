@@ -140,8 +140,12 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          # ** recurses into the installer/ subdirectory that
+          # upload-artifact@v4 creates when multiple paths share a parent
+          # (target/) — without ** the .msi/.deb/.dmg get skipped and
+          # only the top-level fat JAR makes it onto the release.
           files: |
-            artifacts/phonalyser-windows/*
-            artifacts/phonalyser-linux/*
-            artifacts/phonalyser-macos/*
+            artifacts/phonalyser-windows/**
+            artifacts/phonalyser-linux/**
+            artifacts/phonalyser-macos/**
           draft: true
