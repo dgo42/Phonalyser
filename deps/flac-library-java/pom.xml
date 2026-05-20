@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.nayuki</groupId>
+    <artifactId>flac-library</artifactId>
+    <version>1.1.0</version>
+    <packaging>jar</packaging>
+
+    <name>FLAC library (Java)</name>
+    <description>Pure-Java FLAC encoder + decoder by Project Nayuki (LGPLv3).
+                 Source: https://github.com/nayuki/FLAC-library-Java
+                 Vendored locally and installed to ~/.m2 via `mvn install`.</description>
+    <url>https://www.nayuki.io/page/flac-library-java</url>
+
+    <licenses>
+        <license>
+            <name>GNU Lesser General Public License, Version 3.0</name>
+            <url>https://www.gnu.org/licenses/lgpl-3.0.html</url>
+        </license>
+    </licenses>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <build>
+        <!-- Nayuki's source layout is src/main/<package>, not the Maven
+             default src/main/java/<package>.  Override to compile in place. -->
+        <sourceDirectory>${basedir}/src/main</sourceDirectory>
+    </build>
+</project>

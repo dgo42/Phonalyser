@@ -3,7 +3,6 @@ Claude.md
 preferences.yaml
 .vscode
 branding/
-deps/
 docs/
 download/
 logs/
