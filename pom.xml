@@ -135,7 +135,7 @@
                 </os>
             </activation>
             <properties>
-                <jpackage.type>msi</jpackage.type>
+                <jpackage.type>MSI</jpackage.type>
                 <jpackage.nativesDir>${project.basedir}/lib/windows</jpackage.nativesDir>
                 <platform.id>windows</platform.id>
             </properties>
@@ -220,7 +220,7 @@
                 </os>
             </activation>
             <properties>
-                <jpackage.type>deb</jpackage.type>
+                <jpackage.type>DEB</jpackage.type>
                 <platform.id>linux</platform.id>
             </properties>
             <dependencies>
@@ -260,7 +260,7 @@
                 </os>
             </activation>
             <properties>
-                <jpackage.type>deb</jpackage.type>
+                <jpackage.type>DEB</jpackage.type>
                 <platform.id>linux-aarch64</platform.id>
             </properties>
             <dependencies>
@@ -299,7 +299,7 @@
                 </os>
             </activation>
             <properties>
-                <jpackage.type>dmg</jpackage.type>
+                <jpackage.type>DMG</jpackage.type>
                 <platform.id>macos-x64</platform.id>
             </properties>
             <dependencies>
@@ -342,7 +342,7 @@
                 </os>
             </activation>
             <properties>
-                <jpackage.type>dmg</jpackage.type>
+                <jpackage.type>DMG</jpackage.type>
                 <platform.id>macos</platform.id>
             </properties>
             <dependencies>
@@ -556,9 +556,11 @@
             </plugin>
 
             <!-- jpackage plugin — produces a native installer (or an
-                 app-image folder when -Djpackage.type=app_image is passed)
+                 app-image folder when -Djpackage.type=APP_IMAGE is passed)
                  for the host OS.  Bound to the `package` phase so a single
-                 `mvn package` builds the fat JAR and then wraps it. -->
+                 `mvn package` builds the fat JAR and then wraps it.  All
+                 type values are UPPERCASE enum constants (MSI, DEB, DMG,
+                 APP_IMAGE) — the plugin rejects lowercase. -->
             <plugin>
                 <groupId>org.panteleyev</groupId>
                 <artifactId>jpackage-maven-plugin</artifactId>
