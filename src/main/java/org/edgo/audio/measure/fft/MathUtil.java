@@ -54,4 +54,11 @@ public final class MathUtil {
         double delta = 0.5 * (pLo - pHi) / denom;
         return peakBin + delta;
     }
+
+    /** Smallest power of 2 ≥ {@code x}. Returns 1 for {@code x ≤ 1}. */
+    public static int nextPow2(int x) {
+        if (x <= 1) return 1;
+        int hi = Integer.highestOneBit(x);
+        return hi == x ? x : hi << 1;
+    }
 }

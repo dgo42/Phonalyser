@@ -355,22 +355,11 @@ public class FftAnalyzer {
             int expectedBin = (int) Math.round(expectedFundHz * fftSize / (double) sampleRate);
             int kLo = Math.max(1,        expectedBin - 10);
             int kHi = Math.min(halfSize, expectedBin + 10);
-            intFundBin = kLo;
-            double peakPow = f0Re[kLo] * f0Re[kLo] + f0Im[kLo] * f0Im[kLo];
-            for (int k = kLo + 1; k <= kHi; k++) {
-                double p = f0Re[k] * f0Re[k] + f0Im[k] * f0Im[k];
-                if (p > peakPow) { peakPow = p; intFundBin = k; }
-            }
+            intFundBin = peakBin(f0Re, f0Im, kLo, kHi);
             log.info("Fundamental seeded from expected freq {} Hz: bin {} (±10-bin window)",
                     String.format(Locale.US, "%.6f", expectedFundHz), intFundBin);
         } else {
-            intFundBin = fundSearchMinBin;
-            double peakPow = f0Re[fundSearchMinBin] * f0Re[fundSearchMinBin]
-                           + f0Im[fundSearchMinBin] * f0Im[fundSearchMinBin];
-            for (int k = fundSearchMinBin + 1; k <= halfSize; k++) {
-                double p = f0Re[k] * f0Re[k] + f0Im[k] * f0Im[k];
-                if (p > peakPow) { peakPow = p; intFundBin = k; }
-            }
+            intFundBin = peakBin(f0Re, f0Im, fundSearchMinBin, halfSize);
             log.info("Fundamental search (no hint): scanned bins {}..{} (~{} Hz upward); picked bin {} (~{} Hz)",
                     fundSearchMinBin, halfSize,
                     String.format(Locale.US, "%.2f", fundSearchMinBin * freqRes),
@@ -397,16 +386,9 @@ public class FftAnalyzer {
         // inflates peakAmp by √2·DC, and R for every sample drifts
         // ~29% away from peakAmp regardless of glitches — flagging
         // half the samples and rejecting every frame.
-        double sumSamples = 0.0;
-        for (float s : samples) sumSamples += s;
-        final double dcMean = sumSamples / samples.length;
-        double sumSq = 0.0;
-        for (float s : samples) {
-            double d = s - dcMean;
-            sumSq += d * d;
-        }
-        double rms     = Math.sqrt(sumSq / samples.length);
-        double peakAmp = rms * Math.sqrt(2.0);
+        final double dcMean  = sampleMean(samples);
+        double       rms     = dcRemovedRms(samples, dcMean);
+        double       peakAmp = rms * Math.sqrt(2.0);
         double estFundHz = intFundBin * freqRes;
         double omegaPerSample = 2.0 * Math.PI * estFundHz / sampleRate;
         final double R_TOLERANCE = 0.10;      // |R−A|/A > 10 %  → flag sample
@@ -447,14 +429,7 @@ public class FftAnalyzer {
         // of glitches — turning every analysis into a "rejection
         // invalidated" log entry.  Bail out upfront instead.
         if (rejectionFeasible && peakAmp > 0 && omegaPerSample > 0) {
-            double sumD2Sq = 0.0;
-            for (int n = 1; n < samples.length - 1; n++) {
-                double d2 = (double) samples[n + 1] - 2.0 * samples[n] + samples[n - 1];
-                sumD2Sq += d2 * d2;
-            }
-            double rmsD2 = Math.sqrt(sumD2Sq / Math.max(1, samples.length - 2));
-            double expectedSineRmsD2 = peakAmp * omegaPerSample * omegaPerSample / Math.sqrt(2.0);
-            double noiseAmplification = rmsD2 / Math.max(1e-30, expectedSineRmsD2);
+            double noiseAmplification = derivativeNoiseRatio(samples, peakAmp, omegaPerSample);
             final double MAX_NOISE_AMPLIFICATION = 5.0;
             if (noiseAmplification > MAX_NOISE_AMPLIFICATION) {
                 log.info("Frame R-invariant rejection skipped: derivative-noise ratio {} > {} (signal {} too small for the 1/k amplification at k={}); accepting all frames",
@@ -633,16 +608,9 @@ public class FftAnalyzer {
         }
         Fft.forward(s0Re, s0Im);
         // refine intFundBin within ±2 bins of the pre-pass estimate (in case of drift)
-        int refIntBin = intFundBin;
-        {
-            double peakPow = s0Re[refIntBin] * s0Re[refIntBin] + s0Im[refIntBin] * s0Im[refIntBin];
-            int kLo = Math.max(1, intFundBin - 2);
-            int kHi = Math.min(halfSize, intFundBin + 2);
-            for (int k = kLo; k <= kHi; k++) {
-                double p = s0Re[k] * s0Re[k] + s0Im[k] * s0Im[k];
-                if (p > peakPow) { peakPow = p; refIntBin = k; }
-            }
-        }
+        int refIntBin = peakBin(s0Re, s0Im,
+                Math.max(1, intFundBin - 2),
+                Math.min(halfSize, intFundBin + 2));
         double kFractional;
         if (bestLen >= 2) {
             int    estStep = step > 0 ? step : fftSize;
@@ -727,22 +695,7 @@ public class FftAnalyzer {
         // frame's contribution from the accumulator.
         if (coherentAveraging && bestLen >= 4) {
             final double PHASE_COHERENCE_THRESHOLD_RAD = Math.toRadians(3.0);   // 3°
-            // Circular median via atan2(median(sin), median(cos)) — robust for
-            // tightly clustered phases (the expected case for a coherent signal).
-            double[] sins = new double[bestLen];
-            double[] coss = new double[bestLen];
-            for (int i = 0; i < bestLen; i++) {
-                double mag = Math.sqrt(fundCorrRe[i] * fundCorrRe[i] + fundCorrIm[i] * fundCorrIm[i]);
-                sins[i] = mag > 0 ? fundCorrIm[i] / mag : 0.0;
-                coss[i] = mag > 0 ? fundCorrRe[i] / mag : 0.0;
-            }
-            double[] sinsSorted = Arrays.copyOf(sins, bestLen);
-            double[] cossSorted = Arrays.copyOf(coss, bestLen);
-            Arrays.sort(sinsSorted);
-            Arrays.sort(cossSorted);
-            double medSin = sinsSorted[bestLen / 2];
-            double medCos = cossSorted[bestLen / 2];
-            double medianPhase = Math.atan2(medSin, medCos);
+            double medianPhase = circularMedianPhase(fundCorrRe, fundCorrIm, bestLen);
 
             int phaseRejected = 0;
             double maxDeviationDeg = 0.0;
@@ -888,34 +841,9 @@ public class FftAnalyzer {
         double[] hHz   = new double[harmonicCount];
         double[] hDbFs = new double[harmonicCount];
         double[] hPct  = new double[harmonicCount];
-
-        for (int h = 0; h < harmonicCount; h++) {
-            int hNum   = h + 2;
-            // Use refined (sub-bin) fundamental to compute nominal harmonic bin —
-            // avoids integer rounding error that compounds at higher harmonics.
-            int nomBin = (int) Math.round(kFractional * hNum);
-            if (nomBin > halfSize) {
-                hBins[h] = -1;
-                hHz[h]   = fundHzRefined * hNum;
-                hDbFs[h] = -300.0;
-                hPct[h]  = 0.0;
-                continue;
-            }
-            // Search ±(hNum/2 + 2) bins to account for accumulated bin offset
-            // and window main-lobe width at higher harmonics.
-            int searchRadius = hNum / 2 + 2;
-            int peak = nomBin;
-            for (int k = Math.max(1, nomBin - searchRadius);
-                     k <= Math.min(halfSize, nomBin + searchRadius); k++) {
-                if (amplLinear[k] > amplLinear[peak]) {
-                    peak = k;
-                }
-            }
-            hBins[h] = peak;
-            hHz[h]   = fundHzRefined * hNum;
-            hDbFs[h] = amplDbFs[peak];
-            hPct[h]  = refLin > 0 ? amplLinear[peak] / refLin * 100.0 : 0.0;
-        }
+        detectHarmonics(kFractional, fundHzRefined, halfSize,
+                amplLinear, amplDbFs, refLin,
+                harmonicCount, hBins, hHz, hDbFs, hPct);
 
         double snrLo = snrFreqMin > 0.0 ? snrFreqMin : 0.0;
         double snrHi = snrFreqMax > 0.0 ? snrFreqMax : Double.MAX_VALUE;
@@ -943,121 +871,19 @@ public class FftAnalyzer {
         //              Excluded from both the noise-floor median and the SNR
         //              peak-spur search, so harmonics do not appear in SNR.
         final int EXCL_BINS = 4;
-        boolean[] isSignalBin = new boolean[halfSize + 1];
-        for (int d = -EXCL_BINS; d <= EXCL_BINS; d++) {
-            int bin = fundBin + d;
-            if (bin >= 0 && bin <= halfSize) {
-                isSignalBin[bin] = true;
-            }
-        }
-        for (int h = 0; h < harmonicCount; h++) {
-            if (hBins[h] > 0) {
-                for (int d = -EXCL_BINS; d <= EXCL_BINS; d++) {
-                    int bin = hBins[h] + d;
-                    if (bin >= 0 && bin <= halfSize) {
-                        isSignalBin[bin] = true;
-                    }
-                }
-            }
-        }
+        boolean[] isSignalBin = buildSignalBinMask(halfSize, fundBin, hBins, harmonicCount, EXCL_BINS);
 
         // --- SNR — integrated noise over the measurement band ----------------
         // Fundamental and all harmonics are excluded via isSignalBin.
         // SNR = signal_power / sum(noise_bins_in_range) → bandwidth-dependent.
 
-        // Pass 1 — two medians in one scan:
-        //   globalMedianNoisePow : full spectrum (no range limit) — used only for the
-        //                          dynamic fundamental exclusion walk, so it is never
-        //                          contaminated by leakage bins inside a narrow range.
-        //   medianNoisePow       : range-restricted — used for spike threshold / SNR.
-        int candidateCount = 0;
-        int globalCount    = 0;
-        for (int k = 1; k <= halfSize; k++) {
-            double freq = k * freqRes;
-            if (!isSignalBin[k]) {
-                globalCount++;
-                if (freq >= snrLo && freq <= snrHi) candidateCount++;
-            }
-        }
-        double[] candidatePow = new double[candidateCount];
-        double[] globalPow    = new double[globalCount];
-        int ci = 0, gi = 0;
-        for (int k = 1; k <= halfSize; k++) {
-            double freq = k * freqRes;
-            if (!isSignalBin[k]) {
-                double pow = amplLinear[k] * amplLinear[k];
-                globalPow[gi++] = pow;
-                if (freq >= snrLo && freq <= snrHi) candidatePow[ci++] = pow;
-            }
-        }
-        Arrays.sort(candidatePow);
-        Arrays.sort(globalPow);
-        double medianNoisePow       = candidateCount > 0 ? candidatePow[candidateCount / 2]      : 0.0;
-        // 10th-percentile of the full-spectrum powers: closer to the true quantization
-        // noise floor than the median, which is pulled up by non-harmonic spurs.
-        // Used as the walk threshold so the fundamental leakage zone is extended to
-        // where the window sidelobe drops to the actual noise floor, not to a
-        // spur-inflated level that would leave leakage bins in the search.
-        double globalMedianNoisePow = globalCount    > 0 ? globalPow[globalCount / 10]      : 0.0;
-
-        // Inter-pass — dynamic fundamental exclusion at noise floor level.
-        // Uses globalMedianNoisePow so the exclusion width is independent of the
-        // chosen SNR frequency range (narrow range bins near the fundamental are
-        // contaminated by window leakage and would give a falsely short walk).
-        int dynWidthBins = EXCL_BINS;
-        if (globalMedianNoisePow > 0) {
-            int dynLo = fundBin, dynHi = fundBin;
-            while (dynLo > 1
-                    && amplLinear[dynLo - 1] * amplLinear[dynLo - 1] > globalMedianNoisePow) {
-                dynLo--;
-            }
-            while (dynHi < halfSize - 1
-                    && amplLinear[dynHi + 1] * amplLinear[dynHi + 1] > globalMedianNoisePow) {
-                dynHi++;
-            }
-            dynWidthBins = Math.max(fundBin - dynLo, dynHi - fundBin);
-            if (dynWidthBins > EXCL_BINS) {
-                log.info("Fundamental dynamic exclusion: +/-{} bins ({} Hz each side)",
-                        dynWidthBins, String.format(Locale.US, "%.2f", dynWidthBins * freqRes));
-                for (int k = dynLo; k <= dynHi; k++) {
-                    isSignalBin[k] = true;
-                }
-
-                // Pass 2 — refined range-restricted median with updated exclusion
-                candidateCount = 0;
-                for (int k = 1; k <= halfSize; k++) {
-                    double freq = k * freqRes;
-                    if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) {
-                        candidateCount++;
-                    }
-                }
-                candidatePow = new double[candidateCount];
-                ci = 0;
-                for (int k = 1; k <= halfSize; k++) {
-                    double freq = k * freqRes;
-                    if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) {
-                        candidatePow[ci++] = amplLinear[k] * amplLinear[k];
-                    }
-                }
-                Arrays.sort(candidatePow);
-                medianNoisePow = candidateCount > 0 ? candidatePow[candidateCount / 2] : medianNoisePow;
-            }
-        }
-
-        // Phase-noise exclusion: scan a wide zone around the fundamental and
-        // mark any bin above the refined noise-floor median as signal.  The
-        // contiguous dynamic walk above terminates on the first sub-floor
-        // dip, so isolated phase-noise bumps beyond it would otherwise be
-        // counted toward SNR.  Zone is capped at ±fundBin/2 so it cannot
-        // reach H2 at 2·fundBin.
-        if (medianNoisePow > 0) {
-            int phaseLo = Math.max(1, fundBin - fundBin / 2);
-            int phaseHi = Math.min(halfSize, fundBin + fundBin / 2);
-            for (int k = phaseLo; k <= phaseHi; k++) {
-                if (!isSignalBin[k] && amplLinear[k] * amplLinear[k] > medianNoisePow) {
-                    isSignalBin[k] = true;
-                }
-            }
+        NoiseFloor nf = computeNoiseFloorAndExtendSignalMask(
+                amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS);
+        double medianNoisePow = nf.medianNoisePow;
+        int    dynWidthBins   = nf.dynWidthBins;
+        if (dynWidthBins > EXCL_BINS) {
+            log.info("Fundamental dynamic exclusion: +/-{} bins ({} Hz each side)",
+                    dynWidthBins, String.format(Locale.US, "%.2f", dynWidthBins * freqRes));
         }
 
         // SNR: signal RMS² / total unweighted noise power, integrated over
@@ -1211,91 +1037,16 @@ public class FftAnalyzer {
 
         // --- Signal-bin mask: fundamental + every harmonic +/- EXCL_BINS ---
         final int EXCL_BINS = 4;
-        boolean[] isSignalBin = new boolean[halfSize + 1];
-        for (int d = -EXCL_BINS; d <= EXCL_BINS; d++) {
-            int bin = fundBin + d;
-            if (bin >= 0 && bin <= halfSize) isSignalBin[bin] = true;
-        }
-        for (int h = 0; h < harmonicCount; h++) {
-            int hb = r.harmonicBins[h];
-            if (hb > 0) {
-                for (int d = -EXCL_BINS; d <= EXCL_BINS; d++) {
-                    int bin = hb + d;
-                    if (bin >= 0 && bin <= halfSize) isSignalBin[bin] = true;
-                }
-            }
-        }
+        boolean[] isSignalBin = buildSignalBinMask(halfSize, fundBin,
+                r.harmonicBins, harmonicCount, EXCL_BINS);
 
-        // --- Noise medians: range-restricted + global (10th percentile) ---
-        int candidateCount = 0, globalCount = 0;
-        for (int k = 1; k <= halfSize; k++) {
-            double freq = k * freqRes;
-            if (!isSignalBin[k]) {
-                globalCount++;
-                if (freq >= snrLo && freq <= snrHi) candidateCount++;
-            }
-        }
-        double[] candidatePow = new double[candidateCount];
-        double[] globalPow    = new double[globalCount];
-        int ci = 0, gi = 0;
-        for (int k = 1; k <= halfSize; k++) {
-            double freq = k * freqRes;
-            if (!isSignalBin[k]) {
-                double pow = amplLinear[k] * amplLinear[k];
-                globalPow[gi++] = pow;
-                if (freq >= snrLo && freq <= snrHi) candidatePow[ci++] = pow;
-            }
-        }
-        Arrays.sort(candidatePow);
-        Arrays.sort(globalPow);
-        double medianNoisePow       = candidateCount > 0 ? candidatePow[candidateCount / 2] : 0.0;
-        double globalMedianNoisePow = globalCount    > 0 ? globalPow[globalCount / 10]      : 0.0;
-
-        // --- Dynamic fundamental exclusion walk ----------------------------
-        int dynWidthBins = EXCL_BINS;
-        if (globalMedianNoisePow > 0) {
-            int dynLo = fundBin, dynHi = fundBin;
-            while (dynLo > 1
-                    && amplLinear[dynLo - 1] * amplLinear[dynLo - 1] > globalMedianNoisePow) {
-                dynLo--;
-            }
-            while (dynHi < halfSize - 1
-                    && amplLinear[dynHi + 1] * amplLinear[dynHi + 1] > globalMedianNoisePow) {
-                dynHi++;
-            }
-            dynWidthBins = Math.max(fundBin - dynLo, dynHi - fundBin);
-            if (dynWidthBins > EXCL_BINS) {
-                for (int k = dynLo; k <= dynHi; k++) isSignalBin[k] = true;
-
-                candidateCount = 0;
-                for (int k = 1; k <= halfSize; k++) {
-                    double freq = k * freqRes;
-                    if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) candidateCount++;
-                }
-                candidatePow = new double[candidateCount];
-                ci = 0;
-                for (int k = 1; k <= halfSize; k++) {
-                    double freq = k * freqRes;
-                    if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) {
-                        candidatePow[ci++] = amplLinear[k] * amplLinear[k];
-                    }
-                }
-                Arrays.sort(candidatePow);
-                medianNoisePow = candidateCount > 0 ? candidatePow[candidateCount / 2] : medianNoisePow;
-            }
-        }
-
-        // Phase-noise exclusion (mirrors analyze()): drop bins above the
-        // noise-floor median within ±fundBin/2 of the fundamental.
-        if (medianNoisePow > 0) {
-            int phaseLo = Math.max(1, fundBin - fundBin / 2);
-            int phaseHi = Math.min(halfSize, fundBin + fundBin / 2);
-            for (int k = phaseLo; k <= phaseHi; k++) {
-                if (!isSignalBin[k] && amplLinear[k] * amplLinear[k] > medianNoisePow) {
-                    isSignalBin[k] = true;
-                }
-            }
-        }
+        // --- Noise floor + signal-mask extension (shared with analyze()) ---
+        // recomputeStats discards dynWidthBins — the
+        // Result.fundamentalDynExclusionHz is final and was set on the
+        // original analyze() pass; we only need the median noise power.
+        double medianNoisePow = computeNoiseFloorAndExtendSignalMask(
+                amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS)
+                .medianNoisePow;
 
         // --- SNR (signal RMS² / total unweighted noise power) ---------------
         double noisePower = 0.0;
@@ -1486,5 +1237,255 @@ public class FftAnalyzer {
 
     private String ts() {
         return LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+    }
+
+    /** Arithmetic mean of {@code samples}.  Used by {@link #analyze} to
+     *  estimate the DC bias before computing the R-invariant peak amplitude
+     *  — without subtracting the bias the RMS-derived peakAmp inflates by
+     *  √2·DC for any signal where DC is comparable to the AC swing. */
+    private static double sampleMean(float[] samples) {
+        double sum = 0.0;
+        for (float s : samples) sum += s;
+        return sum / samples.length;
+    }
+
+    /** RMS of {@code samples} with the supplied {@code dcMean} subtracted
+     *  beforehand.  Two-pass: caller computes {@link #sampleMean} first,
+     *  then passes the result here. */
+    private static double dcRemovedRms(float[] samples, double dcMean) {
+        double sumSq = 0.0;
+        for (float s : samples) {
+            double d = s - dcMean;
+            sumSq += d * d;
+        }
+        return Math.sqrt(sumSq / samples.length);
+    }
+
+    /** Locates each harmonic (H2..H{@code harmonicCount+1}) in the
+     *  averaged spectrum.  For each harmonic, computes the nominal bin
+     *  from the refined fractional fundamental {@code kFractional}
+     *  (avoids integer-rounding drift at higher harmonics), then peak-
+     *  searches within ±({@code h/2}+2) bins to absorb accumulated bin
+     *  offset and window main-lobe width.
+     *
+     *  <p>Out-parameters: {@code hBins}, {@code hHz}, {@code hDbFs},
+     *  {@code hPct} are pre-allocated by the caller and filled in place. */
+    private static void detectHarmonics(double kFractional, double fundHzRefined,
+                                        int halfSize, double[] amplLinear, double[] amplDbFs,
+                                        double refLin, int harmonicCount,
+                                        int[] hBins, double[] hHz, double[] hDbFs, double[] hPct) {
+        for (int h = 0; h < harmonicCount; h++) {
+            int hNum   = h + 2;
+            int nomBin = (int) Math.round(kFractional * hNum);
+            if (nomBin > halfSize) {
+                hBins[h] = -1;
+                hHz[h]   = fundHzRefined * hNum;
+                hDbFs[h] = -300.0;
+                hPct[h]  = 0.0;
+                continue;
+            }
+            int searchRadius = hNum / 2 + 2;
+            int peak = nomBin;
+            for (int k = Math.max(1, nomBin - searchRadius);
+                     k <= Math.min(halfSize, nomBin + searchRadius); k++) {
+                if (amplLinear[k] > amplLinear[peak]) {
+                    peak = k;
+                }
+            }
+            hBins[h] = peak;
+            hHz[h]   = fundHzRefined * hNum;
+            hDbFs[h] = amplDbFs[peak];
+            hPct[h]  = refLin > 0 ? amplLinear[peak] / refLin * 100.0 : 0.0;
+        }
+    }
+
+    /** Builds the "signal bin" mask: fundamental bin + all harmonic bins,
+     *  each smeared by {@code exclBins} on either side to cover window
+     *  leakage.  Used by both {@link #analyze} and {@code recomputeStats}
+     *  as the starting mask for the noise-floor computation; the mask is
+     *  then extended by {@link #computeNoiseFloorAndExtendSignalMask}
+     *  with the dynamic fundamental-exclusion walk and phase-noise zone. */
+    private static boolean[] buildSignalBinMask(int halfSize, int fundBin,
+                                                int[] hBins, int harmonicCount, int exclBins) {
+        boolean[] isSignalBin = new boolean[halfSize + 1];
+        for (int d = -exclBins; d <= exclBins; d++) {
+            int bin = fundBin + d;
+            if (bin >= 0 && bin <= halfSize) isSignalBin[bin] = true;
+        }
+        for (int h = 0; h < harmonicCount; h++) {
+            if (hBins[h] > 0) {
+                for (int d = -exclBins; d <= exclBins; d++) {
+                    int bin = hBins[h] + d;
+                    if (bin >= 0 && bin <= halfSize) isSignalBin[bin] = true;
+                }
+            }
+        }
+        return isSignalBin;
+    }
+
+    /** Result of {@link #computeNoiseFloorAndExtendSignalMask} — the
+     *  refined range-restricted noise floor (squared linear amplitude)
+     *  plus the dynamic fundamental exclusion half-width in bins. */
+    private static final class NoiseFloor {
+        final double medianNoisePow;
+        final int    dynWidthBins;
+        NoiseFloor(double m, int d) { this.medianNoisePow = m; this.dynWidthBins = d; }
+    }
+
+    /** Computes the median non-signal-bin power inside the SNR band,
+     *  performs the dynamic fundamental-exclusion walk (against the
+     *  global 10th-percentile floor — leakage-immune), and applies the
+     *  phase-noise exclusion zone within ±{@code fundBin/2} of the
+     *  fundamental.  Mutates {@code isSignalBin} in place to mark every
+     *  bin that ends up classified as signal (window leakage + phase
+     *  noise + already-marked harmonic neighbours).
+     *
+     *  <p>Pulled out of {@link #analyze} and {@code recomputeStats}
+     *  where the same ~60 lines of bookkeeping appeared verbatim.
+     *  Single point of truth for the SNR/THD-N noise-floor model. */
+    private static NoiseFloor computeNoiseFloorAndExtendSignalMask(
+            double[] amplLinear, boolean[] isSignalBin,
+            int halfSize, double freqRes,
+            double snrLo, double snrHi,
+            int fundBin, int exclBins) {
+
+        // Pass 1 — two medians in one scan:
+        //   globalMedianNoisePow : full spectrum (no range limit) — used only for the
+        //                          dynamic fundamental exclusion walk, so it is never
+        //                          contaminated by leakage bins inside a narrow range.
+        //   medianNoisePow       : range-restricted — used for spike threshold / SNR.
+        int candidateCount = 0;
+        int globalCount    = 0;
+        for (int k = 1; k <= halfSize; k++) {
+            double freq = k * freqRes;
+            if (!isSignalBin[k]) {
+                globalCount++;
+                if (freq >= snrLo && freq <= snrHi) candidateCount++;
+            }
+        }
+        double[] candidatePow = new double[candidateCount];
+        double[] globalPow    = new double[globalCount];
+        int ci = 0, gi = 0;
+        for (int k = 1; k <= halfSize; k++) {
+            double freq = k * freqRes;
+            if (!isSignalBin[k]) {
+                double pow = amplLinear[k] * amplLinear[k];
+                globalPow[gi++] = pow;
+                if (freq >= snrLo && freq <= snrHi) candidatePow[ci++] = pow;
+            }
+        }
+        Arrays.sort(candidatePow);
+        Arrays.sort(globalPow);
+        double medianNoisePow       = candidateCount > 0 ? candidatePow[candidateCount / 2] : 0.0;
+        // 10th-percentile of the full-spectrum powers: closer to the true quantization
+        // noise floor than the median, which is pulled up by non-harmonic spurs.
+        double globalMedianNoisePow = globalCount    > 0 ? globalPow[globalCount / 10]      : 0.0;
+
+        // Inter-pass — dynamic fundamental exclusion at noise floor level.
+        // Uses globalMedianNoisePow so the exclusion width is independent of the
+        // chosen SNR frequency range (narrow range bins near the fundamental are
+        // contaminated by window leakage and would give a falsely short walk).
+        int dynWidthBins = exclBins;
+        if (globalMedianNoisePow > 0) {
+            int dynLo = fundBin, dynHi = fundBin;
+            while (dynLo > 1
+                    && amplLinear[dynLo - 1] * amplLinear[dynLo - 1] > globalMedianNoisePow) {
+                dynLo--;
+            }
+            while (dynHi < halfSize - 1
+                    && amplLinear[dynHi + 1] * amplLinear[dynHi + 1] > globalMedianNoisePow) {
+                dynHi++;
+            }
+            dynWidthBins = Math.max(fundBin - dynLo, dynHi - fundBin);
+            if (dynWidthBins > exclBins) {
+                for (int k = dynLo; k <= dynHi; k++) isSignalBin[k] = true;
+
+                // Pass 2 — refined range-restricted median with updated exclusion
+                candidateCount = 0;
+                for (int k = 1; k <= halfSize; k++) {
+                    double freq = k * freqRes;
+                    if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) candidateCount++;
+                }
+                candidatePow = new double[candidateCount];
+                ci = 0;
+                for (int k = 1; k <= halfSize; k++) {
+                    double freq = k * freqRes;
+                    if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) {
+                        candidatePow[ci++] = amplLinear[k] * amplLinear[k];
+                    }
+                }
+                Arrays.sort(candidatePow);
+                medianNoisePow = candidateCount > 0 ? candidatePow[candidateCount / 2] : medianNoisePow;
+            }
+        }
+
+        // Phase-noise exclusion: scan a wide zone around the fundamental and
+        // mark any bin above the refined noise-floor median as signal.  The
+        // contiguous dynamic walk above terminates on the first sub-floor
+        // dip, so isolated phase-noise bumps beyond it would otherwise be
+        // counted toward SNR.  Zone is capped at ±fundBin/2 so it cannot
+        // reach H2 at 2·fundBin.
+        if (medianNoisePow > 0) {
+            int phaseLo = Math.max(1, fundBin - fundBin / 2);
+            int phaseHi = Math.min(halfSize, fundBin + fundBin / 2);
+            for (int k = phaseLo; k <= phaseHi; k++) {
+                if (!isSignalBin[k] && amplLinear[k] * amplLinear[k] > medianNoisePow) {
+                    isSignalBin[k] = true;
+                }
+            }
+        }
+        return new NoiseFloor(medianNoisePow, dynWidthBins);
+    }
+
+    /** Returns the bin index in {@code [kLo, kHi]} with the largest
+     *  squared-magnitude {@code re[k]² + im[k]²}.  Used by {@link #analyze}
+     *  for the pre-pass fundamental search (both the global "loudest"
+     *  variant and the hinted ±10-bin variant). */
+    private static int peakBin(double[] re, double[] im, int kLo, int kHi) {
+        int    best    = kLo;
+        double peakPow = re[kLo] * re[kLo] + im[kLo] * im[kLo];
+        for (int k = kLo + 1; k <= kHi; k++) {
+            double p = re[k] * re[k] + im[k] * im[k];
+            if (p > peakPow) { peakPow = p; best = k; }
+        }
+        return best;
+    }
+
+    /** Circular median of {@code n} complex phasors {@code (re[i], im[i])}.
+     *  Computes median(sin) and median(cos) on the unit-circle-normalised
+     *  components, then takes {@code atan2(medSin, medCos)}.  Robust for
+     *  tightly clustered phases — the expected case for the fundamental
+     *  bin across all accepted FFT frames.  Used by {@link #analyze}'s
+     *  phase-coherence outlier rejection. */
+    private static double circularMedianPhase(double[] re, double[] im, int n) {
+        double[] sins = new double[n];
+        double[] coss = new double[n];
+        for (int i = 0; i < n; i++) {
+            double mag = Math.sqrt(re[i] * re[i] + im[i] * im[i]);
+            sins[i] = mag > 0 ? im[i] / mag : 0.0;
+            coss[i] = mag > 0 ? re[i] / mag : 0.0;
+        }
+        Arrays.sort(sins);
+        Arrays.sort(coss);
+        return Math.atan2(sins[n / 2], coss[n / 2]);
+    }
+
+    /** Ratio of {@code RMS(Δ²s)} to the expected sine contribution at
+     *  {@code peakAmp · omega²/√2}.  Used inside {@link #analyze} to
+     *  decide whether per-sample R-invariant rejection is feasible: when
+     *  this ratio exceeds the threshold, the 1/k amplification on
+     *  dq = Δs/k turns broadband noise into a per-sample "glitch"
+     *  detector and every frame gets rejected — so the analyser bails
+     *  out of rejection entirely instead.  See the inline rationale in
+     *  {@code analyze}. */
+    private static double derivativeNoiseRatio(float[] samples, double peakAmp, double omegaPerSample) {
+        double sumD2Sq = 0.0;
+        for (int n = 1; n < samples.length - 1; n++) {
+            double d2 = (double) samples[n + 1] - 2.0 * samples[n] + samples[n - 1];
+            sumD2Sq += d2 * d2;
+        }
+        double rmsD2             = Math.sqrt(sumD2Sq / Math.max(1, samples.length - 2));
+        double expectedSineRmsD2 = peakAmp * omegaPerSample * omegaPerSample / Math.sqrt(2.0);
+        return rmsD2 / Math.max(1e-30, expectedSineRmsD2);
     }
 }
