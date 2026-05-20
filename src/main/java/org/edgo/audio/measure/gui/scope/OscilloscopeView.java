@@ -1,7 +1,5 @@
 package org.edgo.audio.measure.gui.scope;
 
-import java.util.Locale;
-
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
@@ -23,10 +21,10 @@ import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
+import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBuffer;
 import org.edgo.audio.measure.sound.AudioBackend;
 
@@ -139,12 +137,12 @@ public final class OscilloscopeView extends Canvas {
 
     /**
      * Refresh period for the cap/s readout string and the measurement-table
-     * Row[] aggregation.  Limits how often the (relatively expensive)
+     * MeasurementRow[] aggregation.  Limits how often the (relatively expensive)
      * String.format + stats walk runs — the canvas is still redrawn on every
      * paint, just with the cached values.
      */
     private static final long READOUT_THROTTLE_NS = 200_000_000L;
-    private Row[]  cachedMeasurementRows;
+    private MeasurementRow[]  cachedMeasurementRows;
     private long   lastMeasurementBuildNanos;
     private String cachedCapsString = "";
     private long   lastCapsBuildNanos;
@@ -616,14 +614,14 @@ public final class OscilloscopeView extends Canvas {
             if (leftChannelColor != null) leftChannelColor.dispose();
             if (leftChannelMid   != null) leftChannelMid.dispose();
             leftChannelColor = newColor(newL);
-            leftChannelMid   = newColor(midRgb(newL));
+            leftChannelMid   = newColor(ScopeFormat.midRgb(newL));
             currentLeftRgb = newL;
         }
         if (newR != currentRightRgb) {
             if (rightChannelColor != null) rightChannelColor.dispose();
             if (rightChannelMid   != null) rightChannelMid.dispose();
             rightChannelColor = newColor(newR);
-            rightChannelMid   = newColor(midRgb(newR));
+            rightChannelMid   = newColor(ScopeFormat.midRgb(newR));
             currentRightRgb = newR;
         }
     }
@@ -632,16 +630,6 @@ public final class OscilloscopeView extends Canvas {
         return new Color(getDisplay(), (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
     }
 
-
-    /** Returns {@code rgb} with each channel scaled to ≈⅔ brightness — still
-     *  clearly visible, but visibly less prominent than the fully-bright
-     *  active variant. */
-    private int midRgb(int rgb) {
-        int r = (int) Math.round(((rgb >> 16) & 0xFF) * 0.65);
-        int g = (int) Math.round(((rgb >>  8) & 0xFF) * 0.65);
-        int b = (int) Math.round(( rgb        & 0xFF) * 0.65);
-        return (r << 16) | (g << 8) | b;
-    }
 
     /**
      * Arms a single-shot capture in SINGLE trigger mode.  The next trigger
@@ -799,7 +787,7 @@ public final class OscilloscopeView extends Canvas {
             Font prev = gc.getFont();
             if (monoFont == null) monoFont = new Font(getDisplay(), "Consolas", 9, SWT.NORMAL);
             gc.setFont(monoFont);
-            int rightLabelWidth = gc.textExtent(formatVolts(maxV, rightVDiv)).x;
+            int rightLabelWidth = gc.textExtent(ScopeFormat.formatVolts(maxV, rightVDiv)).x;
             gc.setFont(prev);
             leftEdge = centerX + 4 + rightLabelWidth + FILE_PATH_GAP_TO_RIGHT_LABEL;
         }
@@ -870,7 +858,7 @@ public final class OscilloscopeView extends Canvas {
         if (!prefs.isOscShowMeasurementTable()) return;
         if (!showL && !showR) return;
 
-        Row[] rows = prepareMeasurementRows(prefs);
+        MeasurementRow[] rows = prepareMeasurementRows(prefs);
         if (rows == null) return;
         // When extracted, the rows are drawn by externalMeasurementCanvas's
         // paint listener — skip the in-canvas table here.  We still want
@@ -886,7 +874,7 @@ public final class OscilloscopeView extends Canvas {
      *  measurement snapshot, or both channels are disabled.  Side-effect:
      *  auto-flips the selected measurement channel if its source has been
      *  switched off, matching the previous inline logic. */
-    private Row[] prepareMeasurementRows(Preferences prefs) {
+    private MeasurementRow[] prepareMeasurementRows(Preferences prefs) {
         boolean showL = prefs.isOscLeftChannelEnabled();
         boolean showR = prefs.isOscRightChannelEnabled();
         if (!showL && !showR) return null;
@@ -903,18 +891,18 @@ public final class OscilloscopeView extends Canvas {
         SignalMeasurements cur = measWorker.getLastMeasResult();
         if (cur == null) return null;
         long now = System.nanoTime();
-        Row[] rows = cachedMeasurementRows;
+        MeasurementRow[] rows = cachedMeasurementRows;
         if (rows == null || now - lastMeasurementBuildNanos >= READOUT_THROTTLE_NS) {
             long windowNanos = (long) (prefs.getOscMeasurementAverageSeconds() * 1e9);
             long cutoff = now - windowNanos;
-            StatsBuilder vppS   = new StatsBuilder();
-            StatsBuilder vrmsS  = new StatsBuilder();
-            StatsBuilder vmeanS = new StatsBuilder();
-            StatsBuilder tpS    = new StatsBuilder();
-            StatsBuilder trS    = new StatsBuilder();
-            StatsBuilder tfS    = new StatsBuilder();
-            StatsBuilder fS     = new StatsBuilder();
-            StatsBuilder dutyS  = new StatsBuilder();
+            MeasurementStats vppS   = new MeasurementStats();
+            MeasurementStats vrmsS  = new MeasurementStats();
+            MeasurementStats vmeanS = new MeasurementStats();
+            MeasurementStats tpS    = new MeasurementStats();
+            MeasurementStats trS    = new MeasurementStats();
+            MeasurementStats tfS    = new MeasurementStats();
+            MeasurementStats fS     = new MeasurementStats();
+            MeasurementStats dutyS  = new MeasurementStats();
             measWorker.walkRecentHistory(cutoff, s -> {
                 vppS  .add(s.getVpp());
                 vrmsS .add(s.getVrms());
@@ -925,15 +913,15 @@ public final class OscilloscopeView extends Canvas {
                 fS    .add(s.getFrequency());
                 dutyS .add(s.getDutyCycle());
             });
-            rows = new Row[] {
-                    Row.forVolts("Vpp",   cur.getVpp(),       vppS),
-                    Row.forVolts("Vrms",  cur.getVrms(),      vrmsS),
-                    Row.forVolts("Vmean", cur.getVmean(),     vmeanS),
-                    Row.forTime ("Tp",    cur.getPeriod(),    tpS),
-                    Row.forTime ("Tr",    cur.getRiseTime(),  trS),
-                    Row.forTime ("Tf",    cur.getFallTime(),  tfS),
-                    Row.forFreq ("f",     cur.getFrequency(), fS),
-                    Row.forPct  ("Duty",  cur.getDutyCycle(), dutyS),
+            rows = new MeasurementRow[] {
+                    MeasurementRow.forVolts("Vpp",   cur.getVpp(),       vppS),
+                    MeasurementRow.forVolts("Vrms",  cur.getVrms(),      vrmsS),
+                    MeasurementRow.forVolts("Vmean", cur.getVmean(),     vmeanS),
+                    MeasurementRow.forTime ("Tp",    cur.getPeriod(),    tpS),
+                    MeasurementRow.forTime ("Tr",    cur.getRiseTime(),  trS),
+                    MeasurementRow.forTime ("Tf",    cur.getFallTime(),  tfS),
+                    MeasurementRow.forFreq ("f",     cur.getFrequency(), fS),
+                    MeasurementRow.forPct  ("Duty",  cur.getDutyCycle(), dutyS),
             };
             cachedMeasurementRows     = rows;
             lastMeasurementBuildNanos = now;
@@ -1080,7 +1068,7 @@ public final class OscilloscopeView extends Canvas {
         Preferences prefs = Preferences.instance();
         if (buffer == null) return;
         if (!prefs.isOscShowMeasurementTable()) return;
-        Row[] rows = prepareMeasurementRows(prefs);
+        MeasurementRow[] rows = prepareMeasurementRows(prefs);
         if (rows == null) return;
         boolean showL = prefs.isOscLeftChannelEnabled();
         boolean showR = prefs.isOscRightChannelEnabled();
@@ -1273,7 +1261,7 @@ public final class OscilloscopeView extends Canvas {
         r.x = x; r.y = y; r.width = w; r.height = h;
     }
 
-    private void drawMeasurementTable(GC gc, Row[] rows,
+    private void drawMeasurementTable(GC gc, MeasurementRow[] rows,
                                       boolean showL, boolean showR, Channel selected) {
         // Main-view call site: the button row sits at y ∈ [5, 27), so the
         // table starts one line below.
@@ -1284,7 +1272,7 @@ public final class OscilloscopeView extends Canvas {
      *  starting y position.  The extracted tool window reuses this with a
      *  smaller offset (or a button-row offset when the stats/reset
      *  buttons live above the table). */
-    private void drawMeasurementTableAt(GC gc, Row[] rows,
+    private void drawMeasurementTableAt(GC gc, MeasurementRow[] rows,
                                         boolean showL, boolean showR, Channel selected,
                                         int startY) {
         if (monoFont == null) {
@@ -1321,7 +1309,7 @@ public final class OscilloscopeView extends Canvas {
             gc.drawText(HEADERS[i], HEADER_RIGHTS[i] - headerExtents[i].x, y, true);
         }
         y += lineH;
-        for (Row r : rows) {
+        for (MeasurementRow r : rows) {
             gc.drawText(r.name, COL_NAME_X, y, true);
             drawRightAligned(gc, r.cur,   COL_CUR_RIGHT,  y);
             if (showStats) {
@@ -1432,126 +1420,6 @@ public final class OscilloscopeView extends Canvas {
         gc.drawText(s, rightX - ts.x, y, true);
     }
 
-    /**
-     * One formatted row of the measurement table.  Picks a unit prefix based
-     * on the current value's magnitude and renders cur / avg / min / max / σ
-     * in that same prefix so the column entries line up.
-     */
-    private static final class Row {
-        final String name;
-        final String cur, avg, min, max, sigma;
-
-        private Row(String name, String cur, String avg, String min, String max, String sigma) {
-            this.name = name; this.cur = cur; this.avg = avg; this.min = min; this.max = max; this.sigma = sigma;
-        }
-
-        static Row forVolts(String base, double curVal, StatsBuilder s) {
-            String unit; double scale;
-            double m = peakMag(curVal, s);
-            if (m >= 1)     { unit = "V";  scale = 1; }
-            else if (m >= 1e-3) { unit = "mV"; scale = 1e3; }
-            else if (m >= 1e-6) { unit = "μV"; scale = 1e6; }
-            else                 { unit = "V";  scale = 1; }
-            return scaled(base + ", " + unit, scale, curVal, s);
-        }
-
-        static Row forTime(String base, double curVal, StatsBuilder s) {
-            String unit; double scale;
-            double m = peakMag(curVal, s);
-            if (m >= 1)     { unit = "s";  scale = 1; }
-            else if (m >= 1e-3) { unit = "ms"; scale = 1e3; }
-            else if (m >= 1e-6) { unit = "μs"; scale = 1e6; }
-            else                 { unit = "s";  scale = 1; }
-            return scaled(base + ", " + unit, scale, curVal, s);
-        }
-
-        static Row forFreq(String base, double curVal, StatsBuilder s) {
-            // Hz with adaptive decimal places: cap the total digit count at
-            // 7 (excluding the decimal point) so the column never overflows.
-            return new Row(base + ", Hz",
-                    fmtFreq(curVal),
-                    fmtFreq(s.getMean()),
-                    fmtFreq(s.getMin()),
-                    fmtFreq(s.getMax()),
-                    fmtFreq(s.getSigma()));
-        }
-
-        /**
-         * Frequency formatter capped at 7 significant digits (excluding the
-         * decimal point).  Below 100 kHz the readout keeps 0.01 Hz
-         * resolution; between 100 kHz and 1 MHz it drops to 0.1 Hz; at or
-         * above 1 MHz it rounds to whole hertz.  Magnitudes above ~10 MHz
-         * shouldn't occur (the broad-band scan caps at sampleRate/4 ≤ ~250 kHz
-         * at the highest supported sample rate), so the formatter falls back
-         * to "%.0f" without further guards.
-         */
-        private static String fmtFreq(double v) {
-            if (Double.isNaN(v)) return "---";
-            double a = Math.abs(v);
-            if (a >= 1_000_000.0) return String.format("%.0f", v);  // "1234567"
-            if (a >= 100_000.0)   return String.format("%.1f", v);  // "999999.9"
-            return String.format("%.2f", v);                        // "99999.99"
-        }
-
-        static Row forPct(String base, double curVal, StatsBuilder s) {
-            // Duty cycle is stored as fraction [0,1]; show as percent.
-            return scaled(base + ", %", 100, curVal, s);
-        }
-
-        private static double peakMag(double cur, StatsBuilder s) {
-            double a = Double.isNaN(cur) ? 0 : Math.abs(cur);
-            if (!Double.isNaN(s.getMean())) a = Math.max(a, Math.abs(s.getMean()));
-            if (!Double.isNaN(s.getMax()))  a = Math.max(a, Math.abs(s.getMax()));
-            if (!Double.isNaN(s.getMin()))  a = Math.max(a, Math.abs(s.getMin()));
-            return a;
-        }
-
-        private static Row scaled(String name, double scale, double cur, StatsBuilder s) {
-            return new Row(name,
-                    fmt(cur * scale),
-                    fmt(s.getMean()  * scale),
-                    fmt(s.getMin()   * scale),
-                    fmt(s.getMax()   * scale),
-                    fmt(s.getSigma() * scale));
-        }
-
-        private static String fmt(double v) {
-            if (Double.isNaN(v)) return "---";
-            double a = Math.abs(v);
-            if (a == 0)   return "0.000";
-            if (a >= 1000) return String.format("%.1f", v);
-            if (a >= 100)  return String.format("%.2f", v);
-            return String.format("%.3f", v);
-        }
-    }
-
-    /**
-     * Online avg / min / max / variance accumulator (Welford).  Skips
-     * {@link Double#NaN} inputs so missing-cycle samples don't poison the
-     * window stats.
-     */
-    private static final class StatsBuilder {
-        private int count;
-        private double mean;
-        private double m2;
-        private double min =  Double.POSITIVE_INFINITY;
-        private double max =  Double.NEGATIVE_INFINITY;
-
-        void add(double v) {
-            if (Double.isNaN(v)) return;
-            count++;
-            double delta = v - mean;
-            mean += delta / count;
-            m2 += delta * (v - mean);
-            if (v < min) min = v;
-            if (v > max) max = v;
-        }
-        double getMean()  { return count > 0 ? mean : Double.NaN; }
-        double getMin()   { return count > 0 ? min  : Double.NaN; }
-        double getMax()   { return count > 0 ? max  : Double.NaN; }
-        double getSigma() { return count > 1 ? Math.sqrt(m2 / (count - 1)) : Double.NaN; }
-    }
-
     private void drawGrid(GC gc, int w, int h) {
         double divW = (double) w / DIVISIONS_X;
         double divH = (double) h / DIVISIONS_Y;
@@ -1626,7 +1494,7 @@ public final class OscilloscopeView extends Canvas {
         // line left end.  Using the worst-case width yields a uniform stop
         // even at slider-Y positions where the lines would not actually
         // overlap, but the result reads as a clean broken track.
-        double levelFrac = clamp01(prefs.getOscTriggerLevelFrac());
+        double levelFrac = ScopeFormat.clamp01(prefs.getOscTriggerLevelFrac());
         int levelY = (int) Math.round(levelFrac * h);
         Color levelColor = (trigCh == Channel.L) ? leftChannelColor : rightChannelColor;
         // Trigger-channel offset is intentionally NOT clamped to [0, 1] —
@@ -1638,7 +1506,7 @@ public final class OscilloscopeView extends Canvas {
                 : prefs.getOscRightOffsetFrac();
         double trigVDiv  = (trigCh == Channel.L) ? leftVDiv : rightVDiv;
         double levelVolts = (trigOffsetFrac - levelFrac) * DIVISIONS_Y * trigVDiv;
-        String levelStr = formatVolts(levelVolts, trigVDiv);
+        String levelStr = ScopeFormat.formatVolts(levelVolts, trigVDiv);
         Point lvs = gc.textExtent(levelStr);
 
         int maxOffsetLabelW = 0;
@@ -1646,12 +1514,12 @@ public final class OscilloscopeView extends Canvas {
             // No clamp01 — the offset-marker voltage label needs to honour
             // the extended offset range too (mirrors the trigger-level
             // label above).
-            String s = formatVolts((0.5 - prefs.getOscLeftOffsetFrac())
+            String s = ScopeFormat.formatVolts((0.5 - prefs.getOscLeftOffsetFrac())
                     * DIVISIONS_Y * leftVDiv, leftVDiv);
             maxOffsetLabelW = Math.max(maxOffsetLabelW, gc.textExtent(s).x);
         }
         if (showR) {
-            String s = formatVolts((0.5 - prefs.getOscRightOffsetFrac())
+            String s = ScopeFormat.formatVolts((0.5 - prefs.getOscRightOffsetFrac())
                     * DIVISIONS_Y * rightVDiv, rightVDiv);
             maxOffsetLabelW = Math.max(maxOffsetLabelW, gc.textExtent(s).x);
         }
@@ -1693,7 +1561,7 @@ public final class OscilloscopeView extends Canvas {
         // ----- Trigger position: long-dashed vertical cross-hair + handle on bottom edge.
         // Same fileMode-hide treatment for the trigger-position slider.
         if (!fileMode) {
-            double posFrac = clamp01(prefs.getOscTriggerPositionFrac());
+            double posFrac = ScopeFormat.clamp01(prefs.getOscTriggerPositionFrac());
             int posX = (int) Math.round(posFrac * w);
             gc.setForeground(overlayColor);
             gc.setLineDash(LONG_DASH);
@@ -1706,7 +1574,7 @@ public final class OscilloscopeView extends Canvas {
             triggerPosBounds.height = SLIDER_TRI_LONG + 4;
             double windowTime = timePerDiv * DIVISIONS_X;
             double posSeconds = (posFrac - 0.5) * windowTime;
-            String posStr = formatSeconds(posSeconds);
+            String posStr = ScopeFormat.formatSeconds(posSeconds);
             Point pps = gc.textExtent(posStr);
             int posLabelY = h - SLIDER_TRI_LONG - 4 - pps.y - pps.y;
             int posLabelX = posX - pps.x / 2;
@@ -1737,12 +1605,12 @@ public final class OscilloscopeView extends Canvas {
         final int[] FS_DASH = { 2, 6 };
         if (showL) {
             drawFullScaleLines(gc, h, w, FS_DASH,
-                    clamp01(prefs.getOscLeftOffsetFrac()), leftVDiv,
+                    ScopeFormat.clamp01(prefs.getOscLeftOffsetFrac()), leftVDiv,
                     peakVolts, pixelsPerDivY, leftChannelMid);
         }
         if (showR) {
             drawFullScaleLines(gc, h, w, FS_DASH,
-                    clamp01(prefs.getOscRightOffsetFrac()), rightVDiv,
+                    ScopeFormat.clamp01(prefs.getOscRightOffsetFrac()), rightVDiv,
                     peakVolts, pixelsPerDivY, rightChannelMid);
         }
 
@@ -1752,7 +1620,7 @@ public final class OscilloscopeView extends Canvas {
         if (otherEnabled) {
             boolean otherIsL = !activeIsL;
             drawOffsetTrack(gc, h, DASH,
-                    clamp01(otherIsL ? prefs.getOscLeftOffsetFrac()
+                    ScopeFormat.clamp01(otherIsL ? prefs.getOscLeftOffsetFrac()
                                      : prefs.getOscRightOffsetFrac()),
                     otherIsL ? leftVDiv : rightVDiv,
                     otherIsL ? leftChannelColor : rightChannelColor,
@@ -1762,7 +1630,7 @@ public final class OscilloscopeView extends Canvas {
         if (activeEnabled) {
             Color c = activeIsL ? leftChannelColor : rightChannelColor;
             drawOffsetTrack(gc, h, DASH,
-                    clamp01(activeIsL ? prefs.getOscLeftOffsetFrac()
+                    ScopeFormat.clamp01(activeIsL ? prefs.getOscLeftOffsetFrac()
                                       : prefs.getOscRightOffsetFrac()),
                     activeIsL ? leftVDiv : rightVDiv,
                     c, c, true, offsetLineRightEnd);
@@ -1813,7 +1681,7 @@ public final class OscilloscopeView extends Canvas {
                                   Color lineLabelColor, Color triangleColor,
                                   boolean isActive, int lineRightEnd) {
         int offsetY     = (int) Math.round(offsetFrac * h);
-        String label    = formatVolts((0.5 - offsetFrac) * DIVISIONS_Y * vDiv, vDiv);
+        String label    = ScopeFormat.formatVolts((0.5 - offsetFrac) * DIVISIONS_Y * vDiv, vDiv);
         Point ts        = gc.textExtent(label);
         int labelX      = SLIDER_TRI_LONG + 4;
         int labelY      = offsetY - ts.y / 2;
@@ -1872,12 +1740,6 @@ public final class OscilloscopeView extends Canvas {
         gc.fillPolygon(poly);
     }
 
-    private double clamp01(double v) {
-        if (v < 0) return 0;
-        if (v > 1) return 1;
-        return v;
-    }
-
     /**
      * Renders absolute-unit labels along the centre cross-hair:
      * <ul>
@@ -1911,11 +1773,11 @@ public final class OscilloscopeView extends Canvas {
 
         // ----- Time on the horizontal centre line × left / right edges.
         double windowTime = timePerDiv * DIVISIONS_X;
-        double posFrac    = clamp01(prefs.getOscTriggerPositionFrac());
+        double posFrac    = ScopeFormat.clamp01(prefs.getOscTriggerPositionFrac());
         double leftTime   = -posFrac * windowTime;
         double rightTime  = (1 - posFrac) * windowTime;
-        String leftTimeStr  = formatSeconds(leftTime);
-        String rightTimeStr = formatSeconds(rightTime);
+        String leftTimeStr  = ScopeFormat.formatSeconds(leftTime);
+        String rightTimeStr = ScopeFormat.formatSeconds(rightTime);
         Point lts = gc.textExtent(leftTimeStr);
         Point rts = gc.textExtent(rightTimeStr);
         gc.setForeground(overlayColor);
@@ -1943,8 +1805,8 @@ public final class OscilloscopeView extends Canvas {
             double off = prefs.getOscLeftOffsetFrac();
             double maxV = off * DIVISIONS_Y * leftVDiv;
             double minV = -(1 - off) * DIVISIONS_Y * leftVDiv;
-            String maxStr = formatVolts(maxV, leftVDiv);
-            String minStr = formatVolts(minV, leftVDiv);
+            String maxStr = ScopeFormat.formatVolts(maxV, leftVDiv);
+            String minStr = ScopeFormat.formatVolts(minV, leftVDiv);
             Point mxs = gc.textExtent(maxStr);
             Point mns = gc.textExtent(minStr);
             gc.setForeground(leftChannelColor);
@@ -1965,8 +1827,8 @@ public final class OscilloscopeView extends Canvas {
             double off = prefs.getOscRightOffsetFrac();
             double maxV = off * DIVISIONS_Y * rightVDiv;
             double minV = -(1 - off) * DIVISIONS_Y * rightVDiv;
-            String maxStr = formatVolts(maxV, rightVDiv);
-            String minStr = formatVolts(minV, rightVDiv);
+            String maxStr = ScopeFormat.formatVolts(maxV, rightVDiv);
+            String minStr = ScopeFormat.formatVolts(minV, rightVDiv);
             Point mxs = gc.textExtent(maxStr);
             Point mns = gc.textExtent(minStr);
             gc.setForeground(rightChannelColor);
@@ -1987,41 +1849,6 @@ public final class OscilloscopeView extends Canvas {
         gc.setFont(prevFont);
     }
 
-    /** Volts with auto-prefix AND auto-precision based on {@code vpdiv}.  The
-     *  display resolves to ≈ {@code vpdiv / 10} (one 1/10-div tick), so as
-     *  the user picks a narrower V/div the label gains decimal places to
-     *  keep the readout meaningful.  Used for the channel edge labels and
-     *  the trigger-level voltage label. */
-    private String formatVolts(double v, double vpdiv) {
-        double a = Math.abs(v);
-        String unit;
-        double scaledV;
-        double scaledRes;
-        if (a >= 1.0)        { unit = "V";  scaledV = v;       scaledRes = vpdiv * 0.1; }
-        else if (a >= 1e-3)  { unit = "mV"; scaledV = v * 1e3; scaledRes = vpdiv * 0.1 * 1e3; }
-        else if (a >= 1e-6)  { unit = "µV"; scaledV = v * 1e6; scaledRes = vpdiv * 0.1 * 1e6; }
-        else if (a == 0)     return "0 V";
-        else                 return String.format(Locale.ROOT, "%.2g V", v);
-        int dp;
-        if (scaledRes >= 1.0)    dp = 1;
-        else if (scaledRes > 0)  dp = (int) Math.ceil(-Math.log10(scaledRes)) + 1;
-        else                     dp = 3;
-        if (dp < 1) dp = 1;
-        if (dp > 6) dp = 6;
-        return String.format(Locale.ROOT, "%." + dp + "f " + unit, scaledV);
-    }
-
-    /** Seconds with auto-prefix (s / ms / μs / ns), 2 significant decimals. */
-    private String formatSeconds(double t) {
-        double a = Math.abs(t);
-        if (a >= 1.0)       return String.format(Locale.ROOT, "%.2f s",  t);
-        if (a >= 1e-3)      return String.format(Locale.ROOT, "%.2f ms", t * 1e3);
-        if (a >= 1e-6)      return String.format(Locale.ROOT, "%.1f µs", t * 1e6);
-        if (a >= 1e-9)      return String.format(Locale.ROOT, "%.1f ns", t * 1e9);
-        if (a == 0)         return "0 s";
-        return String.format(Locale.ROOT, "%.2g s", t);
-    }
-
     /**
      * Maps a mouse position to the active slider's fraction and stores it
      * back into preferences (without saving — the disk save happens on
@@ -2035,7 +1862,7 @@ public final class OscilloscopeView extends Canvas {
         Preferences prefs = Preferences.instance();
         switch (draggingSlider) {
             case OFFSET: {
-                double frac = clamp01((double) mouseY / h);
+                double frac = ScopeFormat.clamp01((double) mouseY / h);
                 if (prefs.getOscMeasurementChannel() == Channel.L) {
                     prefs.setOscLeftOffsetFrac(frac);
                 } else {
@@ -2044,10 +1871,10 @@ public final class OscilloscopeView extends Canvas {
                 break;
             }
             case TRIGGER_LEVEL:
-                prefs.setOscTriggerLevelFrac(clamp01((double) mouseY / h));
+                prefs.setOscTriggerLevelFrac(ScopeFormat.clamp01((double) mouseY / h));
                 break;
             case TRIGGER_POSITION:
-                prefs.setOscTriggerPositionFrac(clamp01((double) mouseX / w));
+                prefs.setOscTriggerPositionFrac(ScopeFormat.clamp01((double) mouseX / w));
                 break;
         }
         redraw();
@@ -2116,16 +1943,16 @@ public final class OscilloscopeView extends Canvas {
         // Trigger position slider: 0 = trigger at left edge of display,
         // 0.5 = centred, 1 = right edge.  Computed early because both the
         // read size and the trigger search range depend on it.
-        double triggerPosFrac = clamp01(prefs.getOscTriggerPositionFrac());
+        double triggerPosFrac = ScopeFormat.clamp01(prefs.getOscTriggerPositionFrac());
 
         // Read window must span at least one full display window before the
         // trigger AND one full display window after, so the trigger position
         // slider can be dragged from edge to edge without the display falling
-        // off the buffer.  Plus LANCZOS_PADDING on each side for the sinc
+        // off the buffer.  Plus ScopeLanczos.LANCZOS_PADDING on each side for the sinc
         // kernel, plus an extra lookback so the trigger search reliably
         // contains a rising edge even for low-frequency signals.
         int extraLookback = Math.min(b.getSampleRate(), ScopeMeasurementWorker.MEAS_MAX_SAMPLES);
-        int wanted = 2 * displaySamples + 2 * LANCZOS_PADDING + extraLookback;
+        int wanted = 2 * displaySamples + 2 * ScopeLanczos.LANCZOS_PADDING + extraLookback;
         // When SINGLE is armed, capture both channels so toggling L/R after
         // the freeze still shows real data instead of a stale buffer.
         boolean armedSingle = (triggerMode == TriggerMode.SINGLE) && singleArmed;
@@ -2157,7 +1984,7 @@ public final class OscilloscopeView extends Canvas {
         // "signal jumps left/right".  Right-edge anchoring is stable
         // across both operations.
         if (viewBackOffsetFrames > 0 || fileMode) {
-            int rightPadN = Math.min(LANCZOS_PADDING, Math.max(0, available - displaySamples));
+            int rightPadN = Math.min(ScopeLanczos.LANCZOS_PADDING, Math.max(0, available - displaySamples));
             int dispEndN  = available - rightPadN;
             int dispStartN = Math.max(0, dispEndN - displaySamples);
             int dispCountN = dispEndN - dispStartN;
@@ -2172,7 +1999,7 @@ public final class OscilloscopeView extends Canvas {
         }
 
         // Trigger search range: keep the resulting display window
-        // [windowLeftT, windowLeftT + displaySamples) plus LANCZOS_PADDING on
+        // [windowLeftT, windowLeftT + displaySamples) plus ScopeLanczos.LANCZOS_PADDING on
         // each side fully inside the read buffer.  The split is asymmetric
         // when the trigger-position slider isn't centred — at triggerPosFrac
         // = 0 the display extends one full window to the right of the
@@ -2181,8 +2008,8 @@ public final class OscilloscopeView extends Canvas {
         // triggerPosFrac = 1.
         int leftHalf  = (int) Math.ceil(displaySamples * triggerPosFrac);
         int rightHalf = (int) Math.ceil(displaySamples * (1.0 - triggerPosFrac));
-        int searchFrom = Math.max(1, LANCZOS_PADDING + leftHalf + 1);
-        int searchTo   = available - rightHalf - LANCZOS_PADDING;
+        int searchFrom = Math.max(1, ScopeLanczos.LANCZOS_PADDING + leftHalf + 1);
+        int searchTo   = available - rightHalf - ScopeLanczos.LANCZOS_PADDING;
         float[] triggerData = (triggerCh == Channel.L) ? leftBuf : rightBuf;
         boolean rising = (triggerEdge == TriggerEdge.RISE);
         // Trigger uses the TRIGGER channel's sinc setting for sub-sample
@@ -2225,7 +2052,7 @@ public final class OscilloscopeView extends Canvas {
                 ? (float) (prefs.getOscTriggerHysteresisDiv() * triggerVDiv / triggerPeakVolts)
                 : 0f;
         double triggerFrac = (searchTo > searchFrom)
-                ? findTrigger(triggerData, available, searchFrom, searchTo,
+                ? ScopeTrigger.find(triggerData, available, searchFrom, searchTo,
                               effectiveTriggerLevel, rising, sincEnabled, triggerHysteresis)
                 : -1.0;
         boolean foundTrigger = (triggerFrac >= 0);
@@ -2285,8 +2112,8 @@ public final class OscilloscopeView extends Canvas {
             double localTriggerFrac = (lastTriggerAbsPos - bufStartAbs) + lastTriggerSubSampleOffset;
             double windowLeftT = localTriggerFrac - displaySamples * triggerPosFrac;
             int holdStart = (int) Math.floor(windowLeftT);
-            if (holdStart >= LANCZOS_PADDING
-                    && holdStart + displaySamples + LANCZOS_PADDING <= available) {
+            if (holdStart >= ScopeLanczos.LANCZOS_PADDING
+                    && holdStart + displaySamples + ScopeLanczos.LANCZOS_PADDING <= available) {
                 dispStart = holdStart;
                 subSampleOffset = windowLeftT - holdStart;
                 haveFrame = true;
@@ -2301,7 +2128,7 @@ public final class OscilloscopeView extends Canvas {
         //    NORMAL deliberately leaves the pane blank in that case.
         if (!haveFrame) {
             if (triggerMode == TriggerMode.AUTO || triggerMode == TriggerMode.SINGLE) {
-                int rightPad = Math.min(LANCZOS_PADDING, Math.max(0, available - displaySamples));
+                int rightPad = Math.min(ScopeLanczos.LANCZOS_PADDING, Math.max(0, available - displaySamples));
                 int dispEnd  = available - rightPad;
                 dispStart = Math.max(0, dispEnd - displaySamples);
                 dispCount = dispEnd - dispStart;
@@ -2329,8 +2156,8 @@ public final class OscilloscopeView extends Canvas {
             // SINGLE held: the captured frame is a frozen snapshot; subtract
             // its own DC so the frozen trace stays centred regardless of any
             // drift in the live data after the freeze.
-            double dcL = acL ? windowMean(capturedLeft,  0, capturedLen) : 0.0;
-            double dcR = acR ? windowMean(capturedRight, 0, capturedLen) : 0.0;
+            double dcL = acL ? ScopeFormat.windowMean(capturedLeft,  0, capturedLen) : 0.0;
+            double dcR = acR ? ScopeFormat.windowMean(capturedRight, 0, capturedLen) : 0.0;
             renderTraces(gc, w, h, capturedLeft, capturedRight, capturedLen,
                          capturedDispStart, capturedSubSampleOffset, capturedDispCount,
                          showL, showR, leftVDiv, rightVDiv, sincL, sincR, dcL, dcR);
@@ -2354,7 +2181,7 @@ public final class OscilloscopeView extends Canvas {
      * Copies the samples around the just-found trigger into the captured-frame
      * arrays so they persist independently of the ring buffer.  Saves up to
      * two display windows centred on the trigger (i.e. {@code 2·displaySamples
-     * + 2·LANCZOS_PADDING}) so the renderer has at least half-a-window of
+     * + 2·ScopeLanczos.LANCZOS_PADDING}) so the renderer has at least half-a-window of
      * context on each side — that way the sinc kernel has full data even at
      * the pane edges, and a late Start that fires the trigger close to the
      * buffer end still shows the full screen.  When the ring buffer doesn't
@@ -2364,8 +2191,8 @@ public final class OscilloscopeView extends Canvas {
     private void captureSingleFrame(int dispStart, int displaySamples,
                                     int available, double subSampleOffset) {
         int extra = displaySamples / 2;     // half a screen extra on each side → 2 screens total
-        int idealStart = dispStart - LANCZOS_PADDING - extra;
-        int idealEnd   = dispStart + displaySamples + LANCZOS_PADDING + extra;
+        int idealStart = dispStart - ScopeLanczos.LANCZOS_PADDING - extra;
+        int idealEnd   = dispStart + displaySamples + ScopeLanczos.LANCZOS_PADDING + extra;
         int srcStart = Math.max(0, idealStart);
         int srcEnd   = Math.min(available, idealEnd);
         int len = srcEnd - srcStart;
@@ -2427,14 +2254,6 @@ public final class OscilloscopeView extends Canvas {
         }
     }
 
-    /** Mean of {@code data} over {@code [start, start+count)} — used for AC-mode DC removal. */
-    private double windowMean(float[] data, int start, int count) {
-        if (data == null || count <= 0) return 0.0;
-        double s = 0;
-        for (int i = 0; i < count; i++) s += data[start + i];
-        return s / count;
-    }
-
     /**
      * Returns {@code {dcL, dcR}} to subtract when rendering the captured
      * SINGLE frame in AC mode.  Prefers the worker-published, ≥ 500 ms-
@@ -2457,217 +2276,10 @@ public final class OscilloscopeView extends Canvas {
         return new double[] { dcL, dcR };
     }
 
-    /**
-     * Half-width (in samples per unit kernel scale) of the Lanczos window.
-     * A=16 gives a much sharper transition band (~-45 dB stop-band) than
-     * the more usual A=8 (~-25 dB), at the cost of 2× more sample reads per
-     * output point.  Worth it: with A=8 enough energy near Nyquist leaks
-     * through the filter to alias into visible beat-envelope artifacts on
-     * dense high-frequency traces.
-     */
-    private static final int LANCZOS_A = 16;
-
-    /**
-     * Largest downsample factor for which the scaled Lanczos kernel is still
-     * cheap enough to evaluate per pixel.  Beyond this we fall back to
-     * per-column min/max bars.  Also determines the buffer padding needed
-     * for full kernel coverage at the pane edges.
-     */
-    private static final int MAX_LANCZOS_DOWNSAMPLE = 5;
-
-    /** Buffer padding (each side) so the widest kernel still has real context. */
-    private static final int LANCZOS_PADDING = LANCZOS_A * MAX_LANCZOS_DOWNSAMPLE;
-
-    /**
-     * Lanczos-windowed sinc reconstruction of {@code data} at the (fractional)
-     * sample-domain position {@code t}, with a kernel scaled to act as a
-     * low-pass filter at the output rate ({@code scale = max(1, samplesPerPx)}).
-     * For {@code scale = 1} this is the classic Whittaker–Shannon reconstruction
-     * Σ x[i]·sinc(t-i); for {@code scale > 1} the kernel widens to
-     * {@code sinc((t-i)/scale)} which kills the energy between the output
-     * Nyquist and the input Nyquist — without that, downsampling to one
-     * value per pixel would fold high-frequency content into low-frequency
-     * beat envelopes.
-     */
-    /**
-     * Lanczos sinc reconstruction at {@code t}, using a precomputed phase
-     * table for whichever {@code scale} is currently in play — the inner
-     * loop is now a plain table lookup with zero {@code Math.sin} calls,
-     * which is the dominant per-pixel cost.  Works for any {@code scale},
-     * so traces at slow time/div (scale &gt; 1, kernel widened for
-     * anti-aliasing) benefit too, not just the {@code scale == 1} fast path.
-     */
-    private double lanczos(float[] data, int n, double t, double scale) {
-        double[][] table = getKernelTable(scale);
-        int halfWidth = (int) Math.ceil(LANCZOS_A * scale);
-        int center = (int) Math.floor(t);
-        double frac = t - center;
-        int phase = (int) (frac * LANCZOS_PHASES);
-        if (phase < 0) phase = 0;
-        if (phase >= LANCZOS_PHASES) phase = LANCZOS_PHASES - 1;
-        double[] w = table[phase];
-        int iLo = Math.max(0, center - halfWidth + 1);
-        int iHi = Math.min(n - 1, center + halfWidth);
-        // Subtract a baseline from each sample before weighting so the
-        // accumulated sum reflects DIFFERENCES between samples, not their
-        // absolute magnitude.  Critical at extreme V/div: with samples
-        // sitting near ±FS, the absolute values are ~1.0 in float; the
-        // ~1e-7 float epsilon multiplied by a ~3e5 vScale becomes a
-        // visible pixel deflection.  Working with (data[i] − baseline)
-        // keeps the summed quantity small (just inter-sample deltas) and
-        // the kernel is mathematically equivalent because the original
-        // formula Σ data[i]·w[j] = baseline·Σw[j] + Σ(data[i]−baseline)·w[j].
-        int centerClamped = (center < 0) ? 0 : (center >= n ? n - 1 : center);
-        double baseline = data[centerClamped];
-        double sumWeights = 0.0;
-        double sumDeltas  = 0.0;
-        for (int i = iLo; i <= iHi; i++) {
-            int j = i - center + halfWidth - 1;       // tap index ∈ [0, 2·halfWidth)
-            double wj = w[j];
-            sumWeights += wj;
-            sumDeltas  += (data[i] - baseline) * wj;
-        }
-        // Kernel rows are normalised to Σw = 1 (unit DC gain) for every
-        // scale, so this evaluates to baseline + Σ(data[i] − baseline)·w[j]
-        // — exactly the band-limited reconstruction at t with no implicit
-        // amplitude scaling.  sumWeights is kept in the formula so the
-        // edge-clamped case (where the kernel partially overhangs the
-        // buffer) still returns a sensible value: the clamped Σw ≠ 1, and
-        // multiplying baseline by it matches what the missing samples
-        // would have contributed if they equalled baseline.
-        return baseline * sumWeights + sumDeltas;
-    }
-
-    /** Phase resolution for the cached Lanczos kernel tables (≈ 0.001 sample precision). */
-    private static final int LANCZOS_PHASES = 1024;
-
-    /**
-     * Two-slot table cache: one slot is permanently kept for {@code scale == 1}
-     * (used by {@link #refineCrossing} and every fast-time/div render), and
-     * the other slot holds whatever non-unit scale was last requested.  Two
-     * slots are enough to avoid thrashing because each frame issues at most
-     * those two scales — trigger refinement at 1.0 plus the current draw
-     * scale.
-     */
-    private static volatile double[][] cachedKernelScale1;
-    private static volatile double[][] cachedKernelOther;
-    private static volatile double     cachedKernelOtherScale = Double.NaN;
-
-    private double[][] getKernelTable(double scale) {
-        if (scale == 1.0) {
-            double[][] t = cachedKernelScale1;
-            if (t != null) return t;
-            synchronized (OscilloscopeView.class) {
-                if (cachedKernelScale1 == null) cachedKernelScale1 = buildKernelTable(1.0);
-                return cachedKernelScale1;
-            }
-        }
-        double[][] t = cachedKernelOther;
-        double s = cachedKernelOtherScale;
-        if (t != null && s == scale) return t;
-        synchronized (OscilloscopeView.class) {
-            if (cachedKernelOther == null || cachedKernelOtherScale != scale) {
-                cachedKernelOther = buildKernelTable(scale);
-                cachedKernelOtherScale = scale;
-            }
-            return cachedKernelOther;
-        }
-    }
-
-    /**
-     * Pre-bakes the Lanczos kernel for {@code scale} into a
-     * {@code [LANCZOS_PHASES][2·halfWidth]} table.  Each weight already
-     * includes the 1/scale gain normalization so {@link #lanczos} just sums.
-     *
-     * <p>Two precision tricks live here for the "everything near full scale"
-     * regime that turned up at 200 µV/div on a 2 V RMS signal:
-     * <ul>
-     *   <li>Each row is computed via {@link #sinc(double)} which uses a
-     *       Taylor series for {@code |x| < 0.1} — the regime where the
-     *       sin-x/x form has the worst conditioning (subtracting two nearly
-     *       equal quantities of order {@code πx}).</li>
-     *   <li>Every row is normalised at the end so {@code Σw = 1/scale}
-     *       exactly (the nominal gain for a properly scaled Lanczos
-     *       kernel).  Removes the few-ULP residual that the analytic form
-     *       leaves behind — small in isolation but amplified by the
-     *       3·10⁵ vScale at narrow V/div.</li>
-     * </ul>
-     */
-    private double[][] buildKernelTable(double scale) {
-        int halfWidth = (int) Math.ceil(LANCZOS_A * scale);
-        int taps = 2 * halfWidth;
-        double invScale = 1.0 / scale;
-        double[][] table = new double[LANCZOS_PHASES][taps];
-        for (int p = 0; p < LANCZOS_PHASES; p++) {
-            double frac = (double) p / LANCZOS_PHASES;
-            double[] row = table[p];
-            for (int j = 0; j < taps; j++) {
-                // tap j ↔ sample offset (j − halfWidth + 1) from the kernel
-                // centre; x = (frac − offset) / scale.
-                double x = (frac + (halfWidth - 1) - j) * invScale;
-                if (Math.abs(x) >= LANCZOS_A) {
-                    row[j] = 0.0;
-                } else {
-                    // Windowed sinc.  sinc(x) handles the |x| ≈ 0 case
-                    // with a high-precision Taylor expansion; the outer
-                    // sin(πx)/(πx) factor is the band-limit, the inner
-                    // sin(πx/A)/(πx/A) is the Lanczos window.
-                    row[j] = sinc(x) * sinc(x / LANCZOS_A) * invScale;
-                }
-            }
-            // Row-normalise to unit DC gain (Σw = 1) regardless of the
-            // ULP-scale drift from the sin / sinc math AND regardless of
-            // the {@code scale} value.  The analytic {@code *invScale}
-            // factor above is the textbook continuous-domain low-pass
-            // gain for {@code scale > 1} (it makes Σw ≈ 1/scale before
-            // normalisation), so dividing by the observed sum and
-            // multiplying by 1 gets us exactly unit gain at all scales.
-            // Without this normalisation the trace shrank by a factor
-            // of {@code scale} once samplesPerPx > 1 — visible as a 2×
-            // shrink at 1 ms/div and 4× at 2 ms/div on the SWT canvas.
-            double s = 0.0;
-            for (double v : row) s += v;
-            if (s != 0.0) {
-                double k = 1.0 / s;
-                for (int j = 0; j < taps; j++) row[j] *= k;
-            }
-        }
-        return table;
-    }
-
-    /**
-     * {@code sinc(x) = sin(πx) / (πx)} with full double precision near 0.
-     *
-     * <p>For {@code |x| < 0.1}, evaluating {@code Math.sin(πx) / (πx)}
-     * suffers from the same conditioning loss as a Taylor truncation: the
-     * numerator and denominator are both near {@code πx}, so the relative
-     * precision of the quotient hinges on the absolute precision of
-     * {@code Math.sin(πx) − πx} which is only ~ULP of {@code πx}.  An
-     * 8th-order Taylor series in {@code u = (πx)²} gives the same answer
-     * to within {@code 1e-18} for {@code |x| < 0.1} without that
-     * cancellation — well below machine epsilon.  For larger {@code |x|}
-     * we fall back to the standard form where the cancellation is
-     * benign.
-     */
-    private double sinc(double x) {
-        if (x == 0.0) return 1.0;
-        double pix = Math.PI * x;
-        if (Math.abs(x) < 0.1) {
-            double u = pix * pix;
-            // 1 − u/6 + u²/120 − u³/5040 + u⁴/362880 + …
-            // Horner form for fewer rounding ops:
-            return 1.0 + u * (-1.0 / 6.0
-                       + u * ( 1.0 / 120.0
-                       + u * (-1.0 / 5040.0
-                       + u * ( 1.0 / 362880.0
-                       + u * (-1.0 / 39916800.0)))));
-        }
-        return Math.sin(pix) / pix;
-    }
 
 
     /**
-     * Draws a waveform.  When {@code samplesPerPx ≤ MAX_LANCZOS_DOWNSAMPLE}
+     * Draws a waveform.  When {@code samplesPerPx ≤ ScopeLanczos.MAX_LANCZOS_DOWNSAMPLE}
      * the signal is band-limit-reconstructed via a Lanczos-windowed sinc kernel
      * scaled to the output rate (no aliasing into beat envelopes).  Above that
      * threshold per-column min/max bars take over.  A 5-px filled dot is
@@ -2686,7 +2298,7 @@ public final class OscilloscopeView extends Canvas {
         gc.setForeground(color);
         double samplesPerPx = (double) dispCount / width;
         double pxPerSample = (double) width / dispCount;
-        if (samplesPerPx <= MAX_LANCZOS_DOWNSAMPLE) {
+        if (samplesPerPx <= ScopeLanczos.MAX_LANCZOS_DOWNSAMPLE) {
             double scale = Math.max(1.0, samplesPerPx);
             Path path = new Path(gc.getDevice());
             try {
@@ -2701,7 +2313,7 @@ public final class OscilloscopeView extends Canvas {
                     final int padPixels = 4;
                     for (int x = -padPixels; x < width + padPixels; x++) {
                         double t = dispStart + subSampleOffset + x * samplesPerPx;
-                        float yp = (float) (centerY - (lanczos(data, n, t, scale) - dcOffset) * vScale);
+                        float yp = (float) (centerY - (ScopeLanczos.lanczos(data, n, t, scale) - dcOffset) * vScale);
                         if (x == -padPixels) path.moveTo(x, yp);
                         else                  path.lineTo(x, yp);
                     }
@@ -2789,101 +2401,6 @@ public final class OscilloscopeView extends Canvas {
         }
     }
 
-    /**
-     * Schmitt-style trigger scan: walks {@code data[from..to)} forward
-     * tracking armed / fired state with lower and upper thresholds at
-     * {@code level ± hysteresis}.  A rising trigger fires only when the signal
-     * has first dropped below {@code level − hysteresis} (LOW) and then
-     * crosses above {@code level + hysteresis} (HIGH); the trigger position
-     * is the {@code level}-crossing inside that transition, refined either by
-     * {@link #lanczos} bisection ({@code sincRefine}) or linear interpolation.
-     * Returns the rightmost qualified trigger's fractional sample index, or
-     * {@code -1.0} if none was found.  With {@code hysteresis == 0} the two
-     * thresholds collapse onto {@code level}, recovering the previous
-     * single-sample-bracket behaviour.
-     */
-    private double findTrigger(float[] data, int n, int from, int to,
-                                      float level, boolean rising, boolean sincRefine,
-                                      float hysteresis) {
-        float lo = level - hysteresis;
-        float hi = level + hysteresis;
-        // Determine the incoming Schmitt state by walking back from `from`
-        // until we find a sample firmly outside the dead-band.  Falling back
-        // to the opposite-of-fire-direction lets a clean signal that starts
-        // inside the dead-band still produce a first trigger.
-        int state = 0;     // -1 = LOW, +1 = HIGH, 0 = unknown
-        for (int j = from - 1; j >= 0; j--) {
-            if (data[j] <= lo) { state = -1; break; }
-            if (data[j] >= hi) { state = +1; break; }
-        }
-        if (state == 0) state = rising ? -1 : +1;
-
-        double lastTrigger = -1.0;
-        double pendingCrossing = -1.0;     // most-recent `level` crossing while still in the opposite state
-        float prev = data[from - 1];
-        for (int i = from; i < to; i++) {
-            float curr = data[i];
-            if (rising) {
-                if (prev < level && curr >= level) {
-                    pendingCrossing = sincRefine
-                            ? refineCrossing(data, n, i - 1, i, level, true)
-                            : linearCrossing(prev, curr, i - 1, level);
-                }
-                if (curr <= lo) {
-                    state = -1;
-                } else if (curr >= hi) {
-                    if (state == -1 && pendingCrossing >= 0) {
-                        lastTrigger = pendingCrossing;
-                    }
-                    state = +1;
-                    pendingCrossing = -1.0;
-                }
-            } else {
-                if (prev > level && curr <= level) {
-                    pendingCrossing = sincRefine
-                            ? refineCrossing(data, n, i - 1, i, level, false)
-                            : linearCrossing(prev, curr, i - 1, level);
-                }
-                if (curr >= hi) {
-                    state = +1;
-                } else if (curr <= lo) {
-                    if (state == +1 && pendingCrossing >= 0) {
-                        lastTrigger = pendingCrossing;
-                    }
-                    state = -1;
-                    pendingCrossing = -1.0;
-                }
-            }
-            prev = curr;
-        }
-        return lastTrigger;
-    }
-
-    /** Linear interpolation of the {@code level}-crossing between samples at indices {@code prevIdx} and {@code prevIdx + 1}. */
-    private double linearCrossing(float prev, float curr, int prevIdx, float level) {
-        float denom = curr - prev;
-        if (denom == 0) return prevIdx;
-        return prevIdx + (level - prev) / denom;
-    }
-
-    /**
-     * Bisects the sinc-interpolated signal between {@code a} and {@code b}
-     * to find the precise crossing of {@code level}.  10 iterations give
-     * sub-millisample precision (2⁻¹⁰ ≈ 0.001 sample).  Uses the unit-scale
-     * Lanczos kernel — i.e. the band-limited reconstruction at the input
-     * sample rate, which is what the renderer draws when {@code samplesPerPx ≤ 1}.
-     */
-    private double refineCrossing(float[] data, int n, double a, double b,
-                                         float level, boolean rising) {
-        for (int iter = 0; iter < 10; iter++) {
-            double m = 0.5 * (a + b);
-            double val = lanczos(data, n, m, 1.0);
-            boolean atRightSide = rising ? (val >= level) : (val <= level);
-            if (atRightSide) b = m;
-            else             a = m;
-        }
-        return 0.5 * (a + b);
-    }
 
     @Override
     protected void checkSubclass() {

@@ -9,8 +9,6 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
@@ -82,17 +80,6 @@ public final class FftPane {
     private static final String[] FFT_LENGTH_LABELS = {
             "8k", "16k", "32k", "64k", "128k", "256k", "512k", "1M", "2M", "4M"
     };
-    /** Human-readable labels for {@link WindowType} values
-     *  (index-aligned with {@code WindowType.values()}). */
-    private static final String[] WINDOW_LABELS = {
-            "Rectangular",
-            "Hann",
-            "Blackman-Harris 4",
-            "Blackman-Harris 7",
-            "Flat top",
-            "Dolph-Chebyshev 150",
-            "Dolph-Chebyshev 200"
-    };
     /** Resolution of the FlatScrollbars (any large integer — slider values
      *  are mapped to fractional positions). */
     private static final int SCROLL_RANGE = 1_000_000;
@@ -101,12 +88,6 @@ public final class FftPane {
     private static final int TAB_FFT_SETTINGS = 0;
     private static final int TAB_THD_SETTINGS = 1;
     private static final int NUM_CUSTOM_TABS  = 2;
-
-    /** Short labels for the human-readable Window combo — also used as
-     *  the compact text in the FFT-settings tab's tile row. */
-    private static final String[] WINDOW_SHORT_LABELS = {
-            "Rect", "Hann", "BH4", "BH7", "FT", "DC150", "DC200"
-    };
 
     private final Composite group;
     private PaneTitle title;
@@ -773,7 +754,7 @@ public final class FftPane {
         addLabel(g, I18n.t("fft.settings.length"));
         fftLengthCombo = new Combo(g, SWT.READ_ONLY);
         fftLengthCombo.setItems(FFT_LENGTH_LABELS);
-        int lenIdx = indexOfInt(FFT_LENGTH_VALUES, prefs.getFftLength());
+        int lenIdx = FftPaneFormat.indexOfInt(FFT_LENGTH_VALUES, prefs.getFftLength());
         fftLengthCombo.select(lenIdx < 0 ? 3 : lenIdx);
         fftLengthCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         fftLengthCombo.addListener(SWT.Selection, e -> {
@@ -794,10 +775,10 @@ public final class FftPane {
 
         addLabel(g, I18n.t("fft.settings.window"));
         windowCombo = new Combo(g, SWT.READ_ONLY);
-        windowCombo.setItems(WINDOW_LABELS);
+        windowCombo.setItems(FftPaneFormat.WINDOW_LABELS);
         windowCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         WindowType currWin =
-                enumOr(WindowType.class, prefs.getFftWindow(), WindowType.HANN);
+                FftPaneFormat.enumOr(WindowType.class, prefs.getFftWindow(), WindowType.HANN);
         windowCombo.select(currWin.ordinal());
         windowCombo.addListener(SWT.Selection, e -> {
             int i = windowCombo.getSelectionIndex();
@@ -813,7 +794,7 @@ public final class FftPane {
         overlapCombo = new Combo(g, SWT.READ_ONLY);
         for (FftOverlap ov : FftOverlap.values()) overlapCombo.add(ov.label);
         overlapCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        FftOverlap currOv = enumOr(FftOverlap.class, prefs.getFftOverlap(), FftOverlap.PCT_0);
+        FftOverlap currOv = FftPaneFormat.enumOr(FftOverlap.class, prefs.getFftOverlap(), FftOverlap.PCT_0);
         overlapCombo.select(currOv.ordinal());
         overlapCombo.addListener(SWT.Selection, e -> {
             int i = overlapCombo.getSelectionIndex();
@@ -829,11 +810,11 @@ public final class FftPane {
         // Cycling stepper: wheel / arrow keys snap to the next /
         // previous preset (2, 4, 8, 16, 32, ∞) while manual typing
         // still accepts any positive integer.
-        Stepper avgCycle = FftPane::stepAveragesCycle;
+        Stepper avgCycle = FftPaneFormat::stepAveragesCycle;
         averagesField = new NumericStepField(g,
                 Math.max(1, prefs.getFftAverages()),
-                FftPane::parseAveragesNumeric,
-                FftPane::formatAverages,
+                FftPaneFormat::parseAveragesNumeric,
+                FftPaneFormat::formatAverages,
                 avgCycle,
                 avgCycle,
                 70);
@@ -874,7 +855,7 @@ public final class FftPane {
         stopAfterNEnable.setToolTipText(I18n.t("fft.settings.stopAfterN.tooltip"));
         stopAfterNField = new NumericStepField(stopRow,
                 prefs.getFftStopAfterN(),
-                txt -> parseIntStrict(txt),
+                txt -> FftPaneFormat.parseIntStrict(txt),
                 v -> Long.toString((long) Math.round(v)),
                 (v, dir) -> Math.max(1, v + dir),
                 (v, dir) -> Math.max(1, v + dir),
@@ -962,7 +943,7 @@ public final class FftPane {
         distMinEnable.setSelection(prefs.isFftDistMinEnabled());
         distMinField = new NumericStepField(g,
                 prefs.getFftDistMinHz(),
-                FftPane::parseDoubleStrict,
+                FftPaneFormat::parseDoubleStrict,
                 v -> String.format("%.1f", v),
                 (v, dir) -> Math.max(0, v + 50 * dir),
                 (v, dir) -> Math.max(0, v + dir),
@@ -992,7 +973,7 @@ public final class FftPane {
         distMaxEnable.setSelection(prefs.isFftDistMaxEnabled());
         distMaxField = new NumericStepField(g,
                 prefs.getFftDistMaxHz(),
-                FftPane::parseDoubleStrict,
+                FftPaneFormat::parseDoubleStrict,
                 v -> String.format("%.1f", v),
                 (v, dir) -> Math.max(0, v + 50 * dir),
                 (v, dir) -> Math.max(0, v + dir),
@@ -1028,8 +1009,8 @@ public final class FftPane {
         // precision); the formatter re-renders in the user's last unit.
         manualFundField = new NumericStepField(g,
                 prefs.getFftManualFundVrms(),
-                FftPane::parseAmplitudeWithUnit,
-                v -> formatAmplitudeWithUnit(v, Preferences.instance().getFftManualFundUnit()),
+                FftPaneFormat::parseAmplitudeWithUnit,
+                v -> FftPaneFormat.formatAmplitudeWithUnit(v, Preferences.instance().getFftManualFundUnit()),
                 (v, dir) -> v * (1.0 + 0.05 * dir),
                 (v, dir) -> v * (1.0 + 0.01 * dir),
                 110);
@@ -1048,7 +1029,7 @@ public final class FftPane {
         addLabel(g, I18n.t("fft.thd.maxThd"));
         thdMaxHarmField = new NumericStepField(g,
                 prefs.getFftThdMaxHarmonic(),
-                FftPane::parseIntStrict,
+                FftPaneFormat::parseIntStrict,
                 v -> Long.toString((long) Math.round(v)),
                 (v, dir) -> Math.min(9, Math.max(2, v + dir)),
                 (v, dir) -> Math.min(9, Math.max(2, v + dir)),
@@ -1068,7 +1049,7 @@ public final class FftPane {
         // up to HN" (N − 1 harmonics in the 2..N range).
         calcMaxHarmField = new NumericStepField(g,
                 prefs.getFftCalcMaxHarmonic(),
-                FftPane::parseIntStrict,
+                FftPaneFormat::parseIntStrict,
                 v -> Long.toString((long) Math.round(v)),
                 (v, dir) -> Math.min(50, Math.max(9, v + dir)),
                 (v, dir) -> Math.min(50, Math.max(9, v + dir)),
@@ -1297,19 +1278,19 @@ public final class FftPane {
         Preferences prefs = Preferences.instance();
         view.refreshFromPrefs();
         if (fftLengthCombo != null && !fftLengthCombo.isDisposed()) {
-            int i = indexOfInt(FFT_LENGTH_VALUES, prefs.getFftLength());
+            int i = FftPaneFormat.indexOfInt(FFT_LENGTH_VALUES, prefs.getFftLength());
             if (i >= 0) fftLengthCombo.select(i);
         }
         if (averagesField != null && !averagesField.isDisposed()) {
             averagesField.setValue(Math.max(1, prefs.getFftAverages()));
         }
         if (windowCombo  != null && !windowCombo .isDisposed()) {
-            WindowType wt = enumOr(WindowType.class,
+            WindowType wt = FftPaneFormat.enumOr(WindowType.class,
                     prefs.getFftWindow(), WindowType.HANN);
             windowCombo.select(wt.ordinal());
         }
         if (overlapCombo != null && !overlapCombo.isDisposed()) {
-            FftOverlap ov = enumOr(FftOverlap.class, prefs.getFftOverlap(), FftOverlap.PCT_0);
+            FftOverlap ov = FftPaneFormat.enumOr(FftOverlap.class, prefs.getFftOverlap(), FftOverlap.PCT_0);
             overlapCombo.select(ov.ordinal());
         }
         if (stopAfterNEnable != null && !stopAfterNEnable.isDisposed()) {
@@ -1507,38 +1488,6 @@ public final class FftPane {
      *  on the volts axis (20 dB = ×10), so the user sees the same grid
      *  lines around the same signal levels after the switch.
      *  Returns {@code new double[] {newTop, newBot}}. */
-    /** Maximum sensible top-of-axis value for a magnitude unit.
-     *  Driven by the ADC full-scale calibration so the user can never
-     *  scroll above what the hardware could produce. */
-    private static double magMaxFor(FftMagnitudeUnit unit, double adcFsVrms) {
-        double fs = Math.max(1e-12, adcFsVrms);
-        switch (unit) {
-            case DBFS:      return 0;                              // 0 dBFS = ADC clipping
-            case DBV: {
-                double dbvFs = 20 * Math.log10(fs);
-                return Math.ceil((dbvFs + 5) / 10.0) * 10;         // round up to 10 dB
-            }
-            case V:         return Math.ceil(fs + 1);              // a bit above FS
-            case V_SQRT_HZ: return Math.max(1e-3, fs);
-            default:        return 0;
-        }
-    }
-
-    /** Minimum sensible bottom-of-axis value for a magnitude unit.
-     *  Linear-amplitude axes (V, V/√Hz) bottom out at 1 fV which is
-     *  well below the thermal noise floor of any realistic ADC — the
-     *  user can still zoom in tight thanks to the ratio-based span
-     *  rule in {@link #clampRangesAndSave}. */
-    private static double magMinFor(FftMagnitudeUnit unit, double adcFsVrms) {
-        switch (unit) {
-            case DBFS:      return -300;
-            case DBV:       return -300 + 20 * Math.log10(Math.max(1e-12, adcFsVrms));
-            case V:
-            case V_SQRT_HZ: return 1e-15;   // 1 fV
-            default:        return -300;
-        }
-    }
-
     /** Clamps the persisted freq + mag window to the current hardware
      *  limits.  Called after every wheel zoom, scrollbar move, and
      *  controller publish so an extreme value can never escape. */
@@ -1555,8 +1504,8 @@ public final class FftPane {
         prefs.setFftFreqMaxHz(fMax);
         FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
         double fs    = prefs.getAdcFsVoltageRms();
-        double maxTp = magMaxFor(unit, fs);
-        double minBt = magMinFor(unit, fs);
+        double maxTp = FftFormat.magMaxFor(unit, fs);
+        double minBt = FftFormat.magMinFor(unit, fs);
         double mTop = prefs.getFftMagTop();
         double mBot = prefs.getFftMagBottom();
         if (mTop > maxTp) mTop = maxTp;
@@ -1634,8 +1583,8 @@ public final class FftPane {
         // ---- Magnitude scrollbar
         FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
         double fs    = prefs.getAdcFsVoltageRms();
-        double maxTp = magMaxFor(unit, fs);
-        double minBt = magMinFor(unit, fs);
+        double maxTp = FftFormat.magMaxFor(unit, fs);
+        double minBt = FftFormat.magMinFor(unit, fs);
         double mTop  = prefs.getFftMagTop();
         double mBot  = prefs.getFftMagBottom();
         double magVis = mTop - mBot;
@@ -1692,8 +1641,8 @@ public final class FftPane {
         Preferences prefs = Preferences.instance();
         FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
         double fs    = prefs.getAdcFsVoltageRms();
-        double maxTp = magMaxFor(unit, fs);
-        double minBt = magMinFor(unit, fs);
+        double maxTp = FftFormat.magMaxFor(unit, fs);
+        double minBt = FftFormat.magMinFor(unit, fs);
         double visible = prefs.getFftMagTop() - prefs.getFftMagBottom();
         double total   = maxTp - minBt;
         int sel   = magScrollbar.getSelection();
@@ -1815,13 +1764,13 @@ public final class FftPane {
     private static List<String> tileTexts(Preferences prefs, int tabIndex) {
         List<String> out = new ArrayList<>();
         if (tabIndex == TAB_FFT_SETTINGS) {
-            out.add(shortFftLength(prefs.getFftLength()));
-            out.add(shortWindow(prefs.getFftWindow()));
-            out.add(shortOverlap(prefs.getFftOverlap()));
-            out.add(formatAverages(prefs.getFftAverages()) + "×");
+            out.add(FftPaneFormat.shortFftLength(prefs.getFftLength()));
+            out.add(FftPaneFormat.shortWindow(prefs.getFftWindow()));
+            out.add(FftPaneFormat.shortOverlap(prefs.getFftOverlap()));
+            out.add(FftPaneFormat.formatAverages(prefs.getFftAverages()) + "×");
             out.add(prefs.isFftCoherentAveraging() ? "coh" : "inc");
         } else if (tabIndex == TAB_THD_SETTINGS) {
-            out.add(shortDistRange(prefs));
+            out.add(FftPaneFormat.shortDistRange(prefs));
             out.add("H" + prefs.getFftThdMaxHarmonic());
             if (prefs.isFftManualFundEnabled()) {
                 out.add("manF");
@@ -1851,28 +1800,28 @@ public final class FftPane {
 
         if (tabIndex == TAB_FFT_SETTINGS) {
             int w1 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                    shortFftLength(prefs.getFftLength()));
+                    FftPaneFormat.shortFftLength(prefs.getFftLength()));
             addTabRegion(x, y, w1, tileH, I18n.t("fft.tile.length", prefs.getFftLength()));
             x += w1 + gap;
             int w2 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                    shortWindow(prefs.getFftWindow()));
-            addTabRegion(x, y, w2, tileH, I18n.t("fft.tile.window", prettyWindow(prefs.getFftWindow())));
+                    FftPaneFormat.shortWindow(prefs.getFftWindow()));
+            addTabRegion(x, y, w2, tileH, I18n.t("fft.tile.window", FftPaneFormat.prettyWindow(prefs.getFftWindow())));
             x += w2 + gap;
             int w3 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                    shortOverlap(prefs.getFftOverlap()));
-            addTabRegion(x, y, w3, tileH, I18n.t("fft.tile.overlap", prettyOverlap(prefs.getFftOverlap())));
+                    FftPaneFormat.shortOverlap(prefs.getFftOverlap()));
+            addTabRegion(x, y, w3, tileH, I18n.t("fft.tile.overlap", FftPaneFormat.prettyOverlap(prefs.getFftOverlap())));
             x += w3 + gap;
             int w4 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                    formatAverages(prefs.getFftAverages()) + "×");
+                    FftPaneFormat.formatAverages(prefs.getFftAverages()) + "×");
             addTabRegion(x, y, w4, tileH,
-                    I18n.t("fft.tile.averages", formatAverages(prefs.getFftAverages())));
+                    I18n.t("fft.tile.averages", FftPaneFormat.formatAverages(prefs.getFftAverages())));
             x += w4 + gap;
             int w5 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
                     prefs.isFftCoherentAveraging() ? "coh" : "inc");
             addTabRegion(x, y, w5, tileH, I18n.t(prefs.isFftCoherentAveraging()
                     ? "fft.tile.coh" : "fft.tile.inc"));
         } else if (tabIndex == TAB_THD_SETTINGS) {
-            String dr = shortDistRange(prefs);
+            String dr = FftPaneFormat.shortDistRange(prefs);
             int w1 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR, dr);
             addTabRegion(x, y, w1, tileH, I18n.t("fft.tile.distRange", dr));
             x += w1 + gap;
@@ -1924,50 +1873,6 @@ public final class FftPane {
         }
     }
 
-    // ---- Short / pretty labels used in tile rows -----------------------
-
-    private static String shortFftLength(int n) {
-        if (n >= 1 << 20) return (n >> 20) + "M";
-        if (n >= 1 << 10) return (n >> 10) + "k";
-        return Integer.toString(n);
-    }
-
-    private static String shortWindow(String name) {
-        try {
-            WindowType wt = WindowType.valueOf(name);
-            return WINDOW_SHORT_LABELS[wt.ordinal()];
-        } catch (IllegalArgumentException e) { return "Hann"; }
-    }
-
-    private static String prettyWindow(String name) {
-        try {
-            WindowType wt = WindowType.valueOf(name);
-            return WINDOW_LABELS[wt.ordinal()];
-        } catch (IllegalArgumentException e) { return "Hann"; }
-    }
-
-    private static String shortOverlap(String name) {
-        try {
-            return FftOverlap.valueOf(name).label;
-        } catch (IllegalArgumentException e) { return "0%"; }
-    }
-
-    private static String prettyOverlap(String name) {
-        return shortOverlap(name);
-    }
-
-    private static String shortDistRange(Preferences prefs) {
-        if (!prefs.isFftDistMinEnabled() && !prefs.isFftDistMaxEnabled()) return "all";
-        String lo = prefs.isFftDistMinEnabled() ? shortHz(prefs.getFftDistMinHz()) : "0";
-        String hi = prefs.isFftDistMaxEnabled() ? shortHz(prefs.getFftDistMaxHz()) : "∞";
-        return lo + "-" + hi;
-    }
-
-    private static String shortHz(double f) {
-        if (f >= 1000) return ((int) Math.round(f / 1000)) + "k";
-        return Long.toString(Math.round(f));
-    }
-
     // =========================================================================
     // Helpers
     // =========================================================================
@@ -1984,119 +1889,5 @@ public final class FftPane {
         Label l = new Label(parent, SWT.NONE);
         l.setText(text);
         l.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-    }
-
-
-    private static int indexOfInt(int[] arr, int value) {
-        for (int i = 0; i < arr.length; i++) if (arr[i] == value) return i;
-        return -1;
-    }
-
-    private static <E extends Enum<E>> E enumOr(Class<E> type, String name, E fallback) {
-        if (name == null) return fallback;
-        try { return Enum.valueOf(type, name); }
-        catch (IllegalArgumentException e) { return fallback; }
-    }
-
-    /** Parses an amplitude with an embedded unit suffix.  Accepts trailing
-     *  {@code mV}, {@code V} (or no suffix), {@code dBV}, {@code dBFS}.
-     *  Side-effect: stores the chosen unit into Preferences so the
-     *  formatter re-renders the value in the same unit the user typed.
-     *  Canonical return value is volts (linear). */
-    private static Double parseAmplitudeWithUnit(String s) {
-        if (s == null) return null;
-        String t = s.trim().replace(',', '.');
-        if (t.isEmpty()) return null;
-        // Identify trailing unit suffix.
-        String unit = "V";
-        String numText = t;
-        Matcher m = Pattern
-                .compile("([+-]?[0-9]*\\.?[0-9]+(?:[eE][+-]?[0-9]+)?)\\s*([a-zA-Z]*)$")
-                .matcher(t);
-        if (!m.matches()) return null;
-        numText = m.group(1);
-        String u = m.group(2);
-        if (!u.isEmpty()) {
-            if      (u.equalsIgnoreCase("mV"))   unit = "mV";
-            else if (u.equalsIgnoreCase("V"))    unit = "V";
-            else if (u.equalsIgnoreCase("dBV"))  unit = "dBV";
-            else if (u.equalsIgnoreCase("dBFS")) unit = "dBFS";
-            else return null;
-        }
-        double raw;
-        try { raw = Double.parseDouble(numText); }
-        catch (NumberFormatException ex) { return null; }
-        double v;
-        switch (unit) {
-            case "mV":   v = raw * 0.001; break;
-            case "V":    v = raw;         break;
-            case "dBV":
-            case "dBFS": v = Math.pow(10, raw / 20.0); break;
-            default:     v = raw;
-        }
-        Preferences.instance().setFftManualFundUnit(unit);
-        return v;
-    }
-
-    private static String formatAmplitudeWithUnit(double vrms, String unit) {
-        if (unit == null) unit = "V";
-        switch (unit) {
-            case "mV":   return String.format("%.3f mV",  vrms * 1000);
-            case "dBV":  return String.format("%+.3f dBV", 20 * Math.log10(Math.max(1e-30, vrms)));
-            case "dBFS": return String.format("%+.3f dBFS",20 * Math.log10(Math.max(1e-30, vrms)));
-            case "V":
-            default:     return String.format("%.4f V", vrms);
-        }
-    }
-
-    /** Averages presets used by the cycling stepper (wheel / arrows). */
-    private static final double[] AVERAGES_PRESETS = { 2, 4, 8, 16, 32, Double.POSITIVE_INFINITY };
-
-    /** Wheel / arrow stepper for the averages field — snaps to the next
-     *  / previous preset rather than ±1.  Manual typing in the field is
-     *  unaffected because parsing goes through {@link #parseAveragesNumeric}. */
-    private static double stepAveragesCycle(double current, int dir) {
-        if (dir > 0) {
-            for (double t : AVERAGES_PRESETS) if (t > current + 1e-9) return t;
-            return Double.POSITIVE_INFINITY;
-        }
-        double best = 2;
-        for (double t : AVERAGES_PRESETS) {
-            if (Double.isInfinite(t)) break;
-            if (t < current - 1e-9) best = t; else break;
-        }
-        return best;
-    }
-
-    /** Parses an averages-field value — accepts any positive integer
-     *  AND the special tokens {@code "∞"} / {@code "forever"} → +Infinity. */
-    private static Double parseAveragesNumeric(String s) {
-        if (s == null) return null;
-        String t = s.trim();
-        if (t.isEmpty()) return null;
-        if (t.equals("∞") || t.equalsIgnoreCase("forever") || t.equalsIgnoreCase("inf")) {
-            return Double.POSITIVE_INFINITY;
-        }
-        try {
-            long n = Long.parseLong(t);
-            return n >= 1 ? (double) n : null;
-        } catch (NumberFormatException e) { return null; }
-    }
-
-    /** Formats an averages value — {@code +Infinity} → {@code "∞"},
-     *  finite values → plain integer string. */
-    private static String formatAverages(double v) {
-        if (Double.isInfinite(v)) return "∞";
-        return Long.toString((long) Math.round(v));
-    }
-
-    private static Double parseDoubleStrict(String s) {
-        try { return Double.parseDouble(s.trim().replace(',', '.')); }
-        catch (NumberFormatException e) { return null; }
-    }
-
-    private static Double parseIntStrict(String s) {
-        try { return (double) Integer.parseInt(s.trim()); }
-        catch (NumberFormatException e) { return null; }
     }
 }

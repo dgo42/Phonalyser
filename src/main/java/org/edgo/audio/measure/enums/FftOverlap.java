@@ -7,7 +7,7 @@ public enum FftOverlap {
     PCT_50(0.5,   "50%"),
     PCT_75(0.75,  "75%"),
     PCT_87_5(0.875,  "87.5%"),
-    PCT_92_75(0.9275, "92.75%");
+    PCT_93_75(0.9375, "93.75%");
 
     public final double fraction;
     public final String label;
@@ -29,13 +29,12 @@ public enum FftOverlap {
             case "87.5":
             case "87":
                 return PCT_87_5;
-            case "92.75":
-            case "92":
+            case "93.75":
             case "93":
-                return PCT_92_75;
+                return PCT_93_75;
             default:
                 throw new IllegalArgumentException(
-                        "Unknown overlap: " + s + " — use 0, 50, 75, 87.5, or 92.75");
+                        "Unknown overlap: " + s + " — use 0, 50, 75, 87.5, or 93.75");
         }
     }
 }

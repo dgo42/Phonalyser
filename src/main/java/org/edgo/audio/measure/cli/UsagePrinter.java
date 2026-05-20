@@ -100,7 +100,7 @@ public final class UsagePrinter {
         log.info("    [--harmonics <n>]         harmonics (H2..) to measure (default 10)");
         log.info("    [--window-fn <type>]      RECTANGULAR | HANN | BH4 | BH7 | FLAT_TOP |");
         log.info("                              DC150 | DC200 (default HANN)");
-        log.info("    [--overlap <pct>]         0 | 50 | 75 | 87.5 | 92.75 (default 0)");
+        log.info("    [--overlap <pct>]         0 | 50 | 75 | 87.5 | 93.75 (default 0)");
         log.info("    [--dist-min <hz>]         lower bound for SNR/noise integration (default 0)");
         log.info("    [--dist-max <hz>]         upper bound for SNR/noise integration (default Fs/2)");
         log.info("    [--fund-v <vrms>]         true RMS voltage of the fundamental — anchors dBV scale");

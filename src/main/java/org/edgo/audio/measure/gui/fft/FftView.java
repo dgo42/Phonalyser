@@ -1,8 +1,6 @@
 package org.edgo.audio.measure.gui.fft;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.MouseAdapter;
@@ -278,8 +276,11 @@ public final class FftView extends Canvas {
         Preferences prefs = Preferences.instance();
         FftMagnitudeUnit oldUnit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
         FftMagnitudeUnit newUnit = FftMagnitudeUnit.fromName(MAG_UNIT_NAMES[i]);
-        double[] conv = convertMagRange(prefs.getFftMagTop(), prefs.getFftMagBottom(),
-                oldUnit, newUnit);
+        double fs = prefs.getAdcFsVoltageRms();
+        if (!(fs > 0)) fs = 1.0;
+        double fsDbv = 20 * Math.log10(fs);
+        double[] conv = FftFormat.convertMagRange(prefs.getFftMagTop(), prefs.getFftMagBottom(),
+                oldUnit, newUnit, fsDbv);
         prefs.setFftMagTop(conv[0]);
         prefs.setFftMagBottom(conv[1]);
         prefs.setFftMagUnit(MAG_UNIT_NAMES[i]);
@@ -334,44 +335,6 @@ public final class FftView extends Canvas {
         if (value == null) return -1;
         for (int i = 0; i < arr.length; i++) if (value.equals(arr[i])) return i;
         return -1;
-    }
-
-    /** Converts a {@code [top, bottom]} pair from one magnitude unit to
-     *  another so a unit-combo change preserves the visible signal-on-
-     *  the-axis: each dB on the dB axis maps to one factor-of-10^0.05 on
-     *  the volts axis (20 dB = ×10), so the user sees the same grid
-     *  lines around the same signal levels after the switch. */
-    private static double[] convertMagRange(double oldTop, double oldBot,
-                                            FftMagnitudeUnit from, FftMagnitudeUnit to) {
-        if (from == to) return new double[] {oldTop, oldBot};
-        double fs = Preferences.instance().getAdcFsVoltageRms();
-        if (!(fs > 0)) fs = 1.0;
-        double fsDbv = 20 * Math.log10(fs);
-        double topDbv = toDbv(oldTop, from, fsDbv);
-        double botDbv = toDbv(oldBot, from, fsDbv);
-        double newTop = fromDbv(topDbv, to, fsDbv);
-        double newBot = fromDbv(botDbv, to, fsDbv);
-        return new double[] {newTop, newBot};
-    }
-
-    private static double toDbv(double v, FftMagnitudeUnit unit, double fsDbv) {
-        switch (unit) {
-            case DBV:       return v;
-            case DBFS:      return v + fsDbv;
-            case V:         return (v > 0) ? 20 * Math.log10(v) : -300;
-            case V_SQRT_HZ: return (v > 0) ? 20 * Math.log10(v) : -300;
-            default:        return v;
-        }
-    }
-
-    private static double fromDbv(double dbv, FftMagnitudeUnit unit, double fsDbv) {
-        switch (unit) {
-            case DBV:       return dbv;
-            case DBFS:      return dbv - fsDbv;
-            case V:
-            case V_SQRT_HZ: return Math.pow(10, dbv / 20.0);
-            default:        return dbv;
-        }
     }
 
     private void disposeResources() {
@@ -810,7 +773,7 @@ public final class FftView extends Canvas {
         // Drop the dot entirely when its magnitude is outside the
         // visible range — dots clamped to the edge would otherwise
         // appear as misleading markers at the chart's top / bottom.
-        double t = magToYFraction(v, magTop, magBot, unit);
+        double t = FftFormat.magToYFraction(v, magTop, magBot, unit);
         if (t < 0 || t > 1) return;
         int x = freqToX(hz, plot, freqMin, freqMax, logFreq);
         int y = magToY(v, plot, magTop, magBot, unit);
@@ -868,8 +831,8 @@ public final class FftView extends Canvas {
         // so the user sees the classic REW-style log grid; linear axis
         // uses the same nice-number ticks the labels use.
         double[] vTicks = logFreq
-                ? logFreqTicks(freqMin, freqMax, false)
-                : niceLinearTicks(freqMin, freqMax, 10);
+                ? FftAxisTicks.logFreqAll(freqMin, freqMax, false)
+                : FftAxisTicks.niceLinear(freqMin, freqMax, 10);
         for (double f : vTicks) {
             if (f <= freqMin || f >= freqMax) continue;
             int x = freqToX(f, plot, freqMin, freqMax, logFreq);
@@ -877,9 +840,9 @@ public final class FftView extends Canvas {
         }
         // Horizontal grid — log units (V, V/√Hz) get decade ticks
         // (1..9 × 10ⁿ); dB units get nice linear ticks.
-        double[] hTicks = isMagLog(unit)
-                ? logMagTicks(magBot, magTop, false)
-                : niceLinearTicks(magBot, magTop, 10);
+        double[] hTicks = FftAxisTicks.isMagLog(unit)
+                ? FftAxisTicks.logMagMajor(magBot, magTop, false)
+                : FftAxisTicks.niceLinear(magBot, magTop, 10);
         for (double m : hTicks) {
             if (m <= magBot || m >= magTop) continue;
             int y = magToY(m, plot, magTop, magBot, unit);
@@ -907,16 +870,16 @@ public final class FftView extends Canvas {
         // overpaint them.  dB axes clamp the major step at minimum
         // 5 dB so a tight zoom can't produce 1- or 2-dB majors —
         // matches the "ticks no denser than 5 dB" rule.
-        double[] magTicks = isMagLog(unit)
-                ? logMagTicks(magBot, magTop, true)
-                : niceLinearTicksMinStep(magBot, magTop, 10, 5.0);
+        double[] magTicks = FftAxisTicks.isMagLog(unit)
+                ? FftAxisTicks.logMagMajor(magBot, magTop, true)
+                : FftAxisTicks.niceLinearMinStep(magBot, magTop, 10, 5.0);
         int axisX = plot.x;
         gc.setForeground(axisColor);
         for (double m : magTicks) {
             if (m < magBot || m > magTop) continue;
             int y = magToY(m, plot, magTop, magBot, unit);
             gc.drawLine(axisX - 4, y, axisX, y);
-            String s = formatMagnitudeBare(m, unit);
+            String s = FftFormat.formatMagnitudeBare(m, unit);
             gc.setForeground(textColor);
             Point ext = gc.textExtent(s);
             gc.drawText(s, plot.x - ext.x - 8, y - ext.y / 2, true);
@@ -928,7 +891,7 @@ public final class FftView extends Canvas {
         //   • Tick + label — additional check that the row also clears
         //     the nearest LABELLED tick by one text-height, otherwise
         //     the value text would visually overlap a major label.
-        double[] magMinor = magMinorTicks(magBot, magTop, unit);
+        double[] magMinor = FftAxisTicks.magMinor(magBot, magTop, unit);
         int textH = gc.textExtent("M").y;
         int prevMinorY = Integer.MIN_VALUE;
         int prevLabelY = Integer.MIN_VALUE;
@@ -948,7 +911,7 @@ public final class FftView extends Canvas {
                 if (Math.abs(y - yM) < textH + 2) { clearOfMajors = false; break; }
             }
             if (clearOfMajors && Math.abs(y - prevLabelY) >= textH + 2) {
-                String s = formatMagnitudeBare(m, unit);
+                String s = FftFormat.formatMagnitudeBare(m, unit);
                 gc.setForeground(textColor);
                 Point ext = gc.textExtent(s);
                 gc.drawText(s, plot.x - ext.x - 8, y - ext.y / 2, true);
@@ -983,7 +946,7 @@ public final class FftView extends Canvas {
         // outward mark whenever there's at least 6 px of space between
         // them; on the linear axis we sub-divide each step into 5 and
         // draw a 2-px outward mark for each sub-position.
-        double[] fLabels = freqTickValues(freqMin, freqMax, logFreq);
+        double[] fLabels = FftAxisTicks.freqMajor(freqMin, freqMax, logFreq);
         int axisY = plot.y + plot.height;
         gc.setForeground(axisColor);
         // Major tick marks + labels.  Right-edge label gets nudged
@@ -994,7 +957,7 @@ public final class FftView extends Canvas {
         for (double f : fLabels) {
             int x = freqToX(f, plot, freqMin, freqMax, logFreq);
             gc.drawLine(x, axisY, x, axisY + 4);
-            String s = logFreq ? formatFrequency(f) : formatFrequencyInteger(f);
+            String s = logFreq ? FftFormat.formatFrequency(f) : FftFormat.formatFrequencyInteger(f);
             Point ext = gc.textExtent(s);
             int textX = x - ext.x / 2;
             if (textX + ext.x > plotRight) textX = plotRight - ext.x;
@@ -1004,7 +967,7 @@ public final class FftView extends Canvas {
         // Minor tick marks (no labels) — only emitted when neighbours
         // are far enough apart that they wouldn't overlap the labelled
         // ones visually.
-        double[] minor = freqMinorTicks(freqMin, freqMax, logFreq);
+        double[] minor = FftAxisTicks.freqMinor(freqMin, freqMax, logFreq);
         int prevMinorX = Integer.MIN_VALUE;
         for (double f : minor) {
             int x = freqToX(f, plot, freqMin, freqMax, logFreq);
@@ -1013,230 +976,6 @@ public final class FftView extends Canvas {
             prevMinorX = x;
         }
         gc.setForeground(textColor);
-    }
-
-    /** Minor (unlabelled) ticks on the magnitude axis.  dB units
-     *  emit positions on a fixed 5-dB grid, with positions that
-     *  coincide with a major tick removed — yields regular spacing
-     *  regardless of how niceLinearTicks chose the major step.  Log
-     *  units (V / V/√Hz) emit every 1..9 × 10ⁿ position minus the
-     *  labelled subset, then drop any consecutive pair closer than
-     *  5 dB so the column never renders denser than the 5-dB grid. */
-    private static double[] magMinorTicks(double magBot, double magTop, FftMagnitudeUnit unit) {
-        if (isMagLog(unit)) {
-            double[] all   = logMagAllSteps(magBot, magTop);
-            double[] major = logMagTicks(magBot, magTop, true);
-            return enforceMinDbSpacing(subtract(all, major), unit, 5.0);
-        }
-        // dB axis: walk the 5-dB grid directly so the pattern stays
-        // 5-dB-aligned even when niceLinearTicks chose a 20-dB or
-        // 25-dB major step.  Earlier we sub-divided the major step
-        // (e.g. step=20 → sub=4) and filtered, which produced
-        // irregular kept positions (e.g. 4 dB, 12 dB, 24 dB …) that
-        // the user saw as "weird ticks in between" while scrolling.
-        double[] major = niceLinearTicks(magBot, magTop, 10);
-        double minorStep = 5.0;
-        double first = Math.ceil(magBot / minorStep) * minorStep;
-        List<Double> out = new ArrayList<>();
-        for (double m = first; m <= magTop + 1e-9; m += minorStep) {
-            if (m < magBot || m > magTop) continue;
-            boolean isMajor = false;
-            for (double M : major) {
-                if (Math.abs(m - M) < 1e-6) { isMajor = true; break; }
-            }
-            if (!isMajor) out.add(m);
-        }
-        double[] arr = new double[out.size()];
-        for (int i = 0; i < arr.length; i++) arr[i] = out.get(i);
-        return arr;
-    }
-
-    /** Keeps only positions whose dB-equivalent distance from the
-     *  previous kept value is at least {@code minDb}.  Used for log
-     *  magnitude units where the dB equivalent of a 1..9 × 10ⁿ
-     *  position is {@code 20·log10(v)}. */
-    private static double[] enforceMinDbSpacing(double[] positions, FftMagnitudeUnit unit, double minDb) {
-        if (positions.length == 0) return positions;
-        List<Double> out = new ArrayList<>();
-        double prevDb = Double.NEGATIVE_INFINITY;
-        for (double v : positions) {
-            double db = isMagLog(unit)
-                    ? 20 * Math.log10(Math.max(Double.MIN_NORMAL, v))
-                    : v;
-            if (db - prevDb < minDb) continue;
-            out.add(v);
-            prevDb = db;
-        }
-        double[] arr = new double[out.size()];
-        for (int i = 0; i < arr.length; i++) arr[i] = out.get(i);
-        return arr;
-    }
-
-    /** Every 1..9 × 10ⁿ position in the visible log-magnitude range,
-     *  with no thinning — used by {@link #magMinorTicks} to derive the
-     *  unlabelled subset. */
-    private static double[] logMagAllSteps(double magBot, double magTop) {
-        double lo = Math.min(magBot, magTop);
-        double hi = Math.max(magBot, magTop);
-        if (lo <= 0) lo = 1e-30;
-        if (hi <= lo) hi = lo * 10;
-        int loDec = (int) Math.floor(Math.log10(lo));
-        int hiDec = (int) Math.ceil (Math.log10(hi));
-        List<Double> out = new ArrayList<>();
-        for (int d = loDec; d <= hiDec; d++) {
-            double base = Math.pow(10, d);
-            for (int m = 1; m <= 9; m++) {
-                double v = base * m;
-                if (v < lo || v > hi) continue;
-                out.add(v);
-            }
-        }
-        double[] arr = new double[out.size()];
-        for (int i = 0; i < arr.length; i++) arr[i] = out.get(i);
-        return arr;
-    }
-
-    /** Minor (unlabelled) ticks on the frequency axis.  Returns all
-     *  positions that aren't already in {@link #freqTickValues} so
-     *  callers can draw a short tick mark at each. */
-    private static double[] freqMinorTicks(double freqMin, double freqMax, boolean logFreq) {
-        if (logFreq) {
-            // Every 1..9 × 10ⁿ minus the major-tick subset returned by
-            // logFreqTicks(.., labelsOnly=true).
-            double[] all   = logFreqTicks(freqMin, freqMax, false);
-            double[] major = logFreqTicks(freqMin, freqMax, true);
-            return subtract(all, major);
-        }
-        // Linear: 5 sub-divisions per major step.
-        double[] major = niceLinearTicks(freqMin, freqMax, 10);
-        if (major.length < 2) return new double[0];
-        double step = major[1] - major[0];
-        double sub = step / 5.0;
-        List<Double> out = new ArrayList<>();
-        for (double f = major[0] - 4 * sub; f <= freqMax; f += sub) {
-            if (f < freqMin || f > freqMax) continue;
-            // Skip the major positions themselves.
-            boolean isMajor = false;
-            for (double m : major) {
-                if (Math.abs(f - m) < sub * 0.5) { isMajor = true; break; }
-            }
-            if (!isMajor) out.add(f);
-        }
-        double[] arr = new double[out.size()];
-        for (int i = 0; i < arr.length; i++) arr[i] = out.get(i);
-        return arr;
-    }
-
-    /** Returns the elements of {@code all} that are not present in {@code
-     *  exclude} (per a small numeric tolerance).  Used to split the log
-     *  axis's all-minor-tick list into a labelled subset + unlabelled
-     *  remainder. */
-    private static double[] subtract(double[] all, double[] exclude) {
-        List<Double> out = new ArrayList<>();
-        for (double v : all) {
-            boolean keep = true;
-            for (double e : exclude) {
-                if (Math.abs(v - e) < 1e-9 * Math.max(1, Math.abs(v))) { keep = false; break; }
-            }
-            if (keep) out.add(v);
-        }
-        double[] arr = new double[out.size()];
-        for (int i = 0; i < arr.length; i++) arr[i] = out.get(i);
-        return arr;
-    }
-
-    /** Major-tick values for the linear axis (used by both grid + labels).
-     *  Log-axis callers should use {@link #logFreqTicks(double, double, boolean)}
-     *  directly so they can distinguish major vs minor ticks. */
-    private static double[] freqTickValues(double freqMin, double freqMax, boolean logFreq) {
-        if (logFreq) return logFreqTicks(freqMin, freqMax, true);
-        return niceLinearTicks(freqMin, freqMax, 10);
-    }
-
-    /** REW-style log frequency ticks: at each decade we emit 1×, 2×, 3×,
-     *  4×, 5×, 6×, 7×, 8×, 9× × 10ⁿ.  {@code labelsOnly} = true returns
-     *  only the values that should get a printed label (auto-thinned when
-     *  the pixel density is high).  {@code labelsOnly} = false returns
-     *  every minor tick — used by the grid. */
-    private static double[] logFreqTicks(double freqMin, double freqMax, boolean labelsOnly) {
-        double safeMin = Math.max(1, freqMin);
-        double safeMax = Math.max(safeMin + 1, freqMax);
-        int loDec = (int) Math.floor(Math.log10(safeMin));
-        int hiDec = (int) Math.ceil (Math.log10(safeMax));
-        List<Double> out = new ArrayList<>();
-        for (int d = loDec; d <= hiDec; d++) {
-            double base = Math.pow(10, d);
-            for (int m = 1; m <= 9; m++) {
-                double f = base * m;
-                if (f < safeMin || f > safeMax) continue;
-                out.add(f);
-            }
-        }
-        if (!labelsOnly) {
-            double[] arr = new double[out.size()];
-            for (int i = 0; i < arr.length; i++) arr[i] = out.get(i);
-            return arr;
-        }
-        // For labels: pick a subset depending on how many decades are
-        // visible.  Few decades → show all 1..9; many → thin to 1,2,5 or
-        // just 1 — REW does this dynamically by pixel density.  Use a
-        // simple decade-count heuristic.
-        int decades = hiDec - loDec;
-        int[] keep;
-        if (decades <= 1)      keep = new int[] {1,2,3,4,5,6,7,8};
-        else if (decades <= 2) keep = new int[] {1,2,3,4,5,6,8};
-        else if (decades <= 3) keep = new int[] {1,2,3,5,7};
-        else if (decades <= 5) keep = new int[] {1,2,5};
-        else                   keep = new int[] {1};
-        List<Double> labels = new ArrayList<>();
-        for (double f : out) {
-            double base = Math.pow(10, Math.floor(Math.log10(f)));
-            int   m    = (int) Math.round(f / base);
-            for (int k : keep) if (k == m) { labels.add(f); break; }
-        }
-        double[] arr = new double[labels.size()];
-        for (int i = 0; i < arr.length; i++) arr[i] = labels.get(i);
-        return arr;
-    }
-
-    /** Same as {@link #niceLinearTicks} but rounds the chosen step UP
-     *  to at least {@code minStep} so the caller can enforce a
-     *  per-axis density floor (e.g. "no ticks closer than 5 dB" on
-     *  the magnitude axis).  When the natural step is already ≥
-     *  {@code minStep} this returns identical output. */
-    private static double[] niceLinearTicksMinStep(double min, double max, int targetCount, double minStep) {
-        double[] candidate = niceLinearTicks(min, max, targetCount);
-        if (candidate.length < 2) return candidate;
-        double step = candidate[1] - candidate[0];
-        if (step >= minStep) return candidate;
-        // Force step to {@code minStep}, walking the aligned grid.
-        double first = Math.ceil(min / minStep) * minStep;
-        List<Double> out = new ArrayList<>();
-        for (double f = first; f <= max + 1e-9; f += minStep) out.add(f);
-        double[] arr = new double[out.size()];
-        for (int i = 0; i < arr.length; i++) arr[i] = out.get(i);
-        return arr;
-    }
-
-    /** Returns ~{@code targetCount} round-number tick positions between
-     *  {@code min} and {@code max}.  Step is 1 / 2 / 2.5 / 5 × 10ⁿ. */
-    private static double[] niceLinearTicks(double min, double max, int targetCount) {
-        double range = Math.max(1e-9, max - min);
-        double rough = range / Math.max(1, targetCount);
-        double pow   = Math.pow(10, Math.floor(Math.log10(rough)));
-        double mant  = rough / pow;
-        double step;
-        if      (mant < 1.5) step = 1     * pow;
-        else if (mant < 3)   step = 2     * pow;
-        else if (mant < 4)   step = 2.5   * pow;
-        else if (mant < 7)   step = 5     * pow;
-        else                 step = 10    * pow;
-        double first = Math.ceil(min / step) * step;
-        List<Double> out = new ArrayList<>();
-        for (double f = first; f <= max + step * 1e-9; f += step) out.add(f);
-        double[] arr = new double[out.size()];
-        for (int i = 0; i < arr.length; i++) arr[i] = out.get(i);
-        return arr;
     }
 
     // =========================================================================
@@ -1722,7 +1461,7 @@ public final class FftView extends Canvas {
         // is unrelated to the actual signal level at that frequency).
         double f = xToFreq(crossX, plot, freqMin, freqMax, logFreq);
         StringBuilder sb = new StringBuilder();
-        sb.append("f = ").append(formatFrequencyFine(f));
+        sb.append("f = ").append(FftFormat.formatFrequencyFine(f));
         if (r != null && r.amplitudeDbFs != null && r.freqResolution > 0) {
             int bin = (int) Math.round(f / r.freqResolution);
             if (bin >= 0 && bin < r.amplitudeDbFs.length) {
@@ -1739,7 +1478,7 @@ public final class FftView extends Canvas {
                     if (bin == fb) refDbV = r.fundamentalTrueDbV - r.fundamentalDbFs;
                 }
                 double v = unit.convertFromDbFs(r.amplitudeDbFs[bin], refDbV, r.freqResolution);
-                sb.append('\n').append("|m| = ").append(formatMagnitude(v, unit));
+                sb.append('\n').append("|m| = ").append(FftFormat.formatMagnitude(v, unit));
             }
         }
         String text = sb.toString();
@@ -1962,7 +1701,7 @@ public final class FftView extends Canvas {
         if (frac < 0) frac = 0; else if (frac > 1) frac = 1;
         double scale = (dir > 0) ? 0.8 : 1.25;
         double newTop, newBot;
-        if (isMagLog(unit)) {
+        if (FftAxisTicks.isMagLog(unit)) {
             double lt = Math.log10(Math.max(1e-30, top));
             double lb = Math.log10(Math.max(1e-30, bot));
             if (lt <= lb) return;
@@ -2038,7 +1777,7 @@ public final class FftView extends Canvas {
         double bot = prefs.getFftMagBottom();
         double[] lim = magLimits(unit, prefs.getAdcFsVoltageRms());
         double maxTp = lim[0], minBt = lim[1];
-        if (isMagLog(unit)) {
+        if (FftAxisTicks.isMagLog(unit)) {
             double lt = Math.log10(Math.max(Double.MIN_NORMAL, top));
             double lb = Math.log10(Math.max(Double.MIN_NORMAL, bot));
             double step = (lt - lb) * 0.1 * dir;
@@ -2203,163 +1942,11 @@ public final class FftView extends Canvas {
         return freqMin + t * (freqMax - freqMin);
     }
 
-    /** Returns true when the magnitude axis should be log-scaled.  V and
-     *  V/√Hz are linear amplitudes that span many decades for a typical
-     *  audio recording (1 V → 1 µV) so they're displayed on a log axis;
-     *  dBV / dBFS are already log domain so the axis stays linear in dB. */
-    private static boolean isMagLog(FftMagnitudeUnit unit) {
-        return unit == FftMagnitudeUnit.V || unit == FftMagnitudeUnit.V_SQRT_HZ;
-    }
-
     private int magToY(double v, Rectangle plot, double top, double bot, FftMagnitudeUnit unit) {
-        double t = magToYFraction(v, top, bot, unit);
+        double t = FftFormat.magToYFraction(v, top, bot, unit);
         if (t < 0) t = 0;
         if (t > 1) t = 1;
         return plot.y + (int) Math.round(t * plot.height);
-    }
-
-    /** Shared mapping kernel: returns the fractional position 0..1 of
-     *  {@code v} within the {@code [bot, top]} range, where 0 = top
-     *  and 1 = bot.  No clamping. */
-    private static double magToYFraction(double v, double top, double bot, FftMagnitudeUnit unit) {
-        if (isMagLog(unit)) {
-            double vL  = (v   <= 0) ? Double.NEGATIVE_INFINITY : Math.log10(v);
-            double topL = (top <= 0) ? -30 : Math.log10(top);
-            double botL = (bot <= 0) ? -30 : Math.log10(bot);
-            if (topL <= botL) return 0;
-            return (topL - vL) / (topL - botL);
-        }
-        return (top - v) / (top - bot);
-    }
-
-    /** Major ticks on a log magnitude axis — emits the 1×10ⁿ decades by
-     *  default, with the 2× and 5× intermediates added once the visible
-     *  decade count is small enough that they fit without crowding.  Used
-     *  by both the grid (every emitted tick gets a line) and labels
-     *  (caller passes {@code labelsOnly=true} so only major decade lines
-     *  get text). */
-    private static double[] logMagTicks(double magBot, double magTop, boolean labelsOnly) {
-        double lo = Math.min(magBot, magTop);
-        double hi = Math.max(magBot, magTop);
-        if (lo <= 0) lo = 1e-30;
-        if (hi <= lo) hi = lo * 10;
-        int loDec = (int) Math.floor(Math.log10(lo));
-        int hiDec = (int) Math.ceil (Math.log10(hi));
-        int decades = Math.max(1, hiDec - loDec);
-        int[] keep;
-        if      (decades <= 3) keep = new int[] {1, 2, 5};
-        else if (decades <= 6) keep = new int[] {1, 2};
-        else                   keep = new int[] {1};
-        List<Double> out = new ArrayList<>();
-        for (int d = loDec; d <= hiDec; d++) {
-            double base = Math.pow(10, d);
-            for (int m : keep) {
-                double v = base * m;
-                if (v < lo || v > hi) continue;
-                out.add(v);
-            }
-        }
-        // If labelsOnly is false we still emit the same set — every tick
-        // gets a grid line.  The labelsOnly flag is reserved for future
-        // thinning if axes get crowded.
-        if (labelsOnly && decades > 8) {
-            // Trim to decade-only labels for very tall axes.
-            List<Double> labels = new ArrayList<>();
-            for (double v : out) {
-                double base = Math.pow(10, Math.floor(Math.log10(v)));
-                if (Math.abs(v / base - 1) < 1e-9) labels.add(v);
-            }
-            out = labels;
-        }
-        double[] arr = new double[out.size()];
-        for (int i = 0; i < arr.length; i++) arr[i] = out.get(i);
-        return arr;
-    }
-
-    private static String formatFrequency(double f) {
-        if (!Double.isFinite(f) || f <= 0) return "—";
-        if (f >= 1000) return String.format("%.2f kHz", f / 1000);
-        return String.format("%.1f Hz", f);
-    }
-
-    /** Fine-grained formatter for the crosshair readout and the THD-table
-     *  fundamental row — shows 4 decimal places so the user can read the
-     *  sub-Hz refinement that {@link FftAnalyzer.Result#fundamentalHzRefined}
-     *  produces.  Switches to kHz at 10 kHz so the digits stay aligned. */
-    private static String formatFrequencyFine(double f) {
-        if (!Double.isFinite(f) || f <= 0) return "—";
-        if (f >= 10_000) return String.format("%.4f kHz", f / 1000);
-        return String.format("%.4f Hz", f);
-    }
-
-    /** Integer-only frequency formatter used on the linear axis labels —
-     *  no fractional Hz, kHz with 0 / 1 decimals depending on size. */
-    private static String formatFrequencyInteger(double f) {
-        if (!Double.isFinite(f)) return "—";
-        if (f >= 1000) {
-            double k = f / 1000;
-            if (Math.abs(k - Math.round(k)) < 0.05) return String.format("%d kHz", (long) Math.round(k));
-            return String.format("%.1f kHz", k);
-        }
-        return String.format("%d Hz", (long) Math.round(f));
-    }
-
-    private static String formatMagnitude(double v, FftMagnitudeUnit unit) {
-        if (!Double.isFinite(v)) return "—";
-        switch (unit) {
-            case DBFS: return String.format("%.1f dBFS", v);
-            case DBV:  return String.format("%.1f dBV",  v);
-            case V:    return formatVoltsSi(v) + "V";
-            case V_SQRT_HZ: return formatVoltsSi(v) + "V/√Hz";
-            default:   return String.format("%g", v);
-        }
-    }
-
-    /** Same as {@link #formatMagnitude} but without the unit suffix — used
-     *  for per-tick axis labels (the unit is drawn once above the axis).
-     *  Drops the "+" prefix on positive dB values so the column reads as
-     *  "10.0 / 0.0 / -10.0" rather than "+10.0 / +0.0 / -10.0". */
-    private static String formatMagnitudeBare(double v, FftMagnitudeUnit unit) {
-        if (!Double.isFinite(v)) return "—";
-        switch (unit) {
-            case DBFS:
-            case DBV:  return String.format("%.1f", v);
-            case V:
-            case V_SQRT_HZ: return formatVoltsSi(v);
-            default:   return String.format("%g", v);
-        }
-    }
-
-    /** SI-prefix formatter for the V / V/√Hz axes.  Keeps axis labels
-     *  compact: 1.5 V instead of 1.500e+00, 100 mV instead of 0.1000.
-     *  Uses k / (no prefix) / m / µ / n / p / f over the audio dynamic
-     *  range; the trailing space is part of the prefix so callers
-     *  concatenate the unit suffix directly.  Negative values keep
-     *  their sign. */
-    private static String formatVoltsSi(double v) {
-        if (v == 0) return "0 ";
-        double abs = Math.abs(v);
-        String prefix;
-        double scale;
-        if      (abs >= 1e3)  { prefix = "k"; scale = 1e3; }
-        else if (abs >= 1)    { prefix = "";  scale = 1;   }
-        else if (abs >= 1e-3) { prefix = "m"; scale = 1e-3; }
-        else if (abs >= 1e-6) { prefix = "µ"; scale = 1e-6; }
-        else if (abs >= 1e-9) { prefix = "n"; scale = 1e-9; }
-        else if (abs >= 1e-12){ prefix = "p"; scale = 1e-12; }
-        else                  { prefix = "f"; scale = 1e-15; }
-        double s = v / scale;
-        // Compact mantissa: drop trailing zeros, max 3 sig figs.
-        String m;
-        if      (Math.abs(s) >= 100) m = String.format("%.0f", s);
-        else if (Math.abs(s) >= 10)  m = String.format("%.1f", s);
-        else                          m = String.format("%.2f", s);
-        // Strip trailing zeros / dot for compactness.
-        if (m.contains(".")) {
-            m = m.replaceAll("0+$", "");
-            if (m.endsWith(".")) m = m.substring(0, m.length() - 1);
-        }
-        return m + " " + prefix;
     }
 
     // =========================================================================

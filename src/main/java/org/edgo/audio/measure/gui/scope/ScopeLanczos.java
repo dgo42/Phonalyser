@@ -1,0 +1,167 @@
+package org.edgo.audio.measure.gui.scope;
+
+import lombok.experimental.UtilityClass;
+
+/**
+ * Lanczos-windowed sinc reconstruction kernel for the oscilloscope's
+ * waveform renderer.  Decoupled from {@link OscilloscopeView} so the
+ * kernel math is unit-testable and the per-scale kernel cache is
+ * shared once across every view instance.
+ *
+ * <p>{@link #lanczos(float[], int, double, double)} reconstructs the
+ * trace at any fractional sample-domain position {@code t}, with the
+ * kernel widened by {@code scale} so it acts as a low-pass filter at
+ * the output rate (kills the energy between the output Nyquist and the
+ * input Nyquist that would otherwise fold into beat envelopes).  Phase
+ * resolution and downsample limits are tuned for an audio sample rate
+ * cap of ~768 kHz drawn on an SWT canvas.
+ */
+@UtilityClass
+public class ScopeLanczos {
+
+    /**
+     * Kernel half-width in samples.  Windowed-sinc with this many lobes
+     * each side gives a stop-band ≥ 80 dB down — well below visible
+     * envelope artifacts on a 14-bit canvas.
+     */
+    public static final int LANCZOS_A = 16;
+
+    /**
+     * Largest downsample factor for which the scaled Lanczos kernel is
+     * still cheap enough to evaluate per pixel.  Beyond this the renderer
+     * falls back to per-column min/max bars.  Also determines the buffer
+     * padding needed for full kernel coverage at the pane edges.
+     */
+    public static final int MAX_LANCZOS_DOWNSAMPLE = 5;
+
+    /** Buffer padding (each side) so the widest kernel still has real context. */
+    public static final int LANCZOS_PADDING = LANCZOS_A * MAX_LANCZOS_DOWNSAMPLE;
+
+    /** Phase resolution for the cached kernel tables (≈ 0.001 sample precision). */
+    private static final int LANCZOS_PHASES = 1024;
+
+    /**
+     * Two-slot table cache: one slot is permanently kept for {@code scale == 1}
+     * (used by trigger refinement and every fast-time/div render), the other
+     * holds whatever non-unit scale was last requested.  Two slots avoid
+     * thrashing because each frame issues at most those two scales.
+     */
+    private static volatile double[][] cachedKernelScale1;
+    private static volatile double[][] cachedKernelOther;
+    private static volatile double     cachedKernelOtherScale = Double.NaN;
+
+    /**
+     * Lanczos sinc reconstruction of {@code data} at fractional position
+     * {@code t}, using a precomputed phase table for {@code scale} — the
+     * inner loop is a plain table lookup with zero {@code Math.sin} calls.
+     *
+     * @param data    sample buffer
+     * @param n       valid length of {@code data}
+     * @param t       sample-domain position (may be fractional)
+     * @param scale   downsample factor; 1 = classic Whittaker–Shannon, &gt;1
+     *                widens the kernel to act as an anti-aliasing low-pass
+     */
+    public double lanczos(float[] data, int n, double t, double scale) {
+        double[][] table = getKernelTable(scale);
+        int halfWidth = (int) Math.ceil(LANCZOS_A * scale);
+        int center = (int) Math.floor(t);
+        double frac = t - center;
+        int phase = (int) (frac * LANCZOS_PHASES);
+        if (phase < 0) phase = 0;
+        if (phase >= LANCZOS_PHASES) phase = LANCZOS_PHASES - 1;
+        double[] w = table[phase];
+        int iLo = Math.max(0, center - halfWidth + 1);
+        int iHi = Math.min(n - 1, center + halfWidth);
+        // Subtract a baseline from each sample before weighting so the
+        // accumulated sum reflects DIFFERENCES between samples, not their
+        // absolute magnitudes.  Critical at extreme V/div: with samples
+        // sitting near ±FS, ~1e-7 float epsilon multiplied by ~3e5 vScale
+        // becomes a visible pixel deflection.  Σ x[i]·w[j]
+        // = baseline·Σw[j] + Σ(x[i]−baseline)·w[j].
+        int centerClamped = (center < 0) ? 0 : (center >= n ? n - 1 : center);
+        double baseline = data[centerClamped];
+        double sumWeights = 0.0;
+        double sumDeltas  = 0.0;
+        for (int i = iLo; i <= iHi; i++) {
+            int j = i - center + halfWidth - 1;
+            double wj = w[j];
+            sumWeights += wj;
+            sumDeltas  += (data[i] - baseline) * wj;
+        }
+        return baseline * sumWeights + sumDeltas;
+    }
+
+    private double[][] getKernelTable(double scale) {
+        if (scale == 1.0) {
+            double[][] t = cachedKernelScale1;
+            if (t != null) return t;
+            synchronized (ScopeLanczos.class) {
+                if (cachedKernelScale1 == null) cachedKernelScale1 = buildKernelTable(1.0);
+                return cachedKernelScale1;
+            }
+        }
+        double[][] t = cachedKernelOther;
+        double s = cachedKernelOtherScale;
+        if (t != null && s == scale) return t;
+        synchronized (ScopeLanczos.class) {
+            if (cachedKernelOther == null || cachedKernelOtherScale != scale) {
+                cachedKernelOther = buildKernelTable(scale);
+                cachedKernelOtherScale = scale;
+            }
+            return cachedKernelOther;
+        }
+    }
+
+    /**
+     * Pre-bakes the kernel for {@code scale} into a phase table.  Each row is
+     * normalised to unit DC gain ({@code Σw = 1}) regardless of the
+     * ULP-level drift the analytic form leaves behind — critical at narrow
+     * V/div where small gain errors get multiplied by the ~3·10⁵ vScale
+     * factor and become visible as a constant amplitude shrink.
+     */
+    private double[][] buildKernelTable(double scale) {
+        int halfWidth = (int) Math.ceil(LANCZOS_A * scale);
+        int taps = 2 * halfWidth;
+        double invScale = 1.0 / scale;
+        double[][] table = new double[LANCZOS_PHASES][taps];
+        for (int p = 0; p < LANCZOS_PHASES; p++) {
+            double frac = (double) p / LANCZOS_PHASES;
+            double[] row = table[p];
+            for (int j = 0; j < taps; j++) {
+                double x = (frac + (halfWidth - 1) - j) * invScale;
+                if (Math.abs(x) >= LANCZOS_A) {
+                    row[j] = 0.0;
+                } else {
+                    row[j] = sinc(x) * sinc(x / LANCZOS_A) * invScale;
+                }
+            }
+            double s = 0.0;
+            for (double v : row) s += v;
+            if (s != 0.0) {
+                double k = 1.0 / s;
+                for (int j = 0; j < taps; j++) row[j] *= k;
+            }
+        }
+        return table;
+    }
+
+    /**
+     * {@code sinc(x) = sin(πx) / (πx)} with full double precision near 0.
+     * For {@code |x| < 0.1} an 8th-order Taylor series in {@code u = (πx)²}
+     * avoids the cancellation loss that the {@code sin(πx)/(πx)} form
+     * suffers near zero.
+     */
+    public double sinc(double x) {
+        if (x == 0.0) return 1.0;
+        double pix = Math.PI * x;
+        if (Math.abs(x) < 0.1) {
+            double u = pix * pix;
+            return 1.0 + u * (-1.0 / 6.0
+                       + u * ( 1.0 / 120.0
+                       + u * (-1.0 / 5040.0
+                       + u * ( 1.0 / 362880.0
+                       + u * (-1.0 / 39916800.0)))));
+        }
+        return Math.sin(pix) / pix;
+    }
+}

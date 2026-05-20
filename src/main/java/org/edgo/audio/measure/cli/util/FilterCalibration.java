@@ -1,4 +1,4 @@
-package org.edgo.audio.measure.cli;
+package org.edgo.audio.measure.cli.util;
 
 /**
  * In-memory representation of a filter calibration: a sparse set of measured

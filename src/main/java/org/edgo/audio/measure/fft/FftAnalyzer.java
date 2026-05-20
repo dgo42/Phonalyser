@@ -22,7 +22,7 @@ import org.edgo.audio.measure.enums.WindowType;
  * FFT-based audio analyzer: coherent averaging, fundamental detection, THD,
  * THD+N (IEC 61672:2003 A-weighting), SNR.
  *
- * <p>Supports configurable overlap (0 %, 50 %, 75 %, 87.5 %, 92.75 %) and
+ * <p>Supports configurable overlap (0 %, 50 %, 75 %, 87.5 %, 93.75 %) and
  * configurable window function (Rectangular, Hann, Blackman-Harris 4/7,
  * Flat-top, Dolph-Chebyshev 150 dB / 200 dB).
  */

@@ -2,9 +2,9 @@ package org.edgo.audio.measure;
 
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.cli.AnalyzeHistogramMode;
-import org.edgo.audio.measure.cli.ArgParser;
+import org.edgo.audio.measure.cli.util.ArgParser;
 import org.edgo.audio.measure.cli.DeembedMode;
-import org.edgo.audio.measure.cli.DeviceSelector;
+import org.edgo.audio.measure.cli.util.DeviceSelector;
 import org.edgo.audio.measure.cli.FftAnalyzeMode;
 import org.edgo.audio.measure.cli.FilterSweepMode;
 import org.edgo.audio.measure.cli.GenFftMode;

@@ -917,13 +917,13 @@ public final class OscilloscopePane {
                 boolean sinc    = isLeft ? prefs.isOscLeftSincInterpEnabled()
                                          : prefs.isOscRightSincInterpEnabled();
                 if (enabled) total += tileH + gap;
-                total += gc.textExtent(shortVoltsPerDiv(vDiv)).x + 2 * hPadding + gap;
+                total += gc.textExtent(ScopeFormat.shortVoltsPerDiv(vDiv)).x + 2 * hPadding + gap;
                 total += gc.textExtent(acMode ? "ac" : "dc").x + 2 * hPadding + gap;
                 total += gc.textExtent(sinc ? "sin" : "lin").x + 2 * hPadding;
                 break;
             }
             case TAB_HORIZONTAL: {
-                total += gc.textExtent(shortTimePerDiv(prefs.getOscTimePerDiv())).x + 2 * hPadding;
+                total += gc.textExtent(ScopeFormat.shortTimePerDiv(prefs.getOscTimePerDiv())).x + 2 * hPadding;
                 break;
             }
             case TAB_TRIGGER: {
@@ -1098,7 +1098,7 @@ public final class OscilloscopePane {
                     addTabRegion(x, y, tileH, tileH, I18n.t("scope.tile.led.active", chName));
                     x += tileH + gap;
                 }
-                int wv = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR, shortVoltsPerDiv(vDiv));
+                int wv = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR, ScopeFormat.shortVoltsPerDiv(vDiv));
                 addTabRegion(x, y, wv, tileH,
                         I18n.t("scope.tile.scale", chName, OscParse.formatVoltsPerDiv(vDiv)));
                 x += wv + gap;
@@ -1113,7 +1113,7 @@ public final class OscilloscopePane {
             }
             case TAB_HORIZONTAL: {
                 int wt = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                                         shortTimePerDiv(prefs.getOscTimePerDiv()));
+                                         ScopeFormat.shortTimePerDiv(prefs.getOscTimePerDiv()));
                 addTabRegion(x, y, wt, tileH,
                         I18n.t("scope.tile.time", OscParse.formatTimePerDiv(prefs.getOscTimePerDiv())));
                 break;
@@ -1228,28 +1228,6 @@ public final class OscilloscopePane {
     /** Formats a volts-per-division value as a compact label (no "V/div"
      *  suffix, SI prefix u / m / none).  E.g. {@code 0.000050 → "50u"},
      *  {@code 0.020 → "20m"}, {@code 0.5 → "500m"}, {@code 1 → "1"}. */
-    private static String shortVoltsPerDiv(double v) {
-        return shortSi(v);
-    }
-    /** Formats a seconds-per-division value as a compact label (no "s/div"
-     *  suffix, SI prefix n / u / m / none).  E.g. {@code 0.000050 → "50u"},
-     *  {@code 0.020 → "20m"}, {@code 0.5 → "500m"}, {@code 1 → "1"}. */
-    private static String shortTimePerDiv(double v) {
-        if (v > 0 && v < 1e-6) return shortNum(v * 1e9) + "n";
-        return shortSi(v);
-    }
-    private static String shortSi(double v) {
-        if (v <= 0)       return "0";
-        if (v >= 1.0)     return shortNum(v);
-        if (v >= 1e-3)    return shortNum(v * 1e3) + "m";
-        return shortNum(v * 1e6) + "u";
-    }
-    private static String shortNum(double v) {
-        long iv = Math.round(v);
-        if (Math.abs(v - iv) < 1e-4) return Long.toString(iv);
-        return String.format(Locale.ROOT, "%.1f", v);
-    }
-
     /** Toggles whether the toolbar CTabFolder shows its tab content area.
      *  When collapsed, only the tab strip is visible — clicking a tab still
      *  switches the active tab, but the controls underneath are hidden and
@@ -1329,7 +1307,7 @@ public final class OscilloscopePane {
             // the V/div changes — feels like "zoom around the middle"
             // rather than "rescale everything from y=0".
             prefs.setOscLeftOffsetFrac(
-                    preserveCanvasMiddle(prefs.getOscLeftOffsetFrac(), oldV, newV));
+                    ScopeFormat.preserveCanvasMiddle(prefs.getOscLeftOffsetFrac(), oldV, newV));
             prefs.setOscLeftVoltsPerDiv(newV);
             prefs.save();
             requestRedraw();
@@ -1384,7 +1362,7 @@ public final class OscilloscopePane {
             double oldV = prefs.getOscRightVoltsPerDiv();
             double newV = rightScale.getValue();
             prefs.setOscRightOffsetFrac(
-                    preserveCanvasMiddle(prefs.getOscRightOffsetFrac(), oldV, newV));
+                    ScopeFormat.preserveCanvasMiddle(prefs.getOscRightOffsetFrac(), oldV, newV));
             prefs.setOscRightVoltsPerDiv(newV);
             prefs.save();
             requestRedraw();
@@ -1526,9 +1504,9 @@ public final class OscilloscopePane {
         hystLabel.setText(I18n.t("scope.trigger.hysteresis"));
         hystLabel.setToolTipText(I18n.t("scope.trigger.hysteresis.tooltip"));
 
-        String[] hystValues = hysteresisDivSteps();
+        String[] hystValues = ScopeFormat.hysteresisDivSteps();
         hysteresisSel = new StepSelector(hystSet, hystValues,
-                nearestHysteresisIndex(hystValues, prefs.getOscTriggerHysteresisDiv()), 50);
+                ScopeFormat.nearestIndex(hystValues, prefs.getOscTriggerHysteresisDiv()), 50);
         hysteresisSel.setToolTipText(I18n.t("scope.trigger.hysteresis.tooltip"));
         hysteresisSel.setEnabled(prefs.isOscTriggerHysteresisEnabled());
         hysteresisSel.addSelectionListener(e -> {
@@ -1543,29 +1521,6 @@ public final class OscilloscopePane {
             hysteresisSel.setEnabled(on);
             refreshTabHeader(TAB_TRIGGER);
         });
-    }
-
-    /** "0.0", "0.1", … "5.0" — 0.1-division steps for the trigger-hysteresis
-     *  selector.  Formatted with {@link Locale#ROOT} so the decimal separator
-     *  is always a period (matches {@link Double#parseDouble}). */
-    private static String[] hysteresisDivSteps() {
-        int count = 51;
-        String[] out = new String[count];
-        for (int i = 0; i < count; i++) out[i] = String.format(Locale.ROOT, "%.1f", 0.1 * i);
-        return out;
-    }
-
-    /** Index of the entry in {@code values} whose parsed double is closest to
-     *  {@code target} — used to seed the hysteresis selector from prefs. */
-    private static int nearestHysteresisIndex(String[] values, double target) {
-        int best = 0;
-        double bestDist = Double.POSITIVE_INFINITY;
-        for (int i = 0; i < values.length; i++) {
-            double v = Double.parseDouble(values[i]);
-            double d = Math.abs(v - target);
-            if (d < bestDist) { bestDist = d; best = i; }
-        }
-        return best;
     }
 
     /**
@@ -1772,12 +1727,12 @@ public final class OscilloscopePane {
         if (Double.isFinite(freq) && freq > 0) {
             double period = 1.0 / freq;
             double targetTDiv = period * 1.5 / OscilloscopeView.DIVISIONS_X;
-            double newTDiv    = ceilToStep(targetTDiv, OscParse.timePerDivTargets());
+            double newTDiv    = ScopeFormat.ceilToStep(targetTDiv, OscParse.timePerDivTargets());
             if (timeScale != null && !timeScale.isDisposed()) timeScale.setValue(newTDiv);
         }
         if (Double.isFinite(vpp) && vpp > 0) {
             double targetVDiv = vpp / (OscilloscopeView.DIVISIONS_Y * 0.75);
-            double newVDiv    = ceilToStep(targetVDiv, OscParse.voltsPerDivTargets());
+            double newVDiv    = ScopeFormat.ceilToStep(targetVDiv, OscParse.voltsPerDivTargets());
             if (leftScale  != null && !leftScale .isDisposed()) leftScale .setValue(newVDiv);
             if (rightScale != null && !rightScale.isDisposed()) rightScale.setValue(newVDiv);
         }
@@ -1790,13 +1745,6 @@ public final class OscilloscopePane {
         requestRedraw();
     }
 
-    /** Returns the smallest target {@code >= value}, or the largest target
-     *  if {@code value} exceeds them all.  {@code targets} must be sorted
-     *  ascending. */
-    private static double ceilToStep(double value, double[] targets) {
-        for (double t : targets) if (t >= value) return t;
-        return targets[targets.length - 1];
-    }
 
     /** Pushes every preset value into the live {@link Preferences} AND the
      *  UI widgets.  {@code StepSelector.setValue} fires its selection
@@ -1908,8 +1856,8 @@ public final class OscilloscopePane {
         NumericStepField durField = new NumericStepField(
                 g,
                 Math.max(0.001, prefs.getOscSaveDurationSeconds()),
-                OscilloscopePane::parseSeconds,
-                OscilloscopePane::formatSeconds,
+                ScopeFormat::parseSeconds,
+                ScopeFormat::formatSecondsTrimmed,
                 /* wheel: ±5 % */ (v, dir) -> Math.max(0.001, v * (1.0 + 0.05 * dir)),
                 /* arrows: ±1 s */ (v, dir) -> Math.max(0.001, v + dir),
                 54);     // 60% of the previous 90 px width
@@ -2000,7 +1948,7 @@ public final class OscilloscopePane {
             // away from the live tip and break trigger.
             SignalBuffer loadedBuf = view.getBuffer();
             if (loadedBuf != null) {
-                int displaySamples = displaySamplesFor(prefs.getOscTimePerDiv(), loadedBuf.getSampleRate());
+                int displaySamples = ScopeFormat.displaySamplesFor(prefs.getOscTimePerDiv(), loadedBuf.getSampleRate());
                 viewCenterFrames = displaySamples / 2.0;
             }
             setNavSliderVisible(true);
@@ -2087,7 +2035,7 @@ public final class OscilloscopePane {
         if (!view.isFileMode()) return;     // live mode: ignore stray events
         SignalBuffer buf = view.getBuffer();
         if (buf == null) return;
-        int displaySamples = displaySamplesFor(Preferences.instance().getOscTimePerDiv(), buf.getSampleRate());
+        int displaySamples = ScopeFormat.displaySamplesFor(Preferences.instance().getOscTimePerDiv(), buf.getSampleRate());
         long writePos = buf.getWritePos();
         long oldest   = Math.max(0L, writePos - buf.getCapacity());
         long minCenter = oldest   + displaySamples / 2;
@@ -2122,7 +2070,7 @@ public final class OscilloscopePane {
             requestRedraw();
             return;
         }
-        int displaySamples = displaySamplesFor(Preferences.instance().getOscTimePerDiv(), buf.getSampleRate());
+        int displaySamples = ScopeFormat.displaySamplesFor(Preferences.instance().getOscTimePerDiv(), buf.getSampleRate());
         long writePos = buf.getWritePos();
         long resident = Math.min(writePos, buf.getCapacity());
 
@@ -2198,12 +2146,6 @@ public final class OscilloscopePane {
         requestRedraw();
     }
 
-    /** Frames the main view shows for the given t/div value (seconds), given the buffer's sampleRate. */
-    private int displaySamplesFor(double timePerDiv, int sampleRate) {
-        double windowSeconds = timePerDiv * 10.0;
-        return Math.max(2, (int) Math.round(windowSeconds * sampleRate));
-    }
-
     /**
      * Walks the widget tree rooted at {@code root} and toggles
      * {@link Control#setEnabled(boolean)} on every descendant.  SWT's
@@ -2248,11 +2190,11 @@ public final class OscilloscopePane {
     private void stepVoltsPerDiv(int delta) {
         Preferences prefs = Preferences.instance();
         if (leftScale != null && !leftScale.isDisposed() && prefs.isOscLeftChannelEnabled()) {
-            leftScale.setValue(nextTargetFrom(prefs.getOscLeftVoltsPerDiv(),
+            leftScale.setValue(ScopeFormat.nextTargetFrom(prefs.getOscLeftVoltsPerDiv(),
                     OscParse.voltsPerDivTargets(), delta));
         }
         if (rightScale != null && !rightScale.isDisposed() && prefs.isOscRightChannelEnabled()) {
-            rightScale.setValue(nextTargetFrom(prefs.getOscRightVoltsPerDiv(),
+            rightScale.setValue(ScopeFormat.nextTargetFrom(prefs.getOscRightVoltsPerDiv(),
                     OscParse.voltsPerDivTargets(), delta));
         }
     }
@@ -2260,7 +2202,7 @@ public final class OscilloscopePane {
     /** Steps the t/div selector by {@code delta}.  Same routing as {@link #stepVoltsPerDiv}. */
     private void stepTimePerDiv(int delta) {
         if (timeScale == null || timeScale.isDisposed()) return;
-        timeScale.setValue(nextTargetFrom(Preferences.instance().getOscTimePerDiv(),
+        timeScale.setValue(ScopeFormat.nextTargetFrom(Preferences.instance().getOscTimePerDiv(),
                 OscParse.timePerDivTargets(), delta));
     }
 
@@ -2269,7 +2211,7 @@ public final class OscilloscopePane {
      *  channel — each channel's V/div + offsetFrac are adjusted using that
      *  channel's voltage-at-mouse, since the two channels can have different
      *  scales.  Note: the {@code *Scale} selection listeners overwrite
-     *  offsetFrac with {@code preserveCanvasMiddle(...)} (center-anchored
+     *  offsetFrac with {@code ScopeFormat.preserveCanvasMiddle(...)} (center-anchored
      *  zoom).  We re-apply the mouse-anchored offsetFrac AFTER
      *  {@code setValue(...)} so our value wins and the redraw scheduled by
      *  the listener picks it up. */
@@ -2315,7 +2257,7 @@ public final class OscilloscopePane {
         double mouseFrac = (double) mouseY / height;
         if (leftScale != null && !leftScale.isDisposed() && prefs.isOscLeftChannelEnabled()) {
             double vDivOld = prefs.getOscLeftVoltsPerDiv();
-            double vDivNew = nextTargetFrom(vDivOld, OscParse.voltsPerDivTargets(), delta);
+            double vDivNew = ScopeFormat.nextTargetFrom(vDivOld, OscParse.voltsPerDivTargets(), delta);
             if (vDivNew != vDivOld) {
                 double offOld = prefs.getOscLeftOffsetFrac();
                 double vAtMouse = (offOld - mouseFrac) * OscilloscopeView.DIVISIONS_Y * vDivOld;
@@ -2328,7 +2270,7 @@ public final class OscilloscopePane {
         }
         if (rightScale != null && !rightScale.isDisposed() && prefs.isOscRightChannelEnabled()) {
             double vDivOld = prefs.getOscRightVoltsPerDiv();
-            double vDivNew = nextTargetFrom(vDivOld, OscParse.voltsPerDivTargets(), delta);
+            double vDivNew = ScopeFormat.nextTargetFrom(vDivOld, OscParse.voltsPerDivTargets(), delta);
             if (vDivNew != vDivOld) {
                 double offOld = prefs.getOscRightOffsetFrac();
                 double vAtMouse = (offOld - mouseFrac) * OscilloscopeView.DIVISIONS_Y * vDivOld;
@@ -2358,7 +2300,7 @@ public final class OscilloscopePane {
         }
         Preferences prefs = Preferences.instance();
         double tDivOld = prefs.getOscTimePerDiv();
-        double tDivNew = nextTargetFrom(tDivOld, OscParse.timePerDivTargets(), delta);
+        double tDivNew = ScopeFormat.nextTargetFrom(tDivOld, OscParse.timePerDivTargets(), delta);
         if (tDivNew == tDivOld) return;
         double mouseFrac = (double) mouseX / width;
         double posOld    = prefs.getOscTriggerPositionFrac();
@@ -2367,22 +2309,6 @@ public final class OscilloscopePane {
         if (posNew > 1.0) posNew = 1.0;
         prefs.setOscTriggerPositionFrac(posNew);
         timeScale.setValue(tDivNew);
-    }
-
-    /** Returns the next "nice" step target strictly above (delta &gt; 0) /
-     *  below (delta &lt; 0) {@code current}, or {@code current} unchanged
-     *  if no such target exists in {@code targets} (sorted ascending). */
-    private static double nextTargetFrom(double current, double[] targets, int delta) {
-        if (delta > 0) {
-            for (double t : targets) {
-                if (t > current) return t;
-            }
-        } else if (delta < 0) {
-            for (int i = targets.length - 1; i >= 0; i--) {
-                if (targets[i] < current) return targets[i];
-            }
-        }
-        return current;
     }
 
     /** Vertical-offset wheel step size as a fraction of the channel's
@@ -2419,7 +2345,7 @@ public final class OscilloscopePane {
         if (view.isFileMode()) {
             SignalBuffer buf = view.getBuffer();
             if (buf == null) return;
-            int displaySamples = displaySamplesFor(
+            int displaySamples = ScopeFormat.displaySamplesFor(
                     Preferences.instance().getOscTimePerDiv(), buf.getSampleRate());
             long writePos  = buf.getWritePos();
             long oldest    = Math.max(0L, writePos - buf.getCapacity());
@@ -2439,18 +2365,12 @@ public final class OscilloscopePane {
         } else {
             Preferences prefs = Preferences.instance();
             double cur = prefs.getOscTriggerPositionFrac();
-            double next = clampFrac(cur + dir * WHEEL_OFFSET_STEP_FRAC);
+            double next = ScopeFormat.clamp01(cur + dir * WHEEL_OFFSET_STEP_FRAC);
             if (next == cur) return;
             prefs.setOscTriggerPositionFrac(next);
             prefs.save();
             requestRedraw();
         }
-    }
-
-    private static double clampFrac(double v) {
-        if (v < 0.0) return 0.0;
-        if (v > 1.0) return 1.0;
-        return v;
     }
 
     /** Returns the offsetFrac value that, after the V/div changes from
@@ -2461,11 +2381,6 @@ public final class OscilloscopePane {
      *  Y · V/div}.  Holding that voltage constant across the V/div
      *  transition gives
      *  {@code newOffsetFrac = (oldOffsetFrac − 0.5) · oldV / newV + 0.5}. */
-    private double preserveCanvasMiddle(double offsetFrac, double oldVpdiv, double newVpdiv) {
-        if (oldVpdiv <= 0 || newVpdiv <= 0) return offsetFrac;
-        return (offsetFrac - 0.5) * oldVpdiv / newVpdiv + 0.5;
-    }
-
     /** Shows or hides the horizontal navigation slider.
      *  <p>On <strong>Linux</strong> the row swaps between the
      *  {@link FlatScrollbar} (file mode) and a fixed-height {@link Label}
@@ -2655,29 +2570,6 @@ public final class OscilloscopePane {
                     I18n.t("scope.save.error"),
                     I18n.t("scope.save.error.message", path, ex.getMessage()));
         }
-    }
-
-    private static Double parseSeconds(String s) {
-        if (s == null) return null;
-        String t = s.trim();
-        if (t.endsWith("s")) t = t.substring(0, t.length() - 1).trim();
-        if (t.isEmpty()) return null;
-        try {
-            double v = Double.parseDouble(t.replace(',', '.'));
-            return v <= 0 ? null : v;
-        } catch (NumberFormatException ex) {
-            return null;
-        }
-    }
-    private static String formatSeconds(double v) {
-        String s = String.format(Locale.ROOT, "%.3f", v);
-        if (s.contains(".")) {
-            int end = s.length();
-            while (end > 0 && s.charAt(end - 1) == '0') end--;
-            if (end > 0 && s.charAt(end - 1) == '.') end--;
-            s = s.substring(0, end);
-        }
-        return s + " s";
     }
 
     /**

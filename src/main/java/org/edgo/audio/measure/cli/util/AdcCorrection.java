@@ -1,4 +1,4 @@
-package org.edgo.audio.measure.cli;
+package org.edgo.audio.measure.cli.util;
 
 import lombok.Value;
 
