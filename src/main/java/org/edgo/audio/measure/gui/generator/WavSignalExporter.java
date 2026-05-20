@@ -42,7 +42,7 @@ public final class WavSignalExporter {
         int  bytesPerFrame  = bytesPerSample * CHANNELS;
         byte[] buf          = new byte[BUFFER_FRAMES * bytesPerFrame];
 
-        try (WavWriter w = new WavWriter(outFile, sampleRate, CHANNELS, bitDepth, /*floatFormat*/ false)) {
+        try (WavWriter w = new WavWriter(outFile, sampleRate, CHANNELS, bitDepth, false)) {
             long written = 0;
             while (written < totalFrames) {
                 int frames = (int) Math.min(BUFFER_FRAMES, totalFrames - written);

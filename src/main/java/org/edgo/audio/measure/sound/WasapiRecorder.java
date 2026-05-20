@@ -10,6 +10,7 @@ import com.sun.jna.ptr.PointerByReference;
 import lombok.extern.log4j.Log4j2;
 
 import javax.sound.sampled.AudioFormat;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
@@ -315,7 +316,7 @@ public class WasapiRecorder implements AudioCapture {
                 if (silent) {
                     silentPackets++;
                     silentFrames += frames;
-                    java.util.Arrays.fill(heap, 0, bytes, (byte) 0);
+                    Arrays.fill(heap, 0, bytes, (byte) 0);
                 } else {
                     Pointer data = ppData.getValue();
                     if (data != null) data.read(0, heap, 0, bytes);
@@ -343,7 +344,7 @@ public class WasapiRecorder implements AudioCapture {
 
     private void dispatch(byte[] buffer, int bytes) {
         if (rawBytesListener != null) {
-            byte[] copy = java.util.Arrays.copyOf(buffer, bytes);
+            byte[] copy = Arrays.copyOf(buffer, bytes);
             rawBytesListener.accept(copy);
         }
         if (pcmBatchListener != null) {

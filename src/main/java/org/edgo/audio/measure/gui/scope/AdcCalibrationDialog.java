@@ -8,9 +8,9 @@ import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Label;
-import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
+import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.i18n.I18n;
 
 import java.util.Locale;
@@ -91,10 +91,9 @@ public final class AdcCalibrationDialog {
         ok.addListener(SWT.Selection, e -> {
             Double vrms = parseAsVrms(valueField.getText(), unitCombo.getText());
             if (vrms == null || vrms <= 0 || Double.isNaN(vrms) || Double.isInfinite(vrms)) {
-                MessageBox mb = new MessageBox(dialog, SWT.ICON_ERROR | SWT.OK);
-                mb.setText(I18n.t("calibrate.error.title"));
-                mb.setMessage(I18n.t("calibrate.error.message"));
-                mb.open();
+                Dialogs.error(dialog,
+                        I18n.t("calibrate.error.title"),
+                        I18n.t("calibrate.error.message"));
                 return;
             }
             onCalibrate.accept(vrms);

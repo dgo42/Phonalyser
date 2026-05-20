@@ -5,9 +5,9 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.SWTError;
 import org.eclipse.swt.browser.Browser;
 import org.eclipse.swt.layout.FillLayout;
-import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Shell;
 
+import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
@@ -138,10 +138,7 @@ public final class HelpViewer {
 
         Path root = resolveLangRoot();
         if (root == null) {
-            MessageBox box = new MessageBox(parent, SWT.ICON_ERROR | SWT.OK);
-            box.setText(I18n.t("help.window.title"));
-            box.setMessage(I18n.t("help.window.notFound"));
-            box.open();
+            Dialogs.error(parent, I18n.t("help.window.title"), I18n.t("help.window.notFound"));
             return;
         }
         Path target = root.resolve(file);
@@ -150,10 +147,7 @@ public final class HelpViewer {
                     file, root, INDEX_FILE);
             target = root.resolve(INDEX_FILE);
             if (!Files.isRegularFile(target)) {
-                MessageBox box = new MessageBox(parent, SWT.ICON_ERROR | SWT.OK);
-                box.setText(I18n.t("help.window.title"));
-                box.setMessage(I18n.t("help.window.notFound"));
-                box.open();
+                Dialogs.error(parent, I18n.t("help.window.title"), I18n.t("help.window.notFound"));
                 return;
             }
         }
@@ -178,10 +172,9 @@ public final class HelpViewer {
             browser = new Browser(s, SWT.NONE);
         } catch (SWTError ex) {
             log.error("SWT Browser unavailable on this platform: {}", ex.getMessage());
-            MessageBox box = new MessageBox(parent, SWT.ICON_ERROR | SWT.OK);
-            box.setText(I18n.t("help.window.title"));
-            box.setMessage(I18n.t("help.window.browserUnavailable"));
-            box.open();
+            Dialogs.error(parent,
+                    I18n.t("help.window.title"),
+                    I18n.t("help.window.browserUnavailable"));
             s.dispose();
             return;
         }

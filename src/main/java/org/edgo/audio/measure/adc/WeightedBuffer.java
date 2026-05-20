@@ -9,8 +9,9 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-//import java.util.Arrays;
+import java.util.Arrays;
 import java.util.Locale;
+import java.util.function.BiConsumer;
 
 import org.edgo.audio.measure.common.StereoSample;
 import org.edgo.audio.measure.common.StereoSampleFloat;
@@ -426,7 +427,7 @@ public class WeightedBuffer {
         }
 
         if (valid == 0) return 1.0;
-        java.util.Arrays.sort(amps, 0, valid);
+        Arrays.sort(amps, 0, valid);
         return amps[valid / 2];   // median for robustness
     }
 
@@ -574,7 +575,7 @@ public class WeightedBuffer {
     // -------------------------------------------------------------------------
 
     public float forEachBucket(int buckets, double scaleVolts,
-                              java.util.function.BiConsumer<Double, Float> action) {
+                              BiConsumer<Double, Float> action) {
         final double voltsPerLSB = scaleVolts / binCount;
         final double bucketSize  = (double) binCount / buckets;
 

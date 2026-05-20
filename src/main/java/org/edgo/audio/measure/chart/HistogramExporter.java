@@ -2,6 +2,8 @@ package org.edgo.audio.measure.chart;
 
 import java.io.File;
 import java.io.IOException;
+import java.text.DecimalFormat;
+import java.text.NumberFormat;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
@@ -98,7 +100,7 @@ public class HistogramExporter {
                     String.format("%,d", sums[0]),
                     String.format("%,d", sums[buckets - 1]),
                     String.format("%,d", peakInner),
-                    String.format(java.util.Locale.US, "%.1f", SPIKE_RATIO));
+                    String.format(Locale.US, "%.1f", SPIKE_RATIO));
         }
 
         XYSeriesCollection dataset = new XYSeriesCollection(series);
@@ -123,8 +125,7 @@ public class HistogramExporter {
         // string passed explicitly — leaving NumberTickUnit's default DecimalFormat
         // produces unlabeled ticks under some locales.
         double step = ChartStyle.chooseVoltageTickStep(scaleVolts, width);
-        java.text.DecimalFormat fmt = (java.text.DecimalFormat)
-                java.text.NumberFormat.getNumberInstance(java.util.Locale.US);
+        DecimalFormat fmt = (DecimalFormat) NumberFormat.getNumberInstance(Locale.US);
         int decimals = step >= 1.0 ? 0 : (int) Math.ceil(-Math.log10(step));
         StringBuilder pat = new StringBuilder("0");
         if (decimals > 0) { pat.append('.'); for (int i = 0; i < decimals; i++) pat.append('0'); }

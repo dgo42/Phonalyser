@@ -10,6 +10,9 @@ import javax.sound.sampled.DataLine;
 import javax.sound.sampled.SourceDataLine;
 
 import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.common.Closeables;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.wav.PcmFileLoader;
 
 /**
@@ -36,11 +39,6 @@ public final class FilePlayController {
     private volatile boolean       running;
     private volatile boolean       loop;
     private volatile String        lastStartError;
-    /** Fired on the play thread when playback ends (any reason — user stop, EOF, error). */
-    private Runnable               onStopped;
-
-    /** Sets the callback fired when playback ends.  May run on any thread; caller marshals to SWT if needed. */
-    public void setOnStopped(Runnable r) { this.onStopped = r; }
 
     /** Live-updates the loop flag.  Picked up at the next EOF check by the play thread. */
     public void setLoop(boolean loop) { this.loop = loop; }
@@ -102,7 +100,7 @@ public final class FilePlayController {
                 int n = in.read(buf, 0, buf.length);
                 if (n <= 0) {
                     if (!loop) break;        // volatile — re-read each EOF
-                    try { in.close(); } catch (Exception ignored) {}
+                    Closeables.closeQuietly(in);
                     in = loader.openAsPcm(file);
                     continue;
                 }
@@ -115,18 +113,12 @@ public final class FilePlayController {
             lastStartError = ex.getMessage();
         } finally {
             if (line != null) {
-                try { line.stop();  } catch (Exception ignored) {}
-                try { line.close(); } catch (Exception ignored) {}
+                try { line.stop(); } catch (Exception ignored) {}
             }
-            if (in != null) {
-                try { in.close(); } catch (Exception ignored) {}
-            }
+            Closeables.closeQuietly(line);
+            Closeables.closeQuietly(in);
             running = false;
-            Runnable r = onStopped;
-            if (r != null) {
-                try { r.run(); }
-                catch (Throwable t) { log.warn("onStopped callback failed: {}", t.toString()); }
-            }
+            MessageBus.instance().publish(Events.FILE_PLAY_STOPPED);
         }
     }
 }

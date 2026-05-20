@@ -2,8 +2,11 @@ package org.edgo.audio.measure.chart;
 
 import java.io.File;
 import java.io.IOException;
+import java.text.DecimalFormat;
+import java.text.NumberFormat;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 
 import org.edgo.audio.measure.adc.WeightedBuffer;
 import org.jfree.chart.ChartFactory;
@@ -71,8 +74,7 @@ public class ChartExporter {
         // string passed explicitly — leaving NumberTickUnit's default DecimalFormat
         // produces unlabeled ticks under some locales.
         double step = ChartStyle.chooseVoltageTickStep(scaleVolts, width);
-        java.text.DecimalFormat fmt = (java.text.DecimalFormat)
-                java.text.NumberFormat.getNumberInstance(java.util.Locale.US);
+        DecimalFormat fmt = (DecimalFormat) NumberFormat.getNumberInstance(Locale.US);
         int decimals = step >= 1.0 ? 0 : (int) Math.ceil(-Math.log10(step));
         StringBuilder pat = new StringBuilder("0");
         if (decimals > 0) { pat.append('.'); for (int i = 0; i < decimals; i++) pat.append('0'); }
@@ -112,8 +114,8 @@ public class ChartExporter {
 
         log.info("Chart saved: {}  (Y range {} .. {})",
                 outFile.getAbsolutePath(),
-                String.format(java.util.Locale.US, "%.6f", minVal - pad),
-                String.format(java.util.Locale.US, "%.6f", maxVal + pad));
+                String.format(Locale.US, "%.6f", minVal - pad),
+                String.format(Locale.US, "%.6f", maxVal + pad));
         return outFile.getAbsolutePath();
     }
 }

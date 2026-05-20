@@ -14,6 +14,7 @@ import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.enums.GenSignalForm;
 
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
 
@@ -39,9 +40,9 @@ public final class SignalFormIcon {
     private static final int DROPDOWN_TOP_PAD = 2;
 
     private static final Map<Display, Map<GenSignalForm, Image>> CACHES =
-            new java.util.HashMap<>();
+            new HashMap<>();
     private static final Map<Display, Map<GenSignalForm, Image>> DROPDOWN_CACHES =
-            new java.util.HashMap<>();
+            new HashMap<>();
 
     private SignalFormIcon() {}
 

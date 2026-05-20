@@ -13,7 +13,9 @@ import javax.sound.sampled.TargetDataLine;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.enums.AudioBackendType;
 
 /**
@@ -175,8 +177,8 @@ public final class JavaSoundDeviceManager {
         //    carry no hardware information so they're skipped; an empty
         //    result triggers PreferencesDialog's default-rate fallback.
         Line.Info[] lineInfos = output ? m.getSourceLineInfo() : m.getTargetLineInfo();
-        java.util.TreeSet<Integer> rates  = new java.util.TreeSet<>();
-        java.util.TreeSet<Integer> depths = new java.util.TreeSet<>();
+        TreeSet<Integer> rates  = new TreeSet<>();
+        TreeSet<Integer> depths = new TreeSet<>();
         for (Line.Info li : lineInfos) {
             if (!(li instanceof DataLine.Info dli)) continue;
             for (AudioFormat sf : dli.getFormats()) {
@@ -228,9 +230,7 @@ public final class JavaSoundDeviceManager {
         } catch (LineUnavailableException | IllegalArgumentException ex) {
             return false;
         } finally {
-            if (line != null) {
-                try { line.close(); } catch (Throwable ignored) {}
-            }
+            Closeables.closeQuietly(line);
         }
     }
 }

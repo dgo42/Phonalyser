@@ -1,6 +1,6 @@
 package org.edgo.audio.measure.gui.scope;
 
-import java.util.Arrays;
+import java.util.Locale;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;
@@ -21,6 +21,8 @@ import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.OscSliderId;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.common.IconUtils;
@@ -132,7 +134,6 @@ public final class OscilloscopeView extends Canvas {
      * AC-mode trace's history-averaged DC subtraction isn't biased by the
      * settling.
      */
-    private static final long AC_WARMUP_NANOS = 500_000L;
     private double  captureRate;
 
     /**
@@ -217,80 +218,17 @@ public final class OscilloscopeView extends Canvas {
      * tick at ~10 Hz is the biggest single throughput win.
      */
     /**
-     * Latest computed measurements, owned by the measurement worker thread.
-     * Read from the SWT thread in {@link #drawMeasurements}; written from
-     * {@link #measurementLoop}.  {@code volatile} is sufficient because each
-     * read either uses the freshest snapshot or skips display.
+     * Background measurement worker.  Owns the compute thread, the
+     * latest {@link SignalMeasurements} snapshot, the rolling history
+     * ring (for avg / min / max / σ stats), and the per-channel DC mean
+     * used by the AC-coupling display.  Paint code reads worker state
+     * via accessors and via {@link ScopeMeasurementWorker#walkRecentHistory}
+     * / {@link ScopeMeasurementWorker#averagedChannelMean}.
      */
-    private volatile SignalMeasurements lastMeasResult;
-    /**
-     * Latest per-channel DC mean in normalised sample units ([-1, +1]),
-     * published by the measurement worker.  Read by the paint thread to
-     * remove the DC bias when AC coupling is on — same source as the
-     * measurement table's {@code Vmean}, so what the user sees on screen
-     * matches what the table reports.  Stay at 0 until the worker has run
-     * at least once after capture starts.
-     */
-    private volatile double lastLeftMeanNormalized;
-    private volatile double lastRightMeanNormalized;
-    private static final long  MEAS_COMPUTE_PERIOD_NANOS = 100_000_000L;  // 100 ms = 10 Hz
+    private final ScopeMeasurementWorker measWorker = new ScopeMeasurementWorker();
 
-    /**
-     * Cap on samples used by per-paint, per-sample-rate work — measurement
-     * window, trigger lookback, AC-offset estimation.  At low sample rates
-     * the cap is never hit (sampleRate &lt; cap) and behaviour matches the
-     * old "use the whole one-second history" approach; at 192 / 384 kHz it
-     * bounds the per-paint cost so the SWT thread isn't blocked for hundreds
-     * of milliseconds doing Goertzel scans or ring-buffer modulo loops.
-     * 96 000 samples is one second at 96 kHz / quarter-second at 384 kHz.
-     */
-    private static final int MEAS_MAX_SAMPLES = 96_000;
-
-    /**
-     * Worker thread that computes signal measurements off the SWT thread.
-     * Started by {@link #startMeasurementThread()} when capture begins and
-     * stopped by {@link #stopMeasurementThread()} when capture ends.  All
-     * reads of {@link #buffer} on the worker thread are safe because
-     * {@link SignalBuffer#readLatest} is synchronised.
-     */
-    private Thread          measThread;
-    private volatile boolean measThreadRunning;
-
-    /** Guards multi-field updates to the measurement history ring. */
-    private final Object measHistoryLock = new Object();
-
-    /**
-     * Dedicated buffers for the measurement read.  Sized at first use to
-     * one second of audio (any rate up to ~200 kHz) so the period detector
-     * and Goertzel scan see at least one full cycle for any audio-band
-     * signal.  Kept separate from {@link #leftBuf}/{@link #rightBuf} so a
-     * SINGLE held frame doesn't disturb live-signal measurements.
-     */
-    private float[] measLeftBuf;
-    private float[] measRightBuf;
-
-    /**
-     * Circular history of measurement snapshots and their nano-timestamps —
-     * fed once per paint and trimmed by age to the user-configured averaging
-     * window for the avg / min / max / σ columns.  Sized for ~33 seconds at
-     * 30 FPS so the window can extend up to ~30 s without ring overflow.
-     */
-    private static final int MEAS_HISTORY_CAP = 1024;
-    private final SignalMeasurements[] measHistory = new SignalMeasurements[MEAS_HISTORY_CAP];
-    private final long[] measHistoryTime = new long[MEAS_HISTORY_CAP];
-    /**
-     * Per-channel DC means stored alongside each entry of {@link #measHistory}
-     * in normalised sample units.  The AC-mode display offset and AC trigger
-     * level shift average over these to smooth out per-tick jitter; using a
-     * 500 ms-or-longer window keeps the trace from drifting visibly between
-     * worker ticks while still tracking slow drift in the input DC bias.
-     */
-    private final double[] meanHistoryLeftNorm  = new double[MEAS_HISTORY_CAP];
-    private final double[] meanHistoryRightNorm = new double[MEAS_HISTORY_CAP];
     /** Minimum averaging window for AC DC removal — never average less than this even when prefs.avg is shorter. */
     private static final long AC_DC_MIN_AVG_NANOS = 500_000_000L;
-    private int measHistoryWrite;
-    private int measHistorySize;
 
     /** Monospace font for the measurement table — created lazily, disposed with the view. */
     private Font monoFont;
@@ -310,9 +248,6 @@ public final class OscilloscopeView extends Canvas {
     private final Rectangle autoSetupButtonBounds     = new Rectangle(0, 0, 0, 0);
     /** Hit-box for the External-Window button (window-restore icon). */
     private final Rectangle externalWindowButtonBounds = new Rectangle(0, 0, 0, 0);
-    /** Callback invoked when the user clicks the Auto-Setup button — set
-     *  by {@link OscilloscopePane} via {@link #setAutoSetupCallback}. */
-    private Runnable autoSetupCallback;
     /** When true, the measurement-table rows are NOT drawn in this view —
      *  they're hosted in {@link #externalMeasurementShell} instead.  Header
      *  buttons (L, R, Auto-Setup, gauge, external-window, chart, reset)
@@ -404,9 +339,7 @@ public final class OscilloscopeView extends Canvas {
                         && prefs.getOscMeasurementChannel() != Channel.L) {
                     prefs.setOscMeasurementChannel(Channel.L);
                     prefs.save();
-                    synchronized (measHistoryLock) {
-                        clearMeasHistoryLocked();
-                    }
+                    measWorker.clearHistory();
                     redraw();
                     return;
                 }
@@ -414,15 +347,14 @@ public final class OscilloscopeView extends Canvas {
                         && prefs.getOscMeasurementChannel() != Channel.R) {
                     prefs.setOscMeasurementChannel(Channel.R);
                     prefs.save();
-                    synchronized (measHistoryLock) {
-                        clearMeasHistoryLocked();
-                    }
+                    measWorker.clearHistory();
                     redraw();
                     return;
                 }
-                // Auto-Setup — fire the registered callback (one-shot push).
+                // Auto-Setup — broadcast on the bus.  The scope pane
+                // subscribes and re-fits the vertical / horizontal scales.
                 if (autoSetupButtonBounds.contains(ev.x, ev.y)) {
-                    if (autoSetupCallback != null) autoSetupCallback.run();
+                    MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP);
                     return;
                 }
                 // External-Window — toggle the table-extract tool window.
@@ -449,9 +381,7 @@ public final class OscilloscopeView extends Canvas {
                     return;
                 }
                 if (resetButtonBoundsHeader.contains(ev.x, ev.y)) {
-                    synchronized (measHistoryLock) {
-                        clearMeasHistoryLocked();
-                    }
+                    measWorker.clearHistory();
                     redraw();
                     return;
                 }
@@ -597,44 +527,22 @@ public final class OscilloscopeView extends Canvas {
         });
     }
 
-    /** Registers the callback that fires when the user clicks the
-     *  Auto-Setup button in the measurement header.  Wired by
-     *  {@link OscilloscopePane} during construction. */
-    public void setAutoSetupCallback(Runnable r) {
-        this.autoSetupCallback = r;
-    }
-
     /** Attaches the live ring buffer.  {@code null} clears the waveform overlay. */
     public void setBuffer(SignalBuffer buffer) {
         this.buffer = buffer;
+        measWorker.setBuffer(buffer);
         // Reset per-capture state so a previous session's values aren't
         // displayed on the first few paints of a new capture (notably the
-        // DC mean, which is read straight from lastMeasResult / lastXMean
-        // until the measurement worker publishes a fresh tick ~100 ms in).
-        this.lastMeasResult          = null;
-        this.lastLeftMeanNormalized  = 0;
-        this.lastRightMeanNormalized = 0;
+        // DC mean, which is read straight from the worker until it
+        // publishes a fresh tick ~100 ms in).
+        measWorker.clearLatest();
         this.captureRate             = 0;
         this.lastNewFrameNanos       = 0;
         this.countedTriggerAbsPos    = -1;
         this.lastTriggerAbsPos       = -1;
         this.cachedMeasurementRows   = null;
         this.cachedCapsString        = "";
-        synchronized (measHistoryLock) {
-            clearMeasHistoryLocked();
-        }
-    }
-
-    /** Resets the measurement-history ring cursors AND nulls every slot
-     *  so stale {@link SignalMeasurements} references are released for
-     *  GC immediately on reset.  Without the array-fill, up to 1024 old
-     *  SM instances stay reachable until they're overwritten by new
-     *  writes (~34 s at 30 FPS).  Caller MUST already hold
-     *  {@link #measHistoryLock}. */
-    private void clearMeasHistoryLocked() {
-        measHistoryWrite = 0;
-        measHistorySize  = 0;
-        Arrays.fill(measHistory, null);
+        measWorker.clearHistory();
     }
 
     /** Returns the currently-attached ring buffer (or {@code null} if none). */
@@ -650,7 +558,7 @@ public final class OscilloscopeView extends Canvas {
      * actual amplitude.
      */
     public Double getLastVrms() {
-        SignalMeasurements m = lastMeasResult;
+        SignalMeasurements m = measWorker.getLastMeasResult();
         return (m == null) ? null : m.getVrms();
     }
 
@@ -662,7 +570,7 @@ public final class OscilloscopeView extends Canvas {
      * integer number of signal periods so the file loops cleanly.
      */
     public double getLastFrequencyHz() {
-        SignalMeasurements m = lastMeasResult;
+        SignalMeasurements m = measWorker.getLastMeasResult();
         return (m == null) ? Double.NaN : m.getFrequency();
     }
 
@@ -674,7 +582,7 @@ public final class OscilloscopeView extends Canvas {
      * small a signal would yield a noisy calibration result.
      */
     public double getLastVpp() {
-        SignalMeasurements m = lastMeasResult;
+        SignalMeasurements m = measWorker.getLastMeasResult();
         return (m == null) ? Double.NaN : m.getVpp();
     }
 
@@ -688,37 +596,7 @@ public final class OscilloscopeView extends Canvas {
      */
     public void copyMeasurementsFrom(OscilloscopeView source) {
         if (source == null || source == this) return;
-        // Snapshot under source's lock, write under ours.  Two distinct locks
-        // so we don't accidentally deadlock if these views were ever live in
-        // parallel (the screenshot use case doesn't need that, but the cost
-        // of being safe is one extra synchronized block).
-        SignalMeasurements snap = source.lastMeasResult;
-        double leftMeanSnap  = source.lastLeftMeanNormalized;
-        double rightMeanSnap = source.lastRightMeanNormalized;
-        synchronized (source.measHistoryLock) {
-            int cap = MEAS_HISTORY_CAP;
-            SignalMeasurements[] hist = new SignalMeasurements[cap];
-            long[]               t    = new long[cap];
-            double[]             ml   = new double[cap];
-            double[]             mr   = new double[cap];
-            System.arraycopy(source.measHistory,         0, hist, 0, cap);
-            System.arraycopy(source.measHistoryTime,     0, t,    0, cap);
-            System.arraycopy(source.meanHistoryLeftNorm, 0, ml,   0, cap);
-            System.arraycopy(source.meanHistoryRightNorm,0, mr,   0, cap);
-            int w = source.measHistoryWrite;
-            int s = source.measHistorySize;
-            synchronized (this.measHistoryLock) {
-                System.arraycopy(hist, 0, this.measHistory,         0, cap);
-                System.arraycopy(t,    0, this.measHistoryTime,     0, cap);
-                System.arraycopy(ml,   0, this.meanHistoryLeftNorm, 0, cap);
-                System.arraycopy(mr,   0, this.meanHistoryRightNorm,0, cap);
-                this.measHistoryWrite = w;
-                this.measHistorySize  = s;
-            }
-        }
-        this.lastMeasResult            = snap;
-        this.lastLeftMeanNormalized    = leftMeanSnap;
-        this.lastRightMeanNormalized   = rightMeanSnap;
+        this.measWorker.snapshotFrom(source.measWorker);
     }
 
     /**
@@ -1014,17 +892,13 @@ public final class OscilloscopeView extends Canvas {
         if (selected == Channel.L && !showL && showR) {
             prefs.setOscMeasurementChannel(Channel.R);
             prefs.save();
-            synchronized (measHistoryLock) {
-                clearMeasHistoryLocked();
-            }
+            measWorker.clearHistory();
         } else if (selected == Channel.R && !showR && showL) {
             prefs.setOscMeasurementChannel(Channel.L);
             prefs.save();
-            synchronized (measHistoryLock) {
-                clearMeasHistoryLocked();
-            }
+            measWorker.clearHistory();
         }
-        SignalMeasurements cur = lastMeasResult;
+        SignalMeasurements cur = measWorker.getLastMeasResult();
         if (cur == null) return null;
         long now = System.nanoTime();
         Row[] rows = cachedMeasurementRows;
@@ -1039,21 +913,16 @@ public final class OscilloscopeView extends Canvas {
             StatsBuilder tfS    = new StatsBuilder();
             StatsBuilder fS     = new StatsBuilder();
             StatsBuilder dutyS  = new StatsBuilder();
-            synchronized (measHistoryLock) {
-                for (int i = 0; i < measHistorySize; i++) {
-                    int idx = (measHistoryWrite - 1 - i + MEAS_HISTORY_CAP) % MEAS_HISTORY_CAP;
-                    if (measHistoryTime[idx] < cutoff) break;
-                    SignalMeasurements s = measHistory[idx];
-                    vppS  .add(s.getVpp());
-                    vrmsS .add(s.getVrms());
-                    vmeanS.add(s.getVmean());
-                    tpS   .add(s.getPeriod());
-                    trS   .add(s.getRiseTime());
-                    tfS   .add(s.getFallTime());
-                    fS    .add(s.getFrequency());
-                    dutyS .add(s.getDutyCycle());
-                }
-            }
+            measWorker.walkRecentHistory(cutoff, s -> {
+                vppS  .add(s.getVpp());
+                vrmsS .add(s.getVrms());
+                vmeanS.add(s.getVmean());
+                tpS   .add(s.getPeriod());
+                trS   .add(s.getRiseTime());
+                tfS   .add(s.getFallTime());
+                fS    .add(s.getFrequency());
+                dutyS .add(s.getDutyCycle());
+            });
             rows = new Row[] {
                     Row.forVolts("Vpp",   cur.getVpp(),       vppS),
                     Row.forVolts("Vrms",  cur.getVrms(),      vrmsS),
@@ -1133,9 +1002,7 @@ public final class OscilloscopeView extends Canvas {
                     return;
                 }
                 if (extResetButtonBounds.contains(ev.x, ev.y)) {
-                    synchronized (measHistoryLock) {
-                        clearMeasHistoryLocked();
-                    }
+                    measWorker.clearHistory();
                     redraw();
                 }
             }
@@ -1247,164 +1114,23 @@ public final class OscilloscopeView extends Canvas {
         }
     }
 
+
     /**
      * Starts the background measurement worker.  Idempotent — calling while
      * the worker is already running is a no-op.  Invoked by
      * {@link OscilloscopeController#start()} once a fresh {@link SignalBuffer}
      * has been attached via {@link #setBuffer(SignalBuffer)}.
      */
-    public synchronized void startMeasurementThread() {
-        // Self-heal against the previous owner not having fully torn
-        // its worker down — switching from record to play-from-file
-        // would otherwise see {@code measThreadRunning == true} from a
-        // dying thread, skip the spawn, and leave the new source
-        // unmonitored.  Join is bounded by stopMeasurementThread().
-        if (measThreadRunning || measThread != null) {
-            stopMeasurementThread();
-        }
-        measThreadRunning = true;
-        // Clear stale state from previous capture so the first paint after
-        // start doesn't show measurements from the previous session.
-        lastMeasResult = null;
-        synchronized (measHistoryLock) {
-            clearMeasHistoryLocked();
-        }
-        Thread t = new Thread(this::measurementLoop, "osc-measurement");
-        t.setDaemon(true);
-        t.start();
-        measThread = t;
+    public void startMeasurementThread() {
+        measWorker.start();
     }
 
     /**
      * Stops the background measurement worker and waits up to 2 s for it to
      * exit.  Called from {@link OscilloscopeController#stop()}.
      */
-    public synchronized void stopMeasurementThread() {
-        measThreadRunning = false;
-        Thread t = measThread;
-        if (t != null) {
-            try { t.join(2000); } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
-            }
-            measThread = null;
-        }
-    }
-
-    /**
-     * Measurement worker loop: sleeps for {@code MEAS_COMPUTE_PERIOD_NANOS}
-     * between probes, reads the latest samples from the {@link SignalBuffer},
-     * runs {@link SignalMeasurements#compute}, and stores the result for the
-     * SWT thread to pick up at next paint.  Runs at fixed cadence (drift-
-     * compensated) so the avg / min / max / σ stats are evenly spaced even
-     * if a single compute occasionally overruns the period.
-     */
-    private void measurementLoop() {
-        long nextWake = System.nanoTime() + MEAS_COMPUTE_PERIOD_NANOS;
-        while (measThreadRunning) {
-            long now = System.nanoTime();
-            long sleepNs = nextWake - now;
-            if (sleepNs > 0) {
-                try {
-                    Thread.sleep(sleepNs / 1_000_000L, (int) (sleepNs % 1_000_000L));
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-            }
-            if (!measThreadRunning) return;
-            try {
-                computeMeasurementOnce();
-            } catch (RuntimeException ex) {
-                log.warn("measurement loop iteration failed: {}", ex.toString());
-            }
-            nextWake += MEAS_COMPUTE_PERIOD_NANOS;
-            // Drift compensation: if a compute overran badly, snap forward so
-            // we don't busy-loop trying to catch up.
-            long lag = System.nanoTime() - nextWake;
-            if (lag > MEAS_COMPUTE_PERIOD_NANOS) {
-                nextWake = System.nanoTime() + MEAS_COMPUTE_PERIOD_NANOS;
-            }
-        }
-    }
-
-    /** Runs one measurement pass on the worker thread and updates the cache. */
-    private void computeMeasurementOnce() {
-        SignalBuffer b = buffer;
-        if (b == null) return;
-        Preferences prefs = Preferences.instance();
-        Channel selected = prefs.getOscMeasurementChannel();
-        int sampleRate = b.getSampleRate();
-        // Exclude the first AC_WARMUP_NANOS of captured samples from every
-        // read — those contain the ADC's startup transient and would bias
-        // the published DC mean (which then biases the AC-mode trace's
-        // history-averaged DC subtraction).  postWarmupCount is the number
-        // of post-warmup samples currently in the ring buffer; cap the
-        // read size to it so the most-recent samples returned by
-        // readLatest never overlap the warmup region.
-        long warmupSamples   = (long) sampleRate * AC_WARMUP_NANOS / 1_000_000_000L;
-        long postWarmupCount = b.getWritePos() - warmupSamples;
-        if (postWarmupCount < 64) return;
-        int measN = (int) Math.min(postWarmupCount, MEAS_MAX_SAMPLES);
-        if (measLeftBuf == null || measLeftBuf.length < measN) {
-            measLeftBuf  = new float[measN];
-            measRightBuf = new float[measN];
-        }
-        // Always read both channels — even when only one is the measurement
-        // selection — so we can publish a fresh per-channel DC mean for the
-        // paint thread's AC-mode trace offset and AC-mode trigger-level shift.
-        int avail = b.readLatest(measN, measLeftBuf, measRightBuf);
-        if (avail < 64) return;
-        double peakVolts = AudioBackend.adcFsVoltageRms * Math.sqrt(2.0);
-        double leftMean  = sampleMean(measLeftBuf,  avail);
-        double rightMean = sampleMean(measRightBuf, avail);
-        float[] data = (selected == Channel.L) ? measLeftBuf : measRightBuf;
-        SignalMeasurements result = SignalMeasurements.compute(data, avail, sampleRate, peakVolts);
-        long now = System.nanoTime();
-        synchronized (measHistoryLock) {
-            measHistory[measHistoryWrite] = result;
-            measHistoryTime[measHistoryWrite] = now;
-            meanHistoryLeftNorm [measHistoryWrite] = leftMean;
-            meanHistoryRightNorm[measHistoryWrite] = rightMean;
-            measHistoryWrite = (measHistoryWrite + 1) % MEAS_HISTORY_CAP;
-            if (measHistorySize < MEAS_HISTORY_CAP) measHistorySize++;
-        }
-        lastLeftMeanNormalized  = leftMean;
-        lastRightMeanNormalized = rightMean;
-        lastMeasResult = result;
-    }
-
-    /** Arithmetic mean of {@code data[0..n)}.  Returns 0 for empty inputs. */
-    private double sampleMean(float[] data, int n) {
-        if (data == null || n <= 0) return 0.0;
-        double sum = 0;
-        for (int i = 0; i < n; i++) sum += data[i];
-        return sum / n;
-    }
-
-    /**
-     * Returns the time-windowed average of one channel's recent DC means.
-     * Walks {@link #meanHistoryLeftNorm} / {@link #meanHistoryRightNorm}
-     * backwards in time from the most recent worker tick until the entry's
-     * timestamp falls outside {@code windowNanos} ago.  Falls back to the
-     * latest single-tick value when the history doesn't span the window
-     * (the first few hundred ms after capture starts).
-     */
-    private double averagedChannelMean(boolean leftChannel, long windowNanos) {
-        long cutoff = System.nanoTime() - windowNanos;
-        double sum = 0;
-        int count = 0;
-        synchronized (measHistoryLock) {
-            for (int i = 0; i < measHistorySize; i++) {
-                int idx = (measHistoryWrite - 1 - i + MEAS_HISTORY_CAP) % MEAS_HISTORY_CAP;
-                if (measHistoryTime[idx] < cutoff) break;
-                sum += leftChannel ? meanHistoryLeftNorm[idx] : meanHistoryRightNorm[idx];
-                count++;
-            }
-        }
-        if (count > 0) return sum / count;
-        // History too short for the requested window — use the latest snapshot
-        // rather than 0 so AC removal isn't suddenly off-zero for half a second.
-        return leftChannel ? lastLeftMeanNormalized : lastRightMeanNormalized;
+    public void stopMeasurementThread() {
+        measWorker.stop();
     }
 
     /**
@@ -1415,7 +1141,7 @@ public final class OscilloscopeView extends Canvas {
     private double acDcMean(boolean leftChannel) {
         long windowNanos = Math.max(AC_DC_MIN_AVG_NANOS,
                 (long) (Preferences.instance().getOscMeasurementAverageSeconds() * 1e9));
-        return averagedChannelMean(leftChannel, windowNanos);
+        return measWorker.averagedChannelMean(leftChannel, windowNanos);
     }
 
     /**
@@ -2273,25 +1999,25 @@ public final class OscilloscopeView extends Canvas {
         else if (a >= 1e-3)  { unit = "mV"; scaledV = v * 1e3; scaledRes = vpdiv * 0.1 * 1e3; }
         else if (a >= 1e-6)  { unit = "µV"; scaledV = v * 1e6; scaledRes = vpdiv * 0.1 * 1e6; }
         else if (a == 0)     return "0 V";
-        else                 return String.format(java.util.Locale.ROOT, "%.2g V", v);
+        else                 return String.format(Locale.ROOT, "%.2g V", v);
         int dp;
         if (scaledRes >= 1.0)    dp = 1;
         else if (scaledRes > 0)  dp = (int) Math.ceil(-Math.log10(scaledRes)) + 1;
         else                     dp = 3;
         if (dp < 1) dp = 1;
         if (dp > 6) dp = 6;
-        return String.format(java.util.Locale.ROOT, "%." + dp + "f " + unit, scaledV);
+        return String.format(Locale.ROOT, "%." + dp + "f " + unit, scaledV);
     }
 
     /** Seconds with auto-prefix (s / ms / μs / ns), 2 significant decimals. */
     private String formatSeconds(double t) {
         double a = Math.abs(t);
-        if (a >= 1.0)       return String.format(java.util.Locale.ROOT, "%.2f s",  t);
-        if (a >= 1e-3)      return String.format(java.util.Locale.ROOT, "%.2f ms", t * 1e3);
-        if (a >= 1e-6)      return String.format(java.util.Locale.ROOT, "%.1f µs", t * 1e6);
-        if (a >= 1e-9)      return String.format(java.util.Locale.ROOT, "%.1f ns", t * 1e9);
+        if (a >= 1.0)       return String.format(Locale.ROOT, "%.2f s",  t);
+        if (a >= 1e-3)      return String.format(Locale.ROOT, "%.2f ms", t * 1e3);
+        if (a >= 1e-6)      return String.format(Locale.ROOT, "%.1f µs", t * 1e6);
+        if (a >= 1e-9)      return String.format(Locale.ROOT, "%.1f ns", t * 1e9);
         if (a == 0)         return "0 s";
-        return String.format(java.util.Locale.ROOT, "%.2g s", t);
+        return String.format(Locale.ROOT, "%.2g s", t);
     }
 
     /**
@@ -2396,7 +2122,7 @@ public final class OscilloscopeView extends Canvas {
         // off the buffer.  Plus LANCZOS_PADDING on each side for the sinc
         // kernel, plus an extra lookback so the trigger search reliably
         // contains a rising edge even for low-frequency signals.
-        int extraLookback = Math.min(b.getSampleRate(), MEAS_MAX_SAMPLES);
+        int extraLookback = Math.min(b.getSampleRate(), ScopeMeasurementWorker.MEAS_MAX_SAMPLES);
         int wanted = 2 * displaySamples + 2 * LANCZOS_PADDING + extraLookback;
         // When SINGLE is armed, capture both channels so toggling L/R after
         // the freeze still shows real data instead of a stale buffer.
@@ -2717,15 +2443,15 @@ public final class OscilloscopeView extends Canvas {
      * before the worker fired once).
      */
     private double[] computeAcOffsetsForCaptured(SignalBuffer b, boolean acL, boolean acR) {
-        if (lastMeasResult != null) {
+        if (measWorker.getLastMeasResult() != null) {
             return new double[] {
                     acL ? acDcMean(true)  : 0.0,
                     acR ? acDcMean(false) : 0.0
             };
         }
         // No measurement worker output yet — fall back to the captured frame.
-        double dcL = acL ? sampleMean(capturedLeft,  capturedLen) : 0.0;
-        double dcR = acR ? sampleMean(capturedRight, capturedLen) : 0.0;
+        double dcL = acL ? ScopeMeasurementWorker.sampleMean(capturedLeft,  capturedLen) : 0.0;
+        double dcR = acR ? ScopeMeasurementWorker.sampleMean(capturedRight, capturedLen) : 0.0;
         return new double[] { dcL, dcR };
     }
 

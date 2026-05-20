@@ -1,7 +1,10 @@
 package org.edgo.audio.measure.gui.scope;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
@@ -26,7 +29,6 @@ import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
-import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.enums.Channel;
@@ -35,12 +37,14 @@ import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.gui.MainWindow;
 import org.edgo.audio.measure.gui.generator.NumericStepField;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.preferences.OscPreset;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.gui.widgets.StepSelector;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -101,10 +105,15 @@ public final class OscilloscopePane {
     /** Reference to the trigger toolbar tab content so it can be enabled/disabled
      *  when switching between live record and file (openSignal) modes. */
     private Composite                    triggerGroup;
-    /** Re-applies the "Start button is enabled iff Single mode is selected"
-     *  rule.  Called after re-enabling the trigger group on Record so
-     *  the Start button respects the mode rather than the bulk-enable. */
-    private Runnable                     triggerStartSync;
+    /** "Start" button on the Trigger toolbar tab — enabled iff Single
+     *  mode is selected.  Promoted to a field so {@link #syncTriggerStart}
+     *  can re-apply the rule after a bulk-enable. */
+    private Button                       triggerStartBtn;
+    /** Subscriber for {@link Events#SCOPE_AUTO_SETUP}.  Held as a field
+     *  so the dispose listener can unsubscribe — bound only on the live
+     *  pane so the offscreen screenshot-renderer doesn't respond to user
+     *  clicks on the live pane.  {@code null} on the offscreen variant. */
+    private Runnable                     autoSetupListener;
     /** Read-only text field showing the currently loaded openSignal file path. */
     private Text                         openSignalPathField;
     /** CTabFolder hosting the six toolbar tabs (Vertical / Horizontal / Trigger /
@@ -152,7 +161,7 @@ public final class OscilloscopePane {
     /** Painted-region map used to show region-specific tooltips on hover.
      *  Rebuilt on every CTabFolder paint; consumed by the MouseMove
      *  listener that sets the CTabFolder's tooltip text dynamically. */
-    private final java.util.List<TabRegion> tabRegions = new java.util.ArrayList<>();
+    private final List<TabRegion> tabRegions = new ArrayList<>();
 
     /** A painted sub-region of a tab header (a tile) paired with its
      *  fully-resolved hover-tooltip text.  Resolved at paint time so the
@@ -290,7 +299,6 @@ public final class OscilloscopePane {
                 I18n.t("scope.pane.toggle.tooltip"));
 
         view = new OscilloscopeView(group);
-        view.setAutoSetupCallback(this::performAutoSetup);
         // Column 0 of the 2-col paneLayout — leaves column 1 free for the
         // vertical scrollbar that follows.
         view.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
@@ -497,7 +505,7 @@ public final class OscilloscopePane {
                 String key = tabLabelTooltipKey(hoverIdx);
                 if (key != null) tip = I18n.t(key);
             }
-            if (hoverIdx != currentIdx[0] || !java.util.Objects.equals(currentTip[0], tip)) {
+            if (hoverIdx != currentIdx[0] || !Objects.equals(currentTip[0], tip)) {
                 currentTip[0] = tip;
                 currentIdx[0] = hoverIdx;
                 if (hoverIdx >= 0) {
@@ -571,7 +579,10 @@ public final class OscilloscopePane {
             controller = new OscilloscopeController(view, condensed);
             loader     = new ScopeOpenSignal(view, condensed);
             wireRecordButton();
+            autoSetupListener = this::performAutoSetup;
+            MessageBus.instance().subscribe(Events.SCOPE_AUTO_SETUP, autoSetupListener);
             group.addDisposeListener(e -> {
+                MessageBus.instance().unsubscribe(Events.SCOPE_AUTO_SETUP, autoSetupListener);
                 loader.clear();
                 controller.stop();
             });
@@ -664,7 +675,7 @@ public final class OscilloscopePane {
                 // "Start is enabled iff Single mode" rule afterwards
                 // so it doesn't stay clickable in Auto / Normal modes.
                 setSubtreeEnabled(triggerGroup, true);
-                if (triggerStartSync != null) triggerStartSync.run();
+                syncTriggerStart();
                 view.setViewBackOffsetFrames(0);
                 condensed.setViewBackOffsetFrames(0);
                 controller.start();
@@ -673,11 +684,7 @@ public final class OscilloscopePane {
                     recordButton.setImage(recordDim);
                     String err = controller.getLastStartError();
                     if (err != null) {
-                        Shell parentShell = group.getShell();
-                        MessageBox mb = new MessageBox(parentShell, SWT.ICON_ERROR | SWT.OK);
-                        mb.setText(I18n.t("scope.record.error.start"));
-                        mb.setMessage(err);
-                        mb.open();
+                        Dialogs.error(group.getShell(), I18n.t("scope.record.error.start"), err);
                     }
                 }
             } else {
@@ -749,10 +756,7 @@ public final class OscilloscopePane {
         if (parent == null) return;
         Double currentVrms = (view == null) ? null : view.getLastVrms();
         if (currentVrms == null || currentVrms <= 0 || Double.isNaN(currentVrms)) {
-            MessageBox mb = new MessageBox(parent, SWT.ICON_INFORMATION | SWT.OK);
-            mb.setText(I18n.t("calibrate.title"));
-            mb.setMessage(I18n.t("calibrate.error.noVrms"));
-            mb.open();
+            Dialogs.info(parent, I18n.t("calibrate.title"), I18n.t("calibrate.error.noVrms"));
             return;
         }
         final double measuredVrms = currentVrms;
@@ -1247,7 +1251,7 @@ public final class OscilloscopePane {
     private static String shortNum(double v) {
         long iv = Math.round(v);
         if (Math.abs(v - iv) < 1e-4) return Long.toString(iv);
-        return String.format(java.util.Locale.ROOT, "%.1f", v);
+        return String.format(Locale.ROOT, "%.1f", v);
     }
 
     /** Toggles whether the toolbar CTabFolder shows its tab content area.
@@ -1496,22 +1500,20 @@ public final class OscilloscopePane {
         modeSingle.addListener(SWT.Selection,
                 e -> { if (modeSingle.getSelection()) { prefs.setOscTriggerMode(TriggerMode.SINGLE); prefs.save(); refreshTabHeader(TAB_TRIGGER); } });
 
-        Button startBtn = new Button(g, SWT.PUSH);
+        triggerStartBtn = new Button(g, SWT.PUSH);
         Image triggerPlayIcon = IconUtils.instance().renderAtHeight(g.getDisplay(),
                 SvgPaths.PLAY, SQUARE_BUTTON - 12, null);
-        startBtn.setImage(triggerPlayIcon);
+        triggerStartBtn.setImage(triggerPlayIcon);
         // Image is cached and owned by IconUtils — disposed when the
         // main shell tears down, not on button dispose.
-        startBtn.setToolTipText(I18n.t("scope.trigger.start.tooltip"));
-        startBtn.setLayoutData(new RowData(SQUARE_BUTTON, SQUARE_BUTTON));
-        startBtn.setEnabled(modeSingle.getSelection());
-        startBtn.addListener(SWT.Selection, e -> onSingleStart.run());
+        triggerStartBtn.setToolTipText(I18n.t("scope.trigger.start.tooltip"));
+        triggerStartBtn.setLayoutData(new RowData(SQUARE_BUTTON, SQUARE_BUTTON));
+        triggerStartBtn.setEnabled(modeSingle.getSelection());
+        triggerStartBtn.addListener(SWT.Selection, e -> onSingleStart.run());
 
-        Runnable syncStart = () -> startBtn.setEnabled(modeSingle.getSelection());
-        triggerStartSync = syncStart;
-        modeAuto  .addListener(SWT.Selection, e -> syncStart.run());
-        modeNormal.addListener(SWT.Selection, e -> syncStart.run());
-        modeSingle.addListener(SWT.Selection, e -> syncStart.run());
+        modeAuto  .addListener(SWT.Selection, e -> syncTriggerStart());
+        modeNormal.addListener(SWT.Selection, e -> syncTriggerStart());
+        modeSingle.addListener(SWT.Selection, e -> syncTriggerStart());
 
         // Hysteresis selector — 0.1-div steps from 0.0 (disabled) to 5.0 div.
         // Moved out of the global Preferences dialog so it lives alongside
@@ -1573,7 +1575,7 @@ public final class OscilloscopePane {
     /**
      * Presets tab — editable name combo + Save / Load buttons.  Save reads
      * the current values of every preset-tracked control into a new
-     * {@link Preferences.OscPreset} and writes it under the typed name (or
+     * {@link OscPreset} and writes it under the typed name (or
      * overwrites if the name already exists).  Load reads back the named
      * preset and pushes every value into the UI controls and prefs.
      */
@@ -1614,7 +1616,7 @@ public final class OscilloscopePane {
         presetLoadBtn.addListener(SWT.Selection, e -> {
             String name = presetCombo.getText().trim();
             if (name.isEmpty()) return;
-            Preferences.OscPreset p = prefs.getOscPresets().get(name);
+            OscPreset p = prefs.getOscPresets().get(name);
             if (p != null) {
                 applyOscPreset(p);
                 refreshPresetButtonState();
@@ -1665,7 +1667,7 @@ public final class OscilloscopePane {
             presetDeleteBtn.setEnabled(false);
             return;
         }
-        Preferences.OscPreset existing = Preferences.instance().getOscPresets().get(name);
+        OscPreset existing = Preferences.instance().getOscPresets().get(name);
         if (existing == null) {
             // New name — Save is the way to create it; nothing to load/delete.
             presetSaveBtn  .setEnabled(true);
@@ -1679,10 +1681,10 @@ public final class OscilloscopePane {
         }
     }
 
-    /** Field-by-field equality of two {@link Preferences.OscPreset}s.
+    /** Field-by-field equality of two {@link OscPreset}s.
      *  Used to decide whether the Save button should be active when an
      *  existing preset is selected. */
-    private static boolean presetsEqual(Preferences.OscPreset a, Preferences.OscPreset b) {
+    private static boolean presetsEqual(OscPreset a, OscPreset b) {
         return a.isLeftChannelEnabled()        == b.isLeftChannelEnabled()
             && a.isRightChannelEnabled()       == b.isRightChannelEnabled()
             && a.isLeftAcMode()                == b.isLeftAcMode()
@@ -1704,27 +1706,23 @@ public final class OscilloscopePane {
     /** Yes/No confirmation prompt for overwriting an existing preset.
      *  Returns true when the user picks Yes. */
     private boolean confirmOverwritePreset(String name) {
-        MessageBox mb = new MessageBox(group.getShell(),
-                SWT.ICON_QUESTION | SWT.YES | SWT.NO);
-        mb.setText(I18n.t("scope.presets.overwrite.title"));
-        mb.setMessage(I18n.t("scope.presets.overwrite.message", name));
-        return mb.open() == SWT.YES;
+        return Dialogs.confirm(group.getShell(),
+                I18n.t("scope.presets.overwrite.title"),
+                I18n.t("scope.presets.overwrite.message", name)) == SWT.YES;
     }
 
     /** Yes/No confirmation prompt for deleting a preset. */
     private boolean confirmDeletePreset(String name) {
-        MessageBox mb = new MessageBox(group.getShell(),
-                SWT.ICON_QUESTION | SWT.YES | SWT.NO);
-        mb.setText(I18n.t("scope.presets.delete.title"));
-        mb.setMessage(I18n.t("scope.presets.delete.message", name));
-        return mb.open() == SWT.YES;
+        return Dialogs.confirm(group.getShell(),
+                I18n.t("scope.presets.delete.title"),
+                I18n.t("scope.presets.delete.message", name)) == SWT.YES;
     }
 
     /** Reads every preset-tracked value from the live {@link Preferences}
-     *  into a new {@link Preferences.OscPreset}. */
-    private Preferences.OscPreset captureCurrentOscPreset() {
+     *  into a new {@link OscPreset}. */
+    private OscPreset captureCurrentOscPreset() {
         Preferences prefs = Preferences.instance();
-        Preferences.OscPreset p = new Preferences.OscPreset();
+        OscPreset p = new OscPreset();
         p.setLeftChannelEnabled(prefs.isOscLeftChannelEnabled());
         p.setRightChannelEnabled(prefs.isOscRightChannelEnabled());
         p.setLeftAcMode(prefs.isOscLeftAcMode());
@@ -1755,6 +1753,14 @@ public final class OscilloscopePane {
      * or Vpp yet (capture not running, or the warm-up window is still
      * in effect).
      */
+    /** Re-applies the "Start button enabled iff Single mode is selected"
+     *  rule.  Called from the trigger-mode radio listeners and after a
+     *  bulk-enable of {@link #triggerGroup} restores Record mode. */
+    private void syncTriggerStart() {
+        if (triggerStartBtn == null || triggerStartBtn.isDisposed()) return;
+        triggerStartBtn.setEnabled(modeSingle != null && modeSingle.getSelection());
+    }
+
     private void performAutoSetup() {
         if (view == null || view.isDisposed()) return;
         // Refuse to auto-setup when the scope isn't actively recording.
@@ -1803,7 +1809,7 @@ public final class OscilloscopePane {
      *  AFTER the scale updates so the preset values win.  Button widgets
      *  use {@code setSelection} which does NOT fire listeners, so we update
      *  prefs explicitly for those. */
-    private void applyOscPreset(Preferences.OscPreset p) {
+    private void applyOscPreset(OscPreset p) {
         Preferences prefs = Preferences.instance();
         // Scales — fire listeners that adjust offsetFrac; we'll overwrite below.
         if (leftScale  != null && !leftScale .isDisposed()) leftScale .setValue(p.getLeftVoltsPerDiv());
@@ -1833,7 +1839,7 @@ public final class OscilloscopePane {
         if (modeAuto   != null && !modeAuto  .isDisposed()) modeAuto  .setSelection(p.getTriggerMode()    == TriggerMode.AUTO);
         if (modeNormal != null && !modeNormal.isDisposed()) modeNormal.setSelection(p.getTriggerMode()    == TriggerMode.NORMAL);
         if (modeSingle != null && !modeSingle.isDisposed()) modeSingle.setSelection(p.getTriggerMode()    == TriggerMode.SINGLE);
-        if (triggerStartSync != null) triggerStartSync.run();
+        syncTriggerStart();
         // Fractions — overwrite the values the scale listeners would have
         // clobbered.  Goes last so the preset wins.
         prefs.setOscLeftOffsetFrac     (p.getLeftOffsetFrac());
@@ -2013,10 +2019,9 @@ public final class OscilloscopePane {
             view.setFilePath(picked);
         } else {
             String err = (loader != null) ? loader.getLastError() : "Loader not available.";
-            MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_ERROR | SWT.OK);
-            mb.setText(I18n.t("scope.openSignal.error"));
-            mb.setMessage(err != null ? err : "Unknown error opening the file.");
-            mb.open();
+            Dialogs.error(group.getShell(),
+                    I18n.t("scope.openSignal.error"),
+                    err != null ? err : "Unknown error opening the file.");
         }
     }
 
@@ -2596,10 +2601,9 @@ public final class OscilloscopePane {
     /** Performs the scope-buffer save, surfacing errors as a MessageBox. */
     private void doScopeSave(String path, double durationSeconds) {
         if (path == null || path.isEmpty()) {
-            MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_INFORMATION | SWT.OK);
-            mb.setText(I18n.t("scope.save.dialog"));
-            mb.setMessage(I18n.t("scope.save.pickFirst"));
-            mb.open();
+            Dialogs.info(group.getShell(),
+                    I18n.t("scope.save.dialog"),
+                    I18n.t("scope.save.pickFirst"));
             return;
         }
         Preferences prefs = Preferences.instance();
@@ -2615,10 +2619,9 @@ public final class OscilloscopePane {
             log.info("Scope saved: {} ({} bytes)", path, bytes);
         } catch (Exception ex) {
             log.warn("Scope save failed", ex);
-            MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_ERROR | SWT.OK);
-            mb.setText(I18n.t("scope.save.error"));
-            mb.setMessage(I18n.t("scope.save.error.message", path, ex.getMessage()));
-            mb.open();
+            Dialogs.error(group.getShell(),
+                    I18n.t("scope.save.error"),
+                    I18n.t("scope.save.error.message", path, ex.getMessage()));
         }
     }
 

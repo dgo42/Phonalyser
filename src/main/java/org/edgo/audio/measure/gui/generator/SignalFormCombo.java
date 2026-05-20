@@ -96,7 +96,7 @@ public final class SignalFormCombo extends Composite {
         // glyph on some Linux themes), so we paint the caret ourselves.
         // No press-state animation in the combo (the popup itself is the
         // visual feedback) — pass equal sizes to disable the swap. #808080
-        dropArrow = IconStepLabel.create(this, "/icons/caret-down.svg",
+        dropArrow = new IconStepLabel(this, "/icons/caret-down.svg",
                 13, 13, new RGB(0x80, 0x80, 0x80));
         GridData arrowGd = new GridData(SWT.FILL, SWT.FILL, false, true);
         arrowGd.widthHint = 18;

@@ -9,6 +9,7 @@ import java.util.Locale;
 import java.util.Random;
 
 import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.HarmonicsCsv;
 
 import lombok.Value;
 import lombok.extern.log4j.Log4j2;
@@ -172,7 +173,7 @@ public class SignalGenerator {
     /**
      * Constructs a {@link GenSignalForm#SINE_COMPENSATED} generator.
      * Loads H2..Hn harmonic corrections from an {@code fft_harmonics_*.csv} file
-     * produced by {@link FftAnalyzer#exportHarmonicsCsv}, or an
+     * produced by {@link HarmonicsCsv#export}, or an
      * {@code applied_compensation_*.csv} file from the iterative workflow.
      *
      * <p>If the CSV contains generator-parameter metadata (written by

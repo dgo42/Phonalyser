@@ -16,6 +16,7 @@ import org.edgo.audio.measure.gui.widgets.IconStepLabel;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 import org.edgo.audio.measure.gui.interfaces.Formatter;
 import org.edgo.audio.measure.gui.interfaces.Parser;
 import org.edgo.audio.measure.gui.interfaces.Stepper;
@@ -84,7 +85,7 @@ public final class NumericStepField extends Composite {
         // press grows 6 → 10 px via IconStepLabel (Canvas under the hood
         // so the icon centres horizontally — plain Label ignores SWT.CENTER
         // for images on GTK).
-        upBtn = IconStepLabel.create(this, "/icons/sort-up.svg",
+        upBtn = new IconStepLabel(this, "/icons/sort-up.svg",
                 10, 8, new RGB(0x80, 0x80, 0x80));
         GridData ud = new GridData(SWT.FILL, SWT.FILL, false, true);
         ud.widthHint  = 16;
@@ -94,7 +95,7 @@ public final class NumericStepField extends Composite {
         ud.heightHint = 12;
         upBtn.setLayoutData(ud);
 
-        downBtn = IconStepLabel.create(this, "/icons/sort-down.svg",
+        downBtn = new IconStepLabel(this, "/icons/sort-down.svg",
                 10, 8, new RGB(0x80, 0x80, 0x80));
         GridData dd = new GridData(SWT.FILL, SWT.FILL, false, true);
         dd.widthHint  = 16;
@@ -161,9 +162,9 @@ public final class NumericStepField extends Composite {
         });
     }
 
-    private static final java.util.regex.Pattern NUMERIC_NO_UNIT = java.util.regex.Pattern.compile(
+    private static final Pattern NUMERIC_NO_UNIT = Pattern.compile(
             "[+-]?(\\d+([.,]\\d*)?|[.,]\\d*)");
-    private static final java.util.regex.Pattern NUMERIC_WITH_UNIT = java.util.regex.Pattern.compile(
+    private static final Pattern NUMERIC_WITH_UNIT = Pattern.compile(
             "[+-]?(\\d+([.,]\\d*)?|[.,]\\d*)\\s*([a-zA-Zµμ°Ω%]*)?");
 
     private static boolean matchesNumeric(String s, boolean allowUnit) {

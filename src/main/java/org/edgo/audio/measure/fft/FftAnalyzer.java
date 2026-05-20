@@ -1,16 +1,8 @@
 package org.edgo.audio.measure.fft;
 
 import org.edgo.audio.measure.sound.AudioBackend;
-import java.awt.Font;
-import java.awt.FontMetrics;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
-import java.awt.geom.Rectangle2D;
-import java.awt.image.BufferedImage;
-import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -20,27 +12,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
-
-import org.edgo.audio.measure.chart.ChartStyle;
-import org.jfree.chart.ChartFactory;
-import org.jfree.chart.JFreeChart;
-import org.jfree.chart.annotations.XYTextAnnotation;
-import org.jfree.chart.axis.AxisLocation;
-import org.jfree.chart.axis.AxisState;
-import org.jfree.chart.axis.LogAxis;
-import org.jfree.chart.axis.NumberAxis;
-import org.jfree.chart.axis.NumberTick;
-import org.jfree.chart.axis.NumberTickUnit;
-import org.jfree.chart.axis.TickType;
-import org.jfree.chart.plot.IntervalMarker;
-import org.jfree.chart.plot.PlotOrientation;
-import org.jfree.chart.plot.XYPlot;
-import org.jfree.chart.renderer.xy.XYLineAndShapeRenderer;
-import org.jfree.chart.ui.Layer;
-import org.jfree.chart.ui.RectangleEdge;
-import org.jfree.chart.ui.TextAnchor;
-import org.jfree.data.xy.XYSeries;
-import org.jfree.data.xy.XYSeriesCollection;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -86,8 +57,12 @@ public class FftAnalyzer {
     // Result
     // =========================================================================
 
-    /** Immutable container for all FFT analysis outputs. */
-    public class Result {
+    /** Container for all FFT analysis outputs.  Static inner class so each
+     *  {@code Result} instance is independent of the {@link FftAnalyzer}
+     *  instance that produced it — important for the FFT worker's
+     *  double-buffered hand-off, where one analyser keeps emitting fresh
+     *  results while previous ones are still on the paint thread. */
+    public static class Result {
 
         /** FFT frame length (power of 2). */
         public final int fftSize;
@@ -365,7 +340,7 @@ public class FftAnalyzer {
         for (int n = 0; n < fftSize; n++) {
             f0Re[n] = samples[n] * window[n];
         }
-        fft(f0Re, f0Im);
+        Fft.forward(f0Re, f0Im);
         // Skip the DC + ULF zone below 10 Hz when searching for the fundamental:
         // window leakage from a residual DC offset can populate bin 1 at roughly
         // -32 dB (Hann) below DC level, easily beating a deeply notched
@@ -540,7 +515,7 @@ public class FftAnalyzer {
         }
 
         boolean[] frameClean = new boolean[frameCount];
-        java.util.Arrays.fill(frameClean, true);
+        Arrays.fill(frameClean, true);
         int rejectedFrames = 0;
         if (!events.isEmpty()) {
             log.warn("R-invariant scan: {} sample hit(s) > {}%, grouped into {} event(s) (max |R−A|/A in signal = {}%)",
@@ -591,7 +566,7 @@ public class FftAnalyzer {
         if (!events.isEmpty() && rejectedFrames >= frameCount) {
             log.warn("R-invariant rejection invalidated: would reject all {} frame(s) (likely low-SNR signal — derivative-noise amplification); accepting all frames",
                     frameCount);
-            java.util.Arrays.fill(frameClean, true);
+            Arrays.fill(frameClean, true);
             rejectedFrames = 0;
             events.clear();
             hitCount = 0;
@@ -656,7 +631,7 @@ public class FftAnalyzer {
         for (int n = 0; n < fftSize; n++) {
             s0Re[n] = samples[segBaseSample + n] * window[n];
         }
-        fft(s0Re, s0Im);
+        Fft.forward(s0Re, s0Im);
         // refine intFundBin within ±2 bins of the pre-pass estimate (in case of drift)
         int refIntBin = intFundBin;
         {
@@ -676,7 +651,7 @@ public class FftAnalyzer {
             for (int n = 0; n < fftSize; n++) {
                 s1Re[n] = samples[segBaseSample + estStep + n] * window[n];
             }
-            fft(s1Re, s1Im);
+            Fft.forward(s1Re, s1Im);
             double phi0 = Math.atan2(s0Im[refIntBin], s0Re[refIntBin]);
             double phi1 = Math.atan2(s1Im[refIntBin], s1Re[refIntBin]);
             double expectedDiff = 2.0 * Math.PI * refIntBin * estStep / (double) fftSize;
@@ -684,7 +659,7 @@ public class FftAnalyzer {
             long   m            = Math.round((rawDiff - expectedDiff) / (2.0 * Math.PI));
             kFractional = (rawDiff - 2.0 * Math.PI * m) * fftSize / (2.0 * Math.PI * estStep);
         } else {
-            kFractional = parabolicBinInterp(s0Re, s0Im, refIntBin, fftSize);
+            kFractional = MathUtil.parabolicBinInterp(s0Re, s0Im, refIntBin, fftSize);
         }
         intFundBin = refIntBin;
         log.info("k_f re-estimate (from clean segment frame {}): intBin={}, k_f={}, refinedHz={}",
@@ -706,7 +681,7 @@ public class FftAnalyzer {
                 frameRe[n] = samples[base + n] * window[n];
                 frameIm[n] = 0.0;
             }
-            fft(frameRe, frameIm);
+            Fft.forward(frameRe, frameIm);
             if (coherentAveraging) {
                 // DFT time-shift theorem: frame f starting at sample f·step imparts phase
                 //   exp(+j · 2π · k_f · f · step / N)
@@ -786,7 +761,7 @@ public class FftAnalyzer {
                         frameRe[n] = samples[base + n] * window[n];
                         frameIm[n] = 0.0;
                     }
-                    fft(frameRe, frameIm);
+                    Fft.forward(frameRe, frameIm);
                     double baseAngle  = -2.0 * Math.PI * (long) f * step * kFractional
                                         / ((double) fftSize * intFundBinRounded);
                     double cosBase = Math.cos(baseAngle);
@@ -1435,14 +1410,14 @@ public class FftAnalyzer {
      */
     double[] buildChebyshevWindow(int N, double attenDb) {
         double beta = Math.pow(10.0, attenDb / 20.0);
-        double x0   = Math.cosh(acosh(beta) / (N - 1));
+        double x0   = Math.cosh(MathUtil.acosh(beta) / (N - 1));
 
         double[] wRe = new double[N];
         double[] wIm = new double[N];
 
         // Compute W[k] = T_{N-1}(x0 * cos(π*k/N)) for k=0..N/2, symmetric fill
         for (int k = 0; k <= N / 2; k++) {
-            double val = chebyshevT(N - 1, x0 * Math.cos(Math.PI * k / N));
+            double val = MathUtil.chebyshevT(N - 1, x0 * Math.cos(Math.PI * k / N));
             wRe[k] = val;
             if (k > 0 && k < N - k) {
                 wRe[N - k] = val;
@@ -1451,7 +1426,7 @@ public class FftAnalyzer {
 
         // IFFT via FFT conjugate: IFFT(W) = conj(FFT(conj(W))) / N
         // Since W is real, conj(W) = W, so IFFT = FFT / N
-        fft(wRe, wIm);
+        Fft.forward(wRe, wIm);
         for (int i = 0; i < N; i++) {
             wRe[i] /= N;
         }
@@ -1478,185 +1453,8 @@ public class FftAnalyzer {
         return window;
     }
 
-    /** Chebyshev polynomial of the first kind T_n(x). */
-    private double chebyshevT(int n, double x) {
-        if (x > 1.0) {
-            return Math.cosh(n * acosh(x));
-        } else if (x < -1.0) {
-            return (n % 2 == 0 ? 1.0 : -1.0) * Math.cosh(n * acosh(-x));
-        } else {
-            return Math.cos(n * Math.acos(x));
-        }
-    }
 
-    /** Inverse hyperbolic cosine: acosh(x) = ln(x + √(x²−1)), x ≥ 1. */
-    private double acosh(double x) {
-        return Math.log(x + Math.sqrt(x * x - 1.0));
-    }
 
-    /**
-     * Parabolic interpolation on log-power spectrum to refine a peak bin to a
-     * fractional bin index.  Uses the three-point formula:
-     * <pre>  δ = 0.5 · (α − γ) / (α − 2β + γ)</pre>
-     * where α, β, γ are the log-power at bins (peakBin−1), peakBin, (peakBin+1).
-     *
-     * @return fractional bin index (peakBin + δ)
-     */
-    private double parabolicBinInterp(double[] re, double[] im,
-                                             int peakBin, int fftSize) {
-        int halfSize = fftSize / 2;
-        int lo = Math.max(1, peakBin - 1);
-        int hi = Math.min(halfSize, peakBin + 1);
-        double pLo   = Math.log(re[lo] * re[lo] + im[lo] * im[lo] + 1e-30);
-        double pMid  = Math.log(re[peakBin] * re[peakBin] + im[peakBin] * im[peakBin] + 1e-30);
-        double pHi   = Math.log(re[hi] * re[hi] + im[hi] * im[hi] + 1e-30);
-        double denom = pLo - 2.0 * pMid + pHi;
-        if (Math.abs(denom) < 1e-15) {
-            return peakBin;
-        }
-        double delta = 0.5 * (pLo - pHi) / denom;
-        return peakBin + delta;
-    }
-
-    // =========================================================================
-    // FFT — Cooley-Tukey radix-2, decimation-in-time, in-place
-    // =========================================================================
-
-    public void fft(double[] re, double[] im) {
-        int n = re.length;
-
-        // Bit-reversal permutation
-        int j = 0;
-        for (int i = 1; i < n; i++) {
-            int bit = n >> 1;
-            while ((j & bit) != 0) {
-                j ^= bit;
-                bit >>= 1;
-            }
-            j ^= bit;
-            if (i < j) {
-                double t;
-                t = re[i]; re[i] = re[j]; re[j] = t;
-                t = im[i]; im[i] = im[j]; im[j] = t;
-            }
-        }
-
-        // Butterfly stages
-        for (int len = 2; len <= n; len <<= 1) {
-            double ang = -2.0 * Math.PI / len;
-            double wRe = Math.cos(ang);
-            double wIm = Math.sin(ang);
-            for (int i = 0; i < n; i += len) {
-                double curRe = 1.0, curIm = 0.0;
-                for (int k = 0; k < len / 2; k++) {
-                    int    p  = i + k;
-                    int    q  = i + k + len / 2;
-                    double uR = re[p];
-                    double uI = im[p];
-                    double vR = re[q] * curRe - im[q] * curIm;
-                    double vI = re[q] * curIm + im[q] * curRe;
-                    re[p] = uR + vR;
-                    im[p] = uI + vI;
-                    re[q] = uR - vR;
-                    im[q] = uI - vI;
-                    double nextRe = curRe * wRe - curIm * wIm;
-                    curIm         = curRe * wIm + curIm * wRe;
-                    curRe         = nextRe;
-                }
-            }
-        }
-    }
-
-    // =========================================================================
-    // Harmonic subtraction
-    // =========================================================================
-
-    /**
-     * Loads a harmonics CSV file (produced by {@link #exportHarmonicsCsv}) and
-     * subtracts the reconstructed sinusoids (H2 and above) from {@code samples}
-     * in-place.  The fundamental (H1) is always skipped.
-     *
-     * <p>Two phase-source modes:
-     * <ul>
-     *   <li>{@code useReIm=false} (default): amplitude from {@code amplitude_dbfs},
-     *       phase from {@code phase_deg} column (4 decimal places).</li>
-     *   <li>{@code useReIm=true}: amplitude from {@code amplitude_dbfs},
-     *       phase derived via {@code atan2(im, re)} — full double precision.</li>
-     * </ul>
-     *
-     * @param samples    signal buffer to modify in-place
-     * @param sampleRate sample rate in Hz
-     * @param csvFile    path to the harmonics CSV file
-     * @param useReIm    true = derive phase from re/im columns; false = use phase_deg column
-     */
-    public void subtractHarmonicsCsv(float[] samples, int sampleRate,
-                                             String csvFile, boolean useReIm) throws IOException {
-        // Parse rows: skip header, skip H1 (fundamental), skip footers
-        // Stored as [freqHz, ampLinear, cos(phase), sin(phase)]
-        List<double[]> harmonics = new ArrayList<>();
-        try (BufferedReader br = new BufferedReader(new FileReader(csvFile))) {
-            br.readLine();   // header
-            String line;
-            while ((line = br.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty() || !Character.isDigit(line.charAt(0))) {
-                    continue;   // blank line or footer (THD, SNR, …)
-                }
-                String[] cols = line.split(";");
-                if (cols.length < 5) continue;
-                int harmonicIndex = Integer.parseInt(cols[0].trim());
-                if (harmonicIndex == 1) {
-                    continue;   // skip fundamental
-                }
-                double freqHz        = Double.parseDouble(cols[1].trim().replace(',', '.'));
-                double amplitudeDbFs = Double.parseDouble(cols[2].trim().replace(',', '.'));
-                double ampLinear     = Math.pow(10.0, amplitudeDbFs / 20.0);
-                double cosPhase, sinPhase;
-                if (useReIm && cols.length >= 7) {
-                    double re = Double.parseDouble(cols[5].trim().replace(',', '.'));
-                    double im = Double.parseDouble(cols[6].trim().replace(',', '.'));
-                    double mag = Math.sqrt(re * re + im * im);
-                    if (mag > 0) {
-                        cosPhase = re / mag;
-                        sinPhase = im / mag;
-                    } else {
-                        cosPhase = 1.0;
-                        sinPhase = 0.0;
-                    }
-                } else {
-                    double phaseRad = Math.toRadians(
-                            Double.parseDouble(cols[4].trim().replace(',', '.')));
-                    cosPhase = Math.cos(phaseRad);
-                    sinPhase = Math.sin(phaseRad);
-                }
-                harmonics.add(new double[]{ freqHz, ampLinear, cosPhase, sinPhase });
-            }
-        }
-        log.info("Subtracting {} harmonic(s) (H2+) using {} from: {}",
-                harmonics.size(), useReIm ? "re/im" : "amp+phase", csvFile);
-
-        for (double[] h : harmonics) {
-            double freqHz    = h[0];
-            double ampLinear = h[1];
-            double omega     = 2.0 * Math.PI * freqHz / sampleRate;
-
-            double cosOmega = Math.cos(omega);
-            double sinOmega = Math.sin(omega);
-            // Start phasor at n=0: exp(j·phase) = cosPhase + j·sinPhase
-            double curRe = h[2];   // cos(phase)
-            double curIm = h[3];   // sin(phase)
-
-            for (int n = 0; n < samples.length; n++) {
-                // A·cos(ω·n + φ) = A · Re(exp(j·(ω·n+φ))) = A · curRe
-                samples[n] -= (float) (ampLinear * curRe);
-                double nextRe = curRe * cosOmega - curIm * sinOmega;
-                curIm         = curRe * sinOmega + curIm * cosOmega;
-                curRe         = nextRe;
-            }
-            log.debug("Subtracted H at {} Hz  {} dBFS", freqHz,
-                    String.format(Locale.US, "%.4f", 20.0 * Math.log10(ampLinear)));
-        }
-    }
 
     // =========================================================================
     // CSV export
@@ -1680,577 +1478,7 @@ public class FftAnalyzer {
         return outFile.getAbsolutePath();
     }
 
-    public String exportHarmonicsCsv(Result r, String directory) throws IOException {
-        return exportHarmonicsCsv(r, directory, null);
-    }
 
-    public String exportHarmonicsCsv(Result r, String directory, String filePrefix) throws IOException {
-        File outFile = (filePrefix != null && !filePrefix.isEmpty())
-                ? new File(directory, filePrefix + ".csv")
-                : new File(directory, "fft_harmonics_" + ts() + ".csv");
-        try (PrintWriter pw = new PrintWriter(new BufferedWriter(new FileWriter(outFile)))) {
-            pw.println("harmonic;frequency_hz;amplitude_dbfs;amplitude_pct;phase_deg;re;im");
-            pw.printf(Locale.GERMAN, "1;%.6f;%.4f;100.000000;%.4f;%.10e;%.10e%n",
-                    r.fundamentalHz, r.fundamentalDbFs,
-                    r.phaseDeg[r.fundamentalBin],
-                    r.re[r.fundamentalBin], r.im[r.fundamentalBin]);
-            for (int h = 0; h < r.harmonicCount; h++) {
-                int bin = r.harmonicBins[h];
-                double phase = bin > 0 ? r.phaseDeg[bin] : 0.0;
-                double re    = bin > 0 ? r.re[bin]        : 0.0;
-                double im    = bin > 0 ? r.im[bin]        : 0.0;
-                pw.printf(Locale.GERMAN, "%d;%.6f;%.4f;%.9f;%.4f;%.10e;%.10e%n",
-                        h + 2, r.harmonicHz[h], r.harmonicDbFs[h], r.harmonicPct[h],
-                        phase, re, im);
-            }
-            pw.println();
-            pw.printf(Locale.GERMAN, "THD;;%.6f%%;%.4f dB%n",  r.thdPct,  r.thdDb);
-            pw.printf(Locale.GERMAN, "THD+N (A-weighted);;;%.4f dB%n",     r.thdNDb);
-            pw.printf(Locale.GERMAN, "SNR;;;%.4f dB%n",                     r.snrDb);
-        }
-        log.info("FFT harmonics CSV saved: {}", outFile.getAbsolutePath());
-        return outFile.getAbsolutePath();
-    }
-
-    // =========================================================================
-    // Chart export
-    // =========================================================================
-
-    public String exportChart(Result r, int width, int height,
-                                     String directory) throws IOException {
-        return exportChart(r, width, height, directory, null);
-    }
-
-    public String exportChart(Result r, int width, int height,
-                                     String directory, String comment) throws IOException {
-        return exportChart(r, width, height, directory, comment, false);
-    }
-
-    public String exportChart(Result r, int width, int height,
-                                     String directory, String comment,
-                                     boolean harmonicsSubtracted) throws IOException {
-        return exportChart(r, width, height, directory, comment, harmonicsSubtracted, null);
-    }
-
-    public String exportChart(Result r, int width, int height,
-                                     String directory, String comment,
-                                     boolean harmonicsSubtracted, String filePrefix) throws IOException {
-        return exportChart(r, width, height, directory, comment, harmonicsSubtracted, filePrefix, null);
-    }
-
-    public String exportChart(Result r, int width, int height,
-                                     String directory, String comment,
-                                     boolean harmonicsSubtracted, String filePrefix,
-                                     Double genFreqHz) throws IOException {
-        return exportChart(r, width, height, directory, comment, harmonicsSubtracted,
-                filePrefix, genFreqHz, null, null, null, null);
-    }
-
-    public String exportChart(Result r, int width, int height,
-                                     String directory, String comment,
-                                     boolean harmonicsSubtracted, String filePrefix,
-                                     Double genFreqHz,
-                                     double[] overlayFreqs, double[] overlayDbFs) throws IOException {
-        return exportChart(r, width, height, directory, comment, harmonicsSubtracted,
-                filePrefix, genFreqHz, overlayFreqs, overlayDbFs, null, null);
-    }
-
-    /**
-     * Overload that also draws an overlay series (e.g. the inverted cal filter
-     * response) as a dashed green line on top of the spectrum, plus a separate
-     * series of blue dots at {@code (preCorrFreqs[i], preCorrDbFs[i])} showing
-     * where the fundamental and harmonic peaks sat BEFORE cal correction was
-     * applied.  Pass {@code null} for either pair to suppress that layer.
-     * Y values are in dBFS; they're shifted to the primary axis units (dBV or
-     * dBFS) internally.
-     */
-    public String exportChart(Result r, int width, int height,
-                                     String directory, String comment,
-                                     boolean harmonicsSubtracted, String filePrefix,
-                                     Double genFreqHz,
-                                     double[] overlayFreqs, double[] overlayDbFs,
-                                     double[] preCorrFreqs, double[] preCorrDbFs) throws IOException {
-        String ts = ts();
-
-        // When a dBV reference is set (--fund-v / --fund-dbv / --cal CSV /
-        // --adc-fs-vrms), promote dBV to the primary range axis so horizontal
-        // gridlines line up on round dBV values (0, −20, −40 …) instead of on
-        // dBFS values that end up offset by 20·log10(adcFsVoltageRms).  All
-        // plotted Y values are shifted by {@code dbFsToDbV} so they land on
-        // the dBV axis at the correct position; dBFS moves to the secondary
-        // axis with its own (unshifted) range.
-        boolean hasDbv = !Double.isNaN(r.fundRefDbV);
-        double  dbFsToDbV = hasDbv ? (r.fundRefDbV - r.fundamentalDbFs) : 0.0;
-        String  primaryAxisLabel = hasDbv ? "Amplitude (dBV)" : "Amplitude (dBFS)";
-
-        // The fundamental peak marker is drawn at the *true* user-stated dBV
-        // when supplied (e.g. external twin-T notch makes the measured H1
-        // unreliable); otherwise at the cal-converted measured value.
-        // The spectrum-line point at fundBin is also forced to this level so
-        // the line touches the marker instead of dipping to the notched value.
-        double fundDisplayDbV = !Double.isNaN(r.fundamentalTrueDbV)
-                ? r.fundamentalTrueDbV
-                : r.fundamentalDbFs + dbFsToDbV;
-
-        // --- Series (Y values in primary-axis units = dBV if set, else dBFS) -
-        XYSeries spectrum = new XYSeries("Spectrum");
-        for (int k = 1; k <= r.fftSize / 2; k++) {
-            double freq = k * r.freqResolution;
-            if (freq >= 1.0) {
-                double y = (k == r.fundamentalBin && !Double.isNaN(r.fundamentalTrueDbV))
-                        ? fundDisplayDbV
-                        : r.amplitudeDbFs[k] + dbFsToDbV;
-                spectrum.add(freq, y);
-            }
-        }
-
-        XYSeries harmPeaks = new XYSeries("Harmonics");
-        harmPeaks.add(r.fundamentalHz, fundDisplayDbV);
-        for (int h = 0; h < r.harmonicCount; h++) {
-            if (r.harmonicBins[h] > 0) {
-                harmPeaks.add(r.harmonicHz[h], r.harmonicDbFs[h] + dbFsToDbV);
-            }
-        }
-
-        XYSeriesCollection dataset = new XYSeriesCollection();
-        dataset.addSeries(spectrum);
-        dataset.addSeries(harmPeaks);
-
-        boolean hasOverlay = overlayFreqs != null && overlayDbFs != null
-                && overlayFreqs.length == overlayDbFs.length
-                && overlayFreqs.length >= 2;
-        if (hasOverlay) {
-            XYSeries overlay = new XYSeries("Cal (inverted)");
-            for (int i = 0; i < overlayFreqs.length; i++) {
-                if (overlayFreqs[i] > 0.0) {
-                    overlay.add(overlayFreqs[i], overlayDbFs[i] + dbFsToDbV);
-                }
-            }
-            dataset.addSeries(overlay);
-        }
-
-        boolean hasPrePeaks = preCorrFreqs != null && preCorrDbFs != null
-                && preCorrFreqs.length == preCorrDbFs.length
-                && preCorrFreqs.length >= 1;
-        if (hasPrePeaks) {
-            XYSeries prePeaks = new XYSeries("Before cal");
-            for (int i = 0; i < preCorrFreqs.length; i++) {
-                if (preCorrFreqs[i] > 0.0) {
-                    prePeaks.add(preCorrFreqs[i], preCorrDbFs[i] + dbFsToDbV);
-                }
-            }
-            dataset.addSeries(prePeaks);
-        }
-
-        // --- Chart -----------------------------------------------------------
-        JFreeChart chart = ChartFactory.createXYLineChart(
-                "FFT Analysis", "Frequency (Hz)", primaryAxisLabel,
-                dataset,
-                PlotOrientation.VERTICAL,
-                true, false, false);
-        chart.getTitle().setFont(ChartStyle.CHART_TITLE_FONT);
-
-        XYPlot plot = (XYPlot) chart.getPlot();
-        plot.setBackgroundPaint(ChartStyle.PLOT_BACKGROUND);
-        plot.setDomainGridlinePaint(ChartStyle.GRID_LINE_COLOR);
-        plot.setRangeGridlinePaint(ChartStyle.GRID_LINE_COLOR);
-
-        // --- Log-frequency X axis with 1-2-3-5-7×decade ticks ---------------
-        final double freqMin = Math.max(1.0, r.freqResolution * 0.5);
-        final double freqMax = r.sampleRate / 2.0;
-        LogAxis freqAxis = new LogAxis("Frequency (Hz)") {
-            @Override
-            public List<NumberTick> refreshTicks(Graphics2D g2,
-                                               AxisState state,
-                                               Rectangle2D dataArea,
-                                               RectangleEdge edge) {
-                List<NumberTick> ticks = new ArrayList<>();
-                double[] multipliers = {1, 2, 3, 5, 7};
-                double decade = 1.0;
-                while (decade <= getUpperBound() * 1.01) {
-                    for (double m : multipliers) {
-                        double f = decade * m;
-                        if (f >= getLowerBound() && f <= getUpperBound()) {
-                            String label = f >= 1000.0
-                                    ? String.format(Locale.US, "%.0fk", f / 1000.0)
-                                    : String.format(Locale.US, "%.0f", f);
-                            ticks.add(new NumberTick(TickType.MAJOR, f, label,
-                                    TextAnchor.TOP_CENTER, TextAnchor.CENTER, 0.0));
-                        }
-                    }
-                    decade *= 10.0;
-                }
-                return ticks;
-            }
-        };
-        freqAxis.setBase(10.0);
-        freqAxis.setRange(freqMin, freqMax);
-        freqAxis.setLabelFont(ChartStyle.AXIS_LABEL_FONT);
-        freqAxis.setTickLabelFont(ChartStyle.AXIS_TICK_FONT);
-        plot.setDomainAxis(freqAxis);
-
-        // --- Dim regions outside SNR frequency range -------------------------
-        if (r.snrFreqMin > 0.0 && r.snrFreqMin > freqMin) {
-            IntervalMarker left = new IntervalMarker(freqMin, r.snrFreqMin);
-            left.setPaint(ChartStyle.DIM_COLOR);
-            left.setAlpha(ChartStyle.DIM_ALPHA);
-            plot.addDomainMarker(left, Layer.FOREGROUND);
-        }
-        double nyquist = r.sampleRate / 2.0;
-        if (r.snrFreqMax > 0.0 && r.snrFreqMax < nyquist) {
-            IntervalMarker right = new IntervalMarker(r.snrFreqMax, nyquist);
-            right.setPaint(ChartStyle.DIM_COLOR);
-            right.setAlpha(ChartStyle.DIM_ALPHA);
-            plot.addDomainMarker(right, Layer.FOREGROUND);
-        }
-
-        // --- Primary Y axis (dBV when ref is set, else dBFS) ----------------
-        // Range is in whichever units the series were built with (dBFS +
-        // dbFsToDbV).  TickUnit 20 produces round dBV gridlines at 0, ±20, …
-        double yMaxDbFs = 10.0;
-        double yMinDbFs = -220.0;
-        NumberAxis yAxis = (NumberAxis) plot.getRangeAxis();
-        yAxis.setRange(yMinDbFs + dbFsToDbV, yMaxDbFs + dbFsToDbV);
-        yAxis.setTickUnit(new NumberTickUnit(20.0));
-        yAxis.setLabelFont(ChartStyle.AXIS_LABEL_FONT);
-        yAxis.setTickLabelFont(ChartStyle.AXIS_TICK_FONT);
-
-        // --- Secondary dBFS axis, only when primary is dBV ------------------
-        if (hasDbv) {
-            NumberAxis yAxisDbFs = new NumberAxis("Amplitude (dBFS)");
-            yAxisDbFs.setRange(yMinDbFs, yMaxDbFs);
-            yAxisDbFs.setTickUnit(new NumberTickUnit(20.0));
-            yAxisDbFs.setLabelFont(ChartStyle.AXIS_LABEL_FONT);
-            yAxisDbFs.setTickLabelFont(ChartStyle.AXIS_TICK_FONT);
-            plot.setRangeAxis(1, yAxisDbFs);
-            plot.setRangeAxisLocation(1, AxisLocation.BOTTOM_OR_LEFT);
-        }
-
-        // --- Renderer series layout -----------------------------------------
-        //   0            = spectrum line
-        //   1            = corrected harmonic peaks (red dots)
-        //   [hasOverlay] = cal overlay dashed line (green)
-        //   [hasPrePeaks]= pre-correction peaks (blue dots)
-        XYLineAndShapeRenderer renderer = new XYLineAndShapeRenderer(false, false);
-        renderer.setSeriesLinesVisible(0, true);
-        renderer.setSeriesShapesVisible(0, false);
-        renderer.setSeriesPaint(0, ChartStyle.SPECTRUM_COLOR);
-        renderer.setSeriesStroke(0, ChartStyle.SPECTRUM_STROKE);
-        renderer.setSeriesLinesVisible(1, false);
-        renderer.setSeriesShapesVisible(1, true);
-        renderer.setSeriesPaint(1, ChartStyle.PEAK_COLOR);
-        renderer.setSeriesShape(1, ChartStyle.PEAK_SHAPE);
-        int seriesIdx = 2;
-        if (hasOverlay) {
-            renderer.setSeriesLinesVisible(seriesIdx, true);
-            renderer.setSeriesShapesVisible(seriesIdx, false);
-            renderer.setSeriesPaint(seriesIdx, ChartStyle.CAL_OVERLAY_COLOR);
-            renderer.setSeriesStroke(seriesIdx, ChartStyle.CAL_OVERLAY_STROKE);
-            seriesIdx++;
-        }
-        if (hasPrePeaks) {
-            renderer.setSeriesLinesVisible(seriesIdx, false);
-            renderer.setSeriesShapesVisible(seriesIdx, true);
-            renderer.setSeriesPaint(seriesIdx, ChartStyle.PRE_PEAK_COLOR);
-            renderer.setSeriesShape(seriesIdx, ChartStyle.PRE_PEAK_SHAPE);
-        }
-        plot.setRenderer(0, renderer);
-
-        // --- Harmonic peak annotations ---------------------------------------
-        Font annFont = ChartStyle.ANNOTATION_FONT;
-
-        XYTextAnnotation fundLabel = new XYTextAnnotation(
-                String.format(Locale.US, "H1 %.2f Hz", r.fundamentalHz),
-                r.fundamentalHz,
-                r.fundamentalDbFs + dbFsToDbV + ChartStyle.ANNOTATION_Y_OFFSET);
-        fundLabel.setFont(annFont);
-        fundLabel.setPaint(ChartStyle.FUND_ANNOTATION_COLOR);
-        plot.addAnnotation(fundLabel);
-
-        for (int h = 0; h < r.harmonicCount; h++) {
-            if (r.harmonicBins[h] > 0
-                    && r.harmonicDbFs[h] > yMinDbFs + ChartStyle.ANNOTATION_Y_OFFSET) {
-                XYTextAnnotation ann = new XYTextAnnotation(
-                        String.format(Locale.US, "H%d", h + 2),
-                        r.harmonicHz[h],
-                        r.harmonicDbFs[h] + dbFsToDbV + ChartStyle.ANNOTATION_Y_OFFSET);
-                ann.setFont(annFont);
-                ann.setPaint(ChartStyle.HARM_ANNOTATION_COLOR);
-                plot.addAnnotation(ann);
-            }
-        }
-
-        // --- Info table overlay (top-right corner of plot area) --------------
-        // Computed via a ChartPanel overlay; here we use a custom Title subclass
-        // that draws directly onto the chart image after rendering.
-        // We paint it onto the BufferedImage after ChartUtils renders the chart.
-        BufferedImage chartImage =
-                chart.createBufferedImage(width, height);
-
-        // ENOB = (SINAD − 1.76) / 6.02 — uses signal vs noise+distortion (the
-        // standard ADC effective-bits definition), not signal/noise alone.
-        double enob = (r.sinadDb - 1.76) / 6.02;
-
-        // Real dBV of the fundamental: prefer the user-stated true value
-        // (--fund-v / --fund-dbv) so the info table matches the chart's
-        // fundamental peak marker; otherwise fall back to the cal-converted
-        // value, then to dBFS-as-dBV.
-        boolean hasRef = !Double.isNaN(r.fundRefDbV);
-        double fundamentalDbV = !Double.isNaN(r.fundamentalTrueDbV)
-                ? r.fundamentalTrueDbV
-                : (hasRef ? r.fundRefDbV : r.fundamentalDbFs);
-        // dBFS→dBV offset (same value already computed above as dbFsToDbV)
-
-        // Noise+Distortion absolute level in dBV (A-weighted)
-        double ndDbVA = r.thdNDb + fundamentalDbV;
-
-        // Span = SNR frequency range (snrFreqMin/Max are always set: 0 and Fs/2 when not provided)
-        String spanLabel = String.format(Locale.US, "Span: %.0f .. %.0f Hz",
-                r.snrFreqMin, r.snrFreqMax);
-
-        // Determine the highest harmonic number (H2..H9 cap) within dist range for the THD label
-        double distLo = r.snrFreqMin > 0.0 ? r.snrFreqMin : 0.0;
-        double distHi = r.snrFreqMax > 0.0 ? r.snrFreqMax : Double.MAX_VALUE;
-        int thdLastHarm = 1;
-        for (int h = 0; h < Math.min(r.harmonicCount, 8); h++) {
-            if (r.harmonicBins[h] > 0 && r.harmonicHz[h] >= distLo && r.harmonicHz[h] <= distHi) {
-                thdLastHarm = h + 2;
-            }
-        }
-        String thdLabel = thdLastHarm >= 2
-                ? String.format(Locale.US, "THD H2..%d:", thdLastHarm)
-                : "THD:";
-
-        // Build table rows: left-label, left-value, right-label, right-value
-        // Row 0: header (fundamental line) — spans full width
-        // Harmonics: pair them up 2 per row
-        List<String[]> rows = new ArrayList<>();
-
-        // header row: fund freq, dBFS and dBV (dBV shown only when reference is set).
-        // When the user supplied --fund-v / --fund-dbv, show the back-converted
-        // true dBFS (= trueDbV − dbFsToDbV) instead of the notched measurement,
-        // so dBFS and dBV columns are consistent with the chart's lifted peak.
-        double fundHeaderDbFs = !Double.isNaN(r.fundamentalTrueDbV)
-                ? fundDisplayDbV - dbFsToDbV
-                : r.fundamentalDbFs;
-        String fundHeader = hasRef
-                ? String.format(Locale.US, "%.2f Hz  %.2f dBFS  %.2f dBV",
-                        r.fundamentalHz, fundHeaderDbFs, fundamentalDbV)
-                : String.format(Locale.US, "%.2f Hz  %.2f dBFS",
-                        r.fundamentalHz, fundHeaderDbFs);
-        rows.add(new String[]{ fundHeader, null, null, null });
-
-        // span row
-        rows.add(new String[]{ spanLabel, null, null, null });
-
-        // metrics rows (2-column layout)
-        rows.add(new String[]{
-            "N+D:", String.format(Locale.US, "%.1f dBV A", ndDbVA),
-            thdLabel,
-            String.format(Locale.US, "%.8f %%", r.thdPct)
-        });
-        rows.add(new String[]{
-            "N:", String.format(Locale.US, "%.1f dBV", fundamentalDbV - r.snrDb),
-            "THD+N:", String.format(Locale.US, "%.8f %%",
-                    Math.pow(10.0, r.thdNDb / 20.0) * 100.0)
-        });
-        rows.add(new String[]{
-            "SNR:", String.format(Locale.US, "%.1f dB", r.snrDb),
-            "ENOB:", String.format(Locale.US, "%.1f bits", enob)
-        });
-
-        // Clock mismatch row (only when caller provided generator freq).
-        // ΔF = measured − requested; ppm = 1e6·ΔF/f_gen.
-        // Δosc maps the relative drift back to the master oscillator
-        // (22.5792 MHz for 44.1k family, 24.576 MHz for 48k family).
-        if (genFreqHz != null && genFreqHz > 0.0) {
-            double delta = r.fundamentalHzRefined - genFreqHz;
-            double ppm   = 1e6 * delta / genFreqHz;
-            double osc;
-            String oscName;
-            if (r.sampleRate % 44100 == 0) {
-                osc = 22.5792e6; oscName = "22.5792 MHz";
-            } else if (r.sampleRate % 48000 == 0) {
-                osc = 24.576e6;  oscName = "24.576 MHz";
-            } else {
-                osc = Double.NaN; oscName = "?";
-            }
-            String text;
-            if (Double.isNaN(osc)) {
-                text = String.format(Locale.US, "ΔF: %+.6f Hz (%+.2f ppm)", delta, ppm);
-            } else {
-                double oscDelta = osc * delta / genFreqHz;
-                text = String.format(Locale.US,
-                        "ΔF: %+.6f Hz (%+.2f ppm)  Δosc: %+.2f Hz @ %s",
-                        delta, ppm, oscDelta, oscName);
-            }
-            rows.add(new String[]{ text, null, null, null });
-        }
-
-        // harmonic rows — pair them; each value shows dBFS and percent
-        for (int h = 0; h < r.harmonicCount; h += 2) {
-            String lLabel = String.format(Locale.US, "H%d:", h + 2);
-            String lVal   = hasRef
-                    ? String.format(Locale.US, "%.2f dBV  %.8f %%",
-                            r.harmonicDbFs[h] + dbFsToDbV, r.harmonicPct[h])
-                    : String.format(Locale.US, "%.2f dBFS  %.8f %%",
-                            r.harmonicDbFs[h], r.harmonicPct[h]);
-            String rLabel = null, rVal = null;
-            if (h + 1 < r.harmonicCount) {
-                rLabel = String.format(Locale.US, "H%d:", h + 3);
-                rVal   = hasRef
-                        ? String.format(Locale.US, "%.2f dBV  %.8f %%",
-                                r.harmonicDbFs[h + 1] + dbFsToDbV, r.harmonicPct[h + 1])
-                        : String.format(Locale.US, "%.2f dBFS  %.8f %%",
-                                r.harmonicDbFs[h + 1], r.harmonicPct[h + 1]);
-            }
-            rows.add(new String[]{ lLabel, lVal, rLabel, rVal });
-        }
-
-        drawInfoTable(chartImage, rows, width, height);
-
-        drawCornerInfo(chartImage, comment, harmonicsSubtracted, r.frameCount, width, height);
-
-        // --- Save (from buffered image, not via ChartUtils) ------------------
-        File outFile = (filePrefix != null && !filePrefix.isEmpty())
-                ? new File(directory, filePrefix + ".png")
-                : new File(directory, "fft_chart_" + ts + ".png");
-        javax.imageio.ImageIO.write(chartImage, "PNG", outFile);
-        log.info("FFT chart saved: {}", outFile.getAbsolutePath());
-        return outFile.getAbsolutePath();
-    }
-
-    /**
-     * Draws a semi-transparent info table in the top-right corner of the image.
-     * Each row is String[4]: leftLabel, leftValue, rightLabel, rightValue.
-     * If rightLabel is null the left pair spans the full width.
-     */
-    private void drawInfoTable(BufferedImage img,
-                                      List<String[]> rows,
-                                      int imgWidth, int imgHeight) {
-        Graphics2D g = img.createGraphics();
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-
-        Font headerFont = ChartStyle.TABLE_HEADER_FONT;
-        Font cellFont   = ChartStyle.TABLE_CELL_FONT;
-
-        // Measure table width
-        FontMetrics hmFm = g.getFontMetrics(headerFont);
-        FontMetrics cmFm = g.getFontMetrics(cellFont);
-        int lineH   = cmFm.getHeight() + 2;
-        int pad     = ChartStyle.TABLE_PAD;
-
-        // Measure span rows and data columns independently to avoid span rows
-        // inflating the data column widths and making the box too wide.
-        int spanMaxW = 0;
-        int colW0 = 0, colW1 = 0, colW2 = 0, colW3 = 0;
-        for (String[] row : rows) {
-            if (row[1] == null) {
-                spanMaxW = Math.max(spanMaxW, hmFm.stringWidth(row[0]));
-            } else {
-                colW0 = Math.max(colW0, cmFm.stringWidth(row[0]));
-                colW1 = Math.max(colW1, cmFm.stringWidth(row[1]));
-                if (row[2] != null) {
-                    colW2 = Math.max(colW2, cmFm.stringWidth(row[2]));
-                    colW3 = Math.max(colW3, cmFm.stringWidth(row[3]));
-                }
-            }
-        }
-
-        int colSep  = pad;
-        int halfW   = colW0 + colSep + colW1;
-        int dataW   = halfW + colSep + pad + colW2 + colSep + colW3;
-        int tableW  = Math.max(dataW, spanMaxW) + pad * 2;
-        int tableH  = rows.size() * lineH + pad * 2;
-
-        int x0 = imgWidth  - tableW - ChartStyle.TABLE_MARGIN;
-        int y0 = ChartStyle.TABLE_MARGIN;
-
-        // Background
-        g.setColor(ChartStyle.TABLE_BG_COLOR);
-        g.fillRoundRect(x0, y0, tableW, tableH, ChartStyle.TABLE_ARC, ChartStyle.TABLE_ARC);
-        g.setColor(ChartStyle.TABLE_BORDER_COLOR);
-        g.drawRoundRect(x0, y0, tableW, tableH, ChartStyle.TABLE_ARC, ChartStyle.TABLE_ARC);
-
-        int textX = x0 + pad;
-        int textY = y0 + pad + cmFm.getAscent();
-
-        for (String[] row : rows) {
-            if (row[1] == null) {
-                // header/span row — centered, bold
-                g.setFont(headerFont);
-                g.setColor(ChartStyle.TABLE_HEADER_COLOR);
-                int sw = hmFm.stringWidth(row[0]);
-                g.drawString(row[0], x0 + (tableW - sw) / 2, textY);
-            } else {
-                // two-column data row
-                g.setFont(cellFont);
-                // left label (right-aligned to colW0)
-                g.setColor(ChartStyle.TABLE_LABEL_COLOR);
-                g.drawString(row[0], textX + colW0 - cmFm.stringWidth(row[0]), textY);
-                // left value (left-aligned after label)
-                g.setColor(ChartStyle.TABLE_VALUE_COLOR);
-                g.drawString(row[1], textX + colW0 + colSep, textY);
-                if (row[2] != null) {
-                    int rx = textX + halfW + pad;
-                    g.setColor(ChartStyle.TABLE_LABEL_COLOR);
-                    g.drawString(row[2], rx + colW2 - cmFm.stringWidth(row[2]), textY);
-                    g.setColor(ChartStyle.TABLE_VALUE_COLOR);
-                    g.drawString(row[3], rx + colW2 + colSep, textY);
-                }
-            }
-            textY += lineH;
-        }
-        g.dispose();
-    }
-
-
-    /**
-     * Draws a bottom-left info box with optional comment, "Harmonics compensated",
-     * and average cycle count.
-     */
-    private void drawCornerInfo(BufferedImage img,
-                                       String comment, boolean harmonicsSubtracted,
-                                       int frameCount, int imgWidth, int imgHeight) {
-        List<String> lines = new ArrayList<>();
-        if (comment != null && !comment.isBlank()) {
-            lines.add(comment);
-        }
-        if (harmonicsSubtracted) {
-            lines.add("Harmonics compensated");
-        }
-        lines.add(String.format(Locale.US, "Avg cycles: %d", frameCount));
-
-        Graphics2D g = img.createGraphics();
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,      RenderingHints.VALUE_ANTIALIAS_ON);
-        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,  RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-
-        Font font = ChartStyle.TABLE_CELL_FONT;
-        g.setFont(font);
-        FontMetrics fm = g.getFontMetrics();
-
-        int pad   = ChartStyle.CORNER_PAD;
-        int lineH = fm.getHeight() + 2;
-        int boxH  = lineH * lines.size() + pad * 2;
-        int maxW  = lines.stream().mapToInt(fm::stringWidth).max().orElse(0);
-        int boxW  = maxW + pad * 2;
-        int boxX  = pad;
-        int boxY  = imgHeight - boxH - pad;
-
-        g.setColor(ChartStyle.CORNER_BG_COLOR);
-        g.fillRoundRect(boxX, boxY, boxW, boxH, ChartStyle.CORNER_ARC, ChartStyle.CORNER_ARC);
-        g.setColor(ChartStyle.CORNER_BORDER_COLOR);
-        g.drawRoundRect(boxX, boxY, boxW, boxH, ChartStyle.CORNER_ARC, ChartStyle.CORNER_ARC);
-
-        g.setColor(ChartStyle.CORNER_TEXT_COLOR);
-        int textY = boxY + pad + fm.getAscent();
-        for (String line : lines) {
-            g.drawString(line, boxX + pad, textY);
-            textY += lineH;
-        }
-        g.dispose();
-    }
 
     // =========================================================================
     // Helpers

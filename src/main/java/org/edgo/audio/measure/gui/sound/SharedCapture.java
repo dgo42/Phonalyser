@@ -1,8 +1,10 @@
 package org.edgo.audio.measure.gui.sound;
 
 import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.preferences.BackendPrefs;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.SignalBuffer;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -105,7 +107,7 @@ public final class SharedCapture {
         lastStartError = null;
 
         Preferences prefs = Preferences.instance();
-        Preferences.BackendPrefs bp = prefs.current();
+        BackendPrefs bp = prefs.current();
         String deviceName = bp.getInputDeviceName();
         if (deviceName == null) {
             lastStartError = "No input device selected. Open Preferences and pick a capture device.";
@@ -179,7 +181,7 @@ public final class SharedCapture {
         if (refCount > 0) return;
         if (capture != null) {
             try { capture.stopRecording(); } catch (Exception ignored) {}
-            try { capture.close();         } catch (Exception ignored) {}
+            Closeables.closeQuietly(capture);
             capture = null;
         }
         sharedBuffer = null;
@@ -231,10 +233,8 @@ public final class SharedCapture {
 
     private void cleanupAfterFailure() {
         refCount = 0;
-        if (capture != null) {
-            try { capture.close(); } catch (Exception ignored) {}
-            capture = null;
-        }
+        Closeables.closeQuietly(capture);
+        capture = null;
         sharedBuffer = null;
     }
 

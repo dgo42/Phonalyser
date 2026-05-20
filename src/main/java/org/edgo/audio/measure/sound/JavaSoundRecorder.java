@@ -1,6 +1,7 @@
 package org.edgo.audio.measure.sound;
 
 import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.common.StereoSample;
 
 import javax.sound.sampled.AudioFormat;
@@ -170,9 +171,7 @@ public class JavaSoundRecorder implements AudioCapture {
         if (recording.get()) {
             try { stopRecording(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         }
-        if (line != null) {
-            try { line.close(); } catch (Throwable ignored) {}
-            line = null;
-        }
+        Closeables.closeQuietly(line);
+        line = null;
     }
 }

@@ -333,7 +333,7 @@ public final class StepSelector extends Composite {
      *  pressed for click feedback. */
     private Canvas makeStepArrow(boolean up, Runnable onPress) {
         // Width-driven sizing: 10 px wide normal, 8 px wide on press.
-        Canvas l = IconStepLabel.create(this,
+        Canvas l = new IconStepLabel(this,
                 up ? "/icons/sort-up.svg" : "/icons/sort-down.svg",
                 10, 8, new RGB(0x80, 0x80, 0x80));
         GridData gd = new GridData(SWT.FILL, SWT.FILL, false, true);

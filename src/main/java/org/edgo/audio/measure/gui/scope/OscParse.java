@@ -2,6 +2,8 @@ package org.edgo.audio.measure.gui.scope;
 
 import org.edgo.audio.measure.gui.preferences.Preferences;
 
+import java.util.Locale;
+
 /**
  * Converts the user-facing labels from the V/div and t/div pick lists back
  * into numeric values (volts and seconds) for layout / drawing math.
@@ -100,7 +102,7 @@ public final class OscParse {
         else                 { scaled = v * 1e9; prefix = "n"; }
         // Strip trailing zeros after the decimal point so e.g. 100.000
         // shows as "100" but 45.5 shows as "45.5".
-        String s = String.format(java.util.Locale.ROOT, "%.3f", scaled);
+        String s = String.format(Locale.ROOT, "%.3f", scaled);
         if (s.contains(".")) {
             int end = s.length();
             while (end > 0 && s.charAt(end - 1) == '0') end--;

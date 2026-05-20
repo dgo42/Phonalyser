@@ -8,6 +8,7 @@ import com.sun.jna.Pointer;
 import com.sun.jna.PointerType;
 import com.sun.jna.Structure;
 import com.sun.jna.ptr.PointerByReference;
+import lombok.extern.log4j.Log4j2;
 
 import java.util.Arrays;
 import java.util.List;
@@ -29,6 +30,7 @@ import java.util.Locale;
  * 32-bit, so this binding uses {@link NativeLong} (platform {@code long})
  * for those fields.
  */
+@Log4j2
 public final class PortAudio {
 
     public static final int paNoError                  = 0;
@@ -236,10 +238,8 @@ public final class PortAudio {
                         last);
             }
             // Surface any exception thrown from a callback so it isn't silently dropped.
-            Native.setCallbackExceptionHandler((cb, ex) -> {
-                System.err.println("JNA callback threw (class=" + cb.getClass().getName() + "): " + ex);
-                ex.printStackTrace(System.err);
-            });
+            Native.setCallbackExceptionHandler((cb, ex) ->
+                    log.error("JNA callback threw (class={})", cb.getClass().getName(), ex));
         }
         if (!initialized) {
             int rc = LIB.Pa_Initialize();

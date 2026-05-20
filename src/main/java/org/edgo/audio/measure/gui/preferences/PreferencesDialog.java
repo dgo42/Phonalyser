@@ -24,6 +24,7 @@ import org.edgo.audio.measure.gui.widgets.StepSelector;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import javax.sound.sampled.AudioFormat;
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
@@ -81,7 +82,7 @@ public final class PreferencesDialog {
         // backend.  Both are mutated during the dialog session (so switching
         // backends mid-session preserves edits), then restored on Cancel.
         AudioBackendType originalBackend = prefs.getBackend();
-        Map<AudioBackendType, Preferences.BackendPrefs> snapshots =
+        Map<AudioBackendType, BackendPrefs> snapshots =
                 new EnumMap<>(AudioBackendType.class);
         for (AudioBackendType t : AudioBackendType.values()) {
             snapshots.put(t, prefs.prefsFor(t).snapshot());
@@ -117,7 +118,7 @@ public final class PreferencesDialog {
         // Only list backends that work on the current OS — WASAPI / WDM-KS
         // are Windows-only.  The order in the combo is preserved so
         // selectionIndex matches availableBackends below.
-        List<AudioBackendType> availableBackends = new java.util.ArrayList<>();
+        List<AudioBackendType> availableBackends = new ArrayList<>();
         for (AudioBackendType type : AudioBackendType.values()) {
             if (type.isAvailable()) {
                 availableBackends.add(type);
@@ -325,7 +326,7 @@ public final class PreferencesDialog {
         // is picked or the driver reports nothing.
         Runnable refreshInputRatesAndDepths = () -> {
             DeviceRef dev = pickedDevice(inputCombo, devices.inputs);
-            Preferences.BackendPrefs bp = prefs.prefsFor(active[0]);
+            BackendPrefs bp = prefs.prefsFor(active[0]);
             TreeSet<Integer> rates  = (dev != null)
                     ? ratesOf(AudioBackend.instance().listSupportedInputFormats(dev))
                     : null;
@@ -339,7 +340,7 @@ public final class PreferencesDialog {
         // Mirror of {@code refreshInputRatesAndDepths} for the output side.
         Runnable refreshOutputRatesAndDepths = () -> {
             DeviceRef dev = pickedDevice(outputCombo, devices.outputs);
-            Preferences.BackendPrefs bp = prefs.prefsFor(active[0]);
+            BackendPrefs bp = prefs.prefsFor(active[0]);
             TreeSet<Integer> rates  = (dev != null)
                     ? ratesOf(AudioBackend.instance().listSupportedOutputFormats(dev))
                     : null;
@@ -355,7 +356,7 @@ public final class PreferencesDialog {
         // are stored by name (string) — the saved name is matched back to a
         // live DeviceRef on dialog open via populateDeviceCombo.
         Runnable captureUiToActive = () -> {
-            Preferences.BackendPrefs bp = prefs.prefsFor(active[0]);
+            BackendPrefs bp = prefs.prefsFor(active[0]);
             bp.setInputDeviceName (nameOf(pickedDevice(inputCombo,  devices.inputs)));
             bp.setOutputDeviceName(nameOf(pickedDevice(outputCombo, devices.outputs)));
             int idx;
@@ -372,7 +373,7 @@ public final class PreferencesDialog {
             AudioBackend.instance().setActive(active[0]);
             devices.inputs  = AudioBackend.instance().listInputDevices();
             devices.outputs = AudioBackend.instance().listOutputDevices();
-            Preferences.BackendPrefs bp = prefs.prefsFor(active[0]);
+            BackendPrefs bp = prefs.prefsFor(active[0]);
             populateDeviceCombo(inputCombo,  devices.inputs,  bp.getInputDeviceName());
             populateDeviceCombo(outputCombo, devices.outputs, bp.getOutputDeviceName());
             refreshInputRatesAndDepths.run();
@@ -418,7 +419,7 @@ public final class PreferencesDialog {
             prefs.setFftFilterResponseColor      (fftFilterColorHolder[0]);
             prefs.setBackend(active[0]);
             AudioBackend.instance().setActive(active[0]);
-            Preferences.BackendPrefs bp = prefs.current();
+            BackendPrefs bp = prefs.current();
             log.info("Preferences saved: backend={}, in={} @ {} Hz / {} bits, out={} @ {} Hz / {} bits",
                     prefs.getBackend(),
                     bp.getInputDeviceName()  != null ? bp.getInputDeviceName()  : "<none>",
@@ -432,7 +433,7 @@ public final class PreferencesDialog {
         cancelButton.addListener(SWT.Selection, e -> {
             // Roll every backend's prefs back to what they were at open, so
             // mid-session edits across backends are fully discarded.
-            for (Map.Entry<AudioBackendType, Preferences.BackendPrefs> entry : snapshots.entrySet()) {
+            for (Map.Entry<AudioBackendType, BackendPrefs> entry : snapshots.entrySet()) {
                 prefs.prefsFor(entry.getKey()).copyFrom(entry.getValue());
             }
             prefs.setBackend(originalBackend);

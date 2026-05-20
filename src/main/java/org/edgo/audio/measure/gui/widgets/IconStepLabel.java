@@ -11,18 +11,18 @@ import org.eclipse.swt.widgets.Listener;
 import org.edgo.audio.measure.gui.common.IconUtils;
 
 /**
- * Tiny factory for click-able SVG-icon "arrow" labels used by
- * {@link StepSelector}, {@code NumericStepField} and {@code SignalFormCombo}'s
- * drop caret.  Replaces the native {@code SWT.ARROW | UP/DOWN} Button
- * which renders inconsistently across GTK / win32.
+ * Click-able SVG-icon "arrow" label used by {@link StepSelector},
+ * {@code NumericStepField} and {@code SignalFormCombo}'s drop caret.
+ * Replaces the native {@code SWT.ARROW | UP/DOWN} Button which renders
+ * inconsistently across GTK / win32.
  *
- * <p>Implemented as a {@link Canvas} with a custom paint listener rather
- * than a {@code Label} / {@code CLabel} — both of the latter have GTK
- * quirks with image alignment and image-swap repaint that produced
- * vanishing icons.  Drawing manually with {@link org.eclipse.swt.graphics.GC#drawImage}
- * is identical on every platform.
+ * <p>Implemented as a {@link Canvas} subclass with a custom paint
+ * listener rather than a {@code Label} / {@code CLabel} — both of the
+ * latter have GTK quirks with image alignment and image-swap repaint
+ * that produced vanishing icons.  Drawing manually with
+ * {@code GC#drawImage} is identical on every platform.
  *
- * <p>The returned widget has:
+ * <p>The widget has:
  * <ul>
  *   <li>no border, no rounded corners — sits flush on the parent's
  *       background (we explicitly copy the parent's background colour);</li>
@@ -30,45 +30,45 @@ import org.edgo.audio.measure.gui.common.IconUtils;
  *       larger <em>or</em> smaller than the normal size, or equal to
  *       disable press animation entirely;</li>
  *   <li>mouse-down / mouse-up / mouse-exit listeners that switch between
- *       the two images via a redraw flag — no widget-property gymnastics;</li>
- *   <li>a dispose listener that releases both {@link Image}s.</li>
+ *       the two images via a redraw flag.</li>
  * </ul>
  *
- * <p>Click semantics (step, toggle popup, …) are left to the caller — just
+ * <p>The {@link Image} instances are cached by {@link IconUtils} and
+ * disposed when the main shell tears down — not here.
+ *
+ * <p>Click semantics (step, toggle popup, …) are left to the caller —
  * add another {@code SWT.MouseDown} or {@code SWT.MouseUp} listener.
  */
-public final class IconStepLabel {
+public final class IconStepLabel extends Canvas {
 
-    private IconStepLabel() {}
+    private final Image   normal;
+    private final Image   pressed;
+    private       boolean isPressed;
 
-    /** Build the arrow.  {@code normalPx} / {@code pressedPx} are
-     *  <em>widths</em> — height is derived from the icon's bounding-box
-     *  aspect ratio (these spinner / caret icons are wider than tall).
-     *  Pass the same value for both to disable press animation. */
-    public static Canvas create(Composite parent, String svgResource,
-                                int normalPx, int pressedPx, RGB tint) {
+    /**
+     * Builds the arrow.  {@code normalPx} / {@code pressedPx} are
+     * <em>widths</em> — height is derived from the icon's bounding-box
+     * aspect ratio (these spinner / caret icons are wider than tall).
+     * Pass the same value for both to disable press animation.
+     */
+    public IconStepLabel(Composite parent, String svgResource,
+                         int normalPx, int pressedPx, RGB tint) {
+        super(parent, SWT.NO_BACKGROUND);
         Display d = parent.getDisplay();
         IconUtils icons = IconUtils.instance();
-        final Image normal  = icons.renderAtWidth(d, svgResource, normalPx,  tint);
-        final Image pressed = (normalPx == pressedPx)
-                ? normal
+        this.normal  = icons.renderAtWidth(d, svgResource, normalPx, tint);
+        this.pressed = (normalPx == pressedPx)
+                ? this.normal
                 : icons.renderAtWidth(d, svgResource, pressedPx, tint);
+        setBackground(parent.getBackground());
 
-        // Hold the press flag in a single-element array so the paint
-        // listener (a lambda) can see the mutating value without us
-        // needing a named class.
-        final boolean[] isPressed = { false };
-
-        Canvas c = new Canvas(parent, SWT.NO_BACKGROUND);
-        c.setBackground(parent.getBackground());
-
-        c.addPaintListener(e -> {
-            Image img = isPressed[0] ? pressed : normal;
+        addPaintListener(e -> {
+            Image img = isPressed ? pressed : normal;
             Rectangle ib = img.getBounds();
-            Rectangle cb = c.getClientArea();
+            Rectangle cb = getClientArea();
             // Wipe the cell first so a smaller image swapped in over a
             // larger one doesn't leave fragments.
-            e.gc.setBackground(c.getBackground());
+            e.gc.setBackground(getBackground());
             e.gc.fillRectangle(cb);
             int x = Math.max(0, (cb.width  - ib.width)  / 2);
             int y = Math.max(0, (cb.height - ib.height) / 2);
@@ -76,22 +76,23 @@ public final class IconStepLabel {
         });
 
         if (normal != pressed) {
-            c.addListener(SWT.MouseDown, e -> {
-                if (e.button != 1 || c.isDisposed()) return;
-                isPressed[0] = true;
-                c.redraw();
+            addListener(SWT.MouseDown, e -> {
+                if (e.button != 1 || isDisposed()) return;
+                isPressed = true;
+                redraw();
             });
             Listener restore = e -> {
-                if (c.isDisposed()) return;
-                isPressed[0] = false;
-                c.redraw();
+                if (isDisposed()) return;
+                isPressed = false;
+                redraw();
             };
-            c.addListener(SWT.MouseUp,   restore);
-            c.addListener(SWT.MouseExit, restore);
+            addListener(SWT.MouseUp,   restore);
+            addListener(SWT.MouseExit, restore);
         }
+    }
 
-        // Cached Image instances are owned by IconUtils — disposal happens
-        // when the main shell is torn down, not here.
-        return c;
+    @Override
+    protected void checkSubclass() {
+        // SWT forbids subclassing of most widgets by default — opt back in.
     }
 }

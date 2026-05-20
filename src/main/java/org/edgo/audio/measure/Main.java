@@ -35,8 +35,11 @@ import org.edgo.audio.measure.adc.WeightedBuffer;
 import org.edgo.audio.measure.chart.ChartExporter;
 import org.edgo.audio.measure.chart.ChartStyle;
 import org.edgo.audio.measure.chart.DnlInlExporter;
+import org.edgo.audio.measure.chart.FftChartExporter;
 import org.edgo.audio.measure.chart.HistogramExporter;
 import org.edgo.audio.measure.chart.WaveformExporter;
+import org.edgo.audio.measure.fft.Fft;
+import org.edgo.audio.measure.fft.HarmonicsCsv;
 import org.edgo.audio.measure.common.StereoSampleFloat;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.generator.SignalGenerator;
@@ -1618,7 +1621,7 @@ public class Main {
         FftAnalyzer fftAnalyzer = new FftAnalyzer();
         if (subHarmArg != null) {
             log.info("Sub-harm  : {}  (mode: {})", subHarmArg, subHarmReIm ? "re/im" : "amp+phase");
-            fftAnalyzer.subtractHarmonicsCsv(trimmed, sampleRate, subHarmArg, subHarmReIm);
+            HarmonicsCsv.subtract(trimmed, sampleRate, subHarmArg, subHarmReIm);
         }
 
         // Suppress the inner THD/SNR summary when ADC correction will run, so
@@ -1672,8 +1675,8 @@ public class Main {
         applyDefaultDbvScaling(result);
 
         fftAnalyzer.exportFftCsv(result, "results");
-        fftAnalyzer.exportHarmonicsCsv(result, "results");
-        fftAnalyzer.exportChart(result, chartWidth, chartHeight, "results",
+        HarmonicsCsv.export(result, "results");
+        FftChartExporter.exportChart(result, chartWidth, chartHeight, "results",
                 commentArg, subHarmArg != null, null, genFreqHz,
                 overlayFreqs, overlayDbFs, preCorrFreqs, preCorrDbFs);
         if (genFreqHz != null) {
@@ -2066,8 +2069,8 @@ public class Main {
         applyDefaultDbvScaling(result);
 
         fftAnalyzer.exportFftCsv(result, outputDir);
-        fftAnalyzer.exportHarmonicsCsv(result, outputDir);
-        fftAnalyzer.exportChart(result, chartWidth, chartHeight, outputDir,
+        HarmonicsCsv.export(result, outputDir);
+        FftChartExporter.exportChart(result, chartWidth, chartHeight, outputDir,
                 commentArg, false, null, frequency,
                 overlayFreqs, overlayDbFs, preCorrFreqs, preCorrDbFs);
         logClockMismatch(0, frequency, result.fundamentalHzRefined, sampleRate);
@@ -2321,7 +2324,7 @@ public class Main {
                     compSnrMargin, compStep);
         }
 
-        fftAnalyzer.exportChart(result0, chartWidth, chartHeight, "results",
+        FftChartExporter.exportChart(result0, chartWidth, chartHeight, "results",
                 "Iteration 0 (uncompensated)", false,
                 "fft_chart_iter0_" + wfTs, frequency,
                 overlayFreqs0, overlayDbFs0, preCorrFreqs0, preCorrDbFs0);
@@ -2448,7 +2451,7 @@ public class Main {
                         compSnrMargin, compStep);
             }
 
-            fftAnalyzer.exportChart(result, chartWidth, chartHeight, "results",
+            FftChartExporter.exportChart(result, chartWidth, chartHeight, "results",
                     String.format("Iteration %d", iter), false,
                     String.format("fft_chart_iter%d_", iter) + wfTs, frequency,
                     overlayFreqs, overlayDbFs, preCorrFreqs, preCorrDbFs);
@@ -2555,7 +2558,7 @@ public class Main {
         }
 
         // --- Save best harmonics CSV -----------------------------------------
-        String csvPath = fftAnalyzer.exportHarmonicsCsv(bestResult, "results",
+        String csvPath = HarmonicsCsv.export(bestResult, "results",
                 "fft_harmonics_" + wfTs);
         log.info("Best-iteration residual harmonics CSV (iter {}): {}", bestIter, csvPath);
 
@@ -3278,8 +3281,6 @@ public class Main {
             FftAnalyzer.Result r, AdcCorrection adc) {
         if (samples.length < fftSize) return;
 
-        FftAnalyzer fftAnalyzer = new FftAnalyzer();
-
         // HANN window matching FftAnalyzer (uses N-1 denominator).
         double[] window = new double[fftSize];
         double   wsum   = 0.0;
@@ -3313,7 +3314,7 @@ public class Main {
                 re[j] = samples[start + j] * window[j];
                 im[j] = 0.0;
             }
-            fftAnalyzer.fft(re, im);
+            Fft.forward(re, im);
             double phi1F  = Math.atan2(im[fundBin], re[fundBin]);
             double r1AmpF = Math.hypot(re[fundBin], im[fundBin]);
             double LF     = r1AmpF * linPerMag;
@@ -3842,7 +3843,7 @@ public class Main {
         final int LEAKAGE_BINS = 4;
         boolean[] correctBin = new boolean[half + 1];
         if (correctAllBins) {
-            java.util.Arrays.fill(correctBin, true);
+            Arrays.fill(correctBin, true);
         } else {
             for (int d = -LEAKAGE_BINS; d <= LEAKAGE_BINS; d++) {
                 int b = r.fundamentalBin + d;

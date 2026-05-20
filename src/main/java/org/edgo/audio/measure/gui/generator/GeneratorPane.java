@@ -17,12 +17,12 @@ import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
-import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -32,6 +32,7 @@ import org.eclipse.swt.widgets.Display;
 
 import java.io.File;
 import java.util.Locale;
+import java.util.function.Supplier;
 import org.edgo.audio.measure.enums.AmplitudeUnit;
 
 /**
@@ -135,6 +136,11 @@ public final class GeneratorPane {
      *  so the dispose listener can unsubscribe it from the bus — without
      *  that, the bus would keep this pane alive forever. */
     private Runnable fftLengthListener;
+    /** Handler for {@link Events#FILE_PLAY_STOPPED}.  Fires on the
+     *  play thread when the file player ends (user stop, EOF without
+     *  loop, or playback error) — resets the play-from LED on the UI
+     *  thread.  Held as a field so the dispose listener can unsubscribe. */
+    private Runnable filePlayStoppedListener;
 
     public GeneratorPane(Composite parent) {
         // Seed the tracked pane width from prefs BEFORE the host
@@ -624,8 +630,10 @@ public final class GeneratorPane {
         playFromBtn.setToolTipText(I18n.t("generator.loadFrom.play"));
         playFromBtn.addListener(SWT.Selection, e -> togglePlayFrom());
         // Auto-reset the LED when playback ends naturally (EOF without
-        // loop) or fails on the play thread.
-        filePlayer.setOnStopped(() -> {
+        // loop) or fails on the play thread.  The bus delivers
+        // FILE_PLAY_STOPPED on the play thread; marshal to the UI thread
+        // before touching widgets.
+        filePlayStoppedListener = () -> {
             if (!playFromBtn.isDisposed()) {
                 playFromBtn.getDisplay().asyncExec(() -> {
                     if (!playFromBtn.isDisposed()) {
@@ -635,7 +643,8 @@ public final class GeneratorPane {
                     }
                 });
             }
-        });
+        };
+        MessageBus.instance().subscribe(Events.FILE_PLAY_STOPPED, filePlayStoppedListener);
 
         // --------------------------------------------------------------- Play
         // Main play button sits on its own row, indented to the right
@@ -679,10 +688,9 @@ public final class GeneratorPane {
                     startOnAirBlink();
                 } else {
                     String err = controller.getLastStartError();
-                    MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_ERROR | SWT.OK);
-                    mb.setText(I18n.t("generator.error.start"));
-                    mb.setMessage(err != null ? err : "Unknown error starting the generator.");
-                    mb.open();
+                    Dialogs.error(group.getShell(),
+                            I18n.t("generator.error.start"),
+                            err != null ? err : "Unknown error starting the generator.");
                 }
             }
         });
@@ -703,12 +711,13 @@ public final class GeneratorPane {
         // — registerResponder replaces any prior registration, so
         // language-switch shell rebuilds re-bind cleanly.
         MessageBus.instance().registerResponder(Events.GENERATOR_RUNNING,
-                (java.util.function.Supplier<Boolean>) this::isRunning);
+                (Supplier<Boolean>) this::isRunning);
 
         // Dispose-time: stop the playback thread and tear down the icon
         // cache owned by this pane's display.
         group.addDisposeListener(e -> {
             MessageBus.instance().unsubscribe(Events.FFT_LENGTH_CHANGED, fftLengthListener);
+            MessageBus.instance().unsubscribe(Events.FILE_PLAY_STOPPED,  filePlayStoppedListener);
             MessageBus.instance().unregisterResponder(Events.GENERATOR_RUNNING);
             controller.stop();
             filePlayer.stop();
@@ -790,11 +799,9 @@ public final class GeneratorPane {
                     startOnAirBlink();
                 } else {
                     String err = controller.getLastStartError();
-                    MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_ERROR | SWT.OK);
-                    mb.setText(I18n.t("generator.error.resume"));
-                    mb.setMessage(err != null ? err
-                            : "Generator could not be restarted after backend change.");
-                    mb.open();
+                    Dialogs.error(group.getShell(),
+                            I18n.t("generator.error.resume"),
+                            err != null ? err : "Generator could not be restarted after backend change.");
                 }
             }
             // File player isn't reopened automatically — it doesn't go
@@ -1323,10 +1330,7 @@ public final class GeneratorPane {
             stopOnAirBlink();
             String err = controller.getLastStartError();
             if (err != null) {
-                MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_ERROR | SWT.OK);
-                mb.setText(I18n.t("generator.error.restart"));
-                mb.setMessage(err);
-                mb.open();
+                Dialogs.error(group.getShell(), I18n.t("generator.error.restart"), err);
             }
         }
     }
@@ -1445,10 +1449,9 @@ public final class GeneratorPane {
         Preferences prefs = Preferences.instance();
         String path = prefs.getGenPlayFromPath();
         if (path == null || path.isEmpty()) {
-            MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_INFORMATION | SWT.OK);
-            mb.setText(I18n.t("generator.loadFrom.dialog"));
-            mb.setMessage(I18n.t("generator.error.playFile.pickFirst"));
-            mb.open();
+            Dialogs.info(group.getShell(),
+                    I18n.t("generator.loadFrom.dialog"),
+                    I18n.t("generator.error.playFile.pickFirst"));
             return;
         }
         // Generator DDS and Play-from-file share the audio output device.
@@ -1466,11 +1469,9 @@ public final class GeneratorPane {
             startOnAirBlink();
         } else {
             String err = filePlayer.getLastStartError();
-            MessageBox mb = new MessageBox(
-                    group.getShell(), SWT.ICON_ERROR | SWT.OK);
-            mb.setText(I18n.t("generator.error.playFile"));
-            mb.setMessage(err != null ? err : "Unknown error opening the file.");
-            mb.open();
+            Dialogs.error(group.getShell(),
+                    I18n.t("generator.error.playFile"),
+                    err != null ? err : "Unknown error opening the file.");
         }
     }
 
@@ -1488,19 +1489,16 @@ public final class GeneratorPane {
         Preferences prefs = Preferences.instance();
         String path = prefs.getGenWavPath();
         if (path == null || path.isEmpty()) {
-            MessageBox mb = new MessageBox(
-                    group.getShell(), SWT.ICON_INFORMATION | SWT.OK);
-            mb.setText(I18n.t("generator.error.save"));
-            mb.setMessage(I18n.t("generator.error.save.pickFirst"));
-            mb.open();
+            Dialogs.info(group.getShell(),
+                    I18n.t("generator.error.save"),
+                    I18n.t("generator.error.save.pickFirst"));
             return;
         }
         GenSignalForm form = parseForm(prefs.getGenSignalForm());
         if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
-            MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_ERROR | SWT.OK);
-            mb.setText(I18n.t("generator.error.save"));
-            mb.setMessage(I18n.t("generator.error.save.sweepUnsupported"));
-            mb.open();
+            Dialogs.error(group.getShell(),
+                    I18n.t("generator.error.save"),
+                    I18n.t("generator.error.save.sweepUnsupported"));
             return;
         }
         int    sampleRate    = prefs.current().getOutputSampleRate();
@@ -1514,10 +1512,9 @@ public final class GeneratorPane {
             if (form == GenSignalForm.SINE_COMPENSATED) {
                 String csv = prefs.getGenCorrectionsCsv();
                 if (csv == null || csv.isEmpty()) {
-                    MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_ERROR | SWT.OK);
-                    mb.setText(I18n.t("generator.error.save"));
-                    mb.setMessage(I18n.t("generator.error.save.compensatedNeedsCsv"));
-                    mb.open();
+                    Dialogs.error(group.getShell(),
+                            I18n.t("generator.error.save"),
+                            I18n.t("generator.error.save.compensatedNeedsCsv"));
                     return;
                 }
                 gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms, csv);
@@ -1533,11 +1530,9 @@ public final class GeneratorPane {
             log.info("File saved: {} ({} bytes)", path, bytes);
         } catch (Exception ex) {
             log.warn("Save failed", ex);
-            MessageBox mb = new MessageBox(
-                    group.getShell(), SWT.ICON_ERROR | SWT.OK);
-            mb.setText(I18n.t("generator.error.save.failed"));
-            mb.setMessage(I18n.t("generator.error.save.failedMessage", path, ex.getMessage()));
-            mb.open();
+            Dialogs.error(group.getShell(),
+                    I18n.t("generator.error.save.failed"),
+                    I18n.t("generator.error.save.failedMessage", path, ex.getMessage()));
         }
     }
 

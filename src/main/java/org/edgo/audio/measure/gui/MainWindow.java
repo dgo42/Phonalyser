@@ -4,6 +4,7 @@ import java.net.JarURLConnection;
 import java.net.URL;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -286,11 +287,11 @@ public final class MainWindow {
         List<String> tags = new ArrayList<>();
         tags.add("en");                                  // default bundle
 
-        java.nio.file.Path external = I18n.externalDir();
+        Path external = I18n.externalDir();
         if (external != null) {
-            try (DirectoryStream<java.nio.file.Path> ds =
+            try (DirectoryStream<Path> ds =
                          Files.newDirectoryStream(external, "messages_*.properties")) {
-                for (java.nio.file.Path p : ds) {
+                for (Path p : ds) {
                     tags.add(tagFromFileName(p.getFileName().toString()));
                 }
                 Collections.sort(tags);
@@ -307,10 +308,10 @@ public final class MainWindow {
         }
         try {
             if ("file".equals(folderUrl.getProtocol())) {
-                java.nio.file.Path dir = Paths.get(folderUrl.toURI());
-                try (DirectoryStream<java.nio.file.Path> ds =
+                Path dir = Paths.get(folderUrl.toURI());
+                try (DirectoryStream<Path> ds =
                              Files.newDirectoryStream(dir, "messages_*.properties")) {
-                    for (java.nio.file.Path p : ds) {
+                    for (Path p : ds) {
                         tags.add(tagFromFileName(p.getFileName().toString()));
                     }
                 }

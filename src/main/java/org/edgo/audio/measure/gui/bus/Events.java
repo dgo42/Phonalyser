@@ -68,4 +68,17 @@ public final class Events {
      *  pane) flip the Record button back off and release the shared
      *  capture.  No payload.  Published on the UI thread. */
     public static final String FFT_RECORDING_AUTO_STOPPED = "fft.recording.auto-stopped";
+
+    /** Notification — the generator's file-player thread finished
+     *  (user stop, EOF without loop, or playback error).  Subscribers
+     *  (the generator pane) reset the play-from LED.  No payload.
+     *  Published on the play thread — subscribers must marshal to the
+     *  UI thread if they touch widgets. */
+    public static final String FILE_PLAY_STOPPED = "filePlay.stopped";
+
+    /** Notification — the user clicked the scope's Auto-Setup button.
+     *  Subscribers (the scope pane) re-fit the vertical / horizontal
+     *  scales to the current signal.  No payload.  Published on the
+     *  UI thread (the click handler runs there). */
+    public static final String SCOPE_AUTO_SETUP = "scope.autoSetup";
 }

@@ -1,8 +1,10 @@
 package org.edgo.audio.measure.gui.generator;
 
 import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.gui.preferences.BackendPrefs;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioPlayback;
@@ -47,7 +49,7 @@ public final class GeneratorController {
         lastStartError = null;
 
         Preferences prefs = Preferences.instance();
-        Preferences.BackendPrefs bp = prefs.current();
+        BackendPrefs bp = prefs.current();
         String deviceName = bp.getOutputDeviceName();
         if (deviceName == null || deviceName.isEmpty()) {
             lastStartError = "No output device selected.  Pick one in Preferences first.";
@@ -169,7 +171,7 @@ public final class GeneratorController {
             } catch (Exception ex) {
                 log.warn("Playback thread terminated abnormally", ex);
             } finally {
-                try { ag.close(); } catch (Exception ignored) {}
+                Closeables.closeQuietly(ag);
             }
         }, "generator-play");
         t.setDaemon(true);

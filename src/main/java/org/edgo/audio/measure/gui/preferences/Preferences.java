@@ -443,22 +443,22 @@ public final class Preferences {
             for (Map.Entry<String, OscPreset> e : oscPresets.entrySet()) {
                 OscPreset p = e.getValue();
                 Map<String, Object> pm = new LinkedHashMap<>();
-                pm.put("leftChannelEnabled",     p.leftChannelEnabled);
-                pm.put("rightChannelEnabled",    p.rightChannelEnabled);
-                pm.put("leftAcMode",             p.leftAcMode);
-                pm.put("rightAcMode",            p.rightAcMode);
-                pm.put("leftSincInterpEnabled",  p.leftSincInterpEnabled);
-                pm.put("rightSincInterpEnabled", p.rightSincInterpEnabled);
-                pm.put("leftVoltsPerDiv",        p.leftVoltsPerDiv);
-                pm.put("rightVoltsPerDiv",       p.rightVoltsPerDiv);
-                pm.put("leftOffsetFrac",         p.leftOffsetFrac);
-                pm.put("rightOffsetFrac",        p.rightOffsetFrac);
-                pm.put("timePerDiv",             p.timePerDiv);
-                pm.put("triggerPositionFrac",    p.triggerPositionFrac);
-                pm.put("triggerChannel",         p.triggerChannel.name());
-                pm.put("triggerEdge",            p.triggerEdge.name());
-                pm.put("triggerMode",            p.triggerMode.name());
-                pm.put("triggerLevelFrac",       p.triggerLevelFrac);
+                pm.put("leftChannelEnabled",     p.isLeftChannelEnabled());
+                pm.put("rightChannelEnabled",    p.isRightChannelEnabled());
+                pm.put("leftAcMode",             p.isLeftAcMode());
+                pm.put("rightAcMode",            p.isRightAcMode());
+                pm.put("leftSincInterpEnabled",  p.isLeftSincInterpEnabled());
+                pm.put("rightSincInterpEnabled", p.isRightSincInterpEnabled());
+                pm.put("leftVoltsPerDiv",        p.getLeftVoltsPerDiv());
+                pm.put("rightVoltsPerDiv",       p.getRightVoltsPerDiv());
+                pm.put("leftOffsetFrac",         p.getLeftOffsetFrac());
+                pm.put("rightOffsetFrac",        p.getRightOffsetFrac());
+                pm.put("timePerDiv",             p.getTimePerDiv());
+                pm.put("triggerPositionFrac",    p.getTriggerPositionFrac());
+                pm.put("triggerChannel",         p.getTriggerChannel().name());
+                pm.put("triggerEdge",            p.getTriggerEdge().name());
+                pm.put("triggerMode",            p.getTriggerMode().name());
+                pm.put("triggerLevelFrac",       p.getTriggerLevelFrac());
                 presetsMap.put(e.getKey(), pm);
             }
             root.put("oscPresets", presetsMap);
@@ -506,30 +506,30 @@ public final class Preferences {
             for (Map.Entry<String, FftPreset> e : fftPresets.entrySet()) {
                 FftPreset p = e.getValue();
                 Map<String, Object> pm = new LinkedHashMap<>();
-                pm.put("channel",           p.channel.name());
-                pm.put("magUnit",           p.magUnit);
-                pm.put("logFreqAxis",       p.logFreqAxis);
-                pm.put("freqMinHz",         p.freqMinHz);
-                pm.put("freqMaxHz",         p.freqMaxHz);
-                pm.put("magTop",            p.magTop);
-                pm.put("magBottom",         p.magBottom);
-                pm.put("fftLength",         p.fftLength);
-                pm.put("averages",          p.averages);
-                pm.put("stopAfterNEnabled", p.stopAfterNEnabled);
-                pm.put("stopAfterN",        p.stopAfterN);
-                pm.put("fundFromGenerator", p.fundFromGenerator);
-                pm.put("window",            p.window);
-                pm.put("overlap",           p.overlap);
-                pm.put("coherentAveraging", p.coherentAveraging);
-                pm.put("distMinHz",         p.distMinHz);
-                pm.put("distMaxHz",         p.distMaxHz);
-                pm.put("distMinEnabled",    p.distMinEnabled);
-                pm.put("distMaxEnabled",    p.distMaxEnabled);
-                pm.put("thdMaxHarmonic",    p.thdMaxHarmonic);
-                pm.put("calcMaxHarmonic",   p.calcMaxHarmonic);
-                pm.put("manualFundVrms",    p.manualFundVrms);
-                pm.put("manualFundUnit",    p.manualFundUnit);
-                pm.put("manualFundEnabled", p.manualFundEnabled);
+                pm.put("channel",           p.getChannel().name());
+                pm.put("magUnit",           p.getMagUnit());
+                pm.put("logFreqAxis",       p.isLogFreqAxis());
+                pm.put("freqMinHz",         p.getFreqMinHz());
+                pm.put("freqMaxHz",         p.getFreqMaxHz());
+                pm.put("magTop",            p.getMagTop());
+                pm.put("magBottom",         p.getMagBottom());
+                pm.put("fftLength",         p.getFftLength());
+                pm.put("averages",          p.getAverages());
+                pm.put("stopAfterNEnabled", p.isStopAfterNEnabled());
+                pm.put("stopAfterN",        p.getStopAfterN());
+                pm.put("fundFromGenerator", p.isFundFromGenerator());
+                pm.put("window",            p.getWindow());
+                pm.put("overlap",           p.getOverlap());
+                pm.put("coherentAveraging", p.isCoherentAveraging());
+                pm.put("distMinHz",         p.getDistMinHz());
+                pm.put("distMaxHz",         p.getDistMaxHz());
+                pm.put("distMinEnabled",    p.isDistMinEnabled());
+                pm.put("distMaxEnabled",    p.isDistMaxEnabled());
+                pm.put("thdMaxHarmonic",    p.getThdMaxHarmonic());
+                pm.put("calcMaxHarmonic",   p.getCalcMaxHarmonic());
+                pm.put("manualFundVrms",    p.getManualFundVrms());
+                pm.put("manualFundUnit",    p.getManualFundUnit());
+                pm.put("manualFundEnabled", p.isManualFundEnabled());
                 fpMap.put(e.getKey(), pm);
             }
             root.put("fftPresets", fpMap);
@@ -540,12 +540,12 @@ public final class Preferences {
             for (Map.Entry<AudioBackendType, BackendPrefs> e : perBackend.entrySet()) {
                 Map<String, Object> bp = new LinkedHashMap<>();
                 BackendPrefs v = e.getValue();
-                bp.put("inputDeviceName",  v.inputDeviceName);
-                bp.put("outputDeviceName", v.outputDeviceName);
-                bp.put("inputSampleRate",  v.inputSampleRate);
-                bp.put("inputBitDepth",    v.inputBitDepth);
-                bp.put("outputSampleRate", v.outputSampleRate);
-                bp.put("outputBitDepth",   v.outputBitDepth);
+                bp.put("inputDeviceName",  v.getInputDeviceName());
+                bp.put("outputDeviceName", v.getOutputDeviceName());
+                bp.put("inputSampleRate",  v.getInputSampleRate());
+                bp.put("inputBitDepth",    v.getInputBitDepth());
+                bp.put("outputSampleRate", v.getOutputSampleRate());
+                bp.put("outputBitDepth",   v.getOutputBitDepth());
                 perBackendMap.put(e.getKey().name(), bp);
             }
         }
@@ -638,22 +638,22 @@ public final class Preferences {
                 if (!(e.getKey() instanceof String key)) continue;
                 if (!(e.getValue() instanceof Map<?, ?> pm)) continue;
                 OscPreset p = new OscPreset();
-                if (pm.get("leftChannelEnabled")     instanceof Boolean b) p.leftChannelEnabled     = b;
-                if (pm.get("rightChannelEnabled")    instanceof Boolean b) p.rightChannelEnabled    = b;
-                if (pm.get("leftAcMode")             instanceof Boolean b) p.leftAcMode             = b;
-                if (pm.get("rightAcMode")            instanceof Boolean b) p.rightAcMode            = b;
-                if (pm.get("leftSincInterpEnabled")  instanceof Boolean b) p.leftSincInterpEnabled  = b;
-                if (pm.get("rightSincInterpEnabled") instanceof Boolean b) p.rightSincInterpEnabled = b;
-                if (pm.get("leftVoltsPerDiv")        instanceof Number  n) p.leftVoltsPerDiv        = n.doubleValue();
-                if (pm.get("rightVoltsPerDiv")       instanceof Number  n) p.rightVoltsPerDiv       = n.doubleValue();
-                if (pm.get("leftOffsetFrac")         instanceof Number  n) p.leftOffsetFrac         = n.doubleValue();
-                if (pm.get("rightOffsetFrac")        instanceof Number  n) p.rightOffsetFrac        = n.doubleValue();
-                if (pm.get("timePerDiv")             instanceof Number  n) p.timePerDiv             = n.doubleValue();
-                if (pm.get("triggerPositionFrac")    instanceof Number  n) p.triggerPositionFrac    = n.doubleValue();
-                if (pm.get("triggerChannel")         instanceof String  s) p.triggerChannel = enumOr(Channel.class, s, p.triggerChannel);
-                if (pm.get("triggerEdge")            instanceof String  s) p.triggerEdge    = enumOr(TriggerEdge.class,    s, p.triggerEdge);
-                if (pm.get("triggerMode")            instanceof String  s) p.triggerMode    = enumOr(TriggerMode.class,    s, p.triggerMode);
-                if (pm.get("triggerLevelFrac")       instanceof Number  n) p.triggerLevelFrac       = n.doubleValue();
+                if (pm.get("leftChannelEnabled")     instanceof Boolean b) p.setLeftChannelEnabled(b);
+                if (pm.get("rightChannelEnabled")    instanceof Boolean b) p.setRightChannelEnabled(b);
+                if (pm.get("leftAcMode")             instanceof Boolean b) p.setLeftAcMode(b);
+                if (pm.get("rightAcMode")            instanceof Boolean b) p.setRightAcMode(b);
+                if (pm.get("leftSincInterpEnabled")  instanceof Boolean b) p.setLeftSincInterpEnabled(b);
+                if (pm.get("rightSincInterpEnabled") instanceof Boolean b) p.setRightSincInterpEnabled(b);
+                if (pm.get("leftVoltsPerDiv")        instanceof Number  n) p.setLeftVoltsPerDiv(n.doubleValue());
+                if (pm.get("rightVoltsPerDiv")       instanceof Number  n) p.setRightVoltsPerDiv(n.doubleValue());
+                if (pm.get("leftOffsetFrac")         instanceof Number  n) p.setLeftOffsetFrac(n.doubleValue());
+                if (pm.get("rightOffsetFrac")        instanceof Number  n) p.setRightOffsetFrac(n.doubleValue());
+                if (pm.get("timePerDiv")             instanceof Number  n) p.setTimePerDiv(n.doubleValue());
+                if (pm.get("triggerPositionFrac")    instanceof Number  n) p.setTriggerPositionFrac(n.doubleValue());
+                if (pm.get("triggerChannel")         instanceof String  s) p.setTriggerChannel(enumOr(Channel.class,     s, p.getTriggerChannel()));
+                if (pm.get("triggerEdge")            instanceof String  s) p.setTriggerEdge   (enumOr(TriggerEdge.class, s, p.getTriggerEdge()));
+                if (pm.get("triggerMode")            instanceof String  s) p.setTriggerMode   (enumOr(TriggerMode.class, s, p.getTriggerMode()));
+                if (pm.get("triggerLevelFrac")       instanceof Number  n) p.setTriggerLevelFrac(n.doubleValue());
                 oscPresets.put(key, p);
             }
         }
@@ -709,30 +709,30 @@ public final class Preferences {
                 if (!(e.getKey() instanceof String key)) continue;
                 if (!(e.getValue() instanceof Map<?, ?> pm)) continue;
                 FftPreset p = new FftPreset();
-                if (pm.get("channel")           instanceof String  s) p.channel           = enumOr(Channel.class, s, p.channel);
-                if (pm.get("magUnit")           instanceof String  s) p.magUnit           = s;
-                if (pm.get("logFreqAxis")       instanceof Boolean b) p.logFreqAxis       = b;
-                if (pm.get("freqMinHz")         instanceof Number  n) p.freqMinHz         = n.doubleValue();
-                if (pm.get("freqMaxHz")         instanceof Number  n) p.freqMaxHz         = n.doubleValue();
-                if (pm.get("magTop")            instanceof Number  n) p.magTop            = n.doubleValue();
-                if (pm.get("magBottom")         instanceof Number  n) p.magBottom         = n.doubleValue();
-                if (pm.get("fftLength")         instanceof Number  n) p.fftLength         = n.intValue();
-                if (pm.get("averages")          instanceof Number  n) p.averages          = n.doubleValue();
-                if (pm.get("stopAfterNEnabled") instanceof Boolean b) p.stopAfterNEnabled = b;
-                if (pm.get("stopAfterN")        instanceof Number  n) p.stopAfterN        = n.intValue();
-                if (pm.get("fundFromGenerator") instanceof Boolean b) p.fundFromGenerator = b;
-                if (pm.get("window")            instanceof String  s) p.window            = s;
-                if (pm.get("overlap")           instanceof String  s) p.overlap           = s;
-                if (pm.get("coherentAveraging") instanceof Boolean b) p.coherentAveraging = b;
-                if (pm.get("distMinHz")         instanceof Number  n) p.distMinHz         = n.doubleValue();
-                if (pm.get("distMaxHz")         instanceof Number  n) p.distMaxHz         = n.doubleValue();
-                if (pm.get("distMinEnabled")    instanceof Boolean b) p.distMinEnabled    = b;
-                if (pm.get("distMaxEnabled")    instanceof Boolean b) p.distMaxEnabled    = b;
-                if (pm.get("thdMaxHarmonic")    instanceof Number  n) p.thdMaxHarmonic    = n.intValue();
-                if (pm.get("calcMaxHarmonic")   instanceof Number  n) p.calcMaxHarmonic   = n.intValue();
-                if (pm.get("manualFundVrms")    instanceof Number  n) p.manualFundVrms    = n.doubleValue();
-                if (pm.get("manualFundUnit")    instanceof String  s) p.manualFundUnit    = s;
-                if (pm.get("manualFundEnabled") instanceof Boolean b) p.manualFundEnabled = b;
+                if (pm.get("channel")           instanceof String  s) p.setChannel(enumOr(Channel.class, s, p.getChannel()));
+                if (pm.get("magUnit")           instanceof String  s) p.setMagUnit(s);
+                if (pm.get("logFreqAxis")       instanceof Boolean b) p.setLogFreqAxis(b);
+                if (pm.get("freqMinHz")         instanceof Number  n) p.setFreqMinHz(n.doubleValue());
+                if (pm.get("freqMaxHz")         instanceof Number  n) p.setFreqMaxHz(n.doubleValue());
+                if (pm.get("magTop")            instanceof Number  n) p.setMagTop(n.doubleValue());
+                if (pm.get("magBottom")         instanceof Number  n) p.setMagBottom(n.doubleValue());
+                if (pm.get("fftLength")         instanceof Number  n) p.setFftLength(n.intValue());
+                if (pm.get("averages")          instanceof Number  n) p.setAverages(n.doubleValue());
+                if (pm.get("stopAfterNEnabled") instanceof Boolean b) p.setStopAfterNEnabled(b);
+                if (pm.get("stopAfterN")        instanceof Number  n) p.setStopAfterN(n.intValue());
+                if (pm.get("fundFromGenerator") instanceof Boolean b) p.setFundFromGenerator(b);
+                if (pm.get("window")            instanceof String  s) p.setWindow(s);
+                if (pm.get("overlap")           instanceof String  s) p.setOverlap(s);
+                if (pm.get("coherentAveraging") instanceof Boolean b) p.setCoherentAveraging(b);
+                if (pm.get("distMinHz")         instanceof Number  n) p.setDistMinHz(n.doubleValue());
+                if (pm.get("distMaxHz")         instanceof Number  n) p.setDistMaxHz(n.doubleValue());
+                if (pm.get("distMinEnabled")    instanceof Boolean b) p.setDistMinEnabled(b);
+                if (pm.get("distMaxEnabled")    instanceof Boolean b) p.setDistMaxEnabled(b);
+                if (pm.get("thdMaxHarmonic")    instanceof Number  n) p.setThdMaxHarmonic(n.intValue());
+                if (pm.get("calcMaxHarmonic")   instanceof Number  n) p.setCalcMaxHarmonic(n.intValue());
+                if (pm.get("manualFundVrms")    instanceof Number  n) p.setManualFundVrms(n.doubleValue());
+                if (pm.get("manualFundUnit")    instanceof String  s) p.setManualFundUnit(s);
+                if (pm.get("manualFundEnabled") instanceof Boolean b) p.setManualFundEnabled(b);
                 fftPresets.put(key, p);
             }
         }
@@ -744,12 +744,12 @@ public final class Preferences {
                 if (type == null) continue;
                 BackendPrefs bp = prefsFor(type);
                 if (e.getValue() instanceof Map<?, ?> bpMap) {
-                    if (bpMap.get("inputDeviceName")  instanceof String  s) bp.inputDeviceName  = s;
-                    if (bpMap.get("outputDeviceName") instanceof String  s) bp.outputDeviceName = s;
-                    if (bpMap.get("inputSampleRate")  instanceof Integer i) bp.inputSampleRate  = i;
-                    if (bpMap.get("inputBitDepth")    instanceof Integer i) bp.inputBitDepth    = i;
-                    if (bpMap.get("outputSampleRate") instanceof Integer i) bp.outputSampleRate = i;
-                    if (bpMap.get("outputBitDepth")   instanceof Integer i) bp.outputBitDepth   = i;
+                    if (bpMap.get("inputDeviceName")  instanceof String  s) bp.setInputDeviceName(s);
+                    if (bpMap.get("outputDeviceName") instanceof String  s) bp.setOutputDeviceName(s);
+                    if (bpMap.get("inputSampleRate")  instanceof Integer i) bp.setInputSampleRate(i);
+                    if (bpMap.get("inputBitDepth")    instanceof Integer i) bp.setInputBitDepth(i);
+                    if (bpMap.get("outputSampleRate") instanceof Integer i) bp.setOutputSampleRate(i);
+                    if (bpMap.get("outputBitDepth")   instanceof Integer i) bp.setOutputBitDepth(i);
                 }
             }
         }
@@ -828,103 +828,4 @@ public final class Preferences {
         if (fftPresets.remove(name) != null) save();
     }
 
-    /**
-     * Snapshot of every FFT-view control whose value is part of a saved
-     * preset: chart range (freqMin/Max, magTop/Bottom, magnitude unit,
-     * phase visibility, log/lin), every FFT-tab field, and every THD-tab
-     * field.  Field names mirror the top-level {@code fftXxx} fields so
-     * apply/capture in {@code FftPane} is a straight assignment per field.
-     */
-    @Getter
-    @Setter
-    public static class FftPreset {
-        private Channel channel               = Channel.L;
-        private String  magUnit                      = "DBV";
-        private boolean logFreqAxis                  = true;
-        private double  freqMinHz                    = 20;
-        private double  freqMaxHz                    = 20000;
-        private double  magTop                       = 10;
-        private double  magBottom                    = -150;
-        // Settings tab
-        private int     fftLength                    = 65536;
-        private double  averages                     = 4;
-        private boolean stopAfterNEnabled            = false;
-        private int     stopAfterN                   = 10;
-        private boolean fundFromGenerator            = false;
-        private String  window                       = "HANN";
-        private String  overlap                      = "PCT_0";
-        private boolean coherentAveraging            = true;
-        // THD tab
-        private double  distMinHz                    = 20;
-        private double  distMaxHz                    = 20000;
-        private boolean distMinEnabled               = false;
-        private boolean distMaxEnabled               = false;
-        private int     thdMaxHarmonic               = 9;
-        private int     calcMaxHarmonic              = 9;
-        private double  manualFundVrms               = 1.0;
-        private String  manualFundUnit               = "V";
-        private boolean manualFundEnabled            = false;
-    }
-
-    /**
-     * Snapshot of every oscilloscope control whose value is part of a
-     * saved preset: both channels (V/div, offset, AC, sinc, enabled),
-     * the horizontal scale + trigger position, and the trigger settings
-     * + level.  Field types mirror the corresponding top-level
-     * {@link Preferences} fields one-for-one so apply/capture in
-     * {@code OscilloscopePane} is a straight assignment per field.
-     */
-    @Getter
-    @Setter
-    public static class OscPreset {
-        private boolean leftChannelEnabled       = true;
-        private boolean rightChannelEnabled      = true;
-        private boolean leftAcMode               = false;
-        private boolean rightAcMode              = false;
-        private boolean leftSincInterpEnabled    = true;
-        private boolean rightSincInterpEnabled   = true;
-        private double  leftVoltsPerDiv          = 0.1;
-        private double  rightVoltsPerDiv         = 0.1;
-        private double  leftOffsetFrac           = 0.5;
-        private double  rightOffsetFrac          = 0.5;
-        private double  timePerDiv               = 1e-3;
-        private double  triggerPositionFrac      = 0.5;
-        private Channel triggerChannel    = Channel.L;
-        private TriggerEdge    triggerEdge       = TriggerEdge.RISE;
-        private TriggerMode    triggerMode       = TriggerMode.AUTO;
-        private double  triggerLevelFrac         = 0.5;
-    }
-
-    /**
-     * Per-backend settings.  Devices are stored by name (string) — the
-     * concrete {@code DeviceRef} is re-resolved at dialog open time by
-     * matching the saved name against the live device list.
-     */
-    @Getter
-    @Setter
-    public class BackendPrefs {
-        private String inputDeviceName;
-        private String outputDeviceName;
-        private int    inputSampleRate  = 384000;
-        private int    inputBitDepth    = 24;
-        private int    outputSampleRate = 384000;
-        private int    outputBitDepth   = 24;
-
-        /** Copies all fields from {@code src} into this instance. */
-        public void copyFrom(BackendPrefs src) {
-            this.inputDeviceName  = src.inputDeviceName;
-            this.outputDeviceName = src.outputDeviceName;
-            this.inputSampleRate  = src.inputSampleRate;
-            this.inputBitDepth    = src.inputBitDepth;
-            this.outputSampleRate = src.outputSampleRate;
-            this.outputBitDepth   = src.outputBitDepth;
-        }
-
-        /** Returns a snapshot of this instance suitable for later restoration via {@link #copyFrom}. */
-        public BackendPrefs snapshot() {
-            BackendPrefs copy = new BackendPrefs();
-            copy.copyFrom(this);
-            return copy;
-        }
-    }
 }

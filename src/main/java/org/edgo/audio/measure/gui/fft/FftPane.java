@@ -6,6 +6,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
@@ -34,7 +39,6 @@ import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
-import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.enums.FftMagnitudeUnit;
@@ -44,11 +48,13 @@ import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.gui.MainTab;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.generator.NumericStepField;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.interfaces.Stepper;
+import org.edgo.audio.measure.gui.preferences.FftPreset;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.AdcCalibrationDialog;
 import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
@@ -132,7 +138,7 @@ public final class FftPane {
     private GridData   toolbarTabsGd;
     private final String[] tabLabels = new String[NUM_CUSTOM_TABS];
     private final Image[]  tabSpacerImages = new Image[NUM_CUSTOM_TABS];
-    private final java.util.List<TabRegion> tabRegions = new java.util.ArrayList<>();
+    private final List<TabRegion> tabRegions = new ArrayList<>();
     private Color tabTileBg;
     private Color tabTileFg;
     private Font  tabTileFont;
@@ -171,11 +177,6 @@ public final class FftPane {
      *  false after release.  Prevents an extra release on a
      *  disposed-without-record path. */
     private boolean captureHeld;
-    /** Cached "turn record OFF" recipe — flips the Record button image,
-     *  stops the controller, releases the shared capture.  Called from
-     *  the record button (user click) AND from {@link #disengageRecord}
-     *  (stop-after fired). */
-    private Runnable recordOffAction;
     /** Subscriber for {@link Events#FFT_RANGE_CHANGED}, stored as a
      *  field so the dispose listener can unsubscribe the SAME instance
      *  (method references compare by identity). */
@@ -376,7 +377,7 @@ public final class FftPane {
                 String key = tabLabelTooltipKey(hoverIdx);
                 if (key != null) tip = I18n.t(key);
             }
-            if (hoverIdx != currentIdx[0] || !java.util.Objects.equals(currentTip[0], tip)) {
+            if (hoverIdx != currentIdx[0] || !Objects.equals(currentTip[0], tip)) {
                 currentTip[0] = tip;
                 currentIdx[0] = hoverIdx;
                 if (hoverIdx >= 0) {
@@ -423,17 +424,6 @@ public final class FftPane {
         bus.subscribe(Events.FFT_RANGE_CHANGED,           rangeChangedListener);
         bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED,  autoStoppedListener);
 
-        recordOffAction = () -> {
-            if (recordButton.isDisposed()) return;
-            view.stop();
-            view.setBuffer(null);
-            if (captureHeld) {
-                MessageBus.instance().publish(Events.CAPTURE_RELEASE);
-                captureHeld = false;
-            }
-            recordButton.setSelection(false);
-            recordButton.setImage(recordDim);
-        };
         recordButton.addListener(SWT.Selection, e -> {
             boolean on = recordButton.getSelection();
             if (on) {
@@ -453,7 +443,7 @@ public final class FftPane {
                 view.setBuffer(buf);
                 view.start();
             } else {
-                recordOffAction.run();
+                recordOff();
             }
         });
 
@@ -596,7 +586,23 @@ public final class FftPane {
      *  refcount drops (which lets the audio device close if no other
      *  pane is holding it). */
     private void disengageRecord() {
-        if (recordOffAction != null) recordOffAction.run();
+        recordOff();
+    }
+
+    /** Turns the Record button OFF — stops the worker, releases the
+     *  shared capture, restores the dim icon.  Called from the user's
+     *  Record-button click (off path) and from {@link #disengageRecord}
+     *  when the analyser's stop-after-N counter trips. */
+    private void recordOff() {
+        if (recordButton.isDisposed()) return;
+        view.stop();
+        view.setBuffer(null);
+        if (captureHeld) {
+            MessageBus.instance().publish(Events.CAPTURE_RELEASE);
+            captureHeld = false;
+        }
+        recordButton.setSelection(false);
+        recordButton.setImage(recordDim);
     }
 
     /** Enables / disables the "Stop after N" checkbox + numeric field
@@ -652,10 +658,7 @@ public final class FftPane {
         if (parent == null) return;
         Double currentVrms = (view == null) ? null : view.getLastVrms();
         if (currentVrms == null || currentVrms <= 0 || Double.isNaN(currentVrms)) {
-            MessageBox mb = new MessageBox(parent, SWT.ICON_INFORMATION | SWT.OK);
-            mb.setText(I18n.t("calibrate.title"));
-            mb.setMessage(I18n.t("calibrate.error.noVrms"));
-            mb.open();
+            Dialogs.info(parent, I18n.t("calibrate.title"), I18n.t("calibrate.error.noVrms"));
             return;
         }
         final double measuredVrms = currentVrms;
@@ -1127,7 +1130,7 @@ public final class FftPane {
         presetLoadBtn.addListener(SWT.Selection, e -> {
             String name = presetCombo.getText().trim();
             if (name.isEmpty()) return;
-            Preferences.FftPreset p = prefs.getFftPresets().get(name);
+            FftPreset p = prefs.getFftPresets().get(name);
             if (p != null) {
                 applyFftPreset(p);
                 refreshPresetButtonState();
@@ -1171,7 +1174,7 @@ public final class FftPane {
             presetDeleteBtn.setEnabled(false);
             return;
         }
-        Preferences.FftPreset existing = Preferences.instance().getFftPresets().get(name);
+        FftPreset existing = Preferences.instance().getFftPresets().get(name);
         if (existing == null) {
             presetSaveBtn.setEnabled(true);
             presetLoadBtn.setEnabled(false);
@@ -1183,7 +1186,7 @@ public final class FftPane {
         }
     }
 
-    private static boolean presetsEqual(Preferences.FftPreset a, Preferences.FftPreset b) {
+    private static boolean presetsEqual(FftPreset a, FftPreset b) {
         return a.getChannel() == b.getChannel()
             && eq(a.getMagUnit(), b.getMagUnit())
             && a.isLogFreqAxis()       == b.isLogFreqAxis()
@@ -1215,22 +1218,20 @@ public final class FftPane {
     }
 
     private boolean confirmOverwritePreset(String name) {
-        MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_QUESTION | SWT.YES | SWT.NO);
-        mb.setText(I18n.t("fft.presets.overwrite.title"));
-        mb.setMessage(I18n.t("fft.presets.overwrite.message", name));
-        return mb.open() == SWT.YES;
+        return Dialogs.confirm(group.getShell(),
+                I18n.t("fft.presets.overwrite.title"),
+                I18n.t("fft.presets.overwrite.message", name)) == SWT.YES;
     }
 
     private boolean confirmDeletePreset(String name) {
-        MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_QUESTION | SWT.YES | SWT.NO);
-        mb.setText(I18n.t("fft.presets.delete.title"));
-        mb.setMessage(I18n.t("fft.presets.delete.message", name));
-        return mb.open() == SWT.YES;
+        return Dialogs.confirm(group.getShell(),
+                I18n.t("fft.presets.delete.title"),
+                I18n.t("fft.presets.delete.message", name)) == SWT.YES;
     }
 
-    private Preferences.FftPreset captureCurrentFftPreset() {
+    private FftPreset captureCurrentFftPreset() {
         Preferences prefs = Preferences.instance();
-        Preferences.FftPreset p = new Preferences.FftPreset();
+        FftPreset p = new FftPreset();
         p.setChannel(prefs.getFftChannel());
         p.setMagUnit(prefs.getFftMagUnit());
         p.setLogFreqAxis(prefs.isFftLogFreqAxis());
@@ -1258,7 +1259,7 @@ public final class FftPane {
         return p;
     }
 
-    private void applyFftPreset(Preferences.FftPreset p) {
+    private void applyFftPreset(FftPreset p) {
         Preferences prefs = Preferences.instance();
         prefs.setFftChannel(p.getChannel());
         prefs.setFftMagUnit(p.getMagUnit());
@@ -1471,10 +1472,7 @@ public final class FftPane {
     }
 
     private void showError(String title, String message) {
-        MessageBox mb = new MessageBox(group.getShell(), SWT.ICON_ERROR | SWT.OK);
-        mb.setText(title);
-        mb.setMessage(message);
-        mb.open();
+        Dialogs.error(group.getShell(), title, message);
     }
 
     // =========================================================================
@@ -1814,8 +1812,8 @@ public final class FftPane {
 
     /** Returns the per-tile text strings for the given tab, derived from
      *  the current prefs.  Order = visual order, left to right. */
-    private static java.util.List<String> tileTexts(Preferences prefs, int tabIndex) {
-        java.util.List<String> out = new java.util.ArrayList<>();
+    private static List<String> tileTexts(Preferences prefs, int tabIndex) {
+        List<String> out = new ArrayList<>();
         if (tabIndex == TAB_FFT_SETTINGS) {
             out.add(shortFftLength(prefs.getFftLength()));
             out.add(shortWindow(prefs.getFftWindow()));
@@ -2012,7 +2010,7 @@ public final class FftPane {
         // Identify trailing unit suffix.
         String unit = "V";
         String numText = t;
-        java.util.regex.Matcher m = java.util.regex.Pattern
+        Matcher m = Pattern
                 .compile("([+-]?[0-9]*\\.?[0-9]+(?:[eE][+-]?[0-9]+)?)\\s*([a-zA-Z]*)$")
                 .matcher(t);
         if (!m.matches()) return null;

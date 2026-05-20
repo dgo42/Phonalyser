@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import java.util.Locale;
 
 import org.edgo.audio.measure.fft.FftAnalyzer;
@@ -112,7 +113,7 @@ public class RegressionCalibrator {
         // LS fit uses all samples.
         int searchLen = Math.min(samples.length, 1 << 16);
         float[] searchBuf = searchLen < samples.length
-                ? java.util.Arrays.copyOf(samples, searchLen)
+                ? Arrays.copyOf(samples, searchLen)
                 : samples;
         double binWidth = (double) sampleRate / fftSize;
         double freqLo   = Math.max(1.0, roughFreqHz - 2.0 * binWidth);
