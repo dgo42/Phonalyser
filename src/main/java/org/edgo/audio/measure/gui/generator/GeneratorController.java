@@ -73,7 +73,7 @@ public final class GeneratorController {
         // in prefs.getGenFrequencyHz — the field keeps the raw user
         // value (e.g. 1000 Hz), the controller emits the snapped value
         // (e.g. 999.987 Hz at 1M FFT / 48 kHz).
-        final double frequency = snapToFftBinIfEnabled(prefs, form, sampleRate, rawFrequency);
+        final double frequency = FftBinSnap.snapIfEnabled(prefs, form, sampleRate, rawFrequency);
 
         // The WASAPI exclusive-mode driver sometimes refuses to start the
         // render stream on the first attempt when a sibling capture stream
@@ -252,23 +252,6 @@ public final class GeneratorController {
         g.setForm(form);
     }
 
-    /** Returns {@code raw} rounded to the nearest FFT bin centre when
-     *  the user has enabled snap-to-FFT-bin with a SINE waveform.
-     *  Otherwise returns {@code raw} unchanged.  Bin width is derived
-     *  from the active output sample rate and {@code fftLength} pref.
-     *  Shared with {@code GeneratorPane} (which uses the same math to
-     *  show the bracketed correction next to the field). */
-    public static double snapToFftBinIfEnabled(Preferences prefs, GenSignalForm form,
-                                               int sampleRate, double raw) {
-        if (form != GenSignalForm.SINE) return raw;
-        if (!prefs.isGenSnapToFftBin()) return raw;
-        int fftSize = prefs.getFftLength();
-        if (fftSize < 8 || sampleRate <= 0) return raw;
-        double binHz = (double) sampleRate / fftSize;
-        if (binHz <= 0) return raw;
-        return Math.round(raw / binHz) * binHz;
-    }
-
     /** Live-applies a new frequency (Hz) to the running generator.  No-op if not running. */
     public void setFrequency(double hz) {
         SignalGenerator g = generator;
@@ -336,7 +319,7 @@ public final class GeneratorController {
     public boolean isRunning()         { return running; }
     public String  getLastStartError() { return lastStartError; }
 
-    private static DeviceRef findOutputDevice(String name) {
+    private DeviceRef findOutputDevice(String name) {
         List<DeviceRef> devices = AudioBackend.instance().listOutputDevices();
         for (DeviceRef d : devices) {
             if (name.equals(d.name())) return d;
@@ -344,7 +327,7 @@ public final class GeneratorController {
         return null;
     }
 
-    private static GenSignalForm parseForm(String s) {
+    private GenSignalForm parseForm(String s) {
         if (s == null) return GenSignalForm.SINE;
         try { return GenSignalForm.valueOf(s); }
         catch (IllegalArgumentException ex) { return GenSignalForm.SINE; }

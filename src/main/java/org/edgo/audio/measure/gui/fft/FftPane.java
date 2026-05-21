@@ -166,6 +166,14 @@ public final class FftPane {
      *  when the analyser's stop-after-N counter trips so the pane can
      *  flip Record back off and release the shared capture. */
     private Runnable autoStoppedListener;
+    /** Subscriber for {@link Events#FREQRESP_MEASUREMENT_STARTED} — the
+     *  Frequency Response pane is about to drive the capture device
+     *  exclusively, so this pane must stop any running recording and
+     *  gray its Record button so it can't be re-engaged mid-sweep. */
+    private Runnable freqRespStartedListener;
+    /** Counterpart to {@link #freqRespStartedListener} — re-enables the
+     *  Record button once the sweep finishes (or aborts). */
+    private Runnable freqRespStoppedListener;
 
     public FftPane(Composite parent,
                    boolean liveCapture) {
@@ -399,11 +407,15 @@ public final class FftPane {
         //     auto-setup / maximize → realign the scrollbars.
         //   - FFT_RECORDING_AUTO_STOPPED: view publishes when its
         //     stop-after-N counter trips → release record state.
-        rangeChangedListener  = this::syncFftPan;
-        autoStoppedListener   = this::disengageRecord;
+        rangeChangedListener      = this::syncFftPan;
+        autoStoppedListener       = this::disengageRecord;
+        freqRespStartedListener   = this::onFreqRespMeasurementStarted;
+        freqRespStoppedListener   = this::onFreqRespMeasurementStopped;
         MessageBus bus = MessageBus.instance();
-        bus.subscribe(Events.FFT_RANGE_CHANGED,           rangeChangedListener);
-        bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED,  autoStoppedListener);
+        bus.subscribe(Events.FFT_RANGE_CHANGED,             rangeChangedListener);
+        bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED,    autoStoppedListener);
+        bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
+        bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
 
         recordButton.addListener(SWT.Selection, e -> {
             boolean on = recordButton.getSelection();
@@ -430,8 +442,10 @@ public final class FftPane {
 
         group.addDisposeListener(e -> {
             MessageBus bus2 = MessageBus.instance();
-            bus2.unsubscribe(Events.FFT_RANGE_CHANGED,          rangeChangedListener);
-            bus2.unsubscribe(Events.FFT_RECORDING_AUTO_STOPPED, autoStoppedListener);
+            bus2.unsubscribe(Events.FFT_RANGE_CHANGED,             rangeChangedListener);
+            bus2.unsubscribe(Events.FFT_RECORDING_AUTO_STOPPED,    autoStoppedListener);
+            bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
+            bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
             view.stop();
             view.setBuffer(null);
             if (captureHeld) {
@@ -568,6 +582,23 @@ public final class FftPane {
      *  pane is holding it). */
     private void disengageRecord() {
         recordOff();
+    }
+
+    /** {@link Events#FREQRESP_MEASUREMENT_STARTED} handler: stops any
+     *  in-flight FFT recording and grays the Record button so the user
+     *  can't kick it back on mid-sweep.  The Frequency Response analyzer
+     *  needs exclusive use of the capture device while it runs. */
+    private void onFreqRespMeasurementStarted() {
+        if (recordButton == null || recordButton.isDisposed()) return;
+        if (recordButton.getSelection()) recordOff();
+        recordButton.setEnabled(false);
+    }
+
+    /** Counterpart that re-enables the Record button once the sweep
+     *  finishes (or aborts). */
+    private void onFreqRespMeasurementStopped() {
+        if (recordButton == null || recordButton.isDisposed()) return;
+        recordButton.setEnabled(true);
     }
 
     /** Turns the Record button OFF — stops the worker, releases the
@@ -1167,7 +1198,7 @@ public final class FftPane {
         }
     }
 
-    private static boolean presetsEqual(FftPreset a, FftPreset b) {
+    private boolean presetsEqual(FftPreset a, FftPreset b) {
         return a.getChannel() == b.getChannel()
             && eq(a.getMagUnit(), b.getMagUnit())
             && a.isLogFreqAxis()       == b.isLogFreqAxis()
@@ -1194,7 +1225,7 @@ public final class FftPane {
             && a.isManualFundEnabled() == b.isManualFundEnabled();
     }
 
-    private static boolean eq(String a, String b) {
+    private boolean eq(String a, String b) {
         return (a == null) ? b == null : a.equals(b);
     }
 
@@ -1761,7 +1792,7 @@ public final class FftPane {
 
     /** Returns the per-tile text strings for the given tab, derived from
      *  the current prefs.  Order = visual order, left to right. */
-    private static List<String> tileTexts(Preferences prefs, int tabIndex) {
+    private List<String> tileTexts(Preferences prefs, int tabIndex) {
         List<String> out = new ArrayList<>();
         if (tabIndex == TAB_FFT_SETTINGS) {
             out.add(FftPaneFormat.shortFftLength(prefs.getFftLength()));
@@ -1865,7 +1896,7 @@ public final class FftPane {
     }
 
     /** Tab-level hover tooltip key — fallback when no tile is hovered. */
-    private static String tabLabelTooltipKey(int tabIndex) {
+    private String tabLabelTooltipKey(int tabIndex) {
         switch (tabIndex) {
             case TAB_FFT_SETTINGS: return "fft.tab.settings.tooltip";
             case TAB_THD_SETTINGS: return "fft.tab.thd.tooltip";
@@ -1885,7 +1916,7 @@ public final class FftPane {
         return c;
     }
 
-    private static void addLabel(Composite parent, String text) {
+    private void addLabel(Composite parent, String text) {
         Label l = new Label(parent, SWT.NONE);
         l.setText(text);
         l.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));

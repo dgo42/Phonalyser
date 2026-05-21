@@ -1,5 +1,6 @@
 package org.edgo.audio.measure.gui.common;
 
+import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Image;
@@ -25,14 +26,13 @@ import java.io.InputStream;
  * the shell is disposed.
  */
 @Log4j2
-public final class ShellIcons {
+@UtilityClass
+public class ShellIcons {
 
-    private static final String ICO_PATH = "/icons/phonalyser.ico";
-    private static final String PNG_PATH = "/icons/phonalyser.png";
+    private final String ICO_PATH = "/icons/phonalyser.ico";
+    private final String PNG_PATH = "/icons/phonalyser.png";
 
-    private ShellIcons() {}
-
-    public static void apply(Shell target) {
+    public void apply(Shell target) {
         Image[] images = loadIcons(target);
         if (images.length == 0) return;
         target.setImages(images);
@@ -45,7 +45,7 @@ public final class ShellIcons {
 
     /** Loads the platform-appropriate icon as one or more {@link Image}s.
      *  Returns an empty array on any I/O failure. */
-    private static Image[] loadIcons(Shell target) {
+    private Image[] loadIcons(Shell target) {
         boolean windows = "win32".equals(SWT.getPlatform());
         String primary = windows ? ICO_PATH : PNG_PATH;
         Image[] fromPrimary = tryLoad(target, primary);
@@ -62,7 +62,7 @@ public final class ShellIcons {
     /** Reads every {@link ImageData} frame from {@code resourcePath}
      *  (an {@code .ico} packs multiple sizes; PNG packs one) and wraps
      *  each as an SWT {@link Image}. */
-    private static Image[] tryLoad(Shell target, String resourcePath) {
+    private Image[] tryLoad(Shell target, String resourcePath) {
         try (InputStream in = ShellIcons.class.getResourceAsStream(resourcePath)) {
             if (in == null) {
                 log.warn("Shell-icon resource not found: {}", resourcePath);

@@ -54,6 +54,14 @@ public class Versions {
         return s.split("[.\\-_]");
     }
 
+    /** Reads the running app's version from its manifest, falling back to
+     *  {@code "dev"} when invoked outside a packaged JAR.  Single source of
+     *  truth for the About dialog and the update checker. */
+    public String appVersion() {
+        String v = Versions.class.getPackage().getImplementationVersion();
+        return (v != null && !v.isEmpty()) ? v : "dev";
+    }
+
     private int compareSegment(String a, String b) {
         if (a.equalsIgnoreCase(b)) return 0;
 

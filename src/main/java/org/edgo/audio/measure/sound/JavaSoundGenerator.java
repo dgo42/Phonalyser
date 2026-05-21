@@ -129,6 +129,11 @@ public class JavaSoundGenerator implements AudioPlayback {
         int    preFillCount   = Math.max(1, hwFrames / BUFFER_FRAMES);
 
         warmupJit(generator, buf);
+        // Warmup consumed nextSample() calls that advance sweep playback
+        // state; reset so the real stream sees the sweep from sample 0
+        // (otherwise a freq-response measurement captures a mid-sweep
+        // recording while the deconv reference starts at zero).
+        generator.resetSweepPosition();
 
         line.start();
         log.info("JavaSound playback started (continuous) — pre-filling {} frames ({} ms)...",

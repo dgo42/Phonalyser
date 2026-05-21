@@ -5,6 +5,8 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.SWTError;
 import org.eclipse.swt.browser.Browser;
 import org.eclipse.swt.layout.FillLayout;
+import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Shell;
 
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -91,18 +93,34 @@ public final class HelpViewer {
 
     /** Single live instance — second invocations re-focus rather than
      *  open a duplicate window. */
-    private static Shell openShell;
+    private Shell openShell;
     /** Cached language-specific help root (i.e. the directory holding
      *  the index.html / chapter files for the active language).
      *  Resolved once per JVM lifetime — see {@link #resolveLangRoot}. */
-    private static volatile Path langRoot;
+    private volatile Path langRoot;
+
+    private static volatile HelpViewer instance;
 
     private HelpViewer() {}
+
+    public static HelpViewer instance() {
+        HelpViewer local = instance;
+        if (local == null) {
+            synchronized (HelpViewer.class) {
+                local = instance;
+                if (local == null) {
+                    local = new HelpViewer();
+                    instance = local;
+                }
+            }
+        }
+        return local;
+    }
 
     /**
      * Opens (or re-focuses) the help window on the entry-point page.
      */
-    public static void show(Shell parent) {
+    public void show(Shell parent) {
         showAt(parent, INDEX_FILE);
     }
 
@@ -113,10 +131,10 @@ public final class HelpViewer {
      * The hint is parsed as either {@code "file"} or {@code "file#anchor"};
      * an empty / missing hint goes to {@link #INDEX_FILE}.
      */
-    public static void showForActiveItem(Shell parent) {
+    public void showForActiveItem(Shell parent) {
         String hint = null;
         if (parent != null && parent.getDisplay() != null) {
-            org.eclipse.swt.widgets.Control focus = parent.getDisplay().getFocusControl();
+            Control focus = parent.getDisplay().getFocusControl();
             while (focus != null && hint == null) {
                 Object tag = focus.getData("helpAnchor");
                 if (tag instanceof String s && !s.isEmpty()) hint = s;
@@ -128,7 +146,7 @@ public final class HelpViewer {
 
     /** Internal: parse the hint to a (file, anchor) pair, resolve the
      *  file inside the active language root, and load it. */
-    private static void showAt(Shell parent, String hint) {
+    private void showAt(Shell parent, String hint) {
         String file;
         String anchor;
         int hash = hint.indexOf('#');
@@ -186,10 +204,10 @@ public final class HelpViewer {
     }
 
     /** Walks the shell's child tree looking for the embedded Browser. */
-    private static Browser findBrowser(org.eclipse.swt.widgets.Composite root) {
-        for (org.eclipse.swt.widgets.Control c : root.getChildren()) {
+    private Browser findBrowser(Composite root) {
+        for (Control c : root.getChildren()) {
             if (c instanceof Browser b) return b;
-            if (c instanceof org.eclipse.swt.widgets.Composite child) {
+            if (c instanceof Composite child) {
                 Browser b = findBrowser(child);
                 if (b != null) return b;
             }
@@ -202,7 +220,7 @@ public final class HelpViewer {
      *  running JAR) so user edits and translations show up without a
      *  rebuild; only falls back to the classpath bundle when nothing
      *  on disk is found.  Result cached for the JVM lifetime. */
-    private static synchronized Path resolveLangRoot() {
+    private synchronized Path resolveLangRoot() {
         if (langRoot != null && Files.isDirectory(langRoot)) return langRoot;
         String[] langs = resolveLanguageChain();
         Path externalBase = resolveExternalHelpDir();
@@ -229,7 +247,7 @@ public final class HelpViewer {
      *  {@code -Dhelp.dir} system property, then a {@code help/} folder
      *  alongside the running JAR.  Returns {@code null} when neither
      *  exists. */
-    private static Path resolveExternalHelpDir() {
+    private Path resolveExternalHelpDir() {
         String prop = System.getProperty("help.dir");
         if (prop != null && !prop.isEmpty()) {
             Path p = Paths.get(prop);
@@ -256,7 +274,7 @@ public final class HelpViewer {
      *  reach it via {@code file://}.  Returns the language-specific
      *  temp dir, or {@code null} when no usable bundle is on the
      *  classpath. */
-    private static Path extractFromClasspath(String[] langs) {
+    private Path extractFromClasspath(String[] langs) {
         for (String lang : langs) {
             if (HelpViewer.class.getResourceAsStream("/help/" + lang + "/" + INDEX_FILE) == null) {
                 continue;
@@ -283,7 +301,7 @@ public final class HelpViewer {
         return null;
     }
 
-    private static boolean copyResource(String resource, Path target) throws IOException {
+    private boolean copyResource(String resource, Path target) throws IOException {
         try (InputStream in = HelpViewer.class.getResourceAsStream(resource)) {
             if (in == null) return false;
             if (target.getParent() != null) Files.createDirectories(target.getParent());
@@ -295,7 +313,7 @@ public final class HelpViewer {
 
     /** Returns the language-fallback chain for the active UI language:
      *  full BCP-47 tag → primary subtag → {@value #FALLBACK_LANG}. */
-    private static String[] resolveLanguageChain() {
+    private String[] resolveLanguageChain() {
         String lang = Preferences.instance().getUiLanguage();
         if (lang == null || lang.isEmpty()) lang = FALLBACK_LANG;
         lang = lang.toLowerCase(Locale.ROOT);

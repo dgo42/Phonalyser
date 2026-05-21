@@ -227,6 +227,11 @@ public class WasapiGenerator implements AudioPlayback {
         // for the rationale; here we drive encodeIntoScratch directly
         // (no GetBuffer/ReleaseBuffer COM call, no SDR side-effect).
         warmupJit(generator, scratch);
+        // Warmup consumed nextSample() calls that advance sweep playback
+        // state; reset so the real stream sees the sweep from sample 0
+        // (otherwise a freq-response measurement captures a mid-sweep
+        // recording while the deconv reference starts at zero).
+        generator.resetSweepPosition();
 
         // Pre-fill the entire hardware buffer once so the device has
         // something to play the instant Start() is called.  Without

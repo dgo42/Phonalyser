@@ -255,12 +255,12 @@ public final class MainWindow {
         MenuItem helpShow = new MenuItem(helpMenu, SWT.PUSH);
         helpShow.setText(I18n.t("menu.help.show"));
         helpShow.setAccelerator(SWT.F1);
-        helpShow.addListener(SWT.Selection, e -> HelpViewer.show(shell));
+        helpShow.addListener(SWT.Selection, e -> HelpViewer.instance().show(shell));
 
         MenuItem helpShowActive = new MenuItem(helpMenu, SWT.PUSH);
         helpShowActive.setText(I18n.t("menu.help.showActive"));
         helpShowActive.setAccelerator(SWT.CTRL | SWT.F1);
-        helpShowActive.addListener(SWT.Selection, e -> HelpViewer.showForActiveItem(shell));
+        helpShowActive.addListener(SWT.Selection, e -> HelpViewer.instance().showForActiveItem(shell));
 
         new MenuItem(helpMenu, SWT.SEPARATOR);
 

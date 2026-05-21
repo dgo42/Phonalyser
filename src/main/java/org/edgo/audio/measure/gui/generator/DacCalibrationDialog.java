@@ -117,7 +117,7 @@ public final class DacCalibrationDialog {
         }
     }
 
-    private static Double parseAsVrms(String valueStr, String unit) {
+    private Double parseAsVrms(String valueStr, String unit) {
         if (valueStr == null) return null;
         String trimmed = valueStr.trim().replace(',', '.');
         if (trimmed.isEmpty()) return null;
@@ -135,7 +135,7 @@ public final class DacCalibrationDialog {
         }
     }
 
-    private static String formatVoltage(double v) {
+    private String formatVoltage(double v) {
         double a = Math.abs(v);
         if (a >= 1.0)  return String.format(Locale.ROOT, "%.4f V",  v);
         if (a >= 1e-3) return String.format(Locale.ROOT, "%.3f mV", v * 1e3);

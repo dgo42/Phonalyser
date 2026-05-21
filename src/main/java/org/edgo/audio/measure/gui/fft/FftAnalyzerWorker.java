@@ -332,7 +332,7 @@ public final class FftAnalyzerWorker {
         }
     }
 
-    private static int msForSamples(int samples, int sampleRate) {
+    private int msForSamples(int samples, int sampleRate) {
         if (sampleRate <= 0 || samples <= 0) return 0;
         return (int) Math.ceil(1000.0 * samples / sampleRate);
     }
@@ -341,7 +341,7 @@ public final class FftAnalyzerWorker {
      *  In manual-fundamental mode we pass the user's value directly;
      *  otherwise we pass {@code NaN} so the analyser uses the measured
      *  {@code fundLinear} as its anchor. */
-    private static double resolveFundRefDbV(Preferences prefs) {
+    private double resolveFundRefDbV(Preferences prefs) {
         if (prefs.isFftManualFundEnabled()) {
             String unit = prefs.getFftManualFundUnit();
             double v = prefs.getFftManualFundVrms();

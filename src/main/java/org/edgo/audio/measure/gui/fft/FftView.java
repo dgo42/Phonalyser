@@ -1,7 +1,5 @@
 package org.edgo.audio.measure.gui.fft;
 
-import java.util.Arrays;
-
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.MouseAdapter;
 import org.eclipse.swt.events.MouseEvent;
@@ -29,9 +27,10 @@ import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
-import org.edgo.audio.measure.gui.generator.GeneratorController;
+import org.edgo.audio.measure.gui.generator.FftBinSnap;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBuffer;
@@ -51,7 +50,7 @@ import org.edgo.audio.measure.gui.sound.SignalBuffer;
  * View → pane communication is purely via {@link MessageBus} broadcasts
  * ({@link Events#FFT_RANGE_CHANGED}, {@link Events#FFT_RECORDING_AUTO_STOPPED}).
  */
-public final class FftView extends Canvas {
+public final class FftView extends AbstractFreqDomainView {
 
     // ─── Colours ─────────────────────────────────────────────────────────
     /** User-configurable; re-allocated by {@link #syncFftColors} when the
@@ -148,19 +147,10 @@ public final class FftView extends Canvas {
     private Shell   externalShell;
     private Canvas  externalCanvas;
 
-    // ─── Spectrum / grid offscreen buffer ───────────────────────────────
-    /** Cached rendering of the static layers (background + grid +
-     *  spectrum + phase + axes).  Rebuilt only when the underlying
-     *  state actually changes — mouse-move / crosshair redraws blit
-     *  this image and paint the overlay directly on top, so they cost
-     *  ~one drawImage instead of re-walking 64 k spectrum bins. */
-    private Image    traceBuffer;
-    /** Fingerprint of the data + view parameters used to build
-     *  {@link #traceBuffer}.  Compared against the live state every
-     *  paint; a mismatch triggers a rebuild. */
-    private long     traceBufferFingerprint;
-    /** Canvas width / height the {@link #traceBuffer} was built for. */
-    private int      traceBufferW, traceBufferH;
+    // Static-layer paint cache (traceBuffer Image + fingerprint) now
+    // lives in AbstractFreqDomainView.  Mouse-move / crosshair redraws
+    // hit the blit path via paintCachedStatic and never re-walk the
+    // 64 k spectrum bins.
 
     // ─── Plot region constants ───────────────────────────────────────────
     /** Pixel margins around the plotting area inside the canvas.
@@ -202,6 +192,31 @@ public final class FftView extends Canvas {
         resetColor       = new Color(d, 220,  60,  60);
         dimColor         = new Color(d, 200, 200, 200);
         syncFftColors();
+
+        // Register the header-row buttons as Hotspots with the shared base.
+        // The base owns the rect-by-reference list + lookup helper; the
+        // mouseDown handler below dispatches via hotspotAt(...) instead of
+        // running through seven explicit if/else branches.
+        registerHotspot(leftChanButtonBounds, () -> {
+            Preferences p = Preferences.instance();
+            p.setFftChannel(Channel.L); p.save(); redraw();
+        });
+        registerHotspot(rightChanButtonBounds, () -> {
+            Preferences p = Preferences.instance();
+            p.setFftChannel(Channel.R); p.save(); redraw();
+        });
+        registerHotspot(autoSetupButtonBounds, this::autoSetup);
+        registerHotspot(maximizeButtonBounds, this::maximize);
+        registerHotspot(distortionButtonBounds, () -> {
+            Preferences p = Preferences.instance();
+            p.setFftDistortionTableVisible(!p.isFftDistortionTableVisible());
+            p.save();
+            syncExternalShell();
+            redraw();
+        });
+        registerHotspot(externalButtonBounds, () -> setTableExtracted(!tableExtracted));
+        registerHotspot(resetButtonBounds, () -> { resetStatistics(); redraw(); });
+
         setBackground(background);
         addPaintListener(this::onPaint);
         addMouseListener(new MouseAdapter() {
@@ -331,7 +346,7 @@ public final class FftView extends Canvas {
         d.timerExec(100, tick[0]);
     }
 
-    private static int indexOf(String[] arr, String value) {
+    private int indexOf(String[] arr, String value) {
         if (value == null) return -1;
         for (int i = 0; i < arr.length; i++) if (value.equals(arr[i])) return i;
         return -1;
@@ -359,7 +374,7 @@ public final class FftView extends Canvas {
         // Header icons are cached and owned by IconUtils — disposed
         // when the main shell tears down, not here.
         if (externalShell != null && !externalShell.isDisposed()) externalShell.dispose();
-        if (traceBuffer   != null && !traceBuffer  .isDisposed()) traceBuffer  .dispose();
+        disposeTraceBuffer();
     }
 
     /** (Re-)allocates the user-configurable FFT colours from
@@ -369,36 +384,31 @@ public final class FftView extends Canvas {
      *  the Preferences dialog take effect on the next redraw. */
     private void syncFftColors() {
         Preferences prefs = Preferences.instance();
-        Display d = getDisplay();
         int bg  = prefs.getFftChartBackgroundColor();
         int sp  = prefs.getFftLineColor();
         int dot = prefs.getFftHarmonicDotColor();
         int flt = prefs.getFftFreqRespColor();
         if (bg  != currentBgRgb) {
             if (background       != null) background.dispose();
-            background       = newRgbColor(d, bg);
+            background       = newColor(bg);
             currentBgRgb     = bg;
             setBackground(background);
         }
         if (sp  != currentSpectrumRgb) {
             if (spectrumColor    != null) spectrumColor.dispose();
-            spectrumColor    = newRgbColor(d, sp);
+            spectrumColor    = newColor(sp);
             currentSpectrumRgb = sp;
         }
         if (dot != currentDotRgb) {
             if (harmonicDotColor != null) harmonicDotColor.dispose();
-            harmonicDotColor = newRgbColor(d, dot);
+            harmonicDotColor = newColor(dot);
             currentDotRgb    = dot;
         }
         if (flt != currentFreqRespRgb) {
             if (freqRespResponseColor != null) freqRespResponseColor.dispose();
-            freqRespResponseColor = newRgbColor(d, flt);
+            freqRespResponseColor = newColor(flt);
             currentFreqRespRgb    = flt;
         }
-    }
-
-    private static Color newRgbColor(Display d, int rgb) {
-        return new Color(d, (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
     }
 
     // =========================================================================
@@ -635,21 +645,26 @@ public final class FftView extends Canvas {
         FftAnalyzer.Result r = worker.getLastResult();
 
         // ---- Static-layer buffer: blit cached image when nothing
-        // affecting the trace / grid / axes has changed.  Mouse-move
-        // redraws (crosshair tracking) cost only one drawImage instead
-        // of re-walking 60 k+ spectrum bins.
-        long fp = computeTraceFingerprint(r, area, unit, freqMin, freqMax,
+        // affecting the trace / grid / axes has changed.  Cache
+        // lifecycle (rebuild / blit) lives in AbstractFreqDomainView;
+        // we just hand it a fingerprint and the static-layer painter.
+        final double fFreqMin = freqMin;
+        long fp = computeTraceFingerprint(r, area, unit, fFreqMin, freqMax,
                 magTop, magBot, logFreq);
-        if (traceBuffer == null || traceBuffer.isDisposed()
-                || traceBufferW != area.width || traceBufferH != area.height
-                || traceBufferFingerprint != fp) {
-            rebuildTraceBuffer(area, plot, r, unit, freqMin, freqMax,
-                    magTop, magBot, logFreq);
-            traceBufferFingerprint = fp;
-            traceBufferW = area.width;
-            traceBufferH = area.height;
-        }
-        gc.drawImage(traceBuffer, 0, 0);
+        paintCachedStatic(gc, area, fp, bgc -> {
+            bgc.setBackground(background);
+            bgc.fillRectangle(0, 0, area.width, area.height);
+            bgc.setAntialias(SWT.ON);
+            bgc.setTextAntialias(SWT.ON);
+            drawGrid(bgc, plot, fFreqMin, freqMax, magTop, magBot, logFreq, unit);
+            drawDistortionBands(bgc, plot, fFreqMin, freqMax, logFreq);
+            drawAxes(bgc, plot, fFreqMin, freqMax, magTop, magBot, logFreq, unit);
+            if (r != null) {
+                drawSpectrum(bgc, plot, r, unit, fFreqMin, freqMax, magTop, magBot, logFreq);
+                drawHarmonicDots(bgc, plot, r, unit, fFreqMin, freqMax,
+                        magTop, magBot, logFreq);
+            }
+        });
 
         // ---- Dynamic overlay (drawn live on top of the cached image)
         gc.setAntialias(SWT.ON);
@@ -665,37 +680,6 @@ public final class FftView extends Canvas {
                 && crossY >= plot.y && crossY < plot.y + plot.height
                 && !pointerOverButton(crossX, crossY)) {
             drawCrosshair(gc, plot, r, unit, freqMin, freqMax, magTop, magBot, logFreq);
-        }
-    }
-
-    /** Renders the static layers (background, grid, spectrum, phase,
-     *  axes) into {@link #traceBuffer}.  Called only when the
-     *  fingerprint or canvas size changes — the user's mouse-tracking
-     *  crosshair fires {@link #redraw()} dozens of times per second but
-     *  the fingerprint stays constant so this expensive path is skipped. */
-    private void rebuildTraceBuffer(Rectangle area, Rectangle plot,
-                                    FftAnalyzer.Result r, FftMagnitudeUnit unit,
-                                    double freqMin, double freqMax,
-                                    double magTop, double magBot,
-                                    boolean logFreq) {
-        if (traceBuffer != null && !traceBuffer.isDisposed()) traceBuffer.dispose();
-        traceBuffer = new Image(getDisplay(), Math.max(1, area.width), Math.max(1, area.height));
-        GC bgc = new GC(traceBuffer);
-        try {
-            bgc.setBackground(background);
-            bgc.fillRectangle(0, 0, area.width, area.height);
-            bgc.setAntialias(SWT.ON);
-            bgc.setTextAntialias(SWT.ON);
-            drawGrid(bgc, plot, freqMin, freqMax, magTop, magBot, logFreq, unit);
-            drawDistortionBands(bgc, plot, freqMin, freqMax, logFreq);
-            drawAxes(bgc, plot, freqMin, freqMax, magTop, magBot, logFreq, unit);
-            if (r != null) {
-                drawSpectrum(bgc, plot, r, unit, freqMin, freqMax, magTop, magBot, logFreq);
-                drawHarmonicDots(bgc, plot, r, unit, freqMin, freqMax,
-                        magTop, magBot, logFreq);
-            }
-        } finally {
-            bgc.dispose();
         }
     }
 
@@ -1032,18 +1016,13 @@ public final class FftView extends Canvas {
         int kPrev = Math.max(0,     kFirst - 1);
         int kNext = Math.min(n - 1, kLast  + 1);
 
+        // Column-bucketed polyline rendering — see ColumnBucketPainter
+        // in the shared base.  FFT also tracks one bin JUST outside the
+        // visible range on each side so the polyline reaches the chart
+        // edges; the helper exposes setLeftAnchor / setRightAnchor for
+        // exactly that.
+        ColumnBucketPainter painter = new ColumnBucketPainter(plot);
         int W = plot.width;
-        int[]    yMins = new int[W];
-        int[]    yMaxs = new int[W];
-        int[]    cnts  = new int[W];
-        Arrays.fill(yMins, Integer.MAX_VALUE);
-        Arrays.fill(yMaxs, Integer.MIN_VALUE);
-        // Anchors for bins JUST outside the visible x-range — used to
-        // extend the polyline to the left / right plot edges.  Each
-        // pair is (xUnbounded, yClamped); xUnbounded may be negative
-        // or > W and the line draw routine handles that fine.
-        int leftAnchorX  = Integer.MIN_VALUE, leftAnchorY  = 0;
-        int rightAnchorX = Integer.MIN_VALUE, rightAnchorY = 0;
         for (int k = kPrev; k <= kNext; k++) {
             double f = k * binBw;
             int xAbs = freqToX(f, plot, freqMin, freqMax, logFreq);
@@ -1053,60 +1032,11 @@ public final class FftView extends Canvas {
                     : refDbV;
             double v = unit.convertFromDbFs(r.amplitudeDbFs[k], binRefDbV, binBw);
             int y = magToY(v, plot, magTop, magBot, unit);
-            if (x < 0) {
-                // Keep the right-most "before plot" bin — it becomes
-                // the polyline's left edge anchor.
-                if (xAbs > leftAnchorX) { leftAnchorX = xAbs; leftAnchorY = y; }
-            } else if (x >= W) {
-                // Keep the left-most "after plot" bin — right anchor.
-                if (rightAnchorX == Integer.MIN_VALUE || xAbs < rightAnchorX) {
-                    rightAnchorX = xAbs; rightAnchorY = y;
-                }
-            } else {
-                if (y < yMins[x]) yMins[x] = y;
-                if (y > yMaxs[x]) yMaxs[x] = y;
-                cnts[x]++;
-            }
+            if (x < 0)         painter.setLeftAnchor(xAbs, y);
+            else if (x >= W)   painter.setRightAnchor(xAbs, y);
+            else               painter.add(xAbs, y);
         }
-        // Clip the rest of the drawing to the plot rectangle so the
-        // polyline segments that anchor on bins JUST outside the
-        // visible x-range (used to make the trace reach plot.x /
-        // plot.x + width) don't draw past the chart border.  Vertical
-        // envelope bars already live inside the plot, so the clip is
-        // a no-op for them.
-        Rectangle prevClip = gc.getClipping();
-        gc.setClipping(plot);
-        try {
-            // First pass: vertical bars for columns that collapse multiple bins
-            // into one pixel (envelope behaviour for zoomed-out views).
-            for (int x = 0; x < W; x++) {
-                if (cnts[x] == 0) continue;
-                if (yMins[x] != yMaxs[x]) {
-                    int px = plot.x + x;
-                    gc.drawLine(px, yMins[x], px, yMaxs[x]);
-                }
-            }
-            // Second pass: polyline through known column centres — gaps
-            // between sparse bins (zoomed-in view, log axis at low freq)
-            // get bridged so the trace looks continuous.  Left / right
-            // anchors are prepended / appended so the polyline reaches
-            // plot.x and plot.x + plot.width; the GC clip above hides
-            // the portion of each anchor line that sits past the edge.
-            int prevX = leftAnchorX, prevY = leftAnchorY;
-            for (int x = 0; x < W; x++) {
-                if (cnts[x] == 0) continue;
-                int midY = (yMins[x] + yMaxs[x]) >>> 1;
-                int px = plot.x + x;
-                if (prevX != Integer.MIN_VALUE) gc.drawLine(prevX, prevY, px, midY);
-                prevX = px;
-                prevY = midY;
-            }
-            if (rightAnchorX != Integer.MIN_VALUE && prevX != Integer.MIN_VALUE) {
-                gc.drawLine(prevX, prevY, rightAnchorX, rightAnchorY);
-            }
-        } finally {
-            gc.setClipping(prevClip);
-        }
+        painter.drawTo(gc);
     }
 
     // =========================================================================
@@ -1171,15 +1101,11 @@ public final class FftView extends Canvas {
 
     /** Returns true when {@code (px, py)} lies inside any header button —
      *  caller uses this to suppress the crosshair / floating readout so
-     *  they don't visually fight with the button icons. */
+     *  they don't visually fight with the button icons.  Delegates to
+     *  the shared {@link #hotspotAt} so any new button registered in
+     *  the constructor is picked up automatically. */
     private boolean pointerOverButton(int px, int py) {
-        return leftChanButtonBounds  .contains(px, py)
-            || rightChanButtonBounds .contains(px, py)
-            || autoSetupButtonBounds .contains(px, py)
-            || maximizeButtonBounds  .contains(px, py)
-            || distortionButtonBounds.contains(px, py)
-            || resetButtonBounds     .contains(px, py)
-            || externalButtonBounds  .contains(px, py);
+        return hotspotAt(px, py) != null;
     }
 
     private void drawChannelButton(GC gc, int x, int y, int w, int h,
@@ -1202,28 +1128,19 @@ public final class FftView extends Canvas {
         if (on) {
             gc.setBackground(buttonFrameColor);
             gc.fillRoundRectangle(x, y, w, h, 4, 4);
-            Image icon = (darkIcon != null) ? darkIcon : lightIcon;
-            if (icon != null) {
-                Rectangle ib = icon.getBounds();
-                gc.drawImage(icon, x + (w - ib.width) / 2, y + (h - ib.height) / 2);
-            }
+            drawCenteredIcon(gc, (darkIcon != null) ? darkIcon : lightIcon, x, y, w, h);
         } else {
             gc.setForeground(buttonFrameColor);
             gc.drawRoundRectangle(x, y, w, h, 4, 4);
-            if (lightIcon != null) {
-                Rectangle ib = lightIcon.getBounds();
-                gc.drawImage(lightIcon, x + (w - ib.width) / 2, y + (h - ib.height) / 2);
-            }
+            drawCenteredIcon(gc, lightIcon, x, y, w, h);
         }
     }
 
     private void drawIconPushButton(GC gc, int x, int y, int w, int h, Image icon) {
-        if (icon == null) return;
-        Rectangle ib = icon.getBounds();
-        gc.drawImage(icon, x + (w - ib.width) / 2, y + (h - ib.height) / 2);
+        drawCenteredIcon(gc, icon, x, y, w, h);
     }
 
-    private static void setBounds(Rectangle r, int x, int y, int w, int h) {
+    private void setBounds(Rectangle r, int x, int y, int w, int h) {
         r.x = x; r.y = y; r.width = w; r.height = h;
     }
 
@@ -1298,7 +1215,7 @@ public final class FftView extends Canvas {
                 // Using the raw value here would make ΔF report the
                 // entire snap residual as a clock drift, which is
                 // misleading.
-                double expected = GeneratorController.snapToFftBinIfEnabled(
+                double expected = FftBinSnap.snapIfEnabled(
                         prefs, GenSignalForm.SINE,
                         r.sampleRate,
                         prefs.getGenFrequencyHz());
@@ -1391,10 +1308,10 @@ public final class FftView extends Canvas {
      *  {@code rightColX}, and the right value at
      *  {@code rightColX + rKeyW}.  An empty right key skips the
      *  right column. */
-    private static void drawKv(GC gc, int x, int y, int lKeyW,
-                               String lKey, String lVal,
-                               int rightColX, int rKeyW,
-                               String rKey, String rVal) {
+    private void drawKv(GC gc, int x, int y, int lKeyW,
+                        String lKey, String lVal,
+                        int rightColX, int rKeyW,
+                        String rKey, String rVal) {
         gc.drawText(lKey, x, y, true);
         gc.drawText(lVal, x + lKeyW, y, true);
         if (rKey != null && !rKey.isEmpty()) {
@@ -1409,7 +1326,7 @@ public final class FftView extends Canvas {
      *  "full" rather than the misleading {@code "Span: 0 .. 0 Hz"}.
      *  Otherwise fall back to the actual numeric bounds, treating zero
      *  on one side as "0" or "Nyquist" as appropriate. */
-    private static String formatSpan(FftAnalyzer.Result r) {
+    private String formatSpan(FftAnalyzer.Result r) {
         boolean hasLo = r.snrFreqMin > 0;
         boolean hasHi = r.snrFreqMax > 0;
         if (!hasLo && !hasHi) return "Span: full";
@@ -1422,21 +1339,21 @@ public final class FftView extends Canvas {
      *  its top at {@code y} using the current GC font.  Centring is
      *  done via {@link GC#textExtent} so it respects the active font
      *  (mono / mono-bold) — callers don't have to pre-measure. */
-    private static void drawCentred(GC gc, String text, int centreX, int y) {
+    private void drawCentred(GC gc, String text, int centreX, int y) {
         Point ext = gc.textExtent(text);
         gc.drawText(text, centreX - ext.x / 2, y, true);
     }
 
-    private static String fmtDb(double v) {
+    private String fmtDb(double v) {
         return Double.isFinite(v) ? String.format("%7.2f dBV", v) : "—";
     }
 
-    private static double noiseDb(FftAnalyzer.Result r) {
+    private double noiseDb(FftAnalyzer.Result r) {
         if (r.noisePower <= 0 || !Double.isFinite(r.fundRefDbV)) return Double.NaN;
         return 10 * Math.log10(r.noisePower) + (r.fundRefDbV - r.fundamentalDbFs);
     }
 
-    private static double thdNPct(FftAnalyzer.Result r) {
+    private double thdNPct(FftAnalyzer.Result r) {
         if (!Double.isFinite(r.thdNDb)) return Double.NaN;
         return Math.pow(10, r.thdNDb / 20.0) * 100;
     }
@@ -1481,19 +1398,8 @@ public final class FftView extends Canvas {
                 sb.append('\n').append("|m| = ").append(FftFormat.formatMagnitude(v, unit));
             }
         }
-        String text = sb.toString();
-        gc.setFont(monoFont);
-        Point ext = gc.textExtent(text);
-        int boxX = crossX + 12;
-        int boxY = crossY + 12;
-        if (boxX + ext.x + 8 > plot.x + plot.width)  boxX = crossX - ext.x - 16;
-        if (boxY + ext.y + 6 > plot.y + plot.height) boxY = crossY - ext.y - 18;
-        gc.setBackground(overlayBgColor);
-        gc.fillRectangle(boxX, boxY, ext.x + 8, ext.y + 6);
-        gc.setForeground(buttonFrameColor);
-        gc.drawRectangle(boxX, boxY, ext.x + 8, ext.y + 6);
-        gc.setForeground(textColor);
-        gc.drawText(text, boxX + 4, boxY + 3, true);
+        drawReadoutBox(gc, sb.toString(), crossX + 12, crossY + 12, plot,
+                monoFont, overlayBgColor, buttonFrameColor, textColor);
     }
 
     // =========================================================================
@@ -1623,37 +1529,11 @@ public final class FftView extends Canvas {
 
     private void onMouseDown(MouseEvent ev) {
         if (ev.button != 1) return;
-        Preferences prefs = Preferences.instance();
-        if (leftChanButtonBounds.contains(ev.x, ev.y)) {
-            prefs.setFftChannel(Channel.L); prefs.save(); redraw(); return;
-        }
-        if (rightChanButtonBounds.contains(ev.x, ev.y)) {
-            prefs.setFftChannel(Channel.R); prefs.save(); redraw(); return;
-        }
-        if (autoSetupButtonBounds.contains(ev.x, ev.y)) {
-            autoSetup();
-            return;
-        }
-        if (maximizeButtonBounds.contains(ev.x, ev.y)) {
-            maximize();
-            return;
-        }
-        if (distortionButtonBounds.contains(ev.x, ev.y)) {
-            prefs.setFftDistortionTableVisible(!prefs.isFftDistortionTableVisible());
-            prefs.save();
-            syncExternalShell();
-            redraw();
-            return;
-        }
-        if (externalButtonBounds.contains(ev.x, ev.y)) {
-            setTableExtracted(!tableExtracted);
-            return;
-        }
-        if (resetButtonBounds.contains(ev.x, ev.y)) {
-            resetStatistics();
-            redraw();
-            return;
-        }
+        // All header-row buttons (L/R, Auto-Setup, Maximize, Distortion,
+        // External, Reset) are registered as Hotspots with the shared
+        // base — dispatch them through the registry.
+        Hotspot hot = hotspotAt(ev.x, ev.y);
+        if (hot != null) hot.onClick.run();
     }
 
     /**
@@ -1804,7 +1684,7 @@ public final class FftView extends Canvas {
      *  Matches {@link org.edgo.audio.measure.gui.fft.FftPane}'s clamp
      *  logic so the pan-step clip here lines up exactly with the
      *  post-pan clamp the pane applies. */
-    private static double[] magLimits(FftMagnitudeUnit unit, double adcFsVrms) {
+    private double[] magLimits(FftMagnitudeUnit unit, double adcFsVrms) {
         double fs = (adcFsVrms > 0) ? adcFsVrms : 1.0;
         switch (unit) {
             case DBFS:
@@ -1913,34 +1793,10 @@ public final class FftView extends Canvas {
     // Coordinate / formatting helpers
     // =========================================================================
 
-    private int freqToX(double f, Rectangle plot, double freqMin, double freqMax, boolean logFreq) {
-        if (logFreq) {
-            // Both bounds compared / logged in linear Hz space.  The
-            // earlier version mixed log10(freqMin) with raw freqMax
-            // inside Math.max, which silently inverted the range when
-            // freqMax was small.
-            double safeMin = Math.max(1, freqMin);
-            double safeMax = Math.max(safeMin + 1, freqMax);
-            double lo = Math.log10(safeMin);
-            double hi = Math.log10(safeMax);
-            double t  = (Math.log10(Math.max(1, f)) - lo) / (hi - lo);
-            return plot.x + (int) Math.round(t * plot.width);
-        }
-        double t = (f - freqMin) / (freqMax - freqMin);
-        return plot.x + (int) Math.round(t * plot.width);
-    }
-
-    private double xToFreq(int x, Rectangle plot, double freqMin, double freqMax, boolean logFreq) {
-        double t = (double) (x - plot.x) / plot.width;
-        if (logFreq) {
-            double safeMin = Math.max(1, freqMin);
-            double safeMax = Math.max(safeMin + 1, freqMax);
-            double lo = Math.log10(safeMin);
-            double hi = Math.log10(safeMax);
-            return Math.pow(10, lo + t * (hi - lo));
-        }
-        return freqMin + t * (freqMax - freqMin);
-    }
+    // freqToX / xToFreq live on the shared AbstractFreqDomainView base
+    // (same body, same idiom); the magToY below stays per-view because
+    // it routes through FftFormat.magToYFraction for unit-aware (V /
+    // V/sqrt(Hz) / dBFS / dBV) scaling that FreqResp doesn't need.
 
     private int magToY(double v, Rectangle plot, double top, double bot, FftMagnitudeUnit unit) {
         double t = FftFormat.magToYFraction(v, top, bot, unit);

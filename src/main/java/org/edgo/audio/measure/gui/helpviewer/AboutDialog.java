@@ -1,5 +1,6 @@
 package org.edgo.audio.measure.gui.helpviewer;
 
+import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.layout.GridData;
@@ -18,11 +19,10 @@ import org.edgo.audio.measure.gui.i18n.I18n;
  * returning to the main UI.
  */
 @Log4j2
-public final class AboutDialog {
+@UtilityClass
+public class AboutDialog {
 
-    private AboutDialog() {}
-
-    public static void show(Shell parent) {
+    public void show(Shell parent) {
         Shell s = new Shell(parent, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL);
         s.setText(I18n.t("help.about.title"));
         GridLayout gl = new GridLayout(1, false);
@@ -30,7 +30,7 @@ public final class AboutDialog {
         s.setLayout(gl);
 
         Label name = new Label(s, SWT.NONE);
-        name.setText("Phonalyser " + appVersion());
+        name.setText("Phonalyser " + Versions.appVersion());
         name.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, true, false));
 
         Label tagline = new Label(s, SWT.NONE);
@@ -57,12 +57,5 @@ public final class AboutDialog {
         s.setDefaultButton(close);
         s.pack();
         s.open();
-    }
-
-    /** Reads the app version from the manifest if present, falling back
-     *  to "dev" when running outside a packaged JAR. */
-    private static String appVersion() {
-        String v = AboutDialog.class.getPackage().getImplementationVersion();
-        return (v == null || v.isEmpty()) ? "dev" : v;
     }
 }
