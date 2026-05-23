@@ -137,6 +137,7 @@ public final class FftAnalyzerWorker {
         this.onResultReady = onResultReady;
         analyzer.setFrameCache(frameFftCacheImpl);
         MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnEvent);
+        MessageBus.instance().subscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
     }
 
     // ─── External wiring ────────────────────────────────────────────────────
@@ -185,6 +186,7 @@ public final class FftAnalyzerWorker {
             worker = null;
         }
         MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnEvent);
+        MessageBus.instance().unsubscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
         synchronized (frameCacheLock) { frameCacheMap.clear(); }
     }
 
