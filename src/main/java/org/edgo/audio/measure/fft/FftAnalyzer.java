@@ -52,6 +52,72 @@ public class FftAnalyzer {
         return cachedWindow;
     }
 
+    // =========================================================================
+    // Per-frame FFT cache (optional; populated by the caller)
+    // =========================================================================
+
+    /** Optional per-frame raw windowed-FFT cache.  The caller (typically
+     *  the GUI worker) provides an implementation keyed by absolute
+     *  sample-start position; the analyser consults it before every
+     *  per-frame FFT and stores fresh results back.  This avoids
+     *  re-FFT-ing the same raw frame across overlapping sliding-window
+     *  ticks (the dominant cost at large fftSize × N). */
+    public interface FrameFftCache {
+        /** If a cached result exists for {@code (absStart, fftSize)},
+         *  copy its real and imaginary parts into {@code outRe} /
+         *  {@code outIm} (length = fftSize) and return {@code true}.
+         *  Otherwise return {@code false}. */
+        boolean tryFill(long absStart, int fftSize, double[] outRe, double[] outIm);
+
+        /** Stores a copy of {@code (re, im)} (length = fftSize) for the
+         *  key {@code (absStart, fftSize)}.  The cache MUST copy — the
+         *  caller reuses the input arrays. */
+        void put(long absStart, int fftSize, double[] re, double[] im);
+    }
+
+    /** Cache instance to consult during {@link #analyze}; {@code null}
+     *  disables caching (CLI default).  Set by the caller via
+     *  {@link #setFrameCache}; copied into a local at the top of
+     *  {@code analyze} so changes mid-call have no effect. */
+    private FrameFftCache frameCache;
+    /** Absolute sample-start position of {@code samples[0]} in the
+     *  caller's stream, used to key the cache.  Only meaningful when
+     *  {@link #frameCache} is non-null. */
+    private long samplesAbsStart;
+
+    /** Wires (or clears) the per-frame FFT cache.  Call with
+     *  {@code null} to disable caching for the next {@code analyze}. */
+    public void setFrameCache(FrameFftCache cache) {
+        this.frameCache = cache;
+    }
+
+    /** Sets the absolute sample-start position of the next
+     *  {@code analyze} call's {@code samples[0]}.  Used as the cache
+     *  key offset.  Ignored when {@link #frameCache} is null. */
+    public void setSamplesAbsStart(long absStart) {
+        this.samplesAbsStart = absStart;
+    }
+
+    /** Tries the cache for the windowed FFT of the frame starting at
+     *  local sample offset {@code localStart}.  On miss, windows +
+     *  FFTs from {@code samples} and stores the result.  Always leaves
+     *  {@code re} / {@code im} populated with the result. */
+    private void cachedFrameFft(float[] samples, int localStart, int fftSize,
+                                double[] window, double[] re, double[] im) {
+        long absStart = samplesAbsStart + localStart;
+        if (frameCache != null && frameCache.tryFill(absStart, fftSize, re, im)) {
+            return;
+        }
+        for (int n = 0; n < fftSize; n++) {
+            re[n] = samples[localStart + n] * window[n];
+            im[n] = 0.0;
+        }
+        Fft.forward(re, im);
+        if (frameCache != null) {
+            frameCache.put(absStart, fftSize, re, im);
+        }
+    }
+
 
     // =========================================================================
     // Result
@@ -337,10 +403,7 @@ public class FftAnalyzer {
         //     slew threshold — final kFractional is re-estimated post-rejection)
         double[] f0Re = new double[fftSize];
         double[] f0Im = new double[fftSize];
-        for (int n = 0; n < fftSize; n++) {
-            f0Re[n] = samples[n] * window[n];
-        }
-        Fft.forward(f0Re, f0Im);
+        cachedFrameFft(samples, 0, fftSize, window, f0Re, f0Im);
         // Skip the DC + ULF zone below 10 Hz when searching for the fundamental:
         // window leakage from a residual DC offset can populate bin 1 at roughly
         // -32 dB (Hann) below DC level, easily beating a deeply notched
@@ -603,10 +666,7 @@ public class FftAnalyzer {
         int    segBaseSample = bestStart * step;
         double[] s0Re = new double[fftSize];
         double[] s0Im = new double[fftSize];
-        for (int n = 0; n < fftSize; n++) {
-            s0Re[n] = samples[segBaseSample + n] * window[n];
-        }
-        Fft.forward(s0Re, s0Im);
+        cachedFrameFft(samples, segBaseSample, fftSize, window, s0Re, s0Im);
         // refine intFundBin within ±2 bins of the pre-pass estimate (in case of drift)
         int refIntBin = peakBin(s0Re, s0Im,
                 Math.max(1, intFundBin - 2),
@@ -616,10 +676,7 @@ public class FftAnalyzer {
             int    estStep = step > 0 ? step : fftSize;
             double[] s1Re = new double[fftSize];
             double[] s1Im = new double[fftSize];
-            for (int n = 0; n < fftSize; n++) {
-                s1Re[n] = samples[segBaseSample + estStep + n] * window[n];
-            }
-            Fft.forward(s1Re, s1Im);
+            cachedFrameFft(samples, segBaseSample + estStep, fftSize, window, s1Re, s1Im);
             double phi0 = Math.atan2(s0Im[refIntBin], s0Re[refIntBin]);
             double phi1 = Math.atan2(s1Im[refIntBin], s1Re[refIntBin]);
             double expectedDiff = 2.0 * Math.PI * refIntBin * estStep / (double) fftSize;
@@ -645,11 +702,7 @@ public class FftAnalyzer {
         int acceptedFrames = 0;
         for (int f = bestStart; f < bestStart + bestLen; f++) {
             int base = f * step;
-            for (int n = 0; n < fftSize; n++) {
-                frameRe[n] = samples[base + n] * window[n];
-                frameIm[n] = 0.0;
-            }
-            Fft.forward(frameRe, frameIm);
+            cachedFrameFft(samples, base, fftSize, window, frameRe, frameIm);
             if (coherentAveraging) {
                 // DFT time-shift theorem: frame f starting at sample f·step imparts phase
                 //   exp(+j · 2π · k_f · f · step / N)
@@ -710,11 +763,7 @@ public class FftAnalyzer {
                     // Re-FFT the rejected frame and subtract its corrected spectrum
                     int f    = bestStart + i;
                     int base = f * step;
-                    for (int n = 0; n < fftSize; n++) {
-                        frameRe[n] = samples[base + n] * window[n];
-                        frameIm[n] = 0.0;
-                    }
-                    Fft.forward(frameRe, frameIm);
+                    cachedFrameFft(samples, base, fftSize, window, frameRe, frameIm);
                     double baseAngle  = -2.0 * Math.PI * (long) f * step * kFractional
                                         / ((double) fftSize * intFundBinRounded);
                     double cosBase = Math.cos(baseAngle);

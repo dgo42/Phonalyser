@@ -454,6 +454,7 @@ public final class GeneratorPane {
             prefs.save();
             // Live-apply if running.
             controller.setAmplitudeVrms(vrms);
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED);
         });
 
         // ----- Duty cycle (RECTANGLE or TRIANGLE) -----------------------
@@ -985,6 +986,7 @@ public final class GeneratorPane {
         Preferences.instance().setGenFrequencyHz(freqField.getValue());
         Preferences.instance().save();
         controller.setFrequency(effectiveGeneratorFrequency());
+        MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED);
     }
 
     /** Re-applies the FFT-bin snap to the current frequency.  Invoked

@@ -57,6 +57,12 @@ public final class Events {
      *  {@code null} when no responder is registered. */
     public static final String GENERATOR_RUNNING = "generator.running";
 
+    /** Notification — a generator signal parameter (frequency, amplitude,
+     *  waveform, …) changed.  No payload; subscribers that cache results
+     *  derived from the generated signal (e.g. the FFT worker's per-frame
+     *  raw-FFT cache) treat this as "drop everything; restart". */
+    public static final String GENERATOR_SIGNAL_CHANGED = "generator.signal.changed";
+
     /** Notification — the FFT view's visible freq / magnitude pan
      *  window changed (mouse-wheel zoom, drag, auto-setup, maximize).
      *  No payload — subscribers (the FFT pane's scrollbars) read the

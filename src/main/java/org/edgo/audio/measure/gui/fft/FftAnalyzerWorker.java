@@ -1,5 +1,7 @@
 package org.edgo.audio.measure.gui.fft;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.swt.widgets.Display;
@@ -63,6 +65,55 @@ public final class FftAnalyzerWorker {
     private float[] reusableRightBuf = new float[0];
     private Thread worker;
 
+    // ─── Per-frame FFT cache (perf) ─────────────────────────────────────────
+    /** Shared monitor for all {@link #frameCacheMap} access — the cache is
+     *  written/read on the worker thread but cleared from arbitrary
+     *  threads (event subscriptions, {@link #resetStatistics}). */
+    private final Object frameCacheLock = new Object();
+    /** Position-keyed cache of raw windowed FFT results (re[], im[]) for
+     *  individual frames.  Lets each tick FFT only the genuinely-new
+     *  frame instead of re-FFT-ing all N frames in the sliding window. */
+    private final LinkedHashMap<Long, double[][]> frameCacheMap =
+            new LinkedHashMap<Long, double[][]>(64, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<Long, double[][]> eldest) {
+            return size() > frameCacheCap;
+        }
+    };
+    /** Current cap on cached frames — scaled to 2× the configured
+     *  averaging count so the entire sliding window fits with slack. */
+    private volatile int frameCacheCap = 16;
+    /** Fingerprint of (fftSize, window, channel, sampleRate) at the time
+     *  the cache was last known to be coherent.  Mismatch ⇒ clear. */
+    private volatile long frameCacheFingerprint = Long.MIN_VALUE;
+    /** Event-bus callback that clears the cache + flushes the spectrum.
+     *  Subscribed in the constructor; unsubscribed in {@link #stop}. */
+    private final Runnable invalidateOnEvent = this::resetStatistics;
+    /** Cache adapter passed to {@link FftAnalyzer#setFrameCache}; backed
+     *  by {@link #frameCacheMap} under {@link #frameCacheLock}. */
+    private final FftAnalyzer.FrameFftCache frameFftCacheImpl =
+            new FftAnalyzer.FrameFftCache() {
+        @Override
+        public boolean tryFill(long absStart, int fftSize,
+                               double[] outRe, double[] outIm) {
+            double[][] hit;
+            synchronized (frameCacheLock) {
+                hit = frameCacheMap.get(absStart);
+            }
+            if (hit == null || hit[0].length != fftSize) return false;
+            System.arraycopy(hit[0], 0, outRe, 0, fftSize);
+            System.arraycopy(hit[1], 0, outIm, 0, fftSize);
+            return true;
+        }
+        @Override
+        public void put(long absStart, int fftSize, double[] re, double[] im) {
+            double[][] copy = { re.clone(), im.clone() };
+            synchronized (frameCacheLock) {
+                frameCacheMap.put(absStart, copy);
+            }
+        }
+    };
+
     /**
      * @param display       SWT display used to marshal redraw / event
      *                      publish hops back to the UI thread.
@@ -73,6 +124,8 @@ public final class FftAnalyzerWorker {
     public FftAnalyzerWorker(Display display, Runnable onResultReady) {
         this.display       = display;
         this.onResultReady = onResultReady;
+        analyzer.setFrameCache(frameFftCacheImpl);
+        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnEvent);
     }
 
     // ─── External wiring ────────────────────────────────────────────────────
@@ -115,6 +168,8 @@ public final class FftAnalyzerWorker {
             worker.interrupt();
             worker = null;
         }
+        MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnEvent);
+        synchronized (frameCacheLock) { frameCacheMap.clear(); }
     }
 
     /** Clears the completed-analyses counter, drops the retained
@@ -128,6 +183,7 @@ public final class FftAnalyzerWorker {
         firstFrameDone        = false;
         lastAnalysisWritePos  = -1;
         startWritePos         = -1;
+        synchronized (frameCacheLock) { frameCacheMap.clear(); }
     }
 
     // ─── Status queries ─────────────────────────────────────────────────────
@@ -271,8 +327,26 @@ public final class FftAnalyzerWorker {
             if (reusableRightBuf.length != needed) reusableRightBuf = new float[needed];
             rightBuf = reusableRightBuf;
         }
-        int got = buf.readLatest(needed, leftBuf, rightBuf);
+        // readEndingAt (not readLatest) so the samples returned have a
+        // deterministic absolute end position == writePos snapshotted
+        // above.  This makes samplesAbsStart = writePos − got, which the
+        // FrameFftCache uses as a stable key across ticks.
+        int got = buf.readEndingAt(writePos, needed, leftBuf, rightBuf);
         if (got < fftLength) return IDLE_TICK_MS;
+        long samplesAbsStart = writePos - got;
+
+        // Cache invalidation: any change to fftLength / window / channel /
+        // sampleRate makes previously cached raw FFTs stale.  Clear and
+        // re-fingerprint before handing the cache to the analyzer.
+        long cfgFingerprint = fftLength;
+        cfgFingerprint = 31 * cfgFingerprint + sampleRate;
+        cfgFingerprint = 31 * cfgFingerprint + window.ordinal();
+        cfgFingerprint = 31 * cfgFingerprint + (wantLeft ? 1 : 0);
+        if (cfgFingerprint != frameCacheFingerprint) {
+            synchronized (frameCacheLock) { frameCacheMap.clear(); }
+            frameCacheFingerprint = cfgFingerprint;
+        }
+        frameCacheCap = Math.max(8, 2 * averages);
 
         float[] samples = wantLeft ? leftBuf : rightBuf;
         if (got < samples.length) {
@@ -291,6 +365,7 @@ public final class FftAnalyzerWorker {
                 ? Preferences.instance().getGenFrequencyHz()
                 : Double.NaN;
 
+        analyzer.setSamplesAbsStart(samplesAbsStart);
         FftAnalyzer.Result r;
         try {
             r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH,
