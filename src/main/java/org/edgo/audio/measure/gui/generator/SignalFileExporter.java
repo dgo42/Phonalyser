@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.util.Locale;
 import java.util.Random;
 
+import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 
 import org.edgo.audio.measure.generator.SignalGenerator;
@@ -28,22 +29,21 @@ import org.edgo.audio.measure.gui.interfaces.PcmSink;
  * the requested duration as-is.
  */
 @Log4j2
-public final class SignalFileExporter {
+@UtilityClass
+public class SignalFileExporter {
 
-    private static final int CHANNELS      = 2;
-    private static final int BUFFER_FRAMES = 4096;
-
-    private SignalFileExporter() {}
+    private final int CHANNELS      = 2;
+    private final int BUFFER_FRAMES = 4096;
 
     /**
      * @param signalFrequencyHz pass &gt; 0 for periodic forms (file is
      *        truncated to an integer multiple of the period); pass 0 / NaN
      *        for noise / sweep where there's no period to align to.
      */
-    public static long export(SignalGenerator generator, File outFile,
-                              int sampleRate, int bitDepth,
-                              double durationSeconds, int ditherBits,
-                              double signalFrequencyHz) throws IOException {
+    public long export(SignalGenerator generator, File outFile,
+                       int sampleRate, int bitDepth,
+                       double durationSeconds, int ditherBits,
+                       double signalFrequencyHz) throws IOException {
         long requestedFrames = Math.max(1, Math.round(durationSeconds * sampleRate));
         long totalFrames = truncateToFullPeriods(requestedFrames, sampleRate, signalFrequencyHz);
 
@@ -74,7 +74,7 @@ public final class SignalFileExporter {
     }
 
     /** Snaps {@code requested} down to the largest multiple of one signal period. */
-    private static long truncateToFullPeriods(long requested, int sampleRate, double freqHz) {
+    private long truncateToFullPeriods(long requested, int sampleRate, double freqHz) {
         if (!(freqHz > 0.0) || sampleRate <= 0) return requested;
         long period = Math.max(1, Math.round(sampleRate / freqHz));
         long n = (requested / period) * period;
@@ -82,7 +82,7 @@ public final class SignalFileExporter {
     }
 
 
-    private static PcmSink openSink(AudioFileFormat fmt, File outFile, int sampleRate, int bitDepth)
+    private PcmSink openSink(AudioFileFormat fmt, File outFile, int sampleRate, int bitDepth)
             throws IOException {
         switch (fmt) {
             case FLAC: {
@@ -115,8 +115,8 @@ public final class SignalFileExporter {
      * so a saved file equals the bytes that would have been streamed to
      * the DAC.  Stereo: both channels get the same sample.
      */
-    private static void fillBuffer(SignalGenerator gen, byte[] buf, int frames,
-                                   int bitDepth, int ditherBits, Random rng) {
+    private void fillBuffer(SignalGenerator gen, byte[] buf, int frames,
+                            int bitDepth, int ditherBits, Random rng) {
         int bytesPerSample = bitDepth / 8;
         int bytesPerFrame  = bytesPerSample * CHANNELS;
         if (bitDepth == 8) {
@@ -145,12 +145,12 @@ public final class SignalFileExporter {
         }
     }
 
-    private static double tpdfNoise(int ditherBits, Random rng) {
+    private double tpdfNoise(int ditherBits, Random rng) {
         if (ditherBits == 0 || rng == null) return 0.0;
         return (rng.nextDouble() - rng.nextDouble()) / (1L << (ditherBits - 1));
     }
 
-    private static double clamp(double v) {
+    private double clamp(double v) {
         if (v >  1.0) return  1.0;
         if (v < -1.0) return -1.0;
         return v;

@@ -39,20 +39,34 @@ public final class SignalFormIcon {
      *  prevents the glyph from visually overlapping the row's top border. */
     private static final int DROPDOWN_TOP_PAD = 2;
 
-    private static final Map<Display, Map<GenSignalForm, Image>> CACHES =
-            new HashMap<>();
-    private static final Map<Display, Map<GenSignalForm, Image>> DROPDOWN_CACHES =
-            new HashMap<>();
+    private final Map<Display, Map<GenSignalForm, Image>> caches         = new HashMap<>();
+    private final Map<Display, Map<GenSignalForm, Image>> dropdownCaches = new HashMap<>();
+
+    private static volatile SignalFormIcon instance;
 
     private SignalFormIcon() {}
+
+    public static SignalFormIcon instance() {
+        SignalFormIcon local = instance;
+        if (local == null) {
+            synchronized (SignalFormIcon.class) {
+                local = instance;
+                if (local == null) {
+                    local = new SignalFormIcon();
+                    instance = local;
+                }
+            }
+        }
+        return local;
+    }
 
     /**
      * Returns the cached pictogram for {@code form} on {@code display},
      * rendering it on first request.  All icons are 24×24, line-art style,
      * with the foreground colour set to {@link SWT#COLOR_WIDGET_FOREGROUND}.
      */
-    public static synchronized Image get(Display display, GenSignalForm form) {
-        Map<GenSignalForm, Image> cache = CACHES.computeIfAbsent(display,
+    public synchronized Image get(Display display, GenSignalForm form) {
+        Map<GenSignalForm, Image> cache = caches.computeIfAbsent(display,
                 d -> new EnumMap<>(GenSignalForm.class));
         return cache.computeIfAbsent(form, f -> render(display, f, 0));
     }
@@ -61,21 +75,21 @@ public final class SignalFormIcon {
      * Like {@link #get} but with a couple of pixels of transparent padding
      * at the top, so the glyph clears the dropdown row's top border.
      */
-    public static synchronized Image getForDropdown(Display display, GenSignalForm form) {
-        Map<GenSignalForm, Image> cache = DROPDOWN_CACHES.computeIfAbsent(display,
+    public synchronized Image getForDropdown(Display display, GenSignalForm form) {
+        Map<GenSignalForm, Image> cache = dropdownCaches.computeIfAbsent(display,
                 d -> new EnumMap<>(GenSignalForm.class));
         return cache.computeIfAbsent(form, f -> render(display, f, DROPDOWN_TOP_PAD));
     }
 
     /** Disposes all cached icons for {@code display}; safe to call multiple times. */
-    public static synchronized void disposeAll(Display display) {
-        Map<GenSignalForm, Image> cache = CACHES.remove(display);
+    public synchronized void disposeAll(Display display) {
+        Map<GenSignalForm, Image> cache = caches.remove(display);
         if (cache != null) {
             for (Image img : cache.values()) {
                 if (img != null && !img.isDisposed()) img.dispose();
             }
         }
-        Map<GenSignalForm, Image> dropCache = DROPDOWN_CACHES.remove(display);
+        Map<GenSignalForm, Image> dropCache = dropdownCaches.remove(display);
         if (dropCache != null) {
             for (Image img : dropCache.values()) {
                 if (img != null && !img.isDisposed()) img.dispose();
@@ -83,7 +97,7 @@ public final class SignalFormIcon {
         }
     }
 
-    private static Image render(Display display, GenSignalForm form, int topPad) {
+    private Image render(Display display, GenSignalForm form, int topPad) {
         // 32-bit ARGB image started fully transparent — only the strokes
         // we paint pick up alpha=255, untouched pixels stay alpha=0.  This
         // is what makes the dropdown rows read on any background colour
@@ -134,7 +148,7 @@ public final class SignalFormIcon {
     // Individual pictograms — each fills a 24×24 cell with ~3 px insets.
     // -------------------------------------------------------------------------
 
-    private static void drawSine(GC gc, boolean compensated) {
+    private void drawSine(GC gc, boolean compensated) {
         Path p = new Path(gc.getDevice());
         try {
             int steps = 40;
@@ -156,7 +170,7 @@ public final class SignalFormIcon {
         }
     }
 
-    private static void drawRectangle(GC gc) {
+    private void drawRectangle(GC gc) {
         // Two square-wave cycles, 50 % duty.  Vertical edges + horizontal
         // tops + horizontal bottoms.
         gc.drawLine(2,  4,   8,  4);
@@ -168,7 +182,7 @@ public final class SignalFormIcon {
         gc.drawLine(20, 20, 22, 20);
     }
 
-    private static void drawTriangle(GC gc) {
+    private void drawTriangle(GC gc) {
         // Two triangle waves across the cell.
         int[] xs = { 2, 7, 12, 17, 22 };
         int[] ys = {20, 4, 20,  4, 20 };
@@ -177,7 +191,7 @@ public final class SignalFormIcon {
         }
     }
 
-    private static void drawNoise(GC gc, int seed, int variant) {
+    private void drawNoise(GC gc, int seed, int variant) {
         // Random-looking scatter, deterministic per variant so each noise
         // form has a distinct fingerprint.
         Random rng = new Random(seed);
@@ -193,7 +207,7 @@ public final class SignalFormIcon {
         }
     }
 
-    private static void drawSweep(GC gc, boolean logarithmic) {
+    private void drawSweep(GC gc, boolean logarithmic) {
         // Frequency rises across the cell — period shrinks left→right.
         Path p = new Path(gc.getDevice());
         try {

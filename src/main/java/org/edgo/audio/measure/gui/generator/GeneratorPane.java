@@ -62,7 +62,7 @@ public final class GeneratorPane {
      * 0 is rendered as "Off" in the combo; values above the DAC's
      * resolution would have no effect and are dropped.
      */
-    private static int[] ditherBitsFor(int outputBitDepth) {
+    private int[] ditherBitsFor(int outputBitDepth) {
         int cap = Math.max(0, outputBitDepth);
         int[] out = new int[cap + 1];
         for (int i = 0; i <= cap; i++) out[i] = i;
@@ -143,6 +143,12 @@ public final class GeneratorPane {
      *  loop, or playback error) — resets the play-from LED on the UI
      *  thread.  Held as a field so the dispose listener can unsubscribe. */
     private Runnable filePlayStoppedListener;
+    /** Handler for {@link Events#FREQRESP_MEASUREMENT_STARTED} — stops
+     *  the running generator (DDS tone + file player) and disables both
+     *  play buttons so the FreqResp sweep can drive the DAC exclusively. */
+    private Runnable freqRespStartedListener;
+    /** Counterpart that re-enables both play buttons after the sweep. */
+    private Runnable freqRespStoppedListener;
 
     public GeneratorPane(Composite parent) {
         // Seed the tracked pane width from prefs BEFORE the host
@@ -239,8 +245,8 @@ public final class GeneratorPane {
         freqLabel.setLayoutData(fillH());
         freqField = new NumericStepField(group,
                 Math.max(0.01, prefs.getGenFrequencyHz()),
-                GeneratorPane::parseFrequency,
-                GeneratorPane::formatFrequency,
+                this::parseFrequency,
+                this::formatFrequency,
                 /* wheel:  ±5 % */ (v, dir) -> v * (1.0 + 0.05 * dir),
                 /* arrows: ±1 Hz */ (v, dir) -> Math.max(0.0, v + dir),
                 /* width: */ 160);
@@ -294,8 +300,8 @@ public final class GeneratorPane {
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.startFreq"));
         sweepStartField = new NumericStepField(sweepPanel,
                 Math.max(0.0, prefs.getGenSweepFreqStartHz()),
-                GeneratorPane::parseFrequency,
-                GeneratorPane::formatFrequency,
+                this::parseFrequency,
+                this::formatFrequency,
                 /* wheel: ±5 % */ (v, dir) -> Math.max(0.0, v * (1.0 + 0.05 * dir)),
                 /* arrows: ±1 Hz */ (v, dir) -> Math.max(0.0, v + dir),
                 120);
@@ -310,8 +316,8 @@ public final class GeneratorPane {
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.stopFreq"));
         sweepEndField = new NumericStepField(sweepPanel,
                 Math.max(0.0, prefs.getGenSweepFreqEndHz()),
-                GeneratorPane::parseFrequency,
-                GeneratorPane::formatFrequency,
+                this::parseFrequency,
+                this::formatFrequency,
                 (v, dir) -> Math.max(0.0, v * (1.0 + 0.05 * dir)),
                 (v, dir) -> Math.max(0.0, v + dir),
                 120);
@@ -326,8 +332,8 @@ public final class GeneratorPane {
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.duration"));
         sweepDurationField = new NumericStepField(sweepPanel,
                 Math.max(0.001, prefs.getGenSweepDurationSec()),
-                GeneratorPane::parseSeconds,
-                GeneratorPane::formatSeconds,
+                this::parseSeconds,
+                this::formatSeconds,
                 (v, dir) -> Math.max(0.001, v * (1.0 + 0.05 * dir)),
                 (v, dir) -> Math.max(0.001, v + dir),
                 120);
@@ -342,8 +348,8 @@ public final class GeneratorPane {
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.fadeIn"));
         sweepFadeInField = new NumericStepField(sweepPanel,
                 Math.max(0.0, prefs.getGenSweepFadeInSec()),
-                GeneratorPane::parseSecondsOrZero,
-                GeneratorPane::formatSeconds,
+                this::parseSecondsOrZero,
+                this::formatSeconds,
                 (v, dir) -> Math.max(0.0, v + dir * 0.001),
                 (v, dir) -> Math.max(0.0, v + dir * 0.001),
                 120);
@@ -358,8 +364,8 @@ public final class GeneratorPane {
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.fadeOut"));
         sweepFadeOutField = new NumericStepField(sweepPanel,
                 Math.max(0.0, prefs.getGenSweepFadeOutSec()),
-                GeneratorPane::parseSecondsOrZero,
-                GeneratorPane::formatSeconds,
+                this::parseSecondsOrZero,
+                this::formatSeconds,
                 (v, dir) -> Math.max(0.0, v + dir * 0.001),
                 (v, dir) -> Math.max(0.0, v + dir * 0.001),
                 120);
@@ -469,8 +475,8 @@ public final class GeneratorPane {
                 : prefs.getGenRectangleDuty() * 100.0;
         dutyField = new NumericStepField(group,
                 clampDutyPercent(initialDutyPct),
-                GeneratorPane::parseDutyPercent,
-                GeneratorPane::formatDutyPercent,
+                this::parseDutyPercent,
+                this::formatDutyPercent,
                 /* wheel:  ±1 sample of the current period */
                 (v, dir) -> stepDutyBySamples(v, dir),
                 /* arrows: ±1 sample of the current period */
@@ -541,8 +547,8 @@ public final class GeneratorPane {
         addRowLabel(group, I18n.t("generator.duration"));
         durationField = new NumericStepField(group,
                 Math.max(0.001, prefs.getGenWavDurationSeconds()),
-                GeneratorPane::parseSeconds,
-                GeneratorPane::formatSeconds,
+                this::parseSeconds,
+                this::formatSeconds,
                 /* wheel: ±5 % */ (v, dir) -> Math.max(0.001, v * (1.0 + 0.05 * dir)),
                 /* arrows: ±1 s */ (v, dir) -> Math.max(0.001, v + dir),
                 160);
@@ -715,6 +721,10 @@ public final class GeneratorPane {
         // reference to this pane.
         fftLengthListener = this::reapplyFrequencySnap;
         MessageBus.instance().subscribe(Events.FFT_LENGTH_CHANGED, fftLengthListener);
+        freqRespStartedListener = this::onFreqRespMeasurementStarted;
+        freqRespStoppedListener = this::onFreqRespMeasurementStopped;
+        MessageBus.instance().subscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
+        MessageBus.instance().subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
 
         // Respond to "is the generator running?" requests from the FFT
         // controller so it can decide whether to anchor the fundamental
@@ -727,12 +737,14 @@ public final class GeneratorPane {
         // Dispose-time: stop the playback thread and tear down the icon
         // cache owned by this pane's display.
         group.addDisposeListener(e -> {
-            MessageBus.instance().unsubscribe(Events.FFT_LENGTH_CHANGED, fftLengthListener);
-            MessageBus.instance().unsubscribe(Events.FILE_PLAY_STOPPED,  filePlayStoppedListener);
+            MessageBus.instance().unsubscribe(Events.FFT_LENGTH_CHANGED,            fftLengthListener);
+            MessageBus.instance().unsubscribe(Events.FILE_PLAY_STOPPED,             filePlayStoppedListener);
+            MessageBus.instance().unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
+            MessageBus.instance().unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
             MessageBus.instance().unregisterResponder(Events.GENERATOR_RUNNING);
             controller.stop();
             filePlayer.stop();
-            SignalFormIcon.disposeAll(group.getDisplay());
+            SignalFormIcon.instance().disposeAll(group.getDisplay());
             if (onAirRedColor    != null && !onAirRedColor.isDisposed())    onAirRedColor.dispose();
             if (onAirRedDimColor != null && !onAirRedDimColor.isDisposed()) onAirRedDimColor.dispose();
             if (onAirGreyColor   != null && !onAirGreyColor.isDisposed())   onAirGreyColor.dispose();
@@ -914,6 +926,37 @@ public final class GeneratorPane {
         return controller.isRunning() || filePlayer.isRunning();
     }
 
+    /** {@link Events#FREQRESP_MEASUREMENT_STARTED} handler — stops the
+     *  running DDS tone + file player and grays both Play buttons so the
+     *  Frequency Response analyzer can drive the DAC exclusively. */
+    private void onFreqRespMeasurementStarted() {
+        if (group.isDisposed()) return;
+        if (controller.isRunning()) {
+            controller.stop();
+            if (playBtn != null && !playBtn.isDisposed()) {
+                playBtn.setImage(playDimImg);
+                playBtn.setToolTipText(I18n.t("generator.play.start"));
+            }
+            stopOnAirBlink();
+        }
+        if (filePlayer.isRunning()) {
+            filePlayer.stop();
+            if (playFromBtn != null && !playFromBtn.isDisposed()) {
+                playFromBtn.setImage(tinyPlayDimImg);
+                playFromBtn.setToolTipText(I18n.t("generator.loadFrom.play"));
+            }
+        }
+        if (playBtn      != null && !playBtn.isDisposed())      playBtn.setEnabled(false);
+        if (playFromBtn  != null && !playFromBtn.isDisposed())  playFromBtn.setEnabled(false);
+    }
+
+    /** Counterpart that re-enables both Play buttons after the sweep. */
+    private void onFreqRespMeasurementStopped() {
+        if (group.isDisposed()) return;
+        if (playBtn     != null && !playBtn.isDisposed())     playBtn.setEnabled(true);
+        if (playFromBtn != null && !playFromBtn.isDisposed()) playFromBtn.setEnabled(true);
+    }
+
     /**
      * Opens the DAC calibration dialog.  The dialog shows the
      * currently-commanded full-scale Vrms and lets the user enter the
@@ -950,7 +993,7 @@ public final class GeneratorPane {
     /** Returns the FFT size the snap should use — the active value from
      *  the FFT pane's Preferences.  Falls back to 65536 if the preference
      *  is unset (which shouldn't happen after first launch). */
-    private static int fftSizeForSnap() {
+    private int fftSizeForSnap() {
         int n = Preferences.instance().getFftLength();
         return (n >= 8 && (n & (n - 1)) == 0) ? n : 65536;
     }
@@ -1077,30 +1120,30 @@ public final class GeneratorPane {
         dutyLabel.getParent().layout();
     }
 
-    private static String formatLabelHz(double v) {
+    private String formatLabelHz(double v) {
         return String.format(Locale.ROOT, "%.3f Hz", v);
     }
 
-    private static String formatLabelPct(double v) {
+    private String formatLabelPct(double v) {
         return String.format(Locale.ROOT, "%.3f %%", v);
     }
 
     // -------------------------------------------------------------------------
     // Layout helpers
     // -------------------------------------------------------------------------
-    private static void addRowLabel(Composite parent, String text) {
+    private void addRowLabel(Composite parent, String text) {
         Label l = new Label(parent, SWT.NONE);
         l.setText(text);
         l.setLayoutData(fillH());
     }
-    private static GridData fillH() {
+    private GridData fillH() {
         return new GridData(SWT.FILL, SWT.CENTER, true, false);
     }
 
     // -------------------------------------------------------------------------
     // Frequency parse/format
     // -------------------------------------------------------------------------
-    private static Double parseFrequency(String s) {
+    private Double parseFrequency(String s) {
         if (s == null) return null;
         // Strip an optional trailing "Hz" (case-insensitive) before parsing.
         String trimmed = s.trim();
@@ -1120,7 +1163,7 @@ public final class GeneratorPane {
             return null;
         }
     }
-    private static String formatFrequency(double v) {
+    private String formatFrequency(double v) {
         return formatNumber(v) + " Hz";
     }
 
@@ -1276,7 +1319,7 @@ public final class GeneratorPane {
     // -------------------------------------------------------------------------
     // Duty / duration parse + format
     // -------------------------------------------------------------------------
-    private static Double parseDutyPercent(String s) {
+    private Double parseDutyPercent(String s) {
         if (s == null) return null;
         String t = s.trim();
         if (t.endsWith("%")) t = t.substring(0, t.length() - 1).trim();
@@ -1289,7 +1332,7 @@ public final class GeneratorPane {
         }
     }
     /** Renders a duty-percent with up to 3 decimal places, dropping trailing zeros and a "%" suffix. */
-    private static String formatDutyPercent(double v) {
+    private String formatDutyPercent(double v) {
         String s = String.format(Locale.ROOT, "%.3f", v);
         if (s.contains(".")) {
             int end = s.length();
@@ -1299,7 +1342,7 @@ public final class GeneratorPane {
         }
         return s + " %";
     }
-    private static double clampDutyPercent(double v) {
+    private double clampDutyPercent(double v) {
         if (Double.isNaN(v)) return 50.0;
         if (v < 1.0)  return 1.0;
         if (v > 99.0) return 99.0;
@@ -1325,7 +1368,7 @@ public final class GeneratorPane {
         }
     }
 
-    private static Double parseSeconds(String s) {
+    private Double parseSeconds(String s) {
         if (s == null) return null;
         String t = s.trim();
         if (t.endsWith("s")) t = t.substring(0, t.length() - 1).trim();
@@ -1339,7 +1382,7 @@ public final class GeneratorPane {
     }
     /** Like {@link #parseSeconds} but accepts 0 — used by the sweep
      *  fade-in / fade-out fields where 0 = no fade is a legitimate value. */
-    private static Double parseSecondsOrZero(String s) {
+    private Double parseSecondsOrZero(String s) {
         if (s == null) return null;
         String t = s.trim();
         if (t.endsWith("s")) t = t.substring(0, t.length() - 1).trim();
@@ -1351,7 +1394,7 @@ public final class GeneratorPane {
             return null;
         }
     }
-    private static String formatSeconds(double v) {
+    private String formatSeconds(double v) {
         return formatNumber(v) + " s";
     }
 
@@ -1516,7 +1559,7 @@ public final class GeneratorPane {
     }
 
     /** Builds a default file name encoding signal form + sample rate (kHz) + bit width.  WAV by default. */
-    private static String buildSuggestedSaveName() {
+    private String buildSuggestedSaveName() {
         Preferences prefs = Preferences.instance();
         GenSignalForm form     = parseForm(prefs.getGenSignalForm());
         int        rateKhz  = prefs.current().getOutputSampleRate() / 1000;
@@ -1585,7 +1628,7 @@ public final class GeneratorPane {
      * {@code 1000 → "1000"}, {@code 1000.5 → "1000.5"},
      * {@code 0.00012345 → "0.0001"}.
      */
-    private static String formatNumber(double v) {
+    private String formatNumber(double v) {
         if (v == 0) return "0";
         String s = String.format(Locale.ROOT, "%.4f", v);
         if (s.contains(".")) {
@@ -1598,18 +1641,18 @@ public final class GeneratorPane {
         return s;
     }
 
-    private static GenSignalForm parseForm(String s) {
+    private GenSignalForm parseForm(String s) {
         if (s == null) return GenSignalForm.SINE;
         try { return GenSignalForm.valueOf(s); }
         catch (IllegalArgumentException ex) { return GenSignalForm.SINE; }
     }
 
-    private static AmplitudeUnit parseUnit(String s, AmplitudeUnit fallback) {
+    private AmplitudeUnit parseUnit(String s, AmplitudeUnit fallback) {
         AmplitudeUnit u = AmplitudeUnit.fromString(s);
         return u != null ? u : fallback;
     }
 
-    private static boolean isPeriodic(GenSignalForm f) {
+    private boolean isPeriodic(GenSignalForm f) {
         switch (f) {
             case WHITE_NOISE:
             case PINK_NOISE:
@@ -1657,5 +1700,5 @@ public final class GeneratorPane {
         onOutputBitDepthChanged(currentDepth);
     }
 
-    private static String nullToEmpty(String s) { return s == null ? "" : s; }
+    private String nullToEmpty(String s) { return s == null ? "" : s; }
 }

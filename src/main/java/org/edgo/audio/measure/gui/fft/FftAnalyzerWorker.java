@@ -4,6 +4,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.eclipse.swt.widgets.Display;
 
+import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
+import org.edgo.audio.measure.cli.util.FreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
@@ -12,6 +14,8 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBuffer;
+
+import java.util.List;
 
 /**
  * Background analyser worker that owns the FFT compute thread, its
@@ -41,6 +45,13 @@ public final class FftAnalyzerWorker {
     private final FftAnalyzer analyzer = new FftAnalyzer();
 
     private volatile FftAnalyzer.Result lastResult;
+    /** Snapshot of fundamental + harmonic (freq, dBFS) pairs BEFORE
+     *  calibration was subtracted from {@link #lastResult}, or {@code null}
+     *  when no calibration is loaded.  Layout matches
+     *  {@code FreqRespCalHelper.capturePreCorrectionPeaks}:
+     *  {@code [0]} = freqs[], {@code [1]} = dBFs[].  Read by the view
+     *  to draw the "before-cal" dots in the configured colour. */
+    private volatile double[][]         preCorrectionPeaks;
     private volatile SignalBuffer       buffer;
     private final    AtomicBoolean      paused = new AtomicBoolean(false);
     private volatile int                completedAnalyses;
@@ -81,6 +92,11 @@ public final class FftAnalyzerWorker {
     public SignalBuffer getBuffer()              { return buffer; }
     public FftAnalyzer.Result getLastResult()   { return lastResult; }
     public void setLastResult(FftAnalyzer.Result r) { this.lastResult = r; }
+    /** Returns the fundamental + harmonic (freq, dBFS) pairs measured
+     *  BEFORE calibration was applied, or {@code null} when no
+     *  calibration is loaded.  Same layout as
+     *  {@code FreqRespCalHelper.capturePreCorrectionPeaks}. */
+    public double[][] getPreCorrectionPeaks()   { return preCorrectionPeaks; }
     public int  getCompletedAnalyses()          { return completedAnalyses; }
     public boolean isRunning()                  { return running; }
     public boolean isPaused()                   { return paused.get(); }
@@ -306,6 +322,39 @@ public final class FftAnalyzerWorker {
         if (fs > 0 && Double.isFinite(r.fundamentalDbFs)) {
             r.fundRefDbV = r.fundamentalDbFs + 20.0 * Math.log10(fs);
         }
+        // Apply every loaded .frc calibration in cascade.  Each call
+        // mutates r in place and re-runs the harmonic / THD / SNR
+        // recompute, so the numeric readouts the view reads from r
+        // reflect the corrected spectrum.  "Calibrate with noise"
+        // (THD-tab checkbox) → correct EVERY bin; otherwise just the
+        // fundamental + harmonic bin neighbourhoods.
+        List<FftCalibrationStore.Entry> calEntries =
+                FftCalibrationStore.instance().getEntries();
+        if (!calEntries.isEmpty()) {
+            // Snapshot pre-correction peaks BEFORE the in-place mutate
+            // so the view can draw "before" dots next to the corrected
+            // "after" ones.
+            preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
+            boolean correctAll = prefs.isFftCalibrateWithNoise();
+            for (FftCalibrationStore.Entry e : calEntries) {
+                FreqRespCalibration calForChan = wantLeft
+                        ? e.getCalibration().left()
+                        : e.getCalibration().right();
+                FreqRespCalHelper.applyCompensationInPlace(
+                        r, calForChan, correctAll);
+            }
+            // applyCompensationInPlace only re-anchors fundRefDbV when
+            // the cal file itself carries adcFsVoltageRms, and loadCsv
+            // never reads that field — so after the cascade fundRefDbV
+            // is stale (still references pre-cal fundamentalDbFs).
+            // Re-apply the global ADC FS anchor here so the displayed
+            // dBV reflects the cal-restored fundamental level.
+            if (fs > 0 && Double.isFinite(r.fundamentalDbFs)) {
+                r.fundRefDbV = r.fundamentalDbFs + 20.0 * Math.log10(fs);
+            }
+        } else {
+            preCorrectionPeaks = null;
+        }
         lastResult = r;
         completedAnalyses++;
         lastAnalysisWritePos = buf.getWritePos();
@@ -332,7 +381,7 @@ public final class FftAnalyzerWorker {
         }
     }
 
-    private static int msForSamples(int samples, int sampleRate) {
+    private int msForSamples(int samples, int sampleRate) {
         if (sampleRate <= 0 || samples <= 0) return 0;
         return (int) Math.ceil(1000.0 * samples / sampleRate);
     }
@@ -341,7 +390,7 @@ public final class FftAnalyzerWorker {
      *  In manual-fundamental mode we pass the user's value directly;
      *  otherwise we pass {@code NaN} so the analyser uses the measured
      *  {@code fundLinear} as its anchor. */
-    private static double resolveFundRefDbV(Preferences prefs) {
+    private double resolveFundRefDbV(Preferences prefs) {
         if (prefs.isFftManualFundEnabled()) {
             String unit = prefs.getFftManualFundUnit();
             double v = prefs.getFftManualFundVrms();

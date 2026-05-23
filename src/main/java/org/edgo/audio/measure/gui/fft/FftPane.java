@@ -1,5 +1,6 @@
 package org.edgo.audio.measure.gui.fft;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
@@ -14,6 +15,7 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
 import org.eclipse.swt.custom.CTabFolderRenderer;
 import org.eclipse.swt.custom.CTabItem;
+import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
@@ -22,6 +24,7 @@ import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.PaletteData;
 import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.FormAttachment;
@@ -46,6 +49,8 @@ import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.gui.MainTab;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
+import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
@@ -166,6 +171,14 @@ public final class FftPane {
      *  when the analyser's stop-after-N counter trips so the pane can
      *  flip Record back off and release the shared capture. */
     private Runnable autoStoppedListener;
+    /** Subscriber for {@link Events#FREQRESP_MEASUREMENT_STARTED} — the
+     *  Frequency Response pane is about to drive the capture device
+     *  exclusively, so this pane must stop any running recording and
+     *  gray its Record button so it can't be re-engaged mid-sweep. */
+    private Runnable freqRespStartedListener;
+    /** Counterpart to {@link #freqRespStartedListener} — re-enables the
+     *  Record button once the sweep finishes (or aborts). */
+    private Runnable freqRespStoppedListener;
 
     public FftPane(Composite parent,
                    boolean liveCapture) {
@@ -274,6 +287,7 @@ public final class FftPane {
         buildThdTab(tabs);
         buildPresetsTab(tabs);
         buildUtilityTab(tabs);
+        buildCalibrationTab(tabs);
         if (liveCapture) {
             buildSaveToTab(tabs);
             buildLoadFromTab(tabs);
@@ -399,11 +413,15 @@ public final class FftPane {
         //     auto-setup / maximize → realign the scrollbars.
         //   - FFT_RECORDING_AUTO_STOPPED: view publishes when its
         //     stop-after-N counter trips → release record state.
-        rangeChangedListener  = this::syncFftPan;
-        autoStoppedListener   = this::disengageRecord;
+        rangeChangedListener      = this::syncFftPan;
+        autoStoppedListener       = this::disengageRecord;
+        freqRespStartedListener   = this::onFreqRespMeasurementStarted;
+        freqRespStoppedListener   = this::onFreqRespMeasurementStopped;
         MessageBus bus = MessageBus.instance();
-        bus.subscribe(Events.FFT_RANGE_CHANGED,           rangeChangedListener);
-        bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED,  autoStoppedListener);
+        bus.subscribe(Events.FFT_RANGE_CHANGED,             rangeChangedListener);
+        bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED,    autoStoppedListener);
+        bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
+        bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
 
         recordButton.addListener(SWT.Selection, e -> {
             boolean on = recordButton.getSelection();
@@ -430,8 +448,10 @@ public final class FftPane {
 
         group.addDisposeListener(e -> {
             MessageBus bus2 = MessageBus.instance();
-            bus2.unsubscribe(Events.FFT_RANGE_CHANGED,          rangeChangedListener);
-            bus2.unsubscribe(Events.FFT_RECORDING_AUTO_STOPPED, autoStoppedListener);
+            bus2.unsubscribe(Events.FFT_RANGE_CHANGED,             rangeChangedListener);
+            bus2.unsubscribe(Events.FFT_RECORDING_AUTO_STOPPED,    autoStoppedListener);
+            bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
+            bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
             view.stop();
             view.setBuffer(null);
             if (captureHeld) {
@@ -568,6 +588,23 @@ public final class FftPane {
      *  pane is holding it). */
     private void disengageRecord() {
         recordOff();
+    }
+
+    /** {@link Events#FREQRESP_MEASUREMENT_STARTED} handler: stops any
+     *  in-flight FFT recording and grays the Record button so the user
+     *  can't kick it back on mid-sweep.  The Frequency Response analyzer
+     *  needs exclusive use of the capture device while it runs. */
+    private void onFreqRespMeasurementStarted() {
+        if (recordButton == null || recordButton.isDisposed()) return;
+        if (recordButton.getSelection()) recordOff();
+        recordButton.setEnabled(false);
+    }
+
+    /** Counterpart that re-enables the Record button once the sweep
+     *  finishes (or aborts). */
+    private void onFreqRespMeasurementStopped() {
+        if (recordButton == null || recordButton.isDisposed()) return;
+        recordButton.setEnabled(true);
     }
 
     /** Turns the Record button OFF — stops the worker, releases the
@@ -1070,6 +1107,34 @@ public final class FftPane {
             prefs.save();
         });
         new Label(g, SWT.NONE);   // fill row
+
+        // "Calibrate with noise" — when checked, subtraction applies to
+        // every FFT bin.  When unchecked, only the fundamental +
+        // harmonic dot positions are corrected.  Enabled only when ≥1
+        // calibration file is loaded; we listen to FFT_CALIBRATION_CHANGED
+        // to flip enablement live as the user loads / clears rows.
+        new Label(g, SWT.NONE);
+        Button calNoiseBtn = new Button(g, SWT.CHECK);
+        calNoiseBtn.setText(I18n.t("fft.thd.calibrateWithNoise"));
+        calNoiseBtn.setToolTipText(I18n.t("fft.thd.calibrateWithNoise.tooltip"));
+        calNoiseBtn.setSelection(prefs.isFftCalibrateWithNoise());
+        calNoiseBtn.setEnabled(FftCalibrationStore.instance().isAnyLoaded());
+        GridData calGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
+        calGd.horizontalSpan = 3;
+        calNoiseBtn.setLayoutData(calGd);
+        calNoiseBtn.addListener(SWT.Selection, e -> {
+            prefs.setFftCalibrateWithNoise(calNoiseBtn.getSelection());
+            prefs.save();
+            MessageBus.instance().publish(Events.FFT_CALIBRATION_CHANGED);
+        });
+        // Live enable/disable as the calibration list mutates.
+        Runnable updateCalBtnEnable = () -> {
+            if (calNoiseBtn.isDisposed()) return;
+            calNoiseBtn.setEnabled(FftCalibrationStore.instance().isAnyLoaded());
+        };
+        MessageBus.instance().subscribe(Events.FFT_CALIBRATION_CHANGED, updateCalBtnEnable);
+        calNoiseBtn.addDisposeListener(e ->
+                MessageBus.instance().unsubscribe(Events.FFT_CALIBRATION_CHANGED, updateCalBtnEnable));
     }
 
     // =========================================================================
@@ -1167,7 +1232,7 @@ public final class FftPane {
         }
     }
 
-    private static boolean presetsEqual(FftPreset a, FftPreset b) {
+    private boolean presetsEqual(FftPreset a, FftPreset b) {
         return a.getChannel() == b.getChannel()
             && eq(a.getMagUnit(), b.getMagUnit())
             && a.isLogFreqAxis()       == b.isLogFreqAxis()
@@ -1194,7 +1259,7 @@ public final class FftPane {
             && a.isManualFundEnabled() == b.isManualFundEnabled();
     }
 
-    private static boolean eq(String a, String b) {
+    private boolean eq(String a, String b) {
         return (a == null) ? b == null : a.equals(b);
     }
 
@@ -1348,7 +1413,7 @@ public final class FftPane {
 
     private void buildSaveToTab(CTabFolder folder) {
         Composite g = groupCell(folder, I18n.t("fft.tab.save"));
-        GridLayout gl = new GridLayout(3, false);
+        GridLayout gl = new GridLayout(2, false);
         gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);
         Preferences prefs = Preferences.instance();
@@ -1359,45 +1424,51 @@ public final class FftPane {
         if (saved != null && !saved.isEmpty()) pathField.setToolTipText(saved);
         pathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
-        Button browse = new Button(g, SWT.PUSH);
-        browse.setText("…");
-        browse.setToolTipText(I18n.t("fft.save.browse.tooltip"));
-        browse.addListener(SWT.Selection, e -> {
-            FileDialog d = new FileDialog(group.getShell(), SWT.SAVE);
-            d.setFilterExtensions(new String[]{"*.csv"});
-            d.setFilterNames(new String[]{"CSV (frequency_hz;magnitude_dBV;phase_deg)"});
-            d.setOverwrite(true);
-            if (prefs.getFftSaveFolder() != null) d.setFilterPath(prefs.getFftSaveFolder());
-            String chosen = d.open();
-            if (chosen != null) {
-                pathField.setText(chosen);
-                pathField.setToolTipText(chosen);
-                prefs.setFftSavePath(chosen);
-                prefs.setFftSaveFolder(Paths.get(chosen).getParent() == null ? null
-                        : Paths.get(chosen).getParent().toString());
-                prefs.save();
-            }
-        });
-
+        // Single floppy-disk button collapses the old browse-then-save
+        // two-step into one flow: opens the Save-as dialog, persists the
+        // chosen path into the field + prefs, and immediately writes the
+        // CSV.  Clicking again with a populated path re-uses it without
+        // re-prompting (the file dialog still appears so the user can
+        // confirm or change the target).
+        Image floppyIcon = IconUtils.instance().renderAtHeight(
+                g.getDisplay(), SvgPaths.FLOPPY_DISK, 16, null);
         Button save = new Button(g, SWT.PUSH);
-        save.setText(I18n.t("fft.save.write"));
+        if (floppyIcon != null) save.setImage(floppyIcon);
         save.setToolTipText(I18n.t("fft.save.write.tooltip"));
         save.addListener(SWT.Selection, e -> {
-            String path = pathField.getText().trim();
-            if (path.isEmpty()) {
-                showError(I18n.t("fft.save.pickFirst.title"), I18n.t("fft.save.pickFirst.message"));
-                return;
-            }
             FftAnalyzer.Result r = view.getLastResult();
             if (r == null) {
                 showError(I18n.t("fft.save.error.title"), I18n.t("fft.save.noData"));
                 return;
             }
+            FileDialog d = new FileDialog(group.getShell(), SWT.SAVE);
+            d.setFilterExtensions(new String[]{"*.csv"});
+            d.setFilterNames(new String[]{"CSV (frequency_hz;magnitude_dBV;phase_deg)"});
+            d.setOverwrite(true);
+            // Seed the dialog with the previously-used file, if any —
+            // lets the user write to the same target with one click +
+            // OK in the file dialog.
+            String prev = pathField.getText().trim();
+            if (!prev.isEmpty()) {
+                d.setFileName(Paths.get(prev).getFileName().toString());
+                Path parent = Paths.get(prev).getParent();
+                if (parent != null) d.setFilterPath(parent.toString());
+            } else if (prefs.getFftSaveFolder() != null) {
+                d.setFilterPath(prefs.getFftSaveFolder());
+            }
+            String chosen = d.open();
+            if (chosen == null) return;
+            pathField.setText(chosen);
+            pathField.setToolTipText(chosen);
+            prefs.setFftSavePath(chosen);
+            Path parent = Paths.get(chosen).getParent();
+            prefs.setFftSaveFolder(parent == null ? null : parent.toString());
+            prefs.save();
             try {
-                writeSpectrumCsv(Paths.get(path), r);
+                writeSpectrumCsv(Paths.get(chosen), r);
             } catch (IOException ex) {
                 showError(I18n.t("fft.save.error.title"),
-                        I18n.t("fft.save.error.message", path, ex.getMessage()));
+                        I18n.t("fft.save.error.message", chosen, ex.getMessage()));
             }
         });
     }
@@ -1415,8 +1486,10 @@ public final class FftPane {
         if (saved != null && !saved.isEmpty()) pathField.setToolTipText(saved);
         pathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
+        Image folderIcon = IconUtils.instance().renderAtHeight(
+                g.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
         Button browse = new Button(g, SWT.PUSH);
-        browse.setText("…");
+        if (folderIcon != null) browse.setImage(folderIcon);
         browse.setToolTipText(I18n.t("fft.load.browse.tooltip"));
         browse.addListener(SWT.Selection, e -> {
             FileDialog d = new FileDialog(group.getShell(), SWT.OPEN);
@@ -1761,7 +1834,7 @@ public final class FftPane {
 
     /** Returns the per-tile text strings for the given tab, derived from
      *  the current prefs.  Order = visual order, left to right. */
-    private static List<String> tileTexts(Preferences prefs, int tabIndex) {
+    private List<String> tileTexts(Preferences prefs, int tabIndex) {
         List<String> out = new ArrayList<>();
         if (tabIndex == TAB_FFT_SETTINGS) {
             out.add(FftPaneFormat.shortFftLength(prefs.getFftLength()));
@@ -1865,7 +1938,7 @@ public final class FftPane {
     }
 
     /** Tab-level hover tooltip key — fallback when no tile is hovered. */
-    private static String tabLabelTooltipKey(int tabIndex) {
+    private String tabLabelTooltipKey(int tabIndex) {
         switch (tabIndex) {
             case TAB_FFT_SETTINGS: return "fft.tab.settings.tooltip";
             case TAB_THD_SETTINGS: return "fft.tab.thd.tooltip";
@@ -1877,6 +1950,212 @@ public final class FftPane {
     // Helpers
     // =========================================================================
 
+    // =========================================================================
+    // Load-calibration tab — multi-row .frc loader (mirrors FreqRespPane).
+    // =========================================================================
+
+    private Composite             fftCalRowsContainer;
+    private ScrolledComposite     fftCalRowsScroll;
+    private final List<FftCalRow> fftCalRows = new ArrayList<>();
+
+    private static final class FftCalRow {
+        Composite                composite;
+        Text                     pathField;
+        StereoFreqRespCalibration calibration;
+        String                   path;  // null when row is empty
+    }
+
+    private void buildCalibrationTab(CTabFolder folder) {
+        CTabItem item = new CTabItem(folder, SWT.NONE);
+        item.setText(I18n.t("fft.tab.calibration"));
+
+        fftCalRowsScroll = new ScrolledComposite(folder, SWT.V_SCROLL);
+        fftCalRowsScroll.setExpandHorizontal(true);
+        fftCalRowsScroll.setExpandVertical(true);
+        item.setControl(fftCalRowsScroll);
+
+        fftCalRowsContainer = new Composite(fftCalRowsScroll, SWT.NONE);
+        fftCalRowsScroll.setContent(fftCalRowsContainer);
+        GridLayout gl = new GridLayout(1, false);
+        gl.marginWidth = 8; gl.marginHeight = 6;
+        gl.verticalSpacing = 4;
+        fftCalRowsContainer.setLayout(gl);
+
+        Preferences prefs = Preferences.instance();
+        FftCalRow row0 = createFftCalRowUi();
+        String p0 = prefs.getFftCalibrationPath();
+        if (p0 != null && !p0.isEmpty()) loadFileIntoFftCalRow(row0, p0, false);
+
+        List<String> extras = prefs.getFftCalibrationPathsExtra();
+        if (extras != null) {
+            for (String pn : extras) {
+                FftCalRow rN = createFftCalRowUi();
+                if (pn != null && !pn.isEmpty()) loadFileIntoFftCalRow(rN, pn, false);
+            }
+        }
+        FftCalibrationStore.instance().clearAll();
+        for (FftCalRow r : fftCalRows) {
+            if (r.calibration != null && r.path != null) {
+                FftCalibrationStore.instance().addEntry(r.calibration, r.path);
+            }
+        }
+    }
+
+    /** Builds and appends a fresh row.  5-column grid: pathField, load,
+     *  clear, add, remove.  Remove is {@code setVisible(false)} on row 0
+     *  so its column stays reserved and the load/clear/add buttons in
+     *  every row line up vertically. */
+    private FftCalRow createFftCalRowUi() {
+        boolean isRow0 = fftCalRows.isEmpty();
+
+        Composite row = new Composite(fftCalRowsContainer, SWT.NONE);
+        row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        GridLayout rl = new GridLayout(5, false);
+        rl.marginWidth = 0; rl.marginHeight = 0; rl.horizontalSpacing = 6;
+        row.setLayout(rl);
+
+        Text pathField = new Text(row, SWT.BORDER | SWT.READ_ONLY);
+        GridData pgd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        pgd.widthHint = 320;
+        pathField.setLayoutData(pgd);
+        pathField.setText(I18n.t("freqResp.calibration.path.none"));
+
+        Image folderIcon = IconUtils.instance().renderAtHeight(
+                row.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
+        Button loadBtn = new Button(row, SWT.PUSH);
+        if (folderIcon != null) loadBtn.setImage(folderIcon);
+        loadBtn.setToolTipText(I18n.t("freqResp.calibration.load.tooltip"));
+
+        Image xmark = IconUtils.instance().renderAtHeight(
+                row.getDisplay(), SvgPaths.RECTANGLE_XMARK, 16,
+                new RGB(0xC8, 0x28, 0x28));
+        Button clearBtn = new Button(row, SWT.PUSH);
+        if (xmark != null) clearBtn.setImage(xmark);
+        clearBtn.setToolTipText(I18n.t("freqResp.calibration.clear.tooltip"));
+
+        Image plus = IconUtils.instance().renderAtHeight(
+                row.getDisplay(), SvgPaths.PLUS, 16,
+                new RGB(0x28, 0x90, 0x28));
+        Button addBtn = new Button(row, SWT.PUSH);
+        if (plus != null) addBtn.setImage(plus);
+        addBtn.setToolTipText(I18n.t("freqResp.calibration.add.tooltip"));
+
+        Image minus = IconUtils.instance().render(
+                row.getDisplay(), SvgPaths.MINUS, 16, 16,
+                new RGB(0xC8, 0x28, 0x28));
+        Button removeBtn = new Button(row, SWT.PUSH);
+        if (minus != null) removeBtn.setImage(minus);
+        removeBtn.setToolTipText(I18n.t("freqResp.calibration.remove.tooltip"));
+        if (isRow0) removeBtn.setVisible(false);
+
+        FftCalRow r = new FftCalRow();
+        r.composite = row;
+        r.pathField = pathField;
+        fftCalRows.add(r);
+
+        loadBtn.addListener(SWT.Selection,  e -> userLoadInFftCalRow(r));
+        clearBtn.addListener(SWT.Selection, e -> userClearFftCalRow(r));
+        addBtn.addListener(SWT.Selection,   e -> userAddFftCalRow());
+        if (!isRow0) removeBtn.addListener(SWT.Selection, e -> userRemoveFftCalRow(r));
+
+        relayoutFftCalRows();
+        return r;
+    }
+
+    private void relayoutFftCalRows() {
+        if (fftCalRowsContainer != null && !fftCalRowsContainer.isDisposed()) {
+            fftCalRowsContainer.layout(true, true);
+        }
+        if (fftCalRowsScroll != null && !fftCalRowsScroll.isDisposed() && fftCalRowsContainer != null) {
+            fftCalRowsScroll.setMinSize(fftCalRowsContainer.computeSize(SWT.DEFAULT, SWT.DEFAULT));
+        }
+    }
+
+    private void userLoadInFftCalRow(FftCalRow r) {
+        FileDialog fd = new FileDialog(group.getShell(), SWT.OPEN);
+        fd.setText(I18n.t("freqResp.calibration.dialog"));
+        fd.setFilterExtensions(new String[]{ "*.frc", "*.csv", "*.*" });
+        String memFolder = Preferences.instance().getFftLoadFolder();
+        if (memFolder != null) fd.setFilterPath(memFolder);
+        String picked = fd.open();
+        if (picked == null) return;
+        if (!loadFileIntoFftCalRow(r, picked, true)) return;
+        Preferences prefs = Preferences.instance();
+        String parent = new File(picked).getParent();
+        if (parent != null) prefs.setFftLoadFolder(parent);
+        syncFftStoreFromRows();
+        persistFftRowsToPrefs();
+    }
+
+    private void userClearFftCalRow(FftCalRow r) {
+        r.calibration = null;
+        r.path        = null;
+        r.pathField.setText(I18n.t("freqResp.calibration.path.none"));
+        r.pathField.setToolTipText(null);
+        syncFftStoreFromRows();
+        persistFftRowsToPrefs();
+    }
+
+    private void userAddFftCalRow() {
+        createFftCalRowUi();
+        persistFftRowsToPrefs();
+    }
+
+    private void userRemoveFftCalRow(FftCalRow r) {
+        if (fftCalRows.size() <= 1) return;
+        int idx = fftCalRows.indexOf(r);
+        if (idx <= 0) return;
+        fftCalRows.remove(idx);
+        r.composite.dispose();
+        relayoutFftCalRows();
+        syncFftStoreFromRows();
+        persistFftRowsToPrefs();
+    }
+
+    private boolean loadFileIntoFftCalRow(FftCalRow r, String picked, boolean showErrors) {
+        try {
+            StereoFreqRespCalibration cal = FreqRespCalHelper.loadCsv(picked);
+            r.calibration = cal;
+            r.path        = picked;
+            r.pathField.setText(picked);
+            r.pathField.setToolTipText(picked);
+            return true;
+        } catch (Exception ex) {
+            log.warn("FFT calibration load failed: {}", picked, ex);
+            if (showErrors) {
+                Dialogs.error(group.getShell(),
+                        I18n.t("freqResp.calibration.dialog"),
+                        I18n.t("freqResp.error.calibration.load").replace("{0}",
+                                ex.getMessage() != null ? ex.getMessage()
+                                                        : ex.getClass().getSimpleName()));
+            }
+            return false;
+        }
+    }
+
+    private void syncFftStoreFromRows() {
+        FftCalibrationStore store = FftCalibrationStore.instance();
+        store.clearAll();
+        for (FftCalRow r : fftCalRows) {
+            if (r.calibration != null && r.path != null) {
+                store.addEntry(r.calibration, r.path);
+            }
+        }
+    }
+
+    private void persistFftRowsToPrefs() {
+        Preferences prefs = Preferences.instance();
+        String row0 = fftCalRows.isEmpty() ? null : fftCalRows.get(0).path;
+        prefs.setFftCalibrationPath(row0);
+        List<String> extras = new ArrayList<>();
+        for (int i = 1; i < fftCalRows.size(); i++) {
+            String p = fftCalRows.get(i).path;
+            extras.add(p == null ? "" : p);
+        }
+        prefs.setFftCalibrationPathsExtra(extras);
+        prefs.save();
+    }
+
     private Composite groupCell(CTabFolder folder, String title) {
         Composite c = new Composite(folder, SWT.NONE);
         CTabItem item = new CTabItem(folder, SWT.NONE);
@@ -1885,7 +2164,7 @@ public final class FftPane {
         return c;
     }
 
-    private static void addLabel(Composite parent, String text) {
+    private void addLabel(Composite parent, String text) {
         Label l = new Label(parent, SWT.NONE);
         l.setText(text);
         l.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));

@@ -6,6 +6,7 @@ branding/
 docs/
 download/
 logs/
+old/
 results/
 plans/
 target/
@@ -28,3 +29,4 @@ buildNumber.properties
 .project
 # JDT-specific (Eclipse Java Development Tools)
 .classpath
+CLAUDE_old.md

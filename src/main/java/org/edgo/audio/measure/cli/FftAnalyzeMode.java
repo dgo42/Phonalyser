@@ -180,7 +180,10 @@ public class FftAnalyzeMode {
         double[] preCorrDbFs   = null;
         if (freqRespCalArg != null) {
             log.info("Frequency response cal: {}{}", freqRespCalArg, calNoise ? "  (--cal-noise: correct all bins)" : "");
-            FreqRespCalibration cal = FreqRespCalHelper.loadCsv(freqRespCalArg);
+            // FreqResp files are stereo since v6; the FFT compensation
+            // path is single-channel, so apply the left side (matches the
+            // primary capture channel both modes assume).
+            FreqRespCalibration cal = FreqRespCalHelper.loadCsv(freqRespCalArg).left();
             double[][] overlay  = FreqRespCalHelper.computeOverlay(cal, result);
             double[][] prePeaks = FreqRespCalHelper.capturePreCorrectionPeaks(result);
             if (overlay != null) {

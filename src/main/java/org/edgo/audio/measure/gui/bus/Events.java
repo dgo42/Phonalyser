@@ -36,6 +36,7 @@ public final class Events {
     public static final int PANE_ID_GENERATOR = 1;
     public static final int PANE_ID_SCOPE     = 2;
     public static final int PANE_ID_FFT       = 3;
+    public static final int PANE_ID_FREQRESP  = 4;
 
     /** Request — opens (or refcount-increments) the shared input capture
      *  device.  Responder: the {@code SharedCapture} singleton.
@@ -81,4 +82,45 @@ public final class Events {
      *  scales to the current signal.  No payload.  Published on the
      *  UI thread (the click handler runs there). */
     public static final String SCOPE_AUTO_SETUP = "scope.autoSetup";
+
+    /** Notification — the FreqResp view's visible freq / magnitude pan
+     *  window changed.  No payload — subscribers read fresh values from
+     *  {@code Preferences}.  Mirror of {@link #FFT_RANGE_CHANGED} for the
+     *  Frequency Response pane. */
+    public static final String FREQRESP_RANGE_CHANGED = "freqresp.range.changed";
+
+    /** Notification — the active Frequency Response calibration changed
+     *  (loaded from file, cleared, or replaced by the wizard).  No
+     *  payload — subscribers read from {@code FreqRespCalibrationStore}. */
+    public static final String FREQRESP_CALIBRATION_CHANGED = "freqresp.calibration.changed";
+
+    /** Notification — the FreqResp pane started a measurement.  No
+     *  payload.  Other panes (FFT, scope) subscribe to disable their
+     *  Record buttons for the duration so the shared capture device
+     *  isn't contended. */
+    public static final String FREQRESP_MEASUREMENT_STARTED = "freqresp.measurement.started";
+
+    /** Notification — the FreqResp pane finished (or aborted) a
+     *  measurement.  No payload.  Counterpart to
+     *  {@link #FREQRESP_MEASUREMENT_STARTED}. */
+    public static final String FREQRESP_MEASUREMENT_STOPPED = "freqresp.measurement.stopped";
+
+    /** Notification — a fresh {@code FreqRespResult} is available for
+     *  display.  Payload: the {@code FreqRespResult} itself.  Published
+     *  by the analyzer worker on the UI thread. */
+    public static final String FREQRESP_RESULT_AVAILABLE = "freqresp.result.available";
+
+    /** Notification — a parameter that affects how the compare-mode
+     *  curve is derived (e.g. the smoothing window size) changed.
+     *  No payload — subscribers (the FreqResp view) re-derive the
+     *  smoothed diff, refresh the anchor / min-max table, and
+     *  redraw.  Distinct from {@link #FREQRESP_RANGE_CHANGED}
+     *  because the visible band itself does not change. */
+    public static final String FREQRESP_COMPARE_PARAMS_CHANGED = "freqresp.compare.params.changed";
+
+    /** Notification — the FFT pane's loaded calibration list changed
+     *  (file added / removed / replaced / cleared).  No payload —
+     *  subscribers read {@code FftCalibrationStore}.  The view re-derives
+     *  the calibrated spectrum / harmonic dot positions on next paint. */
+    public static final String FFT_CALIBRATION_CHANGED = "fft.calibration.changed";
 }

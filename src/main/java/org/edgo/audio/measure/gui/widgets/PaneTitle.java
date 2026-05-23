@@ -80,6 +80,10 @@ public final class PaneTitle extends Canvas {
     private final String expandedText;
     private final String collapsedText;
     private final String clickEventName;
+    /** When true, the title behaves as a static label: no arrow is drawn,
+     *  clicking does nothing, and the hand cursor is suppressed.  Used by
+     *  panes that are not collapsible (e.g. Frequency Response). */
+    private boolean staticMode;
     /** True when the title is in its collapsed-pane appearance.
      *  Drives both the displayed text and the leading arrow glyph
      *  (▶ when {@code true}, ▼ when {@code false}). */
@@ -130,7 +134,17 @@ public final class PaneTitle extends Canvas {
         relayoutAndRedraw();
     }
 
+    /** Switches the title into a non-interactive label: arrow is hidden,
+     *  clicks are ignored, and the hand cursor is dropped.  Use for panes
+     *  that should not be collapsible. */
+    public void setStaticMode(boolean staticMode) {
+        this.staticMode = staticMode;
+        setCursor(staticMode ? null : getDisplay().getSystemCursor(SWT.CURSOR_HAND));
+        redraw();
+    }
+
     private void onClick() {
+        if (staticMode) return;
         collapsed = !collapsed;
         relayoutAndRedraw();
         MessageBus.instance().publish(clickEventName, collapsed);
@@ -184,11 +198,13 @@ public final class PaneTitle extends Canvas {
 
         String text = currentText();
         char arrow = collapsed ? '▶' : '▼';
+        boolean drawArrow = !staticMode;
 
         Point textExt = gc.textExtent(text);
-        int gap = text.isEmpty() ? 0 : ARROW_GAP;
-        int contentW = ARROW_PX + gap + textExt.x;
-        int contentH = Math.max(ARROW_PX, textExt.y);
+        int gap = text.isEmpty() ? 0 : (drawArrow ? ARROW_GAP : 0);
+        int arrowW = drawArrow ? ARROW_PX : 0;
+        int contentW = arrowW + gap + textExt.x;
+        int contentH = Math.max(drawArrow ? ARROW_PX : textExt.y, textExt.y);
 
         Point sz = getSize();
         if (sz.x < contentW + 2 * PAD_X) {
@@ -201,9 +217,9 @@ public final class PaneTitle extends Canvas {
                 tr.rotate(-90);
                 tr.translate(-contentW / 2f, -contentH / 2f);
                 gc.setTransform(tr);
-                drawArrow(gc, 0, (contentH - ARROW_PX) / 2, arrow);
+                if (drawArrow) drawArrow(gc, 0, (contentH - ARROW_PX) / 2, arrow);
                 if (!text.isEmpty()) {
-                    gc.drawText(text, ARROW_PX + gap, (contentH - textExt.y) / 2, true);
+                    gc.drawText(text, arrowW + gap, (contentH - textExt.y) / 2, true);
                 }
                 gc.setTransform(null);
             } finally {
@@ -212,9 +228,9 @@ public final class PaneTitle extends Canvas {
         } else {
             int x = PAD_X;
             int yTop = PAD_Y;
-            drawArrow(gc, x, yTop + (contentH - ARROW_PX) / 2, arrow);
+            if (drawArrow) drawArrow(gc, x, yTop + (contentH - ARROW_PX) / 2, arrow);
             if (!text.isEmpty()) {
-                gc.drawText(text, x + ARROW_PX + gap, yTop + (contentH - textExt.y) / 2, true);
+                gc.drawText(text, x + arrowW + gap, yTop + (contentH - textExt.y) / 2, true);
             }
         }
     }
