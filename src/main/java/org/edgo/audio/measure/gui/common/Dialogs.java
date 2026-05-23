@@ -1,6 +1,7 @@
 package org.edgo.audio.measure.gui.common;
 
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
@@ -25,6 +26,27 @@ import org.eclipse.swt.widgets.Text;
 public final class Dialogs {
 
     private Dialogs() {}
+
+    /** Centres {@code child} on its parent shell.  Must be called after
+     *  {@code child.pack()} (or {@code child.setSize(...)}) so the size
+     *  is final before the location is computed.  No-op when the child
+     *  has no parent (e.g. a top-level utility shell).
+     *
+     *  <p>Use this for every modal dialog so it opens in a predictable
+     *  spot regardless of where the main window has been moved — tool
+     *  windows that have their own positioning logic (offscreen render
+     *  shells, dropdown popups, …) should not call this. */
+    public static void centerOnParent(Shell child) {
+        if (child == null || child.isDisposed()) return;
+        Shell parent = (Shell) child.getParent();
+        if (parent == null || parent.isDisposed()) return;
+        Point size  = child.getSize();
+        Point pLoc  = parent.getLocation();
+        Point pSize = parent.getSize();
+        child.setLocation(
+                pLoc.x + (pSize.x - size.x) / 2,
+                pLoc.y + (pSize.y - size.y) / 2);
+    }
 
     /** Modal error dialog: ICON_ERROR + OK.  Both title and message are
      *  shown verbatim — caller is responsible for {@code I18n.t(...)}
@@ -107,11 +129,7 @@ public final class Dialogs {
         cancel.addListener(SWT.Selection, e -> dialog.close());
 
         dialog.pack();
-        if (parent != null) {
-            int x = parent.getLocation().x + (parent.getSize().x - dialog.getSize().x) / 2;
-            int y = parent.getLocation().y + (parent.getSize().y - dialog.getSize().y) / 2;
-            dialog.setLocation(x, y);
-        }
+        centerOnParent(dialog);
         dialog.open();
         Display d = dialog.getDisplay();
         while (!dialog.isDisposed()) {

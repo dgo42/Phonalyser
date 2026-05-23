@@ -3,7 +3,6 @@ package org.edgo.audio.measure.gui.freqresp;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.FreqRespCalibration;
-import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
 import org.edgo.audio.measure.cli.util.StereoSamples;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.generator.SignalGenerator;
@@ -90,11 +89,12 @@ public final class FreqRespAnalyzer {
 
         checkCancel(cancel);
         reportProgress(progress, 0.05, "Running sweep");
-        StereoSamples rec = cfg.getStereoCaptureProvider().capture(
+        StereoSamples rec = cfg.getStereoCaptureProvider().captureWithProgress(
                 gen, cfg.getOutDevice(), cfg.getInDevice(),
                 cfg.getSampleRate(), cfg.getBitDepth(), cfg.getDitherBits(),
                 durationSec,
-                cancel == null ? null : cancel::isCancelled);
+                cancel == null ? null : cancel::isCancelled,
+                cfg.getCaptureProgress());
 
         if (cfg.getRawCaptureListener() != null) {
             cfg.getRawCaptureListener().onRawCapture(rec);
@@ -119,18 +119,11 @@ public final class FreqRespAnalyzer {
         FreqRespCalibration calL = awaitOrFail(calLFut);
         FreqRespCalibration calR = awaitOrFail(calRFut);
 
-        boolean calApplied = false;
-        if (cfg.isApplyCalibration()) {
-            StereoFreqRespCalibration loaded = FreqRespCalibrationStore.instance().getCurrent();
-            if (loaded != null) {
-                FreqRespCalHelper.divideInPlace(calL, loaded.left());
-                FreqRespCalHelper.divideInPlace(calR, loaded.right());
-                calApplied = true;
-                log.info("FreqResp analyzer: divided both channels by loaded calibration ({} points each)",
-                        loaded.left().freqs.length);
-            }
-        }
-
+        // Loaded calibration is no longer divided in here — the result
+        // carries the raw deconvolution.  Calibration is applied only
+        // when the curve is rendered ({@code FreqRespView.applyCurrentCalibration})
+        // and at save time, so swapping the loaded calibration retraces
+        // the existing measurement without forcing a re-sweep.
         reportProgress(progress, 1.0, "Done");
 
         FreqRespSweepParams params = new FreqRespSweepParams(
@@ -141,11 +134,11 @@ public final class FreqRespAnalyzer {
         FreqRespResult left  = new FreqRespResult(
                 Channel.L, cfg.getSampleRate(),
                 calL.freqs, calL.magLin, calL.phaseRad,
-                params, null, calApplied);
+                params, null, false);
         FreqRespResult right = new FreqRespResult(
                 Channel.R, cfg.getSampleRate(),
                 calR.freqs, calR.magLin, calR.phaseRad,
-                params, null, calApplied);
+                params, null, false);
         return new StereoFreqRespResult(left, right);
     }
 

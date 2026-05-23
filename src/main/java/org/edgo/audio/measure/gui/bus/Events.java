@@ -109,4 +109,18 @@ public final class Events {
      *  display.  Payload: the {@code FreqRespResult} itself.  Published
      *  by the analyzer worker on the UI thread. */
     public static final String FREQRESP_RESULT_AVAILABLE = "freqresp.result.available";
+
+    /** Notification — a parameter that affects how the compare-mode
+     *  curve is derived (e.g. the smoothing window size) changed.
+     *  No payload — subscribers (the FreqResp view) re-derive the
+     *  smoothed diff, refresh the anchor / min-max table, and
+     *  redraw.  Distinct from {@link #FREQRESP_RANGE_CHANGED}
+     *  because the visible band itself does not change. */
+    public static final String FREQRESP_COMPARE_PARAMS_CHANGED = "freqresp.compare.params.changed";
+
+    /** Notification — the FFT pane's loaded calibration list changed
+     *  (file added / removed / replaced / cleared).  No payload —
+     *  subscribers read {@code FftCalibrationStore}.  The view re-derives
+     *  the calibrated spectrum / harmonic dot positions on next paint. */
+    public static final String FFT_CALIBRATION_CHANGED = "fft.calibration.changed";
 }

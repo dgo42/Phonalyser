@@ -107,10 +107,7 @@ public final class DacCalibrationDialog {
     /** Opens the dialog modally and pumps the parent display loop until closed. */
     public void open() {
         dialog.pack();
-        Shell parent = (Shell) dialog.getParent();
-        int x = parent.getLocation().x + (parent.getSize().x - dialog.getSize().x) / 2;
-        int y = parent.getLocation().y + (parent.getSize().y - dialog.getSize().y) / 2;
-        dialog.setLocation(x, y);
+        Dialogs.centerOnParent(dialog);
         dialog.open();
         while (!dialog.isDisposed()) {
             if (!dialog.getDisplay().readAndDispatch()) dialog.getDisplay().sleep();

@@ -115,7 +115,8 @@ public class CaptureWithGenerator {
                                    int sampleRate, int bitDepth, int ditherBits,
                                    int duration, WeightedBuffer weights,
                                    int syncPauseSec,
-                                   BooleanSupplier cancelToken) throws Exception {
+                                   BooleanSupplier cancelToken,
+                                   StereoCaptureProgress progress) throws Exception {
         int   maxSamples = (int) Math.min((long) duration * sampleRate + sampleRate, Integer.MAX_VALUE);
         final float[] leftBuf  = new float[maxSamples];
         final float[] rightBuf = new float[maxSamples];
@@ -149,6 +150,9 @@ public class CaptureWithGenerator {
                     return;
                 }
                 int n = writePos.get();
+                double sumSqL = 0.0;
+                double sumSqR = 0.0;
+                int    cnt    = 0;
                 for (int i = 0; i < stereo.length && n + i < leftBuf.length; i++) {
                     double code0;
                     double code1;
@@ -159,10 +163,21 @@ public class CaptureWithGenerator {
                         code0 = (double) (stereo[i].ch0 & 0xFFFFFFFFL);
                         code1 = (double) (stereo[i].ch1 & 0xFFFFFFFFL);
                     }
-                    leftBuf [n + i] = (float) ((code0 - halfRange) / (double) halfRange);
-                    rightBuf[n + i] = (float) ((code1 - halfRange) / (double) halfRange);
+                    float l = (float) ((code0 - halfRange) / (double) halfRange);
+                    float r = (float) ((code1 - halfRange) / (double) halfRange);
+                    leftBuf [n + i] = l;
+                    rightBuf[n + i] = r;
+                    sumSqL += l * (double) l;
+                    sumSqR += r * (double) r;
+                    cnt++;
                 }
                 writePos.addAndGet(stereo.length);
+                if (progress != null && cnt > 0) {
+                    double rmsL = Math.sqrt(sumSqL / cnt);
+                    double rmsR = Math.sqrt(sumSqR / cnt);
+                    try { progress.onBlock(writePos.get(), Math.max(rmsL, rmsR)); }
+                    catch (Exception ex) { log.warn("Capture progress listener threw", ex); }
+                }
             });
 
             recorder.open();

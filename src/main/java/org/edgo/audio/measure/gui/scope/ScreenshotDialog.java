@@ -22,6 +22,7 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
+import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.i18n.I18n;
 
 import lombok.extern.log4j.Log4j2;
@@ -242,6 +243,7 @@ public final class ScreenshotDialog {
         closeBtn.addListener(SWT.Selection, e -> dialog.close());
 
         dialog.pack();
+        Dialogs.centerOnParent(dialog);
         dialog.open();
     }
 

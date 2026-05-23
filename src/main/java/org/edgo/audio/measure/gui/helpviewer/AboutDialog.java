@@ -11,6 +11,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Link;
 import org.eclipse.swt.widgets.Shell;
 
+import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.i18n.I18n;
 
 /**
@@ -56,6 +57,7 @@ public class AboutDialog {
 
         s.setDefaultButton(close);
         s.pack();
+        Dialogs.centerOnParent(s);
         s.open();
     }
 }

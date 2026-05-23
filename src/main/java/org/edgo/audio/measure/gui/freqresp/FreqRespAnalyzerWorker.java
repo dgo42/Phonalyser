@@ -6,6 +6,7 @@ import java.util.function.Consumer;
 
 import org.eclipse.swt.widgets.Display;
 
+import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.preferences.Preferences;
@@ -41,8 +42,9 @@ public final class FreqRespAnalyzerWorker {
     private final Runnable             onComplete;
     private final Consumer<String>     onError;
 
-    private volatile Thread       workerThread;
-    private final AtomicBoolean   cancelFlag = new AtomicBoolean(false);
+    private volatile Thread             workerThread;
+    private final AtomicBoolean         cancelFlag       = new AtomicBoolean(false);
+    private volatile StereoCaptureProgress activeProgress;
 
     public FreqRespAnalyzerWorker(Display display, FreqRespView view,
                                   Runnable onComplete, Consumer<String> onError) {
@@ -52,13 +54,23 @@ public final class FreqRespAnalyzerWorker {
         this.onError    = onError;
     }
 
-    /** Starts the worker thread (no-op if already running). */
+    /** Starts the worker thread (no-op if already running).  See
+     *  {@link #start(StereoCaptureProgress)} when a live progress meter
+     *  is hooked up. */
     public synchronized void start() {
+        start(null);
+    }
+
+    /** Variant that wires a per-block capture-progress callback into the
+     *  analyzer config so a UI-side meter can paint a live "level vs.
+     *  time" curve while the sweep runs. */
+    public synchronized void start(StereoCaptureProgress progress) {
         if (workerThread != null && workerThread.isAlive()) {
             log.warn("FreqResp worker already running — start() ignored");
             return;
         }
         cancelFlag.set(false);
+        activeProgress = progress;
         // Clear previous results from the view so the user sees an empty
         // chart while the sweep runs (avoids confusion about whether the
         // displayed trace is the current or previous measurement).
@@ -119,6 +131,7 @@ public final class FreqRespAnalyzerWorker {
                     .leadInSec(prefs.getFreqRespLeadInSec())
                     .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
                     .applyCalibration(prefs.isFreqRespApplyCalibration())
+                    .captureProgress(activeProgress)
                     .build();
             StereoFreqRespResult stereo = new FreqRespAnalyzer(cfg).run(null, cancelFlag::get);
             if (stereo == null) return;

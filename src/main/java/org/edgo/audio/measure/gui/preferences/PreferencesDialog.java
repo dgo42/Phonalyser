@@ -19,6 +19,10 @@ import org.eclipse.swt.widgets.TabItem;
 
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.generator.NumericStepField;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.StepSelector;
 import org.edgo.audio.measure.sound.DeviceRef;
@@ -51,6 +55,24 @@ public final class PreferencesDialog {
             352800, 384000, 705600, 768000
     };
     private static final int[] DEFAULT_BIT_DEPTHS = {16, 24, 32};
+
+    /** Lower bound (in % of Nyquist) of the FreqResp "Maximal analyzed
+     *  frequency" field.  The field clamps to this on every edit, both
+     *  via wheel/arrow steppers and after manual text entry. */
+    private static final double FREQRESP_MAX_FREQ_PCT_MIN  = 83.0;
+    /** Upper bound (in % of Nyquist) of the same field.  100 % = strict
+     *  Nyquist (sampleRate / 2). */
+    private static final double FREQRESP_MAX_FREQ_PCT_MAX  = 100.0;
+    /** Wheel / arrow step size (in % points) for the same field. */
+    private static final double FREQRESP_MAX_FREQ_PCT_STEP =   0.5;
+
+    /** Lower bound (in points) of the FreqResp compare-mode smoothing
+     *  window field.  0 = no smoothing. */
+    private static final int    FREQRESP_SMOOTH_W_MIN  =   0;
+    /** Upper bound (in points) of the same field. */
+    private static final int    FREQRESP_SMOOTH_W_MAX  = 100;
+    /** Wheel / arrow step size (in points) for the same field. */
+    private static final int    FREQRESP_SMOOTH_W_STEP =   1;
 
     private final Shell parent;
 
@@ -95,6 +117,17 @@ public final class PreferencesDialog {
         // Snapshot the Look & Feel prefs too so Cancel rolls them back.
         final String originalTabOrientation = prefs.getTabOrientation();
         final boolean originalSmallIcons    = prefs.isSmallIconsInMainTab();
+
+        // Snapshot the FreqResp Nyquist fraction.  It applies live (so
+        // the user can see the band shrink/grow as they type), and the
+        // Cancel handler rolls it back.  Top-level pref — not part of
+        // any BackendPrefs snapshot — so kept in its own field.
+        final double originalNyquistFraction = prefs.getFreqRespNyquistFraction();
+        final double originalFreqMaxHz       = prefs.getFreqRespFreqMaxHz();
+        final double originalFreqMinHz       = prefs.getFreqRespFreqMinHz();
+        final int     originalSmoothWindow    = prefs.getFreqRespCompareSmoothWindow();
+        final boolean originalNotchEnabled    = prefs.isFreqRespNotchEnabled();
+        final int     originalNotchBaseHz     = prefs.getFreqRespNotchBaseHz();
 
         // --- Tab folder: Look & Feel + Audio + Oscilloscope + FFT -----------
         TabFolder tabs = new TabFolder(dialog, SWT.TOP);
@@ -356,6 +389,248 @@ public final class PreferencesDialog {
             }
         });
 
+        // Before-calibration dot colour — painted next to the
+        // (red) corrected fundamental / harmonic dots so the user
+        // can see how much the loaded .frc shifted each peak.
+        int[] fftBeforeCalDotColorHolder = { prefs.getFftBeforeCalDotColor() };
+        new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.beforeCalDotColor"));
+        Button fftBeforeCalDotColorBtn = new Button(fftTab, SWT.PUSH);
+        fftBeforeCalDotColorBtn.setLayoutData(comboData());
+        applyButtonColor(fftBeforeCalDotColorBtn, fftBeforeCalDotColorHolder[0]);
+        fftBeforeCalDotColorBtn.addListener(SWT.Selection, e -> {
+            ColorDialog dlg = new ColorDialog(dialog);
+            dlg.setRGB(unpackRgb(fftBeforeCalDotColorHolder[0]));
+            RGB picked = dlg.open();
+            if (picked != null) {
+                fftBeforeCalDotColorHolder[0] = packRgb(picked);
+                applyButtonColor(fftBeforeCalDotColorBtn, fftBeforeCalDotColorHolder[0]);
+            }
+        });
+
+        // Calibration overlay colour — the mirrored cascade of all loaded
+        // .frc files, drawn parallel to the FFT spectrum so the user can
+        // see at a glance which bands the calibration is lifting or cutting.
+        int[] fftCalOverlayColorHolder = { prefs.getFftCalOverlayColor() };
+        new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.calOverlayColor"));
+        Button fftCalOverlayColorBtn = new Button(fftTab, SWT.PUSH);
+        fftCalOverlayColorBtn.setLayoutData(comboData());
+        applyButtonColor(fftCalOverlayColorBtn, fftCalOverlayColorHolder[0]);
+        fftCalOverlayColorBtn.addListener(SWT.Selection, e -> {
+            ColorDialog dlg = new ColorDialog(dialog);
+            dlg.setRGB(unpackRgb(fftCalOverlayColorHolder[0]));
+            RGB picked = dlg.open();
+            if (picked != null) {
+                fftCalOverlayColorHolder[0] = packRgb(picked);
+                applyButtonColor(fftCalOverlayColorBtn, fftCalOverlayColorHolder[0]);
+            }
+        });
+
+        // --- Frequency response tab ----------------------------------------
+        TabItem freqRespTabItem = new TabItem(tabs, SWT.NONE);
+        freqRespTabItem.setText(I18n.t("preferences.tab.freqResp"));
+        Composite freqRespTab = new Composite(tabs, SWT.NONE);
+        GridLayout freqRespLayout = new GridLayout(2, false);
+        freqRespLayout.marginWidth  = 8;
+        freqRespLayout.marginHeight = 8;
+        freqRespLayout.verticalSpacing = 8;
+        freqRespTab.setLayout(freqRespLayout);
+        freqRespTabItem.setControl(freqRespTab);
+
+        // Maximal analyzed frequency as % of Nyquist.  Pref value is a
+        // fraction in [0.83, 1.00]; the field displays it as a percent.
+        // 100 % = strict Nyquist; the user usually wants 83–99 % to avoid
+        // the deconvolution kernel's roll-off right at Fs/2.  The label
+        // also shows the resulting frequency in Hz so the user sees the
+        // concrete band, not just an abstract percent.
+        Label nyqLabel = new Label(freqRespTab, SWT.NONE);
+        nyqLabel.setText(formatMaxFreqLabel(
+                prefs.getFreqRespNyquistFraction(),
+                prefs.current().getInputSampleRate()));
+        NumericStepField nyqField = new NumericStepField(freqRespTab,
+                prefs.getFreqRespNyquistFraction() * 100.0,
+                raw -> {
+                    if (raw == null) return null;
+                    String s = raw.trim().replace(',', '.').replace("%", "").trim();
+                    if (s.isEmpty()) return null;
+                    try { return Double.parseDouble(s); }
+                    catch (NumberFormatException ex) { return null; }
+                },
+                v -> String.format(Locale.ROOT, "%.1f %%", v),
+                (v, dir) -> Math.max(FREQRESP_MAX_FREQ_PCT_MIN,
+                        Math.min(FREQRESP_MAX_FREQ_PCT_MAX,
+                                v + FREQRESP_MAX_FREQ_PCT_STEP * dir)),    // wheel
+                (v, dir) -> Math.max(FREQRESP_MAX_FREQ_PCT_MIN,
+                        Math.min(FREQRESP_MAX_FREQ_PCT_MAX,
+                                v + FREQRESP_MAX_FREQ_PCT_STEP * dir)),    // arrows
+                90);
+        nyqField.setLayoutData(comboData());
+        nyqField.setToolTipText(I18n.t("preferences.freqResp.maxFreqPctNyquist.tooltip"));
+        // Apply changes live: every edit (wheel, arrow, typed text) updates
+        // the pref immediately, clamps the FreqResp view's right-edge if
+        // the new max moved below it, and publishes a range-changed event
+        // so the pane re-syncs scrollbars and the view redraws.  Cancel
+        // rolls every changed pref back via the originals captured above.
+        nyqField.addSelectionListener(e -> {
+            double pct  = Math.max(FREQRESP_MAX_FREQ_PCT_MIN,
+                    Math.min(FREQRESP_MAX_FREQ_PCT_MAX, nyqField.getValue()));
+            double frac = pct / 100.0;
+            prefs.setFreqRespNyquistFraction(frac);
+            int sr = prefs.current().getInputSampleRate();
+            double maxBand = (sr > 0 ? sr * 0.5 : 24000.0) * frac;
+            if (prefs.getFreqRespFreqMaxHz() > maxBand) {
+                prefs.setFreqRespFreqMaxHz(maxBand);
+                if (prefs.getFreqRespFreqMinHz() > maxBand) {
+                    prefs.setFreqRespFreqMinHz(Math.max(1.0, maxBand * 0.5));
+                }
+            }
+            // Refresh the label so the (Hz) suffix tracks the typed
+            // percent.  layout() so the now-longer-or-shorter text
+            // doesn't get clipped by the surrounding grid.
+            nyqLabel.setText(formatMaxFreqLabel(frac, sr));
+            nyqLabel.requestLayout();
+            MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
+        });
+
+        // Compare-mode smoothing window (points).  Used by the FreqResp
+        // view's getSmoothedDiffDb to draw the (measured − reference)
+        // curve and to compute the anchor / min-max table that the
+        // auto-setup snaps to.  Live-applied: every edit publishes
+        // FREQRESP_COMPARE_PARAMS_CHANGED so the view re-derives the
+        // smoothed array and refreshes the table without disturbing
+        // the current zoom.
+        new Label(freqRespTab, SWT.NONE).setText(I18n.t("preferences.freqResp.compareSmoothWindow"));
+        NumericStepField smoothField = new NumericStepField(freqRespTab,
+                prefs.getFreqRespCompareSmoothWindow(),
+                raw -> {
+                    if (raw == null) return null;
+                    String s = raw.trim().replace(',', '.');
+                    if (s.isEmpty()) return null;
+                    try { return (double) Integer.parseInt(s); }
+                    catch (NumberFormatException ex) {
+                        try { return Math.rint(Double.parseDouble(s)); }
+                        catch (NumberFormatException ex2) { return null; }
+                    }
+                },
+                v -> String.format(Locale.ROOT, "%d", (int) Math.round(v)),
+                (v, dir) -> Math.max(FREQRESP_SMOOTH_W_MIN,
+                        Math.min(FREQRESP_SMOOTH_W_MAX,
+                                Math.rint(v) + FREQRESP_SMOOTH_W_STEP * dir)),  // wheel
+                (v, dir) -> Math.max(FREQRESP_SMOOTH_W_MIN,
+                        Math.min(FREQRESP_SMOOTH_W_MAX,
+                                Math.rint(v) + FREQRESP_SMOOTH_W_STEP * dir)),  // arrows
+                90);
+        smoothField.setLayoutData(comboData());
+        smoothField.setToolTipText(I18n.t("preferences.freqResp.compareSmoothWindow.tooltip"));
+        smoothField.addSelectionListener(e -> {
+            int w = (int) Math.round(Math.max(FREQRESP_SMOOTH_W_MIN,
+                    Math.min(FREQRESP_SMOOTH_W_MAX, smoothField.getValue())));
+            prefs.setFreqRespCompareSmoothWindow(w);
+            MessageBus.instance().publish(Events.FREQRESP_COMPARE_PARAMS_CHANGED);
+        });
+
+        // Industrial-noise notch filter.  When enabled, the FreqResp view
+        // linearly interpolates across each harmonic of the chosen base
+        // frequency (50 / 60 Hz mains) before drawing — removes the
+        // mains-hum spikes without re-running the measurement.  Live-applied
+        // via FREQRESP_CALIBRATION_CHANGED so the view re-derives the
+        // displayed copy and redraws.
+        Label notchEnableSpacer = new Label(freqRespTab, SWT.NONE);  // column 0 placeholder
+        notchEnableSpacer.setText("");
+        Button notchEnableBtn = new Button(freqRespTab, SWT.CHECK);
+        notchEnableBtn.setText(I18n.t("preferences.freqResp.notch.enable"));
+        notchEnableBtn.setToolTipText(I18n.t("preferences.freqResp.notch.enable.tooltip"));
+        notchEnableBtn.setSelection(prefs.isFreqRespNotchEnabled());
+        notchEnableBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        new Label(freqRespTab, SWT.NONE).setText(I18n.t("preferences.freqResp.notch.baseHz"));
+        Combo notchBaseCombo = new Combo(freqRespTab, SWT.READ_ONLY);
+        notchBaseCombo.add("50 Hz");
+        notchBaseCombo.add("60 Hz");
+        notchBaseCombo.select(prefs.getFreqRespNotchBaseHz() == 60 ? 1 : 0);
+        notchBaseCombo.setToolTipText(I18n.t("preferences.freqResp.notch.baseHz.tooltip"));
+        notchBaseCombo.setLayoutData(comboData());
+
+        notchEnableBtn.addListener(SWT.Selection, e -> {
+            prefs.setFreqRespNotchEnabled(notchEnableBtn.getSelection());
+            MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED);
+        });
+        notchBaseCombo.addListener(SWT.Selection, e -> {
+            prefs.setFreqRespNotchBaseHz(notchBaseCombo.getSelectionIndex() == 1 ? 60 : 50);
+            // Only fires a redraw when the notch is currently active; the
+            // base-Hz pref affects nothing else, so a quiet listener would
+            // also work — but firing unconditionally keeps the wiring
+            // symmetric with the checkbox.
+            MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED);
+        });
+
+        // ── Chart colour pickers.  Pattern mirrors the FFT tab's colour
+        // buttons: each holder array carries the currently-selected RGB
+        // through the dialog session so OK / Cancel can commit / roll
+        // back atomically.  Each button shows its current colour as the
+        // background; clicking opens the system ColorDialog.  The
+        // FreqResp view reads these prefs every paint, so a committed
+        // OK takes effect on the next redraw without an extra event.
+        int[] freqRespSignalColorHolder     = { prefs.getFreqRespSignalColor() };
+        int[] freqRespPhaseColorHolder      = { prefs.getFreqRespPhaseColor() };
+        int[] freqRespReferenceColorHolder  = { prefs.getFreqRespReferenceColor() };
+        int[] freqRespBackgroundColorHolder = { prefs.getFreqRespBackgroundColor() };
+
+        new Label(freqRespTab, SWT.NONE).setText(I18n.t("preferences.freqResp.signalColor"));
+        Button signalColorBtn = new Button(freqRespTab, SWT.PUSH);
+        signalColorBtn.setLayoutData(comboData());
+        applyButtonColor(signalColorBtn, freqRespSignalColorHolder[0]);
+        signalColorBtn.addListener(SWT.Selection, e -> {
+            ColorDialog dlg = new ColorDialog(dialog);
+            dlg.setRGB(unpackRgb(freqRespSignalColorHolder[0]));
+            RGB picked = dlg.open();
+            if (picked != null) {
+                freqRespSignalColorHolder[0] = packRgb(picked);
+                applyButtonColor(signalColorBtn, freqRespSignalColorHolder[0]);
+            }
+        });
+
+        new Label(freqRespTab, SWT.NONE).setText(I18n.t("preferences.freqResp.phaseColor"));
+        Button phaseColorBtn = new Button(freqRespTab, SWT.PUSH);
+        phaseColorBtn.setLayoutData(comboData());
+        applyButtonColor(phaseColorBtn, freqRespPhaseColorHolder[0]);
+        phaseColorBtn.addListener(SWT.Selection, e -> {
+            ColorDialog dlg = new ColorDialog(dialog);
+            dlg.setRGB(unpackRgb(freqRespPhaseColorHolder[0]));
+            RGB picked = dlg.open();
+            if (picked != null) {
+                freqRespPhaseColorHolder[0] = packRgb(picked);
+                applyButtonColor(phaseColorBtn, freqRespPhaseColorHolder[0]);
+            }
+        });
+
+        new Label(freqRespTab, SWT.NONE).setText(I18n.t("preferences.freqResp.referenceColor"));
+        Button refColorBtn = new Button(freqRespTab, SWT.PUSH);
+        refColorBtn.setLayoutData(comboData());
+        applyButtonColor(refColorBtn, freqRespReferenceColorHolder[0]);
+        refColorBtn.addListener(SWT.Selection, e -> {
+            ColorDialog dlg = new ColorDialog(dialog);
+            dlg.setRGB(unpackRgb(freqRespReferenceColorHolder[0]));
+            RGB picked = dlg.open();
+            if (picked != null) {
+                freqRespReferenceColorHolder[0] = packRgb(picked);
+                applyButtonColor(refColorBtn, freqRespReferenceColorHolder[0]);
+            }
+        });
+
+        new Label(freqRespTab, SWT.NONE).setText(I18n.t("preferences.freqResp.backgroundColor"));
+        Button bgColorBtn = new Button(freqRespTab, SWT.PUSH);
+        bgColorBtn.setLayoutData(comboData());
+        applyButtonColor(bgColorBtn, freqRespBackgroundColorHolder[0]);
+        bgColorBtn.addListener(SWT.Selection, e -> {
+            ColorDialog dlg = new ColorDialog(dialog);
+            dlg.setRGB(unpackRgb(freqRespBackgroundColorHolder[0]));
+            RGB picked = dlg.open();
+            if (picked != null) {
+                freqRespBackgroundColorHolder[0] = packRgb(picked);
+                applyButtonColor(bgColorBtn, freqRespBackgroundColorHolder[0]);
+            }
+        });
+
         // --- Device list state + refresh logic -----------------------------
         DeviceListState devices = new DeviceListState();
 
@@ -455,6 +730,15 @@ public final class PreferencesDialog {
             prefs.setFftChartBackgroundColor     (fftBgColorHolder[0]);
             prefs.setFftHarmonicDotColor         (fftDotColorHolder[0]);
             prefs.setFftFreqRespColor      (fftFreqRespColorHolder[0]);
+            prefs.setFftBeforeCalDotColor  (fftBeforeCalDotColorHolder[0]);
+            prefs.setFftCalOverlayColor    (fftCalOverlayColorHolder[0]);
+            prefs.setFreqRespSignalColor    (freqRespSignalColorHolder[0]);
+            prefs.setFreqRespPhaseColor     (freqRespPhaseColorHolder[0]);
+            prefs.setFreqRespReferenceColor (freqRespReferenceColorHolder[0]);
+            prefs.setFreqRespBackgroundColor(freqRespBackgroundColorHolder[0]);
+            MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED);
+            // Nyquist fraction is already saved live by the field listener;
+            // nothing extra to commit here.
             prefs.setBackend(active[0]);
             AudioBackend.instance().setActive(active[0]);
             // Look & Feel saves.
@@ -482,10 +766,35 @@ public final class PreferencesDialog {
             // Roll back Look & Feel too.
             prefs.setTabOrientation(originalTabOrientation);
             prefs.setSmallIconsInMainTab(originalSmallIcons);
+            // Roll back the FreqResp Nyquist fraction (and the freq
+            // window we may have clamped while the dialog was open).
+            // One range-changed publish so the pane re-syncs to the
+            // restored values.
+            boolean nyqMoved = prefs.getFreqRespNyquistFraction() != originalNyquistFraction
+                            || prefs.getFreqRespFreqMaxHz()       != originalFreqMaxHz
+                            || prefs.getFreqRespFreqMinHz()       != originalFreqMinHz;
+            prefs.setFreqRespNyquistFraction(originalNyquistFraction);
+            prefs.setFreqRespFreqMaxHz(originalFreqMaxHz);
+            prefs.setFreqRespFreqMinHz(originalFreqMinHz);
+            if (nyqMoved) MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
+            // Compare-smoothing pref rollback — separate event since it
+            // doesn't change the visible band.
+            if (prefs.getFreqRespCompareSmoothWindow() != originalSmoothWindow) {
+                prefs.setFreqRespCompareSmoothWindow(originalSmoothWindow);
+                MessageBus.instance().publish(Events.FREQRESP_COMPARE_PARAMS_CHANGED);
+            }
+            // Notch-filter pref rollback — restores both flag and base Hz,
+            // fires once so the view re-derives the displayed copy.
+            boolean notchMoved = prefs.isFreqRespNotchEnabled() != originalNotchEnabled
+                              || prefs.getFreqRespNotchBaseHz() != originalNotchBaseHz;
+            prefs.setFreqRespNotchEnabled(originalNotchEnabled);
+            prefs.setFreqRespNotchBaseHz(originalNotchBaseHz);
+            if (notchMoved) MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED);
             dialog.close();
         });
 
         dialog.pack();
+        Dialogs.centerOnParent(dialog);
         dialog.open();
     }
 
@@ -493,6 +802,28 @@ public final class PreferencesDialog {
         GridData gd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         gd.widthHint = 360;
         return gd;
+    }
+
+    /** Formats the FreqResp "Maximal analyzed frequency" label as
+     *  {@code "Maximal analyzed frequency, % Nyquist (24000 Hz)"}.  The
+     *  bracketed Hz is {@code nyqFraction · sampleRate / 2} so the user
+     *  sees the absolute upper band at the current input sample rate.
+     *  Falls back to {@code "(— Hz)"} when no input device is picked
+     *  yet (sampleRate ≤ 0). */
+    private String formatMaxFreqLabel(double nyqFraction, int sampleRate) {
+        String base = I18n.t("preferences.freqResp.maxFreqPctNyquist");
+        String hz;
+        if (sampleRate <= 0) {
+            hz = "— Hz";
+        } else {
+            double f = sampleRate * 0.5 * nyqFraction;
+            if (f >= 1000.0) {
+                hz = String.format(Locale.ROOT, "%.2f kHz", f / 1000.0);
+            } else {
+                hz = String.format(Locale.ROOT, "%.0f Hz", f);
+            }
+        }
+        return base + " (" + hz + ")";
     }
 
     /**

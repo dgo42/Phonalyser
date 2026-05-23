@@ -31,6 +31,46 @@ public class FreqRespCalHelper {
      *  swept band intact. */
     public static final double SWEEP_FADE_FRACTION_PER_SIDE = 0.05;
 
+    /** Compile-time switch for IR-domain time gating after delay
+     *  correction.  When on, the deconvolved impulse response is
+     *  windowed to {@link #IR_GATE_LENGTH_SEC} around the main peak
+     *  before being re-FFTed; the rest of the IR (mostly noise) is
+     *  zeroed.  Net effect on the magnitude trace: smooth ≈20 dB of
+     *  residual ripple while keeping every real device feature with
+     *  decay time shorter than the gate. */
+    private static final boolean USE_IR_GATING = false;
+
+    /** One-sided gate length in seconds.  Frequency resolution after
+     *  gating is ≈ 1/this — features narrower than that get smoothed.
+     *  50 ms preserves any analog feature with Q · f₀ &lt; 1000 (e.g. a
+     *  Twin-T at 1 kHz up to Q ≈ 50). */
+    private static final double IR_GATE_LENGTH_SEC = 0.25;
+
+    /** Hann taper at the gate edge as a fraction of the gate length.
+     *  Smooths the gate's transition from 1 to 0 to avoid spectral
+     *  artefacts a hard cutoff would introduce. */
+    private static final double IR_GATE_TAPER_FRAC = 0.1;
+
+    /** Compile-time switch for Savitzky-Golay smoothing.  When on, the
+     *  magnitude and phase arrays returned by the deconvolution are
+     *  passed through an SG filter of {@link #SAVGOL_WINDOW} points and
+     *  {@link #SAVGOL_ORDER} polynomial order.  Suppresses the residual
+     *  noise ripple while preserving sharp features better than a
+     *  moving average.  Independent of {@link #USE_IR_GATING}; both
+     *  can be enabled at once. */
+    private static final boolean USE_SAVGOL_FILTER = true;
+
+    /** SG window length in output samples.  Must be odd and
+     *  {@code > SAVGOL_ORDER}.  Larger window = smoother but blurs
+     *  narrower features.  7 points across a typical 200-point
+     *  log-spaced output ≈ 3.5% of a decade ≈ 1/12-octave smoothing. */
+    private static final int SAVGOL_WINDOW = 7;
+
+    /** SG polynomial order.  Higher = better feature preservation at
+     *  the cost of noise sensitivity.  Order 3 preserves Q≈10 notches;
+     *  bump to 5 for Q≈20-50 (Twin-T high-Q active variants). */
+    private static final int SAVGOL_ORDER = 3;
+
     /** Returns the per-side Hann fade length in samples for a sweep of
      *  {@code sweepSamples} samples.  Same value must be set on the
      *  {@code SignalGenerator} (so the DAC plays a windowed sweep) AND
@@ -159,6 +199,58 @@ public class FreqRespCalHelper {
             hIm[k] = im;
         }
 
+        // IR-domain time gating.  After delay correction, the impulse
+        // sits at sample 0 (with the response extending into positive
+        // time and, via the circular IFFT, wrapping a bandlimit pre-echo
+        // into the highest samples M-1, M-2, ...).  A symmetric Hann-
+        // tapered window of half-width IR_GATE_LENGTH_SEC samples keeps
+        // both branches; everything outside (noise tail) is zeroed.
+        // Re-FFT updates hRe/hIm in place so the downstream
+        // bin-to-output interpolation reads the smoothed H(f).
+        if (USE_IR_GATING) {
+            double[] gatedIr = new double[M];
+            gatedIr[0] = hRe[0];
+            gatedIr[1] = hRe[halfBins];
+            for (int k = 1; k < halfBins; k++) {
+                gatedIr[2*k]     = hRe[k];
+                gatedIr[2*k + 1] = hIm[k];
+            }
+            fft.realInverse(gatedIr, true);
+
+            int gateSamples = Math.max(1,
+                    Math.min(M / 2, (int) (IR_GATE_LENGTH_SEC * sampleRate)));
+            int taperSamples = Math.max(1, (int) (gateSamples * IR_GATE_TAPER_FRAC));
+            int flatEnd = Math.max(0, gateSamples - taperSamples);
+            for (int i = 0; i < M; i++) {
+                int dist = Math.min(i, M - i);     // circular distance from sample 0
+                double env;
+                if (dist < flatEnd) {
+                    env = 1.0;
+                } else if (dist < gateSamples) {
+                    int taperPos = dist - flatEnd;
+                    env = 0.5 * (1.0 + Math.cos(Math.PI * taperPos / taperSamples));
+                } else {
+                    env = 0.0;
+                }
+                gatedIr[i] *= env;
+            }
+
+            fft.realForward(gatedIr);
+            hRe[0]        = gatedIr[0];
+            hIm[0]        = 0.0;
+            hRe[halfBins] = gatedIr[1];
+            hIm[halfBins] = 0.0;
+            for (int k = 1; k < halfBins; k++) {
+                hRe[k] = gatedIr[2*k];
+                hIm[k] = gatedIr[2*k + 1];
+            }
+            log.info("{}Filter cal IR gate: ±{} samples (±{} ms), {} sample Hann taper",
+                    tag,
+                    gateSamples,
+                    String.format(Locale.US, "%.3f", 1000.0 * gateSamples / sampleRate),
+                    taperSamples);
+        }
+
         int nPoints = freqs.length;
         double[] magLin   = new double[nPoints];
         double[] phaseRad = new double[nPoints];
@@ -197,6 +289,34 @@ public class FreqRespCalHelper {
             }
         }
 
+        // Savitzky-Golay smoothing of the final per-output-point arrays.
+        // Magnitude is smoothed directly; phase is smoothed in (sin, cos)
+        // space and recombined via atan2 to handle ±π wraparound at
+        // notches without artefacts.  Boundary samples use reflection.
+        if (USE_SAVGOL_FILTER && nPoints >= SAVGOL_WINDOW) {
+            double[] coeffs = savGolCoefficients(SAVGOL_WINDOW, SAVGOL_ORDER);
+            double[] smoothMag = new double[nPoints];
+            double[] sinPh     = new double[nPoints];
+            double[] cosPh     = new double[nPoints];
+            for (int i = 0; i < nPoints; i++) {
+                sinPh[i] = Math.sin(phaseRad[i]);
+                cosPh[i] = Math.cos(phaseRad[i]);
+            }
+            double[] smoothSin = new double[nPoints];
+            double[] smoothCos = new double[nPoints];
+            for (int i = 0; i < nPoints; i++) {
+                smoothMag[i] = applySavGol(magLin, i, coeffs);
+                smoothSin[i] = applySavGol(sinPh,  i, coeffs);
+                smoothCos[i] = applySavGol(cosPh,  i, coeffs);
+            }
+            for (int i = 0; i < nPoints; i++) {
+                magLin[i]   = smoothMag[i];
+                phaseRad[i] = Math.atan2(smoothSin[i], smoothCos[i]);
+            }
+            log.info("{}Filter cal SG smooth: window={}, order={}",
+                    tag, SAVGOL_WINDOW, SAVGOL_ORDER);
+        }
+
         double minDb = Double.POSITIVE_INFINITY, maxDb = -Double.POSITIVE_INFINITY;
         double minF = 0.0, maxF = 0.0;
         for (int k = 0; k < nPoints; k++) {
@@ -221,6 +341,96 @@ public class FreqRespCalHelper {
         }
 
         return new FreqRespCalibration(freqs, magLin, phaseRad);
+    }
+
+    /** Computes the central-tap Savitzky-Golay smoothing coefficients
+     *  for the given odd window length and polynomial order.  The
+     *  central tap of the SG smoother is the first row of
+     *  {@code (Vᵀ V)⁻¹ Vᵀ} where {@code V[i][j] = (i − centre)^j}.
+     *  Matrix inversion is plain Gauss-Jordan; the matrix is at most
+     *  {@code (order+1) × (order+1)} which is tiny so the cost is
+     *  negligible. */
+    private double[] savGolCoefficients(int window, int order) {
+        int m = window / 2;
+        int n = order + 1;
+        double[][] v = new double[window][n];
+        for (int i = 0; i < window; i++) {
+            double x = i - m;
+            v[i][0] = 1.0;
+            for (int j = 1; j < n; j++) v[i][j] = v[i][j - 1] * x;
+        }
+        double[][] vtv = new double[n][n];
+        for (int a = 0; a < n; a++) {
+            for (int b = 0; b < n; b++) {
+                double s = 0.0;
+                for (int i = 0; i < window; i++) s += v[i][a] * v[i][b];
+                vtv[a][b] = s;
+            }
+        }
+        double[][] inv = invertSquareMatrix(vtv);
+        double[] c = new double[window];
+        for (int i = 0; i < window; i++) {
+            double s = 0.0;
+            for (int j = 0; j < n; j++) s += inv[0][j] * v[i][j];
+            c[i] = s;
+        }
+        return c;
+    }
+
+    /** Convolves {@code arr} with {@code coeffs} at index {@code i}.
+     *  Out-of-bounds indices are reflected (mirror at boundary) so
+     *  edge samples still get smoothed without exotic boundary
+     *  conventions. */
+    private double applySavGol(double[] arr, int i, double[] coeffs) {
+        int half = coeffs.length / 2;
+        double sum = 0.0;
+        for (int j = -half; j <= half; j++) {
+            int idx = i + j;
+            if (idx < 0)             idx = -idx;
+            if (idx >= arr.length)   idx = 2 * (arr.length - 1) - idx;
+            if (idx < 0)             idx = 0;
+            if (idx >= arr.length)   idx = arr.length - 1;
+            sum += coeffs[j + half] * arr[idx];
+        }
+        return sum;
+    }
+
+    /** Gauss-Jordan inverse for a small square matrix.  Caller owns
+     *  the input; this method returns a fresh inverse and does not
+     *  mutate {@code a}.  Adequate for the {@code (order+1)²} matrices
+     *  used by {@link #savGolCoefficients}; not intended for anything
+     *  larger. */
+    private double[][] invertSquareMatrix(double[][] a) {
+        int n = a.length;
+        double[][] m = new double[n][2 * n];
+        for (int i = 0; i < n; i++) {
+            System.arraycopy(a[i], 0, m[i], 0, n);
+            m[i][n + i] = 1.0;
+        }
+        for (int col = 0; col < n; col++) {
+            int pivot = col;
+            double pivotMag = Math.abs(m[col][col]);
+            for (int row = col + 1; row < n; row++) {
+                double mag = Math.abs(m[row][col]);
+                if (mag > pivotMag) { pivot = row; pivotMag = mag; }
+            }
+            if (pivot != col) {
+                double[] tmp = m[col]; m[col] = m[pivot]; m[pivot] = tmp;
+            }
+            double diag = m[col][col];
+            if (diag == 0.0) throw new ArithmeticException("Singular matrix in SG coefficient solve");
+            double inv = 1.0 / diag;
+            for (int j = 0; j < 2 * n; j++) m[col][j] *= inv;
+            for (int row = 0; row < n; row++) {
+                if (row == col) continue;
+                double factor = m[row][col];
+                if (factor == 0.0) continue;
+                for (int j = 0; j < 2 * n; j++) m[row][j] -= factor * m[col][j];
+            }
+        }
+        double[][] out = new double[n][n];
+        for (int i = 0; i < n; i++) System.arraycopy(m[i], n, out[i], 0, n);
+        return out;
     }
 
     /** Mutates {@code measured} in-place: divides every magnitude by the

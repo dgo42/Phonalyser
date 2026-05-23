@@ -11,7 +11,6 @@ import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
-import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
@@ -23,6 +22,7 @@ import org.eclipse.swt.widgets.Shell;
 
 import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.FreqRespCalibration;
+import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -71,7 +71,11 @@ public final class FreqRespWizardDialog {
     /** "Please wait" modal shown for the duration of a wizard measurement.
      *  Same shape as the pane's busy shell so the user sees consistent
      *  feedback regardless of which Play button started the sweep. */
-    private Shell          busyShell;
+    private Shell             busyShell;
+    /** Live "level vs. time" meter inside {@link #busyShell}, fed by the
+     *  capture-progress callback that the wizard passes through to the
+     *  analyzer config.  Null while no busy shell is open. */
+    private FreqRespLiveMeter busyMeter;
     private boolean        appliedSuccessfully;
     private int            currentPageIndex;
 
@@ -113,6 +117,7 @@ public final class FreqRespWizardDialog {
             e.doit = handleCancel();
         });
 
+        Dialogs.centerOnParent(dialog);
         dialog.open();
         Display d = dialog.getDisplay();
         while (!dialog.isDisposed()) {
@@ -248,8 +253,23 @@ public final class FreqRespWizardDialog {
         backBtn.setEnabled(false);
         nextBtn.setEnabled(false);
 
-        openBusyShell();
+        int sr = Math.max(1, prefs.current().getInputSampleRate());
+        double totalSec = prefs.getFreqRespLeadInSec()
+                        + prefs.getFreqRespDurationSec()
+                        + 0.5;
+        openBusyShell(totalSec);
         MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
+        // Marshal capture-progress to the UI thread so the busy shell's
+        // live meter paints level-vs-time as the sweep runs.
+        Display d = dialog.getDisplay();
+        StereoCaptureProgress progress = (totalSamples, rmsLin) -> {
+            double tSec = totalSamples / (double) sr;
+            d.asyncExec(() -> {
+                if (busyMeter != null && !busyMeter.isDisposed()) {
+                    busyMeter.appendSample(tSec, rmsLin);
+                }
+            });
+        };
         Thread t = new Thread(() -> {
             try {
                 FreqRespAnalyzerConfig cfg = FreqRespAnalyzerConfig.builder()
@@ -264,6 +284,7 @@ public final class FreqRespWizardDialog {
                         .leadInSec(prefs.getFreqRespLeadInSec())
                         .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
                         .applyCalibration(!directLeg)  // page 2 divides out the page-1 transfer
+                        .captureProgress(progress)
                         .build();
                 StereoFreqRespResult r = new FreqRespAnalyzer(cfg).run(null, null);
                 dialog.getDisplay().asyncExec(() -> onMeasurementDone(directLeg, r, null));
@@ -296,8 +317,11 @@ public final class FreqRespWizardDialog {
         if (directLeg) {
             directResult = r;
             StereoFreqRespCalibration cal = stereoCalFromResult(r);
+            // Only the direct (transient) slot — the view applies it
+            // automatically alongside the entries list so page 2 gets
+            // the page-1 loopback subtracted without polluting the
+            // persistent calibration tab.
             FreqRespCalibrationStore.instance().setDirect(cal);
-            FreqRespCalibrationStore.instance().setCurrent(cal, null);
             hostView.setLeftResult(r.left());
             hostView.setRightResult(r.right());
             hostView.setSourceFilePath(null);
@@ -342,7 +366,19 @@ public final class FreqRespWizardDialog {
         String picked = fd.open();
         if (picked == null) return;
         try {
+            // The analyzer now always returns the raw deconvolution
+            // (loopback × DUT, in page-2 terms).  Save needs the
+            // DUT-alone curve, so divide the raw result by the loaded
+            // "direct" calibration before writing.  When no direct cal
+            // is available (shouldn't happen at page-3 — page 1 always
+            // populates it) the raw measurement is saved as-is.
             StereoFreqRespCalibration stereoCal = stereoCalFromResult(dutResult);
+            StereoFreqRespCalibration direct =
+                    FreqRespCalibrationStore.instance().getDirect();
+            if (direct != null) {
+                FreqRespCalHelper.divideInPlace(stereoCal.left(),  direct.left());
+                FreqRespCalHelper.divideInPlace(stereoCal.right(), direct.right());
+            }
             FreqRespSweepParams p = dutResult.left().getSweepParams();
             FreqRespCalHelper.saveCsv(stereoCal,
                     picked, dutResult.left().getSampleRate(),
@@ -402,16 +438,25 @@ public final class FreqRespWizardDialog {
         return true;
     }
 
-    private void openBusyShell() {
+    private void openBusyShell(double totalDurationSec) {
         if (busyShell != null && !busyShell.isDisposed()) return;
-        Shell s = new Shell(dialog, SWT.ON_TOP | SWT.TITLE | SWT.BORDER
+        Shell s = new Shell(dialog, SWT.TITLE | SWT.BORDER
                 | SWT.APPLICATION_MODAL);
         s.setText(I18n.t("freqResp.busy.title"));
-        FillLayout fl = new FillLayout();
-        fl.marginWidth = 24; fl.marginHeight = 18;
-        s.setLayout(fl);
+        GridLayout gl = new GridLayout(1, false);
+        gl.marginWidth = 12; gl.marginHeight = 10;
+        gl.verticalSpacing = 8;
+        s.setLayout(gl);
         Label l = new Label(s, SWT.CENTER);
         l.setText(I18n.t("freqResp.busy.message"));
+        l.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        busyMeter = new FreqRespLiveMeter(s, totalDurationSec);
+        GridData mg = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        mg.widthHint  = 520;
+        mg.heightHint = 100;
+        busyMeter.setLayoutData(mg);
+
         s.pack();
         Rectangle pb = dialog.getBounds();
         Point sz = s.getSize();
@@ -426,6 +471,7 @@ public final class FreqRespWizardDialog {
     private void closeBusyShell() {
         if (busyShell != null && !busyShell.isDisposed()) busyShell.close();
         busyShell = null;
+        busyMeter = null;
     }
 
     private DeviceRef findDevice(boolean output, String name) {

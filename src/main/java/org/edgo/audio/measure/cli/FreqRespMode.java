@@ -166,7 +166,7 @@ public class FreqRespMode {
         // L and R deconvolved from the same sweep.
         StereoSamples rec = CaptureWithGenerator.runStereo(
                 gen, outDevice, inDevice, sampleRate, bitDepth, ditherBits,
-                durationSec, null, 0, null);
+                durationSec, null, 0, null, null);
         log.info("Captured    : {} samples per channel ({} s)", rec.left().length,
                 String.format(Locale.US, "%.4f", rec.left().length / (double) sampleRate));
 

@@ -39,16 +39,58 @@ public class FreqRespFormat {
         return String.format(Locale.ROOT, "%.2f dB", db);
     }
 
-    /** Magnitude label without the dB suffix — used per-tick. */
+    /** Crosshair-readout variant of {@link #formatDb} that keeps the
+     *  number of decimal places in step with the value's magnitude so
+     *  that ~4 significant digits always read clearly:
+     *  <ul>
+     *    <li>10.1234 → "10.12 dB"</li>
+     *    <li> 0.1234 → "0.1234 dB"</li>
+     *    <li> 0.0000123 → "0.0000123 dB"</li>
+     *  </ul>
+     *  Stays in fixed notation (no scientific) so the readout is
+     *  comfortable to read at a glance. */
+    public String formatDbReadout(double db) {
+        if (!Double.isFinite(db)) return "—";
+        return String.format(Locale.ROOT, "%s dB", formatSignificant(db, 4));
+    }
+
+    /** Formats {@code value} in fixed notation with the given number of
+     *  significant digits.  Decimal places auto-expand as the value gets
+     *  smaller so the readout never loses precision; trailing zeros
+     *  beyond the last significant digit are emitted so the format is
+     *  consistent within a magnitude band. */
+    private String formatSignificant(double value, int sigDigits) {
+        if (value == 0.0) {
+            return String.format(Locale.ROOT, "%." + (sigDigits - 1) + "f", 0.0);
+        }
+        double absV = Math.abs(value);
+        int magnitude = (int) Math.floor(Math.log10(absV));
+        int decimals  = Math.max(0, sigDigits - 1 - magnitude);
+        return String.format(Locale.ROOT, "%." + decimals + "f", value);
+    }
+
+    /** Magnitude label without the dB suffix — used per-tick.  Four
+     *  significant digits so the precision adapts to the magnitude:
+     *  12.3456 → "12.34", 0.12345 → "0.1234", 0.001234 → "0.001234",
+     *  100 → "100.0".  Lets a high-resolution compare trace show the
+     *  actual gridline values without padding small numbers with
+     *  meaningless trailing zeros. */
     public String formatDbBare(double db) {
         if (!Double.isFinite(db)) return "—";
-        return String.format(Locale.ROOT, "%.1f", db);
+        return formatSignificant(db, 4);
     }
 
     /** Phase label in degrees, wrapped to {@code [-180, +180]}. */
     public String formatPhase(double deg) {
         if (!Double.isFinite(deg)) return "—";
         return String.format(Locale.ROOT, "%.1f°", deg);
+    }
+
+    /** Crosshair-readout variant of {@link #formatPhase} with ~4 sig
+     *  digits, like {@link #formatDbReadout}. */
+    public String formatPhaseReadout(double deg) {
+        if (!Double.isFinite(deg)) return "—";
+        return String.format(Locale.ROOT, "%s°", formatSignificant(deg, 4));
     }
 
     /** Linear magnitude → dB.  Returns {@code -300} for non-positive

@@ -78,14 +78,14 @@ class FreqRespCalibrationStoreTest {
     }
 
     @Test
-    void directSlotIsIndependentAndDoesNotFireEvent() {
+    void directSlotFiresButDoesNotLeakIntoEntries() {
         StereoFreqRespCalibration direct = sampleStereo();
         store.setDirect(direct);
         assertSame(direct, store.getDirect());
         assertNull(store.getCurrent(),
-                "setDirect must not leak into the current slot");
-        assertEquals(0, eventCounter.get(),
-                "setDirect must not publish FREQRESP_CALIBRATION_CHANGED");
+                "setDirect must not leak into the entries list");
+        assertEquals(1, eventCounter.get(),
+                "setDirect publishes FREQRESP_CALIBRATION_CHANGED so the view re-applies");
     }
 
     @Test

@@ -12,6 +12,7 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
 import org.eclipse.swt.custom.CTabFolderRenderer;
 import org.eclipse.swt.custom.CTabItem;
+import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
@@ -20,7 +21,6 @@ import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
-import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.FormAttachment;
 import org.eclipse.swt.layout.FormData;
 import org.eclipse.swt.layout.FormLayout;
@@ -36,6 +36,7 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.FreqRespCalibration;
+import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bus.Events;
@@ -45,6 +46,7 @@ import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.generator.NumericStepField;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.preferences.FreqRespPreset;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
@@ -78,8 +80,10 @@ public final class FreqRespPane {
     private static final double FREQ_FLOOR_HZ = 1.0;
     /** Upper bound for the magnitude axis (full dynamic range cap). */
     private static final double MAG_TOP_MAX = 20.0;
-    /** Lower bound for the magnitude axis. */
-    private static final double MAG_BOT_MIN = -140.0;
+    /** Lower bound for the magnitude axis — matches the view's wheel
+     *  zoom-out limit (MAG_BOT_MIN_DB) so the scrollbar can reach the
+     *  same outer edge the wheel allows. */
+    private static final double MAG_BOT_MIN = -300.0;
 
     @Getter private final Composite group;
     @Getter private FreqRespView view;
@@ -249,7 +253,7 @@ public final class FreqRespPane {
         toolbarTabs.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         buildSettingsTab();
         buildRiaaTab();
-        buildEmptyTab("freqResp.tab.presets");      // deferred — FreqResp preset POJO clone-out lives outside this plan's scope
+        buildPresetsTab();
         buildUtilityTab();
         buildCalibrationTab();
         buildSaveToTab();
@@ -345,17 +349,191 @@ public final class FreqRespPane {
         playButton.addListener(SWT.Selection, e -> onPlayClicked());
     }
 
-    /** Adds an empty CTabItem with the given i18n key as its label.  Each
-     *  tab gets a placeholder Composite so subsequent phases can wire
-     *  real content into it. */
-    private void buildEmptyTab(String labelKey) {
+    // -------------------------------------------------------------------------
+    // Presets tab — named snapshots of every FreqResp Settings + RIAA pref
+    //
+    // Layout mirrors the FFT pane: an editable combo holding every saved
+    // preset's name, plus Save / Load / Delete push-buttons.  The buttons
+    // self-enable based on whether the name in the combo refers to an
+    // existing preset and whether the current settings differ from that
+    // preset's snapshot (Save is grey when the on-screen values already
+    // match; Load / Delete are grey for an empty / unknown name).
+    // -------------------------------------------------------------------------
+
+    private Combo  freqRespPresetCombo;
+    private Button freqRespPresetSaveBtn;
+    private Button freqRespPresetLoadBtn;
+    private Button freqRespPresetDeleteBtn;
+
+    private void buildPresetsTab() {
         CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
-        item.setText(I18n.t(labelKey));
-        Composite content = new Composite(toolbarTabs, SWT.NONE);
-        content.setLayout(new GridLayout(1, false));
-        Label placeholder = new Label(content, SWT.NONE);
-        placeholder.setText("");
-        item.setControl(content);
+        item.setText(I18n.t("freqResp.tab.presets"));
+        Composite g = new Composite(toolbarTabs, SWT.NONE);
+        item.setControl(g);
+        GridLayout gl = new GridLayout(4, false);
+        gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
+        g.setLayout(gl);
+        Preferences prefs = Preferences.instance();
+
+        freqRespPresetCombo = new Combo(g, SWT.DROP_DOWN);
+        freqRespPresetCombo.setToolTipText(I18n.t("freqResp.presets.combo.tooltip"));
+        GridData comboGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        comboGd.widthHint = 180;
+        freqRespPresetCombo.setLayoutData(comboGd);
+        for (String name : prefs.getFreqRespPresets().keySet()) freqRespPresetCombo.add(name);
+        freqRespPresetCombo.addListener(SWT.Modify,    e -> refreshFreqRespPresetButtonState());
+        freqRespPresetCombo.addListener(SWT.Selection, e -> refreshFreqRespPresetButtonState());
+
+        freqRespPresetSaveBtn = new Button(g, SWT.PUSH);
+        freqRespPresetSaveBtn.setText(I18n.t("freqResp.presets.save"));
+        freqRespPresetSaveBtn.setToolTipText(I18n.t("freqResp.presets.save.tooltip"));
+        freqRespPresetSaveBtn.addListener(SWT.Selection, e -> {
+            String name = freqRespPresetCombo.getText().trim();
+            if (name.isEmpty()) return;
+            if (prefs.getFreqRespPresets().containsKey(name)
+                    && !confirmFreqRespPresetOverwrite(name)) return;
+            prefs.putFreqRespPreset(name, captureCurrentFreqRespPreset());
+            if (freqRespPresetCombo.indexOf(name) < 0) freqRespPresetCombo.add(name);
+            freqRespPresetCombo.setText(name);
+            refreshFreqRespPresetButtonState();
+            refreshTabHeader(TAB_FREQRESP_PRESETS);
+        });
+
+        freqRespPresetLoadBtn = new Button(g, SWT.PUSH);
+        freqRespPresetLoadBtn.setText(I18n.t("freqResp.presets.load"));
+        freqRespPresetLoadBtn.setToolTipText(I18n.t("freqResp.presets.load.tooltip"));
+        freqRespPresetLoadBtn.addListener(SWT.Selection, e -> {
+            String name = freqRespPresetCombo.getText().trim();
+            if (name.isEmpty()) return;
+            FreqRespPreset p = prefs.getFreqRespPresets().get(name);
+            if (p != null) {
+                applyFreqRespPreset(p);
+                refreshFreqRespPresetButtonState();
+            }
+        });
+
+        freqRespPresetDeleteBtn = new Button(g, SWT.PUSH);
+        freqRespPresetDeleteBtn.setText(I18n.t("freqResp.presets.delete"));
+        freqRespPresetDeleteBtn.setToolTipText(I18n.t("freqResp.presets.delete.tooltip"));
+        freqRespPresetDeleteBtn.addListener(SWT.Selection, e -> {
+            String name = freqRespPresetCombo.getText().trim();
+            if (name.isEmpty() || !prefs.getFreqRespPresets().containsKey(name)) return;
+            if (!confirmFreqRespPresetDelete(name)) return;
+            prefs.removeFreqRespPreset(name);
+            int idx = freqRespPresetCombo.indexOf(name);
+            if (idx >= 0) freqRespPresetCombo.remove(idx);
+            freqRespPresetCombo.setText("");
+            refreshFreqRespPresetButtonState();
+            refreshTabHeader(TAB_FREQRESP_PRESETS);
+        });
+
+        refreshFreqRespPresetButtonState();
+        // Re-tick the Save-button enable state periodically so it grays
+        // out as soon as the user makes the live settings match the
+        // named preset's snapshot.  Matches FftPane's same idiom.
+        Display display = g.getDisplay();
+        Runnable[] tick = { null };
+        tick[0] = () -> {
+            if (freqRespPresetCombo == null || freqRespPresetCombo.isDisposed()) return;
+            refreshFreqRespPresetButtonState();
+            display.timerExec(500, tick[0]);
+        };
+        display.timerExec(500, tick[0]);
+    }
+
+    private FreqRespPreset captureCurrentFreqRespPreset() {
+        Preferences prefs = Preferences.instance();
+        FreqRespPreset p = new FreqRespPreset();
+        p.setStartHz(prefs.getFreqRespStartHz());
+        p.setStopHz(prefs.getFreqRespStopHz());
+        p.setAmplitudeVrms(prefs.getFreqRespAmplitudeVrms());
+        p.setSweepPoints(prefs.getFreqRespSweepPoints());
+        p.setFftSize(prefs.getFreqRespFftSize());
+        p.setLeadInSec(prefs.getFreqRespLeadInSec());
+        p.setDitherBits(prefs.getFreqRespDitherBits());
+        p.setShowRiaa(prefs.isFreqRespShowRiaa());
+        p.setReverseRiaa(prefs.isFreqRespReverseRiaa());
+        p.setIecAmendment(prefs.isFreqRespIecAmendment());
+        p.setCompareMode(prefs.isFreqRespCompareMode());
+        return p;
+    }
+
+    private void applyFreqRespPreset(FreqRespPreset p) {
+        Preferences prefs = Preferences.instance();
+        prefs.setFreqRespStartHz(p.getStartHz());
+        prefs.setFreqRespStopHz(p.getStopHz());
+        prefs.setFreqRespAmplitudeVrms(p.getAmplitudeVrms());
+        prefs.setFreqRespSweepPoints(p.getSweepPoints());
+        prefs.setFreqRespFftSize(p.getFftSize());
+        prefs.setFreqRespLeadInSec(p.getLeadInSec());
+        prefs.setFreqRespDitherBits(p.getDitherBits());
+        prefs.setFreqRespShowRiaa(p.isShowRiaa());
+        prefs.setFreqRespReverseRiaa(p.isReverseRiaa());
+        prefs.setFreqRespIecAmendment(p.isIecAmendment());
+        prefs.setFreqRespCompareMode(p.isCompareMode());
+        // Re-derive the derived sweep duration from the loaded FFT size
+        // + lead-in so the analyzer + Settings-tab label both reflect
+        // the preset's values.
+        prefs.setFreqRespDurationSec(deriveDurationSecFromFftSize(p.getFftSize()));
+        prefs.save();
+        // Force a full pane rebuild's worth of side-effects: refresh the
+        // settings-tab label + every tile header that depends on these
+        // prefs, plus the view's redraw via the range-changed event.
+        refreshFftSizeLabel();
+        refreshTabHeader(TAB_FREQRESP_SETTINGS);
+        refreshTabHeader(TAB_FREQRESP_RIAA);
+        MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
+        view.redraw();
+    }
+
+    private boolean freqRespPresetsEqual(FreqRespPreset a, FreqRespPreset b) {
+        return Double.compare(a.getStartHz(),       b.getStartHz())       == 0
+            && Double.compare(a.getStopHz(),        b.getStopHz())        == 0
+            && Double.compare(a.getAmplitudeVrms(), b.getAmplitudeVrms()) == 0
+            && a.getSweepPoints() == b.getSweepPoints()
+            && a.getFftSize()     == b.getFftSize()
+            && Double.compare(a.getLeadInSec(),     b.getLeadInSec())     == 0
+            && a.getDitherBits()  == b.getDitherBits()
+            && a.isShowRiaa()     == b.isShowRiaa()
+            && a.isReverseRiaa()  == b.isReverseRiaa()
+            && a.isIecAmendment() == b.isIecAmendment()
+            && a.isCompareMode()  == b.isCompareMode();
+    }
+
+    private void refreshFreqRespPresetButtonState() {
+        if (freqRespPresetCombo == null || freqRespPresetCombo.isDisposed()) return;
+        if (freqRespPresetSaveBtn == null || freqRespPresetSaveBtn.isDisposed()) return;
+        if (freqRespPresetLoadBtn == null || freqRespPresetLoadBtn.isDisposed()) return;
+        if (freqRespPresetDeleteBtn == null || freqRespPresetDeleteBtn.isDisposed()) return;
+        String name = freqRespPresetCombo.getText().trim();
+        if (name.isEmpty()) {
+            freqRespPresetSaveBtn.setEnabled(false);
+            freqRespPresetLoadBtn.setEnabled(false);
+            freqRespPresetDeleteBtn.setEnabled(false);
+            return;
+        }
+        FreqRespPreset existing = Preferences.instance().getFreqRespPresets().get(name);
+        if (existing == null) {
+            freqRespPresetSaveBtn.setEnabled(true);
+            freqRespPresetLoadBtn.setEnabled(false);
+            freqRespPresetDeleteBtn.setEnabled(false);
+        } else {
+            freqRespPresetSaveBtn.setEnabled(!freqRespPresetsEqual(existing, captureCurrentFreqRespPreset()));
+            freqRespPresetLoadBtn.setEnabled(true);
+            freqRespPresetDeleteBtn.setEnabled(true);
+        }
+    }
+
+    private boolean confirmFreqRespPresetOverwrite(String name) {
+        return Dialogs.confirm(group.getShell(),
+                I18n.t("freqResp.presets.overwrite.title"),
+                I18n.t("freqResp.presets.overwrite.message").replace("{0}", name)) == SWT.YES;
+    }
+
+    private boolean confirmFreqRespPresetDelete(String name) {
+        return Dialogs.confirm(group.getShell(),
+                I18n.t("freqResp.presets.delete.title"),
+                I18n.t("freqResp.presets.delete.message").replace("{0}", name)) == SWT.YES;
     }
 
     // -------------------------------------------------------------------------
@@ -372,11 +550,21 @@ public final class FreqRespPane {
             "8k", "16k", "64k", "128k", "256k", "512k", "1M", "2M", "4M"
     };
 
-    /** Nyquist-fraction options exposed by the dropdown (the spec says
-     *  40-50 %, so we offer 0.5 %-spaced steps in that range). */
-    private static final double[] NYQUIST_FRAC_VALUES = {
-            0.40, 0.42, 0.44, 0.46, 0.48, 0.50
+    /** Deconvolution FFT length offered by the FFT-size combo.  Every
+     *  entry is a power of 2; the larger the size, the longer the
+     *  sweep, the finer the freq resolution. */
+    private static final int[] FFT_SIZE_VALUES = {
+            1 << 16, 1 << 17, 1 << 18, 1 << 19, 1 << 20,
+            1 << 21, 1 << 22, 1 << 23, 1 << 24
     };
+    private static final String[] FFT_SIZE_LABELS = {
+            "64k", "128k", "256k", "512k", "1M", "2M", "4M", "8M", "16M"
+    };
+
+    /** Updated whenever the FFT-size combo or the lead-in field changes
+     *  — caption is {@code "FFT size (D.Ds)"} where D.D is the derived
+     *  sweep duration in seconds. */
+    private Label fftSizeLabel;
 
     private void buildSettingsTab() {
         CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
@@ -426,21 +614,34 @@ public final class FreqRespPane {
             refreshTabHeader(TAB_FREQRESP_SETTINGS);
         });
 
-        addLabel(g, I18n.t("freqResp.settings.duration"));
-        NumericStepField durationField = new NumericStepField(g,
-                prefs.getFreqRespDurationSec(),
-                this::parseDouble,
-                v -> String.format(Locale.ROOT, "%.1f s", v),
-                (v, dir) -> Math.max(0.5, v + 0.5 * dir),     // wheel: ±0.5 s
-                (v, dir) -> Math.max(0.5, v + 0.5 * dir),     // arrows: ±0.5 s
-                90);
-        durationField.setLayoutData(comboGd());
-        durationField.setToolTipText(I18n.t("freqResp.settings.duration.tooltip"));
-        durationField.addSelectionListener(e -> {
-            prefs.setFreqRespDurationSec(Math.max(0.5, durationField.getValue()));
+        // FFT-size combo replaces the old sweep-duration field.  The
+        // analyzer picks {@code nextPow2(leadIn + sweep + tail)} as its
+        // deconvolution length, so by letting the user pick FFT size
+        // directly we can solve back for the sweep duration that lands
+        // exactly on that pow2 — no wasted bins, and the label shows
+        // the user how long the actual sweep will run.
+        fftSizeLabel = new Label(g, SWT.NONE);
+        fftSizeLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        Combo fftSizeCombo = new Combo(g, SWT.READ_ONLY);
+        for (String s : FFT_SIZE_LABELS) fftSizeCombo.add(s);
+        selectFftSizeCombo(fftSizeCombo, prefs.getFreqRespFftSize());
+        fftSizeCombo.setToolTipText(I18n.t("freqResp.settings.fftSize.tooltip"));
+        fftSizeCombo.setLayoutData(comboGd());
+        fftSizeCombo.addListener(SWT.Selection, e -> {
+            int idx = fftSizeCombo.getSelectionIndex();
+            if (idx < 0 || idx >= FFT_SIZE_VALUES.length) return;
+            int n = FFT_SIZE_VALUES[idx];
+            prefs.setFreqRespFftSize(n);
+            prefs.setFreqRespDurationSec(deriveDurationSecFromFftSize(n));
             prefs.save();
+            refreshFftSizeLabel();
             refreshTabHeader(TAB_FREQRESP_SETTINGS);
         });
+        // Initial sync: the YAML may carry a stale durationSec that no
+        // longer matches the persisted fftSize (or vice versa).  Re-derive
+        // and persist on every pane build so the analyzer + label agree.
+        prefs.setFreqRespDurationSec(deriveDurationSecFromFftSize(prefs.getFreqRespFftSize()));
+        refreshFftSizeLabel();
 
         // ---- Row 3: sweep points combo + lead-in ---------------------------
         addLabel(g, I18n.t("freqResp.settings.points"));
@@ -465,7 +666,13 @@ public final class FreqRespPane {
         leadInField.setToolTipText(I18n.t("freqResp.settings.leadIn.tooltip"));
         leadInField.addSelectionListener(e -> {
             prefs.setFreqRespLeadInSec(Math.max(0.05, leadInField.getValue()));
+            // The derived sweep duration depends on lead-in (lead-in eats
+            // into the same FFT window), so a lead-in change ripples
+            // through to durationSec and the FFT-size label.
+            prefs.setFreqRespDurationSec(deriveDurationSecFromFftSize(prefs.getFreqRespFftSize()));
             prefs.save();
+            refreshFftSizeLabel();
+            refreshTabHeader(TAB_FREQRESP_SETTINGS);
         });
 
         // ---- Row 4: dither + nyquist fraction ------------------------------
@@ -480,23 +687,6 @@ public final class FreqRespPane {
             prefs.save();
         });
 
-        addLabel(g, I18n.t("freqResp.settings.nyquistFrac"));
-        Combo nyqCombo = new Combo(g, SWT.READ_ONLY);
-        for (double v : NYQUIST_FRAC_VALUES) {
-            nyqCombo.add(String.format(Locale.ROOT, "%.0f %%", v * 100));
-        }
-        int nyqIdx = nearestIndex(NYQUIST_FRAC_VALUES, prefs.getFreqRespNyquistFraction());
-        nyqCombo.select(nyqIdx);
-        nyqCombo.setLayoutData(comboGd());
-        nyqCombo.setToolTipText(I18n.t("freqResp.settings.nyquistFrac.tooltip"));
-        nyqCombo.addListener(SWT.Selection, e -> {
-            int i = nyqCombo.getSelectionIndex();
-            if (i >= 0 && i < NYQUIST_FRAC_VALUES.length) {
-                prefs.setFreqRespNyquistFraction(NYQUIST_FRAC_VALUES[i]);
-                prefs.save();
-                view.redraw();
-            }
-        });
     }
 
     private NumericStepField freqField(Composite parent, double initial) {
@@ -546,6 +736,45 @@ public final class FreqRespPane {
         combo.select(0);  // default to SR/2 when no exact match
     }
 
+    /** Selects the combo row whose FFT-size value matches the given
+     *  number of samples.  Falls back to the smallest entry (64k) when
+     *  the prefs value doesn't line up — should be impossible because
+     *  the load-time snap rounds non-pow2 values to the next legal
+     *  one, but defensive anyway. */
+    private void selectFftSizeCombo(Combo combo, int currentFftSize) {
+        for (int i = 0; i < FFT_SIZE_VALUES.length; i++) {
+            if (FFT_SIZE_VALUES[i] == currentFftSize) { combo.select(i); return; }
+        }
+        combo.select(0);
+    }
+
+    /** Derives the sweep duration (in seconds) that pairs with the
+     *  chosen FFT size so the analyzer's
+     *  {@code nextPow2(leadIn + sweep + tail)} lands exactly on
+     *  {@code fftSize}.  Clamped to ≥ 0.5 s so a small FFT size with a
+     *  long lead-in doesn't produce a negative or unworkable sweep. */
+    private double deriveDurationSecFromFftSize(int fftSize) {
+        Preferences prefs = Preferences.instance();
+        int sr = Math.max(1, prefs.current().getInputSampleRate());
+        long leadIn = Math.round(prefs.getFreqRespLeadInSec() * sr);
+        long tail   = sr / 2L;
+        long sweep  = fftSize - leadIn - tail;
+        if (sweep < (long) Math.round(0.5 * sr)) {
+            sweep = (long) Math.round(0.5 * sr);
+        }
+        return sweep / (double) sr;
+    }
+
+    /** Updates the FFT-size label's caption to "FFT size (D.Ds)" where
+     *  D.D is the current derived sweep duration. */
+    private void refreshFftSizeLabel() {
+        if (fftSizeLabel == null || fftSizeLabel.isDisposed()) return;
+        double dur = Preferences.instance().getFreqRespDurationSec();
+        fftSizeLabel.setText(I18n.t("freqResp.settings.fftSize")
+                + " (" + String.format(Locale.ROOT, "%.1f", dur) + "s)");
+        fftSizeLabel.requestLayout();
+    }
+
     private void handlePointsCombo(Combo combo) {
         Preferences prefs = Preferences.instance();
         int idx = combo.getSelectionIndex();
@@ -573,16 +802,6 @@ public final class FreqRespPane {
         }
         prefs.save();
         refreshTabHeader(TAB_FREQRESP_SETTINGS);
-    }
-
-    private int nearestIndex(double[] values, double target) {
-        int best = 0;
-        double bestDist = Double.POSITIVE_INFINITY;
-        for (int i = 0; i < values.length; i++) {
-            double d = Math.abs(values[i] - target);
-            if (d < bestDist) { bestDist = d; best = i; }
-        }
-        return best;
     }
 
     // -------------------------------------------------------------------------
@@ -615,9 +834,19 @@ public final class FreqRespPane {
                 prefs.isFreqRespCompareMode());
 
         riaaShowBtn.addListener(SWT.Selection, e -> {
-            prefs.setFreqRespShowRiaa(riaaShowBtn.getSelection());
+            boolean show = riaaShowBtn.getSelection();
+            prefs.setFreqRespShowRiaa(show);
             prefs.save();
             refreshRiaaEnable();
+            // Compare mode only takes effect when both Show RIAA and
+            // Compare are on (see drawCompareTrace).  If Compare was
+            // already on and the user now turns Show RIAA on, the
+            // compare trace becomes active for the first time — run
+            // the one-shot auto-zoom so the difference series fits the
+            // view, just like toggling Compare itself does.
+            if (show && prefs.isFreqRespCompareMode() && view.hasAnyResult()) {
+                view.autoSetupCompare(prefs);
+            }
             view.redraw();
             refreshTabHeader(TAB_FREQRESP_RIAA);
         });
@@ -646,7 +875,7 @@ public final class FreqRespPane {
             prefs.save();
             // One-shot auto-zoom on entry only — the user's subsequent pan /
             // zoom must stick instead of being clobbered on every redraw.
-            if (enable) view.autozoomCompareIfNeeded(prefs);
+            if (enable) view.autoSetupCompare(prefs);
             view.redraw();
             refreshTabHeader(TAB_FREQRESP_RIAA);
         });
@@ -689,27 +918,46 @@ public final class FreqRespPane {
         g.setLayout(gl);
 
         IconUtils icons = IconUtils.instance();
-        Image cameraIcon = icons.renderAtHeight(g.getDisplay(), SvgPaths.CAMERA, 16, null);
-        Image gaugeIcon  = icons.renderAtHeight(g.getDisplay(), SvgPaths.GAUGE_HIGH, 16, null);
+        Image cameraIcon    = icons.renderAtHeight(g.getDisplay(), SvgPaths.CAMERA,    16, null);
+        Image crosshairIcon = icons.renderAtHeight(g.getDisplay(), SvgPaths.CROSSHAIR, 16, null);
 
         // Icon-only buttons; the action label lives in the tooltip so the
-        // toolbar stays compact, matching the scope's utility row.
+        // toolbar stays compact, matching the scope's utility row.  All
+        // three buttons are pinned at 30 px tall per UI spec so the row
+        // reads as a uniform tool tray instead of three differently-sized
+        // chips.
         Button screenshotBtn = new Button(g, SWT.PUSH);
         if (cameraIcon != null) screenshotBtn.setImage(cameraIcon);
         screenshotBtn.setToolTipText(I18n.t("freqResp.utility.screenshot.tooltip"));
+        screenshotBtn.setLayoutData(utilityButtonGd());
         screenshotBtn.addListener(SWT.Selection, e -> openScreenshotDialog());
 
+        // ADC / DAC calibration both use the crosshair icon — the
+        // tooltips disambiguate which one.  Matches the scope / FFT
+        // "crosshair = calibrate" convention.
         Button dacCalBtn = new Button(g, SWT.PUSH);
-        if (gaugeIcon != null) dacCalBtn.setImage(gaugeIcon);
+        if (crosshairIcon != null) dacCalBtn.setImage(crosshairIcon);
         dacCalBtn.setToolTipText(I18n.t("freqResp.utility.calibrateDac.tooltip"));
+        dacCalBtn.setLayoutData(utilityButtonGd());
         dacCalBtn.addListener(SWT.Selection, e ->
                 log.info("FreqResp DAC-cal clicked (dialog wired in Phase 6 follow-up)"));
 
         Button adcCalBtn = new Button(g, SWT.PUSH);
-        if (gaugeIcon != null) adcCalBtn.setImage(gaugeIcon);
+        if (crosshairIcon != null) adcCalBtn.setImage(crosshairIcon);
         adcCalBtn.setToolTipText(I18n.t("freqResp.utility.calibrateAdc.tooltip"));
+        adcCalBtn.setLayoutData(utilityButtonGd());
         adcCalBtn.addListener(SWT.Selection, e ->
                 log.info("FreqResp ADC-cal clicked (dialog wired in Phase 6 follow-up)"));
+    }
+
+    /** Layout data for the Utility-tab buttons: 30 px tall so the row
+     *  reads as a uniform tool tray regardless of the icon's intrinsic
+     *  size. */
+    private GridData utilityButtonGd() {
+        GridData gd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
+        gd.heightHint = 30;
+        gd.widthHint  = 30;
+        return gd;
     }
 
     /** Opens the shared {@link ScreenshotDialog} with a renderer that
@@ -738,50 +986,174 @@ public final class FreqRespPane {
     }
 
     // -------------------------------------------------------------------------
-    // Calibration tab — load + clear + active-path display
+    // Calibration tab — multi-row load + clear + add + remove
+    //
+    // Row 0 is the persistent "primary" calibration (mirrors the legacy
+    // single-cal pref {@code freqRespCalibrationPath}); rows 1..N are
+    // stored in {@code freqRespCalibrationPathsExtra}.  Each row carries:
+    // pathField (read-only), Load (folder icon), Clear (red xmark), Add
+    // (green plus).  Rows 1..N additionally have a Remove (red minus).
+    // The view chains divides through every loaded row in order at draw
+    // and save time, so multiple files compose into a single correction.
     // -------------------------------------------------------------------------
 
-    private Text calibrationPathField;
+    /** Container Composite for the dynamic row list. */
+    private Composite calRowsContainer;
+    /** Scrolled wrapper around {@link #calRowsContainer} so a long list
+     *  of rows scrolls vertically instead of overflowing the tab. */
+    private ScrolledComposite calRowsScroll;
+    /** One entry per visible row, in display order. */
+    private final List<CalRow> calRows = new ArrayList<>();
+    /** Re-entrancy guard so the store's change event doesn't trigger a
+     *  UI rebuild for changes the pane initiated itself. */
+    private boolean calMutationInFlight;
+
+    /** Per-row widget bundle + the loaded calibration (when any). */
+    private static final class CalRow {
+        Composite                composite;
+        Text                     pathField;
+        StereoFreqRespCalibration calibration;
+        String                   path; // null when the row is empty
+    }
 
     private void buildCalibrationTab() {
         CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
         item.setText(I18n.t("freqResp.tab.calibration"));
-        Composite g = new Composite(toolbarTabs, SWT.NONE);
-        item.setControl(g);
-        GridLayout gl = new GridLayout(3, false);
+
+        // ScrolledComposite wraps the rows so the tab can grow vertically
+        // beyond the available height — a long list of calibrations
+        // scrolls instead of overflowing.
+        calRowsScroll = new ScrolledComposite(toolbarTabs, SWT.V_SCROLL);
+        calRowsScroll.setExpandHorizontal(true);
+        calRowsScroll.setExpandVertical(true);
+        item.setControl(calRowsScroll);
+
+        calRowsContainer = new Composite(calRowsScroll, SWT.NONE);
+        calRowsScroll.setContent(calRowsContainer);
+        GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 8; gl.marginHeight = 6;
-        gl.horizontalSpacing = 6;
-        g.setLayout(gl);
+        gl.verticalSpacing = 4;
+        calRowsContainer.setLayout(gl);
 
-        calibrationPathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
-        GridData pfGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        pfGd.widthHint = 360;
-        calibrationPathField.setLayoutData(pfGd);
-        refreshCalibrationPathField();
+        // Build the rows from prefs (always at least row 0) and load any
+        // referenced files into the store.  Suppress the change-listener's
+        // rebuild while we're populating ourselves.
+        Preferences prefs = Preferences.instance();
+        calMutationInFlight = true;
+        try {
+            // Row 0 — always present.
+            CalRow row0 = createRowUi();
+            String p0 = prefs.getFreqRespCalibrationPath();
+            if (p0 != null && !p0.isEmpty()) loadFileIntoRow(row0, p0, false);
 
-        Image folderIcon = IconUtils.instance().renderAtHeight(
-                g.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
-        Button loadBtn = new Button(g, SWT.PUSH);
-        if (folderIcon != null) loadBtn.setImage(folderIcon);
-        loadBtn.setText(I18n.t("freqResp.calibration.load"));
-        loadBtn.setToolTipText(I18n.t("freqResp.calibration.load.tooltip"));
-        loadBtn.addListener(SWT.Selection, e -> openCalibrationFileDialog());
-
-        Image xmark = IconUtils.instance().renderAtHeight(
-                group.getDisplay(), SvgPaths.RECTANGLE_XMARK, 16,
-                new RGB(0xC8, 0x28, 0x28));
-        Button clearBtn = new Button(g, SWT.PUSH);
-        if (xmark != null) clearBtn.setImage(xmark);
-        clearBtn.setToolTipText(I18n.t("freqResp.calibration.clear.tooltip"));
-        clearBtn.addListener(SWT.Selection, e -> {
-            FreqRespCalibrationStore.instance().clearCurrent();
-            Preferences.instance().setFreqRespCalibrationPath(null);
-            Preferences.instance().save();
-            refreshCalibrationPathField();
-        });
+            // Rows 1..N from the extras list (skipped silently when empty).
+            List<String> extras = prefs.getFreqRespCalibrationPathsExtra();
+            if (extras != null) {
+                for (String pn : extras) {
+                    CalRow rN = createRowUi();
+                    if (pn != null && !pn.isEmpty()) loadFileIntoRow(rN, pn, false);
+                }
+            }
+            // Push the loaded state into the store atomically — one event
+            // fires so the view re-derives once.
+            FreqRespCalibrationStore.instance().clearAll();
+            for (CalRow r : calRows) {
+                if (r.calibration != null && r.path != null) {
+                    FreqRespCalibrationStore.instance().addEntry(r.calibration, r.path);
+                }
+            }
+        } finally {
+            calMutationInFlight = false;
+        }
     }
 
-    private void openCalibrationFileDialog() {
+    /** Builds and appends a fresh row to the calibration tab.  The row
+     *  starts empty (no path, no calibration).  Every row has 5 grid
+     *  cells (path, load, clear, add, remove) — for row 0 the remove
+     *  button is invisible so its grid cell stays reserved, keeping the
+     *  load/clear/add columns vertically aligned across all rows. */
+    private CalRow createRowUi() {
+        boolean isRow0 = calRows.isEmpty();
+
+        Composite row = new Composite(calRowsContainer, SWT.NONE);
+        row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        GridLayout rl = new GridLayout(5, false);
+        rl.marginWidth = 0; rl.marginHeight = 0;
+        rl.horizontalSpacing = 6;
+        row.setLayout(rl);
+
+        Text pathField = new Text(row, SWT.BORDER | SWT.READ_ONLY);
+        GridData pgd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        pgd.widthHint = 320;
+        pathField.setLayoutData(pgd);
+        pathField.setText(I18n.t("freqResp.calibration.path.none"));
+
+        Image folderIcon = IconUtils.instance().renderAtHeight(
+                row.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
+        Button loadBtn = new Button(row, SWT.PUSH);
+        if (folderIcon != null) loadBtn.setImage(folderIcon);
+        loadBtn.setToolTipText(I18n.t("freqResp.calibration.load.tooltip"));
+
+        Image xmark = IconUtils.instance().renderAtHeight(
+                row.getDisplay(), SvgPaths.RECTANGLE_XMARK, 16,
+                new RGB(0xC8, 0x28, 0x28));
+        Button clearBtn = new Button(row, SWT.PUSH);
+        if (xmark != null) clearBtn.setImage(xmark);
+        clearBtn.setToolTipText(I18n.t("freqResp.calibration.clear.tooltip"));
+
+        Image plus = IconUtils.instance().renderAtHeight(
+                row.getDisplay(), SvgPaths.PLUS, 16,
+                new RGB(0x28, 0x90, 0x28));
+        Button addBtn = new Button(row, SWT.PUSH);
+        if (plus != null) addBtn.setImage(plus);
+        addBtn.setToolTipText(I18n.t("freqResp.calibration.add.tooltip"));
+
+        // Minus icon: render to a square 16×16 canvas so the SVG's thin
+        // horizontal bar sits centered with transparent padding above
+        // and below — otherwise renderAtHeight derives width from the
+        // path bounding box (which is wide-and-thin) and we'd get a
+        // stretched red rectangle.
+        Image minus = IconUtils.instance().render(
+                row.getDisplay(), SvgPaths.MINUS, 16, 16,
+                new RGB(0xC8, 0x28, 0x28));
+        Button removeBtn = new Button(row, SWT.PUSH);
+        if (minus != null) removeBtn.setImage(minus);
+        removeBtn.setToolTipText(I18n.t("freqResp.calibration.remove.tooltip"));
+        if (isRow0) {
+            // Invisible-but-present placeholder so the column widths of
+            // load/clear/add stay identical across all rows.
+            removeBtn.setVisible(false);
+        }
+
+        CalRow r = new CalRow();
+        r.composite = row;
+        r.pathField = pathField;
+        calRows.add(r);
+
+        loadBtn.addListener(SWT.Selection, e -> userLoadInRow(r));
+        clearBtn.addListener(SWT.Selection, e -> userClearRow(r));
+        addBtn.addListener(SWT.Selection, e -> userAddRow());
+        if (!isRow0) {
+            removeBtn.addListener(SWT.Selection, e -> userRemoveRow(r));
+        }
+
+        relayoutCalRows();
+        return r;
+    }
+
+    /** Re-runs the rows container's layout AND tells the surrounding
+     *  ScrolledComposite to recompute its scroll extent so a newly
+     *  added row participates in the V_SCROLL bar. */
+    private void relayoutCalRows() {
+        if (calRowsContainer != null && !calRowsContainer.isDisposed()) {
+            calRowsContainer.layout(true, true);
+        }
+        if (calRowsScroll != null && !calRowsScroll.isDisposed() && calRowsContainer != null) {
+            calRowsScroll.setMinSize(calRowsContainer.computeSize(SWT.DEFAULT, SWT.DEFAULT));
+        }
+    }
+
+    private void userLoadInRow(CalRow r) {
         FileDialog fd = new FileDialog(group.getShell(), SWT.OPEN);
         fd.setText(I18n.t("freqResp.calibration.dialog"));
         fd.setFilterExtensions(new String[]{ "*.frc", "*.csv", "*.*" });
@@ -789,63 +1161,217 @@ public final class FreqRespPane {
         if (memFolder != null) fd.setFilterPath(memFolder);
         String picked = fd.open();
         if (picked == null) return;
+        if (!loadFileIntoRow(r, picked, true)) return;
+        Preferences prefs = Preferences.instance();
+        prefs.setFreqRespLoadFolder(new File(picked).getParent());
+        syncStoreFromRows();
+        persistRowsToPrefs();
+    }
+
+    private void userClearRow(CalRow r) {
+        r.calibration = null;
+        r.path        = null;
+        r.pathField.setText(I18n.t("freqResp.calibration.path.none"));
+        r.pathField.setToolTipText(null);
+        syncStoreFromRows();
+        persistRowsToPrefs();
+    }
+
+    private void userAddRow() {
+        createRowUi();
+        persistRowsToPrefs();
+    }
+
+    private void userRemoveRow(CalRow r) {
+        if (calRows.size() <= 1) return;
+        int idx = calRows.indexOf(r);
+        if (idx <= 0) return; // never remove row 0
+        calRows.remove(idx);
+        r.composite.dispose();
+        relayoutCalRows();
+        syncStoreFromRows();
+        persistRowsToPrefs();
+    }
+
+    /** Reads a calibration file from disk and writes the result into
+     *  {@code r}.  When {@code showErrors} is true, file-load failures
+     *  pop a modal dialog; otherwise they're logged silently (used at
+     *  startup so a missing file doesn't block the whole pane). */
+    private boolean loadFileIntoRow(CalRow r, String picked, boolean showErrors) {
         try {
             StereoFreqRespCalibration cal = FreqRespCalHelper.loadCsv(picked);
-            FreqRespCalibrationStore.instance().setCurrent(cal, picked);
-            Preferences prefs = Preferences.instance();
-            prefs.setFreqRespCalibrationPath(picked);
-            prefs.setFreqRespLoadFolder(new File(picked).getParent());
-            prefs.save();
-            refreshCalibrationPathField();
+            r.calibration = cal;
+            r.path        = picked;
+            r.pathField.setText(picked);
+            r.pathField.setToolTipText(picked);
+            return true;
         } catch (Exception ex) {
-            log.warn("FreqResp calibration load failed", ex);
-            Dialogs.error(group.getShell(),
-                    I18n.t("freqResp.calibration.dialog"),
-                    I18n.t("freqResp.error.calibration.load").replace("{0}",
-                            ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
+            log.warn("FreqResp calibration load failed: {}", picked, ex);
+            if (showErrors) {
+                Dialogs.error(group.getShell(),
+                        I18n.t("freqResp.calibration.dialog"),
+                        I18n.t("freqResp.error.calibration.load").replace("{0}",
+                                ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName()));
+            }
+            return false;
         }
     }
 
-    /** Re-syncs the calibration path text field with the active calibration.
-     *  Called from {@link #onCalibrationChanged} so the field updates whether
-     *  the user loaded via the tab, the wizard, or the clear button. */
-    private void refreshCalibrationPathField() {
-        if (calibrationPathField == null || calibrationPathField.isDisposed()) return;
-        String path = FreqRespCalibrationStore.instance().getCurrentPath();
-        if (path == null || path.isEmpty()) {
-            calibrationPathField.setText(I18n.t("freqResp.calibration.path.none"));
-            calibrationPathField.setToolTipText(null);
-        } else {
-            calibrationPathField.setText(path);
-            calibrationPathField.setToolTipText(path);
+    /** Pushes the current row state into the {@link FreqRespCalibrationStore}.
+     *  Empty rows are skipped so the store holds only entries the view
+     *  should divide by. */
+    private void syncStoreFromRows() {
+        FreqRespCalibrationStore store = FreqRespCalibrationStore.instance();
+        calMutationInFlight = true;
+        try {
+            store.clearAll();
+            for (CalRow r : calRows) {
+                if (r.calibration != null && r.path != null) {
+                    store.addEntry(r.calibration, r.path);
+                }
+            }
+        } finally {
+            calMutationInFlight = false;
         }
+    }
+
+    /** Persists every row's path to {@link Preferences}.  Row 0 maps to
+     *  the legacy {@code freqRespCalibrationPath} field; rows 1..N to
+     *  {@code freqRespCalibrationPathsExtra}.  Empty rows are persisted
+     *  as empty strings in the extras list so the row count is preserved
+     *  across restarts. */
+    private void persistRowsToPrefs() {
+        Preferences prefs = Preferences.instance();
+        String row0 = calRows.isEmpty() ? null : calRows.get(0).path;
+        prefs.setFreqRespCalibrationPath(row0);
+        List<String> extras = new ArrayList<>();
+        for (int i = 1; i < calRows.size(); i++) {
+            String p = calRows.get(i).path;
+            extras.add(p == null ? "" : p);
+        }
+        prefs.setFreqRespCalibrationPathsExtra(extras);
+        prefs.save();
+    }
+
+    /** Rebuilds the row UI from the store.  Used when an external source
+     *  (e.g. the wizard's Apply step) replaces the calibration entries
+     *  out-of-band — drops any user-added empty rows, leaving exactly
+     *  one row per loaded entry (with row 0 always present). */
+    private void rebuildRowsFromStore() {
+        if (calRowsContainer == null || calRowsContainer.isDisposed()) return;
+        List<FreqRespCalibrationStore.Entry> entries =
+                FreqRespCalibrationStore.instance().getEntries();
+        // No-op when the store's loaded entries already line up with
+        // the loaded rows in the UI (in the same order).  Skipping
+        // here preserves user-added empty rows when the bus event is
+        // unrelated to the entries list — e.g. the wizard's setDirect
+        // fires the same event but doesn't touch entries.
+        if (loadedRowsMatch(entries)) return;
+        for (CalRow r : calRows) {
+            if (r.composite != null && !r.composite.isDisposed()) r.composite.dispose();
+        }
+        calRows.clear();
+        int rowCount = Math.max(1, entries.size());
+        for (int i = 0; i < rowCount; i++) {
+            CalRow r = createRowUi();
+            if (i < entries.size()) {
+                FreqRespCalibrationStore.Entry e = entries.get(i);
+                r.calibration = e.getCalibration();
+                r.path        = e.getPath();
+                r.pathField.setText(e.getPath());
+                r.pathField.setToolTipText(e.getPath());
+            }
+        }
+        relayoutCalRows();
+        persistRowsToPrefs();
+    }
+
+    /** True when the loaded subset of {@link #calRows} (skipping empty
+     *  rows) is identical, in order, to {@code entries}. */
+    private boolean loadedRowsMatch(List<FreqRespCalibrationStore.Entry> entries) {
+        int j = 0;
+        for (CalRow r : calRows) {
+            if (r.calibration == null) continue;
+            if (j >= entries.size()) return false;
+            FreqRespCalibrationStore.Entry e = entries.get(j);
+            if (r.calibration != e.getCalibration()) return false;
+            if (r.path == null || !r.path.equals(e.getPath())) return false;
+            j++;
+        }
+        return j == entries.size();
     }
 
     // -------------------------------------------------------------------------
     // Save-to tab — write the current measurement to a CSV
     // -------------------------------------------------------------------------
 
+    /** Path field shared between the Save-to and Load-from tabs.  Kept
+     *  as a field so the file-dialog handler can update the displayed
+     *  text from anywhere (including dropping a future drag-and-drop
+     *  source onto the same widget). */
+    private Text saveToPathField;
+    private Text loadFromPathField;
+
     private void buildSaveToTab() {
         CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
         item.setText(I18n.t("freqResp.tab.saveTo"));
         Composite g = new Composite(toolbarTabs, SWT.NONE);
         item.setControl(g);
-        GridLayout gl = new GridLayout(1, false);
-        gl.marginWidth = 6; gl.marginHeight = 4;
+        GridLayout gl = new GridLayout(3, false);
+        gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);
+        Preferences prefs = Preferences.instance();
 
-        // Single icon-only button: clicking opens the Save-as dialog and
-        // writes the current measurement; the action label is in the
-        // tooltip.  Matches the user's spec — no path field, no text.
+        // Layout mirrors the FFT pane's save tab: [pathField] [browse …]
+        // [save-icon].  Browse opens the file dialog and writes the
+        // chosen path into the read-only field; the save-icon button
+        // commits the current measurement to whichever path is shown.
+        saveToPathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
+        String savedPath = prefs.getFreqRespSavePath();
+        saveToPathField.setText(savedPath == null ? "" : savedPath);
+        if (savedPath != null && !savedPath.isEmpty()) saveToPathField.setToolTipText(savedPath);
+        saveToPathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        Image folderIcon = IconUtils.instance().renderAtHeight(
+                g.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
+        Button browseBtn = new Button(g, SWT.PUSH);
+        if (folderIcon != null) browseBtn.setImage(folderIcon);
+        browseBtn.setToolTipText(I18n.t("freqResp.saveTo.browse.tooltip"));
+        browseBtn.addListener(SWT.Selection, e -> openSaveBrowseDialog());
+
         Image floppyIcon = IconUtils.instance().renderAtHeight(
                 g.getDisplay(), SvgPaths.FLOPPY_DISK, 16, null);
         Button saveBtn = new Button(g, SWT.PUSH);
         if (floppyIcon != null) saveBtn.setImage(floppyIcon);
         saveBtn.setToolTipText(I18n.t("freqResp.saveTo.tooltip"));
-        saveBtn.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         saveBtn.addListener(SWT.Selection, e -> openSaveDialog());
     }
 
+    /** Opens a Save-as file dialog and stores the chosen path in the
+     *  Save-to tab's text field + prefs.  Does NOT actually write the
+     *  file — that happens when the user clicks the floppy-disk
+     *  button (or accepts a Save-as via {@link #openSaveDialog}). */
+    private void openSaveBrowseDialog() {
+        Preferences prefs = Preferences.instance();
+        FileDialog fd = new FileDialog(group.getShell(), SWT.SAVE);
+        fd.setText(I18n.t("freqResp.saveTo.dialog"));
+        fd.setFilterExtensions(new String[]{ "*.frc", "*.csv" });
+        fd.setOverwrite(true);
+        if (prefs.getFreqRespSaveFolder() != null) fd.setFilterPath(prefs.getFreqRespSaveFolder());
+        fd.setFileName("freqresp_" + LocalDateTime.now()
+                .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".frc");
+        String picked = fd.open();
+        if (picked == null) return;
+        if (saveToPathField != null && !saveToPathField.isDisposed()) {
+            saveToPathField.setText(picked);
+            saveToPathField.setToolTipText(picked);
+        }
+        prefs.setFreqRespSavePath(picked);
+        String parent = new File(picked).getParent();
+        if (parent != null) prefs.setFreqRespSaveFolder(parent);
+        prefs.save();
+        refreshTabHeader(TAB_FREQRESP_SAVE);
+    }
 
     private void openSaveDialog() {
         FreqRespResult left  = view.getLeftResultOrNull();
@@ -856,17 +1382,30 @@ public final class FreqRespPane {
                     I18n.t("freqResp.saveTo.error.noResult"));
             return;
         }
-        FileDialog fd = new FileDialog(group.getShell(), SWT.SAVE);
-        fd.setText(I18n.t("freqResp.saveTo.dialog"));
-        fd.setFilterExtensions(new String[]{ "*.frc", "*.csv" });
-        fd.setOverwrite(true);
         Preferences prefs = Preferences.instance();
-        String memFolder = prefs.getFreqRespSaveFolder();
-        if (memFolder != null) fd.setFilterPath(memFolder);
-        fd.setFileName("freqresp_" + LocalDateTime.now()
-                .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".frc");
-        String picked = fd.open();
-        if (picked == null) return;
+        // Prefer the path the user typed/browsed into the Save-to tab's
+        // text field; fall back to a Save-as dialog when the field is
+        // empty so the floppy-icon button is always functional.
+        String picked = (saveToPathField != null && !saveToPathField.isDisposed())
+                ? saveToPathField.getText().trim() : "";
+        if (picked.isEmpty()) {
+            FileDialog fd = new FileDialog(group.getShell(), SWT.SAVE);
+            fd.setText(I18n.t("freqResp.saveTo.dialog"));
+            fd.setFilterExtensions(new String[]{ "*.frc", "*.csv" });
+            fd.setOverwrite(true);
+            String memFolder = prefs.getFreqRespSaveFolder();
+            if (memFolder != null) fd.setFilterPath(memFolder);
+            fd.setFileName("freqresp_" + LocalDateTime.now()
+                    .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".frc");
+            picked = fd.open();
+            if (picked == null) return;
+            if (saveToPathField != null && !saveToPathField.isDisposed()) {
+                saveToPathField.setText(picked);
+                saveToPathField.setToolTipText(picked);
+            }
+            prefs.setFreqRespSavePath(picked);
+            refreshTabHeader(TAB_FREQRESP_SAVE);
+        }
         try {
             // Both channels are always written; the new file format is
             // strict stereo (5 columns: f, mag_L_dB, mag_R_dB, phase_L_deg,
@@ -908,27 +1447,39 @@ public final class FreqRespPane {
         item.setText(I18n.t("freqResp.tab.loadFrom"));
         Composite g = new Composite(toolbarTabs, SWT.NONE);
         item.setControl(g);
-        GridLayout gl = new GridLayout(1, false);
-        gl.marginWidth = 6; gl.marginHeight = 4;
+        GridLayout gl = new GridLayout(3, false);
+        gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);
+        Preferences prefs = Preferences.instance();
 
-        // Single icon-only button: clicking opens the Open dialog and
-        // pushes the result onto the view.  Matches the user's spec —
-        // no path field, no text.
+        // [pathField] [browse folder-icon] [load folder-icon] — same shape
+        // as the FFT pane's load tab.  Browse opens the file dialog and
+        // writes the chosen path into the read-only field; the dedicated
+        // load button reads from that path and pushes the result into
+        // the view.
+        loadFromPathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
+        String savedPath = prefs.getFreqRespLoadPath();
+        loadFromPathField.setText(savedPath == null ? "" : savedPath);
+        if (savedPath != null && !savedPath.isEmpty()) loadFromPathField.setToolTipText(savedPath);
+        loadFromPathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
         Image folderIcon = IconUtils.instance().renderAtHeight(
                 g.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
+        Button browseBtn = new Button(g, SWT.PUSH);
+        if (folderIcon != null) browseBtn.setImage(folderIcon);
+        browseBtn.setToolTipText(I18n.t("freqResp.loadFrom.browse.tooltip"));
+        browseBtn.addListener(SWT.Selection, e -> openLoadBrowseDialog());
+
         Button loadBtn = new Button(g, SWT.PUSH);
         if (folderIcon != null) loadBtn.setImage(folderIcon);
         loadBtn.setToolTipText(I18n.t("freqResp.loadFrom.tooltip"));
-        loadBtn.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         loadBtn.addListener(SWT.Selection, e -> openLoadDialog());
     }
 
-    /** Opens the load-from file dialog, parses the chosen file, and pushes
-     *  the result onto the view.  Detects single- vs. stereo-channel files
-     *  via the {@code _r} columns introduced in {@code format_version=5}
-     *  and populates both view slots when the file is stereo. */
-    private void openLoadDialog() {
+    /** Opens an Open file dialog and stores the chosen path in the
+     *  Load-from tab's text field + prefs.  Doesn't read the file yet —
+     *  that happens when the user clicks the load button. */
+    private void openLoadBrowseDialog() {
         Preferences prefs = Preferences.instance();
         FileDialog fd = new FileDialog(group.getShell(), SWT.OPEN);
         fd.setText(I18n.t("freqResp.loadFrom.dialog"));
@@ -936,6 +1487,41 @@ public final class FreqRespPane {
         if (prefs.getFreqRespLoadFolder() != null) fd.setFilterPath(prefs.getFreqRespLoadFolder());
         String picked = fd.open();
         if (picked == null) return;
+        if (loadFromPathField != null && !loadFromPathField.isDisposed()) {
+            loadFromPathField.setText(picked);
+            loadFromPathField.setToolTipText(picked);
+        }
+        prefs.setFreqRespLoadPath(picked);
+        String parent = new File(picked).getParent();
+        if (parent != null) prefs.setFreqRespLoadFolder(parent);
+        prefs.save();
+        refreshTabHeader(TAB_FREQRESP_LOAD);
+    }
+
+    /** Reads the load-from file currently shown in the path field, or
+     *  prompts the user with an Open dialog when the field is empty.
+     *  Parses the chosen file and pushes the result onto the view.
+     *  Detects single- vs. stereo-channel files via the {@code _r}
+     *  columns introduced in {@code format_version=5} and populates
+     *  both view slots when the file is stereo. */
+    private void openLoadDialog() {
+        Preferences prefs = Preferences.instance();
+        String picked = (loadFromPathField != null && !loadFromPathField.isDisposed())
+                ? loadFromPathField.getText().trim() : "";
+        if (picked.isEmpty()) {
+            FileDialog fd = new FileDialog(group.getShell(), SWT.OPEN);
+            fd.setText(I18n.t("freqResp.loadFrom.dialog"));
+            fd.setFilterExtensions(new String[]{ "*.frc", "*.csv", "*.*" });
+            if (prefs.getFreqRespLoadFolder() != null) fd.setFilterPath(prefs.getFreqRespLoadFolder());
+            picked = fd.open();
+            if (picked == null) return;
+            if (loadFromPathField != null && !loadFromPathField.isDisposed()) {
+                loadFromPathField.setText(picked);
+                loadFromPathField.setToolTipText(picked);
+            }
+            prefs.setFreqRespLoadPath(picked);
+            refreshTabHeader(TAB_FREQRESP_LOAD);
+        }
         try {
             StereoFreqRespCalibration st = FreqRespCalHelper.loadCsv(picked);
             FreqRespCalibration cL = st.left();
@@ -996,25 +1582,56 @@ public final class FreqRespPane {
                     msg  -> { showError(msg); closeBusyShell(); });
         }
         setLocked(true);
-        openBusyShell();
-        worker.start();
+        Preferences prefs = Preferences.instance();
+        int sr = Math.max(1, prefs.current().getInputSampleRate());
+        double totalSec = prefs.getFreqRespLeadInSec()
+                        + prefs.getFreqRespDurationSec()
+                        + 0.5;  // matches analyzer's tail
+        openBusyShell(totalSec);
+        // Marshal each capture block's RMS to the SWT UI thread and
+        // forward it to the live meter.  The callback fires on the audio
+        // capture thread so we MUST asyncExec — touching the meter
+        // directly here would deadlock or crash.
+        Display d = group.getDisplay();
+        StereoCaptureProgress progress = (totalSamples, rmsLin) -> {
+            double tSec = totalSamples / (double) sr;
+            d.asyncExec(() -> {
+                if (busyMeter != null && !busyMeter.isDisposed()) {
+                    busyMeter.appendSample(tSec, rmsLin);
+                }
+            });
+        };
+        worker.start(progress);
     }
 
     /** Shell shown for the duration of a measurement / deconvolution.
      *  Created on entry, closed by the worker's completion or error path. */
     private Shell busyShell;
+    /** Live "level vs. time" meter inside {@link #busyShell}, fed by the
+     *  capture-progress callback that the worker passes through to the
+     *  analyzer.  Null when no busy shell is open. */
+    private FreqRespLiveMeter busyMeter;
 
-    private void openBusyShell() {
+    private void openBusyShell(double totalDurationSec) {
         if (busyShell != null && !busyShell.isDisposed()) return;
         Shell parent = group.getShell();
-        Shell s = new Shell(parent, SWT.ON_TOP | SWT.TITLE | SWT.BORDER
+        Shell s = new Shell(parent, SWT.TITLE | SWT.BORDER
                 | SWT.APPLICATION_MODAL);
         s.setText(I18n.t("freqResp.busy.title"));
-        FillLayout fl = new FillLayout();
-        fl.marginWidth = 24; fl.marginHeight = 18;
-        s.setLayout(fl);
+        GridLayout gl = new GridLayout(1, false);
+        gl.marginWidth = 12; gl.marginHeight = 10;
+        gl.verticalSpacing = 8;
+        s.setLayout(gl);
         Label l = new Label(s, SWT.CENTER);
         l.setText(I18n.t("freqResp.busy.message"));
+        l.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        busyMeter = new FreqRespLiveMeter(s, totalDurationSec);
+        GridData mg = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        mg.widthHint  = 520;
+        mg.heightHint = 100;
+        busyMeter.setLayoutData(mg);
+
         s.pack();
         Rectangle pb = parent.getBounds();
         Point sz = s.getSize();
@@ -1031,6 +1648,7 @@ public final class FreqRespPane {
     private void closeBusyShell() {
         if (busyShell != null && !busyShell.isDisposed()) busyShell.close();
         busyShell = null;
+        busyMeter = null;
     }
 
     private void showError(String message) {
@@ -1135,9 +1753,16 @@ public final class FreqRespPane {
         view.redraw();
     }
 
+    /** Maximal analyzed frequency for the FreqResp view — Nyquist
+     *  (sampleRate/2) scaled by {@code freqRespNyquistFraction}.  Caps
+     *  the scrollbar's outer travel at the same value the view uses for
+     *  zoom-out. */
     private double nyquistHz() {
         int sr = Preferences.instance().current().getInputSampleRate();
-        return sr > 0 ? sr / 2.0 : 24000.0;
+        double base = sr > 0 ? sr / 2.0 : 24000.0;
+        double frac = Preferences.instance().getFreqRespNyquistFraction();
+        if (!Double.isFinite(frac) || frac <= 0.0) frac = 1.0;
+        return base * frac;
     }
 
     // -------------------------------------------------------------------------
@@ -1145,7 +1770,13 @@ public final class FreqRespPane {
     // -------------------------------------------------------------------------
 
     private void onCalibrationChanged() {
-        refreshCalibrationPathField();
+        // Skip the rebuild when this pane initiated the store mutation
+        // itself — calRows already matches what we just wrote.  Other
+        // sources (e.g. wizard Apply, wizard Cancel-restore) take the
+        // rebuildRowsFromStore path so the UI catches up.
+        if (!calMutationInFlight) {
+            rebuildRowsFromStore();
+        }
         refreshTabHeader(TAB_FREQRESP_CALIBRATION);
     }
 
@@ -1178,7 +1809,10 @@ public final class FreqRespPane {
                     formatShortHz(prefs.getFreqRespStopHz())));
             out.add(String.format(Locale.US, "%.2fV", prefs.getFreqRespAmplitudeVrms()));
             out.add(formatShortCount(prefs.getFreqRespSweepPoints()) + " pts");
-            out.add(String.format(Locale.US, "%.1fs", prefs.getFreqRespDurationSec()));
+            // FFT size tile (replaces the old sweep-duration tile, which
+            // is now derived from FFT size and shown in the settings-tab
+            // label instead).
+            out.add(formatFftSize(prefs.getFreqRespFftSize()));
         } else if (tabIndex == TAB_FREQRESP_RIAA) {
             if (prefs.isFreqRespShowRiaa()) {
                 out.add(prefs.isFreqRespReverseRiaa() ? "rec" : "play");
@@ -1186,8 +1820,26 @@ public final class FreqRespPane {
                 if (prefs.isFreqRespCompareMode())  out.add("comp");
             }
         } else if (tabIndex == TAB_FREQRESP_CALIBRATION) {
-            if (FreqRespCalibrationStore.instance().getCurrent() != null) out.add("loaded");
+            int n = FreqRespCalibrationStore.instance().getEntries().size();
+            if (n == 1)      out.add("loaded");
+            else if (n  > 1) out.add(n + " loaded");
+        } else if (tabIndex == TAB_FREQRESP_PRESETS) {
+            // Show the number of saved presets when there are any —
+            // gives the user a hint that there's something to load.
+            int n = prefs.getFreqRespPresets().size();
+            if (n > 0) out.add(n + " saved");
+        } else if (tabIndex == TAB_FREQRESP_UTILITY) {
+            // No persistent state on the Utility tab — the screenshot,
+            // DAC-cal and ADC-cal actions don't leave a per-run footprint
+            // visible in the tab header.  Branch left empty intentionally
+            // so the tile area stays clean; the constant reference here
+            // also keeps the switch exhaustive.
         }
+        // TAB_FREQRESP_SAVE and TAB_FREQRESP_LOAD intentionally render no
+        // tiles — per user spec the file path lives in the tab body's
+        // path field, not in the header.  The constants are still used
+        // by the refreshTabHeader callers that fire after a successful
+        // save / load (cheap no-op when the tile list is empty).
         return out;
     }
 
@@ -1313,6 +1965,17 @@ public final class FreqRespPane {
         return Integer.toString(n);
     }
 
+    /** Pretty-prints an FFT size as a power-of-2 abbreviation matching
+     *  the {@link #FFT_SIZE_LABELS} combo entries: 65536 → "64k",
+     *  524288 → "512k", 16777216 → "16M".  Falls back to
+     *  {@link #formatShortCount} for non-power-of-2 values. */
+    private String formatFftSize(int n) {
+        for (int i = 0; i < FFT_SIZE_VALUES.length; i++) {
+            if (FFT_SIZE_VALUES[i] == n) return FFT_SIZE_LABELS[i];
+        }
+        return formatShortCount(n);
+    }
+
     /** Custom CTabFolderRenderer: pads each custom tab to fit its tile row
      *  and re-renders the captured label on top of the default chrome.
      *  Other tabs (currently none in this pane) would render with the
@@ -1345,7 +2008,23 @@ public final class FreqRespPane {
             gc.setForeground(fg);
             Font prev = gc.getFont();
             gc.setFont(toolbarTabs.getFont());
-            gc.drawText(label, bounds.x + leftInset, bounds.y + 3, true);
+            // Y-position: when this tab has tiles painted underneath the
+            // label, sit just under the tab's top edge so there's room
+            // for the tile row at the bottom.  When there are NO tiles,
+            // centre the label vertically inside the tab so it doesn't
+            // float alone at the top of a header sized for tile-bearing
+            // siblings (CTabFolder enforces a uniform row height across
+            // all tabs).
+            ensureTabResources();
+            int textY;
+            Point te = gc.textExtent(label);
+            boolean hasTiles = !tileTexts(Preferences.instance(), part).isEmpty();
+            if (hasTiles) {
+                textY = bounds.y + 3;
+            } else {
+                textY = bounds.y + Math.max(3, (bounds.height - te.y) / 2);
+            }
+            gc.drawText(label, bounds.x + leftInset, textY, true);
             gc.setFont(prev);
         }
     }

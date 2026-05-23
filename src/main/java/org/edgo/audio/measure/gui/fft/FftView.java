@@ -1,5 +1,7 @@
 package org.edgo.audio.measure.gui.fft;
 
+import java.util.List;
+
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.MouseAdapter;
 import org.eclipse.swt.events.MouseEvent;
@@ -24,6 +26,8 @@ import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftMagnitudeUnit;
 import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
+import org.edgo.audio.measure.cli.util.FreqRespCalibration;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -73,17 +77,27 @@ public final class FftView extends AbstractFreqDomainView {
     private final Color dimColor;
     /** Dot colour for fundamental + harmonic markers; user-configurable. */
     private Color harmonicDotColor;
+    /** Dot colour for pre-calibration markers — drawn next to the
+     *  (red) corrected dots when at least one calibration file is
+     *  loaded so the user can see how much the cal moved each peak. */
+    private Color beforeCalDotColor;
     /** User-configurable frequency response / cal-overlay response trace colour.
      *  Allocated even though the FFT view doesn't yet draw a frequency
      *  response trace — kept in sync so it's ready when that layer is
      *  added. */
     private Color freqRespResponseColor;
+    /** Trace colour for the inverted-cascade calibration overlay (drawn
+     *  parallel to the FFT spectrum so the user can see at a glance
+     *  which bands the calibration is lifting or cutting). */
+    private Color calOverlayColor;
     /** Cached packed-RGB values of the last allocated FFT colors; used by
      *  {@link #syncFftColors} to skip reallocation when prefs match. */
-    private int currentBgRgb        = -1;
-    private int currentSpectrumRgb  = -1;
-    private int currentDotRgb       = -1;
-    private int currentFreqRespRgb    = -1;
+    private int currentBgRgb         = -1;
+    private int currentSpectrumRgb   = -1;
+    private int currentDotRgb        = -1;
+    private int currentBeforeCalRgb  = -1;
+    private int currentFreqRespRgb   = -1;
+    private int currentCalOverlayRgb = -1;
 
     // ─── Fonts ────────────────────────────────────────────────────────────
     private Font monoFont;
@@ -367,7 +381,9 @@ public final class FftView extends AbstractFreqDomainView {
         resetColor.dispose();
         dimColor.dispose();
         if (harmonicDotColor    != null) harmonicDotColor.dispose();
+        if (beforeCalDotColor   != null) beforeCalDotColor.dispose();
         if (freqRespResponseColor != null) freqRespResponseColor.dispose();
+        if (calOverlayColor     != null) calOverlayColor.dispose();
         if (monoFont       != null) monoFont.dispose();
         if (monoBoldFont   != null) monoBoldFont.dispose();
         if (chanButtonFont != null) chanButtonFont.dispose();
@@ -404,10 +420,22 @@ public final class FftView extends AbstractFreqDomainView {
             harmonicDotColor = newColor(dot);
             currentDotRgb    = dot;
         }
+        int beforeCal = prefs.getFftBeforeCalDotColor();
+        if (beforeCal != currentBeforeCalRgb) {
+            if (beforeCalDotColor != null) beforeCalDotColor.dispose();
+            beforeCalDotColor = newColor(beforeCal);
+            currentBeforeCalRgb = beforeCal;
+        }
         if (flt != currentFreqRespRgb) {
             if (freqRespResponseColor != null) freqRespResponseColor.dispose();
             freqRespResponseColor = newColor(flt);
             currentFreqRespRgb    = flt;
+        }
+        int calOv = prefs.getFftCalOverlayColor();
+        if (calOv != currentCalOverlayRgb) {
+            if (calOverlayColor != null) calOverlayColor.dispose();
+            calOverlayColor = newColor(calOv);
+            currentCalOverlayRgb = calOv;
         }
     }
 
@@ -661,6 +689,8 @@ public final class FftView extends AbstractFreqDomainView {
             drawAxes(bgc, plot, fFreqMin, freqMax, magTop, magBot, logFreq, unit);
             if (r != null) {
                 drawSpectrum(bgc, plot, r, unit, fFreqMin, freqMax, magTop, magBot, logFreq);
+                drawCalOverlay(bgc, plot, r, unit, fFreqMin, freqMax,
+                        magTop, magBot, logFreq);
                 drawHarmonicDots(bgc, plot, r, unit, fFreqMin, freqMax,
                         magTop, magBot, logFreq);
             }
@@ -722,7 +752,6 @@ public final class FftView extends AbstractFreqDomainView {
                                   double freqMin, double freqMax,
                                   double magTop, double magBot,
                                   boolean logFreq) {
-        gc.setBackground(harmonicDotColor);
         double calRefDbV = Double.isNaN(r.fundRefDbV) ? 0
                 : (r.fundRefDbV - r.fundamentalDbFs);
         // Only the fundamental dot lifts to the manual-override dBV;
@@ -732,9 +761,28 @@ public final class FftView extends AbstractFreqDomainView {
                 ? r.fundamentalTrueDbV - r.fundamentalDbFs
                 : calRefDbV;
         double binBw = r.freqResolution;
+
+        // "Before-cal" dots — painted FIRST so the corrected (red)
+        // dots sit on top.  Pulled from the worker's snapshot taken
+        // before the in-place compensation; null when no calibration
+        // is loaded.  Uses the same per-dot dBV anchor as the
+        // corrected dots so the two are directly comparable.
+        double[][] before = worker.getPreCorrectionPeaks();
+        if (before != null && before.length == 2
+                && before[0] != null && before[1] != null) {
+            gc.setBackground(beforeCalDotColor);
+            int n = Math.min(before[0].length, before[1].length);
+            for (int i = 0; i < n; i++) {
+                double anchor = (i == 0) ? fundRefDbV : calRefDbV;
+                plotDotAt(gc, plot, before[0][i], before[1][i],
+                        unit, freqMin, freqMax, magTop, magBot, logFreq, anchor, binBw);
+            }
+        }
+
         // Each plotDotAt gates on the dot's magnitude vs the visible
         // range and skips drawing when it falls outside — that hides
         // dots cleanly without snapping them to the chart edges.
+        gc.setBackground(harmonicDotColor);
         plotDotAt(gc, plot, r.fundamentalHzRefined, r.fundamentalDbFs,
                 unit, freqMin, freqMax, magTop, magBot, logFreq, fundRefDbV, binBw);
         if (r.harmonicHz != null && r.harmonicDbFs != null) {
@@ -744,6 +792,45 @@ public final class FftView extends AbstractFreqDomainView {
                         unit, freqMin, freqMax, magTop, magBot, logFreq, calRefDbV, binBw);
             }
         }
+
+        // Hn labels on top of every (corrected) dot — fundamental gets
+        // the full "H1 ⟨freq⟩" pair, harmonics get just "Hn".  Only
+        // the harmonics within the calc-max-harmonic count are
+        // labelled (matches the THD-tab's calcMaxHarmonic pref).
+        gc.setForeground(harmonicDotColor);
+        drawHarmonicLabel(gc, plot, "H1 " + FftFormat.formatFrequency(r.fundamentalHzRefined),
+                r.fundamentalHzRefined, r.fundamentalDbFs,
+                unit, freqMin, freqMax, magTop, magBot, logFreq, fundRefDbV, binBw);
+        if (r.harmonicHz != null && r.harmonicDbFs != null) {
+            int n = Math.min(r.harmonicHz.length, r.harmonicDbFs.length);
+            int calcMax = Preferences.instance().getFftCalcMaxHarmonic();
+            for (int i = 0; i < n && (i + 2) <= calcMax; i++) {
+                drawHarmonicLabel(gc, plot, "H" + (i + 2),
+                        r.harmonicHz[i], r.harmonicDbFs[i],
+                        unit, freqMin, freqMax, magTop, magBot, logFreq, calRefDbV, binBw);
+            }
+        }
+    }
+
+    /** Paints a small label centred horizontally on the dot's column
+     *  and just above the dot itself.  No-op when the dot would fall
+     *  outside the visible plot. */
+    private void drawHarmonicLabel(GC gc, Rectangle plot, String text,
+                                   double hz, double dbFs, FftMagnitudeUnit unit,
+                                   double freqMin, double freqMax,
+                                   double magTop, double magBot,
+                                   boolean logFreq, double refDbV, double binBw) {
+        if (!Double.isFinite(hz) || hz < freqMin || hz > freqMax) return;
+        if (!Double.isFinite(dbFs)) return;
+        double v = unit.convertFromDbFs(dbFs, refDbV, binBw);
+        double t = FftFormat.magToYFraction(v, magTop, magBot, unit);
+        if (t < 0 || t > 1) return;
+        int x = freqToX(hz, plot, freqMin, freqMax, logFreq);
+        int y = magToY(v, plot, magTop, magBot, unit);
+        Point ext = gc.textExtent(text);
+        int lx = Math.max(plot.x, Math.min(plot.x + plot.width - ext.x, x - ext.x / 2));
+        int ly = Math.max(plot.y, y - ext.y - 4);
+        gc.drawText(text, lx, ly, true);
     }
 
     private void plotDotAt(GC gc, Rectangle plot, double hz, double dbFs,
@@ -797,7 +884,19 @@ public final class FftView extends AbstractFreqDomainView {
         h = 31 * h + prefs.getFftLineColor();
         h = 31 * h + prefs.getFftChartBackgroundColor();
         h = 31 * h + prefs.getFftHarmonicDotColor();
+        h = 31 * h + prefs.getFftBeforeCalDotColor();
         h = 31 * h + prefs.getFftFreqRespColor();
+        h = 31 * h + prefs.getFftCalOverlayColor();
+        // Pre-correction peaks identity — when calibration is loaded
+        // the snapshot moves between analyses, so the cache must
+        // invalidate alongside the corrected result.
+        h = 31 * h + System.identityHashCode(worker.getPreCorrectionPeaks());
+        // Cal entry list contents — adding / removing a row would
+        // otherwise leave the overlay curve stale until the next FFT
+        // result swaps the result reference.
+        for (FftCalibrationStore.Entry e : FftCalibrationStore.instance().getEntries()) {
+            h = 31 * h + System.identityHashCode(e.getCalibration());
+        }
         return h;
     }
 
@@ -1031,6 +1130,81 @@ public final class FftView extends AbstractFreqDomainView {
                     ? fundRefDbVOverride
                     : refDbV;
             double v = unit.convertFromDbFs(r.amplitudeDbFs[k], binRefDbV, binBw);
+            int y = magToY(v, plot, magTop, magBot, unit);
+            if (x < 0)         painter.setLeftAnchor(xAbs, y);
+            else if (x >= W)   painter.setRightAnchor(xAbs, y);
+            else               painter.add(xAbs, y);
+        }
+        painter.drawTo(gc);
+    }
+
+    /** Paints the cascade of every loaded FFT calibration as an inverted
+     *  overlay curve parallel to the spectrum.  Anchored at H2 so the
+     *  user can read it as "this is how much the calibration is lifting
+     *  or cutting each band relative to the second harmonic".  No-op
+     *  when no calibration is loaded or when H2 wasn't detected.
+     *
+     *  <p>Combined magnitude in dB is the per-frequency sum across all
+     *  loaded cals (cascade); the curve plots {@code -sumDb + offset}
+     *  where {@code offset = h2DbFs + sumDb(h2Freq)}. */
+    private void drawCalOverlay(GC gc, Rectangle plot, FftAnalyzer.Result r,
+                                FftMagnitudeUnit unit,
+                                double freqMin, double freqMax,
+                                double magTop, double magBot,
+                                boolean logFreq) {
+        List<FftCalibrationStore.Entry> entries =
+                FftCalibrationStore.instance().getEntries();
+        if (entries.isEmpty()) return;
+        if (r.harmonicCount == 0 || r.harmonicBins == null
+                || r.harmonicBins.length == 0 || r.harmonicBins[0] <= 0) return;
+        double h2Freq = r.harmonicHz[0];
+        double h2DbFs = r.harmonicDbFs[0];
+        if (!(h2Freq > 0.0) || !Double.isFinite(h2DbFs)) return;
+
+        // Match the cal channel to whichever channel the FFT is
+        // currently analysing — using .left() unconditionally would
+        // mis-compensate the signal when the user picks the right
+        // channel (their L/R cal curves are not identical).
+        boolean wantLeft = Preferences.instance().getFftChannel() == Channel.L;
+        double sumDbAtH2 = 0.0;
+        for (FftCalibrationStore.Entry e : entries) {
+            FreqRespCalibration cal = wantLeft
+                    ? e.getCalibration().left()
+                    : e.getCalibration().right();
+            double m = FreqRespCalHelper.interpolate(cal, h2Freq)[0];
+            sumDbAtH2 += (m > 0.0) ? 20.0 * Math.log10(m) : -300.0;
+        }
+        double offset = h2DbFs + sumDbAtH2;
+
+        FreqRespCalibration first = wantLeft
+                ? entries.get(0).getCalibration().left()
+                : entries.get(0).getCalibration().right();
+        double[] freqs = first.freqs;
+        double calRefDbV = Double.isNaN(r.fundRefDbV) ? 0
+                : (r.fundRefDbV - r.fundamentalDbFs);
+        double binBw = r.freqResolution;
+
+        gc.setForeground(calOverlayColor);
+        gc.setLineWidth((int) Math.max(1, Math.round(Preferences.instance().getFftLineWidth())));
+        ColumnBucketPainter painter = new ColumnBucketPainter(plot);
+        int W = plot.width;
+        for (int i = 0; i < freqs.length; i++) {
+            double f = freqs[i];
+            if (!(f > 0.0)) continue;
+            double sumDb = 0.0;
+            for (FftCalibrationStore.Entry e : entries) {
+                FreqRespCalibration cal = wantLeft
+                        ? e.getCalibration().left()
+                        : e.getCalibration().right();
+                double m = (cal == first)
+                        ? cal.magLin[i]
+                        : FreqRespCalHelper.interpolate(cal, f)[0];
+                sumDb += (m > 0.0) ? 20.0 * Math.log10(m) : -300.0;
+            }
+            double dbFs = -sumDb + offset;
+            double v = unit.convertFromDbFs(dbFs, calRefDbV, binBw);
+            int xAbs = freqToX(f, plot, freqMin, freqMax, logFreq);
+            int x = xAbs - plot.x;
             int y = magToY(v, plot, magTop, magBot, unit);
             if (x < 0)         painter.setLeftAnchor(xAbs, y);
             else if (x >= W)   painter.setRightAnchor(xAbs, y);
