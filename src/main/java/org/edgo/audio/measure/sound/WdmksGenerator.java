@@ -168,6 +168,11 @@ public class WdmksGenerator implements AudioPlayback {
         // it before PA's audio thread first calls it.  Same compiled
         // method body is then used by the callback.
         warmupJit(generator);
+        // Warmup consumed nextSample() calls that advance sweep playback
+        // state; reset so the real stream sees the sweep from sample 0
+        // (otherwise a freq-response measurement captures a mid-sweep
+        // recording while the deconv reference starts at zero).
+        generator.resetSweepPosition();
 
         PortAudio.check(PortAudio.lib().Pa_StartStream(stream), "Pa_StartStream(output)");
         log.info("WDM-KS playback started (continuous, callback mode).");

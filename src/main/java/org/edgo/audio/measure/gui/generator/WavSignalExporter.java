@@ -1,5 +1,6 @@
 package org.edgo.audio.measure.gui.generator;
 
+import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.wav.WavWriter;
@@ -16,12 +17,11 @@ import java.util.Random;
  * path so the file's noise floor matches what the user hears.
  */
 @Log4j2
-public final class WavSignalExporter {
+@UtilityClass
+public class WavSignalExporter {
 
-    private static final int CHANNELS       = 2;
-    private static final int BUFFER_FRAMES  = 4096;
-
-    private WavSignalExporter() {}
+    private final int CHANNELS       = 2;
+    private final int BUFFER_FRAMES  = 4096;
 
     /**
      * Renders {@code durationSeconds} of {@code generator} into {@code outFile}.
@@ -30,7 +30,7 @@ public final class WavSignalExporter {
      *
      * @throws IOException on filesystem failure
      */
-    public static long export(SignalGenerator generator,
+    public long export(SignalGenerator generator,
                               File outFile,
                               int sampleRate,
                               int bitDepth,
@@ -61,8 +61,8 @@ public final class WavSignalExporter {
      * inline here so the WAV path doesn't have to acquire a real audio
      * line.  Identical sample-by-sample output to the live playback.
      */
-    private static void fillBuffer(SignalGenerator gen, byte[] buf, int frames,
-                                   int bitDepth, int ditherBits, Random rng) {
+    private void fillBuffer(SignalGenerator gen, byte[] buf, int frames,
+                            int bitDepth, int ditherBits, Random rng) {
         int bytesPerSample = bitDepth / 8;
         int bytesPerFrame  = bytesPerSample * CHANNELS;
         if (bitDepth == 8) {
@@ -89,12 +89,12 @@ public final class WavSignalExporter {
         }
     }
 
-    private static double tpdfNoise(int ditherBits, Random rng) {
+    private double tpdfNoise(int ditherBits, Random rng) {
         if (ditherBits == 0 || rng == null) return 0.0;
         return (rng.nextDouble() - rng.nextDouble()) / (1L << (ditherBits - 1));
     }
 
-    private static double clamp(double v) {
+    private double clamp(double v) {
         if (v >  1.0) return  1.0;
         if (v < -1.0) return -1.0;
         return v;

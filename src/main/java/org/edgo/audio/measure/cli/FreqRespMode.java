@@ -37,6 +37,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * {@code --freq-response} — measures a filter's transfer function H(f) via
@@ -153,59 +154,91 @@ public class FreqRespMode {
         log.info("Chart       : {}x{} px", chartWidth, chartHeight);
 
         SignalGenerator gen = new SignalGenerator(fStart, fEnd, sweepSamples, leadInSamples, sampleRate, amp);
-        float[] yRec = CaptureWithGenerator.run(gen, outDevice, inDevice, sampleRate, bitDepth, ditherBits, durationSec);
-        log.info("Captured    : {} samples ({} s)", yRec.length,
-                String.format(Locale.US, "%.4f", yRec.length / (double) sampleRate));
+        // One-shot sweep for the measurement: emit silence after the buffer
+        // ends instead of looping a second cycle into the capture window,
+        // which would alias into the deconvolution.  Hann fade-in/fade-out
+        // suppresses sweep-boundary spectral leakage (same value also
+        // applied to the X reference inside computeFromLogSweep).
+        int fadeSamples = FreqRespCalHelper.sweepFadeSamples(sweepSamples);
+        gen.setSweepParams(false, fadeSamples, fadeSamples);
+        // Stereo capture: one playback, both ADC channels retained — the
+        // CLI mirrors the GUI's behaviour so a saved measurement carries
+        // L and R deconvolved from the same sweep.
+        StereoSamples rec = CaptureWithGenerator.runStereo(
+                gen, outDevice, inDevice, sampleRate, bitDepth, ditherBits,
+                durationSec, null, 0, null, null);
+        log.info("Captured    : {} samples per channel ({} s)", rec.left().length,
+                String.format(Locale.US, "%.4f", rec.left().length / (double) sampleRate));
 
         if (wavOutArg != null) {
-            byte[] pcm = PcmUtils.floatMonoToStereoBytes(yRec, bitDepth);
+            byte[] pcm = PcmUtils.floatStereoToBytes(rec.left(), rec.right(), bitDepth);
             try (WavWriter w = new WavWriter(new File(wavOutArg), sampleRate, 2, bitDepth, false)) {
                 w.writeRaw(pcm, pcm.length);
             }
             log.info("Sweep WAV   : {}", wavOutArg);
         }
 
-        FreqRespCalibration cal = FreqRespCalHelper.computeFromLogSweep(
-                yRec, gen.getLogSweepBuffer(), leadInSamples, sampleRate, freqs, amp);
+        // Parallel deconvolution: L and R share the same reference sweep
+        // but compute independently, so they run on separate futures off
+        // the common ForkJoin pool.
+        float[] sweepRef = gen.getLogSweepBuffer();
+        CompletableFuture<FreqRespCalibration> calLFut = CompletableFuture.supplyAsync(
+                () -> FreqRespCalHelper.computeFromLogSweep(
+                        rec.left(), sweepRef, leadInSamples, sampleRate, freqs, amp,
+                        fadeSamples, "L"));
+        CompletableFuture<FreqRespCalibration> calRFut = CompletableFuture.supplyAsync(
+                () -> FreqRespCalHelper.computeFromLogSweep(
+                        rec.right(), sweepRef, leadInSamples, sampleRate, freqs, amp,
+                        fadeSamples, "R"));
+        FreqRespCalibration calL = calLFut.join();
+        FreqRespCalibration calR = calRFut.join();
+        StereoFreqRespCalibration stereo = new StereoFreqRespCalibration(calL, calR);
 
         String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
         String csvPath = outputArg != null
                 ? outputArg
                 : new File("results", "filter_cal_" + ts + ".csv").getPath();
-        FreqRespCalHelper.saveCsv(cal, csvPath, sampleRate, fStart, fEnd, nPoints, amp);
+        FreqRespCalHelper.saveCsv(stereo, csvPath, sampleRate, fStart, fEnd, nPoints, amp);
         log.info("Filter cal CSV saved: {}", csvPath);
 
         String chartPath = csvPath.replaceFirst("\\.csv$", "") + ".png";
-        exportChart(cal, chartWidth, chartHeight, chartPath);
+        exportChart(stereo, chartWidth, chartHeight, chartPath);
         log.info("Filter cal chart saved: {}", chartPath);
     }
 
     /**
-     * Renders a frequency-response chart from a per-point filter calibration:
-     *   Series 0 = magnitude in dB (left Y axis)
-     *   Series 1 = phase in degrees (right Y axis), unwrapped
+     * Renders a stereo frequency-response chart:
+     *   Series 0 / 1 = magnitude L / R in dB (left Y axis)
+     *   Series 0 / 1 = phase L / R in degrees (right Y axis), unwrapped
      */
-    private void exportChart(FreqRespCalibration cal,
+    private void exportChart(StereoFreqRespCalibration stereo,
             int width, int height, String pngPath) throws IOException {
-        XYSeries magSeries   = new XYSeries("Magnitude (dB)");
-        XYSeries phaseSeries = new XYSeries("Phase (deg)");
-        for (int i = 0; i < cal.freqs.length; i++) {
-            double freq = cal.freqs[i];
+        FreqRespCalibration calL = stereo.left();
+        FreqRespCalibration calR = stereo.right();
+        XYSeries magL   = new XYSeries("Magnitude L (dB)");
+        XYSeries magR   = new XYSeries("Magnitude R (dB)");
+        XYSeries phaseL = new XYSeries("Phase L (deg)");
+        XYSeries phaseR = new XYSeries("Phase R (deg)");
+        for (int i = 0; i < calL.freqs.length; i++) {
+            double freq = calL.freqs[i];
             if (freq <= 0.0) continue;
-            double mag  = cal.magLin[i];
-            double db   = mag > 0.0 ? 20.0 * Math.log10(mag) : -300.0;
-            double phaseDeg = Math.toDegrees(cal.phaseRad[i]);
-            magSeries.add(freq,  db);
-            phaseSeries.add(freq, phaseDeg);
+            double mL = calL.magLin[i];
+            double mR = calR.magLin[i];
+            magL.add(freq,   mL > 0.0 ? 20.0 * Math.log10(mL) : -300.0);
+            magR.add(freq,   mR > 0.0 ? 20.0 * Math.log10(mR) : -300.0);
+            phaseL.add(freq, Math.toDegrees(calL.phaseRad[i]));
+            phaseR.add(freq, Math.toDegrees(calR.phaseRad[i]));
         }
 
-        XYSeriesCollection magData   = new XYSeriesCollection();
-        magData.addSeries(magSeries);
+        XYSeriesCollection magData = new XYSeriesCollection();
+        magData.addSeries(magL);
+        magData.addSeries(magR);
         XYSeriesCollection phaseData = new XYSeriesCollection();
-        phaseData.addSeries(phaseSeries);
+        phaseData.addSeries(phaseL);
+        phaseData.addSeries(phaseR);
 
         JFreeChart chart = ChartFactory.createXYLineChart(
-                "Filter Frequency Response", "Frequency (Hz)", "Magnitude (dB)",
+                "Filter Frequency Response (L + R)", "Frequency (Hz)", "Magnitude (dB)",
                 magData, PlotOrientation.VERTICAL,
                 true, false, false);
         chart.getTitle().setFont(ChartStyle.CHART_TITLE_FONT);
@@ -215,8 +248,8 @@ public class FreqRespMode {
         plot.setDomainGridlinePaint(ChartStyle.GRID_LINE_COLOR);
         plot.setRangeGridlinePaint(ChartStyle.GRID_LINE_COLOR);
 
-        final double freqMin = cal.freqs[0];
-        final double freqMax = cal.freqs[cal.freqs.length - 1];
+        final double freqMin = calL.freqs[0];
+        final double freqMax = calL.freqs[calL.freqs.length - 1];
         LogAxis freqAxis = new LogAxis("Frequency (Hz)") {
             @Override
             public List<NumberTick> refreshTicks(
@@ -253,12 +286,13 @@ public class FreqRespMode {
 
         double minDb =  Double.POSITIVE_INFINITY;
         double maxDb = -Double.POSITIVE_INFINITY;
-        for (int i = 0; i < cal.freqs.length; i++) {
-            double mag = cal.magLin[i];
-            if (mag <= 0.0) continue;
-            double db = 20.0 * Math.log10(mag);
-            if (db < minDb) minDb = db;
-            if (db > maxDb) maxDb = db;
+        for (int i = 0; i < calL.freqs.length; i++) {
+            for (double mag : new double[]{ calL.magLin[i], calR.magLin[i] }) {
+                if (mag <= 0.0) continue;
+                double db = 20.0 * Math.log10(mag);
+                if (db < minDb) minDb = db;
+                if (db > maxDb) maxDb = db;
+            }
         }
         if (!Double.isFinite(minDb)) { minDb = -100.0; maxDb = 10.0; }
         double yMin = Math.floor((minDb - 5.0) / 10.0) * 10.0;
@@ -272,10 +306,12 @@ public class FreqRespMode {
 
         double minPhase =  Double.POSITIVE_INFINITY;
         double maxPhase = -Double.POSITIVE_INFINITY;
-        for (int i = 0; i < cal.freqs.length; i++) {
-            double pd = Math.toDegrees(cal.phaseRad[i]);
-            if (pd < minPhase) minPhase = pd;
-            if (pd > maxPhase) maxPhase = pd;
+        for (int i = 0; i < calL.freqs.length; i++) {
+            for (double pd : new double[]{ Math.toDegrees(calL.phaseRad[i]),
+                                           Math.toDegrees(calR.phaseRad[i]) }) {
+                if (pd < minPhase) minPhase = pd;
+                if (pd > maxPhase) maxPhase = pd;
+            }
         }
         if (!Double.isFinite(minPhase)) { minPhase = -180.0; maxPhase = 180.0; }
         double pSpan = Math.max(90.0, maxPhase - minPhase);
@@ -290,16 +326,22 @@ public class FreqRespMode {
 
         XYLineAndShapeRenderer magRend =
                 new XYLineAndShapeRenderer(true, false);
-        magRend.setSeriesPaint(0, ChartStyle.SPECTRUM_COLOR);
+        // Match the GUI's channel colour convention: L red, R blue.
+        magRend.setSeriesPaint(0, new Color(0xCC, 0x33, 0x33));
         magRend.setSeriesStroke(0, ChartStyle.SPECTRUM_STROKE);
+        magRend.setSeriesPaint(1, new Color(0x33, 0x66, 0xCC));
+        magRend.setSeriesStroke(1, ChartStyle.SPECTRUM_STROKE);
         plot.setRenderer(0, magRend);
 
         XYLineAndShapeRenderer phRend =
                 new XYLineAndShapeRenderer(true, false);
-        phRend.setSeriesPaint(0, new Color(0, 150, 0));
-        phRend.setSeriesStroke(0, new BasicStroke(0.6f,
+        BasicStroke dashed = new BasicStroke(0.6f,
                 BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND,
-                10.0f, new float[]{4f, 3f}, 0f));
+                10.0f, new float[]{4f, 3f}, 0f);
+        phRend.setSeriesPaint(0, new Color(0xCC, 0x33, 0x33));
+        phRend.setSeriesStroke(0, dashed);
+        phRend.setSeriesPaint(1, new Color(0x33, 0x66, 0xCC));
+        phRend.setSeriesStroke(1, dashed);
         plot.setRenderer(1, phRend);
 
         File out = new File(pngPath);

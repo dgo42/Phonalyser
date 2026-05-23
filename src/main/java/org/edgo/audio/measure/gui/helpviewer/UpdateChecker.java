@@ -1,5 +1,6 @@
 package org.edgo.audio.measure.gui.helpviewer;
 
+import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.program.Program;
@@ -43,19 +44,18 @@ import java.util.regex.Pattern;
  * body — to avoid pulling in a JSON library for two fields and a boolean.
  */
 @Log4j2
-public final class UpdateChecker {
+@UtilityClass
+public class UpdateChecker {
 
-    private UpdateChecker() {}
+    private final Pattern TAG_NAME_PAT   = Pattern.compile("\"tag_name\"\\s*:\\s*\"([^\"]+)\"");
+    private final Pattern HTML_URL_PAT   = Pattern.compile("\"html_url\"\\s*:\\s*\"([^\"]+)\"");
+    private final Pattern PRERELEASE_PAT = Pattern.compile("\"prerelease\"\\s*:\\s*(true|false)");
 
-    private static final Pattern TAG_NAME_PAT   = Pattern.compile("\"tag_name\"\\s*:\\s*\"([^\"]+)\"");
-    private static final Pattern HTML_URL_PAT   = Pattern.compile("\"html_url\"\\s*:\\s*\"([^\"]+)\"");
-    private static final Pattern PRERELEASE_PAT = Pattern.compile("\"prerelease\"\\s*:\\s*(true|false)");
-
-    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
-    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+    private final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
+    private final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
 
     /** User-triggered check via the Help menu.  Always shows a result. */
-    public static void checkNow(Shell parent) {
+    public void checkNow(Shell parent) {
         log.info("Manual update check requested");
         runCheckInBackground(parent, false, true);
     }
@@ -68,12 +68,12 @@ public final class UpdateChecker {
      * @param parent      shell to anchor the eventual dialog to
      * @param includeBeta when true, pre-release tags are also considered
      */
-    public static void checkOnStartup(Shell parent, boolean includeBeta) {
+    public void checkOnStartup(Shell parent, boolean includeBeta) {
         log.debug("Startup update check, includeBeta={}", includeBeta);
         runCheckInBackground(parent, true, includeBeta);
     }
 
-    private static void runCheckInBackground(Shell parent, boolean silentIfUpToDate, boolean includeBeta) {
+    private void runCheckInBackground(Shell parent, boolean silentIfUpToDate, boolean includeBeta) {
         final Display display = parent.getDisplay();
         Thread t = new Thread(() -> {
             ReleaseInfo info;
@@ -91,7 +91,7 @@ public final class UpdateChecker {
                 log.warn("Update check: response did not contain tag_name");
                 return;
             }
-            final String current = appVersion();
+            final String current = Versions.appVersion();
             if (!includeBeta && info.preRelease) {
                 log.info("Latest release {} is a pre-release; skipping (includeBeta=false)", info.tag);
                 if (!silentIfUpToDate) {
@@ -112,7 +112,7 @@ public final class UpdateChecker {
         t.start();
     }
 
-    private static ReleaseInfo fetchLatestRelease() throws Exception {
+    private ReleaseInfo fetchLatestRelease() throws Exception {
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(CONNECT_TIMEOUT)
                 .followRedirects(HttpClient.Redirect.NORMAL)
@@ -135,12 +135,12 @@ public final class UpdateChecker {
                 "true".equals(firstMatch(PRERELEASE_PAT, body)));
     }
 
-    private static String firstMatch(Pattern p, String body) {
+    private String firstMatch(Pattern p, String body) {
         Matcher m = p.matcher(body);
         return m.find() ? m.group(1) : null;
     }
 
-    private static void showNewer(Shell parent, ReleaseInfo info, String current) {
+    private void showNewer(Shell parent, ReleaseInfo info, String current) {
         MessageBox box = new MessageBox(parent, SWT.ICON_INFORMATION | SWT.YES | SWT.NO);
         box.setText(I18n.t("help.update.title"));
         box.setMessage(I18n.t("help.update.newer.message", info.tag, current));
@@ -149,23 +149,18 @@ public final class UpdateChecker {
         }
     }
 
-    private static void showUpToDate(Shell parent, String current) {
+    private void showUpToDate(Shell parent, String current) {
         MessageBox box = new MessageBox(parent, SWT.ICON_INFORMATION | SWT.OK);
         box.setText(I18n.t("help.update.title"));
         box.setMessage(I18n.t("help.update.upToDate.message", current));
         box.open();
     }
 
-    private static void showError(Shell parent, String reason) {
+    private void showError(Shell parent, String reason) {
         MessageBox box = new MessageBox(parent, SWT.ICON_WARNING | SWT.OK);
         box.setText(I18n.t("help.update.title"));
         box.setMessage(I18n.t("help.update.error.message", reason));
         box.open();
-    }
-
-    private static String appVersion() {
-        String v = UpdateChecker.class.getPackage().getImplementationVersion();
-        return (v != null && !v.isEmpty()) ? v : "dev";
     }
 
     private record ReleaseInfo(String tag, String url, boolean preRelease) {}

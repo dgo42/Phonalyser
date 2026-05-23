@@ -21,6 +21,7 @@ import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -38,7 +39,7 @@ import lombok.extern.log4j.Log4j2;
  * volts/division and time/division settings.
  */
 @Log4j2
-public final class OscilloscopeView extends Canvas {
+public final class OscilloscopeView extends AbstractMeasurementView {
 
     /** Number of horizontal grid divisions.  Package-private so the pane's
      *  mouse-anchored t/div zoom can compute the time at the mouse using
@@ -321,67 +322,64 @@ public final class OscilloscopeView extends Canvas {
         // them from the current settings and re-create on change.
         syncChannelColors();
 
+        // Register the header-row buttons as Hotspots with the shared base.
+        // The base owns the rect-by-reference list and the lookup helper;
+        // the mouseDown handler below simply consults hotspotAt(...) instead
+        // of running through six explicit if/else branches.  Each rect is
+        // mutated in place by the paint code, so registration only happens
+        // once here.
+        registerHotspot(leftChanButtonBounds, () -> {
+            Preferences p = Preferences.instance();
+            if (p.getOscMeasurementChannel() == Channel.L) return;
+            p.setOscMeasurementChannel(Channel.L);
+            p.save();
+            measWorker.clearHistory();
+            redraw();
+        }, "scope.stats.left.tooltip");
+        registerHotspot(rightChanButtonBounds, () -> {
+            Preferences p = Preferences.instance();
+            if (p.getOscMeasurementChannel() == Channel.R) return;
+            p.setOscMeasurementChannel(Channel.R);
+            p.save();
+            measWorker.clearHistory();
+            redraw();
+        }, "scope.stats.right.tooltip");
+        registerHotspot(autoSetupButtonBounds,
+                () -> MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP),
+                "scope.autosetup.tooltip");
+        registerHotspot(externalWindowButtonBounds,
+                () -> setTableExtracted(!tableExtracted),
+                "scope.external.window.tooltip");
+        registerHotspot(tableToggleBounds, () -> {
+            Preferences p = Preferences.instance();
+            p.setOscShowMeasurementTable(!p.isOscShowMeasurementTable());
+            p.save();
+            syncExternalShell();
+            redraw();
+        }, "scope.stats.table.tooltip");
+        registerHotspot(statsToggleBounds, () -> {
+            Preferences p = Preferences.instance();
+            p.setOscShowStats(!p.isOscShowStats());
+            p.save();
+            redraw();
+        }, "scope.stats.toggle.tooltip");
+        registerHotspot(resetButtonBoundsHeader, () -> {
+            measWorker.clearHistory();
+            redraw();
+        }, "scope.stats.reset.tooltip");
+
         setBackground(background);
         addPaintListener(this::onPaint);
         addMouseListener(new org.eclipse.swt.events.MouseAdapter() {
             @Override
             public void mouseDown(org.eclipse.swt.events.MouseEvent ev) {
                 if (ev.button != 1) return;
-                Preferences prefs = Preferences.instance();
-                // L / R channel-pick buttons — always clickable so the
-                // measurement channel (and the vertical-offset slider's
-                // channel) can be flipped even when the target channel
-                // is currently disabled.
-                if (leftChanButtonBounds.contains(ev.x, ev.y)
-                        && prefs.getOscMeasurementChannel() != Channel.L) {
-                    prefs.setOscMeasurementChannel(Channel.L);
-                    prefs.save();
-                    measWorker.clearHistory();
-                    redraw();
-                    return;
-                }
-                if (rightChanButtonBounds.contains(ev.x, ev.y)
-                        && prefs.getOscMeasurementChannel() != Channel.R) {
-                    prefs.setOscMeasurementChannel(Channel.R);
-                    prefs.save();
-                    measWorker.clearHistory();
-                    redraw();
-                    return;
-                }
-                // Auto-Setup — broadcast on the bus.  The scope pane
-                // subscribes and re-fits the vertical / horizontal scales.
-                if (autoSetupButtonBounds.contains(ev.x, ev.y)) {
-                    MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP);
-                    return;
-                }
-                // External-Window — toggle the table-extract tool window.
-                if (externalWindowButtonBounds.contains(ev.x, ev.y)) {
-                    setTableExtracted(!tableExtracted);
-                    return;
-                }
-                // Gauge — toggle whole measurement-table visibility.  The
-                // "extracted" intent is preserved across this toggle:
-                // hiding the table closes the tool window, showing it
-                // again brings the tool window back (because
-                // syncExternalShell reads both flags).
-                if (tableToggleBounds.contains(ev.x, ev.y)) {
-                    prefs.setOscShowMeasurementTable(!prefs.isOscShowMeasurementTable());
-                    prefs.save();
-                    syncExternalShell();
-                    redraw();
-                    return;
-                }
-                if (statsToggleBounds.contains(ev.x, ev.y)) {
-                    prefs.setOscShowStats(!prefs.isOscShowStats());
-                    prefs.save();
-                    redraw();
-                    return;
-                }
-                if (resetButtonBoundsHeader.contains(ev.x, ev.y)) {
-                    measWorker.clearHistory();
-                    redraw();
-                    return;
-                }
+                // All header-row buttons (L/R, Auto-Setup, Table, External,
+                // Stats, Reset) are registered as Hotspots with the shared
+                // base — dispatch them through the registry instead of
+                // running through six explicit if/else branches.
+                Hotspot hot = hotspotAt(ev.x, ev.y);
+                if (hot != null) { hot.onClick.run(); return; }
                 // Slider hit detection — first match wins.  The handle is
                 // grabbed and the slider value is updated immediately so a
                 // click without a drag still moves the slider.
@@ -455,27 +453,13 @@ public final class OscilloscopeView extends Canvas {
             } else if (!fileMode && triggerPosBounds.contains(ev.x, ev.y)) {
                 cursorId = SWT.CURSOR_SIZEWE;
                 tip = I18n.t("scope.trigger.position.tooltip");
-            } else if (resetButtonBoundsHeader.contains(ev.x, ev.y)) {
+            } else if (hotspotAt(ev.x, ev.y) != null) {
+                // All header-row buttons go through the base's hotspot
+                // registry — one branch instead of seven if/elses.  The
+                // tooltip key comes from the matched hotspot.
+                Hotspot hot = hotspotAt(ev.x, ev.y);
                 cursorId = SWT.CURSOR_HAND;
-                tip = I18n.t("scope.stats.reset.tooltip");
-            } else if (leftChanButtonBounds.contains(ev.x, ev.y)) {
-                cursorId = SWT.CURSOR_HAND;
-                tip = I18n.t("scope.stats.left.tooltip");
-            } else if (rightChanButtonBounds.contains(ev.x, ev.y)) {
-                cursorId = SWT.CURSOR_HAND;
-                tip = I18n.t("scope.stats.right.tooltip");
-            } else if (autoSetupButtonBounds.contains(ev.x, ev.y)) {
-                cursorId = SWT.CURSOR_HAND;
-                tip = I18n.t("scope.autosetup.tooltip");
-            } else if (externalWindowButtonBounds.contains(ev.x, ev.y)) {
-                cursorId = SWT.CURSOR_HAND;
-                tip = I18n.t("scope.external.window.tooltip");
-            } else if (tableToggleBounds.contains(ev.x, ev.y)) {
-                cursorId = SWT.CURSOR_HAND;
-                tip = I18n.t("scope.stats.table.tooltip");
-            } else if (statsToggleBounds.contains(ev.x, ev.y)) {
-                cursorId = SWT.CURSOR_HAND;
-                tip = I18n.t("scope.stats.toggle.tooltip");
+                tip = hot.tooltipKey != null ? I18n.t(hot.tooltipKey) : null;
             } else if (leftMaxLabelBounds.contains(ev.x, ev.y)
                     || leftMinLabelBounds.contains(ev.x, ev.y)
                     || rightMaxLabelBounds.contains(ev.x, ev.y)
@@ -622,11 +606,6 @@ public final class OscilloscopeView extends Canvas {
             currentRightRgb = newR;
         }
     }
-
-    private Color newColor(int rgb) {
-        return new Color(getDisplay(), (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
-    }
-
 
     /**
      * Arms a single-shot capture in SINGLE trigger mode.  The next trigger
@@ -1404,13 +1383,6 @@ public final class OscilloscopeView extends Canvas {
         drawCenteredIcon(gc, iconLight, x, y, w, h);
     }
 
-    private void drawCenteredIcon(GC gc, Image icon, int x, int y, int w, int h) {
-        if (icon == null || icon.isDisposed()) return;
-        org.eclipse.swt.graphics.Rectangle ib = icon.getBounds();
-        int ix = x + (w - ib.width) / 2;
-        int iy = y + (h - ib.height) / 2;
-        gc.drawImage(icon, ix, iy);
-    }
 
     private void drawRightAligned(GC gc, String s, int rightX, int y) {
         Point ts = gc.textExtent(s);

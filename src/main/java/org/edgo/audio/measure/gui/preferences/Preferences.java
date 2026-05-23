@@ -295,6 +295,29 @@ public final class Preferences {
     @Getter @Setter private String  fftLoadPath;
     @Getter @Setter private String  fftLoadFolder;
 
+    /** Path to the row-0 FFT calibration file (.frc), or null when row
+     *  0 is empty.  Mirrors the FreqResp pane's row-0 / extras-list
+     *  pattern. */
+    @Getter @Setter private String  fftCalibrationPath;
+    /** Paths to additional calibration files loaded into rows 1..N of
+     *  the FFT pane's Load-calibration tab.  Empty strings represent
+     *  empty rows that the user added but didn't yet populate. */
+    @Getter @Setter private List<String> fftCalibrationPathsExtra = new ArrayList<>();
+    /** When true, calibration subtraction applies to EVERY spectrum
+     *  bin (including the noise floor).  When false, only the
+     *  fundamental + harmonic dot positions are adjusted.  Bound to
+     *  the "Calibrate with noise" checkbox on the THD Settings tab. */
+    @Getter @Setter private boolean fftCalibrateWithNoise     = false;
+    /** Packed RGB of the "before-calibration" dot painted next to each
+     *  fundamental / harmonic peak when at least one .frc calibration
+     *  is loaded.  Default dark blue (0x00, 0x00, 0x80). */
+    @Getter @Setter private int     fftBeforeCalDotColor      = 0x000080;
+    /** Packed RGB of the "inverted calibration" overlay curve — the
+     *  cascaded calibration response negated and anchored at the H2
+     *  peak, drawn alongside the spectrum so the user can see what
+     *  shape was subtracted.  Default green (0x00, 0x96, 0x00). */
+    @Getter @Setter private int     fftCalOverlayColor        = 0x009600;
+
     // FFT view appearance (FFT tab in Preferences dialog).  Defaults mirror
     // the colours used by FftAnalyzer.exportChart via ChartStyle.
     /** Spectrum trace line width in pixels. */
@@ -312,6 +335,136 @@ public final class Preferences {
 
     /** User-saved FFT presets, same shape and conventions as {@link #oscPresets}. */
     @Getter private final Map<String, FftPreset> fftPresets = new LinkedHashMap<>();
+    /** User-saved Frequency-Response presets — same insertion-order map
+     *  semantics as the FFT / Scope preset maps so the dropdown shows
+     *  entries in the order they were created. */
+    @Getter private final Map<String, FreqRespPreset> freqRespPresets = new LinkedHashMap<>();
+
+    // -------------------------------------------------------------------------
+    // Frequency Response pane — sweep settings, view state, RIAA + calibration
+    // -------------------------------------------------------------------------
+
+    /** Sweep start frequency in Hz.  Default 20 Hz (audible bottom). */
+    @Getter @Setter private double  freqRespStartHz          = 20.0;
+    /** Sweep stop  frequency in Hz.  Default 20 kHz (audible top). */
+    @Getter @Setter private double  freqRespStopHz           = 20000.0;
+    /** Generator drive amplitude at the DAC, V RMS. */
+    @Getter @Setter private double  freqRespAmplitudeVrms    = 0.5;
+    /** Number of log-spaced output frequency points the deconvolution emits.
+     *  Default 65536 (64 k) is a safe trade-off between resolution and
+     *  memory for a single sweep. */
+    @Getter @Setter private int     freqRespSweepPoints      = 65536;
+    /** Sweep duration in seconds, excluding lead-in.  Derived from
+     *  {@link #freqRespFftSize} + {@link #freqRespLeadInSec} + the half-
+     *  second tail; the Settings tab keeps the two in sync.  The
+     *  analyzer / wizard still read this field so the rest of the
+     *  pipeline doesn't have to know about FFT size. */
+    @Getter @Setter private double  freqRespDurationSec      = 5.5;
+    /** Deconvolution FFT length (power of 2, 64k … 16M).  Primary control
+     *  in the Settings tab — the sweep duration is derived from this so
+     *  the analyzer's {@code nextPow2(leadIn + sweep + tail)} lands
+     *  exactly on the chosen length (no wasted bins). */
+    @Getter @Setter private int     freqRespFftSize          = 524288;
+    /** TPDF dither bits applied to the generator before quantisation;
+     *  0 disables.  Same convention as the generator pane. */
+    @Getter @Setter private int     freqRespDitherBits       = 0;
+    /** Silent lead-in prepended to the sweep, in seconds.  Lets the DAC →
+     *  ADC chain settle before the first sweep sample lands. */
+    @Getter @Setter private double  freqRespLeadInSec        = 0.2;
+
+    /** Whether the left-channel trace is visible on the view (toggle on the
+     *  view's header).  L + R are independent toggles, not single-choice. */
+    @Getter @Setter private boolean freqRespLeftVisible      = true;
+    /** Whether the right-channel trace is visible on the view. */
+    @Getter @Setter private boolean freqRespRightVisible     = false;
+    /** Whether the phase curve (right Y-axis ±180°) is painted. */
+    @Getter @Setter private boolean freqRespPhaseVisible     = false;
+
+    /** Visible frequency window — left edge of the trace area in Hz. */
+    @Getter @Setter private double  freqRespFreqMinHz        = 20.0;
+    /** Visible frequency window — right edge of the trace area in Hz. */
+    @Getter @Setter private double  freqRespFreqMaxHz        = 20000.0;
+    /** Visible magnitude window — top edge in dB. */
+    @Getter @Setter private double  freqRespMagTopDb         = 20.0;
+    /** Visible magnitude window — bottom edge in dB. */
+    @Getter @Setter private double  freqRespMagBotDb         = -140.0;
+
+    /** Maximum frequency the crosshair readout reports, expressed as a
+     *  fraction of the sample rate (0.40–0.50).  Default 0.48 clips the
+     *  readout at 0.48·Fs so the user doesn't see meaningless magnitude /
+     *  phase numbers right at Nyquist where the deconvolution kernel has
+     *  no usable energy. */
+    @Getter @Setter private double  freqRespNyquistFraction  = 1.0;
+
+    /** Window size (in points) of the moving-average smoothing applied
+     *  to the compare-mode (measured − reference) curve.  Affects both
+     *  the displayed trace and the anchor / min-max table that the
+     *  auto-setup computes.  Clamped to [0, 100]; 0 disables smoothing. */
+    @Getter @Setter private int     freqRespCompareSmoothWindow = 6;
+
+    /** When true, the FreqResp view interpolates across each harmonic of
+     *  {@link #freqRespNotchBaseHz} (50/60 Hz) before drawing — removes
+     *  mains-hum spikes from the displayed response.  Applied per-channel
+     *  on the way from raw to displayed copy, so toggling the flag
+     *  redraws without re-measuring. */
+    @Getter @Setter private boolean freqRespNotchEnabled = false;
+    /** Base frequency of the industrial-noise harmonic comb removed when
+     *  {@link #freqRespNotchEnabled}.  Either 50 (EU mains) or 60 (US). */
+    @Getter @Setter private int     freqRespNotchBaseHz  = 50;
+
+    /** Trace colour for the measured signal (whichever channel is the
+     *  active one — L and R are mutually-exclusive radio toggles, so a
+     *  single colour covers both).  Packed RGB int, default {@code #0064C8}
+     *  (a saturated blue). */
+    @Getter @Setter private int freqRespSignalColor     = 0x0064C8;
+    /** Trace colour for the phase overlay.  Default {@code #FF0000} (red). */
+    @Getter @Setter private int freqRespPhaseColor      = 0xFF0000;
+    /** Trace colour for the RIAA / IEC reference curve.  Default
+     *  {@code #009600} (a saturated green). */
+    @Getter @Setter private int freqRespReferenceColor  = 0x009600;
+    /** Chart background colour.  Default {@code #FFFFFF} (white). */
+    @Getter @Setter private int freqRespBackgroundColor = 0xFFFFFF;
+
+    /** Show RIAA reference curve overlaid on the trace. */
+    @Getter @Setter private boolean freqRespShowRiaa         = false;
+    /** When {@link #freqRespShowRiaa}, paint the reverse (playback) curve
+     *  instead of the record curve.  Vertical mirror around 0 dB at 1 kHz. */
+    @Getter @Setter private boolean freqRespReverseRiaa      = false;
+    /** When {@link #freqRespShowRiaa}, apply the IEC subsonic high-pass
+     *  amendment (T4 = 7950 µs) on top of whichever direction is active. */
+    @Getter @Setter private boolean freqRespIecAmendment     = false;
+    /** Comparison mode: show measured − reference subtraction trace in
+     *  place of the live measurement; auto-zoom to 2 Hz–25 kHz, ±2 dB
+     *  over min/max.  Only enabled when a measured result exists. */
+    @Getter @Setter private boolean freqRespCompareMode      = false;
+
+    /** When {@code true}, fresh measurements get divided by the loaded
+     *  calibration before being shown.  No effect if no calibration is
+     *  loaded.  Defaults on so a loaded calibration takes effect by
+     *  default. */
+    @Getter @Setter private boolean freqRespApplyCalibration = true;
+    /** Path to the currently-loaded calibration CSV, or {@code null} when
+     *  no calibration is active.  Treated as row 0 of the calibration tab's
+     *  multi-row list; subsequent rows are stored in
+     *  {@link #freqRespCalibrationPathsExtra}. */
+    @Getter @Setter private String  freqRespCalibrationPath;
+    /** Paths to additional calibration files loaded beyond row 0.  Each
+     *  entry is divided into the measured signal in sequence (linear-mag
+     *  divide, phase subtract) at draw / save time.  Empty when only row 0
+     *  is loaded; the row count in the UI is {@code 1 + size()}. */
+    @Getter @Setter private List<String> freqRespCalibrationPathsExtra = new ArrayList<>();
+
+    /** Last-used folder for the "Save to..." tab; persisted across launches. */
+    @Getter @Setter private String  freqRespSaveFolder;
+    /** Most-recently-chosen save-to path; restored into the path field at startup. */
+    @Getter @Setter private String  freqRespSavePath;
+    /** Last-used folder for the "Load from..." tab. */
+    @Getter @Setter private String  freqRespLoadFolder;
+    /** Most-recently-chosen load-from path; restored into the path field at startup. */
+    @Getter @Setter private String  freqRespLoadPath;
+
+    /** Zero-based index of the FreqResp pane's currently-selected tab. */
+    @Getter @Setter private int     freqRespActiveTabIndex   = 0;
 
     private Preferences() {
         load();
@@ -520,12 +673,59 @@ public final class Preferences {
         if (fftSaveFolder != null) root.put("fftSaveFolder", fftSaveFolder);
         if (fftLoadPath   != null) root.put("fftLoadPath",   fftLoadPath);
         if (fftLoadFolder != null) root.put("fftLoadFolder", fftLoadFolder);
+        if (fftCalibrationPath != null) root.put("fftCalibrationPath", fftCalibrationPath);
+        if (fftCalibrationPathsExtra != null && !fftCalibrationPathsExtra.isEmpty()) {
+            root.put("fftCalibrationPathsExtra", new ArrayList<>(fftCalibrationPathsExtra));
+        }
+        root.put("fftCalibrateWithNoise", fftCalibrateWithNoise);
+        root.put("fftBeforeCalDotColor", fftBeforeCalDotColor);
+        root.put("fftCalOverlayColor",   fftCalOverlayColor);
         root.put("fftLineWidth",              fftLineWidth);
         root.put("fftHarmonicDotDiameter",    fftHarmonicDotDiameter);
         root.put("fftLineColor",              formatHtmlColor(fftLineColor));
         root.put("fftChartBackgroundColor",   formatHtmlColor(fftChartBackgroundColor));
         root.put("fftHarmonicDotColor",       formatHtmlColor(fftHarmonicDotColor));
         root.put("fftFreqRespColor",          formatHtmlColor(fftFreqRespColor));
+
+        // ---- Frequency Response pane --------------------------------------
+        root.put("freqRespStartHz",           freqRespStartHz);
+        root.put("freqRespStopHz",            freqRespStopHz);
+        root.put("freqRespAmplitudeVrms",     freqRespAmplitudeVrms);
+        root.put("freqRespSweepPoints",       freqRespSweepPoints);
+        root.put("freqRespDurationSec",       freqRespDurationSec);
+        root.put("freqRespFftSize",           freqRespFftSize);
+        root.put("freqRespDitherBits",        freqRespDitherBits);
+        root.put("freqRespLeadInSec",         freqRespLeadInSec);
+        root.put("freqRespLeftVisible",       freqRespLeftVisible);
+        root.put("freqRespRightVisible",      freqRespRightVisible);
+        root.put("freqRespPhaseVisible",      freqRespPhaseVisible);
+        root.put("freqRespFreqMinHz",         freqRespFreqMinHz);
+        root.put("freqRespFreqMaxHz",         freqRespFreqMaxHz);
+        root.put("freqRespMagTopDb",          freqRespMagTopDb);
+        root.put("freqRespMagBotDb",          freqRespMagBotDb);
+        root.put("freqRespNyquistFraction",   freqRespNyquistFraction);
+        root.put("freqRespCompareSmoothWindow", freqRespCompareSmoothWindow);
+        root.put("freqRespNotchEnabled",        freqRespNotchEnabled);
+        root.put("freqRespNotchBaseHz",         freqRespNotchBaseHz);
+        root.put("freqRespSignalColor",         freqRespSignalColor);
+        root.put("freqRespPhaseColor",          freqRespPhaseColor);
+        root.put("freqRespReferenceColor",      freqRespReferenceColor);
+        root.put("freqRespBackgroundColor",     freqRespBackgroundColor);
+        // Note: freqRespShowRiaa is intentionally NOT persisted — it always
+        // starts unchecked on a fresh session.
+        root.put("freqRespReverseRiaa",       freqRespReverseRiaa);
+        root.put("freqRespIecAmendment",      freqRespIecAmendment);
+        root.put("freqRespCompareMode",       freqRespCompareMode);
+        root.put("freqRespApplyCalibration",  freqRespApplyCalibration);
+        if (freqRespCalibrationPath != null) root.put("freqRespCalibrationPath", freqRespCalibrationPath);
+        if (freqRespCalibrationPathsExtra != null && !freqRespCalibrationPathsExtra.isEmpty()) {
+            root.put("freqRespCalibrationPathsExtra", new ArrayList<>(freqRespCalibrationPathsExtra));
+        }
+        if (freqRespSaveFolder      != null) root.put("freqRespSaveFolder",      freqRespSaveFolder);
+        if (freqRespSavePath        != null) root.put("freqRespSavePath",        freqRespSavePath);
+        if (freqRespLoadFolder      != null) root.put("freqRespLoadFolder",      freqRespLoadFolder);
+        if (freqRespLoadPath        != null) root.put("freqRespLoadPath",        freqRespLoadPath);
+        root.put("freqRespActiveTabIndex",    freqRespActiveTabIndex);
 
         if (!fftPresets.isEmpty()) {
             Map<String, Object> fpMap = new LinkedHashMap<>();
@@ -559,6 +759,27 @@ public final class Preferences {
                 fpMap.put(e.getKey(), pm);
             }
             root.put("fftPresets", fpMap);
+        }
+
+        if (!freqRespPresets.isEmpty()) {
+            Map<String, Object> frMap = new LinkedHashMap<>();
+            for (Map.Entry<String, FreqRespPreset> e : freqRespPresets.entrySet()) {
+                FreqRespPreset p = e.getValue();
+                Map<String, Object> pm = new LinkedHashMap<>();
+                pm.put("startHz",        p.getStartHz());
+                pm.put("stopHz",         p.getStopHz());
+                pm.put("amplitudeVrms",  p.getAmplitudeVrms());
+                pm.put("sweepPoints",    p.getSweepPoints());
+                pm.put("fftSize",        p.getFftSize());
+                pm.put("leadInSec",      p.getLeadInSec());
+                pm.put("ditherBits",     p.getDitherBits());
+                pm.put("showRiaa",       p.isShowRiaa());
+                pm.put("reverseRiaa",    p.isReverseRiaa());
+                pm.put("iecAmendment",   p.isIecAmendment());
+                pm.put("compareMode",    p.isCompareMode());
+                frMap.put(e.getKey(), pm);
+            }
+            root.put("freqRespPresets", frMap);
         }
 
         Map<String, Object> perBackendMap = new LinkedHashMap<>();
@@ -717,7 +938,92 @@ public final class Preferences {
         if (root.get("fftSavePath")               instanceof String  s) fftSavePath          = s;
         if (root.get("fftSaveFolder")             instanceof String  s) fftSaveFolder        = s;
         if (root.get("fftLoadPath")               instanceof String  s) fftLoadPath          = s;
+
+        // ---- Frequency Response pane --------------------------------------
+        if (root.get("freqRespStartHz")           instanceof Number  n) freqRespStartHz          = n.doubleValue();
+        if (root.get("freqRespStopHz")            instanceof Number  n) freqRespStopHz           = n.doubleValue();
+        if (root.get("freqRespAmplitudeVrms")     instanceof Number  n) freqRespAmplitudeVrms    = n.doubleValue();
+        if (root.get("freqRespSweepPoints")       instanceof Number  n) freqRespSweepPoints      = n.intValue();
+        if (root.get("freqRespDurationSec")       instanceof Number  n) freqRespDurationSec      = n.doubleValue();
+        if (root.get("freqRespFftSize")           instanceof Number  n) {
+            // Snap any non-power-of-two value to the nearest legal one
+            // (between 64k and 16M) so the UI combo can match a row.
+            int v = n.intValue();
+            v = Math.max(1 << 16, Math.min(1 << 24, v));
+            // Round up to the next power of two so the combo's
+            // selectionIndex maps cleanly.
+            int p = 1 << 16;
+            while (p < v) p <<= 1;
+            freqRespFftSize = p;
+        }
+        if (root.get("freqRespDitherBits")        instanceof Number  n) freqRespDitherBits       = n.intValue();
+        if (root.get("freqRespLeadInSec")         instanceof Number  n) freqRespLeadInSec        = n.doubleValue();
+        if (root.get("freqRespLeftVisible")       instanceof Boolean b) freqRespLeftVisible      = b;
+        if (root.get("freqRespRightVisible")      instanceof Boolean b) freqRespRightVisible     = b;
+        if (root.get("freqRespPhaseVisible")      instanceof Boolean b) freqRespPhaseVisible     = b;
+        if (root.get("freqRespFreqMinHz")         instanceof Number  n) freqRespFreqMinHz        = n.doubleValue();
+        if (root.get("freqRespFreqMaxHz")         instanceof Number  n) freqRespFreqMaxHz        = n.doubleValue();
+        if (root.get("freqRespMagTopDb")          instanceof Number  n) freqRespMagTopDb         = n.doubleValue();
+        if (root.get("freqRespMagBotDb")          instanceof Number  n) freqRespMagBotDb         = n.doubleValue();
+        if (root.get("freqRespNyquistFraction")   instanceof Number  n) {
+            // Clamp into the [0.83, 1.0] band the UI exposes — older
+            // YAML files may still carry the legacy 0.40-0.50 range.
+            double v = n.doubleValue();
+            freqRespNyquistFraction = Math.max(0.83, Math.min(1.0, v < 0.83 ? 1.0 : v));
+        }
+        if (root.get("freqRespCompareSmoothWindow") instanceof Number n) {
+            freqRespCompareSmoothWindow = Math.max(0, Math.min(100, n.intValue()));
+        }
+        if (root.get("freqRespNotchEnabled") instanceof Boolean b) freqRespNotchEnabled = b;
+        if (root.get("freqRespNotchBaseHz")  instanceof Number  n) {
+            int v = n.intValue();
+            // Snap any non-50/60 value back to 50 (EU default) — the UI
+            // exposes only those two choices.
+            freqRespNotchBaseHz = (v == 60) ? 60 : 50;
+        }
+        Object signalColorObj = root.get("freqRespSignalColor");
+        if (signalColorObj instanceof String s) freqRespSignalColor = parseHtmlColor(s, freqRespSignalColor);
+        else if (signalColorObj instanceof Number n) freqRespSignalColor = n.intValue();
+        Object phaseColorObj  = root.get("freqRespPhaseColor");
+        if (phaseColorObj  instanceof String s) freqRespPhaseColor  = parseHtmlColor(s, freqRespPhaseColor);
+        else if (phaseColorObj  instanceof Number n) freqRespPhaseColor  = n.intValue();
+        Object refColorObj    = root.get("freqRespReferenceColor");
+        if (refColorObj    instanceof String s) freqRespReferenceColor = parseHtmlColor(s, freqRespReferenceColor);
+        else if (refColorObj    instanceof Number n) freqRespReferenceColor = n.intValue();
+        Object bgColorObj     = root.get("freqRespBackgroundColor");
+        if (bgColorObj     instanceof String s) freqRespBackgroundColor = parseHtmlColor(s, freqRespBackgroundColor);
+        else if (bgColorObj     instanceof Number n) freqRespBackgroundColor = n.intValue();
+        // freqRespShowRiaa is intentionally not loaded from disk — it
+        // always starts unchecked on a fresh session.
+        if (root.get("freqRespReverseRiaa")       instanceof Boolean b) freqRespReverseRiaa      = b;
+        if (root.get("freqRespIecAmendment")      instanceof Boolean b) freqRespIecAmendment     = b;
+        if (root.get("freqRespCompareMode")       instanceof Boolean b) freqRespCompareMode      = b;
+        if (root.get("freqRespApplyCalibration")  instanceof Boolean b) freqRespApplyCalibration = b;
+        if (root.get("freqRespCalibrationPath")   instanceof String  s) freqRespCalibrationPath  = s;
+        if (root.get("freqRespCalibrationPathsExtra") instanceof List<?> raw) {
+            freqRespCalibrationPathsExtra = new ArrayList<>();
+            for (Object o : raw) {
+                if (o instanceof String s) freqRespCalibrationPathsExtra.add(s);
+            }
+        }
+        if (root.get("freqRespSaveFolder")        instanceof String  s) freqRespSaveFolder       = s;
+        if (root.get("freqRespSavePath")          instanceof String  s) freqRespSavePath         = s;
+        if (root.get("freqRespLoadFolder")        instanceof String  s) freqRespLoadFolder       = s;
+        if (root.get("freqRespLoadPath")          instanceof String  s) freqRespLoadPath         = s;
+        if (root.get("freqRespActiveTabIndex")    instanceof Number  n) freqRespActiveTabIndex   = n.intValue();
         if (root.get("fftLoadFolder")             instanceof String  s) fftLoadFolder        = s;
+        if (root.get("fftCalibrationPath")        instanceof String  s) fftCalibrationPath   = s;
+        if (root.get("fftCalibrationPathsExtra")  instanceof List<?> raw) {
+            fftCalibrationPathsExtra = new ArrayList<>();
+            for (Object o : raw) if (o instanceof String s) fftCalibrationPathsExtra.add(s);
+        }
+        if (root.get("fftCalibrateWithNoise")     instanceof Boolean b) fftCalibrateWithNoise = b;
+        Object beforeCalColorObj = root.get("fftBeforeCalDotColor");
+        if (beforeCalColorObj instanceof String s) fftBeforeCalDotColor = parseHtmlColor(s, fftBeforeCalDotColor);
+        else if (beforeCalColorObj instanceof Number n) fftBeforeCalDotColor = n.intValue();
+        Object calOverlayColorObj = root.get("fftCalOverlayColor");
+        if (calOverlayColorObj instanceof String s) fftCalOverlayColor = parseHtmlColor(s, fftCalOverlayColor);
+        else if (calOverlayColorObj instanceof Number n) fftCalOverlayColor = n.intValue();
         if (root.get("fftLineWidth")              instanceof Number  n) fftLineWidth           = n.doubleValue();
         if (root.get("fftHarmonicDotDiameter")    instanceof Number  n) fftHarmonicDotDiameter = n.intValue();
         Object fftLineColorObj   = root.get("fftLineColor");
@@ -764,6 +1070,27 @@ public final class Preferences {
                 if (pm.get("manualFundUnit")    instanceof String  s) p.setManualFundUnit(s);
                 if (pm.get("manualFundEnabled") instanceof Boolean b) p.setManualFundEnabled(b);
                 fftPresets.put(key, p);
+            }
+        }
+
+        if (root.get("freqRespPresets") instanceof Map<?, ?> frMap) {
+            freqRespPresets.clear();
+            for (Map.Entry<?, ?> e : frMap.entrySet()) {
+                if (!(e.getKey() instanceof String key)) continue;
+                if (!(e.getValue() instanceof Map<?, ?> pm)) continue;
+                FreqRespPreset p = new FreqRespPreset();
+                if (pm.get("startHz")        instanceof Number  n) p.setStartHz(n.doubleValue());
+                if (pm.get("stopHz")         instanceof Number  n) p.setStopHz(n.doubleValue());
+                if (pm.get("amplitudeVrms")  instanceof Number  n) p.setAmplitudeVrms(n.doubleValue());
+                if (pm.get("sweepPoints")    instanceof Number  n) p.setSweepPoints(n.intValue());
+                if (pm.get("fftSize")        instanceof Number  n) p.setFftSize(n.intValue());
+                if (pm.get("leadInSec")      instanceof Number  n) p.setLeadInSec(n.doubleValue());
+                if (pm.get("ditherBits")     instanceof Number  n) p.setDitherBits(n.intValue());
+                if (pm.get("showRiaa")       instanceof Boolean b) p.setShowRiaa(b);
+                if (pm.get("reverseRiaa")    instanceof Boolean b) p.setReverseRiaa(b);
+                if (pm.get("iecAmendment")   instanceof Boolean b) p.setIecAmendment(b);
+                if (pm.get("compareMode")    instanceof Boolean b) p.setCompareMode(b);
+                freqRespPresets.put(key, p);
             }
         }
 
@@ -856,6 +1183,19 @@ public final class Preferences {
     public synchronized void removeFftPreset(String name) {
         if (name == null) return;
         if (fftPresets.remove(name) != null) save();
+    }
+
+    /** Inserts or replaces the FreqResp preset under {@code name} and persists. */
+    public synchronized void putFreqRespPreset(String name, FreqRespPreset preset) {
+        if (name == null || name.isEmpty() || preset == null) return;
+        freqRespPresets.put(name, preset);
+        save();
+    }
+
+    /** Removes the named FreqResp preset (if present) and persists. */
+    public synchronized void removeFreqRespPreset(String name) {
+        if (name == null) return;
+        if (freqRespPresets.remove(name) != null) save();
     }
 
 }

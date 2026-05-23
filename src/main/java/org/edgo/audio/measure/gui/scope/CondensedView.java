@@ -1,5 +1,6 @@
 package org.edgo.audio.measure.gui.scope;
 
+import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBuffer;
 
@@ -11,7 +12,6 @@ import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.LineAttributes;
 import org.eclipse.swt.graphics.Path;
 import org.eclipse.swt.graphics.Rectangle;
-import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 
@@ -25,7 +25,7 @@ import org.eclipse.swt.widgets.Display;
  * sample value uses the full strip height, so the user doesn't have to
  * adjust V/div to keep the overview visible.
  */
-public final class CondensedView extends Canvas {
+public final class CondensedView extends AbstractMeasurementView {
 
     private static final int DIVISIONS_X = 10;
 

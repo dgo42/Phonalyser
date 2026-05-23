@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+    <!-- Phase-shift illustration: two full 3/4-period sine waves, drawn over
+         the same x range (0 .. 270 deg).
+         Red:  sin(t)         — starts at (0, 0), peaks at 90 deg / +1,
+                                returns through 0 at 180 deg, ends at -1 at 270 deg.
+         Blue: sin(t - 90 deg) = -cos(t)
+                              — starts at (0, -1), passes 0 at 90 deg,
+                                peaks at +1 at 180 deg, returns to 0 at 270 deg.
+         X maps 0..270 deg to x = 4..44 (40 px per 270 deg).
+         Y centred on y = 24 with a vertical amplitude of 16 px (+1 = y8, -1 = y40). -->
+    <polyline fill="none" stroke="#D32F2F" stroke-width="3"
+              stroke-linecap="round" stroke-linejoin="round"
+              points="4,24 6.67,19.06 9.33,14.59 12,11.06 14.67,8.78 17.33,8 20,8.78 22.67,11.06 25.33,14.59 28,19.06 30.67,24 33.33,28.94 36,33.41 38.67,36.94 41.33,39.22 44,40"/>
+    <polyline fill="none" stroke="#1976D2" stroke-width="3"
+              stroke-linecap="round" stroke-linejoin="round"
+              points="4,40 6.67,39.22 9.33,36.94 12,33.41 14.67,28.94 17.33,24 20,19.06 22.67,14.59 25.33,11.06 28,8.78 30.67,8 33.33,8.78 36,11.06 38.67,14.59 41.33,19.06 44,24"/>
+</svg>

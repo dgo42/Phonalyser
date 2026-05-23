@@ -30,4 +30,31 @@ public class PcmUtils {
         }
         return out;
     }
+
+    /**
+     * Interleaves two normalised float[-1,+1] mono signals into stereo
+     * little-endian signed-PCM bytes at {@code bitDepth}.  Used when the
+     * caller already has separate L and R buffers (e.g. a stereo capture)
+     * and just needs the interleaved byte layout a WAV writer expects.
+     */
+    public byte[] floatStereoToBytes(float[] left, float[] right, int bitDepth) {
+        int n = Math.min(left.length, right.length);
+        int sampleBytes = bitDepth / 8;
+        int frameSize   = sampleBytes * 2;
+        byte[] out      = new byte[n * frameSize];
+        long maxPos     = (1L << (bitDepth - 1)) - 1;
+        long minNeg     = -(1L << (bitDepth - 1));
+        for (int i = 0; i < n; i++) {
+            long vL = Math.round((double) left[i]  * (1L << (bitDepth - 1)));
+            long vR = Math.round((double) right[i] * (1L << (bitDepth - 1)));
+            if (vL > maxPos) vL = maxPos; else if (vL < minNeg) vL = minNeg;
+            if (vR > maxPos) vR = maxPos; else if (vR < minNeg) vR = minNeg;
+            int off = i * frameSize;
+            for (int b = 0; b < sampleBytes; b++) {
+                out[off + b]               = (byte) (vL >> (8 * b));
+                out[off + sampleBytes + b] = (byte) (vR >> (8 * b));
+            }
+        }
+        return out;
+    }
 }

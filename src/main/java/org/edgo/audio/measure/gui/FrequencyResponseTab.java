@@ -1,28 +1,27 @@
 package org.edgo.audio.measure.gui;
 
-import org.eclipse.swt.SWT;
-import org.eclipse.swt.layout.GridData;
-import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Label;
 
-import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.freqresp.FreqRespPane;
 
+import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
- * Frequency-response tab — placeholder for the sweep-driven FR measurement
- * UI that will live here in a later iteration.  Today it just shows a
- * centered "coming soon" label so the tab can ship alongside the
- * tab-orientation refactor and reserve a slot in the navigation.
+ * Frequency-response tab — hosts the {@link FreqRespPane} (Phase 5+
+ * skeleton).  Earlier this class was a "coming soon" placeholder
+ * reserved for the future feature; now it just wraps the real pane in a
+ * single-cell layout so {@link MainTab}'s tab host doesn't need to know
+ * about the internals of the FreqResp implementation.
  */
 @Log4j2
 public final class FrequencyResponseTab {
 
+    @Getter private final FreqRespPane pane;
+
     public FrequencyResponseTab(Composite parent) {
-        parent.setLayout(new GridLayout(1, false));
-        Label placeholder = new Label(parent, SWT.CENTER);
-        placeholder.setText(I18n.t("tab.frequencyResponse.placeholder"));
-        placeholder.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, true, true));
+        parent.setLayout(new FillLayout());
+        pane = new FreqRespPane(parent);
     }
 }

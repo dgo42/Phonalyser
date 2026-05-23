@@ -200,7 +200,7 @@ public class IterativeCompensateMode {
         if (freqRespCalArg != null) log.info("Frequency response cal : {}", freqRespCalArg);
 
         FreqRespCalibration freqRespCal = freqRespCalArg != null
-                ? FreqRespCalHelper.loadCsv(freqRespCalArg)
+                ? FreqRespCalHelper.loadCsv(freqRespCalArg).left()
                 : null;
 
         String wfTs = LocalDateTime.now()

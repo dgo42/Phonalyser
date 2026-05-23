@@ -29,4 +29,7 @@ public final class SvgPaths {
     public static final String SWISS_ARMY_KNIFE    = "/icons/swiss-army-knife.svg";
     public static final String RIAA_IEC_CURVE      = "/icons/riaa-iec-curve.svg";
     public static final String WAND                = "/icons/wand.svg";
+    public static final String PHASE_SINE          = "/icons/phase-sine.svg";
+    public static final String PLUS                = "/icons/plus.svg";
+    public static final String MINUS               = "/icons/minus.svg";
 }

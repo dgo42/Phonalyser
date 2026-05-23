@@ -115,6 +115,13 @@ public final class OscilloscopePane {
      *  pane so the offscreen screenshot-renderer doesn't respond to user
      *  clicks on the live pane.  {@code null} on the offscreen variant. */
     private Runnable                     autoSetupListener;
+    /** {@link Events#FREQRESP_MEASUREMENT_STARTED} subscriber — stops a
+     *  running scope capture and disables the Record button so the
+     *  Frequency Response sweep can use the device exclusively. */
+    private Runnable                     freqRespStartedListener;
+    /** {@link Events#FREQRESP_MEASUREMENT_STOPPED} subscriber — re-enables
+     *  the Record button once the sweep finishes. */
+    private Runnable                     freqRespStoppedListener;
     /** Read-only text field showing the currently loaded openSignal file path. */
     private Text                         openSignalPathField;
     /** CTabFolder hosting the six toolbar tabs (Vertical / Horizontal / Trigger /
@@ -474,13 +481,41 @@ public final class OscilloscopePane {
      *  its own. */
     private void wireLiveCaptureLifecycle() {
         wireRecordButton();
-        autoSetupListener = this::performAutoSetup;
-        MessageBus.instance().subscribe(Events.SCOPE_AUTO_SETUP, autoSetupListener);
+        autoSetupListener        = this::performAutoSetup;
+        freqRespStartedListener  = this::onFreqRespMeasurementStarted;
+        freqRespStoppedListener  = this::onFreqRespMeasurementStopped;
+        MessageBus bus = MessageBus.instance();
+        bus.subscribe(Events.SCOPE_AUTO_SETUP,             autoSetupListener);
+        bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
+        bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
         group.addDisposeListener(e -> {
-            MessageBus.instance().unsubscribe(Events.SCOPE_AUTO_SETUP, autoSetupListener);
+            MessageBus bus2 = MessageBus.instance();
+            bus2.unsubscribe(Events.SCOPE_AUTO_SETUP,             autoSetupListener);
+            bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
+            bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
             loader.clear();
             controller.stop();
         });
+    }
+
+    /** Stops a running capture and grays the Record button — fired by the
+     *  Frequency Response pane via {@link Events#FREQRESP_MEASUREMENT_STARTED}
+     *  so the FreqResp analyzer can take exclusive control of the device. */
+    private void onFreqRespMeasurementStarted() {
+        if (recordButton == null || recordButton.isDisposed()) return;
+        if (recordButton.getSelection()) {
+            recordButton.setSelection(false);
+            controller.stop();
+            recordButton.setImage(recordDim);
+        }
+        recordButton.setEnabled(false);
+    }
+
+    /** Counterpart that re-enables the Record button after the sweep
+     *  finishes (or aborts). */
+    private void onFreqRespMeasurementStopped() {
+        if (recordButton == null || recordButton.isDisposed()) return;
+        recordButton.setEnabled(true);
     }
 
     /** Auto-sizes the condensed strip on every Group resize.  Target

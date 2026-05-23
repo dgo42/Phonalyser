@@ -134,7 +134,7 @@ public class GenFftMode {
         if (inDevice  == null) { log.error("No input device. Use --in-device <index>.");  System.exit(1); }
 
         FreqRespCalibration freqRespCal = freqRespCalArg != null
-                ? FreqRespCalHelper.loadCsv(freqRespCalArg) : null;
+                ? FreqRespCalHelper.loadCsv(freqRespCalArg).left() : null;
 
         log.info("=== Gen + FFT (single shot) ===");
         log.info("Out device : {}", outDevice.name());

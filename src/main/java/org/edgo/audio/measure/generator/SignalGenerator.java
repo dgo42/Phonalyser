@@ -337,6 +337,22 @@ public class SignalGenerator {
     public float[] getLogSweepBuffer() { return logSweepBuffer; }
 
     /**
+     * Resets the sweep playback position so the next {@link #nextSample()}
+     * starts from the beginning of the lead-in (LOG_SWEEP) or the start of
+     * the cycle (LINEAR_SWEEP).  Called by playback backends after any
+     * pre-stream JIT warmup that consumed samples from this generator —
+     * without this, a freq-response measurement would see the recorder
+     * capture a sweep that started mid-buffer, and the deconvolution
+     * reference would not align with the captured signal.
+     */
+    public void resetSweepPosition() {
+        this.logSweepIdx = 0L;
+        this.sweepIdx    = 0;
+        this.sweepPhase  = 0.0;
+        this.phaseAcc    = 0L;
+    }
+
+    /**
      * Returns the theoretical RMS value of the raw (unit-amplitude) signal for each waveform.
      * Used to convert a target V RMS into a linear peak amplitude scale factor.
      *

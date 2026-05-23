@@ -85,7 +85,7 @@ public final class SignalFormCombo extends Composite {
         iconGd.widthHint  = SignalFormIcon.SIZE;
         iconGd.heightHint = SignalFormIcon.SIZE;
         iconLabel.setLayoutData(iconGd);
-        iconLabel.setImage(SignalFormIcon.get(getDisplay(), current));
+        iconLabel.setImage(SignalFormIcon.instance().get(getDisplay(), current));
 
         textLabel = new Label(this, SWT.NONE);
         textLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, true));
@@ -147,7 +147,7 @@ public final class SignalFormCombo extends Composite {
     public void setSelectedForm(GenSignalForm f) {
         if (f == null || f == current) return;
         current = f;
-        iconLabel.setImage(SignalFormIcon.get(getDisplay(), current));
+        iconLabel.setImage(SignalFormIcon.instance().get(getDisplay(), current));
         textLabel.setText(labelOf(current));
         layout();
         fire();
@@ -183,7 +183,7 @@ public final class SignalFormCombo extends Composite {
         int selectedIdx = 0;
         for (int i = 0; i < forms.length; i++) {
             TableItem ti = new TableItem(table, SWT.NONE);
-            ti.setImage(SignalFormIcon.getForDropdown(d, forms[i]));
+            ti.setImage(SignalFormIcon.instance().getForDropdown(d, forms[i]));
             ti.setText(labelOf(forms[i]));
             if (forms[i] == current) selectedIdx = i;
         }
