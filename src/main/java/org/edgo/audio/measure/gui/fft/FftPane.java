@@ -424,26 +424,8 @@ public final class FftPane {
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
 
         recordButton.addListener(SWT.Selection, e -> {
-            boolean on = recordButton.getSelection();
-            if (on) {
-                // Pressing the FFT record button acquires a reference on
-                // the shared audio capture device — without flipping the
-                // scope's Record-LED.  Scope and FFT consume from the
-                // SAME SignalBuffer; whichever pane the user records,
-                // the device stays open until the last reference is
-                // released.
-                SignalBuffer buf = MessageBus.instance().request(Events.CAPTURE_ACQUIRE);
-                if (buf == null) {
-                    recordButton.setSelection(false);
-                    return;
-                }
-                captureHeld = true;
-                recordButton.setImage(recordLit);
-                view.setBuffer(buf);
-                view.start();
-            } else {
-                recordOff();
-            }
+            if (recordButton.getSelection()) recordOn();
+            else                              recordOff();
         });
 
         group.addDisposeListener(e -> {
@@ -605,6 +587,43 @@ public final class FftPane {
     private void onFreqRespMeasurementStopped() {
         if (recordButton == null || recordButton.isDisposed()) return;
         recordButton.setEnabled(true);
+    }
+
+    /** Turns the Record button ON — acquires a reference on the shared
+     *  audio capture device (scope + FFT share the same device; whichever
+     *  pane records first opens it), wires the live {@link SignalBuffer}
+     *  into the view, and starts the worker.  Bails out silently and
+     *  un-toggles the button when the acquire fails (no input device,
+     *  already-busy device, etc.). */
+    private void recordOn() {
+        if (recordButton == null || recordButton.isDisposed()) return;
+        SignalBuffer buf = MessageBus.instance().request(Events.CAPTURE_ACQUIRE);
+        if (buf == null) {
+            recordButton.setSelection(false);
+            return;
+        }
+        captureHeld = true;
+        recordButton.setSelection(true);
+        recordButton.setImage(recordLit);
+        view.setBuffer(buf);
+        view.start();
+    }
+
+    /** Pauses FFT recording for the lifetime of a modal dialog (e.g.
+     *  Preferences).  Mirrors the oscilloscope's pause-around-dialog
+     *  contract: returns a {@link Runnable} that restores the previous
+     *  recording state.  Crucial for sample-rate / device changes —
+     *  without releasing the FFT's capture reference here, the shared
+     *  audio device stays open at the OLD parameters and the user's
+     *  new settings would silently never take effect. */
+    public Runnable pauseForDialog() {
+        boolean wasRecording = recordButton != null
+                && !recordButton.isDisposed()
+                && recordButton.getSelection();
+        if (wasRecording) recordOff();
+        return () -> {
+            if (wasRecording) recordOn();
+        };
     }
 
     /** Turns the Record button OFF — stops the worker, releases the

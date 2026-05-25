@@ -93,9 +93,16 @@ public final class MultifunctionalTab {
     public Runnable pauseForDialog() {
         boolean oscWasRunning = oscController != null && oscController.isRunning();
         if (oscWasRunning) oscController.stop();
+        // The FFT pane holds its own ref on SharedCapture when recording.
+        // Without releasing it here, refCount stays > 0 across the dialog,
+        // SharedCapture.acquire() short-circuits, and any sample-rate /
+        // device / bit-depth change the user just made is silently
+        // ignored (the existing buffer keeps running at the OLD rate).
+        Runnable resumeFft = (fftPane != null) ? fftPane.pauseForDialog() : () -> {};
         Runnable resumeGen = (genPane != null) ? genPane.pauseAroundDialog() : () -> {};
         return () -> {
             if (oscWasRunning) oscController.start();
+            resumeFft.run();
             resumeGen.run();
         };
     }

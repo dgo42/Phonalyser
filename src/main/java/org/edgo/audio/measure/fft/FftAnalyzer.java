@@ -98,6 +98,36 @@ public class FftAnalyzer {
         this.samplesAbsStart = absStart;
     }
 
+    // =========================================================================
+    // Reusable scratch buffers
+    // =========================================================================
+
+    /** Per-fftSize scratch arrays that are purely internal to one
+     *  {@code analyze} call — they are filled in, consumed, and then
+     *  discarded before the {@link Result} is returned (i.e., nothing
+     *  in the Result holds a reference to them).  Caching them as
+     *  instance fields and re-using them across calls eliminates the
+     *  10 × fftSize × 8 B allocation per analyze (≈ 80 MB at fftSize=1 M,
+     *  ≈ 320 MB at 4 M).  Lazily (re-)allocated when fftSize changes. */
+    private double[] scratchF0Re, scratchF0Im;
+    private double[] scratchSumRe, scratchSumIm;
+    private double[] scratchFrameRe, scratchFrameIm;
+    private double[] scratchS0Re, scratchS0Im;
+    private double[] scratchS1Re, scratchS1Im;
+    /** Half-size scratch for amplitudes — used only inside one
+     *  {@code analyze} call by the harmonic-detection and noise-floor
+     *  paths; never returned. */
+    private double[] scratchAmplLinear;
+
+    /** Returns {@code current} if it has the requested length; else
+     *  allocates a fresh array.  Caller is responsible for any required
+     *  zero-fill (most call sites overwrite every cell, so no fill is
+     *  needed; accumulators must explicitly {@code Arrays.fill(0)}). */
+    private double[] scratchOrAlloc(double[] current, int size) {
+        if (current != null && current.length == size) return current;
+        return new double[size];
+    }
+
     /** Tries the cache for the windowed FFT of the frame starting at
      *  local sample offset {@code localStart}.  On miss, windows +
      *  FFTs from {@code samples} and stores the result.  Always leaves
@@ -183,6 +213,19 @@ public class FftAnalyzer {
         public double awNoisePower;
         /** Average noise floor: RMS amplitude of a single noise bin converted to dBFS. */
         public double avgNoiseFloorDbFs;
+        /** Pre-correction (BLUE-dot) snapshot of fundamental + harmonic
+         *  (freq, dBFS) pairs, paired with this Result so they publish
+         *  atomically together via {@code lastResult = r}.  Lives in
+         *  Result rather than as a separate volatile field on the worker
+         *  to avoid a tearing race where the view reads "new pre / old
+         *  r" and renders BLUE based on a future tick's cumulative data
+         *  while RED still reflects the current tick — visible as the
+         *  BLUE dot jumping every few ticks even when the cal lookup
+         *  itself is bit-stable.
+         *  Layout: {@code [0] = freqs[], [1] = dBFs[]} with index 0
+         *  holding the fundamental and indices 1..harmonicCount holding
+         *  H2..HN.  {@code null} when no calibration is loaded. */
+        public double[][] preCorrectionPeaks;
         /**
          * Half-width of the dynamic fundamental exclusion zone in Hz (one side).
          * For a clean recording this is a few Hz; a signal interruption causes
@@ -401,8 +444,10 @@ public class FftAnalyzer {
 
         // --- Pre-pass peak-bin estimate (from frame 0; only used to size the
         //     slew threshold — final kFractional is re-estimated post-rejection)
-        double[] f0Re = new double[fftSize];
-        double[] f0Im = new double[fftSize];
+        scratchF0Re = scratchOrAlloc(scratchF0Re, fftSize);
+        scratchF0Im = scratchOrAlloc(scratchF0Im, fftSize);
+        double[] f0Re = scratchF0Re;
+        double[] f0Im = scratchF0Im;
         cachedFrameFft(samples, 0, fftSize, window, f0Re, f0Im);
         // Skip the DC + ULF zone below 10 Hz when searching for the fundamental:
         // window leakage from a residual DC offset can populate bin 1 at roughly
@@ -505,10 +550,20 @@ public class FftAnalyzer {
         }
 
         // --- Averaging (coherent: complex sum; incoherent: power sum) --------
-        double[] sumRe   = new double[fftSize];   // complex Re  OR  power (incoherent)
-        double[] sumIm   = new double[fftSize];   // complex Im  OR  unused (incoherent)
-        double[] frameRe = new double[fftSize];
-        double[] frameIm = new double[fftSize];
+        scratchSumRe   = scratchOrAlloc(scratchSumRe,   fftSize);
+        scratchSumIm   = scratchOrAlloc(scratchSumIm,   fftSize);
+        scratchFrameRe = scratchOrAlloc(scratchFrameRe, fftSize);
+        scratchFrameIm = scratchOrAlloc(scratchFrameIm, fftSize);
+        // sumRe / sumIm are the averaging accumulators — must start at 0.
+        // frameRe / frameIm are fully overwritten per frame (either by the
+        // cache copy or by the windowing loop in cachedFrameFft), so no
+        // explicit fill is needed.
+        Arrays.fill(scratchSumRe, 0.0);
+        Arrays.fill(scratchSumIm, 0.0);
+        double[] sumRe   = scratchSumRe;          // complex Re  OR  power (incoherent)
+        double[] sumIm   = scratchSumIm;          // complex Im  OR  unused (incoherent)
+        double[] frameRe = scratchFrameRe;
+        double[] frameIm = scratchFrameIm;
 
         // --- Pass 1: per-sample R scan, then group hits into events ----------
         // Adjacent hits (within GAP samples) belong to the same disturbance, so we
@@ -664,8 +719,10 @@ public class FftAnalyzer {
         // We use the first frame of the segment + one frame `step` later when
         // available, otherwise fall back to parabolic interpolation.
         int    segBaseSample = bestStart * step;
-        double[] s0Re = new double[fftSize];
-        double[] s0Im = new double[fftSize];
+        scratchS0Re = scratchOrAlloc(scratchS0Re, fftSize);
+        scratchS0Im = scratchOrAlloc(scratchS0Im, fftSize);
+        double[] s0Re = scratchS0Re;
+        double[] s0Im = scratchS0Im;
         cachedFrameFft(samples, segBaseSample, fftSize, window, s0Re, s0Im);
         // refine intFundBin within ±2 bins of the pre-pass estimate (in case of drift)
         int refIntBin = peakBin(s0Re, s0Im,
@@ -674,8 +731,10 @@ public class FftAnalyzer {
         double kFractional;
         if (bestLen >= 2) {
             int    estStep = step > 0 ? step : fftSize;
-            double[] s1Re = new double[fftSize];
-            double[] s1Im = new double[fftSize];
+            scratchS1Re = scratchOrAlloc(scratchS1Re, fftSize);
+            scratchS1Im = scratchOrAlloc(scratchS1Im, fftSize);
+            double[] s1Re = scratchS1Re;
+            double[] s1Im = scratchS1Im;
             cachedFrameFft(samples, segBaseSample + estStep, fftSize, window, s1Re, s1Im);
             double phi0 = Math.atan2(s0Im[refIntBin], s0Re[refIntBin]);
             double phi1 = Math.atan2(s1Im[refIntBin], s1Re[refIntBin]);
@@ -797,9 +856,15 @@ public class FftAnalyzer {
 
         // --- Single-sided amplitude & phase spectrum -------------------------
         double   normFactor = 1.0 / ((double) fftSize * cohGain);
+        // avgRe / avgIm / amplDbFs / phaseDeg are stored in the returned
+        // Result and outlive this call — they MUST be fresh allocations
+        // so the previously-published Result (still being painted by the
+        // view) doesn't see its arrays mutated.  amplLinear is purely
+        // local and overwritten cell-by-cell below — safe to reuse.
         double[] avgRe      = new double[halfSize + 1];
         double[] avgIm      = new double[halfSize + 1];
-        double[] amplLinear = new double[halfSize + 1];
+        scratchAmplLinear   = scratchOrAlloc(scratchAmplLinear, halfSize + 1);
+        double[] amplLinear = scratchAmplLinear;
         double[] amplDbFs   = new double[halfSize + 1];
         double[] phaseDeg   = new double[halfSize + 1];
 
@@ -886,13 +951,17 @@ public class FftAnalyzer {
         }
 
         // --- Harmonics -------------------------------------------------------
-        int[]    hBins = new int[harmonicCount];
-        double[] hHz   = new double[harmonicCount];
-        double[] hDbFs = new double[harmonicCount];
-        double[] hPct  = new double[harmonicCount];
+        int[]    hBins   = new int[harmonicCount];
+        double[] hHz     = new double[harmonicCount];
+        double[] hDbFs   = new double[harmonicCount];
+        // hLinear holds the proportional-bin-combined harmonic amplitude
+        // (see detectHarmonics) — used by the THD sum below so it matches
+        // the per-harmonic readout, instead of resampling from amplLinear.
+        double[] hLinear = new double[harmonicCount];
+        double[] hPct    = new double[harmonicCount];
         detectHarmonics(kFractional, fundHzRefined, halfSize,
                 amplLinear, amplDbFs, refLin,
-                harmonicCount, hBins, hHz, hDbFs, hPct);
+                harmonicCount, hBins, hHz, hDbFs, hLinear, hPct);
 
         double snrLo = snrFreqMin > 0.0 ? snrFreqMin : 0.0;
         double snrHi = snrFreqMax > 0.0 ? snrFreqMax : Double.MAX_VALUE;
@@ -903,7 +972,7 @@ public class FftAnalyzer {
             if (hBins[h] > 0) {
                 double harmFreq = hHz[h];
                 if (harmFreq >= snrLo && harmFreq <= snrHi) {
-                    double a = amplLinear[hBins[h]];
+                    double a = hLinear[h];
                     harmPowerSum += a * a;
                 }
             }
@@ -1061,12 +1130,36 @@ public class FftAnalyzer {
         }
 
         // --- Harmonic table -------------------------------------------------
+        // Mirror the proportional-bin combination from detectHarmonics: the
+        // Nth harmonic sits at the fractional bin (harmonicHz/freqRes), which
+        // equals N·kFractional by construction.  Power-weight the two
+        // straddling bins so the readout reflects the real harmonic energy
+        // even when the harmonic falls between bins.
         int harmonicCount = r.harmonicCount;
+        double[] hLinear = new double[harmonicCount];
         for (int h = 0; h < harmonicCount; h++) {
-            int bin = r.harmonicBins[h];
-            if (bin <= 0) continue;
-            r.harmonicDbFs[h] = r.amplitudeDbFs[bin];
-            r.harmonicPct[h]  = refLin > 0 ? amplLinear[bin] / refLin * 100.0 : 0.0;
+            if (r.harmonicBins[h] <= 0) continue;
+            double kH = freqRes > 0 ? r.harmonicHz[h] / freqRes : 0.0;
+            int binMain = (int) Math.round(kH);
+            if (binMain < 1 || binMain > halfSize) {
+                r.harmonicBins[h] = -1;
+                r.harmonicDbFs[h] = -300.0;
+                r.harmonicPct[h]  = 0.0;
+                hLinear[h]        = 0.0;
+                continue;
+            }
+            double offset = kH - binMain;
+            int binAdj = (offset >= 0.0)
+                    ? Math.min(halfSize, binMain + 1)
+                    : Math.max(1, binMain - 1);
+            double w = Math.abs(offset);
+            double pMain = amplLinear[binMain] * amplLinear[binMain];
+            double pAdj  = amplLinear[binAdj]  * amplLinear[binAdj];
+            double aCombined = Math.sqrt((1.0 - w) * pMain + w * pAdj);
+            r.harmonicBins[h] = binMain;
+            r.harmonicDbFs[h] = aCombined > 1e-15 ? 20.0 * Math.log10(aCombined) : -300.0;
+            r.harmonicPct[h]  = refLin > 0 ? aCombined / refLin * 100.0 : 0.0;
+            hLinear[h]        = aCombined;
         }
 
         // --- THD (H2..H9 within SNR range) ---------------------------------
@@ -1076,7 +1169,7 @@ public class FftAnalyzer {
             if (hb > 0) {
                 double freq = r.harmonicHz[h];
                 if (freq >= snrLo && freq <= snrHi) {
-                    double a = amplLinear[hb];
+                    double a = hLinear[h];
                     harmPowerSum += a * a;
                 }
             }
@@ -1311,40 +1404,59 @@ public class FftAnalyzer {
     }
 
     /** Locates each harmonic (H2..H{@code harmonicCount+1}) in the
-     *  averaged spectrum.  For each harmonic, computes the nominal bin
-     *  from the refined fractional fundamental {@code kFractional}
-     *  (avoids integer-rounding drift at higher harmonics), then peak-
-     *  searches within ±({@code h/2}+2) bins to absorb accumulated bin
-     *  offset and window main-lobe width.
+     *  averaged spectrum.  Physics fixes the Nth harmonic at exactly
+     *  {@code N × fundamentalFreq}, so its fractional FFT bin is
+     *  {@code N × kFractional} — and {@link #kFractional} already
+     *  captures any DAC↔ADC clock skew with ~1e-5 bin precision.
+     *
+     *  <p>When the theoretical fractional bin lands between two FFT bins
+     *  (which it almost always does at higher harmonics, even when the
+     *  generator is bin-aligned, because tiny clock-skew accumulates as
+     *  {@code N × skew}), the harmonic energy splits across both bins
+     *  via the window's main-lobe leakage.  We recover it by power-
+     *  weighting the two straddling bins proportionally to the sub-bin
+     *  offset: {@code power = (1−w)·|X[main]|² + w·|X[adj]|²} where
+     *  {@code w = |offset_from_main|} ∈ [0, 0.5].  This replaces the
+     *  earlier "local-max within ±~3 bins" search, which snapped to
+     *  random noise peaks when a harmonic was buried in the noise.
      *
      *  <p>Out-parameters: {@code hBins}, {@code hHz}, {@code hDbFs},
-     *  {@code hPct} are pre-allocated by the caller and filled in place. */
+     *  {@code hLinear}, {@code hPct} are pre-allocated by the caller
+     *  and filled in place. */
     private static void detectHarmonics(double kFractional, double fundHzRefined,
                                         int halfSize, double[] amplLinear, double[] amplDbFs,
                                         double refLin, int harmonicCount,
-                                        int[] hBins, double[] hHz, double[] hDbFs, double[] hPct) {
+                                        int[] hBins, double[] hHz,
+                                        double[] hDbFs, double[] hLinear, double[] hPct) {
         for (int h = 0; h < harmonicCount; h++) {
-            int hNum   = h + 2;
-            int nomBin = (int) Math.round(kFractional * hNum);
-            if (nomBin > halfSize) {
-                hBins[h] = -1;
-                hHz[h]   = fundHzRefined * hNum;
-                hDbFs[h] = -300.0;
-                hPct[h]  = 0.0;
+            int hNum = h + 2;
+            double kH  = kFractional * hNum;             // theoretical fractional bin
+            int binMain = (int) Math.round(kH);
+            if (binMain < 1 || binMain > halfSize) {
+                hBins[h]   = -1;
+                hHz[h]     = fundHzRefined * hNum;
+                hDbFs[h]   = -300.0;
+                hLinear[h] = 0.0;
+                hPct[h]    = 0.0;
                 continue;
             }
-            int searchRadius = hNum / 2 + 2;
-            int peak = nomBin;
-            for (int k = Math.max(1, nomBin - searchRadius);
-                     k <= Math.min(halfSize, nomBin + searchRadius); k++) {
-                if (amplLinear[k] > amplLinear[peak]) {
-                    peak = k;
-                }
+            double offset = kH - binMain;                // signed, (−0.5, +0.5]
+            int binAdj;
+            if (offset >= 0.0) {
+                binAdj = Math.min(halfSize, binMain + 1);
+            } else {
+                binAdj = Math.max(1, binMain - 1);
             }
-            hBins[h] = peak;
-            hHz[h]   = fundHzRefined * hNum;
-            hDbFs[h] = amplDbFs[peak];
-            hPct[h]  = refLin > 0 ? amplLinear[peak] / refLin * 100.0 : 0.0;
+            double w        = Math.abs(offset);          // [0, 0.5]
+            double pMain    = amplLinear[binMain] * amplLinear[binMain];
+            double pAdj     = amplLinear[binAdj]  * amplLinear[binAdj];
+            double pCombined = (1.0 - w) * pMain + w * pAdj;
+            double aCombined = Math.sqrt(pCombined);
+            hBins[h]   = binMain;
+            hHz[h]     = fundHzRefined * hNum;
+            hLinear[h] = aCombined;
+            hDbFs[h]   = aCombined > 1e-15 ? 20.0 * Math.log10(aCombined) : -300.0;
+            hPct[h]    = refLin > 0 ? aCombined / refLin * 100.0 : 0.0;
         }
     }
 

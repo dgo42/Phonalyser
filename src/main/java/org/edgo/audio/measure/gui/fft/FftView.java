@@ -194,7 +194,17 @@ public final class FftView extends AbstractFreqDomainView {
         // bottom-out at the chapter and the user navigates within.
         setData("helpAnchor", "fft.html");
         Display d = getDisplay();
-        worker = new FftAnalyzerWorker(d, () -> { if (!isDisposed()) redraw(); });
+        worker = new FftAnalyzerWorker(d, () -> {
+            if (isDisposed()) return;
+            redraw();
+            // Force the paint to fire synchronously here rather than
+            // letting SWT coalesce multiple per-tick redraws into one
+            // delayed paint.  At typical analysis cadences (1–5 ticks
+            // per second) the per-tick paint cost is well under the
+            // hop interval, so blocking the UI thread for this paint
+            // is negligible; the user sees a paint per analysis.
+            update();
+        });
         gridColor        = new Color(d, 0xDC, 0xDC, 0xDC);
         axisColor        = new Color(d, 0x80, 0x80, 0x80);
         textColor        = new Color(d, 0x20, 0x20, 0x20);
@@ -341,10 +351,15 @@ public final class FftView extends AbstractFreqDomainView {
             String txt = pct + "%";
             if (!txt.equals(fillPercentLabel.getText())) fillPercentLabel.setText(txt);
             if (averagesCountLabel != null && !averagesCountLabel.isDisposed()) {
-                // First capture has nothing to average against, so it
-                // contributes 0 averages.  For a finite N the count is
-                // capped at N once the moving window is full.  For
-                // "forever" it keeps climbing.
+                // Tick-based count (consistent across cycled and forever
+                // modes — both increment by exactly one per analysis).
+                // For finite N: capped at N once the moving window is
+                // full.  For "forever": climbs without limit.
+                // The cross-tick accumulator math (forever mode) makes
+                // each displayed tick contribute additional SNR depth —
+                // the actual frames-averaged depth is roughly 2× the
+                // displayed N because each forever tick contributes
+                // ~2 FFT frames to the running sum.
                 int done = getCompletedAnalyses();
                 int n = Math.max(0, done - 1);
                 double avgRaw = Preferences.instance().getFftAverages();
@@ -763,11 +778,14 @@ public final class FftView extends AbstractFreqDomainView {
         double binBw = r.freqResolution;
 
         // "Before-cal" dots — painted FIRST so the corrected (red)
-        // dots sit on top.  Pulled from the worker's snapshot taken
-        // before the in-place compensation; null when no calibration
-        // is loaded.  Uses the same per-dot dBV anchor as the
-        // corrected dots so the two are directly comparable.
-        double[][] before = worker.getPreCorrectionPeaks();
+        // dots sit on top.  Pulled from the SAME r snapshot used for
+        // the post-cal dots so both share one tick's harmonicHz values;
+        // calling worker.getPreCorrectionPeaks() instead would do a
+        // separate volatile lastResult read and could pair tick N+1's
+        // pre with tick N's post, shifting BLUE sub-bin off RED — a
+        // tiny X offset that's invisible at linear-freq zoom but
+        // visibly dances at log-freq zoom.
+        double[][] before = (r != null) ? r.preCorrectionPeaks : null;
         if (before != null && before.length == 2
                 && before[0] != null && before[1] != null) {
             gc.setBackground(beforeCalDotColor);
@@ -864,7 +882,18 @@ public final class FftView extends AbstractFreqDomainView {
                                          double magTop, double magBot,
                                          boolean logFreq) {
         Preferences prefs = Preferences.instance();
+        // Worker increments completedAnalyses immediately AFTER each
+        // lastResult = r assignment, so a ticking counter guarantees
+        // a fresh fingerprint here.  Using identityHashCode(r) ALONE
+        // turned out not to be reliable in long runs — under sustained
+        // GC churn the hash of consecutive Result objects could repeat
+        // for stretches lasting seconds-to-minutes, causing the static
+        // trace cache to blit a stale image even though the worker was
+        // producing fresh results (visible as a frozen chart with the
+        // averages counter / fill-% still ticking).  Add completedAnalyses
+        // so the fingerprint moves in lockstep with the analysis tick.
         long h = (r == null) ? 0 : System.identityHashCode(r);
+        h = 31 * h + worker.getCompletedAnalyses();
         h = 31 * h + area.width;
         h = 31 * h + area.height;
         h = 31 * h + unit.ordinal();

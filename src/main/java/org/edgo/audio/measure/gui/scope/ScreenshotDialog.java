@@ -184,58 +184,82 @@ public final class ScreenshotDialog {
         rl.spacing = 8;
         buttonBar.setLayout(rl);
 
+        // renderer.render() internally pumps the SWT event loop so the
+        // panes' offscreen Canvases can paint themselves into the
+        // returned Image.  That pump processes queued events — including
+        // a second click on Copy/Save if the user happened to double-tap
+        // — and reentry would race the original invocation's
+        // dialog.close() against the outer frame's dialog.getDisplay(),
+        // throwing "Widget is disposed".  Single-flight guard prevents
+        // reentry; cached display lets us still finish cleanly if the
+        // dialog were disposed mid-render by some other path.
+        boolean[] busy = { false };
         Button copyBtn = new Button(buttonBar, SWT.PUSH);
         copyBtn.setText(I18n.t("screenshot.copy"));
         copyBtn.addListener(SWT.Selection, e -> {
-            int[] wh = readSize(widthText, heightText);
-            if (wh == null) return;
-            Image img = renderer.render(dialog.getDisplay(), wh[0], wh[1]);
-            Clipboard cb = new Clipboard(dialog.getDisplay());
+            if (busy[0]) return;
+            busy[0] = true;
             try {
-                cb.setContents(new Object[]{ img.getImageData() },
-                               new Transfer[]{ ImageTransfer.getInstance() });
-                log.info("Screenshot {}×{} copied to clipboard", wh[0], wh[1]);
-                if (onSize != null) onSize.accept(wh[0], wh[1]);
+                int[] wh = readSize(widthText, heightText);
+                if (wh == null) return;
+                Display d = dialog.getDisplay();
+                Image img = renderer.render(d, wh[0], wh[1]);
+                Clipboard cb = new Clipboard(d);
+                try {
+                    cb.setContents(new Object[]{ img.getImageData() },
+                                   new Transfer[]{ ImageTransfer.getInstance() });
+                    log.info("Screenshot {}×{} copied to clipboard", wh[0], wh[1]);
+                    if (onSize != null) onSize.accept(wh[0], wh[1]);
+                } finally {
+                    cb.dispose();
+                    img.dispose();
+                }
+                if (!dialog.isDisposed()) dialog.close();
             } finally {
-                cb.dispose();
-                img.dispose();
+                busy[0] = false;
             }
-            dialog.close();
         });
 
         String[] folderHolder = { initialFolder };
         Button saveBtn = new Button(buttonBar, SWT.PUSH);
         saveBtn.setText(I18n.t("screenshot.saveAs"));
         saveBtn.addListener(SWT.Selection, e -> {
-            FileDialog fd = new FileDialog(dialog, SWT.SAVE);
-            fd.setFilterExtensions(new String[]{ "*.png", "*.jpg", "*.bmp" });
-            fd.setFilterNames(new String[]{ "PNG image (*.png)", "JPEG image (*.jpg)", "Bitmap image (*.bmp)" });
-            fd.setOverwrite(true);
-            if (folderHolder[0] != null) fd.setFilterPath(folderHolder[0]);
-            String path = fd.open();
-            if (path == null) return;
-            int[] wh = readSize(widthText, heightText);
-            if (wh == null) return;
-            Image img = renderer.render(dialog.getDisplay(), wh[0], wh[1]);
+            if (busy[0]) return;
+            busy[0] = true;
             try {
-                ImageLoader loader = new ImageLoader();
-                loader.data = new ImageData[]{ img.getImageData() };
-                String lower = path.toLowerCase();
-                int format = lower.endsWith(".jpg") || lower.endsWith(".jpeg") ? SWT.IMAGE_JPEG
-                           : lower.endsWith(".bmp") ? SWT.IMAGE_BMP
-                           : SWT.IMAGE_PNG;
-                loader.save(path, format);
-                log.info("Screenshot {}×{} saved to {}", wh[0], wh[1], path);
-                if (onSize != null) onSize.accept(wh[0], wh[1]);
-                String parent = new File(path).getParent();
-                if (parent != null) {
-                    folderHolder[0] = parent;
-                    if (onFolder != null) onFolder.accept(parent);
+                FileDialog fd = new FileDialog(dialog, SWT.SAVE);
+                fd.setFilterExtensions(new String[]{ "*.png", "*.jpg", "*.bmp" });
+                fd.setFilterNames(new String[]{ "PNG image (*.png)", "JPEG image (*.jpg)", "Bitmap image (*.bmp)" });
+                fd.setOverwrite(true);
+                if (folderHolder[0] != null) fd.setFilterPath(folderHolder[0]);
+                String path = fd.open();
+                if (path == null) return;
+                int[] wh = readSize(widthText, heightText);
+                if (wh == null) return;
+                Display d = dialog.getDisplay();
+                Image img = renderer.render(d, wh[0], wh[1]);
+                try {
+                    ImageLoader loader = new ImageLoader();
+                    loader.data = new ImageData[]{ img.getImageData() };
+                    String lower = path.toLowerCase();
+                    int format = lower.endsWith(".jpg") || lower.endsWith(".jpeg") ? SWT.IMAGE_JPEG
+                               : lower.endsWith(".bmp") ? SWT.IMAGE_BMP
+                               : SWT.IMAGE_PNG;
+                    loader.save(path, format);
+                    log.info("Screenshot {}×{} saved to {}", wh[0], wh[1], path);
+                    if (onSize != null) onSize.accept(wh[0], wh[1]);
+                    String parent = new File(path).getParent();
+                    if (parent != null) {
+                        folderHolder[0] = parent;
+                        if (onFolder != null) onFolder.accept(parent);
+                    }
+                } finally {
+                    img.dispose();
                 }
+                if (!dialog.isDisposed()) dialog.close();
             } finally {
-                img.dispose();
+                busy[0] = false;
             }
-            dialog.close();
         });
 
         Button closeBtn = new Button(buttonBar, SWT.PUSH);

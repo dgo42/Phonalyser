@@ -567,22 +567,31 @@ public class FreqRespCalHelper {
         double oldFundMag = Math.hypot(r.re[r.fundamentalBin], r.im[r.fundamentalBin]);
         double linPerMag  = oldFundMag > 0.0 ? r.fundamentalLinear / oldFundMag : 0.0;
 
-        final int LEAKAGE_BINS = 4;
+        // Match the dot-level / THD computation: only correct the two
+        // FFT bins straddling the theoretical fundamental / harmonic
+        // fractional position (kFractional × N).  The old ±LEAKAGE_BINS
+        // (=4) expansion lifted 9 bins per harmonic by 1/H(f); at the
+        // notch frequencies in the calibration that's a huge multiplier
+        // applied to noise-only neighbours, producing wide spurious
+        // humps around each harmonic instead of a single sharp 2-bin
+        // peak that reflects the actual harmonic energy.
         boolean[] correctBin = new boolean[half + 1];
         if (correctAllBins) {
             Arrays.fill(correctBin, true);
         } else {
-            for (int d = -LEAKAGE_BINS; d <= LEAKAGE_BINS; d++) {
-                int b = r.fundamentalBin + d;
-                if (b > 0 && b <= half) correctBin[b] = true;
-            }
-            for (int hb : r.harmonicBins) {
-                if (hb > 0) {
-                    for (int d = -LEAKAGE_BINS; d <= LEAKAGE_BINS; d++) {
-                        int b = hb + d;
-                        if (b > 0 && b <= half) correctBin[b] = true;
-                    }
-                }
+            double freqRes = binWidth;
+            // Fundamental — refined fractional bin from kFractional.
+            double kF = (freqRes > 0 && Double.isFinite(r.fundamentalHzRefined))
+                    ? r.fundamentalHzRefined / freqRes
+                    : r.fundamentalBin;
+            markProportionalBinPair(correctBin, kF, half);
+            // Harmonics — theoretical position is r.harmonicHz[h] / freqRes
+            // (= N · kFractional by construction in analyze()).
+            int harmonicCount = r.harmonicCount;
+            for (int h = 0; h < harmonicCount; h++) {
+                if (r.harmonicBins[h] <= 0) continue;
+                double kH = freqRes > 0 ? r.harmonicHz[h] / freqRes : r.harmonicBins[h];
+                markProportionalBinPair(correctBin, kH, half);
             }
         }
 
@@ -632,6 +641,22 @@ public class FreqRespCalHelper {
                         : String.format(Locale.US, "%.2f", r.fundRefDbV),
                 String.format(Locale.US, "%.2f", r.snrDb),
                 String.format(Locale.US, "%.6f", r.thdPct));
+    }
+
+    /** Marks {@code binMain = round(k)} plus its sub-bin-adjacent
+     *  neighbour as correctable.  Mirrors the dot-level / THD
+     *  proportional-bin pairing in {@code FftAnalyzer.detectHarmonics}
+     *  so the cal touches exactly the two bins that actually carry
+     *  the harmonic energy. */
+    private static void markProportionalBinPair(boolean[] correctBin, double k, int half) {
+        int binMain = (int) Math.round(k);
+        if (binMain < 1 || binMain > half) return;
+        correctBin[binMain] = true;
+        double offset = k - binMain;
+        int binAdj = (offset >= 0.0)
+                ? Math.min(half, binMain + 1)
+                : Math.max(1,    binMain - 1);
+        correctBin[binAdj] = true;
     }
 
     /**
