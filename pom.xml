@@ -115,6 +115,15 @@
             <version>2.2</version>
         </dependency>
 
+        <!-- Apache Commons Lang — ArrayUtils.indexOf (linear search on unsorted
+             arrays) and other small utilities that would otherwise be reinvented
+             per-class. -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <version>3.14.0</version>
+        </dependency>
+
         <!-- JUnit 5 for testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

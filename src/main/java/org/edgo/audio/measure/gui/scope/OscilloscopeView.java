@@ -1,5 +1,7 @@
 package org.edgo.audio.measure.gui.scope;
 
+import java.util.Map;
+
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
@@ -52,16 +54,12 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private static final int TICKS_PER_DIV  = 5;
     private static final int TICK_HALF_LEN  = 3;
 
-    private final Color background;
-    private final Color gridColor;
-    private final Color crossColor;
-    private Color leftChannelColor;
-    private Color rightChannelColor;
-    private final Color overlayColor;     // light grey for cap/s and measurement readouts
-    private final Color resetColor;       // red glyph for the reset-stats button
-    private Color leftChannelMid;         // 65 % version of leftChannelColor  (inactive offset triangle + unselected L/R button)
-    private Color rightChannelMid;        // 65 % version of rightChannelColor (inactive offset triangle + unselected L/R button)
-    private final Color disabledChannel;  // grey for a channel that isn't currently captured
+    // All scope colours live in the AbstractMeasurementView palette
+    // (background, grid, text, crosshair, blink lit/dim, left/right
+    // trace, left/right channel mid, disabled channel, reset).  The
+    // dark-theme overrides + the prefs-driven trace RGBs are passed
+    // to super(...) below; the derived mid colours are computed via
+    // attenuate(...) and applied via setColor in syncChannelColors().
     /** Cached RGB ints of the channel colours — used to detect pref changes. */
     private int currentLeftRgb  = -1;
     private int currentRightRgb = -1;
@@ -203,11 +201,6 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         this.filePath = (p == null || p.isEmpty()) ? null : p;
         if (!isDisposed()) redraw();
     }
-    /** Pre-allocated near-white colours for the file-path blink — disposed
-     *  in {@link #disposeColors()} together with the rest of the palette. */
-    private Color filePathBlinkLitColor;
-    private Color filePathBlinkDimColor;
-
     /**
      * Cached measurement result.  Recomputed at most once every
      * {@value #MEAS_COMPUTE_PERIOD_NANOS} nanoseconds so the per-paint cost
@@ -302,24 +295,29 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private OscSliderId draggingSlider;
 
     public OscilloscopeView(Composite parent) {
-        super(parent, SWT.DOUBLE_BUFFERED);
+        // Dark-theme overrides + prefs-driven trace colours, all consumed
+        // by AbstractMeasurementView in a single per-role allocation
+        // pass.  The mid-channel colours (~65 % attenuation of the trace
+        // RGBs) are derived after super() returns since attenuate() is
+        // an instance method.
+        super(parent, SWT.DOUBLE_BUFFERED, Map.of(
+                ColorRole.BACKGROUND,        0x000000,
+                ColorRole.GRID,              0x3C3C3C,
+                // Frame and grid share a shade on scope (different roles
+                // semantically, same RGB on the dark theme).
+                ColorRole.AXIS,              0x3C3C3C,
+                ColorRole.TEXT,              0xF0F0F0,
+                ColorRole.BLINK_LIT,         0xF0F0F0,
+                ColorRole.BLINK_DIM,         0xA0A0A0,
+                ColorRole.DISABLED_CHANNEL,  0x828282,
+                ColorRole.LEFT_TRACE,        Preferences.instance().getOscLeftChannelColor(),
+                ColorRole.RIGHT_TRACE,       Preferences.instance().getOscRightChannelColor()));
         // Chapter-level help anchor: Ctrl+F1 anywhere on the canvas
-        // opens oscilloscope.html.  The view's header buttons /
-        // measurement table aren't separate widgets (everything is
-        // custom-painted on this single Canvas), so the deep anchors
-        // documented in the help map to canvas regions but only the
-        // chapter is reachable via the focus-walk shortcut.
+        // opens oscilloscope.html.
         setData("helpAnchor", "oscilloscope.html");
-        background        = new Color(getDisplay(),   0,   0,   0);
-        gridColor         = new Color(getDisplay(),  60,  60,  60);
-        crossColor        = new Color(getDisplay(), 110, 110, 110);
-        overlayColor      = new Color(getDisplay(), 235, 235, 235);   // bright grey readouts
-        resetColor        = new Color(getDisplay(), 220,  60,  60);   // red reset glyph
-        disabledChannel   = new Color(getDisplay(), 130, 130, 130);   // grey when channel not captured
-        filePathBlinkLitColor = new Color(getDisplay(), 0xFF, 0xFF, 0xFF);   // #FFFFFF
-        filePathBlinkDimColor = new Color(getDisplay(), 0xAA, 0xAA, 0xAA);   // #AAAAAA
-        // Channel colours are user-configurable in Preferences — initialise
-        // them from the current settings and re-create on change.
+        // Derived mid (~65 %) channel colours track the LEFT/RIGHT_TRACE
+        // entries — set once here, refreshed by syncChannelColors() on
+        // every relevant prefs change.
         syncChannelColors();
 
         // Register the header-row buttons as Hotspots with the shared base.
@@ -368,7 +366,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             redraw();
         }, "scope.stats.reset.tooltip");
 
-        setBackground(background);
+        setBackground(color(ColorRole.BACKGROUND));
         addPaintListener(this::onPaint);
         addMouseListener(new org.eclipse.swt.events.MouseAdapter() {
             @Override
@@ -487,18 +485,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         });
         addDisposeListener(e -> {
             measWorker.stop();
-            background.dispose();
-            gridColor.dispose();
-            crossColor.dispose();
-            leftChannelColor.dispose();
-            rightChannelColor.dispose();
-            overlayColor.dispose();
-            resetColor.dispose();
-            if (leftChannelMid  != null) leftChannelMid.dispose();
-            if (rightChannelMid != null) rightChannelMid.dispose();
-            disabledChannel.dispose();
-            if (filePathBlinkLitColor != null) filePathBlinkLitColor.dispose();
-            if (filePathBlinkDimColor != null) filePathBlinkDimColor.dispose();
+            disposePalette();
             if (monoFont != null) monoFont.dispose();
             if (chanButtonFont != null) chanButtonFont.dispose();
             // Header icons are cached and owned by IconUtils — disposed
@@ -592,17 +579,13 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         int newL = prefs.getOscLeftChannelColor();
         int newR = prefs.getOscRightChannelColor();
         if (newL != currentLeftRgb) {
-            if (leftChannelColor != null) leftChannelColor.dispose();
-            if (leftChannelMid   != null) leftChannelMid.dispose();
-            leftChannelColor = newColor(newL);
-            leftChannelMid   = newColor(ScopeFormat.midRgb(newL));
+            setColor(ColorRole.LEFT_TRACE,        newL);
+            setColor(ColorRole.LEFT_CHANNEL_MID,  attenuate(newL, 0.65));
             currentLeftRgb = newL;
         }
         if (newR != currentRightRgb) {
-            if (rightChannelColor != null) rightChannelColor.dispose();
-            if (rightChannelMid   != null) rightChannelMid.dispose();
-            rightChannelColor = newColor(newR);
-            rightChannelMid   = newColor(ScopeFormat.midRgb(newR));
+            setColor(ColorRole.RIGHT_TRACE,       newR);
+            setColor(ColorRole.RIGHT_CHANNEL_MID, attenuate(newR, 0.65));
             currentRightRgb = newR;
         }
     }
@@ -641,9 +624,23 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     public void paintCanvas(GC gc, int w, int h) {
         gc.setAdvanced(true);
         syncChannelColors();
-        gc.setBackground(background);
+        gc.setBackground(color(ColorRole.BACKGROUND));
         gc.fillRectangle(0, 0, w, h);
-        drawGrid(gc, w, h);
+        // Scope grid: linear 10×10, no axis labels, centred cross-hair
+        // with TICKS_PER_DIV sub-ticks along each arm.  The base method
+        // does all the geometry; we just feed it the scope's range and
+        // colour palette.
+        drawGrid(gc,
+                 new Rectangle(0, 0, w, h),
+                 AxisSpec.linear(0, DIVISIONS_X, DIVISIONS_X),
+                 AxisSpec.linear(0, DIVISIONS_Y, DIVISIONS_Y),
+                 null,
+                 color(ColorRole.GRID), color(ColorRole.AXIS),
+                 null, null,
+                 0, 0,
+                 new CrossHairSpec(0.5, 0.5, color(ColorRole.CROSSHAIR),
+                                   TICKS_PER_DIV, TICK_HALF_LEN,
+                                   DIVISIONS_X, DIVISIONS_Y));
         drawWaveforms(gc, w, h);
         drawSliders(gc, w, h);
         drawEdgeLabels(gc, w, h);
@@ -709,8 +706,8 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         if (buffer == null || captureRate <= 0) return;
         gc.setAntialias(SWT.OFF);
         gc.setTextAntialias(SWT.ON);
-        gc.setForeground(overlayColor);
-        gc.setBackground(background);
+        gc.setForeground(color(ColorRole.TEXT));
+        gc.setBackground(color(ColorRole.BACKGROUND));
         // Throttle the String.format call to ~5 Hz; drawText still runs every
         // paint so the readout never blanks.
         long now = System.nanoTime();
@@ -785,8 +782,8 @@ public final class OscilloscopeView extends AbstractMeasurementView {
 
         Point sExt = gc.textExtent(shown);
         boolean lit = ((System.currentTimeMillis() / 500L) % 2L) == 0L;
-        gc.setForeground(lit ? filePathBlinkLitColor : filePathBlinkDimColor);
-        gc.setBackground(background);
+        gc.setForeground(lit ? color(ColorRole.BLINK_LIT) : color(ColorRole.BLINK_DIM));
+        gc.setBackground(color(ColorRole.BACKGROUND));
         gc.drawText(shown, rightEdge - sExt.x, 6, true);
 
         scheduleFilePathBlinkRedraw();
@@ -951,7 +948,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         s.setText(I18n.t("scope.external.window.title"));
         s.setLayout(new org.eclipse.swt.layout.FillLayout());
         Canvas c = new Canvas(s, SWT.DOUBLE_BUFFERED);
-        c.setBackground(background);
+        c.setBackground(color(ColorRole.BACKGROUND));
         c.addPaintListener(this::paintExternalMeasurementTable);
         c.addMouseListener(new org.eclipse.swt.events.MouseAdapter() {
             @Override
@@ -1145,8 +1142,8 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         Font prevFont = gc.getFont();
         gc.setAntialias(SWT.OFF);
         gc.setTextAntialias(SWT.ON);
-        gc.setForeground(overlayColor);
-        gc.setBackground(background);
+        gc.setForeground(color(ColorRole.TEXT));
+        gc.setBackground(color(ColorRole.BACKGROUND));
 
         final int y = 5;
         final int btnW = 22;
@@ -1160,9 +1157,9 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         int lbX = COL_NAME_X;
         int rbX = lbX + btnW + 2;
         drawChannelButton(gc, lbX, y, btnW, btnH, "L", true,
-                selected == Channel.L, leftChannelColor, leftChannelMid);
+                selected == Channel.L, color(ColorRole.LEFT_TRACE), color(ColorRole.LEFT_CHANNEL_MID));
         drawChannelButton(gc, rbX, y, btnW, btnH, "R", true,
-                selected == Channel.R, rightChannelColor, rightChannelMid);
+                selected == Channel.R, color(ColorRole.RIGHT_TRACE), color(ColorRole.RIGHT_CHANNEL_MID));
         setBounds(leftChanButtonBounds,  lbX, y, btnW, btnH);
         setBounds(rightChanButtonBounds, rbX, y, btnW, btnH);
         gc.setFont(monoFont);
@@ -1258,8 +1255,8 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         gc.setFont(monoFont);
         gc.setAntialias(SWT.OFF);
         gc.setTextAntialias(SWT.ON);
-        gc.setForeground(overlayColor);
-        gc.setBackground(background);
+        gc.setForeground(color(ColorRole.TEXT));
+        gc.setBackground(color(ColorRole.BACKGROUND));
 
         int lineH = gc.textExtent("M").y + 1;
         int y = startY;
@@ -1267,7 +1264,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         boolean showStats = Preferences.instance().isOscShowStats();
 
         gc.setFont(monoFont);
-        gc.setForeground(overlayColor);
+        gc.setForeground(color(ColorRole.TEXT));
         // First paint: cache textExtent of each header now that the GC is
         // wearing monoFont.  Headers never change, so this stays valid.
         if (headerExtents == null) {
@@ -1314,11 +1311,11 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private void drawChannelButton(GC gc, int x, int y, int w, int h,
                                    String label, boolean enabled, boolean selected,
                                    Color bright, Color dim) {
-        Color paint = !enabled ? disabledChannel : (selected ? bright : dim);
+        Color paint = !enabled ? color(ColorRole.DISABLED_CHANNEL) : (selected ? bright : dim);
         if (enabled && selected) {
             gc.setBackground(paint);
             gc.fillRectangle(x, y, w, h);
-            gc.setForeground(background);
+            gc.setForeground(color(ColorRole.BACKGROUND));
         } else {
             gc.setForeground(paint);
             gc.setLineAttributes(lineAttrsThin);
@@ -1343,9 +1340,9 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private void ensureIconButtonResources() {
         if (gaugeIconLight != null) return;
         Display d = getDisplay();
-        RGB light = new RGB(235, 235, 235);     // matches overlayColor
+        RGB light = new RGB(235, 235, 235);     // matches color(ColorRole.TEXT)
         RGB dark  = new RGB(  0,   0,   0);     // matches canvas background
-        RGB red   = new RGB(220,  60,  60);     // matches resetColor — red ↻ legacy
+        RGB red   = new RGB(220,  60,  60);     // matches color(ColorRole.RESET) — red ↻ legacy
         IconUtils icons = IconUtils.instance();
         gaugeIconLight       = icons.renderAtHeight(d, SvgPaths.GAUGE_HIGH,         16, light);
         gaugeIconDark        = icons.renderAtHeight(d, SvgPaths.GAUGE_HIGH,         16, dark);
@@ -1365,11 +1362,11 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private void drawIconToggleButton(GC gc, int x, int y, int w, int h,
                                       Image iconLight, Image iconDark, boolean on) {
         if (on) {
-            gc.setBackground(overlayColor);
+            gc.setBackground(color(ColorRole.TEXT));
             gc.fillRectangle(x, y, w, h);
             drawCenteredIcon(gc, iconDark != null ? iconDark : iconLight, x, y, w, h);
         } else {
-            gc.setForeground(overlayColor);
+            gc.setForeground(color(ColorRole.TEXT));
             gc.setLineAttributes(lineAttrsThin);
             gc.drawRectangle(x, y, w - 1, h - 1);
             drawCenteredIcon(gc, iconLight, x, y, w, h);
@@ -1389,35 +1386,6 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         gc.drawText(s, rightX - ts.x, y, true);
     }
 
-    private void drawGrid(GC gc, int w, int h) {
-        double divW = (double) w / DIVISIONS_X;
-        double divH = (double) h / DIVISIONS_Y;
-        gc.setForeground(gridColor);
-        for (int i = 0; i <= DIVISIONS_X; i++) {
-            int x = (int) Math.round(i * divW);
-            gc.drawLine(x, 0, x, h - 1);
-        }
-        for (int i = 0; i <= DIVISIONS_Y; i++) {
-            int y = (int) Math.round(i * divH);
-            gc.drawLine(0, y, w - 1, y);
-        }
-
-        int cx = (int) Math.round(DIVISIONS_X / 2.0 * divW);
-        int cy = (int) Math.round(DIVISIONS_Y / 2.0 * divH);
-        gc.setForeground(crossColor);
-        gc.drawLine(cx, 0, cx, h - 1);
-        gc.drawLine(0, cy, w - 1, cy);
-
-        double tickX = divW / TICKS_PER_DIV;
-        double tickY = divH / TICKS_PER_DIV;
-        int totalTicks = DIVISIONS_X * TICKS_PER_DIV;
-        for (int i = 0; i <= totalTicks; i++) {
-            int x = (int) Math.round(i * tickX);
-            int y = (int) Math.round(i * tickY);
-            gc.drawLine(cx - TICK_HALF_LEN, y, cx + TICK_HALF_LEN, y);
-            gc.drawLine(x, cy - TICK_HALF_LEN, x, cy + TICK_HALF_LEN);
-        }
-    }
 
     /**
      * Draws the three pane-edge sliders (signal offset on the left, trigger
@@ -1453,7 +1421,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         }
         Font prevFont = gc.getFont();
         gc.setFont(monoFont);
-        gc.setBackground(background);
+        gc.setBackground(color(ColorRole.BACKGROUND));
         gc.setTextAntialias(SWT.ON);
 
         // ----- Pre-compute opposite-side label widths so each horizontal
@@ -1465,7 +1433,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         // overlap, but the result reads as a clean broken track.
         double levelFrac = ScopeFormat.clamp01(prefs.getOscTriggerLevelFrac());
         int levelY = (int) Math.round(levelFrac * h);
-        Color levelColor = (trigCh == Channel.L) ? leftChannelColor : rightChannelColor;
+        Color levelColor = (trigCh == Channel.L) ? color(ColorRole.LEFT_TRACE) : color(ColorRole.RIGHT_TRACE);
         // Trigger-channel offset is intentionally NOT clamped to [0, 1] —
         // the trigger-level voltage label needs to track the channel offset
         // out to the extended ±FS-at-centre range the vertical scrollbar
@@ -1532,11 +1500,11 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         if (!fileMode) {
             double posFrac = ScopeFormat.clamp01(prefs.getOscTriggerPositionFrac());
             int posX = (int) Math.round(posFrac * w);
-            gc.setForeground(overlayColor);
+            gc.setForeground(color(ColorRole.TEXT));
             gc.setLineDash(LONG_DASH);
             gc.drawLine(posX, 0, posX, h - 1);
             gc.setLineDash(null);
-            drawUpPointingTriangle(gc, posX, h - 1, overlayColor);
+            drawUpPointingTriangle(gc, posX, h - 1, color(ColorRole.TEXT));
             triggerPosBounds.x      = posX - SLIDER_GRAB_HALF;
             triggerPosBounds.y      = h - SLIDER_TRI_LONG - 2;
             triggerPosBounds.width  = 2 * SLIDER_GRAB_HALF;
@@ -1549,7 +1517,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             int posLabelX = posX - pps.x / 2;
             if (posLabelX < 2) posLabelX = 2;
             if (posLabelX + pps.x > w - 2) posLabelX = w - 2 - pps.x;
-            gc.setForeground(overlayColor);
+            gc.setForeground(color(ColorRole.TEXT));
             gc.drawText(posStr, posLabelX, posLabelY, true);
         } else {
             triggerPosBounds.x = -1; triggerPosBounds.y = -1;
@@ -1575,12 +1543,12 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         if (showL) {
             drawFullScaleLines(gc, h, w, FS_DASH,
                     ScopeFormat.clamp01(prefs.getOscLeftOffsetFrac()), leftVDiv,
-                    peakVolts, pixelsPerDivY, leftChannelMid);
+                    peakVolts, pixelsPerDivY, color(ColorRole.LEFT_CHANNEL_MID));
         }
         if (showR) {
             drawFullScaleLines(gc, h, w, FS_DASH,
                     ScopeFormat.clamp01(prefs.getOscRightOffsetFrac()), rightVDiv,
-                    peakVolts, pixelsPerDivY, rightChannelMid);
+                    peakVolts, pixelsPerDivY, color(ColorRole.RIGHT_CHANNEL_MID));
         }
 
         boolean activeIsL = (measCh == Channel.L);
@@ -1592,12 +1560,12 @@ public final class OscilloscopeView extends AbstractMeasurementView {
                     ScopeFormat.clamp01(otherIsL ? prefs.getOscLeftOffsetFrac()
                                      : prefs.getOscRightOffsetFrac()),
                     otherIsL ? leftVDiv : rightVDiv,
-                    otherIsL ? leftChannelColor : rightChannelColor,
-                    otherIsL ? leftChannelMid   : rightChannelMid,
+                    otherIsL ? color(ColorRole.LEFT_TRACE) : color(ColorRole.RIGHT_TRACE),
+                    otherIsL ? color(ColorRole.LEFT_CHANNEL_MID)   : color(ColorRole.RIGHT_CHANNEL_MID),
                     false, offsetLineRightEnd);
         }
         if (activeEnabled) {
-            Color c = activeIsL ? leftChannelColor : rightChannelColor;
+            Color c = activeIsL ? color(ColorRole.LEFT_TRACE) : color(ColorRole.RIGHT_TRACE);
             drawOffsetTrack(gc, h, DASH,
                     ScopeFormat.clamp01(activeIsL ? prefs.getOscLeftOffsetFrac()
                                       : prefs.getOscRightOffsetFrac()),
@@ -1734,7 +1702,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         }
         Font prevFont = gc.getFont();
         gc.setFont(monoFont);
-        gc.setBackground(background);
+        gc.setBackground(color(ColorRole.BACKGROUND));
         gc.setTextAntialias(SWT.ON);
 
         int centerX = w / 2;
@@ -1749,7 +1717,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         String rightTimeStr = ScopeFormat.formatSeconds(rightTime);
         Point lts = gc.textExtent(leftTimeStr);
         Point rts = gc.textExtent(rightTimeStr);
-        gc.setForeground(overlayColor);
+        gc.setForeground(color(ColorRole.TEXT));
         int leftTimeX  = 4;
         int leftTimeY  = centerY - lts.y - 2;
         int rightTimeX = w - rts.x - 4;
@@ -1778,7 +1746,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             String minStr = ScopeFormat.formatVolts(minV, leftVDiv);
             Point mxs = gc.textExtent(maxStr);
             Point mns = gc.textExtent(minStr);
-            gc.setForeground(leftChannelColor);
+            gc.setForeground(color(ColorRole.LEFT_TRACE));
             int maxX = centerX - mxs.x - 4;
             int minX = centerX - mns.x - 4;
             int minY = h - mns.y - 2;
@@ -1800,7 +1768,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             String minStr = ScopeFormat.formatVolts(minV, rightVDiv);
             Point mxs = gc.textExtent(maxStr);
             Point mns = gc.textExtent(minStr);
-            gc.setForeground(rightChannelColor);
+            gc.setForeground(color(ColorRole.RIGHT_TRACE));
             int maxX = centerX + 4;
             int minX = centerX + 4;
             int minY = h - mns.y - 2;
@@ -2219,12 +2187,12 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         if (showL) {
             double vScale = peakVolts / leftVDiv * pixelsPerDivY;
             drawTrace(gc, dataLeft,  dataLen, dispStart, subSampleOffset, dispCount,
-                      w, leftCenterY, vScale, leftChannelColor, sincEnabledL, dcOffsetL, dotDiameter);
+                      w, leftCenterY, vScale, color(ColorRole.LEFT_TRACE), sincEnabledL, dcOffsetL, dotDiameter);
         }
         if (showR) {
             double vScale = peakVolts / rightVDiv * pixelsPerDivY;
             drawTrace(gc, dataRight, dataLen, dispStart, subSampleOffset, dispCount,
-                      w, rightCenterY, vScale, rightChannelColor, sincEnabledR, dcOffsetR, dotDiameter);
+                      w, rightCenterY, vScale, color(ColorRole.RIGHT_TRACE), sincEnabledR, dcOffsetR, dotDiameter);
         }
     }
 

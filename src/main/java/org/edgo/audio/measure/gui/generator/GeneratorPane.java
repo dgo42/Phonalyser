@@ -33,6 +33,7 @@ import org.eclipse.swt.widgets.Display;
 
 import java.io.File;
 import java.util.Locale;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.edgo.audio.measure.enums.AmplitudeUnit;
 
@@ -137,18 +138,18 @@ public final class GeneratorPane {
     /** Handler for {@link Events#FFT_LENGTH_CHANGED}.  Held as a field
      *  so the dispose listener can unsubscribe it from the bus — without
      *  that, the bus would keep this pane alive forever. */
-    private Runnable fftLengthListener;
+    private Consumer<Void> fftLengthListener;
     /** Handler for {@link Events#FILE_PLAY_STOPPED}.  Fires on the
      *  play thread when the file player ends (user stop, EOF without
      *  loop, or playback error) — resets the play-from LED on the UI
      *  thread.  Held as a field so the dispose listener can unsubscribe. */
-    private Runnable filePlayStoppedListener;
+    private Consumer<Void> filePlayStoppedListener;
     /** Handler for {@link Events#FREQRESP_MEASUREMENT_STARTED} — stops
      *  the running generator (DDS tone + file player) and disables both
      *  play buttons so the FreqResp sweep can drive the DAC exclusively. */
-    private Runnable freqRespStartedListener;
+    private Consumer<Void> freqRespStartedListener;
     /** Counterpart that re-enables both play buttons after the sweep. */
-    private Runnable freqRespStoppedListener;
+    private Consumer<Void> freqRespStoppedListener;
 
     public GeneratorPane(Composite parent) {
         // Seed the tracked pane width from prefs BEFORE the host
@@ -643,7 +644,7 @@ public final class GeneratorPane {
         // loop) or fails on the play thread.  The bus delivers
         // FILE_PLAY_STOPPED on the play thread; marshal to the UI thread
         // before touching widgets.
-        filePlayStoppedListener = () -> {
+        filePlayStoppedListener = ignored -> {
             if (!playFromBtn.isDisposed()) {
                 playFromBtn.getDisplay().asyncExec(() -> {
                     if (!playFromBtn.isDisposed()) {
@@ -720,10 +721,10 @@ public final class GeneratorPane {
         // carries no payload.  Stored as a field so the dispose
         // listener below can unsubscribe and let the bus release its
         // reference to this pane.
-        fftLengthListener = this::reapplyFrequencySnap;
+        fftLengthListener = ignored -> reapplyFrequencySnap();
         MessageBus.instance().subscribe(Events.FFT_LENGTH_CHANGED, fftLengthListener);
-        freqRespStartedListener = this::onFreqRespMeasurementStarted;
-        freqRespStoppedListener = this::onFreqRespMeasurementStopped;
+        freqRespStartedListener = ignored -> onFreqRespMeasurementStarted();
+        freqRespStoppedListener = ignored -> onFreqRespMeasurementStopped();
         MessageBus.instance().subscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
         MessageBus.instance().subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
 

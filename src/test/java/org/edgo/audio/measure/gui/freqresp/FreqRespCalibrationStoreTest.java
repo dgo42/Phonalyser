@@ -1,6 +1,7 @@
 package org.edgo.audio.measure.gui.freqresp;
 
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import org.edgo.audio.measure.cli.util.FreqRespCalibration;
 import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
@@ -29,14 +30,14 @@ class FreqRespCalibrationStoreTest {
     private final MessageBus bus = MessageBus.instance();
 
     private AtomicInteger eventCounter;
-    private Runnable handler;
+    private Consumer<Void> handler;
 
     @BeforeEach
     void setup() {
         store.clearCurrent();
         store.setDirect(null);
         eventCounter = new AtomicInteger();
-        handler = eventCounter::incrementAndGet;
+        handler = ignored -> eventCounter.incrementAndGet();
         bus.subscribe(Events.FREQRESP_CALIBRATION_CHANGED, handler);
         eventCounter.set(0);
     }

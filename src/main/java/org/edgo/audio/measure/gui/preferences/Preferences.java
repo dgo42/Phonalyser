@@ -136,8 +136,8 @@ public final class Preferences {
     /** Sample-dot diameter (pixels) when the inter-sample spacing exceeds 10 px. */
     @Getter @Setter private int            oscDotDiameter       = 5;
     /** Packed RGB (0xRRGGBB) of the left and right channel traces. */
-    @Getter @Setter private int            oscLeftChannelColor  = 0x28DCF0;  // (40, 220, 240) cyan
-    @Getter @Setter private int            oscRightChannelColor = 0xF0DC28;  // (240, 220, 40) yellow
+    @Getter @Setter private int            oscLeftChannelColor  = 0x0057B7;
+    @Getter @Setter private int            oscRightChannelColor = 0xFFD700;
 
     /** Last screenshot resolution / folder, 0 / null = use the pane's current size / system default. */
     @Getter @Setter private int    screenshotWidth;

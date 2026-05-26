@@ -4,6 +4,7 @@ import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 import org.eclipse.swt.widgets.Display;
 
@@ -13,28 +14,31 @@ import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.FftAnalyzer.FrameFftCache;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBuffer;
 
+import lombok.extern.log4j.Log4j2;
+
 import java.util.List;
 
 /**
- * Background analyser worker that owns the FFT compute thread, its
- * {@link FftAnalyzer} instance, and every piece of state that the
- * spectrum-paint side of {@link FftView} merely consumes.
+ * Background analyser worker that owns the FFT compute thread and its
+ * {@link FftAnalyzer} instance.  Holds none of the view's state — the
+ * worker thread is fully decoupled from {@link FftView} via the bus:
+ * each completed analysis is {@linkplain FftAnalyzer.Result#deepCopy
+ * deep-copied} and published on
+ * {@link Events#FFT_RESULT_AVAILABLE}; subscribers (typically
+ * {@link FftView}) keep the snapshot and paint from it without
+ * touching anything the worker owns.
  *
  * <p>Lifecycle is parent-owned: {@link FftView} constructs one worker
  * and calls {@link #start} / {@link #stop} alongside its own visibility
- * and dispose lifecycle.  The worker publishes "new result available"
- * back to {@link FftView} by invoking the {@link Runnable} passed into
- * the constructor — already marshalled to the SWT thread via
- * {@link Display#asyncExec}.
- *
- * <p>All getters return current state read from {@code volatile} fields
- * so {@link FftView}'s paint listener can pull values without locking.
+ * and dispose lifecycle.
  */
+@Log4j2
 public final class FftAnalyzerWorker {
 
     /** Idle tick when there's no buffer / not enough fresh samples. */
@@ -43,13 +47,9 @@ public final class FftAnalyzerWorker {
     private static final int MAX_SLEEP_MS = 500;
 
     private final Display  display;
-    private final Runnable onResultReady;
 
     private final FftAnalyzer analyzer = new FftAnalyzer();
 
-    private volatile FftAnalyzer.Result lastResult;
-    // (preCorrectionPeaks now lives inside Result so it publishes
-    //  atomically with the rest of the result; getter reads via lastResult.)
     private volatile SignalBuffer       buffer;
     private final    AtomicBoolean      paused = new AtomicBoolean(false);
     private volatile int                completedAnalyses;
@@ -71,6 +71,9 @@ public final class FftAnalyzerWorker {
     private float[] reusableLeftBuf  = new float[0];
     private float[] reusableRightBuf = new float[0];
     private Thread worker;
+
+    private long startAnalyze;
+    private long startSendToUi;
 
     // ─── Per-frame FFT cache (perf) ─────────────────────────────────────────
     /** Soft budget for total cache memory (bytes).  Cap on frame count is
@@ -123,7 +126,7 @@ public final class FftAnalyzerWorker {
      *  analysis to wait for a full fftLength of fresh samples — a
      *  multi-second blank period the user perceives as a glitch every
      *  time they nudge an amplitude / frequency / cal row. */
-    private final Runnable invalidateOnEvent = this::recycleAndClearCache;
+    private final Consumer<Void> invalidateOnEvent = ignored -> recycleAndClearCache();
     /** Cache adapter passed to {@link FftAnalyzer#setFrameCache}; backed
      *  by {@link #frameCacheMap} under {@link #frameCacheLock}. */
     private final FftAnalyzer.FrameFftCache frameFftCacheImpl =
@@ -375,36 +378,20 @@ public final class FftAnalyzerWorker {
     }
 
     /**
-     * @param display       SWT display used to marshal redraw / event
-     *                      publish hops back to the UI thread.
-     * @param onResultReady invoked on the UI thread after each
-     *                      successful analysis pass.  Typically the
-     *                      view's {@code redraw()}.
+     * @param display SWT display used to marshal {@link Events#FFT_RESULT_AVAILABLE}
+     *                publishes back to the UI thread.  Subscribers to that
+     *                event (typically the FFT view's {@code redraw()}) are
+     *                where the post-analysis paint hook now lives.
      */
-    public FftAnalyzerWorker(Display display, Runnable onResultReady) {
-        this.display       = display;
-        this.onResultReady = onResultReady;
+    public FftAnalyzerWorker(Display display) {
+        this.display = display;
         analyzer.setFrameCache(frameFftCacheImpl);
-        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnEvent);
-        MessageBus.instance().subscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
     }
 
     // ─── External wiring ────────────────────────────────────────────────────
 
     public void setBuffer(SignalBuffer b)       { this.buffer = b; }
     public SignalBuffer getBuffer()              { return buffer; }
-    public FftAnalyzer.Result getLastResult()   { return lastResult; }
-    public void setLastResult(FftAnalyzer.Result r) { this.lastResult = r; }
-    /** Returns the fundamental + harmonic (freq, dBFS) pairs measured
-     *  BEFORE calibration was applied, or {@code null} when no
-     *  calibration is loaded.  Read from the published Result so that
-     *  it stays consistent with {@link #getLastResult()} — no tearing
-     *  race where a fresh pre is paired with a stale r (or vice versa).
-     *  Same layout as {@code FreqRespCalHelper.capturePreCorrectionPeaks}. */
-    public double[][] getPreCorrectionPeaks() {
-        FftAnalyzer.Result r = lastResult;
-        return r != null ? r.preCorrectionPeaks : null;
-    }
     public int  getCompletedAnalyses()          { return completedAnalyses; }
     /** Cumulative frame count accumulated across all forever-mode ticks
      *  since the last reset.  Returns 0 outside forever mode or before
@@ -429,10 +416,11 @@ public final class FftAnalyzerWorker {
         firstFrameDone        = false;
         lastAnalysisWritePos  = -1;
         startWritePos         = -1;
-        lastResult            = null;
         completedAnalyses     = 0;
-        resetAccumulator();
+        resetStatistics();
         paused.set(false);
+        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnEvent);
+        MessageBus.instance().subscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
         worker = new Thread(this::workerLoop, "fft-analyzer");
         worker.setDaemon(true);
         worker.start();
@@ -458,7 +446,6 @@ public final class FftAnalyzerWorker {
     public void resetStatistics() {
         paused.set(false);
         completedAnalyses     = 0;
-        lastResult            = null;
         firstFrameDone        = false;
         lastAnalysisWritePos  = -1;
         startWritePos         = -1;
@@ -538,12 +525,20 @@ public final class FftAnalyzerWorker {
      *  configured overlap so the FFT update rate scales with the hop
      *  size. */
     private int doAnalysis() {
+        startAnalyze = System.nanoTime();
         // Generator-state transition: wipe accumulated stats so the next
         // analysis starts with a clean slate.
         boolean genActiveNow = isGeneratorActive();
         if (lastGeneratorActive != null && lastGeneratorActive != genActiveNow) {
             resetStatistics();
-            postRedraw();
+            // No fresh Result — just nudge the UI to repaint the (now
+            // empty) chart.  Subscribers receive null and just call
+            // redraw / update.
+            // Do not erase only if generator is toggled on/off
+            /*if (display != null && !display.isDisposed()) {
+                display.asyncExec(() ->
+                        MessageBus.instance().publish(Events.FFT_RESULT_AVAILABLE));
+            }*/
         }
         lastGeneratorActive = genActiveNow;
 
@@ -782,7 +777,6 @@ public final class FftAnalyzerWorker {
             }
         }
 
-        lastResult = r;
         completedAnalyses++;
         lastAnalysisWritePos = buf.getWritePos();
         firstFrameDone = true;
@@ -794,6 +788,7 @@ public final class FftAnalyzerWorker {
         // actual averaging depth is roughly 2× this threshold in frame
         // count.  Finite N already implements a moving window so the
         // analysis is continuous.
+        log.warn("FFT analyse took {} ms", (double)(System.nanoTime() - startAnalyze) / 1_000_000);
         if (foreverMode
                 && prefs.isFftStopAfterNEnabled()
                 && completedAnalyses >= prefs.getFftStopAfterN()) {
@@ -803,14 +798,49 @@ public final class FftAnalyzerWorker {
                         MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
             }
         }
-        postRedraw();
+        // Hand off to the UI: deep-copy the freshly-filled result so
+        // the worker can mutate its local {@code r} on the next tick
+        // without the view (which keeps the snapshot it received) ever
+        // seeing a torn read.
+        publishResult(r);
         return msForSamples(hopSamples, sampleRate);
     }
 
-    private void postRedraw() {
-        if (display != null && !display.isDisposed()) {
-            display.asyncExec(onResultReady);
-        }
+    /** Deep-copies {@code newSlot} on the worker thread and publishes
+     *  the snapshot on {@link Events#FFT_RESULT_AVAILABLE} via
+     *  {@link Display#asyncExec} so subscribers receive the payload on
+     *  the UI thread.  The copy decouples the worker (which may keep
+     *  mutating its working {@code r}) from {@link FftView} (which
+     *  paints from the published snapshot for many frames). */
+    private void publishResult(FftAnalyzer.Result newSlot) {
+        if (display == null || display.isDisposed()) return;
+        FftAnalyzer.Result clone = newSlot/* .deepCopy()*/;
+        startSendToUi = System.nanoTime();
+        // Diagnostic: log who the SWT thread is so we can spot a stale
+        // Display reference, and log right before / after asyncExec so a
+        // dispatch stall is visible even when the lambda never runs.
+        Thread swt = display.getThread();
+        log.warn("publishResult: calling asyncExec (SWT thread tid={} name={})",
+                swt != null ? swt.getId() : -1,
+                swt != null ? swt.getName() : "<null>");
+        display.asyncExec(() -> {
+            log.warn("FFT result achieved asyncExec in {} ms", (double)(System.nanoTime() - startSendToUi) / 1_000_000);
+            try {
+                MessageBus.instance().publish(Events.FFT_RESULT_AVAILABLE, clone);
+            } catch(Exception e) {
+                log.error("Can't dispatch Events.FFT_RESULT_AVAILABLE", e);
+            }
+        });
+        // Force the SWT main loop to wake from Display.sleep() if it was
+        // dozing.  asyncExec already posts a wake message but on Windows
+        // the message queue can drop wakes under load — wake() is the
+        // belt-and-suspenders nudge.
+        display.wake();
+        log.warn("publishResult: asyncExec queued + wake() sent");
+    }
+
+    public void uiGotResult() {
+        log.warn("FFT result achieved UI in {} ms", (double)(System.nanoTime() - startSendToUi) / 1_000_000);
     }
 
     private int msForSamples(int samples, int sampleRate) {

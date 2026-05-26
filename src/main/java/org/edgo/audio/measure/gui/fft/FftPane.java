@@ -10,6 +10,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
@@ -166,19 +167,19 @@ public final class FftPane {
     /** Subscriber for {@link Events#FFT_RANGE_CHANGED}, stored as a
      *  field so the dispose listener can unsubscribe the SAME instance
      *  (method references compare by identity). */
-    private Runnable rangeChangedListener;
+    private Consumer<Void> rangeChangedListener;
     /** Subscriber for {@link Events#FFT_RECORDING_AUTO_STOPPED} — fires
      *  when the analyser's stop-after-N counter trips so the pane can
      *  flip Record back off and release the shared capture. */
-    private Runnable autoStoppedListener;
+    private Consumer<Void> autoStoppedListener;
     /** Subscriber for {@link Events#FREQRESP_MEASUREMENT_STARTED} — the
      *  Frequency Response pane is about to drive the capture device
      *  exclusively, so this pane must stop any running recording and
      *  gray its Record button so it can't be re-engaged mid-sweep. */
-    private Runnable freqRespStartedListener;
+    private Consumer<Void> freqRespStartedListener;
     /** Counterpart to {@link #freqRespStartedListener} — re-enables the
      *  Record button once the sweep finishes (or aborts). */
-    private Runnable freqRespStoppedListener;
+    private Consumer<Void> freqRespStoppedListener;
 
     public FftPane(Composite parent,
                    boolean liveCapture) {
@@ -413,10 +414,10 @@ public final class FftPane {
         //     auto-setup / maximize → realign the scrollbars.
         //   - FFT_RECORDING_AUTO_STOPPED: view publishes when its
         //     stop-after-N counter trips → release record state.
-        rangeChangedListener      = this::syncFftPan;
-        autoStoppedListener       = this::disengageRecord;
-        freqRespStartedListener   = this::onFreqRespMeasurementStarted;
-        freqRespStoppedListener   = this::onFreqRespMeasurementStopped;
+        rangeChangedListener      = ignored -> syncFftPan();
+        autoStoppedListener       = ignored -> disengageRecord();
+        freqRespStartedListener   = ignored -> onFreqRespMeasurementStarted();
+        freqRespStoppedListener   = ignored -> onFreqRespMeasurementStopped();
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.FFT_RANGE_CHANGED,             rangeChangedListener);
         bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED,    autoStoppedListener);
@@ -1147,7 +1148,7 @@ public final class FftPane {
             MessageBus.instance().publish(Events.FFT_CALIBRATION_CHANGED);
         });
         // Live enable/disable as the calibration list mutates.
-        Runnable updateCalBtnEnable = () -> {
+        Consumer<Void> updateCalBtnEnable = ignored -> {
             if (calNoiseBtn.isDisposed()) return;
             calNoiseBtn.setEnabled(FftCalibrationStore.instance().isAnyLoaded());
         };

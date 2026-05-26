@@ -1,7 +1,10 @@
 package org.edgo.audio.measure.gui.fft;
 
 import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 
+import org.apache.commons.lang3.ArrayUtils;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.MouseAdapter;
 import org.eclipse.swt.events.MouseEvent;
@@ -23,11 +26,11 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
+import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
+import org.edgo.audio.measure.cli.util.FreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftMagnitudeUnit;
 import org.edgo.audio.measure.enums.GenSignalForm;
-import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
-import org.edgo.audio.measure.cli.util.FreqRespCalibration;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -38,6 +41,10 @@ import org.edgo.audio.measure.gui.generator.FftBinSnap;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBuffer;
+
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Live FFT canvas.  Paints a black-on-white spectrum trace (one channel
@@ -54,50 +61,17 @@ import org.edgo.audio.measure.gui.sound.SignalBuffer;
  * View → pane communication is purely via {@link MessageBus} broadcasts
  * ({@link Events#FFT_RANGE_CHANGED}, {@link Events#FFT_RECORDING_AUTO_STOPPED}).
  */
+@Log4j2
 public final class FftView extends AbstractFreqDomainView {
 
     // ─── Colours ─────────────────────────────────────────────────────────
-    /** User-configurable; re-allocated by {@link #syncFftColors} when the
-     *  corresponding pref changes. */
-    private Color background;
-    private final Color gridColor;
-    private final Color axisColor;
-    private final Color textColor;
-    /** User-configurable spectrum trace colour. */
-    private Color spectrumColor;
-    private final Color crosshairColor;
-    private final Color leftChanColor;
-    private final Color rightChanColor;
-    private final Color overlayBgColor;
-    private final Color buttonFrameColor;
-    private final Color resetColor;
-    /** Light-grey overlay used to dim the parts of the spectrum that
-     *  lie outside an active distortion HP / LP window — matches the
-     *  CLI FFT chart's {@code ChartStyle.DIM_COLOR}. */
-    private final Color dimColor;
-    /** Dot colour for fundamental + harmonic markers; user-configurable. */
-    private Color harmonicDotColor;
-    /** Dot colour for pre-calibration markers — drawn next to the
-     *  (red) corrected dots when at least one calibration file is
-     *  loaded so the user can see how much the cal moved each peak. */
-    private Color beforeCalDotColor;
-    /** User-configurable frequency response / cal-overlay response trace colour.
-     *  Allocated even though the FFT view doesn't yet draw a frequency
-     *  response trace — kept in sync so it's ready when that layer is
-     *  added. */
-    private Color freqRespResponseColor;
-    /** Trace colour for the inverted-cascade calibration overlay (drawn
-     *  parallel to the FFT spectrum so the user can see at a glance
-     *  which bands the calibration is lifting or cutting). */
-    private Color calOverlayColor;
-    /** Cached packed-RGB values of the last allocated FFT colors; used by
-     *  {@link #syncFftColors} to skip reallocation when prefs match. */
-    private int currentBgRgb         = -1;
-    private int currentSpectrumRgb   = -1;
-    private int currentDotRgb        = -1;
-    private int currentBeforeCalRgb  = -1;
-    private int currentFreqRespRgb   = -1;
-    private int currentCalOverlayRgb = -1;
+    // All FFT palette colours (background, grid, axis, text, crosshair,
+    // overlay_bg, left/right btn chan, button frame, reset, spectrum,
+    // dim, harmonic_dot, before_cal_dot, freq_resp_response, cal_overlay)
+    // live in the AbstractMeasurementView palette — accessed via
+    // color(ColorRole.X).  syncFftColors() re-allocates the prefs-driven
+    // entries via setColor() (which short-circuits when the RGB hasn't
+    // changed, so there's no per-paint allocation cost).
 
     // ─── Fonts ────────────────────────────────────────────────────────────
     private Font monoFont;
@@ -122,27 +96,23 @@ public final class FftView extends AbstractFreqDomainView {
     /** Count of completed analyses since the last reset / record-start. */
     private Label averagesCountLabel;
 
-    /** Magnitude-unit option names (Preferences value form). */
-    private static final String[] MAG_UNIT_NAMES = {
-            FftMagnitudeUnit.V       .name(),
-            FftMagnitudeUnit.V_SQRT_HZ.name(),
-            FftMagnitudeUnit.DBV     .name(),
-            FftMagnitudeUnit.DBFS    .name()
-    };
-    /** Magnitude-unit option labels (display text). */
-    private static final String[] MAG_UNIT_LABELS = {
-            FftMagnitudeUnit.V       .getLabel(),
-            FftMagnitudeUnit.V_SQRT_HZ.getLabel(),
-            FftMagnitudeUnit.DBV     .getLabel(),
-            FftMagnitudeUnit.DBFS    .getLabel()
-    };
+    private FftAnalyzerWorker worker = null;
 
-    // ─── Analyser pipeline ─────────────────────────────────────────────
-    /** Owns the FFT worker thread, the {@link FftAnalyzer} instance, and
-     *  every piece of analysis state that the paint side merely consumes.
-     *  Constructed in {@link #FftView} with a {@link Runnable} that fires
-     *  a redraw on the UI thread after every new result. */
-    private final FftAnalyzerWorker worker;
+    private long startRender;
+    /** Subscription handler held as a field so the same instance is
+     *  passed to both {@code subscribe} and {@code unsubscribe} — the
+     *  bus removes by reference equality.  The {@code slot} payload is
+     *  already a deep-copied snapshot (produced on the worker thread
+     *  inside {@code publishResult}); we just store the reference and
+     *  redraw — paint code reads {@link #lastResult} directly. */
+    private final Consumer<FftAnalyzer.Result> onResultReady = slot -> {
+        if (isDisposed()) return;
+        if (worker != null) worker.uiGotResult();
+        startRender = System.nanoTime();
+        lastResult = slot;
+        redraw();
+        update();
+    };
 
     // ─── Mouse / crosshair tracking ──────────────────────────────────────
     private int crossX = -1, crossY = -1;
@@ -186,7 +156,15 @@ public final class FftView extends AbstractFreqDomainView {
     private static final int TABLE_TOP_Y = 5 + BTN_H + 6;
 
     public FftView(Composite parent) {
-        super(parent, SWT.DOUBLE_BUFFERED);
+        // Pass prefs-driven BACKGROUND + SPECTRUM through the override
+        // map so the base allocates the right colour once; everything
+        // else uses the light-theme defaults from AbstractMeasurementView.
+        // DIM (#DCDCDC) is FFT-only — supplied here rather than the base
+        // because no other view dims spectrum regions.
+        super(parent, SWT.DOUBLE_BUFFERED, Map.of(
+                ColorRole.BACKGROUND, Preferences.instance().getFftChartBackgroundColor(),
+                ColorRole.SPECTRUM,   Preferences.instance().getFftLineColor(),
+                ColorRole.DIM,        0xDCDCDC));
         // Chapter-level help anchor: Ctrl+F1 anywhere on the spectrum
         // canvas opens fft.html.  The header buttons / THD table /
         // crosshair aren't separate widgets (everything is custom-
@@ -194,27 +172,18 @@ public final class FftView extends AbstractFreqDomainView {
         // bottom-out at the chapter and the user navigates within.
         setData("helpAnchor", "fft.html");
         Display d = getDisplay();
-        worker = new FftAnalyzerWorker(d, () -> {
-            if (isDisposed()) return;
-            redraw();
-            // Force the paint to fire synchronously here rather than
-            // letting SWT coalesce multiple per-tick redraws into one
-            // delayed paint.  At typical analysis cadences (1–5 ticks
-            // per second) the per-tick paint cost is well under the
-            // hop interval, so blocking the UI thread for this paint
-            // is negligible; the user sees a paint per analysis.
-            update();
-        });
-        gridColor        = new Color(d, 0xDC, 0xDC, 0xDC);
-        axisColor        = new Color(d, 0x80, 0x80, 0x80);
-        textColor        = new Color(d, 0x20, 0x20, 0x20);
-        crosshairColor   = new Color(d, 0x90, 0x90, 0x90);
-        leftChanColor    = new Color(d, 0x28, 0xDC, 0xF0);
-        rightChanColor   = new Color(d, 0xF0, 0xDC, 0x28);
-        overlayBgColor   = new Color(d, 0xF6, 0xF6, 0xF6);
-        buttonFrameColor = new Color(d, 0x60, 0x60, 0x60);
-        resetColor       = new Color(d, 220,  60,  60);
-        dimColor         = new Color(d, 200, 200, 200);
+        worker = new FftAnalyzerWorker(d);
+        // Paint-on-result: subscribe to FFT_RESULT_AVAILABLE (published
+        // by the worker on the UI thread after each analysis) and force
+        // the paint to fire synchronously rather than letting SWT
+        // coalesce multiple per-tick redraws into one delayed paint.
+        // At typical analysis cadences (1–5 ticks per second) the
+        // per-tick paint cost is well under the hop interval, so
+        // blocking the UI thread for this paint is negligible.
+        MessageBus.instance().subscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
+        // Pick up FFT-only prefs (harmonic dot, freq-resp response,
+        // before-cal dot, cal overlay) that aren't part of the base
+        // palette — kept as view-local fields below.
         syncFftColors();
 
         // Register the header-row buttons as Hotspots with the shared base.
@@ -241,7 +210,7 @@ public final class FftView extends AbstractFreqDomainView {
         registerHotspot(externalButtonBounds, () -> setTableExtracted(!tableExtracted));
         registerHotspot(resetButtonBounds, () -> { resetStatistics(); redraw(); });
 
-        setBackground(background);
+        setBackground(color(ColorRole.BACKGROUND));
         addPaintListener(this::onPaint);
         addMouseListener(new MouseAdapter() {
             @Override
@@ -264,10 +233,10 @@ public final class FftView extends AbstractFreqDomainView {
         setLayout(new FormLayout());
 
         magUnitCombo = new Combo(this, SWT.READ_ONLY);
-        magUnitCombo.setItems(MAG_UNIT_LABELS);
+        magUnitCombo.setItems(FftMagnitudeUnit.labels());
         magUnitCombo.setToolTipText(I18n.t("fft.magUnit.tooltip"));
         magUnitCombo.setData("helpAnchor", "fft.html#fft-mag-unit");
-        int magIdx = indexOf(MAG_UNIT_NAMES, Preferences.instance().getFftMagUnit());
+        int magIdx = ArrayUtils.indexOf(FftMagnitudeUnit.names(), Preferences.instance().getFftMagUnit());
         magUnitCombo.select(magIdx < 0 ? 2 : magIdx);
         magUnitCombo.addListener(SWT.Selection, e -> onMagUnitChanged());
 
@@ -314,7 +283,7 @@ public final class FftView extends AbstractFreqDomainView {
         if (i < 0) return;
         Preferences prefs = Preferences.instance();
         FftMagnitudeUnit oldUnit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
-        FftMagnitudeUnit newUnit = FftMagnitudeUnit.fromName(MAG_UNIT_NAMES[i]);
+        FftMagnitudeUnit newUnit = FftMagnitudeUnit.fromName(FftMagnitudeUnit.names()[i]);
         double fs = prefs.getAdcFsVoltageRms();
         if (!(fs > 0)) fs = 1.0;
         double fsDbv = 20 * Math.log10(fs);
@@ -322,7 +291,7 @@ public final class FftView extends AbstractFreqDomainView {
                 oldUnit, newUnit, fsDbv);
         prefs.setFftMagTop(conv[0]);
         prefs.setFftMagBottom(conv[1]);
-        prefs.setFftMagUnit(MAG_UNIT_NAMES[i]);
+        prefs.setFftMagUnit(FftMagnitudeUnit.names()[i]);
         prefs.save();
         fireRangeChanged();
         redraw();
@@ -333,7 +302,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  load or screenshot-pane wire-up. */
     public void refreshFromPrefs() {
         if (magUnitCombo == null || magUnitCombo.isDisposed()) return;
-        int i = indexOf(MAG_UNIT_NAMES, Preferences.instance().getFftMagUnit());
+        int i = ArrayUtils.indexOf(FftMagnitudeUnit.names(), Preferences.instance().getFftMagUnit());
         if (i >= 0) magUnitCombo.select(i);
     }
 
@@ -375,30 +344,10 @@ public final class FftView extends AbstractFreqDomainView {
         d.timerExec(100, tick[0]);
     }
 
-    private int indexOf(String[] arr, String value) {
-        if (value == null) return -1;
-        for (int i = 0; i < arr.length; i++) if (value.equals(arr[i])) return i;
-        return -1;
-    }
-
     private void disposeResources() {
+        MessageBus.instance().unsubscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
         worker.stop();
-        if (background          != null) background.dispose();
-        gridColor.dispose();
-        axisColor.dispose();
-        textColor.dispose();
-        if (spectrumColor       != null) spectrumColor.dispose();
-        crosshairColor.dispose();
-        leftChanColor.dispose();
-        rightChanColor.dispose();
-        overlayBgColor.dispose();
-        buttonFrameColor.dispose();
-        resetColor.dispose();
-        dimColor.dispose();
-        if (harmonicDotColor    != null) harmonicDotColor.dispose();
-        if (beforeCalDotColor   != null) beforeCalDotColor.dispose();
-        if (freqRespResponseColor != null) freqRespResponseColor.dispose();
-        if (calOverlayColor     != null) calOverlayColor.dispose();
+        disposePalette();
         if (monoFont       != null) monoFont.dispose();
         if (monoBoldFont   != null) monoBoldFont.dispose();
         if (chanButtonFont != null) chanButtonFont.dispose();
@@ -415,43 +364,16 @@ public final class FftView extends AbstractFreqDomainView {
      *  the Preferences dialog take effect on the next redraw. */
     private void syncFftColors() {
         Preferences prefs = Preferences.instance();
-        int bg  = prefs.getFftChartBackgroundColor();
-        int sp  = prefs.getFftLineColor();
-        int dot = prefs.getFftHarmonicDotColor();
-        int flt = prefs.getFftFreqRespColor();
-        if (bg  != currentBgRgb) {
-            if (background       != null) background.dispose();
-            background       = newColor(bg);
-            currentBgRgb     = bg;
-            setBackground(background);
-        }
-        if (sp  != currentSpectrumRgb) {
-            if (spectrumColor    != null) spectrumColor.dispose();
-            spectrumColor    = newColor(sp);
-            currentSpectrumRgb = sp;
-        }
-        if (dot != currentDotRgb) {
-            if (harmonicDotColor != null) harmonicDotColor.dispose();
-            harmonicDotColor = newColor(dot);
-            currentDotRgb    = dot;
-        }
-        int beforeCal = prefs.getFftBeforeCalDotColor();
-        if (beforeCal != currentBeforeCalRgb) {
-            if (beforeCalDotColor != null) beforeCalDotColor.dispose();
-            beforeCalDotColor = newColor(beforeCal);
-            currentBeforeCalRgb = beforeCal;
-        }
-        if (flt != currentFreqRespRgb) {
-            if (freqRespResponseColor != null) freqRespResponseColor.dispose();
-            freqRespResponseColor = newColor(flt);
-            currentFreqRespRgb    = flt;
-        }
-        int calOv = prefs.getFftCalOverlayColor();
-        if (calOv != currentCalOverlayRgb) {
-            if (calOverlayColor != null) calOverlayColor.dispose();
-            calOverlayColor = newColor(calOv);
-            currentCalOverlayRgb = calOv;
-        }
+        setColor(ColorRole.BACKGROUND,         prefs.getFftChartBackgroundColor());
+        setColor(ColorRole.SPECTRUM,           prefs.getFftLineColor());
+        setColor(ColorRole.HARMONIC_DOT,       prefs.getFftHarmonicDotColor());
+        setColor(ColorRole.BEFORE_CAL_DOT,     prefs.getFftBeforeCalDotColor());
+        setColor(ColorRole.FREQ_RESP_RESPONSE, prefs.getFftFreqRespColor());
+        setColor(ColorRole.CAL_OVERLAY,        prefs.getFftCalOverlayColor());
+        // Keep the SWT Canvas background in sync with the palette entry —
+        // base setColor() is a no-op when the RGB hasn't changed, so this
+        // is cheap to repeat per paint.
+        setBackground(color(ColorRole.BACKGROUND));
     }
 
     // =========================================================================
@@ -466,19 +388,18 @@ public final class FftView extends AbstractFreqDomainView {
         worker.setBuffer(b);
     }
 
-    /** Latest published analysis result.  {@code null} before the first
-     *  successful tick.  Used by the pane's Save-CSV / screenshot paths
-     *  and by the calibration dialog (via {@link #getLastVrms}). */
-    public FftAnalyzer.Result getLastResult() {
-        return worker.getLastResult();
-    }
-
-    /** Injects a snapshot result without running the analysis loop.
-     *  Used by the offscreen screenshot pane so it can render the same
-     *  spectrum the live pane is showing. */
-    public void setLastResult(FftAnalyzer.Result r) {
-        worker.setLastResult(r);
-    }
+    /** Latest published analysis result — a deep copy taken on the
+     *  worker thread inside {@code publishResult} before it crossed
+     *  the bus.  {@code null} before the first successful tick.
+     *  Mutating this snapshot is safe: the worker no longer holds a
+     *  reference, so paint code and the pane's Save-CSV / screenshot
+     *  paths can read or even mutate it without coordinating with the
+     *  analyser.  Lombok provides public {@code getLastResult} /
+     *  {@code setLastResult} accessors — used by the offscreen
+     *  screenshot pane to inject a snapshot without running the
+     *  analysis loop. */
+    @Getter @Setter
+    private FftAnalyzer.Result lastResult;
 
     /** Number of analyses completed since the last reset. */
     public int getCompletedAnalyses() {
@@ -541,17 +462,16 @@ public final class FftView extends AbstractFreqDomainView {
      *  10 dB below the top with the noise floor 20 dB below the
      *  bottom.  No-op when no analysis result is published yet. */
     private void autoSetup() {
-        FftAnalyzer.Result r = worker.getLastResult();
-        if (r == null) return;
+        if (lastResult == null) return;
         Preferences prefs = Preferences.instance();
         FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
 
         // ── Frequency: one decade either side of the fundamental
         // (×0.1 .. ×10), clamped to bin size / Nyquist.
-        double f0 = r.fundamentalHzRefined;
+        double f0 = lastResult.fundamentalHzRefined;
         if (Double.isFinite(f0) && f0 > 0) {
             double lo = Math.max(currentBinSize(), f0 / 10.0);
-            double hi = Math.min(r.sampleRate / 2.0,  f0 * 10.0);
+            double hi = Math.min(lastResult.sampleRate / 2.0,  f0 * 10.0);
             if (hi > lo) {
                 prefs.setFftFreqMinHz(lo);
                 prefs.setFftFreqMaxHz(hi);
@@ -562,22 +482,22 @@ public final class FftView extends AbstractFreqDomainView {
         // floor − 20 dB.  Translated to the active unit so the user's
         // view shows the spectrum sitting comfortably between the
         // strongest line and ~20 dB below the noise grass.
-        if (Double.isFinite(r.fundamentalDbFs) && Double.isFinite(r.avgNoiseFloorDbFs)) {
-            double topDbFs = r.fundamentalDbFs   + 10;
-            double botDbFs = r.avgNoiseFloorDbFs - 20;
-            double calRefDbV = Double.isNaN(r.fundRefDbV) ? 0
-                    : (r.fundRefDbV - r.fundamentalDbFs);
+        if (Double.isFinite(lastResult.fundamentalDbFs) && Double.isFinite(lastResult.avgNoiseFloorDbFs)) {
+            double topDbFs = lastResult.fundamentalDbFs   + 10;
+            double botDbFs = lastResult.avgNoiseFloorDbFs - 20;
+            double calRefDbV = Double.isNaN(lastResult.fundRefDbV) ? 0
+                    : (lastResult.fundRefDbV - lastResult.fundamentalDbFs);
             // The fundamental is rendered at the manual-override dBV
             // when the user supplied one, so the auto-setup ceiling
             // tracks that value (+10 dB headroom) instead of the
             // calibrated peak; the noise floor stays on the calibrated
             // anchor since non-fundamental bins aren't affected.
-            double topRefDbV = (Double.isFinite(r.fundamentalTrueDbV)
-                    && Double.isFinite(r.fundamentalDbFs))
-                    ? r.fundamentalTrueDbV - r.fundamentalDbFs
+            double topRefDbV = (Double.isFinite(lastResult.fundamentalTrueDbV)
+                    && Double.isFinite(lastResult.fundamentalDbFs))
+                    ? lastResult.fundamentalTrueDbV - lastResult.fundamentalDbFs
                     : calRefDbV;
-            double top = unit.convertFromDbFs(topDbFs, topRefDbV,  r.freqResolution);
-            double bot = unit.convertFromDbFs(botDbFs, calRefDbV, r.freqResolution);
+            double top = unit.convertFromDbFs(topDbFs, topRefDbV,  lastResult.freqResolution);
+            double bot = unit.convertFromDbFs(botDbFs, calRefDbV, lastResult.freqResolution);
             if (Double.isFinite(top) && Double.isFinite(bot) && top != bot) {
                 if (top < bot) { double s = top; top = bot; bot = s; }
                 prefs.setFftMagTop(top);
@@ -597,14 +517,13 @@ public final class FftView extends AbstractFreqDomainView {
      *  even when no analysis result is published yet (uses fallback
      *  values for the bottom). */
     private void maximize() {
-        FftAnalyzer.Result r = worker.getLastResult();
         Preferences prefs = Preferences.instance();
         FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
 
         // Frequency span: 0 (clamped to bin size) → Nyquist.  Fall back
         // to currentNyquist() when no result is available yet — that
         // helper itself defaults to 192 kHz / 2 = 96 kHz half-rate.
-        double nyquist = (r != null) ? r.sampleRate / 2.0 : currentNyquist();
+        double nyquist = (lastResult != null) ? lastResult.sampleRate / 2.0 : currentNyquist();
         double lo = Math.max(currentBinSize(), 0.0);
         if (nyquist > lo) {
             prefs.setFftFreqMinHz(lo);
@@ -615,15 +534,15 @@ public final class FftView extends AbstractFreqDomainView {
         // present; otherwise default to −150 dBFS bottom to give a
         // sensible empty-chart layout).
         double topDbFs = 20;
-        double botDbFs = (r != null && Double.isFinite(r.avgNoiseFloorDbFs))
-                ? r.avgNoiseFloorDbFs - 30
+        double botDbFs = (lastResult != null && Double.isFinite(lastResult.avgNoiseFloorDbFs))
+                ? lastResult.avgNoiseFloorDbFs - 30
                 : -150;
         double calRefDbV = 0;
         double binBw = 1.0;
-        if (r != null) {
-            calRefDbV = Double.isNaN(r.fundRefDbV) ? 0
-                    : (r.fundRefDbV - r.fundamentalDbFs);
-            binBw = r.freqResolution;
+        if (lastResult != null) {
+            calRefDbV = Double.isNaN(lastResult.fundRefDbV) ? 0
+                    : (lastResult.fundRefDbV - lastResult.fundamentalDbFs);
+            binBw = lastResult.freqResolution;
         }
         double top = unit.convertFromDbFs(topDbFs, calRefDbV, binBw);
         double bot = unit.convertFromDbFs(botDbFs, calRefDbV, binBw);
@@ -640,17 +559,15 @@ public final class FftView extends AbstractFreqDomainView {
     /** Latest fundamental frequency in Hz, or {@code NaN} if no analysis yet.
      *  Used by Auto-Setup to fit 1-2 periods into the view. */
     public double getLastFrequencyHz() {
-        FftAnalyzer.Result r = worker.getLastResult();
-        return (r == null) ? Double.NaN : r.fundamentalHzRefined;
+        return (lastResult == null) ? Double.NaN : lastResult.fundamentalHzRefined;
     }
 
     /** Latest fundamental Vrms (linear, calibrated by ADC fs voltage), or
      *  {@code null} when no analysis. */
     public Double getLastVrms() {
-        FftAnalyzer.Result r = worker.getLastResult();
-        if (r == null || Double.isNaN(r.fundamentalLinear)) return null;
+        if (lastResult == null || Double.isNaN(lastResult.fundamentalLinear)) return null;
         double fs = Preferences.instance().getAdcFsVoltageRms();
-        return (fs > 0) ? r.fundamentalLinear * fs : null;
+        return (fs > 0) ? lastResult.fundamentalLinear * fs : null;
     }
 
     @Override
@@ -685,28 +602,38 @@ public final class FftView extends AbstractFreqDomainView {
         boolean logFreq = prefs.isFftLogFreqAxis();
         if (logFreq && freqMin < 1) freqMin = 1;
 
-        FftAnalyzer.Result r = worker.getLastResult();
 
         // ---- Static-layer buffer: blit cached image when nothing
         // affecting the trace / grid / axes has changed.  Cache
         // lifecycle (rebuild / blit) lives in AbstractFreqDomainView;
         // we just hand it a fingerprint and the static-layer painter.
         final double fFreqMin = freqMin;
-        long fp = computeTraceFingerprint(r, area, unit, fFreqMin, freqMax,
+        long fp = computeTraceFingerprint(lastResult, area, unit, fFreqMin, freqMax,
                 magTop, magBot, logFreq);
         paintCachedStatic(gc, area, fp, bgc -> {
-            bgc.setBackground(background);
+            bgc.setBackground(color(ColorRole.BACKGROUND));
             bgc.fillRectangle(0, 0, area.width, area.height);
             bgc.setAntialias(SWT.ON);
             bgc.setTextAntialias(SWT.ON);
-            drawGrid(bgc, plot, fFreqMin, freqMax, magTop, magBot, logFreq, unit);
+            boolean magLog = FftAxisTicks.isMagLog(unit);
+            AxisSpec xSpec = (logFreq
+                    ? AxisSpec.log(fFreqMin, freqMax)
+                    : AxisSpec.linearNice(fFreqMin, freqMax, 10, 0))
+                    .withFormat(logFreq ? LabelFormat.FREQ : LabelFormat.FREQ_INT);
+            AxisSpec ySpec = (magLog
+                    ? AxisSpec.log(magBot, magTop)
+                    : AxisSpec.linearNice(magBot, magTop, 10, 5.0))
+                    .withFormat(magLog ? LabelFormat.VOLTS_SI : LabelFormat.DB)
+                    .withUnit(unit.getLabel());
+            drawGrid(bgc, plot, xSpec, ySpec, null,
+                     color(ColorRole.GRID), color(ColorRole.AXIS), color(ColorRole.TEXT), monoFont,
+                     4, 2, null);
             drawDistortionBands(bgc, plot, fFreqMin, freqMax, logFreq);
-            drawAxes(bgc, plot, fFreqMin, freqMax, magTop, magBot, logFreq, unit);
-            if (r != null) {
-                drawSpectrum(bgc, plot, r, unit, fFreqMin, freqMax, magTop, magBot, logFreq);
-                drawCalOverlay(bgc, plot, r, unit, fFreqMin, freqMax,
+            if (lastResult != null) {
+                drawSpectrum(bgc, plot, lastResult, unit, fFreqMin, freqMax, magTop, magBot, logFreq);
+                drawCalOverlay(bgc, plot, lastResult, unit, fFreqMin, freqMax,
                         magTop, magBot, logFreq);
-                drawHarmonicDots(bgc, plot, r, unit, fFreqMin, freqMax,
+                drawHarmonicDots(bgc, plot, lastResult, unit, fFreqMin, freqMax,
                         magTop, magBot, logFreq);
             }
         });
@@ -714,9 +641,9 @@ public final class FftView extends AbstractFreqDomainView {
         // ---- Dynamic overlay (drawn live on top of the cached image)
         gc.setAntialias(SWT.ON);
         gc.setTextAntialias(SWT.ON);
-        drawHeaderButtons(gc, r != null);
-        if (r != null && prefs.isFftDistortionTableVisible() && !tableExtracted) {
-            drawDistortionTable(gc, r, unit);
+        drawHeaderButtons(gc, lastResult != null);
+        if (lastResult != null && prefs.isFftDistortionTableVisible() && !tableExtracted) {
+            drawDistortionTable(gc, lastResult, unit);
         }
         // Crosshair: only when inside the plot area AND not over any
         // header button (so the crosshair / floating readout don't
@@ -724,8 +651,10 @@ public final class FftView extends AbstractFreqDomainView {
         if (crossX >= plot.x && crossX < plot.x + plot.width
                 && crossY >= plot.y && crossY < plot.y + plot.height
                 && !pointerOverButton(crossX, crossY)) {
-            drawCrosshair(gc, plot, r, unit, freqMin, freqMax, magTop, magBot, logFreq);
+            drawCrosshair(gc, plot, lastResult, unit, freqMin, freqMax, magTop, magBot, logFreq);
         }
+        log.warn("FFT result rendered in {} ms", (double)(System.nanoTime() - startRender) / 1_000_000);
+        startRender = System.nanoTime();
     }
 
     /** Tints the spectrum area outside the active distortion-HP /
@@ -739,7 +668,7 @@ public final class FftView extends AbstractFreqDomainView {
         boolean hpOn = prefs.isFftDistMinEnabled();
         boolean lpOn = prefs.isFftDistMaxEnabled();
         if (!hpOn && !lpOn) return;
-        gc.setBackground(dimColor);
+        gc.setBackground(color(ColorRole.DIM));
         if (hpOn) {
             double hp = prefs.getFftDistMinHz();
             if (hp > freqMin) {
@@ -779,16 +708,13 @@ public final class FftView extends AbstractFreqDomainView {
 
         // "Before-cal" dots — painted FIRST so the corrected (red)
         // dots sit on top.  Pulled from the SAME r snapshot used for
-        // the post-cal dots so both share one tick's harmonicHz values;
-        // calling worker.getPreCorrectionPeaks() instead would do a
-        // separate volatile lastResult read and could pair tick N+1's
-        // pre with tick N's post, shifting BLUE sub-bin off RED — a
-        // tiny X offset that's invisible at linear-freq zoom but
-        // visibly dances at log-freq zoom.
+        // the post-cal dots so both share one tick's harmonicHz
+        // values — the snapshot was deep-copied at publish time, so
+        // BLUE and RED can never end up from different ticks.
         double[][] before = (r != null) ? r.preCorrectionPeaks : null;
         if (before != null && before.length == 2
                 && before[0] != null && before[1] != null) {
-            gc.setBackground(beforeCalDotColor);
+            gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
             int n = Math.min(before[0].length, before[1].length);
             for (int i = 0; i < n; i++) {
                 double anchor = (i == 0) ? fundRefDbV : calRefDbV;
@@ -800,7 +726,7 @@ public final class FftView extends AbstractFreqDomainView {
         // Each plotDotAt gates on the dot's magnitude vs the visible
         // range and skips drawing when it falls outside — that hides
         // dots cleanly without snapping them to the chart edges.
-        gc.setBackground(harmonicDotColor);
+        gc.setBackground(color(ColorRole.HARMONIC_DOT));
         plotDotAt(gc, plot, r.fundamentalHzRefined, r.fundamentalDbFs,
                 unit, freqMin, freqMax, magTop, magBot, logFreq, fundRefDbV, binBw);
         if (r.harmonicHz != null && r.harmonicDbFs != null) {
@@ -815,8 +741,8 @@ public final class FftView extends AbstractFreqDomainView {
         // the full "H1 ⟨freq⟩" pair, harmonics get just "Hn".  Only
         // the harmonics within the calc-max-harmonic count are
         // labelled (matches the THD-tab's calcMaxHarmonic pref).
-        gc.setForeground(harmonicDotColor);
-        drawHarmonicLabel(gc, plot, "H1 " + FftFormat.formatFrequency(r.fundamentalHzRefined),
+        gc.setForeground(color(ColorRole.HARMONIC_DOT));
+        drawHarmonicLabel(gc, plot, "H1 " + formatFrequency(r.fundamentalHzRefined),
                 r.fundamentalHzRefined, r.fundamentalDbFs,
                 unit, freqMin, freqMax, magTop, magBot, logFreq, fundRefDbV, binBw);
         if (r.harmonicHz != null && r.harmonicDbFs != null) {
@@ -882,16 +808,15 @@ public final class FftView extends AbstractFreqDomainView {
                                          double magTop, double magBot,
                                          boolean logFreq) {
         Preferences prefs = Preferences.instance();
-        // Worker increments completedAnalyses immediately AFTER each
-        // lastResult = r assignment, so a ticking counter guarantees
-        // a fresh fingerprint here.  Using identityHashCode(r) ALONE
-        // turned out not to be reliable in long runs — under sustained
-        // GC churn the hash of consecutive Result objects could repeat
-        // for stretches lasting seconds-to-minutes, causing the static
-        // trace cache to blit a stale image even though the worker was
-        // producing fresh results (visible as a frozen chart with the
-        // averages counter / fill-% still ticking).  Add completedAnalyses
-        // so the fingerprint moves in lockstep with the analysis tick.
+        // completedAnalyses ticks once per published result, so adding
+        // it here guarantees a fresh fingerprint every analysis.  Using
+        // identityHashCode(r) ALONE turned out not to be reliable in
+        // long runs — under sustained GC churn the hash of consecutive
+        // Result objects could repeat for stretches lasting seconds-
+        // to-minutes, causing the static trace cache to blit a stale
+        // image even though the worker was producing fresh results
+        // (visible as a frozen chart with the averages counter / fill-%
+        // still ticking).
         long h = (r == null) ? 0 : System.identityHashCode(r);
         h = 31 * h + worker.getCompletedAnalyses();
         h = 31 * h + area.width;
@@ -916,10 +841,6 @@ public final class FftView extends AbstractFreqDomainView {
         h = 31 * h + prefs.getFftBeforeCalDotColor();
         h = 31 * h + prefs.getFftFreqRespColor();
         h = 31 * h + prefs.getFftCalOverlayColor();
-        // Pre-correction peaks identity — when calibration is loaded
-        // the snapshot moves between analyses, so the cache must
-        // invalidate alongside the corrected result.
-        h = 31 * h + System.identityHashCode(worker.getPreCorrectionPeaks());
         // Cal entry list contents — adding / removing a row would
         // otherwise leave the overlay curve stale until the next FFT
         // result swaps the result reference.
@@ -927,167 +848,6 @@ public final class FftView extends AbstractFreqDomainView {
             h = 31 * h + System.identityHashCode(e.getCalibration());
         }
         return h;
-    }
-
-    // =========================================================================
-    // Grid + axes
-    // =========================================================================
-
-    private void drawGrid(GC gc, Rectangle plot,
-                          double freqMin, double freqMax,
-                          double magTop, double magBot,
-                          boolean logFreq, FftMagnitudeUnit unit) {
-        gc.setForeground(gridColor);
-        gc.setLineWidth(1);
-        // Vertical grid — log axis uses ALL minor ticks (1..9 × 10ⁿ)
-        // so the user sees the classic REW-style log grid; linear axis
-        // uses the same nice-number ticks the labels use.
-        double[] vTicks = logFreq
-                ? FftAxisTicks.logFreqAll(freqMin, freqMax, false)
-                : FftAxisTicks.niceLinear(freqMin, freqMax, 10);
-        for (double f : vTicks) {
-            if (f <= freqMin || f >= freqMax) continue;
-            int x = freqToX(f, plot, freqMin, freqMax, logFreq);
-            gc.drawLine(x, plot.y, x, plot.y + plot.height);
-        }
-        // Horizontal grid — log units (V, V/√Hz) get decade ticks
-        // (1..9 × 10ⁿ); dB units get nice linear ticks.
-        double[] hTicks = FftAxisTicks.isMagLog(unit)
-                ? FftAxisTicks.logMagMajor(magBot, magTop, false)
-                : FftAxisTicks.niceLinear(magBot, magTop, 10);
-        for (double m : hTicks) {
-            if (m <= magBot || m >= magTop) continue;
-            int y = magToY(m, plot, magTop, magBot, unit);
-            gc.drawLine(plot.x, y, plot.x + plot.width, y);
-        }
-        // Plot frame.
-        gc.setForeground(axisColor);
-        gc.drawRectangle(plot.x, plot.y, plot.width, plot.height);
-    }
-
-    private void drawAxes(GC gc, Rectangle plot,
-                          double freqMin, double freqMax,
-                          double magTop, double magBot,
-                          boolean logFreq, FftMagnitudeUnit unit) {
-        gc.setFont(monoFont);
-        gc.setForeground(textColor);
-
-        // ── Left magnitude axis: labelled major ticks + short
-        // intermediate tick marks for the unlabelled positions.
-        // Mirrors the bottom frequency axis layout: major ticks get a
-        // 4-px outward mark and a numeric label; minor ticks (1..9 ×
-        // 10ⁿ on log, 5 sub-divisions per major step on linear) get a
-        // 2-px mark when there's at least 6 px of spacing between
-        // neighbours.  Labels drawn FIRST so the unit caption can
-        // overpaint them.  dB axes clamp the major step at minimum
-        // 5 dB so a tight zoom can't produce 1- or 2-dB majors —
-        // matches the "ticks no denser than 5 dB" rule.
-        double[] magTicks = FftAxisTicks.isMagLog(unit)
-                ? FftAxisTicks.logMagMajor(magBot, magTop, true)
-                : FftAxisTicks.niceLinearMinStep(magBot, magTop, 10, 5.0);
-        int axisX = plot.x;
-        gc.setForeground(axisColor);
-        for (double m : magTicks) {
-            if (m < magBot || m > magTop) continue;
-            int y = magToY(m, plot, magTop, magBot, unit);
-            gc.drawLine(axisX - 4, y, axisX, y);
-            String s = FftFormat.formatMagnitudeBare(m, unit);
-            gc.setForeground(textColor);
-            Point ext = gc.textExtent(s);
-            gc.drawText(s, plot.x - ext.x - 8, y - ext.y / 2, true);
-            gc.setForeground(axisColor);
-        }
-        // Minor tick marks on the magnitude axis.  Two gates:
-        //   • Tick mark only — 6-px minimum spacing from the previous
-        //     drawn minor (avoids crowding in dense log decades).
-        //   • Tick + label — additional check that the row also clears
-        //     the nearest LABELLED tick by one text-height, otherwise
-        //     the value text would visually overlap a major label.
-        double[] magMinor = FftAxisTicks.magMinor(magBot, magTop, unit);
-        int textH = gc.textExtent("M").y;
-        int prevMinorY = Integer.MIN_VALUE;
-        int prevLabelY = Integer.MIN_VALUE;
-        for (double m : magMinor) {
-            if (m < magBot || m > magTop) continue;
-            int y = magToY(m, plot, magTop, magBot, unit);
-            if (Math.abs(y - prevMinorY) < 6) continue;
-            gc.drawLine(axisX - 2, y, axisX, y);
-            prevMinorY = y;
-            // Add a label too when there's room — check distance to
-            // both the nearest major label (above + below) and the
-            // previous minor label.
-            boolean clearOfMajors = true;
-            for (double M : magTicks) {
-                if (M < magBot || M > magTop) continue;
-                int yM = magToY(M, plot, magTop, magBot, unit);
-                if (Math.abs(y - yM) < textH + 2) { clearOfMajors = false; break; }
-            }
-            if (clearOfMajors && Math.abs(y - prevLabelY) >= textH + 2) {
-                String s = FftFormat.formatMagnitudeBare(m, unit);
-                gc.setForeground(textColor);
-                Point ext = gc.textExtent(s);
-                gc.drawText(s, plot.x - ext.x - 8, y - ext.y / 2, true);
-                gc.setForeground(axisColor);
-                prevLabelY = y;
-            }
-        }
-        gc.setForeground(textColor);
-
-        // ── Unit caption (Z-order: drawn LAST so it sits ON TOP of
-        //    any axis label that happens to share its row).  Painted
-        //    onto a background-coloured rectangle so the overlapped
-        //    portion of the underlying tick label is hidden — the
-        //    caption is always legible, the tick slides "under" it
-        //    when the user scrolls into the top of the range.
-        String unitCap = unit.getLabel();
-        Point unitExt = gc.textExtent(unitCap);
-        int unitY = (MARGIN_TOP > unitExt.y)
-                ? plot.y - unitExt.y - 1
-                : plot.y + 2;
-        int unitX = plot.x - unitExt.x - 4;
-        gc.setBackground(background);
-        // Extend the over-paint rectangle all the way to the canvas's
-        // left edge so an axis label long enough to start at x=0 still
-        // gets hidden behind the unit caption when they share a row.
-        gc.fillRectangle(0, unitY - 1, unitX + unitExt.x + 2, unitExt.y + 2);
-        gc.drawText(unitCap, unitX, unitY, true);
-
-        // ── Bottom frequency axis: labelled major ticks + short
-        // intermediate tick marks for the unlabelled positions.  On
-        // the log axis the minor ticks (1..9 × 10ⁿ) get a 3-px
-        // outward mark whenever there's at least 6 px of space between
-        // them; on the linear axis we sub-divide each step into 5 and
-        // draw a 2-px outward mark for each sub-position.
-        double[] fLabels = FftAxisTicks.freqMajor(freqMin, freqMax, logFreq);
-        int axisY = plot.y + plot.height;
-        gc.setForeground(axisColor);
-        // Major tick marks + labels.  Right-edge label gets nudged
-        // inward so a centred-on-tick label that would otherwise hang
-        // past the plot's right side (now flush with the scrollbar)
-        // stays fully inside the chart.
-        int plotRight = plot.x + plot.width;
-        for (double f : fLabels) {
-            int x = freqToX(f, plot, freqMin, freqMax, logFreq);
-            gc.drawLine(x, axisY, x, axisY + 4);
-            String s = logFreq ? FftFormat.formatFrequency(f) : FftFormat.formatFrequencyInteger(f);
-            Point ext = gc.textExtent(s);
-            int textX = x - ext.x / 2;
-            if (textX + ext.x > plotRight) textX = plotRight - ext.x;
-            if (textX < plot.x)            textX = plot.x;
-            gc.drawText(s, textX, axisY + 4, true);
-        }
-        // Minor tick marks (no labels) — only emitted when neighbours
-        // are far enough apart that they wouldn't overlap the labelled
-        // ones visually.
-        double[] minor = FftAxisTicks.freqMinor(freqMin, freqMax, logFreq);
-        int prevMinorX = Integer.MIN_VALUE;
-        for (double f : minor) {
-            int x = freqToX(f, plot, freqMin, freqMax, logFreq);
-            if (x - prevMinorX < 6) continue;
-            gc.drawLine(x, axisY, x, axisY + 2);
-            prevMinorX = x;
-        }
-        gc.setForeground(textColor);
     }
 
     // =========================================================================
@@ -1114,7 +874,7 @@ public final class FftView extends AbstractFreqDomainView {
                               double magTop, double magBot,
                               boolean logFreq) {
         if (r.amplitudeDbFs == null) return;
-        gc.setForeground(spectrumColor);
+        gc.setForeground(color(ColorRole.SPECTRUM));
         gc.setLineWidth((int) Math.max(1, Math.round(Preferences.instance().getFftLineWidth())));
         double binBw   = r.freqResolution;
         double refDbV  = Double.isNaN(r.fundRefDbV) ? 0
@@ -1213,7 +973,7 @@ public final class FftView extends AbstractFreqDomainView {
                 : (r.fundRefDbV - r.fundamentalDbFs);
         double binBw = r.freqResolution;
 
-        gc.setForeground(calOverlayColor);
+        gc.setForeground(color(ColorRole.CAL_OVERLAY));
         gc.setLineWidth((int) Math.max(1, Math.round(Preferences.instance().getFftLineWidth())));
         ColumnBucketPainter painter = new ColumnBucketPainter(plot);
         int W = plot.width;
@@ -1256,10 +1016,10 @@ public final class FftView extends AbstractFreqDomainView {
         int x = MARGIN_LEFT + 4;
         // L / R always visible — toggle the active channel.
         gc.setFont(chanButtonFont);
-        drawChannelButton(gc, x, y, BTN_W, BTN_H, "L", isLeft, leftChanColor);
+        drawChannelButton(gc, x, y, BTN_W, BTN_H, "L", isLeft, color(ColorRole.LEFT_BTN_CHAN));
         setBounds(leftChanButtonBounds, x, y, BTN_W, BTN_H);
         x += BTN_W + BTN_GAP_SMALL;
-        drawChannelButton(gc, x, y, BTN_W, BTN_H, "R", isRight, rightChanColor);
+        drawChannelButton(gc, x, y, BTN_W, BTN_H, "R", isRight, color(ColorRole.RIGHT_BTN_CHAN));
         setBounds(rightChanButtonBounds, x, y, BTN_W, BTN_H);
         x += BTN_W + BTN_GAP_LARGE;
         gc.setFont(monoFont);
@@ -1316,11 +1076,11 @@ public final class FftView extends AbstractFreqDomainView {
         if (selected) {
             gc.setBackground(tint);
             gc.fillRoundRectangle(x, y, w, h, 4, 4);
-            gc.setForeground(textColor);
+            gc.setForeground(color(ColorRole.TEXT));
         } else {
-            gc.setForeground(buttonFrameColor);
+            gc.setForeground(color(ColorRole.BUTTON_FRAME));
             gc.drawRoundRectangle(x, y, w, h, 4, 4);
-            gc.setForeground(textColor);
+            gc.setForeground(color(ColorRole.TEXT));
         }
         Point ext = gc.textExtent(label);
         gc.drawText(label, x + (w - ext.x) / 2, y + (h - ext.y) / 2, true);
@@ -1329,11 +1089,11 @@ public final class FftView extends AbstractFreqDomainView {
     private void drawIconToggleButton(GC gc, int x, int y, int w, int h,
                                       Image lightIcon, Image darkIcon, boolean on) {
         if (on) {
-            gc.setBackground(buttonFrameColor);
+            gc.setBackground(color(ColorRole.BUTTON_FRAME));
             gc.fillRoundRectangle(x, y, w, h, 4, 4);
             drawCenteredIcon(gc, (darkIcon != null) ? darkIcon : lightIcon, x, y, w, h);
         } else {
-            gc.setForeground(buttonFrameColor);
+            gc.setForeground(color(ColorRole.BUTTON_FRAME));
             gc.drawRoundRectangle(x, y, w, h, 4, 4);
             drawCenteredIcon(gc, lightIcon, x, y, w, h);
         }
@@ -1370,7 +1130,7 @@ public final class FftView extends AbstractFreqDomainView {
     private void drawDistortionTable(GC gc, FftAnalyzer.Result r, FftMagnitudeUnit unit,
                                      int xLeft, int yTop, boolean includeClockRow) {
         gc.setFont(monoFont);
-        gc.setForeground(textColor);
+        gc.setForeground(color(ColorRole.TEXT));
         int y     = yTop;
         int lineH = gc.textExtent("M").y + 1;
         int charW = gc.textExtent("M").x;
@@ -1503,7 +1263,7 @@ public final class FftView extends AbstractFreqDomainView {
         }
         // Suppress unused-variable warning for the metric-row right
         // value width (kept for symmetry / future right-alignment).
-        if (mValR < 0) gc.setForeground(textColor);
+        if (mValR < 0) gc.setForeground(color(ColorRole.TEXT));
     }
 
     /** Two key/value pairs at independent key-column widths.  The
@@ -1570,7 +1330,7 @@ public final class FftView extends AbstractFreqDomainView {
                                double freqMin, double freqMax,
                                double magTop, double magBot,
                                boolean logFreq) {
-        gc.setForeground(crosshairColor);
+        gc.setForeground(color(ColorRole.CROSSHAIR));
         gc.setLineStyle(SWT.LINE_DOT);
         gc.drawLine(plot.x, crossY, plot.x + plot.width,  crossY);
         gc.drawLine(crossX, plot.y, crossX,               plot.y + plot.height);
@@ -1581,7 +1341,7 @@ public final class FftView extends AbstractFreqDomainView {
         // is unrelated to the actual signal level at that frequency).
         double f = xToFreq(crossX, plot, freqMin, freqMax, logFreq);
         StringBuilder sb = new StringBuilder();
-        sb.append("f = ").append(FftFormat.formatFrequencyFine(f));
+        sb.append("f = ").append(formatFrequencyFine(f));
         if (r != null && r.amplitudeDbFs != null && r.freqResolution > 0) {
             int bin = (int) Math.round(f / r.freqResolution);
             if (bin >= 0 && bin < r.amplitudeDbFs.length) {
@@ -1598,11 +1358,11 @@ public final class FftView extends AbstractFreqDomainView {
                     if (bin == fb) refDbV = r.fundamentalTrueDbV - r.fundamentalDbFs;
                 }
                 double v = unit.convertFromDbFs(r.amplitudeDbFs[bin], refDbV, r.freqResolution);
-                sb.append('\n').append("|m| = ").append(FftFormat.formatMagnitude(v, unit));
+                sb.append('\n').append("|m| = ").append(formatMagnitudeWithUnit(v, unit));
             }
         }
         drawReadoutBox(gc, sb.toString(), crossX + 12, crossY + 12, plot,
-                monoFont, overlayBgColor, buttonFrameColor, textColor);
+                monoFont, color(ColorRole.OVERLAY_BG), color(ColorRole.BUTTON_FRAME), color(ColorRole.TEXT));
     }
 
     // =========================================================================
@@ -1646,7 +1406,7 @@ public final class FftView extends AbstractFreqDomainView {
         s.setText(I18n.t("fft.external.window.title"));
         s.setLayout(new FillLayout());
         Canvas c = new Canvas(s, SWT.DOUBLE_BUFFERED);
-        c.setBackground(background);
+        c.setBackground(color(ColorRole.BACKGROUND));
         c.addPaintListener(this::paintExternalDistortion);
         externalShell  = s;
         externalCanvas = c;
@@ -1713,8 +1473,7 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     private void paintExternalDistortion(PaintEvent ev) {
-        FftAnalyzer.Result r = worker.getLastResult();
-        if (r == null) return;
+        if (lastResult == null) return;
         GC gc = ev.gc;
         gc.setAntialias(SWT.ON);
         gc.setTextAntialias(SWT.ON);
@@ -1723,7 +1482,7 @@ public final class FftView extends AbstractFreqDomainView {
         // don't touch the window border.  No reset button here — the
         // button stays in the main FFT view.
         FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(Preferences.instance().getFftMagUnit());
-        drawDistortionTable(gc, r, unit, EXT_LEFT_PAD, EXT_LEFT_PAD, true);
+        drawDistortionTable(gc, lastResult, unit, EXT_LEFT_PAD, EXT_LEFT_PAD, true);
     }
 
     // =========================================================================
@@ -1946,8 +1705,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  FFT length and sample rate.  Falls back to a wide guess when
      *  no result is yet available. */
     private double currentBinSize() {
-        FftAnalyzer.Result r = worker.getLastResult();
-        if (r != null && r.fftSize > 0) return (double) r.sampleRate / r.fftSize;
+        if (lastResult != null && lastResult.fftSize > 0) return (double) lastResult.sampleRate / lastResult.fftSize;
         int sr = 384_000;
         int fftLen = Math.max(8, Preferences.instance().getFftLength());
         return (double) sr / fftLen;
@@ -1955,8 +1713,7 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** Nyquist upper bound on the visible freq range (Hz). */
     private double currentNyquist() {
-        FftAnalyzer.Result r = worker.getLastResult();
-        if (r != null) return r.sampleRate / 2.0;
+        if (lastResult != null) return lastResult.sampleRate / 2.0;
         return 192_000;
     }
 

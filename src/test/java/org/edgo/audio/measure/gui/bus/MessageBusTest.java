@@ -26,7 +26,7 @@ class MessageBusTest {
     @Test
     void notification_subscribePublishUnsubscribe() {
         AtomicInteger calls = new AtomicInteger();
-        Runnable handler = calls::incrementAndGet;
+        Consumer<Void> handler = ignored -> calls.incrementAndGet();
         String ev = "test.notification.basic";
 
         bus.subscribe(ev, handler);
@@ -54,21 +54,7 @@ class MessageBusTest {
         assertEquals("hello", seen.get(), "unsubscribed payload handler must not fire");
     }
 
-    @Test
-    void payload_publishToNotificationHandlerDeliversNull() {
-        // Mixed-shape subscriber: notification handler under the same name.
-        // dispatch() calls run() on a Runnable, accept(null) on a Consumer.
-        AtomicInteger notifCalls = new AtomicInteger();
-        Runnable notif = notifCalls::incrementAndGet;
-        String ev = "test.mixed.shape";
-
-        bus.subscribe(ev, notif);
-        bus.publish(ev, "ignored-by-runnable");
-        assertEquals(1, notifCalls.get(), "Runnable subscribers fire on payload publishes too");
-        bus.unsubscribe(ev, notif);
-    }
-
-    @Test
+@Test
     void responder_replacementIsExclusive() {
         String ev = "test.responder.replace";
 
@@ -104,8 +90,8 @@ class MessageBusTest {
         // event name MUST still receive the publish.
         String ev = "test.exception.isolation";
         AtomicInteger goodCalls = new AtomicInteger();
-        Runnable bad  = () -> { throw new RuntimeException("intentional"); };
-        Runnable good = goodCalls::incrementAndGet;
+        Consumer<Void> bad  = ignored -> { throw new RuntimeException("intentional"); };
+        Consumer<Void> good = ignored -> goodCalls.incrementAndGet();
 
         bus.subscribe(ev, bad);
         bus.subscribe(ev, good);

@@ -12,7 +12,6 @@ import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
 import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.FreqRespCalibration;
@@ -27,9 +26,9 @@ import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
+import java.util.Map;
+import java.util.function.Consumer;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -85,44 +84,11 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private static final int HEADER_BTN_INSET = 23;
 
     // --- Colours -------------------------------------------------------------
-    // User-configurable slots (background + signal + phase + reference)
-    // are re-allocated whenever the matching Preferences int changes;
-    // see {@link #syncColors()}.  The cached "currentXxxRgb" ints let
-    // a paint-time poll detect a change without re-creating the SWT
-    // Color on every redraw.
-    private Color background;
-    private Color signalColor;
-    private Color phaseTraceColor;
-    private Color riaaTraceColor;
-    private int  currentBgRgb        = -1;
-    private int  currentSignalRgb    = -1;
-    private int  currentPhaseRgb     = -1;
-    private int  currentReferenceRgb = -1;
-    // The L and R trace colours are now the same single signal colour
-    // — kept as separate fields only so existing call sites keep
-    // reading via familiar names.  Both refer to {@link #signalColor}.
-    private Color leftTraceColor;
-    private Color rightTraceColor;
-    private final Color gridColor;
-    private final Color axisColor;
-    private final Color textColor;
-    /** Fixed tint of the L / R header buttons when their channel is the
-     *  active one.  Borrowed from the Scope pane's cyan / yellow palette
-     *  so the button identifies the channel visually — independent of
-     *  the user-configurable trace colour, which is shared between L and
-     *  R now that they're a radio pair. */
-    private final Color btnLTint;
-    private final Color btnRTint;
-    private final Color compareTraceColor;
-    /** Pair of dark greys used by the blinking compare-banner and source-path
-     *  overlays.  Mirrors the scope's near-white/pale-grey blink, but darker
-     *  per spec so it reads cleanly against the white plot background. */
-    private final Color blinkLitColor;
-    private final Color blinkDimColor;
-    private final Color crosshairColor;
-    private final Color overlayBgColor;
-    private final Color buttonFrameColor;
-    private final Color buttonActiveColor;
+    // All FreqResp palette colours live in the AbstractMeasurementView
+    // palette — accessed via color(ColorRole.X).  syncColors() pushes
+    // the prefs-driven entries (background + L/R trace + phase + RIAA)
+    // through setColor() on every paint; the base short-circuits when
+    // the RGB hasn't changed, so there's no allocation cost per redraw.
 
     // --- Fonts ---------------------------------------------------------------
     private Font axisFont;
@@ -142,9 +108,9 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private FreqRespResult rightResult;
     private String         sourceFilePath;
     /** Bus-handler reference kept so we can unsubscribe symmetrically. */
-    private Runnable       calibrationChangedListener;
+    private Consumer<Void> calibrationChangedListener;
     /** Bus-handler reference kept so we can unsubscribe symmetrically. */
-    private Runnable       compareParamsChangedListener;
+    private Consumer<Void> compareParamsChangedListener;
 
     private int    mouseX = -1;
     private int    mouseY = -1;
@@ -228,31 +194,18 @@ public final class FreqRespView extends AbstractFreqDomainView {
     // onPaint; the base owns disposal via disposeTraceBuffer().
 
     public FreqRespView(Composite parent) {
-        super(parent, SWT.NO_BACKGROUND | SWT.DOUBLE_BUFFERED);
-        Display d = getDisplay();
-
-        gridColor         = new Color(d, 0xD0, 0xD0, 0xD0);
-        axisColor         = new Color(d, 0x60, 0x60, 0x60);
-        textColor         = new Color(d, 0x20, 0x20, 0x20);
-        // Fixed scope-style channel tints — used ONLY for the L / R
-        // header-button background when the channel is active.  Not
-        // user-configurable: they identify the channel, not the trace.
-        btnLTint          = new Color(d, 0x28, 0xDC, 0xF0);  // cyan
-        btnRTint          = new Color(d, 0xF0, 0xDC, 0x28);  // yellow
-        // background / signal / phase / RIAA reference are user-
-        // configurable via the Preferences dialog → allocated lazily
-        // by syncColors() so a live edit takes effect on next paint
-        // without leaking SWT Color resources.
-        syncColors();
-        compareTraceColor = new Color(d, 0x1B, 0x5E, 0x20);  // dark green
-        // Blink pair for source-path + compare-banner overlays.  Almost
-        // black to stand out against the white plot background.
-        blinkLitColor     = new Color(d, 0x00, 0x00, 0x00);
-        blinkDimColor     = new Color(d, 0x50, 0x50, 0x50);
-        crosshairColor    = new Color(d, 0x80, 0x80, 0x80);
-        overlayBgColor    = new Color(d, 0xFF, 0xFF, 0xE0);  // pale yellow tooltip
-        buttonFrameColor  = new Color(d, 0xA0, 0xA0, 0xA0);
-        buttonActiveColor = new Color(d, 0xC0, 0xD8, 0xF0);  // light blue-grey
+        // Push prefs-driven entries (background, L/R trace, phase, RIAA)
+        // through the super override map so the base allocates each
+        // colour exactly once.  Common entries (grid, axis, text,
+        // crosshair, overlay_bg, button_frame, blink lit/dim, L/R btn
+        // chan, compare_trace, button_active) use the AbstractMeasurementView
+        // light-theme defaults.
+        super(parent, SWT.NO_BACKGROUND | SWT.DOUBLE_BUFFERED, Map.of(
+                ColorRole.BACKGROUND,  Preferences.instance().getFreqRespBackgroundColor(),
+                ColorRole.LEFT_TRACE,  Preferences.instance().getFreqRespSignalColor(),
+                ColorRole.RIGHT_TRACE, Preferences.instance().getFreqRespSignalColor(),
+                ColorRole.PHASE_TRACE, Preferences.instance().getFreqRespPhaseColor(),
+                ColorRole.RIAA_TRACE,  Preferences.instance().getFreqRespReferenceColor()));
 
         allocateFonts();
 
@@ -308,13 +261,13 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // Re-trace whenever the active calibration changes (load, clear, or
         // wizard Apply).  The view divides the raw result by the new
         // calibration to keep what's painted in sync with the store.
-        calibrationChangedListener = this::onCalibrationChanged;
+        calibrationChangedListener = ignored -> onCalibrationChanged();
         MessageBus.instance().subscribe(Events.FREQRESP_CALIBRATION_CHANGED,
                 calibrationChangedListener);
         // Compare-params changed (e.g. the smoothing-window pref): refresh
         // the anchor + min/max table from the new smoothed array, then
         // redraw.  Does NOT alter the view's zoom — see recomputeCompareAnchor.
-        compareParamsChangedListener = this::onCompareParamsChanged;
+        compareParamsChangedListener = ignored -> onCompareParamsChanged();
         MessageBus.instance().subscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED,
                 compareParamsChangedListener);
 
@@ -327,26 +280,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 MessageBus.instance().unsubscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED,
                         compareParamsChangedListener);
             }
-            // User-configurable slots are reallocated by syncColors() and
-            // disposed individually when they change; clean up the
-            // current live instance here.  leftTraceColor / rightTraceColor
-            // both alias signalColor, so a single dispose covers them.
-            if (background     != null) background.dispose();
-            if (signalColor    != null) signalColor.dispose();
-            if (phaseTraceColor != null) phaseTraceColor.dispose();
-            if (riaaTraceColor  != null) riaaTraceColor.dispose();
-            gridColor.dispose();
-            axisColor.dispose();
-            textColor.dispose();
-            btnLTint.dispose();
-            btnRTint.dispose();
-            compareTraceColor.dispose();
-            blinkLitColor.dispose();
-            blinkDimColor.dispose();
-            crosshairColor.dispose();
-            overlayBgColor.dispose();
-            buttonFrameColor.dispose();
-            buttonActiveColor.dispose();
+            disposePalette();
             if (axisFont    != null && !axisFont.isDisposed())    axisFont.dispose();
             if (readoutFont != null && !readoutFont.isDisposed()) readoutFont.dispose();
             if (phaseIcon     != null && !phaseIcon.isDisposed())     phaseIcon.dispose();
@@ -369,47 +303,17 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  from {@link #onPaint} so an OK from the Preferences dialog
      *  takes effect on the next redraw without an explicit subscription.
      *
-     *  <p>The L and R trace fields both point at {@link #signalColor};
+     *  <p>The L and R trace fields both point at {@link #color(ColorRole.LEFT_TRACE)};
      *  with the radio-style L/R toggle, only one channel is ever shown
      *  at a time so a single user-chosen colour covers both. */
     private void syncColors() {
-        Display d = getDisplay();
         Preferences prefs = Preferences.instance();
-        int bg  = prefs.getFreqRespBackgroundColor();
         int sig = prefs.getFreqRespSignalColor();
-        int ph  = prefs.getFreqRespPhaseColor();
-        int ref = prefs.getFreqRespReferenceColor();
-        if (bg != currentBgRgb) {
-            if (background != null) background.dispose();
-            background = newColor(d, bg);
-            currentBgRgb = bg;
-        }
-        if (sig != currentSignalRgb) {
-            if (signalColor != null) signalColor.dispose();
-            signalColor = newColor(d, sig);
-            currentSignalRgb = sig;
-            leftTraceColor  = signalColor;
-            rightTraceColor = signalColor;
-        }
-        if (ph != currentPhaseRgb) {
-            if (phaseTraceColor != null) phaseTraceColor.dispose();
-            phaseTraceColor = newColor(d, ph);
-            currentPhaseRgb = ph;
-        }
-        if (ref != currentReferenceRgb) {
-            if (riaaTraceColor != null) riaaTraceColor.dispose();
-            riaaTraceColor = newColor(d, ref);
-            currentReferenceRgb = ref;
-        }
-    }
-
-    /** Unpacks a {@code 0xRRGGBB} int into a fresh SWT {@link Color}.
-     *  Caller owns disposal. */
-    private Color newColor(Display d, int rgbInt) {
-        return new Color(d,
-                (rgbInt >> 16) & 0xFF,
-                (rgbInt >>  8) & 0xFF,
-                 rgbInt        & 0xFF);
+        setColor(ColorRole.BACKGROUND,  prefs.getFreqRespBackgroundColor());
+        setColor(ColorRole.LEFT_TRACE,  sig);
+        setColor(ColorRole.RIGHT_TRACE, sig);
+        setColor(ColorRole.PHASE_TRACE, prefs.getFreqRespPhaseColor());
+        setColor(ColorRole.RIAA_TRACE,  prefs.getFreqRespReferenceColor());
     }
 
     // -------------------------------------------------------------------------
@@ -778,12 +682,23 @@ public final class FreqRespView extends AbstractFreqDomainView {
         long fp = computeFingerprint(area, prefs, phaseVisible,
                 fFreqMin, freqMax, magTop, magBot);
         paintCachedStatic(gc, area, fp, bgc -> {
-            bgc.setBackground(background);
+            bgc.setBackground(color(ColorRole.BACKGROUND));
             bgc.fillRectangle(0, 0, area.width, area.height);
             bgc.setAntialias(SWT.ON);
             bgc.setTextAntialias(SWT.ON);
-            drawGrid(bgc, plot, fFreqMin, freqMax, magTop, magBot);
-            drawAxes(bgc, plot, fFreqMin, freqMax, magTop, magBot, phaseVisible);
+            AxisSpec xSpec = AxisSpec.log(fFreqMin, freqMax)
+                    .withFormat(LabelFormat.FREQ);
+            AxisSpec yLeftSpec = AxisSpec.linearNice(magBot, magTop, 10, 5.0)
+                    .withFormat(LabelFormat.DB)
+                    .withUnit("dB");
+            AxisSpec yRightSpec = phaseVisible
+                    ? AxisSpec.linear(-180, 180, 8)
+                            .withFormat(LabelFormat.PHASE_DEG)
+                            .withUnit("φ")
+                    : null;
+            drawGrid(bgc, plot, xSpec, yLeftSpec, yRightSpec,
+                     color(ColorRole.GRID), color(ColorRole.AXIS), color(ColorRole.TEXT), axisFont,
+                     4, 2, null);
             if (prefs.isFreqRespCompareMode() && hasAnyResult() && prefs.isFreqRespShowRiaa()) {
                 drawCompareTrace(bgc, plot, fFreqMin, freqMax, magTop, magBot, prefs);
             } else {
@@ -854,7 +769,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private void drawRiaaOverlay(GC gc, Rectangle plot, double freqMin, double freqMax,
                                  double magTop, double magBot, Preferences prefs) {
         double anchorDb = riaaAnchorDb(prefs);
-        gc.setForeground(riaaTraceColor);
+        gc.setForeground(color(ColorRole.RIAA_TRACE));
         gc.setLineStyle(SWT.LINE_DASH);
         gc.setLineWidth(2);
         int prevX = -1, prevY = -1;
@@ -927,7 +842,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         CompareDiff diff = getCompareDiff(src, reverse, iec);
         double[] smoothed = diff.smoothed;
 
-        gc.setForeground(compareTraceColor);
+        gc.setForeground(color(ColorRole.COMPARE_TRACE));
         gc.setLineWidth(2);
         int prevX = -1, prevY = -1;
         gc.setClipping(plot);
@@ -1137,7 +1052,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private void drawCompareMeasurementTable(GC gc) {
         if (Double.isNaN(compareSmoothedMin) || Double.isNaN(compareSmoothedMax)) return;
         gc.setFont(readoutFont);
-        gc.setForeground(textColor);
+        gc.setForeground(color(ColorRole.TEXT));
         int x     = MARGIN_LEFT + 6;
         int y     = BTN_TOP + BTN_H + 6;
         int lineH = gc.getFontMetrics().getHeight();
@@ -1163,7 +1078,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         int x = plot.x + plot.width - ext.x - 6;
         int y = plot.y + 6;
         boolean lit = blinkLit();
-        gc.setForeground(lit ? blinkLitColor : blinkDimColor);
+        gc.setForeground(lit ? color(ColorRole.BLINK_LIT) : color(ColorRole.BLINK_DIM));
         gc.drawText(text, x, y, true);
         scheduleBlinkRedraw();
     }
@@ -1189,161 +1104,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
     }
     private boolean blinkRedrawScheduled;
 
-    private void drawGrid(GC gc, Rectangle plot, double freqMin, double freqMax,
-                          double magTop, double magBot) {
-        gc.setForeground(gridColor);
-        gc.setLineWidth(1);
-
-        for (double f : FreqRespAxisTicks.freqMinor(freqMin, freqMax)) {
-            int x = freqToX(f, plot, freqMin, freqMax, true);
-            gc.drawLine(x, plot.y, x, plot.y + plot.height);
-        }
-        for (double f : FreqRespAxisTicks.freqMajor(freqMin, freqMax)) {
-            int x = freqToX(f, plot, freqMin, freqMax, true);
-            gc.drawLine(x, plot.y, x, plot.y + plot.height);
-        }
-
-        for (double db : FreqRespAxisTicks.magMinor(magBot, magTop)) {
-            int y = dbToY(db, plot, magTop, magBot);
-            gc.drawLine(plot.x, y, plot.x + plot.width, y);
-        }
-        for (double db : FreqRespAxisTicks.magMajor(magBot, magTop)) {
-            int y = dbToY(db, plot, magTop, magBot);
-            gc.drawLine(plot.x, y, plot.x + plot.width, y);
-        }
-    }
-
-    private void drawAxes(GC gc, Rectangle plot, double freqMin, double freqMax,
-                          double magTop, double magBot, boolean phaseVisible) {
-        gc.setForeground(axisColor);
-        gc.setLineWidth(1);
-        gc.setFont(axisFont);
-
-        gc.drawRectangle(plot.x, plot.y, plot.width, plot.height);
-
-        // ── Bottom frequency axis: labelled major ticks + a denser pass
-        // that opportunistically labels minor positions when there's
-        // room.  Mirrors FftView's "minor tick marks" idea but extends
-        // it with labels so the user sees more numbers on the wide
-        // log axis.
-        int axisY    = plot.y + plot.height;
-        int plotLeft = plot.x;
-        int plotRight = plot.x + plot.width;
-        // Step 1: majors — always labelled and tick-marked.
-        List<int[]> labelledBands = new ArrayList<>(); // [xStart, xEnd] of placed labels
-        for (double f : FreqRespAxisTicks.freqMajor(freqMin, freqMax)) {
-            int x = freqToX(f, plot, freqMin, freqMax, true);
-            gc.setForeground(axisColor);
-            gc.drawLine(x, axisY, x, axisY + 4);
-            String label = FreqRespFormat.formatFrequency(f);
-            Point ext = gc.textExtent(label);
-            int lx = Math.max(plotLeft, Math.min(plotRight - ext.x, x - ext.x / 2));
-            gc.setForeground(textColor);
-            gc.drawText(label, lx, axisY + 6, true);
-            labelledBands.add(new int[] { lx - 4, lx + ext.x + 4 });
-        }
-        // Step 2: minors — short tick mark + label IF the label fits
-        // without overlapping any already-placed major-band.  Skipped
-        // when adjacent minors crowd (< 6 px apart).
-        gc.setForeground(axisColor);
-        // NOTE: must NOT initialise prevMinorX to Integer.MIN_VALUE —
-        // the (x − prevMinorX) subtraction would overflow into a
-        // negative int and the < 6 guard would skip every minor.  Use
-        // a "first iteration" flag instead.
-        int prevMinorX = 0;
-        boolean firstMinor = true;
-        for (double f : FreqRespAxisTicks.freqMinor(freqMin, freqMax)) {
-            int x = freqToX(f, plot, freqMin, freqMax, true);
-            if (!firstMinor && x - prevMinorX < 6) continue;
-            firstMinor = false;
-            gc.drawLine(x, axisY, x, axisY + 2);
-            prevMinorX = x;
-            String label = FreqRespFormat.formatFrequency(f);
-            Point ext = gc.textExtent(label);
-            int lx = x - ext.x / 2;
-            if (lx < plotLeft || lx + ext.x > plotRight) continue;
-            boolean clear = true;
-            for (int[] band : labelledBands) {
-                if (lx < band[1] && lx + ext.x > band[0]) { clear = false; break; }
-            }
-            if (!clear) continue;
-            gc.setForeground(textColor);
-            gc.drawText(label, lx, axisY + 6, true);
-            gc.setForeground(axisColor);
-            labelledBands.add(new int[] { lx - 4, lx + ext.x + 4 });
-        }
-
-        // ── dB axis labels.  Decimal count is derived from the
-        // major-tick step so every label — including 0 — has the same
-        // precision.  Minimum 3 decimals so a 0.2-dB step renders as
-        // "0.200 / 0.000 / -0.200" instead of asymmetric trailing zeros
-        // on zero; a finer step (e.g. 0.0001) adds more decimals
-        // automatically.
-        double[] majors = FreqRespAxisTicks.magMajor(magBot, magTop);
-        int magDecimals = dbAxisDecimals(majors);
-        String dbFmt = "%." + magDecimals + "f";
-        for (double db : majors) {
-            int y = dbToY(db, plot, magTop, magBot);
-            gc.setForeground(axisColor);
-            gc.drawLine(plot.x - 4, y, plot.x, y);
-            String label = Double.isFinite(db)
-                    ? String.format(Locale.ROOT, dbFmt, db)
-                    : "—";
-            Point ext = gc.textExtent(label);
-            gc.setForeground(textColor);
-            gc.drawText(label, plot.x - 6 - ext.x, y - ext.y / 2, true);
-        }
-
-        // ── dB unit overlay.  White rectangle from the view's left edge
-        // (x=0) all the way to plot.x so any 3-decimal axis label that
-        // happens to overlap the unit row is hidden underneath; the
-        // "dB" text sits on top of the strip, right-aligned to the
-        // chart edge.  Mirrors FftView's unit-overlay technique.
-        String unitText = "dB";
-        Point unitExt = gc.textExtent(unitText);
-        int unitY = plot.y - unitExt.y - 1;
-        if (unitY < 0) unitY = plot.y + 2;
-        int unitX = plot.x - unitExt.x - 4;
-        gc.setBackground(background);
-        gc.fillRectangle(0, unitY - 1, plot.x, unitExt.y + 2);
-        gc.setForeground(textColor);
-        gc.drawText(unitText, unitX, unitY, true);
-
-        if (phaseVisible) {
-            int axisX = plot.x + plot.width;
-            for (double deg : FreqRespAxisTicks.phaseMajor()) {
-                int y = phaseToY(deg, plot);
-                gc.setForeground(axisColor);
-                gc.drawLine(axisX, y, axisX + 4, y);
-                String label = String.format("%d°", (int) Math.round(deg));
-                gc.setForeground(textColor);
-                gc.drawText(label, axisX + 6, y - gc.textExtent(label).y / 2, true);
-            }
-            gc.setForeground(textColor);
-            gc.drawText("φ", axisX + 24, plot.y - 14, true);
-        }
-    }
-
-    /** Returns the number of decimal places to use for every dB-axis
-     *  label so zero matches the precision of the surrounding non-zero
-     *  ticks.  The count is {@code max(3, ceil(-log10(step)))} where
-     *  {@code step} is the smallest non-zero gap between successive
-     *  major ticks — so a 0.2 dB step gives 3 decimals (0.200 / 0.000
-     *  / -0.200), a 0.002 dB step gives 3 decimals, and a 0.0001 dB
-     *  step gives 4 decimals.  The 3-decimal floor keeps the axis from
-     *  rendering "0.2 / 0.0 / -0.2" with asymmetric trailing zeros on
-     *  zero (the original complaint). */
-    private int dbAxisDecimals(double[] majors) {
-        double step = 0.0;
-        for (int i = 1; i < majors.length; i++) {
-            double gap = Math.abs(majors[i] - majors[i - 1]);
-            if (gap > 0 && (step == 0.0 || gap < step)) step = gap;
-        }
-        if (step <= 0.0) return 3;
-        int natural = (int) Math.ceil(-Math.log10(step));
-        return Math.max(3, Math.max(0, natural));
-    }
-
     private void drawTraces(GC gc, Rectangle plot, double freqMin, double freqMax,
                             double magTop, double magBot) {
         Preferences prefs = Preferences.instance();
@@ -1351,18 +1111,18 @@ public final class FreqRespView extends AbstractFreqDomainView {
 
         if (prefs.isFreqRespLeftVisible() && leftResult != null) {
             paintTrace(gc, leftResult, plot, freqMin, freqMax, magTop, magBot,
-                    leftTraceColor);
+                    color(ColorRole.LEFT_TRACE));
         }
         if (prefs.isFreqRespRightVisible() && rightResult != null) {
             paintTrace(gc, rightResult, plot, freqMin, freqMax, magTop, magBot,
-                    rightTraceColor);
+                    color(ColorRole.RIGHT_TRACE));
         }
         if (prefs.isFreqRespPhaseVisible()) {
             if (prefs.isFreqRespLeftVisible() && leftResult != null) {
-                paintPhase(gc, leftResult, plot, freqMin, freqMax, phaseTraceColor);
+                paintPhase(gc, leftResult, plot, freqMin, freqMax, color(ColorRole.PHASE_TRACE));
             }
             if (prefs.isFreqRespRightVisible() && rightResult != null) {
-                paintPhase(gc, rightResult, plot, freqMin, freqMax, phaseTraceColor);
+                paintPhase(gc, rightResult, plot, freqMin, freqMax, color(ColorRole.PHASE_TRACE));
             }
         }
     }
@@ -1430,7 +1190,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         }
         Point ext = gc.textExtent(label);
         boolean lit = blinkLit();
-        gc.setForeground(lit ? blinkLitColor : blinkDimColor);
+        gc.setForeground(lit ? color(ColorRole.BLINK_LIT) : color(ColorRole.BLINK_DIM));
         int x = plot.x + plot.width - ext.x - 6;
         gc.drawText(label, x, plot.y + 4, true);
         scheduleBlinkRedraw();
@@ -1454,10 +1214,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
         layoutButton(btnMax,       x, y);
 
         // Toggle buttons follow the FftView style: selected → fill with the
-        // channel's trace tint and draw label in textColor; unselected →
+        // channel's trace tint and draw label in color(ColorRole.TEXT); unselected →
         // frame only.  Maximize is an icon push button.
-        paintToggleButton(gc, btnL,     "L", prefs.isFreqRespLeftVisible(),  btnLTint);
-        paintToggleButton(gc, btnR,     "R", prefs.isFreqRespRightVisible(), btnRTint);
+        paintToggleButton(gc, btnL,     "L", prefs.isFreqRespLeftVisible(),  color(ColorRole.LEFT_BTN_CHAN));
+        paintToggleButton(gc, btnR,     "R", prefs.isFreqRespRightVisible(), color(ColorRole.RIGHT_BTN_CHAN));
         paintPhaseButton(gc, btnPhase, phaseVisible);
         paintAutoSetupButton(gc, btnAutoSetup);
         paintMaximizeButton(gc, btnMax);
@@ -1466,7 +1226,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
     /** Maximize button: a square frame with the arrows-from-circle icon
      *  centred inside.  Push button, never reads as selected. */
     private void paintMaximizeButton(GC gc, Rectangle r) {
-        gc.setForeground(buttonFrameColor);
+        gc.setForeground(color(ColorRole.BUTTON_FRAME));
         gc.drawRectangle(r.x, r.y, r.width - 1, r.height - 1);
         Image icon = maximizeIcon();
         if (icon != null) {
@@ -1490,7 +1250,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  circle" icon — fits the trace's vertical magnitude range to the
      *  visible band with 10 % padding above and below. */
     private void paintAutoSetupButton(GC gc, Rectangle r) {
-        gc.setForeground(buttonFrameColor);
+        gc.setForeground(color(ColorRole.BUTTON_FRAME));
         gc.drawRectangle(r.x, r.y, r.width - 1, r.height - 1);
         Image icon = autoSetupIcon();
         if (icon != null) {
@@ -1512,10 +1272,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
 
     private void paintPhaseButton(GC gc, Rectangle r, boolean active) {
         if (active) {
-            gc.setBackground(phaseTraceColor);
+            gc.setBackground(color(ColorRole.PHASE_TRACE));
             gc.fillRectangle(r.x, r.y, r.width, r.height);
         } else {
-            gc.setForeground(buttonFrameColor);
+            gc.setForeground(color(ColorRole.BUTTON_FRAME));
             gc.drawRectangle(r.x, r.y, r.width - 1, r.height - 1);
         }
         Image icon = phaseIcon();
@@ -1526,7 +1286,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
                     r.y + (r.height - ib.height) / 2);
         } else {
             gc.setFont(getFont());
-            gc.setForeground(textColor);
+            gc.setForeground(color(ColorRole.TEXT));
             Point ext = gc.textExtent("φ");
             gc.drawText("φ",
                     r.x + (r.width  - ext.x) / 2,
@@ -1548,17 +1308,17 @@ public final class FreqRespView extends AbstractFreqDomainView {
     }
 
     /** Channel toggle button styled like FftView: selected → tinted fill,
-     *  unselected → frame only.  Label is centred in {@code textColor}. */
+     *  unselected → frame only.  Label is centred in {@code color(ColorRole.TEXT)}. */
     private void paintToggleButton(GC gc, Rectangle r, String label,
                                    boolean active, Color tint) {
         if (active) {
             gc.setBackground(tint);
             gc.fillRectangle(r.x, r.y, r.width, r.height);
-            gc.setForeground(textColor);
+            gc.setForeground(color(ColorRole.TEXT));
         } else {
-            gc.setForeground(buttonFrameColor);
+            gc.setForeground(color(ColorRole.BUTTON_FRAME));
             gc.drawRectangle(r.x, r.y, r.width - 1, r.height - 1);
-            gc.setForeground(textColor);
+            gc.setForeground(color(ColorRole.TEXT));
         }
         gc.setFont(getFont());
         Point ext = gc.textExtent(label);
@@ -1585,14 +1345,14 @@ public final class FreqRespView extends AbstractFreqDomainView {
         double maxFreq = prefs.getFreqRespNyquistFraction() * sr;
         if (cursorFreq > maxFreq && maxFreq > 0) cursorFreq = maxFreq;
 
-        gc.setForeground(crosshairColor);
+        gc.setForeground(color(ColorRole.CROSSHAIR));
         gc.setLineStyle(SWT.LINE_DOT);
         gc.drawLine(mouseX, plot.y, mouseX, plot.y + plot.height);
         gc.drawLine(plot.x, mouseY, plot.x + plot.width, mouseY);
         gc.setLineStyle(SWT.LINE_SOLID);
 
         StringBuilder sb = new StringBuilder();
-        sb.append("f = ").append(FreqRespFormat.formatFrequencyFine(cursorFreq));
+        sb.append("f = ").append(formatFrequencyFine(cursorFreq));
         boolean compareActive = prefs.isFreqRespCompareMode()
                 && prefs.isFreqRespShowRiaa()
                 && hasAnyResult();
@@ -1635,7 +1395,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
             }
         }
         drawReadoutBox(gc, sb.toString(), mouseX + 12, mouseY + 12, plot,
-                readoutFont, overlayBgColor, buttonFrameColor, textColor);
+                readoutFont, color(ColorRole.OVERLAY_BG), color(ColorRole.BUTTON_FRAME), color(ColorRole.TEXT));
     }
 
     /** Log-frequency linear-dB interpolation of a result's magnitude at a

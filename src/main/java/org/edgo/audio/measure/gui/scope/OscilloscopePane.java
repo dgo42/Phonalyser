@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
@@ -114,14 +115,14 @@ public final class OscilloscopePane {
      *  so the dispose listener can unsubscribe — bound only on the live
      *  pane so the offscreen screenshot-renderer doesn't respond to user
      *  clicks on the live pane.  {@code null} on the offscreen variant. */
-    private Runnable                     autoSetupListener;
+    private Consumer<Void>               autoSetupListener;
     /** {@link Events#FREQRESP_MEASUREMENT_STARTED} subscriber — stops a
      *  running scope capture and disables the Record button so the
      *  Frequency Response sweep can use the device exclusively. */
-    private Runnable                     freqRespStartedListener;
+    private Consumer<Void>               freqRespStartedListener;
     /** {@link Events#FREQRESP_MEASUREMENT_STOPPED} subscriber — re-enables
      *  the Record button once the sweep finishes. */
-    private Runnable                     freqRespStoppedListener;
+    private Consumer<Void>               freqRespStoppedListener;
     /** Read-only text field showing the currently loaded openSignal file path. */
     private Text                         openSignalPathField;
     /** CTabFolder hosting the six toolbar tabs (Vertical / Horizontal / Trigger /
@@ -481,9 +482,9 @@ public final class OscilloscopePane {
      *  its own. */
     private void wireLiveCaptureLifecycle() {
         wireRecordButton();
-        autoSetupListener        = this::performAutoSetup;
-        freqRespStartedListener  = this::onFreqRespMeasurementStarted;
-        freqRespStoppedListener  = this::onFreqRespMeasurementStopped;
+        autoSetupListener        = ignored -> performAutoSetup();
+        freqRespStartedListener  = ignored -> onFreqRespMeasurementStarted();
+        freqRespStoppedListener  = ignored -> onFreqRespMeasurementStopped();
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.SCOPE_AUTO_SETUP,             autoSetupListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);

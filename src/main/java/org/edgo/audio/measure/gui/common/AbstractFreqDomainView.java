@@ -8,6 +8,7 @@ import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
 
 import java.util.Arrays;
+import java.util.Map;
 
 /**
  * Shared base for the frequency-domain canvases — FFT and frequency-response.
@@ -55,6 +56,14 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
 
     protected AbstractFreqDomainView(Composite parent, int style) {
         super(parent, style);
+    }
+
+    /** Forwards to {@link AbstractMeasurementView#AbstractMeasurementView(Composite, int, Map)}
+     *  so frequency-domain subclasses (FftView / FreqRespView) can pass
+     *  their per-role colour overrides through the palette constructor. */
+    protected AbstractFreqDomainView(Composite parent, int style,
+                                     Map<ColorRole, Integer> overrides) {
+        super(parent, style, overrides);
     }
 
     /**

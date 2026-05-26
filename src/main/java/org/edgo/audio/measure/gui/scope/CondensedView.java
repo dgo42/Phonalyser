@@ -1,5 +1,7 @@
 package org.edgo.audio.measure.gui.scope;
 
+import java.util.Map;
+
 import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBuffer;
@@ -29,11 +31,11 @@ public final class CondensedView extends AbstractMeasurementView {
 
     private static final int DIVISIONS_X = 10;
 
-    private final Color background;
-    private final Color gridColor;
-    private final Color midlineColor;
-    private final Color leftChannelColor;
-    private final Color rightChannelColor;
+    // All colours live in the AbstractMeasurementView palette —
+    // dark-theme overrides + prefs-driven L/R trace RGBs are passed
+    // via the super(...) override map.  Midline reuses the CROSSHAIR
+    // role (semantically the same "thin divider through the strip"
+    // line) with a slightly darker shade for the dark theme.
 
     private SignalBuffer buffer;
     private float[] leftBuf  = new float[0];
@@ -44,22 +46,16 @@ public final class CondensedView extends AbstractMeasurementView {
     public void setViewBackOffsetFrames(long v) { this.viewBackOffsetFrames = Math.max(0L, v); }
 
     public CondensedView(Composite parent) {
-        super(parent, SWT.DOUBLE_BUFFERED);
-        background        = new Color(getDisplay(),   0,   0,   0);
-        gridColor         = new Color(getDisplay(),  60,  60,  60);
-        midlineColor      = new Color(getDisplay(), 110, 110, 110);
-        leftChannelColor  = new Color(getDisplay(),  40, 220, 240);   // cyan
-        rightChannelColor = new Color(getDisplay(), 240, 220,  40);
-
-        setBackground(background);
+        super(parent, SWT.DOUBLE_BUFFERED, Map.of(
+                ColorRole.BACKGROUND,  0x000000,
+                ColorRole.GRID,        0x3C3C3C,
+                ColorRole.AXIS,        0x3C3C3C,
+                ColorRole.CROSSHAIR,   0x6E6E6E,
+                ColorRole.LEFT_TRACE,  Preferences.instance().getOscLeftChannelColor(),
+                ColorRole.RIGHT_TRACE, Preferences.instance().getOscRightChannelColor()));
+        setBackground(color(ColorRole.BACKGROUND));
         addPaintListener(this::onPaint);
-        addDisposeListener(e -> {
-            background.dispose();
-            gridColor.dispose();
-            midlineColor.dispose();
-            leftChannelColor.dispose();
-            rightChannelColor.dispose();
-        });
+        addDisposeListener(e -> disposePalette());
     }
 
     public void setBuffer(SignalBuffer buffer) {
@@ -82,7 +78,7 @@ public final class CondensedView extends AbstractMeasurementView {
      */
     public void paintCanvas(GC gc, int w, int h) {
         gc.setAdvanced(true);
-        gc.setBackground(background);
+        gc.setBackground(color(ColorRole.BACKGROUND));
         gc.fillRectangle(0, 0, w, h);
         drawGrid(gc, w, h);
         drawWaveforms(gc, w, h);
@@ -102,14 +98,14 @@ public final class CondensedView extends AbstractMeasurementView {
 
     private void drawGrid(GC gc, int w, int h) {
         double divW = (double) w / DIVISIONS_X;
-        gc.setForeground(gridColor);
+        gc.setForeground(color(ColorRole.GRID));
         for (int i = 0; i <= DIVISIONS_X; i++) {
             int x = (int) Math.round(i * divW);
             gc.drawLine(x, 0, x, h - 1);
         }
         gc.drawLine(0, 0,     w - 1, 0);
         gc.drawLine(0, h - 1, w - 1, h - 1);
-        gc.setForeground(midlineColor);
+        gc.setForeground(color(ColorRole.CROSSHAIR));
         int cy = h / 2;
         gc.drawLine(0, cy, w - 1, cy);
     }
@@ -155,8 +151,8 @@ public final class CondensedView extends AbstractMeasurementView {
         // densities (otherwise thick antialiased segments render as dashes).
         gc.setAntialias(SWT.ON);
         gc.setLineAttributes(new LineAttributes(2.0f, SWT.CAP_ROUND, SWT.JOIN_ROUND));
-        if (showL) drawTrace(gc, leftBuf,  available, dispStart, dispCount, w, centerY, vScale, leftChannelColor);
-        if (showR) drawTrace(gc, rightBuf, available, dispStart, dispCount, w, centerY, vScale, rightChannelColor);
+        if (showL) drawTrace(gc, leftBuf,  available, dispStart, dispCount, w, centerY, vScale, color(ColorRole.LEFT_TRACE));
+        if (showR) drawTrace(gc, rightBuf, available, dispStart, dispCount, w, centerY, vScale, color(ColorRole.RIGHT_TRACE));
     }
 
     /** See {@link OscilloscopeView#LANCZOS_A} — A=16 for sharper stop-band. */

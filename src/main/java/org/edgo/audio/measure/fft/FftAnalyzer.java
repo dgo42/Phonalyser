@@ -1,6 +1,5 @@
 package org.edgo.audio.measure.fft;
 
-import org.edgo.audio.measure.sound.AudioBackend;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
@@ -13,10 +12,11 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
-import lombok.extern.log4j.Log4j2;
-
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.sound.AudioBackend;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * FFT-based audio analyzer: coherent averaging, fundamental detection, THD,
@@ -158,41 +158,45 @@ public class FftAnalyzer {
      *  instance that produced it — important for the FFT worker's
      *  double-buffered hand-off, where one analyser keeps emitting fresh
      *  results while previous ones are still on the paint thread. */
-    public static class Result {
+    public class Result {
+
+        static final long serialVersionUID = 42L;
 
         /** FFT frame length (power of 2). */
-        public final int fftSize;
+        public int fftSize;
         /** Sample rate of the analyzed signal in Hz. */
-        public final int sampleRate;
+        public int sampleRate;
         /** Number of frames that were coherently averaged. */
-        public final int frameCount;
+        public int frameCount;
         /** Frequency resolution in Hz per bin (= sampleRate / fftSize). */
-        public final double freqResolution;
+        public double freqResolution;
         /** Window function used. */
-        public final WindowType windowType;
+        public WindowType windowType;
         /** FftOverlap used. */
-        public final FftOverlap overlap;
+        public FftOverlap overlap;
 
-        // Single-sided spectrum, bins 0 … fftSize/2
-        public final double[] amplitudeDbFs;
-        public final double[] phaseDeg;
-        public final double[] re;
-        public final double[] im;
+        // Single-sided spectrum, bins 0 … fftSize/2.  Arrays are reused
+        // across analysis ticks via the pool; {@link #ensureArrays} grows
+        // them when the FFT length changes.
+        public double[] amplitudeDbFs;
+        public double[] phaseDeg;
+        public double[] re;
+        public double[] im;
 
-        // Fundamental — non-final so post-processing (e.g. frequency response compensation) can mutate.
-        public final int    fundamentalBin;
-        public final double fundamentalHz;
+        // Fundamental
+        public int    fundamentalBin;
+        public double fundamentalHz;
         /** Phase-difference refined frequency in Hz — sub-bin accurate (~1e-5 bin). */
-        public final double fundamentalHzRefined;
+        public double fundamentalHzRefined;
         public double fundamentalDbFs;
         public double fundamentalLinear;
 
         // Harmonics (index 0 = 2nd harmonic, …)
-        public final int      harmonicCount;
-        public final int[]    harmonicBins;
-        public final double[] harmonicHz;
-        public final double[] harmonicDbFs;
-        public final double[] harmonicPct;
+        public int      harmonicCount;
+        public int[]    harmonicBins;
+        public double[] harmonicHz;
+        public double[] harmonicDbFs;
+        public double[] harmonicPct;
 
         // Metrics — non-final so post-processing (e.g. ADC/frequency response correction) can mutate.
         public double thdPct;
@@ -202,11 +206,11 @@ public class FftAnalyzer {
         /** Unweighted SINAD: 10·log10(refLin² / (noisePower + Σ harmonic power)) — basis for ENOB. */
         public double sinadDb;
         /** Lower bound of the frequency range used for SNR (Hz); 0 = no limit. */
-        public final double snrFreqMin;
+        public double snrFreqMin;
         /** Upper bound of the frequency range used for SNR (Hz); 0 = no limit. */
-        public final double snrFreqMax;
+        public double snrFreqMax;
         /** True = coherent (complex) averaging; false = incoherent (power) averaging. */
-        public final boolean coherentAveraging;
+        public boolean coherentAveraging;
         /** Sum of amplLinear[k]^2 for noise bins inside the SNR band (unweighted). */
         public double noisePower;
         /** A-weighted noise+distortion power (all non-fundamental bins, no band limit). */
@@ -231,7 +235,7 @@ public class FftAnalyzer {
          * For a clean recording this is a few Hz; a signal interruption causes
          * spectral splatter that broadens this to hundreds or thousands of Hz.
          */
-        public final double fundamentalDynExclusionHz;
+        public double fundamentalDynExclusionHz;
         /**
          * Reference dBV for the fundamental.  When set, dBV is shown for every bin
          * as {@code amplitudeDbFs[k] + (fundRefDbV - fundamentalDbFs)}; {@link Double#NaN}
@@ -263,6 +267,92 @@ public class FftAnalyzer {
          * no user override is supplied.
          */
         public double fundamentalTrueDbV;
+
+        /** Empty constructor used by the {@link ResultPool} to allocate
+         *  reusable slots.  All fields stay at Java defaults until the
+         *  worker calls {@link #ensureArrays} and the analyzer fills the
+         *  result via direct field writes. */
+        public Result() { }
+
+        /** Ensures the bin / harmonic arrays are sized for the next
+         *  analysis.  Reuses the existing arrays when their length
+         *  already matches; otherwise reallocates (FFT-length change
+         *  in prefs or a new pool slot that's never been filled).
+         *  Called from {@link FftAnalyzer#analyze} before the bin
+         *  arrays are written so the analyzer can use {@code re} /
+         *  {@code im} / {@code amplitudeDbFs} / {@code phaseDeg}
+         *  directly as its output buffers — no per-tick allocation. */
+        public void ensureArrays(int binCount, int harmonicCount) {
+            if (amplitudeDbFs == null || amplitudeDbFs.length != binCount) {
+                amplitudeDbFs = new double[binCount];
+                phaseDeg      = new double[binCount];
+                re            = new double[binCount];
+                im            = new double[binCount];
+            }
+            if (harmonicBins == null || harmonicBins.length != harmonicCount) {
+                harmonicBins  = new int   [harmonicCount];
+                harmonicHz    = new double[harmonicCount];
+                harmonicDbFs  = new double[harmonicCount];
+                harmonicPct   = new double[harmonicCount];
+            }
+        }
+
+        /** Returns an independent copy of this result.  All scalar
+         *  fields are copied by value; every array is cloned so a
+         *  later in-place mutation of the source (e.g. cal cascade
+         *  re-write on the worker thread) doesn't perturb the copy.
+         *  Use when a consumer needs a stable snapshot decoupled from
+         *  the live worker tick — e.g. a screenshot, a frozen
+         *  comparison reference, or a paint that may outlive the next
+         *  worker write. */
+        public Result deepCopy() {
+            Result c = new Result();
+            c.fftSize                    = fftSize;
+            c.sampleRate                 = sampleRate;
+            c.frameCount                 = frameCount;
+            c.freqResolution             = freqResolution;
+            c.windowType                 = windowType;
+            c.overlap                    = overlap;
+            c.amplitudeDbFs              = amplitudeDbFs != null ? amplitudeDbFs.clone() : null;
+            c.phaseDeg                   = phaseDeg      != null ? phaseDeg.clone()      : null;
+            c.re                         = re            != null ? re.clone()            : null;
+            c.im                         = im            != null ? im.clone()            : null;
+            c.fundamentalBin             = fundamentalBin;
+            c.fundamentalHz              = fundamentalHz;
+            c.fundamentalHzRefined       = fundamentalHzRefined;
+            c.fundamentalDbFs            = fundamentalDbFs;
+            c.fundamentalLinear          = fundamentalLinear;
+            c.harmonicCount              = harmonicCount;
+            c.harmonicBins               = harmonicBins  != null ? harmonicBins.clone()  : null;
+            c.harmonicHz                 = harmonicHz    != null ? harmonicHz.clone()    : null;
+            c.harmonicDbFs               = harmonicDbFs  != null ? harmonicDbFs.clone()  : null;
+            c.harmonicPct                = harmonicPct   != null ? harmonicPct.clone()   : null;
+            c.thdPct                     = thdPct;
+            c.thdDb                      = thdDb;
+            c.thdNDb                     = thdNDb;
+            c.snrDb                      = snrDb;
+            c.sinadDb                    = sinadDb;
+            c.snrFreqMin                 = snrFreqMin;
+            c.snrFreqMax                 = snrFreqMax;
+            c.coherentAveraging          = coherentAveraging;
+            c.noisePower                 = noisePower;
+            c.awNoisePower               = awNoisePower;
+            c.avgNoiseFloorDbFs          = avgNoiseFloorDbFs;
+            c.fundamentalDynExclusionHz  = fundamentalDynExclusionHz;
+            c.fundRefDbV                 = fundRefDbV;
+            c.fundamentalTrueDbV         = fundamentalTrueDbV;
+            // 2-D array: clone the outer array AND each non-null row so
+            // the copy can be mutated independently of the source.
+            if (preCorrectionPeaks != null) {
+                double[][] src = preCorrectionPeaks;
+                double[][] dst = new double[src.length][];
+                for (int i = 0; i < src.length; i++) {
+                    dst[i] = src[i] != null ? src[i].clone() : null;
+                }
+                c.preCorrectionPeaks = dst;
+            }
+            return c;
+        }
 
         Result(int fftSize, int sampleRate, int frameCount, double freqResolution,
                WindowType windowType, FftOverlap overlap,
@@ -309,6 +399,7 @@ public class FftAnalyzer {
             this.avgNoiseFloorDbFs         = avgNoiseFloorDbFs;
             this.fundamentalDynExclusionHz = fundamentalDynExclusionHz;
         }
+
     }
 
     // =========================================================================
@@ -393,6 +484,12 @@ public class FftAnalyzer {
      * latch onto a harmonic, mains hum, or a spur and the entire downstream
      * harmonic table would be wrong.  Pass {@link Double#NaN} for the legacy
      * loudest-bin behaviour.
+     *
+     * <p>Allocates a fresh {@link Result} per call — preferred for one-shot
+     * CLI / test callers.  The live FFT view goes through
+     * {@link #analyze(float[], int, int, int, WindowType, FftOverlap,
+     * double, double, boolean, double, boolean, double, Result)} to write
+     * into a pre-allocated pool slot and avoid per-tick array churn.
      */
     public Result analyze(float[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
@@ -400,6 +497,27 @@ public class FftAnalyzer {
                                  double snrFreqMin, double snrFreqMax,
                                  boolean coherentAveraging, double fundRefDbV,
                                  boolean logSummary, double expectedFundHz) {
+        return analyze(samples, sampleRate, fftSize, harmonicCount,
+                windowType, overlap, snrFreqMin, snrFreqMax, coherentAveraging,
+                fundRefDbV, logSummary, expectedFundHz, new Result());
+    }
+
+    /**
+     * Pool-friendly variant: writes the analysis into the supplied
+     * {@code outResult} slot instead of allocating a fresh Result.
+     * The slot's bin / harmonic arrays are resized as needed
+     * ({@link Result#ensureArrays}) and then used directly as the
+     * analysis output buffers — no per-tick allocation for the four
+     * fftSize/2+1-long spectrum arrays.  Returns {@code outResult} for
+     * convenience.
+     */
+    public Result analyze(float[] samples, int sampleRate,
+                                 int fftSize, int harmonicCount,
+                                 WindowType windowType, FftOverlap overlap,
+                                 double snrFreqMin, double snrFreqMax,
+                                 boolean coherentAveraging, double fundRefDbV,
+                                 boolean logSummary, double expectedFundHz,
+                                 Result outResult) {
         if (Integer.bitCount(fftSize) != 1) {
             throw new IllegalArgumentException("fftSize must be a power of 2, got: " + fftSize);
         }
@@ -441,6 +559,11 @@ public class FftAnalyzer {
         // CLEAN segment (re-estimated below), so glitchy frames at the
         // beginning of the recording cannot poison the kFractional estimate.
         int halfSize = fftSize / 2;
+
+        // Resize the pool slot's bin / harmonic arrays once up-front so
+        // the per-frame loops below can write into them directly (no
+        // per-tick allocation for the four halfSize+1-long arrays).
+        outResult.ensureArrays(halfSize + 1, harmonicCount);
 
         // --- Pre-pass peak-bin estimate (from frame 0; only used to size the
         //     slew threshold — final kFractional is re-estimated post-rejection)
@@ -856,17 +979,19 @@ public class FftAnalyzer {
 
         // --- Single-sided amplitude & phase spectrum -------------------------
         double   normFactor = 1.0 / ((double) fftSize * cohGain);
-        // avgRe / avgIm / amplDbFs / phaseDeg are stored in the returned
-        // Result and outlive this call — they MUST be fresh allocations
-        // so the previously-published Result (still being painted by the
-        // view) doesn't see its arrays mutated.  amplLinear is purely
-        // local and overwritten cell-by-cell below — safe to reuse.
-        double[] avgRe      = new double[halfSize + 1];
-        double[] avgIm      = new double[halfSize + 1];
+        // avgRe / avgIm / amplDbFs / phaseDeg are stored in outResult and
+        // outlive this call — but the pool guarantees outResult is owned
+        // exclusively by this analysis until the worker publishes it.
+        // Aliasing the slot's pre-sized arrays as locals avoids per-tick
+        // allocation of four halfSize+1-long arrays.  amplLinear is
+        // purely local and overwritten cell-by-cell below — safe to
+        // reuse from scratch.
+        double[] avgRe      = outResult.re;
+        double[] avgIm      = outResult.im;
         scratchAmplLinear   = scratchOrAlloc(scratchAmplLinear, halfSize + 1);
         double[] amplLinear = scratchAmplLinear;
-        double[] amplDbFs   = new double[halfSize + 1];
-        double[] phaseDeg   = new double[halfSize + 1];
+        double[] amplDbFs   = outResult.amplitudeDbFs;
+        double[] phaseDeg   = outResult.phaseDeg;
 
         for (int k = 0; k <= halfSize; k++) {
             double mag;
@@ -951,14 +1076,18 @@ public class FftAnalyzer {
         }
 
         // --- Harmonics -------------------------------------------------------
-        int[]    hBins   = new int[harmonicCount];
-        double[] hHz     = new double[harmonicCount];
-        double[] hDbFs   = new double[harmonicCount];
+        // Aliased onto the pool slot's harmonic arrays — sized by
+        // ensureArrays at the top of analyze.  hLinear is purely local
+        // (intermediate THD-sum term), kept as a fresh allocation; it
+        // doesn't outlive the call.
+        int[]    hBins   = outResult.harmonicBins;
+        double[] hHz     = outResult.harmonicHz;
+        double[] hDbFs   = outResult.harmonicDbFs;
         // hLinear holds the proportional-bin-combined harmonic amplitude
         // (see detectHarmonics) — used by the THD sum below so it matches
         // the per-harmonic readout, instead of resampling from amplLinear.
         double[] hLinear = new double[harmonicCount];
-        double[] hPct    = new double[harmonicCount];
+        double[] hPct    = outResult.harmonicPct;
         detectHarmonics(kFractional, fundHzRefined, halfSize,
                 amplLinear, amplDbFs, refLin,
                 harmonicCount, hBins, hHz, hDbFs, hLinear, hPct);
@@ -1056,18 +1185,40 @@ public class FftAnalyzer {
             }
         }
 
-        Result result = new Result(
-                fftSize, sampleRate, frameCount, freqRes,
-                windowType, overlap,
-                amplDbFs, phaseDeg, avgRe, avgIm,
-                fundBin, fundHz, fundHzRefined, fundDbFs, fundLinear,
-                harmonicCount, hBins, hHz, hDbFs, hPct,
-                thdPct, thdDb, thdNDb, snrDb,
-                snrFreqMin, snrFreqMax, coherentAveraging,
-                noisePower, noisePower, fundRefDbV, avgNoiseFloorDbFs,
-                dynWidthBins * freqRes);
-        result.sinadDb = sinadDb;
-        return result;
+        // outResult's arrays were aliased above (avgRe/avgIm/amplDbFs/
+        // phaseDeg/hBins/hHz/hDbFs/hPct point into outResult).  Only
+        // the scalars need to be written here.
+        outResult.fftSize                    = fftSize;
+        outResult.sampleRate                 = sampleRate;
+        outResult.frameCount                 = frameCount;
+        outResult.freqResolution             = freqRes;
+        outResult.windowType                 = windowType;
+        outResult.overlap                    = overlap;
+        outResult.fundamentalBin             = fundBin;
+        outResult.fundamentalHz              = fundHz;
+        outResult.fundamentalHzRefined       = fundHzRefined;
+        outResult.fundamentalDbFs            = fundDbFs;
+        outResult.fundamentalLinear          = fundLinear;
+        outResult.harmonicCount              = harmonicCount;
+        outResult.thdPct                     = thdPct;
+        outResult.thdDb                      = thdDb;
+        outResult.thdNDb                     = thdNDb;
+        outResult.snrDb                      = snrDb;
+        outResult.sinadDb                    = sinadDb;
+        outResult.snrFreqMin                 = snrFreqMin;
+        outResult.snrFreqMax                 = snrFreqMax;
+        outResult.coherentAveraging          = coherentAveraging;
+        outResult.noisePower                 = noisePower;
+        outResult.awNoisePower               = noisePower;
+        outResult.avgNoiseFloorDbFs          = avgNoiseFloorDbFs;
+        outResult.fundRefDbV                 = fundRefDbV;
+        outResult.fundamentalTrueDbV         = fundRefDbV;
+        outResult.fundamentalDynExclusionHz  = dynWidthBins * freqRes;
+        // preCorrectionPeaks is owned by the worker (set after analyze
+        // returns when calibration is loaded); reset here so a previous
+        // tick's value doesn't leak across pool slot recycle.
+        outResult.preCorrectionPeaks = null;
+        return outResult;
     }
 
     /**

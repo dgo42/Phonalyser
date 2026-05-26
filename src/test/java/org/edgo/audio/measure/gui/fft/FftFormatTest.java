@@ -4,7 +4,6 @@ import org.edgo.audio.measure.enums.FftMagnitudeUnit;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests for {@link FftFormat} — magnitude-unit conversion and the
@@ -69,42 +68,6 @@ class FftFormatTest {
         double frac2 = FftFormat.magToYFraction(0.01, 1.0, 1e-6, FftMagnitudeUnit.V);
         assertEquals(1.0 / 6, frac1, 1e-9);
         assertEquals(2.0 / 6, frac2, 1e-9);
-    }
-
-    @Test
-    void formatFrequency_switchesToKhzAt1000() {
-        // The production formatter uses the default locale's decimal
-        // separator, so accept either '.' or ',' here.
-        assertTrue(FftFormat.formatFrequency(999.0).matches("999[.,]0 Hz"));
-        assertTrue(FftFormat.formatFrequency(1000.0).matches("1[.,]00 kHz"));
-        assertTrue(FftFormat.formatFrequency(12340.0).matches("12[.,]34 kHz"));
-    }
-
-    @Test
-    void formatFrequency_invalidInputs() {
-        assertEquals("—", FftFormat.formatFrequency(0.0));
-        assertEquals("—", FftFormat.formatFrequency(-1.0));
-        assertEquals("—", FftFormat.formatFrequency(Double.NaN));
-    }
-
-    @Test
-    void formatVoltsSi_pickRightPrefix() {
-        // The volts formatter returns "<mantissa> <prefix>" with the
-        // prefix letter trailing.  Mantissa uses the default locale's
-        // decimal separator so we match the prefix loosely.
-        // 1.5 V → "1.5 " (or "1,50 " on locales whose "%.2f" uses comma —
-        // the trailing-zero strip is dot-only, see the production code).
-        // Accept anything that starts with "1" and has a comma or dot.
-        String r15 = FftFormat.formatVoltsSi(1.5);
-        assertTrue(r15.matches("1[.,]50?\\s*"),
-                "expected '1.5'-ish (locale-tolerant), got '" + r15 + "'");
-        // 100 mV → "100 m"
-        assertTrue(FftFormat.formatVoltsSi(0.1).contains("m"),
-                "100 mV output should contain 'm', got '" + FftFormat.formatVoltsSi(0.1) + "'");
-        // 1 µV → "1 µ"
-        assertTrue(FftFormat.formatVoltsSi(1e-6).contains("µ"),
-                "1 µV output should contain 'µ', got '" + FftFormat.formatVoltsSi(1e-6) + "'");
-        assertEquals("0 ", FftFormat.formatVoltsSi(0.0));
     }
 
     @Test

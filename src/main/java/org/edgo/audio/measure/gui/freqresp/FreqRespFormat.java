@@ -1,35 +1,18 @@
 package org.edgo.audio.measure.gui.freqresp;
 
 import lombok.experimental.UtilityClass;
-import org.edgo.audio.measure.gui.fft.FftFormat;
 
 import java.util.Locale;
 
 /**
- * Pure-math formatters for the Frequency Response chart labels and
- * crosshair readout.  Magnitude is always in dB and phase always in
- * degrees, so this class is simpler than {@link FftFormat} — but we still
- * delegate to {@code FftFormat} for shared frequency / SI-prefix helpers so
- * both panes render labels identically.
+ * Pure-math formatters specific to the Frequency Response chart — dB /
+ * phase readouts plus log-axis fraction math.  Shared formatters
+ * (frequency labels, SI-prefix voltages, etc.) live on the
+ * {@code AbstractMeasurementView} base class; this class only holds the
+ * helpers that don't make sense outside the FreqResp pane.
  */
 @UtilityClass
 public class FreqRespFormat {
-
-    /** Frequency label suitable for axis ticks (compact). */
-    public String formatFrequency(double f) {
-        return FftFormat.formatFrequency(f);
-    }
-
-    /** Fine-grained frequency formatter for the crosshair readout — four
-     *  decimal places so sub-Hz refinements stay visible. */
-    public String formatFrequencyFine(double f) {
-        return FftFormat.formatFrequencyFine(f);
-    }
-
-    /** Integer-only frequency formatter used on linear axis labels. */
-    public String formatFrequencyInteger(double f) {
-        return FftFormat.formatFrequencyInteger(f);
-    }
 
     /** Magnitude label in dB.  Drops the "+" prefix on positive values to
      *  match the FFT axis convention.  Two decimals so 1 dB rounding

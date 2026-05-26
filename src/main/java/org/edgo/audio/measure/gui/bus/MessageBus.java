@@ -16,28 +16,23 @@ import java.util.function.Supplier;
  * literal at the call site; the constant gives compile-time safety and
  * a single place to rename / retire events.
  *
- * <p>Three flavours of event are supported:
+ * <p>Two flavours of event are supported:
  * <ul>
- *   <li><b>Notification (no payload)</b> — publish with
- *       {@link #publish(String)}, subscribe with
- *       {@link #subscribe(String, Runnable)}.  Use this when the event
- *       name alone is enough; the subscriber will pull whatever fresh
- *       state it needs from {@link org.edgo.audio.measure.gui.preferences.Preferences}
- *       or another well-known source.</li>
- *   <li><b>Payload event</b> — publish with {@link #publish(String, Object)},
- *       subscribe with {@link #subscribe(String, Consumer)}.  Use when
- *       the payload IS the message (e.g. delta values that aren't in
- *       any shared store).  Convention: one payload type per event
+ *   <li><b>Pub / sub</b> — every subscriber is a {@link Consumer}.  For
+ *       notifications without a payload, use {@code Consumer<Void>} and
+ *       publish with {@link #publish(String)} — subscribers receive
+ *       {@code null}.  For payload-carrying events, declare
+ *       {@code Consumer<MyPayload>} and publish with
+ *       {@link #publish(String, Object)}.  One payload type per event
  *       name — mixing types is a programmer error.</li>
  *   <li><b>Request / response</b> — caller invokes
  *       {@link #request(String)} / {@link #request(String, Object)} and
  *       gets a value back from a single registered responder
  *       ({@link #registerResponder(String, Supplier)} /
- *       {@link #registerResponder(String, Function)}).  Use when the
- *       publisher needs a return value (success boolean, current
- *       state, computed result).  Exactly one responder per event name
- *       — a second {@code registerResponder} replaces the first.
- *       Returns {@code null} when no responder is registered.</li>
+ *       {@link #registerResponder(String, Function)}).  Exactly one
+ *       responder per event name — a second {@code registerResponder}
+ *       replaces the first.  Returns {@code null} when no responder is
+ *       registered.</li>
  * </ul>
  *
  * <h2>Threading</h2>
@@ -60,10 +55,10 @@ public final class MessageBus {
 
     private static volatile MessageBus instance;
 
-    /** Handler list per event name.  Each entry is either a
-     *  {@link Runnable} (notification subscriber) or a {@link Consumer}
-     *  (payload subscriber). */
-    private final Map<String, List<Object>> subscribers = new ConcurrentHashMap<>();
+    /** Handler list per event name.  Each entry is a {@link Consumer}
+     *  — uniform shape lets {@link #dispatch} run a single typed call
+     *  per subscriber, no instanceof branching. */
+    private final Map<String, List<Consumer<?>>> subscribers = new ConcurrentHashMap<>();
 
     /** Single responder per event name — a {@link Supplier} (no payload
      *  request) or a {@link Function} (payload-carrying request). */
@@ -80,32 +75,22 @@ public final class MessageBus {
         }
     }
 
-    // ---- Notification (no payload) -----------------------------------------
-
-    public void subscribe(String eventName, Runnable handler) {
-        listFor(eventName).add(handler);
-    }
-
-    public void unsubscribe(String eventName, Runnable handler) {
-        List<Object> list = subscribers.get(eventName);
-        if (list != null) list.remove(handler);
-    }
-
-    /** Notifies every handler subscribed to {@code eventName}.  Payload
-     *  subscribers under the same name (if any) receive {@code null}. */
-    public void publish(String eventName) {
-        dispatch(eventName, null);
-    }
-
-    // ---- Payload event ------------------------------------------------------
+    // ---- Pub / sub ----------------------------------------------------------
 
     public <T> void subscribe(String eventName, Consumer<T> handler) {
         listFor(eventName).add(handler);
     }
 
     public <T> void unsubscribe(String eventName, Consumer<T> handler) {
-        List<Object> list = subscribers.get(eventName);
+        List<Consumer<?>> list = subscribers.get(eventName);
         if (list != null) list.remove(handler);
+    }
+
+    /** Notification — dispatches with a {@code null} payload to every
+     *  subscriber.  {@code Consumer<Void>} handlers must tolerate the
+     *  null. */
+    public void publish(String eventName) {
+        dispatch(eventName, null);
     }
 
     public <T> void publish(String eventName, T payload) {
@@ -165,18 +150,17 @@ public final class MessageBus {
         return null;
     }
 
-    private List<Object> listFor(String eventName) {
+    private List<Consumer<?>> listFor(String eventName) {
         return subscribers.computeIfAbsent(eventName, k -> new CopyOnWriteArrayList<>());
     }
 
     @SuppressWarnings("unchecked")
     private <T> void dispatch(String eventName, T payload) {
-        List<Object> list = subscribers.get(eventName);
+        List<Consumer<?>> list = subscribers.get(eventName);
         if (list == null || list.isEmpty()) return;
-        for (Object raw : list) {
+        for (Consumer<?> raw : list) {
             try {
-                if (raw instanceof Runnable r) r.run();
-                else ((Consumer<T>) raw).accept(payload);
+                ((Consumer<T>) raw).accept(payload);
             } catch (Exception ex) {
                 log.warn("Subscriber threw on {}: {}", eventName, ex.getMessage(), ex);
             }

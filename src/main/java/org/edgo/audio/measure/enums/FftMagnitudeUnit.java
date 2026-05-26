@@ -32,6 +32,33 @@ public enum FftMagnitudeUnit {
     /** Short display string used in the combo box and axis labels. */
     public String getLabel() { return label; }
 
+    // ─── Cached parallel-array views ────────────────────────────────────
+    //
+    // The combo box and preference round-trip both need the full set of
+    // enum names / labels in declaration order.  Building those arrays
+    // once at class-load lets callers reach for them by method call
+    // without re-walking values() or maintaining their own hard-coded
+    // mirror of this enum.
+    private static final String[] NAMES;
+    private static final String[] LABELS;
+    static {
+        FftMagnitudeUnit[] all = values();
+        NAMES  = new String[all.length];
+        LABELS = new String[all.length];
+        for (int i = 0; i < all.length; i++) {
+            NAMES[i]  = all[i].name();
+            LABELS[i] = all[i].label;
+        }
+    }
+
+    /** All enum names ({@link #name()}) in declaration order — the form
+     *  used as preference values.  Cached; do not mutate. */
+    public static String[] names()  { return NAMES;  }
+
+    /** All display labels ({@link #getLabel()}) in declaration order —
+     *  the form shown in the combo box.  Cached; do not mutate. */
+    public static String[] labels() { return LABELS; }
+
     /** Converts an analyser dBFS magnitude into this unit. */
     public double convertFromDbFs(double dbFs, double fundRefDbV, double binBw) {
         switch (this) {

@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
@@ -132,8 +133,8 @@ public final class FreqRespPane {
 
     /** Bus subscriber kept as a field so dispose can unsubscribe the
      *  same instance (method references compare by identity). */
-    private Runnable rangeChangedListener;
-    private Runnable calibrationChangedListener;
+    private Consumer<Void> rangeChangedListener;
+    private Consumer<Void> calibrationChangedListener;
 
     public FreqRespPane(Composite parent) {
         Display d = parent.getDisplay();
@@ -162,8 +163,8 @@ public final class FreqRespPane {
         // Bus subscriptions.  Range-changed re-aligns the scrollbars after
         // the view's wheel-driven pan / zoom; calibration-changed lets the
         // calibration tab refresh its file-path label without polling.
-        rangeChangedListener       = this::syncScrollbars;
-        calibrationChangedListener = this::onCalibrationChanged;
+        rangeChangedListener       = ignored -> syncScrollbars();
+        calibrationChangedListener = ignored -> onCalibrationChanged();
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.FREQRESP_RANGE_CHANGED,        rangeChangedListener);
         bus.subscribe(Events.FREQRESP_CALIBRATION_CHANGED,  calibrationChangedListener);

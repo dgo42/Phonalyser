@@ -51,6 +51,18 @@ public final class Events {
      *  released. */
     public static final String CAPTURE_RELEASE = "capture.release";
 
+    /** Notification — the shared capture device just appended a fresh
+     *  batch of samples to its {@code SignalBuffer}.  No payload.
+     *  Published by {@code SharedCapture} on the audio callback
+     *  thread, so subscribers that touch widgets MUST marshal to the
+     *  UI thread (typically {@code display.asyncExec(...)}).
+     *
+     *  <p>Drives the oscilloscope's capture-driven redraw — replacing
+     *  a 1 ms polling timer that was flooding the OS message queue
+     *  and starving every other {@code asyncExec} in the app
+     *  (including the FFT worker's result handoff). */
+    public static final String CAPTURE_BATCH_AVAILABLE = "capture.batch.available";
+
     /** Request — asks whether the audio generator is currently producing
      *  a signal (either the DDS tone or the WAV file player).
      *  Responder: the generator pane.  Response: {@code Boolean} —
@@ -75,6 +87,14 @@ public final class Events {
      *  pane) flip the Record button back off and release the shared
      *  capture.  No payload.  Published on the UI thread. */
     public static final String FFT_RECORDING_AUTO_STOPPED = "fft.recording.auto-stopped";
+
+    /** Notification — a fresh FFT analyser result is ready for display.
+     *  Payload: the {@code FftAnalyzer.Result} slot (may be {@code null}
+     *  when the worker just wants to nudge a repaint without new data,
+     *  e.g. after {@code resetStatistics}).  Published on the UI thread
+     *  by {@code FftAnalyzerWorker} after each successful analysis;
+     *  subscribers MUST handle {@code null}. */
+    public static final String FFT_RESULT_AVAILABLE = "fft.result.available";
 
     /** Notification — the generator's file-player thread finished
      *  (user stop, EOF without loop, or playback error).  Subscribers

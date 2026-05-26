@@ -61,7 +61,7 @@ public final class SharedCapture {
     private SharedCapture() {
         MessageBus bus = MessageBus.instance();
         bus.registerResponder(Events.CAPTURE_ACQUIRE, this::acquire);
-        bus.subscribe(Events.CAPTURE_RELEASE, this::release);
+        bus.subscribe(Events.CAPTURE_RELEASE, ignored -> release());
     }
 
     private AudioCapture capture;
@@ -155,6 +155,7 @@ public final class SharedCapture {
                     r[f] = (float) ((uR - midpoint) / midpoint);
                 }
                 buf.appendBatch(l, r, frames);
+                MessageBus.instance().publish(Events.CAPTURE_BATCH_AVAILABLE);
             });
 
             this.capture      = cap;
