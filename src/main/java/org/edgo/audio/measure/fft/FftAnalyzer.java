@@ -187,6 +187,13 @@ public class FftAnalyzer {
          *  alternative.  {@code null} when the ADC calibration
          *  hasn't been set. */
         public double[] amplitudeDbV;
+        /** {@code 20·log10(adcFsVoltageRms)} — the constant offset
+         *  between dBFs and dBV scales (dBV = dBFs + dbvOffsetDb).
+         *  Cached once per analysis so consumers that need to convert
+         *  between scales for display don't recompute the {@code log}
+         *  per pixel / per row.  {@code 0} when the ADC calibration
+         *  isn't set (i.e. dBFs == dBV in that case). */
+        public double dbvOffsetDb;
         public double[] phaseDeg;
         public double[] re;
         public double[] im;
@@ -322,6 +329,8 @@ public class FftAnalyzer {
             c.windowType                 = windowType;
             c.overlap                    = overlap;
             c.amplitudeDbFs              = amplitudeDbFs != null ? amplitudeDbFs.clone() : null;
+            c.amplitudeDbV               = amplitudeDbV  != null ? amplitudeDbV.clone()  : null;
+            c.dbvOffsetDb                = dbvOffsetDb;
             c.phaseDeg                   = phaseDeg      != null ? phaseDeg.clone()      : null;
             c.re                         = re            != null ? re.clone()            : null;
             c.im                         = im            != null ? im.clone()            : null;

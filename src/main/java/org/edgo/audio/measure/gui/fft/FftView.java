@@ -45,7 +45,6 @@ import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBuffer;
 
 import lombok.Getter;
-import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -471,11 +470,11 @@ public final class FftView extends AbstractFreqDomainView {
      *  Mutating this snapshot is safe: the worker no longer holds a
      *  reference, so paint code and the pane's Save-CSV / screenshot
      *  paths can read or even mutate it without coordinating with the
-     *  analyser.  Lombok provides public {@code getLastResult} /
-     *  {@code setLastResult} accessors — used by the offscreen
-     *  screenshot pane to inject a snapshot without running the
-     *  analysis loop. */
-    @Getter @Setter
+     *  analyser.  Lombok provides a public {@code getLastResult}
+     *  accessor; the offscreen screenshot pane injects this and the
+     *  IMD snapshot via {@link #copySnapshotFrom(FftView)} without
+     *  running the analysis loop. */
+    @Getter
     private FftAnalyzer.Result lastResult;
 
     /** Latest dual-tone IMD result computed from {@link #lastResult}
@@ -486,6 +485,19 @@ public final class FftView extends AbstractFreqDomainView {
      *  is microseconds-scale so it doesn't move the paint budget. */
     @Getter
     private ImdResult lastImd;
+
+    /** Copies the paint-relevant snapshot — last spectrum result, the
+     *  dual-tone IMD slot and the THD/IMD table-mode flag — from
+     *  {@code source} into this view.  Used by the screenshot renderer
+     *  so a passive (worker-less) clone draws exactly the table and
+     *  dots the live view shows; without the IMD slot the offscreen
+     *  view would fall back to the THD table. */
+    public void copySnapshotFrom(FftView source) {
+        if (source == null || source == this) return;
+        this.lastResult     = source.lastResult;
+        this.lastImd        = source.lastImd;
+        this.tableModeIsImd = source.tableModeIsImd;
+    }
 
     /** Number of analyses completed since the last reset. */
     public int getCompletedAnalyses() {
@@ -666,8 +678,10 @@ public final class FftView extends AbstractFreqDomainView {
         if (Double.isFinite(lastResult.fundamentalDbFs) && Double.isFinite(lastResult.avgNoiseFloorDbFs)) {
             double peakDbFs = lastResult.fundamentalDbFs;
             if (lastImd != null) {
-                if (Double.isFinite(lastImd.f1DbFs)) peakDbFs = Math.max(peakDbFs, lastImd.f1DbFs);
-                if (Double.isFinite(lastImd.f2DbFs)) peakDbFs = Math.max(peakDbFs, lastImd.f2DbFs);
+                double f1DbFs = dbvToDbFs(lastImd.f1DbV);
+                double f2DbFs = dbvToDbFs(lastImd.f2DbV);
+                if (Double.isFinite(f1DbFs)) peakDbFs = Math.max(peakDbFs, f1DbFs);
+                if (Double.isFinite(f2DbFs)) peakDbFs = Math.max(peakDbFs, f2DbFs);
             }
             double topDbFs = peakDbFs + 10;
             double botDbFs = lastResult.avgNoiseFloorDbFs - 20;
@@ -1028,8 +1042,8 @@ public final class FftView extends AbstractFreqDomainView {
         int count = 2 + 2 * (ImdResult.MAX_ORDER - 1);
         double[] hz   = new double[count];
         double[] dbFs = new double[count];
-        hz[0]   = imd.f1Hz;  dbFs[0] = imd.f1DbFs;
-        hz[1]   = imd.f2Hz;  dbFs[1] = imd.f2DbFs;
+        hz[0]   = imd.f1Hz;  dbFs[0] = dbvToDbFs(imd.f1DbV);
+        hz[1]   = imd.f2Hz;  dbFs[1] = dbvToDbFs(imd.f2DbV);
         int idx = 2;
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
             hz[idx]   = imd.dnLHz[k];
@@ -1071,9 +1085,9 @@ public final class FftView extends AbstractFreqDomainView {
         // strictly above their own dots so the dot itself is never
         // obscured.
         gc.setForeground(color(ColorRole.HARMONIC_DOT));
-        Point p1 = dotScreenPos(plot, imd.f1Hz, imd.f1DbFs, unit, freqMin, freqMax,
+        Point p1 = dotScreenPos(plot, imd.f1Hz, dbvToDbFs(imd.f1DbV), unit, freqMin, freqMax,
                 magTop, magBot, logFreq, refDbV, binBw);
-        Point p2 = dotScreenPos(plot, imd.f2Hz, imd.f2DbFs, unit, freqMin, freqMax,
+        Point p2 = dotScreenPos(plot, imd.f2Hz, dbvToDbFs(imd.f2DbV), unit, freqMin, freqMax,
                 magTop, magBot, logFreq, refDbV, binBw);
         if (p1 != null || p2 != null) {
             String t1 = "F1 " + formatFrequency(imd.f1Hz);
@@ -1545,10 +1559,10 @@ public final class FftView extends AbstractFreqDomainView {
         // ── Centred F1 / F2 headers (bold). ────────────────────────────
         gc.setFont(monoBoldFont);
         drawCentred(gc, String.format("F1: %.4f Hz   %.2f dBFS   %.2f dBV",
-                imd.f1Hz, imd.f1DbFs, imd.f1DbV), centreX, y);
+                imd.f1Hz, dbvToDbFs(imd.f1DbV), imd.f1DbV), centreX, y);
         y += lineH;
         drawCentred(gc, String.format("F2: %.4f Hz   %.2f dBFS   %.2f dBV",
-                imd.f2Hz, imd.f2DbFs, imd.f2DbV), centreX, y);
+                imd.f2Hz, dbvToDbFs(imd.f2DbV), imd.f2DbV), centreX, y);
         y += lineH;
 
         // ── Span line (re-uses the THD format from a Result if any). ──
@@ -2232,6 +2246,16 @@ public final class FftView extends AbstractFreqDomainView {
     private double currentNyquist() {
         if (lastResult != null) return lastResult.sampleRate / 2.0;
         return 192_000;
+    }
+
+    /** Converts a dBV value to dBFs using the FFT result's cached
+     *  {@code dbvOffsetDb} (= 20·log10(adcFsVoltageRms), computed
+     *  once per analysis tick by {@code FftAnalyzerWorker}).  Used
+     *  by the IMD render path to drive chart Y-coord mapping / the
+     *  dBFs column from {@code ImdResult}'s dBV-only output without
+     *  recomputing the log per call. */
+    private double dbvToDbFs(double dbv) {
+        return (lastResult != null) ? dbv - lastResult.dbvOffsetDb : dbv;
     }
 
     private void onMouseMove(MouseEvent ev) {

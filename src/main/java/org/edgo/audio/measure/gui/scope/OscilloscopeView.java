@@ -588,13 +588,13 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         if (newL != currentLeftRgb) {
             setColor(ColorRole.LEFT_TRACE,        newL);
             setColor(ColorRole.LEFT_CHANNEL_MID,  attenuate(newL, 0.65));
-            setColor(ColorRole.LEFT_BEAT,         attenuate(newL, 0.80));
+            setColor(ColorRole.LEFT_BEAT,         attenuate(newL, 0.45));
             currentLeftRgb = newL;
         }
         if (newR != currentRightRgb) {
             setColor(ColorRole.RIGHT_TRACE,       newR);
             setColor(ColorRole.RIGHT_CHANNEL_MID, attenuate(newR, 0.65));
-            setColor(ColorRole.RIGHT_BEAT,        attenuate(newR, 0.80));
+            setColor(ColorRole.RIGHT_BEAT,        attenuate(newR, 0.45));
             currentRightRgb = newR;
         }
     }

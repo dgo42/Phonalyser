@@ -665,8 +665,17 @@ public final class FftAnalyzerWorker {
         boolean coherent = prefs.isFftCoherentAveraging();
         boolean genActive = isGeneratorActive();
         double fundRefDbV = genActive ? resolveFundRefDbV(prefs) : Double.NaN;
+        // The coherent de-rotation locks onto the detected fundamental, so
+        // in dual-tone the hint must point at a real tone (the lower one).
+        // Hinting the single-tone frequency — usually nowhere near F1/F2 —
+        // pegs the reference to a noise bin that jitters tick-to-tick, which
+        // smears BOTH tones and makes the measured frequencies (and Δf
+        // readout) swing wildly even though the generator never moves.
+        boolean dualTone = "DUAL_TONE".equalsIgnoreCase(prefs.getGenSignalForm());
         double expectedFundHz = (genActive && prefs.isFftFundFromGenerator())
-                ? Preferences.instance().getGenFrequencyHz()
+                ? (dualTone
+                    ? Math.min(prefs.getGenDualToneFreq1Hz(), prefs.getGenDualToneFreq2Hz())
+                    : prefs.getGenFrequencyHz())
                 : Double.NaN;
 
         analyzer.setSamplesAbsStart(samplesAbsStart);
@@ -790,6 +799,31 @@ public final class FftAnalyzerWorker {
                 }
                 r.preCorrectionPeaks = new double[][] { preFreqs, preDbFs };
             }
+        }
+
+        // Lift the FINAL spectrum onto the dBV scale — done here, after
+        // every mutation (cal cascade + forever-mode overlay +
+        // recomputeStats) so {@code amplitudeDbV} reflects exactly the
+        // spectrum the view shows, not a stale single-tick snapshot.
+        // This is the SOURCE OF TRUTH for voltage-based downstream
+        // analysis (ImdAnalyzer / TD+N / IMD %); those consumers never
+        // touch {@code amplitudeDbFs}, only {@code amplitudeDbV}.  The
+        // offset is a pure hardware-calibration constant, cached on the
+        // Result so display code that converts dBV ↔ dBFs reuses it
+        // without recomputing {@code log10} per pixel.
+        if (fs > 0) {
+            double anchor = 20.0 * Math.log10(fs);
+            r.dbvOffsetDb = anchor;
+            int nbv = r.amplitudeDbFs.length;
+            if (r.amplitudeDbV == null || r.amplitudeDbV.length != nbv) {
+                r.amplitudeDbV = new double[nbv];
+            }
+            for (int i = 0; i < nbv; i++) {
+                r.amplitudeDbV[i] = r.amplitudeDbFs[i] + anchor;
+            }
+        } else {
+            r.amplitudeDbV = null;
+            r.dbvOffsetDb = 0.0;
         }
 
         completedAnalyses++;

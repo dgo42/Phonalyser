@@ -21,13 +21,13 @@ package org.edgo.audio.measure.gui.fft;
  *   <li>{@code imdPwrPct} — combined intermod RMS as a percentage of
  *       the fundamental reference |F1| + |F2| (linear-magnitude sum
  *       of the two fundamentals).</li>
- *   <li>{@code tdnPct} — total distortion + noise: scalar residual
- *       as a percentage of total Vrms, computed as
- *       {@code (Vrms − √(F1_Vrms² + F2_Vrms²)) / Vrms}.  Vrms is
- *       derived from the FFT spectrum via Parseval
- *       ({@code Σ m_k² = 2 · Vrms²} for sine-calibrated bin
- *       amplitudes), so it shares the spectrum's averaging /
- *       phase-rejection state with {@code F1} / {@code F2}.</li>
+ *   <li>{@code tdnPct} — total distortion + noise as the scalar drop
+ *       from total RMS to the fundamentals,
+ *       {@code 100·(Vrms − √(F1² + F2²)) / Vrms}, where {@code Vrms²}
+ *       and {@code F1² + F2²} are summed squared bin voltages over the
+ *       whole spectrum and over the F1 / F2 skirts respectively.
+ *       Window-independent (the window's ENBW cancels in the
+ *       ratio), so it's correct for Hann, Blackman-Harris, etc.</li>
  * </ul>
  *
  * <p>All arrays sized for {@code n = 0..5} with {@code [0]} / {@code [1]}
@@ -48,11 +48,11 @@ public final class ImdResult {
      *  (0..1).  Convert to dBV via the same anchor the THD path uses. */
     public double f1Mag;
     public double f2Mag;
-    /** F1 / F2 dBFS values. */
-    public double f1DbFs;
-    public double f2DbFs;
-    /** F1 / F2 dBV values (computed with the same FS-voltage anchor
-     *  the THD readout uses, so the numbers agree across modes). */
+    /** F1 / F2 dBV values — the canonical level readout for both
+     *  tones.  ImdAnalyzer is voltage-domain only, so it never
+     *  produces dBFs values; the FFT view derives those at display
+     *  time from {@code f1DbV − 20·log10(adcFsVoltageRms)} when it
+     *  needs a dBFs column. */
     public double f1DbV;
     public double f2DbV;
 
@@ -68,9 +68,10 @@ public final class ImdResult {
     /** IMD power ratio (combined IM products / fundamentals), in %.
      *  Reference is the linear-magnitude sum |F1| + |F2|. */
     public double imdPwrPct;
-    /** Total distortion + noise: scalar residual as a percentage of
-     *  total Vrms, i.e.
-     *  {@code (Vrms − √(F1_Vrms² + F2_Vrms²)) / Vrms · 100}. */
+    /** Total distortion + noise as the scalar drop from total RMS to
+     *  the fundamentals — {@code 100·(Vrms − √(F1² + F2²)) / Vrms} over
+     *  squared bin voltages, the F1 / F2 skirts forming the
+     *  fundamental term.  Window-independent. */
     public double tdnPct;
 
     /** Frequencies of the per-order sideband products, Hz.

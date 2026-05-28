@@ -728,9 +728,9 @@ public final class FftPane {
     /** Renders this FFT pane offscreen at the requested dimensions with
      *  its toolbar tab body collapsed.  Builds a fresh {@link FftPane} in
      *  a hidden Shell (no live capture, no controller worker) and copies
-     *  the live controller's last {@link FftAnalyzer.Result} into it, so
-     *  the spectrum + THD table render the same data the user is
-     *  currently seeing. */
+     *  the live view's render snapshot into it, so the spectrum and the
+     *  THD / IMD table render the same data the user is currently
+     *  seeing. */
     private Image renderOffscreen(Display d, int targetW, int targetH) {
         targetW = Math.max(1, targetW);
         targetH = Math.max(1, targetH);
@@ -739,7 +739,7 @@ public final class FftPane {
         FftPane fftPane = new FftPane(offscreen, false);
         Image output = new Image(d, targetW, targetH);
         try {
-            fftPane.getView().setLastResult(view.getLastResult());
+            fftPane.copySnapshotFrom(this);
             fftPane.setTabsCollapsed(true);
             fftPane.refreshFromPrefs();
 
@@ -763,6 +763,15 @@ public final class FftPane {
             offscreen.dispose();
         }
         return output;
+    }
+
+    /** Copies the live pane's render snapshot (spectrum result, IMD
+     *  slot and table mode) into this pane's view — used by the
+     *  offscreen screenshot clone so it draws exactly what the live
+     *  pane shows. */
+    public void copySnapshotFrom(FftPane source) {
+        if (source == null || source == this) return;
+        view.copySnapshotFrom(source.view);
     }
 
     /** True when this pane is collapsed to just its title bar. */
