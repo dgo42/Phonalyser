@@ -3,7 +3,7 @@ package org.edgo.audio.measure.enums;
 /** Waveform produced by the audio signal generator. */
 public enum GenSignalForm {
     SINE, TRIANGLE, RECTANGLE, WHITE_NOISE, PINK_NOISE, PINK_NOISE_LINEAR, SINE_COMPENSATED,
-    LINEAR_SWEEP, LOG_SWEEP;
+    LINEAR_SWEEP, LOG_SWEEP, DUAL_TONE;
 
     private GenSignalForm() {}
 
@@ -18,8 +18,9 @@ public enum GenSignalForm {
             case "sine_compensated", "sine_hmc"                         -> SINE_COMPENSATED;
             case "linear_sweep", "sweep", "chirp"                       -> LINEAR_SWEEP;
             case "log_sweep", "farina"                                  -> LOG_SWEEP;
+            case "dual_tone", "dualtone", "twotone", "two_tone"         -> DUAL_TONE;
             default -> throw new IllegalArgumentException("Unknown signal form: " + s +
-                    ". Valid: sine, triangle, rectangle, white_noise, pink_noise, pink_noise_linear, sine_compensated, linear_sweep, log_sweep");
+                    ". Valid: sine, triangle, rectangle, white_noise, pink_noise, pink_noise_linear, sine_compensated, linear_sweep, log_sweep, dual_tone");
         };
     }
 }

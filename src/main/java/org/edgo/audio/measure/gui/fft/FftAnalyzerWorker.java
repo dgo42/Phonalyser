@@ -16,6 +16,7 @@ import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftAnalyzer.FrameFftCache;
 import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBuffer;
@@ -72,7 +73,9 @@ public final class FftAnalyzerWorker {
     private float[] reusableRightBuf = new float[0];
     private Thread worker;
 
+    @SuppressWarnings("unused")
     private long startAnalyze;
+    @SuppressWarnings("unused")
     private long startSendToUi;
 
     // ─── Per-frame FFT cache (perf) ─────────────────────────────────────────
@@ -127,6 +130,17 @@ public final class FftAnalyzerWorker {
      *  multi-second blank period the user perceives as a glitch every
      *  time they nudge an amplitude / frequency / cal row. */
     private final Consumer<Void> invalidateOnEvent = ignored -> recycleAndClearCache();
+    /** Variant of {@link #invalidateOnEvent} for
+     *  {@link Events#GENERATOR_SIGNAL_CHANGED}: inspects the payload's
+     *  {@link GenChangeCause} and skips the cache flush when the cause
+     *  is {@link GenChangeCause#FLL_TRIM}.  An FLL trim is a sub-Hz
+     *  alignment of the generator with the FFT bin grid; the cached
+     *  FFTs are still correct (the underlying samples haven't changed)
+     *  and we want to KEEP averaging so the lock converges. */
+    private final Consumer<GenChangeCause> invalidateOnGenChange = cause -> {
+        if (cause == GenChangeCause.FLL_TRIM) return;
+        recycleAndClearCache();
+    };
     /** Cache adapter passed to {@link FftAnalyzer#setFrameCache}; backed
      *  by {@link #frameCacheMap} under {@link #frameCacheLock}. */
     private final FftAnalyzer.FrameFftCache frameFftCacheImpl =
@@ -419,7 +433,7 @@ public final class FftAnalyzerWorker {
         completedAnalyses     = 0;
         resetStatistics();
         paused.set(false);
-        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnEvent);
+        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnGenChange);
         MessageBus.instance().subscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
         worker = new Thread(this::workerLoop, "fft-analyzer");
         worker.setDaemon(true);
@@ -433,7 +447,7 @@ public final class FftAnalyzerWorker {
             worker.interrupt();
             worker = null;
         }
-        MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnEvent);
+        MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnGenChange);
         MessageBus.instance().unsubscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
         discardCacheAndPool();
         resetAccumulator();
@@ -674,9 +688,11 @@ public final class FftAnalyzerWorker {
         // Apply every loaded .frc calibration in cascade.  Each call
         // mutates r in place and re-runs the harmonic / THD / SNR
         // recompute, so the numeric readouts the view reads from r
-        // reflect the corrected spectrum.  "Calibrate with noise"
-        // (THD-tab checkbox) → correct EVERY bin; otherwise just the
-        // fundamental + harmonic bin neighbourhoods.
+        // reflect the corrected spectrum.  Each entry carries its own
+        // "with noise" flag (set per-row in the Load-calibration tab):
+        // when true, this entry's correction applies to every FFT bin
+        // including the noise floor; when false, only the fundamental
+        // + harmonic bin neighbourhoods are corrected.
         List<FftCalibrationStore.Entry> calEntries =
                 FftCalibrationStore.instance().getEntries();
         if (!calEntries.isEmpty()) {
@@ -684,13 +700,12 @@ public final class FftAnalyzerWorker {
             // so the view can draw "before" dots next to the corrected
             // "after" ones.
             r.preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
-            boolean correctAll = prefs.isFftCalibrateWithNoise();
             for (FftCalibrationStore.Entry e : calEntries) {
                 FreqRespCalibration calForChan = wantLeft
                         ? e.getCalibration().left()
                         : e.getCalibration().right();
                 FreqRespCalHelper.applyCompensationInPlace(
-                        r, calForChan, correctAll);
+                        r, calForChan, e.isWithNoise());
             }
             // applyCompensationInPlace only re-anchors fundRefDbV when
             // the cal file itself carries adcFsVoltageRms, and loadCsv
@@ -788,7 +803,7 @@ public final class FftAnalyzerWorker {
         // actual averaging depth is roughly 2× this threshold in frame
         // count.  Finite N already implements a moving window so the
         // analysis is continuous.
-        log.warn("FFT analyse took {} ms", (double)(System.nanoTime() - startAnalyze) / 1_000_000);
+        //log.warn("FFT analyse took {} ms", (double)(System.nanoTime() - startAnalyze) / 1_000_000);
         if (foreverMode
                 && prefs.isFftStopAfterNEnabled()
                 && completedAnalyses >= prefs.getFftStopAfterN()) {
@@ -816,15 +831,8 @@ public final class FftAnalyzerWorker {
         if (display == null || display.isDisposed()) return;
         FftAnalyzer.Result clone = newSlot/* .deepCopy()*/;
         startSendToUi = System.nanoTime();
-        // Diagnostic: log who the SWT thread is so we can spot a stale
-        // Display reference, and log right before / after asyncExec so a
-        // dispatch stall is visible even when the lambda never runs.
-        Thread swt = display.getThread();
-        log.warn("publishResult: calling asyncExec (SWT thread tid={} name={})",
-                swt != null ? swt.getId() : -1,
-                swt != null ? swt.getName() : "<null>");
         display.asyncExec(() -> {
-            log.warn("FFT result achieved asyncExec in {} ms", (double)(System.nanoTime() - startSendToUi) / 1_000_000);
+            //log.warn("FFT result achieved asyncExec in {} ms", (double)(System.nanoTime() - startSendToUi) / 1_000_000);
             try {
                 MessageBus.instance().publish(Events.FFT_RESULT_AVAILABLE, clone);
             } catch(Exception e) {
@@ -836,11 +844,10 @@ public final class FftAnalyzerWorker {
         // the message queue can drop wakes under load — wake() is the
         // belt-and-suspenders nudge.
         display.wake();
-        log.warn("publishResult: asyncExec queued + wake() sent");
     }
 
     public void uiGotResult() {
-        log.warn("FFT result achieved UI in {} ms", (double)(System.nanoTime() - startSendToUi) / 1_000_000);
+        //log.warn("FFT result achieved UI in {} ms", (double)(System.nanoTime() - startSendToUi) / 1_000_000);
     }
 
     private int msForSamples(int samples, int sampleRate) {

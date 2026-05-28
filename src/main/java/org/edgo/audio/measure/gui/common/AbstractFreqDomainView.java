@@ -1,5 +1,6 @@
 package org.edgo.audio.measure.gui.common;
 
+import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
@@ -327,42 +328,101 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
             }
         }
 
-        /** Emits the accumulated points as drawLine calls on {@code gc}.
-         *  The GC's clip is temporarily set to the plot rect so segments
-         *  that would otherwise spill past the chart edge are cut
-         *  cleanly.  Caller is responsible for setting foreground / line
-         *  width / line style before calling. */
+        /** Emits the accumulated points as vertical envelope bars
+         *  (one per multi-bin column, the "1 bin &lt; 1 px" dense
+         *  regime, AA off so single-bin spikes stay sharp) plus a
+         *  midpoint polyline through every non-empty column (carries
+         *  the trace through the sparse "1 bin &gt;= 1 px" regime,
+         *  AA on for a smooth line).  The GC's clip is temporarily
+         *  set to the plot rect; caller is responsible for setting
+         *  foreground / line width / line style before calling. */
+        // Previous implementation kept for reference — emitted
+        // up to 2 × plot.width drawLine calls (one envelope bar per
+        // multi-bin column + one polyline segment per inter-column
+        // gap).  Replaced by the fillPolygon + drawPolyline pass below
+        // because at 1000 px wide that was ~2000 GDI calls per spectrum
+        // rebuild — a measurable chunk of the FFT's 200 ms paint time.
+        //
+        // public void drawTo(GC gc) {
+        //     Rectangle prevClip = gc.getClipping();
+        //     gc.setClipping(plot);
+        //     try {
+        //         // Pass 1: vertical envelope bars for columns where
+        //         // multiple data points collapsed onto the same X pixel.
+        //         for (int x = 0; x < cnts.length; x++) {
+        //             if (cnts[x] == 0) continue;
+        //             if (yMins[x] != yMaxs[x]) {
+        //                 int px = plot.x + x;
+        //                 gc.drawLine(px, yMins[x], px, yMaxs[x]);
+        //             }
+        //         }
+        //         // Pass 2: polyline through column midpoints — bridges
+        //         // gaps between sparse columns so the trace reads as one
+        //         // continuous line.  Left / right anchors (when set)
+        //         // prepend / append a segment that reaches past the
+        //         // plot edge; the GC clip above hides the out-of-rect
+        //         // portion.
+        //         int prevX = leftAnchorX, prevY = leftAnchorY;
+        //         for (int x = 0; x < cnts.length; x++) {
+        //             if (cnts[x] == 0) continue;
+        //             int midY = (yMins[x] + yMaxs[x]) >>> 1;
+        //             int px   = plot.x + x;
+        //             if (prevX != Integer.MIN_VALUE) gc.drawLine(prevX, prevY, px, midY);
+        //             prevX = px; prevY = midY;
+        //         }
+        //         if (rightAnchorX != Integer.MIN_VALUE && prevX != Integer.MIN_VALUE) {
+        //             gc.drawLine(prevX, prevY, rightAnchorX, rightAnchorY);
+        //         }
+        //     } finally {
+        //         gc.setClipping(prevClip);
+        //     }
+        // }
         public void drawTo(GC gc) {
             Rectangle prevClip = gc.getClipping();
             gc.setClipping(plot);
+            int prevAA = gc.getAntialias();
             try {
-                // Pass 1: vertical envelope bars for columns where
-                // multiple data points collapsed onto the same X pixel.
+                // Pass 1: vertical envelope bars for the "1 bin < 1 px"
+                // (dense) columns.  AA OFF so 1-px-wide spikes — narrow
+                // harmonics, transients — render as a sharp stroke and
+                // don't get blended into the noise floor.  A fillPolygon
+                // envelope was tried previously but its diagonal top
+                // edge smeared single-bin spikes into adjacent columns.
+                gc.setAntialias(SWT.OFF);
                 for (int x = 0; x < cnts.length; x++) {
-                    if (cnts[x] == 0) continue;
-                    if (yMins[x] != yMaxs[x]) {
-                        int px = plot.x + x;
-                        gc.drawLine(px, yMins[x], px, yMaxs[x]);
-                    }
+                    if (cnts[x] < 2 || yMins[x] == yMaxs[x]) continue;
+                    int px = plot.x + x;
+                    gc.drawLine(px, yMins[x], px, yMaxs[x]);
                 }
-                // Pass 2: polyline through column midpoints — bridges
-                // gaps between sparse columns so the trace reads as one
-                // continuous line.  Left / right anchors (when set)
-                // prepend / append a segment that reaches past the
-                // plot edge; the GC clip above hides the out-of-rect
-                // portion.
+
+                // Pass 2: midpoint polyline (AA on) plus separate
+                // drawLine extensions to the anchors.  Keeping them as
+                // separate calls (instead of one combined polyline)
+                // sidesteps a render quirk where a polyline with many
+                // off-clip-rect vertices intermittently fails to
+                // render its in-rect segments at all.
+                // Pass 2: midpoint trace as per-segment drawLine calls
+                // (AA on).  Per-segment avoids a drawPolyline rendering
+                // quirk on Windows where many off-clip-rect vertices
+                // can cause the in-rect segments to drop out entirely.
+                // Left / right anchors prepend / append a connecting
+                // segment so the trace reaches past the plot edge; the
+                // clip above hides the out-of-rect portion.
+                gc.setAntialias(SWT.ON);
                 int prevX = leftAnchorX, prevY = leftAnchorY;
                 for (int x = 0; x < cnts.length; x++) {
                     if (cnts[x] == 0) continue;
                     int midY = (yMins[x] + yMaxs[x]) >>> 1;
                     int px   = plot.x + x;
                     if (prevX != Integer.MIN_VALUE) gc.drawLine(prevX, prevY, px, midY);
-                    prevX = px; prevY = midY;
+                    prevX = px;
+                    prevY = midY;
                 }
                 if (rightAnchorX != Integer.MIN_VALUE && prevX != Integer.MIN_VALUE) {
                     gc.drawLine(prevX, prevY, rightAnchorX, rightAnchorY);
                 }
             } finally {
+                gc.setAntialias(prevAA);
                 gc.setClipping(prevClip);
             }
         }

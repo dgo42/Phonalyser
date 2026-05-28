@@ -64,15 +64,16 @@ public final class GeneratorController {
         final int    sampleRate    = bp.getOutputSampleRate();
         final int    bitDepth      = bp.getOutputBitDepth();
         final int    ditherBits    = prefs.getGenDitherBits();
-        final double rawFrequency  = prefs.getGenFrequencyHz();
         final double amplitudeVRms = prefs.getGenAmplitudeVrms();
         final GenSignalForm form      = parseForm(prefs.getGenSignalForm());
-        // Snap the emitted frequency to the nearest FFT bin when the
-        // user enabled "snap to FFT bin" with a SINE waveform.  Done
-        // here (not in GeneratorPane) so the snap doesn't have to live
-        // in prefs.getGenFrequencyHz — the field keeps the raw user
-        // value (e.g. 1000 Hz), the controller emits the snapped value
-        // (e.g. 999.987 Hz at 1M FFT / 48 kHz).
+        // First tone frequency: the generator constructor's
+        // {@code frequency} parameter feeds the primary DDS, so for
+        // DUAL_TONE this is tone 1.  Snapped to the nearest FFT bin
+        // when the user enabled snap-to-bin; the snap helper itself
+        // gates on the waveform.
+        final double rawFrequency  = (form == GenSignalForm.DUAL_TONE)
+                ? prefs.getGenDualToneFreq1Hz()
+                : prefs.getGenFrequencyHz();
         final double frequency = FftBinSnap.snapIfEnabled(prefs, form, sampleRate, rawFrequency);
 
         // The WASAPI exclusive-mode driver sometimes refuses to start the
@@ -148,6 +149,20 @@ public final class GeneratorController {
             int fadeIn  = Math.max(0, (int) Math.round(prefs.getGenSweepFadeInSec()  * sampleRate));
             int fadeOut = Math.max(0, (int) Math.round(prefs.getGenSweepFadeOutSec() * sampleRate));
             gen.setSweepParams(prefs.isGenSweepLoop(), fadeIn, fadeOut);
+        }
+        if (form == GenSignalForm.DUAL_TONE) {
+            // Dual-tone: tone 1 uses the frequency the generator was
+            // constructed with (already snapped above); tone 2's
+            // frequency and the per-tone amplitude split are pushed
+            // in here.  Tone 2 is snapped to the FFT bin grid
+            // independently so both tones land on a bin centre.
+            // {@code genDualToneSplitPct} carries Freq 1's amplitude
+            // percentage; Freq 2's amplitude is the complement.
+            double rawF2  = prefs.getGenDualToneFreq2Hz();
+            double snapF2 = FftBinSnap.snapIfEnabled(prefs, form, sampleRate, rawF2);
+            gen.setDualToneFrequency2(snapF2);
+            double a1Pct = prefs.getGenDualToneSplitPct();
+            gen.setDualToneAmplitudes(a1Pct, 100.0 - a1Pct);
         }
         this.generator = gen;
         final SignalGenerator generator = gen;
@@ -256,6 +271,35 @@ public final class GeneratorController {
     public void setFrequency(double hz) {
         SignalGenerator g = generator;
         if (g != null) g.setFrequency(hz);
+    }
+
+    /** Live-applies the second tone's frequency (Hz) for the
+     *  {@code DUAL_TONE} waveform.  No-op if not running; no audible
+     *  effect for non-DUAL_TONE waveforms (the second accumulator
+     *  stays idle until the form is switched to DUAL_TONE). */
+    public void setDualToneFrequency2(double hz) {
+        SignalGenerator g = generator;
+        if (g != null) g.setDualToneFrequency2(hz);
+    }
+
+    /** Live-applies the dual-tone power split (first tone's percentage
+     *  of total signal power).  Generator clamps to {@code [0, 100]}.
+     *
+     *  @deprecated Replaced by {@link #setDualToneAmplitudes} which
+     *      takes both percentages explicitly (amp1 + amp2 = 100). */
+    @Deprecated
+    public void setDualToneSplitPercent(double firstPercent) {
+        SignalGenerator g = generator;
+        if (g != null) g.setDualToneAmplitudes(firstPercent, 100.0 - firstPercent);
+    }
+
+    /** Live-applies the dual-tone per-tone amplitude percentages.
+     *  Both values together; generator clamps each to {@code [0, 100]}
+     *  and re-normalises the internal amplitude scale so the combined
+     *  signal's Vrms still matches the Amplitude field. */
+    public void setDualToneAmplitudes(double amp1Pct, double amp2Pct) {
+        SignalGenerator g = generator;
+        if (g != null) g.setDualToneAmplitudes(amp1Pct, amp2Pct);
     }
 
     /** Live-applies a new amplitude (V RMS) to the running generator.  No-op if not running. */

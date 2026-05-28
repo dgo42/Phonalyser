@@ -49,6 +49,7 @@ import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.gui.MainTab;
 import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
@@ -147,6 +148,13 @@ public final class FftPane {
     private Button             fundFromGenCheck;
     private Button             logFreqCheck;
     private Button             coherentCheck;
+    /** "Align generator to frequency difference" — gates the FFT-side
+     *  frequency-lock loop.  Enabled in the UI only when both
+     *  snap-to-FFT-bin and fund-from-generator are on, since the loop
+     *  needs a target bin (snap) and a target frequency (fund-from-gen)
+     *  to lock onto.  Even when this is checked the loop only fires if
+     *  the other two are also on — see {@code FftView.applyFrequencyLockLoop}. */
+    private Button             alignGenCheck;
     private Button             distMinEnable;
     private NumericStepField   distMinField;
     private Button             distMaxEnable;
@@ -180,6 +188,11 @@ public final class FftPane {
     /** Counterpart to {@link #freqRespStartedListener} — re-enables the
      *  Record button once the sweep finishes (or aborts). */
     private Consumer<Void> freqRespStoppedListener;
+    /** Subscriber for {@link Events#GENERATOR_SIGNAL_CHANGED} — used
+     *  only to refresh {@link #alignGenCheck}'s enabled state when the
+     *  user toggles snap-to-FFT-bin on the generator pane (snap-to-bin
+     *  is the missing prerequisite the user needs to satisfy here). */
+    private Consumer<GenChangeCause> genChangeListener;
 
     public FftPane(Composite parent,
                    boolean liveCapture) {
@@ -418,11 +431,13 @@ public final class FftPane {
         autoStoppedListener       = ignored -> disengageRecord();
         freqRespStartedListener   = ignored -> onFreqRespMeasurementStarted();
         freqRespStoppedListener   = ignored -> onFreqRespMeasurementStopped();
+        genChangeListener         = cause   -> updateAlignGenEnabled();
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.FFT_RANGE_CHANGED,             rangeChangedListener);
         bus.subscribe(Events.FFT_RECORDING_AUTO_STOPPED,    autoStoppedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
+        bus.subscribe(Events.GENERATOR_SIGNAL_CHANGED,      genChangeListener);
 
         recordButton.addListener(SWT.Selection, e -> {
             if (recordButton.getSelection()) recordOn();
@@ -435,6 +450,7 @@ public final class FftPane {
             bus2.unsubscribe(Events.FFT_RECORDING_AUTO_STOPPED,    autoStoppedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
+            bus2.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED,      genChangeListener);
             view.stop();
             view.setBuffer(null);
             if (captureHeld) {
@@ -935,11 +951,11 @@ public final class FftPane {
             view.resetStatistics();
         });
 
-        // Three boolean knobs packed onto two rows so the tab content
+        // Four boolean knobs packed onto two rows so the tab content
         // fits inside the typical FFT-pane height (the previous 3-rows-
         // of-spans-4 layout pushed the third checkbox below the visible
         // CTabFolder client area).
-        // Row: Get fundamental from generator (span 2) | Log freq (span 2)
+        // Row: Get fundamental from generator (span 2) | Align generator (span 2)
         fundFromGenCheck = new Button(g, SWT.CHECK);
         fundFromGenCheck.setText(I18n.t("fft.settings.fundFromGen"));
         fundFromGenCheck.setSelection(prefs.isFftFundFromGenerator());
@@ -949,6 +965,41 @@ public final class FftPane {
         fundFromGenCheck.addListener(SWT.Selection, e -> {
             prefs.setFftFundFromGenerator(fundFromGenCheck.getSelection());
             prefs.save();
+        });
+
+        // "Align generator to frequency difference" — only meaningful
+        // when both snap-to-bin (provides a target bin) and
+        // fund-from-generator (provides a target frequency) are on, so
+        // the checkbox is disabled otherwise.  Even when on, the FLL
+        // still re-checks all three prefs at fire time — see
+        // FftView.applyFrequencyLockLoop.
+        alignGenCheck = new Button(g, SWT.CHECK);
+        alignGenCheck.setText(I18n.t("fft.settings.alignGenToFreqDiff"));
+        alignGenCheck.setSelection(prefs.isFftAlignGenToFreqDiff());
+        GridData algGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
+        algGd.horizontalSpan = 2;
+        alignGenCheck.setLayoutData(algGd);
+        alignGenCheck.addListener(SWT.Selection, e -> {
+            prefs.setFftAlignGenToFreqDiff(alignGenCheck.getSelection());
+            prefs.save();
+            // Reset the FLL when turning off so the next "on" toggle
+            // starts converging from zero instead of resuming an old
+            // correction value the user can't see any more.
+            if (!alignGenCheck.getSelection()) view.resetStatistics();
+        });
+
+        // Row: Coherent averaging (span 2) | Log freq (span 2)
+        coherentCheck = new Button(g, SWT.CHECK);
+        coherentCheck.setText(I18n.t("fft.thd.coherent"));
+        coherentCheck.setSelection(prefs.isFftCoherentAveraging());
+        GridData cohGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
+        cohGd.horizontalSpan = 2;
+        coherentCheck.setLayoutData(cohGd);
+        coherentCheck.addListener(SWT.Selection, e -> {
+            prefs.setFftCoherentAveraging(coherentCheck.getSelection());
+            prefs.save();
+            refreshTabHeader(TAB_FFT_SETTINGS);
+            view.resetStatistics();
         });
 
         logFreqCheck = new Button(g, SWT.CHECK);
@@ -963,19 +1014,22 @@ public final class FftPane {
             view.redraw();
         });
 
-        // Row: Coherent averaging (spans full width).
-        coherentCheck = new Button(g, SWT.CHECK);
-        coherentCheck.setText(I18n.t("fft.thd.coherent"));
-        coherentCheck.setSelection(prefs.isFftCoherentAveraging());
-        GridData cohGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
-        cohGd.horizontalSpan = 4;
-        coherentCheck.setLayoutData(cohGd);
-        coherentCheck.addListener(SWT.Selection, e -> {
-            prefs.setFftCoherentAveraging(coherentCheck.getSelection());
-            prefs.save();
-            refreshTabHeader(TAB_FFT_SETTINGS);
-            view.resetStatistics();
-        });
+        // Initial enable state + update it when the fund-from-gen
+        // checkbox flips locally; snap-to-bin changes come via the bus
+        // (subscribe wired below in the bus block).
+        updateAlignGenEnabled();
+        fundFromGenCheck.addListener(SWT.Selection, e -> updateAlignGenEnabled());
+    }
+
+    /** Enables {@link #alignGenCheck} only when both prerequisites
+     *  (snap-to-FFT-bin and fund-from-generator) are checked.  Called
+     *  from local listeners and from the {@code GENERATOR_SIGNAL_CHANGED}
+     *  bus subscriber (which fires when the user toggles snap-to-bin
+     *  on the generator pane). */
+    private void updateAlignGenEnabled() {
+        if (alignGenCheck == null || alignGenCheck.isDisposed()) return;
+        Preferences prefs = Preferences.instance();
+        alignGenCheck.setEnabled(prefs.isGenSnapToFftBin() && prefs.isFftFundFromGenerator());
     }
 
     // =========================================================================
@@ -1127,34 +1181,9 @@ public final class FftPane {
             prefs.save();
         });
         new Label(g, SWT.NONE);   // fill row
-
-        // "Calibrate with noise" — when checked, subtraction applies to
-        // every FFT bin.  When unchecked, only the fundamental +
-        // harmonic dot positions are corrected.  Enabled only when ≥1
-        // calibration file is loaded; we listen to FFT_CALIBRATION_CHANGED
-        // to flip enablement live as the user loads / clears rows.
-        new Label(g, SWT.NONE);
-        Button calNoiseBtn = new Button(g, SWT.CHECK);
-        calNoiseBtn.setText(I18n.t("fft.thd.calibrateWithNoise"));
-        calNoiseBtn.setToolTipText(I18n.t("fft.thd.calibrateWithNoise.tooltip"));
-        calNoiseBtn.setSelection(prefs.isFftCalibrateWithNoise());
-        calNoiseBtn.setEnabled(FftCalibrationStore.instance().isAnyLoaded());
-        GridData calGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
-        calGd.horizontalSpan = 3;
-        calNoiseBtn.setLayoutData(calGd);
-        calNoiseBtn.addListener(SWT.Selection, e -> {
-            prefs.setFftCalibrateWithNoise(calNoiseBtn.getSelection());
-            prefs.save();
-            MessageBus.instance().publish(Events.FFT_CALIBRATION_CHANGED);
-        });
-        // Live enable/disable as the calibration list mutates.
-        Consumer<Void> updateCalBtnEnable = ignored -> {
-            if (calNoiseBtn.isDisposed()) return;
-            calNoiseBtn.setEnabled(FftCalibrationStore.instance().isAnyLoaded());
-        };
-        MessageBus.instance().subscribe(Events.FFT_CALIBRATION_CHANGED, updateCalBtnEnable);
-        calNoiseBtn.addDisposeListener(e ->
-                MessageBus.instance().unsubscribe(Events.FFT_CALIBRATION_CHANGED, updateCalBtnEnable));
+        // (The previous global "Calibrate with noise" checkbox moved to
+        // the Load-calibration tab — it's now a per-row "With noise"
+        // flag, set independently per loaded .frc file.)
     }
 
     // =========================================================================
@@ -1981,8 +2010,21 @@ public final class FftPane {
     private static final class FftCalRow {
         Composite                composite;
         Text                     pathField;
+        /** "Active" toggle — the calibration is only added to
+         *  {@link FftCalibrationStore} when this is checked AND a file
+         *  is loaded.  Setting it ahead of loading the file is OK
+         *  (the load handler re-runs syncFftStoreFromRows). */
+        Button                   activeCheck;
+        /** "With noise" toggle — when checked, this row's correction
+         *  is applied to every FFT bin (including the noise floor),
+         *  not just the harmonic dot positions.  Only meaningful when
+         *  {@link #activeCheck} is on AND a file is loaded; disabled
+         *  otherwise. */
+        Button                   noiseCheck;
         StereoFreqRespCalibration calibration;
         String                   path;  // null when row is empty
+        boolean                  active;
+        boolean                  withNoise;
     }
 
     private void buildCalibrationTab(CTabFolder folder) {
@@ -2003,34 +2045,54 @@ public final class FftPane {
 
         Preferences prefs = Preferences.instance();
         FftCalRow row0 = createFftCalRowUi();
+        row0.active    = prefs.isFftCalibrationActive();
+        row0.withNoise = prefs.isFftCalibrationWithNoise();
         String p0 = prefs.getFftCalibrationPath();
         if (p0 != null && !p0.isEmpty()) loadFileIntoFftCalRow(row0, p0, false);
+        updateFftCalRowEnable(row0);
 
-        List<String> extras = prefs.getFftCalibrationPathsExtra();
+        List<String>  extras       = prefs.getFftCalibrationPathsExtra();
+        List<Boolean> extrasActive = prefs.getFftCalibrationActiveExtra();
+        List<Boolean> extrasNoise  = prefs.getFftCalibrationWithNoiseExtra();
         if (extras != null) {
-            for (String pn : extras) {
+            for (int i = 0; i < extras.size(); i++) {
                 FftCalRow rN = createFftCalRowUi();
+                rN.active    = (extrasActive != null && i < extrasActive.size()) ? extrasActive.get(i) : false;
+                rN.withNoise = (extrasNoise  != null && i < extrasNoise.size())  ? extrasNoise.get(i)  : false;
+                String pn = extras.get(i);
                 if (pn != null && !pn.isEmpty()) loadFileIntoFftCalRow(rN, pn, false);
+                updateFftCalRowEnable(rN);
             }
         }
         FftCalibrationStore.instance().clearAll();
         for (FftCalRow r : fftCalRows) {
-            if (r.calibration != null && r.path != null) {
-                FftCalibrationStore.instance().addEntry(r.calibration, r.path);
+            if (r.calibration != null && r.path != null && r.active) {
+                FftCalibrationStore.instance().addEntry(r.calibration, r.path, r.withNoise);
             }
         }
     }
 
-    /** Builds and appends a fresh row.  5-column grid: pathField, load,
-     *  clear, add, remove.  Remove is {@code setVisible(false)} on row 0
-     *  so its column stays reserved and the load/clear/add buttons in
-     *  every row line up vertically. */
+    /** Builds and appends a fresh row.  7-column grid: pathField,
+     *  activeCheck, noiseCheck, load, clear, add, remove.  Remove is
+     *  {@code setVisible(false)} on row 0 so its column stays reserved
+     *  and the buttons line up vertically across rows.
+     *
+     *  <p>The two checkboxes feed {@link #syncFftStoreFromRows}:
+     *  <ul>
+     *    <li>"Active" — entry is only added to the calibration store
+     *        when checked AND a file is loaded.  Toggling it
+     *        rebuilds the store immediately.</li>
+     *    <li>"With noise" — when checked, this row's correction is
+     *        applied to every FFT bin (noise floor included);
+     *        otherwise only harmonic / dot bins are corrected.  Only
+     *        meaningful when Active is on; disabled otherwise.</li>
+     *  </ul> */
     private FftCalRow createFftCalRowUi() {
         boolean isRow0 = fftCalRows.isEmpty();
 
         Composite row = new Composite(fftCalRowsContainer, SWT.NONE);
         row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout rl = new GridLayout(5, false);
+        GridLayout rl = new GridLayout(7, false);
         rl.marginWidth = 0; rl.marginHeight = 0; rl.horizontalSpacing = 6;
         row.setLayout(rl);
 
@@ -2039,6 +2101,14 @@ public final class FftPane {
         pgd.widthHint = 320;
         pathField.setLayoutData(pgd);
         pathField.setText(I18n.t("freqResp.calibration.path.none"));
+
+        Button activeCheck = new Button(row, SWT.CHECK);
+        activeCheck.setText(I18n.t("fft.calibration.active"));
+        activeCheck.setToolTipText(I18n.t("fft.calibration.active.tooltip"));
+
+        Button noiseCheck = new Button(row, SWT.CHECK);
+        noiseCheck.setText(I18n.t("fft.calibration.withNoise"));
+        noiseCheck.setToolTipText(I18n.t("fft.calibration.withNoise.tooltip"));
 
         Image folderIcon = IconUtils.instance().renderAtHeight(
                 row.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
@@ -2069,17 +2139,48 @@ public final class FftPane {
         if (isRow0) removeBtn.setVisible(false);
 
         FftCalRow r = new FftCalRow();
-        r.composite = row;
-        r.pathField = pathField;
+        r.composite   = row;
+        r.pathField   = pathField;
+        r.activeCheck = activeCheck;
+        r.noiseCheck  = noiseCheck;
         fftCalRows.add(r);
+        updateFftCalRowEnable(r);
 
         loadBtn.addListener(SWT.Selection,  e -> userLoadInFftCalRow(r));
         clearBtn.addListener(SWT.Selection, e -> userClearFftCalRow(r));
         addBtn.addListener(SWT.Selection,   e -> userAddFftCalRow());
         if (!isRow0) removeBtn.addListener(SWT.Selection, e -> userRemoveFftCalRow(r));
+        activeCheck.addListener(SWT.Selection, e -> {
+            r.active = activeCheck.getSelection();
+            updateFftCalRowEnable(r);
+            syncFftStoreFromRows();
+            persistFftRowsToPrefs();
+        });
+        noiseCheck.addListener(SWT.Selection, e -> {
+            r.withNoise = noiseCheck.getSelection();
+            syncFftStoreFromRows();
+            persistFftRowsToPrefs();
+        });
 
         relayoutFftCalRows();
         return r;
+    }
+
+    /** Keeps the row's two checkboxes' enabled state in sync with the
+     *  current row state — Active needs a loaded file, With-noise
+     *  needs both a file and an active row.  Called from row
+     *  creation, file load, file clear, and the Active checkbox
+     *  listener. */
+    private void updateFftCalRowEnable(FftCalRow r) {
+        boolean fileLoaded = r.path != null && r.calibration != null;
+        if (r.activeCheck != null && !r.activeCheck.isDisposed()) {
+            r.activeCheck.setEnabled(fileLoaded);
+            r.activeCheck.setSelection(r.active);
+        }
+        if (r.noiseCheck != null && !r.noiseCheck.isDisposed()) {
+            r.noiseCheck.setEnabled(fileLoaded && r.active);
+            r.noiseCheck.setSelection(r.withNoise);
+        }
     }
 
     private void relayoutFftCalRows() {
@@ -2112,6 +2213,12 @@ public final class FftPane {
         r.path        = null;
         r.pathField.setText(I18n.t("freqResp.calibration.path.none"));
         r.pathField.setToolTipText(null);
+        // Clearing the file forces the two checkboxes back to disabled
+        // (their "applies when active && file selected" rule).  Active
+        // stays SELECTED in the UI so the row re-applies as soon as
+        // the user picks a new file — that's the user's stated intent:
+        // "if checkbox active and file not loaded, apply once it loads".
+        updateFftCalRowEnable(r);
         syncFftStoreFromRows();
         persistFftRowsToPrefs();
     }
@@ -2139,6 +2246,9 @@ public final class FftPane {
             r.path        = picked;
             r.pathField.setText(picked);
             r.pathField.setToolTipText(picked);
+            // File just loaded — refresh the checkboxes' enabled state
+            // (Active becomes enable-able; With-noise follows Active).
+            updateFftCalRowEnable(r);
             return true;
         } catch (Exception ex) {
             log.warn("FFT calibration load failed: {}", picked, ex);
@@ -2157,22 +2267,33 @@ public final class FftPane {
         FftCalibrationStore store = FftCalibrationStore.instance();
         store.clearAll();
         for (FftCalRow r : fftCalRows) {
-            if (r.calibration != null && r.path != null) {
-                store.addEntry(r.calibration, r.path);
+            // Only push entries that have a loaded file AND the user
+            // has checked "Active" — the per-row With-noise flag rides
+            // with the entry into the store.
+            if (r.calibration != null && r.path != null && r.active) {
+                store.addEntry(r.calibration, r.path, r.withNoise);
             }
         }
     }
 
     private void persistFftRowsToPrefs() {
         Preferences prefs = Preferences.instance();
-        String row0 = fftCalRows.isEmpty() ? null : fftCalRows.get(0).path;
-        prefs.setFftCalibrationPath(row0);
-        List<String> extras = new ArrayList<>();
+        FftCalRow row0 = fftCalRows.isEmpty() ? null : fftCalRows.get(0);
+        prefs.setFftCalibrationPath(row0 == null ? null : row0.path);
+        prefs.setFftCalibrationActive(row0 != null && row0.active);
+        prefs.setFftCalibrationWithNoise(row0 != null && row0.withNoise);
+        List<String>  extras       = new ArrayList<>();
+        List<Boolean> extrasActive = new ArrayList<>();
+        List<Boolean> extrasNoise  = new ArrayList<>();
         for (int i = 1; i < fftCalRows.size(); i++) {
-            String p = fftCalRows.get(i).path;
-            extras.add(p == null ? "" : p);
+            FftCalRow r = fftCalRows.get(i);
+            extras.add(r.path == null ? "" : r.path);
+            extrasActive.add(r.active);
+            extrasNoise.add(r.withNoise);
         }
         prefs.setFftCalibrationPathsExtra(extras);
+        prefs.setFftCalibrationActiveExtra(extrasActive);
+        prefs.setFftCalibrationWithNoiseExtra(extrasNoise);
         prefs.save();
     }
 

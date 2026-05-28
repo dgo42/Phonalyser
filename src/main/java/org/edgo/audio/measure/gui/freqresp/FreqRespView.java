@@ -1056,10 +1056,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
         int x     = MARGIN_LEFT + 6;
         int y     = BTN_TOP + BTN_H + 6;
         int lineH = gc.getFontMetrics().getHeight();
-        gc.drawText("max: " + FreqRespFormat.formatDbReadout(compareSmoothedMax),
-                x, y, true);
-        gc.drawText("min: " + FreqRespFormat.formatDbReadout(compareSmoothedMin),
-                x, y + lineH, true);
+        drawOutlinedText(gc, "max: " + FreqRespFormat.formatDbReadout(compareSmoothedMax),
+                x, y);
+        drawOutlinedText(gc, "min: " + FreqRespFormat.formatDbReadout(compareSmoothedMin),
+                x, y + lineH);
     }
 
     /** Paints the centred comparison-mode banner.  No background box; just
@@ -1079,7 +1079,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         int y = plot.y + 6;
         boolean lit = blinkLit();
         gc.setForeground(lit ? color(ColorRole.BLINK_LIT) : color(ColorRole.BLINK_DIM));
-        gc.drawText(text, x, y, true);
+        drawOutlinedText(gc, text, x, y);
         scheduleBlinkRedraw();
     }
 
@@ -1139,13 +1139,21 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // in the shared base.  One drawLine per pixel column instead of
         // one per data point, so a 65 k-point sweep renders in
         // ~plot.width draws instead of 65 k.
+        //
+        // Points just outside the visible range are routed to the
+        // painter's left / right anchors so a polyline can still be
+        // drawn (clipped to the plot rect) when only 0–1 sweep points
+        // fall inside the visible window — that's the "very strong
+        // zoom" case where the bucket pass alone would produce an
+        // empty polyline and the trace would disappear.
         ColumnBucketPainter painter = new ColumnBucketPainter(plot);
         for (int i = 0; i < freqs.length; i++) {
             double f = freqs[i];
-            if (f < freqMin || f > freqMax) continue;
-            painter.add(
-                    freqToX(f, plot, freqMin, freqMax, true),
-                    dbToY(FreqRespFormat.linToDb(magLin[i]), plot, magTop, magBot));
+            int xAbs = freqToX(f, plot, freqMin, freqMax, true);
+            int y    = dbToY(FreqRespFormat.linToDb(magLin[i]), plot, magTop, magBot);
+            if (f < freqMin)        painter.setLeftAnchor(xAbs, y);
+            else if (f > freqMax)   painter.setRightAnchor(xAbs, y);
+            else                    painter.add(xAbs, y);
         }
         painter.drawTo(gc);
     }
@@ -1192,7 +1200,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         boolean lit = blinkLit();
         gc.setForeground(lit ? color(ColorRole.BLINK_LIT) : color(ColorRole.BLINK_DIM));
         int x = plot.x + plot.width - ext.x - 6;
-        gc.drawText(label, x, plot.y + 4, true);
+        drawOutlinedText(gc, label, x, plot.y + 4);
         scheduleBlinkRedraw();
     }
 

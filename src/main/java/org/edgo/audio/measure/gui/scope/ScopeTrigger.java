@@ -32,6 +32,26 @@ public class ScopeTrigger {
     public double find(float[] data, int n, int from, int to,
                        float level, boolean rising, boolean sincRefine,
                        float hysteresis) {
+        return find(data, n, from, to, level, rising, sincRefine, hysteresis, 0.0);
+    }
+
+    /**
+     * Variant of {@link #find} that suppresses qualified crossings spaced
+     * closer than {@code minSpacingSamples} apart — the next accepted
+     * trigger must lie at least that many samples after the previously
+     * accepted one.  Used by the scope in DUAL_TONE mode to lock the
+     * display onto the slow {@code |F1-F2|} beat envelope: the carrier
+     * crosses the trigger level many times per beat, so a {@code
+     * minSpacingSamples = sampleRate / |F1-F2|} keeps only one trigger
+     * per beat cycle.
+     *
+     * <p>With {@code minSpacingSamples <= 0} this collapses onto the
+     * no-holdoff behaviour of {@link #find(float[], int, int, int, float,
+     * boolean, boolean, float)}.
+     */
+    public double find(float[] data, int n, int from, int to,
+                       float level, boolean rising, boolean sincRefine,
+                       float hysteresis, double minSpacingSamples) {
         float lo = level - hysteresis;
         float hi = level + hysteresis;
         // Determine the incoming Schmitt state by walking back from `from`
@@ -59,7 +79,9 @@ public class ScopeTrigger {
                 if (curr <= lo) {
                     state = -1;
                 } else if (curr >= hi) {
-                    if (state == -1 && pendingCrossing >= 0) {
+                    if (state == -1 && pendingCrossing >= 0
+                            && (lastTrigger < 0
+                                || pendingCrossing - lastTrigger >= minSpacingSamples)) {
                         lastTrigger = pendingCrossing;
                     }
                     state = +1;
@@ -74,7 +96,9 @@ public class ScopeTrigger {
                 if (curr >= hi) {
                     state = +1;
                 } else if (curr <= lo) {
-                    if (state == +1 && pendingCrossing >= 0) {
+                    if (state == +1 && pendingCrossing >= 0
+                            && (lastTrigger < 0
+                                || pendingCrossing - lastTrigger >= minSpacingSamples)) {
                         lastTrigger = pendingCrossing;
                     }
                     state = -1;

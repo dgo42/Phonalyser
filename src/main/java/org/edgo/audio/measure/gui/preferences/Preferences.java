@@ -114,6 +114,12 @@ public final class Preferences {
      *  {@link #oscTriggerHysteresisDiv}; the stored div value is preserved
      *  so re-enabling restores the user's last setting. */
     @Getter @Setter private boolean        oscTriggerHysteresisEnabled = false;
+    /** When {@code true} (and the generator is in {@code DUAL_TONE}
+     *  mode), the scope overlays the reconstructed {@code |F1-F2|}
+     *  beat envelope on the live trace in the trigger channel's
+     *  trace colour (20 % darker).  Has no effect outside DUAL_TONE
+     *  mode — the overlay is gated on the form independently. */
+    @Getter @Setter private boolean        oscShowReconstructedBeat = false;
     /** Per-channel Lanczos sinc-interpolation toggle.  Each channel renders
      *  independently so the user can compare a sinc-reconstructed trace
      *  against a linearly-interpolated one side-by-side. */
@@ -182,6 +188,14 @@ public final class Preferences {
     // -------------------------------------------------------------------------
     @Getter @Setter private String genSignalForm    = "SINE";
     @Getter @Setter private double genFrequencyHz   = 1000.0;
+    /** First tone of the {@code DUAL_TONE} waveform — Hz. */
+    @Getter @Setter private double genDualToneFreq1Hz = 1000.0;
+    /** Second tone of the {@code DUAL_TONE} waveform — Hz. */
+    @Getter @Setter private double genDualToneFreq2Hz = 1300.0;
+    /** Percentage of the total signal power going to the first tone of
+     *  {@code DUAL_TONE}; the second tone receives {@code 100 − this}.
+     *  Range [0, 100], default 50 = equal split. */
+    @Getter @Setter private double genDualToneSplitPct = 50.0;
     @Getter @Setter private double genAmplitudeVrms = 0.5;
     /** Unit the amplitude field renders in: one of {@code mV}, {@code V}, {@code dBV}, {@code dBFS}. */
     @Getter @Setter private String genAmplitudeUnit = "V";
@@ -270,6 +284,12 @@ public final class Preferences {
     /** {@code FftOverlap} enum name. */
     @Getter @Setter private String  fftOverlap           = "PCT_0";
     @Getter @Setter private boolean fftCoherentAveraging = true;
+    /** When true, the FFT-side frequency-lock loop drives the generator
+     *  to keep the fundamental on the nearest FFT bin centre.  Only
+     *  takes effect when {@code genSnapToFftBin} AND
+     *  {@code fftFundFromGenerator} are also true — both prerequisites
+     *  are required for the loop to know which bin to lock onto. */
+    @Getter @Setter private boolean fftAlignGenToFreqDiff = false;
     @Getter @Setter private double  fftDistMinHz         = 20;
     @Getter @Setter private double  fftDistMaxHz         = 20000;
     @Getter @Setter private boolean fftDistMinEnabled    = false;
@@ -303,10 +323,26 @@ public final class Preferences {
      *  the FFT pane's Load-calibration tab.  Empty strings represent
      *  empty rows that the user added but didn't yet populate. */
     @Getter @Setter private List<String> fftCalibrationPathsExtra = new ArrayList<>();
+    /** Row-0 "Active" flag — when true the row's loaded calibration is
+     *  applied. */
+    @Getter @Setter private boolean fftCalibrationActive       = false;
+    /** Row-0 "With noise" flag — when true the row's correction
+     *  applies to every FFT bin (noise floor included), not just the
+     *  harmonic dot positions. */
+    @Getter @Setter private boolean fftCalibrationWithNoise    = false;
+    /** Per-row "Active" flags for the extras rows (rows 1..N). */
+    @Getter @Setter private List<Boolean> fftCalibrationActiveExtra    = new ArrayList<>();
+    /** Per-row "With noise" flags for the extras rows (rows 1..N). */
+    @Getter @Setter private List<Boolean> fftCalibrationWithNoiseExtra = new ArrayList<>();
     /** When true, calibration subtraction applies to EVERY spectrum
      *  bin (including the noise floor).  When false, only the
-     *  fundamental + harmonic dot positions are adjusted.  Bound to
-     *  the "Calibrate with noise" checkbox on the THD Settings tab. */
+     *  fundamental + harmonic dot positions are adjusted.
+     *
+     *  @deprecated Replaced by per-row {@link #fftCalibrationWithNoise}
+     *      + {@link #fftCalibrationWithNoiseExtra}.  Field is kept so
+     *      old settings.json files still load cleanly; new code uses
+     *      the per-row flags via {@code FftCalibrationStore.Entry#isWithNoise}. */
+    @Deprecated
     @Getter @Setter private boolean fftCalibrateWithNoise     = false;
     /** Packed RGB of the "before-calibration" dot painted next to each
      *  fundamental / harmonic peak when at least one .frc calibration
@@ -448,6 +484,12 @@ public final class Preferences {
      *  multi-row list; subsequent rows are stored in
      *  {@link #freqRespCalibrationPathsExtra}. */
     @Getter @Setter private String  freqRespCalibrationPath;
+    /** Row-0 "Active" flag — when true the row's loaded calibration is
+     *  applied to the displayed trace. */
+    @Getter @Setter private boolean freqRespCalibrationActive       = false;
+    /** Per-row "Active" flags for the extras rows (1..N) of the
+     *  FreqResp pane's Load-calibration tab. */
+    @Getter @Setter private List<Boolean> freqRespCalibrationActiveExtra = new ArrayList<>();
     /** Paths to additional calibration files loaded beyond row 0.  Each
      *  entry is divided into the measured signal in sequence (linear-mag
      *  divide, phase subtract) at draw / save time.  Empty when only row 0
@@ -569,6 +611,7 @@ public final class Preferences {
         root.put("oscTriggerMode",         oscTriggerMode.name());
         root.put("oscTriggerHysteresisDiv",     oscTriggerHysteresisDiv);
         root.put("oscTriggerHysteresisEnabled", oscTriggerHysteresisEnabled);
+        root.put("oscShowReconstructedBeat",    oscShowReconstructedBeat);
         root.put("oscLeftSincInterpEnabled",  oscLeftSincInterpEnabled);
         root.put("oscRightSincInterpEnabled", oscRightSincInterpEnabled);
         root.put("oscLeftOffsetFrac",      oscLeftOffsetFrac);
@@ -583,6 +626,9 @@ public final class Preferences {
         root.put("dacFsVoltageRms",              dacFsVoltageRms);
         root.put("genSignalForm",                genSignalForm);
         root.put("genFrequencyHz",               genFrequencyHz);
+        root.put("genDualToneFreq1Hz",           genDualToneFreq1Hz);
+        root.put("genDualToneFreq2Hz",           genDualToneFreq2Hz);
+        root.put("genDualToneSplitPct",          genDualToneSplitPct);
         root.put("genAmplitudeVrms",             genAmplitudeVrms);
         root.put("genAmplitudeUnit",             genAmplitudeUnit);
         root.put("genDitherBits",                genDitherBits);
@@ -653,6 +699,7 @@ public final class Preferences {
         root.put("fftWindow",                 fftWindow);
         root.put("fftOverlap",                fftOverlap);
         root.put("fftCoherentAveraging",      fftCoherentAveraging);
+        root.put("fftAlignGenToFreqDiff",     fftAlignGenToFreqDiff);
         root.put("fftDistMinHz",              fftDistMinHz);
         root.put("fftDistMaxHz",              fftDistMaxHz);
         root.put("fftDistMinEnabled",         fftDistMinEnabled);
@@ -674,6 +721,14 @@ public final class Preferences {
         if (fftLoadPath   != null) root.put("fftLoadPath",   fftLoadPath);
         if (fftLoadFolder != null) root.put("fftLoadFolder", fftLoadFolder);
         if (fftCalibrationPath != null) root.put("fftCalibrationPath", fftCalibrationPath);
+        root.put("fftCalibrationActive",    fftCalibrationActive);
+        root.put("fftCalibrationWithNoise", fftCalibrationWithNoise);
+        if (fftCalibrationActiveExtra != null && !fftCalibrationActiveExtra.isEmpty()) {
+            root.put("fftCalibrationActiveExtra", new ArrayList<>(fftCalibrationActiveExtra));
+        }
+        if (fftCalibrationWithNoiseExtra != null && !fftCalibrationWithNoiseExtra.isEmpty()) {
+            root.put("fftCalibrationWithNoiseExtra", new ArrayList<>(fftCalibrationWithNoiseExtra));
+        }
         if (fftCalibrationPathsExtra != null && !fftCalibrationPathsExtra.isEmpty()) {
             root.put("fftCalibrationPathsExtra", new ArrayList<>(fftCalibrationPathsExtra));
         }
@@ -718,6 +773,10 @@ public final class Preferences {
         root.put("freqRespCompareMode",       freqRespCompareMode);
         root.put("freqRespApplyCalibration",  freqRespApplyCalibration);
         if (freqRespCalibrationPath != null) root.put("freqRespCalibrationPath", freqRespCalibrationPath);
+        root.put("freqRespCalibrationActive", freqRespCalibrationActive);
+        if (freqRespCalibrationActiveExtra != null && !freqRespCalibrationActiveExtra.isEmpty()) {
+            root.put("freqRespCalibrationActiveExtra", new ArrayList<>(freqRespCalibrationActiveExtra));
+        }
         if (freqRespCalibrationPathsExtra != null && !freqRespCalibrationPathsExtra.isEmpty()) {
             root.put("freqRespCalibrationPathsExtra", new ArrayList<>(freqRespCalibrationPathsExtra));
         }
@@ -831,6 +890,7 @@ public final class Preferences {
         if (root.get("oscTriggerMode")         instanceof String  s) oscTriggerMode    = enumOr(TriggerMode.class,    s, oscTriggerMode);
         if (root.get("oscTriggerHysteresisDiv")     instanceof Number  n) oscTriggerHysteresisDiv     = n.doubleValue();
         if (root.get("oscTriggerHysteresisEnabled") instanceof Boolean b) oscTriggerHysteresisEnabled = b;
+        if (root.get("oscShowReconstructedBeat")    instanceof Boolean b) oscShowReconstructedBeat    = b;
         if (root.get("oscLeftSincInterpEnabled")  instanceof Boolean b) oscLeftSincInterpEnabled  = b;
         if (root.get("oscRightSincInterpEnabled") instanceof Boolean b) oscRightSincInterpEnabled = b;
         if (root.get("oscLeftOffsetFrac")      instanceof Number n) oscLeftOffsetFrac      = n.doubleValue();
@@ -845,6 +905,9 @@ public final class Preferences {
         if (root.get("dacFsVoltageRms")              instanceof Number n) dacFsVoltageRms      = n.doubleValue();
         if (root.get("genSignalForm")                instanceof String s) genSignalForm        = s;
         if (root.get("genFrequencyHz")               instanceof Number n) genFrequencyHz       = n.doubleValue();
+        if (root.get("genDualToneFreq1Hz")           instanceof Number n) genDualToneFreq1Hz   = n.doubleValue();
+        if (root.get("genDualToneFreq2Hz")           instanceof Number n) genDualToneFreq2Hz   = n.doubleValue();
+        if (root.get("genDualToneSplitPct")          instanceof Number n) genDualToneSplitPct  = n.doubleValue();
         if (root.get("genAmplitudeVrms")             instanceof Number n) genAmplitudeVrms     = n.doubleValue();
         if (root.get("genAmplitudeUnit")             instanceof String s) genAmplitudeUnit     = s;
         if (root.get("genDitherBits")                instanceof Number n) genDitherBits        = n.intValue();
@@ -919,6 +982,7 @@ public final class Preferences {
         if (root.get("fftWindow")                 instanceof String  s) fftWindow            = s;
         if (root.get("fftOverlap")                instanceof String  s) fftOverlap           = s;
         if (root.get("fftCoherentAveraging")      instanceof Boolean b) fftCoherentAveraging = b;
+        if (root.get("fftAlignGenToFreqDiff")     instanceof Boolean b) fftAlignGenToFreqDiff = b;
         if (root.get("fftDistMinHz")              instanceof Number  n) fftDistMinHz         = n.doubleValue();
         if (root.get("fftDistMaxHz")              instanceof Number  n) fftDistMaxHz         = n.doubleValue();
         if (root.get("fftDistMinEnabled")         instanceof Boolean b) fftDistMinEnabled    = b;
@@ -1000,6 +1064,11 @@ public final class Preferences {
         if (root.get("freqRespCompareMode")       instanceof Boolean b) freqRespCompareMode      = b;
         if (root.get("freqRespApplyCalibration")  instanceof Boolean b) freqRespApplyCalibration = b;
         if (root.get("freqRespCalibrationPath")   instanceof String  s) freqRespCalibrationPath  = s;
+        if (root.get("freqRespCalibrationActive") instanceof Boolean b) freqRespCalibrationActive = b;
+        if (root.get("freqRespCalibrationActiveExtra") instanceof List<?> raw) {
+            freqRespCalibrationActiveExtra = new ArrayList<>();
+            for (Object o : raw) if (o instanceof Boolean b) freqRespCalibrationActiveExtra.add(b);
+        }
         if (root.get("freqRespCalibrationPathsExtra") instanceof List<?> raw) {
             freqRespCalibrationPathsExtra = new ArrayList<>();
             for (Object o : raw) {
@@ -1013,6 +1082,16 @@ public final class Preferences {
         if (root.get("freqRespActiveTabIndex")    instanceof Number  n) freqRespActiveTabIndex   = n.intValue();
         if (root.get("fftLoadFolder")             instanceof String  s) fftLoadFolder        = s;
         if (root.get("fftCalibrationPath")        instanceof String  s) fftCalibrationPath   = s;
+        if (root.get("fftCalibrationActive")      instanceof Boolean b) fftCalibrationActive = b;
+        if (root.get("fftCalibrationWithNoise")   instanceof Boolean b) fftCalibrationWithNoise = b;
+        if (root.get("fftCalibrationActiveExtra") instanceof List<?> raw) {
+            fftCalibrationActiveExtra = new ArrayList<>();
+            for (Object o : raw) if (o instanceof Boolean b) fftCalibrationActiveExtra.add(b);
+        }
+        if (root.get("fftCalibrationWithNoiseExtra") instanceof List<?> raw) {
+            fftCalibrationWithNoiseExtra = new ArrayList<>();
+            for (Object o : raw) if (o instanceof Boolean b) fftCalibrationWithNoiseExtra.add(b);
+        }
         if (root.get("fftCalibrationPathsExtra")  instanceof List<?> raw) {
             fftCalibrationPathsExtra = new ArrayList<>();
             for (Object o : raw) if (o instanceof String s) fftCalibrationPathsExtra.add(s);

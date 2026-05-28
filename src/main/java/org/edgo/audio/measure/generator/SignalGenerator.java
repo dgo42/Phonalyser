@@ -73,6 +73,26 @@ public class SignalGenerator {
      *  freq changes pushed via {@link #setFrequency} from the GUI thread
      *  without a tear (a 64-bit volatile read is atomic on 64-bit JVMs). */
     private volatile long phaseInc;
+    /** Second 32-bit phase accumulator for the {@link GenSignalForm#DUAL_TONE}
+     *  waveform.  Unused by every other form. */
+    private long phaseAcc2 = 0;
+    /** Second phase increment for the dual-tone waveform.  Live-swappable
+     *  via {@link #setDualToneFrequency2}. */
+    private volatile long phaseInc2;
+    /** Per-tone linear amplitude weights for the dual-tone waveform.
+     *  Each weight equals the user's amplitude percentage / 100.
+     *  Combined-signal RMS = {@code amplitude · √((w₁² + w₂²) / 2)},
+     *  so {@link #amplitude} is re-normalised against the weights
+     *  inside {@link #setDualToneAmplitudes} to keep the RMS equal to
+     *  whatever Vrms was last set on {@link #setAmplitudeVrms}.  Live-
+     *  swappable. */
+    private volatile double dualW1 = 0.5;
+    private volatile double dualW2 = 0.5;
+    /** Last Vrms value passed to {@link #setAmplitudeVrms}, cached so
+     *  the dual-tone amplitude-split path can re-derive
+     *  {@link #amplitude} when the weights change without losing the
+     *  user's chosen RMS target. */
+    private volatile double currentVrms = 0.0;
 
     // -------------------------------------------------------------------------
     // Generator parameters
@@ -162,10 +182,11 @@ public class SignalGenerator {
      * @param amplitudeVRms   desired output amplitude in V RMS
      */
     public SignalGenerator(GenSignalForm form, double frequency, int sampleRate, double amplitudeVRms) {
-        this.form       = form;
-        this.amplitude  = amplitudeVRms / (FS_VOLTAGE * rawRms(form));
-        this.phaseInc   = Math.round(frequency / sampleRate * 4294967296.0);
-        this.sampleRate = sampleRate;
+        this.form        = form;
+        this.currentVrms = amplitudeVRms;
+        this.amplitude   = amplitudeVRms / (FS_VOLTAGE * rawRms(form));
+        this.phaseInc    = Math.round(frequency / sampleRate * 4294967296.0);
+        this.sampleRate  = sampleRate;
         log.debug("DDS: form={} freq={}Hz rate={}Hz phaseInc={} amplitude={}V RMS",
                 form, frequency, sampleRate, phaseInc, amplitudeVRms);
     }
@@ -258,6 +279,7 @@ public class SignalGenerator {
     public SignalGenerator(double freqStart, double freqEnd, int sampleRate,
                            int periodSamples, double amplitudeVRms) {
         this.form               = GenSignalForm.LINEAR_SWEEP;
+        this.currentVrms        = amplitudeVRms;
         this.amplitude          = amplitudeVRms / (FS_VOLTAGE * rawRms(GenSignalForm.LINEAR_SWEEP));
         this.phaseInc           = 0;            // unused for sweep
         this.sampleRate         = sampleRate;
@@ -294,6 +316,7 @@ public class SignalGenerator {
     public SignalGenerator(double f0, double f1, int sweepSamples, int leadInSamples,
                            int sampleRate, double amplitudeVRms) {
         this.form           = GenSignalForm.LOG_SWEEP;
+        this.currentVrms    = amplitudeVRms;
         this.amplitude      = amplitudeVRms / (FS_VOLTAGE * rawRms(GenSignalForm.LOG_SWEEP));
         this.phaseInc       = 0;            // unused for sweep
         this.sampleRate     = sampleRate;
@@ -369,7 +392,32 @@ public class SignalGenerator {
             case WHITE_NOISE              -> 1.0;                                         // Gaussian std dev = 1
             case PINK_NOISE               -> 1.0 / Math.sqrt(PINK_OCTAVES + 1.0);        // Gaussian source, 17 summed terms / 17
             case PINK_NOISE_LINEAR        -> 1.0 / Math.sqrt(3.0 * (PINK_OCTAVES + 1.0));// uniform source, std = 1/√3 per term
+            case DUAL_TONE                -> rawRmsDualTone();                            // depends on per-tone weights — see rawRmsDualTone
         };
+    }
+
+    /** RMS of the unscaled DUAL_TONE waveform for the CURRENT
+     *  {@link #dualW1} / {@link #dualW2} weights.
+     *
+     *  <p>{@code raw = w₁·sin(ω₁t) + w₂·sin(ω₂t)} (uncorrelated sines at
+     *  different frequencies), so {@code RMS² = (w₁² + w₂²) / 2} and
+     *  {@code RMS = √((w₁² + w₂²) / 2)}.  Floored at a tiny positive
+     *  value so the {@code amplitude = Vrms / (FS · rawRms)} divide
+     *  doesn't go infinite when both weights are zero (which would mean
+     *  the user dialled both tones to 0 % — silence, but we still need
+     *  a finite amplitude scale to avoid NaN propagation). */
+    private double rawRmsDualTone() {
+        double rms2 = (dualW1 * dualW1 + dualW2 * dualW2) / 2.0;
+        return Math.max(1e-12, Math.sqrt(rms2));
+    }
+
+    /** State-aware wrapper around {@link #rawRms(GenSignalForm)} —
+     *  reads the current form from the field instead of taking it as
+     *  a parameter.  Used by the dual-tone re-normalisation path
+     *  where {@link #setDualToneAmplitudes} needs to recompute
+     *  {@link #amplitude} against the new weights. */
+    private double rawRmsForCurrentState() {
+        return rawRms(form);
     }
 
     // -------------------------------------------------------------------------
@@ -389,9 +437,10 @@ public class SignalGenerator {
         if (newForm == null || newForm == form) return;
         // Re-scale amplitude so the new form keeps the same V RMS output —
         // sine and triangle / saw / noise have different peak / RMS ratios.
-        double currentVRms = this.amplitude * FS_VOLTAGE * rawRms(form);
-        this.amplitude = currentVRms / (FS_VOLTAGE * rawRms(newForm));
-        this.form = newForm;
+        // {@link #currentVrms} is the cached "what the user dialled" and
+        // gets re-divided against the new form's rawRms.
+        this.form      = newForm;
+        this.amplitude = currentVrms / (FS_VOLTAGE * rawRms(newForm));
     }
 
     /**
@@ -404,12 +453,45 @@ public class SignalGenerator {
         this.phaseInc = Math.round(frequencyHz / (double) sampleRate * 4294967296.0);
     }
 
+    /** Live-updates the second tone's frequency for the
+     *  {@link GenSignalForm#DUAL_TONE} waveform.  No-op for every other
+     *  form (the second accumulator only advances when the form is
+     *  DUAL_TONE).  Phase-continuous like {@link #setFrequency}. */
+    public void setDualToneFrequency2(double frequencyHz) {
+        this.phaseInc2 = Math.round(frequencyHz / (double) sampleRate * 4294967296.0);
+    }
+
+    /** Live-updates the dual-tone amplitude split.  {@code amp1Pct} +
+     *  {@code amp2Pct} are interpreted as LINEAR amplitude percentages
+     *  per tone (not power) — the per-tone DDS weight is the
+     *  percentage divided by 100.  Each value is clamped to
+     *  {@code [0, 100]} independently.
+     *
+     *  <p>After updating the weights the internal {@code amplitude}
+     *  scale is re-normalised against the new
+     *  {@code rawRms() = √((w₁² + w₂²) / 2)} so the combined signal's
+     *  Vrms still matches whatever was last passed to
+     *  {@link #setAmplitudeVrms}.  Without the re-normalisation a
+     *  50/50 split would emit a noticeably quieter signal than a 100/0
+     *  single-tone case at the same Amplitude-field setting. */
+    public void setDualToneAmplitudes(double amp1Pct, double amp2Pct) {
+        double a1 = Math.max(0.0, Math.min(100.0, amp1Pct)) / 100.0;
+        double a2 = Math.max(0.0, Math.min(100.0, amp2Pct)) / 100.0;
+        this.dualW1 = a1;
+        this.dualW2 = a2;
+        // Re-derive the amplitude scale from the cached Vrms so the
+        // combined RMS stays equal to the Amplitude field's value
+        // regardless of how the user splits the two tones.
+        this.amplitude = currentVrms / (FS_VOLTAGE * rawRmsForCurrentState());
+    }
+
     /**
      * Live-updates the output amplitude (V RMS).  Takes effect on the
      * next sample emitted; no audible click unless the change is large.
      */
     public void setAmplitudeVrms(double amplitudeVRms) {
-        this.amplitude = amplitudeVRms / (FS_VOLTAGE * rawRms(form));
+        this.currentVrms = amplitudeVRms;
+        this.amplitude   = amplitudeVRms / (FS_VOLTAGE * rawRms(form));
     }
 
     /**
@@ -452,8 +534,15 @@ public class SignalGenerator {
             case SINE_COMPENSATED  -> ddsSineCompensated();
             case LINEAR_SWEEP      -> linearSweepNext();
             case LOG_SWEEP         -> logSweepNext();
+            case DUAL_TONE         -> ddsSine() * dualW1 + ddsSine2() * dualW2;
         };
-        phaseAcc = (phaseAcc + phaseInc) & 0xFFFFFFFFL;
+        phaseAcc  = (phaseAcc  + phaseInc)  & 0xFFFFFFFFL;
+        // Second accumulator only advances for DUAL_TONE.  Cheap branch
+        // — the audio loop already executed the per-form switch and
+        // form is volatile-cached locally by the JIT.
+        if (form == GenSignalForm.DUAL_TONE) {
+            phaseAcc2 = (phaseAcc2 + phaseInc2) & 0xFFFFFFFFL;
+        }
         return raw * amplitude;
     }
 
@@ -656,6 +745,30 @@ public class SignalGenerator {
         int    idx  = (int) (phaseAcc >>> (32 - TABLE_BITS));   // 0 .. 65535
         long   frac = phaseAcc & ((1L << (32 - TABLE_BITS)) - 1);
         double dx   = frac * TWO_PI_OVER_2_32;                  // fractional radians
+        double dx2  = dx * dx;
+        double cosDx = 1.0 + dx2 * (-0.5
+                              + dx2 * (1.0 / 24.0
+                              + dx2 * (-1.0 / 720.0
+                              + dx2 * (1.0 / 40320.0))));
+        double sinDx = dx * (1.0 + dx2 * (-1.0 / 6.0
+                                  + dx2 * (1.0 / 120.0
+                                  + dx2 * (-1.0 / 5040.0
+                                  + dx2 * (1.0 / 362880.0)))));
+        double sinT = SINE_TABLE[idx];
+        double cosT = COS_TABLE[idx];
+        return sinT * cosDx + cosT * sinDx;
+    }
+
+    /** Second DDS sine reader — identical math to {@link #ddsSine}, but
+     *  reads {@link #phaseAcc2} instead of {@link #phaseAcc} so the
+     *  dual-tone waveform can run two independent oscillators in lock-
+     *  step with a single sample tick.  Kept as a separate method
+     *  rather than parameterising {@code ddsSine} so the JIT can still
+     *  inline the per-tone read without an extra parameter copy. */
+    private double ddsSine2() {
+        int    idx  = (int) (phaseAcc2 >>> (32 - TABLE_BITS));
+        long   frac = phaseAcc2 & ((1L << (32 - TABLE_BITS)) - 1);
+        double dx   = frac * TWO_PI_OVER_2_32;
         double dx2  = dx * dx;
         double cosDx = 1.0 + dx2 * (-0.5
                               + dx2 * (1.0 / 24.0

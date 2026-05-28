@@ -22,6 +22,7 @@ import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
@@ -93,6 +94,25 @@ public final class GeneratorPane {
     private NumericStepField      sweepFadeInField;
     private NumericStepField      sweepFadeOutField;
     private Button                sweepLoopBtn;
+    /** Dual-tone parameter block — single column, labels stacked above
+     *  fields, in the user-requested order:
+     *  Freq 1, Freq 2, snap-to-FFT-bin, Freq 1 amplitude %, Freq 2
+     *  amplitude %.  amp1 + amp2 is constrained to 100 % so the two
+     *  amplitude fields are coupled (editing one updates the other).
+     *  Same show/hide pattern as the sweep panel: visible only when
+     *  the selected form is {@link GenSignalForm#DUAL_TONE}. */
+    private Composite             dualTonePanel;
+    private NumericStepField      dualToneFreq1Field;
+    private NumericStepField      dualToneFreq2Field;
+    private NumericStepField      dualToneAmp1Field;
+    private NumericStepField      dualToneAmp2Field;
+    /** Freq 1 / Freq 2 labels inside the dual-tone panel — kept as
+     *  fields so {@link #updateDualToneFreqLabels} can append the
+     *  snap-corrected frequency in brackets when snap-to-FFT-bin is
+     *  active.  Mirrors how {@link #updateFreqLabel} annotates the
+     *  single-tone Frequency label. */
+    private Label                 dualToneFreq1Label;
+    private Label                 dualToneFreq2Label;
     private final Combo           ditherCombo;
     private final Text            correctionsField;
     private final NumericStepField durationField;
@@ -150,6 +170,19 @@ public final class GeneratorPane {
     private Consumer<Void> freqRespStartedListener;
     /** Counterpart that re-enables both play buttons after the sweep. */
     private Consumer<Void> freqRespStoppedListener;
+    /** Handler for {@link Events#GENERATOR_FREQ_TRIM} — sub-Hz frequency
+     *  alignment from the FFT-side frequency-lock loop.  Live-applies
+     *  the new freq to the DDS and republishes
+     *  {@link Events#GENERATOR_SIGNAL_CHANGED} with cause
+     *  {@link GenChangeCause#FLL_TRIM} so the FFT worker keeps its
+     *  averaging accumulator alive (a USER_INPUT republish would
+     *  trash it). */
+    private Consumer<Double> freqTrimListener;
+    /** Handler for {@link Events#GENERATOR_FREQ_TRIM_2} — the
+     *  dual-tone second-tone variant of {@link #freqTrimListener}.
+     *  Same FLL_TRIM republish so the FFT worker's averaging
+     *  accumulator survives the per-tone correction. */
+    private Consumer<Double> freqTrim2Listener;
 
     public GeneratorPane(Composite parent) {
         // Seed the tracked pane width from prefs BEFORE the host
@@ -268,6 +301,66 @@ public final class GeneratorPane {
             updateDutyLabel();
         });
 
+        // ----- Dual-tone Freq 1 / Freq 2 rows.  Live in the outer
+        // group (not inside dualTonePanel) so the snap-to-FFT-bin
+        // checkbox keeps its position regardless of waveform —
+        // visibility flips between the regular Frequency row above
+        // and these two rows.  Labels are stacked above their fields
+        // (horizontalSpan = 2) per the dual-tone styling.
+        dualToneFreq1Label = new Label(group, SWT.NONE);
+        dualToneFreq1Label.setText(I18n.t("generator.dualTone.freq1"));
+        GridData dt1lGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        dt1lGd.horizontalSpan = 2;
+        dualToneFreq1Label.setLayoutData(dt1lGd);
+        dualToneFreq1Field = new NumericStepField(group,
+                Math.max(0.01, prefs.getGenDualToneFreq1Hz()),
+                this::parseFrequency,
+                this::formatFrequency,
+                (v, dir) -> v * (1.0 + 0.05 * dir),
+                (v, dir) -> Math.max(0.0, v + dir),
+                160);
+        GridData dt1fGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        dt1fGd.horizontalSpan = 2;
+        dualToneFreq1Field.setLayoutData(dt1fGd);
+        dualToneFreq1Field.setToolTipText(I18n.t("generator.dualTone.freq1.tooltip"));
+        dualToneFreq1Field.addSelectionListener(e -> {
+            prefs.setGenDualToneFreq1Hz(dualToneFreq1Field.getValue());
+            prefs.save();
+            int sr = currentOutputSampleRate();
+            double f1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
+                    dualToneFreq1Field.getValue());
+            controller.setFrequency(f1);
+            updateDualToneFreqLabels();
+            updateFreqLabel();
+        });
+
+        dualToneFreq2Label = new Label(group, SWT.NONE);
+        dualToneFreq2Label.setText(I18n.t("generator.dualTone.freq2"));
+        GridData dt2lGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        dt2lGd.horizontalSpan = 2;
+        dualToneFreq2Label.setLayoutData(dt2lGd);
+        dualToneFreq2Field = new NumericStepField(group,
+                Math.max(0.01, prefs.getGenDualToneFreq2Hz()),
+                this::parseFrequency,
+                this::formatFrequency,
+                (v, dir) -> v * (1.0 + 0.05 * dir),
+                (v, dir) -> Math.max(0.0, v + dir),
+                160);
+        GridData dt2fGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        dt2fGd.horizontalSpan = 2;
+        dualToneFreq2Field.setLayoutData(dt2fGd);
+        dualToneFreq2Field.setToolTipText(I18n.t("generator.dualTone.freq2.tooltip"));
+        dualToneFreq2Field.addSelectionListener(e -> {
+            prefs.setGenDualToneFreq2Hz(dualToneFreq2Field.getValue());
+            prefs.save();
+            int sr = currentOutputSampleRate();
+            double f2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
+                    dualToneFreq2Field.getValue());
+            controller.setDualToneFrequency2(f2);
+            updateDualToneFreqLabels();
+            updateFreqLabel();
+        });
+
         // ------- FFT-bin snap checkbox.  Persisted, and live-applied:
         // toggling on snaps the running sine to the nearest bin of the
         // FFT pane's current fftLength; toggling off restores the
@@ -281,6 +374,17 @@ public final class GeneratorPane {
             prefs.setGenSnapToFftBin(fftSnapBtn.getSelection());
             persistRawFrequency();
             updateFreqLabel();
+            // Dual-tone uses the same snap pref — refresh both tones
+            // on a running generator AND the per-tone label brackets.
+            String form = prefs.getGenSignalForm();
+            if ("DUAL_TONE".equalsIgnoreCase(form)) {
+                int sr = currentOutputSampleRate();
+                controller.setFrequency(FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
+                        sr, prefs.getGenDualToneFreq1Hz()));
+                controller.setDualToneFrequency2(FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
+                        sr, prefs.getGenDualToneFreq2Hz()));
+            }
+            updateDualToneFreqLabels();
         });
 
         // ----- Sweep controls (LINEAR_SWEEP / LOG_SWEEP only) -----------
@@ -390,14 +494,66 @@ public final class GeneratorPane {
             controller.setSweepLoop(sweepLoopBtn.getSelection());
         });
 
+        // ----- Dual-tone amplitude controls (DUAL_TONE only) ----------
+        // Only the two amplitude % fields live in this panel; Freq 1
+        // and Freq 2 fields are placed earlier in the outer group so
+        // the snap-to-FFT-bin checkbox between them keeps its
+        // position regardless of waveform.
+        dualTonePanel = new Composite(group, SWT.NONE);
+        GridData dtPanelGd = new GridData(SWT.FILL, SWT.TOP, true, false);
+        dtPanelGd.horizontalSpan = 2;   // span both columns of the outer group's GridLayout
+        dualTonePanel.setLayoutData(dtPanelGd);
+        GridLayout dtGl = new GridLayout(1, false);
+        dtGl.marginWidth  = 0;
+        dtGl.marginHeight = 0;
+        dtGl.verticalSpacing = 2;
+        dualTonePanel.setLayout(dtGl);
+
+        // --- Freq 1 amplitude % (label above field).
+        Label dtAmp1Label = new Label(dualTonePanel, SWT.NONE);
+        dtAmp1Label.setText(I18n.t("generator.dualTone.amp1"));
+        dtAmp1Label.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        double initAmp1 = clampPct(prefs.getGenDualToneSplitPct());
+        dualToneAmp1Field = new NumericStepField(dualTonePanel,
+                initAmp1,
+                this::parsePercent,
+                this::formatPercent,
+                (v, dir) -> clampPct(v + 5.0 * dir),
+                (v, dir) -> clampPct(v + dir),
+                160);
+        dualToneAmp1Field.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        dualToneAmp1Field.setToolTipText(I18n.t("generator.dualTone.amp1.tooltip"));
+
+        // --- Freq 2 amplitude % (label above field).
+        Label dtAmp2Label = new Label(dualTonePanel, SWT.NONE);
+        dtAmp2Label.setText(I18n.t("generator.dualTone.amp2"));
+        dtAmp2Label.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        dualToneAmp2Field = new NumericStepField(dualTonePanel,
+                clampPct(100.0 - initAmp1),
+                this::parsePercent,
+                this::formatPercent,
+                (v, dir) -> clampPct(v + 5.0 * dir),
+                (v, dir) -> clampPct(v + dir),
+                160);
+        dualToneAmp2Field.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        dualToneAmp2Field.setToolTipText(I18n.t("generator.dualTone.amp2.tooltip"));
+
+        // Couple the two amplitude fields so they always sum to 100 %.
+        dualToneAmp1Field.addSelectionListener(e -> applyDualToneAmpSplit(true));
+        dualToneAmp2Field.addSelectionListener(e -> applyDualToneAmpSplit(false));
+
         // Initial visibility matches the saved form — hide the regular
         // freq row + FFT-bin-snap and show the sweep panel up-front when
         // the app starts on a sweep, instead of waiting for the user to
         // poke the form combo.
-        boolean initialIsSweep = initialForm == GenSignalForm.LINEAR_SWEEP
-                              || initialForm == GenSignalForm.LOG_SWEEP;
-        setNonSweepFreqRowsVisible(!initialIsSweep);
+        boolean initialIsSweep    = initialForm == GenSignalForm.LINEAR_SWEEP
+                                 || initialForm == GenSignalForm.LOG_SWEEP;
+        boolean initialIsDualTone = initialForm == GenSignalForm.DUAL_TONE;
+        setRegularFreqRowVisible(!initialIsSweep && !initialIsDualTone);
+        setDualToneFreqRowsVisible(initialIsDualTone);
+        setSnapBtnVisible(!initialIsSweep);   // snap applies to SINE AND DUAL_TONE
         setSweepPanelVisible(initialIsSweep);
+        setDualTonePanelVisible(initialIsDualTone);
 
         // Form change: persist, grey-out frequency for noise forms, and
         // live-apply to the running generator when the target form is
@@ -410,24 +566,38 @@ public final class GeneratorPane {
             GenSignalForm f = formCombo.getSelectedForm();
             prefs.setGenSignalForm(f.name());
             prefs.save();
-            boolean newIsSweep  = f == GenSignalForm.LINEAR_SWEEP || f == GenSignalForm.LOG_SWEEP;
-            boolean prevWasSweep = prevForm == GenSignalForm.LINEAR_SWEEP
-                                || prevForm == GenSignalForm.LOG_SWEEP;
-            // Sweep mode hijacks the single-frequency input — hide the
-            // regular Frequency row and the FFT-bin-snap checkbox so the
-            // user can't confuse a sweep with a single-tone setting.
-            setNonSweepFreqRowsVisible(!newIsSweep);
-            freqField.setEnabled(!newIsSweep && isPeriodic(f));
+            boolean newIsSweep    = f == GenSignalForm.LINEAR_SWEEP || f == GenSignalForm.LOG_SWEEP;
+            boolean newIsDualTone = f == GenSignalForm.DUAL_TONE;
+            boolean prevWasSweep    = prevForm == GenSignalForm.LINEAR_SWEEP
+                                   || prevForm == GenSignalForm.LOG_SWEEP;
+            boolean prevWasDualTone = prevForm == GenSignalForm.DUAL_TONE;
+            // Sweep + dual-tone each hijack the single-frequency input
+            // — hide the regular Frequency row.  For DUAL_TONE, show
+            // the Freq 1 / Freq 2 rows instead (placed just under the
+            // regular Frequency row in the outer group).  Snap
+            // checkbox stays visible for SINE and DUAL_TONE — and
+            // because all three freq controls sit adjacent in the
+            // same outer-group layout, the snap checkbox keeps its
+            // exact on-screen position across the form switch.
+            setRegularFreqRowVisible(!newIsSweep && !newIsDualTone);
+            setDualToneFreqRowsVisible(newIsDualTone);
+            setSnapBtnVisible(!newIsSweep);
+            freqField.setEnabled(!newIsSweep && !newIsDualTone && isPeriodic(f));
             updateDutyFieldEnabled(f);
             // Reload duty field from the appropriate pref so RECTANGLE and
             // TRIANGLE each remember their own duty independently.
             reloadDutyForForm(f);
-            // Sweep parameter panel only visible for sweep forms.
+            // Parameter panels: each visible only for its own form.
             setSweepPanelVisible(newIsSweep);
-            // Sweep transitions need a full stop+start because the sweep
-            // form's state machine isn't safe to live-swap; the simple
-            // periodic forms still hot-swap via controller.setForm().
-            if ((newIsSweep || prevWasSweep) && controller.isRunning()) {
+            setDualTonePanelVisible(newIsDualTone);
+            // Sweep + dual-tone transitions need a full stop+start
+            // because their constructors set up dedicated DDS state
+            // (dual-tone's second accumulator, sweep's state machine)
+            // that the simple {@code controller.setForm()} can't
+            // hot-swap.  Plain periodic forms still hot-swap.
+            boolean needsRestart = (newIsSweep || prevWasSweep
+                                 || newIsDualTone || prevWasDualTone);
+            if (needsRestart && controller.isRunning()) {
                 restartGenerator();
             } else {
                 controller.setForm(f);
@@ -435,6 +605,12 @@ public final class GeneratorPane {
             // Different forms get different bracket annotations (or none).
             updateFreqLabel();
             updateDutyLabel();
+            // Notify subscribers (FFT view, scope, FreqResp pane) that the
+            // generated signal changed.  Without this the form-combo
+            // change wouldn't reach the FFT view's form-change detector
+            // and stale stats (THD averages from the old waveform) would
+            // pollute the new measurement.
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
         // --------------------------------------------------------- Amplitude
@@ -461,7 +637,7 @@ public final class GeneratorPane {
             prefs.save();
             // Live-apply if running.
             controller.setAmplitudeVrms(vrms);
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED);
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
         // ----- Duty cycle (RECTANGLE or TRIANGLE) -----------------------
@@ -727,6 +903,23 @@ public final class GeneratorPane {
         freqRespStoppedListener = ignored -> onFreqRespMeasurementStopped();
         MessageBus.instance().subscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
         MessageBus.instance().subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
+        // FLL trim: the FFT view publishes the new DDS frequency in Hz
+        // after each result; we live-apply it and republish as
+        // FLL_TRIM so the FFT worker keeps its averaging accumulator.
+        freqTrimListener = newHz -> {
+            if (newHz == null || !Double.isFinite(newHz)) return;
+            controller.setFrequency(newHz);
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
+        };
+        MessageBus.instance().subscribe(Events.GENERATOR_FREQ_TRIM, freqTrimListener);
+        // Companion listener for the dual-tone second-tone FLL — same
+        // FLL_TRIM republish so the FFT worker stays averaging.
+        freqTrim2Listener = newHz -> {
+            if (newHz == null || !Double.isFinite(newHz)) return;
+            controller.setDualToneFrequency2(newHz);
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
+        };
+        MessageBus.instance().subscribe(Events.GENERATOR_FREQ_TRIM_2, freqTrim2Listener);
 
         // Respond to "is the generator running?" requests from the FFT
         // controller so it can decide whether to anchor the fundamental
@@ -743,6 +936,8 @@ public final class GeneratorPane {
             MessageBus.instance().unsubscribe(Events.FILE_PLAY_STOPPED,             filePlayStoppedListener);
             MessageBus.instance().unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             MessageBus.instance().unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
+            MessageBus.instance().unsubscribe(Events.GENERATOR_FREQ_TRIM,           freqTrimListener);
+            MessageBus.instance().unsubscribe(Events.GENERATOR_FREQ_TRIM_2,         freqTrim2Listener);
             MessageBus.instance().unregisterResponder(Events.GENERATOR_RUNNING);
             controller.stop();
             filePlayer.stop();
@@ -1030,7 +1225,7 @@ public final class GeneratorPane {
         Preferences.instance().setGenFrequencyHz(freqField.getValue());
         Preferences.instance().save();
         controller.setFrequency(effectiveGeneratorFrequency());
-        MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED);
+        MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
     }
 
     /** Re-applies the FFT-bin snap to the current frequency.  Invoked
@@ -1042,6 +1237,18 @@ public final class GeneratorPane {
         if (fftSnapBtn == null || !fftSnapBtn.getSelection()) return;
         controller.setFrequency(effectiveGeneratorFrequency());
         updateFreqLabel();
+        // Dual-tone uses the same FFT-length-driven bin grid — refresh
+        // both tones' corrected-frequency brackets and (when DUAL_TONE
+        // is the active form) live-re-snap the running tones too.
+        Preferences prefs = Preferences.instance();
+        if ("DUAL_TONE".equalsIgnoreCase(prefs.getGenSignalForm())) {
+            int sr = currentOutputSampleRate();
+            controller.setFrequency(FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
+                    sr, prefs.getGenDualToneFreq1Hz()));
+            controller.setDualToneFrequency2(FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
+                    sr, prefs.getGenDualToneFreq2Hz()));
+        }
+        updateDualToneFreqLabels();
     }
 
     /** Returns the frequency the controller should actually emit — the
@@ -1168,6 +1375,37 @@ public final class GeneratorPane {
     }
     private String formatFrequency(double v) {
         return formatNumber(v) + " Hz";
+    }
+
+    /** Parses a percent value — accepts plain numbers and an optional
+     *  trailing {@code %} or {@code percent} token.  Returns {@code null}
+     *  when the input doesn't contain a valid number. */
+    private Double parsePercent(String raw) {
+        if (raw == null) return null;
+        String trimmed = raw.trim().replace(',', '.');
+        if (trimmed.endsWith("%")) trimmed = trimmed.substring(0, trimmed.length() - 1).trim();
+        if (trimmed.isEmpty()) return null;
+        try {
+            return Double.parseDouble(trimmed);
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+    private String formatPercent(double v) {
+        return formatNumber(v) + " %";
+    }
+    /** Clamps a percentage to {@code [0, 100]} — used as the value
+     *  transform for the dual-tone split spinner so the field can't be
+     *  scrolled out of physical bounds. */
+    private double clampPct(double v) {
+        return Math.max(0.0, Math.min(100.0, v));
+    }
+
+    /** Current output device sample rate, read from prefs.  Used by
+     *  the dual-tone freq listeners to compute the snapped value for
+     *  live-apply to a running generator. */
+    private int currentOutputSampleRate() {
+        return Preferences.instance().current().getOutputSampleRate();
     }
 
     // -------------------------------------------------------------------------
@@ -1421,17 +1659,109 @@ public final class GeneratorPane {
         }
     }
 
-    /** Shows / hides the regular Frequency row (label + field) and the
-     *  FFT-bin-snap checkbox.  Hidden in sweep modes — those have their
-     *  own start/stop frequency fields in the sweep panel and the FFT-bin
-     *  snap setting doesn't apply.  Layout reflows via GridData.exclude. */
-    private void setNonSweepFreqRowsVisible(boolean visible) {
-        toggleRow(freqLabel,  visible);
-        toggleRow(freqField,  visible);
-        toggleRow(fftSnapBtn, visible);
+    /** Shows / hides the dual-tone Freq 1 / Freq 2 rows that live in
+     *  the outer group right under the regular Frequency row.
+     *  Visibility is flipped between the regular Frequency row and
+     *  these two so the snap-to-FFT-bin checkbox below stays in the
+     *  same on-screen position when the user switches between
+     *  single-tone and dual-tone waveforms.  Layout reflows via
+     *  {@code GridData.exclude}. */
+    private void setDualToneFreqRowsVisible(boolean visible) {
+        toggleRow(dualToneFreq1Label, visible);
+        toggleRow(dualToneFreq1Field, visible);
+        toggleRow(dualToneFreq2Label, visible);
+        toggleRow(dualToneFreq2Field, visible);
+        if (dualToneFreq1Label != null && !dualToneFreq1Label.isDisposed()
+                && dualToneFreq1Label.getParent() != null) {
+            dualToneFreq1Label.getParent().layout(true);
+        }
+    }
+
+    /** Shows / hides ONLY the regular Frequency row (label + field).
+     *  Used when DUAL_TONE wants its own two-frequency block to take
+     *  over the freq area while leaving the FFT-bin-snap checkbox
+     *  visible (snap still applies to both dual-tone frequencies). */
+    private void setRegularFreqRowVisible(boolean visible) {
+        toggleRow(freqLabel, visible);
+        toggleRow(freqField, visible);
         if (freqLabel.getParent() != null && !freqLabel.getParent().isDisposed()) {
             freqLabel.getParent().layout(true);
         }
+    }
+
+    /** Shows / hides the FFT-bin-snap checkbox.  Visible for SINE and
+     *  DUAL_TONE, hidden for everything else. */
+    private void setSnapBtnVisible(boolean visible) {
+        toggleRow(fftSnapBtn, visible);
+        if (fftSnapBtn.getParent() != null && !fftSnapBtn.getParent().isDisposed()) {
+            fftSnapBtn.getParent().layout(true);
+        }
+    }
+
+    /** Shows / hides the dual-tone parameter panel.  Mirrors
+     *  {@link #setSweepPanelVisible}; reflows via
+     *  {@code GridData.exclude}.  Refreshes the corrected-frequency
+     *  brackets on the Freq 1 / Freq 2 labels at the same time so
+     *  they're current the moment the panel appears. */
+    private void setDualTonePanelVisible(boolean visible) {
+        if (dualTonePanel == null || dualTonePanel.isDisposed()) return;
+        dualTonePanel.setVisible(visible);
+        Object ld = dualTonePanel.getLayoutData();
+        if (ld instanceof GridData) ((GridData) ld).exclude = !visible;
+        if (visible) updateDualToneFreqLabels();
+        dualTonePanel.getParent().layout(true);
+    }
+
+    /** Re-renders the Freq 1 / Freq 2 labels inside the dual-tone
+     *  panel, appending the snap-corrected frequency in brackets when
+     *  snap-to-FFT-bin is on (e.g. "Frequency 1 (17996.18 Hz)" when
+     *  the user typed 18 kHz at 384 k / 2 M).  Reused on every freq
+     *  field edit, on snap toggle, and on panel-show. */
+    private void updateDualToneFreqLabels() {
+        if (dualToneFreq1Label == null || dualToneFreq1Label.isDisposed()) return;
+        Preferences prefs = Preferences.instance();
+        int sr = currentOutputSampleRate();
+        String base1 = I18n.t("generator.dualTone.freq1");
+        String base2 = I18n.t("generator.dualTone.freq2");
+        boolean snap = prefs.isGenSnapToFftBin();
+        if (snap) {
+            double raw1 = (dualToneFreq1Field != null && !dualToneFreq1Field.isDisposed())
+                    ? dualToneFreq1Field.getValue() : prefs.getGenDualToneFreq1Hz();
+            double raw2 = (dualToneFreq2Field != null && !dualToneFreq2Field.isDisposed())
+                    ? dualToneFreq2Field.getValue() : prefs.getGenDualToneFreq2Hz();
+            double snap1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, raw1);
+            double snap2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, raw2);
+            dualToneFreq1Label.setText(base1 + "  (" + formatFrequency(snap1) + ")");
+            dualToneFreq2Label.setText(base2 + "  (" + formatFrequency(snap2) + ")");
+        } else {
+            dualToneFreq1Label.setText(base1);
+            dualToneFreq2Label.setText(base2);
+        }
+        dualToneFreq1Label.getParent().layout(true);
+    }
+
+    /** Couples the two amplitude % fields so they always sum to 100 %.
+     *  Called by both fields' selection listeners.  {@code editedFirst}
+     *  is true when the user just modified the Freq 1 amplitude field;
+     *  false when they modified Freq 2's.  The unedited field is set
+     *  to {@code 100 − edited} and the pref of record
+     *  ({@code genDualToneSplitPct}) tracks Freq 1's amplitude
+     *  percentage. */
+    private void applyDualToneAmpSplit(boolean editedFirst) {
+        Preferences prefs = Preferences.instance();
+        double a1, a2;
+        if (editedFirst) {
+            a1 = clampPct(dualToneAmp1Field.getValue());
+            a2 = clampPct(100.0 - a1);
+            dualToneAmp2Field.setValue(a2);
+        } else {
+            a2 = clampPct(dualToneAmp2Field.getValue());
+            a1 = clampPct(100.0 - a2);
+            dualToneAmp1Field.setValue(a1);
+        }
+        prefs.setGenDualToneSplitPct(a1);
+        prefs.save();
+        controller.setDualToneAmplitudes(a1, a2);
     }
 
     /** Flips a control's GridData.exclude flag and visibility together. */

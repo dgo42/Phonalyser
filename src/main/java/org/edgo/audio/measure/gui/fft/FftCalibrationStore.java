@@ -34,6 +34,13 @@ public final class FftCalibrationStore {
     public static final class Entry {
         @Getter private final StereoFreqRespCalibration calibration;
         @Getter private final String                    path;
+        /** When {@code true}, this entry's correction is subtracted
+         *  from every FFT bin (including noise floor); when
+         *  {@code false}, only the fundamental + harmonic dot
+         *  positions get the per-frequency offset.  Used to per-file
+         *  what was previously a single global "Calibrate with noise"
+         *  toggle.  Defaults to {@code false}. */
+        @Getter private final boolean                   withNoise;
     }
 
     private static volatile FftCalibrationStore instance;
@@ -59,13 +66,14 @@ public final class FftCalibrationStore {
         return !entries.isEmpty();
     }
 
-    public synchronized void addEntry(StereoFreqRespCalibration calibration, String path) {
+    public synchronized void addEntry(StereoFreqRespCalibration calibration, String path,
+                                      boolean withNoise) {
         if (calibration == null || path == null) {
             throw new IllegalArgumentException("calibration and path must be non-null");
         }
-        entries.add(new Entry(calibration, path));
-        log.info("FFT calibration added (row {}, {} points): {}",
-                entries.size() - 1, calibration.left().freqs.length, path);
+        entries.add(new Entry(calibration, path, withNoise));
+        log.info("FFT calibration added (row {}, {} points, withNoise={}): {}",
+                entries.size() - 1, calibration.left().freqs.length, withNoise, path);
         fire();
     }
 

@@ -44,6 +44,7 @@ import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.gui.widgets.StepSelector;
 import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
@@ -203,6 +204,11 @@ public final class OscilloscopePane {
     private StepSelector                 timeScale;
     private StepSelector                 hysteresisSel;
     private Button                       hysteresisEnable;
+    /** "Reconstructed beat" overlay toggle — enabled only when the
+     *  generator is in DUAL_TONE mode; field-promoted so the
+     *  generator-form listener can flip its enabled state without
+     *  rebuilding the tab. */
+    private Button                       reconstructedBeatBtn;
     /** Per-channel and trigger control widgets — fields so the preset
      *  load path can push saved values back into the UI without having to
      *  rebuild the toolbar.  All built once in {@link #buildLeftGroup} /
@@ -485,15 +491,25 @@ public final class OscilloscopePane {
         autoSetupListener        = ignored -> performAutoSetup();
         freqRespStartedListener  = ignored -> onFreqRespMeasurementStarted();
         freqRespStoppedListener  = ignored -> onFreqRespMeasurementStopped();
+        // Track generator-form changes so the "Reconstructed beat"
+        // checkbox stays enabled only in DUAL_TONE mode without
+        // requiring a pane rebuild.
+        Consumer<GenChangeCause> beatFormListener = cause -> {
+            if (group != null && !group.isDisposed()) {
+                group.getDisplay().asyncExec(this::syncReconstructedBeatEnabled);
+            }
+        };
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.SCOPE_AUTO_SETUP,             autoSetupListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
+        bus.subscribe(Events.GENERATOR_SIGNAL_CHANGED,     beatFormListener);
         group.addDisposeListener(e -> {
             MessageBus bus2 = MessageBus.instance();
             bus2.unsubscribe(Events.SCOPE_AUTO_SETUP,             autoSetupListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
+            bus2.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED,     beatFormListener);
             loader.clear();
             controller.stop();
         });
@@ -1532,13 +1548,13 @@ public final class OscilloscopePane {
         Composite hystSet = new Composite(g, SWT.NONE);
         hystSet.setLayout(flushRowLayoutHorizontal(4));
 
+        // Checkbox carries its own "Hysteresis" text so clicking the
+        // label toggles the checkbox itself instead of doing nothing
+        // (or accidentally focussing the numeric field next to it).
         hysteresisEnable = new Button(hystSet, SWT.CHECK);
+        hysteresisEnable.setText(I18n.t("scope.trigger.hysteresis"));
         hysteresisEnable.setSelection(prefs.isOscTriggerHysteresisEnabled());
         hysteresisEnable.setToolTipText(I18n.t("scope.trigger.hysteresis.tooltip"));
-
-        Label hystLabel = new Label(hystSet, SWT.NONE);
-        hystLabel.setText(I18n.t("scope.trigger.hysteresis"));
-        hystLabel.setToolTipText(I18n.t("scope.trigger.hysteresis.tooltip"));
 
         String[] hystValues = ScopeFormat.hysteresisDivSteps();
         hysteresisSel = new StepSelector(hystSet, hystValues,
@@ -1557,6 +1573,40 @@ public final class OscilloscopePane {
             hysteresisSel.setEnabled(on);
             refreshTabHeader(TAB_TRIGGER);
         });
+
+        // "Reconstructed beat" overlay toggle — paints the |F1-F2|
+        // envelope on top of the live trace in the trigger channel's
+        // colour.  Active only in DUAL_TONE; disabled (greyed) on
+        // every other waveform.  Subscribed to
+        // GENERATOR_SIGNAL_CHANGED below so toggling the generator
+        // form live updates the enabled state.
+        reconstructedBeatBtn = new Button(g, SWT.CHECK);
+        reconstructedBeatBtn.setText(I18n.t("scope.trigger.reconstructedBeat"));
+        reconstructedBeatBtn.setToolTipText(I18n.t("scope.trigger.reconstructedBeat.tooltip"));
+        reconstructedBeatBtn.setSelection(prefs.isOscShowReconstructedBeat());
+        reconstructedBeatBtn.setEnabled(isGeneratorDualTone());
+        reconstructedBeatBtn.addListener(SWT.Selection, e -> {
+            prefs.setOscShowReconstructedBeat(reconstructedBeatBtn.getSelection());
+            prefs.save();
+            requestRedraw();
+        });
+    }
+
+    /** True when the generator is currently in {@code DUAL_TONE} form
+     *  (drives the "Reconstructed beat" checkbox's enabled state). */
+    private boolean isGeneratorDualTone() {
+        return "DUAL_TONE".equalsIgnoreCase(
+                Preferences.instance().getGenSignalForm());
+    }
+
+    /** Re-evaluates {@link #reconstructedBeatBtn}'s enabled state from
+     *  the current generator form.  Called on every
+     *  {@link Events#GENERATOR_SIGNAL_CHANGED} so toggling the form
+     *  combo greys / un-greys the checkbox without restarting the
+     *  pane. */
+    private void syncReconstructedBeatEnabled() {
+        if (reconstructedBeatBtn == null || reconstructedBeatBtn.isDisposed()) return;
+        reconstructedBeatBtn.setEnabled(isGeneratorDualTone());
     }
 
     /**
@@ -1760,8 +1810,21 @@ public final class OscilloscopePane {
         Preferences prefs = Preferences.instance();
         double freq = view.getLastFrequencyHz();
         double vpp  = view.getLastVpp();
-        if (Double.isFinite(freq) && freq > 0) {
-            double period = 1.0 / freq;
+        // In dual-tone mode the carrier crosses 0 many times per beat
+        // envelope cycle.  Auto-setup picks the LOWER of the carrier
+        // frequency and |F1-F2| so the time scale covers at least one
+        // full beat envelope — picking the carrier alone would render
+        // a packed wall of cycles with no visible envelope.
+        double scaleHz = freq;
+        if ("DUAL_TONE".equalsIgnoreCase(prefs.getGenSignalForm())) {
+            double beatHz = Math.abs(prefs.getGenDualToneFreq2Hz()
+                                   - prefs.getGenDualToneFreq1Hz());
+            if (beatHz > 0 && (!Double.isFinite(scaleHz) || beatHz < scaleHz)) {
+                scaleHz = beatHz;
+            }
+        }
+        if (Double.isFinite(scaleHz) && scaleHz > 0) {
+            double period = 1.0 / scaleHz;
             double targetTDiv = period * 1.5 / OscilloscopeView.DIVISIONS_X;
             double newTDiv    = ScopeFormat.ceilToStep(targetTDiv, OscParse.timePerDivTargets());
             if (timeScale != null && !timeScale.isDisposed()) timeScale.setValue(newTDiv);

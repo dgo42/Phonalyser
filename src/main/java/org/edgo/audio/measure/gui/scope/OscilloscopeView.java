@@ -85,6 +85,13 @@ public final class OscilloscopeView extends AbstractMeasurementView {
      */
     private double lastTriggerSubSampleOffset = 0.0;
 
+    /** Most-recent reconstructed |F1-F2| beat envelope used by the
+     *  dual-tone trigger search.  Stored after each reconstruction so
+     *  {@link #drawBeatOverlay} can paint it on top of the live trace
+     *  when {@code prefs.isOscShowReconstructedBeat()} is on and the
+     *  generator is in DUAL_TONE mode. */
+    private float[] debugBeatSignal;
+
     /**
      * True between pressing the Start button and the next captured trigger
      * in SINGLE mode.  Cleared on capture so subsequent redraws hold the
@@ -263,7 +270,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private Image gaugeIconDark;
     private Image chartColumnIconLight;
     private Image chartColumnIconDark;
-    private Image rotateLeftIcon;
+    private Image resetStatIcon;
     private Image autoSetupIcon;
     private Image windowRestoreIconLight;
     private Image windowRestoreIconDark;
@@ -581,11 +588,13 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         if (newL != currentLeftRgb) {
             setColor(ColorRole.LEFT_TRACE,        newL);
             setColor(ColorRole.LEFT_CHANNEL_MID,  attenuate(newL, 0.65));
+            setColor(ColorRole.LEFT_BEAT,         attenuate(newL, 0.80));
             currentLeftRgb = newL;
         }
         if (newR != currentRightRgb) {
             setColor(ColorRole.RIGHT_TRACE,       newR);
             setColor(ColorRole.RIGHT_CHANNEL_MID, attenuate(newR, 0.65));
+            setColor(ColorRole.RIGHT_BEAT,        attenuate(newR, 0.80));
             currentRightRgb = newR;
         }
     }
@@ -716,11 +725,11 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             lastCapsBuildNanos = now;
         }
         Point ts = gc.textExtent(cachedCapsString);
-        gc.drawText(cachedCapsString, w - ts.x - 8, 6, true);
+        drawOutlinedText(gc, cachedCapsString, w - ts.x - 8, 6);
     }
 
     /** Gap (px) between the cap/s readout and the file-path label drawn to its left. */
-    private static final int FILE_PATH_GAP_TO_CAPS = 20;
+    private static final int FILE_PATH_GAP_TO_CAPS = 1;
     /** Gap (px) between the right-channel max-voltage label and the file path,
      *  so the blinking text never collides with that channel readout. */
     private static final int FILE_PATH_GAP_TO_RIGHT_LABEL = 8;
@@ -784,7 +793,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         boolean lit = ((System.currentTimeMillis() / 500L) % 2L) == 0L;
         gc.setForeground(lit ? color(ColorRole.BLINK_LIT) : color(ColorRole.BLINK_DIM));
         gc.setBackground(color(ColorRole.BACKGROUND));
-        gc.drawText(shown, rightEdge - sExt.x, 6, true);
+        drawOutlinedText(gc, shown, rightEdge - sExt.x, 6);
 
         scheduleFilePathBlinkRedraw();
     }
@@ -1059,7 +1068,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         setBounds(extStatsToggleBounds, sbX, by, btnW, btnH);
         if (showStats) {
             int rsX = sbX + btnW + 2;
-            drawIconPushButton(ev.gc, rsX, by, btnW, btnH, rotateLeftIcon);
+            drawIconPushButton(ev.gc, rsX, by, btnW, btnH, resetStatIcon);
             setBounds(extResetButtonBounds, rsX, by, btnW, btnH);
         } else {
             extResetButtonBounds.width = 0; extResetButtonBounds.height = 0;
@@ -1076,7 +1085,6 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             externalMeasurementCanvas.redraw();
         }
     }
-
 
     /**
      * Starts the background measurement worker.  Idempotent — calling while
@@ -1217,7 +1225,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
 
             if (showStats) {
                 int rsX = sbX + btnW + 2;
-                drawIconPushButton(gc, rsX, y, btnW, btnH, rotateLeftIcon);
+                drawIconPushButton(gc, rsX, y, btnW, btnH, resetStatIcon);
                 setBounds(resetButtonBoundsHeader, rsX, y, btnW, btnH);
             } else {
                 resetButtonBoundsHeader.width = 0; resetButtonBoundsHeader.height = 0;
@@ -1279,17 +1287,17 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         // back on shows up-to-date numbers immediately.
         int headerCols = showStats ? HEADERS.length : 1;
         for (int i = 0; i < headerCols; i++) {
-            gc.drawText(HEADERS[i], HEADER_RIGHTS[i] - headerExtents[i].x, y, true);
+            drawOutlinedText(gc, HEADERS[i], HEADER_RIGHTS[i] - headerExtents[i].x, y);
         }
         y += lineH;
         for (MeasurementRow r : rows) {
-            gc.drawText(r.name, COL_NAME_X, y, true);
-            drawRightAligned(gc, r.cur,   COL_CUR_RIGHT,  y);
+            drawOutlinedText(gc, r.name, COL_NAME_X, y);
+            drawOutlinedRightAligned(gc, r.cur,   COL_CUR_RIGHT,  y);
             if (showStats) {
-                drawRightAligned(gc, r.avg,   COL_AVG_RIGHT,  y);
-                drawRightAligned(gc, r.min,   COL_MIN_RIGHT,  y);
-                drawRightAligned(gc, r.max,   COL_MAX_RIGHT,  y);
-                drawRightAligned(gc, r.sigma, COL_SIGMA_RIGHT, y);
+                drawOutlinedRightAligned(gc, r.avg,   COL_AVG_RIGHT,  y);
+                drawOutlinedRightAligned(gc, r.min,   COL_MIN_RIGHT,  y);
+                drawOutlinedRightAligned(gc, r.max,   COL_MAX_RIGHT,  y);
+                drawOutlinedRightAligned(gc, r.sigma, COL_SIGMA_RIGHT, y);
             }
             y += lineH;
         }
@@ -1340,19 +1348,19 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private void ensureIconButtonResources() {
         if (gaugeIconLight != null) return;
         Display d = getDisplay();
-        RGB light = new RGB(235, 235, 235);     // matches color(ColorRole.TEXT)
-        RGB dark  = new RGB(  0,   0,   0);     // matches canvas background
-        RGB red   = new RGB(220,  60,  60);     // matches color(ColorRole.RESET) — red ↻ legacy
+        RGB text = rgb(ColorRole.TEXT);
+        RGB background  = rgb(ColorRole.BACKGROUND);
+        RGB reset   = rgb(ColorRole.RESET);
         IconUtils icons = IconUtils.instance();
-        gaugeIconLight       = icons.renderAtHeight(d, SvgPaths.GAUGE_HIGH,         16, light);
-        gaugeIconDark        = icons.renderAtHeight(d, SvgPaths.GAUGE_HIGH,         16, dark);
-        chartColumnIconLight = icons.renderAtHeight(d, SvgPaths.CHART_COLUMN,       16, light);
-        chartColumnIconDark  = icons.renderAtHeight(d, SvgPaths.CHART_COLUMN,       16, dark);
+        gaugeIconLight       = icons.renderAtHeight(d, SvgPaths.GAUGE_HIGH,         16, text);
+        gaugeIconDark        = icons.renderAtHeight(d, SvgPaths.GAUGE_HIGH,         16, background);
+        chartColumnIconLight = icons.renderAtHeight(d, SvgPaths.CHART_COLUMN,       16, text);
+        chartColumnIconDark  = icons.renderAtHeight(d, SvgPaths.CHART_COLUMN,       16, background);
         // Reset icon has no frame so it can use the extra 2 px of room.
-        rotateLeftIcon       = icons.renderAtHeight(d, SvgPaths.ROTATE_LEFT,        18, red);
-        autoSetupIcon          = icons.renderAtHeight(d, SvgPaths.ARROWS_TO_CIRCLE,   16, light);
-        windowRestoreIconLight = icons.renderAtHeight(d, SvgPaths.WINDOW_RESTORE,     16, light);
-        windowRestoreIconDark  = icons.renderAtHeight(d, SvgPaths.WINDOW_RESTORE,     16, dark);
+        resetStatIcon       = icons.renderAtHeight(d, SvgPaths.ROTATE_LEFT,        18, reset);
+        autoSetupIcon          = icons.renderAtHeight(d, SvgPaths.ARROWS_TO_CIRCLE,   16, text);
+        windowRestoreIconLight = icons.renderAtHeight(d, SvgPaths.WINDOW_RESTORE,     16, text);
+        windowRestoreIconDark  = icons.renderAtHeight(d, SvgPaths.WINDOW_RESTORE,     16, background);
     }
 
     /** Draws a toggleable icon button (outlined when {@code on} is false,
@@ -1381,10 +1389,6 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     }
 
 
-    private void drawRightAligned(GC gc, String s, int rightX, int y) {
-        Point ts = gc.textExtent(s);
-        gc.drawText(s, rightX - ts.x, y, true);
-    }
 
 
     /**
@@ -1474,20 +1478,17 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             int levelLabelX  = w - SLIDER_TRI_LONG - 4 - lvs.x;
             int levelLabelY  = levelY - lvs.y / 2;
             int levelLineEnd = levelLabelX - 4;
-            gc.setForeground(levelColor);
-            gc.setLineWidth(1);
-            gc.setLineDash(LONG_DASH);
             if (levelLineStartX < levelLineEnd) {
-                gc.drawLine(levelLineStartX, levelY, levelLineEnd, levelY);
+                drawOutlinedDashedLine(gc, levelLineStartX, levelY,
+                        levelLineEnd, levelY, LONG_DASH, levelColor);
             }
-            gc.setLineDash(null);
             drawLeftPointingTriangle(gc, w - 1, levelY, levelColor);
             triggerLevelBounds.x      = w - SLIDER_TRI_LONG - 2;
             triggerLevelBounds.y      = levelY - SLIDER_GRAB_HALF;
             triggerLevelBounds.width  = SLIDER_TRI_LONG + 4;
             triggerLevelBounds.height = 2 * SLIDER_GRAB_HALF;
             gc.setForeground(levelColor);
-            gc.drawText(levelStr, levelLabelX, levelLabelY, true);
+            drawOutlinedText(gc, levelStr, levelLabelX, levelLabelY);
         } else {
             // Clear hit-test bounds so a leftover position from before
             // the mode switch can't intercept clicks.
@@ -1500,10 +1501,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         if (!fileMode) {
             double posFrac = ScopeFormat.clamp01(prefs.getOscTriggerPositionFrac());
             int posX = (int) Math.round(posFrac * w);
-            gc.setForeground(color(ColorRole.TEXT));
-            gc.setLineDash(LONG_DASH);
-            gc.drawLine(posX, 0, posX, h - 1);
-            gc.setLineDash(null);
+            drawOutlinedDashedLine(gc, posX, 0, posX, h - 1, LONG_DASH, color(ColorRole.TEXT));
             drawUpPointingTriangle(gc, posX, h - 1, color(ColorRole.TEXT));
             triggerPosBounds.x      = posX - SLIDER_GRAB_HALF;
             triggerPosBounds.y      = h - SLIDER_TRI_LONG - 2;
@@ -1518,7 +1516,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             if (posLabelX < 2) posLabelX = 2;
             if (posLabelX + pps.x > w - 2) posLabelX = w - 2 - pps.x;
             gc.setForeground(color(ColorRole.TEXT));
-            gc.drawText(posStr, posLabelX, posLabelY, true);
+            drawOutlinedText(gc, posStr, posLabelX, posLabelY);
         } else {
             triggerPosBounds.x = -1; triggerPosBounds.y = -1;
             triggerPosBounds.width = 0; triggerPosBounds.height = 0;
@@ -1624,17 +1622,15 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         int labelY      = offsetY - ts.y / 2;
         int lineStartX  = labelX + ts.x + 4;
 
-        gc.setForeground(lineLabelColor);
-        gc.setLineDash(lineDash);
         if (lineStartX < lineRightEnd) {
-            gc.drawLine(lineStartX, offsetY, lineRightEnd, offsetY);
+            drawOutlinedDashedLine(gc, lineStartX, offsetY, lineRightEnd, offsetY,
+                    lineDash, lineLabelColor);
         }
-        gc.setLineDash(null);
 
         drawRightPointingTriangle(gc, 0, offsetY, triangleColor);
 
         gc.setForeground(lineLabelColor);
-        gc.drawText(label, labelX, labelY, true);
+        drawOutlinedText(gc, label, labelX, labelY);
 
         if (isActive) {
             offsetSliderBounds.x      = 0;
@@ -1651,8 +1647,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
                 xBase + SLIDER_TRI_LONG,    y,
                 xBase,                      y + SLIDER_TRI_HALF
         };
-        gc.setBackground(color);
-        gc.fillPolygon(poly);
+        drawOutlinedFilledPolygon(gc, poly, color);
     }
 
     /** Filled triangle whose tip points into the grid from the right edge. */
@@ -1662,8 +1657,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
                 xBase - SLIDER_TRI_LONG,    y,
                 xBase,                      y + SLIDER_TRI_HALF
         };
-        gc.setBackground(color);
-        gc.fillPolygon(poly);
+        drawOutlinedFilledPolygon(gc, poly, color);
     }
 
     /** Filled triangle whose tip points up into the grid from the bottom edge. */
@@ -1673,8 +1667,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
                 x,                          yBase - SLIDER_TRI_LONG,
                 x + SLIDER_TRI_HALF,        yBase
         };
-        gc.setBackground(color);
-        gc.fillPolygon(poly);
+        drawOutlinedFilledPolygon(gc, poly, color);
     }
 
     /**
@@ -1722,8 +1715,8 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         int leftTimeY  = centerY - lts.y - 2;
         int rightTimeX = w - rts.x - 4;
         int rightTimeY = centerY - rts.y - 2;
-        gc.drawText(leftTimeStr,  leftTimeX,  leftTimeY,  true);
-        gc.drawText(rightTimeStr, rightTimeX, rightTimeY, true);
+        drawOutlinedText(gc, leftTimeStr,  leftTimeX,  leftTimeY);
+        drawOutlinedText(gc, rightTimeStr, rightTimeX, rightTimeY);
         timeLeftLabelBounds .x = leftTimeX;  timeLeftLabelBounds .y = leftTimeY;
         timeLeftLabelBounds .width = lts.x;  timeLeftLabelBounds .height = lts.y;
         timeRightLabelBounds.x = rightTimeX; timeRightLabelBounds.y = rightTimeY;
@@ -1750,8 +1743,8 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             int maxX = centerX - mxs.x - 4;
             int minX = centerX - mns.x - 4;
             int minY = h - mns.y - 2;
-            gc.drawText(maxStr, maxX, 2,    true);
-            gc.drawText(minStr, minX, minY, true);
+            drawOutlinedText(gc, maxStr, maxX, 2);
+            drawOutlinedText(gc, minStr, minX, minY);
             leftMaxLabelBounds.x = maxX; leftMaxLabelBounds.y = 2;
             leftMaxLabelBounds.width = mxs.x; leftMaxLabelBounds.height = mxs.y;
             leftMinLabelBounds.x = minX; leftMinLabelBounds.y = minY;
@@ -1772,8 +1765,8 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             int maxX = centerX + 4;
             int minX = centerX + 4;
             int minY = h - mns.y - 2;
-            gc.drawText(maxStr, maxX, 2,    true);
-            gc.drawText(minStr, minX, minY, true);
+            drawOutlinedText(gc, maxStr, maxX, 2);
+            drawOutlinedText(gc, minStr, minX, minY);
             rightMaxLabelBounds.x = maxX; rightMaxLabelBounds.y = 2;
             rightMaxLabelBounds.width = mxs.x; rightMaxLabelBounds.height = mxs.y;
             rightMinLabelBounds.x = minX; rightMinLabelBounds.y = minY;
@@ -1988,9 +1981,40 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         float triggerHysteresis = prefs.isOscTriggerHysteresisEnabled()
                 ? (float) (prefs.getOscTriggerHysteresisDiv() * triggerVDiv / triggerPeakVolts)
                 : 0f;
+        // In dual-tone mode the carrier crosses the trigger level many
+        // times per |F1-F2| beat cycle; without dedicated handling the
+        // anchor would jump between adjacent carrier zeros on every
+        // paint and the slow envelope would smear.  Reconstruct an
+        // AC-coupled |F1-F2| envelope (in the trigger channel's
+        // volts-per-div units), then run the standard trigger search
+        // on it.  The user's trigger-level slider and hysteresis stay
+        // honoured — the level offsets above or below the envelope's
+        // mid-line in the same units the raw trace is drawn in, so
+        // moving the slider re-positions where on the beat envelope
+        // the trigger fires.  Sub-sample refinement is dropped (the
+        // Lanczos refiner is tuned for the raw capture's sample rate,
+        // not the band-limited envelope).
+        float[] effectiveData = triggerData;
+        boolean effectiveSinc = sincEnabled;
+        debugBeatSignal = null;
+        if ("DUAL_TONE".equalsIgnoreCase(prefs.getGenSignalForm())) {
+            double f1 = prefs.getGenDualToneFreq1Hz();
+            double f2 = prefs.getGenDualToneFreq2Hz();
+            int sr = b.getSampleRate();
+            if (f1 > 0 && f2 > 0 && sr > 0 && Math.abs(f2 - f1) > 0) {
+                effectiveData = reconstructBeatSignal(triggerData, available, sr, f1, f2);
+                effectiveSinc = false;
+                // Cache the reconstruction for the overlay painter.
+                // The overlay only renders when the user has the
+                // "Reconstructed beat" checkbox on — gated inside
+                // drawBeatOverlay so the trigger path keeps using
+                // the reconstruction independently.
+                debugBeatSignal = effectiveData;
+            }
+        }
         double triggerFrac = (searchTo > searchFrom)
-                ? ScopeTrigger.find(triggerData, available, searchFrom, searchTo,
-                              effectiveTriggerLevel, rising, sincEnabled, triggerHysteresis)
+                ? ScopeTrigger.find(effectiveData, available, searchFrom, searchTo,
+                              effectiveTriggerLevel, rising, effectiveSinc, triggerHysteresis)
                 : -1.0;
         boolean foundTrigger = (triggerFrac >= 0);
 
@@ -2117,6 +2141,176 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         renderTraces(gc, w, h, leftBuf, rightBuf, available,
                      dispStart, subSampleOffset, dispCount,
                      showL, showR, leftVDiv, rightVDiv, sincL, sincR, dcL, dcR);
+        // Overlay the reconstructed |F1-F2| beat envelope on top of
+        // the live trace.  Gated on DUAL_TONE form AND the user's
+        // "Reconstructed beat" checkbox inside drawBeatOverlay.
+        drawBeatOverlay(gc, w, h, dispStart, subSampleOffset, dispCount,
+                available, triggerCh, leftVDiv, rightVDiv);
+    }
+
+    /** Paints the most-recently reconstructed |F1-F2| beat envelope
+     *  ({@link #debugBeatSignal}) on top of the trigger channel's
+     *  trace.  The overlay uses the trigger channel's V/div and
+     *  offset so it sits in the same voltage domain as the trace,
+     *  and the trigger channel's trace colour at 80 % brightness
+     *  ("20 % darker") so it's visually paired with the channel
+     *  driving the trigger.  Renders only when the generator is in
+     *  DUAL_TONE mode (which is also the only condition under which
+     *  {@link #debugBeatSignal} is non-null) AND the user has the
+     *  "Reconstructed beat" checkbox enabled in the Trigger tab. */
+    private void drawBeatOverlay(GC gc, int w, int h,
+                                 int dispStart, double subSampleOffset, int dispCount,
+                                 int dataLen, Channel triggerCh,
+                                 double leftVDiv, double rightVDiv) {
+        float[] beat = debugBeatSignal;
+        if (beat == null || dispCount < 2 || w <= 0) return;
+        Preferences prefs = Preferences.instance();
+        if (!prefs.isOscShowReconstructedBeat()) return;
+        double centerY = h * ((triggerCh == Channel.L)
+                ? prefs.getOscLeftOffsetFrac() : prefs.getOscRightOffsetFrac());
+        double vDiv    = (triggerCh == Channel.L) ? leftVDiv : rightVDiv;
+        double pixelsPerDivY = (double) h / DIVISIONS_Y;
+        double peakVolts     = AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double vScale        = peakVolts / vDiv * pixelsPerDivY;
+        Color beatColor = (triggerCh == Channel.L)
+                ? color(ColorRole.LEFT_BEAT)
+                : color(ColorRole.RIGHT_BEAT);
+        drawTrace(gc, beat, dataLen, dispStart, subSampleOffset, dispCount,
+                w, centerY, vScale, beatColor,
+                /* sincEnabled = */ false, /* dcOffset = */ 0.0, /* dotDiameter = */ 0);
+    }
+
+    /** Reconstructs the signed beat modulator of a dual-tone signal,
+     *  i.e. the slow {@code cos((F1-F2)/2·t)} factor that envelopes
+     *  the high-frequency carrier in {@code sin(F1·t) + sin(F2·t) =
+     *  2·sin((F1+F2)/2·t)·cos((F1-F2)/2·t)}.
+     *
+     *  <p>The reconstruction has three steps:
+     *  <ol>
+     *    <li>Rectify the input ({@code |data[i]|}) and boxcar-LP it
+     *        to extract the abs envelope {@code |cos((F1-F2)/2·t)|}
+     *        in the trigger channel's voltage units.  The boxcar's
+     *        length is tuned so its main lobe lies above the carrier
+     *        residue band but well below the {@code (F1+F2)} carrier
+     *        sum, keeping the abs envelope clean.</li>
+     *    <li>Walk the abs envelope and flip the sign every time it
+     *        dips into a local minimum — those minima are exactly the
+     *        modulator's zero crossings, so the sign of {@code cos}
+     *        flips there.  A hysteresis-based "in-minimum" flag stops
+     *        the same minimum from triggering multiple flips when
+     *        ripple causes the envelope to wobble around the
+     *        threshold.</li>
+     *    <li>Subtract the residual mean so the output centres on
+     *        zero — the scope's trigger level slider then offsets
+     *        above or below the modulator's mid-line in the same
+     *        volts-per-div units as the raw trace, and the user's
+     *        slider keeps its physical meaning.</li>
+     *  </ol>
+     *
+     *  <p>The output looks like a clean sine at frequency
+     *  {@code (F1-F2)/2} with peak-to-peak ≈ the dual-tone signal's
+     *  peak envelope, so an oscilloscope overlay of it traces the
+     *  outer envelope of the carrier exactly as the eye expects. */
+    private float[] reconstructBeatSignal(float[] data, int available,
+                                          int sampleRate,
+                                          double f1Hz, double f2Hz) {
+        float[] out = new float[available];
+        double beatHz = Math.abs(f2Hz - f1Hz);
+        if (!(beatHz > 0) || sampleRate <= 0) return out;
+        // L = quarter-beat-period samples — bracketed so a tiny beat
+        // doesn't blow past the buffer length and a huge beat doesn't
+        // collapse to L = 1.
+        int lFromBeat   = (int) Math.round(sampleRate / (4.0 * beatHz));
+        int lMin        = Math.max(2,
+                (int) Math.round(sampleRate / Math.max(1.0, f1Hz + f2Hz)));
+        int lMaxFromBuf = Math.max(2, available / 4);
+        int L = Math.max(lMin, Math.min(lFromBeat, lMaxFromBuf));
+        if (available <= 2 * L) return out;
+        int halfL = L / 2;
+
+        // --- Step 1: rectify + boxcar LP applied TWICE in cascade
+        // → smoothed abs envelope (in volts).  A single boxcar has
+        // {@code sinc} frequency response; cascading two of the same
+        // length gives {@code sinc²}, with much deeper attenuation
+        // in the stopband (carrier-residue band) for only a marginal
+        // increase in main-lobe width.  Each pass emits at its
+        // window centre, so the cascade still has zero net group
+        // delay — the reconstructed modulator stays time-aligned
+        // with the raw trace.  Boundaries of each pass are filled
+        // with the nearest valid value so the next stage's running
+        // sum doesn't ingest zero-initialised edge samples.
+        float[] tmp = new float[available];
+        double sum = 0.0;
+        for (int i = 0; i < L; i++) sum += Math.abs(data[i]);
+        for (int i = L; i < available; i++) {
+            tmp[i - halfL] = (float) (sum / L);
+            sum += Math.abs(data[i]) - Math.abs(data[i - L]);
+        }
+        float tmpFirst = tmp[halfL];
+        float tmpLast  = tmp[available - halfL - 1];
+        for (int i = 0; i < halfL; i++) tmp[i] = tmpFirst;
+        for (int i = available - halfL; i < available; i++) tmp[i] = tmpLast;
+
+        float[] absLp = new float[available];
+        sum = 0.0;
+        for (int i = 0; i < L; i++) sum += tmp[i];
+        for (int i = L; i < available; i++) {
+            absLp[i - halfL] = (float) (sum / L);
+            sum += tmp[i] - tmp[i - L];
+        }
+        float firstValid = absLp[halfL];
+        float lastValid  = absLp[available - halfL - 1];
+        for (int i = 0; i < halfL; i++) absLp[i] = firstValid;
+        for (int i = available - halfL; i < available; i++) absLp[i] = lastValid;
+
+        // --- Step 2: raw-signal peak for amplitude scaling.  The peak
+        // ≈ |F1| + |F2| (the two tones add constructively at every
+        // envelope maximum), so the reconstructed modulator's peak
+        // is matched to it and the cyan overlay touches the yellow
+        // signal's outer envelope.
+        float rawPeak = 0f;
+        for (int i = halfL; i < available - halfL; i++) {
+            float a = Math.abs(data[i]);
+            if (a > rawPeak) rawPeak = a;
+        }
+        if (!(rawPeak > 0)) return out;
+
+        // --- Step 3: synchronous detection of the {@code (F1-F2)}
+        // component in absLp.  Mathematically,
+        //   |cos((F1-F2)/2·t - φ_m)|  expands into Fourier series
+        //                              (2/π) + (4/(3π))·cos(2·((F1-F2)/2·t - φ_m)) + ...
+        // so the first AC harmonic of absLp sits at frequency
+        // {@code (F1-F2)} with phase {@code 2·φ_m}.  Computing the
+        // I / Q correlation of {@code absLp - DC} against
+        // {@code cos(ωt), sin(ωt)} at {@code ω = 2π·(F1-F2)} gives
+        // {@code atan2(Q, I) = 2·φ_m}, so {@code φ_m = phase / 2}.
+        // Reconstructing the modulator as a clean sinusoid at the
+        // recovered phase eliminates every residual carrier and
+        // higher-harmonic ripple — output is a pure
+        // {@code cos((F1-F2)/2·t - φ_m)} with peak {@code rawPeak}.
+        double dc = 0.0;
+        int validN = 0;
+        for (int i = halfL; i < available - halfL; i++) {
+            dc += absLp[i];
+            validN++;
+        }
+        if (validN <= 0) return out;
+        dc /= validN;
+        double omega = 2.0 * Math.PI * beatHz / sampleRate;
+        double iSum = 0.0;
+        double qSum = 0.0;
+        for (int i = halfL; i < available - halfL; i++) {
+            double ac = absLp[i] - dc;
+            iSum += ac * Math.cos(omega * i);
+            qSum += ac * Math.sin(omega * i);
+        }
+        double phase    = Math.atan2(qSum, iSum);
+        double omegaMod = omega / 2.0;
+        double phaseMod = phase  / 2.0;
+        for (int i = 0; i < available; i++) {
+            out[i] = (float) (rawPeak * Math.cos(omegaMod * i - phaseMod));
+        }
+        return out;
     }
 
     /**

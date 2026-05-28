@@ -283,6 +283,16 @@ public final class ScopeMeasurementWorker {
         double rightMean = sampleMean(measRightBuf, avail);
         float[] data = (selected == Channel.L) ? measLeftBuf : measRightBuf;
         SignalMeasurements result = SignalMeasurements.compute(data, avail, sampleRate, peakVolts);
+        // Dual-tone has two simultaneous fundamentals — a single Tp /
+        // Tr / Tf / f / duty value has no physical meaning.  Clear
+        // the time fields so the readout shows {@code ---} for every
+        // time row instead of latching onto whichever spectral peak
+        // happened to win the Goertzel search on this tick.  Vpp /
+        // Vrms / Vmean stay intact since they're well-defined for
+        // any signal mode.
+        if ("DUAL_TONE".equalsIgnoreCase(prefs.getGenSignalForm())) {
+            result = result.withoutTimes();
+        }
         long now = System.nanoTime();
         synchronized (measHistoryLock) {
             measHistory[measHistoryWrite] = result;

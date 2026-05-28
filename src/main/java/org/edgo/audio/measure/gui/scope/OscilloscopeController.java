@@ -6,14 +6,11 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBuffer;
 
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
-
 import lombok.extern.log4j.Log4j2;
 
 /**
  * Owns the oscilloscope's UI-side lifecycle: the {@link #isRunning()}
- * Record-button flag, the capture-driven view redraws, and the
+ * Record-button flag, the periodic view redraws, and the
  * stop-with-frozen-snapshot behaviour.  The audio device itself is
  * owned by {@link SharedCapture} — the controller just acquires /
  * releases a reference for the duration of the scope's Record state.
@@ -29,21 +26,20 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class OscilloscopeController {
 
+    /**
+     * Period between scope redraw ticks, in milliseconds.  20 ms (≈ 50 Hz)
+     * is fast enough to read as smooth motion and leaves plenty of idle
+     * time in the OS message queue between paints, so the FFT worker's
+     * {@code display.asyncExec} handoff still gets dispatched even
+     * while the scope is recording.  The previous 1 ms value flooded
+     * the message pump with WM_TIMER + WM_PAINT pairs and starved every
+     * other async work item in the app.
+     */
+    private static final int REDRAW_PERIOD_MS = 20;
+
     private final OscilloscopeView mainView;
     private final CondensedView    condensedView;
     private final Display          display;
-
-    /** Bus subscriber that fires on every {@link Events#CAPTURE_BATCH_AVAILABLE}
-     *  (= every audio-callback batch).  Held as a field so {@link #stop()}
-     *  can pass the same Consumer identity to {@code unsubscribe}. */
-    private final Consumer<Object> batchListener = ignored -> onCaptureBatch();
-
-    /** Coalescer: a single asyncExec is in flight per audio-thread burst.
-     *  If 5 batches arrive before the UI gets to repaint, only one redraw
-     *  is queued — the next batch arrival can queue another only after
-     *  the previous redraw has run.  Keeps the async queue from growing
-     *  when paints take longer than the audio batch period. */
-    private final AtomicBoolean redrawScheduled = new AtomicBoolean(false);
 
     /** True while the scope's own Record button is on — drives the redraw
      *  timer and the {@link #isRunning()} accessor.  Independent of the
@@ -81,11 +77,10 @@ public final class OscilloscopeController {
 
     /**
      * Requests the shared capture via the bus, attaches both views to
-     * the live buffer, starts the measurement worker, and subscribes
-     * to {@link Events#CAPTURE_BATCH_AVAILABLE} so the views repaint
-     * as new samples arrive.  Bails out (without flipping
-     * {@link #scopeLive}) if the device fails to open — the reason is
-     * available via {@link #getLastStartError()}.
+     * the live buffer, starts the measurement worker and the redraw
+     * timer.  Bails out (without flipping {@link #scopeLive}) if the
+     * device fails to open — the reason is available via
+     * {@link #getLastStartError()}.
      */
     public synchronized void start() {
         if (scopeLive) return;
@@ -104,7 +99,7 @@ public final class OscilloscopeController {
         // paint thread doesn't block on the Goertzel scan at high sample
         // rates.  Started after the buffer is wired so the worker sees it.
         mainView.startMeasurementThread();
-        MessageBus.instance().subscribe(Events.CAPTURE_BATCH_AVAILABLE, batchListener);
+        scheduleRedraw();
     }
 
     /**
@@ -115,7 +110,6 @@ public final class OscilloscopeController {
     public synchronized void stop() {
         if (!scopeLive) return;
         scopeLive = false;
-        MessageBus.instance().unsubscribe(Events.CAPTURE_BATCH_AVAILABLE, batchListener);
         // Stop the measurement worker first so it doesn't try to read
         // from the buffer while capture is being torn down.
         if (!mainView.isDisposed()) mainView.stopMeasurementThread();
@@ -154,31 +148,40 @@ public final class OscilloscopeController {
      * Number of main-view redraws between condensed-view redraws.  The
      * condensed strip walks ~1 s of audio (lots of samples per pixel) and
      * its per-paint work would otherwise halve the main view's cap/s.
-     * Updating it at ~6 Hz is plenty for the human eye and keeps the main
+     * Updating it at ~5 Hz is plenty for the human eye and keeps the main
      * trace at full speed.
      */
     private static final int CONDENSED_DECIMATION = 10;
     private int redrawCounter = 0;
 
     /**
-     * Audio-thread entry point — fired by every
-     * {@link Events#CAPTURE_BATCH_AVAILABLE} (~once per audio batch).
-     * Coalesces a burst of arrivals into a single UI-thread redraw via
-     * {@link #redrawScheduled}: if a previous redraw is still pending,
-     * the new batch's arrival is silently dropped — the pending paint
-     * will already pick up whatever samples landed in between.
+     * Schedules the next paint pass via {@link Display#timerExec}.
+     *
+     * <p>The callback paints the main scope view <em>synchronously</em>
+     * ({@code redraw() + update()}) and only then schedules the next
+     * timer.  This guarantees the {@value #REDRAW_PERIOD_MS} ms period
+     * is measured from <strong>end of paint</strong>, not from when the
+     * paint was queued — so the message pump truly idles for that long
+     * between scope paints.  During that idle window the FFT view's
+     * pending {@code WM_PAINT} (and the FFT worker's
+     * {@code display.asyncExec} handoff) get a chance to dispatch.
+     * Without the synchronous {@code update()} call, a paint that takes
+     * longer than the period leaves the next timer permanently armed
+     * and back-to-back scope paints starve every other UI work item.
      */
-    private void onCaptureBatch() {
+    private void scheduleRedraw() {
         if (!scopeLive) return;
-        if (!redrawScheduled.compareAndSet(false, true)) return;
-        display.asyncExec(() -> {
-            redrawScheduled.set(false);
+        display.timerExec(REDRAW_PERIOD_MS, () -> {
             if (!scopeLive) return;
-            if (!mainView.isDisposed()) mainView.redraw();
+            if (!mainView.isDisposed()) {
+                mainView.redraw();
+                mainView.update();
+            }
             if (redrawCounter++ >= CONDENSED_DECIMATION) {
                 redrawCounter = 0;
                 if (!condensedView.isDisposed()) condensedView.redraw();
             }
+            scheduleRedraw();
         });
     }
 }

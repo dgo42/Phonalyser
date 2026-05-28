@@ -49,6 +49,7 @@ public final class SignalFormCombo extends Composite {
     static {
         LABELS.put(GenSignalForm.SINE,              "Sine");
         LABELS.put(GenSignalForm.SINE_COMPENSATED,  "Sine (compensated)");
+        LABELS.put(GenSignalForm.DUAL_TONE,         "Dual tone");
         LABELS.put(GenSignalForm.TRIANGLE,          "Triangle");
         LABELS.put(GenSignalForm.RECTANGLE,         "Rectangle / pulse");
         LABELS.put(GenSignalForm.WHITE_NOISE,       "White noise");

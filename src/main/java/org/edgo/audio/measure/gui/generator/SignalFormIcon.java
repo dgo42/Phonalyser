@@ -125,6 +125,7 @@ public final class SignalFormIcon {
             switch (form) {
                 case SINE:              drawSine(gc, false);            break;
                 case SINE_COMPENSATED:  drawSine(gc, true);             break;
+                case DUAL_TONE:         drawDualTone(gc);               break;
                 case TRIANGLE:          drawTriangle(gc);               break;
                 case RECTANGLE:         drawRectangle(gc);              break;
                 case WHITE_NOISE:       drawNoise(gc, 31, 1);           break;
@@ -147,6 +148,35 @@ public final class SignalFormIcon {
     // -------------------------------------------------------------------------
     // Individual pictograms — each fills a 24×24 cell with ~3 px insets.
     // -------------------------------------------------------------------------
+
+    /** Pictogram for {@link GenSignalForm#DUAL_TONE} — the
+     *  amplitude-modulated beat pattern that two close frequencies
+     *  produce, matching the time-domain shape the user sees on the
+     *  scope when running dual tone.  Drawn as the sum of two sines
+     *  at the slightly different rates {@code 5·t} and {@code 6·t};
+     *  the slow {@code (6−5)·t/2} envelope is what gives the
+     *  characteristic "fading in and out" visual. */
+    private void drawDualTone(GC gc) {
+        Path p = new Path(gc.getDevice());
+        try {
+            int steps = 80;
+            // Two sines at slightly different frequencies that beat at
+            // a rate slow enough to be visible inside the 20-px-wide
+            // icon body.  Sum is divided by 2 so the peak fits inside
+            // the ±8-px vertical budget.
+            for (int i = 0; i <= steps; i++) {
+                double t = (double) i / steps;
+                float x = 2 + (float) (t * 20);
+                double s1 = Math.sin(t * 5.0 * Math.PI);
+                double s2 = Math.sin(t * 6.0 * Math.PI);
+                float y  = (float) (12 - (s1 + s2) * 4.0);
+                if (i == 0) p.moveTo(x, y); else p.lineTo(x, y);
+            }
+            gc.drawPath(p);
+        } finally {
+            p.dispose();
+        }
+    }
 
     private void drawSine(GC gc, boolean compensated) {
         Path p = new Path(gc.getDevice());

@@ -10,6 +10,7 @@ import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.DeviceRef;
 
@@ -75,16 +76,47 @@ public final class FreqRespAnalyzerWorker {
         // chart while the sweep runs (avoids confusion about whether the
         // displayed trace is the current or previous measurement).
         display.asyncExec(view::clearResults);
+        // Publish FIRST so subscribers (FFT pane, scope pane, generator
+        // pane) run their stop logic synchronously on this thread before
+        // the worker thread launches.  The worker still spin-waits for
+        // the shared capture device + generator to actually idle before
+        // opening the audio device for the sweep — synchronous
+        // subscriber returns guarantee they ASKED their workers to
+        // stop, not that the worker threads have terminated.
+        MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
         workerThread = new Thread(this::runMeasurement, "freqresp-worker");
         workerThread.setDaemon(true);
         workerThread.start();
-        MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
     }
 
     /** Sets the cooperative cancel flag.  The analyzer checks it before
      *  each step; the capture loop polls it every 50 ms. */
     public void cancel() {
         cancelFlag.set(true);
+    }
+
+    /** Polls {@link SharedCapture#isCapturing()} and the generator's
+     *  bus-resolved {@code GENERATOR_RUNNING} responder until both
+     *  signal idle, or the timeout expires.  Returns {@code true} when
+     *  every other worker has released the audio device + DAC, {@code
+     *  false} on timeout / cancel.  Sleeps 20 ms between polls so the
+     *  CPU isn't pinned during the typical 50-200 ms teardown window. */
+    private boolean waitForOtherWorkersStopped(long timeoutMs) {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (cancelFlag.get()) return false;
+            boolean cap = SharedCapture.instance().isCapturing();
+            Boolean genRaw = MessageBus.instance().request(Events.GENERATOR_RUNNING);
+            boolean gen = Boolean.TRUE.equals(genRaw);
+            if (!cap && !gen) return true;
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
     }
 
     /** True while a measurement is in flight. */
@@ -99,6 +131,20 @@ public final class FreqRespAnalyzerWorker {
 
     private void runMeasurement() {
         try {
+            // Wait for the other panes' workers to release the audio
+            // device before we open it ourselves.  The
+            // FREQRESP_MEASUREMENT_STARTED publish (on the UI thread)
+            // already called their stop() methods, but those typically
+            // signal-and-return; the actual worker threads + the OS
+            // device handle release take another few tens of ms.
+            // Without this wait the FreqRespAnalyzer's openCapture
+            // races the FFT/scope worker's last analyze() and either
+            // fails with a "device in use" error or steals samples
+            // mid-frame.
+            if (!waitForOtherWorkersStopped(2000)) {
+                log.warn("FreqResp: timeout waiting for other workers to release the audio device");
+            }
+            if (cancelFlag.get()) return;
             Preferences prefs = Preferences.instance();
 
             DeviceRef out = resolveDevice(true,  prefs.current().getOutputDeviceName());

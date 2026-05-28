@@ -71,10 +71,38 @@ public final class Events {
     public static final String GENERATOR_RUNNING = "generator.running";
 
     /** Notification — a generator signal parameter (frequency, amplitude,
-     *  waveform, …) changed.  No payload; subscribers that cache results
-     *  derived from the generated signal (e.g. the FFT worker's per-frame
-     *  raw-FFT cache) treat this as "drop everything; restart". */
+     *  waveform, …) changed.  Payload: {@link GenChangeCause} —
+     *  {@code USER_INPUT} when the user moved a control,
+     *  {@code FLL_TRIM} when the FFT-side frequency-lock loop applied
+     *  a sub-Hz alignment trim.  Subscribers that cache results
+     *  derived from the generated signal (e.g. the FFT worker's
+     *  per-frame raw-FFT cache + averaging accumulator) MUST treat
+     *  {@code USER_INPUT} as "drop everything; restart" but keep their
+     *  cache + averaging alive for {@code FLL_TRIM}. */
     public static final String GENERATOR_SIGNAL_CHANGED = "generator.signal.changed";
+
+    /** Notification — the FFT-side frequency-lock loop wants the
+     *  generator to adopt a new fundamental frequency without
+     *  restarting the FFT averaging accumulator.  Payload: the new
+     *  frequency in Hz ({@code Double}).  Subscriber:
+     *  {@code GeneratorPane}; on receipt it live-applies the freq to
+     *  the DDS and republishes {@link #GENERATOR_SIGNAL_CHANGED} with
+     *  cause {@link GenChangeCause#FLL_TRIM} so the FFT worker keeps
+     *  its averaging.  Decouples FftView from the GeneratorController
+     *  instance owned by GeneratorPane. */
+    public static final String GENERATOR_FREQ_TRIM = "generator.freq.trim";
+
+    /** Notification — the FFT-side frequency-lock loop wants the
+     *  generator's <strong>second</strong> tone of a DUAL_TONE
+     *  waveform to adopt a new frequency.  Payload: the new
+     *  frequency in Hz ({@code Double}).  Mirror of
+     *  {@link #GENERATOR_FREQ_TRIM} for tone 2.  Subscriber:
+     *  {@code GeneratorPane}; on receipt it live-applies the freq via
+     *  {@code setDualToneFrequency2} and republishes
+     *  {@link #GENERATOR_SIGNAL_CHANGED} with cause
+     *  {@link GenChangeCause#FLL_TRIM} so the FFT worker keeps its
+     *  averaging accumulator alive. */
+    public static final String GENERATOR_FREQ_TRIM_2 = "generator.freq.trim.2";
 
     /** Notification — the FFT view's visible freq / magnitude pan
      *  window changed (mouse-wheel zoom, drag, auto-setup, maximize).

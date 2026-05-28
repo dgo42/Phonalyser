@@ -1,20 +1,22 @@
 package org.edgo.audio.measure.gui.common;
 
-import org.eclipse.swt.SWT;
-import org.eclipse.swt.graphics.Color;
-import org.eclipse.swt.graphics.Font;
-import org.eclipse.swt.graphics.GC;
-import org.eclipse.swt.graphics.Image;
-import org.eclipse.swt.graphics.Rectangle;
-import org.eclipse.swt.widgets.Canvas;
-import org.eclipse.swt.widgets.Composite;
-import org.edgo.audio.measure.enums.FftMagnitudeUnit;
-
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.Font;
+import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.RGB;
+import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.widgets.Canvas;
+import org.eclipse.swt.widgets.Composite;
+import org.edgo.audio.measure.enums.FftMagnitudeUnit;
 
 /**
  * Shared base for the project's measurement canvases — oscilloscope, FFT,
@@ -83,6 +85,11 @@ public abstract class AbstractMeasurementView extends Canvas {
          *  states of L-channel UI elements (scope only). */               LEFT_CHANNEL_MID,
         /** 65 % attenuation of {@link #RIGHT_TRACE} — symmetric to
          *  {@link #LEFT_CHANNEL_MID} (scope only). */                     RIGHT_CHANNEL_MID,
+        /** 80 % brightness ("20 % darker") of {@link #LEFT_TRACE} —
+         *  used by the dual-tone reconstructed-beat overlay when the
+         *  trigger channel is L (scope only). */                          LEFT_BEAT,
+        /** 80 % brightness of {@link #RIGHT_TRACE} — symmetric to
+         *  {@link #LEFT_BEAT} (scope only). */                            RIGHT_BEAT,
         /** Neutral grey shown in place of a trace when its channel
          *  isn't currently captured (scope only). */                      DISABLED_CHANNEL,
         /** FFT spectrum trace (prefs-driven, FFT only). */                SPECTRUM,
@@ -165,6 +172,86 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  unless the view has already been disposed. */
     protected final Color color(ColorRole role) {
         return palette.get(role);
+    }
+
+    /** Draws {@code s} at ({@code x}, {@code y}) with a 1-px outline
+     *  in the view's {@link ColorRole#BACKGROUND} colour behind the
+     *  current foreground.  Used by views that paint readouts on top
+     *  of a live signal trace (scope, FFT, FreqResp) so the text
+     *  stays legible regardless of the colour of the pixels
+     *  underneath.  The outline matches the chart background — black
+     *  on the scope, white on FFT / FreqResp — giving a background-
+     *  coloured halo that always contrasts the foreground.  Stamps
+     *  the outline colour at the eight ±1-px neighbours then the
+     *  original foreground on top; restores the foreground before
+     *  returning so the caller's GC state is unchanged. */
+    protected final void drawOutlinedText(GC gc, String s, int x, int y) {
+        Color fg = gc.getForeground();
+        gc.setForeground(color(ColorRole.BACKGROUND));
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                if (dx == 0 && dy == 0) continue;
+                gc.drawText(s, x + dx, y + dy, true);
+            }
+        }
+        gc.setForeground(fg);
+        gc.drawText(s, x, y, true);
+    }
+
+    /** Right-aligned variant of {@link #drawOutlinedText} — places
+     *  the text so its right edge lands at {@code rightX}. */
+    protected final void drawOutlinedRightAligned(GC gc, String s, int rightX, int y) {
+        Point ts = gc.textExtent(s);
+        drawOutlinedText(gc, s, rightX - ts.x, y);
+    }
+
+    /** Fills the polygon described by {@code poly} with {@code fillColor}
+     *  then strokes a 1-px outline in the view's
+     *  {@link ColorRole#BACKGROUND} colour around it.  Used for
+     *  marker triangles / handles that sit on top of the live
+     *  trace, so they remain visible against any signal colour
+     *  underneath while still blending with the chart background.
+     *  Restores foreground / background. */
+    protected final void drawOutlinedFilledPolygon(GC gc, int[] poly, Color fillColor) {
+        Color prevBg = gc.getBackground();
+        Color prevFg = gc.getForeground();
+        gc.setBackground(fillColor);
+        gc.fillPolygon(poly);
+        gc.setForeground(color(ColorRole.BACKGROUND));
+        gc.drawPolygon(poly);
+        gc.setBackground(prevBg);
+        gc.setForeground(prevFg);
+    }
+
+    /** Draws a dashed line from ({@code x1}, {@code y1}) to ({@code x2},
+     *  {@code y2}) in {@code color} with a 1-px halo in the view's
+     *  {@link ColorRole#BACKGROUND} colour on either side.  Strokes
+     *  the same dashed line at line-width 3 in the background colour
+     *  first, then at line-width 1 in the caller's colour on top —
+     *  the wider background underneath shows as a 1-px edge around
+     *  each coloured dash.  Restores line width, dash, and
+     *  foreground. */
+    protected final void drawOutlinedDashedLine(GC gc, int x1, int y1, int x2, int y2,
+                                                int[] dash, Color color) {
+        int prevWidth = gc.getLineWidth();
+        int[] prevDash = gc.getLineDash();
+        Color prevFg = gc.getForeground();
+        gc.setLineDash(dash);
+        gc.setLineWidth(3);
+        gc.setForeground(color(ColorRole.BACKGROUND));
+        gc.drawLine(x1, y1, x2, y2);
+        gc.setLineWidth(1);
+        gc.setForeground(color);
+        gc.drawLine(x1, y1, x2, y2);
+        gc.setLineDash(prevDash);
+        gc.setLineWidth(prevWidth);
+        gc.setForeground(prevFg);
+    }
+
+    /** Returns the live {@link RGB} for {@code role} — never null
+     *  unless the view has already been disposed. */
+    protected final RGB rgb(ColorRole role) {
+        return palette.get(role).getRGB();
     }
 
     /** Allocates a fresh colour for {@code role} from {@code packedRgb}
@@ -722,7 +809,12 @@ public abstract class AbstractMeasurementView extends Canvas {
     /** Decade boundaries 10ⁿ inside [min, max]. */
     private static double[] logMajorTicks(double min, double max) {
         double safeMin = Math.max(1e-12, min);
-        double safeMax = Math.max(safeMin * 10, max);
+        // safeMax must MATCH the formula used by AbstractFreqDomainView.freqToX
+        // (max(safeMin + ε, max)) — otherwise the labels and trace use
+        // different log ranges and visually misalign at narrow zoom
+        // (e.g. a 1 kHz peak rendered near the "2 kHz" label when zoomed
+        // to less than one decade).
+        double safeMax = Math.max(safeMin + 1e-9, max);
         int lo = (int) Math.floor(Math.log10(safeMin));
         int hi = (int) Math.ceil (Math.log10(safeMax));
         List<Double> out = new ArrayList<>();
@@ -737,7 +829,7 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  decade boundaries themselves (those are the majors). */
     private static double[] logMinorTicks(double min, double max) {
         double safeMin = Math.max(1e-12, min);
-        double safeMax = Math.max(safeMin * 10, max);
+        double safeMax = Math.max(safeMin + 1e-9, max);
         int lo = (int) Math.floor(Math.log10(safeMin)) - 1;
         int hi = (int) Math.ceil (Math.log10(safeMax)) + 1;
         List<Double> out = new ArrayList<>();
@@ -777,7 +869,11 @@ public abstract class AbstractMeasurementView extends Canvas {
     private static double axisFraction(double v, AxisSpec axis) {
         if (axis.scale == Scale.LOG) {
             double safeMin = Math.max(1e-12, axis.min);
-            double safeMax = Math.max(safeMin * 10, axis.max);
+            // Match AbstractFreqDomainView.freqToX so labels and trace
+            // span the same log range — a narrow zoom (less than one
+            // decade) otherwise puts labels in compressed positions
+            // while the trace stretches the full plot width.
+            double safeMax = Math.max(safeMin + 1e-9, axis.max);
             double lo = Math.log10(safeMin);
             double hi = Math.log10(safeMax);
             return (Math.log10(Math.max(safeMin, v)) - lo) / (hi - lo);
@@ -943,7 +1039,7 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  {@code FftAxisTicks.logFreqAll}. */
     private static double[] adaptiveLogLabels(double min, double max) {
         double safeMin = Math.max(1e-12, min);
-        double safeMax = Math.max(safeMin * 10, max);
+        double safeMax = Math.max(safeMin + 1e-9, max);
         int loDec = (int) Math.floor(Math.log10(safeMin));
         int hiDec = (int) Math.ceil (Math.log10(safeMax));
         int decades = hiDec - loDec;

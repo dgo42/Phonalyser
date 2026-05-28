@@ -292,4 +292,18 @@ final class SignalMeasurements {
     }
 
     private SignalMeasurements() { this(0, 0, 0, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN); }
+
+    /** Returns a copy of this measurement with every time-domain field
+     *  set to {@link Double#NaN} (period, rise time, fall time,
+     *  frequency, duty cycle).  Used by the scope worker for dual-tone
+     *  signals — period / frequency / duty have no meaningful
+     *  single-value answer for two simultaneous tones, so the readout
+     *  table renders {@code ---} ({@link MeasurementRow}'s NaN
+     *  formatting) instead of latching onto an arbitrary value.
+     *  Vpp / Vrms / Vmean stay valid since they're meaningful in
+     *  every signal mode. */
+    SignalMeasurements withoutTimes() {
+        return new SignalMeasurements(vpp, vrms, vmean,
+                Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+    }
 }

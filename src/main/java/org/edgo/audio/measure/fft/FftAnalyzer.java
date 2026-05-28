@@ -179,6 +179,14 @@ public class FftAnalyzer {
         // across analysis ticks via the pool; {@link #ensureArrays} grows
         // them when the FFT length changes.
         public double[] amplitudeDbFs;
+        /** Per-bin amplitude in dBV (= dBFs + 20·log10(adcFsVoltageRms)).
+         *  Populated by the analyser worker once the ADC full-scale
+         *  RMS calibration is known.  This is the SOURCE OF TRUTH for
+         *  voltage-based downstream analysis (e.g. {@code ImdAnalyzer})
+         *  — {@code amplitudeDbFs} stays around only as a display
+         *  alternative.  {@code null} when the ADC calibration
+         *  hasn't been set. */
+        public double[] amplitudeDbV;
         public double[] phaseDeg;
         public double[] re;
         public double[] im;

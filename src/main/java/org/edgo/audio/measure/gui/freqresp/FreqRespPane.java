@@ -1013,8 +1013,14 @@ public final class FreqRespPane {
     private static final class CalRow {
         Composite                composite;
         Text                     pathField;
+        /** "Active" toggle — same semantics as the FFT pane: the
+         *  calibration is only pushed into the store when this is
+         *  checked AND a file is loaded.  Checking it ahead of loading
+         *  is OK; the next loadFileIntoRow re-runs syncStoreFromRows. */
+        Button                   activeCheck;
         StereoFreqRespCalibration calibration;
         String                   path; // null when the row is empty
+        boolean                  active;
     }
 
     private void buildCalibrationTab() {
@@ -1044,22 +1050,28 @@ public final class FreqRespPane {
         try {
             // Row 0 — always present.
             CalRow row0 = createRowUi();
+            row0.active = prefs.isFreqRespCalibrationActive();
             String p0 = prefs.getFreqRespCalibrationPath();
             if (p0 != null && !p0.isEmpty()) loadFileIntoRow(row0, p0, false);
+            updateCalRowEnable(row0);
 
             // Rows 1..N from the extras list (skipped silently when empty).
-            List<String> extras = prefs.getFreqRespCalibrationPathsExtra();
+            List<String>  extras       = prefs.getFreqRespCalibrationPathsExtra();
+            List<Boolean> extrasActive = prefs.getFreqRespCalibrationActiveExtra();
             if (extras != null) {
-                for (String pn : extras) {
+                for (int i = 0; i < extras.size(); i++) {
                     CalRow rN = createRowUi();
+                    rN.active = (extrasActive != null && i < extrasActive.size()) ? extrasActive.get(i) : false;
+                    String pn = extras.get(i);
                     if (pn != null && !pn.isEmpty()) loadFileIntoRow(rN, pn, false);
+                    updateCalRowEnable(rN);
                 }
             }
             // Push the loaded state into the store atomically — one event
             // fires so the view re-derives once.
             FreqRespCalibrationStore.instance().clearAll();
             for (CalRow r : calRows) {
-                if (r.calibration != null && r.path != null) {
+                if (r.calibration != null && r.path != null && r.active) {
                     FreqRespCalibrationStore.instance().addEntry(r.calibration, r.path);
                 }
             }
@@ -1069,16 +1081,17 @@ public final class FreqRespPane {
     }
 
     /** Builds and appends a fresh row to the calibration tab.  The row
-     *  starts empty (no path, no calibration).  Every row has 5 grid
-     *  cells (path, load, clear, add, remove) — for row 0 the remove
-     *  button is invisible so its grid cell stays reserved, keeping the
-     *  load/clear/add columns vertically aligned across all rows. */
+     *  starts empty (no path, no calibration).  Every row has 6 grid
+     *  cells (path, active, load, clear, add, remove) — for row 0 the
+     *  remove button is invisible so its grid cell stays reserved,
+     *  keeping the load/clear/add columns vertically aligned across
+     *  all rows. */
     private CalRow createRowUi() {
         boolean isRow0 = calRows.isEmpty();
 
         Composite row = new Composite(calRowsContainer, SWT.NONE);
         row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout rl = new GridLayout(5, false);
+        GridLayout rl = new GridLayout(6, false);
         rl.marginWidth = 0; rl.marginHeight = 0;
         rl.horizontalSpacing = 6;
         row.setLayout(rl);
@@ -1088,6 +1101,10 @@ public final class FreqRespPane {
         pgd.widthHint = 320;
         pathField.setLayoutData(pgd);
         pathField.setText(I18n.t("freqResp.calibration.path.none"));
+
+        Button activeCheck = new Button(row, SWT.CHECK);
+        activeCheck.setText(I18n.t("fft.calibration.active"));
+        activeCheck.setToolTipText(I18n.t("fft.calibration.active.tooltip"));
 
         Image folderIcon = IconUtils.instance().renderAtHeight(
                 row.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
@@ -1127,9 +1144,11 @@ public final class FreqRespPane {
         }
 
         CalRow r = new CalRow();
-        r.composite = row;
-        r.pathField = pathField;
+        r.composite   = row;
+        r.pathField   = pathField;
+        r.activeCheck = activeCheck;
         calRows.add(r);
+        updateCalRowEnable(r);
 
         loadBtn.addListener(SWT.Selection, e -> userLoadInRow(r));
         clearBtn.addListener(SWT.Selection, e -> userClearRow(r));
@@ -1137,9 +1156,24 @@ public final class FreqRespPane {
         if (!isRow0) {
             removeBtn.addListener(SWT.Selection, e -> userRemoveRow(r));
         }
+        activeCheck.addListener(SWT.Selection, e -> {
+            r.active = activeCheck.getSelection();
+            syncStoreFromRows();
+            persistRowsToPrefs();
+        });
 
         relayoutCalRows();
         return r;
+    }
+
+    /** Keeps the row's "Active" checkbox enabled state in sync with
+     *  the file-loaded state — disabled until a calibration is loaded
+     *  into the row. */
+    private void updateCalRowEnable(CalRow r) {
+        if (r.activeCheck == null || r.activeCheck.isDisposed()) return;
+        boolean fileLoaded = r.path != null && r.calibration != null;
+        r.activeCheck.setEnabled(fileLoaded);
+        r.activeCheck.setSelection(r.active);
     }
 
     /** Re-runs the rows container's layout AND tells the surrounding
@@ -1174,6 +1208,10 @@ public final class FreqRespPane {
         r.path        = null;
         r.pathField.setText(I18n.t("freqResp.calibration.path.none"));
         r.pathField.setToolTipText(null);
+        // Clearing the file disables Active in the UI but we keep
+        // r.active so re-loading a file re-engages the row without
+        // the user having to re-tick the box — matches the FFT pane.
+        updateCalRowEnable(r);
         syncStoreFromRows();
         persistRowsToPrefs();
     }
@@ -1205,6 +1243,7 @@ public final class FreqRespPane {
             r.path        = picked;
             r.pathField.setText(picked);
             r.pathField.setToolTipText(picked);
+            updateCalRowEnable(r);
             return true;
         } catch (Exception ex) {
             log.warn("FreqResp calibration load failed: {}", picked, ex);
@@ -1227,7 +1266,10 @@ public final class FreqRespPane {
         try {
             store.clearAll();
             for (CalRow r : calRows) {
-                if (r.calibration != null && r.path != null) {
+                // Only push rows the user has explicitly activated; an
+                // unticked row is a "loaded but parked" calibration the
+                // user can re-engage with one click without re-browsing.
+                if (r.calibration != null && r.path != null && r.active) {
                     store.addEntry(r.calibration, r.path);
                 }
             }
@@ -1243,14 +1285,18 @@ public final class FreqRespPane {
      *  across restarts. */
     private void persistRowsToPrefs() {
         Preferences prefs = Preferences.instance();
-        String row0 = calRows.isEmpty() ? null : calRows.get(0).path;
-        prefs.setFreqRespCalibrationPath(row0);
-        List<String> extras = new ArrayList<>();
+        CalRow row0 = calRows.isEmpty() ? null : calRows.get(0);
+        prefs.setFreqRespCalibrationPath(row0 == null ? null : row0.path);
+        prefs.setFreqRespCalibrationActive(row0 != null && row0.active);
+        List<String>  extras       = new ArrayList<>();
+        List<Boolean> extrasActive = new ArrayList<>();
         for (int i = 1; i < calRows.size(); i++) {
-            String p = calRows.get(i).path;
-            extras.add(p == null ? "" : p);
+            CalRow r = calRows.get(i);
+            extras.add(r.path == null ? "" : r.path);
+            extrasActive.add(r.active);
         }
         prefs.setFreqRespCalibrationPathsExtra(extras);
+        prefs.setFreqRespCalibrationActiveExtra(extrasActive);
         prefs.save();
     }
 
@@ -1318,27 +1364,20 @@ public final class FreqRespPane {
         item.setText(I18n.t("freqResp.tab.saveTo"));
         Composite g = new Composite(toolbarTabs, SWT.NONE);
         item.setControl(g);
-        GridLayout gl = new GridLayout(3, false);
+        GridLayout gl = new GridLayout(2, false);
         gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);
         Preferences prefs = Preferences.instance();
 
-        // Layout mirrors the FFT pane's save tab: [pathField] [browse …]
-        // [save-icon].  Browse opens the file dialog and writes the
-        // chosen path into the read-only field; the save-icon button
-        // commits the current measurement to whichever path is shown.
+        // Layout: [pathField (read-only display of last save)] [save].
+        // The save button now ALWAYS opens the file-picker before
+        // writing — the previous separate "browse" button was redundant
+        // since browse-then-save was the only useful sequence.
         saveToPathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
         String savedPath = prefs.getFreqRespSavePath();
         saveToPathField.setText(savedPath == null ? "" : savedPath);
         if (savedPath != null && !savedPath.isEmpty()) saveToPathField.setToolTipText(savedPath);
         saveToPathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-
-        Image folderIcon = IconUtils.instance().renderAtHeight(
-                g.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
-        Button browseBtn = new Button(g, SWT.PUSH);
-        if (folderIcon != null) browseBtn.setImage(folderIcon);
-        browseBtn.setToolTipText(I18n.t("freqResp.saveTo.browse.tooltip"));
-        browseBtn.addListener(SWT.Selection, e -> openSaveBrowseDialog());
 
         Image floppyIcon = IconUtils.instance().renderAtHeight(
                 g.getDisplay(), SvgPaths.FLOPPY_DISK, 16, null);
@@ -1346,32 +1385,6 @@ public final class FreqRespPane {
         if (floppyIcon != null) saveBtn.setImage(floppyIcon);
         saveBtn.setToolTipText(I18n.t("freqResp.saveTo.tooltip"));
         saveBtn.addListener(SWT.Selection, e -> openSaveDialog());
-    }
-
-    /** Opens a Save-as file dialog and stores the chosen path in the
-     *  Save-to tab's text field + prefs.  Does NOT actually write the
-     *  file — that happens when the user clicks the floppy-disk
-     *  button (or accepts a Save-as via {@link #openSaveDialog}). */
-    private void openSaveBrowseDialog() {
-        Preferences prefs = Preferences.instance();
-        FileDialog fd = new FileDialog(group.getShell(), SWT.SAVE);
-        fd.setText(I18n.t("freqResp.saveTo.dialog"));
-        fd.setFilterExtensions(new String[]{ "*.frc", "*.csv" });
-        fd.setOverwrite(true);
-        if (prefs.getFreqRespSaveFolder() != null) fd.setFilterPath(prefs.getFreqRespSaveFolder());
-        fd.setFileName("freqresp_" + LocalDateTime.now()
-                .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".frc");
-        String picked = fd.open();
-        if (picked == null) return;
-        if (saveToPathField != null && !saveToPathField.isDisposed()) {
-            saveToPathField.setText(picked);
-            saveToPathField.setToolTipText(picked);
-        }
-        prefs.setFreqRespSavePath(picked);
-        String parent = new File(picked).getParent();
-        if (parent != null) prefs.setFreqRespSaveFolder(parent);
-        prefs.save();
-        refreshTabHeader(TAB_FREQRESP_SAVE);
     }
 
     private void openSaveDialog() {
@@ -1384,29 +1397,34 @@ public final class FreqRespPane {
             return;
         }
         Preferences prefs = Preferences.instance();
-        // Prefer the path the user typed/browsed into the Save-to tab's
-        // text field; fall back to a Save-as dialog when the field is
-        // empty so the floppy-icon button is always functional.
-        String picked = (saveToPathField != null && !saveToPathField.isDisposed())
+        // Always open the Save-as dialog so the user explicitly picks
+        // (or confirms) the destination on every click — the
+        // dedicated "browse" button was removed because pick-and-save
+        // is the only useful sequence here.  The picker is pre-filled
+        // with the last saved path so the typical "save to the same
+        // file again" case is just two clicks.
+        FileDialog fd = new FileDialog(group.getShell(), SWT.SAVE);
+        fd.setText(I18n.t("freqResp.saveTo.dialog"));
+        fd.setFilterExtensions(new String[]{ "*.frc", "*.csv" });
+        fd.setOverwrite(true);
+        String memFolder = prefs.getFreqRespSaveFolder();
+        if (memFolder != null) fd.setFilterPath(memFolder);
+        String lastPath = (saveToPathField != null && !saveToPathField.isDisposed())
                 ? saveToPathField.getText().trim() : "";
-        if (picked.isEmpty()) {
-            FileDialog fd = new FileDialog(group.getShell(), SWT.SAVE);
-            fd.setText(I18n.t("freqResp.saveTo.dialog"));
-            fd.setFilterExtensions(new String[]{ "*.frc", "*.csv" });
-            fd.setOverwrite(true);
-            String memFolder = prefs.getFreqRespSaveFolder();
-            if (memFolder != null) fd.setFilterPath(memFolder);
+        if (!lastPath.isEmpty()) {
+            fd.setFileName(new File(lastPath).getName());
+        } else {
             fd.setFileName("freqresp_" + LocalDateTime.now()
                     .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".frc");
-            picked = fd.open();
-            if (picked == null) return;
-            if (saveToPathField != null && !saveToPathField.isDisposed()) {
-                saveToPathField.setText(picked);
-                saveToPathField.setToolTipText(picked);
-            }
-            prefs.setFreqRespSavePath(picked);
-            refreshTabHeader(TAB_FREQRESP_SAVE);
         }
+        String picked = fd.open();
+        if (picked == null) return;
+        if (saveToPathField != null && !saveToPathField.isDisposed()) {
+            saveToPathField.setText(picked);
+            saveToPathField.setToolTipText(picked);
+        }
+        prefs.setFreqRespSavePath(picked);
+        refreshTabHeader(TAB_FREQRESP_SAVE);
         try {
             // Both channels are always written; the new file format is
             // strict stereo (5 columns: f, mag_L_dB, mag_R_dB, phase_L_deg,
@@ -1448,16 +1466,16 @@ public final class FreqRespPane {
         item.setText(I18n.t("freqResp.tab.loadFrom"));
         Composite g = new Composite(toolbarTabs, SWT.NONE);
         item.setControl(g);
-        GridLayout gl = new GridLayout(3, false);
+        GridLayout gl = new GridLayout(2, false);
         gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);
         Preferences prefs = Preferences.instance();
 
-        // [pathField] [browse folder-icon] [load folder-icon] — same shape
-        // as the FFT pane's load tab.  Browse opens the file dialog and
-        // writes the chosen path into the read-only field; the dedicated
-        // load button reads from that path and pushes the result into
-        // the view.
+        // Layout: [pathField (read-only display of last load)] [load].
+        // The load button now ALWAYS opens the file-picker before
+        // reading — the previous separate "browse" button was
+        // redundant since browse-then-load was the only useful
+        // sequence.
         loadFromPathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
         String savedPath = prefs.getFreqRespLoadPath();
         loadFromPathField.setText(savedPath == null ? "" : savedPath);
@@ -1466,26 +1484,26 @@ public final class FreqRespPane {
 
         Image folderIcon = IconUtils.instance().renderAtHeight(
                 g.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
-        Button browseBtn = new Button(g, SWT.PUSH);
-        if (folderIcon != null) browseBtn.setImage(folderIcon);
-        browseBtn.setToolTipText(I18n.t("freqResp.loadFrom.browse.tooltip"));
-        browseBtn.addListener(SWT.Selection, e -> openLoadBrowseDialog());
-
         Button loadBtn = new Button(g, SWT.PUSH);
         if (folderIcon != null) loadBtn.setImage(folderIcon);
         loadBtn.setToolTipText(I18n.t("freqResp.loadFrom.tooltip"));
         loadBtn.addListener(SWT.Selection, e -> openLoadDialog());
     }
 
-    /** Opens an Open file dialog and stores the chosen path in the
-     *  Load-from tab's text field + prefs.  Doesn't read the file yet —
-     *  that happens when the user clicks the load button. */
-    private void openLoadBrowseDialog() {
+    /** Opens an Open file dialog, then loads the chosen file into the
+     *  view.  Always prompts — the dedicated "browse" button was
+     *  removed because browse-then-load was the only useful sequence.
+     *  The picker is pre-filled with the last loaded path so re-load
+     *  is one extra click. */
+    private void openLoadDialog() {
         Preferences prefs = Preferences.instance();
         FileDialog fd = new FileDialog(group.getShell(), SWT.OPEN);
         fd.setText(I18n.t("freqResp.loadFrom.dialog"));
         fd.setFilterExtensions(new String[]{ "*.frc", "*.csv", "*.*" });
         if (prefs.getFreqRespLoadFolder() != null) fd.setFilterPath(prefs.getFreqRespLoadFolder());
+        String lastPath = (loadFromPathField != null && !loadFromPathField.isDisposed())
+                ? loadFromPathField.getText().trim() : "";
+        if (!lastPath.isEmpty()) fd.setFileName(new File(lastPath).getName());
         String picked = fd.open();
         if (picked == null) return;
         if (loadFromPathField != null && !loadFromPathField.isDisposed()) {
@@ -1493,36 +1511,7 @@ public final class FreqRespPane {
             loadFromPathField.setToolTipText(picked);
         }
         prefs.setFreqRespLoadPath(picked);
-        String parent = new File(picked).getParent();
-        if (parent != null) prefs.setFreqRespLoadFolder(parent);
-        prefs.save();
         refreshTabHeader(TAB_FREQRESP_LOAD);
-    }
-
-    /** Reads the load-from file currently shown in the path field, or
-     *  prompts the user with an Open dialog when the field is empty.
-     *  Parses the chosen file and pushes the result onto the view.
-     *  Detects single- vs. stereo-channel files via the {@code _r}
-     *  columns introduced in {@code format_version=5} and populates
-     *  both view slots when the file is stereo. */
-    private void openLoadDialog() {
-        Preferences prefs = Preferences.instance();
-        String picked = (loadFromPathField != null && !loadFromPathField.isDisposed())
-                ? loadFromPathField.getText().trim() : "";
-        if (picked.isEmpty()) {
-            FileDialog fd = new FileDialog(group.getShell(), SWT.OPEN);
-            fd.setText(I18n.t("freqResp.loadFrom.dialog"));
-            fd.setFilterExtensions(new String[]{ "*.frc", "*.csv", "*.*" });
-            if (prefs.getFreqRespLoadFolder() != null) fd.setFilterPath(prefs.getFreqRespLoadFolder());
-            picked = fd.open();
-            if (picked == null) return;
-            if (loadFromPathField != null && !loadFromPathField.isDisposed()) {
-                loadFromPathField.setText(picked);
-                loadFromPathField.setToolTipText(picked);
-            }
-            prefs.setFreqRespLoadPath(picked);
-            refreshTabHeader(TAB_FREQRESP_LOAD);
-        }
         try {
             StereoFreqRespCalibration st = FreqRespCalHelper.loadCsv(picked);
             FreqRespCalibration cL = st.left();
