@@ -75,8 +75,15 @@ public final class ImdAnalyzer {
         if (p1 == null || p2 == null) return null;
 
         ImdResult out = new ImdResult();
-        out.f1Hz   = p1.freqHz;
-        out.f2Hz   = p2.freqHz;
+        // Frequencies come from the analyzer's clean-frame sub-bin estimate
+        // (the same honest method as the single-tone fundamental), NOT from
+        // the peak of the coherently-collapsed average — which reads the bin
+        // centre and hides the real sub-bin offset.  Fall back to the local
+        // peak when the estimate is unavailable (e.g. no generator hint).
+        out.f1Hz   = (r.fundamentalHzRefined > 0.0)
+                ? r.fundamentalHzRefined  : p1.freqHz;
+        out.f2Hz   = (!Double.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0)
+                ? r.fundamental2HzRefined : p2.freqHz;
         out.f1DbV  = p1.levelDbV;
         out.f2DbV  = p2.levelDbV;
         // f1Mag / f2Mag are V_rms in volts (= 10^(dBV/20), since

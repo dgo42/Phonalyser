@@ -248,6 +248,26 @@ public final class FftAnalyzerWorker {
     private double  accumKFractional;
     /** Pinned {@code round(kFractional)} for the rotation formula. */
     private int     accumIntFundBinRounded;
+    /** Fractional bins of the strong tones detected at restart (sorted
+     *  ascending).  Length ≤ 1 ⇒ single-reference rotation (legacy path);
+     *  length ≥ 2 ⇒ each tone's lobe is de-rotated by its OWN frequency so
+     *  the accumulated spectrum keeps every fundamental at its true sub-bin
+     *  position instead of locking it to the FFT grid.  Found from the
+     *  spectrum itself, so it works for unknown / external multi-tone
+     *  signals where the app can't know the frequencies up front. */
+    private double[] accumToneKappa = new double[0];
+    /** A spectral peak is its own de-rotation reference ("strong tone")
+     *  when it rises at least this many dB above the noise floor.  Measured
+     *  from the floor (not the strongest peak) so a very lopsided pair —
+     *  e.g. one tone at 99.99 %, the other at 0.01 % (~80 dB down) — still
+     *  gives BOTH tones a reference. */
+    private static final double STRONG_TONE_FLOOR_DB = 20.0;
+    /** Half-width (bins) of the lobe a tone's constant phase covers. */
+    private static final int    TONE_LOBE_HALF_BINS = 16;
+    /** Two peaks closer than this (bins) are merged into one tone. */
+    private static final int    MIN_TONE_SEP_BINS   = 48;
+    /** Cap on independent tone references. */
+    private static final int    MAX_TONES           = 8;
     /** Config the accumulator was built for; mismatch ⇒ reset. */
     private int     accumFftSize;
     private boolean accumCoherent;
@@ -265,6 +285,7 @@ public final class FftAnalyzerWorker {
         accumPow = null;
         accumFrames = 0;
         accumHasData = false;
+        accumToneKappa = new double[0];
     }
 
     /** Adds the post-cal Result's spectrum to the cross-tick accumulator.
@@ -297,35 +318,39 @@ public final class FftAnalyzerWorker {
             accumRefSampleStart    = samplesAbsStart;
             accumKFractional       = kFrac;
             accumIntFundBinRounded = intFundBin;
+            accumToneKappa         = coherent ? detectStrongTones(r) : new double[0];
             accumHasData = true;
         }
 
         int weight = Math.max(1, r.frameCount);
         if (coherent) {
-            // Per-bin time-shift rotation: same formula as analyze()'s
-            // per-frame correction, with f·step replaced by the absolute
-            // sample delta from the accumulator's reference.  For bin
-            // k = N·intFundBinRounded (the Nth harmonic), this rotates
-            // by exactly the phase shift the tone accumulated over
-            // (samplesAbsStart − accumRefSampleStart) samples.
             long delta = samplesAbsStart - accumRefSampleStart;
-            double baseAngle = (accumIntFundBinRounded > 0)
-                    ? -2.0 * Math.PI * delta * accumKFractional
-                      / ((double) fftSize * accumIntFundBinRounded)
-                    : 0.0;
-            double cosBase = Math.cos(baseAngle);
-            double sinBase = Math.sin(baseAngle);
-            double corrRe = 1.0, corrIm = 0.0;
-            for (int k = 0; k < N; k++) {
-                double rRe = r.re[k] * weight;
-                double rIm = r.im[k] * weight;
-                double rotRe = rRe * corrRe - rIm * corrIm;
-                double rotIm = rRe * corrIm + rIm * corrRe;
-                accumRe[k] += rotRe;
-                accumIm[k] += rotIm;
-                double nextRe = corrRe * cosBase - corrIm * sinBase;
-                corrIm = corrRe * sinBase + corrIm * cosBase;
-                corrRe = nextRe;
+            if (accumToneKappa.length >= 2) {
+                // Multi-tone: de-rotate each detected tone's lobe by its OWN
+                // frequency (constant phase), so every fundamental keeps its
+                // true position — no single reference, hence no grid-lock.
+                accumulateMultiTone(r, N, weight, delta);
+            } else {
+                // Single reference: per-bin time-shift rotation tied to the one
+                // detected fundamental (and, via the linear ramp, its harmonics).
+                // Same formula as analyze()'s per-frame correction with f·step
+                // replaced by the absolute sample delta from the reference.
+                double baseAngle = (accumIntFundBinRounded > 0)
+                        ? -2.0 * Math.PI * delta * accumKFractional
+                          / ((double) fftSize * accumIntFundBinRounded)
+                        : 0.0;
+                double cosBase = Math.cos(baseAngle);
+                double sinBase = Math.sin(baseAngle);
+                double corrRe = 1.0, corrIm = 0.0;
+                for (int k = 0; k < N; k++) {
+                    double rRe = r.re[k] * weight;
+                    double rIm = r.im[k] * weight;
+                    accumRe[k] += rRe * corrRe - rIm * corrIm;
+                    accumIm[k] += rRe * corrIm + rIm * corrRe;
+                    double nextRe = corrRe * cosBase - corrIm * sinBase;
+                    corrIm = corrRe * sinBase + corrIm * cosBase;
+                    corrRe = nextRe;
+                }
             }
         } else {
             for (int k = 0; k < N; k++) {
@@ -336,6 +361,131 @@ public final class FftAnalyzerWorker {
             }
         }
         accumFrames += weight;
+    }
+
+    /** Multi-tone cross-tick rotation: each detected strong tone's lobe is
+     *  de-rotated by a CONSTANT phase equal to that tone's own inter-tick
+     *  advance, so the lobe is preserved intact and the accumulated peak
+     *  stays at the tone's true (sub-bin) frequency — no locking to the FFT
+     *  grid.  Bins outside every tone lobe get the plain time-shift ramp,
+     *  which leaves broadband noise to average down.  This is the honest
+     *  "measure what was sampled" path for unknown / external multi-tone
+     *  signals: the tones are found from the spectrum, not assumed. */
+    private void accumulateMultiTone(FftAnalyzer.Result r, int N, int weight, long delta) {
+        int fftSize = r.fftSize;
+        double rampSlope = -2.0 * Math.PI * delta / (double) fftSize;
+        double stepRe = Math.cos(rampSlope);
+        double stepIm = Math.sin(rampSlope);
+        double phRe = 1.0, phIm = 0.0;   // plain time-shift phasor: exp(j·k·rampSlope)
+        int nT = accumToneKappa.length;
+        double[] cRe = new double[nT];
+        double[] cIm = new double[nT];
+        int[]    lo  = new int[nT];
+        int[]    hi  = new int[nT];
+        for (int t = 0; t < nT; t++) {
+            double ang = -2.0 * Math.PI * delta * accumToneKappa[t] / (double) fftSize;
+            cRe[t] = Math.cos(ang);
+            cIm[t] = Math.sin(ang);
+            int k0 = (int) Math.round(accumToneKappa[t]);
+            lo[t] = Math.max(0,     k0 - TONE_LOBE_HALF_BINS);
+            hi[t] = Math.min(N - 1, k0 + TONE_LOBE_HALF_BINS);
+        }
+        int curT = 0;
+        for (int k = 0; k < N; k++) {
+            while (curT < nT && k > hi[curT]) curT++;
+            double rotRe, rotIm;
+            if (curT < nT && k >= lo[curT]) { rotRe = cRe[curT]; rotIm = cIm[curT]; }
+            else                            { rotRe = phRe;      rotIm = phIm;      }
+            double rRe = r.re[k] * weight;
+            double rIm = r.im[k] * weight;
+            accumRe[k] += rRe * rotRe - rIm * rotIm;
+            accumIm[k] += rRe * rotIm + rIm * rotRe;
+            double nextRe = phRe * stepRe - phIm * stepIm;
+            phIm = phRe * stepIm + phIm * stepRe;
+            phRe = nextRe;
+        }
+    }
+
+    /** Finds the fractional bins of the "strong" tones in {@code r}'s
+     *  spectrum — local maxima within {@link #STRONG_TONE_REL_DB} dB of the
+     *  strongest peak, merged within {@link #MIN_TONE_SEP_BINS} and refined
+     *  to sub-bin by parabolic interpolation, sorted ascending.  Detection
+     *  from the spectrum (not commanded frequencies) is deliberate: the
+     *  generator may be external, so the FFT is the only thing that knows
+     *  what was actually received. */
+    private double[] detectStrongTones(FftAnalyzer.Result r) {
+        double[] db = r.amplitudeDbFs;
+        if (db == null) return new double[0];
+        int halfSize = r.fftSize / 2;
+        if (halfSize < 4) return new double[0];
+        double thresh = noiseFloorDb(db, halfSize) + STRONG_TONE_FLOOR_DB;
+        // Keep the strongest MAX_TONES local maxima above the floor, merging
+        // peaks closer than MIN_TONE_SEP_BINS (one tone's lobe).  Selecting by
+        // strength (not scan order) keeps the real tones even when 1/f or the
+        // HF-rise noise also clears the threshold.
+        int[]    bins = new int[MAX_TONES];
+        double[] lvls = new double[MAX_TONES];
+        int count = 0;
+        for (int k = 2; k < halfSize; k++) {
+            if (db[k] < thresh) continue;
+            if (!(db[k] > db[k - 1] && db[k] >= db[k + 1])) continue;   // local max
+            double lvl = db[k];
+            int near = -1;
+            for (int t = 0; t < count; t++) {
+                if (Math.abs(k - bins[t]) < MIN_TONE_SEP_BINS) { near = t; break; }
+            }
+            if (near >= 0) {
+                if (lvl > lvls[near]) { bins[near] = k; lvls[near] = lvl; }
+            } else if (count < MAX_TONES) {
+                bins[count] = k; lvls[count] = lvl; count++;
+            } else {
+                int weakest = 0;
+                for (int t = 1; t < count; t++) if (lvls[t] < lvls[weakest]) weakest = t;
+                if (lvl > lvls[weakest]) { bins[weakest] = k; lvls[weakest] = lvl; }
+            }
+        }
+        // Sort the kept tones by bin ascending (needed by the region walk).
+        for (int i = 1; i < count; i++) {
+            int b = bins[i]; double l = lvls[i]; int j = i - 1;
+            while (j >= 0 && bins[j] > b) { bins[j + 1] = bins[j]; lvls[j + 1] = lvls[j]; j--; }
+            bins[j + 1] = b; lvls[j + 1] = l;
+        }
+        double[] out = new double[count];
+        for (int i = 0; i < count; i++) out[i] = refineBin(db, bins[i], halfSize);
+        return out;
+    }
+
+    /** 10th-percentile bin level (dB) via a coarse 1-dB histogram — a
+     *  leakage-immune estimate of the broadband noise floor, cheap enough
+     *  to run on the full half-spectrum without sorting. */
+    private double noiseFloorDb(double[] db, int halfSize) {
+        final int LO = -320, NB = 360;   // 1-dB buckets covering [-320, 40) dB
+        int[] hist = new int[NB];
+        int total = 0;
+        for (int k = 1; k <= halfSize; k++) {
+            int b = (int) Math.floor(db[k]) - LO;
+            if (b < 0) b = 0; else if (b >= NB) b = NB - 1;
+            hist[b]++; total++;
+        }
+        if (total == 0) return -160.0;
+        int target = total / 10;
+        int cum = 0;
+        for (int b = 0; b < NB; b++) {
+            cum += hist[b];
+            if (cum >= target) return LO + b;
+        }
+        return -160.0;
+    }
+
+    /** 3-point parabolic peak interpolation (on dB) around bin {@code k}. */
+    private double refineBin(double[] db, int k, int halfSize) {
+        if (k <= 1 || k >= halfSize) return k;
+        double yl = db[k - 1], yc = db[k], yr = db[k + 1];
+        double denom = yl - 2.0 * yc + yr;
+        double d = (Math.abs(denom) < 1e-12) ? 0.0 : 0.5 * (yl - yr) / denom;
+        if (d < -0.5) d = -0.5;
+        if (d >  0.5) d =  0.5;
+        return k + d;
     }
 
     /** Mutates {@code r}'s re/im/amplitudeDbFs/phaseDeg arrays in place to
@@ -679,6 +829,14 @@ public final class FftAnalyzerWorker {
                 : Double.NaN;
 
         analyzer.setSamplesAbsStart(samplesAbsStart);
+        // Dual-tone: hint the upper tone too, so the analyzer produces an
+        // honest sub-bin frequency estimate for it from a clean frame — the
+        // dual-tone readout then reports true frequencies instead of reading
+        // peaks off the coherently-collapsed average (see ImdAnalyzer).
+        analyzer.setSecondToneHintHz(
+                (genActive && prefs.isFftFundFromGenerator() && dualTone)
+                        ? Math.max(prefs.getGenDualToneFreq1Hz(), prefs.getGenDualToneFreq2Hz())
+                        : Double.NaN);
         FftAnalyzer.Result r;
         try {
             r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH,

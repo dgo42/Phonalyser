@@ -98,6 +98,20 @@ public class FftAnalyzer {
         this.samplesAbsStart = absStart;
     }
 
+    /** Optional second-tone frequency hint (Hz) for dual-/multi-tone
+     *  signals; {@link Double#NaN} disables it.  When set, {@code analyze}
+     *  also produces a sub-bin frequency estimate for this tone — via the
+     *  same clean-frame parabolic / phase method used for the fundamental
+     *  — so a dual-tone readout reports its TRUE frequency rather than a
+     *  peak read off the coherently-collapsed average. */
+    private double secondToneHintHz = Double.NaN;
+
+    /** Sets (or clears, with NaN) the second-tone frequency hint for the
+     *  next {@code analyze}. */
+    public void setSecondToneHintHz(double hz) {
+        this.secondToneHintHz = hz;
+    }
+
     // =========================================================================
     // Reusable scratch buffers
     // =========================================================================
@@ -203,6 +217,11 @@ public class FftAnalyzer {
         public double fundamentalHz;
         /** Phase-difference refined frequency in Hz — sub-bin accurate (~1e-5 bin). */
         public double fundamentalHzRefined;
+        /** Sub-bin refined frequency (Hz) of the second tone in a dual-/
+         *  multi-tone signal, estimated by the same clean-frame method as
+         *  {@link #fundamentalHzRefined}.  {@link Double#NaN} for single-tone
+         *  (no second-tone hint was supplied). */
+        public double fundamental2HzRefined = Double.NaN;
         public double fundamentalDbFs;
         public double fundamentalLinear;
 
@@ -337,6 +356,7 @@ public class FftAnalyzer {
             c.fundamentalBin             = fundamentalBin;
             c.fundamentalHz              = fundamentalHz;
             c.fundamentalHzRefined       = fundamentalHzRefined;
+            c.fundamental2HzRefined      = fundamental2HzRefined;
             c.fundamentalDbFs            = fundamentalDbFs;
             c.fundamentalLinear          = fundamentalLinear;
             c.harmonicCount              = harmonicCount;
@@ -890,6 +910,33 @@ public class FftAnalyzer {
                 bestStart, intFundBin,
                 String.format(Locale.US, "%.6f", kFractional),
                 String.format(Locale.US, "%.6f", kFractional * freqRes));
+
+        // --- Second tone (dual-/multi-tone): same clean-frame sub-bin
+        // estimate around its hinted bin.  Computed on the SAME single clean
+        // frame as the fundamental, so the dual-tone frequency readout is as
+        // honest and un-pinned as the single-tone fundamental — never read
+        // off the coherently-collapsed average.  Only the 3 lobe bins feed
+        // the phase difference / parabola, so noise bins can't bias it.
+        outResult.fundamental2HzRefined = Double.NaN;
+        if (!Double.isNaN(secondToneHintHz) && secondToneHintHz > 0.0) {
+            int k0b = (int) Math.round(secondToneHintHz / freqRes);
+            if (k0b >= 3 && k0b <= halfSize - 3) {
+                int ri2 = peakBin(s0Re, s0Im,
+                        Math.max(1, k0b - 2), Math.min(halfSize, k0b + 2));
+                double kf2;
+                if (bestLen >= 2) {
+                    int    estStep = step > 0 ? step : fftSize;
+                    double p0   = Math.atan2(s0Im[ri2], s0Re[ri2]);
+                    double p1   = Math.atan2(scratchS1Im[ri2], scratchS1Re[ri2]);
+                    double exp2 = 2.0 * Math.PI * ri2 * estStep / (double) fftSize;
+                    long   m2   = Math.round((p1 - p0 - exp2) / (2.0 * Math.PI));
+                    kf2 = (p1 - p0 - 2.0 * Math.PI * m2) * fftSize / (2.0 * Math.PI * estStep);
+                } else {
+                    kf2 = MathUtil.parabolicBinInterp(s0Re, s0Im, ri2, fftSize);
+                }
+                outResult.fundamental2HzRefined = kf2 * freqRes;
+            }
+        }
 
         // --- Pass 2: accumulate frames in the longest clean segment ----------
         // Also store per-frame corrected fundamental complex value so we can
