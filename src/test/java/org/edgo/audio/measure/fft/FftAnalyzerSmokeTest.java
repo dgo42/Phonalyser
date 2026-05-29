@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * End-to-end smoke test for {@link FftAnalyzer}: feed a pure sine at a
  * known frequency, verify the analyser locks onto the correct bin and
- * returns a sensible {@link FftAnalyzer.Result}.
+ * returns a sensible {@link FftResult}.
  *
  * <p>The audit recommended this as the foundational FFT test — it
  * exercises the windowing, FFT, peak detection, fractional-bin
@@ -39,7 +39,7 @@ class FftAnalyzerSmokeTest {
         }
 
         FftAnalyzer analyzer = new FftAnalyzer();
-        FftAnalyzer.Result r = analyzer.analyze(
+        FftResult r = analyzer.analyze(
                 signal, sampleRate, fftSize, 8,            // harmonics
                 WindowType.HANN, FftOverlap.PCT_0,
                 0.0, 0.0, true, Double.NaN, false);        // logSummary=false
@@ -75,7 +75,7 @@ class FftAnalyzerSmokeTest {
         }
 
         FftAnalyzer analyzer = new FftAnalyzer();
-        FftAnalyzer.Result r = analyzer.analyze(
+        FftResult r = analyzer.analyze(
                 signal, sampleRate, fftSize, 8,
                 WindowType.HANN, FftOverlap.PCT_0,
                 0.0, 0.0, true, Double.NaN, false);

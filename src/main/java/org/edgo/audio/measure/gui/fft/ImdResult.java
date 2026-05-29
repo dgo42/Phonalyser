@@ -2,7 +2,7 @@ package org.edgo.audio.measure.gui.fft;
 
 /**
  * One slot of intermodulation-distortion measurements computed from a
- * dual-tone FFT spectrum.  Companion to {@code FftAnalyzer.Result}:
+ * dual-tone FFT spectrum.  Companion to {@code FftResult}:
  * attached when the generator's waveform is
  * {@code GenSignalForm.DUAL_TONE}; null otherwise.
  *

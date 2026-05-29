@@ -1,21 +1,28 @@
 package org.edgo.audio.measure.cli;
 
-import org.edgo.audio.measure.cli.util.*;
+import java.util.Locale;
 
-import lombok.experimental.UtilityClass;
-import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.adc.WeightedBuffer;
 import org.edgo.audio.measure.chart.FftChartExporter;
+import org.edgo.audio.measure.cli.util.ArgParser;
+import org.edgo.audio.measure.cli.util.CaptureWithGenerator;
+import org.edgo.audio.measure.cli.util.ClockMismatch;
+import org.edgo.audio.measure.cli.util.DeviceSelector;
+import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
+import org.edgo.audio.measure.cli.util.FreqRespCalibration;
+import org.edgo.audio.measure.cli.util.SampleRates;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.DeviceRef;
 
-import java.util.Locale;
+import lombok.experimental.UtilityClass;
+import lombok.extern.log4j.Log4j2;
 
 /**
  * {@code --gen-fft} — single-shot generate → capture → FFT analyze pipeline
@@ -199,7 +206,7 @@ public class GenFftMode {
                 sampleRate, bitDepth, ditherBits, duration, weights, syncPauseSec);
 
         FftAnalyzer fftAnalyzer = new FftAnalyzer();
-        FftAnalyzer.Result result = fftAnalyzer.analyze(
+        FftResult result = fftAnalyzer.analyze(
                 samples, sampleRate, fftSize, harmonics,
                 windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbV,
                 freqRespCal == null, frequency);

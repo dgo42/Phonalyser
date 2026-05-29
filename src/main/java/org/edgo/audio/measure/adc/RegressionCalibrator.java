@@ -11,6 +11,7 @@ import java.util.Arrays;
 import java.util.Locale;
 
 import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.FftResult;
 import org.jfree.chart.ChartFactory;
 import org.jfree.chart.ChartUtils;
 import org.jfree.chart.JFreeChart;
@@ -104,7 +105,7 @@ public class RegressionCalibrator {
 
         // --- Step 1: rough frequency from FFT --------------------------------
         int fftSize = Integer.highestOneBit(Math.min(samples.length, 1 << 20));
-        FftAnalyzer.Result fftResult = new FftAnalyzer().analyze(samples, sampleRate, fftSize, 1);
+        FftResult fftResult = new FftAnalyzer().analyze(samples, sampleRate, fftSize, 1);
         double roughFreqHz = fftResult.fundamentalHz;
         log.info("Rough frequency from FFT: {} Hz", String.format(Locale.US, "%.4f", roughFreqHz));
 

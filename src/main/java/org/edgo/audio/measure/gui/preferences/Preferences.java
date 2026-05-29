@@ -125,6 +125,15 @@ public final class Preferences {
      *  against a linearly-interpolated one side-by-side. */
     @Getter @Setter private boolean        oscLeftSincInterpEnabled  = true;
     @Getter @Setter private boolean        oscRightSincInterpEnabled = true;
+    /** Per-channel mains-hum suppression mode (MainsSuppression enum name);
+     *  filters the captured signal before scope display / trigger /
+     *  measurement.  DC-preserving (removes only 50/60 Hz + harmonics). */
+    @Getter @Setter private String         oscLeftMainsSuppression  = "NONE";
+    @Getter @Setter private String         oscRightMainsSuppression = "NONE";
+    /** Per-channel HF low-pass mode (LpfMode enum name) — strips spikes
+     *  above the audio band before scope display / measurement. */
+    @Getter @Setter private String         oscLeftLpf   = "NONE";
+    @Getter @Setter private String         oscRightLpf  = "NONE";
 
     // Per-pane slider state.  All values are fractions of the visible window
     // (independent of V/div and t/div): 0.5 = centred, 0 = top/left edge,
@@ -284,6 +293,9 @@ public final class Preferences {
     /** {@code FftOverlap} enum name. */
     @Getter @Setter private String  fftOverlap           = "PCT_0";
     @Getter @Setter private boolean fftCoherentAveraging = true;
+    /** {@code MainsSuppression} enum name — mains-hum filter applied to
+     *  the captured signal before FFT averaging. */
+    @Getter @Setter private String  fftMainsSuppression  = "NONE";
     /** When true, the FFT-side frequency-lock loop drives the generator
      *  to keep the fundamental on the nearest FFT bin centre.  Only
      *  takes effect when {@code genSnapToFftBin} AND
@@ -614,6 +626,10 @@ public final class Preferences {
         root.put("oscShowReconstructedBeat",    oscShowReconstructedBeat);
         root.put("oscLeftSincInterpEnabled",  oscLeftSincInterpEnabled);
         root.put("oscRightSincInterpEnabled", oscRightSincInterpEnabled);
+        root.put("oscLeftMainsSuppression",  oscLeftMainsSuppression);
+        root.put("oscRightMainsSuppression", oscRightMainsSuppression);
+        root.put("oscLeftLpf",  oscLeftLpf);
+        root.put("oscRightLpf", oscRightLpf);
         root.put("oscLeftOffsetFrac",      oscLeftOffsetFrac);
         root.put("oscRightOffsetFrac",     oscRightOffsetFrac);
         root.put("oscTriggerLevelFrac",    oscTriggerLevelFrac);
@@ -674,6 +690,10 @@ public final class Preferences {
                 pm.put("rightAcMode",            p.isRightAcMode());
                 pm.put("leftSincInterpEnabled",  p.isLeftSincInterpEnabled());
                 pm.put("rightSincInterpEnabled", p.isRightSincInterpEnabled());
+                pm.put("leftMainsSuppression",   p.getLeftMainsSuppression());
+                pm.put("rightMainsSuppression",  p.getRightMainsSuppression());
+                pm.put("leftLpf",                p.getLeftLpf());
+                pm.put("rightLpf",               p.getRightLpf());
                 pm.put("leftVoltsPerDiv",        p.getLeftVoltsPerDiv());
                 pm.put("rightVoltsPerDiv",       p.getRightVoltsPerDiv());
                 pm.put("leftOffsetFrac",         p.getLeftOffsetFrac());
@@ -699,6 +719,7 @@ public final class Preferences {
         root.put("fftWindow",                 fftWindow);
         root.put("fftOverlap",                fftOverlap);
         root.put("fftCoherentAveraging",      fftCoherentAveraging);
+        root.put("fftMainsSuppression",       fftMainsSuppression);
         root.put("fftAlignGenToFreqDiff",     fftAlignGenToFreqDiff);
         root.put("fftDistMinHz",              fftDistMinHz);
         root.put("fftDistMaxHz",              fftDistMaxHz);
@@ -893,6 +914,10 @@ public final class Preferences {
         if (root.get("oscShowReconstructedBeat")    instanceof Boolean b) oscShowReconstructedBeat    = b;
         if (root.get("oscLeftSincInterpEnabled")  instanceof Boolean b) oscLeftSincInterpEnabled  = b;
         if (root.get("oscRightSincInterpEnabled") instanceof Boolean b) oscRightSincInterpEnabled = b;
+        if (root.get("oscLeftMainsSuppression")  instanceof String s) oscLeftMainsSuppression  = s;
+        if (root.get("oscRightMainsSuppression") instanceof String s) oscRightMainsSuppression = s;
+        if (root.get("oscLeftLpf")  instanceof String s) oscLeftLpf  = s;
+        if (root.get("oscRightLpf") instanceof String s) oscRightLpf = s;
         if (root.get("oscLeftOffsetFrac")      instanceof Number n) oscLeftOffsetFrac      = n.doubleValue();
         if (root.get("oscRightOffsetFrac")     instanceof Number n) oscRightOffsetFrac     = n.doubleValue();
         if (root.get("oscTriggerLevelFrac")    instanceof Number n) oscTriggerLevelFrac    = n.doubleValue();
@@ -958,6 +983,10 @@ public final class Preferences {
                 if (pm.get("rightAcMode")            instanceof Boolean b) p.setRightAcMode(b);
                 if (pm.get("leftSincInterpEnabled")  instanceof Boolean b) p.setLeftSincInterpEnabled(b);
                 if (pm.get("rightSincInterpEnabled") instanceof Boolean b) p.setRightSincInterpEnabled(b);
+                if (pm.get("leftMainsSuppression")   instanceof String  s) p.setLeftMainsSuppression(s);
+                if (pm.get("rightMainsSuppression")  instanceof String  s) p.setRightMainsSuppression(s);
+                if (pm.get("leftLpf")                instanceof String  s) p.setLeftLpf(s);
+                if (pm.get("rightLpf")               instanceof String  s) p.setRightLpf(s);
                 if (pm.get("leftVoltsPerDiv")        instanceof Number  n) p.setLeftVoltsPerDiv(n.doubleValue());
                 if (pm.get("rightVoltsPerDiv")       instanceof Number  n) p.setRightVoltsPerDiv(n.doubleValue());
                 if (pm.get("leftOffsetFrac")         instanceof Number  n) p.setLeftOffsetFrac(n.doubleValue());
@@ -982,6 +1011,7 @@ public final class Preferences {
         if (root.get("fftWindow")                 instanceof String  s) fftWindow            = s;
         if (root.get("fftOverlap")                instanceof String  s) fftOverlap           = s;
         if (root.get("fftCoherentAveraging")      instanceof Boolean b) fftCoherentAveraging = b;
+        if (root.get("fftMainsSuppression")       instanceof String  s) fftMainsSuppression  = s;
         if (root.get("fftAlignGenToFreqDiff")     instanceof Boolean b) fftAlignGenToFreqDiff = b;
         if (root.get("fftDistMinHz")              instanceof Number  n) fftDistMinHz         = n.doubleValue();
         if (root.get("fftDistMaxHz")              instanceof Number  n) fftDistMaxHz         = n.doubleValue();

@@ -1,21 +1,27 @@
 package org.edgo.audio.measure.cli;
 
-import org.edgo.audio.measure.cli.util.*;
+import java.util.Arrays;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import lombok.experimental.UtilityClass;
-import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.adc.WeightedBuffer;
 import org.edgo.audio.measure.chart.FftChartExporter;
+import org.edgo.audio.measure.cli.util.AdcCorrection;
+import org.edgo.audio.measure.cli.util.AdcCorrectionHelper;
+import org.edgo.audio.measure.cli.util.ArgParser;
+import org.edgo.audio.measure.cli.util.ClockMismatch;
+import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
+import org.edgo.audio.measure.cli.util.FreqRespCalibration;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.wav.WavReader;
 
-import java.util.Arrays;
-import java.util.Locale;
-import java.util.concurrent.atomic.AtomicInteger;
+import lombok.experimental.UtilityClass;
+import lombok.extern.log4j.Log4j2;
 
 /**
  * {@code --fft-analyze <wav>} — offline FFT analysis of a captured WAV.
@@ -160,7 +166,7 @@ public class FftAnalyzeMode {
 
         boolean willPostCorrect = adcCompArg != null || freqRespCalArg != null;
         double expectedFundHz = genFreqHz != null ? genFreqHz : Double.NaN;
-        FftAnalyzer.Result result = fftAnalyzer.analyze(trimmed, sampleRate, fftSize, harmonics,
+        FftResult result = fftAnalyzer.analyze(trimmed, sampleRate, fftSize, harmonics,
                 windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbV,
                 !willPostCorrect, expectedFundHz);
 

@@ -23,6 +23,10 @@ public class OscPreset {
     private boolean rightAcMode              = false;
     private boolean leftSincInterpEnabled    = true;
     private boolean rightSincInterpEnabled   = true;
+    private String  leftMainsSuppression     = "NONE";
+    private String  rightMainsSuppression    = "NONE";
+    private String  leftLpf                  = "NONE";
+    private String  rightLpf                 = "NONE";
     private double  leftVoltsPerDiv          = 0.1;
     private double  rightVoltsPerDiv         = 0.1;
     private double  leftOffsetFrac           = 0.5;

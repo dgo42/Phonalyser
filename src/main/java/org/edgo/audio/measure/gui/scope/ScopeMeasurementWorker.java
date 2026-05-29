@@ -5,7 +5,12 @@ import java.util.function.Consumer;
 
 import lombok.extern.log4j.Log4j2;
 
+import org.edgo.audio.measure.dsp.LowPassFilter;
+import org.edgo.audio.measure.dsp.MainsCombFilter;
+import org.edgo.audio.measure.dsp.MedianFilter;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.LpfMode;
+import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBuffer;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -34,6 +39,10 @@ public final class ScopeMeasurementWorker {
     public static final int  MEAS_MAX_SAMPLES = 96_000;
     /** Depth of the rolling history ring. */
     private static final int  MEAS_HISTORY_CAP = 1024;
+    /** Butterworth order for the scope HF spike-removal low-pass — shared
+     *  with {@link OscilloscopeView} so display and measurement match.  The
+     *  cutoff is per-channel and comes from the {@code LpfMode} preference. */
+    public static final int    SCOPE_HF_LPF_ORDER = 8;
 
     private volatile SignalBuffer       buffer;
 
@@ -46,6 +55,29 @@ public final class ScopeMeasurementWorker {
 
     private float[] measLeftBuf;
     private float[] measRightBuf;
+    /** Reusable tail-slice buffer for measuring the comb's settled region. */
+    private float[] measTailBuf;
+    /** Reusable copy of the raw (pre-comb) selected channel, for re-measuring
+     *  the comb-located tone's frequency free of the comb's notch bias. */
+    private float[] rawSelBuf;
+
+    /** Per-channel mains-hum combs for the measured values; lazily built
+     *  for the capture rate, used when a channel's mains-suppression mode
+     *  is IIR_COMB.  DC-preserving, so Vmean still reflects the true bias. */
+    private MainsCombFilter measCombLeft, measCombRight;
+    private int             measCombSampleRate;
+    /** Per-channel HF low-pass for the measured values (matches the
+     *  display-side filter so Vpp/Vrms aren't inflated by >80 kHz spikes). */
+    private LowPassFilter   measLpfLeft, measLpfRight;
+    private int             measLpfSampleRate;
+    /** Per-channel median de-spike filters for the measured values. */
+    private MedianFilter    measDespikeLeft, measDespikeRight;
+    /** Notch −3 dB width (Hz) — matches the display-side combs. */
+    private static final double MAINS_NOTCH_BW_HZ = 2.0;
+    /** Half-width (Hz) of the raw-signal band used to re-pin the comb-located
+     *  tone's frequency.  Wide enough to cover the comb's frequency pull, far
+     *  narrower than the ≥ ~50 Hz spacing of mains harmonics so none competes. */
+    private static final double FREQ_REFINE_HALF_HZ = 2.0;
 
     /** Guards multi-field updates to the measurement history ring. */
     private final Object measHistoryLock = new Object();
@@ -254,6 +286,53 @@ public final class ScopeMeasurementWorker {
         }
     }
 
+    /** Applies the per-channel HF low-pass to both measurement buffers in
+     *  place (rebuilt on a sample-rate change; reset each pass since reads
+     *  overlap).  No-op below the LPF's Nyquist gate.  Worker-thread only. */
+    private void applyHfLowPass(int sampleRate, int avail) {
+        Preferences prefs = Preferences.instance();
+        LpfMode lm = LpfMode.fromNameOr(prefs.getOscLeftLpf(),  LpfMode.NONE);
+        LpfMode rm = LpfMode.fromNameOr(prefs.getOscRightLpf(), LpfMode.NONE);
+        if (lm == LpfMode.NONE && rm == LpfMode.NONE) return;
+        if (measLpfSampleRate != sampleRate) {
+            measLpfLeft = null; measLpfRight = null;
+            measLpfSampleRate = sampleRate;
+        }
+        applyChannelHf(lm, true,  sampleRate, measLeftBuf,  avail);
+        applyChannelHf(rm, false, sampleRate, measRightBuf, avail);
+    }
+
+    /** Applies one channel's selected HF cleanup ({@link LpfMode}) to the
+     *  measurement buffer in place — matching the display path. */
+    private void applyChannelHf(LpfMode mode, boolean left, int sampleRate, float[] buf, int len) {
+        if (mode == LpfMode.HZ_80) {
+            LowPassFilter f = left ? measLpfLeft : measLpfRight;
+            if (f == null) {
+                f = new LowPassFilter(sampleRate, mode.cutoffHz, SCOPE_HF_LPF_ORDER);
+                if (left) measLpfLeft = f; else measLpfRight = f;
+            }
+            if (f.isActive()) { f.reset(); f.process(buf, len); }
+        } else if (mode == LpfMode.DESPIKE) {
+            MedianFilter m = left ? measDespikeLeft : measDespikeRight;
+            if (m == null) {
+                m = new MedianFilter(mode.window);
+                if (left) measDespikeLeft = m; else measDespikeRight = m;
+            }
+            m.process(buf, len);
+        }
+    }
+
+    /** Lazily (re)builds the per-channel measurement combs for the given
+     *  sample rate.  Worker-thread only. */
+    private MainsCombFilter measComb(boolean left, int sampleRate) {
+        if (measCombSampleRate != sampleRate || measCombLeft == null) {
+            measCombLeft  = new MainsCombFilter(sampleRate, MAINS_NOTCH_BW_HZ);
+            measCombRight = new MainsCombFilter(sampleRate, MAINS_NOTCH_BW_HZ);
+            measCombSampleRate = sampleRate;
+        }
+        return left ? measCombLeft : measCombRight;
+    }
+
     /** Runs one measurement pass on the worker thread and updates the cache. */
     private void computeMeasurementOnce() {
         SignalBuffer b = buffer;
@@ -278,11 +357,77 @@ public final class ScopeMeasurementWorker {
         // paint thread's AC-mode trace offset and AC-mode trigger-level shift.
         int avail = b.readLatest(measN, measLeftBuf, measRightBuf);
         if (avail < 64) return;
+        // HF spike removal (80 kHz LPF) before everything else, so the DC
+        // means, the comb, and Vpp/Vrms all see the de-spiked signal.  No-op
+        // below the LPF's Nyquist gate.
+        applyHfLowPass(sampleRate, avail);
         double peakVolts = AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
         double leftMean  = sampleMean(measLeftBuf,  avail);
         double rightMean = sampleMean(measRightBuf, avail);
+        // Mains suppression for the measured values (Vpp/Vrms/Vmean): the
+        // raw per-channel means above are kept for AC-coupling display, but
+        // the measurement reads the de-hummed signal.  DC-preserving so
+        // Vmean stays meaningful.
+        MainsSuppression leftMode  = MainsSuppression.fromNameOr(
+                prefs.getOscLeftMainsSuppression(),  MainsSuppression.NONE);
+        MainsSuppression rightMode = MainsSuppression.fromNameOr(
+                prefs.getOscRightMainsSuppression(), MainsSuppression.NONE);
+        MainsSuppression selMode = (selected == Channel.L) ? leftMode : rightMode;
+        // When the comb is on, the frequency is found in two steps to avoid the
+        // comb biasing it: the comb suppresses an often-dominant mains so the
+        // tone becomes the spectral peak (a reliable SEED), but its notches sit
+        // at every mains harmonic and one can land within a few Hz of the tone,
+        // and at high sample rates the comb never settles inside the window —
+        // both pull the combed frequency low.  So keep a copy of the raw
+        // (un-combed) selected channel and, once the comb gives the seed,
+        // re-measure on the RAW signal in a narrow band around it (the mains is
+        // stronger there but its harmonics are tens of Hz away, outside the
+        // band) — un-biased and free of the mains.  Copied before the comb
+        // rewrites the selected channel's buffer in place.
+        float[] rawSel = null;
+        if (selMode == MainsSuppression.IIR_COMB) {
+            float[] src = (selected == Channel.L) ? measLeftBuf : measRightBuf;
+            if (rawSelBuf == null || rawSelBuf.length < avail) rawSelBuf = new float[avail];
+            System.arraycopy(src, 0, rawSelBuf, 0, avail);
+            rawSel = rawSelBuf;
+        }
+        if (leftMode == MainsSuppression.IIR_COMB) {
+            MainsCombFilter c = measComb(true, sampleRate);
+            c.track(measLeftBuf, avail);
+            c.reset();
+            c.processPreservingDc(measLeftBuf, avail);
+        }
+        if (rightMode == MainsSuppression.IIR_COMB) {
+            MainsCombFilter c = measComb(false, sampleRate);
+            c.track(measRightBuf, avail);
+            c.reset();
+            c.processPreservingDc(measRightBuf, avail);
+        }
         float[] data = (selected == Channel.L) ? measLeftBuf : measRightBuf;
-        SignalMeasurements result = SignalMeasurements.compute(data, avail, sampleRate, peakVolts);
+        int measLen  = avail;
+        if (selMode == MainsSuppression.IIR_COMB) {
+            // The comb's delay lines start zeroed each pass, so its head is an
+            // un-suppressed pass-through that would skew Vpp/Vrms.  Measure the
+            // settled tail instead (≈3 time-constants in; capped so at least
+            // half the window remains — at very high sample rates the window
+            // can be shorter than the settle time, leaving some residual hum).
+            int settle = (int) (3.0 * sampleRate / (Math.PI * MAINS_NOTCH_BW_HZ));
+            int from   = Math.min(settle, avail / 2);
+            if (from > 0) {
+                measLen = avail - from;
+                if (measTailBuf == null || measTailBuf.length < measLen) measTailBuf = new float[measLen];
+                System.arraycopy(data, from, measTailBuf, 0, measLen);
+                data = measTailBuf;
+            }
+        }
+        SignalMeasurements result = SignalMeasurements.compute(data, measLen, sampleRate, peakVolts);
+        if (rawSel != null && Double.isFinite(result.getFrequency())) {
+            // Re-pin the comb-located tone on the raw signal, free of the
+            // comb's notch bias, with a narrow band around the seed.
+            double precise = SignalMeasurements.refineFrequencyAround(
+                    rawSel, avail, sampleRate, result.getFrequency(), FREQ_REFINE_HALF_HZ);
+            if (Double.isFinite(precise)) result = result.withFrequency(precise);
+        }
         // Dual-tone has two simultaneous fundamentals — a single Tp /
         // Tr / Tf / f / duty value has no physical meaning.  Clear
         // the time fields so the readout shows {@code ---} for every

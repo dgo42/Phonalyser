@@ -17,7 +17,12 @@ import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
+import org.edgo.audio.measure.dsp.LowPassFilter;
+import org.edgo.audio.measure.dsp.MainsCombFilter;
+import org.edgo.audio.measure.dsp.MedianFilter;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.LpfMode;
+import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OscSliderId;
 import org.edgo.audio.measure.enums.TriggerEdge;
@@ -69,6 +74,42 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private SignalBuffer buffer;
     private float[] leftBuf  = new float[0];
     private float[] rightBuf = new float[0];
+
+    /** Carbon-copy of the last trace frame this view rendered (the exact
+     *  windowed samples + render parameters passed to {@link #renderTraces}).
+     *  The screenshot pane reads this so a saved image matches what's on
+     *  screen — including a frozen / stopped trace — instead of re-reading
+     *  fresh samples from the buffer. */
+    private RenderedFrame lastFrame;
+    /** When non-null this view renders {@code frozenFrame} verbatim and
+     *  ignores the live buffer — used by the offscreen screenshot view. */
+    private RenderedFrame frozenFrame;
+
+    /** Per-channel mains-hum combs (lazily built for the capture rate),
+     *  used when a channel's mains-suppression mode is IIR_COMB.  Re-tuned
+     *  occasionally (mains drift is slow) and reset+applied each paint over
+     *  the contiguous read window; the displayed span sits well inside the
+     *  read's pre-roll so the comb's start transient stays off-screen left. */
+    private MainsCombFilter mainsCombLeft, mainsCombRight;
+    private int  mainsCombSampleRate;
+    private long mainsTrackNanos;
+
+    /** Per-channel HF low-pass combs that strip switching / RF spikes above
+     *  the audio band before display + trigger.  Always applied (both
+     *  channels) but a no-op below {@value #SCOPE_HF_LPF_HZ} Hz Nyquist, so
+     *  they only do work at high sample rates where such spikes appear. */
+    private LowPassFilter hfLpfLeft, hfLpfRight;
+    private int  hfLpfSampleRate;
+    /** Per-channel median de-spike filters (LpfMode.DESPIKE). */
+    private MedianFilter despikeLeft, despikeRight;
+    /** Last-logged tracked mains frequency per channel (debounce for the
+     *  lock diagnostic); {@link Double#NaN} = not tracking / not logged. */
+    private double mainsLoggedHzL = Double.NaN, mainsLoggedHzR = Double.NaN;
+    /** Notch −3 dB width (Hz) for the scope mains combs. */
+    private static final double MAINS_NOTCH_BW_HZ = 2.0;
+    /** Minimum spacing between mains re-tracks (ns); tuning persists across
+     *  the per-paint reset, so the comb keeps filtering between tracks. */
+    private static final long MAINS_TRACK_PERIOD_NANOS = 200_000_000L;
 
     /**
      * Absolute writePos (in samples since capture start) of the trigger event
@@ -1118,6 +1159,170 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     }
 
     /**
+     * Applies per-channel mains-hum suppression to {@link #leftBuf} /
+     * {@link #rightBuf} in place (DC-preserving) when a channel's mode is
+     * {@code IIR_COMB}.  Combs are rebuilt on a sample-rate change; the
+     * mains frequency is re-tracked at most every
+     * {@link #MAINS_TRACK_PERIOD_NANOS} (drift is slow) and the tuning
+     * persists across the per-paint {@code reset()}, so filtering continues
+     * between tracks.  Called once per paint right after the read window is
+     * filled, so trigger, draw and SINGLE capture all see the filtered data.
+     */
+    /** Snapshot of one rendered trace frame — the windowed samples plus the
+     *  parameters {@link #renderTraces} needs — so a screenshot reproduces
+     *  exactly what was on screen.  Vertical offset / line width / dot size
+     *  are intentionally NOT stored: they come from the (global) Preferences
+     *  the offscreen view shares, so they match automatically. */
+    public static final class RenderedFrame {
+        final float[] left, right;
+        final int     len, dispStart, dispCount;
+        final double  subSampleOffset;
+        final boolean showL, showR, sincL, sincR;
+        final double  leftVDiv, rightVDiv, dcL, dcR;
+        RenderedFrame(float[] left, float[] right, int len, int dispStart, int dispCount,
+                      double subSampleOffset, boolean showL, boolean showR,
+                      boolean sincL, boolean sincR, double leftVDiv, double rightVDiv,
+                      double dcL, double dcR) {
+            this.left = left; this.right = right; this.len = len;
+            this.dispStart = dispStart; this.dispCount = dispCount;
+            this.subSampleOffset = subSampleOffset;
+            this.showL = showL; this.showR = showR; this.sincL = sincL; this.sincR = sincR;
+            this.leftVDiv = leftVDiv; this.rightVDiv = rightVDiv; this.dcL = dcL; this.dcR = dcR;
+        }
+    }
+
+    /** Returns a carbon-copy of the most recently rendered frame, or
+     *  {@code null} if nothing has been drawn yet.  Used by the screenshot
+     *  pane so the image matches the (possibly frozen) on-screen trace. */
+    public RenderedFrame getRenderedFrameSnapshot() {
+        return lastFrame;
+    }
+
+    /** Makes this view render {@code f} verbatim instead of reading the live
+     *  buffer (offscreen screenshot view). */
+    public void setFrozenFrame(RenderedFrame f) {
+        this.frozenFrame = f;
+    }
+
+    /** Copies just the displayed window (plus Lanczos padding) of the data
+     *  {@link #renderTraces} is about to draw into {@link #lastFrame}, so the
+     *  snapshot is small yet sufficient to re-render an identical trace. */
+    private void captureFrame(float[] dataLeft, float[] dataRight, int dataLen,
+                              int dispStart, double subSampleOffset, int dispCount,
+                              boolean showL, boolean showR, double leftVDiv, double rightVDiv,
+                              boolean sincL, boolean sincR, double dcL, double dcR) {
+        int pad = ScopeLanczos.LANCZOS_PADDING;
+        int lo  = Math.max(0, dispStart - pad);
+        int hi  = Math.min(dataLen, dispStart + dispCount + pad);
+        int n   = Math.max(0, hi - lo);
+        float[] l = (showL && dataLeft  != null) ? new float[n] : null;
+        float[] r = (showR && dataRight != null) ? new float[n] : null;
+        if (l != null) System.arraycopy(dataLeft,  lo, l, 0, n);
+        if (r != null) System.arraycopy(dataRight, lo, r, 0, n);
+        lastFrame = new RenderedFrame(l, r, n, dispStart - lo, dispCount, subSampleOffset,
+                showL, showR, sincL, sincR, leftVDiv, rightVDiv, dcL, dcR);
+    }
+
+    /** Applies the per-channel HF low-pass (80 kHz) to {@link #leftBuf} /
+     *  {@link #rightBuf} in place, stripping switching / RF spikes above the
+     *  audio band.  Always on for both channels (re-read overlapping windows
+     *  ⇒ reset each paint), but a no-op below its Nyquist gate. */
+    private void applyHfLowPass(int sampleRate, int available,
+                                boolean needL, boolean needR) {
+        Preferences prefs = Preferences.instance();
+        LpfMode lm = LpfMode.fromNameOr(prefs.getOscLeftLpf(),  LpfMode.NONE);
+        LpfMode rm = LpfMode.fromNameOr(prefs.getOscRightLpf(), LpfMode.NONE);
+        if (lm == LpfMode.NONE && rm == LpfMode.NONE) return;
+        if (hfLpfSampleRate != sampleRate) {
+            hfLpfLeft = null; hfLpfRight = null;
+            hfLpfSampleRate = sampleRate;
+        }
+        if (needL) applyChannelHf(lm, true,  sampleRate, leftBuf,  available);
+        if (needR) applyChannelHf(rm, false, sampleRate, rightBuf, available);
+    }
+
+    /** Applies one channel's selected HF cleanup ({@link LpfMode}) to
+     *  {@code buf} in place: an 80 kHz Chebyshev low-pass, a median
+     *  de-spike, or nothing.  Filters are built lazily; the LPF (IIR) is
+     *  reset each call since the scope re-reads overlapping windows, while
+     *  the median is memoryless. */
+    private void applyChannelHf(LpfMode mode, boolean left, int sampleRate, float[] buf, int len) {
+        if (mode == LpfMode.HZ_80) {
+            LowPassFilter f = left ? hfLpfLeft : hfLpfRight;
+            if (f == null) {
+                f = new LowPassFilter(sampleRate, mode.cutoffHz, ScopeMeasurementWorker.SCOPE_HF_LPF_ORDER);
+                if (left) hfLpfLeft = f; else hfLpfRight = f;
+                log.info("Scope LPF [{}]: {} Hz, active={} (Nyquist {} Hz)",
+                        left ? "L" : "R", mode.cutoffHz, f.isActive(), sampleRate / 2);
+            }
+            if (f.isActive()) { f.reset(); f.process(buf, len); }
+        } else if (mode == LpfMode.DESPIKE) {
+            MedianFilter m = left ? despikeLeft : despikeRight;
+            if (m == null) {
+                m = new MedianFilter(mode.window);
+                if (left) despikeLeft = m; else despikeRight = m;
+            }
+            m.process(buf, len);
+        }
+    }
+
+    private void applyMainsSuppression(int sampleRate, int available,
+                                       boolean needL, boolean needR) {
+        Preferences prefs = Preferences.instance();
+        boolean mainsL = needL && MainsSuppression.fromNameOr(
+                prefs.getOscLeftMainsSuppression(),  MainsSuppression.NONE) == MainsSuppression.IIR_COMB;
+        boolean mainsR = needR && MainsSuppression.fromNameOr(
+                prefs.getOscRightMainsSuppression(), MainsSuppression.NONE) == MainsSuppression.IIR_COMB;
+        if (!mainsL && !mainsR) return;
+        if (mainsCombSampleRate != sampleRate || mainsCombLeft == null) {
+            mainsCombLeft  = new MainsCombFilter(sampleRate, MAINS_NOTCH_BW_HZ);
+            mainsCombRight = new MainsCombFilter(sampleRate, MAINS_NOTCH_BW_HZ);
+            mainsCombSampleRate = sampleRate;
+            mainsTrackNanos = 0;
+        }
+        long now = System.nanoTime();
+        boolean retrack = (now - mainsTrackNanos) >= MAINS_TRACK_PERIOD_NANOS;
+        if (retrack) mainsTrackNanos = now;
+        // An untuned comb (just enabled, or no mains line found yet) is
+        // re-tracked every paint until it locks — independent of the throttle
+        // and of System.nanoTime()'s arbitrary origin — so enabling a channel
+        // mid-run takes effect immediately rather than after one throttle gap.
+        if (mainsL) {
+            if (retrack || !mainsCombLeft.isTuned()) {
+                double f = mainsCombLeft.track(leftBuf, available);
+                logMainsLock("L", f);
+            }
+            mainsCombLeft.reset();
+            mainsCombLeft.processPreservingDc(leftBuf, available);
+        }
+        if (mainsR) {
+            if (retrack || !mainsCombRight.isTuned()) {
+                double f = mainsCombRight.track(rightBuf, available);
+                logMainsLock("R", f);
+            }
+            mainsCombRight.reset();
+            mainsCombRight.processPreservingDc(rightBuf, available);
+        }
+    }
+
+    /** One-line diagnostic, debounced to lock-state changes, so the log
+     *  shows whether the scope's mains comb actually detected a 50/60 Hz
+     *  line (and to what frequency) — a quick way to tell a detection miss
+     *  from a merely-invisible-on-a-linear-trace suppression. */
+    private void logMainsLock(String ch, double trackedHz) {
+        double last = "L".equals(ch) ? mainsLoggedHzL : mainsLoggedHzR;
+        boolean changed = Double.isNaN(trackedHz) != Double.isNaN(last)
+                || (!Double.isNaN(trackedHz) && Math.abs(trackedHz - last) > 0.5);
+        if (!changed) return;
+        if ("L".equals(ch)) mainsLoggedHzL = trackedHz; else mainsLoggedHzR = trackedHz;
+        if (Double.isNaN(trackedHz)) {
+            log.info("Scope mains comb [{}]: no mains line detected (suppression idle)", ch);
+        } else {
+            log.info("Scope mains comb [{}]: locked {} Hz", ch, trackedHz);
+        }
+    }
+
+    /**
      * Column right-edge x positions for the measurement table.  The
      * parameter column is 60 % of its original 192 px width (= 115 px);
      * every value column is 90 % of its original 80 px width (= 72 px).
@@ -1813,6 +2018,15 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     }
 
     private void drawWaveforms(GC gc, int w, int h) {
+        // Screenshot view: render the captured frame verbatim (a carbon copy
+        // of the live trace), never re-reading the buffer.
+        if (frozenFrame != null) {
+            RenderedFrame f = frozenFrame;
+            renderTraces(gc, w, h, f.left, f.right, f.len, f.dispStart, f.subSampleOffset,
+                         f.dispCount, f.showL, f.showR, f.leftVDiv, f.rightVDiv,
+                         f.sincL, f.sincR, f.dcL, f.dcR);
+            return;
+        }
         Preferences prefs = Preferences.instance();
         double timePerDiv = prefs.getOscTimePerDiv();
         double leftVDiv   = prefs.getOscLeftVoltsPerDiv();
@@ -1903,6 +2117,14 @@ public final class OscilloscopeView extends AbstractMeasurementView {
                 needL ? leftBuf  : null,
                 needR ? rightBuf : null);
         if (available < 2) return;
+
+        // HF spike removal (80 kHz LPF) then per-channel mains-hum
+        // suppression, applied to the raw read window before trigger search,
+        // drawing, and SINGLE-frame capture all read leftBuf/rightBuf.  The
+        // displayed span sits inside this window's pre-roll, so the combs'
+        // start transients stay off-screen left.
+        applyHfLowPass(b.getSampleRate(), available, needL, needR);
+        applyMainsSuppression(b.getSampleRate(), available, needL, needR);
 
         long bufStartAbs = viewEndAbs - available;
 
@@ -2368,6 +2590,12 @@ public final class OscilloscopeView extends AbstractMeasurementView {
                               boolean sincEnabledL, boolean sincEnabledR,
                               double dcOffsetL, double dcOffsetR) {
         if (dispCount < 2) return;
+        // Snapshot what we're about to draw (live view only) so a screenshot
+        // is a carbon copy of the on-screen trace.
+        if (frozenFrame == null) {
+            captureFrame(dataLeft, dataRight, dataLen, dispStart, subSampleOffset, dispCount,
+                    showL, showR, leftVDiv, rightVDiv, sincEnabledL, sincEnabledR, dcOffsetL, dcOffsetR);
+        }
         Preferences prefs = Preferences.instance();
         // Per-channel vertical centre: offsetFrac maps directly to the Y
         // coordinate where the channel's zero crossing renders.  0.5 ≡

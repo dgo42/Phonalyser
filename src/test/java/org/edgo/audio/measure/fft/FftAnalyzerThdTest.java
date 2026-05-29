@@ -31,7 +31,7 @@ class FftAnalyzerThdTest {
 
         float[] signal = pureSine(sampleRate, freqHz, 0.5, fftSize * 2);
 
-        FftAnalyzer.Result r = new FftAnalyzer().analyze(
+        FftResult r = new FftAnalyzer().analyze(
                 signal, sampleRate, fftSize, 8,
                 WindowType.HANN, FftOverlap.PCT_0,
                 0.0, 0.0, true, Double.NaN, false);
@@ -59,7 +59,7 @@ class FftAnalyzerThdTest {
                   + h2Amp * Math.sin(2.0 * Math.PI * 2 * freqHz * n / sampleRate));
         }
 
-        FftAnalyzer.Result r = new FftAnalyzer().analyze(
+        FftResult r = new FftAnalyzer().analyze(
                 signal, sampleRate, fftSize, 8,
                 WindowType.HANN, FftOverlap.PCT_0,
                 0.0, 0.0, true, Double.NaN, false);
@@ -93,7 +93,7 @@ class FftAnalyzerThdTest {
             signal[n] = (float) s;
         }
 
-        FftAnalyzer.Result r = new FftAnalyzer().analyze(
+        FftResult r = new FftAnalyzer().analyze(
                 signal, sampleRate, fftSize, 8,
                 WindowType.HANN, FftOverlap.PCT_0,
                 0.0, 0.0, true, Double.NaN, false);
@@ -114,7 +114,7 @@ class FftAnalyzerThdTest {
         int fftSize    = 16_384;
         float[] signal = pureSine(sampleRate, 2_000.0, 0.4, fftSize * 2);
 
-        FftAnalyzer.Result r = new FftAnalyzer().analyze(
+        FftResult r = new FftAnalyzer().analyze(
                 signal, sampleRate, fftSize, 6,
                 WindowType.HANN, FftOverlap.PCT_50,
                 10.0, 40_000.0, false, -3.0, false);

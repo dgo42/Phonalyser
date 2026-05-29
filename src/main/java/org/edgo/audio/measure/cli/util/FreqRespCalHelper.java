@@ -1,12 +1,5 @@
 package org.edgo.audio.measure.cli.util;
 
-import lombok.experimental.UtilityClass;
-import lombok.extern.log4j.Log4j2;
-import org.edgo.audio.measure.fft.FftAnalyzer;
-import org.edgo.audio.measure.fft.MathUtil;
-import org.edgo.audio.measure.sound.AudioBackend;
-import org.jtransforms.fft.DoubleFFT_1D;
-
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
@@ -18,6 +11,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+
+import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.MathUtil;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.jtransforms.fft.DoubleFFT_1D;
+
+import lombok.experimental.UtilityClass;
+import lombok.extern.log4j.Log4j2;
 
 @Log4j2
 @UtilityClass
@@ -557,7 +559,7 @@ public class FreqRespCalHelper {
      * {@link FftAnalyzer#recomputeStats} so the fundamental level, harmonic table,
      * THD, THD+N, SNR, and noise stats all reflect the corrected spectrum.
      */
-    public void applyCompensationInPlace(FftAnalyzer.Result r, FreqRespCalibration cal,
+    public void applyCompensationInPlace(FftResult r, FreqRespCalibration cal,
                                          boolean correctAllBins) {
         int half = r.fftSize / 2;
         double binWidth = r.sampleRate / (double) r.fftSize;
@@ -671,7 +673,7 @@ public class FreqRespCalHelper {
      * Sets {@code result.fundRefDbV} from the global ADC full-scale RMS voltage
      * when no other source has anchored it.  No-op when fundRefDbV is already set.
      */
-    public void applyDefaultDbvScaling(FftAnalyzer.Result result) {
+    public void applyDefaultDbvScaling(FftResult result) {
         if (Double.isNaN(result.fundRefDbV) && AudioBackend.getAdcFsVoltageRms() > 0.0) {
             result.fundRefDbV = result.fundamentalDbFs
                     + 20.0 * Math.log10(AudioBackend.getAdcFsVoltageRms());
@@ -682,7 +684,7 @@ public class FreqRespCalHelper {
      * Snapshots the pre-correction fundamental + harmonic peak levels so the
      * chart can draw blue "before-cal" dots alongside the red "after-cal" dots.
      */
-    public double[][] capturePreCorrectionPeaks(FftAnalyzer.Result result) {
+    public double[][] capturePreCorrectionPeaks(FftResult result) {
         int count = 1 + result.harmonicCount;
         double[] freqs = new double[count];
         double[] dbFs  = new double[count];
@@ -702,7 +704,7 @@ public class FreqRespCalHelper {
      * array {@code [freqs, dbFs]} suitable for the chart's overlay parameters,
      * or {@code null} if there's no H2 reference available.
      */
-    public double[][] computeOverlay(FreqRespCalibration cal, FftAnalyzer.Result result) {
+    public double[][] computeOverlay(FreqRespCalibration cal, FftResult result) {
         if (result.harmonicCount == 0 || result.harmonicBins[0] <= 0) return null;
         double h2Freq = result.harmonicHz[0];
         double h2DbFs = result.harmonicDbFs[0];

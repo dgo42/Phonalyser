@@ -117,7 +117,7 @@ public final class Events {
     public static final String FFT_RECORDING_AUTO_STOPPED = "fft.recording.auto-stopped";
 
     /** Notification — a fresh FFT analyser result is ready for display.
-     *  Payload: the {@code FftAnalyzer.Result} slot (may be {@code null}
+     *  Payload: the {@code FftResult} slot (may be {@code null}
      *  when the worker just wants to nudge a repaint without new data,
      *  e.g. after {@code resetStatistics}).  Published on the UI thread
      *  by {@code FftAnalyzerWorker} after each successful analysis;

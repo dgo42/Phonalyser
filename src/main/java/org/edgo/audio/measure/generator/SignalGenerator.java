@@ -8,12 +8,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Random;
 
-import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
 
 import lombok.Value;
 import lombok.extern.log4j.Log4j2;
-import org.edgo.audio.measure.enums.GenSignalForm;
 
 /**
  * DDS (Direct Digital Synthesis) signal generator with 9th-order Taylor sine correction.
@@ -216,7 +216,7 @@ public class SignalGenerator {
 
     /**
      * Constructs a {@link GenSignalForm#SINE_COMPENSATED} generator directly from a
-     * {@link FftAnalyzer.Result} — no intermediate CSV file is written.
+     * {@link FftResult} — no intermediate CSV file is written.
      * Requires coherent averaging ({@code result.coherentAveraging == true}); otherwise
      * phases are unknown and amplitude-only correction is applied with a warning.
      *
@@ -226,7 +226,7 @@ public class SignalGenerator {
      * @param result        FFT analysis result containing harmonic amplitudes and phases
      */
     public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
-                           FftAnalyzer.Result result) {
+                           FftResult result) {
         this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms);
         loadHarmonicsFromResult(frequency, sampleRate, result);
     }
@@ -840,11 +840,11 @@ public class SignalGenerator {
     // -------------------------------------------------------------------------
 
     /**
-     * Initialises harmonic compensation phasors directly from a {@link FftAnalyzer.Result}.
+     * Initialises harmonic compensation phasors directly from a {@link FftResult}.
      * Equivalent to {@link #loadHarmonics} but avoids writing a CSV file.
      * Only harmonics whose bin index is valid (> 0) are loaded.
      */
-    private void loadHarmonicsFromResult(double frequency, int sampleRate, FftAnalyzer.Result r) {
+    private void loadHarmonicsFromResult(double frequency, int sampleRate, FftResult r) {
         if (!r.coherentAveraging) {
             log.warn("FFT result uses incoherent averaging — phase information unavailable; "
                    + "phase correction disabled, amplitude correction only.");

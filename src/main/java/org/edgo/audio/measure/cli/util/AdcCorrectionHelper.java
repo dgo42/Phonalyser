@@ -1,10 +1,5 @@
 package org.edgo.audio.measure.cli.util;
 
-import lombok.experimental.UtilityClass;
-import lombok.extern.log4j.Log4j2;
-import org.edgo.audio.measure.fft.Fft;
-import org.edgo.audio.measure.fft.FftAnalyzer;
-
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
@@ -12,6 +7,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+
+import org.edgo.audio.measure.fft.Fft;
+import org.edgo.audio.measure.fft.FftResult;
+
+import lombok.experimental.UtilityClass;
+import lombok.extern.log4j.Log4j2;
 
 @Log4j2
 @UtilityClass
@@ -61,7 +62,7 @@ public class AdcCorrectionHelper {
      * contribution is {@code [Σ_k c_k · L^{p_k(h)}] · |R_1| · exp(j·h·(φ₁+π/2))},
      * matching the rotated-frame convention used during calibration.
      */
-    public double[] applyToResult(FftAnalyzer.Result r, AdcCorrection adc,
+    public double[] applyToResult(FftResult r, AdcCorrection adc,
                                   double[] outCorrectedAmpLin) {
         double phi1     = Math.atan2(r.im[r.fundamentalBin], r.re[r.fundamentalBin]);
         double r1Amp    = Math.hypot(r.re[r.fundamentalBin], r.im[r.fundamentalBin]);
@@ -107,7 +108,7 @@ public class AdcCorrectionHelper {
      * ADC-corrected residual, and recomputes {@code thdPct} / {@code thdDb}
      * from the corrected harmonic amplitudes.
      */
-    public void applyToResultInPlace(FftAnalyzer.Result r, AdcCorrection adc) {
+    public void applyToResultInPlace(FftResult r, AdcCorrection adc) {
         double phi1     = Math.atan2(r.im[r.fundamentalBin], r.re[r.fundamentalBin]);
         double r1Amp    = Math.hypot(r.re[r.fundamentalBin], r.im[r.fundamentalBin]);
         double L        = r.fundamentalLinear;
@@ -163,7 +164,7 @@ public class AdcCorrectionHelper {
     /**
      * Logs raw vs. ADC-corrected harmonic amplitudes and THD for an FFT result.
      */
-    public void logCorrectedHarmonics(FftAnalyzer.Result r, AdcCorrection adc) {
+    public void logCorrectedHarmonics(FftResult r, AdcCorrection adc) {
         double[] corrAmp = new double[r.harmonicCount];
         double[] thd     = applyToResult(r, adc, corrAmp);
         double L         = r.fundamentalLinear;
@@ -198,7 +199,7 @@ public class AdcCorrectionHelper {
      */
     public void subtractDistortionPerFrameInPlace(
             float[] samples, int sampleRate, int fftSize,
-            FftAnalyzer.Result r, AdcCorrection adc) {
+            FftResult r, AdcCorrection adc) {
         if (samples.length < fftSize) return;
 
         double[] window = new double[fftSize];

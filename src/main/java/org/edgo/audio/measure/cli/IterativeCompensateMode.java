@@ -1,20 +1,5 @@
 package org.edgo.audio.measure.cli;
 
-import org.edgo.audio.measure.cli.util.*;
-
-import lombok.Value;
-import lombok.experimental.UtilityClass;
-import lombok.extern.log4j.Log4j2;
-import org.edgo.audio.measure.chart.FftChartExporter;
-import org.edgo.audio.measure.enums.FftOverlap;
-import org.edgo.audio.measure.enums.GenSignalForm;
-import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.FftAnalyzer;
-import org.edgo.audio.measure.fft.HarmonicsCsv;
-import org.edgo.audio.measure.generator.SignalGenerator;
-import org.edgo.audio.measure.sound.AudioBackend;
-import org.edgo.audio.measure.sound.DeviceRef;
-
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.File;
@@ -29,6 +14,28 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import org.edgo.audio.measure.chart.FftChartExporter;
+import org.edgo.audio.measure.cli.util.ArgParser;
+import org.edgo.audio.measure.cli.util.CaptureWithGenerator;
+import org.edgo.audio.measure.cli.util.ClockMismatch;
+import org.edgo.audio.measure.cli.util.DeviceSelector;
+import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
+import org.edgo.audio.measure.cli.util.FreqRespCalibration;
+import org.edgo.audio.measure.cli.util.SampleRates;
+import org.edgo.audio.measure.enums.FftOverlap;
+import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.HarmonicsCsv;
+import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.DeviceRef;
+
+import lombok.Value;
+import lombok.experimental.UtilityClass;
+import lombok.extern.log4j.Log4j2;
 
 /**
  * {@code --iterative-compensate} — closed-loop DAC pre-distortion to drive
@@ -72,7 +79,7 @@ public class IterativeCompensateMode {
     @Value
     static class IterSnapshot {
         int iter;
-        FftAnalyzer.Result result;
+        FftResult result;
         double[] appliedRe;
         double[] appliedIm;
         double[] hFreqs;
@@ -215,8 +222,8 @@ public class IterativeCompensateMode {
         double[] hFreqs    = accumulate ? new double[harmonics] : null;
 
         List<Double> thdHistory = new ArrayList<>();
-        FftAnalyzer.Result lastResult;
-        FftAnalyzer.Result bestResult = null;
+        FftResult lastResult;
+        FftResult bestResult = null;
         double bestThd = Double.MAX_VALUE;
         double[] bestAccRe = accumulate ? new double[harmonics] : null;
         double[] bestAccIm = accumulate ? new double[harmonics] : null;
@@ -227,7 +234,7 @@ public class IterativeCompensateMode {
         FftAnalyzer fftAnalyzer = new FftAnalyzer();
 
         log.info("--- Iteration 0: uncompensated sine ---");
-        FftAnalyzer.Result result0;
+        FftResult result0;
         double[] overlayFreqs0 = null;
         double[] overlayDbFs0  = null;
         double[] preCorrFreqs0 = null;
@@ -347,7 +354,7 @@ public class IterativeCompensateMode {
             log.info("--- Iteration {}: compensated sine{} ---", iter,
                     accumulate ? " (accumulated corrections)" : "");
 
-            FftAnalyzer.Result result;
+            FftResult result;
             double[] overlayFreqs = null;
             double[] overlayDbFs  = null;
             double[] preCorrFreqs = null;
@@ -536,7 +543,7 @@ public class IterativeCompensateMode {
                 bestIter, String.format(Locale.US, "%.8f", bestThd));
     }
 
-    private void accumulateHarmonics(FftAnalyzer.Result r,
+    private void accumulateHarmonics(FftResult r,
             double[] accRe, double[] accIm, double[] hFreqs,
             double snrMarginDb, double step) {
         double phi1   = Math.atan2(r.im[r.fundamentalBin], r.re[r.fundamentalBin]);

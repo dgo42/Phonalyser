@@ -2,10 +2,10 @@ package org.edgo.audio.measure.gui.fft;
 
 import java.util.Arrays;
 
-import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.FftResult;
 
 /**
- * Compiles a {@link ImdResult} from a {@link FftAnalyzer.Result} when
+ * Compiles a {@link ImdResult} from a {@link FftResult} when
  * the generator is in {@code DUAL_TONE} mode.  Lives next to
  * {@code FftAnalyzerWorker} (which invokes it) but stays a pure
  * function — no state, no threads, no widgets.
@@ -49,7 +49,7 @@ public final class ImdAnalyzer {
      *  Returns {@code null} when there isn't enough data to compute
      *  (e.g. spectrum array is missing or the requested frequencies
      *  fall outside the analysed band). */
-    public static ImdResult analyze(FftAnalyzer.Result r,
+    public static ImdResult analyze(FftResult r,
                                     double f1Cmd, double f2Cmd) {
         if (r == null || r.amplitudeDbV == null) return null;
         double binBw = r.freqResolution;

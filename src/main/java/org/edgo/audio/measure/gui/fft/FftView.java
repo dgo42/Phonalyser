@@ -1,6 +1,7 @@
 package org.edgo.audio.measure.gui.fft;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -33,6 +34,7 @@ import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftMagnitudeUnit;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -56,7 +58,7 @@ import lombok.extern.log4j.Log4j2;
  * <p>Owns the analysis pipeline itself: a daemon worker thread reads the
  * shared {@link SignalBuffer} (supplied via {@link #setBuffer}), runs
  * {@link FftAnalyzer#analyze}, and publishes the latest
- * {@link FftAnalyzer.Result} for paint to read.  The owning
+ * {@link FftResult} for paint to read.  The owning
  * {@link FftPane} drives the lifecycle ({@link #start} / {@link #stop} /
  * {@link #resetStatistics}) and feeds settings via {@code Preferences}.
  * View → pane communication is purely via {@link MessageBus} broadcasts
@@ -163,12 +165,29 @@ public final class FftView extends AbstractFreqDomainView {
      *  already a deep-copied snapshot (produced on the worker thread
      *  inside {@code publishResult}); we just store the reference and
      *  redraw — paint code reads {@link #lastResult} directly. */
-    private final Consumer<FftAnalyzer.Result> onResultReady = slot -> {
+    private final Consumer<FftResult> onResultReady = slot -> {
         if (isDisposed()) return;
         if (worker != null) worker.uiGotResult();
         if (isRunning()) {
             startRender = System.nanoTime();
             lastResult = slot;
+            // Frame / phase rejections slow the averaging — raise a sticky
+            // (20 s, restarted on each fresh rejection) blinking warning with
+            // the full detail in its tooltip.  Otherwise live data clears any
+            // stale banner: the loaded-CSV path (persistent) or a warning whose
+            // timer has already run out.
+            if (slot.rejectedFrames > 0) {
+                String detail = String.format(Locale.US, "%.2f", slot.rejectionDetail);
+                String tip = I18n.t(slot.rejectionPhaseCoherence
+                                ? "fft.warning.rejection.phase"
+                                : "fft.warning.rejection.rInvariant",
+                        slot.rejectedFrames, slot.rejectionTotalFrames, detail);
+                setBanner(I18n.t("fft.warning.rejection"), tip,
+                        ColorRole.WARNING_LIT, ColorRole.WARNING_DIM,
+                        System.nanoTime() + REJECTION_WARN_NANOS);
+            } else {
+                clearBannerIfStale();
+            }
             // Sticky table mode: re-evaluated on every recorded result
             // and held between recordings.  Tied to the generator form
             // because that's the only signal that lets us pick between
@@ -205,6 +224,28 @@ public final class FftView extends AbstractFreqDomainView {
     private final Rectangle distortionButtonBounds   = new Rectangle(0, 0, 0, 0);
     private final Rectangle resetButtonBounds        = new Rectangle(0, 0, 0, 0);
     private final Rectangle externalButtonBounds     = new Rectangle(0, 0, 0, 0);
+
+    // ─── Single blinking status banner (top-right) ───────────────────────
+    // All of the banner's parameters are stored as fields so onPaint just
+    // renders the current banner with no per-paint branching: either the
+    // loaded-spectrum path (set by the pane, persistent until live data
+    // arrives) or the frame-rejection warning (a sticky 20 s timer that a
+    // fresh rejection restarts).  A null/empty text means no banner.
+    private String    bannerText;
+    /** Hover tooltip for the banner; {@code null} = no tooltip. */
+    private String    bannerTooltip;
+    /** Blink colour roles the banner pulses between. */
+    private ColorRole bannerLit = ColorRole.BLINK_LIT;
+    private ColorRole bannerDim = ColorRole.BLINK_DIM;
+    /** Expiry ({@code System.nanoTime}); {@code 0} = persistent (no timer). */
+    private long      bannerUntilNanos;
+    /** Hit-test rect for the banner tooltip (refreshed each paint). */
+    private final Rectangle bannerBounds = new Rectangle(0, 0, 0, 0);
+    /** Coalesces the 500 ms blink-toggle redraw so multiple paint calls
+     *  don't queue multiple timers. */
+    private boolean blinkRedrawScheduled;
+    /** How long the rejection warning keeps blinking after the last hit. */
+    private static final long REJECTION_WARN_NANOS = 20_000_000_000L;
 
     // ─── External tool window ────────────────────────────────────────────
     private boolean tableExtracted;
@@ -313,10 +354,15 @@ public final class FftView extends AbstractFreqDomainView {
         // SWT renders child controls on top automatically.
         setLayout(new FormLayout());
 
+        // These children sit on top of the Canvas; without an explicit cursor
+        // they inherit the Canvas's crosshair (set in onMouseMove), so give
+        // them the normal arrow.  getSystemCursor returns a shared cursor that
+        // must not be disposed.
         magUnitCombo = new Combo(this, SWT.READ_ONLY);
         magUnitCombo.setItems(FftMagnitudeUnit.labels());
         magUnitCombo.setToolTipText(I18n.t("fft.magUnit.tooltip"));
         magUnitCombo.setData("helpAnchor", "fft.html#fft-mag-unit");
+        magUnitCombo.setCursor(d.getSystemCursor(SWT.CURSOR_ARROW));
         int magIdx = ArrayUtils.indexOf(FftMagnitudeUnit.names(), Preferences.instance().getFftMagUnit());
         magUnitCombo.select(magIdx < 0 ? 2 : magIdx);
         magUnitCombo.addListener(SWT.Selection, e -> onMagUnitChanged());
@@ -326,12 +372,14 @@ public final class FftView extends AbstractFreqDomainView {
         averagesCountLabel.setForeground(d.getSystemColor(SWT.COLOR_DARK_GRAY));
         averagesCountLabel.setToolTipText(I18n.t("fft.avgCount.tooltip"));
         averagesCountLabel.setData("helpAnchor", "fft.html#fft-averages-count");
+        averagesCountLabel.setCursor(d.getSystemCursor(SWT.CURSOR_ARROW));
 
         fillPercentLabel = new Label(this, SWT.NONE);
         fillPercentLabel.setText("0%");
         fillPercentLabel.setForeground(d.getSystemColor(SWT.COLOR_DARK_GRAY));
         fillPercentLabel.setToolTipText(I18n.t("fft.fillPercent.tooltip"));
         fillPercentLabel.setData("helpAnchor", "fft.html#fft-fill-percent");
+        fillPercentLabel.setCursor(d.getSystemCursor(SWT.CURSOR_ARROW));
 
         FormData cfd = new FormData();
         cfd.top   = new FormAttachment(0, 4);
@@ -481,7 +529,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  IMD snapshot via {@link #copySnapshotFrom(FftView)} without
      *  running the analysis loop. */
     @Getter
-    private FftAnalyzer.Result lastResult;
+    private FftResult lastResult;
 
     /** Latest dual-tone IMD result computed from {@link #lastResult}
      *  whenever the generator form is {@code DUAL_TONE}.  {@code null}
@@ -537,7 +585,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  emitting; the UI mirrors the first three as a single checkbox
      *  in the FFT settings tab whose enabled state already reflects
      *  the first two prerequisites. */
-    private void applyFrequencyLockLoop(FftAnalyzer.Result slot) {
+    private void applyFrequencyLockLoop(FftResult slot) {
         if (slot == null) return;
         Preferences prefs = Preferences.instance();
         if (!prefs.isGenSnapToFftBin())       return;
@@ -611,6 +659,107 @@ public final class FftView extends AbstractFreqDomainView {
         if (d != null && !d.isDisposed()) {
             d.asyncExec(() -> { if (!isDisposed()) redraw(); });
         }
+    }
+
+    /** Shows a static spectrum loaded from CSV instead of live data.  The
+     *  caller must have already stopped recording (so the worker won't
+     *  overwrite it).  Renders as a single-tone result — the THD / harmonic
+     *  table reflects the loaded spectrum (recomputed by the caller). */
+    public void displayLoadedResult(FftResult r) {
+        lastResult = r;
+        lastImd = null;
+        tableModeIsImd = false;
+        if (!isDisposed()) { redraw(); update(); }
+    }
+
+    /** Sets the "Loaded: …" blinking-banner path (a statically loaded
+     *  spectrum), or clears it with {@code null}.  Repaints. */
+    public void setSourceFilePath(String path) {
+        if (path == null || path.isEmpty()) {
+            clearBanner();
+        } else {
+            setBanner(I18n.t("fft.loaded.prefix", path), null,
+                    ColorRole.BLINK_LIT, ColorRole.BLINK_DIM, 0L);
+        }
+        if (!isDisposed()) redraw();
+    }
+
+    /** Stores the current status banner's parameters; onPaint renders
+     *  whatever is set (see {@link #drawBlinkBanner}) with no branching.
+     *  @param untilNanos {@code 0} = persistent, else a {@code nanoTime}
+     *         expiry after which the banner stops blinking. */
+    private void setBanner(String text, String tooltip,
+                           ColorRole lit, ColorRole dim, long untilNanos) {
+        bannerText       = text;
+        bannerTooltip    = tooltip;
+        bannerLit        = lit;
+        bannerDim        = dim;
+        bannerUntilNanos = untilNanos;
+    }
+
+    /** Clears the banner so nothing is drawn and no tooltip fires. */
+    private void clearBanner() {
+        bannerText = null;
+        bannerTooltip = null;
+        bannerBounds.width = bannerBounds.height = 0;
+    }
+
+    /** Drops a persistent (loaded-path) banner or one whose timer has run
+     *  out; keeps a warning that is still within its sticky window. */
+    private void clearBannerIfStale() {
+        if (bannerUntilNanos == 0L || System.nanoTime() >= bannerUntilNanos) clearBanner();
+    }
+
+    /** Wall-clock-phase blink toggle (flips every 500 ms), matching the
+     *  frequency-response view's loaded-file banner. */
+    private boolean blinkLit() {
+        return ((System.currentTimeMillis() / 500L) % 2L) == 0L;
+    }
+
+    /** Schedules a redraw 500 ms out so the blink keeps toggling even when
+     *  no other event repaints; coalesced via {@link #blinkRedrawScheduled}. */
+    private void scheduleBlinkRedraw() {
+        if (blinkRedrawScheduled || isDisposed()) return;
+        blinkRedrawScheduled = true;
+        getDisplay().timerExec(500, () -> {
+            blinkRedrawScheduled = false;
+            if (!isDisposed()) redraw();
+        });
+    }
+
+    /** Renders the current status banner — a right-aligned blinking line just
+     *  below the top control row (fill-% / averages / unit combo).  Fully
+     *  driven by the stored {@code banner*} fields, so onPaint calls it once
+     *  with no branching; an empty text or an elapsed timer draws nothing.
+     *  The text is left-ellipsised to fit the plot width. */
+    private void drawBlinkBanner(GC gc, Rectangle plot) {
+        boolean show = bannerText != null && !bannerText.isEmpty()
+                && (bannerUntilNanos == 0L || System.nanoTime() < bannerUntilNanos);
+        if (!show) {
+            bannerBounds.width = bannerBounds.height = 0;
+            return;
+        }
+        gc.setFont(monoFont);
+        String shown = fitRight(gc, bannerText, plot.width - 12);
+        Point ext = gc.textExtent(shown);
+        int x = plot.x + plot.width - ext.x - 6;
+        int y = plot.y + 2 * ext.y;
+        gc.setForeground(blinkLit() ? color(bannerLit) : color(bannerDim));
+        drawOutlinedText(gc, shown, x, y);
+        setBounds(bannerBounds, x, y, ext.x, ext.y);
+        scheduleBlinkRedraw();
+    }
+
+    /** Trims {@code text} from the left (prefixing "…") until it fits
+     *  {@code maxWidth} px in the current GC font; returned unchanged when it
+     *  already fits. */
+    private String fitRight(GC gc, String text, int maxWidth) {
+        if (gc.textExtent(text).x <= maxWidth) return text;
+        String s = text;
+        while (s.length() > 1 && gc.textExtent("…" + s).x > maxWidth) {
+            s = s.substring(1);
+        }
+        return "…" + s;
     }
 
     /** Publishes {@link Events#FFT_RANGE_CHANGED} so the owning pane's
@@ -871,6 +1020,10 @@ public final class FftView extends AbstractFreqDomainView {
                 drawDistortionTable(gc, lastResult, unit);
             }
         }
+        // Single blinking top-right status banner — the loaded-spectrum path
+        // or the sticky frame-rejection warning.  All parameters live in the
+        // banner* fields, so there is no per-paint branching here.
+        drawBlinkBanner(gc, plot);
         // Crosshair: only when inside the plot area AND not over any
         // header button (so the crosshair / floating readout don't
         // visually fight with the buttons that occupy the top-left).
@@ -917,7 +1070,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  detected harmonic — same {@code FUND_ANNOTATION_COLOR} the CLI
      *  FFT chart uses.  Helps the user see at a glance which peaks the
      *  analyser picked up. */
-    private void drawHarmonicDots(GC gc, Rectangle plot, FftAnalyzer.Result r,
+    private void drawHarmonicDots(GC gc, Rectangle plot, FftResult r,
                                   FftMagnitudeUnit unit,
                                   double freqMin, double freqMax,
                                   double magTop, double magBot,
@@ -1032,7 +1185,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  visible mag range are skipped (the {@link #plotDotAt} helper
      *  handles the bounds check). */
     private void drawImdDots(GC gc, Rectangle plot, ImdResult imd,
-                             FftAnalyzer.Result r,
+                             FftResult r,
                              FftMagnitudeUnit unit,
                              double freqMin, double freqMax,
                              double magTop, double magBot,
@@ -1200,11 +1353,11 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** Mixes every value that affects the cached image into a single
-     *  long.  Identity-hash of {@link FftAnalyzer.Result} captures
+     *  long.  Identity-hash of {@link FftResult} captures
      *  "new analysis result" without copying the arrays; the rest of
      *  the fields are simple primitives.  Two paints with the same
      *  fingerprint always produce the same cached image. */
-    private long computeTraceFingerprint(FftAnalyzer.Result r, Rectangle area,
+    private long computeTraceFingerprint(FftResult r, Rectangle area,
                                          FftMagnitudeUnit unit,
                                          double freqMin, double freqMax,
                                          double magTop, double magBot,
@@ -1275,7 +1428,7 @@ public final class FftView extends AbstractFreqDomainView {
      * with no connection.  Now the trace is one continuous polyline at
      * any zoom level, and stays O(plotWidth) for huge FFTs.
      */
-    private void drawSpectrum(GC gc, Rectangle plot, FftAnalyzer.Result r,
+    private void drawSpectrum(GC gc, Rectangle plot, FftResult r,
                               FftMagnitudeUnit unit,
                               double freqMin, double freqMax,
                               double magTop, double magBot,
@@ -1350,7 +1503,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  <p>Combined magnitude in dB is the per-frequency sum across all
      *  loaded cals (cascade); the curve plots {@code -sumDb + offset}
      *  where {@code offset = h2DbFs + sumDb(h2Freq)}. */
-    private void drawCalOverlay(GC gc, Rectangle plot, FftAnalyzer.Result r,
+    private void drawCalOverlay(GC gc, Rectangle plot, FftResult r,
                                 FftMagnitudeUnit unit,
                                 double freqMin, double freqMax,
                                 double magTop, double magBot,
@@ -1533,7 +1686,7 @@ public final class FftView extends AbstractFreqDomainView {
      * is 10⁻⁸ %.  Column positions are derived from monospaced font
      * extents so the H₂..H₉ key column never overlaps the value column.
      */
-    private int drawDistortionTable(GC gc, FftAnalyzer.Result r, FftMagnitudeUnit unit) {
+    private int drawDistortionTable(GC gc, FftResult r, FftMagnitudeUnit unit) {
         return drawDistortionTable(gc, r, unit, MARGIN_LEFT + 6, TABLE_TOP_Y, true);
     }
 
@@ -1657,7 +1810,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  origin so the extracted tool window can place the table at (0,0)
      *  instead of leaving room for the header buttons that are only
      *  drawn in the main FFT view. */
-    private int drawDistortionTable(GC gc, FftAnalyzer.Result r, FftMagnitudeUnit unit,
+    private int drawDistortionTable(GC gc, FftResult r, FftMagnitudeUnit unit,
                                      int xLeft, int yTop, boolean includeClockRow) {
         gc.setFont(monoFont);
         gc.setForeground(color(ColorRole.TEXT));
@@ -1773,14 +1926,14 @@ public final class FftView extends AbstractFreqDomainView {
         // ── Harmonics, 2 per row.  Independent layout: short keys
         // ("H2:" / "H10:") but wide values to fit the ~25-char
         // "%+8.2f dBV  %.8f %%" string.
-        int hKey = 5  * charW;         // "H10:" + ":"
-        int hVal = 26 * charW;         // covers "-109.72 dBV  0.00031899 %"
+        int hKey = 4  * charW;         // "H10:" + ":"
+        int hVal = 24 * charW;         // covers "-109.72 dBV 0.00031899 %"
         int hRightColX = xLeft + hKey + hVal + colGap;
         int harmCount = (r.harmonicDbFs == null) ? 0 : r.harmonicDbFs.length;
         double dbvOff = Double.isNaN(r.fundRefDbV) ? 0 : (r.fundRefDbV - r.fundamentalDbFs);
         for (int i = 0; i < harmCount; i += 2) {
             String l = String.format("H%d:", i + 2);
-            String lv = String.format("%8.2f dBV  %.8f %%",
+            String lv = String.format("%8.2f dBV %.8f %%",
                     r.harmonicDbFs[i] + dbvOff, r.harmonicPct[i]);
             String rkey = "", rval = "";
             if (i + 1 < harmCount) {
@@ -1820,7 +1973,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  "full" rather than the misleading {@code "Span: 0 .. 0 Hz"}.
      *  Otherwise fall back to the actual numeric bounds, treating zero
      *  on one side as "0" or "Nyquist" as appropriate. */
-    private String formatSpan(FftAnalyzer.Result r) {
+    private String formatSpan(FftResult r) {
         boolean hasLo = r.snrFreqMin > 0;
         boolean hasHi = r.snrFreqMax > 0;
         if (!hasLo && !hasHi) return "Span: full";
@@ -1842,12 +1995,12 @@ public final class FftView extends AbstractFreqDomainView {
         return Double.isFinite(v) ? String.format("%7.2f dBV", v) : "—";
     }
 
-    private double noiseDb(FftAnalyzer.Result r) {
+    private double noiseDb(FftResult r) {
         if (r.noisePower <= 0 || !Double.isFinite(r.fundRefDbV)) return Double.NaN;
         return 10 * Math.log10(r.noisePower) + (r.fundRefDbV - r.fundamentalDbFs);
     }
 
-    private double thdNPct(FftAnalyzer.Result r) {
+    private double thdNPct(FftResult r) {
         if (!Double.isFinite(r.thdNDb)) return Double.NaN;
         return Math.pow(10, r.thdNDb / 20.0) * 100;
     }
@@ -1856,7 +2009,7 @@ public final class FftView extends AbstractFreqDomainView {
     // Crosshair + readout
     // =========================================================================
 
-    private void drawCrosshair(GC gc, Rectangle plot, FftAnalyzer.Result r,
+    private void drawCrosshair(GC gc, Rectangle plot, FftResult r,
                                FftMagnitudeUnit unit,
                                double freqMin, double freqMax,
                                double magTop, double magBot,
@@ -1995,7 +2148,7 @@ public final class FftView extends AbstractFreqDomainView {
                 // MEASURE the worst-case value — the mono "M" cell under-counts
                 // digit width and the trailing % would otherwise clip.
                 int charW = gc.textExtent("M").x;
-                String worstVal = String.format("%8.2f dBV  %.8f %%", -9999.99, 99.99999999);
+                String worstVal = String.format("%8.2f dBV %.8f %%", -9999.99, 99.99999999);
                 int contentW = EXT_LEFT_PAD + 38 * charW + gc.textExtent(worstVal).x + 34;
                 boolean clk = isGeneratorActive()
                         && Preferences.instance().isFftFundFromGenerator();
@@ -2313,7 +2466,16 @@ public final class FftView extends AbstractFreqDomainView {
             cursorId = SWT.CURSOR_HAND; tip = I18n.t("fft.reset.tooltip");
         } else if (externalButtonBounds.contains(ev.x, ev.y)) {
             cursorId = SWT.CURSOR_HAND; tip = I18n.t("fft.external.tooltip");
+        } else if (bannerBounds.width > 0 && bannerBounds.contains(ev.x, ev.y)) {
+            // Over the blinking banner: plain arrow, its tooltip (the full
+            // rejection detail, if any), and no crosshair over it.
+            cursorId = SWT.CURSOR_ARROW;
+            tip = bannerTooltip;
+            crossX = crossY = -1;
         }
+        // The top-row indicator widgets (fill-%, averages, unit combo) get
+        // their own arrow cursor at creation — they're real child controls, so
+        // the Canvas never receives move events while the pointer is over them.
         setCursor(getDisplay().getSystemCursor(cursorId));
         // Only push tooltip changes when the value actually changes —
         // setToolTipText forces a re-show which fires more mouse-move

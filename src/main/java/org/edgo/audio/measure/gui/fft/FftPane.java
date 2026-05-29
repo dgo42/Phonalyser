@@ -43,16 +43,19 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
+import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
+import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.FftMagnitudeUnit;
 import org.edgo.audio.measure.enums.FftOverlap;
+import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.MainTab;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
-import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
@@ -145,6 +148,7 @@ public final class FftPane {
     private NumericStepField   averagesField;
     private Button             stopAfterNEnable;
     private NumericStepField   stopAfterNField;
+    private Combo              mainsSuppressionCombo;
     private Button             fundFromGenCheck;
     private Button             logFreqCheck;
     private Button             coherentCheck;
@@ -960,6 +964,25 @@ public final class FftPane {
             view.resetStatistics();
         });
 
+        // Mains-suppression selector shares the stop-after row.  Pre-filters
+        // the captured signal (50/60 Hz + harmonics) before averaging; tracks
+        // the mains frequency live while recording.
+        new Label(stopRow, SWT.NONE).setText(I18n.t("fft.settings.mainsSuppression"));
+        mainsSuppressionCombo = new Combo(stopRow, SWT.READ_ONLY);
+        mainsSuppressionCombo.setItems(MainsSuppression.LABELS);
+        mainsSuppressionCombo.setToolTipText(I18n.t("fft.settings.mainsSuppression.tooltip"));
+        MainsSuppression currMains = MainsSuppression.fromNameOr(
+                prefs.getFftMainsSuppression(), MainsSuppression.NONE);
+        mainsSuppressionCombo.select(currMains.ordinal());
+        mainsSuppressionCombo.addListener(SWT.Selection, e -> {
+            int i = mainsSuppressionCombo.getSelectionIndex();
+            if (i >= 0 && i < MainsSuppression.values().length) {
+                prefs.setFftMainsSuppression(MainsSuppression.values()[i].name());
+                prefs.save();
+                view.resetStatistics();
+            }
+        });
+
         // Four boolean knobs packed onto two rows so the tab content
         // fits inside the typical FFT-pane height (the previous 3-rows-
         // of-spans-4 layout pushed the third checkbox below the visible
@@ -1412,6 +1435,11 @@ public final class FftPane {
                     prefs.getFftWindow(), WindowType.HANN);
             windowCombo.select(wt.ordinal());
         }
+        if (mainsSuppressionCombo != null && !mainsSuppressionCombo.isDisposed()) {
+            MainsSuppression ms = MainsSuppression.fromNameOr(
+                    prefs.getFftMainsSuppression(), MainsSuppression.NONE);
+            mainsSuppressionCombo.select(ms.ordinal());
+        }
         if (overlapCombo != null && !overlapCombo.isDisposed()) {
             FftOverlap ov = FftPaneFormat.enumOr(FftOverlap.class, prefs.getFftOverlap(), FftOverlap.PCT_0);
             overlapCombo.select(ov.ordinal());
@@ -1494,7 +1522,7 @@ public final class FftPane {
         if (floppyIcon != null) save.setImage(floppyIcon);
         save.setToolTipText(I18n.t("fft.save.write.tooltip"));
         save.addListener(SWT.Selection, e -> {
-            FftAnalyzer.Result r = view.getLastResult();
+            FftResult r = view.getLastResult();
             if (r == null) {
                 showError(I18n.t("fft.save.error.title"), I18n.t("fft.save.noData"));
                 return;
@@ -1562,15 +1590,93 @@ public final class FftPane {
                 prefs.setFftLoadFolder(Paths.get(chosen).getParent() == null ? null
                         : Paths.get(chosen).getParent().toString());
                 prefs.save();
-                // Load CSV path persisted; rendering from CSV is a follow-up
-                // task — for now we just remember the file location.
-                showError(I18n.t("fft.load.notImplemented.title"),
-                        I18n.t("fft.load.notImplemented.message"));
+                loadSpectrumCsv(chosen);
             }
         });
     }
 
-    private void writeSpectrumCsv(Path file, FftAnalyzer.Result r) throws IOException {
+    /** Loads a spectrum CSV (as written by {@link #writeSpectrumCsv} —
+     *  {@code frequency_hz;magnitude_dBV;phase_deg}), reconstructs an
+     *  {@link FftResult}, recomputes its fundamental / harmonic /
+     *  THD / SNR metrics from the loaded bins, stops live recording, and
+     *  shows it as a static trace. */
+    private void loadSpectrumCsv(String path) {
+        List<double[]> rows = new ArrayList<>();
+        try {
+            for (String line : Files.readAllLines(Paths.get(path), StandardCharsets.UTF_8)) {
+                String s = line.trim();
+                if (s.isEmpty()) continue;
+                char c0 = s.charAt(0);
+                if (c0 != '-' && c0 != '+' && c0 != '.' && !Character.isDigit(c0)) continue; // header / comment
+                String[] p = s.split("[;,]");
+                if (p.length < 2) continue;
+                double f   = Double.parseDouble(p[0].trim());
+                double dbv = Double.parseDouble(p[1].trim());
+                double ph  = (p.length >= 3) ? Double.parseDouble(p[2].trim()) : 0.0;
+                rows.add(new double[]{ f, dbv, ph });
+            }
+        } catch (IOException | NumberFormatException ex) {
+            showError(I18n.t("fft.load.notImplemented.title"),
+                    I18n.t("fft.load.error.read", ex.getMessage()));
+            return;
+        }
+        int n = rows.size();
+        double freqRes = (n >= 2) ? (rows.get(n - 1)[0] - rows.get(0)[0]) / (n - 1) : 0.0;
+        if (n < 4 || !(freqRes > 0)) {
+            showError(I18n.t("fft.load.notImplemented.title"), I18n.t("fft.load.error.format"));
+            return;
+        }
+
+        FftAnalyzer analyzer = new FftAnalyzer();
+        FftResult r = new FftResult();
+        int harmCount = Math.max(9, Preferences.instance().getFftCalcMaxHarmonic());
+        r.ensureArrays(n, harmCount);
+        r.amplitudeDbV     = new double[n];
+        r.freqResolution   = freqRes;
+        r.fftSize          = 2 * (n - 1);
+        r.sampleRate       = (int) Math.round(freqRes * r.fftSize);
+        r.harmonicCount    = harmCount;
+        r.fundamentalTrueDbV = Double.NaN;
+        r.snrFreqMin = 0; r.snrFreqMax = 0;
+        for (int k = 0; k < n; k++) {
+            double dbv = rows.get(k)[1], ph = rows.get(k)[2];
+            r.amplitudeDbFs[k] = dbv;
+            r.amplitudeDbV[k]  = dbv;
+            r.phaseDeg[k]      = ph;
+            double lin = Math.pow(10.0, dbv / 20.0);
+            double rad = Math.toRadians(ph);
+            r.re[k] = lin * Math.cos(rad);
+            r.im[k] = lin * Math.sin(rad);
+        }
+        // Fundamental = strongest bin above ~10 Hz, refined to sub-bin.
+        int halfSize = n - 1;
+        int minBin = Math.min(halfSize, Math.max(1, (int) Math.ceil(10.0 / freqRes)));
+        int fb = minBin;
+        for (int k = minBin; k <= halfSize; k++) if (r.amplitudeDbFs[k] > r.amplitudeDbFs[fb]) fb = k;
+        r.fundamentalBin       = fb;
+        r.fundamentalHz        = fb * freqRes;
+        r.fundamentalHzRefined = MathUtil.parabolicBinInterp(r.re, r.im, fb, r.fftSize) * freqRes;
+        // Theoretical harmonic positions for recomputeStats to measure at.
+        for (int h = 0; h < harmCount; h++) {
+            double hz = (h + 2) * r.fundamentalHzRefined;
+            int hb = (int) Math.round(hz / freqRes);
+            r.harmonicHz[h]   = hz;
+            r.harmonicBins[h] = (hb >= 1 && hb <= halfSize) ? hb : -1;
+        }
+        analyzer.recomputeStats(r);
+        // The CSV already stores dBV, so anchor the dBV scale with a zero
+        // offset (fundRefDbV − fundamentalDbFs = 0 ⇒ shown dBV == stored).
+        r.fundRefDbV = r.fundamentalDbFs;
+
+        // Stop live capture so the loaded spectrum isn't overwritten.
+        if (recordButton != null && !recordButton.isDisposed() && recordButton.getSelection()) {
+            recordOff();
+        }
+        view.displayLoadedResult(r);
+        view.setSourceFilePath(path);
+    }
+
+    private void writeSpectrumCsv(Path file, FftResult r) throws IOException {
         try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8))) {
             pw.println("frequency_hz;magnitude_dBV;phase_deg");
             double dbvOffset = Double.isNaN(r.fundRefDbV) ? 0.0 : (r.fundRefDbV - r.fundamentalDbFs);
@@ -1595,7 +1701,7 @@ public final class FftPane {
      *  most recent analysis.  Falls back to a conservative estimate when
      *  there's no result yet. */
     private double currentBinSize() {
-        FftAnalyzer.Result r = view.getLastResult();
+        FftResult r = view.getLastResult();
         if (r != null && r.fftSize > 0) return (double) r.sampleRate / r.fftSize;
         // No result yet — assume a typical 384 kHz capture and the
         // configured FFT length.  Worst case the user sees the bin-size
@@ -1607,7 +1713,7 @@ public final class FftPane {
 
     /** Nyquist upper bound on the visible freq range. */
     private double currentNyquist() {
-        FftAnalyzer.Result r = view.getLastResult();
+        FftResult r = view.getLastResult();
         if (r != null) return r.sampleRate / 2.0;
         return 192_000;
     }

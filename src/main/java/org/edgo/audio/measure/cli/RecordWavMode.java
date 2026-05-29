@@ -1,26 +1,32 @@
 package org.edgo.audio.measure.cli;
 
-import org.edgo.audio.measure.cli.util.*;
-
-import lombok.experimental.UtilityClass;
-import lombok.extern.log4j.Log4j2;
-import org.edgo.audio.measure.adc.WeightedBuffer;
-import org.edgo.audio.measure.chart.WaveformExporter;
-import org.edgo.audio.measure.common.StereoSampleFloat;
-import org.edgo.audio.measure.enums.FftOverlap;
-import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.FftAnalyzer;
-import org.edgo.audio.measure.sound.AudioBackend;
-import org.edgo.audio.measure.sound.AudioCapture;
-import org.edgo.audio.measure.sound.DeviceRef;
-import org.edgo.audio.measure.wav.WavWriter;
-
 import java.io.File;
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import org.edgo.audio.measure.adc.WeightedBuffer;
+import org.edgo.audio.measure.chart.WaveformExporter;
+import org.edgo.audio.measure.cli.util.AdcCorrection;
+import org.edgo.audio.measure.cli.util.AdcCorrectionHelper;
+import org.edgo.audio.measure.cli.util.ArgParser;
+import org.edgo.audio.measure.cli.util.DeviceSelector;
+import org.edgo.audio.measure.cli.util.PcmUtils;
+import org.edgo.audio.measure.cli.util.SampleRates;
+import org.edgo.audio.measure.common.StereoSampleFloat;
+import org.edgo.audio.measure.enums.FftOverlap;
+import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.AudioCapture;
+import org.edgo.audio.measure.sound.DeviceRef;
+import org.edgo.audio.measure.wav.WavWriter;
+
+import lombok.experimental.UtilityClass;
+import lombok.extern.log4j.Log4j2;
 
 /**
  * {@code --record-wav} / {@code --record-mapped-wav} — raw ADC capture to WAV.
@@ -221,7 +227,7 @@ public class RecordWavMode {
             log.info("ADC correction: running FFT (size={}, harmonics={}) to extract fundamental phase/level",
                     fftSize, harmonics);
             FftAnalyzer fftAnalyzer = new FftAnalyzer();
-            FftAnalyzer.Result r = fftAnalyzer.analyze(samples, sampleRate, fftSize, harmonics,
+            FftResult r = fftAnalyzer.analyze(samples, sampleRate, fftSize, harmonics,
                     WindowType.HANN, FftOverlap.PCT_0,
                     0.0, 0.0, true, Double.NaN);
             AdcCorrectionHelper.logCorrectedHarmonics(r, adc);

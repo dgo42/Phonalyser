@@ -33,6 +33,8 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.LpfMode;
+import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.gui.MainWindow;
@@ -216,6 +218,8 @@ public final class OscilloscopePane {
     private Button leftToggle, rightToggle;
     private Button leftAc, rightAc;
     private Button leftSinc, rightSinc;
+    private Combo  leftMains, rightMains;
+    private Combo  leftLpf, rightLpf;
     private Button chL, chR;
     private Button edgeRise, edgeFall;
     private Button modeAuto, modeNormal, modeSingle;
@@ -732,13 +736,23 @@ public final class OscilloscopePane {
         Image output = new Image(d, targetW, targetH);
         try {
             if (view != null && !view.isDisposed()) {
+                // Carbon-copy the exact frame on screen (works while stopped /
+                // frozen).  The frozen frame drives the trace; the buffer is
+                // still attached so "has signal" is true and the measurement
+                // table renders (its values come from copyMeasurementsFrom).
+                OscilloscopeView.RenderedFrame snap = view.getRenderedFrameSnapshot();
+                if (snap != null) shotPane.getView().setFrozenFrame(snap);
                 SignalBuffer liveBuffer = view.getBuffer();
                 if (liveBuffer != null) {
                     shotPane.getView().setBuffer(liveBuffer);
                     shotPane.getCondensed().setBuffer(liveBuffer);
                 }
+                // copyMeasurementsFrom AFTER setBuffer (which clears latest).
                 shotPane.getView().copyMeasurementsFrom(view);
             }
+            // Show only the tab headers in the screenshot (collapse the
+            // settings body), matching the FFT pane's screenshot behaviour.
+            shotPane.setToolbarTabsCollapsed(true);
             shotPane.setRecordingState(controller != null && controller.isRunning());
 
             offscreen.setSize(targetW, targetH);
@@ -1288,6 +1302,13 @@ public final class OscilloscopePane {
      *  the toolbar can shrink all the way to the tab-strip height (a tall
      *  Record LED would otherwise keep the row at ~60 px regardless of
      *  what the CTabFolder reports). */
+    /** Forces the toolbar tab body collapsed (only headers visible) or
+     *  expanded.  Used by the screenshot renderer to show just the tab
+     *  headers; no-op when already in the requested state. */
+    public void setToolbarTabsCollapsed(boolean wantCollapsed) {
+        if (toolbarTabsCollapsed != wantCollapsed) toggleToolbarTabsCollapse();
+    }
+
     private void toggleToolbarTabsCollapse() {
         if (toolbarTabs == null || toolbarTabs.isDisposed()) return;
         toolbarTabsCollapsed = !toolbarTabsCollapsed;
@@ -1388,6 +1409,37 @@ public final class OscilloscopePane {
             refreshTabHeader(TAB_LEFT);
         });
         leftSinc.addDisposeListener(e -> sincImg.dispose());
+
+        new Label(g, SWT.NONE).setText(I18n.t("scope.mains.label"));
+        leftMains = new Combo(g, SWT.READ_ONLY);
+        leftMains.setItems(MainsSuppression.LABELS);
+        leftMains.setToolTipText(I18n.t("scope.mains.tooltip"));
+        leftMains.select(MainsSuppression.fromNameOr(
+                prefs.getOscLeftMainsSuppression(), MainsSuppression.NONE).ordinal());
+        leftMains.addListener(SWT.Selection, e -> {
+            int i = leftMains.getSelectionIndex();
+            if (i >= 0 && i < MainsSuppression.values().length) {
+                prefs.setOscLeftMainsSuppression(MainsSuppression.values()[i].name());
+                prefs.save();
+                requestRedraw();
+                refreshTabHeader(TAB_LEFT);
+            }
+        });
+
+        new Label(g, SWT.NONE).setText(I18n.t("scope.lpf.label"));
+        leftLpf = new Combo(g, SWT.READ_ONLY);
+        leftLpf.setItems(LpfMode.LABELS);
+        leftLpf.setToolTipText(I18n.t("scope.lpf.tooltip"));
+        leftLpf.select(LpfMode.fromNameOr(prefs.getOscLeftLpf(), LpfMode.NONE).ordinal());
+        leftLpf.addListener(SWT.Selection, e -> {
+            int i = leftLpf.getSelectionIndex();
+            if (i >= 0 && i < LpfMode.values().length) {
+                prefs.setOscLeftLpf(LpfMode.values()[i].name());
+                prefs.save();
+                requestRedraw();
+                refreshTabHeader(TAB_LEFT);
+            }
+        });
     }
 
     private void buildRightGroup(CTabFolder folder) {
@@ -1443,6 +1495,37 @@ public final class OscilloscopePane {
             refreshTabHeader(TAB_RIGHT);
         });
         rightSinc.addDisposeListener(e -> sincImg.dispose());
+
+        new Label(g, SWT.NONE).setText(I18n.t("scope.mains.label"));
+        rightMains = new Combo(g, SWT.READ_ONLY);
+        rightMains.setItems(MainsSuppression.LABELS);
+        rightMains.setToolTipText(I18n.t("scope.mains.tooltip"));
+        rightMains.select(MainsSuppression.fromNameOr(
+                prefs.getOscRightMainsSuppression(), MainsSuppression.NONE).ordinal());
+        rightMains.addListener(SWT.Selection, e -> {
+            int i = rightMains.getSelectionIndex();
+            if (i >= 0 && i < MainsSuppression.values().length) {
+                prefs.setOscRightMainsSuppression(MainsSuppression.values()[i].name());
+                prefs.save();
+                requestRedraw();
+                refreshTabHeader(TAB_RIGHT);
+            }
+        });
+
+        new Label(g, SWT.NONE).setText(I18n.t("scope.lpf.label"));
+        rightLpf = new Combo(g, SWT.READ_ONLY);
+        rightLpf.setItems(LpfMode.LABELS);
+        rightLpf.setToolTipText(I18n.t("scope.lpf.tooltip"));
+        rightLpf.select(LpfMode.fromNameOr(prefs.getOscRightLpf(), LpfMode.NONE).ordinal());
+        rightLpf.addListener(SWT.Selection, e -> {
+            int i = rightLpf.getSelectionIndex();
+            if (i >= 0 && i < LpfMode.values().length) {
+                prefs.setOscRightLpf(LpfMode.values()[i].name());
+                prefs.save();
+                requestRedraw();
+                refreshTabHeader(TAB_RIGHT);
+            }
+        });
     }
 
     private void buildHorizontalGroup(CTabFolder folder) {
@@ -1728,6 +1811,10 @@ public final class OscilloscopePane {
             && a.isRightAcMode()               == b.isRightAcMode()
             && a.isLeftSincInterpEnabled()     == b.isLeftSincInterpEnabled()
             && a.isRightSincInterpEnabled()    == b.isRightSincInterpEnabled()
+            && Objects.equals(a.getLeftMainsSuppression(),  b.getLeftMainsSuppression())
+            && Objects.equals(a.getRightMainsSuppression(), b.getRightMainsSuppression())
+            && Objects.equals(a.getLeftLpf(),  b.getLeftLpf())
+            && Objects.equals(a.getRightLpf(), b.getRightLpf())
             && Double.compare(a.getLeftVoltsPerDiv(),     b.getLeftVoltsPerDiv())     == 0
             && Double.compare(a.getRightVoltsPerDiv(),    b.getRightVoltsPerDiv())    == 0
             && Double.compare(a.getLeftOffsetFrac(),      b.getLeftOffsetFrac())      == 0
@@ -1766,6 +1853,10 @@ public final class OscilloscopePane {
         p.setRightAcMode(prefs.isOscRightAcMode());
         p.setLeftSincInterpEnabled(prefs.isOscLeftSincInterpEnabled());
         p.setRightSincInterpEnabled(prefs.isOscRightSincInterpEnabled());
+        p.setLeftMainsSuppression(prefs.getOscLeftMainsSuppression());
+        p.setRightMainsSuppression(prefs.getOscRightMainsSuppression());
+        p.setLeftLpf(prefs.getOscLeftLpf());
+        p.setRightLpf(prefs.getOscRightLpf());
         p.setLeftVoltsPerDiv(prefs.getOscLeftVoltsPerDiv());
         p.setRightVoltsPerDiv(prefs.getOscRightVoltsPerDiv());
         p.setLeftOffsetFrac(prefs.getOscLeftOffsetFrac());
@@ -1865,12 +1956,24 @@ public final class OscilloscopePane {
         prefs.setOscRightAcMode (p.isRightAcMode());
         prefs.setOscLeftSincInterpEnabled (p.isLeftSincInterpEnabled());
         prefs.setOscRightSincInterpEnabled(p.isRightSincInterpEnabled());
+        prefs.setOscLeftMainsSuppression (p.getLeftMainsSuppression());
+        prefs.setOscRightMainsSuppression(p.getRightMainsSuppression());
+        prefs.setOscLeftLpf (p.getLeftLpf());
+        prefs.setOscRightLpf(p.getRightLpf());
         if (leftToggle  != null && !leftToggle .isDisposed()) leftToggle .setSelection(p.isLeftChannelEnabled());
         if (rightToggle != null && !rightToggle.isDisposed()) rightToggle.setSelection(p.isRightChannelEnabled());
         if (leftAc      != null && !leftAc     .isDisposed()) leftAc     .setSelection(p.isLeftAcMode());
         if (rightAc     != null && !rightAc    .isDisposed()) rightAc    .setSelection(p.isRightAcMode());
         if (leftSinc    != null && !leftSinc   .isDisposed()) leftSinc   .setSelection(p.isLeftSincInterpEnabled());
         if (rightSinc   != null && !rightSinc  .isDisposed()) rightSinc  .setSelection(p.isRightSincInterpEnabled());
+        if (leftMains   != null && !leftMains  .isDisposed()) leftMains  .select(
+                MainsSuppression.fromNameOr(p.getLeftMainsSuppression(),  MainsSuppression.NONE).ordinal());
+        if (rightMains  != null && !rightMains .isDisposed()) rightMains .select(
+                MainsSuppression.fromNameOr(p.getRightMainsSuppression(), MainsSuppression.NONE).ordinal());
+        if (leftLpf     != null && !leftLpf    .isDisposed()) leftLpf    .select(
+                LpfMode.fromNameOr(p.getLeftLpf(),  LpfMode.NONE).ordinal());
+        if (rightLpf    != null && !rightLpf   .isDisposed()) rightLpf   .select(
+                LpfMode.fromNameOr(p.getRightLpf(), LpfMode.NONE).ordinal());
         // Trigger channel / edge / mode radio groups.
         prefs.setOscTriggerChannel(p.getTriggerChannel());
         prefs.setOscTriggerEdge   (p.getTriggerEdge());

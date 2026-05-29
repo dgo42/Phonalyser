@@ -2,19 +2,22 @@ package org.edgo.audio.measure.gui.fft;
 
 import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import org.eclipse.swt.widgets.Display;
-
 import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
+import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftAnalyzer.FrameFftCache;
+import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -23,13 +26,11 @@ import org.edgo.audio.measure.gui.sound.SignalBuffer;
 
 import lombok.extern.log4j.Log4j2;
 
-import java.util.List;
-
 /**
  * Background analyser worker that owns the FFT compute thread and its
  * {@link FftAnalyzer} instance.  Holds none of the view's state — the
  * worker thread is fully decoupled from {@link FftView} via the bus:
- * each completed analysis is {@linkplain FftAnalyzer.Result#deepCopy
+ * each completed analysis is {@linkplain FftResult#deepCopy
  * deep-copied} and published on
  * {@link Events#FFT_RESULT_AVAILABLE}; subscribers (typically
  * {@link FftView}) keep the snapshot and paint from it without
@@ -71,6 +72,15 @@ public final class FftAnalyzerWorker {
      *  Owned by the worker thread only. */
     private float[] reusableLeftBuf  = new float[0];
     private float[] reusableRightBuf = new float[0];
+
+    /** Mains-hum comb, lazily built for the current sample rate.  Used
+     *  only when {@code fftMainsSuppression == IIR_COMB}; re-tracks the
+     *  mains frequency each tick and filters the captured window in place
+     *  before the spectrum is computed. */
+    private MainsCombFilter mainsComb;
+    private int             mainsCombSampleRate;
+    /** Notch −3 dB width (Hz) for the mains comb. */
+    private static final double MAINS_NOTCH_BW_HZ = 2.0;
     private Thread worker;
 
     @SuppressWarnings("unused")
@@ -277,6 +287,16 @@ public final class FftAnalyzerWorker {
      *  transitions between finite-N and forever modes. */
     private boolean lastWasForever;
 
+    /** Returns the mains comb, (re)building it when the sample rate
+     *  changes.  Worker-thread only. */
+    private MainsCombFilter mainsComb(int sampleRate) {
+        if (mainsComb == null || mainsCombSampleRate != sampleRate) {
+            mainsComb = new MainsCombFilter(sampleRate, MAINS_NOTCH_BW_HZ);
+            mainsCombSampleRate = sampleRate;
+        }
+        return mainsComb;
+    }
+
     /** Drops the cross-tick accumulator.  Safe to call from any thread —
      *  arrays are reassigned, not cleared in place. */
     private void resetAccumulator() {
@@ -294,7 +314,7 @@ public final class FftAnalyzerWorker {
      *  add coherently across ticks).  For incoherent mode, just sums
      *  power per bin.  Resets the accumulator transparently when fftSize
      *  or coherent flag changes between ticks. */
-    private void accumulateIntoForeverBuffer(FftAnalyzer.Result r,
+    private void accumulateIntoForeverBuffer(FftResult r,
                                              long samplesAbsStart,
                                              boolean coherent) {
         int fftSize  = r.fftSize;
@@ -371,7 +391,7 @@ public final class FftAnalyzerWorker {
      *  which leaves broadband noise to average down.  This is the honest
      *  "measure what was sampled" path for unknown / external multi-tone
      *  signals: the tones are found from the spectrum, not assumed. */
-    private void accumulateMultiTone(FftAnalyzer.Result r, int N, int weight, long delta) {
+    private void accumulateMultiTone(FftResult r, int N, int weight, long delta) {
         int fftSize = r.fftSize;
         double rampSlope = -2.0 * Math.PI * delta / (double) fftSize;
         double stepRe = Math.cos(rampSlope);
@@ -413,7 +433,7 @@ public final class FftAnalyzerWorker {
      *  from the spectrum (not commanded frequencies) is deliberate: the
      *  generator may be external, so the FFT is the only thing that knows
      *  what was actually received. */
-    private double[] detectStrongTones(FftAnalyzer.Result r) {
+    private double[] detectStrongTones(FftResult r) {
         double[] db = r.amplitudeDbFs;
         if (db == null) return new double[0];
         int halfSize = r.fftSize / 2;
@@ -493,7 +513,7 @@ public final class FftAnalyzerWorker {
      *  should run {@link FftAnalyzer#recomputeStats} so the fundamental,
      *  harmonic table, THD/SNR are re-derived from the cumulative spectrum
      *  (the per-tick stats were just one tick's contribution). */
-    private void overlayAccumulatorOnto(FftAnalyzer.Result r) {
+    private void overlayAccumulatorOnto(FftResult r) {
         if (!accumHasData || accumFrames <= 0) return;
         int halfSize = r.fftSize / 2;
         int N        = halfSize + 1;
@@ -778,10 +798,19 @@ public final class FftAnalyzerWorker {
         // sampleRate makes previously cached raw FFTs stale.  Drop both
         // the cache AND the pool (pooled arrays would also be the wrong
         // size after an fftLength change).
+        // Mains-suppression also enters the fingerprint: toggling it changes
+        // the samples fed to analyze, so cached frames / the accumulator must
+        // be dropped.  When active, the per-frame cache is bypassed entirely
+        // (see below) because block-resetting the comb each tick makes a
+        // frame's samples depend on its offset within the window, breaking
+        // the cache's "same absStart ⇒ same frame" assumption.
+        boolean mainsSuppress = MainsSuppression.fromNameOr(
+                prefs.getFftMainsSuppression(), MainsSuppression.NONE) == MainsSuppression.IIR_COMB;
         long cfgFingerprint = fftLength;
         cfgFingerprint = 31 * cfgFingerprint + sampleRate;
         cfgFingerprint = 31 * cfgFingerprint + window.ordinal();
         cfgFingerprint = 31 * cfgFingerprint + (wantLeft ? 1 : 0);
+        cfgFingerprint = 31 * cfgFingerprint + (mainsSuppress ? 1 : 0);
         if (cfgFingerprint != frameCacheFingerprint) {
             discardCacheAndPool();
             // Same config change invalidates the cross-tick accumulator
@@ -828,6 +857,21 @@ public final class FftAnalyzerWorker {
                     : prefs.getGenFrequencyHz())
                 : Double.NaN;
 
+        // Mains suppression: track the live mains frequency on a short
+        // prefix (a second is ample for a mHz-accurate estimate), then comb-
+        // filter the whole window in place before it's analysed.  The comb is
+        // reset each tick so the block is filtered deterministically; its
+        // start transient is tapered away by the FFT window.  With the filter
+        // on, the per-frame cache is bypassed (frame samples are no longer
+        // position-independent across overlapping ticks).
+        if (mainsSuppress) {
+            MainsCombFilter comb = mainsComb(sampleRate);
+            comb.track(samples, Math.min(samples.length, sampleRate));
+            comb.reset();
+            comb.process(samples, samples.length);
+        }
+        analyzer.setFrameCache(mainsSuppress ? null : frameFftCacheImpl);
+
         analyzer.setSamplesAbsStart(samplesAbsStart);
         // Dual-tone: hint the upper tone too, so the analyzer produces an
         // honest sub-bin frequency estimate for it from a clean frame — the
@@ -840,7 +884,7 @@ public final class FftAnalyzerWorker {
         // Dual tone breaks the single-sine R-invariant glitch test, so skip
         // it (it would otherwise flag nearly every sample and self-invalidate).
         analyzer.setMultiTone(dualTone);
-        FftAnalyzer.Result r;
+        FftResult r;
         try {
             r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH,
                     window, overlap, distMin, distMax, coherent, fundRefDbV,
@@ -1022,9 +1066,9 @@ public final class FftAnalyzerWorker {
      *  the UI thread.  The copy decouples the worker (which may keep
      *  mutating its working {@code r}) from {@link FftView} (which
      *  paints from the published snapshot for many frames). */
-    private void publishResult(FftAnalyzer.Result newSlot) {
+    private void publishResult(FftResult newSlot) {
         if (display == null || display.isDisposed()) return;
-        FftAnalyzer.Result clone = newSlot/* .deepCopy()*/;
+        FftResult clone = newSlot/* .deepCopy()*/;
         startSendToUi = System.nanoTime();
         display.asyncExec(() -> {
             //log.warn("FFT result achieved asyncExec in {} ms", (double)(System.nanoTime() - startSendToUi) / 1_000_000);

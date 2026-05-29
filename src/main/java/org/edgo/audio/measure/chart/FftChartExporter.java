@@ -16,9 +16,8 @@ import java.util.Locale;
 
 import javax.imageio.ImageIO;
 
-import lombok.extern.log4j.Log4j2;
-
 import org.edgo.audio.measure.fft.FftAnalyzer;
+import org.edgo.audio.measure.fft.FftResult;
 import org.jfree.chart.ChartFactory;
 import org.jfree.chart.JFreeChart;
 import org.jfree.chart.annotations.XYTextAnnotation;
@@ -39,8 +38,10 @@ import org.jfree.chart.ui.TextAnchor;
 import org.jfree.data.xy.XYSeries;
 import org.jfree.data.xy.XYSeriesCollection;
 
+import lombok.extern.log4j.Log4j2;
+
 /**
- * Renders an {@link FftAnalyzer.Result} as a PNG chart -- log-frequency
+ * Renders an {@link FftResult} as a PNG chart -- log-frequency
  * X axis, dBV (or dBFS) Y axis, harmonic peak markers + annotations, a
  * top-right info table with THD / SNR / ENOB / per-harmonic metrics,
  * and a bottom-left corner box with optional caller comment and averaging
@@ -55,29 +56,29 @@ public class FftChartExporter {
 
     private FftChartExporter() {}
 
-    public static String exportChart(FftAnalyzer.Result r, int width, int height,
+    public static String exportChart(FftResult r, int width, int height,
                                      String directory) throws IOException {
         return exportChart(r, width, height, directory, null);
     }
 
-    public static String exportChart(FftAnalyzer.Result r, int width, int height,
+    public static String exportChart(FftResult r, int width, int height,
                                      String directory, String comment) throws IOException {
         return exportChart(r, width, height, directory, comment, false);
     }
 
-    public static String exportChart(FftAnalyzer.Result r, int width, int height,
+    public static String exportChart(FftResult r, int width, int height,
                                      String directory, String comment,
                                      boolean harmonicsSubtracted) throws IOException {
         return exportChart(r, width, height, directory, comment, harmonicsSubtracted, null);
     }
 
-    public static String exportChart(FftAnalyzer.Result r, int width, int height,
+    public static String exportChart(FftResult r, int width, int height,
                                      String directory, String comment,
                                      boolean harmonicsSubtracted, String filePrefix) throws IOException {
         return exportChart(r, width, height, directory, comment, harmonicsSubtracted, filePrefix, null);
     }
 
-    public static String exportChart(FftAnalyzer.Result r, int width, int height,
+    public static String exportChart(FftResult r, int width, int height,
                                      String directory, String comment,
                                      boolean harmonicsSubtracted, String filePrefix,
                                      Double genFreqHz) throws IOException {
@@ -85,7 +86,7 @@ public class FftChartExporter {
                 filePrefix, genFreqHz, null, null, null, null);
     }
 
-    public static String exportChart(FftAnalyzer.Result r, int width, int height,
+    public static String exportChart(FftResult r, int width, int height,
                                      String directory, String comment,
                                      boolean harmonicsSubtracted, String filePrefix,
                                      Double genFreqHz,
@@ -102,7 +103,7 @@ public class FftChartExporter {
      * internally onto whichever primary axis is in use (dBV when
      * r.fundRefDbV is set, otherwise dBFS).
      */
-    public static String exportChart(FftAnalyzer.Result r, int width, int height,
+    public static String exportChart(FftResult r, int width, int height,
                                      String directory, String comment,
                                      boolean harmonicsSubtracted, String filePrefix,
                                      Double genFreqHz,

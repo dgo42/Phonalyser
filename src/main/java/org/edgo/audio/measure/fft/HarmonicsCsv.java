@@ -20,7 +20,7 @@ import lombok.extern.log4j.Log4j2;
  * {@link FftAnalyzer}.  Two related operations:
  *
  * <ul>
- *   <li>{@link #export}      — writes a {@link FftAnalyzer.Result} as
+ *   <li>{@link #export}      — writes a {@link FftResult} as
  *       {@code fft_harmonics_*.csv} (or a caller-named file), one row
  *       per harmonic plus THD/SNR footer rows.</li>
  *   <li>{@link #subtract}    — parses an exported CSV and subtracts the
@@ -43,7 +43,7 @@ public final class HarmonicsCsv {
      *
      * @return absolute path of the saved file
      */
-    public static String export(FftAnalyzer.Result r, String directory,
+    public static String export(FftResult r, String directory,
                                 String filePrefix) throws IOException {
         File outFile = (filePrefix != null && !filePrefix.isEmpty())
                 ? new File(directory, filePrefix + ".csv")
@@ -73,7 +73,7 @@ public final class HarmonicsCsv {
     }
 
     /** Convenience overload — saves under the timestamped default name. */
-    public static String export(FftAnalyzer.Result r, String directory) throws IOException {
+    public static String export(FftResult r, String directory) throws IOException {
         return export(r, directory, null);
     }
 

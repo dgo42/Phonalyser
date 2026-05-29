@@ -81,6 +81,9 @@ public abstract class AbstractMeasurementView extends Canvas {
         /** Red glyph for reset / clear-stats buttons. */                  RESET,
         /** Bright phase of a two-phase blink overlay. */                  BLINK_LIT,
         /** Dim phase of a two-phase blink overlay. */                     BLINK_DIM,
+        /** Lit phase of the warning blink banner — separately configurable
+         *  from the neutral {@link #BLINK_LIT} blink. */                   WARNING_LIT,
+        /** Dim phase of the warning blink banner. */                      WARNING_DIM,
         /** 65 % attenuation of {@link #LEFT_TRACE} — inactive / unselected
          *  states of L-channel UI elements (scope only). */               LEFT_CHANNEL_MID,
         /** 65 % attenuation of {@link #RIGHT_TRACE} — symmetric to
@@ -125,7 +128,9 @@ public abstract class AbstractMeasurementView extends Canvas {
         m.put(ColorRole.BUTTON_FRAME,    0x606060);
         m.put(ColorRole.RESET,           0xDC1414);
         m.put(ColorRole.BLINK_LIT,       0x000000);
-        m.put(ColorRole.BLINK_DIM,       0x505050);
+        m.put(ColorRole.BLINK_DIM,       0xC0C0C0);   // light grey ⇒ a clearly-visible black↔grey pulse on white
+        m.put(ColorRole.WARNING_LIT,     0xF00000);
+        m.put(ColorRole.WARNING_DIM,     0x202020);
         m.put(ColorRole.COMPARE_TRACE,   0x1B5E20);
         m.put(ColorRole.BUTTON_ACTIVE,   0xC0D8F0);
         DEFAULT_RGB = m;
@@ -739,21 +744,32 @@ public abstract class AbstractMeasurementView extends Canvas {
             }
             // Unit captions — overpaint a small background rectangle on
             // top of the topmost tick label so the caption stays legible.
+            // The Y captions sit in the top margin when there's room for
+            // them above the plot, otherwise just inside the plot's top edge
+            // (e.g. a flush MARGIN_TOP == 0 layout) so they never fall off
+            // the top of the canvas.
             int lineH = gc.getFontMetrics().getHeight();
+            int capTy = (plot.y >= lineH) ? plot.y - lineH : plot.y + 2;
             Color prevBg = gc.getBackground();
+            // Overpaint with the shared light-grey overlay-box colour (the same
+            // role the readout/tooltip boxes use) rather than each view's SWT
+            // Control background — that is white in FftView (which calls
+            // setBackground) but the system widget grey in FreqRespView (which
+            // never does), which made the two views' captions look different.
+            gc.setBackground(color(ColorRole.OVERLAY_BG));
             if (yLeft.unit != null && !yLeft.unit.isEmpty()) {
                 int sw = gc.textExtent(yLeft.unit).x;
                 int tx = plot.x - majorEdgeMarkPx - sw - 4;
-                int ty = plot.y - lineH;
-                gc.fillRectangle(tx - 2, ty, sw + 4, lineH);
-                gc.drawText(yLeft.unit, tx, ty, true);
+                // Extend the over-paint to the canvas's left edge so a wide
+                // topmost label is fully hidden behind a narrow caption.
+                gc.fillRectangle(0, capTy - 1, tx + sw + 2, lineH + 2);
+                gc.drawText(yLeft.unit, tx, capTy, true);
             }
             if (yRight != null && yRight.unit != null && !yRight.unit.isEmpty()) {
                 int sw = gc.textExtent(yRight.unit).x;
                 int tx = plot.x + plot.width + majorEdgeMarkPx + 4;
-                int ty = plot.y - lineH;
-                gc.fillRectangle(tx - 2, ty, sw + 4, lineH);
-                gc.drawText(yRight.unit, tx, ty, true);
+                gc.fillRectangle(tx - 2, capTy - 1, sw + 4, lineH + 2);
+                gc.drawText(yRight.unit, tx, capTy, true);
             }
             if (x.unit != null && !x.unit.isEmpty()) {
                 int sw = gc.textExtent(x.unit).x;

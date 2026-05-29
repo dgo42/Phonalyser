@@ -176,6 +176,19 @@ final class SignalMeasurements {
             // at D = 5 % / ~0.10 at D = 1 %.  Threshold of 0.1 admits
             // rectangles down to ~1 % / up to ~99 % duty.
             if (bestQ >= 0.1 && bestFreq > 0) {
+                // Leakage-debiased final estimate.  The rectangular-window
+                // Goertzel peak is pulled off the true frequency by spectral
+                // leakage from the negative-frequency image, and the pull is
+                // large on short buffers — up to ~0.3 Hz at ~20 cycles, which
+                // is what made the scope read low next to the FFT.  Re-refining
+                // the same peak on a Hann-windowed copy suppresses that image
+                // (the window's far-lower side-lobes) and pins the frequency to
+                // < 0.02 Hz regardless of buffer length.  Seeded from the
+                // already-located peak so the narrow re-scan stays robust to
+                // noise / harmonics that the broad primary search handled.
+                float[] windowed = hannWindowed(data, n, mean);
+                bestFreq = refineAroundEstimate(windowed, n, sampleRate, bestFreq, 0.0,
+                                                Math.max(5.0, bestFreq * 0.01));
                 frequency = bestFreq;
                 period = 1.0 / bestFreq;
                 duty = (double) highCount / n;
@@ -291,6 +304,23 @@ final class SignalMeasurements {
         return Math.sqrt(q1 * q1 + q2 * q2 - q1 * q2 * coeff);
     }
 
+    /**
+     * Returns a Hann-windowed, DC-removed copy of the first {@code n} samples.
+     * Used for the final leakage-debiased frequency refinement: the window's
+     * low side-lobes suppress the negative-frequency image whose leakage biases
+     * the bare (rectangular-window) Goertzel peak on short buffers.  The copy is
+     * already mean-subtracted, so the refinement runs with {@code mean = 0}.
+     */
+    private static float[] hannWindowed(float[] data, int n, double mean) {
+        float[] w = new float[n];
+        double scale = 2 * Math.PI / (n - 1);
+        for (int i = 0; i < n; i++) {
+            double h = 0.5 - 0.5 * Math.cos(scale * i);
+            w[i] = (float) ((data[i] - mean) * h);
+        }
+        return w;
+    }
+
     private SignalMeasurements() { this(0, 0, 0, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN); }
 
     /** Returns a copy of this measurement with every time-domain field
@@ -305,5 +335,33 @@ final class SignalMeasurements {
     SignalMeasurements withoutTimes() {
         return new SignalMeasurements(vpp, vrms, vmean,
                 Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+    }
+
+    /** Returns a copy with {@code frequency} (and the matching {@code period})
+     *  replaced, keeping every other field.  The scope worker uses this to
+     *  swap in a comb-bias-free frequency re-measured on the raw signal. */
+    SignalMeasurements withFrequency(double freq) {
+        return new SignalMeasurements(vpp, vrms, vmean,
+                (freq > 0 ? 1.0 / freq : Double.NaN), riseTime, fallTime, freq, dutyCycle);
+    }
+
+    /** Re-pins an already-located fundamental {@code seedHz} to a precise
+     *  frequency by a Hann-windowed Goertzel peak search over the narrow band
+     *  [{@code seedHz − halfHz}, {@code seedHz + halfHz}] of {@code data}.
+     *
+     *  <p>The scope worker uses this to read a tone's true frequency off the
+     *  RAW signal after the mains comb has been used only to find WHICH peak
+     *  is the fundamental: the comb suppresses an often-dominant mains so the
+     *  tone becomes the spectral peak (a good seed), but its notches bias the
+     *  frequency; the raw signal is un-biased and — because mains harmonics
+     *  are tens of Hz apart — carries no competing component inside this
+     *  narrow band.  Returns NaN for a non-finite seed. */
+    static double refineFrequencyAround(float[] data, int n, double sampleRate,
+                                        double seedHz, double halfHz) {
+        if (!(seedHz > 0) || n < 4) return Double.NaN;
+        double sum = 0;
+        for (int i = 0; i < n; i++) sum += data[i];
+        float[] win = hannWindowed(data, n, sum / n);
+        return refineAroundEstimate(win, n, sampleRate, seedHz, 0.0, halfHz);
     }
 }
