@@ -837,6 +837,9 @@ public final class FftAnalyzerWorker {
                 (genActive && prefs.isFftFundFromGenerator() && dualTone)
                         ? Math.max(prefs.getGenDualToneFreq1Hz(), prefs.getGenDualToneFreq2Hz())
                         : Double.NaN);
+        // Dual tone breaks the single-sine R-invariant glitch test, so skip
+        // it (it would otherwise flag nearly every sample and self-invalidate).
+        analyzer.setMultiTone(dualTone);
         FftAnalyzer.Result r;
         try {
             r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH,

@@ -18,6 +18,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OscSliderId;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
@@ -26,6 +27,7 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
+import org.edgo.audio.measure.gui.generator.FftBinSnap;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBuffer;
@@ -1998,9 +2000,14 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         boolean effectiveSinc = sincEnabled;
         debugBeatSignal = null;
         if ("DUAL_TONE".equalsIgnoreCase(prefs.getGenSignalForm())) {
-            double f1 = prefs.getGenDualToneFreq1Hz();
-            double f2 = prefs.getGenDualToneFreq2Hz();
             int sr = b.getSampleRate();
+            // Reconstruct from the frequencies the generator actually EMITS:
+            // snapped to the FFT-bin grid when "snap generator freq to FFT
+            // bin" is on, exactly as GeneratorController snaps them.  Using
+            // the raw commanded values makes |F1-F2| slightly off, so the
+            // beat overlay drifts out of phase with the capture when snap is on.
+            double f1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, prefs.getGenDualToneFreq1Hz());
+            double f2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, prefs.getGenDualToneFreq2Hz());
             if (f1 > 0 && f2 > 0 && sr > 0 && Math.abs(f2 - f1) > 0) {
                 effectiveData = reconstructBeatSignal(triggerData, available, sr, f1, f2);
                 effectiveSinc = false;

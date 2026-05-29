@@ -112,6 +112,18 @@ public class FftAnalyzer {
         this.secondToneHintHz = hz;
     }
 
+    /** Multi-tone flag for the next {@code analyze}.  When set, the
+     *  single-sine R-invariant glitch scan is skipped — that invariant
+     *  cannot hold for a sum of tones and would otherwise flag nearly
+     *  every sample, then invalidate itself and accept all frames anyway. */
+    private boolean multiTone = false;
+
+    /** Marks the next {@code analyze} as a multi-tone signal (dual tone,
+     *  etc.).  See {@link #multiTone}. */
+    public void setMultiTone(boolean multiTone) {
+        this.multiTone = multiTone;
+    }
+
     // =========================================================================
     // Reusable scratch buffers
     // =========================================================================
@@ -707,6 +719,16 @@ public class FftAnalyzer {
                         String.format(Locale.US, "%.6f", omegaPerSample));
                 rejectionFeasible = false;
             }
+        }
+
+        // Multi-tone signals (dual tone, etc.): the R-invariant assumes a
+        // single sine, so a sum of tones violates it at almost every sample —
+        // the scan would flag tens of thousands of "events", then invalidate
+        // itself and accept all frames anyway.  Skip it outright.
+        if (rejectionFeasible && multiTone) {
+            log.info("Frame R-invariant rejection skipped: multi-tone signal "
+                    + "(single-sine invariant does not apply); accepting all frames");
+            rejectionFeasible = false;
         }
 
         // --- Averaging (coherent: complex sum; incoherent: power sum) --------

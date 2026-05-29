@@ -175,6 +175,7 @@ public final class FftView extends AbstractFreqDomainView {
             // THD (single tone) and IMD (two tones) — an external two-
             // tone source through a paused generator stays on whichever
             // mode was last selected the previous time recording ran.
+            boolean prevTableModeIsImd = tableModeIsImd;
             tableModeIsImd = "DUAL_TONE".equalsIgnoreCase(
                     Preferences.instance().getGenSignalForm());
             lastImd = tableModeIsImd
@@ -182,6 +183,11 @@ public final class FftView extends AbstractFreqDomainView {
                             Preferences.instance().getGenDualToneFreq1Hz(),
                             Preferences.instance().getGenDualToneFreq2Hz())
                     : null;
+            // Mode just flipped (THD ↔ IMD): refresh the extracted window's
+            // title + size.  It's set at create time and on form-change, but
+            // tableModeIsImd only updates here — one tick later — so without
+            // this the title keeps the old mode (e.g. "IMD" while showing THD).
+            if (tableModeIsImd != prevTableModeIsImd) syncExternalShell();
             redraw();
             update();
             applyFrequencyLockLoop(slot);
@@ -860,7 +866,7 @@ public final class FftView extends AbstractFreqDomainView {
         // in the meantime.
         if (lastResult != null && prefs.isFftDistortionTableVisible() && !tableExtracted) {
             if (tableModeIsImd && lastImd != null) {
-                drawImdTable(gc, lastImd, TABLE_TOP_Y);
+                drawImdTable(gc, lastImd, MARGIN_LEFT + 6, TABLE_TOP_Y);
             } else {
                 drawDistortionTable(gc, lastResult, unit);
             }
@@ -1544,11 +1550,10 @@ public final class FftView extends AbstractFreqDomainView {
      *    <li>d2L..d5L (lower sidebands) and d2H..d5H (upper sidebands),
      *        two per row.</li>
      *  </ul> */
-    private void drawImdTable(GC gc, ImdResult imd, int yTop) {
+    private void drawImdTable(GC gc, ImdResult imd, int xLeft, int yTop) {
         Preferences prefs = Preferences.instance();
         gc.setFont(monoFont);
         gc.setForeground(color(ColorRole.TEXT));
-        int xLeft = MARGIN_LEFT + 6;
         int y     = yTop;
         int lineH = gc.textExtent("M").y + 1;
         int charW = gc.textExtent("M").x;
@@ -1915,26 +1920,37 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     private void syncExternalShell() {
-        // External shell hosts the THD-only painter — show it only when
-        // the sticky table mode is THD (not IMD).  Keeps the extracted
-        // window's content consistent with the main canvas instead of
-        // showing a THD table next to a main-canvas IMD table.
+        // External shell hosts the extracted distortion table — THD or IMD,
+        // matching the main canvas's sticky table mode.  Open it whenever the
+        // table is extracted and visible; the painter picks THD vs IMD.
         boolean wantOpen = tableExtracted
-                && Preferences.instance().isFftDistortionTableVisible()
-                && !tableModeIsImd;
+                && Preferences.instance().isFftDistortionTableVisible();
         boolean isOpen = externalShell != null && !externalShell.isDisposed();
         if (wantOpen && !isOpen) createExternalShell();
         else if (!wantOpen && isOpen) {
             externalShell.dispose();
             externalShell  = null;
             externalCanvas = null;
+        } else if (wantOpen && isOpen) {
+            // Table mode may have flipped (THD ↔ IMD) while open — retitle + refit.
+            externalShell.setText(externalTitle());
+            resizeExternalShellToContent();
         }
+    }
+
+    /** Title for the extracted table window — "IMD …" in dual-tone mode,
+     *  "THD …" otherwise.  Every locale keeps the acronym literal, so a
+     *  THD→IMD swap localises correctly without a separate message key. */
+    private String externalTitle() {
+        String t = I18n.t("fft.external.window.title");
+        return tableModeIsImd ? t.replace("THD", "IMD") : t;
     }
 
     private void createExternalShell() {
         Shell parent = getShell();
+        // RESIZE so the user can widen it if the auto-fit ever falls short.
         Shell s = new Shell(parent, SWT.DIALOG_TRIM);
-        s.setText(I18n.t("fft.external.window.title"));
+        s.setText(externalTitle());
         s.setLayout(new FillLayout());
         Canvas c = new Canvas(s, SWT.DOUBLE_BUFFERED);
         c.setBackground(color(ColorRole.BACKGROUND));
@@ -1971,6 +1987,22 @@ public final class FftView extends AbstractFreqDomainView {
         try {
             gc.setFont(monoFont);
             int lineH = gc.textExtent("M").y + 1;
+            if (tableModeIsImd) {
+                // Rows = F1/F2 + span + optional Δf1/Δf2 + 2 metric rows +
+                // (MAX_ORDER−1) dnL/dnH rows.  Width is set by a dnL/dnH row:
+                // its right-column value is drawn 38·charW from the left
+                // (dKey 5 + dVal 26 + colGap 2 + dKey 5, per drawImdTable), so
+                // MEASURE the worst-case value — the mono "M" cell under-counts
+                // digit width and the trailing % would otherwise clip.
+                int charW = gc.textExtent("M").x;
+                String worstVal = String.format("%8.2f dBV  %.8f %%", -9999.99, 99.99999999);
+                int contentW = EXT_LEFT_PAD + 38 * charW + gc.textExtent(worstVal).x + 34;
+                boolean clk = isGeneratorActive()
+                        && Preferences.instance().isFftFundFromGenerator();
+                int rows = 2 + 1 + (clk ? 2 : 0) + 2 + (ImdResult.MAX_ORDER - 1);
+                int contentH = EXT_LEFT_PAD + rows * lineH + 8;
+                return new Point(contentW, contentH);
+            }
             // Measure the worst-case harmonic row directly — same
             // formatting drawDistortionTable uses (key + lVal + 2-space
             // gap + key + rVal) — and add a generous right padding.
@@ -1979,7 +2011,7 @@ public final class FftView extends AbstractFreqDomainView {
             // pixel narrower than the actual digit / percent glyphs;
             // measuring the entire row text removes that gap.
             String widestRow = String.format(
-                    "H10:  %+8.2f dBV  %.8f %%    H11:  %+8.2f dBV  %.8f %%",
+                    "H10: %+8.2f dBV %.8f %%  H11: %+8.2f dBV %.8f %%",
                     -9999.99, 99.99999999, -9999.99, 99.99999999);
             int rowW = gc.textExtent(widestRow).x;
             int contentW = EXT_LEFT_PAD + rowW + 32;
@@ -2012,8 +2044,12 @@ public final class FftView extends AbstractFreqDomainView {
         // Draw table with a small inset from the top-left so the keys
         // don't touch the window border.  No reset button here — the
         // button stays in the main FFT view.
-        FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(Preferences.instance().getFftMagUnit());
-        drawDistortionTable(gc, lastResult, unit, EXT_LEFT_PAD, EXT_LEFT_PAD, true);
+        if (tableModeIsImd && lastImd != null) {
+            drawImdTable(gc, lastImd, EXT_LEFT_PAD, EXT_LEFT_PAD);
+        } else {
+            FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(Preferences.instance().getFftMagUnit());
+            drawDistortionTable(gc, lastResult, unit, EXT_LEFT_PAD, EXT_LEFT_PAD, true);
+        }
     }
 
     // =========================================================================

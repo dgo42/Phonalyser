@@ -593,6 +593,14 @@ public class FreqRespCalHelper {
                 double kH = freqRes > 0 ? r.harmonicHz[h] / freqRes : r.harmonicBins[h];
                 markProportionalBinPair(correctBin, kH, half);
             }
+            // Second tone (dual-tone): it is a fundamental, NOT a harmonic of
+            // F1, so the single-tone fundamental+harmonic mask above leaves it
+            // uncorrected — F1 gets compensated and F2 doesn't, skewing the
+            // F1/F2 balance by the cal's value at F2.  Mark its bin too.
+            if (!Double.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0
+                    && freqRes > 0) {
+                markProportionalBinPair(correctBin, r.fundamental2HzRefined / freqRes, half);
+            }
         }
 
         int corrected = 0;
