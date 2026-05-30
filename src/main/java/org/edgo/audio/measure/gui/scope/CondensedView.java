@@ -4,7 +4,7 @@ import java.util.Map;
 
 import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
 import org.edgo.audio.measure.gui.preferences.Preferences;
-import org.edgo.audio.measure.gui.sound.SignalBuffer;
+import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;
@@ -37,7 +37,7 @@ public final class CondensedView extends AbstractMeasurementView {
     // role (semantically the same "thin divider through the strip"
     // line) with a slightly darker shade for the dark theme.
 
-    private SignalBuffer buffer;
+    private SignalBufferReader reader;
     private float[] leftBuf  = new float[0];
     private float[] rightBuf = new float[0];
     /** Same back-offset semantics as {@link OscilloscopeView#getViewBackOffsetFrames()}. */
@@ -58,8 +58,8 @@ public final class CondensedView extends AbstractMeasurementView {
         addDisposeListener(e -> disposePalette());
     }
 
-    public void setBuffer(SignalBuffer buffer) {
-        this.buffer = buffer;
+    public void setBuffer(SignalBufferReader reader) {
+        this.reader = reader;
     }
 
     private void onPaint(PaintEvent e) {
@@ -111,7 +111,7 @@ public final class CondensedView extends AbstractMeasurementView {
     }
 
     private void drawWaveforms(GC gc, int w, int h) {
-        SignalBuffer b = buffer;
+        SignalBufferReader b = reader;
         if (b == null) return;
 
         Preferences prefs = Preferences.instance();

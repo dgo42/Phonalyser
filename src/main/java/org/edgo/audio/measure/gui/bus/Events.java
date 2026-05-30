@@ -124,6 +124,13 @@ public final class Events {
      *  subscribers MUST handle {@code null}. */
     public static final String FFT_RESULT_AVAILABLE = "fft.result.available";
 
+    /** Notification — the FFT analyser's capture cursor was overrun: the
+     *  worker fell a full ring behind, the contiguous sample stream broke,
+     *  and the cross-tick average was discarded and restarted from fresh
+     *  data.  No payload.  Published on the UI thread by
+     *  {@code FftAnalyzerWorker}; the view raises a blinking warning. */
+    public static final String FFT_CAPTURE_OVERRUN = "fft.capture.overrun";
+
     /** Notification — the generator's file-player thread finished
      *  (user stop, EOF without loop, or playback error).  Subscribers
      *  (the generator pane) reset the play-from LED.  No payload.

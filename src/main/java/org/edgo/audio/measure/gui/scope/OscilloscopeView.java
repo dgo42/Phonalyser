@@ -35,7 +35,7 @@ import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.generator.FftBinSnap;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
-import org.edgo.audio.measure.gui.sound.SignalBuffer;
+import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.extern.log4j.Log4j2;
@@ -43,7 +43,7 @@ import lombok.extern.log4j.Log4j2;
 /**
  * Oscilloscope main display.  Renders a black canvas with a 10×10 division
  * grid, a centre cross carrying 1/5-division minor tick marks, and (when a
- * {@link SignalBuffer} is attached via {@link #setBuffer(SignalBuffer)}) the
+ * {@link SignalBufferReader} is attached via {@link #setBuffer}) the
  * left/right channel waveforms scaled by the {@link Preferences}-stored
  * volts/division and time/division settings.
  */
@@ -71,7 +71,11 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private int currentLeftRgb  = -1;
     private int currentRightRgb = -1;
 
-    private SignalBuffer buffer;
+    /** Latest-window read cursor over the shared capture (or a wrapped frozen /
+     *  file buffer).  The scope reads relative to {@code writePos}, so it never
+     *  uses the cursor's read position — it just delegates readLatest /
+     *  readEndingAt. */
+    private SignalBufferReader reader;
     private float[] leftBuf  = new float[0];
     private float[] rightBuf = new float[0];
 
@@ -546,10 +550,11 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         });
     }
 
-    /** Attaches the live ring buffer.  {@code null} clears the waveform overlay. */
-    public void setBuffer(SignalBuffer buffer) {
-        this.buffer = buffer;
-        measWorker.setBuffer(buffer);
+    /** Attaches the latest-window read cursor over the capture (or a wrapped
+     *  frozen / file buffer).  {@code null} clears the waveform overlay. */
+    public void setBuffer(SignalBufferReader reader) {
+        this.reader = reader;
+        measWorker.setBuffer(reader);
         // Reset per-capture state so a previous session's values aren't
         // displayed on the first few paints of a new capture (notably the
         // DC mean, which is read straight from the worker until it
@@ -563,9 +568,12 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         measWorker.clearHistory();
     }
 
-    /** Returns the currently-attached ring buffer (or {@code null} if none). */
-    public SignalBuffer getBuffer() {
-        return buffer;
+    /** Returns the latest-window read cursor (or {@code null} if none) — the
+     *  scope's single handle to the captured signal.  Buffer-level operations
+     *  (save, zoom extents, AC offsets) go through this reader, never a raw
+     *  {@code SignalBuffer}. */
+    public SignalBufferReader getReader() {
+        return reader;
     }
 
     /**
@@ -755,7 +763,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
 
     /** Pale-grey "123.4 cap/s" readout in the top-right corner. */
     private void drawCaptureRate(GC gc, int w) {
-        if (buffer == null || captureRate <= 0) return;
+        if (reader == null || captureRate <= 0) return;
         gc.setAntialias(SWT.OFF);
         gc.setTextAntialias(SWT.ON);
         gc.setForeground(color(ColorRole.TEXT));
@@ -875,7 +883,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         // off and even when no live data is available yet.  The gauge,
         // stats toggle, reset, and external-window buttons only appear
         // once a signal is present (recorded or loaded).
-        SignalBuffer b = buffer;
+        SignalBufferReader b = reader;
         boolean hasSignal = (b != null);
         drawMeasurementHeaderButtons(gc, showL, showR, selected, hasSignal);
 
@@ -1091,7 +1099,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
      *  identically to both places. */
     private void paintExternalMeasurementTable(org.eclipse.swt.events.PaintEvent ev) {
         Preferences prefs = Preferences.instance();
-        if (buffer == null) return;
+        if (reader == null) return;
         if (!prefs.isOscShowMeasurementTable()) return;
         MeasurementRow[] rows = prepareMeasurementRows(prefs);
         if (rows == null) return;
@@ -1132,8 +1140,8 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     /**
      * Starts the background measurement worker.  Idempotent — calling while
      * the worker is already running is a no-op.  Invoked by
-     * {@link OscilloscopeController#start()} once a fresh {@link SignalBuffer}
-     * has been attached via {@link #setBuffer(SignalBuffer)}.
+     * {@link OscilloscopeController#start()} once a fresh
+     * {@link SignalBufferReader} has been attached via {@link #setBuffer}.
      */
     public void startMeasurementThread() {
         measWorker.start();
@@ -2063,14 +2071,14 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         boolean acL = prefs.isOscLeftAcMode();
         boolean acR = prefs.isOscRightAcMode();
         if (triggerMode == TriggerMode.SINGLE && singleHeld && !singleArmed) {
-            double[] dc = computeAcOffsetsForCaptured(buffer, acL, acR);
+            double[] dc = computeAcOffsetsForCaptured(reader, acL, acR);
             renderTraces(gc, w, h, capturedLeft, capturedRight, capturedLen,
                          capturedDispStart, capturedSubSampleOffset, capturedDispCount,
                          showL, showR, leftVDiv, rightVDiv, sincL, sincR, dc[0], dc[1]);
             return;
         }
 
-        SignalBuffer b = buffer;
+        SignalBufferReader b = reader;
         if (b == null) {
             // No live source, but a captured SINGLE frame may still be drawable.
             if (singleHeld) {
@@ -2634,7 +2642,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
      * run — i.e. {@link #lastMeasResult} is {@code null} (capture stopped
      * before the worker fired once).
      */
-    private double[] computeAcOffsetsForCaptured(SignalBuffer b, boolean acL, boolean acR) {
+    private double[] computeAcOffsetsForCaptured(SignalBufferReader b, boolean acL, boolean acR) {
         if (measWorker.getLastMeasResult() != null) {
             return new double[] {
                     acL ? acDcMean(true)  : 0.0,

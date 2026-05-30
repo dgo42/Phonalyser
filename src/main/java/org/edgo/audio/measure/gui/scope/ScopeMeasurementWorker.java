@@ -12,7 +12,7 @@ import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.gui.preferences.Preferences;
-import org.edgo.audio.measure.gui.sound.SignalBuffer;
+import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 /**
@@ -44,7 +44,7 @@ public final class ScopeMeasurementWorker {
      *  cutoff is per-channel and comes from the {@code LpfMode} preference. */
     public static final int    SCOPE_HF_LPF_ORDER = 8;
 
-    private volatile SignalBuffer       buffer;
+    private volatile SignalBufferReader reader;
 
     private Thread          measThread;
     private volatile boolean measThreadRunning;
@@ -90,8 +90,7 @@ public final class ScopeMeasurementWorker {
 
     // ─── External wiring ────────────────────────────────────────────────────
 
-    public void setBuffer(SignalBuffer b) { this.buffer = b; }
-    public SignalBuffer getBuffer()        { return buffer; }
+    public void setBuffer(SignalBufferReader r) { this.reader = r; }
     public SignalMeasurements getLastMeasResult() { return lastMeasResult; }
     public double getLastLeftMeanNormalized()  { return lastLeftMeanNormalized; }
     public double getLastRightMeanNormalized() { return lastRightMeanNormalized; }
@@ -251,7 +250,7 @@ public final class ScopeMeasurementWorker {
 
     /**
      * Measurement worker loop: sleeps for {@link #MEAS_COMPUTE_PERIOD_NANOS}
-     * between probes, reads the latest samples from the {@link SignalBuffer},
+     * between probes, reads the latest samples from the {@link SignalBufferReader},
      * runs {@link SignalMeasurements#compute}, and stores the result for
      * the SWT thread to pick up at next paint.  Runs at fixed cadence
      * (drift-compensated) so the avg / min / max / σ stats are evenly
@@ -335,7 +334,7 @@ public final class ScopeMeasurementWorker {
 
     /** Runs one measurement pass on the worker thread and updates the cache. */
     private void computeMeasurementOnce() {
-        SignalBuffer b = buffer;
+        SignalBufferReader b = reader;
         if (b == null) return;
         Preferences prefs = Preferences.instance();
         Channel selected = prefs.getOscMeasurementChannel();

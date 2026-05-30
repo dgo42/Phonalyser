@@ -44,7 +44,6 @@ import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.generator.FftBinSnap;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
-import org.edgo.audio.measure.gui.sound.SignalBuffer;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -55,8 +54,8 @@ import lombok.extern.log4j.Log4j2;
  * magnitude readout, and a row of header buttons modelled on the
  * oscilloscope view.
  *
- * <p>Owns the analysis pipeline itself: a daemon worker thread reads the
- * shared {@link SignalBuffer} (supplied via {@link #setBuffer}), runs
+ * <p>Owns the analysis pipeline itself: a daemon worker thread that acquires
+ * its own shared capture, runs
  * {@link FftAnalyzer#analyze}, and publishes the latest
  * {@link FftResult} for paint to read.  The owning
  * {@link FftPane} drives the lifecycle ({@link #start} / {@link #stop} /
@@ -213,6 +212,18 @@ public final class FftView extends AbstractFreqDomainView {
         }
     };
 
+    /** Capture-overrun notification from the worker (no payload): the
+     *  contiguous sample stream broke and the running average was discarded.
+     *  Raise the same sticky blinking warning the frame-rejection path uses,
+     *  so the depth restart is visible rather than a silent glitch. */
+    private final Consumer<Void> onCaptureOverrun = ignored -> {
+        if (isDisposed() || !isRunning()) return;
+        setBanner(I18n.t("fft.warning.overrun"), I18n.t("fft.warning.overrun.tip"),
+                ColorRole.WARNING_LIT, ColorRole.WARNING_DIM,
+                System.nanoTime() + REJECTION_WARN_NANOS);
+        redraw();
+    };
+
     // ─── Mouse / crosshair tracking ──────────────────────────────────────
     private int crossX = -1, crossY = -1;
 
@@ -302,6 +313,7 @@ public final class FftView extends AbstractFreqDomainView {
         // per-tick paint cost is well under the hop interval, so
         // blocking the UI thread for this paint is negligible.
         MessageBus.instance().subscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
+        MessageBus.instance().subscribe(Events.FFT_CAPTURE_OVERRUN, onCaptureOverrun);
         MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
         // Pick up FFT-only prefs (harmonic dot, freq-resp response,
         // before-cal dot, cal overlay) that aren't part of the base
@@ -475,6 +487,7 @@ public final class FftView extends AbstractFreqDomainView {
 
     private void disposeResources() {
         MessageBus.instance().unsubscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
+        MessageBus.instance().unsubscribe(Events.FFT_CAPTURE_OVERRUN, onCaptureOverrun);
         MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
         worker.stop();
         disposePalette();
@@ -509,14 +522,6 @@ public final class FftView extends AbstractFreqDomainView {
     // =========================================================================
     // Public API
     // =========================================================================
-
-    /** Wires the capture buffer.  Called by {@link FftPane} after a
-     *  successful {@link Events#CAPTURE_ACQUIRE}, and again with
-     *  {@code null} after {@link Events#CAPTURE_RELEASE}.  Safe to call
-     *  while the worker is running — reads are volatile. */
-    public void setBuffer(SignalBuffer b) {
-        worker.setBuffer(b);
-    }
 
     /** Latest published analysis result — a deep copy taken on the
      *  worker thread inside {@code publishResult} before it crossed

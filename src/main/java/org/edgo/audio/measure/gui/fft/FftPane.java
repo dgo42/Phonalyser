@@ -66,7 +66,6 @@ import org.edgo.audio.measure.gui.preferences.FftPreset;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.AdcCalibrationDialog;
 import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
-import org.edgo.audio.measure.gui.sound.SignalBuffer;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -172,10 +171,6 @@ public final class FftPane {
     private Button             presetLoadBtn;
     private Button             presetDeleteBtn;
 
-    /** Set true once {@link Events#CAPTURE_ACQUIRE} has succeeded,
-     *  false after release.  Prevents an extra release on a
-     *  disposed-without-record path. */
-    private boolean captureHeld;
     /** Subscriber for {@link Events#FFT_RANGE_CHANGED}, stored as a
      *  field so the dispose listener can unsubscribe the SAME instance
      *  (method references compare by identity). */
@@ -202,10 +197,9 @@ public final class FftPane {
                    boolean liveCapture) {
         // FFT-length changes, capture acquire / release, and the
         // generator-running query all flow through the MessageBus — no
-        // callback parameters needed for those concerns.  The shared
-        // buffer is fetched on each record-on click via
-        // Events.CAPTURE_ACQUIRE and stored in capturedBuffer for the
-        // controller to poll.
+        // callback parameters needed for those concerns.  The analyser
+        // worker (inside FftView) acquires and releases its own shared
+        // capture on start / stop; the pane just drives the Record button.
         IconUtils icons = IconUtils.instance();
         Display d = parent.getDisplay();
         this.cameraIcon    = icons.render(d, SvgPaths.CAMERA,
@@ -455,12 +449,7 @@ public final class FftPane {
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
             bus2.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED,      genChangeListener);
-            view.stop();
-            view.setBuffer(null);
-            if (captureHeld) {
-                bus2.publish(Events.CAPTURE_RELEASE);
-                captureHeld = false;
-            }
+            view.stop();   // the worker releases its shared-capture reference
         });
 
         // Re-layout once the event loop spins up.  At constructor exit
@@ -610,24 +599,20 @@ public final class FftPane {
         recordButton.setEnabled(true);
     }
 
-    /** Turns the Record button ON — acquires a reference on the shared
-     *  audio capture device (scope + FFT share the same device; whichever
-     *  pane records first opens it), wires the live {@link SignalBuffer}
-     *  into the view, and starts the worker.  Bails out silently and
-     *  un-toggles the button when the acquire fails (no input device,
-     *  already-busy device, etc.). */
+    /** Turns the Record button ON — starts the analyser worker, which acquires
+     *  its own reference on the shared audio capture device (scope + FFT share
+     *  the same device; whichever pane records first opens it).  Bails out
+     *  silently and un-toggles the button when the acquire fails (no input
+     *  device, already-busy device, etc.) — detected via {@link FftView#isRunning}. */
     private void recordOn() {
         if (recordButton == null || recordButton.isDisposed()) return;
-        SignalBuffer buf = MessageBus.instance().request(Events.CAPTURE_ACQUIRE);
-        if (buf == null) {
+        view.start();
+        if (!view.isRunning()) {
             recordButton.setSelection(false);
             return;
         }
-        captureHeld = true;
         recordButton.setSelection(true);
         recordButton.setImage(recordLit);
-        view.setBuffer(buf);
-        view.start();
     }
 
     /** Pauses FFT recording for the lifetime of a modal dialog (e.g.
@@ -647,18 +632,13 @@ public final class FftPane {
         };
     }
 
-    /** Turns the Record button OFF — stops the worker, releases the
-     *  shared capture, restores the dim icon.  Called from the user's
-     *  Record-button click (off path) and from {@link #disengageRecord}
+    /** Turns the Record button OFF — stops the worker (which releases its own
+     *  shared-capture reference) and restores the dim icon.  Called from the
+     *  user's Record-button click (off path) and from {@link #disengageRecord}
      *  when the analyser's stop-after-N counter trips. */
     private void recordOff() {
         if (recordButton.isDisposed()) return;
         view.stop();
-        view.setBuffer(null);
-        if (captureHeld) {
-            MessageBus.instance().publish(Events.CAPTURE_RELEASE);
-            captureHeld = false;
-        }
         recordButton.setSelection(false);
         recordButton.setImage(recordDim);
     }

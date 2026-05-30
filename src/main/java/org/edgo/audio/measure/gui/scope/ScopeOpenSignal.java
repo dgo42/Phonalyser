@@ -6,12 +6,12 @@ import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioInputStream;
 
 import lombok.extern.log4j.Log4j2;
-import org.edgo.audio.measure.gui.sound.SignalBuffer;
+import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.wav.PcmFileLoader;
 
 /**
  * Loads a WAV / FLAC / AIFF file synchronously into a fresh
- * {@link SignalBuffer} sized to the file's exact sample count, and
+ * {@link SignalBufferReader} sized to the file's exact sample count, and
  * attaches it to the scope's main and condensed views.  No threads,
  * no measurement-worker coordination, no per-tick scheduling — just
  * decode, populate, hand to the views.
@@ -54,7 +54,7 @@ public final class ScopeOpenSignal {
     public boolean isLoaded()     { return loadedFile != null; }
 
     /**
-     * Decodes {@code file} entirely into a new {@link SignalBuffer} and
+     * Decodes {@code file} entirely into a new {@link SignalBufferReader} and
      * attaches it to both views.  Returns {@code true} on success;
      * inspect {@link #getLastError} when {@code false}.  Must be called
      * on the SWT thread.
@@ -65,7 +65,7 @@ public final class ScopeOpenSignal {
             lastError = "Pick a file first.";
             return false;
         }
-        SignalBuffer buf;
+        SignalBufferReader.Builder builder;
         try (AudioInputStream in = PcmFileLoader.instance().openAsPcm(file)) {
             AudioFormat fmt = in.getFormat();
             int sampleRate     = (int) fmt.getSampleRate();
@@ -81,9 +81,9 @@ public final class ScopeOpenSignal {
             }
             // Buffer sized to the exact frame count so the entire signal
             // fits without ring-wrap; capacity must be ≥ 1 sample so the
-            // SignalBuffer constructor doesn't reject it.
+            // builder's backing buffer doesn't reject it.
             double bufSeconds = Math.max(1.0 / sampleRate, totalFrames / (double) sampleRate);
-            buf = new SignalBuffer(sampleRate, bufSeconds);
+            builder = SignalBufferReader.builder(sampleRate, bufSeconds);
 
             int chunkFrames = Math.max(256, sampleRate / 50);
             byte[]  pcm   = new byte[chunkFrames * frameSize];
@@ -98,9 +98,9 @@ public final class ScopeOpenSignal {
                     left  = new float[frames];
                     right = new float[frames];
                 }
-                decodeStereo(pcm, frames, channels, bytesPerSample, signed, bigEndian,
+                StereoPcmIo.decodeStereo(pcm, frames, channels, bytesPerSample, signed, bigEndian,
                         left, right);
-                buf.appendBatch(left, right, frames);
+                builder.append(left, right, frames);
             }
             log.info("Scope open signal: {} ({} Hz, {} frames, {} s)",
                     file.getName(), sampleRate, totalFrames,
@@ -112,11 +112,12 @@ public final class ScopeOpenSignal {
         }
 
         loadedFile = file;
+        SignalBufferReader reader = builder.build();
         if (!mainView.isDisposed()) {
-            mainView.setBuffer(buf);
+            mainView.setBuffer(reader);
             mainView.setFileMode(true);
         }
-        if (!condensedView.isDisposed()) condensedView.setBuffer(buf);
+        if (!condensedView.isDisposed()) condensedView.setBuffer(reader);
         // Redraw immediately so the user sees the static waveform without
         // waiting for whatever timer happens to fire next.
         if (!mainView.isDisposed())      mainView.redraw();
@@ -141,51 +142,4 @@ public final class ScopeOpenSignal {
         if (!condensedView.isDisposed()) condensedView.redraw();
     }
 
-    private void decodeStereo(byte[] pcm, int frames, int channels, int bytesPerSample,
-                              boolean signed, boolean bigEndian,
-                              float[] left, float[] right) {
-        int frameSize = bytesPerSample * channels;
-        double midpoint = 1L << (bytesPerSample * 8 - 1);
-        for (int f = 0; f < frames; f++) {
-            int off = f * frameSize;
-            int sL = readSample(pcm, off, bytesPerSample, signed, bigEndian);
-            int sR = (channels >= 2)
-                    ? readSample(pcm, off + bytesPerSample, bytesPerSample, signed, bigEndian)
-                    : sL;
-            left [f] = (float) (sL / midpoint);
-            right[f] = (float) (sR / midpoint);
-        }
-    }
-
-    private int readSample(byte[] pcm, int off, int bytesPerSample, boolean signed, boolean bigEndian) {
-        switch (bytesPerSample) {
-            case 1: {
-                int v = pcm[off] & 0xFF;
-                return signed ? (byte) v : v - 128;
-            }
-            case 2: {
-                int v = bigEndian
-                        ? ((pcm[off] & 0xFF) << 8) | (pcm[off + 1] & 0xFF)
-                        : ((pcm[off + 1] & 0xFF) << 8) | (pcm[off] & 0xFF);
-                return signed ? (short) v : v - 0x8000;
-            }
-            case 3: {
-                int v = bigEndian
-                        ? ((pcm[off] << 16) | ((pcm[off + 1] & 0xFF) << 8) | (pcm[off + 2] & 0xFF))
-                        : ((pcm[off + 2] << 16) | ((pcm[off + 1] & 0xFF) << 8) | (pcm[off] & 0xFF));
-                v = (v << 8) >> 8;        // sign-extend 24-bit
-                return signed ? v : v - 0x800000;
-            }
-            case 4: {
-                int v = bigEndian
-                        ? ((pcm[off] << 24) | ((pcm[off + 1] & 0xFF) << 16)
-                            | ((pcm[off + 2] & 0xFF) << 8) | (pcm[off + 3] & 0xFF))
-                        : ((pcm[off + 3] << 24) | ((pcm[off + 2] & 0xFF) << 16)
-                            | ((pcm[off + 1] & 0xFF) << 8) | (pcm[off] & 0xFF));
-                return signed ? v : (int) (v - 0x80000000L);
-            }
-            default:
-                throw new IllegalStateException("Unsupported bytesPerSample: " + bytesPerSample);
-        }
-    }
 }

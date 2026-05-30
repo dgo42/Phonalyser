@@ -416,16 +416,20 @@ public class FftAnalyzer {
                                  + f0Im[intFundBin] * f0Im[intFundBin]);
         double specPeakAmp = specMag * 2.0 / ((double) fftSize * cohGain);
         boolean rejectionFeasible = peakAmp > 0.0 && specPeakAmp >= 0.5 * peakAmp;
-        log.info("Frame R-invariant check: peakAmp(RMS-derived)={}, fund-bin peak={} (ratio {} dB), k={}, tolerance={}% (using intBin={}, ~{} Hz)",
-                String.format(Locale.US, "%.6e", peakAmp),
-                String.format(Locale.US, "%.6e", specPeakAmp),
-                peakAmp > 0
-                        ? String.format(Locale.US, "%+.1f", 20.0 * Math.log10(specPeakAmp / peakAmp))
-                        : "n/a",
-                String.format(Locale.US, "%.6f", omegaPerSample),
-                String.format(Locale.US, "%.1f", R_TOLERANCE * 100.0),
-                intFundBin,
-                String.format(Locale.US, "%.4f", estFundHz));
+        // Per-analysis diagnostic — demoted to DEBUG and guarded so its five
+        // String.format calls don't run (or spam the log) on every tick.
+        if (log.isDebugEnabled()) {
+            log.debug("Frame R-invariant check: peakAmp(RMS-derived)={}, fund-bin peak={} (ratio {} dB), k={}, tolerance={}% (using intBin={}, ~{} Hz)",
+                    String.format(Locale.US, "%.6e", peakAmp),
+                    String.format(Locale.US, "%.6e", specPeakAmp),
+                    peakAmp > 0
+                            ? String.format(Locale.US, "%+.1f", 20.0 * Math.log10(specPeakAmp / peakAmp))
+                            : "n/a",
+                    String.format(Locale.US, "%.6f", omegaPerSample),
+                    String.format(Locale.US, "%.1f", R_TOLERANCE * 100.0),
+                    intFundBin,
+                    String.format(Locale.US, "%.4f", estFundHz));
+        }
         if (!rejectionFeasible) {
             log.info("Frame R-invariant rejection skipped: fundamental sine buried in noise/spurs "
                     + "(fund-bin peak >20 dB below time-domain peak); accepting all frames");

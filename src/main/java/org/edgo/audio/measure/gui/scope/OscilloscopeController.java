@@ -4,7 +4,7 @@ import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
-import org.edgo.audio.measure.gui.sound.SignalBuffer;
+import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -50,7 +50,7 @@ public final class OscilloscopeController {
      *  Returned by {@link Events#CAPTURE_ACQUIRE} on {@link #start()},
      *  used by {@link #stop()} to snapshot the last frame before
      *  releasing.  {@code null} when the scope isn't recording. */
-    private SignalBuffer currentBuffer;
+    private SignalBufferReader currentBuffer;
 
     public OscilloscopeController(OscilloscopeView mainView, CondensedView condensedView) {
         this.mainView      = mainView;
@@ -84,7 +84,7 @@ public final class OscilloscopeController {
      */
     public synchronized void start() {
         if (scopeLive) return;
-        SignalBuffer buf = MessageBus.instance().request(Events.CAPTURE_ACQUIRE);
+        SignalBufferReader buf = MessageBus.instance().request(Events.CAPTURE_ACQUIRE);
         if (buf == null) return;
         scopeLive = true;
         currentBuffer = buf;
@@ -119,29 +119,13 @@ public final class OscilloscopeController {
         // the FFT pane is still recording) would visually resume the
         // trace whenever a paint event fires.
         if (currentBuffer != null) {
-            SignalBuffer frozen = snapshotBuffer(currentBuffer);
+            SignalBufferReader frozen = currentBuffer.frozenSnapshot();
             if (!mainView.isDisposed())      mainView.setBuffer(frozen);
             if (!condensedView.isDisposed()) condensedView.setBuffer(frozen);
         }
         currentBuffer = null;
         MessageBus.instance().publish(Events.CAPTURE_RELEASE);
         log.info("Oscilloscope stopped.");
-    }
-
-    /** Copies the current contents of {@code live} into a new
-     *  standalone {@link SignalBuffer} that no audio thread writes
-     *  to — used by {@link #stop()} so the scope view freezes on
-     *  the last frame instead of continuing to pick up writes the
-     *  FFT pane's still-running capture pushes into the shared one. */
-    private SignalBuffer snapshotBuffer(SignalBuffer live) {
-        int sr  = live.getSampleRate();
-        int cap = live.getCapacity();
-        SignalBuffer s = new SignalBuffer(sr, (double) cap / sr);
-        float[] l = new float[cap];
-        float[] r = new float[cap];
-        int n = live.readLatest(cap, l, r);
-        s.appendBatch(l, r, n);
-        return s;
     }
 
     /**

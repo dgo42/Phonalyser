@@ -6,16 +6,13 @@ import java.util.Locale;
 
 import lombok.extern.log4j.Log4j2;
 
-import org.edgo.audio.measure.wav.AiffWriter;
-import org.edgo.audio.measure.wav.FlacWriter;
-import org.edgo.audio.measure.wav.WavWriter;
 import org.edgo.audio.measure.enums.AudioFileFormat;
 import org.edgo.audio.measure.gui.interfaces.PcmSink;
-import org.edgo.audio.measure.gui.sound.SignalBuffer;
+import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 
 /**
  * Writes the latest {@code durationSeconds} of capture from a
- * {@link SignalBuffer} into the user-chosen file.  Format is picked
+ * {@link SignalBufferReader} into the user-chosen file.  Format is picked
  * from the file extension ({@code .wav} / {@code .flac} /
  * {@code .aiff} / {@code .aif}); chunks of float samples are
  * quantised to signed-PCM at the supplied bit depth.
@@ -27,8 +24,6 @@ import org.edgo.audio.measure.gui.sound.SignalBuffer;
  */
 @Log4j2
 public final class ScopeFileSaver {
-
-    private static final int CHANNELS = 2;
 
     private ScopeFileSaver() {}
 
@@ -102,19 +97,19 @@ public final class ScopeFileSaver {
      *        Pass 0 or {@link Double#NaN} for forms without a fixed
      *        period (noise, sweep, no detection available).
      */
-    public static long save(SignalBuffer buffer, File outFile,
+    public static long save(SignalBufferReader reader, File outFile,
                             int sampleRate, int bitDepth,
                             double durationSeconds,
                             double signalFrequencyHz) throws IOException {
-        if (buffer == null) {
+        if (reader == null) {
             throw new IOException("No scope buffer to save (start the scope first).");
         }
         int requestedFrames = (int) Math.max(1, Math.round(durationSeconds * sampleRate));
-        int frames = Math.min(requestedFrames, buffer.getCapacity());
+        int frames = Math.min(requestedFrames, reader.getCapacity());
 
         float[] left  = new float[frames];
         float[] right = new float[frames];
-        int actual = buffer.readLatest(frames, left, right);
+        int actual = reader.readLatest(frames, left, right);
         if (actual <= 0) {
             throw new IOException("Scope buffer is empty — capture hasn't produced any samples yet.");
         }
@@ -128,21 +123,17 @@ public final class ScopeFileSaver {
         int saveLength = w.length;
 
         int bytesPerSample = bitDepth / 8;
-        int bytesPerFrame  = bytesPerSample * CHANNELS;
+        int bytesPerFrame  = bytesPerSample * StereoPcmIo.CHANNELS;
 
-        String name = outFile.getName().toLowerCase(Locale.ROOT);
-        AudioFileFormat fmt =
-                name.endsWith(".flac")                          ? AudioFileFormat.FLAC
-              : name.endsWith(".aiff") || name.endsWith(".aif") ? AudioFileFormat.AIFF
-              :                                                   AudioFileFormat.WAV;
+        AudioFileFormat fmt = StereoPcmIo.formatForName(outFile.getName());
 
-        try (PcmSink sink = openSink(fmt, outFile, sampleRate, bitDepth)) {
+        try (PcmSink sink = StereoPcmIo.openSink(fmt, outFile, sampleRate, bitDepth)) {
             int chunkFrames = 4096;
             byte[] buf = new byte[chunkFrames * bytesPerFrame];
             int written = 0;
             while (written < saveLength) {
                 int n = Math.min(chunkFrames, saveLength - written);
-                packStereo(left, right, saveStart + written, n, buf, bitDepth);
+                StereoPcmIo.packStereo(left, right, saveStart + written, n, buf, bitDepth);
                 sink.writeRaw(buf, n * bytesPerFrame);
                 written += n;
             }
@@ -152,69 +143,5 @@ public final class ScopeFileSaver {
                     sampleRate, bitDepth, saveStart, saveStart + saveLength, actual);
         }
         return outFile.length();
-    }
-
-    /**
-     * Converts {@code count} stereo float samples (range {@code [-1, +1]})
-     * starting at {@code offset} in {@code left} / {@code right} into
-     * little-endian signed PCM bytes at the requested bit depth.  Layout
-     * matches what the generator's writers expect.
-     */
-    private static void packStereo(float[] left, float[] right, int offset, int count,
-                                   byte[] buf, int bitDepth) {
-        int bytesPerSample = bitDepth / 8;
-        int bytesPerFrame  = bytesPerSample * CHANNELS;
-        if (bitDepth == 8) {
-            for (int i = 0; i < count; i++) {
-                int    bufOff = i * bytesPerFrame;
-                buf[bufOff]     = (byte) ((int) Math.round(clamp(left [offset + i]) * 127.0) + 128 & 0xFF);
-                buf[bufOff + 1] = (byte) ((int) Math.round(clamp(right[offset + i]) * 127.0) + 128 & 0xFF);
-            }
-            return;
-        }
-        long maxVal = (1L << (bitDepth - 1)) - 1;
-        for (int i = 0; i < count; i++) {
-            long pcmL = (long) Math.round(clamp(left [offset + i]) * maxVal);
-            long pcmR = (long) Math.round(clamp(right[offset + i]) * maxVal);
-            int  bufOff = i * bytesPerFrame;
-            for (int b = 0; b < bytesPerSample; b++) {
-                buf[bufOff + b]                  = (byte) (pcmL >> (8 * b));
-                buf[bufOff + bytesPerSample + b] = (byte) (pcmR >> (8 * b));
-            }
-        }
-    }
-
-    private static double clamp(double v) {
-        if (v >  1.0) return  1.0;
-        if (v < -1.0) return -1.0;
-        return v;
-    }
-
-
-    private static PcmSink openSink(AudioFileFormat fmt, File outFile, int sampleRate, int bitDepth)
-            throws IOException {
-        switch (fmt) {
-            case FLAC: {
-                FlacWriter w = new FlacWriter(outFile, sampleRate, CHANNELS, bitDepth);
-                return new PcmSink() {
-                    @Override public void writeRaw(byte[] b, int n) throws IOException { w.writeRaw(b, n); }
-                    @Override public void close()                    throws IOException { w.close(); }
-                };
-            }
-            case AIFF: {
-                AiffWriter w = new AiffWriter(outFile, sampleRate, CHANNELS, bitDepth);
-                return new PcmSink() {
-                    @Override public void writeRaw(byte[] b, int n) throws IOException { w.writeRaw(b, n); }
-                    @Override public void close()                    throws IOException { w.close(); }
-                };
-            }
-            default: {
-                WavWriter w = new WavWriter(outFile, sampleRate, CHANNELS, bitDepth, false);
-                return new PcmSink() {
-                    @Override public void writeRaw(byte[] b, int n) throws IOException { w.writeRaw(b, n); }
-                    @Override public void close()                    throws IOException { w.close(); }
-                };
-            }
-        }
     }
 }

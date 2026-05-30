@@ -15,6 +15,7 @@ import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.fft.DerotationPhaseLock;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftAnalyzer.FrameFftCache;
 import org.edgo.audio.measure.fft.FftResult;
@@ -22,7 +23,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.preferences.Preferences;
-import org.edgo.audio.measure.gui.sound.SignalBuffer;
+import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -52,26 +53,44 @@ public final class FftAnalyzerWorker {
 
     private final FftAnalyzer analyzer = new FftAnalyzer();
 
-    private volatile SignalBuffer       buffer;
+    private volatile SignalBufferReader reader;
+    /** True while this worker holds a {@code SharedCapture} reference (acquired
+     *  in {@link #start}, released in {@link #stop}).  The worker owns its own
+     *  capture lifecycle, so the view / pane never touch the sample buffer. */
+    private boolean captureHeld;
     private final    AtomicBoolean      paused = new AtomicBoolean(false);
     private volatile int                completedAnalyses;
     private volatile boolean            running;
-    /** Sample-buffer write position at the start of the previous analysis
-     *  window — used to compute "how many new samples since last frame". */
-    private volatile long lastAnalysisWritePos = -1;
-    /** Sample-buffer write position the moment the FFT pane started
-     *  recording (or was reset).  Samples older than this are treated
-     *  as stale.  Sentinel −1 = "set me on the next tick". */
-    private volatile long startWritePos = -1;
     /** False until the very first analysis has run since {@link #start}. */
     private volatile boolean firstFrameDone;
     /** Tracks generator on/off transitions so the data collection is
      *  reset whenever the user starts or stops the generator. */
     private volatile Boolean lastGeneratorActive;
-    /** Reusable per-tick sample buffers — grown lazily, never shrunk.
-     *  Owned by the worker thread only. */
-    private float[] reusableLeftBuf  = new float[0];
-    private float[] reusableRightBuf = new float[0];
+
+    // ─── Contiguous sliding analysis window ─────────────────────────────────
+    /** The selected channel's contiguous analysis window, slid forward one
+     *  hop per tick by pulling fresh samples from {@link #reader} (a consuming
+     *  FIFO cursor).  Retained across ticks — the overlap region — so overlap
+     *  works WITHOUT re-reading the ring.  {@link #winValid} marks it as
+     *  holding a full {@code needed}-sample contiguous block; a window-size /
+     *  channel change or a capture overrun invalidates it and it is rebuilt
+     *  from fresh samples.  Worker-thread only (except the volatile flags). */
+    private float[] winBuf = new float[0];
+    private long    winAbsStart;
+    private int     winLen;
+    private int     winNeeded     = -1;     // `needed` the window was built for
+    private boolean winChannelLeft;         // channel the window currently holds
+    private volatile boolean winValid;
+    /** Set on (re)start / reset; the worker re-anchors {@link #reader} to the
+     *  latest sample on its next tick so the window rebuilds from fresh data
+     *  (no stale pre-reset samples leak in).  Re-anchoring on the worker thread
+     *  keeps the cursor single-owner even though resets arrive from others. */
+    private volatile boolean reanchorPending = true;
+    /** Reusable per-tick scratch: {@code analyzeBuf} is the analysis copy (the
+     *  comb / FFT window mutate it in place, so it must not be {@link #winBuf}),
+     *  {@code hopBuf} stages the fresh hop pulled from the reader each tick. */
+    private float[] analyzeBuf = new float[0];
+    private float[] hopBuf     = new float[0];
 
     /** Mains-hum comb, lazily built for the current sample rate.  Used
      *  only when {@code fftMainsSuppression == IIR_COMB}; re-tracks the
@@ -251,12 +270,43 @@ public final class FftAnalyzerWorker {
      *  spectrum is phase-rotated by the time delta from this reference
      *  to keep tones coherent across ticks. */
     private long    accumRefSampleStart;
-    /** Pinned kFractional from the first contributing tick — held constant
-     *  so the cross-tick rotation is well-defined.  Signals that drift in
-     *  frequency more than a few ppm during the recording will lose phase
-     *  coherence; that's a hardware-stability concern, not fixable here. */
+    /** Cross-tick de-rotation frequency (fractional fundamental bin), driven by
+     *  the phase lock {@link #accumLock}.  An exact value is required: any
+     *  residual error ramps the de-rotation phase over the accumulation and
+     *  vector-cancels the fundamental into a sinc (the ~5–8 dB loss seen in
+     *  long averages).  The lock measures the residual fundamental-phase drift
+     *  and nulls it, giving the exact frequency. */
     private double  accumKFractional;
-    /** Pinned {@code round(kFractional)} for the rotation formula. */
+    /** Phase lock that converges {@link #accumKFractional}; null until the
+     *  accumulator restarts.  While it is not yet locked the spectrum is NOT
+     *  accumulated (the de-rotation isn't trustworthy yet); on lock the
+     *  accumulator is re-anchored to "now" and accumulation begins with the
+     *  exact frequency. */
+    private DerotationPhaseLock accumLock;
+    /** True once {@link #accumLock} has locked and accumulation has begun. */
+    private boolean accumPhaseLocked;
+    /** Cumulative dropped-sample correction.  Samples dropped below the app (an
+     *  interface / driver xrun) advance {@code writePos} normally, so the
+     *  absolute positions silently UNDER-count real time and every later frame
+     *  is time-shifted — exactly the sinc.  Detected gaps are added here and
+     *  folded into the de-rotation sample delta, so the fundamental + harmonics
+     *  re-align and averaging CONTINUES across the gap (no restart). */
+    private double  accumDroppedSamples;
+    /** Last locked de-rotated fundamental phase — constant tick-to-tick when the
+     *  stream is continuous; a sudden jump flags a capture gap. */
+    private double  accumLastFundPhase;
+    /** Phase-lock tuning: ticks per measurement window, per-tick drift (rad)
+     *  below which a window is "stable", and stable windows to declare lock. */
+    private static final int    LOCK_WINDOW      = 8;
+    private static final double LOCK_DRIFT_RAD   = 0.001;   // tight: tiny per-tick drift smears over a long accumulation
+    private static final int    LOCK_WINDOWS     = 2;
+    private static final int    LOCK_MAX_WINDOWS = 12;      // fallback so a noisy signal still locks
+    /** A de-rotated-fundamental phase jump beyond this (rad) between consecutive
+     *  LOCKED ticks is a capture gap (dropped samples), not slow source drift
+     *  (which stays far below this — the lock pinned per-tick drift &lt; 0.001). */
+    private static final double GAP_PHASE_RAD    = 0.3;
+    /** Pinned {@code round(kFractional)} for the rotation formula — the
+     *  integer bin is stable, so only the fractional part needs converging. */
     private int     accumIntFundBinRounded;
     /** Fractional bins of the strong tones detected at restart (sorted
      *  ascending).  Length ≤ 1 ⇒ single-reference rotation (legacy path);
@@ -283,9 +333,10 @@ public final class FftAnalyzerWorker {
     private boolean accumCoherent;
     /** True once at least one tick has contributed. */
     private boolean accumHasData;
-    /** Tracks the previous tick's forever-mode flag so we can reset on
-     *  transitions between finite-N and forever modes. */
-    private boolean lastWasForever;
+    /** Previous tick's averaging mode, for resetting the cross-tick
+     *  accumulator on any change (single ↔ ring N ↔ forever, or a new N). */
+    private boolean lastAccumulate;
+    private int     lastTargetFrames = -1;
 
     /** Returns the mains comb, (re)building it when the sample rate
      *  changes.  Worker-thread only. */
@@ -306,6 +357,47 @@ public final class FftAnalyzerWorker {
         accumFrames = 0;
         accumHasData = false;
         accumToneKappa = new double[0];
+        accumDroppedSamples = 0.0;
+    }
+
+    /** Handles a ring overrun: the worker fell a full ring behind, so the
+     *  contiguous span it was about to read had already been overwritten.  This
+     *  is a COVERAGE gap, not corrupted data — the absolute sample positions are
+     *  still correct ({@code writePos} counts every delivered sample), so the
+     *  cross-tick de-rotation absorbs the gap (it de-rotates by the true sample
+     *  delta) and the running average stays valid.  So just start the next FFT
+     *  window fresh from "now"; do NOT restart averaging.  Worker-thread only
+     *  (it advances the cursor). */
+    private void onCaptureOverrun(SignalBufferReader rdr) {
+        winValid = false;
+        rdr.seekToLatest();
+        if (log.isDebugEnabled()) {
+            log.debug("FFT ring overrun — next window re-anchored, averaging continues");
+        }
+    }
+
+    /** Reports a detected-and-corrected capture gap: samples were dropped below
+     *  the app (interface / driver xrun), the de-rotated fundamental jumped, and
+     *  the time base was re-synced so averaging continues.  Logs it and raises a
+     *  brief blinking banner so the user can see capture gaps are occurring (and
+     *  being corrected) rather than silently smearing the average.  The caller
+     *  runs on the worker thread; the banner publish hops to the UI thread. */
+    private void onCaptureGap(double residualRad, double droppedSamples) {
+        if (log.isWarnEnabled()) {
+            log.warn("FFT capture gap: de-rotated fundamental jumped {} rad "
+                    + "→ +{} dropped samples (re-synced, averaging continues)",
+                    String.format("%.3f", residualRad), String.format("%.1f", droppedSamples));
+        }
+        if (display != null && !display.isDisposed()) {
+            display.asyncExec(() -> {
+                try {
+                    MessageBus.instance().publish(Events.FFT_CAPTURE_OVERRUN);
+                } catch (Exception e) {
+                    log.error("Can't dispatch Events.FFT_CAPTURE_OVERRUN", e);
+                }
+            });
+            display.wake();
+        }
     }
 
     /** Adds the post-cal Result's spectrum to the cross-tick accumulator.
@@ -313,10 +405,19 @@ public final class FftAnalyzerWorker {
      *  this tick's frame-0 with the accumulator's reference (so tones
      *  add coherently across ticks).  For incoherent mode, just sums
      *  power per bin.  Resets the accumulator transparently when fftSize
-     *  or coherent flag changes between ticks. */
-    private void accumulateIntoForeverBuffer(FftResult r,
-                                             long samplesAbsStart,
-                                             boolean coherent) {
+     *  or coherent flag changes between ticks.
+     *
+     *  @param targetN bound on the effective accumulated frame depth.  Use
+     *         {@link Integer#MAX_VALUE} for an unbounded cumulative mean
+     *         (forever mode); a finite N turns the running sum into an
+     *         exponential window of N frames (α = weight/N).
+     *  @return {@code true} if this tick was accumulated; {@code false} while
+     *         the phase lock is still converging (the caller should then show
+     *         the live single-tick spectrum, not the accumulator). */
+    private boolean accumulateIntoForeverBuffer(FftResult r,
+                                                long samplesAbsStart,
+                                                boolean coherent,
+                                                int targetN) {
         int fftSize  = r.fftSize;
         int halfSize = fftSize / 2;
         int N        = halfSize + 1;
@@ -338,23 +439,97 @@ public final class FftAnalyzerWorker {
             accumRefSampleStart    = samplesAbsStart;
             accumKFractional       = kFrac;
             accumIntFundBinRounded = intFundBin;
+            accumLock              = new DerotationPhaseLock(
+                    fftSize, kFrac, LOCK_WINDOW, LOCK_DRIFT_RAD, LOCK_WINDOWS, LOCK_MAX_WINDOWS);
+            accumPhaseLocked       = false;
             accumToneKappa         = coherent ? detectStrongTones(r) : new double[0];
             accumHasData = true;
         }
 
+        // Gap-corrected sample offset: cumulative dropped samples are added so a
+        // capture xrun (which under-counts writePos) doesn't time-shift the
+        // de-rotation.  delta is a double because the gap correction is sub-bin.
+        double delta = (samplesAbsStart - accumRefSampleStart) + accumDroppedSamples;
+
+        // Phase-lock gate (single-reference coherent only).  Until the lock
+        // converges, the de-rotation frequency isn't exact and accumulating
+        // would smear the fundamental into a sinc, so drive the lock from the
+        // de-rotated fundamental phase but do NOT accumulate (the caller then
+        // shows the live single-tick spectrum).  On lock, freeze the exact
+        // frequency and re-anchor the accumulator to "now" so the (slightly
+        // mis-rotated) pre-lock frames never enter the sum.
+        if (coherent && accumToneKappa.length < 2 && accumLock != null) {
+            double kappa = accumLock.kappa();
+            double baseAngle = (accumIntFundBinRounded > 0)
+                    ? -2.0 * Math.PI * delta * kappa
+                      / ((double) fftSize * accumIntFundBinRounded)
+                    : 0.0;
+            int    k0   = Math.min(accumIntFundBinRounded, halfSize);
+            double krot = k0 * baseAngle;          // total de-rotation at the fundamental bin
+            double cr   = Math.cos(krot), sr = Math.sin(krot);
+            double fr   = r.re[k0] * cr - r.im[k0] * sr;
+            double fi   = r.re[k0] * sr + r.im[k0] * cr;
+            double obsPhase = Math.atan2(fi, fr);   // de-rotated fundamental phase
+            if (!accumPhaseLocked) {
+                boolean locked = accumLock.observe(obsPhase, (long) delta);
+                accumKFractional = accumLock.kappa();
+                if (!locked) return false;          // still locking — don't accumulate
+                // Just locked → freeze, re-anchor to "now", clear the sum.
+                accumPhaseLocked    = true;
+                accumRefSampleStart = samplesAbsStart;
+                accumDroppedSamples = 0.0;
+                delta               = 0.0;
+                for (int k = 0; k < N; k++) { accumRe[k] = 0.0; accumIm[k] = 0.0; }
+                accumFrames = 0;
+                accumLastFundPhase = Math.atan2(r.im[k0], r.re[k0]);  // reference at delta=0
+            } else {
+                // Capture-gap recovery: once locked, the de-rotated fundamental
+                // phase is constant tick-to-tick.  A SUDDEN jump means samples
+                // were dropped below the app (interface / driver xrun) — which
+                // shifts the time base of every later frame (the sinc).  Recover
+                // the dropped-sample count from the jump and fold it in, so the
+                // fundamental + harmonics re-align and averaging CONTINUES across
+                // the gap.  Slow source drift stays well under the threshold and
+                // is left to the lock — not mistaken for a gap.
+                double residual = DerotationPhaseLock.wrapToPi(obsPhase - accumLastFundPhase);
+                if (kappa != 0.0 && Math.abs(residual) > GAP_PHASE_RAD) {
+                    double ddrop = residual * fftSize / (2.0 * Math.PI * kappa);
+                    accumDroppedSamples += ddrop;
+                    delta += ddrop;                 // re-correct THIS frame's de-rotation
+                    onCaptureGap(residual, ddrop);
+                } else {
+                    accumLastFundPhase = obsPhase;  // track slow drift
+                }
+            }
+        }
+
         int weight = Math.max(1, r.frameCount);
+        // Bounded (ring) window: before adding this tick, scale the running sum
+        // down so the effective depth holds at targetN frames.  This makes the
+        // running sum an exponential window (α = weight/targetN); forever mode
+        // passes targetN = MAX_VALUE and never scales (true cumulative mean).
+        if (targetN < Integer.MAX_VALUE && accumFrames + weight > targetN) {
+            int    keep  = Math.max(0, targetN - weight);
+            double scale = accumFrames > 0 ? (double) keep / accumFrames : 0.0;
+            if (coherent) {
+                if (accumRe != null) {
+                    for (int k = 0; k < N; k++) { accumRe[k] *= scale; accumIm[k] *= scale; }
+                }
+            } else if (accumPow != null) {
+                for (int k = 0; k < N; k++) accumPow[k] *= scale;
+            }
+            accumFrames = keep;
+        }
         if (coherent) {
-            long delta = samplesAbsStart - accumRefSampleStart;
             if (accumToneKappa.length >= 2) {
                 // Multi-tone: de-rotate each detected tone's lobe by its OWN
                 // frequency (constant phase), so every fundamental keeps its
                 // true position — no single reference, hence no grid-lock.
-                accumulateMultiTone(r, N, weight, delta);
+                accumulateMultiTone(r, N, weight, (long) delta);
             } else {
                 // Single reference: per-bin time-shift rotation tied to the one
-                // detected fundamental (and, via the linear ramp, its harmonics).
-                // Same formula as analyze()'s per-frame correction with f·step
-                // replaced by the absolute sample delta from the reference.
+                // detected fundamental (and, via the linear ramp, its harmonics)
+                // at the phase-locked (exact) frequency in accumKFractional.
                 double baseAngle = (accumIntFundBinRounded > 0)
                         ? -2.0 * Math.PI * delta * accumKFractional
                           / ((double) fftSize * accumIntFundBinRounded)
@@ -381,6 +556,7 @@ public final class FftAnalyzerWorker {
             }
         }
         accumFrames += weight;
+        return true;
     }
 
     /** Multi-tone cross-tick rotation: each detected strong tone's lobe is
@@ -574,8 +750,6 @@ public final class FftAnalyzerWorker {
 
     // ─── External wiring ────────────────────────────────────────────────────
 
-    public void setBuffer(SignalBuffer b)       { this.buffer = b; }
-    public SignalBuffer getBuffer()              { return buffer; }
     public int  getCompletedAnalyses()          { return completedAnalyses; }
     /** Cumulative frame count accumulated across all forever-mode ticks
      *  since the last reset.  Returns 0 outside forever mode or before
@@ -591,15 +765,22 @@ public final class FftAnalyzerWorker {
     /** Starts the analyser on a daemon worker thread.  Idempotent. */
     public synchronized void start() {
         if (running) return;
+        // The worker owns its capture: acquire a SharedCapture reader here so
+        // neither the view nor the pane has to handle the sample buffer.  A
+        // null result means the input device is unavailable — stay stopped so
+        // the caller (which checks isRunning) can revert its Record button.
+        SignalBufferReader r = MessageBus.instance().request(Events.CAPTURE_ACQUIRE);
+        if (r == null) return;
+        this.reader      = r;
+        this.captureHeld = true;
         running = true;
-        // Re-arm the first-frame regime + drop any stale spectrum so
-        // the chart starts blank.  startWritePos sentinel (−1) means
-        // "set me on the next tick" — recorded against the live buffer's
-        // writePos so the first analysis waits for a FULL fftLength of
-        // FRESH samples captured AFTER this point.
+        // Re-arm the first-frame regime + drop any stale spectrum so the chart
+        // starts blank.  reanchorPending makes the worker seek the reader to
+        // "now" on its next tick, so the first analysis window is built from a
+        // FULL needed-sample span of FRESH samples captured AFTER this point.
         firstFrameDone        = false;
-        lastAnalysisWritePos  = -1;
-        startWritePos         = -1;
+        winValid              = false;
+        reanchorPending       = true;
         completedAnalyses     = 0;
         resetStatistics();
         paused.set(false);
@@ -621,6 +802,11 @@ public final class FftAnalyzerWorker {
         MessageBus.instance().unsubscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
         discardCacheAndPool();
         resetAccumulator();
+        reader = null;
+        if (captureHeld) {
+            MessageBus.instance().publish(Events.CAPTURE_RELEASE);
+            captureHeld = false;
+        }
     }
 
     /** Clears the completed-analyses counter, drops the retained
@@ -631,8 +817,8 @@ public final class FftAnalyzerWorker {
         paused.set(false);
         completedAnalyses     = 0;
         firstFrameDone        = false;
-        lastAnalysisWritePos  = -1;
-        startWritePos         = -1;
+        winValid              = false;
+        reanchorPending       = true;
         recycleAndClearCache();
         resetAccumulator();
     }
@@ -652,30 +838,24 @@ public final class FftAnalyzerWorker {
      *  that has already been captured.  Drives the "NN%" indicator next
      *  to the magnitude-unit combo. */
     public double getNextFrameProgress() {
-        SignalBuffer buf = buffer;
-        if (buf == null) return 0;
+        SignalBufferReader rdr = reader;
+        if (rdr == null || !rdr.isAnchored()) return 0;
         Preferences prefs = Preferences.instance();
         int fftLength = prefs.getFftLength();
         if (fftLength < 8) return 0;
-        long writePos = buf.getWritePos();
-        if (!firstFrameDone) {
-            // First-frame regime: need a complete window of FRESH samples.
-            if (startWritePos < 0) return 0;
-            long fresh = writePos - startWritePos;
-            double f = (double) fresh / fftLength;
-            if (f < 0) f = 0; else if (f > 1) f = 1;
-            return f;
-        }
-        // Hop regime — newSamples toward the next hop.
-        if (lastAnalysisWritePos < 0) return 1;
+        long avail = rdr.available();
+        // Overrun is reported as a NEGATIVE progress so the UI can tell it
+        // apart from 0 (= simply no fresh samples captured yet).
+        if (avail == SignalBufferReader.OVERRUN) return -1.0;
         FftOverlap overlap;
         try { overlap = FftOverlap.valueOf(prefs.getFftOverlap()); }
         catch (IllegalArgumentException e) { overlap = FftOverlap.PCT_0; }
         double hop = Math.max(1, fftLength * (1.0 - overlap.fraction));
-        long newSamples = writePos - lastAnalysisWritePos;
-        if (newSamples <= 0) return 0;
-        double f = newSamples / hop;
-        return (f > 1) ? 1 : f;
+        // Building the first window needs a full `needed`; once it's valid each
+        // tick just needs one fresh hop, so the bar sweeps 0→1 per hop.
+        double want = winValid ? hop : (winNeeded > 0 ? winNeeded : fftLength);
+        double f = avail / want;
+        return (f < 0) ? 0 : (f > 1 ? 1 : f);
     }
 
     // ─── Worker loop ────────────────────────────────────────────────────────
@@ -726,9 +906,9 @@ public final class FftAnalyzerWorker {
         }
         lastGeneratorActive = genActiveNow;
 
-        SignalBuffer buf = buffer;
-        if (buf == null) return IDLE_TICK_MS;
-        int sampleRate = buf.getSampleRate();
+        SignalBufferReader rdr = reader;
+        if (rdr == null) return IDLE_TICK_MS;
+        int sampleRate = rdr.getSampleRate();
         if (sampleRate <= 0) return IDLE_TICK_MS;
 
         Preferences prefs = Preferences.instance();
@@ -736,7 +916,22 @@ public final class FftAnalyzerWorker {
         if (fftLength < 8 || (fftLength & (fftLength - 1)) != 0) return IDLE_TICK_MS;
 
         double avgRaw = prefs.getFftAverages();
-        int averages = Double.isInfinite(avgRaw) ? 2 : Math.max(1, (int) avgRaw);
+        boolean foreverMode = Double.isInfinite(avgRaw);
+        int     ringN       = Math.max(1, (int) avgRaw);
+        // Cross-tick accumulate whenever any averaging is requested.  Each tick
+        // then FFTs only a small fixed number of fresh frames (not the whole
+        // ring); the running cross-tick accumulator supplies the depth.  This
+        // makes a "200×" ring reach its full depth (instead of being capped by
+        // what fits in the capture buffer) and stops it re-FFTing ~40 frames
+        // every tick.
+        boolean accumulate = foreverMode || ringN >= 2;
+        int averages = accumulate ? 2 : 1;
+        // Frame-depth cap for the bounded (ring) accumulator.  ≈2 frames are
+        // contributed per tick, and the on-screen "N×" count is tick-based, so
+        // cap at 2·N frames: the floor keeps deepening for the whole time the
+        // count climbs to N (no "stuck at half" artefact), matching the
+        // forever-mode "≈2× displayed N frames" convention.
+        int targetFrames = foreverMode ? Integer.MAX_VALUE : 2 * ringN;
 
         WindowType window;
         try { window = WindowType.valueOf(prefs.getFftWindow()); }
@@ -750,49 +945,74 @@ public final class FftAnalyzerWorker {
         if (hop < 1) hop = 1;
         int hopSamples = (int) Math.max(1, Math.round(hop));
         int needed = (int) Math.ceil(fftLength + (averages - 1) * hop);
-        needed = Math.min(needed, buf.getCapacity());
-
-        long writePos = buf.getWritePos();
-        if (startWritePos < 0) startWritePos = writePos;
-        long fresh = writePos - startWritePos;
-        if (!firstFrameDone) {
-            if (fresh < fftLength) {
-                int waitMs = msForSamples((int)(fftLength - fresh), sampleRate);
-                return Math.max(20, waitMs);
-            }
-        } else {
-            if (lastAnalysisWritePos < 0) lastAnalysisWritePos = writePos;
-            long newSamples = writePos - lastAnalysisWritePos;
-            if (newSamples < hopSamples) {
-                int waitMs = msForSamples(hopSamples - (int) newSamples, sampleRate);
-                return Math.max(20, waitMs);
-            }
-        }
-        // Clamp read window to fresh-only samples until the full averaging
-        // window has accumulated fresh data.  Without this resetStatistics
-        // clears FFT state but the SignalBuffer still holds old samples,
-        // and readLatest(needed,…) pulls (needed − fresh) of them back
-        // into the average — visible as ghosting after the generator stops.
-        needed = (int) Math.min(needed, fresh);
+        needed = Math.min(needed, rdr.getCapacity());
 
         Channel channel = prefs.getFftChannel();
-        boolean wantLeft  = (channel == Channel.L);
-        float[] leftBuf  = null;
-        float[] rightBuf = null;
-        if (wantLeft) {
-            if (reusableLeftBuf.length != needed) reusableLeftBuf = new float[needed];
-            leftBuf = reusableLeftBuf;
-        } else {
-            if (reusableRightBuf.length != needed) reusableRightBuf = new float[needed];
-            rightBuf = reusableRightBuf;
+        boolean wantLeft = (channel == Channel.L);
+
+        // Re-anchor on (re)start / reset so the sliding window is rebuilt only
+        // from FRESH samples captured after this point (no ghosting after the
+        // generator stops).  Done on the worker thread to keep the cursor's
+        // read position single-owner even though resets arrive from others.
+        if (reanchorPending) {
+            rdr.seekToLatest();
+            reanchorPending = false;
+            winValid = false;
         }
-        // readEndingAt (not readLatest) so the samples returned have a
-        // deterministic absolute end position == writePos snapshotted
-        // above.  This makes samplesAbsStart = writePos − got, which the
-        // FrameFftCache uses as a stable key across ticks.
-        int got = buf.readEndingAt(writePos, needed, leftBuf, rightBuf);
-        if (got < fftLength) return IDLE_TICK_MS;
-        long samplesAbsStart = writePos - got;
+        // A change in window size (fftLength / overlap / averages) or channel
+        // forces a rebuild from a fresh contiguous span.
+        if (winNeeded != needed || winChannelLeft != wantLeft) {
+            winValid       = false;
+            winNeeded      = needed;
+            winChannelLeft = wantLeft;
+            if (winBuf.length != needed) winBuf = new float[needed];
+        }
+
+        long avail = rdr.available();
+        if (avail == SignalBufferReader.OVERRUN) {
+            // The writer lapped the cursor — the contiguous stream tore (the
+            // worker fell a full ring behind).  Drop the cross-tick accumulator
+            // + counters, invalidate the window, and re-anchor: deep averaging
+            // restarts from a fresh unbroken span (overlap can only resume once
+            // there are no breaks).  A reset the user can SEE — not a silent
+            // torn-read glitch.
+            onCaptureOverrun(rdr);
+            return IDLE_TICK_MS;
+        }
+
+        long samplesAbsStart;
+        if (!winValid) {
+            // Build the first window from one complete `needed`-sample span.
+            if (avail < needed) {
+                return Math.max(20, msForSamples((int) (needed - avail), sampleRate));
+            }
+            int got = rdr.read(needed, wantLeft ? winBuf : null, wantLeft ? null : winBuf);
+            if (got == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
+            if (got < needed) return IDLE_TICK_MS;        // gated by avail≥needed; defensive
+            winLen      = got;
+            winAbsStart = rdr.getReadPos() - got;
+            winValid    = true;
+        } else {
+            // Slide forward exactly one hop: pull the fresh hop, drop the oldest
+            // hop, append it.  Uniform hop ⇒ uniform cross-tick de-rotation
+            // delta, gap-free across ticks (the contiguous-stream fix).
+            if (avail < hopSamples) {
+                return Math.max(20, msForSamples(hopSamples - (int) avail, sampleRate));
+            }
+            if (hopBuf.length != hopSamples) hopBuf = new float[hopSamples];
+            int got = rdr.read(hopSamples, wantLeft ? hopBuf : null, wantLeft ? null : hopBuf);
+            if (got == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
+            if (got < hopSamples) return IDLE_TICK_MS;    // gated by avail≥hop; defensive
+            System.arraycopy(winBuf, hopSamples, winBuf, 0, winLen - hopSamples);
+            System.arraycopy(hopBuf, 0, winBuf, winLen - hopSamples, hopSamples);
+            winAbsStart += hopSamples;
+        }
+        samplesAbsStart = winAbsStart;
+
+        // Per-tick analysis copy: the comb / FFT window mutate the samples in
+        // place, so the retained sliding window must NOT be handed to analyze.
+        if (analyzeBuf.length != winLen) analyzeBuf = new float[winLen];
+        System.arraycopy(winBuf, 0, analyzeBuf, 0, winLen);
 
         // Cache invalidation: any change to fftLength / window / channel /
         // sampleRate makes previously cached raw FFTs stale.  Drop both
@@ -831,12 +1051,9 @@ public final class FftAnalyzerWorker {
                 FRAME_CACHE_BYTE_BUDGET / Math.max(1L, perEntryBytes));
         frameCacheCap = Math.max(2, Math.min(averages + 2, budgetCap));
 
-        float[] samples = wantLeft ? leftBuf : rightBuf;
-        if (got < samples.length) {
-            float[] trimmed = new float[got];
-            System.arraycopy(samples, 0, trimmed, 0, got);
-            samples = trimmed;
-        }
+        // The pristine sliding window was copied into analyzeBuf above; the
+        // comb / FFT window mutate this copy in place, never winBuf.
+        float[] samples = analyzeBuf;
 
         int    calcMaxH = Math.max(9, prefs.getFftCalcMaxHarmonic()) - 1;
         double distMin  = prefs.isFftDistMinEnabled() ? prefs.getFftDistMinHz() : 0;
@@ -935,23 +1152,24 @@ public final class FftAnalyzerWorker {
             // (default for a freshly-allocated Result), nothing to do.
         }
 
-        // Mode-transition detection — switching between finite-N and
-        // forever resets the cross-tick accumulator so the new mode
-        // starts from a clean slate.
-        boolean foreverMode = Double.isInfinite(avgRaw);
-        if (foreverMode != lastWasForever) {
+        // Mode-transition detection — any change in the averaging target
+        // (single ↔ ring N ↔ forever, or a different N) resets the cross-tick
+        // accumulator so the new mode starts from a clean slate.
+        if (accumulate != lastAccumulate || targetFrames != lastTargetFrames) {
             resetAccumulator();
-            lastWasForever = foreverMode;
+            lastAccumulate   = accumulate;
+            lastTargetFrames = targetFrames;
         }
-        // Cross-tick accumulation: in forever mode each tick contributes
-        // its frames to a running sum (coherently rotated to align with
-        // the accumulator's time reference), then the displayed Result
-        // is rebuilt from the cumulative average and the harmonic / THD
-        // / SNR stats are re-derived via recomputeStats.  This is the
-        // real "infinite average" the user expects — SNR boost √(total
-        // frames accumulated) instead of √(frames per tick).
-        if (foreverMode) {
-            accumulateIntoForeverBuffer(r, samplesAbsStart, coherent);
+        // Cross-tick accumulation: each tick contributes its (small) per-tick
+        // frames to a running accumulator (coherently rotated to align with
+        // the accumulator's time reference), then the displayed Result is
+        // rebuilt from the running average and the harmonic / THD / SNR stats
+        // are re-derived via recomputeStats.  Forever mode is a true cumulative
+        // mean (SNR boost √(total frames)); a finite ring N is the same
+        // accumulator bounded to N frames (an exponential window), so it also
+        // reaches √N depth regardless of the capture-buffer size.
+        if (accumulate
+                && accumulateIntoForeverBuffer(r, samplesAbsStart, coherent, targetFrames)) {
             overlayAccumulatorOnto(r);
             analyzer.recomputeStats(r);
             // recomputeStats updates fundamentalDbFs from the cumulative
@@ -1032,7 +1250,6 @@ public final class FftAnalyzerWorker {
         }
 
         completedAnalyses++;
-        lastAnalysisWritePos = buf.getWritePos();
         firstFrameDone = true;
         // Stop-after-N only fires when the user is in "forever" averages
         // AND has explicitly enabled the cap.  Counts TICKS (matches the

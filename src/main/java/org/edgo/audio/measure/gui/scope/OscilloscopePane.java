@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
@@ -30,6 +31,7 @@ import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.ProgressBar;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.enums.Channel;
@@ -37,21 +39,23 @@ import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
+import org.edgo.audio.measure.gui.MainTab;
 import org.edgo.audio.measure.gui.MainWindow;
-import org.edgo.audio.measure.gui.generator.NumericStepField;
-import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.preferences.OscPreset;
-import org.edgo.audio.measure.gui.preferences.Preferences;
-import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
-import org.edgo.audio.measure.gui.widgets.PaneTitle;
-import org.edgo.audio.measure.gui.widgets.StepSelector;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
-import org.edgo.audio.measure.gui.sound.SignalBuffer;
+import org.edgo.audio.measure.gui.generator.NumericStepField;
+import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.preferences.OscPreset;
+import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.gui.sound.SharedCapture;
+import org.edgo.audio.measure.gui.sound.SignalBufferReader;
+import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
+import org.edgo.audio.measure.gui.widgets.PaneTitle;
+import org.edgo.audio.measure.gui.widgets.StepSelector;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.extern.log4j.Log4j2;
@@ -742,10 +746,10 @@ public final class OscilloscopePane {
                 // table renders (its values come from copyMeasurementsFrom).
                 OscilloscopeView.RenderedFrame snap = view.getRenderedFrameSnapshot();
                 if (snap != null) shotPane.getView().setFrozenFrame(snap);
-                SignalBuffer liveBuffer = view.getBuffer();
-                if (liveBuffer != null) {
-                    shotPane.getView().setBuffer(liveBuffer);
-                    shotPane.getCondensed().setBuffer(liveBuffer);
+                SignalBufferReader reader = view.getReader();
+                if (reader != null) {
+                    shotPane.getView().setBuffer(reader);
+                    shotPane.getCondensed().setBuffer(reader);
                 }
                 // copyMeasurementsFrom AFTER setBuffer (which clears latest).
                 shotPane.getView().copyMeasurementsFrom(view);
@@ -2148,9 +2152,9 @@ public final class OscilloscopePane {
             // first frames are visible.  Slider is enabled only in file
             // mode — in live record it's disabled so user can't scroll
             // away from the live tip and break trigger.
-            SignalBuffer loadedBuf = view.getBuffer();
-            if (loadedBuf != null) {
-                int displaySamples = ScopeFormat.displaySamplesFor(prefs.getOscTimePerDiv(), loadedBuf.getSampleRate());
+            SignalBufferReader reader = view.getReader();
+            if (reader != null) {
+                int displaySamples = ScopeFormat.displaySamplesFor(prefs.getOscTimePerDiv(), reader.getSampleRate());
                 viewCenterFrames = displaySamples / 2.0;
             }
             setNavSliderVisible(true);
@@ -2235,11 +2239,11 @@ public final class OscilloscopePane {
      */
     private void onNavSliderMoved() {
         if (!view.isFileMode()) return;     // live mode: ignore stray events
-        SignalBuffer buf = view.getBuffer();
-        if (buf == null) return;
-        int displaySamples = ScopeFormat.displaySamplesFor(Preferences.instance().getOscTimePerDiv(), buf.getSampleRate());
-        long writePos = buf.getWritePos();
-        long oldest   = Math.max(0L, writePos - buf.getCapacity());
+        SignalBufferReader reader = view.getReader();
+        if (reader == null) return;
+        int displaySamples = ScopeFormat.displaySamplesFor(Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
+        long writePos = reader.getWritePos();
+        long oldest   = Math.max(0L, writePos - reader.getCapacity());
         long minCenter = oldest   + displaySamples / 2;
         long maxCenter = writePos - displaySamples / 2;
         int sel    = navSlider.getSelection();
@@ -2265,16 +2269,16 @@ public final class OscilloscopePane {
      * with a redraw.
      */
     private void applyViewState() {
-        SignalBuffer buf = view.getBuffer();
-        if (buf == null) {
+        SignalBufferReader reader = view.getReader();
+        if (reader == null) {
             view.setViewBackOffsetFrames(0);
             condensed.setViewBackOffsetFrames(0);
             requestRedraw();
             return;
         }
-        int displaySamples = ScopeFormat.displaySamplesFor(Preferences.instance().getOscTimePerDiv(), buf.getSampleRate());
-        long writePos = buf.getWritePos();
-        long resident = Math.min(writePos, buf.getCapacity());
+        int displaySamples = ScopeFormat.displaySamplesFor(Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
+        long writePos = reader.getWritePos();
+        long resident = Math.min(writePos, reader.getCapacity());
 
         // Thumb size = fraction of the buffer the main view is showing.
         // Floor at MIN_SCROLLBAR_THUMB so the thumb stays grabbable even
@@ -2294,7 +2298,7 @@ public final class OscilloscopePane {
         // can't go past writePos (no future frames exist).  In the
         // live ring-wrap case the oldest still-resident frame is
         // writePos − capacity.
-        long oldest    = Math.max(0L, writePos - buf.getCapacity());
+        long oldest    = Math.max(0L, writePos - reader.getCapacity());
         long minCenter = oldest   + displaySamples / 2;
         long maxCenter = writePos - displaySamples / 2;
 
@@ -2341,9 +2345,9 @@ public final class OscilloscopePane {
         // main view's middle.  Clamped so we don't request frames past
         // writePos or before any resident sample.
         long mainCenter       = writePos - mainOffset - displaySamples / 2;
-        long condensedViewEnd = mainCenter + buf.getSampleRate() / 2;
+        long condensedViewEnd = mainCenter + reader.getSampleRate() / 2;
         condensedViewEnd = Math.min(condensedViewEnd, writePos);
-        condensedViewEnd = Math.max(condensedViewEnd, Math.min(writePos, oldest + buf.getSampleRate()));
+        condensedViewEnd = Math.max(condensedViewEnd, Math.min(writePos, oldest + reader.getSampleRate()));
         condensed.setViewBackOffsetFrames(Math.max(0L, writePos - condensedViewEnd));
         requestRedraw();
     }
@@ -2545,12 +2549,12 @@ public final class OscilloscopePane {
      *  while the value walks back into range. */
     private void stepHorizontalOffset(int dir) {
         if (view.isFileMode()) {
-            SignalBuffer buf = view.getBuffer();
-            if (buf == null) return;
+            SignalBufferReader reader = view.getReader();
+            if (reader == null) return;
             int displaySamples = ScopeFormat.displaySamplesFor(
-                    Preferences.instance().getOscTimePerDiv(), buf.getSampleRate());
-            long writePos  = buf.getWritePos();
-            long oldest    = Math.max(0L, writePos - buf.getCapacity());
+                    Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
+            long writePos  = reader.getWritePos();
+            long oldest    = Math.max(0L, writePos - reader.getCapacity());
             double minCenter = oldest   + displaySamples / 2.0;
             double maxCenter = writePos - displaySamples / 2.0;
             if (maxCenter < minCenter) return;   // window bigger than buffer
@@ -2758,12 +2762,21 @@ public final class OscilloscopePane {
         Preferences prefs = Preferences.instance();
         int sampleRate = prefs.current().getInputSampleRate();
         int bitDepth   = prefs.current().getInputBitDepth();
+        // A request longer than the capture ring can hold (and not a loaded
+        // file) ⇒ record FORWARD to disk in real time (streaming) instead of
+        // dumping the ring.  Otherwise dump the most-recent N seconds instantly.
+        SignalBufferReader reader = view.getReader();
+        long requestedFrames = Math.max(1L, Math.round(durationSeconds * (double) sampleRate));
+        if (!view.isFileMode() && (reader == null || requestedFrames > reader.getCapacity())) {
+            startStreamingSave(path, sampleRate, bitDepth, requestedFrames);
+            return;
+        }
         // Pass the latest detected fundamental so ScopeFileSaver can
         // snap the file length to whole signal periods.  NaN = scope
         // hasn't produced a measurement yet (saves raw duration).
         double freqHz = view.getLastFrequencyHz();
         try {
-            long bytes = ScopeFileSaver.save(view.getBuffer(),
+            long bytes = ScopeFileSaver.save(reader,
                     new File(path), sampleRate, bitDepth, durationSeconds, freqHz);
             log.info("Scope saved: {} ({} bytes)", path, bytes);
         } catch (Exception ex) {
@@ -2772,6 +2785,88 @@ public final class OscilloscopePane {
                     I18n.t("scope.save.error"),
                     I18n.t("scope.save.error.message", path, ex.getMessage()));
         }
+    }
+
+    /**
+     * Records {@code totalFrames} of LIVE capture straight to {@code path} in
+     * real time (for captures longer than the ring buffer), showing a modal
+     * progress dialog with a Cancel.  Acquires its own capture reference for
+     * the duration (opening the device if the scope isn't already recording),
+     * streams on a daemon thread via {@link StereoPcmIo#saveStreaming}, and
+     * releases when done or cancelled.
+     */
+    private void startStreamingSave(String path, int sampleRate, int bitDepth, long totalFrames) {
+        SignalBufferReader reader = MessageBus.instance().request(Events.CAPTURE_ACQUIRE);
+        if (reader == null) {
+            Dialogs.error(group.getShell(), I18n.t("scope.save.error"),
+                    I18n.t("scope.save.error.message", path,
+                            SharedCapture.instance().getLastStartError()));
+            return;
+        }
+        double totalSeconds = totalFrames / (double) sampleRate;
+
+        // Floating tool window: on-top so it stays visible, but NOT modal — the
+        // user can keep watching the scope / FFT while it records.
+        Shell dlg = new Shell(group.getShell(), SWT.TOOL | SWT.TITLE | SWT.CLOSE | SWT.ON_TOP);
+        dlg.setText(I18n.t("scope.save.recording.title"));
+        dlg.setLayout(new GridLayout(1, false));
+        Label lbl = new Label(dlg, SWT.NONE);
+        lbl.setText(I18n.t("scope.save.recording.progress", "0.0",
+                String.format(Locale.ROOT, "%.1f", totalSeconds)));
+        GridData lblGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
+        lblGd.widthHint = 300;
+        lbl.setLayoutData(lblGd);
+        ProgressBar bar = new ProgressBar(dlg, SWT.HORIZONTAL | SWT.SMOOTH);
+        bar.setMinimum(0);
+        bar.setMaximum(1000);
+        bar.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        Button cancelBtn = new Button(dlg, SWT.PUSH);
+        cancelBtn.setText(I18n.t("common.cancel"));
+        cancelBtn.setLayoutData(new GridData(SWT.END, SWT.CENTER, false, false));
+        AtomicBoolean cancelled = new AtomicBoolean(false);
+        cancelBtn.addListener(SWT.Selection, e -> cancelled.set(true));
+        dlg.addListener(SWT.Close, e -> cancelled.set(true));
+        dlg.pack();
+        // Centre on the parent window.
+        Rectangle pb = group.getShell().getBounds();
+        Point ds = dlg.getSize();
+        dlg.setLocation(pb.x + (pb.width - ds.x) / 2, pb.y + (pb.height - ds.y) / 2);
+        dlg.open();
+
+        Display display = group.getDisplay();
+        Thread t = new Thread(() -> {
+            Exception err = null;
+            try {
+                StereoPcmIo.saveStreaming(reader, new File(path), sampleRate, bitDepth, totalFrames,
+                        cancelled::get,
+                        written -> {
+                            if (display.isDisposed()) return;
+                            display.asyncExec(() -> {
+                                if (bar.isDisposed()) return;
+                                bar.setSelection((int) Math.min(1000L, 1000L * written / totalFrames));
+                                lbl.setText(I18n.t("scope.save.recording.progress",
+                                        String.format(Locale.ROOT, "%.1f", written / (double) sampleRate),
+                                        String.format(Locale.ROOT, "%.1f", totalSeconds)));
+                            });
+                        });
+            } catch (Exception ex) {
+                err = ex;
+                log.warn("Scope stream-record failed", ex);
+            } finally {
+                MessageBus.instance().publish(Events.CAPTURE_RELEASE);
+            }
+            final Exception fe = err;
+            if (display.isDisposed()) return;
+            display.asyncExec(() -> {
+                if (!dlg.isDisposed()) dlg.close();
+                if (fe != null) {
+                    Dialogs.error(group.getShell(), I18n.t("scope.save.error"),
+                            I18n.t("scope.save.error.message", path, fe.getMessage()));
+                }
+            });
+        }, "scope-stream-record");
+        t.setDaemon(true);
+        t.start();
     }
 
     /**

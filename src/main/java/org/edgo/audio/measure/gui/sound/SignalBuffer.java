@@ -161,4 +161,41 @@ public final class SignalBuffer {
         }
         return available;
     }
+
+    /**
+     * Forward counterpart of {@link #readEndingAt}: copies up to {@code count}
+     * samples STARTING at absolute index {@code absoluteStart} into
+     * {@code outLeft} / {@code outRight} (either may be {@code null}),
+     * head-aligned to index 0.  The natural primitive for a forward cursor
+     * ({@link SignalBufferReader}) that walks the ring as a FIFO.
+     *
+     * <p>Bounds-checked the same way as {@link #readEndingAt}: any part of the
+     * request older than the ring's oldest resident sample, or beyond
+     * {@code writePos}, is silently clipped, and the return value is the number
+     * of samples actually copied.  Package-private: callers walk the stream via
+     * {@link SignalBufferReader}, which owns the read position and the overrun
+     * policy; this method just does the wrap-aware copy.
+     */
+    int readStartingAt(long absoluteStart, int count,
+                       float[] outLeft, float[] outRight) {
+        long currentWrite;
+        synchronized (this) {
+            currentWrite = writePos;
+        }
+        long oldest    = Math.max(0L, currentWrite - capacity);
+        long start     = Math.max(absoluteStart, oldest);
+        long endExcl   = Math.min(absoluteStart + (long) count, currentWrite);
+        int  available = (int) Math.max(0L, endExcl - start);
+        if (available <= 0) return 0;
+        int srcStart   = (int) (start % capacity);
+        int firstChunk = Math.min(available, capacity - srcStart);
+        if (outLeft  != null) System.arraycopy(left,  srcStart, outLeft,  0, firstChunk);
+        if (outRight != null) System.arraycopy(right, srcStart, outRight, 0, firstChunk);
+        int remaining = available - firstChunk;
+        if (remaining > 0) {
+            if (outLeft  != null) System.arraycopy(left,  0, outLeft,  firstChunk, remaining);
+            if (outRight != null) System.arraycopy(right, 0, outRight, firstChunk, remaining);
+        }
+        return available;
+    }
 }

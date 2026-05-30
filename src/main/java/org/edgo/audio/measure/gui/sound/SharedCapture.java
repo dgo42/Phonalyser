@@ -93,15 +93,16 @@ public final class SharedCapture {
 
     /**
      * Opens the input device if no reference is held yet, otherwise
-     * increments the reference count.  Returns the live shared
-     * {@link SignalBuffer} the device is writing into, or {@code null}
-     * on failure (with a human-readable reason stored in
-     * {@link #getLastStartError()}).
+     * increments the reference count.  Returns a fresh
+     * {@link SignalBufferReader} cursor over the live shared buffer the
+     * device is writing into (each consumer gets its own read position
+     * over the one shared stream), or {@code null} on failure (with a
+     * human-readable reason stored in {@link #getLastStartError()}).
      */
-    public synchronized SignalBuffer acquire() {
+    public synchronized SignalBufferReader acquire() {
         if (refCount > 0) {
             refCount++;
-            return sharedBuffer;
+            return new SignalBufferReader(sharedBuffer);
         }
         lastStartError = null;
 
@@ -164,7 +165,7 @@ public final class SharedCapture {
             refCount = 1;
             log.info("Audio capture started: device={}, sampleRate={} Hz, bitDepth={} bits",
                     device.displayName(), sampleRate, bitDepth);
-            return sharedBuffer;
+            return new SignalBufferReader(sharedBuffer);
         } catch (Exception ex) {
             lastStartError = translateOpenFailure(ex, device, sampleRate, bitDepth);
             log.error("Capture: failed to start — {}", ex.getMessage(), ex);
