@@ -46,6 +46,11 @@ import java.util.Arrays;
  */
 public final class MainsCombFilter {
 
+    /** Default −3 dB notch bandwidth (Hz) for the mains comb — the value used
+     *  by the FFT / scope combs throughout the app.  Callers pass it to the
+     *  constructor (a different width can still be chosen per instance). */
+    public static final double DEFAULT_NOTCH_BANDWIDTH_HZ = 2.5;
+
     /** Lowest fundamental the comb will tune to (Hz) — also sizes the
      *  delay line.  Below the 50 Hz detection band with margin. */
     private static final double MIN_MAINS_HZ = 45.0;
@@ -83,10 +88,13 @@ public final class MainsCombFilter {
      *  line holds the existing lock rather than dropping it.  Survives
      *  {@link #reset} (only the delay lines are cleared there). */
     private double lockHz = Double.NaN;
-    /** EWMA weight on the existing lock (vs. a fresh detection). */
-    private static final double LOCK_SMOOTH = 0.85;
+    /** EWMA weight on the existing lock (vs. a fresh detection).  High, because
+     *  mains is very stable (50/60 Hz ± a few mHz over seconds): heavy averaging
+     *  (≈ 1/(1−w) ≈ 33 detections) keeps the locked f0 — and hence every notch
+     *  position k·f0 — from jittering, while still tracking the slow real drift. */
+    private static final double LOCK_SMOOTH = 0.97;
     /** A detection farther than this from the current lock is an outlier. */
-    private static final double MAX_LOCK_DRIFT_HZ = 1.5;
+    private static final double MAX_LOCK_DRIFT_HZ = 0.5;
 
     /** Scratch for the windowed reference inside {@link #track}; grown
      *  on demand to the largest reference length seen. */
@@ -121,6 +129,102 @@ public final class MainsCombFilter {
         return !Double.isNaN(mainsHz);
     }
 
+    /**
+     * Normalized magnitude response at {@code fHz}, linear (0..1): ≈1 in the
+     * passband, → 0 at every mains harmonic (k·f₀).  Closed form of
+     * H(z) = (1 − z⁻ᴺ)/(1 − α·z⁻ᴺ) on the unit circle with N = sampleRate/f₀
+     * (so ωN = 2π·f/f₀), scaled by {@code (1+α)/2} so the anti-notch PEAK is
+     * exactly 1 — i.e. the comb's inherent {@code 2/(1+α)} passband gain
+     * (≈ +0.5 dB) is removed.  Multiplying a spectrum by this notches the mains
+     * harmonics WITHOUT biasing the passband.  Returns 1.0 while untuned.
+     *
+     * <p>Uses the ideal (un-interpolated) N — exact for notch PLACEMENT; the
+     * implementation's fractional-delay interpolation adds only a negligible
+     * treble droop, irrelevant for a plot-time correction.
+     */
+    public double magnitudeAt(double fHz) {
+        if (!isTuned()) return 1.0;
+        double wn  = 2.0 * Math.PI * fHz / mainsHz;          // ωN = 2π·f/f₀
+        double c   = Math.cos(wn);
+        double num = 2.0 * (1.0 - c);
+        double den = 1.0 - 2.0 * alpha * c + alpha * alpha;
+        double h   = (den > 0.0) ? Math.sqrt(Math.max(0.0, num / den)) : 0.0;
+        return h * (1.0 + alpha) / 2.0;                      // peak-normalize → 1
+    }
+
+    // ── Frequency-domain correction ──────────────────────────────────────────
+    // Apply the comb as a divide on an already-computed magnitude spectrum
+    // instead of filtering the time-domain input.  This is the right tool once
+    // you're averaging in the frequency domain: an input-side IIR comb convolves
+    // its transient/phase into every frame, which a coherent average can't undo
+    // (it drifts, worst when a mains harmonic sits on a measured tone), whereas a
+    // per-bin divide on the FINAL averaged spectrum leaves the accumulator raw.
+    // Peak-normalized ⇒ no +0.5 dB passband bias.  The per-bin response is CACHED
+    // and rebuilt only when f0 (or the spectrum geometry) changes, so each call
+    // after the first is a cheap band-limited add — cheap enough for the UI
+    // thread.  Band-limited to CORR_MAX_HZ: real mains hum lives low, so this
+    // removes it without notching higher signal tones, and it keeps the f0-keyed
+    // cache stable (high comb teeth would otherwise jump bins on a milli-Hz drift).
+
+    /** Plot floor (dB): a notch reads as a clean gap to this depth, not −∞. */
+    private static final double CORR_FLOOR_DB     = -120.0;
+    /** Only harmonics below this are notched (real hum band; protects tones). */
+    private static final double CORR_MAX_HZ       = 2500.0;
+    /** Rebuild the cached response only once f0 drifts past this. */
+    private static final double CORR_F0_REBUILD_HZ = 0.005;
+
+    private double[] corrDb;          // cached per-bin dB delta (0 above the band)
+    private double   corrF0 = Double.NaN;
+    private double   corrRes;
+    private int      corrMaxBin;
+
+    /** Divides the cached, band-limited, peak-normalized response (in dB) into a
+     *  magnitude spectrum in place: {@code dbFs} (and {@code dbV}, the same
+     *  delta, when non-null) get the notch added per bin.  Re-tunes to
+     *  {@code f0Hz} and rebuilds the cache when it has moved.  No-op for a
+     *  non-positive {@code f0Hz} (mains off / unlocked). */
+    public void applySpectrumCorrection(double[] dbFs, double[] dbV,
+                                        double freqResolution, double f0Hz) {
+        if (!(f0Hz > 0.0) || dbFs == null || freqResolution <= 0.0) return;
+        int n = dbFs.length;
+        if (corrDb == null || corrDb.length != n || corrRes != freqResolution
+                || Math.abs(corrF0 - f0Hz) > CORR_F0_REBUILD_HZ) {
+            retune(f0Hz);
+            rebuildCorrection(n, freqResolution);
+        }
+        final double[] corr = corrDb;
+        int max = Math.min(corrMaxBin, n - 1);
+        for (int k = 1; k <= max; k++) {
+            double d = corr[k];
+            if (d == 0.0) continue;
+            dbFs[k] += d;
+            if (dbV != null && k < dbV.length) dbV[k] += d;
+        }
+    }
+
+    /** Band-limited, floored mains correction (dB) at a single frequency.  Uses
+     *  the current tuning.  0 dB outside the notched band.  Public so callers
+     *  (e.g. the FFT view's diagnostic overlay) plot exactly the dB the
+     *  correction applies, with the same floor + band-limit. */
+    public double correctionDb(double fHz) {
+        if (fHz > CORR_MAX_HZ || !isTuned()) return 0.0;
+        double mag = magnitudeAt(fHz);
+        return (mag > 0.0) ? Math.max(CORR_FLOOR_DB, 20.0 * Math.log10(mag)) : CORR_FLOOR_DB;
+    }
+
+    /** (Re)builds {@link #corrDb} for the current tuning over [0, CORR_MAX_HZ];
+     *  bins above the band stay 0. */
+    private void rebuildCorrection(int n, double res) {
+        double[] corr = (corrDb != null && corrDb.length == n) ? corrDb : new double[n];
+        Arrays.fill(corr, 0.0);
+        int maxBin = Math.min(n - 1, (int) Math.floor(CORR_MAX_HZ / res));
+        for (int k = 1; k <= maxBin; k++) corr[k] = correctionDb(k * res);
+        corrDb     = corr;
+        corrF0     = mainsHz;
+        corrRes    = res;
+        corrMaxBin = maxBin;
+    }
+
     /** Directly tunes the comb fundamental, bypassing detection.  The
      *  frequency is clamped to {@code [MIN_MAINS_HZ, MAX_MAINS_HZ]}.
      *  Delay-line state is preserved (a re-tune is a smooth glide, not a
@@ -140,6 +244,18 @@ public final class MainsCombFilter {
         Arrays.fill(xBuf, 0.0);
         Arrays.fill(yBuf, 0.0);
         pos = 0;
+    }
+
+    /** Drops the frequency lock and untunes the comb so the next {@link #track}
+     *  re-detects from scratch and snaps immediately (no EWMA inertia from the
+     *  old lock).  Also invalidates the cached frequency-domain correction.
+     *  Unlike {@link #reset} (which keeps the lock), use this when the analysis
+     *  context is reset and the mains estimate should start fresh. */
+    public void resetTracking() {
+        lockHz  = Double.NaN;
+        mainsHz = Double.NaN;
+        corrDb  = null;
+        corrF0  = Double.NaN;
     }
 
     /**

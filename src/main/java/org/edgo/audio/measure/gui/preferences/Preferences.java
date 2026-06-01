@@ -308,6 +308,12 @@ public final class Preferences {
     @Getter @Setter private boolean fftDistMaxEnabled    = false;
     @Getter @Setter private int     fftThdMaxHarmonic    = 9;
     @Getter @Setter private int     fftCalcMaxHarmonic   = 9;
+    /** A spectral peak counts as a separate TONE (→ multi-tone averaging path)
+     *  only if it is within this many dB of the strongest peak.  A clean tone's
+     *  harmonics sit far below and are excluded, so a THD/cal signal stays on
+     *  the single-reference phase-lock path; real dual-tone / IMD partners are
+     *  comparable in level and survive. */
+    @Getter @Setter private double  fftStrongToneRelDb   = 100.0;
     @Getter @Setter private double  fftManualFundVrms    = 1.0;
     /** Unit the manual-fundamental-amplitude field renders in: {@code mV}, {@code V}, or {@code dBV}. */
     @Getter @Setter private String  fftManualFundUnit    = "V";
@@ -727,6 +733,7 @@ public final class Preferences {
         root.put("fftDistMaxEnabled",         fftDistMaxEnabled);
         root.put("fftThdMaxHarmonic",         fftThdMaxHarmonic);
         root.put("fftCalcMaxHarmonic",        fftCalcMaxHarmonic);
+        root.put("fftStrongToneRelDb",        fftStrongToneRelDb);
         root.put("fftManualFundVrms",         fftManualFundVrms);
         root.put("fftManualFundUnit",         fftManualFundUnit);
         root.put("fftManualFundEnabled",      fftManualFundEnabled);
@@ -1019,6 +1026,7 @@ public final class Preferences {
         if (root.get("fftDistMaxEnabled")         instanceof Boolean b) fftDistMaxEnabled    = b;
         if (root.get("fftThdMaxHarmonic")         instanceof Number  n) fftThdMaxHarmonic    = n.intValue();
         if (root.get("fftCalcMaxHarmonic")        instanceof Number  n) fftCalcMaxHarmonic   = n.intValue();
+        if (root.get("fftStrongToneRelDb")        instanceof Number  n) fftStrongToneRelDb   = n.doubleValue();
         if (root.get("fftManualFundVrms")         instanceof Number  n) fftManualFundVrms    = n.doubleValue();
         if (root.get("fftManualFundUnit")         instanceof String  s) fftManualFundUnit    = s;
         if (root.get("fftManualFundEnabled")      instanceof Boolean b) fftManualFundEnabled = b;

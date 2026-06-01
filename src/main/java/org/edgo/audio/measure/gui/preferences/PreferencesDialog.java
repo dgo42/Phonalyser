@@ -325,6 +325,28 @@ public final class PreferencesDialog {
         fftDotDiameterSel.setLayoutData(comboData());
         fftDotDiameterSel.setToolTipText(I18n.t("preferences.fft.dotDiameter.tooltip"));
 
+        // Multi-tone detect threshold (dB below the strongest peak): for
+        // cross-tick coherent averaging a spectral peak is treated as a separate
+        // tone only if within this many dB of the strongest.  Lower it so a
+        // tone's harmonics / IMD products aren't taken as independent tones
+        // (which would route the average onto the per-tone multi-tone path).
+        new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.strongToneRelDb"));
+        NumericStepField fftStrongToneRelDbField = new NumericStepField(fftTab,
+                prefs.getFftStrongToneRelDb(),
+                raw -> {
+                    if (raw == null) return null;
+                    String s = raw.trim().replace(',', '.').replace("dB", "").trim();
+                    if (s.isEmpty()) return null;
+                    try { return Math.max(10.0, Math.min(140.0, Double.parseDouble(s))); }
+                    catch (NumberFormatException ex) { return null; }
+                },
+                v -> String.format(Locale.ROOT, "%.0f dB", v),
+                (v, dir) -> Math.max(10.0, Math.min(140.0, v + 10.0 * dir)),   // wheel ±10
+                (v, dir) -> Math.max(10.0, Math.min(140.0, v +  1.0 * dir)),   // arrows ±1
+                90);
+        fftStrongToneRelDbField.setLayoutData(comboData());
+        fftStrongToneRelDbField.setToolTipText(I18n.t("preferences.fft.strongToneRelDb.tooltip"));
+
         // Spectrum line colour.
         int[] fftLineColorHolder = { prefs.getFftLineColor() };
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.lineColor"));
@@ -726,6 +748,7 @@ public final class PreferencesDialog {
             prefs.setOscRightChannelColor        (rightRgbHolder[0]);
             prefs.setFftLineWidth                (Double.parseDouble(fftLineWidthSel.getSelectedValue()));
             prefs.setFftHarmonicDotDiameter      (Integer.parseInt(fftDotDiameterSel.getSelectedValue()));
+            prefs.setFftStrongToneRelDb          (fftStrongToneRelDbField.getValue());
             prefs.setFftLineColor                (fftLineColorHolder[0]);
             prefs.setFftChartBackgroundColor     (fftBgColorHolder[0]);
             prefs.setFftHarmonicDotColor         (fftDotColorHolder[0]);

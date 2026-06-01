@@ -160,4 +160,25 @@ class MainsCombFilterTest {
             assertEquals(sig[i], copy[i], 0.0f);
         }
     }
+
+    @Test
+    void magnitudeAt_notchesHarmonics_unityPassband_noBias() {
+        MainsCombFilter f = new MainsCombFilter(FS, 2.0);
+        f.retune(50.0);
+        // Mains harmonics (k·f0) → deep notch (≈ 0).
+        for (double h : new double[] { 50, 100, 150, 200, 1000 }) {
+            assertTrue(f.magnitudeAt(h) < 1e-6, "no notch at " + h + " Hz");
+        }
+        // Anti-notches (k+0.5)·f0 → EXACTLY unity: peak-normalized, so the comb's
+        // inherent +0.5 dB passband gain is gone.
+        for (double a : new double[] { 75, 125, 175, 1025 }) {
+            assertEquals(1.0, f.magnitudeAt(a), 1e-9, "passband peak not unity at " + a + " Hz");
+        }
+        // Nothing anywhere exceeds 0 dB (the +0.5 dB bias is removed everywhere).
+        for (double fr = 1.0; fr < 2000.0; fr += 0.5) {
+            assertTrue(f.magnitudeAt(fr) <= 1.0 + 1e-9, "gain > 0 dB at " + fr + " Hz");
+        }
+        // Untuned comb is a pass-through (no correction).
+        assertEquals(1.0, new MainsCombFilter(FS, 2.0).magnitudeAt(137.0), 0.0);
+    }
 }

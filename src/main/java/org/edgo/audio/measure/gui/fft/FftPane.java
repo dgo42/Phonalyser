@@ -868,7 +868,8 @@ public final class FftPane {
                 prefs.setFftOverlap(FftOverlap.values()[i].name());
                 prefs.save();
                 refreshTabHeader(TAB_FFT_SETTINGS);
-                view.resetStatistics();
+                // Overlap only changes the hop, not the spectrum/accumulator —
+                // don't reset the average; the worker adapts on the next tick.
             }
         });
 
@@ -895,7 +896,8 @@ public final class FftPane {
             prefs.save();
             refreshTabHeader(TAB_FFT_SETTINGS);
             refreshStopAfterEnable();
-            view.resetStatistics();
+            // No reset here — the worker resets the average only on a ring↔∞
+            // switch or a smaller ring (a larger ring keeps the depth).
         });
 
         // Stop-after row spans all 4 outer-grid columns and hosts its
@@ -936,12 +938,13 @@ public final class FftPane {
             stopAfterNField.setEnabled(stopAfterNEnable.getSelection()
                     && Double.isInfinite(prefs.getFftAverages()));
             prefs.save();
-            view.resetStatistics();
+            // Don't reset the average.  The worker stops as soon as the collected
+            // count reaches N (and keeps going if N is still ahead).
         });
         stopAfterNField.addSelectionListener(e -> {
             prefs.setFftStopAfterN((int) Math.round(stopAfterNField.getValue()));
             prefs.save();
-            view.resetStatistics();
+            // Don't reset the average — see the enable listener above.
         });
 
         // Mains-suppression selector shares the stop-after row.  Pre-filters
@@ -959,7 +962,6 @@ public final class FftPane {
             if (i >= 0 && i < MainsSuppression.values().length) {
                 prefs.setFftMainsSuppression(MainsSuppression.values()[i].name());
                 prefs.save();
-                view.resetStatistics();
             }
         });
 
@@ -992,12 +994,17 @@ public final class FftPane {
         algGd.horizontalSpan = 2;
         alignGenCheck.setLayoutData(algGd);
         alignGenCheck.addListener(SWT.Selection, e -> {
-            prefs.setFftAlignGenToFreqDiff(alignGenCheck.getSelection());
+            boolean on = alignGenCheck.getSelection();
+            prefs.setFftAlignGenToFreqDiff(on);
             prefs.save();
-            // Reset the FLL when turning off so the next "on" toggle
-            // starts converging from zero instead of resuming an old
-            // correction value the user can't see any more.
-            if (!alignGenCheck.getSelection()) view.resetStatistics();
+            // Reset the FLL only when turning align ON, so each session
+            // converges fresh from zero.  Turning it OFF deliberately
+            // holds everything: the generator stays at the stabilized
+            // frequency, the averaged spectrum is kept, and the
+            // converged correction is retained — so the user can reset
+            // statistics manually and collect a clean average at
+            // near-zero frequency difference.
+            if (on) view.resetFrequencyLock();
         });
 
         // Row: Coherent averaging (span 2) | Log freq (span 2)

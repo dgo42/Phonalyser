@@ -62,6 +62,33 @@ class FftTest {
     }
 
     @Test
+    void forward_largeParallel_coherentSine_landsAtExpectedBin() {
+        // Exercises the PARALLEL path (N ≥ Fft.PARALLEL_THRESHOLD = 64k): the
+        // butterflies are the same, only partitioned across the thread pool, so
+        // a coherent sine must still collapse to exactly bins k and N-k with
+        // essentially zero leakage elsewhere.  (On ≤2-core machines this falls
+        // back to serial and the same assertions hold.)
+        int n = 1 << 17;   // 131072
+        int k = 1234;
+        double[] re = new double[n];
+        double[] im = new double[n];
+        for (int i = 0; i < n; i++) {
+            re[i] = Math.sin(2.0 * Math.PI * k * i / n);
+        }
+
+        Fft.forward(re, im);
+
+        assertEquals(n / 2.0, Math.hypot(re[k],     im[k]),     n * 1e-9, "parallel: bin k mag");
+        assertEquals(n / 2.0, Math.hypot(re[n - k], im[n - k]), n * 1e-9, "parallel: bin N-k mag");
+        double maxLeak = 0.0;
+        for (int b = 0; b < n; b++) {
+            if (b == k || b == n - k) continue;
+            maxLeak = Math.max(maxLeak, Math.hypot(re[b], im[b]));
+        }
+        assertTrue(maxLeak < 1e-3, "parallel: off-bin leakage ~0 (max=" + maxLeak + ")");
+    }
+
+    @Test
     void forward_isLinear_overImpulse() {
         // FFT(δ[n]) = 1 for every bin (a unit impulse at n=0 has flat
         // spectrum, amplitude 1).  Pre-FFT: re[0]=1, rest = 0.

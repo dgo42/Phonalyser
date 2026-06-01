@@ -332,6 +332,8 @@ public final class GeneratorPane {
             controller.setFrequency(f1);
             updateDualToneFreqLabels();
             updateFreqLabel();
+            // Tone 1 moved — invalidate the FFT average / FLL.
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
         dualToneFreq2Label = new Label(group, SWT.NONE);
@@ -359,6 +361,8 @@ public final class GeneratorPane {
             controller.setDualToneFrequency2(f2);
             updateDualToneFreqLabels();
             updateFreqLabel();
+            // Tone 2 moved — invalidate the FFT average / FLL.
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
         // ------- FFT-bin snap checkbox.  Persisted, and live-applied:
@@ -416,6 +420,7 @@ public final class GeneratorPane {
             prefs.setGenSweepFreqStartHz(sweepStartField.getValue());
             prefs.save();
             controller.setSweepFreqStart(sweepStartField.getValue());
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.stopFreq"));
@@ -432,6 +437,7 @@ public final class GeneratorPane {
             prefs.setGenSweepFreqEndHz(sweepEndField.getValue());
             prefs.save();
             controller.setSweepFreqEnd(sweepEndField.getValue());
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.duration"));
@@ -448,6 +454,7 @@ public final class GeneratorPane {
             prefs.setGenSweepDurationSec(sweepDurationField.getValue());
             prefs.save();
             controller.setSweepDurationSeconds(sweepDurationField.getValue());
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.fadeIn"));
@@ -464,6 +471,7 @@ public final class GeneratorPane {
             prefs.setGenSweepFadeInSec(sweepFadeInField.getValue());
             prefs.save();
             controller.setSweepFadeInSeconds(sweepFadeInField.getValue());
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.fadeOut"));
@@ -480,6 +488,7 @@ public final class GeneratorPane {
             prefs.setGenSweepFadeOutSec(sweepFadeOutField.getValue());
             prefs.save();
             controller.setSweepFadeOutSeconds(sweepFadeOutField.getValue());
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
         new Label(sweepPanel, SWT.NONE).setText("");   // spacer for col 0
@@ -492,6 +501,7 @@ public final class GeneratorPane {
             prefs.setGenSweepLoop(sweepLoopBtn.getSelection());
             prefs.save();
             controller.setSweepLoop(sweepLoopBtn.getSelection());
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
         // ----- Dual-tone amplitude controls (DUAL_TONE only) ----------
@@ -675,6 +685,8 @@ public final class GeneratorPane {
                 controller.setRectangleDuty(frac);
             }
             updateDutyLabel();
+            // The emitted waveform changed — invalidate the FFT average / FLL.
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
         updateDutyFieldEnabled(initialForm);
 
@@ -1762,6 +1774,8 @@ public final class GeneratorPane {
         prefs.setGenDualToneSplitPct(a1);
         prefs.save();
         controller.setDualToneAmplitudes(a1, a2);
+        // The tone balance changed — invalidate the FFT average / FLL.
+        MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
     }
 
     /** Flips a control's GridData.exclude flag and visibility together. */

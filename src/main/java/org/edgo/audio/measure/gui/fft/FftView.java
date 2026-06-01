@@ -3,7 +3,6 @@ package org.edgo.audio.measure.gui.fft;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.function.Consumer;
 
 import org.apache.commons.lang3.ArrayUtils;
@@ -33,6 +32,7 @@ import org.edgo.audio.measure.cli.util.FreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftMagnitudeUnit;
 import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
@@ -115,6 +115,18 @@ public final class FftView extends AbstractFreqDomainView {
     private final FrequencyLockLoop fll  = new FrequencyLockLoop();
     private final FrequencyLockLoop fll2 = new FrequencyLockLoop();
 
+    /** Frequency-domain mains rejection for the DISPLAYED frame — the worker
+     *  only tracks f0, this divides the comb's cached response out of the shown
+     *  spectrum (see {@link MainsCombFilter#applySpectrumCorrection}).  Its OWN
+     *  instance (UI-thread-driven, separate from the worker's comb), created
+     *  lazily on first use with the result's real sample rate. */
+    private MainsCombFilter mainsCorrector;
+    /** Re-derives the measurements (THD / SNR / N / fundamental / harmonics, all
+     *  units + %) from the de-hummed spectrum after {@link #mainsCorrector} runs
+     *  — the same {@code recomputeStats} the worker uses, so every readout
+     *  matches the plot.  Reused so its scratch buffers aren't re-allocated. */
+    private final FftAnalyzer mainsStats = new FftAnalyzer();
+
     /** Sticky table-mode selector — {@code true} draws the IMD table,
      *  {@code false} draws the THD table.  Updated only inside
      *  {@link #onResultReady} (which fires only when the FFT worker is
@@ -126,34 +138,19 @@ public final class FftView extends AbstractFreqDomainView {
     private boolean tableModeIsImd =
             "DUAL_TONE".equalsIgnoreCase(Preferences.instance().getGenSignalForm());
 
-    /** Last-observed generator signal form — used to detect a true
-     *  form change in {@link #onGenChangeForFll} (vs. an amp / freq
-     *  tweak that also fires {@code GENERATOR_SIGNAL_CHANGED}).  Form
-     *  changes wipe the FFT statistics so the averaged spectrum doesn't
-     *  contain frames from the wrong waveform. */
-    private String lastGenForm = Preferences.instance().getGenSignalForm();
-
     /** Subscriber for {@link Events#GENERATOR_SIGNAL_CHANGED} — held as
-     *  a field so dispose can unsubscribe by reference.  Resets the FLL
-     *  on USER_INPUT (the locked offset is invalidated whenever the user
-     *  moves a generator control); ignores FLL_TRIM (that's our own
-     *  trim coming back round the bus). */
+     *  a field so dispose can unsubscribe by reference.  On USER_INPUT
+     *  (any user change to the generated signal — form, frequency /
+     *  dual-tone frequencies, amplitude / balance, duty) both the locked
+     *  alignment and the averaged spectrum are stale (they were measured
+     *  for the old signal), so reset the FLL(s) AND wipe the FFT
+     *  statistics including the retained lastResult / lastImd readout.
+     *  Ignores FLL_TRIM (that's our own trim coming back round the bus). */
     private final Consumer<GenChangeCause> onGenChangeForFll = cause -> {
         if (cause == GenChangeCause.USER_INPUT) {
-            fll.reset();
-            fll2.reset();
-            // Detect a true generator-form change (sine ↔ dual-tone, etc.)
-            // separately from an amp / freq tweak that fires the same
-            // event.  A form change invalidates the IMD slot (it was
-            // computed for the old waveform) and the accumulated FFT
-            // statistics (averaging stale frames of the old waveform
-            // into the new one corrupts the spectrum).
-            String form = Preferences.instance().getGenSignalForm();
-            if (!Objects.equals(form, lastGenForm)) {
-                lastGenForm = form;
-                lastImd = null;
-                resetStatistics();
-            }
+            resetFrequencyLock();
+            lastImd = null;
+            resetStatistics();   // accumulator + (while recording) lastResult / lastImd
             syncExternalShell();
             if (!isDisposed()) redraw();
         }
@@ -168,8 +165,12 @@ public final class FftView extends AbstractFreqDomainView {
         if (isDisposed()) return;
         if (worker != null) worker.uiGotResult();
         if (isRunning()) {
+            // Post-average pipeline (mains → recompute → .frc → dBV), run ONCE
+            // here on the DISPLAYED frame (post throttle + coalescing) — before
+            // the deep-copy / IMD so both see the finished spectrum + readouts.
+            finalizeResult(slot);
             startRender = System.nanoTime();
-            lastResult = slot;
+            lastResult = slot.deepCopy();
             // Frame / phase rejections slow the averaging — raise a sticky
             // (20 s, restarted on each fresh rejection) blinking warning with
             // the full detail in its tooltip.  Otherwise live data clears any
@@ -212,13 +213,14 @@ public final class FftView extends AbstractFreqDomainView {
         }
     };
 
-    /** Capture-overrun notification from the worker (no payload): the
-     *  contiguous sample stream broke and the running average was discarded.
-     *  Raise the same sticky blinking warning the frame-rejection path uses,
-     *  so the depth restart is visible rather than a silent glitch. */
-    private final Consumer<Void> onCaptureOverrun = ignored -> {
-        if (isDisposed() || !isRunning()) return;
-        setBanner(I18n.t("fft.warning.overrun"), I18n.t("fft.warning.overrun.tip"),
+    /** Capture re-sync notification from the worker.  Payload is the i18n
+     *  message-key, so one event presents distinct warnings — a ring overrun
+     *  ({@code fft.warning.overrun}) vs a signal discontinuity
+     *  ({@code fft.warning.discontinuity}).  Raises the same sticky blinking
+     *  banner the frame-rejection path uses, so the re-sync is visible. */
+    private final Consumer<String> onCaptureResync = messageKey -> {
+        if (isDisposed() || !isRunning() || messageKey == null) return;
+        setBanner(I18n.t(messageKey), I18n.t(messageKey + ".tip"),
                 ColorRole.WARNING_LIT, ColorRole.WARNING_DIM,
                 System.nanoTime() + REJECTION_WARN_NANOS);
         redraw();
@@ -256,7 +258,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  don't queue multiple timers. */
     private boolean blinkRedrawScheduled;
     /** How long the rejection warning keeps blinking after the last hit. */
-    private static final long REJECTION_WARN_NANOS = 20_000_000_000L;
+    private static final long REJECTION_WARN_NANOS = 10_000_000_000L;
 
     // ─── External tool window ────────────────────────────────────────────
     private boolean tableExtracted;
@@ -313,7 +315,7 @@ public final class FftView extends AbstractFreqDomainView {
         // per-tick paint cost is well under the hop interval, so
         // blocking the UI thread for this paint is negligible.
         MessageBus.instance().subscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
-        MessageBus.instance().subscribe(Events.FFT_CAPTURE_OVERRUN, onCaptureOverrun);
+        MessageBus.instance().subscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
         MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
         // Pick up FFT-only prefs (harmonic dot, freq-resp response,
         // before-cal dot, cal overlay) that aren't part of the base
@@ -487,7 +489,7 @@ public final class FftView extends AbstractFreqDomainView {
 
     private void disposeResources() {
         MessageBus.instance().unsubscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
-        MessageBus.instance().unsubscribe(Events.FFT_CAPTURE_OVERRUN, onCaptureOverrun);
+        MessageBus.instance().unsubscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
         MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
         worker.stop();
         disposePalette();
@@ -645,24 +647,127 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     /** Clears the completed-analyses counter, drops the retained
-     *  spectrum, resets the frequency-lock loop, and resumes the loop
-     *  if it was paused by stop-after-N.  Forces a redraw so any
-     *  visible counter refreshes immediately.  Safe to call from any
-     *  thread.
+     *  spectrum, and resumes the loop if it was paused by stop-after-N.
+     *  Forces a redraw so any visible counter refreshes immediately.
+     *  Safe to call from any thread.
      *
-     *  <p>The FLL reset matches the user's mental model: "Reset
-     *  statistics" wipes the averaged spectrum, so the locked drift
-     *  estimate (which the user can read off the ΔF display) should
-     *  start fresh too — otherwise the displayed ppm jumps to its old
-     *  converged value the moment a fresh result lands, which reads
-     *  as inconsistent with the otherwise-blank statistics. */
+     *  <p>Deliberately does <strong>not</strong> touch the FLL.  The
+     *  intended workflow is: let alignment converge, switch align OFF
+     *  (which holds the generator at the now-stabilized frequency),
+     *  then reset statistics to collect a clean average at near-zero
+     *  frequency difference.  Resetting the FLL here would throw away
+     *  exactly that converged correction.  The FLL is reset only when
+     *  align is turned ON ({@link #resetFrequencyLock()}) or the record
+     *  is restarted ({@link #stop()}). */
     public void resetStatistics() {
         worker.resetStatistics();
-        fll.reset();
-        fll2.reset();
+        // Drop the retained result so the readouts (fundamental, THD,
+        // SNR, harmonics) and the plotted curve clear immediately and
+        // repopulate from the fresh accumulation — otherwise the stale
+        // last values linger on screen.  Only while recording: a
+        // statically loaded CSV (worker stopped) must survive an
+        // unrelated setting change that also calls resetStatistics.
+        if (isRunning()) {
+            lastResult = null;
+            lastImd    = null;
+        }
         Display d = getDisplay();
         if (d != null && !d.isDisposed()) {
             d.asyncExec(() -> { if (!isDisposed()) redraw(); });
+        }
+    }
+
+    /** Resets the frequency-lock loop(s) so alignment converges fresh
+     *  from zero.  Called when the user turns "align generator to
+     *  frequency difference" ON — kept separate from
+     *  {@link #resetStatistics()} so a manual statistics reset keeps
+     *  the converged alignment intact. */
+    public void resetFrequencyLock() {
+        fll.reset();
+        fll2.reset();
+    }
+
+    /** Post-average pipeline, run ONCE per DISPLAYED frame (the worker now hands
+     *  over only the RAW averaged spectrum + the state below): mains rejection →
+     *  recompute every measurement → .frc calibration → dBV lift.  So all
+     *  readouts (THD / SNR / N / fundamental / harmonics, every unit + %) and the
+     *  plot derive from one de-hummed, calibrated spectrum, computed only on
+     *  frames the user actually sees. */
+    private void finalizeResult(FftResult r) {
+        if (r.amplitudeDbFs == null) return;
+        boolean accumulated = !Double.isNaN(r.coherentKappa);
+        double  fs          = Preferences.instance().getAdcFsVoltageRms();
+
+        // 1. Mains rejection — de-hum amplitudeDbFs (the dBV scale is rebuilt from
+        //    it in step 4, so no need to correct it here too).
+        boolean mainsApplied = false;
+        if (r.mainsF0Hz > 0.0 && r.sampleRate > 0) {
+            if (mainsCorrector == null) {
+                mainsCorrector = new MainsCombFilter(r.sampleRate, MainsCombFilter.DEFAULT_NOTCH_BANDWIDTH_HZ);
+            }
+            mainsCorrector.applySpectrumCorrection(r.amplitudeDbFs, null, r.freqResolution, r.mainsF0Hz);
+            mainsApplied = true;
+        }
+
+        // 2. Measurements — averaging always needs a recompute (analyze skipped
+        //    the stats while accumulating); a single tick only needs it once mains
+        //    has changed the spectrum (analyze already produced the rest).
+        if (accumulated || mainsApplied) {
+            mainsStats.recomputeStats(r);
+            if (fs > 0 && Double.isFinite(r.fundamentalDbFs)) {
+                r.fundRefDbV = r.fundamentalDbFs + 20.0 * Math.log10(fs);
+            }
+        }
+
+        // 3. Frequency-response (.frc) calibration — adjusts spectrum + readouts;
+        //    independent of mains, never on the cal (green) line.
+        List<FftCalibrationStore.Entry> calEntries = FftCalibrationStore.instance().getEntries();
+        if (!calEntries.isEmpty()) {
+            boolean wantLeft = r.channelLeft;
+            r.preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
+            for (FftCalibrationStore.Entry e : calEntries) {
+                FreqRespCalibration calForChan = wantLeft
+                        ? e.getCalibration().left()
+                        : e.getCalibration().right();
+                FreqRespCalHelper.applyCompensationInPlace(r, calForChan, e.isWithNoise());
+            }
+            if (fs > 0 && Double.isFinite(r.fundamentalDbFs)) {
+                r.fundRefDbV = r.fundamentalDbFs + 20.0 * Math.log10(fs);
+            }
+            if (accumulated) {
+                // Re-derive the BLUE "before-cal" dots on the cumulative spectrum
+                // using the PINNED coherent κ (the single-tick fundamentalHzRefined
+                // jitters and dances the cal-lookup point).
+                int hc = r.harmonicCount;
+                double[] preFreqs = new double[1 + hc];
+                double[] preDbFs  = new double[1 + hc];
+                double stableFundHz = r.coherentKappa * r.freqResolution;
+                preFreqs[0] = r.fundamentalHz;
+                preDbFs[0]  = r.fundamentalDbFs + sumCalDbAt(calEntries, wantLeft, stableFundHz);
+                for (int h = 0; h < hc; h++) {
+                    if (r.harmonicBins[h] > 0) {
+                        preFreqs[1 + h] = r.harmonicHz[h];
+                        double stableHarmHz = stableFundHz * (h + 2);
+                        preDbFs[1 + h] = r.harmonicDbFs[h] + sumCalDbAt(calEntries, wantLeft, stableHarmHz);
+                    }
+                }
+                r.preCorrectionPeaks = new double[][] { preFreqs, preDbFs };
+            }
+        }
+
+        // 4. dBV lift — amplitudeDbV = amplitudeDbFs + ADC FS anchor (the source
+        //    of truth for ImdAnalyzer / TD+N / IMD %).
+        if (fs > 0) {
+            double anchor = 20.0 * Math.log10(fs);
+            r.dbvOffsetDb = anchor;
+            int n = r.amplitudeDbFs.length;
+            if (r.amplitudeDbV == null || r.amplitudeDbV.length != n) {
+                r.amplitudeDbV = new double[n];
+            }
+            for (int i = 0; i < n; i++) r.amplitudeDbV[i] = r.amplitudeDbFs[i] + anchor;
+        } else {
+            r.amplitudeDbV = null;
+            r.dbvOffsetDb = 0.0;
         }
     }
 
@@ -1075,6 +1180,11 @@ public final class FftView extends AbstractFreqDomainView {
      *  detected harmonic — same {@code FUND_ANNOTATION_COLOR} the CLI
      *  FFT chart uses.  Helps the user see at a glance which peaks the
      *  analyser picked up. */
+    /** DEBUG hard switch: overlay the mains comb's frequency response (red),
+     *  anchored at H2's level, so the notch positions vs the harmonics are
+     *  visible.  Flip to {@code false} to remove the overlay. */
+    private static final boolean SHOW_MAINS_COMB_RESPONSE = true;
+
     private void drawHarmonicDots(GC gc, Rectangle plot, FftResult r,
                                   FftMagnitudeUnit unit,
                                   double freqMin, double freqMax,
@@ -1137,6 +1247,38 @@ public final class FftView extends AbstractFreqDomainView {
                         r.harmonicHz[i], r.harmonicDbFs[i],
                         unit, freqMin, freqMax, magTop, magBot, logFreq, calRefDbV, binBw);
             }
+        }
+
+        // DEBUG overlay: mains comb response (red), anchored at H2's level.
+        if (r.harmonicDbFs != null && r.harmonicDbFs.length > 0) {
+            drawMainsResponse(gc, plot, r, r.harmonicDbFs[0], unit,
+                    freqMin, freqMax, magTop, magBot, logFreq, calRefDbV, binBw);
+        }
+    }
+
+    /** DEBUG: draws the mains comb's response as a red curve across the plot,
+     *  with its 0 dB (passband) baseline anchored at {@code anchorDbFs} — so the
+     *  notch positions are visible against the dots.  Reused by the THD path
+     *  (anchored at H2) and the IMD path (anchored at d2L, since H2 isn't marked
+     *  there).  No-op unless mains is locked. */
+    private void drawMainsResponse(GC gc, Rectangle plot, FftResult r, double anchorDbFs,
+                                   FftMagnitudeUnit unit, double freqMin, double freqMax,
+                                   double magTop, double magBot, boolean logFreq,
+                                   double refDbV, double binBw) {
+        if (!SHOW_MAINS_COMB_RESPONSE || !(r.mainsF0Hz > 0.0) || mainsCorrector == null
+                || !Double.isFinite(anchorDbFs)) return;
+        gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_RED));
+        int prevX = -1, prevY = 0;
+        for (int x = plot.x; x <= plot.x + plot.width; x++) {
+            double f = xToFreq(x, plot, freqMin, freqMax, logFreq);
+            if (!(f > 0)) continue;
+            double combDb = mainsCorrector.correctionDb(f);
+            double v = unit.convertFromDbFs(anchorDbFs + combDb, refDbV, binBw);
+            int y = magToY(v, plot, magTop, magBot, unit);
+            y = Math.max(plot.y, Math.min(plot.y + plot.height, y));
+            if (prevX >= 0) gc.drawLine(prevX, prevY, x, y);
+            prevX = x;
+            prevY = y;
         }
     }
 
@@ -1240,6 +1382,11 @@ public final class FftView extends AbstractFreqDomainView {
             plotDotAt(gc, plot, hz[i], dbFs[i],
                     unit, freqMin, freqMax, magTop, magBot, logFreq, refDbV, binBw);
         }
+
+        // DEBUG overlay: mains comb response (red), anchored at d2L's level
+        // (the order-2 lower IMD product — H2 isn't present in IMD mode).
+        drawMainsResponse(gc, plot, r, imd.dnLDbV[2] - refDbV, unit,
+                freqMin, freqMax, magTop, magBot, logFreq, refDbV, binBw);
 
         // F1 / F2 labels: each anchored just above its own dot, but if
         // the two labels would overlap the lower-dot's label slides up
@@ -1516,26 +1663,37 @@ public final class FftView extends AbstractFreqDomainView {
         List<FftCalibrationStore.Entry> entries =
                 FftCalibrationStore.instance().getEntries();
         if (entries.isEmpty()) return;
-        if (r.harmonicCount == 0 || r.harmonicBins == null
-                || r.harmonicBins.length == 0 || r.harmonicBins[0] <= 0) return;
-        double h2Freq = r.harmonicHz[0];
-        double h2DbFs = r.harmonicDbFs[0];
-        if (!(h2Freq > 0.0) || !Double.isFinite(h2DbFs)) return;
+        // Anchor at H2 in THD mode, or at d2L (the order-2 lower IMD product) in
+        // IMD mode — H2 isn't marked there.
+        double anchorFreq, anchorDbFs;
+        if (lastImd != null && lastImd.dnLHz != null && lastImd.dnLHz.length > 2
+                && Double.isFinite(lastImd.dnLDbV[2])) {
+            double ref = Double.isNaN(r.fundRefDbV) ? 0 : (r.fundRefDbV - r.fundamentalDbFs);
+            anchorFreq = lastImd.dnLHz[2];
+            anchorDbFs = lastImd.dnLDbV[2] - ref;
+        } else if (r.harmonicCount > 0 && r.harmonicBins != null
+                && r.harmonicBins.length > 0 && r.harmonicBins[0] > 0) {
+            anchorFreq = r.harmonicHz[0];
+            anchorDbFs = r.harmonicDbFs[0];
+        } else {
+            return;
+        }
+        if (!(anchorFreq > 0.0) || !Double.isFinite(anchorDbFs)) return;
 
         // Match the cal channel to whichever channel the FFT is
         // currently analysing — using .left() unconditionally would
         // mis-compensate the signal when the user picks the right
         // channel (their L/R cal curves are not identical).
         boolean wantLeft = Preferences.instance().getFftChannel() == Channel.L;
-        double sumDbAtH2 = 0.0;
+        double sumDbAtAnchor = 0.0;
         for (FftCalibrationStore.Entry e : entries) {
             FreqRespCalibration cal = wantLeft
                     ? e.getCalibration().left()
                     : e.getCalibration().right();
-            double m = FreqRespCalHelper.interpolate(cal, h2Freq)[0];
-            sumDbAtH2 += (m > 0.0) ? 20.0 * Math.log10(m) : -300.0;
+            double m = FreqRespCalHelper.interpolate(cal, anchorFreq)[0];
+            sumDbAtAnchor += (m > 0.0) ? 20.0 * Math.log10(m) : -300.0;
         }
-        double offset = h2DbFs + sumDbAtH2;
+        double offset = anchorDbFs + sumDbAtAnchor;
 
         FreqRespCalibration first = wantLeft
                 ? entries.get(0).getCalibration().left()

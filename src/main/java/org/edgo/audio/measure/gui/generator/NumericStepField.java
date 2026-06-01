@@ -267,11 +267,12 @@ public final class NumericStepField extends Composite {
             refresh();
             return;
         }
-        // Always fire after a successful parse, even when the numeric value
-        // happens to match the previous one — the parser may have updated
-        // state owned by the parent (e.g. the amplitude field's current
-        // unit), in which case the listener still needs to run to push
-        // that change downstream.
+        // Unchanged value → nothing to commit and NO change event.  Commit runs
+        // on every focus-out / Enter, so a bare focus loss with the text
+        // untouched parses back to the same value; firing here would spuriously
+        // trigger downstream work (e.g. the FFT averaging restart wired to
+        // GENERATOR_SIGNAL_CHANGED).
+        if (Double.compare(value, parsed) == 0) return;
         value = parsed;
         refresh();
         fire();

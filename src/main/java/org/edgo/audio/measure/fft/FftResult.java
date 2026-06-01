@@ -63,6 +63,21 @@ public class FftResult {
     public double fundamentalDbFs;
     public double fundamentalLinear;
 
+    /** Tracked mains fundamental (Hz) for the FFT pane's frequency-domain mains
+     *  rejection, or {@link Double#NaN} when mains suppression is off / unlocked.
+     *  The worker only TRACKS it; the actual notch correction is applied on the
+     *  displayed frame in {@code FftView} (so it runs once per painted frame, not
+     *  per averaging tick), using a cached per-bin response keyed on this value. */
+    public double mainsF0Hz = Double.NaN;
+    /** Pinned coherent fundamental bin (κ) for the plot-time .frc "before-cal"
+     *  re-derive, or {@link Double#NaN} for a single (non-averaged) tick.  The
+     *  worker owns the accumulator and sets this; the UI's post-average pipeline
+     *  consumes it (non-NaN ⇒ averaging). */
+    public double coherentKappa = Double.NaN;
+    /** Channel this result was analyzed for ({@code true} = left) — picks the
+     *  left/right .frc calibration in the UI's post-average pipeline. */
+    public boolean channelLeft = true;
+
     // Harmonics (index 0 = 2nd harmonic, …)
     public int      harmonicCount;
     public int[]    harmonicBins;
@@ -211,6 +226,9 @@ public class FftResult {
         c.fundamental2HzRefined      = fundamental2HzRefined;
         c.fundamentalDbFs            = fundamentalDbFs;
         c.fundamentalLinear          = fundamentalLinear;
+        c.mainsF0Hz                  = mainsF0Hz;
+        c.coherentKappa              = coherentKappa;
+        c.channelLeft                = channelLeft;
         c.harmonicCount              = harmonicCount;
         c.harmonicBins               = harmonicBins  != null ? harmonicBins.clone()  : null;
         c.harmonicHz                 = harmonicHz    != null ? harmonicHz.clone()    : null;

@@ -2,20 +2,18 @@ package org.edgo.audio.measure.gui.fft;
 
 import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.stream.IntStream;
 
 import org.eclipse.swt.widgets.Display;
-import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
-import org.edgo.audio.measure.cli.util.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.DerotationPhaseLock;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftAnalyzer.FrameFftCache;
 import org.edgo.audio.measure.fft.FftResult;
@@ -47,7 +45,16 @@ public final class FftAnalyzerWorker {
     /** Idle tick when there's no buffer / not enough fresh samples. */
     private static final int IDLE_TICK_MS = 250;
     /** Maximum sleep between analysis attempts. */
-    private static final int MAX_SLEEP_MS = 500;
+    private static final int MAX_SLEEP_MS = 250;
+    /** Per-tick display throttle: the cross-tick accumulator runs every tick, but
+     *  the O(N) display rebuild (overlay + recomputeStats + dBV lift + deep-copy
+     *  publish) is gated to AT MOST one per {@code DISPLAY_MIN_NANOS} when caught
+     *  up, and SKIPPED while the capture backlog is high so the worker catches up
+     *  instead of overrunning — but never deferred past {@code DISPLAY_MAX_NANOS}
+     *  so the view can't freeze. */
+    private static final long DISPLAY_MIN_NANOS =  40_000_000L;   // ≤25 Hz refresh when keeping up
+    private static final long DISPLAY_MAX_NANOS = 500_000_000L;   // ≥2 Hz even while behind
+    private long lastShowNanos;
 
     private final Display  display;
 
@@ -59,6 +66,12 @@ public final class FftAnalyzerWorker {
      *  capture lifecycle, so the view / pane never touch the sample buffer. */
     private boolean captureHeld;
     private final    AtomicBoolean      paused = new AtomicBoolean(false);
+    /** Single-slot, coalescing handoff of the latest result to the UI thread.
+     *  The worker overwrites it every tick (newest wins) and posts ONE drain
+     *  runnable only on the empty→full transition, so the SWT asyncExec queue
+     *  never accumulates more than one multi-MB spectrum however far the UI
+     *  repaint falls behind the (parallelized, fast) per-tick production. */
+    private final AtomicReference<FftResult> latestForUi = new AtomicReference<>();
     private volatile int                completedAnalyses;
     private volatile boolean            running;
     /** False until the very first analysis has run since {@link #start}. */
@@ -98,8 +111,6 @@ public final class FftAnalyzerWorker {
      *  before the spectrum is computed. */
     private MainsCombFilter mainsComb;
     private int             mainsCombSampleRate;
-    /** Notch −3 dB width (Hz) for the mains comb. */
-    private static final double MAINS_NOTCH_BW_HZ = 2.0;
     private Thread worker;
 
     @SuppressWarnings("unused")
@@ -270,44 +281,73 @@ public final class FftAnalyzerWorker {
      *  spectrum is phase-rotated by the time delta from this reference
      *  to keep tones coherent across ticks. */
     private long    accumRefSampleStart;
-    /** Cross-tick de-rotation frequency (fractional fundamental bin), driven by
-     *  the phase lock {@link #accumLock}.  An exact value is required: any
-     *  residual error ramps the de-rotation phase over the accumulation and
-     *  vector-cancels the fundamental into a sinc (the ~5–8 dB loss seen in
-     *  long averages).  The lock measures the residual fundamental-phase drift
-     *  and nulls it, giving the exact frequency. */
+    /** Cross-tick de-rotation frequency (fractional fundamental bin), PINNED at
+     *  the first contributing tick from the refined fundamental and held
+     *  constant for the run so the rotation is well-defined.  A source whose
+     *  frequency drifts more than a few ppm during a long average loses phase
+     *  coherence — a hardware-stability concern, not corrected here. */
     private double  accumKFractional;
-    /** Phase lock that converges {@link #accumKFractional}; null until the
-     *  accumulator restarts.  While it is not yet locked the spectrum is NOT
-     *  accumulated (the de-rotation isn't trustworthy yet); on lock the
-     *  accumulator is re-anchored to "now" and accumulation begins with the
-     *  exact frequency. */
-    private DerotationPhaseLock accumLock;
-    /** True once {@link #accumLock} has locked and accumulation has begun. */
-    private boolean accumPhaseLocked;
-    /** Cumulative dropped-sample correction.  Samples dropped below the app (an
-     *  interface / driver xrun) advance {@code writePos} normally, so the
-     *  absolute positions silently UNDER-count real time and every later frame
-     *  is time-shifted — exactly the sinc.  Detected gaps are added here and
-     *  folded into the de-rotation sample delta, so the fundamental + harmonics
-     *  re-align and averaging CONTINUES across the gap (no restart). */
-    private double  accumDroppedSamples;
-    /** Last locked de-rotated fundamental phase — constant tick-to-tick when the
-     *  stream is continuous; a sudden jump flags a capture gap. */
-    private double  accumLastFundPhase;
-    /** Phase-lock tuning: ticks per measurement window, per-tick drift (rad)
-     *  below which a window is "stable", and stable windows to declare lock. */
-    private static final int    LOCK_WINDOW      = 8;
-    private static final double LOCK_DRIFT_RAD   = 0.001;   // tight: tiny per-tick drift smears over a long accumulation
-    private static final int    LOCK_WINDOWS     = 2;
-    private static final int    LOCK_MAX_WINDOWS = 12;      // fallback so a noisy signal still locks
-    /** A de-rotated-fundamental phase jump beyond this (rad) between consecutive
-     *  LOCKED ticks is a capture gap (dropped samples), not slow source drift
-     *  (which stays far below this — the lock pinned per-tick drift &lt; 0.001). */
-    private static final double GAP_PHASE_RAD    = 0.3;
+    /** A raw-window discontinuity is flagged when the PEAK 3rd-difference
+     *  {@code |Δ³s|} stands more than this many times above the window's
+     *  |Δ³s| RMS.  A clean oversampled signal (any tone count) gives a
+     *  near-sinusoidal Δ³s with peak/RMS ≈ √2, and broadband-noise Δ³s a
+     *  peak/RMS ≈ √(2·ln N) ≈ 5–6, so a margin of 12 cleanly separates a
+     *  localised glitch (peak ≫ RMS) without false-firing on noise/spurs. */
+    private static final double GLITCH_DIFF_K    = 16.0;
     /** Pinned {@code round(kFractional)} for the rotation formula — the
      *  integer bin is stable, so only the fractional part needs converging. */
     private int     accumIntFundBinRounded;
+    /** Phase-slope κ refinement.  The single-frame parabolic peak pins κ only to
+     *  ~0.01–0.03 bin; over a long coherent run that residual ramps the de-
+     *  rotated fundamental phase (2π·Δκ·delta/fftSize) and vector-cancels the
+     *  magnitude — harmonics h× faster.  Measuring the de-rotated fundamental's
+     *  phase SLOPE over {@link #KAPPA_MEAS_FRAMES} CLEAN frames yields Δκ directly
+     *  (~100× tighter than the peak), folded into κ ONCE so the ramp vanishes.
+     *  Re-syncs (overrun / discontinuity) jump delta; the frame after one is
+     *  flagged {@link #kappaSkipNext} and used only to re-anchor the running
+     *  reference — its jumped step is NOT folded in — so a burst of re-syncs
+     *  can't poison or starve the measurement; only the clean frames between
+     *  them count.  Single-reference path only; harmonics ride the time-shift. */
+    private boolean kappaRefined;
+    private int     kappaMeasFrames;   // CLEAN frames counted (the anchor + folded steps)
+    private double  kappaLastDelta;    // delta at the running reference frame
+    private double  kappaLastPhase;    // de-rotated fundamental phase at the reference
+    private double  kappaCumPhase;     // Σ clean per-frame phase steps
+    private double  kappaCleanSpan;    // Σ clean per-frame delta steps (slope denominator)
+    private boolean kappaSkipNext;     // next frame is post-re-sync: re-anchor, don't fold
+    /** Phase-tracking loop (a PLL on the cross-tick fundamental).  Once κ is
+     *  refined the de-rotated fundamental phase should be constant; a frozen
+     *  pinned-κ residual lets it slowly ramp, and a re-sync (the event that sets
+     *  {@link #gapRecoverPending}) steps it.  Each tick the running mis-alignment
+     *  vs the deep accumulated phase is measured and a fraction
+     *  ({@link #PHASE_TRACK_GAIN}) folded into {@link #accumDroppedSamples} so the
+     *  de-rotation re-locks — killing the drift and absorbing disturbances.  On a
+     *  re-sync a one-shot FULL realign is applied (then the loop cleans up). */
+    private double  accumDroppedSamples;   // cumulative de-rotation correction (sub-sample), driven by the loop
+    private boolean gapRecoverPending;     // a re-sync fired; do a one-shot full realign on the next frame
+    /** Frames of de-rotated-fundamental phase observed before the one-shot κ
+     *  refine — ~24 give κ to ~1e-4 bin at high SNR, landing before the drift
+     *  becomes visible (~30 frames). */
+    private static final int KAPPA_MEAS_FRAMES = 24;
+    /** Phase-tracking loop gain (fraction of the running fundamental mis-alignment
+     *  folded into the de-rotation each tick).  Low enough to average out per-tick
+     *  phase noise (which would random-walk if folded whole), high enough to track
+     *  the κ-residual ramp.  Raise it if the fundamental still drifts; lower it if
+     *  the harmonics get noisy. */
+    private static final double PHASE_TRACK_GAIN = 0.10;
+    /** Dropout threshold: when the per-tick fundamental falls below this fraction
+     *  of the accumulated average, the signal is treated as dropped (silence /
+     *  disconnect) and the tick is held out of the average instead of diluting it. */
+    private static final double DROPOUT_FRACTION = 0.75;
+    /** A per-tone cross-tick phase residual larger than this is treated as a
+     *  phase DISCONTINUITY (a DDS phase jump / reconnect that the window
+     *  glitch-gate didn't catch) rather than tracking noise: the tone is
+     *  realigned in one shot (gain 1) so the frame adds coherently at its new
+     *  phase instead of smearing the average.  Well above the per-tick noise +
+     *  κ-ramp residual (sub-degree), so it only fires on a genuine jump.  This
+     *  is the cross-tick safety net for the multi-tone path, where the
+     *  analyzer's per-sample R-invariant glitch test is disabled. */
+    private static final double PHASE_JUMP_RAD = Math.toRadians(60.0);
     /** Fractional bins of the strong tones detected at restart (sorted
      *  ascending).  Length ≤ 1 ⇒ single-reference rotation (legacy path);
      *  length ≥ 2 ⇒ each tone's lobe is de-rotated by its OWN frequency so
@@ -316,33 +356,47 @@ public final class FftAnalyzerWorker {
      *  spectrum itself, so it works for unknown / external multi-tone
      *  signals where the app can't know the frequencies up front. */
     private double[] accumToneKappa = new double[0];
-    /** A spectral peak is its own de-rotation reference ("strong tone")
-     *  when it rises at least this many dB above the noise floor.  Measured
-     *  from the floor (not the strongest peak) so a very lopsided pair —
-     *  e.g. one tone at 99.99 %, the other at 0.01 % (~80 dB down) — still
-     *  gives BOTH tones a reference. */
-    private static final double STRONG_TONE_FLOOR_DB = 20.0;
+    /** Per-tone cumulative de-rotation correction (sub-sample), one entry per
+     *  {@link #accumToneKappa} tone — the multi-tone analogue of
+     *  {@link #accumDroppedSamples}.  Each tone runs its OWN phase-lock loop
+     *  (residual vs the deep accumulated phase at the tone's bin) and folds the
+     *  correction here, so an IMD tone pair holds instead of each lobe ramping
+     *  on a frozen per-tone κ.  Length tracks {@link #accumToneKappa}. */
+    private double[] toneDroppedSamples = new double[0];
     /** Half-width (bins) of the lobe a tone's constant phase covers. */
     private static final int    TONE_LOBE_HALF_BINS = 16;
     /** Two peaks closer than this (bins) are merged into one tone. */
     private static final int    MIN_TONE_SEP_BINS   = 48;
     /** Cap on independent tone references. */
     private static final int    MAX_TONES           = 8;
+    /** A peak at an integer multiple (h≥2) of the strongest tone that is at
+     *  least this far BELOW it is a harmonic (distortion), not an independent
+     *  tone — drop it from the tone list so a single tone + harmonics stays on
+     *  the single-reference (phase-slope-refined) path instead of the per-tone
+     *  multi-tone path.  Far below ⇒ it can't be a real IMD partner (which is
+     *  comparable in level) and the single-ref time-shift already aligns it. */
+    private static final double HARMONIC_REJECT_BELOW_DB = 40.0;
+    /** Ignore peaks below this frequency when detecting tones — a residual DC
+     *  offset leaks through the window main lobe into the first bins and would
+     *  be taken as a spurious second tone.  Well under any real tone. */
+    private static final double DC_REJECT_HZ = 10.0;
     /** Config the accumulator was built for; mismatch ⇒ reset. */
     private int     accumFftSize;
     private boolean accumCoherent;
     /** True once at least one tick has contributed. */
     private boolean accumHasData;
-    /** Previous tick's averaging mode, for resetting the cross-tick
-     *  accumulator on any change (single ↔ ring N ↔ forever, or a new N). */
+    /** Previous tick's averaging mode, for deciding when to reset the cross-tick
+     *  accumulator: the averaging mode flip, a ring↔infinite switch, or a
+     *  smaller ring (a larger ring keeps the depth). */
     private boolean lastAccumulate;
-    private int     lastTargetFrames = -1;
+    private boolean lastForeverMode;
+    private int     lastRingN = -1;
 
     /** Returns the mains comb, (re)building it when the sample rate
      *  changes.  Worker-thread only. */
     private MainsCombFilter mainsComb(int sampleRate) {
         if (mainsComb == null || mainsCombSampleRate != sampleRate) {
-            mainsComb = new MainsCombFilter(sampleRate, MAINS_NOTCH_BW_HZ);
+            mainsComb = new MainsCombFilter(sampleRate, MainsCombFilter.DEFAULT_NOTCH_BANDWIDTH_HZ);
             mainsCombSampleRate = sampleRate;
         }
         return mainsComb;
@@ -357,7 +411,7 @@ public final class FftAnalyzerWorker {
         accumFrames = 0;
         accumHasData = false;
         accumToneKappa = new double[0];
-        accumDroppedSamples = 0.0;
+        toneDroppedSamples = new double[0];
     }
 
     /** Handles a ring overrun: the worker fell a full ring behind, so the
@@ -371,34 +425,110 @@ public final class FftAnalyzerWorker {
     private void onCaptureOverrun(SignalBufferReader rdr) {
         winValid = false;
         rdr.seekToLatest();
-        if (log.isDebugEnabled()) {
-            log.debug("FFT ring overrun — next window re-anchored, averaging continues");
+        kappaSkipNext     = true;   // κ measurement: re-anchor on the jumped frame, don't fold its step
+        gapRecoverPending = true;   // re-sync: one-shot full realign on the next clean frame, then track
+        if (log.isWarnEnabled()) {
+            log.warn("FFT ring overrun — analyser fell a full buffer behind; window re-anchored, "
+                    + "averaging continues (lower the overlap or FFT length if this repeats)");
         }
+        publishCaptureBanner("fft.warning.overrun");
     }
 
-    /** Reports a detected-and-corrected capture gap: samples were dropped below
-     *  the app (interface / driver xrun), the de-rotated fundamental jumped, and
-     *  the time base was re-synced so averaging continues.  Logs it and raises a
-     *  brief blinking banner so the user can see capture gaps are occurring (and
-     *  being corrected) rather than silently smearing the average.  The caller
-     *  runs on the worker thread; the banner publish hops to the UI thread. */
-    private void onCaptureGap(double residualRad, double droppedSamples) {
-        if (log.isWarnEnabled()) {
-            log.warn("FFT capture gap: de-rotated fundamental jumped {} rad "
-                    + "→ +{} dropped samples (re-synced, averaging continues)",
-                    String.format("%.3f", residualRad), String.format("%.1f", droppedSamples));
-        }
-        if (display != null && !display.isDisposed()) {
-            display.asyncExec(() -> {
-                try {
-                    MessageBus.instance().publish(Events.FFT_CAPTURE_OVERRUN);
-                } catch (Exception e) {
-                    log.error("Can't dispatch Events.FFT_CAPTURE_OVERRUN", e);
-                }
-            });
-            display.wake();
-        }
+    /** Posts a capture re-sync warning to the view on the UI thread, carrying the
+     *  i18n message-key as the payload — so ONE event presents the distinct
+     *  "overrun" vs "discontinuity" messages depending on the caller. */
+    private void publishCaptureBanner(String messageKey) {
+        if (display == null || display.isDisposed()) return;
+        display.asyncExec(() -> {
+            try {
+                MessageBus.instance().publish(Events.FFT_CAPTURE_RESYNC, messageKey);
+            } catch (Exception e) {
+                if (log.isErrorEnabled()) log.error("Can't dispatch {}", Events.FFT_CAPTURE_RESYNC, e);
+            }
+        });
+        display.wake();
     }
+
+    /** True if the raw analysis window {@link #winBuf} contains a band-limit-
+     *  violating discontinuity (a glitch).  The capture is heavily oversampled,
+     *  so a clean signal — any number of tones — is locally smooth and its 3rd
+     *  difference {@code Δ³s = s[n] − 3s[n−1] + 3s[n−2] − s[n−3]} is tiny and
+     *  near-uniform; a dropped sample / discontinuity injects out-of-band energy
+     *  that spikes one or a few {@code |Δ³s|} far above the window's |Δ³s| RMS.
+     *  Scale- and tone-count-invariant (it only assumes band-limiting), so it
+     *  works for single tone, dual tone, multitone and noise alike.  DC and any
+     *  slow trend are killed by the 3rd difference, so no mean removal needed. */
+    private boolean detectWindowDiscontinuity() {
+        int len = winLen;
+        if (len < 8) return false;
+        double sumSq  = 0.0;
+        double maxAbs = 0.0;
+/*        for (int n = 3; n < len; n++) {
+            double d3 = winBuf[n] - 3.0 * winBuf[n - 1] + 3.0 * winBuf[n - 2] - winBuf[n - 3];
+            sumSq += d3 * d3;
+            double a = Math.abs(d3);
+            if (a > maxAbs) maxAbs = a;
+        }
+        double rms = Math.sqrt(sumSq / (len - 3));
+*/
+        for (int n = 4; n < len; n++) {
+            double d4 = winBuf[n] - 4.0 * winBuf[n - 1] + 6.0 * winBuf[n - 2] - 4.0 * winBuf[n - 3] - winBuf[n - 4];
+            sumSq += d4 * d4;
+            double a = Math.abs(d4);
+            if (a > maxAbs) maxAbs = a;
+        }
+        double rms = Math.sqrt(sumSq / (len - 4));
+/*        for (int n = 5; n < len; n++) {
+            double d5 = winBuf[n] - 5.0 * winBuf[n - 1] + 10.0 * winBuf[n - 2] - 10.0 * winBuf[n - 3] + 5.0 * winBuf[n - 4] - winBuf[n - 5];
+            sumSq += d5 * d5;
+            double a = Math.abs(d5);
+            if (a > maxAbs) maxAbs = a;
+        }
+        double rms = Math.sqrt(sumSq / (len - 4));
+*/
+        return rms > 0.0 && maxAbs > GLITCH_DIFF_K * rms;
+    }
+
+    /** Recovery for a detected in-window signal discontinuity — the same re-sync
+     *  as a ring overrun: discard the glitched window, re-anchor to "now" and
+     *  rebuild, KEEP the running average (the de-rotation absorbs the coverage
+     *  gap and the cross-tick gap recovery corrects any post-glitch phase step).
+     *  Worker-thread only. */
+    private void onSignalDiscontinuity(SignalBufferReader reader) {
+        winValid = false;
+        reader.seekToLatest();
+        kappaSkipNext     = true;   // κ measurement: re-anchor on the jumped frame, don't fold its step
+        gapRecoverPending = true;   // re-sync: one-shot full realign on the next clean frame, then track
+        if (log.isWarnEnabled()) {
+            log.warn("Found signal discontinuity — re-synced (glitched window discarded, "
+                    + "averaging continues)");
+        }
+        publishCaptureBanner("fft.warning.discontinuity");
+    }
+
+    /** Below this bin count the de-rotation runs serially — the fork/dispatch
+     *  overhead would dominate the small loop. */
+    private static final int DEROT_PARALLEL_THRESHOLD = 1 << 16;   // 64k bins
+
+    /** A contiguous half-open [lo, hi) bin range to process. */
+    @FunctionalInterface
+    private interface RangeTask { void run(int lo, int hi); }
+
+    /** Runs {@code task} over [0, n) split into one contiguous chunk per core on
+     *  the common pool; below {@link #DEROT_PARALLEL_THRESHOLD} it runs the whole
+     *  range on the caller's thread.  The chunks are disjoint, so a task that
+     *  writes only its own [lo, hi) slice needs no synchronisation. */
+    private void parallelChunks(int n, RangeTask task) {
+        if (n < DEROT_PARALLEL_THRESHOLD) { task.run(0, n); return; }
+        int chunks    = Math.max(2, Runtime.getRuntime().availableProcessors() - 1);
+        int chunkSize = (n + chunks - 1) / chunks;
+        IntStream.range(0, chunks).parallel().forEach(c -> {
+            int lo = c * chunkSize;
+            int hi = Math.min(n, lo + chunkSize);
+            if (lo < hi) task.run(lo, hi);
+        });
+    }
+
 
     /** Adds the post-cal Result's spectrum to the cross-tick accumulator.
      *  For coherent mode, applies the time-shift phase rotation that aligns
@@ -439,71 +569,50 @@ public final class FftAnalyzerWorker {
             accumRefSampleStart    = samplesAbsStart;
             accumKFractional       = kFrac;
             accumIntFundBinRounded = intFundBin;
-            accumLock              = new DerotationPhaseLock(
-                    fftSize, kFrac, LOCK_WINDOW, LOCK_DRIFT_RAD, LOCK_WINDOWS, LOCK_MAX_WINDOWS);
-            accumPhaseLocked       = false;
             accumToneKappa         = coherent ? detectStrongTones(r) : new double[0];
+            toneDroppedSamples     = new double[accumToneKappa.length];
+            kappaRefined           = false;
+            kappaMeasFrames        = 0;
+            accumDroppedSamples    = 0.0;
+            gapRecoverPending      = false;
             accumHasData = true;
-        }
-
-        // Gap-corrected sample offset: cumulative dropped samples are added so a
-        // capture xrun (which under-counts writePos) doesn't time-shift the
-        // de-rotation.  delta is a double because the gap correction is sub-bin.
-        double delta = (samplesAbsStart - accumRefSampleStart) + accumDroppedSamples;
-
-        // Phase-lock gate (single-reference coherent only).  Until the lock
-        // converges, the de-rotation frequency isn't exact and accumulating
-        // would smear the fundamental into a sinc, so drive the lock from the
-        // de-rotated fundamental phase but do NOT accumulate (the caller then
-        // shows the live single-tick spectrum).  On lock, freeze the exact
-        // frequency and re-anchor the accumulator to "now" so the (slightly
-        // mis-rotated) pre-lock frames never enter the sum.
-        if (coherent && accumToneKappa.length < 2 && accumLock != null) {
-            double kappa = accumLock.kappa();
-            double baseAngle = (accumIntFundBinRounded > 0)
-                    ? -2.0 * Math.PI * delta * kappa
-                      / ((double) fftSize * accumIntFundBinRounded)
-                    : 0.0;
-            int    k0   = Math.min(accumIntFundBinRounded, halfSize);
-            double krot = k0 * baseAngle;          // total de-rotation at the fundamental bin
-            double cr   = Math.cos(krot), sr = Math.sin(krot);
-            double fr   = r.re[k0] * cr - r.im[k0] * sr;
-            double fi   = r.re[k0] * sr + r.im[k0] * cr;
-            double obsPhase = Math.atan2(fi, fr);   // de-rotated fundamental phase
-            if (!accumPhaseLocked) {
-                boolean locked = accumLock.observe(obsPhase, (long) delta);
-                accumKFractional = accumLock.kappa();
-                if (!locked) return false;          // still locking — don't accumulate
-                // Just locked → freeze, re-anchor to "now", clear the sum.
-                accumPhaseLocked    = true;
-                accumRefSampleStart = samplesAbsStart;
-                accumDroppedSamples = 0.0;
-                delta               = 0.0;
-                for (int k = 0; k < N; k++) { accumRe[k] = 0.0; accumIm[k] = 0.0; }
-                accumFrames = 0;
-                accumLastFundPhase = Math.atan2(r.im[k0], r.re[k0]);  // reference at delta=0
-            } else {
-                // Capture-gap recovery: once locked, the de-rotated fundamental
-                // phase is constant tick-to-tick.  A SUDDEN jump means samples
-                // were dropped below the app (interface / driver xrun) — which
-                // shifts the time base of every later frame (the sinc).  Recover
-                // the dropped-sample count from the jump and fold it in, so the
-                // fundamental + harmonics re-align and averaging CONTINUES across
-                // the gap.  Slow source drift stays well under the threshold and
-                // is left to the lock — not mistaken for a gap.
-                double residual = DerotationPhaseLock.wrapToPi(obsPhase - accumLastFundPhase);
-                if (kappa != 0.0 && Math.abs(residual) > GAP_PHASE_RAD) {
-                    double ddrop = residual * fftSize / (2.0 * Math.PI * kappa);
-                    accumDroppedSamples += ddrop;
-                    delta += ddrop;                 // re-correct THIS frame's de-rotation
-                    onCaptureGap(residual, ddrop);
-                } else {
-                    accumLastFundPhase = obsPhase;  // track slow drift
-                }
+            // State the cross-tick path outright — it is chosen by the SPECTRAL
+            // peak count (detectStrongTones), NOT by the THD/IMD display mode, so
+            // a single-tone THD setup with strong harmonics or residual mains can
+            // still land on the multi-tone path (each tone independently
+            // phase-locked, but no shared κ phase-slope refine).
+            if (log.isInfoEnabled()) {
+                log.info("FFT cross-tick path: {}",
+                        accumToneKappa.length >= 2
+                                ? "MULTI-TONE (" + accumToneKappa.length + " tones) — per-tone phase-lock loop "
+                                  + "(strong harmonics or residual mains added peaks)"
+                                : "single-reference — κ phase-slope refine + phase-lock loop");
             }
         }
 
+        // Time-shift offset from the pinned reference frame-0.  An overrun /
+        // discontinuity re-anchor jumps samplesAbsStart, but the COVERAGE gap is
+        // correctly counted in writePos, so the absolute delta bridges it.  What
+        // it does NOT count is a dropped-sample xrun (the ADC silently drops N) —
+        // that's recovered into accumDroppedSamples by the gap-correction below
+        // and added here so the pinned-κ rotation stays exact across the drop.
+        double delta = (samplesAbsStart - accumRefSampleStart) + accumDroppedSamples;
+
         int weight = Math.max(1, r.frameCount);
+        // Dropout guard: if the fundamental has collapsed (DAC/ADC disconnected,
+        // signal muted), DON'T fold the silence into the average — it would just
+        // dilute everything coherently built.  A dropout is smooth, so the Δ³s
+        // glitch gate never fires; catch it here by amplitude and HOLD the
+        // accumulator (return without adding) until the tone returns.
+        if (coherent && accumRe != null && accumFrames > 0 && accumIntFundBinRounded > 0) {
+            int    k0d      = Math.min(accumIntFundBinRounded, halfSize);
+            double tickFund = Math.hypot(r.re[k0d], r.im[k0d]);
+            double avgFund  = Math.hypot(accumRe[k0d], accumIm[k0d]) / accumFrames;
+            if (avgFund > 0.0 && tickFund < DROPOUT_FRACTION * avgFund) {
+                gapRecoverPending = true;   // tone returns at a new phase → one-shot realign then
+                return true;                // hold the accumulator; don't dilute with a dropout
+            }
+        }
         // Bounded (ring) window: before adding this tick, scale the running sum
         // down so the effective depth holds at targetN frames.  This makes the
         // running sum an exponential window (α = weight/targetN); forever mode
@@ -525,34 +634,126 @@ public final class FftAnalyzerWorker {
                 // Multi-tone: de-rotate each detected tone's lobe by its OWN
                 // frequency (constant phase), so every fundamental keeps its
                 // true position — no single reference, hence no grid-lock.
-                accumulateMultiTone(r, N, weight, (long) delta);
+                accumulateMultiTone(r, N, weight, delta);
             } else {
+                // One-shot κ refine from the de-rotated fundamental's phase slope.
+                // The single-frame peak pins κ to only ~0.01–0.03 bin; dφ/dΔ over
+                // the first KAPPA_MEAS_FRAMES frames IS 2π·Δκ/fftSize, pinning the
+                // EXACT frequency ~100× tighter and killing the long-run phase
+                // ramp (which would vector-cancel the magnitude, harmonics h×
+                // faster).  Refined before accumulating so the corrected κ is used
+                // from here; the few pre-refine frames carry a negligible offset.
+                if (accumIntFundBinRounded > 0) {
+                    int    k0   = Math.min(accumIntFundBinRounded, halfSize);
+                    double krot = -2.0 * Math.PI * delta * accumKFractional / fftSize;
+                    double cr   = Math.cos(krot), sr = Math.sin(krot);
+                    double obsPhase = Math.atan2(r.re[k0] * sr + r.im[k0] * cr,
+                                                 r.re[k0] * cr - r.im[k0] * sr);
+                    if (!kappaRefined) {
+                        // One-shot κ refine from the de-rotated fundamental's phase
+                        // slope: dφ/dΔ over KAPPA_MEAS_FRAMES CLEAN frames IS
+                        // 2π·Δκ/fftSize, pinning the EXACT frequency ~100× tighter
+                        // than the single-frame peak (whose ~0.01-bin bias would
+                        // ramp the phase and sink the magnitude, harmonics h× faster).
+                        if (kappaMeasFrames == 0 || kappaSkipNext) {
+                            // Anchor, or re-anchor after a re-sync (delta jumped):
+                            // adopt this frame as the reference but DON'T fold its
+                            // step in — a burst can't poison or starve the measure.
+                            if (kappaMeasFrames == 0) {
+                                kappaCumPhase   = 0.0;
+                                kappaCleanSpan  = 0.0;
+                                kappaMeasFrames = 1;
+                            }
+                            kappaLastPhase = obsPhase;
+                            kappaLastDelta = delta;
+                            kappaSkipNext  = false;
+                        } else {
+                            kappaCumPhase  += Math.IEEEremainder(obsPhase - kappaLastPhase, 2.0 * Math.PI);
+                            kappaCleanSpan += delta - kappaLastDelta;
+                            kappaLastPhase  = obsPhase;
+                            kappaLastDelta  = delta;
+                            if (++kappaMeasFrames >= KAPPA_MEAS_FRAMES && kappaCleanSpan > 0.0) {
+                                double dKappa = kappaCumPhase * fftSize / (2.0 * Math.PI * kappaCleanSpan);
+                                accumKFractional += dKappa;
+                                kappaRefined = true;
+                                gapRecoverPending = false;
+                                if (log.isInfoEnabled()) {
+                                    log.info("FFT κ refined from phase slope over {} clean frames: Δκ={} bin → κ={}",
+                                            kappaMeasFrames, String.format("%.5f", dKappa),
+                                            String.format("%.5f", accumKFractional));
+                                }
+                            }
+                        }
+                    } else if (accumKFractional != 0.0) {
+                        // Continuous phase-tracking loop (a PLL on the cross-tick
+                        // fundamental).  Instead of trusting a frozen pinned κ — whose
+                        // residual error ramps the de-rotated phase and slowly
+                        // vector-cancels the fundamental — measure the running
+                        // mis-alignment against the DEEP ACCUMULATED phase (the
+                        // √N-averaged true reference; the accumulator rotates bin k0 by
+                        // the same krot as obsPhase, so the two compare directly) and
+                        // fold a FRACTION of it back into the de-rotation every tick.
+                        // PHASE_TRACK_GAIN < 1 is the loop filter: it averages out the
+                        // per-tick phase noise that would otherwise random-walk if
+                        // folded whole.  This holds the fundamental flat with no
+                        // pinned-κ drift, and a glitch is just a large residual the
+                        // loop tracks out — replacing the fragile 8-frame gap-
+                        // correction.  On a re-sync the delta jumped, so do a one-shot
+                        // FULL realign of THIS frame too (gain 1) and let the loop
+                        // clean up any single-frame residual afterwards.
+                        double accumPhase = Math.atan2(accumIm[k0], accumRe[k0]);
+                        double residual   = Math.IEEEremainder(obsPhase - accumPhase, 2.0 * Math.PI);
+                        double gain       = gapRecoverPending ? 1.0 : PHASE_TRACK_GAIN;
+                        double corr       = gain * residual * fftSize
+                                          / (2.0 * Math.PI * accumKFractional);
+                        accumDroppedSamples += corr;
+                        if (gapRecoverPending) {
+                            delta += corr;                 // realign THIS frame after the jump
+                            gapRecoverPending = false;
+                            if (log.isInfoEnabled()) {
+                                log.info("FFT re-sync realigned: {} sample one-shot (Δφ={} rad vs accumulated ref); phase-lock loop continues",
+                                        Math.round(corr), String.format("%.4f", residual));
+                            }
+                        }
+                    }
+                }
                 // Single reference: per-bin time-shift rotation tied to the one
                 // detected fundamental (and, via the linear ramp, its harmonics)
-                // at the phase-locked (exact) frequency in accumKFractional.
+                // at the refined exact frequency in accumKFractional.
                 double baseAngle = (accumIntFundBinRounded > 0)
                         ? -2.0 * Math.PI * delta * accumKFractional
                           / ((double) fftSize * accumIntFundBinRounded)
                         : 0.0;
-                double cosBase = Math.cos(baseAngle);
-                double sinBase = Math.sin(baseAngle);
-                double corrRe = 1.0, corrIm = 0.0;
-                for (int k = 0; k < N; k++) {
-                    double rRe = r.re[k] * weight;
-                    double rIm = r.im[k] * weight;
-                    accumRe[k] += rRe * corrRe - rIm * corrIm;
-                    accumIm[k] += rRe * corrIm + rIm * corrRe;
-                    double nextRe = corrRe * cosBase - corrIm * sinBase;
-                    corrIm = corrRe * sinBase + corrIm * cosBase;
-                    corrRe = nextRe;
-                }
+                final double cosBase = Math.cos(baseAngle);
+                final double sinBase = Math.sin(baseAngle);
+                // Parallelized across cores: each chunk seeds its phasor by direct
+                // trig at its start bin then recurses; the accumRe/accumIm writes
+                // are disjoint per chunk.  Numerically ≡ the serial recursion — in
+                // fact slightly LESS phasor drift, since each chunk recurses over a
+                // shorter span from an exact start.
+                parallelChunks(N, (lo, hi) -> {
+                    double cr = Math.cos(baseAngle * lo);
+                    double ci = Math.sin(baseAngle * lo);
+                    for (int k = lo; k < hi; k++) {
+                        double rRe = r.re[k] * weight;
+                        double rIm = r.im[k] * weight;
+                        accumRe[k] += rRe * cr - rIm * ci;
+                        accumIm[k] += rRe * ci + rIm * cr;
+                        double nextRe = cr * cosBase - ci * sinBase;
+                        ci = cr * sinBase + ci * cosBase;
+                        cr = nextRe;
+                    }
+                });
             }
         } else {
+            // Incoherent analyze stores the RAW FFT magnitude in r.re (im = 0).
+            // Sum its POWER — NOT the already-amplitude r.amplitudeDbFs — so the
+            // mag→amplitude conv in overlayAccumulatorOnto (shared with the
+            // coherent path) applies ONCE, not twice (the double conversion
+            // buried the whole spectrum ~120 dB).
             for (int k = 0; k < N; k++) {
-                double ampLin = r.amplitudeDbFs[k] > -290.0
-                        ? Math.pow(10.0, r.amplitudeDbFs[k] / 20.0)
-                        : 0.0;
-                accumPow[k] += ampLin * ampLin * weight;
+                double mag = r.re[k];
+                accumPow[k] += mag * mag * weight;
             }
         }
         accumFrames += weight;
@@ -563,11 +764,14 @@ public final class FftAnalyzerWorker {
      *  de-rotated by a CONSTANT phase equal to that tone's own inter-tick
      *  advance, so the lobe is preserved intact and the accumulated peak
      *  stays at the tone's true (sub-bin) frequency — no locking to the FFT
-     *  grid.  Bins outside every tone lobe get the plain time-shift ramp,
-     *  which leaves broadband noise to average down.  This is the honest
-     *  "measure what was sampled" path for unknown / external multi-tone
-     *  signals: the tones are found from the spectrum, not assumed. */
-    private void accumulateMultiTone(FftResult r, int N, int weight, long delta) {
+     *  grid.  Each tone carries its OWN phase-lock loop ({@link
+     *  #toneDroppedSamples}) so a frozen-κ residual can't ramp its lobe out of
+     *  phase over a long average — the per-tone analogue of the single-reference
+     *  loop, so IMD tone pairs hold.  Bins outside every tone lobe get the plain
+     *  time-shift ramp, which leaves broadband noise to average down.  This is
+     *  the honest "measure what was sampled" path for unknown / external
+     *  multi-tone signals: the tones are found from the spectrum, not assumed. */
+    private void accumulateMultiTone(FftResult r, int N, int weight, double delta) {
         int fftSize = r.fftSize;
         double rampSlope = -2.0 * Math.PI * delta / (double) fftSize;
         double stepRe = Math.cos(rampSlope);
@@ -579,13 +783,55 @@ public final class FftAnalyzerWorker {
         int[]    lo  = new int[nT];
         int[]    hi  = new int[nT];
         for (int t = 0; t < nT; t++) {
-            double ang = -2.0 * Math.PI * delta * accumToneKappa[t] / (double) fftSize;
-            cRe[t] = Math.cos(ang);
-            cIm[t] = Math.sin(ang);
-            int k0 = (int) Math.round(accumToneKappa[t]);
+            double kappa = accumToneKappa[t];
+            int    k0    = Math.min(Math.max(0, (int) Math.round(kappa)), N - 1);
+            // De-rotate this tone's lobe by its OWN frequency, advanced by the
+            // tone's accumulated loop correction.  A frozen per-tone κ (the
+            // single-frame parabolic estimate, ~0.01–0.05 bin off) would ramp the
+            // lobe phase and vector-cancel it — the multi-tone analogue of the
+            // single-reference drift.
+            double effDelta = delta + toneDroppedSamples[t];
+            double ang = -2.0 * Math.PI * effDelta * kappa / (double) fftSize;
+            double cr = Math.cos(ang), sr = Math.sin(ang);
+            // Per-tone phase-lock loop: compare this tone's de-rotated phase to
+            // the DEEP accumulated phase at its bin (the √N-averaged reference,
+            // rotated by the same ang so the two compare directly) and fold a
+            // fraction of the residual into the tone's correction.  The same loop
+            // that holds the single-tone fundamental, run once per tone.  Skipped
+            // on the first contributing frame (no reference yet).  On a re-sync
+            // (gapRecoverPending) do a one-shot FULL realign of THIS frame too.
+            if (accumRe != null && accumFrames > 0 && kappa > 0.0) {
+                double obsPhase   = Math.atan2(r.re[k0] * sr + r.im[k0] * cr,
+                                               r.re[k0] * cr - r.im[k0] * sr);
+                double accumPhase = Math.atan2(accumIm[k0], accumRe[k0]);
+                double residual   = Math.IEEEremainder(obsPhase - accumPhase, 2.0 * Math.PI);
+                // A residual far beyond the per-tick noise + κ-ramp is a phase
+                // DISCONTINUITY this tone suffered (DDS jump / reconnect) that the
+                // window glitch-gate missed — multi-tone disables the per-sample
+                // R-invariant test, so this is the cross-tick safety net.  Snap
+                // (gain 1) so the frame adds at its new phase instead of smearing.
+                boolean jump = Math.abs(residual) > PHASE_JUMP_RAD;
+                double gain  = (gapRecoverPending || jump) ? 1.0 : PHASE_TRACK_GAIN;
+                double corr  = gain * residual * fftSize / (2.0 * Math.PI * kappa);
+                toneDroppedSamples[t] += corr;
+                if (gapRecoverPending || jump) {
+                    ang = -2.0 * Math.PI * (effDelta + corr) * kappa / (double) fftSize;
+                    cr  = Math.cos(ang);
+                    sr  = Math.sin(ang);
+                    if (jump && !gapRecoverPending && log.isInfoEnabled()) {
+                        log.info("FFT dual-tone discontinuity: tone {} (~{} Hz) phase jump {} rad — realigned",
+                                t, String.format("%.1f", kappa * r.sampleRate / (double) fftSize),
+                                String.format("%.3f", residual));
+                    }
+                }
+            }
+            cRe[t] = cr;
+            cIm[t] = sr;
             lo[t] = Math.max(0,     k0 - TONE_LOBE_HALF_BINS);
             hi[t] = Math.min(N - 1, k0 + TONE_LOBE_HALF_BINS);
         }
+        // One re-sync realign serves every tone; clear after they've all used it.
+        gapRecoverPending = false;
         int curT = 0;
         for (int k = 0; k < N; k++) {
             while (curT < nT && k > hi[curT]) curT++;
@@ -614,15 +860,31 @@ public final class FftAnalyzerWorker {
         if (db == null) return new double[0];
         int halfSize = r.fftSize / 2;
         if (halfSize < 4) return new double[0];
-        double thresh = noiseFloorDb(db, halfSize) + STRONG_TONE_FLOOR_DB;
-        // Keep the strongest MAX_TONES local maxima above the floor, merging
+        // Skip the DC/ULF zone: a residual DC offset leaks through the window's
+        // main lobe into the first bins (bin 3 ≈ 0.55 Hz at 2 M / 384 kHz) and
+        // would be picked up as a spurious "second tone".  Ignore everything
+        // below 10 Hz — well under any real tone, and the same guard the
+        // analyzer's fundamental search uses.
+        double freqRes = (double) r.sampleRate / r.fftSize;
+        int    minBin  = Math.max(2, (int) Math.ceil(DC_REJECT_HZ / freqRes));
+        // A peak counts as a separate TONE only if it is within
+        // fftStrongToneRelDb of the STRONGEST peak.  A clean tone's harmonics
+        // sit far below it (often >100 dB) so they're excluded and the signal
+        // stays on the single-reference phase-lock path; genuine dual-tone / IMD
+        // partners are comparable in level and survive.
+        double strongest = -Double.MAX_VALUE;
+        for (int k = minBin; k < halfSize; k++) {
+            if (db[k] > db[k - 1] && db[k] >= db[k + 1] && db[k] > strongest) strongest = db[k];
+        }
+        double thresh = strongest - Preferences.instance().getFftStrongToneRelDb();
+        // Keep the strongest MAX_TONES local maxima above the threshold, merging
         // peaks closer than MIN_TONE_SEP_BINS (one tone's lobe).  Selecting by
         // strength (not scan order) keeps the real tones even when 1/f or the
         // HF-rise noise also clears the threshold.
         int[]    bins = new int[MAX_TONES];
         double[] lvls = new double[MAX_TONES];
         int count = 0;
-        for (int k = 2; k < halfSize; k++) {
+        for (int k = minBin; k < halfSize; k++) {
             if (db[k] < thresh) continue;
             if (!(db[k] > db[k - 1] && db[k] >= db[k + 1])) continue;   // local max
             double lvl = db[k];
@@ -640,6 +902,32 @@ public final class FftAnalyzerWorker {
                 if (lvl > lvls[weakest]) { bins[weakest] = k; lvls[weakest] = lvl; }
             }
         }
+        // Harmonic rejection: a single tone's harmonics (2f, 3f, …) clear the
+        // floor and would otherwise be taken as independent tones, forcing the
+        // per-tone multi-tone path (frozen parabolic κ, NO phase-slope refine —
+        // the long-run drift).  A harmonic sits at an integer multiple h≥2 of the
+        // strongest tone AND well below it (distortion); the single-reference
+        // time-shift already aligns it via h×, so drop it — leaving a single tone
+        // + harmonics on the refined single-ref path.  Genuine inharmonic IMD
+        // partners aren't integer multiples and aren't far below, so they survive.
+        if (count >= 2) {
+            int fund = 0;
+            for (int i = 1; i < count; i++) if (lvls[i] > lvls[fund]) fund = i;
+            double f0bin = bins[fund];
+            int kept = 0;
+            for (int i = 0; i < count; i++) {
+                boolean harmonic = false;
+                if (i != fund && f0bin > 0.0) {
+                    double ratio = bins[i] / f0bin;
+                    long   h     = Math.round(ratio);
+                    harmonic = h >= 2
+                            && Math.abs(ratio - h) * f0bin < MIN_TONE_SEP_BINS
+                            && lvls[i] < lvls[fund] - HARMONIC_REJECT_BELOW_DB;
+                }
+                if (!harmonic) { bins[kept] = bins[i]; lvls[kept] = lvls[i]; kept++; }
+            }
+            count = kept;
+        }
         // Sort the kept tones by bin ascending (needed by the region walk).
         for (int i = 1; i < count; i++) {
             int b = bins[i]; double l = lvls[i]; int j = i - 1;
@@ -649,28 +937,6 @@ public final class FftAnalyzerWorker {
         double[] out = new double[count];
         for (int i = 0; i < count; i++) out[i] = refineBin(db, bins[i], halfSize);
         return out;
-    }
-
-    /** 10th-percentile bin level (dB) via a coarse 1-dB histogram — a
-     *  leakage-immune estimate of the broadband noise floor, cheap enough
-     *  to run on the full half-spectrum without sorting. */
-    private double noiseFloorDb(double[] db, int halfSize) {
-        final int LO = -320, NB = 360;   // 1-dB buckets covering [-320, 40) dB
-        int[] hist = new int[NB];
-        int total = 0;
-        for (int k = 1; k <= halfSize; k++) {
-            int b = (int) Math.floor(db[k]) - LO;
-            if (b < 0) b = 0; else if (b >= NB) b = NB - 1;
-            hist[b]++; total++;
-        }
-        if (total == 0) return -160.0;
-        int target = total / 10;
-        int cum = 0;
-        for (int b = 0; b < NB; b++) {
-            cum += hist[b];
-            if (cum >= target) return LO + b;
-        }
-        return -160.0;
     }
 
     /** 3-point parabolic peak interpolation (on dB) around bin {@code k}. */
@@ -709,31 +975,37 @@ public final class FftAnalyzerWorker {
         if (magFund < 1e-30 || ampFund < 1e-30) return;
         double conv = ampFund / magFund;   // normFactor · 2 (for non-DC/Nyquist)
 
+        // Per-bin and independent → parallelize the dB rebuild (1M× log10/atan2)
+        // across cores; disjoint k-writes, no recursion.
         if (accumCoherent) {
-            for (int k = 0; k < N; k++) {
-                double avgRe = accumRe[k] / accumFrames;
-                double avgIm = accumIm[k] / accumFrames;
-                r.re[k] = avgRe;
-                r.im[k] = avgIm;
-                double mag = Math.hypot(avgRe, avgIm);
-                double scale = (k == 0 || k == halfSize) ? 0.5 : 1.0;
-                double amp = mag * conv * scale;
-                r.amplitudeDbFs[k] = amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0;
-                r.phaseDeg[k] = Math.toDegrees(Math.atan2(avgIm, avgRe));
-            }
+            parallelChunks(N, (lo, hi) -> {
+                for (int k = lo; k < hi; k++) {
+                    double avgRe = accumRe[k] / accumFrames;
+                    double avgIm = accumIm[k] / accumFrames;
+                    r.re[k] = avgRe;
+                    r.im[k] = avgIm;
+                    double mag = Math.hypot(avgRe, avgIm);
+                    double scale = (k == 0 || k == halfSize) ? 0.5 : 1.0;
+                    double amp = mag * conv * scale;
+                    r.amplitudeDbFs[k] = amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0;
+                    r.phaseDeg[k] = Math.toDegrees(Math.atan2(avgIm, avgRe));
+                }
+            });
         } else {
-            for (int k = 0; k < N; k++) {
-                double avgPow = accumPow[k] / accumFrames;
-                double mag = Math.sqrt(avgPow);
-                double scale = (k == 0 || k == halfSize) ? 0.5 : 1.0;
-                double amp = mag * conv * scale;
-                r.amplitudeDbFs[k] = amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0;
-                // Match analyze()'s incoherent convention: re holds magnitude,
-                // im = 0 (phase is undefined for power averaging).
-                r.re[k] = amp;
-                r.im[k] = 0.0;
-                r.phaseDeg[k] = 0.0;
-            }
+            parallelChunks(N, (lo, hi) -> {
+                for (int k = lo; k < hi; k++) {
+                    double avgPow = accumPow[k] / accumFrames;
+                    double mag = Math.sqrt(avgPow);
+                    double scale = (k == 0 || k == halfSize) ? 0.5 : 1.0;
+                    double amp = mag * conv * scale;
+                    r.amplitudeDbFs[k] = amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0;
+                    // Match analyze()'s incoherent convention: re holds magnitude,
+                    // im = 0 (phase is undefined for power averaging).
+                    r.re[k] = amp;
+                    r.im[k] = 0.0;
+                    r.phaseDeg[k] = 0.0;
+                }
+            });
         }
     }
 
@@ -821,6 +1093,7 @@ public final class FftAnalyzerWorker {
         reanchorPending       = true;
         recycleAndClearCache();
         resetAccumulator();
+        if (mainsComb != null) mainsComb.resetTracking();   // re-lock mains from scratch
     }
 
     // ─── Status queries ─────────────────────────────────────────────────────
@@ -906,9 +1179,8 @@ public final class FftAnalyzerWorker {
         }
         lastGeneratorActive = genActiveNow;
 
-        SignalBufferReader rdr = reader;
-        if (rdr == null) return IDLE_TICK_MS;
-        int sampleRate = rdr.getSampleRate();
+        if (reader == null) return IDLE_TICK_MS;
+        int sampleRate = reader.getSampleRate();
         if (sampleRate <= 0) return IDLE_TICK_MS;
 
         Preferences prefs = Preferences.instance();
@@ -945,7 +1217,7 @@ public final class FftAnalyzerWorker {
         if (hop < 1) hop = 1;
         int hopSamples = (int) Math.max(1, Math.round(hop));
         int needed = (int) Math.ceil(fftLength + (averages - 1) * hop);
-        needed = Math.min(needed, rdr.getCapacity());
+        needed = Math.min(needed, reader.getCapacity());
 
         Channel channel = prefs.getFftChannel();
         boolean wantLeft = (channel == Channel.L);
@@ -955,7 +1227,7 @@ public final class FftAnalyzerWorker {
         // generator stops).  Done on the worker thread to keep the cursor's
         // read position single-owner even though resets arrive from others.
         if (reanchorPending) {
-            rdr.seekToLatest();
+            reader.seekToLatest();
             reanchorPending = false;
             winValid = false;
         }
@@ -968,7 +1240,7 @@ public final class FftAnalyzerWorker {
             if (winBuf.length != needed) winBuf = new float[needed];
         }
 
-        long avail = rdr.available();
+        long avail = reader.available();
         if (avail == SignalBufferReader.OVERRUN) {
             // The writer lapped the cursor — the contiguous stream tore (the
             // worker fell a full ring behind).  Drop the cross-tick accumulator
@@ -976,7 +1248,7 @@ public final class FftAnalyzerWorker {
             // restarts from a fresh unbroken span (overlap can only resume once
             // there are no breaks).  A reset the user can SEE — not a silent
             // torn-read glitch.
-            onCaptureOverrun(rdr);
+            onCaptureOverrun(reader);
             return IDLE_TICK_MS;
         }
 
@@ -986,11 +1258,11 @@ public final class FftAnalyzerWorker {
             if (avail < needed) {
                 return Math.max(20, msForSamples((int) (needed - avail), sampleRate));
             }
-            int got = rdr.read(needed, wantLeft ? winBuf : null, wantLeft ? null : winBuf);
-            if (got == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
+            int got = reader.read(needed, wantLeft ? winBuf : null, wantLeft ? null : winBuf);
+            if (got == SignalBufferReader.OVERRUN) { onCaptureOverrun(reader); return IDLE_TICK_MS; }
             if (got < needed) return IDLE_TICK_MS;        // gated by avail≥needed; defensive
             winLen      = got;
-            winAbsStart = rdr.getReadPos() - got;
+            winAbsStart = reader.getReadPos() - got;
             winValid    = true;
         } else {
             // Slide forward exactly one hop: pull the fresh hop, drop the oldest
@@ -1000,14 +1272,24 @@ public final class FftAnalyzerWorker {
                 return Math.max(20, msForSamples(hopSamples - (int) avail, sampleRate));
             }
             if (hopBuf.length != hopSamples) hopBuf = new float[hopSamples];
-            int got = rdr.read(hopSamples, wantLeft ? hopBuf : null, wantLeft ? null : hopBuf);
-            if (got == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
+            int got = reader.read(hopSamples, wantLeft ? hopBuf : null, wantLeft ? null : hopBuf);
+            if (got == SignalBufferReader.OVERRUN) { onCaptureOverrun(reader); return IDLE_TICK_MS; }
             if (got < hopSamples) return IDLE_TICK_MS;    // gated by avail≥hop; defensive
             System.arraycopy(winBuf, hopSamples, winBuf, 0, winLen - hopSamples);
             System.arraycopy(hopBuf, 0, winBuf, winLen - hopSamples, hopSamples);
             winAbsStart += hopSamples;
         }
         samplesAbsStart = winAbsStart;
+
+        // Pre-FFT discontinuity gate: a band-limit-violating glitch in the raw
+        // window (a dropped sample / DDS discontinuity) would splatter into a
+        // sinc across the whole spectrum and poison the average.  Detect it (any
+        // band-limited signal — single or multi-tone) and re-sync like an overrun
+        // so the glitched window never enters the average.
+        if (detectWindowDiscontinuity()) {
+            onSignalDiscontinuity(reader);
+            return IDLE_TICK_MS;
+        }
 
         // Per-tick analysis copy: the comb / FFT window mutate the samples in
         // place, so the retained sliding window must NOT be handed to analyze.
@@ -1018,19 +1300,16 @@ public final class FftAnalyzerWorker {
         // sampleRate makes previously cached raw FFTs stale.  Drop both
         // the cache AND the pool (pooled arrays would also be the wrong
         // size after an fftLength change).
-        // Mains-suppression also enters the fingerprint: toggling it changes
-        // the samples fed to analyze, so cached frames / the accumulator must
-        // be dropped.  When active, the per-frame cache is bypassed entirely
-        // (see below) because block-resetting the comb each tick makes a
-        // frame's samples depend on its offset within the window, breaking
-        // the cache's "same absStart ⇒ same frame" assumption.
+        // Mains-suppression is NOT in the fingerprint: it no longer touches the
+        // time-domain samples (it's a plot-time frequency-response correction —
+        // see applyMainsCorrection), so the cached raw frames stay valid and
+        // toggling it is a pure re-render, not an accumulator reset.
         boolean mainsSuppress = MainsSuppression.fromNameOr(
                 prefs.getFftMainsSuppression(), MainsSuppression.NONE) == MainsSuppression.IIR_COMB;
         long cfgFingerprint = fftLength;
         cfgFingerprint = 31 * cfgFingerprint + sampleRate;
         cfgFingerprint = 31 * cfgFingerprint + window.ordinal();
         cfgFingerprint = 31 * cfgFingerprint + (wantLeft ? 1 : 0);
-        cfgFingerprint = 31 * cfgFingerprint + (mainsSuppress ? 1 : 0);
         if (cfgFingerprint != frameCacheFingerprint) {
             discardCacheAndPool();
             // Same config change invalidates the cross-tick accumulator
@@ -1074,20 +1353,20 @@ public final class FftAnalyzerWorker {
                     : prefs.getGenFrequencyHz())
                 : Double.NaN;
 
-        // Mains suppression: track the live mains frequency on a short
-        // prefix (a second is ample for a mHz-accurate estimate), then comb-
-        // filter the whole window in place before it's analysed.  The comb is
-        // reset each tick so the block is filtered deterministically; its
-        // start transient is tapered away by the FFT window.  With the filter
-        // on, the per-frame cache is bypassed (frame samples are no longer
-        // position-independent across overlapping ticks).
+        // Mains suppression: only TRACK the live mains fundamental here (a
+        // second of samples gives a mHz-accurate estimate) so the comb stays
+        // locked to 50/60 Hz.  The signal is deliberately NOT filtered in the
+        // time domain — combing each frame convolves the comb's transient/phase
+        // into it, which the coherent average can't undo (drift, worst when a
+        // mains harmonic sits on a measured tone).  Instead the comb's
+        // normalized frequency response is divided out of the AVERAGED spectrum
+        // at plot time (applyMainsCorrection), leaving the accumulator raw —
+        // like the .frc cal, but independent of it.  Input stays pristine, so
+        // the per-frame cache works normally.
         if (mainsSuppress) {
-            MainsCombFilter comb = mainsComb(sampleRate);
-            comb.track(samples, Math.min(samples.length, sampleRate));
-            comb.reset();
-            comb.process(samples, samples.length);
+            mainsComb(sampleRate).track(samples, Math.min(samples.length, sampleRate));
         }
-        analyzer.setFrameCache(mainsSuppress ? null : frameFftCacheImpl);
+        analyzer.setFrameCache(frameFftCacheImpl);
 
         analyzer.setSamplesAbsStart(samplesAbsStart);
         // Dual-tone: hint the upper tone too, so the analyzer produces an
@@ -1101,6 +1380,12 @@ public final class FftAnalyzerWorker {
         // Dual tone breaks the single-sine R-invariant glitch test, so skip
         // it (it would otherwise flag nearly every sample and self-invalidate).
         analyzer.setMultiTone(dualTone);
+        // While cross-tick averaging, the single-tick THD / SNR / noise-floor
+        // stats are discarded and re-derived by recomputeStats() on the
+        // accumulated spectrum below — so tell analyze to skip those sweeps
+        // (incl. the two O(N log N) noise sorts) and only produce the spectrum
+        // + fundamental/harmonic bins.  Single-tick mode keeps the full stats.
+        analyzer.setSpectrumOnly(accumulate);
         FftResult r;
         try {
             r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH,
@@ -1116,50 +1401,22 @@ public final class FftAnalyzerWorker {
         if (fs > 0 && Double.isFinite(r.fundamentalDbFs)) {
             r.fundRefDbV = r.fundamentalDbFs + 20.0 * Math.log10(fs);
         }
-        // Apply every loaded .frc calibration in cascade.  Each call
-        // mutates r in place and re-runs the harmonic / THD / SNR
-        // recompute, so the numeric readouts the view reads from r
-        // reflect the corrected spectrum.  Each entry carries its own
-        // "with noise" flag (set per-row in the Load-calibration tab):
-        // when true, this entry's correction applies to every FFT bin
-        // including the noise floor; when false, only the fundamental
-        // + harmonic bin neighbourhoods are corrected.
-        List<FftCalibrationStore.Entry> calEntries =
-                FftCalibrationStore.instance().getEntries();
-        if (!calEntries.isEmpty()) {
-            // Snapshot pre-correction peaks BEFORE the in-place mutate
-            // so the view can draw "before" dots next to the corrected
-            // "after" ones.
-            r.preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
-            for (FftCalibrationStore.Entry e : calEntries) {
-                FreqRespCalibration calForChan = wantLeft
-                        ? e.getCalibration().left()
-                        : e.getCalibration().right();
-                FreqRespCalHelper.applyCompensationInPlace(
-                        r, calForChan, e.isWithNoise());
-            }
-            // applyCompensationInPlace only re-anchors fundRefDbV when
-            // the cal file itself carries adcFsVoltageRms, and loadCsv
-            // never reads that field — so after the cascade fundRefDbV
-            // is stale (still references pre-cal fundamentalDbFs).
-            // Re-apply the global ADC FS anchor here so the displayed
-            // dBV reflects the cal-restored fundamental level.
-            if (fs > 0 && Double.isFinite(r.fundamentalDbFs)) {
-                r.fundRefDbV = r.fundamentalDbFs + 20.0 * Math.log10(fs);
-            }
-        } else {
-            // No cal loaded — r.preCorrectionPeaks is already null
-            // (default for a freshly-allocated Result), nothing to do.
-        }
-
-        // Mode-transition detection — any change in the averaging target
-        // (single ↔ ring N ↔ forever, or a different N) resets the cross-tick
-        // accumulator so the new mode starts from a clean slate.
-        if (accumulate != lastAccumulate || targetFrames != lastTargetFrames) {
+        // Mode-transition detection — reset the cross-tick average only when the
+        // new bound discards collected depth: the averaging mode flips
+        // (idle ↔ averaging), a ring ↔ infinite switch, or a SMALLER ring.  A
+        // LARGER ring keeps the depth (the exponential window just widens).
+        // Forever is the explicit flag, not a MAX_VALUE sentinel.
+        boolean discard = accumulate != lastAccumulate
+                || foreverMode != lastForeverMode               // ring ↔ infinite
+                || (!foreverMode && ringN < lastRingN);          // smaller ring
+        if (discard) {
             resetAccumulator();
-            lastAccumulate   = accumulate;
-            lastTargetFrames = targetFrames;
+            completedAnalyses = 0;
+            firstFrameDone    = false;
         }
+        lastAccumulate  = accumulate;
+        lastForeverMode = foreverMode;
+        lastRingN       = ringN;
         // Cross-tick accumulation: each tick contributes its (small) per-tick
         // frames to a running accumulator (coherently rotated to align with
         // the accumulator's time reference), then the displayed Result is
@@ -1168,98 +1425,15 @@ public final class FftAnalyzerWorker {
         // mean (SNR boost √(total frames)); a finite ring N is the same
         // accumulator bounded to N frames (an exponential window), so it also
         // reaches √N depth regardless of the capture-buffer size.
-        if (accumulate
-                && accumulateIntoForeverBuffer(r, samplesAbsStart, coherent, targetFrames)) {
-            overlayAccumulatorOnto(r);
-            analyzer.recomputeStats(r);
-            // recomputeStats updates fundamentalDbFs from the cumulative
-            // spectrum; re-anchor fundRefDbV to keep the displayed dBV
-            // consistent with the cal-restored level.
-            if (fs > 0 && Double.isFinite(r.fundamentalDbFs)) {
-                r.fundRefDbV = r.fundamentalDbFs + 20.0 * Math.log10(fs);
-            }
-            // Re-derive preCorrectionPeaks from the cumulative post-cal r
-            // by adding back cal dB at each harmonic frequency.  Without
-            // this the "before-cal" (BLUE) dots reflect a SINGLE-tick
-            // pre-cal noise reading while the "after-cal" (RED) dots
-            // reflect the cumulative average; for harmonics whose lifted
-            // signal sits below the single-tick noise floor (very common
-            // when the user is averaging precisely to reveal them), the
-            // BLUE dots float above the RED dots even though the cal
-            // genuinely lifts — a confusing visual mismatch.  After this
-            // recompute both dots are measured on the SAME cumulative
-            // spectrum and the BLUE-vs-RED difference equals exactly
-            // the cal's dB lift at that harmonic.
-            if (!calEntries.isEmpty()) {
-                int hc = r.harmonicCount;
-                double[] preFreqs = new double[1 + hc];
-                double[] preDbFs  = new double[1 + hc];
-                // Use the PINNED accumKFractional (frozen at the first
-                // contributing tick) to derive the cal-lookup frequency.
-                // The single-tick r.fundamentalHzRefined can jitter
-                // tick-to-tick (worst case when frame-rejection collapses
-                // bestLen to 1 and kFractional falls back to parabolic
-                // interp); that jitter, multiplied by (h+2) for higher
-                // harmonics, would dance the cal sampling point around
-                // and make the BLUE dot jump even though RED (which is
-                // derived from the cumulative bin amplitudes) stays put.
-                double stableKF = accumHasData
-                        ? accumKFractional
-                        : (r.freqResolution > 0
-                                ? r.fundamentalHzRefined / r.freqResolution
-                                : 0.0);
-                double stableFundHz = stableKF * r.freqResolution;
-                preFreqs[0] = r.fundamentalHz;
-                preDbFs[0]  = r.fundamentalDbFs
-                        + sumCalDb(calEntries, wantLeft, stableFundHz);
-                for (int h = 0; h < hc; h++) {
-                    if (r.harmonicBins[h] > 0) {
-                        preFreqs[1 + h] = r.harmonicHz[h];
-                        double stableHarmHz = stableFundHz * (h + 2);
-                        preDbFs[1 + h]  = r.harmonicDbFs[h]
-                                + sumCalDb(calEntries, wantLeft, stableHarmHz);
-                    }
-                }
-                r.preCorrectionPeaks = new double[][] { preFreqs, preDbFs };
-            }
-        }
+        boolean accumulated = accumulate
+                && accumulateIntoForeverBuffer(r, samplesAbsStart, coherent, targetFrames);
 
-        // Lift the FINAL spectrum onto the dBV scale — done here, after
-        // every mutation (cal cascade + forever-mode overlay +
-        // recomputeStats) so {@code amplitudeDbV} reflects exactly the
-        // spectrum the view shows, not a stale single-tick snapshot.
-        // This is the SOURCE OF TRUTH for voltage-based downstream
-        // analysis (ImdAnalyzer / TD+N / IMD %); those consumers never
-        // touch {@code amplitudeDbFs}, only {@code amplitudeDbV}.  The
-        // offset is a pure hardware-calibration constant, cached on the
-        // Result so display code that converts dBV ↔ dBFs reuses it
-        // without recomputing {@code log10} per pixel.
-        if (fs > 0) {
-            double anchor = 20.0 * Math.log10(fs);
-            r.dbvOffsetDb = anchor;
-            int nbv = r.amplitudeDbFs.length;
-            if (r.amplitudeDbV == null || r.amplitudeDbV.length != nbv) {
-                r.amplitudeDbV = new double[nbv];
-            }
-            for (int i = 0; i < nbv; i++) {
-                r.amplitudeDbV[i] = r.amplitudeDbFs[i] + anchor;
-            }
-        } else {
-            r.amplitudeDbV = null;
-            r.dbvOffsetDb = 0.0;
-        }
-
+        // Per-tick bookkeeping runs EVERY tick (the averaging depth is the tick
+        // count), even on ticks whose display we skip below.
         completedAnalyses++;
         firstFrameDone = true;
-        // Stop-after-N only fires when the user is in "forever" averages
-        // AND has explicitly enabled the cap.  Counts TICKS (matches the
-        // displayed "N average(s)" label so "stop after 256" means
-        // 256 analyses contributed to the running average).  The cross-
-        // tick accumulator deepens each tick beyond just 2 frames; the
-        // actual averaging depth is roughly 2× this threshold in frame
-        // count.  Finite N already implements a moving window so the
-        // analysis is continuous.
-        //log.warn("FFT analyse took {} ms", (double)(System.nanoTime() - startAnalyze) / 1_000_000);
+        // Stop-after-N: forever mode + cap enabled; counts ticks (= the "N
+        // average(s)" label).  The cross-tick accumulator deepens past 2 frames.
         if (foreverMode
                 && prefs.isFftStopAfterNEnabled()
                 && completedAnalyses >= prefs.getFftStopAfterN()) {
@@ -1269,10 +1443,47 @@ public final class FftAnalyzerWorker {
                         MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED));
             }
         }
-        // Hand off to the UI: deep-copy the freshly-filled result so
-        // the worker can mutate its local {@code r} on the next tick
-        // without the view (which keeps the snapshot it received) ever
-        // seeing a torn read.
+
+        // Per-tick TRIM: the accumulator above ran this tick, but the O(N) display
+        // rebuild below (overlay + recomputeStats + dBV lift + deep-copy publish)
+        // does NOT need to.  Skip it while the capture backlog is high — catch up
+        // rather than overrun — throttle it to DISPLAY_MIN_NANOS when caught up,
+        // but force it by DISPLAY_MAX_NANOS so the view never freezes.
+        long backlog   = reader.getWritePos() - reader.getReadPos();
+        long sinceShow = System.nanoTime() - lastShowNanos;
+        boolean showNow = paused.get()
+                || sinceShow >= DISPLAY_MAX_NANOS
+                || (sinceShow >= DISPLAY_MIN_NANOS && backlog <= 2L * needed);
+        if (!showNow) {
+            return msForSamples(hopSamples, sampleRate);   // accumulated; defer the rebuild
+        }
+        lastShowNanos = System.nanoTime();
+
+        if (accumulated) {
+            overlayAccumulatorOnto(r);          // r.amplitudeDbFs ← RAW cumulative average
+        }
+        // The whole post-average pipeline — mains rejection → recomputeStats →
+        // .frc calibration → dBV lift — now runs in the UI (FftView), ONCE per
+        // DISPLAYED frame (after the display throttle + the coalescing handoff),
+        // so it's not redone on coalesced frames and mains is applied where the
+        // user wants it.  Here we only hand over the RAW averaged spectrum plus
+        // the state that pipeline needs: tracked mains f0 (NaN ⇒ off), the pinned
+        // coherent κ for the cal "before" dots (NaN ⇒ single tick), the channel.
+        r.mainsF0Hz     = mainsSuppress ? mainsComb(sampleRate).getMainsHz() : Double.NaN;
+        r.coherentKappa = accumulated
+                ? (accumHasData ? accumKFractional
+                                : (r.freqResolution > 0 ? r.fundamentalHzRefined / r.freqResolution : 0.0))
+                : Double.NaN;
+        r.channelLeft   = wantLeft;
+
+        // Hand off to the UI.  No copy needed: analyze() returns a FRESH
+        // FftResult each tick (the worker never mutates a handed-off {@code r}),
+        // and the view deep-copies on receipt.  publishResult coalesces, so a
+        // slow repaint can't pile spectra up on the asyncExec queue.
+        if (log.isWarnEnabled()) {
+            log.warn("FFT took {} ms (cache MISS)", 
+                    String.format("%.2f", (System.nanoTime() - startAnalyze) / 1_000_000.0));
+        }
         publishResult(r);
         return msForSamples(hopSamples, sampleRate);
     }
@@ -1285,13 +1496,23 @@ public final class FftAnalyzerWorker {
      *  paints from the published snapshot for many frames). */
     private void publishResult(FftResult newSlot) {
         if (display == null || display.isDisposed()) return;
-        FftResult clone = newSlot/* .deepCopy()*/;
         startSendToUi = System.nanoTime();
+        // Coalescing handoff: stash the newest result and post a drain runnable
+        // ONLY when the slot was empty.  If the UI hasn't drained the previous
+        // one yet (a large-FFT repaint is far slower than the parallelized
+        // per-tick), the newer result simply overwrites it — the SWT asyncExec
+        // queue then holds at most one spectrum instead of growing without
+        // bound until recording stops.  Averaging keeps running every tick; only
+        // the DISPLAY is throttled to the UI's paint rate, which is lossless for
+        // a coherent average (the next frame carries the deeper accumulation).
+        boolean wasEmpty = latestForUi.getAndSet(newSlot) == null;
+        if (!wasEmpty) return;
         display.asyncExec(() -> {
-            //log.warn("FFT result achieved asyncExec in {} ms", (double)(System.nanoTime() - startSendToUi) / 1_000_000);
+            FftResult slot = latestForUi.getAndSet(null);
+            if (slot == null) return;
             try {
-                MessageBus.instance().publish(Events.FFT_RESULT_AVAILABLE, clone);
-            } catch(Exception e) {
+                MessageBus.instance().publish(Events.FFT_RESULT_AVAILABLE, slot);
+            } catch (Exception e) {
                 log.error("Can't dispatch Events.FFT_RESULT_AVAILABLE", e);
             }
         });
@@ -1311,25 +1532,6 @@ public final class FftAnalyzerWorker {
         return (int) Math.ceil(1000.0 * samples / sampleRate);
     }
 
-    /** Returns the cumulative cal-cascade dB at frequency {@code f Hz}
-     *  for the channel currently being analyzed.  Each loaded calibration
-     *  contributes {@code 20·log10(|H(f)|)} (the cascade is multiplicative
-     *  in magnitude, additive in dB).  Used to derive the cumulative
-     *  pre-cal amplitude from the cumulative post-cal amplitude in
-     *  forever-mode (see the {@code preCorrectionPeaks} recompute in
-     *  {@link #doAnalysis}). */
-    private static double sumCalDb(List<FftCalibrationStore.Entry> calEntries,
-                                   boolean wantLeft, double f) {
-        double sum = 0.0;
-        for (FftCalibrationStore.Entry e : calEntries) {
-            FreqRespCalibration cal = wantLeft
-                    ? e.getCalibration().left()
-                    : e.getCalibration().right();
-            double m = FreqRespCalHelper.interpolate(cal, f)[0];
-            sum += m > 0.0 ? 20.0 * Math.log10(m) : -300.0;
-        }
-        return sum;
-    }
 
     /** Computes the dBV reference anchor passed into {@link FftAnalyzer}.
      *  In manual-fundamental mode we pass the user's value directly;

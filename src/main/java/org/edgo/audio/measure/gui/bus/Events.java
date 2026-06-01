@@ -124,12 +124,13 @@ public final class Events {
      *  subscribers MUST handle {@code null}. */
     public static final String FFT_RESULT_AVAILABLE = "fft.result.available";
 
-    /** Notification — the FFT analyser's capture cursor was overrun: the
-     *  worker fell a full ring behind, the contiguous sample stream broke,
-     *  and the cross-tick average was discarded and restarted from fresh
-     *  data.  No payload.  Published on the UI thread by
-     *  {@code FftAnalyzerWorker}; the view raises a blinking warning. */
-    public static final String FFT_CAPTURE_OVERRUN = "fft.capture.overrun";
+    /** Notification — the FFT analyser re-synced its capture window (a ring
+     *  overrun, a dropped-sample gap, or a signal discontinuity); the running
+     *  average is kept.  Payload: the i18n message-key (String) the view shows
+     *  as a blinking warning, so ONE event carries the distinct overrun vs
+     *  discontinuity messages.  Published on the UI thread by
+     *  {@code FftAnalyzerWorker}. */
+    public static final String FFT_CAPTURE_RESYNC = "fft.capture.resync";
 
     /** Notification — the generator's file-player thread finished
      *  (user stop, EOF without loop, or playback error).  Subscribers
