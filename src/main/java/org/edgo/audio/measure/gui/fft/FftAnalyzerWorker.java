@@ -1474,7 +1474,8 @@ public final class FftAnalyzerWorker {
                 ? (accumHasData ? accumKFractional
                                 : (r.freqResolution > 0 ? r.fundamentalHzRefined / r.freqResolution : 0.0))
                 : Double.NaN;
-        r.channelLeft   = wantLeft;
+        r.channelLeft      = wantLeft;
+        r.samplesAbsStart  = samplesAbsStart;   // for the FLL's real-time dt
 
         // Hand off to the UI.  No copy needed: analyze() returns a FRESH
         // FftResult each tick (the worker never mutates a handed-off {@code r}),

@@ -77,6 +77,11 @@ public class FftResult {
     /** Channel this result was analyzed for ({@code true} = left) — picks the
      *  left/right .frc calibration in the UI's post-average pipeline. */
     public boolean channelLeft = true;
+    /** Absolute sample index of this result's analysis-window start (the
+     *  worker's {@code samplesAbsStart}).  Lets the frequency-lock loop compute
+     *  the REAL elapsed time between corrections — {@code (Δstart)/sampleRate} —
+     *  so its gain is time-correct under wildly varying tick durations. */
+    public long samplesAbsStart;
 
     // Harmonics (index 0 = 2nd harmonic, …)
     public int      harmonicCount;
@@ -229,6 +234,7 @@ public class FftResult {
         c.mainsF0Hz                  = mainsF0Hz;
         c.coherentKappa              = coherentKappa;
         c.channelLeft                = channelLeft;
+        c.samplesAbsStart            = samplesAbsStart;
         c.harmonicCount              = harmonicCount;
         c.harmonicBins               = harmonicBins  != null ? harmonicBins.clone()  : null;
         c.harmonicHz                 = harmonicHz    != null ? harmonicHz.clone()    : null;

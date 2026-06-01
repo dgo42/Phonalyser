@@ -610,12 +610,12 @@ public final class FftView extends AbstractFreqDomainView {
             double t2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
                     slot.sampleRate, prefs.getGenDualToneFreq2Hz());
             if (t1 > 0 && Double.isFinite(lastImd.f1Hz)) {
-                fll.update(t1, lastImd.f1Hz);
+                fll.update(t1, lastImd.f1Hz, slot.samplesAbsStart, slot.sampleRate);
                 MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM,
                         t1 + fll.getCorrection());
             }
             if (t2 > 0 && Double.isFinite(lastImd.f2Hz)) {
-                fll2.update(t2, lastImd.f2Hz);
+                fll2.update(t2, lastImd.f2Hz, slot.samplesAbsStart, slot.sampleRate);
                 MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM_2,
                         t2 + fll2.getCorrection());
             }
@@ -624,7 +624,7 @@ public final class FftView extends AbstractFreqDomainView {
             double target = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.SINE,
                     slot.sampleRate, prefs.getGenFrequencyHz());
             if (!(target > 0)) return;
-            fll.update(target, slot.fundamentalHzRefined);
+            fll.update(target, slot.fundamentalHzRefined, slot.samplesAbsStart, slot.sampleRate);
             MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM,
                     target + fll.getCorrection());
         }
