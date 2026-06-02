@@ -314,6 +314,12 @@ public final class Preferences {
      *  the single-reference phase-lock path; real dual-tone / IMD partners are
      *  comparable in level and survive. */
     @Getter @Setter private double  fftStrongToneRelDb   = 100.0;
+    /** Generator frequency-lock-loop PID gains (Kp, Ki [1/s], Kd [s]) —
+     *  defaults approximate the proven time-aware integrator; the PID
+     *  autotune wizard overwrites them. */
+    @Getter @Setter private double  fftFllKp             = 0.5;
+    @Getter @Setter private double  fftFllKi             = 0.5;
+    @Getter @Setter private double  fftFllKd             = 0.0;
     @Getter @Setter private double  fftManualFundVrms    = 1.0;
     /** Unit the manual-fundamental-amplitude field renders in: {@code mV}, {@code V}, or {@code dBV}. */
     @Getter @Setter private String  fftManualFundUnit    = "V";
@@ -734,6 +740,9 @@ public final class Preferences {
         root.put("fftThdMaxHarmonic",         fftThdMaxHarmonic);
         root.put("fftCalcMaxHarmonic",        fftCalcMaxHarmonic);
         root.put("fftStrongToneRelDb",        fftStrongToneRelDb);
+        root.put("fftFllKp",                  fftFllKp);
+        root.put("fftFllKi",                  fftFllKi);
+        root.put("fftFllKd",                  fftFllKd);
         root.put("fftManualFundVrms",         fftManualFundVrms);
         root.put("fftManualFundUnit",         fftManualFundUnit);
         root.put("fftManualFundEnabled",      fftManualFundEnabled);
@@ -1027,6 +1036,9 @@ public final class Preferences {
         if (root.get("fftThdMaxHarmonic")         instanceof Number  n) fftThdMaxHarmonic    = n.intValue();
         if (root.get("fftCalcMaxHarmonic")        instanceof Number  n) fftCalcMaxHarmonic   = n.intValue();
         if (root.get("fftStrongToneRelDb")        instanceof Number  n) fftStrongToneRelDb   = n.doubleValue();
+        if (root.get("fftFllKp")                  instanceof Number  n) fftFllKp             = n.doubleValue();
+        if (root.get("fftFllKi")                  instanceof Number  n) fftFllKi             = n.doubleValue();
+        if (root.get("fftFllKd")                  instanceof Number  n) fftFllKd             = n.doubleValue();
         if (root.get("fftManualFundVrms")         instanceof Number  n) fftManualFundVrms    = n.doubleValue();
         if (root.get("fftManualFundUnit")         instanceof String  s) fftManualFundUnit    = s;
         if (root.get("fftManualFundEnabled")      instanceof Boolean b) fftManualFundEnabled = b;

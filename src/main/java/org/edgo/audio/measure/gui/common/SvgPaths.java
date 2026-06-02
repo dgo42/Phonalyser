@@ -32,4 +32,5 @@ public final class SvgPaths {
     public static final String PHASE_SINE          = "/icons/phase-sine.svg";
     public static final String PLUS                = "/icons/plus.svg";
     public static final String MINUS               = "/icons/minus.svg";
+    public static final String PID_AUTOTUNE        = "/icons/pid_autotune.svg";
 }

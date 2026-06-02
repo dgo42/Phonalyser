@@ -10,6 +10,7 @@ import java.util.stream.IntStream;
 
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
+import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.MainsSuppression;
@@ -294,6 +295,17 @@ public final class FftAnalyzerWorker {
      *  peak/RMS ≈ √(2·ln N) ≈ 5–6, so a margin of 12 cleanly separates a
      *  localised glitch (peak ≫ RMS) without false-firing on noise/spurs. */
     private static final double GLITCH_DIFF_K    = 16.0;
+    /** Discontinuity-detector selection.  The time-domain Δⁿ test is a
+     *  high-pass, so on a weak signal its own broadband noise buries the
+     *  glitch; the frequency-domain running-median rejector compares each
+     *  block's spectrum to the accepted history and catches exactly those
+     *  cases.  The Δⁿ test is kept (toggle the flag) but off by default. */
+    private static final boolean USE_TIME_DOMAIN_GLITCH     = false;
+    private static final boolean USE_SPECTRAL_DISCONTINUITY = true;
+    /** Frequency-domain running-median glitch / stall rejector, run per tick
+     *  on the freshly computed spectrum before it enters the cross-tick
+     *  (vector) average — where one bad block injects a large complex error. */
+    private final SpectralDiscontinuityDetector spectralDetector = new SpectralDiscontinuityDetector();
     /** Pinned {@code round(kFractional)} for the rotation formula — the
      *  integer bin is stable, so only the fractional part needs converging. */
     private int     accumIntFundBinRounded;
@@ -412,6 +424,7 @@ public final class FftAnalyzerWorker {
         accumHasData = false;
         accumToneKappa = new double[0];
         toneDroppedSamples = new double[0];
+        spectralDetector.reset();   // the median reference restarts with the average
     }
 
     /** Handles a ring overrun: the worker fell a full ring behind, so the
@@ -472,7 +485,7 @@ public final class FftAnalyzerWorker {
         double rms = Math.sqrt(sumSq / (len - 3));
 */
         for (int n = 4; n < len; n++) {
-            double d4 = winBuf[n] - 4.0 * winBuf[n - 1] + 6.0 * winBuf[n - 2] - 4.0 * winBuf[n - 3] - winBuf[n - 4];
+            double d4 = winBuf[n] - 4.0 * winBuf[n - 1] + 6.0 * winBuf[n - 2] - 4.0 * winBuf[n - 3] + winBuf[n - 4];
             sumSq += d4 * d4;
             double a = Math.abs(d4);
             if (a > maxAbs) maxAbs = a;
@@ -504,6 +517,22 @@ public final class FftAnalyzerWorker {
                     + "averaging continues)");
         }
         publishCaptureBanner("fft.warning.discontinuity");
+    }
+
+    /** Fundamental bin(s) the spectral detector measures the near-carrier
+     *  pedestal around (it then gates that pedestal against the noise floor):
+     *  the single-tone fundamental, plus the dual-tone second tone when
+     *  present.  Null when no usable fundamental was measured. */
+    private int[] fundamentalBins(FftResult r) {
+        if (r.freqResolution <= 0) return null;
+        int f1 = (Double.isFinite(r.fundamentalHzRefined)  && r.fundamentalHzRefined  > 0)
+                ? (int) Math.round(r.fundamentalHzRefined  / r.freqResolution) : -1;
+        int f2 = (Double.isFinite(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0)
+                ? (int) Math.round(r.fundamental2HzRefined / r.freqResolution) : -1;
+        if (f1 > 0 && f2 > 0) return new int[]{ f1, f2 };
+        if (f1 > 0)           return new int[]{ f1 };
+        if (f2 > 0)           return new int[]{ f2 };
+        return null;
     }
 
     /** Below this bin count the de-rotation runs serially — the fork/dispatch
@@ -1286,7 +1315,7 @@ public final class FftAnalyzerWorker {
         // sinc across the whole spectrum and poison the average.  Detect it (any
         // band-limited signal — single or multi-tone) and re-sync like an overrun
         // so the glitched window never enters the average.
-        if (detectWindowDiscontinuity()) {
+        if (USE_TIME_DOMAIN_GLITCH && detectWindowDiscontinuity()) {
             onSignalDiscontinuity(reader);
             return IDLE_TICK_MS;
         }
@@ -1425,6 +1454,19 @@ public final class FftAnalyzerWorker {
         // mean (SNR boost √(total frames)); a finite ring N is the same
         // accumulator bounded to N frames (an exponential window), so it also
         // reaches √N depth regardless of the capture-buffer size.
+        // Frequency-domain glitch / stall rejection: compare this tick's
+        // spectrum to the running-median reference and re-sync (like an
+        // overrun — re-anchor past the glitched overlap) before it can poison
+        // the cross-tick vector average.  Only while accumulating; the
+        // detector reconfigures itself on an fftLength change and reuses the
+        // existing discontinuity recovery + banner.
+        if (USE_SPECTRAL_DISCONTINUITY && accumulate) {
+            spectralDetector.configure(fftLength / 2);
+            if (spectralDetector.reject(r.re, r.im, fftLength / 2, fundamentalBins(r))) {
+                onSignalDiscontinuity(reader);
+                return IDLE_TICK_MS;
+            }
+        }
         boolean accumulated = accumulate
                 && accumulateIntoForeverBuffer(r, samplesAbsStart, coherent, targetFrames);
 

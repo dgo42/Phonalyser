@@ -117,6 +117,7 @@ public final class FftPane {
     // disposal is handled centrally.
     private final Image cameraIcon;
     private final Image crosshairIcon;
+    private final Image pidAutotuneIcon;
     private final Image recordDim;
     private final Image recordLit;
     private Button recordButton;
@@ -206,6 +207,11 @@ public final class FftPane {
                 (int) Math.round(UTILITY_ICON_HEIGHT * 1.27), UTILITY_ICON_HEIGHT);
         this.crosshairIcon = icons.render(d, SvgPaths.CROSSHAIR,
                 UTILITY_ICON_HEIGHT, UTILITY_ICON_HEIGHT);
+        // Stroke-based, two-colour illustration — render with native
+        // per-element stroke/fill (the monochrome path-fill renderer would
+        // flatten its open curves into a black silhouette).
+        this.pidAutotuneIcon = icons.renderAtHeightColored(d, SvgPaths.PID_AUTOTUNE,
+                UTILITY_ICON_HEIGHT);
         this.recordDim     = icons.createRecordLed(d, 200,  40,  40, false, RECORD_LED_SIZE);
         this.recordLit     = icons.createRecordLed(d, 255,   0,   0, true,  RECORD_LED_SIZE);
 
@@ -1465,7 +1471,7 @@ public final class FftPane {
 
     private void buildUtilityTab(CTabFolder folder) {
         Composite g = groupCell(folder, I18n.t("fft.tab.utility"));
-        GridLayout gl = new GridLayout(2, false);
+        GridLayout gl = new GridLayout(3, false);
         gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);
 
@@ -1478,6 +1484,28 @@ public final class FftPane {
         calBtn.setImage(crosshairIcon);
         calBtn.setToolTipText(I18n.t("fft.utility.calibrate.tooltip"));
         calBtn.addListener(SWT.Selection, e -> openCalibrationDialog());
+
+        Button autotuneBtn = new Button(g, SWT.PUSH);
+        autotuneBtn.setImage(pidAutotuneIcon);
+        autotuneBtn.setToolTipText(I18n.t("fft.utility.autotune.tooltip"));
+        autotuneBtn.addListener(SWT.Selection, e -> openPidAutotuneDialog());
+    }
+
+    /** Opens the relay-feedback PID autotune wizard for the generator
+     *  frequency-lock loop.  Requires a live single-tone recording with
+     *  snap-to-bin enabled (the loop the wizard tunes); otherwise it just
+     *  reports what's missing rather than running against an idle loop. */
+    private void openPidAutotuneDialog() {
+        Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
+        if (parent == null) return;
+        Preferences prefs = Preferences.instance();
+        boolean sine = "SINE".equalsIgnoreCase(prefs.getGenSignalForm());
+        if (!view.isRunning() || !view.isGeneratorActive() || !sine
+                || !prefs.isGenSnapToFftBin() || !prefs.isFftFundFromGenerator()) {
+            Dialogs.info(parent, I18n.t("fft.autotune.title"), I18n.t("fft.autotune.notReady"));
+            return;
+        }
+        new PidAutotuneDialog(parent, view).open();
     }
 
     // =========================================================================

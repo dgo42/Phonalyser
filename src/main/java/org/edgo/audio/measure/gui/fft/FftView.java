@@ -115,6 +115,13 @@ public final class FftView extends AbstractFreqDomainView {
     private final FrequencyLockLoop fll  = new FrequencyLockLoop();
     private final FrequencyLockLoop fll2 = new FrequencyLockLoop();
 
+    /** When non-null and active, the relay-feedback autotune wizard owns the
+     *  single-tone correction: {@link #applyFrequencyLockLoop} routes the
+     *  measurement to it instead of the PID and publishes its relay output.
+     *  Set/cleared by {@code PidAutotuneDialog} (clearing re-locks the PID
+     *  with the freshly-tuned gains). */
+    private FllAutotuneSession autotuneSession;
+
     /** Frequency-domain mains rejection for the DISPLAYED frame — the worker
      *  only tracks f0, this divides the comb's cached response out of the shown
      *  spectrum (see {@link MainsCombFilter#applySpectrumCorrection}).  Its OWN
@@ -565,6 +572,18 @@ public final class FftView extends AbstractFreqDomainView {
         return worker.getCompletedAnalyses();
     }
 
+    /** Installs (or clears) the relay-feedback autotune session that takes
+     *  over the single-tone correction.  Always resets both PIDs: on install
+     *  so the relay starts from the snapped bin (a clean, known operating
+     *  point — never a diverging correction from bad gains); on clear so the
+     *  loop re-locks from scratch on the freshly-tuned gains after the
+     *  generator was perturbed by the relay. */
+    public void setAutotuneSession(FllAutotuneSession session) {
+        this.autotuneSession = session;
+        fll.reset();
+        fll2.reset();
+    }
+
     /** True if the analyser worker is currently running. */
     public boolean isRunning() {
         return worker.isRunning();
@@ -597,8 +616,26 @@ public final class FftView extends AbstractFreqDomainView {
         Preferences prefs = Preferences.instance();
         if (!prefs.isGenSnapToFftBin())       return;
         if (!prefs.isFftFundFromGenerator())  return;
+        // Relay-feedback autotune hijacks the single-tone correction while
+        // installed (independent of the align checkbox — the user opted in
+        // via the wizard).  It relays during the active phases and holds the
+        // bias once DONE; a FAILED session falls through so the PID recovers.
+        if (autotuneSession != null && !autotuneSession.isFailed()) {
+            if (!isGeneratorActive() || !Double.isFinite(slot.fundamentalHzRefined)) return;
+            double atTarget = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.SINE,
+                    slot.sampleRate, prefs.getGenFrequencyHz());
+            if (!(atTarget > 0)) return;
+            double atCorr = autotuneSession.process(atTarget, slot.fundamentalHzRefined,
+                    slot.samplesAbsStart, slot.sampleRate, slot.fftSize, slot.freqResolution);
+            MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM, atTarget + atCorr);
+            return;
+        }
         if (!prefs.isFftAlignGenToFreqDiff()) return;
         if (!isGeneratorActive())             return;
+        // Apply the current PID gains (autotune writes them to prefs).
+        double kp = prefs.getFftFllKp(), ki = prefs.getFftFllKi(), kd = prefs.getFftFllKd();
+        fll.setGains(kp, ki, kd);
+        fll2.setGains(kp, ki, kd);
         // Branch on generator form: single-tone uses the SINE FLL,
         // dual-tone runs two independent loops driven by the per-tone
         // detected frequencies in lastImd.

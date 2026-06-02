@@ -3,36 +3,33 @@ package org.edgo.audio.measure.gui.fft;
 import org.edgo.audio.measure.gui.bus.Events;
 
 /**
- * Closed-loop integrator that aligns the generator's DDS frequency with
- * the FFT bin grid by feeding back the per-frame error between the
- * commanded target frequency and the FFT's refined fundamental
- * estimate.
+ * Closed-loop PID controller that aligns the generator's DDS frequency
+ * with the FFT bin grid by feeding back the per-frame error between the
+ * commanded target frequency and the FFT's refined fundamental estimate.
  *
  * <p>The error signal is the residual frequency drift between the DDS
- * oscillator and the capture clock — for typical USB audio interfaces
- * this is a stable offset on the order of 1 ppm.  Once locked the
- * fundamental's energy concentrates in a single bin and harmonic /
- * power readings become spectral-leakage-free.
+ * oscillator and the capture clock — for typical USB audio interfaces a
+ * stable offset on the order of 1 ppm.  The plant is essentially unity
+ * gain with a measurement lag, so the integral term carries the
+ * steady-state offset (zero-error lock), the proportional term gives the
+ * fast catch-up on Record start, and the derivative term adds damping.
  *
- * <h2>Update law (time-aware)</h2>
- * <p>A continuous-time integrator sampled at the (variable) interval
- * {@code dt} between corrections, derived from the analysis-window sample
- * positions so it tracks REAL elapsed time — not frame count:
+ * <h2>Update law (time-aware PID)</h2>
+ * <p>Sampled at the (variable) interval {@code dt} between corrections,
+ * derived from the analysis-window sample positions so it tracks REAL
+ * elapsed time — not frame count:
  * <pre>
- *   dt   = (absStart − lastAbsStart) / sampleRate            // seconds
- *   k    = K_START + (K_END − K_START) · min(1, elapsed/RAMP_SECONDS)
- *   step = min(STEP_MAX, k · dt)                             // forward-Euler step
- *   correction ← correction − step · (detected − target)
- *   elapsed += dt
+ *   dt        = (absStart − lastAbsStart) / sampleRate              // seconds
+ *   err       = detected − target
+ *   integral += err · dt                                           // anti-wound
+ *   deriv     = (err − prevErr) / max(dt, DT_MIN)
+ *   out       = Kp·err + Ki·integral + Kd·deriv
+ *   correction = −clamp(out, ±CORRECTION_MAX_HZ)
  * </pre>
- * Scaling the step by {@code dt} gives the loop a fixed real-time
- * convergence constant (≈ 1/k seconds) regardless of how long each tick
- * takes — a 5.5 s first frame and a 0.34 s overlapped frame integrate the
- * same amount per second.  {@code STEP_MAX} caps the forward-Euler step
- * well below the divergence bound (2.0), so a long gap (overrun /
- * discontinuity) can't push the loop unstable.  The gain ramps from a fast
- * catch-up (~5/s) to a quiet steady state (~0.5/s) over the first
- * {@code RAMP_SECONDS}.
+ * The integral is wound only within {@code ±CORRECTION_MAX_HZ/Ki}
+ * (anti-windup) and the output is clamped, so a long gap (overrun /
+ * discontinuity → a large {@code dt}) can't wind up or diverge.  Kp/Ki/Kd
+ * are settable (loaded from Preferences, written by the autotune wizard).
  *
  * <h2>Threading</h2>
  * <p>Not synchronized.  All methods are intended to be called from the
@@ -41,45 +38,45 @@ import org.edgo.audio.measure.gui.bus.Events;
  */
 public final class FrequencyLockLoop {
 
-    /** Per-second gain on Record start — a fast catch-up to the steady
-     *  drift (≈ 1/5 s convergence). */
-    private static final double K_START = 5.0;
-    /** Per-second gain once converged — quiet, so per-frame measurement
-     *  noise barely perturbs the lock (≈ 2 s convergence). */
-    private static final double K_END   = 0.5;
-    /** Seconds over which the gain ramps from {@link #K_START} to
-     *  {@link #K_END}.  Time-based (not frame-based) so the transient lasts
-     *  ~2 s at any tick rate. */
-    private static final double RAMP_SECONDS = 2.0;
-    /** Upper bound on the per-update step {@code k·dt} — the fraction of the
-     *  observed error folded into the correction in one update.  Held well
-     *  under the forward-Euler stability bound of 2.0 so a single long-gap
-     *  frame (huge {@code dt}) can't over-correct or diverge. */
-    private static final double STEP_MAX = 0.6;
+    /** Output saturation (Hz).  The lock only ever needs ~ppm·target
+     *  (sub-Hz for audio), so this is a generous safety/anti-windup bound,
+     *  not a normal operating limit. */
+    private static final double CORRECTION_MAX_HZ = 5.0;
+    /** Floor (s) on the derivative's {@code dt} so a fast tick can't blow
+     *  up {@code Δerr/dt}. */
+    private static final double DT_MIN = 0.05;
 
-    /** Accumulated correction in Hz — added to the commanded target
-     *  frequency before sending to the DDS.  Survives across FFT results
-     *  inside a single Record session and resets on Record stop / user
-     *  frequency change. */
-    private double  correction = 0.0;
-    /** Seconds of signal elapsed since the last {@link #reset()} — drives
-     *  the gain ramp. */
-    private double  elapsed    = 0.0;
-    /** Absolute sample index of the previous update's window start, for the
-     *  {@code dt} between corrections.  {@link #haveLast} guards the first
-     *  update (no prior reference yet). */
+    /** Proportional / integral (per second) / derivative (seconds) gains.
+     *  Defaults approximate the proven time-aware integrator (P halves the
+     *  error immediately, I nulls the rest in ~1/Ki s); the autotune
+     *  wizard overwrites them. */
+    private double kp = 0.5;
+    private double ki = 0.5;
+    private double kd = 0.0;
+
+    private double  integral   = 0.0;   // ∫err·dt  (anti-wound)
+    private double  prevErr     = 0.0;
+    private boolean havePrev    = false;
+    private double  correction  = 0.0;  // cached controller output (Hz)
     private long    lastAbsStart;
-    private boolean haveLast   = false;
+    private boolean haveLast    = false;
+
+    /** Sets the PID gains (Kp, Ki [1/s], Kd [s]).  Loaded from Preferences
+     *  on Record start and updated by the autotune wizard. */
+    public void setGains(double kp, double ki, double kd) {
+        this.kp = kp;
+        this.ki = ki;
+        this.kd = kd;
+    }
+
+    public double getKp() { return kp; }
+    public double getKi() { return ki; }
+    public double getKd() { return kd; }
 
     /** Current correction in Hz.  Add to the snap target before publishing
      *  to {@link Events#GENERATOR_FREQ_TRIM}. */
     public double getCorrection() {
         return correction;
-    }
-
-    /** Returns {@code true} once the gain ramp has fully converged. */
-    public boolean isConverged() {
-        return elapsed >= RAMP_SECONDS;
     }
 
     /** Feeds one FFT measurement into the loop and updates the correction.
@@ -100,19 +97,30 @@ public final class FrequencyLockLoop {
         double dt = (absStartSamples - lastAbsStart) / (double) sampleRate;
         lastAbsStart = absStartSamples;
         if (!(dt > 0.0)) return;               // no signal time advanced — nothing to integrate
-        double err  = detected - target;
-        double k    = K_START + (K_END - K_START) * Math.min(1.0, elapsed / RAMP_SECONDS);
-        double step = Math.min(STEP_MAX, k * dt);
-        correction -= step * err;
-        elapsed    += dt;
+
+        double err = detected - target;
+        integral += err * dt;
+        if (ki > 0.0) {                        // anti-windup: keep Ki·integral within the output bound
+            double iMax = CORRECTION_MAX_HZ / ki;
+            integral = Math.max(-iMax, Math.min(iMax, integral));
+        }
+        double deriv = havePrev ? (err - prevErr) / Math.max(dt, DT_MIN) : 0.0;
+        prevErr  = err;
+        havePrev = true;
+
+        double out = kp * err + ki * integral + kd * deriv;
+        correction = -Math.max(-CORRECTION_MAX_HZ, Math.min(CORRECTION_MAX_HZ, out));
     }
 
-    /** Zeroes the correction and restarts the gain ramp + time reference.
+    /** Zeroes the controller state (correction, integral, time reference).
      *  Call on Record stop and on every user-initiated generator-frequency /
-     *  FFT-length change — both invalidate the locked offset. */
+     *  FFT-length change — both invalidate the locked offset.  Keeps the
+     *  gains. */
     public void reset() {
         correction = 0.0;
-        elapsed    = 0.0;
+        integral   = 0.0;
+        prevErr    = 0.0;
+        havePrev   = false;
         haveLast   = false;
     }
 }
