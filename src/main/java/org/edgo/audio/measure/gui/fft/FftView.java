@@ -1,9 +1,11 @@
 package org.edgo.audio.measure.gui.fft;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.IntToDoubleFunction;
 
 import org.apache.commons.lang3.ArrayUtils;
 import org.eclipse.swt.SWT;
@@ -33,12 +35,15 @@ import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftMagnitudeUnit;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
+import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
+import org.edgo.audio.measure.dsp.ToneLobeLift;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
+import org.edgo.audio.measure.gui.common.DebugSwitches;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.generator.FftBinSnap;
@@ -128,6 +133,9 @@ public final class FftView extends AbstractFreqDomainView {
      *  instance (UI-thread-driven, separate from the worker's comb), created
      *  lazily on first use with the result's real sample rate. */
     private MainsCombFilter mainsCorrector;
+    /** Shared lobe lift for the manual-fundamental display (same algorithm the
+     *  .frc cal uses, so a tone is rescaled identically in both paths). */
+    private static final ToneLobeLift LOBE = new ToneLobeLift();
     /** Re-derives the measurements (THD / SNR / N / fundamental / harmonics, all
      *  units + %) from the de-hummed spectrum after {@link #mainsCorrector} runs
      *  — the same {@code recomputeStats} the worker uses, so every readout
@@ -1217,11 +1225,6 @@ public final class FftView extends AbstractFreqDomainView {
      *  detected harmonic — same {@code FUND_ANNOTATION_COLOR} the CLI
      *  FFT chart uses.  Helps the user see at a glance which peaks the
      *  analyser picked up. */
-    /** DEBUG hard switch: overlay the mains comb's frequency response (red),
-     *  anchored at H2's level, so the notch positions vs the harmonics are
-     *  visible.  Flip to {@code false} to remove the overlay. */
-    private static final boolean SHOW_MAINS_COMB_RESPONSE = true;
-
     private void drawHarmonicDots(GC gc, Rectangle plot, FftResult r,
                                   FftMagnitudeUnit unit,
                                   double freqMin, double freqMax,
@@ -1291,6 +1294,9 @@ public final class FftView extends AbstractFreqDomainView {
             drawMainsResponse(gc, plot, r, r.harmonicDbFs[0], unit,
                     freqMin, freqMax, magTop, magBot, logFreq, calRefDbV, binBw);
         }
+        // DEBUG overlay: spectral discontinuity reject gates.
+        drawDiscontinuityGates(gc, plot, r, unit,
+                freqMin, freqMax, magTop, magBot, logFreq, calRefDbV, binBw);
     }
 
     /** DEBUG: draws the mains comb's response as a red curve across the plot,
@@ -1302,7 +1308,7 @@ public final class FftView extends AbstractFreqDomainView {
                                    FftMagnitudeUnit unit, double freqMin, double freqMax,
                                    double magTop, double magBot, boolean logFreq,
                                    double refDbV, double binBw) {
-        if (!SHOW_MAINS_COMB_RESPONSE || !(r.mainsF0Hz > 0.0) || mainsCorrector == null
+        if (!DebugSwitches.SHOW_MAINS_COMB_RESPONSE || !(r.mainsF0Hz > 0.0) || mainsCorrector == null
                 || !Double.isFinite(anchorDbFs)) return;
         gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_RED));
         int prevX = -1, prevY = 0;
@@ -1317,6 +1323,393 @@ public final class FftView extends AbstractFreqDomainView {
             prevX = x;
             prevY = y;
         }
+    }
+
+    /** DEBUG: overlays the spectral discontinuity detector's three reject gates
+     *  — gate-2 floor-reference curve (dark cyan) + reject boundary (cyan),
+     *  gate-1 near-carrier pedestal reject line (orange), gate-3 total-power
+     *  line + reject band (magenta) — so it's visible what each gate would
+     *  reject.  Every value is positioned by its dB excess over the detector's
+     *  floor, added to the DISPLAYED (calibrated) floor, so it lands at the
+     *  right vertical position whatever calibration the chart applies.  A gate
+     *  that fired this block is drawn thicker. */
+    private void drawDiscontinuityGates(GC gc, Rectangle plot, FftResult r,
+                                        FftMagnitudeUnit unit, double freqMin, double freqMax,
+                                        double magTop, double magBot, boolean logFreq,
+                                        double refDbV, double binBw) {
+        SpectralDiscontinuityDetector.Gates g = r.gates;
+        if (!DebugSwitches.SHOW_DISCONTINUITY_GATES || g == null
+                || binBw <= 0 || r.amplitudeDbFs == null) return;
+        double[] dbfs = r.amplitudeDbFs;
+        int n = dbfs.length, nb = g.mref.length;
+        SpectralDiscontinuityDetector.Gates rej = r.gateRejectGates;   // last rejection's verdict
+        boolean rejScore = rej != null && rej.scoreOut;
+        boolean rejPed   = rej != null && rej.pedestalOut;
+        boolean rejPow   = rej != null && rej.powerOut;
+
+        // Displayed (calibrated) floor per band = median dBFs over the band.
+        double[] floorDisp = new double[nb];
+        for (int b = 0; b < nb; b++) {
+            floorDisp[b] = medianRange(dbfs, Math.max(1, g.bandLo[b]), Math.min(n, g.bandHi[b]));
+        }
+
+        // Per-band MEAN power levels of the pre-average blocks (the quantity gate 2
+        // compares) and the line bands a tone dominates — gate 2 excludes those, so
+        // they are skipped in the reference and the block curves alike.
+        double[] curLvl = bandLevels(r.gateBlockDbFs, g);
+        boolean[] line  = lineBands(g.mref);
+
+        // gate 2: per-band floor reference (dark cyan) + reject boundary (cyan).
+        int prevXr = -1, prevYr = 0, prevXb = -1, prevYb = 0;
+        for (int b = 0; b < nb; b++) {
+            if (line[b] || Double.isNaN(floorDisp[b])) { prevXr = prevXb = -1; continue; }
+            int x = freqToX(0.5 * (g.bandLo[b] + g.bandHi[b]) * binBw, plot, freqMin, freqMax, logFreq);
+            double ref = floorDisp[b] + (g.mref[b] - g.floorDb);
+            int yr = gateY(ref, unit, refDbV, binBw, plot, magTop, magBot);
+            int yb = gateY(ref + g.scoreThreshDb, unit, refDbV, binBw, plot, magTop, magBot);
+            gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_DARK_CYAN));
+            gc.setLineWidth(3);
+            if (prevXr >= 0) gc.drawLine(prevXr, prevYr, x, yr);
+            gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_CYAN));
+            gc.setLineWidth(rejScore ? 2 : 1);
+            if (prevXb >= 0) gc.drawLine(prevXb, prevYb, x, yb);
+            prevXr = x; prevYr = yr; prevXb = x; prevYb = yb;
+        }
+
+        // gate 1: near-carrier pedestal — reject threshold (dark yellow) AND the
+        // rejected block's ACTUAL pedestal (red, thick when it fired), so the
+        // excess that tripped it is visible.
+        if (g.peakBins != null && !Double.isNaN(g.pedestalThreshDb)) {
+            int half = Math.max(24, plot.width / 16);
+            double threshExc = rej != null && !Double.isNaN(rej.pedestalThreshDb)
+                    ? rej.pedestalThreshDb : g.pedestalThreshDb;
+            for (int pk : g.peakBins) {
+                double cf = skirtFloorDbFs(dbfs, pk);
+                if (Double.isNaN(cf)) continue;
+                int xc = freqToX(pk * binBw, plot, freqMin, freqMax, logFreq);
+                int xL = Math.max(plot.x, xc - half), xR = Math.min(plot.x + plot.width, xc + half);
+                gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_DARK_YELLOW));
+                gc.setLineWidth(1);
+                int yT = gateY(cf + threshExc, unit, refDbV, binBw, plot, magTop, magBot);
+                gc.drawLine(xL, yT, xR, yT);
+                if (rej != null && !Double.isNaN(rej.pedestalExcessDb)) {
+                    gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_RED));
+                    gc.setLineWidth(rejPed ? 2 : 1);
+                    int yA = gateY(cf + rej.pedestalExcessDb, unit, refDbV, binBw, plot, magTop, magBot);
+                    gc.drawLine(xL, yA, xR, yA);
+                }
+            }
+        }
+
+        // gate 3: total-power line + reject band (magenta).
+        double medFloor = medianArray(floorDisp);
+        if (!Double.isNaN(medFloor) && g.bins > 0) {
+            double perBin = 10.0 * Math.log10(g.bins);
+            int xr = plot.x + plot.width;
+            gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_MAGENTA));
+            gc.setLineWidth(rejPow ? 2 : 1);
+            int yCur = gateY(medFloor + g.powerDb - perBin - g.floorDb, unit, refDbV, binBw, plot, magTop, magBot);
+            gc.drawLine(plot.x, yCur, xr, yCur);
+            if (g.powerThreshDb > 0) {
+                gc.setLineWidth(3);
+                gc.setLineStyle(SWT.LINE_DOT);
+                double mid = medFloor + g.powerMedDb - perBin - g.floorDb;
+                int yLo = gateY(mid - g.powerThreshDb, unit, refDbV, binBw, plot, magTop, magBot);
+                int yHi = gateY(mid + g.powerThreshDb, unit, refDbV, binBw, plot, magTop, magBot);
+                gc.drawLine(plot.x, yLo, xr, yLo);
+                gc.drawLine(plot.x, yHi, xr, yHi);
+                gc.setLineStyle(SWT.LINE_SOLID);
+            }
+            if (rej != null) {   // rejected block's total power vs the band
+                gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_RED));
+                gc.setLineWidth(rejPow ? 2 : 1);
+                int yRej = gateY(medFloor + rej.powerDb - perBin - rej.floorDb, unit, refDbV, binBw, plot, magTop, magBot);
+                gc.drawLine(plot.x, yRej, xr, yRej);
+            }
+        }
+
+        // Current accepted block — per-band level curve (grey, context).
+        drawLevelCurve(gc, plot, curLvl, line, floorDisp, g, unit,
+                freqMin, freqMax, magTop, magBot, logFreq, refDbV, binBw, SWT.COLOR_GRAY, false);
+        // Full REJECTED FFT (red) at bin resolution — its fundamental rigidly
+        // shifted ONTO the displayed fundamental (no stretch) so the block's
+        // near-carrier skirt reads at its TRUE height against the aligned peak:
+        // the pedestal that tripped the reject shows directly.
+        int fundBin = (Double.isFinite(r.fundamentalHzRefined) && r.fundamentalHzRefined > 0)
+                ? (int) Math.round(r.fundamentalHzRefined / binBw)
+                : (g.peakBins != null && g.peakBins.length > 0 ? g.peakBins[0] : -1);
+        double[] rejPlot = buildRejectedBlockDbFs(r, fundBin, refDbV, binBw, freqMin, freqMax);
+        drawFullBlock(gc, plot, rejPlot, unit,
+                freqMin, freqMax, magTop, magBot, logFreq, refDbV, binBw, SWT.COLOR_RED);
+
+        // Gate-status readout: value/threshold per gate for the last reject and the
+        // current block, firing gate marked «<<» — over-rejection visible at a glance.
+        gc.setLineWidth(1);
+        if (rej != null) {
+            gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_RED));
+            gc.drawString(gateLine("reject ", rej, rejScore, rejPed, rejPow),
+                    plot.x + 8, plot.y + plot.height - 32, true);
+        }
+        gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY));
+        gc.drawString(gateLine("current", g, g.scoreOut, g.pedestalOut, g.powerOut),
+                plot.x + 8, plot.y + plot.height - 16, true);
+    }
+
+    /** Draws a precomputed full-resolution block spectrum ({@code plotDbFs},
+     *  one dBFs value per bin) as a per-column peak-hold envelope. */
+    private void drawFullBlock(GC gc, Rectangle plot, double[] plotDbFs,
+                               FftMagnitudeUnit unit, double freqMin, double freqMax,
+                               double magTop, double magBot, boolean logFreq, double refDbV,
+                               double binBw, int swtColor) {
+        if (plotDbFs == null || binBw <= 0) return;
+        int nblk = plotDbFs.length;
+        int kFirst = Math.max(1, (int) Math.floor(freqMin / binBw));
+        int kLast  = Math.min(nblk - 1, (int) Math.ceil(freqMax / binBw));
+        if (kLast <= kFirst) return;
+        int w = plot.width;
+        int[] colY = new int[w + 1];
+        Arrays.fill(colY, Integer.MAX_VALUE);
+        for (int k = kFirst; k <= kLast; k++) {
+            double v = unit.convertFromDbFs(plotDbFs[k], refDbV, binBw);
+            int y = Math.max(plot.y, Math.min(plot.y + plot.height, magToY(v, plot, magTop, magBot, unit)));
+            int col = freqToX(k * binBw, plot, freqMin, freqMax, logFreq) - plot.x;
+            if (col >= 0 && col <= w && y < colY[col]) colY[col] = y;
+        }
+        gc.setForeground(getDisplay().getSystemColor(swtColor));
+        gc.setLineWidth(1);
+        int prevX = -1, prevY = 0;
+        for (int col = 0; col <= w; col++) {
+            if (colY[col] == Integer.MAX_VALUE) continue;
+            int x = plot.x + col;
+            if (prevX >= 0) gc.drawLine(prevX, prevY, x, colY[col]);
+            prevX = x; prevY = colY[col];
+        }
+    }
+
+    /** Builds the rejected block's full-resolution dBFs curve, positioned to
+     *  ATTACH its fundamental onto the displayed (averaged) fundamental:
+     *  <ul>
+     *   <li>plain spectrum — a rigid dB shift lands the block's fundamental peak
+     *       on the displayed peak (NO stretch); the block's higher single-shot
+     *       floor then rides above the average, exposing the near-carrier skirt
+     *       that tripped the reject.</li>
+     *   <li>manual-fundamental or .frc — the displayed fundamental is itself a
+     *       stretched dome, so the block's lobe is stretched the SAME way (same
+     *       {@link ToneLobeLift#stretch}) up to the displayed peak, its skirt
+     *       lifted onto the cal-corrected scale by the cascade gain.</li>
+     *  </ul>
+     *  Returns {@code null} when no fundamental / block data is available. */
+    private double[] buildRejectedBlockDbFs(FftResult r, int fundBin, double refDbV,
+                                            double binBw, double freqMin, double freqMax) {
+        double[] block = r.gateRejectDbFs, disp = r.amplitudeDbFs;
+        if (block == null || disp == null || fundBin < 1 || fundBin >= block.length) return null;
+        int half = block.length - 1;
+        int kFirst = Math.max(1,    (int) Math.floor(freqMin / binBw));
+        int kLast  = Math.min(half, (int) Math.ceil (freqMax / binBw));
+        if (kLast <= kFirst) return null;
+        double[] out = block.clone();
+        final double[] o = out;
+        IntToDoubleFunction omag = k -> Math.pow(10.0, o[k] / 20.0);
+
+        // 1. Calibrate the block EXACTLY as the displayed (blue) spectrum is, so
+        //    red lands on blue's scale and is directly comparable.  With-noise
+        //    divides every bin by |H| at its own frequency; otherwise only each
+        //    tone's data-derived lobe is stretched by 1/|H| at the tone (noise
+        //    left raw) — mirroring FreqRespCalHelper.applyCompensationInPlace.
+        for (FftCalibrationStore.Entry e : FftCalibrationStore.instance().getEntries()) {
+            FreqRespCalibration c = r.channelLeft ? e.getCalibration().left()
+                                                  : e.getCalibration().right();
+            if (e.isWithNoise()) {
+                for (int k = kFirst; k <= kLast; k++) {
+                    double hMag = FreqRespCalHelper.interpolate(c, k * binBw)[0];
+                    if (hMag > 0.0) out[k] -= 20.0 * Math.log10(hMag);
+                }
+            } else {
+                stretchToneLobe(out, omag, c, fundBin, binBw, half);
+                for (int h = 0; h < r.harmonicCount; h++) {
+                    if (r.harmonicBins != null && r.harmonicBins[h] > 0) {
+                        stretchToneLobe(out, omag, c, r.harmonicBins[h], binBw, half);
+                    }
+                }
+                if (!Double.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0) {
+                    stretchToneLobe(out, omag, c,
+                            (int) Math.round(r.fundamental2HzRefined / binBw), binBw, half);
+                }
+            }
+        }
+
+        // 2. Manual fundamental — its displayed peak is lifted at draw time (not in
+        //    amplitudeDbFs), so lift red's fundamental lobe to the user value too.
+        boolean manual = Double.isFinite(r.fundamentalTrueDbV)
+                && Double.isFinite(r.fundamentalDbFs) && Double.isFinite(r.fundamentalHzRefined);
+        double targetDbFs;
+        if (manual) {
+            targetDbFs = r.fundamentalTrueDbV - refDbV;
+            stretchLobe(out, omag, fundBin, half,
+                    Math.pow(10.0, (targetDbFs - out[fundBin]) / 20.0));
+        } else {
+            double dispPk = Double.NEGATIVE_INFINITY;
+            for (int d = -2; d <= 2; d++) {
+                int k = fundBin + d;
+                if (k >= 1 && k < disp.length) dispPk = Math.max(dispPk, disp[k]);
+            }
+            targetDbFs = dispPk;
+        }
+
+        // 3. Final attach: rigid shift landing red's fundamental peak exactly on
+        //    the displayed one (a small residual — the cal already matched it).
+        double redPk = Double.NEGATIVE_INFINITY;
+        for (int d = -2; d <= 2; d++) {
+            int k = fundBin + d;
+            if (k >= kFirst && k <= kLast) redPk = Math.max(redPk, out[k]);
+        }
+        if (Double.isFinite(redPk) && Double.isFinite(targetDbFs)) {
+            double off = targetDbFs - redPk;
+            for (int k = kFirst; k <= kLast; k++) out[k] += off;
+        }
+        return out;
+    }
+
+    /** Stretches a tone's data-derived main lobe in {@code out} by the cal's
+     *  {@code 1/|H|} at the tone frequency — the per-tone correction
+     *  {@link FreqRespCalHelper#applyCompensationInPlace} applies when the cal
+     *  excludes noise. */
+    private void stretchToneLobe(double[] out, IntToDoubleFunction mag, FreqRespCalibration c,
+                                 int toneBin, double binBw, int half) {
+        if (toneBin < 1 || toneBin > half) return;
+        double hMag = FreqRespCalHelper.interpolate(c, toneBin * binBw)[0];
+        if (hMag > 0.0) stretchLobe(out, mag, toneBin, half, 1.0 / hMag);
+    }
+
+    /** Stretches one tone lobe in {@code out} by a linear {@code factor} via the
+     *  shared {@link ToneLobeLift#stretch} (peak ×factor, wings pinned to the
+     *  floor). */
+    private void stretchLobe(double[] out, IntToDoubleFunction mag, int toneBin, int half,
+                             double factor) {
+        if (toneBin < 1 || toneBin > half) return;
+        double floor   = LOBE.localFloor(mag, toneBin, half);
+        int[]  edges   = LOBE.lobeBins(mag, toneBin, half, floor);
+        double peakMag = mag.applyAsDouble(toneBin);
+        for (int k = edges[0]; k <= edges[1]; k++) {
+            if (k < 1 || k > half || k >= out.length) continue;
+            double nm = LOBE.stretch(mag.applyAsDouble(k), floor, peakMag, factor);
+            out[k] = nm > 1e-15 ? 20.0 * Math.log10(nm) : -300.0;
+        }
+    }
+
+    /** One-line gate status: value/threshold per gate, firing gate marked. */
+    private String gateLine(String tag, SpectralDiscontinuityDetector.Gates g,
+                            boolean score, boolean ped, boolean pow) {
+        return String.format(Locale.US,
+                "%s   floor %+.1f/%.1f%s   pedestal %+.1f/%.1f%s   power %.1f/%.1f%s",
+                tag,
+                g.scoreDb, g.scoreThreshDb, score ? " <<" : "",
+                g.pedestalExcessDb, g.pedestalThreshDb, ped ? " <<" : "",
+                Math.abs(g.powerDb - g.powerMedDb), g.powerThreshDb, pow ? " <<" : "");
+    }
+
+    /** Per-band MEAN power level (dBFs) of a pre-average block — the quantity
+     *  gate 2 compares; {@code null} when the block is absent. */
+    private double[] bandLevels(double[] block, SpectralDiscontinuityDetector.Gates g) {
+        if (block == null) return null;
+        int nb = g.mref.length, n = block.length;
+        double[] lvl = new double[nb];
+        for (int b = 0; b < nb; b++) {
+            int lo = Math.max(1, g.bandLo[b]), hi = Math.min(n, g.bandHi[b]);
+            double sum = 0.0; int m = 0;
+            for (int k = lo; k < hi; k++) { sum += Math.pow(10.0, block[k] / 10.0); m++; }
+            lvl[b] = m > 0 ? 10.0 * Math.log10(sum / m + 1e-300) : Double.NaN;
+        }
+        return lvl;
+    }
+
+    /** Bands whose level towers &gt; 10 dB over the local median — tones, which
+     *  gate 2 excludes from its floor comparison. */
+    private boolean[] lineBands(double[] lvl) {
+        int nb = lvl.length;
+        boolean[] line = new boolean[nb];
+        for (int b = 0; b < nb; b++) {
+            int lo = Math.max(0, b - 3), hi = Math.min(nb, b + 4);
+            double[] loc = Arrays.copyOfRange(lvl, lo, hi);
+            Arrays.sort(loc);
+            line[b] = lvl[b] > loc[loc.length / 2] + 10.0;
+        }
+        return line;
+    }
+
+    /** Median of the non-line band levels — a block's own floor of band means. */
+    private double bandFloor(double[] lvl, boolean[] line) {
+        double[] c = new double[lvl.length];
+        int m = 0;
+        for (int b = 0; b < lvl.length; b++) if (!line[b] && !Double.isNaN(lvl[b])) c[m++] = lvl[b];
+        if (m == 0) return 0.0;
+        c = Arrays.copyOf(c, m);
+        Arrays.sort(c);
+        return c[m / 2];
+    }
+
+    /** Draws a block's per-band level curve, anchored to the displayed floor by
+     *  each band's excess over the block's own floor (so it shares the gate
+     *  reference's frame); line bands are skipped. */
+    private void drawLevelCurve(GC gc, Rectangle plot, double[] lvl, boolean[] line, double[] floorDisp,
+                                SpectralDiscontinuityDetector.Gates g, FftMagnitudeUnit unit,
+                                double freqMin, double freqMax, double magTop, double magBot,
+                                boolean logFreq, double refDbV, double binBw, int swtColor, boolean dashed) {
+        if (lvl == null) return;
+        double floor = bandFloor(lvl, line);
+        gc.setForeground(getDisplay().getSystemColor(swtColor));
+        gc.setLineWidth(3);
+        gc.setLineStyle(dashed ? SWT.LINE_DASH : SWT.LINE_SOLID);
+        int prevX = -1, prevY = 0;
+        for (int b = 0; b < lvl.length; b++) {
+            if (line[b] || Double.isNaN(lvl[b]) || Double.isNaN(floorDisp[b])) { prevX = -1; continue; }
+            double dispDbFs = floorDisp[b] + (lvl[b] - floor);
+            int y = gateY(dispDbFs, unit, refDbV, binBw, plot, magTop, magBot);
+            int x = freqToX(0.5 * (g.bandLo[b] + g.bandHi[b]) * binBw, plot, freqMin, freqMax, logFreq);
+            if (prevX >= 0) gc.drawLine(prevX, prevY, x, y);
+            prevX = x; prevY = y;
+        }
+        gc.setLineStyle(SWT.LINE_SOLID);
+    }
+
+    private int gateY(double dbFs, FftMagnitudeUnit unit, double refDbV, double binBw,
+                      Rectangle plot, double magTop, double magBot) {
+        double v = unit.convertFromDbFs(dbFs, refDbV, binBw);
+        int y = magToY(v, plot, magTop, magBot, unit);
+        return Math.max(plot.y, Math.min(plot.y + plot.height, y));
+    }
+
+    /** Median of {@code a[lo..hi)}; NaN when empty. */
+    private double medianRange(double[] a, int lo, int hi) {
+        int len = hi - lo;
+        if (len <= 0) return Double.NaN;
+        double[] c = Arrays.copyOfRange(a, lo, hi);
+        Arrays.sort(c);
+        return c[len / 2];
+    }
+
+    /** Displayed noise floor in the skirt flanking bin {@code pk} (main lobe excluded). */
+    private double skirtFloorDbFs(double[] a, int pk) {
+        final int gap = 7, span = 56;
+        double[] buf = new double[2 * span];
+        int n = 0;
+        for (int k = pk - gap - span; k < pk - gap; k++) if (k >= 1 && k < a.length) buf[n++] = a[k];
+        for (int k = pk + gap + 1; k <= pk + gap + span && k < a.length; k++) if (k >= 1) buf[n++] = a[k];
+        if (n == 0) return Double.NaN;
+        double[] c = Arrays.copyOf(buf, n);
+        Arrays.sort(c);
+        return c[n / 2];
+    }
+
+    /** Median of an array, skipping NaN; NaN when all NaN. */
+    private double medianArray(double[] a) {
+        double[] c = new double[a.length];
+        int n = 0;
+        for (double v : a) if (!Double.isNaN(v)) c[n++] = v;
+        if (n == 0) return Double.NaN;
+        c = Arrays.copyOf(c, n);
+        Arrays.sort(c);
+        return c[n / 2];
     }
 
     /** Returns the on-screen (x, y) pixel position of a dot at the
@@ -1628,20 +2021,33 @@ public final class FftView extends AbstractFreqDomainView {
         double binBw   = r.freqResolution;
         double refDbV  = Double.isNaN(r.fundRefDbV) ? 0
                 : (r.fundRefDbV - r.fundamentalDbFs);
-        // When the user supplied a "manual fundamental" dBV, the
-        // fundamental bin alone is lifted to that value (computed
-        // here as an alternate refDbV that maps its dBFS → manual dBV);
-        // all other bins keep the calibrated anchor above.
-        double fundRefDbVOverride = Double.NaN;
-        int fundBin = -1;
+        int n = r.amplitudeDbFs.length;
+        // Manual-fundamental: lift the fundamental's WHOLE main lobe to the user
+        // value — not just its peak bin (that left a narrow spike on the
+        // unlifted lobe) — PROPORTIONALLY above the local noise floor so the
+        // wings stay on the floor.  Lobe + floor read from the data via the
+        // shared ToneLobeLift; applied as a per-bin dBV anchor so it works in
+        // every magnitude unit.
+        int    lobeLo = -1, lobeHi = -1;
+        double floorLin = 0.0, liftFactor = 1.0, peakMagLin = 0.0;
         if (Double.isFinite(r.fundamentalTrueDbV)
                 && Double.isFinite(r.fundamentalDbFs)
                 && Double.isFinite(r.fundamentalHzRefined)
                 && binBw > 0) {
-            fundRefDbVOverride = r.fundamentalTrueDbV - r.fundamentalDbFs;
-            fundBin = (int) Math.round(r.fundamentalHzRefined / binBw);
+            int peak = (int) Math.round(r.fundamentalHzRefined / binBw);
+            int half = n - 1;
+            if (peak >= 1 && peak <= half) {
+                final double[] dbfs = r.amplitudeDbFs;
+                IntToDoubleFunction mag = k -> Math.pow(10.0, dbfs[k] / 20.0);
+                floorLin = LOBE.localFloor(mag, peak, half);
+                int[] edges = LOBE.lobeBins(mag, peak, half, floorLin);
+                lobeLo = edges[0];
+                lobeHi = edges[1];
+                peakMagLin = mag.applyAsDouble(peak);
+                double targetDbFs = r.fundamentalTrueDbV - refDbV;   // manual dBV → dBFs-equiv
+                liftFactor = Math.pow(10.0, (targetDbFs - dbfs[peak]) / 20.0);
+            }
         }
-        int n = r.amplitudeDbFs.length;
         int kFirst = Math.max(1,  (int) Math.floor(freqMin / binBw));
         int kLast  = Math.min(n - 1, (int) Math.ceil (freqMax / binBw));
         if (kLast <= kFirst) return;
@@ -1667,9 +2073,13 @@ public final class FftView extends AbstractFreqDomainView {
         for (int k = kPrev; k <= kNext; k++) {
             double f = k * binBw;
             int xAbs = freqToX(f, plot, freqMin, freqMax, logFreq);
-            double binRefDbV = (k == fundBin && Double.isFinite(fundRefDbVOverride))
-                    ? fundRefDbVOverride
-                    : refDbV;
+            double binRefDbV = refDbV;
+            if (lobeLo >= 0 && k >= lobeLo && k <= lobeHi) {
+                double m = Math.pow(10.0, r.amplitudeDbFs[k] / 20.0);
+                double newMag = LOBE.stretch(m, floorLin, peakMagLin, liftFactor);
+                double liftedDbFs = newMag > 1e-15 ? 20.0 * Math.log10(newMag) : -300.0;
+                binRefDbV = liftedDbFs + refDbV - r.amplitudeDbFs[k];
+            }
             double v = unit.convertFromDbFs(r.amplitudeDbFs[k], binRefDbV, binBw);
             int y = magToY(v, plot, magTop, magBot, unit);
             // Route by frequency, not pixel: on LOG scale freqToX

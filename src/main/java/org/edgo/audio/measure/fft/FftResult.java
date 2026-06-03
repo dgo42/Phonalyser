@@ -1,5 +1,6 @@
 package org.edgo.audio.measure.fft;
 
+import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 
@@ -175,6 +176,19 @@ public class FftResult {
      *  deviation in degrees (phase-coherence). */
     public double  rejectionDetail;
 
+    /** Spectral discontinuity detector gate snapshot for the debug overlay
+     *  ({@code DebugSwitches.SHOW_DISCONTINUITY_GATES}); {@code null} when the
+     *  detector isn't running. */
+    public SpectralDiscontinuityDetector.Gates gates;
+    /** Current accepted block's pre-average spectrum (dBFs) for the discontinuity
+     *  debug overlay; {@code null} unless the gate debug is on. */
+    public double[] gateBlockDbFs;
+    /** Last gate-REJECTED block's spectrum (dBFs), held so the debug overlay can
+     *  show what tripped a gate (rejected blocks never reach the display). */
+    public double[] gateRejectDbFs;
+    /** Gate verdict (which gate fired + values) for that last rejected block. */
+    public SpectralDiscontinuityDetector.Gates gateRejectGates;
+
     /** Empty constructor used by the result pool to allocate reusable
      *  slots.  All fields stay at Java defaults until the analyzer calls
      *  {@link #ensureArrays} and fills the result via direct field writes. */
@@ -258,6 +272,10 @@ public class FftResult {
         c.rejectionTotalFrames       = rejectionTotalFrames;
         c.rejectionPhaseCoherence    = rejectionPhaseCoherence;
         c.rejectionDetail            = rejectionDetail;
+        c.gates                      = gates;   // immutable snapshot — share the reference
+        c.gateBlockDbFs              = gateBlockDbFs;    // debug snapshots — share (not mutated)
+        c.gateRejectDbFs             = gateRejectDbFs;
+        c.gateRejectGates            = gateRejectGates;
         // 2-D array: clone the outer array AND each non-null row so
         // the copy can be mutated independently of the source.
         if (preCorrectionPeaks != null) {

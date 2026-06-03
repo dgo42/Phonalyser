@@ -86,8 +86,9 @@ public final class FllAutotuneSession {
 
     /** λ = LAMBDA·θ closed-loop time constant for the {@link Rule#IMC}
      *  tuning.  ≥2 gives no overshoot; 3 leaves a comfortable robustness
-     *  margin against the deadtime / gain estimate. */
-    private static final double IMC_LAMBDA = 3.0;
+     *  margin against the deadtime / gain estimate.  Package-visible so the
+     *  test asserts against the constant, not a hard-coded copy. */
+    static final double IMC_LAMBDA = 2.0;
 
     // Relay sizing, expressed in FFT bins so it scales with resolution and
     // can never jump the peak bin or explode on a noisy σ estimate.

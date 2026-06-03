@@ -154,6 +154,9 @@ public class FftAnalyzer {
     private double[] scratchFrameRe, scratchFrameIm;
     private double[] scratchS0Re, scratchS0Im;
     private double[] scratchS1Re, scratchS1Im;
+    /** Per-harmonic de-rotation phasor cache (cos/sin of {@code h·Φ}), sized
+     *  {@code 2·hMax+1} and rebuilt per frame — see Pass 2. */
+    private double[] scratchHcos, scratchHsin;
     /** Half-size scratch for amplitudes — used only inside one
      *  {@code analyze} call by the harmonic-detection and noise-floor
      *  paths; never returned. */
@@ -750,35 +753,57 @@ public class FftAnalyzer {
         // Also store per-frame corrected fundamental complex value so we can
         // detect sub-slew sample drops (which manifest as a phase step in the
         // fundamental that the time-shift correction cannot account for).
-        int    intFundBinRounded = (int) Math.round(kFractional);
+        int    intFundBinRounded = Math.max(1, (int) Math.round(kFractional));
         double[] fundCorrRe = coherentAveraging ? new double[bestLen] : null;
         double[] fundCorrIm = coherentAveraging ? new double[bestLen] : null;
+        // Per-lobe constant-phase de-rotation.  Each bin is snapped to its
+        // nearest harmonic h = round(signed-freq-bin / k₀) and de-rotated by
+        // that lobe's CONSTANT phase h·Φ — NOT a per-bin frequency ramp
+        // k·baseAngle.  For a stationary windowed tone every bin of a lobe
+        // (its leakage skirt included) advances frame-to-frame by the SAME
+        // phase; the ramp matches that only AT the exact harmonic bins and
+        // over-rotates the skirt by ∝ (bin-offset × frame), which the
+        // sub-frame sum turns into a Dirichlet array factor → a comb at
+        // sampleRate/(frames·step) riding on the leakage skirt.  Constant
+        // phase per lobe aligns the whole lobe, so the comb vanishes (this is
+        // what the multi-tone path already does, hence its clean result).
+        final int hMax = coherentAveraging
+                ? Math.max(1, (fftSize / 2) / intFundBinRounded) : 0;
+        if (coherentAveraging) {
+            scratchHcos = scratchOrAlloc(scratchHcos, 2 * hMax + 1);
+            scratchHsin = scratchOrAlloc(scratchHsin, 2 * hMax + 1);
+        }
         int acceptedFrames = 0;
         for (int f = bestStart; f < bestStart + bestLen; f++) {
             int base = f * step;
             cachedFrameFft(samples, base, fftSize, window, frameRe, frameIm);
             if (coherentAveraging) {
-                // DFT time-shift theorem: frame f starting at sample f·step imparts phase
-                //   exp(+j · 2π · k_f · f · step / N)
-                // to bin k₀ (= round(k_f)).  To align all frames to frame-0 phase, multiply
-                // each frame's spectrum by the CONJUGATE:
-                //   correction(k) = exp(−j · 2π · k_f · f · step / N)
-                // Generalised to bin k (to correct the whole spectrum consistently):
-                //   correction(k) = exp(−j · k · 2π · f · step · k_f / (N · k₀))
-                // which gives the exact per-bin rotation via an incremental complex phasor.
-                final double baseAngle = -2.0 * Math.PI * (long) f * step * kFractional
-                                    / ((double) fftSize * intFundBinRounded);   // NEGATIVE: conjugate rotation
-                final double cosBase = Math.cos(baseAngle);
-                final double sinBase = Math.sin(baseAngle);
-                // De-rotate + accumulate, parallelized across cores: each chunk
-                // seeds its phasor by direct trig at its start bin then recurses;
-                // sumRe/sumIm writes are disjoint per bin within this frame.
+                // Φ = −2π·k_f·f·step/N — the fundamental's inter-frame phase
+                // advance; harmonic lobe h gets h·Φ.  Cache exp(j·h·Φ) for
+                // h = −hMax..hMax via an incremental phasor (negative h is the
+                // conjugate: the real-spectrum image of harmonic h).
+                final double phi = -2.0 * Math.PI * (double) ((long) f * step) * kFractional
+                                   / (double) fftSize;
+                final double e1c = Math.cos(phi), e1s = Math.sin(phi);
+                final double[] hc = scratchHcos, hs = scratchHsin;
+                hc[hMax] = 1.0; hs[hMax] = 0.0;
+                for (int h = 1; h <= hMax; h++) {
+                    hc[hMax + h] = hc[hMax + h - 1] * e1c - hs[hMax + h - 1] * e1s;
+                    hs[hMax + h] = hc[hMax + h - 1] * e1s + hs[hMax + h - 1] * e1c;
+                    hc[hMax - h] =  hc[hMax + h];          // exp(−j·h·Φ) = conjugate
+                    hs[hMax - h] = -hs[hMax + h];
+                }
                 final int frameIdx = f - bestStart;
                 final int ifb      = intFundBin;
+                final int k0       = intFundBinRounded;
+                final int half     = fftSize / 2;
+                final int hm       = hMax;
                 parallelChunks(fftSize, (lo, hi) -> {
-                    double cr = Math.cos(baseAngle * lo);   // exp(−j·baseAngle·lo)
-                    double ci = Math.sin(baseAngle * lo);
                     for (int k = lo; k < hi; k++) {
+                        int kf = (k <= half) ? k : k - fftSize;        // signed frequency bin
+                        int h  = Math.round(kf / (float) k0);           // nearest harmonic lobe
+                        if (h >  hm) h =  hm; else if (h < -hm) h = -hm;
+                        double cr = hc[h + hm], ci = hs[h + hm];
                         double cRe = frameRe[k] * cr - frameIm[k] * ci;
                         double cIm = frameRe[k] * ci + frameIm[k] * cr;
                         sumRe[k] += cRe;
@@ -787,9 +812,6 @@ public class FftAnalyzer {
                             fundCorrRe[frameIdx] = cRe;
                             fundCorrIm[frameIdx] = cIm;
                         }
-                        double nextCr = cr * cosBase - ci * sinBase;
-                        ci            = cr * sinBase + ci * cosBase;
-                        cr            = nextCr;
                     }
                 });
             } else {

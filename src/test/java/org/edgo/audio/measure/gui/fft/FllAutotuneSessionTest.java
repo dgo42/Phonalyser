@@ -83,11 +83,11 @@ class FllAutotuneSessionTest {
         assertEquals(0.0, s.getKp(), 0.0, "Kp must be 0 for IMC");
         assertEquals(0.0, s.getKd(), 0.0, "Kd must be 0 for IMC");
         assertTrue(s.getKi() > 0, "Ki positive");
-        // Ki == 1 / (K·(λ+θ)), θ=Tu/2, K=4/(π·Ku), λ=3θ.
+        // Ki == 1 / (K·(λ+θ)), θ=Tu/2, K=4/(π·Ku), λ=IMC_LAMBDA·θ.
         double tu = s.getMeasuredTuSeconds();
         double theta = 0.5 * tu;
         double k = 4.0 / (Math.PI * s.getUltimateGainKu());
-        double expectedKi = 1.0 / (k * (3.0 * theta + theta));
+        double expectedKi = 1.0 / (k * (FllAutotuneSession.IMC_LAMBDA * theta + theta));
         assertEquals(expectedKi, s.getKi(), expectedKi * 1e-9);
     }
 

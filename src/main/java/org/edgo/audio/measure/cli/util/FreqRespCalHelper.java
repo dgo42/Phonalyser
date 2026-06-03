@@ -8,10 +8,11 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.IntToDoubleFunction;
 
+import org.edgo.audio.measure.dsp.ToneLobeLift;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.MathUtil;
@@ -32,6 +33,11 @@ public class FreqRespCalHelper {
      *  5% per side ≈ 20 dB suppression while keeping the bulk of the
      *  swept band intact. */
     public static final double SWEEP_FADE_FRACTION_PER_SIDE = 0.05;
+
+    /** Shared per-tone lobe lift (floor estimate + data-derived lobe extent +
+     *  power-domain proportional scale) — also used by the manual-fundamental
+     *  display so both rescale a tone the same way. */
+    private static final ToneLobeLift LOBE = new ToneLobeLift();
 
     /** Compile-time switch for IR-domain time gating after delay
      *  correction.  When on, the deconvolved impulse response is
@@ -577,62 +583,49 @@ public class FreqRespCalHelper {
         // applied to noise-only neighbours, producing wide spurious
         // humps around each harmonic instead of a single sharp 2-bin
         // peak that reflects the actual harmonic energy.
-        boolean[] correctBin = new boolean[half + 1];
-        if (correctAllBins) {
-            Arrays.fill(correctBin, true);
-        } else {
-            double freqRes = binWidth;
-            // Fundamental — refined fractional bin from kFractional.
-            double kF = (freqRes > 0 && Double.isFinite(r.fundamentalHzRefined))
-                    ? r.fundamentalHzRefined / freqRes
-                    : r.fundamentalBin;
-            markProportionalBinPair(correctBin, kF, half);
-            // Harmonics — theoretical position is r.harmonicHz[h] / freqRes
-            // (= N · kFractional by construction in analyze()).
-            int harmonicCount = r.harmonicCount;
-            for (int h = 0; h < harmonicCount; h++) {
-                if (r.harmonicBins[h] <= 0) continue;
-                double kH = freqRes > 0 ? r.harmonicHz[h] / freqRes : r.harmonicBins[h];
-                markProportionalBinPair(correctBin, kH, half);
-            }
-            // Second tone (dual-tone): it is a fundamental, NOT a harmonic of
-            // F1, so the single-tone fundamental+harmonic mask above leaves it
-            // uncorrected — F1 gets compensated and F2 doesn't, skewing the
-            // F1/F2 balance by the cal's value at F2.  Mark its bin too.
-            if (!Double.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0
-                    && freqRes > 0) {
-                markProportionalBinPair(correctBin, r.fundamental2HzRefined / freqRes, half);
-            }
-        }
-
         int corrected = 0;
-        for (int k = 1; k <= half; k++) {
-            if (!correctBin[k]) continue;
-            double f = k * binWidth;
-            if (f < fLo || f > fHi) continue;
-
-            double[] h = interpolate(cal, f);
-            double hMag = h[0];
-            if (hMag <= 0.0) continue;
-            double hPhi = h[1];
-            double cosP = Math.cos(hPhi);
-            double sinP = Math.sin(hPhi);
-            double hRe  = hMag * cosP;
-            double hIm  = hMag * sinP;
-            double hMagSq = hMag * hMag;
-
-            double xRe = r.re[k];
-            double xIm = r.im[k];
-            double zRe = (xRe * hRe + xIm * hIm) / hMagSq;
-            double zIm = (xIm * hRe - xRe * hIm) / hMagSq;
-            r.re[k] = zRe;
-            r.im[k] = zIm;
-            double newAmpLin   = Math.hypot(zRe, zIm) * linPerMag;
-            r.amplitudeDbFs[k] = newAmpLin > 1e-15
-                    ? 20.0 * Math.log10(newAmpLin)
-                    : -300.0;
-            r.phaseDeg[k] = Math.toDegrees(Math.atan2(zIm, zRe));
-            corrected++;
+        if (correctAllBins) {
+            // "With noise": every in-range bin divided by H at its OWN
+            // frequency — the whole spectrum, noise included, is corrected.
+            for (int k = 1; k <= half; k++) {
+                double f = k * binWidth;
+                if (f < fLo || f > fHi) continue;
+                double[] h = interpolate(cal, f);
+                double hMag = h[0];
+                if (hMag <= 0.0) continue;
+                double hRe = hMag * Math.cos(h[1]), hIm = hMag * Math.sin(h[1]);
+                double hMagSq = hMag * hMag;
+                double xRe = r.re[k], xIm = r.im[k];
+                double zRe = (xRe * hRe + xIm * hIm) / hMagSq;
+                double zIm = (xIm * hRe - xRe * hIm) / hMagSq;
+                r.re[k] = zRe;
+                r.im[k] = zIm;
+                double newAmpLin = Math.hypot(zRe, zIm) * linPerMag;
+                r.amplitudeDbFs[k] = newAmpLin > 1e-15 ? 20.0 * Math.log10(newAmpLin) : -300.0;
+                r.phaseDeg[k] = Math.toDegrees(Math.atan2(zIm, zRe));
+                corrected++;
+            }
+        } else {
+            // Per-TONE: a tone is a SINGLE frequency whose energy fills the
+            // window's whole main lobe.  Correct the WHOLE lobe (extent found
+            // from the data) by ONE cal value at the tone frequency, applied
+            // PROPORTIONALLY to the signal above the local noise floor — so the
+            // lobe lifts as a unit while its wings stay on the floor.  This
+            // replaces lifting only 1-2 bins (a narrow spike on the wider lobe)
+            // and the per-bin slope (the split + the lobe-tilt frequency shift).
+            boolean[] done = new boolean[half + 1];
+            double fundHz = (Double.isFinite(r.fundamentalHzRefined) && r.fundamentalHzRefined > 0.0)
+                    ? r.fundamentalHzRefined : r.fundamentalBin * binWidth;
+            corrected += correctToneLobe(r, cal, fundHz, half, binWidth, linPerMag, fLo, fHi, done);
+            for (int h = 0; h < r.harmonicCount; h++) {
+                if (r.harmonicBins[h] > 0) {
+                    corrected += correctToneLobe(r, cal, r.harmonicHz[h], half, binWidth, linPerMag, fLo, fHi, done);
+                }
+            }
+            // Second tone (dual-tone) is a fundamental, not a harmonic of F1.
+            if (!Double.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0) {
+                corrected += correctToneLobe(r, cal, r.fundamental2HzRefined, half, binWidth, linPerMag, fLo, fHi, done);
+            }
         }
 
         new FftAnalyzer().recomputeStats(r);
@@ -653,20 +646,52 @@ public class FreqRespCalHelper {
                 String.format(Locale.US, "%.6f", r.thdPct));
     }
 
-    /** Marks {@code binMain = round(k)} plus its sub-bin-adjacent
-     *  neighbour as correctable.  Mirrors the dot-level / THD
-     *  proportional-bin pairing in {@code FftAnalyzer.detectHarmonics}
-     *  so the cal touches exactly the two bins that actually carry
-     *  the harmonic energy. */
-    private static void markProportionalBinPair(boolean[] correctBin, double k, int half) {
-        int binMain = (int) Math.round(k);
-        if (binMain < 1 || binMain > half) return;
-        correctBin[binMain] = true;
-        double offset = k - binMain;
-        int binAdj = (offset >= 0.0)
-                ? Math.min(half, binMain + 1)
-                : Math.max(1,    binMain - 1);
-        correctBin[binAdj] = true;
+    /** Applies the cal to a tone's WHOLE main lobe with ONE value taken at the
+     *  tone's frequency, in the POWER domain so the lobe keeps its shape where
+     *  it stands above the noise yet tapers smoothly back onto the floor at its
+     *  wings:
+     *  <pre>  |X'| = √( (|X|² − floor²)·(1/|H|)² + floor² )  </pre>
+     *  The signal power above the floor is scaled by (1/|H|)² and the noise
+     *  floor power is kept, so every well-above-floor bin lifts by the same
+     *  1/|H| — the lobe shape is preserved (no per-bin split, no
+     *  frequency-shifting tilt, and no narrow spike from lifting the peak more
+     *  than the shoulders) — while near-floor bins stay on the floor (no noise
+     *  hump).  Phase is rotated by {@code −argH}.  Lobe extent is data-derived
+     *  ({@link #lobeEdge}). */
+    private int correctToneLobe(FftResult r, FreqRespCalibration cal, double toneHz,
+                                int half, double binWidth, double linPerMag,
+                                double fLo, double fHi, boolean[] done) {
+        if (!(toneHz > 0.0) || toneHz < fLo || toneHz > fHi) return 0;
+        int peak = (int) Math.round(toneHz / binWidth);
+        if (peak < 1 || peak > half) return 0;
+        double[] h = interpolate(cal, toneHz);
+        if (h[0] <= 0.0) return 0;
+        double invMag = 1.0 / h[0];                          // |1/H| at the tone freq
+        double cosC = Math.cos(h[1]), sinC = Math.sin(h[1]); // ·exp(−j·argH)
+
+        IntToDoubleFunction mag = k -> Math.hypot(r.re[k], r.im[k]);
+        double floor = LOBE.localFloor(mag, peak, half);
+        int[] edges  = LOBE.lobeBins(mag, peak, half, floor);
+        double peakMag = mag.applyAsDouble(peak);
+
+        int n = 0;
+        for (int k = edges[0]; k <= edges[1]; k++) {
+            if (k < 1 || k > half || done[k]) continue;
+            double xRe = r.re[k], xIm = r.im[k];
+            double m = Math.hypot(xRe, xIm);
+            double newMag = LOBE.stretch(m, floor, peakMag, invMag);
+            double scale  = m > 0.0 ? newMag / m : 0.0;
+            double zRe = (xRe * cosC + xIm * sinC) * scale;  // X·exp(−j·argH)·scale
+            double zIm = (xIm * cosC - xRe * sinC) * scale;
+            r.re[k] = zRe;
+            r.im[k] = zIm;
+            double newAmpLin = newMag * linPerMag;
+            r.amplitudeDbFs[k] = newAmpLin > 1e-15 ? 20.0 * Math.log10(newAmpLin) : -300.0;
+            r.phaseDeg[k] = Math.toDegrees(Math.atan2(zIm, zRe));
+            done[k] = true;
+            n++;
+        }
+        return n;
     }
 
     /**

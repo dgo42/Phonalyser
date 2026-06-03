@@ -21,6 +21,7 @@ import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.DebugSwitches;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 
@@ -301,11 +302,21 @@ public final class FftAnalyzerWorker {
      *  block's spectrum to the accepted history and catches exactly those
      *  cases.  The Δⁿ test is kept (toggle the flag) but off by default. */
     private static final boolean USE_TIME_DOMAIN_GLITCH     = false;
-    private static final boolean USE_SPECTRAL_DISCONTINUITY = true;
+    private static final boolean USE_SPECTRAL_DISCONTINUITY = false;
     /** Frequency-domain running-median glitch / stall rejector, run per tick
      *  on the freshly computed spectrum before it enters the cross-tick
      *  (vector) average — where one bad block injects a large complex error. */
     private final SpectralDiscontinuityDetector spectralDetector = new SpectralDiscontinuityDetector();
+    /** Debug overlay: the last gate-REJECTED block's pre-average spectrum (dBFs),
+     *  held so {@code FftView} can show what tripped a gate (rejected blocks never
+     *  otherwise reach the display). */
+    private volatile double[] lastRejectBlockDbFs;
+    /** Debug overlay: the gate verdict (which gate fired + values) for that same
+     *  last rejected block. */
+    private volatile SpectralDiscontinuityDetector.Gates lastRejectGates;
+    /** Per-harmonic de-rotation phasor cache for the cross-tick single-reference
+     *  accumulation (cos/sin of {@code h·Φ}); rebuilt per tick. */
+    private double[] hcosScratch, hsinScratch;
     /** Pinned {@code round(kFractional)} for the rotation formula — the
      *  integer bin is stable, so only the fractional part needs converging. */
     private int     accumIntFundBinRounded;
@@ -425,6 +436,8 @@ public final class FftAnalyzerWorker {
         accumToneKappa = new double[0];
         toneDroppedSamples = new double[0];
         spectralDetector.reset();   // the median reference restarts with the average
+        lastRejectBlockDbFs = null;
+        lastRejectGates     = null;
     }
 
     /** Handles a ring overrun: the worker fell a full ring behind, so the
@@ -746,31 +759,44 @@ public final class FftAnalyzerWorker {
                         }
                     }
                 }
-                // Single reference: per-bin time-shift rotation tied to the one
-                // detected fundamental (and, via the linear ramp, its harmonics)
-                // at the refined exact frequency in accumKFractional.
-                double baseAngle = (accumIntFundBinRounded > 0)
-                        ? -2.0 * Math.PI * delta * accumKFractional
-                          / ((double) fftSize * accumIntFundBinRounded)
-                        : 0.0;
-                final double cosBase = Math.cos(baseAngle);
-                final double sinBase = Math.sin(baseAngle);
-                // Parallelized across cores: each chunk seeds its phasor by direct
-                // trig at its start bin then recurses; the accumRe/accumIm writes
-                // are disjoint per chunk.  Numerically ≡ the serial recursion — in
-                // fact slightly LESS phasor drift, since each chunk recurses over a
-                // shorter span from an exact start.
+                // Single reference: PER-LOBE constant-phase de-rotation (matching
+                // FftAnalyzer Pass 2).  Each bin is snapped to its nearest harmonic
+                // h = round(signed-freq-bin / k0) and rotated by that lobe's CONSTANT
+                // phase h·Φ, Φ = −2π·delta·accumKFractional/N — NOT a per-bin ramp.
+                // The ramp is exact only at the harmonic bins and over-rotates the
+                // leakage skirt between them ∝ (bin-offset × tick), which the
+                // cross-tick sum turns into a comb on the skirt; constant phase per
+                // lobe aligns the whole lobe so the skirt stays clean.
+                final int    k0x   = Math.max(1, accumIntFundBinRounded);
+                final double phiX  = -2.0 * Math.PI * delta * accumKFractional / (double) fftSize;
+                final int    hMaxX = Math.max(1, (N / 2) / k0x);
+                if (hcosScratch == null || hcosScratch.length != 2 * hMaxX + 1) {
+                    hcosScratch = new double[2 * hMaxX + 1];
+                    hsinScratch = new double[2 * hMaxX + 1];
+                }
+                final double e1cx = Math.cos(phiX), e1sx = Math.sin(phiX);
+                final double[] hcx = hcosScratch, hsx = hsinScratch;
+                hcx[hMaxX] = 1.0; hsx[hMaxX] = 0.0;
+                for (int h = 1; h <= hMaxX; h++) {
+                    hcx[hMaxX + h] = hcx[hMaxX + h - 1] * e1cx - hsx[hMaxX + h - 1] * e1sx;
+                    hsx[hMaxX + h] = hcx[hMaxX + h - 1] * e1sx + hsx[hMaxX + h - 1] * e1cx;
+                    hcx[hMaxX - h] =  hcx[hMaxX + h];           // exp(−j·h·Φ) = conjugate
+                    hsx[hMaxX - h] = -hsx[hMaxX + h];
+                }
+                final int halfX = N / 2;
+                final int hmx   = hMaxX;
+                // Parallelized across cores: the accumRe/accumIm writes are disjoint
+                // per chunk; each bin looks up its lobe's cached phasor.
                 parallelChunks(N, (lo, hi) -> {
-                    double cr = Math.cos(baseAngle * lo);
-                    double ci = Math.sin(baseAngle * lo);
                     for (int k = lo; k < hi; k++) {
+                        int kf = (k <= halfX) ? k : k - N;          // signed frequency bin
+                        int h  = Math.round(kf / (float) k0x);       // nearest harmonic lobe
+                        if (h > hmx) h = hmx; else if (h < -hmx) h = -hmx;
+                        double cr = hcx[h + hmx], ci = hsx[h + hmx];
                         double rRe = r.re[k] * weight;
                         double rIm = r.im[k] * weight;
                         accumRe[k] += rRe * cr - rIm * ci;
                         accumIm[k] += rRe * ci + rIm * cr;
-                        double nextRe = cr * cosBase - ci * sinBase;
-                        ci = cr * sinBase + ci * cosBase;
-                        cr = nextRe;
                     }
                 });
             }
@@ -1462,10 +1488,19 @@ public final class FftAnalyzerWorker {
         // existing discontinuity recovery + banner.
         if (USE_SPECTRAL_DISCONTINUITY && accumulate) {
             spectralDetector.configure(fftLength / 2);
-            if (spectralDetector.reject(r.re, r.im, fftLength / 2, fundamentalBins(r))) {
+            // Debug: snapshot this block's pre-average spectrum BEFORE the
+            // accumulator overlay (below) overwrites r.amplitudeDbFs.
+            double[] dbgBlock = DebugSwitches.SHOW_DISCONTINUITY_GATES ? r.amplitudeDbFs.clone() : null;
+            if (spectralDetector.reject(r.re, r.im, fftLength / 2, sampleRate / (double) fftLength, fundamentalBins(r))) {
+                if (dbgBlock != null) {                                  // hold the rejected block + verdict
+                    lastRejectBlockDbFs = dbgBlock;
+                    lastRejectGates     = spectralDetector.gates();
+                }
                 onSignalDiscontinuity(reader);
                 return IDLE_TICK_MS;
             }
+            r.gates         = spectralDetector.gates();   // debug overlay snapshot
+            r.gateBlockDbFs = dbgBlock;                    // current accepted block (pre-average)
         }
         boolean accumulated = accumulate
                 && accumulateIntoForeverBuffer(r, samplesAbsStart, coherent, targetFrames);
@@ -1518,6 +1553,8 @@ public final class FftAnalyzerWorker {
                 : Double.NaN;
         r.channelLeft      = wantLeft;
         r.samplesAbsStart  = samplesAbsStart;   // for the FLL's real-time dt
+        r.gateRejectDbFs   = lastRejectBlockDbFs;   // debug: last gate-rejected block + verdict
+        r.gateRejectGates  = lastRejectGates;
 
         // Hand off to the UI.  No copy needed: analyze() returns a FRESH
         // FftResult each tick (the worker never mutates a handed-off {@code r}),
