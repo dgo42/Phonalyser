@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.TriggerEdge;
@@ -301,7 +302,7 @@ public final class Preferences {
      *  takes effect when {@code genSnapToFftBin} AND
      *  {@code fftFundFromGenerator} are also true — both prerequisites
      *  are required for the loop to know which bin to lock onto. */
-    @Getter @Setter private boolean fftAlignGenToFreqDiff = false;
+    @Getter @Setter private AlignGenerator fftAlignGenerator = AlignGenerator.NONE;
     @Getter @Setter private double  fftDistMinHz         = 20;
     @Getter @Setter private double  fftDistMaxHz         = 20000;
     @Getter @Setter private boolean fftDistMinEnabled    = false;
@@ -732,7 +733,7 @@ public final class Preferences {
         root.put("fftOverlap",                fftOverlap);
         root.put("fftCoherentAveraging",      fftCoherentAveraging);
         root.put("fftMainsSuppression",       fftMainsSuppression);
-        root.put("fftAlignGenToFreqDiff",     fftAlignGenToFreqDiff);
+        root.put("fftAlignGenerator",         fftAlignGenerator.name());
         root.put("fftDistMinHz",              fftDistMinHz);
         root.put("fftDistMaxHz",              fftDistMaxHz);
         root.put("fftDistMinEnabled",         fftDistMinEnabled);
@@ -1028,7 +1029,9 @@ public final class Preferences {
         if (root.get("fftOverlap")                instanceof String  s) fftOverlap           = s;
         if (root.get("fftCoherentAveraging")      instanceof Boolean b) fftCoherentAveraging = b;
         if (root.get("fftMainsSuppression")       instanceof String  s) fftMainsSuppression  = s;
-        if (root.get("fftAlignGenToFreqDiff")     instanceof Boolean b) fftAlignGenToFreqDiff = b;
+        if (root.get("fftAlignGenerator")         instanceof String  s) fftAlignGenerator    = AlignGenerator.fromString(s);
+        else if (root.get("fftAlignGenToFreqDiff") instanceof Boolean b)   // migrate the old checkbox
+            fftAlignGenerator = b ? AlignGenerator.PID : AlignGenerator.NONE;
         if (root.get("fftDistMinHz")              instanceof Number  n) fftDistMinHz         = n.doubleValue();
         if (root.get("fftDistMaxHz")              instanceof Number  n) fftDistMaxHz         = n.doubleValue();
         if (root.get("fftDistMinEnabled")         instanceof Boolean b) fftDistMinEnabled    = b;

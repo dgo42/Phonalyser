@@ -31,6 +31,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.FreqRespCalibration;
+import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftMagnitudeUnit;
 import org.edgo.audio.measure.enums.GenSignalForm;
@@ -117,8 +118,10 @@ public final class FftView extends AbstractFreqDomainView {
      *  {@link #fll2} tracks the dual-tone tone-2 correction (used only
      *  when the generator form is DUAL_TONE).  Each loop is reset
      *  independently. */
-    private final FrequencyLockLoop fll  = new FrequencyLockLoop();
-    private final FrequencyLockLoop fll2 = new FrequencyLockLoop();
+    private FrequencyAligner fll  =   // type follows the align-mode pref (PID/FLL), swapped via the factory
+            FrequencyAlignerFactory.instance().create(AlignGenerator.PID);
+    private FrequencyAligner fll2 =
+            FrequencyAlignerFactory.instance().create(AlignGenerator.PID);
 
     /** When non-null and active, the relay-feedback autotune wizard owns the
      *  single-tone correction: {@link #applyFrequencyLockLoop} routes the
@@ -419,7 +422,7 @@ public final class FftView extends AbstractFreqDomainView {
         FormData acd = new FormData();
         acd.top   = new FormAttachment(0, 6);
         acd.right = new FormAttachment(magUnitCombo, -6);
-        acd.width = 90;
+        acd.width = 110;
         averagesCountLabel.setLayoutData(acd);
 
         FormData fpd = new FormData();
@@ -638,15 +641,23 @@ public final class FftView extends AbstractFreqDomainView {
             MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM, atTarget + atCorr);
             return;
         }
-        if (!prefs.isFftAlignGenToFreqDiff()) return;
+        AlignGenerator mode = prefs.getFftAlignGenerator();
+        if (mode == AlignGenerator.NONE)      return;
         if (!isGeneratorActive())             return;
-        // Apply the current PID gains (autotune writes them to prefs).
-        double kp = prefs.getFftFllKp(), ki = prefs.getFftFllKi(), kd = prefs.getFftFllKd();
-        fll.setGains(kp, ki, kd);
-        fll2.setGains(kp, ki, kd);
-        // Branch on generator form: single-tone uses the SINE FLL,
-        // dual-tone runs two independent loops driven by the per-tone
-        // detected frequencies in lastImd.
+        // Swap the loop type to match the selected mode (a change resets both loops).
+        boolean wantPid = (mode == AlignGenerator.PID);
+        if ((fll instanceof FrequencyPid) != wantPid) {
+            fll  = FrequencyAlignerFactory.instance().create(mode);
+            fll2 = FrequencyAlignerFactory.instance().create(mode);
+        }
+        // PID: apply the current gains (autotune writes them to prefs).  FLL has none.
+        if (fll instanceof FrequencyPid pid) {
+            double kp = prefs.getFftFllKp(), ki = prefs.getFftFllKi(), kd = prefs.getFftFllKd();
+            pid.setGains(kp, ki, kd);
+            ((FrequencyPid) fll2).setGains(kp, ki, kd);
+        }
+        // Branch on generator form: single-tone runs one loop, dual-tone two
+        // independent loops driven by the per-tone detected frequencies in lastImd.
         boolean dualTone = "DUAL_TONE".equalsIgnoreCase(prefs.getGenSignalForm());
         if (dualTone) {
             if (lastImd == null) return;
@@ -655,12 +666,12 @@ public final class FftView extends AbstractFreqDomainView {
             double t2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
                     slot.sampleRate, prefs.getGenDualToneFreq2Hz());
             if (t1 > 0 && Double.isFinite(lastImd.f1Hz)) {
-                fll.update(t1, lastImd.f1Hz, slot.samplesAbsStart, slot.sampleRate);
+                fll.update(t1, lastImd.f1Hz, slot.samplesAbsStart, slot.sampleRate, slot.fftSize);
                 MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM,
                         t1 + fll.getCorrection());
             }
             if (t2 > 0 && Double.isFinite(lastImd.f2Hz)) {
-                fll2.update(t2, lastImd.f2Hz, slot.samplesAbsStart, slot.sampleRate);
+                fll2.update(t2, lastImd.f2Hz, slot.samplesAbsStart, slot.sampleRate, slot.fftSize);
                 MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM_2,
                         t2 + fll2.getCorrection());
             }
@@ -669,7 +680,7 @@ public final class FftView extends AbstractFreqDomainView {
             double target = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.SINE,
                     slot.sampleRate, prefs.getGenFrequencyHz());
             if (!(target > 0)) return;
-            fll.update(target, slot.fundamentalHzRefined, slot.samplesAbsStart, slot.sampleRate);
+            fll.update(target, slot.fundamentalHzRefined, slot.samplesAbsStart, slot.sampleRate, slot.fftSize);
             MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM,
                     target + fll.getCorrection());
         }

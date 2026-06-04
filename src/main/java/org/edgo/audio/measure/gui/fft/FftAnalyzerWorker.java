@@ -1,6 +1,7 @@
 package org.edgo.audio.measure.gui.fft;
 
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -271,6 +272,7 @@ public final class FftAnalyzerWorker {
      *  contribution. */
     private double[] accumRe;
     private double[] accumIm;
+    private int[]    imdGridIdx;   // per-bin IMD-product assignment (cross-tick dual-tone de-rotation)
     /** Incoherent (power) accumulator counterpart.  Holds {@code |X[k]|²}
      *  weighted by frame count, no phase alignment needed. */
     private double[] accumPow;
@@ -841,6 +843,7 @@ public final class FftAnalyzerWorker {
         double[] cIm = new double[nT];
         int[]    lo  = new int[nT];
         int[]    hi  = new int[nT];
+        double[] angT = new double[nT];   // each tone's tracked de-rotation phase (for the IMD grid)
         // The strong tones share ONE clock: each tone's per-tone loop correction
         // measures the same relative drift δ ≈ correction/delta.  Pool them
         // (strength-weighted) below and de-rotate the NON-tone bins by delta·(1+δ).
@@ -888,6 +891,7 @@ public final class FftAnalyzerWorker {
                     }
                 }
             }
+            angT[t] = ang;
             cRe[t] = cr;
             cIm[t] = sr;
             lo[t] = Math.max(0,     k0 - TONE_LOBE_HALF_BINS);
@@ -900,8 +904,51 @@ public final class FftAnalyzerWorker {
         }
         // One re-sync realign serves every tone; clear after they've all used it.
         gapRecoverPending = false;
-        // Non-tone bins: plain time-shift, drift-corrected by the pooled δ so the
-        // weak harmonics track the same clock as the strong teeth (else they sink).
+        // IMD-product grid (true dual-tone): each product a·F1+b·F2 rides
+        // a·ang1 + b·ang2 — the SAME tracked tone phases — so its EXACT sub-bin
+        // frequency (clock offset / wobble included) is de-rotated, not the integer
+        // bin-centre.  Without this the off-bin products carry a (bin − κ_p)·delta
+        // ramp that drifts (slow when aligned, wild at a raw ppm offset).
+        int   nProd   = 0;
+        int[] prodIdx = null;
+        double[] prodCos = null, prodSin = null;
+        if (nT == 2 && accumToneKappa[0] > 0.0 && accumToneKappa[1] > 0.0) {
+            final int ORDER = 9;
+            int[] pa = new int[(2 * ORDER + 1) * (2 * ORDER + 1)];
+            int[] pb = new int[pa.length];
+            int[] pk = new int[pa.length];
+            int cap = 0;
+            for (int a = -ORDER; a <= ORDER; a++) {
+                for (int b = -ORDER; b <= ORDER; b++) {
+                    int ord = Math.abs(a) + Math.abs(b);
+                    if (ord < 2 || ord > ORDER) continue;   // tones (ord 1) handled per-tone above
+                    double kp = a * accumToneKappa[0] + b * accumToneKappa[1];
+                    if (kp < 1.0 || kp > N - 2) continue;
+                    pk[cap] = (int) Math.round(kp);
+                    pa[cap] = a;
+                    pb[cap] = b;
+                    cap++;
+                }
+            }
+            nProd   = cap;
+            prodCos = new double[cap];
+            prodSin = new double[cap];
+            for (int p = 0; p < cap; p++) {
+                double ph = pa[p] * angT[0] + pb[p] * angT[1];
+                prodCos[p] = Math.cos(ph);
+                prodSin[p] = Math.sin(ph);
+            }
+            if (imdGridIdx == null || imdGridIdx.length < N) imdGridIdx = new int[N];
+            prodIdx = imdGridIdx;
+            Arrays.fill(prodIdx, 0, N, -1);
+            for (int p = 0; p < cap; p++) {
+                int plo = Math.max(0,     pk[p] - TONE_LOBE_HALF_BINS);
+                int phi = Math.min(N - 1, pk[p] + TONE_LOBE_HALF_BINS);
+                for (int k = plo; k <= phi; k++) prodIdx[k] = p;
+            }
+        }
+        // Non-tone, non-product bins: plain time-shift, drift-corrected by the
+        // pooled δ so the weak harmonics track the same clock as the strong teeth.
         double deltaEff  = wsum > 0.0 ? delta * (1.0 + dsum / wsum) : delta;
         double rampSlope = -2.0 * Math.PI * deltaEff / (double) fftSize;
         double stepRe = Math.cos(rampSlope), stepIm = Math.sin(rampSlope);
@@ -910,8 +957,10 @@ public final class FftAnalyzerWorker {
         for (int k = 0; k < N; k++) {
             while (curT < nT && k > hi[curT]) curT++;
             double rotRe, rotIm;
-            if (curT < nT && k >= lo[curT]) { rotRe = cRe[curT]; rotIm = cIm[curT]; }
-            else                            { rotRe = phRe;      rotIm = phIm;      }
+            int p = (prodIdx != null) ? prodIdx[k] : -1;
+            if (curT < nT && k >= lo[curT]) { rotRe = cRe[curT];   rotIm = cIm[curT];   }   // tone lobe
+            else if (p >= 0)                { rotRe = prodCos[p];   rotIm = prodSin[p];   }   // IMD product
+            else                            { rotRe = phRe;        rotIm = phIm;         }   // fork
             double rRe = r.re[k] * weight;
             double rIm = r.im[k] * weight;
             accumRe[k] += rRe * rotRe - rIm * rotIm;

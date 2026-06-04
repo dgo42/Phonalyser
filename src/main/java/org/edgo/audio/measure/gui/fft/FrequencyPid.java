@@ -36,7 +36,7 @@ import org.edgo.audio.measure.gui.bus.Events;
  * SWT UI thread (where {@link Events#FFT_RESULT_AVAILABLE} is
  * dispatched).
  */
-public final class FrequencyLockLoop {
+public final class FrequencyPid implements FrequencyAligner {
 
     /** Output saturation (Hz).  The lock only ever needs ~ppm·target
      *  (sub-Hz for audio), so this is a generous safety/anti-windup bound,
@@ -75,6 +75,7 @@ public final class FrequencyLockLoop {
 
     /** Current correction in Hz.  Add to the snap target before publishing
      *  to {@link Events#GENERATOR_FREQ_TRIM}. */
+    @Override
     public double getCorrection() {
         return correction;
     }
@@ -87,7 +88,8 @@ public final class FrequencyLockLoop {
      *  computed.  Skipped silently for non-finite inputs (a glitched frame
      *  must not corrupt the integrator) and for the first call after a reset
      *  (which only establishes the time reference). */
-    public void update(double target, double detected, long absStartSamples, int sampleRate) {
+    @Override
+    public void update(double target, double detected, long absStartSamples, int sampleRate, int fftSize) {
         if (!Double.isFinite(target) || !Double.isFinite(detected) || sampleRate <= 0) return;
         if (!haveLast) {                       // first frame: establish the dt reference only
             lastAbsStart = absStartSamples;
@@ -116,6 +118,7 @@ public final class FrequencyLockLoop {
      *  Call on Record stop and on every user-initiated generator-frequency /
      *  FFT-length change — both invalidate the locked offset.  Keeps the
      *  gains. */
+    @Override
     public void reset() {
         correction = 0.0;
         integral   = 0.0;

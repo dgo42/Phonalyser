@@ -45,6 +45,7 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
+import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.FftMagnitudeUnit;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.MainsSuppression;
@@ -152,13 +153,13 @@ public final class FftPane {
     private Button             fundFromGenCheck;
     private Button             logFreqCheck;
     private Button             coherentCheck;
-    /** "Align generator to frequency difference" — gates the FFT-side
-     *  frequency-lock loop.  Enabled in the UI only when both
+    /** "Align generator" — None / PID / FLL — selects the FFT-side
+     *  frequency-alignment loop.  Enabled in the UI only when both
      *  snap-to-FFT-bin and fund-from-generator are on, since the loop
      *  needs a target bin (snap) and a target frequency (fund-from-gen)
-     *  to lock onto.  Even when this is checked the loop only fires if
+     *  to lock onto.  Even when a mode is selected the loop only fires if
      *  the other two are also on — see {@code FftView.applyFrequencyLockLoop}. */
-    private Button             alignGenCheck;
+    private Combo              alignGenCombo;
     private Button             distMinEnable;
     private NumericStepField   distMinField;
     private Button             distMaxEnable;
@@ -987,30 +988,32 @@ public final class FftPane {
             prefs.save();
         });
 
-        // "Align generator to frequency difference" — only meaningful
-        // when both snap-to-bin (provides a target bin) and
-        // fund-from-generator (provides a target frequency) are on, so
-        // the checkbox is disabled otherwise.  Even when on, the FLL
-        // still re-checks all three prefs at fire time — see
+        // "Align generator" — None / PID / FLL — only meaningful when both
+        // snap-to-bin (provides a target bin) and fund-from-generator (provides a
+        // target frequency) are on, so the combo is disabled otherwise.  Even when
+        // a mode is selected the loop only fires if the other two are also on — see
         // FftView.applyFrequencyLockLoop.
-        alignGenCheck = new Button(g, SWT.CHECK);
-        alignGenCheck.setText(I18n.t("fft.settings.alignGenToFreqDiff"));
-        alignGenCheck.setSelection(prefs.isFftAlignGenToFreqDiff());
-        GridData algGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
-        algGd.horizontalSpan = 2;
-        alignGenCheck.setLayoutData(algGd);
-        alignGenCheck.addListener(SWT.Selection, e -> {
-            boolean on = alignGenCheck.getSelection();
-            prefs.setFftAlignGenToFreqDiff(on);
+        Label algLbl = new Label(g, SWT.NONE);
+        algLbl.setText(I18n.t("fft.settings.alignGen"));
+        algLbl.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        alignGenCombo = new Combo(g, SWT.DROP_DOWN | SWT.READ_ONLY);
+        for (AlignGenerator ag : AlignGenerator.values()) {
+            alignGenCombo.add(ag.label);
+        }
+        alignGenCombo.select(prefs.getFftAlignGenerator().ordinal());
+        alignGenCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        alignGenCombo.addListener(SWT.Selection, e -> {
+            AlignGenerator sel = AlignGenerator.values()[alignGenCombo.getSelectionIndex()];
+            prefs.setFftAlignGenerator(sel);
             prefs.save();
-            // Reset the FLL only when turning align ON, so each session
-            // converges fresh from zero.  Turning it OFF deliberately
-            // holds everything: the generator stays at the stabilized
-            // frequency, the averaged spectrum is kept, and the
-            // converged correction is retained — so the user can reset
-            // statistics manually and collect a clean average at
-            // near-zero frequency difference.
-            if (on) view.resetFrequencyLock();
+            // (Re)selecting an active mode resets its loop so each session converges
+            // fresh from zero; NONE deliberately holds everything (the generator
+            // stays at the stabilized frequency, the spectrum is kept, and the
+            // converged correction is retained — so the user can reset statistics
+            // manually and collect a clean average at near-zero frequency difference).
+            if (sel != AlignGenerator.NONE) {
+                view.resetFrequencyLock();
+            }
         });
 
         // Row: Coherent averaging (span 2) | Log freq (span 2)
@@ -1046,15 +1049,15 @@ public final class FftPane {
         fundFromGenCheck.addListener(SWT.Selection, e -> updateAlignGenEnabled());
     }
 
-    /** Enables {@link #alignGenCheck} only when both prerequisites
+    /** Enables {@link #alignGenCombo} only when both prerequisites
      *  (snap-to-FFT-bin and fund-from-generator) are checked.  Called
      *  from local listeners and from the {@code GENERATOR_SIGNAL_CHANGED}
      *  bus subscriber (which fires when the user toggles snap-to-bin
      *  on the generator pane). */
     private void updateAlignGenEnabled() {
-        if (alignGenCheck == null || alignGenCheck.isDisposed()) return;
+        if (alignGenCombo == null || alignGenCombo.isDisposed()) return;
         Preferences prefs = Preferences.instance();
-        alignGenCheck.setEnabled(prefs.isGenSnapToFftBin() && prefs.isFftFundFromGenerator());
+        alignGenCombo.setEnabled(prefs.isGenSnapToFftBin() && prefs.isFftFundFromGenerator());
     }
 
     // =========================================================================
@@ -1501,7 +1504,8 @@ public final class FftPane {
         Preferences prefs = Preferences.instance();
         boolean sine = "SINE".equalsIgnoreCase(prefs.getGenSignalForm());
         if (!view.isRunning() || !view.isGeneratorActive() || !sine
-                || !prefs.isGenSnapToFftBin() || !prefs.isFftFundFromGenerator()) {
+                || !prefs.isGenSnapToFftBin() || !prefs.isFftFundFromGenerator()
+                || prefs.getFftAlignGenerator() != AlignGenerator.PID) {   // tunes the PID gains
             Dialogs.info(parent, I18n.t("fft.autotune.title"), I18n.t("fft.autotune.notReady"));
             return;
         }

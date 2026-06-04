@@ -152,6 +152,7 @@ public class FftAnalyzer {
     private double[] scratchF0Re, scratchF0Im;
     private double[] scratchSumRe, scratchSumIm;
     private double[] scratchFrameRe, scratchFrameIm;
+    private int[]    scratchImdIdx;   // per-bin IMD-product assignment (dual-tone de-rotation)
     private double[] scratchS0Re, scratchS0Im;
     private double[] scratchS1Re, scratchS1Im;
     /** Per-harmonic de-rotation phasor cache (cos/sin of {@code h·Φ}), sized
@@ -787,8 +788,36 @@ public class FftAnalyzer {
         // off the coherently-collapsed average.  Only the 3 lobe bins feed
         // the phase difference / parabola, so noise bins can't bias it.
         outResult.fundamental2HzRefined = Double.NaN;
-        if (!Double.isNaN(secondToneHintHz) && secondToneHintHz > 0.0) {
-            int k0b = (int) Math.round(secondToneHintHz / freqRes);
+        // The hint is the COMMANDED second-tone frequency — set only when
+        // fund-from-generator is on AND the generator is internal.  When it's
+        // absent (external generator, or that option off) but the signal IS
+        // dual-tone, DETECT the second tone from the CLEAN single frame instead
+        // (where it is still at full level — the cancellation only happens in the
+        // 2-frame average): the strongest local-max peak clear of F1's lobe and
+        // within 40 dB of it.  Without this the F2 de-rotation fix below can't
+        // engage and F2 cancels.
+        final int SECOND_TONE_GUARD_BINS = 100;
+        double effHint = secondToneHintHz;
+        if (Double.isNaN(effHint) && multiTone && intFundBin > 0) {
+            double fundAmp2 = s0Re[intFundBin] * s0Re[intFundBin] + s0Im[intFundBin] * s0Im[intFundBin];
+            double thresh2  = fundAmp2 * 1e-4;                 // ≥ −40 dB of F1 → a real tone, not noise
+            int    loB      = Math.max(3, (int) Math.ceil(10.0 / freqRes));
+            double bestAmp2 = 0.0;
+            int    bestK    = -1;
+            for (int k = loB; k < halfSize; k++) {
+                if (Math.abs(k - intFundBin) <= SECOND_TONE_GUARD_BINS) continue;   // skip F1's lobe
+                double a2 = s0Re[k] * s0Re[k] + s0Im[k] * s0Im[k];
+                if (a2 > bestAmp2 && a2 >= thresh2
+                        && a2 >= s0Re[k - 1] * s0Re[k - 1] + s0Im[k - 1] * s0Im[k - 1]
+                        && a2 >  s0Re[k + 1] * s0Re[k + 1] + s0Im[k + 1] * s0Im[k + 1]) {
+                    bestAmp2 = a2;
+                    bestK = k;
+                }
+            }
+            if (bestK > 0) effHint = bestK * freqRes;
+        }
+        if (!Double.isNaN(effHint) && effHint > 0.0) {
+            int k0b = (int) Math.round(effHint / freqRes);
             if (k0b >= 3 && k0b <= halfSize - 3) {
                 int ri2 = peakBin(s0Re, s0Im,
                         Math.max(1, k0b - 2), Math.min(halfSize, k0b + 2));
@@ -828,6 +857,80 @@ public class FftAnalyzer {
                 kFractional = kRefined;
             }
         }
+
+        // --- Dual-tone: choose F2's lobe de-rotation (individual κ vs single-ref) -
+        // The single-reference per-lobe de-rotation below snaps every bin to a
+        // harmonic of F1, so a SECOND tone F2 (not a harmonic) gets de-rotated by
+        // h·Φ(F1), h=round(κ_F2/κ_F1).  For certain spacings that rotates F2's frames
+        // ~180° apart and CANCELS it (the dual-tone IMD bug).  Try BOTH de-rotations
+        // over the segment and keep whichever leaves F2's spike STRONGER — the wrong
+        // one cancels it, so the strongest spike self-selects (a genuine harmonic
+        // comes out equal either way, so this never hurts the single-tone path).
+        final int F2_LOBE_HALF = 24;            // bins around F2's peak that ride its own phase
+        boolean f2Individual = false;
+        int     k2     = -1;
+        double  kappa2 = 0.0;
+        if (coherentAveraging && bestLen >= 2 && !Double.isNaN(outResult.fundamental2HzRefined)
+                && outResult.fundamental2HzRefined > 0.0 && kFractional > 0.0) {
+            kappa2 = outResult.fundamental2HzRefined / freqRes;
+            k2     = (int) Math.round(kappa2);
+            if (k2 >= 1 && k2 <= halfSize) {
+                int    h2   = Math.max(1, (int) Math.round(kappa2 / kFractional));
+                double saRe = 0.0, saIm = 0.0, sbRe = 0.0, sbIm = 0.0;
+                for (int f = bestStart; f < bestStart + bestLen; f++) {
+                    long base = (long) f * step;
+                    cachedFrameFft(samples, (int) base, fftSize, window, frameRe, frameIm);
+                    double re = frameRe[k2], im = frameIm[k2];
+                    double phiA = -2.0 * Math.PI * base * kFractional * h2 / (double) fftSize;  // h·Φ(F1)
+                    double phiB = -2.0 * Math.PI * base * kappa2          / (double) fftSize;    // Φ(κ_F2)
+                    double ca = Math.cos(phiA), sa = Math.sin(phiA);
+                    double cb = Math.cos(phiB), sb = Math.sin(phiB);
+                    saRe += re * ca - im * sa; saIm += re * sa + im * ca;
+                    sbRe += re * cb - im * sb; sbIm += re * sb + im * cb;
+                }
+                f2Individual = Math.hypot(sbRe, sbIm) > Math.hypot(saRe, saIm);
+            }
+        }
+        // Build the IMD-product grid: when F2 is a real second tone, every
+        // a·κ_F1 + b·κ_F2 (b≠0, |a|+|b| ≤ order) landing in band is de-rotated by
+        // a·Φ(F1) + b·Φ(F2) over its lobe — F2 itself is the (0,1) product.  This
+        // de-rotates the whole 2-tone IMD comb at its TRUE frequencies instead of
+        // snapping each product to the nearest F1-harmonic (which cancels the ones
+        // at a half-integer residual).  b=0 (F1 + its harmonics) stays single-ref.
+        final double f2Kappa = kappa2;
+        int   nProd = 0;
+        int[] prodA = null, prodB = null, imdIdx = null;
+        if (f2Individual) {
+            final int ORDER = Math.max(5, harmonicCount + 1);
+            int[] ta = new int[(2 * ORDER + 1) * (2 * ORDER + 1)];
+            int[] tb = new int[ta.length];
+            int[] tk = new int[ta.length];
+            int cap = 0;
+            for (int a = -ORDER; a <= ORDER; a++) {
+                for (int b = -ORDER; b <= ORDER; b++) {
+                    if (b == 0 || Math.abs(a) + Math.abs(b) > ORDER) continue;
+                    double kp = a * kFractional + b * kappa2;
+                    if (kp < 1.0 || kp > halfSize) continue;
+                    tk[cap] = (int) Math.round(kp);
+                    ta[cap] = a;
+                    tb[cap] = b;
+                    cap++;
+                }
+            }
+            prodA = Arrays.copyOf(ta, cap);
+            prodB = Arrays.copyOf(tb, cap);
+            nProd = cap;
+            if (scratchImdIdx == null || scratchImdIdx.length < fftSize) scratchImdIdx = new int[fftSize];
+            imdIdx = scratchImdIdx;
+            Arrays.fill(imdIdx, 0, fftSize, -1);
+            for (int p = 0; p < cap; p++) {
+                int lo2 = Math.max(1,        tk[p] - F2_LOBE_HALF);
+                int hi2 = Math.min(halfSize, tk[p] + F2_LOBE_HALF);
+                for (int k = lo2; k <= hi2; k++) imdIdx[k] = p;
+            }
+        }
+        final int   nProdF = nProd;
+        final int[] prodAF = prodA, prodBF = prodB, imdIdxF = imdIdx;
 
         // --- Pass 2: accumulate frames in the longest clean segment ----------
         // Also store per-frame corrected fundamental complex value so we can
@@ -873,6 +976,18 @@ public class FftAnalyzer {
                     hc[hMax - h] =  hc[hMax + h];          // exp(−j·h·Φ) = conjugate
                     hs[hMax - h] = -hs[hMax + h];
                 }
+                // IMD-grid de-rotation: each product lobe rides a·Φ(F1)+b·Φ(F2)
+                // (F2 itself is the (0,1) product); every other bin stays single-ref.
+                final double phi2 = (imdIdxF != null)
+                        ? -2.0 * Math.PI * (double) ((long) f * step) * f2Kappa / (double) fftSize : 0.0;
+                final double[] pcos = new double[nProdF];
+                final double[] psin = new double[nProdF];
+                for (int p = 0; p < nProdF; p++) {
+                    double ph = prodAF[p] * phi + prodBF[p] * phi2;     // a·Φ(F1) + b·Φ(F2)
+                    pcos[p] = Math.cos(ph);
+                    psin[p] = Math.sin(ph);
+                }
+                final int[]   imd  = imdIdxF;
                 final int frameIdx = f - bestStart;
                 final int ifb      = intFundBin;
                 final int k0       = intFundBinRounded;
@@ -880,10 +995,16 @@ public class FftAnalyzer {
                 final int hm       = hMax;
                 parallelChunks(fftSize, (lo, hi) -> {
                     for (int k = lo; k < hi; k++) {
-                        int kf = (k <= half) ? k : k - fftSize;        // signed frequency bin
-                        int h  = Math.round(kf / (float) k0);           // nearest harmonic lobe
-                        if (h >  hm) h =  hm; else if (h < -hm) h = -hm;
-                        double cr = hc[h + hm], ci = hs[h + hm];
+                        double cr, ci;
+                        int p = (imd != null) ? imd[k] : -1;
+                        if (p >= 0) {
+                            cr = pcos[p]; ci = psin[p];                 // IMD product: a·Φ1+b·Φ2
+                        } else {
+                            int kf = (k <= half) ? k : k - fftSize;     // signed frequency bin
+                            int h  = Math.round(kf / (float) k0);        // nearest harmonic lobe
+                            if (h >  hm) h =  hm; else if (h < -hm) h = -hm;
+                            cr = hc[h + hm]; ci = hs[h + hm];
+                        }
                         double cRe = frameRe[k] * cr - frameIm[k] * ci;
                         double cIm = frameRe[k] * ci + frameIm[k] * cr;
                         sumRe[k] += cRe;

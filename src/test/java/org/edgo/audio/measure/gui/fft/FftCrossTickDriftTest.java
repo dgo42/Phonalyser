@@ -232,6 +232,75 @@ class FftCrossTickDriftTest {
         FftAnalyzerWorker.FORK_NONTONE_DRIFT = true;
     }
 
+    /** Reproduces the EXACT live case: 19 & 20 kHz at 2 M FFT.  The bug is
+     *  intra-capture, so a single {@code analyze()} (2-frame) shows it directly —
+     *  no cross-tick needed.  Δ=5462 bins → 0.25·5462 = 1365.5 → 180° cancel under
+     *  the single-tone snap.  Logs F1/F2 and the second-tone refine so we can see
+     *  whether the dual-tone fix even engaged. */
+    @Test
+    void crossTickImd2M() {
+        final int FFT = 2_097_152;
+        int hop    = Math.max(1, (int) Math.round(FFT * (1.0 - OVERLAP.fraction)));
+        int winLen = FFT + hop;                              // averages = 2 (single capture = the bug)
+        double binHz = (double) SAMPLE_RATE / FFT;
+        int    f1Bin = 103765;                               // ≈19.0 kHz
+        int[]  dFbins = { 500, 2000, 5462, 10000, 30000 };   // F2−F1 spacing sweep (5462 = the live 1 kHz)
+        LOG.info("=== IMD 2M (NO HINT — auto-detect, live config): F1 bin {} (~19 kHz), F2 swept; "
+                + "multiTone, no commanded fundamental ===", f1Bin);
+
+        FftAnalyzer analyzer = new FftAnalyzer();
+        for (int dF : dFbins) {
+            int f2Bin = f1Bin + dF;
+            double[] freqs = { f1Bin * binHz, f2Bin * binHz };
+            double[] dbfs  = { -10.0, -10.0 };
+            float[] sig = synthesizeTones(SEED, winLen, 0.0, freqs, dbfs);
+            analyzer.setSamplesAbsStart(0);
+            analyzer.setSpectrumOnly(true);
+            analyzer.setMultiTone(true);
+            analyzer.setSecondToneHintHz(Double.NaN);        // NO hint — get-fund-from-gen OFF
+            FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT, HARMONIC_COUNT,
+                    WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);   // no expectedFundHz
+            long resid = f2Bin - Math.round((double) f2Bin / f1Bin) * (long) f1Bin;    // off-harmonic distance
+            LOG.info(String.format("  Δf=%6d bins:  F1=%.2f  F2=%.2f  (F2-F1=%6.2f dB)  fund2refHz=%.3f  residual=%d bins",
+                    dF, r.amplitudeDbFs[f1Bin], r.amplitudeDbFs[f2Bin],
+                    r.amplitudeDbFs[f2Bin] - r.amplitudeDbFs[f1Bin], r.fundamental2HzRefined, resid));
+        }
+    }
+
+    /** Confirms the IMD PRODUCTS (not just F2) are mis-de-rotated: F1/F2 + the
+     *  2nd/3rd-order products at known levels, single 2 M capture, live config.
+     *  Products at a·F1+b·F2 get snapped to the nearest F1-harmonic, so they cancel
+     *  asymmetrically by their residual — set vs measured shows which sink. */
+    @Test
+    void crossTickImdProducts2M() {
+        final int FFT = 2_097_152;
+        int hop    = Math.max(1, (int) Math.round(FFT * (1.0 - OVERLAP.fraction)));
+        int winLen = FFT + hop;
+        double binHz = (double) SAMPLE_RATE / FFT;
+        int f1 = 103765, f2 = 109227;                        // 19 kHz, 20 kHz
+        int[]    bins = { f1, f2, (f2 - f1), (2 * f1 - f2), (2 * f2 - f1), (f1 + f2) };
+        double[] dbfs = { -10.0, -10.0, -90.0, -85.0, -85.0, -90.0 };
+        String[] lbl  = { "F1", "F2", "F2-F1", "2F1-F2", "2F2-F1", "F1+F2" };
+        double[] freqs = new double[bins.length];
+        for (int i = 0; i < bins.length; i++) freqs[i] = bins[i] * binHz;
+
+        float[] sig = synthesizeTones(SEED, winLen, 0.0, freqs, dbfs);
+        FftAnalyzer analyzer = new FftAnalyzer();
+        analyzer.setSamplesAbsStart(0);
+        analyzer.setSpectrumOnly(true);
+        analyzer.setMultiTone(true);
+        analyzer.setSecondToneHintHz(freqs[1]);              // get-fund-from-gen ON
+        FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT, HARMONIC_COUNT,
+                WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, freqs[0]);
+        LOG.info("=== IMD PRODUCTS 2M (single capture): set vs measured ===");
+        for (int i = 0; i < bins.length; i++) {
+            long resid = bins[i] - Math.round((double) bins[i] / f1) * (long) f1;
+            LOG.info(String.format("  %-7s bin %7d set %6.1f → measured %8.2f dBFS   (resid %6d → %3.0f°)",
+                    lbl[i], bins[i], dbfs[i], r.amplitudeDbFs[bins[i]],
+                    resid, 360.0 * ((0.25 * resid) % 1.0)));
+        }
+    }
+
     /** Continuous sum of arbitrary tones {@code freqHz[i]} at {@code dbfs[i]}, all
      *  chirping at the SAME {@code driftPerSample} (one shared clock), plus noise +
      *  TPDF dither.  Re-seeded every 2^16 samples to the exact chirp phase. */
