@@ -302,7 +302,7 @@ public final class FftAnalyzerWorker {
      *  block's spectrum to the accepted history and catches exactly those
      *  cases.  The Δⁿ test is kept (toggle the flag) but off by default. */
     private static final boolean USE_TIME_DOMAIN_GLITCH     = false;
-    private static final boolean USE_SPECTRAL_DISCONTINUITY = false;
+    private static final boolean USE_SPECTRAL_DISCONTINUITY = true;
     /** Frequency-domain running-median glitch / stall rejector, run per tick
      *  on the freshly computed spectrum before it enters the cross-tick
      *  (vector) average — where one bad block injects a large complex error. */
@@ -1216,7 +1216,8 @@ public final class FftAnalyzerWorker {
      *  in milliseconds before the next attempt — derived from the
      *  configured overlap so the FFT update rate scales with the hop
      *  size. */
-    private int doAnalysis() {
+    @SuppressWarnings("unused")
+	private int doAnalysis() {
         startAnalyze = System.nanoTime();
         // Generator-state transition: wipe accumulated stats so the next
         // analysis starts with a clean slate.

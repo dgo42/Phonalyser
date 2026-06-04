@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Test-scope log config: Maven/Surefire picks this up automatically during
+     `mvn test`.  Mirrors the main config (Console + rolling file) for all tests,
+     and adds an INDEPENDENT file for the FFT harmonic-stability harness. -->
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} [%-5level] %msg%n"/>
+        </Console>
+        <RollingFile name="File"
+                     fileName="logs/phonalyser.log"
+                     filePattern="logs/phonalyser-%d{yyyy-MM-dd}.log">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} [%-5level] %logger{36} - %msg%n"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy/>
+            </Policies>
+        </RollingFile>
+        <!-- Independent log for the harmonic-stability test, overwritten each run. -->
+        <File name="FftHarmonicStabilityFile"
+              fileName="target/fft-harmonic-stability.log" append="false">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} %msg%n"/>
+        </File>
+    </Appenders>
+    <Loggers>
+        <!-- Its own file + console, kept OUT of the shared root file. -->
+        <Logger name="FftHarmonicStability" level="INFO" additivity="false">
+            <AppenderRef ref="FftHarmonicStabilityFile"/>
+            <AppenderRef ref="Console"/>
+        </Logger>
+        <Root level="INFO">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="File"/>
+        </Root>
+    </Loggers>
+</Configuration>

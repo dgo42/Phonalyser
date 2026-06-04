@@ -273,7 +273,7 @@ public class FftChartExporter {
         Font annFont = ChartStyle.ANNOTATION_FONT;
 
         XYTextAnnotation fundLabel = new XYTextAnnotation(
-                String.format(Locale.US, "H1 %.2f Hz", r.fundamentalHz),
+                String.format(Locale.US, "F %.2f Hz", r.fundamentalHz),
                 r.fundamentalHz,
                 r.fundamentalDbFs + dbFsToDbV + ChartStyle.ANNOTATION_Y_OFFSET);
         fundLabel.setFont(annFont);

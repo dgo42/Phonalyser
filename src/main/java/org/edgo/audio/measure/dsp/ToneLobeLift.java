@@ -110,6 +110,11 @@ public final class ToneLobeLift {
         if (!(peak > floor)) return mag * factor;
         if (!(mag > floor))  return mag;
         double t = Math.log(mag / floor) / Math.log(peak / floor);
+        // A bin standing ABOVE the assumed peak (t > 1) — a noise bin in the lobe
+        // of a weak tone whose true peak isn't at round(toneHz/binWidth) — must not
+        // be lifted MORE than the peak itself (factor^t ≫ factor), which spikes it
+        // to ~2× the cal gain.  Cap at the peak's own factor.
+        if (t > 1.0) t = 1.0;
         return mag * Math.pow(factor, t);
     }
 }

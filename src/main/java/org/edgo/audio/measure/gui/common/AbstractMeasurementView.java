@@ -950,7 +950,7 @@ public abstract class AbstractMeasurementView extends Canvas {
     protected String formatFrequency(double f) {
         if (!Double.isFinite(f) || f <= 0) return "—";
         if (f >= 1000) return String.format("%.2f kHz", f / 1000);
-        return String.format("%.1f Hz", f);
+        return String.format("%.2f Hz", f);
     }
 
     /** Fine-grained frequency formatter for crosshair readouts — four

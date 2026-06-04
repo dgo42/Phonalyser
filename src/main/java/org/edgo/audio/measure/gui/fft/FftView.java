@@ -1276,7 +1276,7 @@ public final class FftView extends AbstractFreqDomainView {
         // the harmonics within the calc-max-harmonic count are
         // labelled (matches the THD-tab's calcMaxHarmonic pref).
         gc.setForeground(color(ColorRole.HARMONIC_DOT));
-        drawHarmonicLabel(gc, plot, "H1 " + formatFrequency(r.fundamentalHzRefined),
+        drawHarmonicLabel(gc, plot, "F " + formatFrequency(r.fundamentalHzRefined),
                 r.fundamentalHzRefined, r.fundamentalDbFs,
                 unit, freqMin, freqMax, magTop, magBot, logFreq, fundRefDbV, binBw);
         if (r.harmonicHz != null && r.harmonicDbFs != null) {
@@ -1333,7 +1333,8 @@ public final class FftView extends AbstractFreqDomainView {
      *  floor, added to the DISPLAYED (calibrated) floor, so it lands at the
      *  right vertical position whatever calibration the chart applies.  A gate
      *  that fired this block is drawn thicker. */
-    private void drawDiscontinuityGates(GC gc, Rectangle plot, FftResult r,
+    @SuppressWarnings("unused")
+	private void drawDiscontinuityGates(GC gc, Rectangle plot, FftResult r,
                                         FftMagnitudeUnit unit, double freqMin, double freqMax,
                                         double magTop, double magBot, boolean logFreq,
                                         double refDbV, double binBw) {
