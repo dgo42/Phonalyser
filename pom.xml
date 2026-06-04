@@ -31,6 +31,11 @@
              Overridden by each OS profile below; the default keeps the
              build sane if no profile activates. -->
         <platform.id>local</platform.id>
+
+        <!-- JUnit tags excluded from the normal test run.  Slow/diagnostic
+             harnesses are @Tag("exploratory"); override to "" to run them, e.g.
+             mvn -o test -Dsurefire.excludedGroups= -Dtest=FftHarmonicStabilityTest#kappaRefitAB -->
+        <surefire.excludedGroups>exploratory</surefire.excludedGroups>
     </properties>
 
     <dependencies>
@@ -410,6 +415,14 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
+                <configuration>
+                    <!-- Exploratory DSP harnesses (e.g. FftHarmonicStabilityTest)
+                         are slow (minutes) and diagnostic, not regression tests.
+                         They are @Tag("exploratory") and excluded from the normal
+                         build.  Property-driven so it can be overridden on demand:
+                           mvn -o test -Dsurefire.excludedGroups= -Dtest=FftHarmonicStabilityTest#kappaRefitAB -->
+                    <excludedGroups>${surefire.excludedGroups}</excludedGroups>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

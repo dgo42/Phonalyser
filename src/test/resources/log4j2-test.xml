@@ -20,11 +20,20 @@
               fileName="target/fft-harmonic-stability.log" append="false">
             <PatternLayout pattern="%d{HH:mm:ss.SSS} %msg%n"/>
         </File>
+        <!-- Independent log for the cross-tick drift test, overwritten each run. -->
+        <File name="FftCrossTickDriftFile"
+              fileName="target/fft-cross-tick-drift.log" append="false">
+            <PatternLayout pattern="%d{HH:mm:ss.SSS} %msg%n"/>
+        </File>
     </Appenders>
     <Loggers>
         <!-- Its own file + console, kept OUT of the shared root file. -->
         <Logger name="FftHarmonicStability" level="INFO" additivity="false">
             <AppenderRef ref="FftHarmonicStabilityFile"/>
+            <AppenderRef ref="Console"/>
+        </Logger>
+        <Logger name="FftCrossTickDrift" level="INFO" additivity="false">
+            <AppenderRef ref="FftCrossTickDriftFile"/>
             <AppenderRef ref="Console"/>
         </Logger>
         <Root level="INFO">

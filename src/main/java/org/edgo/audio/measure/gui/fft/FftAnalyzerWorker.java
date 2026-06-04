@@ -586,10 +586,12 @@ public final class FftAnalyzerWorker {
      *  @return {@code true} if this tick was accumulated; {@code false} while
      *         the phase lock is still converging (the caller should then show
      *         the live single-tick spectrum, not the accumulator). */
-    private boolean accumulateIntoForeverBuffer(FftResult r,
-                                                long samplesAbsStart,
-                                                boolean coherent,
-                                                int targetN) {
+    // Package-private (not private) so the cross-tick drift harness
+    // (FftCrossTickDriftTest) can drive the real accumulator + PLL headlessly.
+    boolean accumulateIntoForeverBuffer(FftResult r,
+                                        long samplesAbsStart,
+                                        boolean coherent,
+                                        int targetN) {
         int fftSize  = r.fftSize;
         int halfSize = fftSize / 2;
         int N        = halfSize + 1;
@@ -826,17 +828,23 @@ public final class FftAnalyzerWorker {
      *  time-shift ramp, which leaves broadband noise to average down.  This is
      *  the honest "measure what was sampled" path for unknown / external
      *  multi-tone signals: the tones are found from the spectrum, not assumed. */
+    /** "Rotate the fork": pool the strong tones' shared clock-drift estimate and
+     *  apply it to the non-tone bins too, so the weak harmonics / IMD products don't
+     *  sink under drift.  Package-private + non-final so the cross-tick drift harness
+     *  can A/B it; the intended production state is on. */
+    static boolean FORK_NONTONE_DRIFT = true;
+
     private void accumulateMultiTone(FftResult r, int N, int weight, double delta) {
         int fftSize = r.fftSize;
-        double rampSlope = -2.0 * Math.PI * delta / (double) fftSize;
-        double stepRe = Math.cos(rampSlope);
-        double stepIm = Math.sin(rampSlope);
-        double phRe = 1.0, phIm = 0.0;   // plain time-shift phasor: exp(j·k·rampSlope)
         int nT = accumToneKappa.length;
         double[] cRe = new double[nT];
         double[] cIm = new double[nT];
         int[]    lo  = new int[nT];
         int[]    hi  = new int[nT];
+        // The strong tones share ONE clock: each tone's per-tone loop correction
+        // measures the same relative drift δ ≈ correction/delta.  Pool them
+        // (strength-weighted) below and de-rotate the NON-tone bins by delta·(1+δ).
+        double dsum = 0.0, wsum = 0.0;
         for (int t = 0; t < nT; t++) {
             double kappa = accumToneKappa[t];
             int    k0    = Math.min(Math.max(0, (int) Math.round(kappa)), N - 1);
@@ -884,9 +892,20 @@ public final class FftAnalyzerWorker {
             cIm[t] = sr;
             lo[t] = Math.max(0,     k0 - TONE_LOBE_HALF_BINS);
             hi[t] = Math.min(N - 1, k0 + TONE_LOBE_HALF_BINS);
+            if (FORK_NONTONE_DRIFT && accumRe != null && accumFrames > 0 && Math.abs(delta) > 1.0) {
+                double w = Math.hypot(accumRe[k0], accumIm[k0]);   // strength weight
+                dsum += w * toneDroppedSamples[t] / delta;
+                wsum += w;
+            }
         }
         // One re-sync realign serves every tone; clear after they've all used it.
         gapRecoverPending = false;
+        // Non-tone bins: plain time-shift, drift-corrected by the pooled δ so the
+        // weak harmonics track the same clock as the strong teeth (else they sink).
+        double deltaEff  = wsum > 0.0 ? delta * (1.0 + dsum / wsum) : delta;
+        double rampSlope = -2.0 * Math.PI * deltaEff / (double) fftSize;
+        double stepRe = Math.cos(rampSlope), stepIm = Math.sin(rampSlope);
+        double phRe = 1.0, phIm = 0.0;   // exp(j·k·rampSlope)
         int curT = 0;
         for (int k = 0; k < N; k++) {
             while (curT < nT && k > hi[curT]) curT++;
@@ -1010,7 +1029,7 @@ public final class FftAnalyzerWorker {
      *  should run {@link FftAnalyzer#recomputeStats} so the fundamental,
      *  harmonic table, THD/SNR are re-derived from the cumulative spectrum
      *  (the per-tick stats were just one tick's contribution). */
-    private void overlayAccumulatorOnto(FftResult r) {
+    void overlayAccumulatorOnto(FftResult r) {   // package-private for the cross-tick drift harness
         if (!accumHasData || accumFrames <= 0) return;
         int halfSize = r.fftSize / 2;
         int N        = halfSize + 1;

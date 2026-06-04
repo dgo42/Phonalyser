@@ -4,6 +4,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -32,6 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>Every generator/FFT knob is a {@code static final} constant below.
  */
+@Tag("exploratory")   // slow diagnostic harness — excluded from the normal build (see pom surefire)
 class FftHarmonicStabilityTest {
 
     // ── Generator & FFT settings (tune here) ───────────────────────────────

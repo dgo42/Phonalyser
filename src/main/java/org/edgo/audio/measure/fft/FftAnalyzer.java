@@ -191,6 +191,64 @@ public class FftAnalyzer {
         }
     }
 
+    /**
+     * Full-integration refinement of the fundamental's fractional bin κ.  The
+     * coarse estimate is a single one-hop phase difference; its residual error δk
+     * is applied as a linear de-rotation ramp across the whole segment, so on a
+     * long coherent average the harmonics de-cohere (∝ sinc(π·h·δk·M·step/N)) and
+     * read low — the slow harmonic decline seen on long captures.  Here κ is
+     * measured from the SLOPE of the fundamental's phase at {@code refIntBin} over
+     * every clean-segment frame: a {@code (bestLen-1)·step} baseline instead of one
+     * hop, shrinking δk by ~that factor.  The phase RESIDUAL relative to the coarse
+     * κ stays within ±π over the segment (no unwrapping), and the sample-offsets are
+     * centred so the regression stays well-conditioned.  Returns the refined κ.
+     *
+     * <p>Only the fundamental BIN is needed per frame, so a single-bin Goertzel
+     * (O(N) per frame, ~6% of a full FFT) replaces the FFT — no extra spectra.  The
+     * Goertzel result carries a constant phase factor e^{−jω}; being frame-independent
+     * it cancels in the phase SLOPE and does not bias κ.  The residuals are re-centred
+     * on their circular mean before the fit so an arbitrary fundamental phase landing
+     * near ±π cannot wrap mid-segment and corrupt the slope.
+     */
+    private double refineKappaOverSegment(float[] samples, double[] window, int fftSize,
+                                          int step, int bestStart, int bestLen,
+                                          int refIntBin, double kCoarse) {
+        final double w     = 2.0 * Math.PI * refIntBin / fftSize;
+        final double cw    = Math.cos(w);
+        final double sw    = Math.sin(w);
+        final double coeff = 2.0 * cw;
+        double[] resid  = new double[bestLen];
+        double   sumCos = 0.0, sumSin = 0.0;
+        for (int f = bestStart; f < bestStart + bestLen; f++) {
+            int base = f * step;
+            double sp = 0.0, sp2 = 0.0;                         // Goertzel state at refIntBin
+            for (int n = 0; n < fftSize; n++) {
+                double s = samples[base + n] * window[n] + coeff * sp - sp2;
+                sp2 = sp;
+                sp  = s;
+            }
+            double ph       = Math.atan2(sp2 * sw, sp - sp2 * cw);
+            double expected = 2.0 * Math.PI * kCoarse * base / (double) fftSize;
+            double r        = Math.IEEEremainder(ph - expected, 2.0 * Math.PI);
+            resid[f - bestStart] = r;
+            sumCos += Math.cos(r);
+            sumSin += Math.sin(r);
+        }
+        double meanAngle = Math.atan2(sumSin, sumCos);          // circular mean → wrap-safe centre
+        double meanBase  = ((double) bestStart + (bestStart + bestLen - 1)) * 0.5 * step;
+        double sDbR = 0.0, sDb2 = 0.0;
+        for (int f = bestStart; f < bestStart + bestLen; f++) {
+            double rc = Math.IEEEremainder(resid[f - bestStart] - meanAngle, 2.0 * Math.PI);
+            double db = (double) f * step - meanBase;
+            sDbR += db * rc;
+            sDb2 += db * db;
+        }
+        if (!(sDb2 > 0.0)) {
+            return kCoarse;
+        }
+        return kCoarse + (sDbR / sDb2) * fftSize / (2.0 * Math.PI);
+    }
+
 
     // =========================================================================
     // Result — extracted to the standalone top-level class FftResult so a
@@ -746,6 +804,28 @@ public class FftAnalyzer {
                     kf2 = MathUtil.parabolicBinInterp(s0Re, s0Im, ri2, fftSize);
                 }
                 outResult.fundamental2HzRefined = kf2 * freqRes;
+            }
+        }
+
+        // --- Full-integration κ refit (long-baseline) ------------------------
+        // The coarse κ above is a one-hop phase difference; its residual error is
+        // applied as a de-rotation ramp across the whole segment, so on long
+        // averages the harmonics de-cohere and read low.  Refine κ by regressing
+        // the fundamental phase over EVERY clean frame — a (bestLen-1)·step
+        // baseline vs one hop.  See refineKappaOverSegment.
+        if (coherentAveraging && bestLen >= 4 && step > 0) {
+            double kRefined = refineKappaOverSegment(samples, window, fftSize, step,
+                    bestStart, bestLen, refIntBin, kFractional);
+            if (Math.abs(kRefined - kFractional) < 0.5) {       // sanity: reject a wild fit
+                if (log.isInfoEnabled()) {
+                    log.info("k_f full-segment refit over {} frames: {} -> {} ({} bins, {} Hz)",
+                            bestLen,
+                            String.format(Locale.US, "%.6f", kFractional),
+                            String.format(Locale.US, "%.6f", kRefined),
+                            String.format(Locale.US, "%.2e", kRefined - kFractional),
+                            String.format(Locale.US, "%.6f", (kRefined - kFractional) * freqRes));
+                }
+                kFractional = kRefined;
             }
         }
 
