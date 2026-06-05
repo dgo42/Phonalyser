@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.gui.helpviewer;
 
 import lombok.extern.log4j.Log4j2;
@@ -91,6 +109,8 @@ public final class HelpViewer {
             "img/Preferences FFT.png",
     };
 
+    private static volatile HelpViewer instance;
+
     /** Single live instance — second invocations re-focus rather than
      *  open a duplicate window. */
     private Shell openShell;
@@ -98,8 +118,6 @@ public final class HelpViewer {
      *  the index.html / chapter files for the active language).
      *  Resolved once per JVM lifetime — see {@link #resolveLangRoot}. */
     private volatile Path langRoot;
-
-    private static volatile HelpViewer instance;
 
     private HelpViewer() {}
 

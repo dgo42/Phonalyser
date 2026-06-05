@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.gui.generator;
 
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -58,18 +76,16 @@ import org.edgo.audio.measure.enums.GenChangeCause;
 @Log4j2
 public final class GeneratorPane {
 
-    /**
-     * Resolves the set of dither bit options for the given output bit
-     * depth: every integer from 0 to {@code outputBitDepth} inclusive.
-     * 0 is rendered as "Off" in the combo; values above the DAC's
-     * resolution would have no effect and are dropped.
-     */
-    private int[] ditherBitsFor(int outputBitDepth) {
-        int cap = Math.max(0, outputBitDepth);
-        int[] out = new int[cap + 1];
-        for (int i = 0; i <= cap; i++) out[i] = i;
-        return out;
-    }
+    /** Minimum width (px) the pane will accept in the horizontal split. */
+    public static final int MIN_WIDTH_PX = 200;
+
+    /** Pixel height of the main play button at the bottom of the pane. */
+    private static final int PLAY_LED_SIZE       = 33;
+    /** Pixel height of the small play button in the Load-from row. */
+    private static final int TINY_LED_SIZE       = 16;
+    /** Pixel height of the floppy / folder glyphs that sit next to the
+     *  file-path text fields. */
+    private static final int FILE_ICON_HEIGHT    = 16;
 
     /** Current dither values shown in the combo (rebuilt when output bit depth changes). */
     private int[] ditherBits;
@@ -120,13 +136,6 @@ public final class GeneratorPane {
     private final Text            playFromPathField;
     private final Button          playFromBtn;
     private final Button          playFromLoopBtn;
-    /** Pixel height of the main play button at the bottom of the pane. */
-    private static final int PLAY_LED_SIZE       = 33;
-    /** Pixel height of the small play button in the Load-from row. */
-    private static final int TINY_LED_SIZE       = 16;
-    /** Pixel height of the floppy / folder glyphs that sit next to the
-     *  file-path text fields. */
-    private static final int FILE_ICON_HEIGHT    = 16;
 
     private final Image           tinyPlayDimImg;
     private final Image           tinyPlayLitImg;
@@ -183,6 +192,19 @@ public final class GeneratorPane {
      *  Same FLL_TRIM republish so the FFT worker's averaging
      *  accumulator survives the per-tone correction. */
     private Consumer<Double> freqTrim2Listener;
+
+    /** True when the pane is collapsed.  See {@link #setCollapsed(boolean)}. */
+    private boolean    collapsed;
+    /** Per-child visibility snapshot taken when the pane collapses,
+     *  restored verbatim on expand. */
+    private boolean[]  preCollapseChildVisible;
+    private boolean[]  preCollapseChildExclude;
+    /** Current pane pixel width as last seen by the sash filter, seeded
+     *  from prefs in the constructor.  {@code -1} = not yet measured. */
+    private int        paneWidthPx = -1;
+    /** Pixel width remembered at collapse time so {@link #setCollapsed}
+     *  can restore it on expand. */
+    private int        preCollapseWidthPx;
 
     public GeneratorPane(Composite parent) {
         // Seed the tracked pane width from prefs BEFORE the host
@@ -1045,9 +1067,6 @@ public final class GeneratorPane {
 
     public Composite getGroup() { return group; }
 
-    /** Minimum width (px) the pane will accept in the horizontal split. */
-    public static final int MIN_WIDTH_PX = 200;
-
     /** True when this pane is collapsed to just its narrow title strip. */
     public boolean isCollapsed() { return collapsed; }
 
@@ -1112,19 +1131,6 @@ public final class GeneratorPane {
         }
         group.layout(true);
     }
-
-    /** True when the pane is collapsed.  See {@link #setCollapsed(boolean)}. */
-    private boolean    collapsed;
-    /** Per-child visibility snapshot taken when the pane collapses,
-     *  restored verbatim on expand. */
-    private boolean[]  preCollapseChildVisible;
-    private boolean[]  preCollapseChildExclude;
-    /** Current pane pixel width as last seen by the sash filter, seeded
-     *  from prefs in the constructor.  {@code -1} = not yet measured. */
-    private int        paneWidthPx = -1;
-    /** Pixel width remembered at collapse time so {@link #setCollapsed}
-     *  can restore it on expand. */
-    private int        preCollapseWidthPx;
 
     /** True when the audio generator is currently producing a signal —
      *  either the tone {@link GeneratorController} or the WAV file
@@ -1997,6 +2003,19 @@ public final class GeneratorPane {
             default:
                 return true;
         }
+    }
+
+    /**
+     * Resolves the set of dither bit options for the given output bit
+     * depth: every integer from 0 to {@code outputBitDepth} inclusive.
+     * 0 is rendered as "Off" in the combo; values above the DAC's
+     * resolution would have no effect and are dropped.
+     */
+    private int[] ditherBitsFor(int outputBitDepth) {
+        int cap = Math.max(0, outputBitDepth);
+        int[] out = new int[cap + 1];
+        for (int i = 0; i <= cap; i++) out[i] = i;
+        return out;
     }
 
     /** Re-populates the dither combo with {@link #ditherBits} and selects {@code currentBits} (or 0 / "Off" if unavailable). */

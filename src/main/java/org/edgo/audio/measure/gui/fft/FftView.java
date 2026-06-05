@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.gui.fft;
 
 import java.util.Arrays;
@@ -67,6 +85,26 @@ import lombok.extern.log4j.Log4j2;
  */
 @Log4j2
 public final class FftView extends AbstractFreqDomainView {
+
+    /** How long the rejection warning keeps blinking after the last hit. */
+    private static final long REJECTION_WARN_NANOS = 10_000_000_000L;
+
+    // ─── Plot region constants ───────────────────────────────────────────
+    /** Pixel margins around the plotting area inside the canvas.
+     *  Sized for the widest expected axis label — SI-prefix V values
+     *  like "100 mV" / "31.6 µV" — plus a few pixels of breathing room
+     *  between the label and the plot frame. */
+    private static final int MARGIN_LEFT   = 68;
+    /** Zero top margin — the unit caption is drawn INSIDE the plot
+     *  area at the top, so the chart frame sits flush against the
+     *  pane title (no gap). */
+    private static final int MARGIN_TOP    = 0;
+    private static final int MARGIN_BOTTOM = 28;
+    /** THD table overlay y offset from top of canvas. */
+    private static final int TABLE_TOP_Y = 5 + BTN_H + 6;
+
+    /** Left padding (px) for the THD table inside the external window. */
+    private static final int EXT_LEFT_PAD = 4;
 
     // ─── Fonts ────────────────────────────────────────────────────────────
     private Font monoFont;
@@ -245,31 +283,37 @@ public final class FftView extends AbstractFreqDomainView {
     private BlinkBanner banner;
     /** Expiry ({@code System.nanoTime}); {@code 0} = persistent (no timer). */
     private long        bannerUntilNanos;
-    /** How long the rejection warning keeps blinking after the last hit. */
-    private static final long REJECTION_WARN_NANOS = 10_000_000_000L;
 
     // ─── External tool window ────────────────────────────────────────────
     private boolean    tableExtracted;
     private ToolWindow distortionWindow;   // extracted THD/IMD table window (when extracted)
 
+    /** Latest published analysis result — a deep copy taken on the
+     *  worker thread inside {@code publishResult} before it crossed
+     *  the bus.  {@code null} before the first successful tick.
+     *  Mutating this snapshot is safe: the worker no longer holds a
+     *  reference, so paint code and the pane's Save-CSV / screenshot
+     *  paths can read or even mutate it without coordinating with the
+     *  analyser.  Lombok provides a public {@code getLastResult}
+     *  accessor; the offscreen screenshot pane injects this and the
+     *  IMD snapshot via {@link #copySnapshotFrom(FftView)} without
+     *  running the analysis loop. */
+    @Getter
+    private FftResult lastResult;
+
+    /** Latest dual-tone IMD result computed from {@link #lastResult}
+     *  whenever the generator form is {@code DUAL_TONE}.  {@code null}
+     *  when single-tone — the THD table is drawn in that case
+     *  instead.  Recomputed synchronously on the UI thread inside
+     *  {@link #onResultReady}; the math (peak-interp + ~24 bin reads)
+     *  is microseconds-scale so it doesn't move the paint budget. */
+    @Getter
+    private ImdResult lastImd;
+
     // Static-layer paint cache (traceBuffer Image + fingerprint) now
     // lives in AbstractFreqDomainView.  Mouse-move / crosshair redraws
     // hit the blit path via paintCachedStatic and never re-walk the
     // 64 k spectrum bins.
-
-    // ─── Plot region constants ───────────────────────────────────────────
-    /** Pixel margins around the plotting area inside the canvas.
-     *  Sized for the widest expected axis label — SI-prefix V values
-     *  like "100 mV" / "31.6 µV" — plus a few pixels of breathing room
-     *  between the label and the plot frame. */
-    private static final int MARGIN_LEFT   = 68;
-    /** Zero top margin — the unit caption is drawn INSIDE the plot
-     *  area at the top, so the chart frame sits flush against the
-     *  pane title (no gap). */
-    private static final int MARGIN_TOP    = 0;
-    private static final int MARGIN_BOTTOM = 28;
-    /** THD table overlay y offset from top of canvas. */
-    private static final int TABLE_TOP_Y = 5 + BTN_H + 6;
 
     public FftView(Composite parent) {
         // Pass prefs-driven BACKGROUND + SPECTRUM through the override
@@ -558,28 +602,6 @@ public final class FftView extends AbstractFreqDomainView {
     // =========================================================================
     // Public API
     // =========================================================================
-
-    /** Latest published analysis result — a deep copy taken on the
-     *  worker thread inside {@code publishResult} before it crossed
-     *  the bus.  {@code null} before the first successful tick.
-     *  Mutating this snapshot is safe: the worker no longer holds a
-     *  reference, so paint code and the pane's Save-CSV / screenshot
-     *  paths can read or even mutate it without coordinating with the
-     *  analyser.  Lombok provides a public {@code getLastResult}
-     *  accessor; the offscreen screenshot pane injects this and the
-     *  IMD snapshot via {@link #copySnapshotFrom(FftView)} without
-     *  running the analysis loop. */
-    @Getter
-    private FftResult lastResult;
-
-    /** Latest dual-tone IMD result computed from {@link #lastResult}
-     *  whenever the generator form is {@code DUAL_TONE}.  {@code null}
-     *  when single-tone — the THD table is drawn in that case
-     *  instead.  Recomputed synchronously on the UI thread inside
-     *  {@link #onResultReady}; the math (peak-interp + ~24 bin reads)
-     *  is microseconds-scale so it doesn't move the paint budget. */
-    @Getter
-    private ImdResult lastImd;
 
     /** Copies the paint-relevant snapshot — last spectrum result, the
      *  dual-tone IMD slot and the THD/IMD table-mode flag — from
@@ -2633,9 +2655,6 @@ public final class FftView extends AbstractFreqDomainView {
         w.setLocation(pb.x + pb.width - ws.x - 24, pb.y + 96);
         w.open();
     }
-
-    /** Left padding (px) for the THD table inside the external window. */
-    private static final int EXT_LEFT_PAD = 4;
 
     /** Computes the natural client size of the extracted THD table —
      *  used by {@link #createToolWindow} so the tool window fits its

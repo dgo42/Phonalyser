@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.gui.generator;
 
 import org.eclipse.swt.SWT;
@@ -41,6 +59,10 @@ import org.edgo.audio.measure.gui.interfaces.Stepper;
  */
 public final class NumericStepField extends Composite {
 
+    private static final Pattern NUMERIC_NO_UNIT = Pattern.compile(
+            "[+-]?(\\d+([.,]\\d*)?|[.,]\\d*)");
+    private static final Pattern NUMERIC_WITH_UNIT = Pattern.compile(
+            "[+-]?(\\d+([.,]\\d*)?|[.,]\\d*)\\s*([a-zA-Zµμ°Ω%]*)?");
 
     private final Text       field;
     private final Canvas     upBtn;
@@ -161,11 +183,6 @@ public final class NumericStepField extends Composite {
             if (!matchesNumeric(after, allowUnit)) e.doit = false;
         });
     }
-
-    private static final Pattern NUMERIC_NO_UNIT = Pattern.compile(
-            "[+-]?(\\d+([.,]\\d*)?|[.,]\\d*)");
-    private static final Pattern NUMERIC_WITH_UNIT = Pattern.compile(
-            "[+-]?(\\d+([.,]\\d*)?|[.,]\\d*)\\s*([a-zA-Zµμ°Ω%]*)?");
 
     private static boolean matchesNumeric(String s, boolean allowUnit) {
         return (allowUnit ? NUMERIC_WITH_UNIT : NUMERIC_NO_UNIT).matcher(s).matches();

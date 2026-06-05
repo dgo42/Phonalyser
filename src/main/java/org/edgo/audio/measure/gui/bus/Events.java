@@ -1,3 +1,20 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package org.edgo.audio.measure.gui.bus;
 
 import org.edgo.audio.measure.enums.GenChangeCause;
@@ -13,8 +30,6 @@ import org.edgo.audio.measure.enums.GenChangeCause;
  */
 public final class Events {
 
-    private Events() {}
-
     /** Fired by the FFT pane when the user picks a new FFT length.
      *  No payload — subscribers read the fresh value from
      *  {@code Preferences.instance().getFftLength()}. */
@@ -25,13 +40,6 @@ public final class Events {
      *  {@code PaneTitle}'s constructor.  Subscribers pick their pane
      *  by ID — one subscriber per ID. */
     public static final String PANE_TITLE_CLICK_PREFIX = "paneTitle.click.";
-
-    /** Event name for a click on the title bar with {@code id}.  Use
-     *  this in {@code subscribe} / {@code publish} calls so the
-     *  format-string lives in exactly one place. */
-    public static String paneTitleClick(int id) {
-        return PANE_TITLE_CLICK_PREFIX + id;
-    }
 
     /** Pane-title IDs.  Each pane picks a distinct value and passes it
      *  to {@code new PaneTitle(...)}; subscribers route by ID. */
@@ -187,4 +195,13 @@ public final class Events {
      *  subscribers read {@code FftCalibrationStore}.  The view re-derives
      *  the calibrated spectrum / harmonic dot positions on next paint. */
     public static final String FFT_CALIBRATION_CHANGED = "fft.calibration.changed";
+
+    private Events() {}
+
+    /** Event name for a click on the title bar with {@code id}.  Use
+     *  this in {@code subscribe} / {@code publish} calls so the
+     *  format-string lives in exactly one place. */
+    public static String paneTitleClick(int id) {
+        return PANE_TITLE_CLICK_PREFIX + id;
+    }
 }

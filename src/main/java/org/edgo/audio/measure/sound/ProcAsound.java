@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.sound;
 
 import lombok.extern.log4j.Log4j2;
@@ -51,13 +69,28 @@ import java.util.regex.Pattern;
 @Log4j2
 public final class ProcAsound {
 
-    private ProcAsound() {}
-
     private static volatile boolean scanned;
     private static volatile int[] inputRates   = new int[0];
     private static volatile int[] inputDepths  = new int[0];
     private static volatile int[] outputRates  = new int[0];
     private static volatile int[] outputDepths = new int[0];
+
+    /** Matches {@code "Node 0xNN [Type Words] wcaps 0xMM: Description"}.
+     *  Group 1 = bracketed node type ({@code Audio Output} / {@code Audio Input}).
+     *  Group 2 = everything after the bracket (used to detect "Digital"
+     *  S/PDIF nodes — their rates / bits don't reflect the analog
+     *  ADC/DAC capability we actually want). */
+    private static final Pattern NODE_HEADER =
+            Pattern.compile("^Node\\s+0x[0-9a-fA-F]+\\s+\\[([^\\]]+)\\](.*)");
+
+    /** Matches the USB-Audio format header — e.g. {@code "Format: S24_3LE"}.
+     *  We pull the number that follows the leading {@code S}.  Works for
+     *  {@code S16_LE}, {@code S24_LE}, {@code S24_3LE}, {@code S32_LE},
+     *  {@code U8}, etc. */
+    private static final Pattern USB_FORMAT =
+            Pattern.compile("(?:Format|Format \\d+)\\s*:\\s*[SU](\\d+)");
+
+    private ProcAsound() {}
 
     /** Sample rates (Hz) the hardware supports for the requested
      *  direction, or an empty array on non-Linux / unreadable
@@ -77,14 +110,6 @@ public final class ProcAsound {
         if (!scanned) scan();
         return (output ? outputDepths : inputDepths).clone();
     }
-
-    /** Matches {@code "Node 0xNN [Type Words] wcaps 0xMM: Description"}.
-     *  Group 1 = bracketed node type ({@code Audio Output} / {@code Audio Input}).
-     *  Group 2 = everything after the bracket (used to detect "Digital"
-     *  S/PDIF nodes — their rates / bits don't reflect the analog
-     *  ADC/DAC capability we actually want). */
-    private static final Pattern NODE_HEADER =
-            Pattern.compile("^Node\\s+0x[0-9a-fA-F]+\\s+\\[([^\\]]+)\\](.*)");
 
     private enum NodeKind { OUTPUT, INPUT, OTHER }
 
@@ -124,13 +149,6 @@ public final class ProcAsound {
         log.info("/proc/asound hardware caps: in.rates={}, in.bits={}, out.rates={}, out.bits={}",
                 inR, inB, outR, outB);
     }
-
-    /** Matches the USB-Audio format header — e.g. {@code "Format: S24_3LE"}.
-     *  We pull the number that follows the leading {@code S}.  Works for
-     *  {@code S16_LE}, {@code S24_LE}, {@code S24_3LE}, {@code S32_LE},
-     *  {@code U8}, etc. */
-    private static final Pattern USB_FORMAT =
-            Pattern.compile("(?:Format|Format \\d+)\\s*:\\s*[SU](\\d+)");
 
     /** Parses a USB-Audio {@code /proc/asound/cardN/streamN} file.
      *

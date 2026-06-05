@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.dsp;
 
 import java.util.Arrays;
@@ -63,6 +81,19 @@ public final class MainsCombFilter {
     /** A mains line is accepted only when its Goertzel power beats the
      *  scanned-baseline median by this factor (≈ 6 dB). */
     private static final double LOCK_RATIO = 4.0;
+    /** EWMA weight on the existing lock (vs. a fresh detection).  High, because
+     *  mains is very stable (50/60 Hz ± a few mHz over seconds): heavy averaging
+     *  (≈ 1/(1−w) ≈ 33 detections) keeps the locked f0 — and hence every notch
+     *  position k·f0 — from jittering, while still tracking the slow real drift. */
+    private static final double LOCK_SMOOTH = 0.97;
+    /** A detection farther than this from the current lock is an outlier. */
+    private static final double MAX_LOCK_DRIFT_HZ = 0.5;
+    /** Plot floor (dB): a notch reads as a clean gap to this depth, not −∞. */
+    private static final double CORR_FLOOR_DB     = -120.0;
+    /** Only harmonics below this are notched (real hum band; protects tones). */
+    private static final double CORR_MAX_HZ       = 2500.0;
+    /** Rebuild the cached response only once f0 drifts past this. */
+    private static final double CORR_F0_REBUILD_HZ = 0.005;
 
     private final int    sampleRate;
     /** Per-sample-delay pole radius ρ = exp(−π·BW/fs); α = ρ^N. */
@@ -88,17 +119,15 @@ public final class MainsCombFilter {
      *  line holds the existing lock rather than dropping it.  Survives
      *  {@link #reset} (only the delay lines are cleared there). */
     private double lockHz = Double.NaN;
-    /** EWMA weight on the existing lock (vs. a fresh detection).  High, because
-     *  mains is very stable (50/60 Hz ± a few mHz over seconds): heavy averaging
-     *  (≈ 1/(1−w) ≈ 33 detections) keeps the locked f0 — and hence every notch
-     *  position k·f0 — from jittering, while still tracking the slow real drift. */
-    private static final double LOCK_SMOOTH = 0.97;
-    /** A detection farther than this from the current lock is an outlier. */
-    private static final double MAX_LOCK_DRIFT_HZ = 0.5;
 
     /** Scratch for the windowed reference inside {@link #track}; grown
      *  on demand to the largest reference length seen. */
     private double[] windowScratch = new double[0];
+
+    private double[] corrDb;          // cached per-bin dB delta (0 above the band)
+    private double   corrF0 = Double.NaN;
+    private double   corrRes;
+    private int      corrMaxBin;
 
     /**
      * @param sampleRate  capture sample rate (Hz)
@@ -165,18 +194,6 @@ public final class MainsCombFilter {
     // thread.  Band-limited to CORR_MAX_HZ: real mains hum lives low, so this
     // removes it without notching higher signal tones, and it keeps the f0-keyed
     // cache stable (high comb teeth would otherwise jump bins on a milli-Hz drift).
-
-    /** Plot floor (dB): a notch reads as a clean gap to this depth, not −∞. */
-    private static final double CORR_FLOOR_DB     = -120.0;
-    /** Only harmonics below this are notched (real hum band; protects tones). */
-    private static final double CORR_MAX_HZ       = 2500.0;
-    /** Rebuild the cached response only once f0 drifts past this. */
-    private static final double CORR_F0_REBUILD_HZ = 0.005;
-
-    private double[] corrDb;          // cached per-bin dB delta (0 above the band)
-    private double   corrF0 = Double.NaN;
-    private double   corrRes;
-    private int      corrMaxBin;
 
     /** Divides the cached, band-limited, peak-normalized response (in dB) into a
      *  magnitude spectrum in place: {@code dbFs} (and {@code dbV}, the same

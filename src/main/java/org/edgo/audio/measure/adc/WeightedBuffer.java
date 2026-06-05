@@ -1,3 +1,20 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 package org.edgo.audio.measure.adc;
 
 import java.io.BufferedReader;
@@ -32,19 +49,6 @@ public class WeightedBuffer {
     private static final int CHUNK_BITS = 29;
     private static final int CHUNK_SIZE = 1 << CHUNK_BITS;
     private static final int CHUNK_MASK = CHUNK_SIZE - 1;
-
-    @Getter private final int  bitDepth;
-    @Getter private final long binCount;
-
-    // ≤ 24-bit storage
-    @Getter private final float[] bins;
-
-    // 32-bit storage
-    @Getter private final float[][] chunks;
-
-    // Code map built by buildCodeMap(): raw code → corrected code
-    private float[]   codeMapBins;    // ≤ 24-bit
-    private float[][] codeMapChunks;  // 32-bit
 
     @SuppressWarnings("unused")
     private static double[] MOVING_AVERAGE_12_FIR = new double[] {
@@ -89,6 +93,19 @@ public class WeightedBuffer {
         0.000626896741887000,
         -0.000000000000000001
     };
+
+    @Getter private final int  bitDepth;
+    @Getter private final long binCount;
+
+    // ≤ 24-bit storage
+    @Getter private final float[] bins;
+
+    // 32-bit storage
+    @Getter private final float[][] chunks;
+
+    // Code map built by buildCodeMap(): raw code → corrected code
+    private float[]   codeMapBins;    // ≤ 24-bit
+    private float[][] codeMapChunks;  // 32-bit
 
     public WeightedBuffer(int bitDepth) {
         this.bitDepth = bitDepth;

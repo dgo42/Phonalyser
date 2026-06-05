@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.fft;
 
 import org.apache.logging.log4j.LogManager;
@@ -60,6 +78,23 @@ class FftHarmonicStabilityTest {
     private static final long       SEED           = 20_260_604L;
 
     private static final Logger LOG = LogManager.getLogger("FftHarmonicStability");
+
+    // ── Frames × overlap sweep ─────────────────────────────────────────────
+    private static final int[]        FRAMES_SWEEP      = {25, 100, 400};
+    private static final FftOverlap[] OVERLAP_SWEEP     = {
+            FftOverlap.PCT_0, FftOverlap.PCT_50, FftOverlap.PCT_75, FftOverlap.PCT_87_5
+    };
+    private static final int          SWEEP_COLLECTIONS = 8;
+
+    // ── Plateau check: spread vs frames at FIXED overlap ───────────────────
+    private static final int[]      PLATEAU_FRAMES  = {25, 100, 400, 1600};
+    private static final FftOverlap PLATEAU_OVERLAP = FftOverlap.PCT_75;   // fixed → window factor constant
+    private static final int        PLATEAU_SEEDS   = 40;
+
+    // ── κ-refit A/B: "rotate the fork" ─────────────────────────────────────
+    private static final int[] KAPPA_FRAMES = {400, 1600};   // near-minimum, up-branch
+    private static final int   KAPPA_SEEDS  = 24;
+    private static final FftOverlap KAPPA_OVERLAP = FftOverlap.PCT_75;
 
     @Test
     void harmonicStabilityAcrossCollections() {
@@ -139,13 +174,6 @@ class FftHarmonicStabilityTest {
         assertEquals(COLLECTIONS, thd.length);
     }
 
-    // ── Frames × overlap sweep ─────────────────────────────────────────────
-    private static final int[]        FRAMES_SWEEP      = {25, 100, 400};
-    private static final FftOverlap[] OVERLAP_SWEEP     = {
-            FftOverlap.PCT_0, FftOverlap.PCT_50, FftOverlap.PCT_75, FftOverlap.PCT_87_5
-    };
-    private static final int          SWEEP_COLLECTIONS = 8;
-
     /**
      * Depth-vs-stability map: for each (frames × overlap) cell, the peak-pick
      * spread of every harmonic across {@link #SWEEP_COLLECTIONS} independent noise
@@ -179,11 +207,6 @@ class FftHarmonicStabilityTest {
         }
     }
 
-    // ── Plateau check: spread vs frames at FIXED overlap ───────────────────
-    private static final int[]      PLATEAU_FRAMES  = {25, 100, 400, 1600};
-    private static final FftOverlap PLATEAU_OVERLAP = FftOverlap.PCT_75;   // fixed → window factor constant
-    private static final int        PLATEAU_SEEDS   = 40;
-
     /**
      * Settles whether the near-floor harmonics keep averaging down or hit a floor.
      * Overlap is held FIXED (so the window/overlap-add gain is a constant) and only
@@ -214,11 +237,6 @@ class FftHarmonicStabilityTest {
             LOG.info(String.format("frames=%5d  σ(dB):%s", frames, sb));
         }
     }
-
-    // ── κ-refit A/B: "rotate the fork" ─────────────────────────────────────
-    private static final int[] KAPPA_FRAMES = {400, 1600};   // near-minimum, up-branch
-    private static final int   KAPPA_SEEDS  = 24;
-    private static final FftOverlap KAPPA_OVERLAP = FftOverlap.PCT_75;
 
     /**
      * Separates the "rotate the fork" idea into its two levers, against the

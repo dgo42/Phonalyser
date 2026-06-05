@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.gui.fft;
 
 import java.io.File;
@@ -100,12 +118,6 @@ public final class FftPane {
     private static final int TAB_THD_SETTINGS = 1;
     private static final int NUM_CUSTOM_TABS  = 2;
 
-    private final Composite group;
-    private PaneTitle title;
-    private FftView         view;
-    private FlatScrollbar   freqScrollbar;
-    private FlatScrollbar   magScrollbar;
-
     /** Pixel height of the big record-LED button at the right of the top
      *  toolbar — matches the scope's record LED so the two panes look
      *  visually aligned. */
@@ -113,6 +125,12 @@ public final class FftPane {
     /** Pixel height of the utility-row icons (camera screenshot, crosshair
      *  calibrate). */
     private static final int UTILITY_ICON_HEIGHT = 26;
+
+    private final Composite group;
+    private PaneTitle title;
+    private FftView         view;
+    private FlatScrollbar   freqScrollbar;
+    private FlatScrollbar   magScrollbar;
 
     // Image references retained so build methods past the constructor can
     // re-use them; all instances come from the shared IconUtils cache so
@@ -195,6 +213,15 @@ public final class FftPane {
      *  user toggles snap-to-FFT-bin on the generator pane (snap-to-bin
      *  is the missing prerequisite the user needs to satisfy here). */
     private Consumer<GenChangeCause> genChangeListener;
+
+    /** Collapse state + per-child snapshot.  See {@link #setCollapsed(boolean)}. */
+    private boolean    collapsed;
+    private boolean[]  preCollapseChildVisible;
+    private boolean[]  preCollapseChildExclude;
+
+    private Composite             fftCalRowsContainer;
+    private ScrolledComposite     fftCalRowsScroll;
+    private final List<FftCalRow> fftCalRows = new ArrayList<>();
 
     public FftPane(Composite parent,
                    boolean liveCapture) {
@@ -807,11 +834,6 @@ public final class FftPane {
         }
         group.layout(true);
     }
-
-    /** Collapse state + per-child snapshot.  See {@link #setCollapsed(boolean)}. */
-    private boolean    collapsed;
-    private boolean[]  preCollapseChildVisible;
-    private boolean[]  preCollapseChildExclude;
 
     // =========================================================================
     // Settings tab
@@ -2102,10 +2124,6 @@ public final class FftPane {
     // =========================================================================
     // Load-calibration tab — multi-row .frc loader (mirrors FreqRespPane).
     // =========================================================================
-
-    private Composite             fftCalRowsContainer;
-    private ScrolledComposite     fftCalRowsScroll;
-    private final List<FftCalRow> fftCalRows = new ArrayList<>();
 
     private static final class FftCalRow {
         Composite                composite;

@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.gui.scope;
 
 import java.util.Map;
@@ -327,6 +345,27 @@ public final class OscilloscopeView extends AbstractMeasurementView {
 
     /** Slider currently being dragged ({@code null} ⇒ no drag in progress). */
     private OscSliderId draggingSlider;
+
+    /** Gap (px) between the cap/s readout and the file-path label drawn to its left. */
+    private static final int FILE_PATH_GAP_TO_CAPS = 1;
+    /** Gap (px) between the right-channel max-voltage label and the file path,
+     *  so the blinking text never collides with that channel readout. */
+    private static final int FILE_PATH_GAP_TO_RIGHT_LABEL = 8;
+
+    /**
+     * Column right-edge x positions for the measurement table.  The
+     * parameter column is 60 % of its original 192 px width (= 115 px);
+     * every value column is 90 % of its original 80 px width (= 72 px).
+     */
+    private static final int COL_NAME_X      = 8;
+    private static final int COL_CUR_RIGHT   = 150;
+    private static final int COL_WIDTH       = 72;
+    private static final int COL_AVG_RIGHT   = COL_CUR_RIGHT + COL_WIDTH;
+    private static final int COL_MIN_RIGHT   = COL_AVG_RIGHT + COL_WIDTH;
+    private static final int COL_MAX_RIGHT   = COL_MIN_RIGHT + COL_WIDTH;
+    private static final int COL_SIGMA_RIGHT = COL_MAX_RIGHT + COL_WIDTH;
+    private static final String[] HEADERS       = {"cur", "avg", "min", "max", "σ"};
+    private static final int[]    HEADER_RIGHTS = {COL_CUR_RIGHT, COL_AVG_RIGHT, COL_MIN_RIGHT, COL_MAX_RIGHT, COL_SIGMA_RIGHT};
 
     public OscilloscopeView(Composite parent) {
         // Dark-theme overrides + prefs-driven trace colours, all consumed
@@ -771,12 +810,6 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         Point ts = gc.textExtent(cachedCapsString);
         drawOutlinedText(gc, cachedCapsString, w - ts.x - 8, 6);
     }
-
-    /** Gap (px) between the cap/s readout and the file-path label drawn to its left. */
-    private static final int FILE_PATH_GAP_TO_CAPS = 1;
-    /** Gap (px) between the right-channel max-voltage label and the file path,
-     *  so the blinking text never collides with that channel readout. */
-    private static final int FILE_PATH_GAP_TO_RIGHT_LABEL = 8;
 
     /**
      * Top-right blinking file-path label, shown only when in file mode.
@@ -1256,21 +1289,6 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             log.info("Scope mains comb [{}]: locked {} Hz", ch, trackedHz);
         }
     }
-
-    /**
-     * Column right-edge x positions for the measurement table.  The
-     * parameter column is 60 % of its original 192 px width (= 115 px);
-     * every value column is 90 % of its original 80 px width (= 72 px).
-     */
-    private static final int COL_NAME_X      = 8;
-    private static final int COL_CUR_RIGHT   = 150;
-    private static final int COL_WIDTH       = 72;
-    private static final int COL_AVG_RIGHT   = COL_CUR_RIGHT + COL_WIDTH;
-    private static final int COL_MIN_RIGHT   = COL_AVG_RIGHT + COL_WIDTH;
-    private static final int COL_MAX_RIGHT   = COL_MIN_RIGHT + COL_WIDTH;
-    private static final int COL_SIGMA_RIGHT = COL_MAX_RIGHT + COL_WIDTH;
-    private static final String[] HEADERS       = {"cur", "avg", "min", "max", "σ"};
-    private static final int[]    HEADER_RIGHTS = {COL_CUR_RIGHT, COL_AVG_RIGHT, COL_MIN_RIGHT, COL_MAX_RIGHT, COL_SIGMA_RIGHT};
 
     /** Renders the measurement table into {@code gc} from {@code startY} down.  Shared by the
      *  in-canvas table (main-view paint, below the header button row) and the extracted tool

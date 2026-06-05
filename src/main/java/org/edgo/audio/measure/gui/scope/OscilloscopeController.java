@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.gui.scope;
 
 import org.eclipse.swt.widgets.Display;
@@ -37,6 +55,15 @@ public final class OscilloscopeController {
      */
     private static final int REDRAW_PERIOD_MS = 20;
 
+    /**
+     * Number of main-view redraws between condensed-view redraws.  The
+     * condensed strip walks ~1 s of audio (lots of samples per pixel) and
+     * its per-paint work would otherwise halve the main view's cap/s.
+     * Updating it at ~5 Hz is plenty for the human eye and keeps the main
+     * trace at full speed.
+     */
+    private static final int CONDENSED_DECIMATION = 10;
+
     private final OscilloscopeView mainView;
     private final CondensedView    condensedView;
     private final Display          display;
@@ -51,6 +78,7 @@ public final class OscilloscopeController {
      *  used by {@link #stop()} to snapshot the last frame before
      *  releasing.  {@code null} when the scope isn't recording. */
     private SignalBufferReader currentBuffer;
+    private int redrawCounter = 0;
 
     public OscilloscopeController(OscilloscopeView mainView, CondensedView condensedView) {
         this.mainView      = mainView;
@@ -127,16 +155,6 @@ public final class OscilloscopeController {
         MessageBus.instance().publish(Events.CAPTURE_RELEASE);
         log.info("Oscilloscope stopped.");
     }
-
-    /**
-     * Number of main-view redraws between condensed-view redraws.  The
-     * condensed strip walks ~1 s of audio (lots of samples per pixel) and
-     * its per-paint work would otherwise halve the main view's cap/s.
-     * Updating it at ~5 Hz is plenty for the human eye and keeps the main
-     * trace at full speed.
-     */
-    private static final int CONDENSED_DECIMATION = 10;
-    private int redrawCounter = 0;
 
     /**
      * Schedules the next paint pass via {@link Display#timerExec}.

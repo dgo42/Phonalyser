@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.gui.scope;
 
 import java.util.Map;
@@ -31,6 +49,15 @@ public final class CondensedView extends AbstractMeasurementView {
 
     private static final int DIVISIONS_X = 10;
 
+    /** See {@link OscilloscopeView#LANCZOS_A} — A=16 for sharper stop-band. */
+    private static final int LANCZOS_A = 16;
+
+    /** See {@link OscilloscopeView}'s {@code MAX_LANCZOS_DOWNSAMPLE} for rationale. */
+    private static final int MAX_LANCZOS_DOWNSAMPLE = 5;
+
+    /** Buffer padding (each side) so the widest kernel still has real context. */
+    private static final int LANCZOS_PADDING = LANCZOS_A * MAX_LANCZOS_DOWNSAMPLE;
+
     // All colours live in the AbstractMeasurementView palette —
     // dark-theme overrides + prefs-driven L/R trace RGBs are passed
     // via the super(...) override map.  Midline reuses the CROSSHAIR
@@ -42,8 +69,6 @@ public final class CondensedView extends AbstractMeasurementView {
     private float[] rightBuf = new float[0];
     /** Same back-offset semantics as {@link OscilloscopeView#getViewBackOffsetFrames()}. */
     private volatile long viewBackOffsetFrames;
-
-    public void setViewBackOffsetFrames(long v) { this.viewBackOffsetFrames = Math.max(0L, v); }
 
     public CondensedView(Composite parent) {
         super(parent, SWT.DOUBLE_BUFFERED, Map.of(
@@ -57,6 +82,8 @@ public final class CondensedView extends AbstractMeasurementView {
         addPaintListener(this::onPaint);
         addDisposeListener(e -> disposePalette());
     }
+
+    public void setViewBackOffsetFrames(long v) { this.viewBackOffsetFrames = Math.max(0L, v); }
 
     public void setBuffer(SignalBufferReader reader) {
         this.reader = reader;
@@ -154,15 +181,6 @@ public final class CondensedView extends AbstractMeasurementView {
         if (showL) drawTrace(gc, leftBuf,  available, dispStart, dispCount, w, centerY, vScale, color(ColorRole.LEFT_TRACE));
         if (showR) drawTrace(gc, rightBuf, available, dispStart, dispCount, w, centerY, vScale, color(ColorRole.RIGHT_TRACE));
     }
-
-    /** See {@link OscilloscopeView#LANCZOS_A} — A=16 for sharper stop-band. */
-    private static final int LANCZOS_A = 16;
-
-    /** See {@link OscilloscopeView}'s {@code MAX_LANCZOS_DOWNSAMPLE} for rationale. */
-    private static final int MAX_LANCZOS_DOWNSAMPLE = 5;
-
-    /** Buffer padding (each side) so the widest kernel still has real context. */
-    private static final int LANCZOS_PADDING = LANCZOS_A * MAX_LANCZOS_DOWNSAMPLE;
 
     /**
      * Lanczos-windowed sinc reconstruction with the kernel scaled to the

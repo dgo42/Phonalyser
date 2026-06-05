@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.wav;
 
 import java.io.File;
@@ -26,6 +44,11 @@ import net.sourceforge.javaflacencoder.StreamConfiguration;
 @Log4j2
 public class FlacWriter implements AutoCloseable {
 
+    /** FLAC STREAMINFO encodes the sample rate in 20 bits and reserves
+     *  values above this as "invalid".  Going past it produces files
+     *  most decoders (Nayuki / REW / reference libFLAC) reject. */
+    public static final int FLAC_MAX_SAMPLE_RATE = 655350;
+
     private static final int BLOCK_FRAMES = 4096;
 
     private final File             file;
@@ -36,11 +59,6 @@ public class FlacWriter implements AutoCloseable {
     private final int[]            samples;            // reusable interleaved buffer
     private       int              samplesQueued = 0;  // frames in samples not yet pushed
     private       long             totalFrames = 0;
-
-    /** FLAC STREAMINFO encodes the sample rate in 20 bits and reserves
-     *  values above this as "invalid".  Going past it produces files
-     *  most decoders (Nayuki / REW / reference libFLAC) reject. */
-    public static final int FLAC_MAX_SAMPLE_RATE = 655350;
 
     public FlacWriter(File file, int sampleRate, int channels, int bitsPerSample) throws IOException {
         if (bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32) {

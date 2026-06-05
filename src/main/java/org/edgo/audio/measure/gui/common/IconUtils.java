@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.gui.common;
 
 import lombok.EqualsAndHashCode;
@@ -52,6 +70,13 @@ import java.util.regex.Pattern;
 public final class IconUtils {
 
     private static volatile IconUtils instance;
+
+    private static final Pattern DRAWABLE_TAG =
+            Pattern.compile("<(path|polyline|polygon)\\b([^>]*?)/?>", Pattern.DOTALL);
+    private static final Pattern ATTR_PATTERN =
+            Pattern.compile("(\\w[\\w-]*)\\s*=\\s*\"([^\"]*)\"");
+    private static final Pattern STYLE_PROP_PATTERN =
+            Pattern.compile("([\\w-]+)\\s*:\\s*([^;]+)");
 
     private final Map<CacheKey, Image> cache = new ConcurrentHashMap<>();
 
@@ -331,13 +356,6 @@ public final class IconUtils {
                               RGB fillColor, boolean fillNone,
                               RGB strokeColor, boolean strokeNone,
                               float strokeWidth) {}
-
-    private static final Pattern DRAWABLE_TAG =
-            Pattern.compile("<(path|polyline|polygon)\\b([^>]*?)/?>", Pattern.DOTALL);
-    private static final Pattern ATTR_PATTERN =
-            Pattern.compile("(\\w[\\w-]*)\\s*=\\s*\"([^\"]*)\"");
-    private static final Pattern STYLE_PROP_PATTERN =
-            Pattern.compile("([\\w-]+)\\s*:\\s*([^;]+)");
 
     private List<SvgElement> extractElements(String svg) {
         List<SvgElement> out = new ArrayList<>();

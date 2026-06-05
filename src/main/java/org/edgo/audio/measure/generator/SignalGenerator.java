@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.generator;
 
 import java.io.BufferedReader;
@@ -33,6 +51,16 @@ import lombok.extern.log4j.Log4j2;
 public class SignalGenerator {
 
 
+    /**
+     * Full-scale peak voltage of the DAC path (V).  Mutable so the
+     * GUI / a CLI flag can keep it in step with the matching ADC
+     * calibration ({@code AudioBackend.adcFsVoltageRms × √2}).
+     * Mismatch between the generator's FS and the reader's assumed
+     * FS shows up as the file having "wrong" amplitude when opened
+     * in a tool calibrated against the ADC scale.
+     */
+    public static double FS_VOLTAGE = 2.79351;
+
     // -------------------------------------------------------------------------
     // DDS sine lookup table (full wave, 4096 entries)
     // -------------------------------------------------------------------------
@@ -49,16 +77,6 @@ public class SignalGenerator {
             COS_TABLE[i]  = Math.cos(angle);
         }
     }
-
-    /**
-     * Full-scale peak voltage of the DAC path (V).  Mutable so the
-     * GUI / a CLI flag can keep it in step with the matching ADC
-     * calibration ({@code AudioBackend.adcFsVoltageRms × √2}).
-     * Mismatch between the generator's FS and the reader's assumed
-     * FS shows up as the file having "wrong" amplitude when opened
-     * in a tool calibrated against the ADC scale.
-     */
-    public static double FS_VOLTAGE = 2.79351;
 
     // 2π / 2^32 — used to convert fractional accumulator bits to radians
     private static final double TWO_PI_OVER_2_32 = 2.0 * Math.PI / 4294967296.0;

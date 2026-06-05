@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.gui.scope;
 
 import java.io.File;
@@ -93,6 +111,18 @@ public final class OscilloscopePane {
     private static final int UTILITY_ICON_HEIGHT = 26;
     /** Pixel height of the file-row glyphs (floppy disk / folder open). */
     private static final int FILE_ICON_HEIGHT = 16;
+    /**
+     * Minimum peak-to-peak signal amplitude (as a fraction of the ADC's
+     * full-scale p-p) required for the calibrate button to be active.
+     * Below this the signal occupies too little of the ADC's range and a
+     * calibration based on it would be dominated by quantisation /
+     * background noise.  Matches the "0.25 FS p-p" gate from the polish
+     * spec.
+     */
+    private static final double CALIBRATE_MIN_VPP_FRACTION = 0.25;
+    /** Vertical-offset wheel step size as a fraction of the channel's
+     *  full vertical range — 5 % per wheel tick (≈ ½ a division). */
+    private static final double WHEEL_OFFSET_STEP_FRAC = 0.05;
 
     // Cached references from IconUtils — owned by the shared cache and
     // disposed centrally when the main shell tears down.
@@ -282,6 +312,10 @@ public final class OscilloscopePane {
      * switching between record and file modes.
      */
     private ScopeOpenSignal              loader;
+    /** Collapse state + per-child snapshot.  See {@link #setCollapsed(boolean)}. */
+    private boolean    collapsed;
+    private boolean[]  preCollapseChildVisible;
+    private boolean[]  preCollapseChildExclude;
 
 
     /**
@@ -823,11 +857,6 @@ public final class OscilloscopePane {
         }
         group.layout(true);
     }
-
-    /** Collapse state + per-child snapshot.  See {@link #setCollapsed(boolean)}. */
-    private boolean    collapsed;
-    private boolean[]  preCollapseChildVisible;
-    private boolean[]  preCollapseChildExclude;
 
     /** Custom CTabFolderRenderer for the toolbar tabs.  For the custom-painted
      *  tab indices (Left / Right / Horizontal / Trigger):
@@ -2143,16 +2172,6 @@ public final class OscilloscopePane {
         }
     }
 
-    /**
-     * Minimum peak-to-peak signal amplitude (as a fraction of the ADC's
-     * full-scale p-p) required for the calibrate button to be active.
-     * Below this the signal occupies too little of the ADC's range and a
-     * calibration based on it would be dominated by quantisation /
-     * background noise.  Matches the "0.25 FS p-p" gate from the polish
-     * spec.
-     */
-    private static final double CALIBRATE_MIN_VPP_FRACTION = 0.25;
-
     /** Updates {@link #calibrateButton}'s enabled state based on all
      *  three gating conditions: capture running, not in file mode, and
      *  the current measurement-channel Vpp ≥ {@link #CALIBRATE_MIN_VPP_FRACTION}
@@ -2484,10 +2503,6 @@ public final class OscilloscopePane {
         prefs.setOscTriggerPositionFrac(posNew);
         timeScale.setValue(tDivNew);
     }
-
-    /** Vertical-offset wheel step size as a fraction of the channel's
-     *  full vertical range — 5 % per wheel tick (≈ ½ a division). */
-    private static final double WHEEL_OFFSET_STEP_FRAC = 0.05;
 
     /** Nudges both channel offsets by one wheel tick.  Wheel up (dir = +1)
      *  moves the signal UP on screen, which means the offset fraction

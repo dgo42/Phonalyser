@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.gui;
 
 import java.net.JarURLConnection;
@@ -62,9 +80,17 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class MainWindow {
 
+    /** Top-level "please wait" shell shown while a language switch is in
+     *  flight.  Static so it survives the disposal of the old MainWindow
+     *  and gets closed by the new instance's {@link #open()}.  Only one
+     *  may exist at a time. */
+    private static Shell languageSwitchShell;
+
     private final Display display;
     private final Shell   shell;
     private final MainTab mainTab;
+
+    private boolean recreateRequested;
 
     public MainWindow(Display display) {
         this.display = display;
@@ -134,7 +160,6 @@ public final class MainWindow {
     public boolean isRecreateRequested() {
         return recreateRequested;
     }
-    private boolean recreateRequested;
 
     /** Tears the current shell down so the {@code GuiMain} loop builds a
      *  fresh one with the just-changed locale.  Running playback / capture
@@ -150,12 +175,6 @@ public final class MainWindow {
         mainTab.stopForRecreate();
         if (!shell.isDisposed()) shell.close();
     }
-
-    /** Top-level "please wait" shell shown while a language switch is in
-     *  flight.  Static so it survives the disposal of the old MainWindow
-     *  and gets closed by the new instance's {@link #open()}.  Only one
-     *  may exist at a time. */
-    private static Shell languageSwitchShell;
 
     /** Builds and shows the language-switch dialog. */
     private static void showLanguageSwitchDialog(Display d) {

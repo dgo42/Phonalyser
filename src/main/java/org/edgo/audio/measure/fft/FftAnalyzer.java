@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.fft;
 
 import java.io.BufferedWriter;
@@ -31,6 +49,10 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public class FftAnalyzer {
 
+    /** Below this bin count the per-bin passes run serially — the fork/dispatch
+     *  overhead would dominate. */
+    private static final int PASS_PARALLEL_THRESHOLD = 1 << 16;   // 64k bins
+
     /** Cached window-function table — sized to {@link #cachedWindowSize}
      *  for {@link #cachedWindowType}.  analyze() is called repeatedly on
      *  the FFT worker thread with the same (fftSize, windowType) pair, so
@@ -40,42 +62,6 @@ public class FftAnalyzer {
     private double[]   cachedWindow;
     private int        cachedWindowSize;
     private WindowType cachedWindowType;
-
-    /** Returns the cached window table for {@code (N, type)}, rebuilding
-     *  it via {@link #buildWindow} only when the (size, type) pair
-     *  changes. */
-    private double[] getCachedWindow(int N, WindowType type) {
-        if (cachedWindow != null && cachedWindowSize == N && cachedWindowType == type) {
-            return cachedWindow;
-        }
-        cachedWindow     = buildWindow(N, type);
-        cachedWindowSize = N;
-        cachedWindowType = type;
-        return cachedWindow;
-    }
-
-    // =========================================================================
-    // Per-frame FFT cache (optional; populated by the caller)
-    // =========================================================================
-
-    /** Optional per-frame raw windowed-FFT cache.  The caller (typically
-     *  the GUI worker) provides an implementation keyed by absolute
-     *  sample-start position; the analyser consults it before every
-     *  per-frame FFT and stores fresh results back.  This avoids
-     *  re-FFT-ing the same raw frame across overlapping sliding-window
-     *  ticks (the dominant cost at large fftSize × N). */
-    public interface FrameFftCache {
-        /** If a cached result exists for {@code (absStart, fftSize)},
-         *  copy its real and imaginary parts into {@code outRe} /
-         *  {@code outIm} (length = fftSize) and return {@code true}.
-         *  Otherwise return {@code false}. */
-        boolean tryFill(long absStart, int fftSize, double[] outRe, double[] outIm);
-
-        /** Stores a copy of {@code (re, im)} (length = fftSize) for the
-         *  key {@code (absStart, fftSize)}.  The cache MUST copy — the
-         *  caller reuses the input arrays. */
-        void put(long absStart, int fftSize, double[] re, double[] im);
-    }
 
     /** Cache instance to consult during {@link #analyze}; {@code null}
      *  disables caching (CLI default).  Set by the caller via
@@ -87,19 +73,6 @@ public class FftAnalyzer {
      *  {@link #frameCache} is non-null. */
     private long samplesAbsStart;
 
-    /** Wires (or clears) the per-frame FFT cache.  Call with
-     *  {@code null} to disable caching for the next {@code analyze}. */
-    public void setFrameCache(FrameFftCache cache) {
-        this.frameCache = cache;
-    }
-
-    /** Sets the absolute sample-start position of the next
-     *  {@code analyze} call's {@code samples[0]}.  Used as the cache
-     *  key offset.  Ignored when {@link #frameCache} is null. */
-    public void setSamplesAbsStart(long absStart) {
-        this.samplesAbsStart = absStart;
-    }
-
     /** Optional second-tone frequency hint (Hz) for dual-/multi-tone
      *  signals; {@link Double#NaN} disables it.  When set, {@code analyze}
      *  also produces a sub-bin frequency estimate for this tone — via the
@@ -108,23 +81,11 @@ public class FftAnalyzer {
      *  peak read off the coherently-collapsed average. */
     private double secondToneHintHz = Double.NaN;
 
-    /** Sets (or clears, with NaN) the second-tone frequency hint for the
-     *  next {@code analyze}. */
-    public void setSecondToneHintHz(double hz) {
-        this.secondToneHintHz = hz;
-    }
-
     /** Multi-tone flag for the next {@code analyze}.  When set, the
      *  single-sine R-invariant glitch scan is skipped — that invariant
      *  cannot hold for a sum of tones and would otherwise flag nearly
      *  every sample, then invalidate itself and accept all frames anyway. */
     private boolean multiTone = false;
-
-    /** Marks the next {@code analyze} as a multi-tone signal (dual tone,
-     *  etc.).  See {@link #multiTone}. */
-    public void setMultiTone(boolean multiTone) {
-        this.multiTone = multiTone;
-    }
 
     /** Spectrum-only fast-path flag for the next {@code analyze}.  When set,
      *  {@code analyze} produces the averaged complex spectrum + dB magnitude +
@@ -162,6 +123,67 @@ public class FftAnalyzer {
      *  {@code analyze} call by the harmonic-detection and noise-floor
      *  paths; never returned. */
     private double[] scratchAmplLinear;
+
+    /** Returns the cached window table for {@code (N, type)}, rebuilding
+     *  it via {@link #buildWindow} only when the (size, type) pair
+     *  changes. */
+    private double[] getCachedWindow(int N, WindowType type) {
+        if (cachedWindow != null && cachedWindowSize == N && cachedWindowType == type) {
+            return cachedWindow;
+        }
+        cachedWindow     = buildWindow(N, type);
+        cachedWindowSize = N;
+        cachedWindowType = type;
+        return cachedWindow;
+    }
+
+    // =========================================================================
+    // Per-frame FFT cache (optional; populated by the caller)
+    // =========================================================================
+
+    /** Optional per-frame raw windowed-FFT cache.  The caller (typically
+     *  the GUI worker) provides an implementation keyed by absolute
+     *  sample-start position; the analyser consults it before every
+     *  per-frame FFT and stores fresh results back.  This avoids
+     *  re-FFT-ing the same raw frame across overlapping sliding-window
+     *  ticks (the dominant cost at large fftSize × N). */
+    public interface FrameFftCache {
+        /** If a cached result exists for {@code (absStart, fftSize)},
+         *  copy its real and imaginary parts into {@code outRe} /
+         *  {@code outIm} (length = fftSize) and return {@code true}.
+         *  Otherwise return {@code false}. */
+        boolean tryFill(long absStart, int fftSize, double[] outRe, double[] outIm);
+
+        /** Stores a copy of {@code (re, im)} (length = fftSize) for the
+         *  key {@code (absStart, fftSize)}.  The cache MUST copy — the
+         *  caller reuses the input arrays. */
+        void put(long absStart, int fftSize, double[] re, double[] im);
+    }
+
+    /** Wires (or clears) the per-frame FFT cache.  Call with
+     *  {@code null} to disable caching for the next {@code analyze}. */
+    public void setFrameCache(FrameFftCache cache) {
+        this.frameCache = cache;
+    }
+
+    /** Sets the absolute sample-start position of the next
+     *  {@code analyze} call's {@code samples[0]}.  Used as the cache
+     *  key offset.  Ignored when {@link #frameCache} is null. */
+    public void setSamplesAbsStart(long absStart) {
+        this.samplesAbsStart = absStart;
+    }
+
+    /** Sets (or clears, with NaN) the second-tone frequency hint for the
+     *  next {@code analyze}. */
+    public void setSecondToneHintHz(double hz) {
+        this.secondToneHintHz = hz;
+    }
+
+    /** Marks the next {@code analyze} as a multi-tone signal (dual tone,
+     *  etc.).  See {@link #multiTone}. */
+    public void setMultiTone(boolean multiTone) {
+        this.multiTone = multiTone;
+    }
 
     /** Returns {@code current} if it has the requested length; else
      *  allocates a fresh array.  Caller is responsible for any required
@@ -357,10 +379,6 @@ public class FftAnalyzer {
                 windowType, overlap, snrFreqMin, snrFreqMax, coherentAveraging,
                 fundRefDbV, logSummary, expectedFundHz, new FftResult());
     }
-
-    /** Below this bin count the per-bin passes run serially — the fork/dispatch
-     *  overhead would dominate. */
-    private static final int PASS_PARALLEL_THRESHOLD = 1 << 16;   // 64k bins
 
     /** A contiguous half-open [lo, hi) bin range to process. */
     @FunctionalInterface

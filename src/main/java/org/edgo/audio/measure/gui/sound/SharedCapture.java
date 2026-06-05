@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.gui.sound;
 
 import lombok.extern.log4j.Log4j2;
@@ -53,17 +71,6 @@ public final class SharedCapture {
         }
     }
 
-    /** Wires the singleton into the {@link MessageBus} on first
-     *  construction so any consumer can drive the shared capture by
-     *  publishing {@link Events#CAPTURE_ACQUIRE} (request — returns the
-     *  live {@link SignalBuffer} or {@code null}) and
-     *  {@link Events#CAPTURE_RELEASE} (notification). */
-    private SharedCapture() {
-        MessageBus bus = MessageBus.instance();
-        bus.registerResponder(Events.CAPTURE_ACQUIRE, this::acquire);
-        bus.subscribe(Events.CAPTURE_RELEASE, ignored -> release());
-    }
-
     private AudioCapture capture;
     /** The currently-open shared buffer — owned by the active capture
      *  session.  Both the scope view and the FFT pane read from this
@@ -77,6 +84,17 @@ public final class SharedCapture {
      *  or {@code null} on success / clean state.  Cleared on the next
      *  successful acquire. */
     private String lastStartError;
+
+    /** Wires the singleton into the {@link MessageBus} on first
+     *  construction so any consumer can drive the shared capture by
+     *  publishing {@link Events#CAPTURE_ACQUIRE} (request — returns the
+     *  live {@link SignalBuffer} or {@code null}) and
+     *  {@link Events#CAPTURE_RELEASE} (notification). */
+    private SharedCapture() {
+        MessageBus bus = MessageBus.instance();
+        bus.registerResponder(Events.CAPTURE_ACQUIRE, this::acquire);
+        bus.subscribe(Events.CAPTURE_RELEASE, ignored -> release());
+    }
 
     /** Returns {@code true} if the shared audio device is currently open
      *  (at least one consumer holds a reference). */

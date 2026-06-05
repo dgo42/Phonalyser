@@ -1,3 +1,21 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package org.edgo.audio.measure.fft;
 
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
@@ -194,6 +212,52 @@ public class FftResult {
      *  {@link #ensureArrays} and fills the result via direct field writes. */
     public FftResult() { }
 
+    FftResult(int fftSize, int sampleRate, int frameCount, double freqResolution,
+           WindowType windowType, FftOverlap overlap,
+           double[] amplitudeDbFs, double[] phaseDeg, double[] re, double[] im,
+           int fundamentalBin, double fundamentalHz, double fundamentalHzRefined,
+           double fundamentalDbFs, double fundamentalLinear,
+           int harmonicCount, int[] harmonicBins, double[] harmonicHz,
+           double[] harmonicDbFs, double[] harmonicPct,
+           double thdPct, double thdDb, double thdNDb, double snrDb,
+           double snrFreqMin, double snrFreqMax, boolean coherentAveraging,
+           double noisePower, double awNoisePower, double fundRefDbV,
+           double avgNoiseFloorDbFs, double fundamentalDynExclusionHz) {
+        this.fftSize           = fftSize;
+        this.sampleRate        = sampleRate;
+        this.frameCount        = frameCount;
+        this.freqResolution    = freqResolution;
+        this.windowType        = windowType;
+        this.overlap           = overlap;
+        this.amplitudeDbFs     = amplitudeDbFs;
+        this.phaseDeg          = phaseDeg;
+        this.re                = re;
+        this.im                = im;
+        this.fundamentalBin        = fundamentalBin;
+        this.fundamentalHz         = fundamentalHz;
+        this.fundamentalHzRefined  = fundamentalHzRefined;
+        this.fundamentalDbFs       = fundamentalDbFs;
+        this.fundamentalLinear = fundamentalLinear;
+        this.harmonicCount     = harmonicCount;
+        this.harmonicBins      = harmonicBins;
+        this.harmonicHz        = harmonicHz;
+        this.harmonicDbFs      = harmonicDbFs;
+        this.harmonicPct       = harmonicPct;
+        this.thdPct            = thdPct;
+        this.thdDb             = thdDb;
+        this.thdNDb            = thdNDb;
+        this.snrDb             = snrDb;
+        this.snrFreqMin        = snrFreqMin;
+        this.snrFreqMax        = snrFreqMax;
+        this.coherentAveraging = coherentAveraging;
+        this.noisePower           = noisePower;
+        this.awNoisePower         = awNoisePower;
+        this.fundRefDbV                = fundRefDbV;
+        this.fundamentalTrueDbV        = fundRefDbV;   // verbatim user input — cal CSV does not overwrite
+        this.avgNoiseFloorDbFs         = avgNoiseFloorDbFs;
+        this.fundamentalDynExclusionHz = fundamentalDynExclusionHz;
+    }
+
     /** Ensures the bin / harmonic arrays are sized for the next
      *  analysis.  Reuses the existing arrays when their length
      *  already matches; otherwise reallocates (FFT-length change
@@ -287,51 +351,5 @@ public class FftResult {
             c.preCorrectionPeaks = dst;
         }
         return c;
-    }
-
-    FftResult(int fftSize, int sampleRate, int frameCount, double freqResolution,
-           WindowType windowType, FftOverlap overlap,
-           double[] amplitudeDbFs, double[] phaseDeg, double[] re, double[] im,
-           int fundamentalBin, double fundamentalHz, double fundamentalHzRefined,
-           double fundamentalDbFs, double fundamentalLinear,
-           int harmonicCount, int[] harmonicBins, double[] harmonicHz,
-           double[] harmonicDbFs, double[] harmonicPct,
-           double thdPct, double thdDb, double thdNDb, double snrDb,
-           double snrFreqMin, double snrFreqMax, boolean coherentAveraging,
-           double noisePower, double awNoisePower, double fundRefDbV,
-           double avgNoiseFloorDbFs, double fundamentalDynExclusionHz) {
-        this.fftSize           = fftSize;
-        this.sampleRate        = sampleRate;
-        this.frameCount        = frameCount;
-        this.freqResolution    = freqResolution;
-        this.windowType        = windowType;
-        this.overlap           = overlap;
-        this.amplitudeDbFs     = amplitudeDbFs;
-        this.phaseDeg          = phaseDeg;
-        this.re                = re;
-        this.im                = im;
-        this.fundamentalBin        = fundamentalBin;
-        this.fundamentalHz         = fundamentalHz;
-        this.fundamentalHzRefined  = fundamentalHzRefined;
-        this.fundamentalDbFs       = fundamentalDbFs;
-        this.fundamentalLinear = fundamentalLinear;
-        this.harmonicCount     = harmonicCount;
-        this.harmonicBins      = harmonicBins;
-        this.harmonicHz        = harmonicHz;
-        this.harmonicDbFs      = harmonicDbFs;
-        this.harmonicPct       = harmonicPct;
-        this.thdPct            = thdPct;
-        this.thdDb             = thdDb;
-        this.thdNDb            = thdNDb;
-        this.snrDb             = snrDb;
-        this.snrFreqMin        = snrFreqMin;
-        this.snrFreqMax        = snrFreqMax;
-        this.coherentAveraging = coherentAveraging;
-        this.noisePower           = noisePower;
-        this.awNoisePower         = awNoisePower;
-        this.fundRefDbV                = fundRefDbV;
-        this.fundamentalTrueDbV        = fundRefDbV;   // verbatim user input — cal CSV does not overwrite
-        this.avgNoiseFloorDbFs         = avgNoiseFloorDbFs;
-        this.fundamentalDynExclusionHz = fundamentalDynExclusionHz;
     }
 }
