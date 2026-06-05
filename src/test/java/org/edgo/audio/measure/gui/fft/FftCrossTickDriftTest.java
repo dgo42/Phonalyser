@@ -301,19 +301,23 @@ class FftCrossTickDriftTest {
         }
     }
 
-    /** Off-bin twin tones (fractional-bin F1/F2 → the tick-0 parabolic κ carries a
-     *  residual) accumulated over many ticks; products synthesized as tones at
-     *  a·F1+b·F2.  A/B on {@link FftAnalyzerWorker#MULTI_KAPPA_REFINE}: with the
-     *  per-tone κ refine OFF that residual slowly de-coheres the tones AND products
-     *  (the live ~0.01 dB/frame creep); ON, each tone's κ is refined from its phase
-     *  slope so all lock.  Reads tick-50 vs tick-last drift, refine OFF vs ON. */
+    /** Off-bin twin tones carrying a shared relative-frequency WOBBLE
+     *  (δ(k)=A·sin, ~8-tick period — the residual an alignment loop leaves), products
+     *  synthesized as tones at a·F1+b·F2 (each inherits the same relative wobble).
+     *  Accumulated over many ticks; reads the COHERENT level's drift (tick 50 → last),
+     *  which is the de-coherence the wobble induces as the type-1 PLL lags the moving
+     *  frequency.  A/B on {@link FftAnalyzerWorker#MULTI_KAPPA_REFINE}: the one-shot
+     *  refine pins the tick-0 κ but cannot FOLLOW a moving frequency, so it does NOT
+     *  fix the wobble — motivating the per-tick Δf feedforward.  wobble=0 is the
+     *  constant-offset baseline (the PLL holds it; both A/B flat). */
     @Test
-    void crossTickImdOffBinLock() {
+    void crossTickImdWobbleLock() {
         int hop    = Math.max(1, (int) Math.round(FFT_SIZE * (1.0 - OVERLAP.fraction)));
         int winLen = FFT_SIZE + hop;
         int ticks  = 400;
         int total  = (ticks - 1) * hop + winLen;
         double binHz = (double) SAMPLE_RATE / FFT_SIZE;
+        double tau = 4.0 * hop;   // ~4-tick relative-frequency wobble correlation time
 
         // F1, F2 OFF-bin by a fractional bin; products at a·F1+b·F2 (also off-bin).
         double f1 = (1000 + 0.37) * binHz, f2 = (1700 + 0.29) * binHz;
@@ -323,40 +327,44 @@ class FftCrossTickDriftTest {
         int[] bins = new int[freqs.length];
         for (int i = 0; i < freqs.length; i++) bins[i] = (int) Math.round(freqs[i] / binHz);
 
-        float[] sig = synthesizeTones(SEED, total, 0.0, freqs, dbfs);   // no drift — isolate the κ residual
-        LOG.info("=== CROSS-TICK IMD OFF-BIN LOCK: F1={} F2={} (off-bin), {} ticks ===",
-                String.format("%.3f", f1), String.format("%.3f", f2), ticks);
+        LOG.info("=== CROSS-TICK IMD WOBBLE LOCK: F1={} F2={} off-bin, wobble τ~{} ticks, {} ticks ===",
+                String.format("%.3f", f1), String.format("%.3f", f2),
+                String.format("%.0f", tau / hop), ticks);
 
-        for (boolean refine : new boolean[]{false, true}) {
-            FftAnalyzerWorker.MULTI_KAPPA_REFINE = refine;
-            FftAnalyzer       analyzer = new FftAnalyzer();
-            FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
-            float[] win = new float[winLen];
-            double[] early = new double[freqs.length], late = new double[freqs.length];
-            long base = 0;
-            for (int t = 0; t < ticks; t++) {
-                System.arraycopy(sig, (int) base, win, 0, winLen);
-                analyzer.setSamplesAbsStart(base);
-                analyzer.setSpectrumOnly(true);
-                analyzer.setMultiTone(true);
-                analyzer.setSecondToneHintHz(f2);
-                FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
-                        WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
-                worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
-                if (t == 50 || t == ticks - 1) {
-                    worker.overlayAccumulatorOnto(r);
-                    double[] dst = (t == 50) ? early : late;
-                    for (int i = 0; i < freqs.length; i++) {
-                        dst[i] = (r.amplitudeDbFs != null && bins[i] < r.amplitudeDbFs.length)
-                                ? r.amplitudeDbFs[bins[i]] : Double.NaN;
+        for (double wobblePpm : new double[]{0.0, 0.05, 0.5}) {
+            float[] sig = synthesizeWobble(SEED, total, wobblePpm * 1e-6, tau, freqs, dbfs);
+            for (boolean refine : new boolean[]{false, true}) {
+                FftAnalyzerWorker.MULTI_KAPPA_REFINE = refine;
+                FftAnalyzer       analyzer = new FftAnalyzer();
+                FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+                float[] win = new float[winLen];
+                double[] early = new double[freqs.length], late = new double[freqs.length];
+                long base = 0;
+                for (int t = 0; t < ticks; t++) {
+                    System.arraycopy(sig, (int) base, win, 0, winLen);
+                    analyzer.setSamplesAbsStart(base);
+                    analyzer.setSpectrumOnly(true);
+                    analyzer.setMultiTone(true);
+                    analyzer.setSecondToneHintHz(f2);
+                    FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
+                            WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
+                    worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+                    if (t == 50 || t == ticks - 1) {
+                        worker.overlayAccumulatorOnto(r);
+                        double[] dst = (t == 50) ? early : late;
+                        for (int i = 0; i < freqs.length; i++) {
+                            dst[i] = (r.amplitudeDbFs != null && bins[i] < r.amplitudeDbFs.length)
+                                    ? r.amplitudeDbFs[bins[i]] : Double.NaN;
+                        }
                     }
+                    base += hop;
                 }
-                base += hop;
-            }
-            LOG.info(String.format("--- refine = %s  (tick 50 → %d) ---", refine ? "ON " : "OFF", ticks));
-            for (int i = 0; i < freqs.length; i++) {
-                LOG.info(String.format("  %-7s %8.2f → %8.2f dBFS   (drift %+.2f)",
-                        lbl[i], early[i], late[i], late[i] - early[i]));
+                LOG.info(String.format("--- wobble = %.2f ppm  refine = %s  (tick 50 → %d) ---",
+                        wobblePpm, refine ? "ON " : "OFF", ticks));
+                for (int i = 0; i < freqs.length; i++) {
+                    LOG.info(String.format("  %-7s %8.2f → %8.2f dBFS   (drift %+.2f)",
+                            lbl[i], early[i], late[i], late[i] - early[i]));
+                }
             }
         }
         FftAnalyzerWorker.MULTI_KAPPA_REFINE = true;
@@ -399,6 +407,43 @@ class FftCrossTickDriftTest {
                 double next = twoCos[i] * sCur[i] - sPrev[i];
                 sPrev[i] = sCur[i];
                 sCur[i]  = next;
+            }
+            v += NOISE_STD * rng.nextGaussian();
+            double dither = (rng.nextDouble() - 0.5 + rng.nextDouble() - 0.5) * lsb;
+            s[k] = (float) (Math.rint((v + dither) / lsb) * lsb);
+        }
+        return s;
+    }
+
+    /** Sum of tones {@code freqHz[i]} at {@code dbfs[i]}, all sharing ONE relative
+     *  frequency RANDOM-WALK δ(k) — a mean-reverting (Ornstein-Uhlenbeck) wobble with
+     *  stationary std {@code wobbleAmp} and correlation time {@code tauSamples}, the
+     *  bounded residual a NOISY alignment loop leaves around its target.  Unlike a
+     *  clean sinusoid (whose lag averages out), a random walk de-correlates the phase,
+     *  so it actually de-coheres the cross-tick sum when the loop can't follow it.
+     *  Phase integrated per sample: φ_i(k)=w_i·(k+Σδ) — every tone (and the product
+     *  tones) wobbles by the SAME relative amount, as a shared DAC↔ADC clock would. */
+    private static float[] synthesizeWobble(long seed, int n, double wobbleAmp, double tauSamples,
+                                            double[] freqHz, double[] dbfs) {
+        float[]  s    = new float[n];
+        Random   rng  = new Random(seed);
+        int      nt   = freqHz.length;
+        double   lsb  = 2.0 / (double) (1L << DITHER_BITS);
+        double   aOu  = 1.0 / Math.max(1.0, tauSamples);
+        double   sOu  = wobbleAmp * Math.sqrt(2.0 * aOu);   // OU stationary std = wobbleAmp
+        double[] w    = new double[nt];
+        double[] a    = new double[nt];
+        for (int i = 0; i < nt; i++) {
+            w[i] = 2.0 * Math.PI * freqHz[i] / SAMPLE_RATE;
+            a[i] = Math.pow(10.0, dbfs[i] / 20.0);
+        }
+        double delta = 0.0, cum = 0.0;
+        for (int k = 0; k < n; k++) {
+            delta += -aOu * delta + sOu * rng.nextGaussian();   // OU relative-freq wobble
+            cum   += delta;                                     // accumulated phase offset (samples)
+            double v = 0.0;
+            for (int i = 0; i < nt; i++) {
+                v += a[i] * Math.sin(w[i] * (k + cum));
             }
             v += NOISE_STD * rng.nextGaussian();
             double dither = (rng.nextDouble() - 0.5 + rng.nextDouble() - 0.5) * lsb;
