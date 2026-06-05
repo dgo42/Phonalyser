@@ -12,15 +12,17 @@ import java.util.stream.IntStream;
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
+import org.edgo.audio.measure.enums.AmplitudeUnit;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
+import org.edgo.audio.measure.enums.GenChangeCause;
+import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftAnalyzer.FrameFftCache;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
 import org.edgo.audio.measure.gui.preferences.Preferences;
@@ -1314,9 +1316,7 @@ public final class FftAnalyzerWorker {
         // Overrun is reported as a NEGATIVE progress so the UI can tell it
         // apart from 0 (= simply no fresh samples captured yet).
         if (avail == SignalBufferReader.OVERRUN) return -1.0;
-        FftOverlap overlap;
-        try { overlap = FftOverlap.valueOf(prefs.getFftOverlap()); }
-        catch (IllegalArgumentException e) { overlap = FftOverlap.PCT_0; }
+        FftOverlap overlap = prefs.getFftOverlap();
         double hop = Math.max(1, fftLength * (1.0 - overlap.fraction));
         // Building the first window needs a full `needed`; once it's valid each
         // tick just needs one fresh hop, so the bar sweeps 0→1 per hop.
@@ -1400,13 +1400,9 @@ public final class FftAnalyzerWorker {
         // forever-mode "≈2× displayed N frames" convention.
         int targetFrames = foreverMode ? Integer.MAX_VALUE : 2 * ringN;
 
-        WindowType window;
-        try { window = WindowType.valueOf(prefs.getFftWindow()); }
-        catch (IllegalArgumentException e) { window = WindowType.HANN; }
+        WindowType window = prefs.getFftWindow();
 
-        FftOverlap overlap;
-        try { overlap = FftOverlap.valueOf(prefs.getFftOverlap()); }
-        catch (IllegalArgumentException e) { overlap = FftOverlap.PCT_0; }
+        FftOverlap overlap = prefs.getFftOverlap();
 
         double hop = fftLength * (1.0 - overlap.fraction);
         if (hop < 1) hop = 1;
@@ -1499,8 +1495,7 @@ public final class FftAnalyzerWorker {
         // time-domain samples (it's a plot-time frequency-response correction —
         // see applyMainsCorrection), so the cached raw frames stay valid and
         // toggling it is a pure re-render, not an accumulator reset.
-        boolean mainsSuppress = MainsSuppression.fromNameOr(
-                prefs.getFftMainsSuppression(), MainsSuppression.NONE) == MainsSuppression.IIR_COMB;
+        boolean mainsSuppress = prefs.getFftMainsSuppression() == MainsSuppression.IIR_COMB;
         long cfgFingerprint = fftLength;
         cfgFingerprint = 31 * cfgFingerprint + sampleRate;
         cfgFingerprint = 31 * cfgFingerprint + window.ordinal();
@@ -1541,7 +1536,7 @@ public final class FftAnalyzerWorker {
         // pegs the reference to a noise bin that jitters tick-to-tick, which
         // smears BOTH tones and makes the measured frequencies (and Δf
         // readout) swing wildly even though the generator never moves.
-        boolean dualTone = "DUAL_TONE".equalsIgnoreCase(prefs.getGenSignalForm());
+        boolean dualTone = prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE;
         double expectedFundHz = (genActive && prefs.isFftFundFromGenerator())
                 ? (dualTone
                     ? Math.min(prefs.getGenDualToneFreq1Hz(), prefs.getGenDualToneFreq2Hz())
@@ -1759,10 +1754,10 @@ public final class FftAnalyzerWorker {
      *  {@code fundLinear} as its anchor. */
     private double resolveFundRefDbV(Preferences prefs) {
         if (prefs.isFftManualFundEnabled()) {
-            String unit = prefs.getFftManualFundUnit();
+            AmplitudeUnit unit = prefs.getFftManualFundUnit();
             double v = prefs.getFftManualFundVrms();
-            if ("dBV".equalsIgnoreCase(unit)) return v;
-            if ("mV" .equalsIgnoreCase(unit)) v *= 0.001;
+            if (unit == AmplitudeUnit.DBV) return v;
+            if (unit == AmplitudeUnit.MV) v *= 0.001;
             return (v > 0) ? 20.0 * Math.log10(v) : Double.NaN;
         }
         return Double.NaN;

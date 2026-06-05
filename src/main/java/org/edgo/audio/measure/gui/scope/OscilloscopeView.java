@@ -11,12 +11,9 @@ import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.LineAttributes;
 import org.eclipse.swt.graphics.Path;
 import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
-import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.dsp.LowPassFilter;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.MedianFilter;
@@ -30,12 +27,16 @@ import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
-import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.generator.FftBinSnap;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
+import org.edgo.audio.measure.gui.widgets.BlinkBanner;
+import org.edgo.audio.measure.gui.widgets.ToolButton;
+import org.edgo.audio.measure.gui.widgets.Toolbar;
+import org.edgo.audio.measure.gui.widgets.ToolWindow;
+import org.edgo.audio.measure.gui.widgets.TransparentComposite;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.extern.log4j.Log4j2;
@@ -207,7 +208,6 @@ public final class OscilloscopeView extends AbstractMeasurementView {
      * calls were adding ~200 short-lived objects/sec to the young
      * generation; pooling them removes that pressure.
      */
-    private final LineAttributes lineAttrsThin  = new LineAttributes(1.0f);
     private final LineAttributes lineAttrsTrace = new LineAttributes(1.0f,
             SWT.CAP_ROUND, SWT.JOIN_ROUND);
     private final LineAttributes lineAttrsBars  = new LineAttributes(1.0f,
@@ -255,6 +255,8 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         this.filePath = (p == null || p.isEmpty()) ? null : p;
         if (!isDisposed()) redraw();
     }
+    /** Self-blinking file-path banner widget (replaces the overlay-text label). */
+    private BlinkBanner fileBanner;
     /**
      * Cached measurement result.  Recomputed at most once every
      * {@value #MEAS_COMPUTE_PERIOD_NANOS} nanoseconds so the per-paint cost
@@ -281,46 +283,24 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private Font chanButtonFont;
 
     /** Hit-boxes for the header buttons — refreshed every paint, consumed by the mouse listener. */
-    private final Rectangle leftChanButtonBounds      = new Rectangle(0, 0, 0, 0);
-    private final Rectangle rightChanButtonBounds     = new Rectangle(0, 0, 0, 0);
-    /** Hit-box for the gauge (show / hide entire measurement table) toggle. */
-    private final Rectangle tableToggleBounds         = new Rectangle(0, 0, 0, 0);
-    /** Hit-box for the stats-toggle button (chart-column icon). */
-    private final Rectangle statsToggleBounds         = new Rectangle(0, 0, 0, 0);
-    /** Hit-box for the reset-statistics button (rotate-left icon). */
-    private final Rectangle resetButtonBoundsHeader   = new Rectangle(0, 0, 0, 0);
-    /** Hit-box for the Auto-Setup button (arrows-to-circle icon). */
-    private final Rectangle autoSetupButtonBounds     = new Rectangle(0, 0, 0, 0);
-    /** Hit-box for the External-Window button (window-restore icon). */
-    private final Rectangle externalWindowButtonBounds = new Rectangle(0, 0, 0, 0);
+    private Toolbar    headerBar;       // header buttons (migrated from canvas-draw to widgets)
+    private ToolButton leftBtn;
+    private ToolButton rightBtn;
+    private ToolButton autoSetupBtn;
+    private ToolButton tableToggleBtn;
+    private ToolButton externalBtn;
+    private ToolButton statsToggleBtn;
+    private ToolButton resetBtn;
+    private TransparentComposite dataSpacer;   // gap before the signal-gated buttons
     /** When true, the measurement-table rows are NOT drawn in this view —
-     *  they're hosted in {@link #externalMeasurementShell} instead.  Header
+     *  they're hosted in {@link #measurementWindow} instead.  Header
      *  buttons (L, R, Auto-Setup, gauge, external-window, chart, reset)
      *  stay in this view either way. */
     private boolean tableExtracted;
-    private Shell externalMeasurementShell;
-    private Canvas externalMeasurementCanvas;
-    /** Hit-boxes for the stats-toggle + reset buttons when they're painted
-     *  inside the extracted tool window (separate from
-     *  {@link #statsToggleBounds} / {@link #resetButtonBoundsHeader},
-     *  which still belong to the main view's coordinate space). */
-    private final Rectangle extStatsToggleBounds = new Rectangle(0, 0, 0, 0);
-    private final Rectangle extResetButtonBounds = new Rectangle(0, 0, 0, 0);
-
-    /** Lazily-loaded SVG icons for the header buttons.  Each toggle gets a
-     *  light variant (tinted with the overlay colour, used when the button
-     *  is outlined/off) and a dark variant (tinted with the canvas
-     *  background, used when the button is filled/on).  The reset button
-     *  is single-state so it only needs the light variant.  All disposed
-     *  with the view. */
-    private Image gaugeIconLight;
-    private Image gaugeIconDark;
-    private Image chartColumnIconLight;
-    private Image chartColumnIconDark;
-    private Image resetStatIcon;
-    private Image autoSetupIcon;
-    private Image windowRestoreIconLight;
-    private Image windowRestoreIconDark;
+    /** The extracted measurements tool window (non-null only while extracted); it calls back
+     *  into {@link #paintMeasurementTable} to draw the live table, and signals close /
+     *  stats-reset. */
+    private ToolWindow measurementWindow;
 
     /** Drawn-handle size for the three sliders, in pixels. */
     private static final int SLIDER_TRI_LONG = 10;   // triangle long axis (into the grid)
@@ -369,56 +349,81 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         // Chapter-level help anchor: Ctrl+F1 anywhere on the canvas
         // opens oscilloscope.html.
         setData("helpAnchor", "oscilloscope.html");
+        // Self-blinking file-path banner (no canvas redraw); positioned in onPaint.
+        fileBanner = new BlinkBanner(this);
+        fileBanner.setVisible(false);
         // Derived mid (~65 %) channel colours track the LEFT/RIGHT_TRACE
         // entries — set once here, refreshed by syncChannelColors() on
         // every relevant prefs change.
         syncChannelColors();
 
-        // Register the header-row buttons as Hotspots with the shared base.
-        // The base owns the rect-by-reference list and the lookup helper;
-        // the mouseDown handler below simply consults hotspotAt(...) instead
-        // of running through six explicit if/else branches.  Each rect is
-        // mutated in place by the paint code, so registration only happens
-        // once here.
-        registerHotspot(leftChanButtonBounds, () -> {
+        // L/R channel-pick buttons — migrated to ToolButton widgets in a top-left Toolbar.
+        // Dim "mid" colour unselected, bright trace colour filled when selected.
+        chanButtonFont = new Font(getDisplay(), "Consolas", 12, SWT.BOLD);
+        headerBar = new Toolbar(this, BTN_W, BTN_H);
+        Channel mc = Preferences.instance().getOscMeasurementChannel();
+        leftBtn  = headerBar.chanButton("L", color(ColorRole.LEFT_CHANNEL_MID), color(ColorRole.LEFT_CHANNEL_MID),
+                color(ColorRole.LEFT_TRACE),  chanButtonFont, I18n.t("scope.stats.left.tooltip"),  mc == Channel.L, "channel");
+        rightBtn = headerBar.chanButton("R", color(ColorRole.RIGHT_CHANNEL_MID), color(ColorRole.RIGHT_CHANNEL_MID),
+                color(ColorRole.RIGHT_TRACE), chanButtonFont, I18n.t("scope.stats.right.tooltip"), mc == Channel.R, "channel");
+        // Auto-setup (always), then the signal-gated gauge / external / stats / reset.
+        headerBar.spacer(2);
+        autoSetupBtn = headerBar.pushButton(SvgPaths.ARROWS_TO_CIRCLE, 16,
+                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
+                I18n.t("scope.autosetup.tooltip"));
+        dataSpacer = headerBar.spacer(2);
+        tableToggleBtn = headerBar.toggleButton(SvgPaths.GAUGE_HIGH, 16,
+                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
+                I18n.t("scope.stats.table.tooltip"), Preferences.instance().isOscShowMeasurementTable());
+        externalBtn = headerBar.toggleButton(SvgPaths.WINDOW_RESTORE, 16,
+                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
+                I18n.t("scope.external.window.tooltip"), tableExtracted);
+        statsToggleBtn = headerBar.toggleButton(SvgPaths.CHART_COLUMN, 16,
+                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
+                I18n.t("scope.stats.toggle.tooltip"), Preferences.instance().isOscShowStats());
+        resetBtn = headerBar.pushButton(SvgPaths.ROTATE_LEFT, 18,
+                rgb(ColorRole.RESET), rgb(ColorRole.BACKGROUND), color(ColorRole.RESET),
+                I18n.t("scope.stats.reset.tooltip"));
+        Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
+        headerBar.setBounds(COL_NAME_X, 5, hbSize.x, hbSize.y);
+        headerBar.layout();
+        leftBtn.addListener(SWT.Selection, e -> {
+            if (leftBtn.isToggled()) {
+                Preferences p = Preferences.instance();
+                p.setOscMeasurementChannel(Channel.L); p.save();
+                measWorker.clearHistory(); redraw();
+            }
+        });
+        rightBtn.addListener(SWT.Selection, e -> {
+            if (rightBtn.isToggled()) {
+                Preferences p = Preferences.instance();
+                p.setOscMeasurementChannel(Channel.R); p.save();
+                measWorker.clearHistory(); redraw();
+            }
+        });
+        autoSetupBtn.addListener(SWT.Selection, e -> MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP));
+        tableToggleBtn.addListener(SWT.Selection, e -> {
             Preferences p = Preferences.instance();
-            if (p.getOscMeasurementChannel() == Channel.L) return;
-            p.setOscMeasurementChannel(Channel.L);
+            p.setOscShowMeasurementTable(tableToggleBtn.isToggled());
             p.save();
-            measWorker.clearHistory();
+            syncScopeButtons();   // external/stats/reset follow the table's visibility
+            syncToolWindow();
             redraw();
-        }, "scope.stats.left.tooltip");
-        registerHotspot(rightChanButtonBounds, () -> {
+        });
+        externalBtn.addListener(SWT.Selection, e -> {
+            if (externalBtn.isToggled() != tableExtracted) {
+                setTableExtracted(externalBtn.isToggled());
+            }
+        });
+        statsToggleBtn.addListener(SWT.Selection, e -> {
             Preferences p = Preferences.instance();
-            if (p.getOscMeasurementChannel() == Channel.R) return;
-            p.setOscMeasurementChannel(Channel.R);
+            p.setOscShowStats(statsToggleBtn.isToggled());
             p.save();
-            measWorker.clearHistory();
+            syncScopeButtons();   // reset follows the stats toggle
             redraw();
-        }, "scope.stats.right.tooltip");
-        registerHotspot(autoSetupButtonBounds,
-                () -> MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP),
-                "scope.autosetup.tooltip");
-        registerHotspot(externalWindowButtonBounds,
-                () -> setTableExtracted(!tableExtracted),
-                "scope.external.window.tooltip");
-        registerHotspot(tableToggleBounds, () -> {
-            Preferences p = Preferences.instance();
-            p.setOscShowMeasurementTable(!p.isOscShowMeasurementTable());
-            p.save();
-            syncExternalShell();
-            redraw();
-        }, "scope.stats.table.tooltip");
-        registerHotspot(statsToggleBounds, () -> {
-            Preferences p = Preferences.instance();
-            p.setOscShowStats(!p.isOscShowStats());
-            p.save();
-            redraw();
-        }, "scope.stats.toggle.tooltip");
-        registerHotspot(resetButtonBoundsHeader, () -> {
-            measWorker.clearHistory();
-            redraw();
-        }, "scope.stats.reset.tooltip");
+        });
+        resetBtn.addListener(SWT.Selection, e -> { measWorker.clearHistory(); redraw(); });
+        syncScopeButtons();       // apply the initial signal-gated visibility
 
         setBackground(color(ColorRole.BACKGROUND));
         addPaintListener(this::onPaint);
@@ -426,12 +431,6 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             @Override
             public void mouseDown(org.eclipse.swt.events.MouseEvent ev) {
                 if (ev.button != 1) return;
-                // All header-row buttons (L/R, Auto-Setup, Table, External,
-                // Stats, Reset) are registered as Hotspots with the shared
-                // base — dispatch them through the registry instead of
-                // running through six explicit if/else branches.
-                Hotspot hot = hotspotAt(ev.x, ev.y);
-                if (hot != null) { hot.onClick.run(); return; }
                 // Slider hit detection — first match wins.  The handle is
                 // grabbed and the slider value is updated immediately so a
                 // click without a drag still moves the slider.
@@ -505,13 +504,6 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             } else if (!fileMode && triggerPosBounds.contains(ev.x, ev.y)) {
                 cursorId = SWT.CURSOR_SIZEWE;
                 tip = I18n.t("scope.trigger.position.tooltip");
-            } else if (hotspotAt(ev.x, ev.y) != null) {
-                // All header-row buttons go through the base's hotspot
-                // registry — one branch instead of seven if/elses.  The
-                // tooltip key comes from the matched hotspot.
-                Hotspot hot = hotspotAt(ev.x, ev.y);
-                cursorId = SWT.CURSOR_HAND;
-                tip = hot.tooltipKey != null ? I18n.t(hot.tooltipKey) : null;
             } else if (leftMaxLabelBounds.contains(ev.x, ev.y)
                     || leftMinLabelBounds.contains(ev.x, ev.y)
                     || rightMaxLabelBounds.contains(ev.x, ev.y)
@@ -544,8 +536,8 @@ public final class OscilloscopeView extends AbstractMeasurementView {
             if (chanButtonFont != null) chanButtonFont.dispose();
             // Header icons are cached and owned by IconUtils — disposed
             // when the main shell tears down, not here.
-            if (externalMeasurementShell != null && !externalMeasurementShell.isDisposed()) {
-                externalMeasurementShell.dispose();
+            if (measurementWindow != null) {
+                measurementWindow.dispose();
             }
         });
     }
@@ -555,6 +547,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     public void setBuffer(SignalBufferReader reader) {
         this.reader = reader;
         measWorker.setBuffer(reader);
+        syncScopeButtons();   // signal presence changed → re-evaluate the gated buttons
         // Reset per-capture state so a previous session's values aren't
         // displayed on the first few paints of a new capture (notably the
         // DC mean, which is read straight from the worker until it
@@ -797,7 +790,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
      */
     private void drawFilePath(GC gc, int w) {
         String path = filePath;
-        if (path == null || !fileMode) return;
+        if (path == null || !fileMode) { hideFileBanner(); return; }
 
         // Right edge: cap/s left edge minus the configured gap.  If cap/s
         // isn't yet measured (still 0 cap/s but file mode active), pretend
@@ -826,42 +819,25 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         }
 
         int avail = rightEdge - leftEdge;
-        if (avail <= 0) return;   // canvas too narrow → drop the label
+        if (avail <= 0) { hideFileBanner(); return; }   // canvas too narrow → drop the label
 
-        // Left-side ellipsis truncation: prepend "…" then drop characters
-        // after it until the string fits.  Linear scan is fine for typical
-        // path lengths (~100 chars).
-        String shown = path;
-        if (gc.textExtent(shown).x > avail) {
-            shown = "…" + path;
-            while (shown.length() > 1 && gc.textExtent(shown).x > avail) {
-                shown = "…" + shown.substring(2);
-            }
-            if (shown.equals("…")) return;   // not even an ellipsis fits
+        // Hand the path to the self-blinking widget: it right-aligns + left-ellipsises
+        // to its width (the BACKGROUND halo keeps it readable over the trace) and blinks
+        // itself — so the canvas no longer repaints twice a second just for the toggle.
+        fileBanner.setFont(getFont());
+        fileBanner.setText(path);
+        fileBanner.setColors(color(ColorRole.BLINK_LIT), color(ColorRole.BLINK_DIM),
+                             color(ColorRole.BACKGROUND));
+        fileBanner.setBounds(leftEdge, 5, avail, gc.textExtent("X").y + 2);
+        fileBanner.setVisible(true);
+    }
+
+    /** Hides the file-path banner. */
+    private void hideFileBanner() {
+        if (fileBanner != null && !fileBanner.isDisposed()) {
+            fileBanner.setVisible(false);
         }
-
-        Point sExt = gc.textExtent(shown);
-        boolean lit = ((System.currentTimeMillis() / 500L) % 2L) == 0L;
-        gc.setForeground(lit ? color(ColorRole.BLINK_LIT) : color(ColorRole.BLINK_DIM));
-        gc.setBackground(color(ColorRole.BACKGROUND));
-        drawOutlinedText(gc, shown, rightEdge - sExt.x, 6);
-
-        scheduleFilePathBlinkRedraw();
     }
-
-    /** Wall-clock-phase blink doesn't repaint on its own — schedule a
-     *  redraw every 500 ms while file mode is active so the user sees the
-     *  blink even when nothing else triggers a paint. */
-    private void scheduleFilePathBlinkRedraw() {
-        if (filePathBlinkRedrawScheduled) return;
-        filePathBlinkRedrawScheduled = true;
-        getDisplay().timerExec(500, () -> {
-            filePathBlinkRedrawScheduled = false;
-            if (isDisposed()) return;
-            if (filePath != null && fileMode) redraw();
-        });
-    }
-    private boolean filePathBlinkRedrawScheduled;
 
     /**
      * Pale-grey measurement table (Vpp / Vrms / Vmean / Tp / f / Duty) in
@@ -872,6 +848,10 @@ public final class OscilloscopeView extends AbstractMeasurementView {
      * last {@code oscMeasurementAverageSeconds} of measurements.
      */
     private void drawMeasurements(GC gc) {
+        // When extracted, the table is rendered into the measurementWindow instead —
+        // skip the in-canvas table here.
+        if (tableExtracted) return;
+
         Preferences prefs = Preferences.instance();
         boolean showL = prefs.isOscLeftChannelEnabled();
         boolean showR = prefs.isOscRightChannelEnabled();
@@ -885,7 +865,6 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         // once a signal is present (recorded or loaded).
         SignalBufferReader b = reader;
         boolean hasSignal = (b != null);
-        drawMeasurementHeaderButtons(gc, showL, showR, selected, hasSignal);
 
         if (!hasSignal) return;
         if (!prefs.isOscShowMeasurementTable()) return;
@@ -893,13 +872,10 @@ public final class OscilloscopeView extends AbstractMeasurementView {
 
         MeasurementRow[] rows = prepareMeasurementRows(prefs);
         if (rows == null) return;
-        // When extracted, the rows are drawn by externalMeasurementCanvas's
-        // paint listener — skip the in-canvas table here.  We still want
-        // the row build above so the external canvas has fresh data via
-        // cachedMeasurementRows / via prepareMeasurementRows on its own.
-        if (tableExtracted) return;
         selected = prefs.getOscMeasurementChannel();
-        drawMeasurementTable(gc, rows, showL, showR, selected);
+        // Main-view call site: the button row sits at y ∈ [5, 27), so the
+        // table starts one line below.
+        drawMeasurementTableAt(gc, rows, showL, showR, selected, 5 + 22 + 2);
     }
 
     /** Computes (or returns the throttled cache of) the measurement table's
@@ -964,116 +940,104 @@ public final class OscilloscopeView extends AbstractMeasurementView {
 
     /** Records the user's intent to keep the table extracted into the tool
      *  window.  The shell's actual open/closed state is derived from this
-     *  flag AND {@code oscShowMeasurementTable} via {@link #syncExternalShell},
+     *  flag AND {@code oscShowMeasurementTable} via {@link #syncToolWindow},
      *  so hiding the measurement table with the gauge button closes the
      *  shell without forgetting the extracted intent — re-enabling the
      *  measurement table then brings the shell back automatically. */
     private void setTableExtracted(boolean extracted) {
         if (extracted == tableExtracted) return;
         tableExtracted = extracted;
-        syncExternalShell();
+        externalBtn.setToggled(extracted);
+        syncScopeButtons();   // stats/reset depend on !tableExtracted
+        syncToolWindow();
         redraw();
     }
 
-    /** Brings the external shell into sync with the current
+    /** Shows/hides the signal-gated header buttons (gauge / external / stats / reset and
+     *  the gap before them) per the cascade — signal present → table shown → not
+     *  extracted → stats on — then re-flows the toolbar.  Driven by {@link #setBuffer}
+     *  and the toggle listeners, never by paint. */
+    private void syncScopeButtons() {
+        Preferences p = Preferences.instance();
+        boolean signal    = (reader != null);
+        boolean showTable = p.isOscShowMeasurementTable();
+        boolean tableVis = signal;
+        boolean extVis   = signal && showTable;
+        boolean statsVis = extVis && !tableExtracted;
+        boolean resetVis = statsVis && p.isOscShowStats();
+        dataSpacer.setExcluded(!tableVis);
+        tableToggleBtn.setExcluded(!tableVis);
+        externalBtn.setExcluded(!extVis);
+        statsToggleBtn.setExcluded(!statsVis);
+        resetBtn.setExcluded(!resetVis);
+        headerBar.reflow();
+    }
+
+    /** Brings the {@link #measurementWindow} into sync with the current
      *  {@code tableExtracted} ∧ {@code oscShowMeasurementTable} state:
-     *  opens it when both are true, disposes it otherwise. */
-    private void syncExternalShell() {
+     *  creates + opens it when both are true, disposes it otherwise. */
+    private void syncToolWindow() {
         boolean shouldBeOpen = tableExtracted
                 && Preferences.instance().isOscShowMeasurementTable();
-        boolean isOpen = externalMeasurementShell != null
-                && !externalMeasurementShell.isDisposed();
-        if (shouldBeOpen && !isOpen) {
-            createExternalMeasurementShell();
-        } else if (!shouldBeOpen && isOpen) {
-            externalMeasurementShell.dispose();
-            externalMeasurementShell  = null;
-            externalMeasurementCanvas = null;
+        if (shouldBeOpen && measurementWindow == null) {
+            createMeasurementWindow();
+        } else if (!shouldBeOpen && measurementWindow != null) {
+            measurementWindow.dispose();
+            measurementWindow = null;
         }
     }
 
-    /** Builds the tool window with a regular (non-tool) trim so the close
-     *  button has the standard right-edge padding, and without
-     *  {@code SWT.RESIZE} since we auto-size to the table content.  The
-     *  single child Canvas paints the stats/reset buttons (when stats are
-     *  enabled) followed by the measurement table.  Closing the shell
-     *  routes back through {@link #setTableExtracted}(false) so the
+    /** Creates the measurements tool window: pushes its colours + the stats-toggle / reset
+     *  button row (each signalling back here), then the rendered table + size + position,
+     *  and opens it.  Closing it routes through {@link #setTableExtracted}(false) so the
      *  in-canvas table reappears. */
-    private void createExternalMeasurementShell() {
-        Shell parent = getShell();
-        // SWT.DIALOG_TRIM = TITLE | CLOSE | BORDER — gives the standard
-        // Windows title bar (matching Paint.NET-style tool windows) with
-        // proper right-edge inset on the close button.  No resize.
-        Shell s = new Shell(parent, SWT.DIALOG_TRIM);
-        s.setText(I18n.t("scope.external.window.title"));
-        s.setLayout(new org.eclipse.swt.layout.FillLayout());
-        Canvas c = new Canvas(s, SWT.DOUBLE_BUFFERED);
-        c.setBackground(color(ColorRole.BACKGROUND));
-        c.addPaintListener(this::paintExternalMeasurementTable);
-        c.addMouseListener(new org.eclipse.swt.events.MouseAdapter() {
-            @Override
-            public void mouseDown(org.eclipse.swt.events.MouseEvent ev) {
-                if (ev.button != 1) return;
-                Preferences prefs = Preferences.instance();
-                if (extStatsToggleBounds.contains(ev.x, ev.y)) {
-                    prefs.setOscShowStats(!prefs.isOscShowStats());
-                    prefs.save();
-                    // Resize the tool window to match the new column count
-                    // before redrawing so the trim adapts in lock-step.
-                    resizeExternalShellToContent();
-                    redraw();   // mirrors to external canvas via our redraw() override
-                    return;
-                }
-                if (extResetButtonBounds.contains(ev.x, ev.y)) {
+    private void createMeasurementWindow() {
+        ToolWindow w = new ToolWindow(this, color(ColorRole.BACKGROUND), color(ColorRole.TEXT), BTN_W, BTN_H);
+        w.setTitle(I18n.t("scope.external.window.title"));
+        // Stats-toggle re-enables the σ columns from inside the window; reset clears the
+        // running statistics.  Both flow back through redraw().
+        w.addButton(SvgPaths.CHART_COLUMN, 16, true, Preferences.instance().isOscShowStats(),
+                color(ColorRole.TEXT), I18n.t("scope.stats.toggle.tooltip"), e -> {
+                    Preferences p = Preferences.instance();
+                    p.setOscShowStats(!p.isOscShowStats());
+                    p.save();
+                    sizeMeasurementWindow();
+                    redraw();
+                });
+        w.addButton(SvgPaths.ROTATE_LEFT, 18, false, false,
+                color(ColorRole.RESET), I18n.t("scope.stats.reset.tooltip"), e -> {
                     measWorker.clearHistory();
                     redraw();
-                }
-            }
-        });
-        c.addMouseMoveListener(ev -> {
-            int cursorId = SWT.CURSOR_ARROW;
-            String tip   = null;
-            if (extStatsToggleBounds.contains(ev.x, ev.y)) {
-                cursorId = SWT.CURSOR_HAND;
-                tip = I18n.t("scope.stats.toggle.tooltip");
-            } else if (extResetButtonBounds.contains(ev.x, ev.y)) {
-                cursorId = SWT.CURSOR_HAND;
-                tip = I18n.t("scope.stats.reset.tooltip");
-            }
-            c.setCursor(getDisplay().getSystemCursor(cursorId));
-            c.setToolTipText(tip);
-        });
-
-        externalMeasurementShell  = s;
-        externalMeasurementCanvas = c;
-        resizeExternalShellToContent();
-        org.eclipse.swt.graphics.Rectangle pb = parent.getBounds();
-        s.setLocation(pb.x + pb.width - s.getSize().x - 24, pb.y + 96);
-        s.addListener(SWT.Close, e -> {
-            // Don't let the framework auto-dispose — we want
-            // setTableExtracted to clear the state and redraw the main view.
-            e.doit = false;
-            setTableExtracted(false);
-        });
-        s.open();
+                });
+        w.addCloseListener(e -> setTableExtracted(false));
+        w.setPainter(this::paintMeasurementTable);
+        measurementWindow = w;
+        sizeMeasurementWindow();
+        Point ws = w.getSize();
+        Rectangle pb = getShell().getBounds();
+        w.setLocation(pb.x + pb.width - ws.x - 24, pb.y + 96);
+        w.open();
     }
 
-    /** Recomputes the tool window's size from the current stats-visibility
-     *  state and applies it.  Width tracks the rightmost visible column
-     *  (only {@code cur} when stats are off, all five when on).  Called
-     *  when the shell is first built and whenever the stats toggle is
-     *  flipped inside the tool window. */
-    private void resizeExternalShellToContent() {
-        Shell s = externalMeasurementShell;
-        if (s == null || s.isDisposed()) return;
+    /** {@link ToolWindow.ContentPainter} for the measurements window — draws the live table
+     *  straight into the window's GC at {@code top} (just below its button row). */
+    private void paintMeasurementTable(GC gc, int top) {
+        Preferences prefs = Preferences.instance();
+        if (reader == null || !prefs.isOscShowMeasurementTable()) return;
+        MeasurementRow[] rows = prepareMeasurementRows(prefs);
+        if (rows == null) return;
+        drawMeasurementTableAt(gc, rows, prefs.isOscLeftChannelEnabled(),
+                prefs.isOscRightChannelEnabled(), prefs.getOscMeasurementChannel(), top);
+    }
+
+    /** Sizes {@link #measurementWindow} to the current column count (the σ columns appear
+     *  / disappear with the stats toggle). */
+    private void sizeMeasurementWindow() {
+        if (measurementWindow == null) return;
         boolean showStats = Preferences.instance().isOscShowStats();
-        int lineH    = estimateMeasurementLineHeight();
-        int tableH   = lineH * 9 + 6;
-        int contentH = 5 + 22 + 2 + tableH;
-        int rightmostColumn = showStats ? COL_SIGMA_RIGHT : COL_CUR_RIGHT;
-        int contentW = rightmostColumn + 12;
-        org.eclipse.swt.graphics.Rectangle trim = s.computeTrim(0, 0, contentW, contentH);
-        s.setSize(trim.width, trim.height);
+        int tableW = (showStats ? COL_SIGMA_RIGHT : COL_CUR_RIGHT) + 12;
+        int tableH = estimateMeasurementLineHeight() * 9 + 6;
+        measurementWindow.setSize(tableW, tableH);
     }
 
     /** Returns an estimate of the per-row pixel height of the measurement
@@ -1092,48 +1056,13 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         }
     }
 
-    /** Paint listener for {@link #externalMeasurementCanvas} — draws the
-     *  stats-toggle + reset buttons at the top (when stats are on) and
-     *  the measurement table immediately below.  Reads from the shared
-     *  cached rows so updates from the measurement worker propagate
-     *  identically to both places. */
-    private void paintExternalMeasurementTable(org.eclipse.swt.events.PaintEvent ev) {
-        Preferences prefs = Preferences.instance();
-        if (reader == null) return;
-        if (!prefs.isOscShowMeasurementTable()) return;
-        MeasurementRow[] rows = prepareMeasurementRows(prefs);
-        if (rows == null) return;
-        boolean showL = prefs.isOscLeftChannelEnabled();
-        boolean showR = prefs.isOscRightChannelEnabled();
-        Channel selected = prefs.getOscMeasurementChannel();
-
-        ensureIconButtonResources();
-        boolean showStats = prefs.isOscShowStats();
-        final int btnW = 22, btnH = 22;
-        final int by = 5;
-        int sbX = COL_NAME_X;
-        // Stats-toggle is always present inside the tool window so the
-        // user can re-enable stats; reset only when stats are on.
-        drawIconToggleButton(ev.gc, sbX, by, btnW, btnH,
-                chartColumnIconLight, chartColumnIconDark, showStats);
-        setBounds(extStatsToggleBounds, sbX, by, btnW, btnH);
-        if (showStats) {
-            int rsX = sbX + btnW + 2;
-            drawIconPushButton(ev.gc, rsX, by, btnW, btnH, resetStatIcon);
-            setBounds(extResetButtonBounds, rsX, by, btnW, btnH);
-        } else {
-            extResetButtonBounds.width = 0; extResetButtonBounds.height = 0;
-        }
-        drawMeasurementTableAt(ev.gc, rows, showL, showR, selected, by + btnH + 2);
-    }
-
     @Override
     public void redraw() {
         super.redraw();
-        // Mirror the redraw to the extracted table window so its data
-        // tracks the main view in lock-step.
-        if (externalMeasurementCanvas != null && !externalMeasurementCanvas.isDisposed()) {
-            externalMeasurementCanvas.redraw();
+        // Mirror to the extracted tool window so it tracks the main view in lock-step — its
+        // canvas repaints through the painter registered in createMeasurementWindow().
+        if (measurementWindow != null) {
+            measurementWindow.redraw();
         }
     }
 
@@ -1238,8 +1167,8 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private void applyHfLowPass(int sampleRate, int available,
                                 boolean needL, boolean needR) {
         Preferences prefs = Preferences.instance();
-        LpfMode lm = LpfMode.fromNameOr(prefs.getOscLeftLpf(),  LpfMode.NONE);
-        LpfMode rm = LpfMode.fromNameOr(prefs.getOscRightLpf(), LpfMode.NONE);
+        LpfMode lm = prefs.getOscLeftLpf();
+        LpfMode rm = prefs.getOscRightLpf();
         if (lm == LpfMode.NONE && rm == LpfMode.NONE) return;
         if (hfLpfSampleRate != sampleRate) {
             hfLpfLeft = null; hfLpfRight = null;
@@ -1277,10 +1206,8 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private void applyMainsSuppression(int sampleRate, int available,
                                        boolean needL, boolean needR) {
         Preferences prefs = Preferences.instance();
-        boolean mainsL = needL && MainsSuppression.fromNameOr(
-                prefs.getOscLeftMainsSuppression(),  MainsSuppression.NONE) == MainsSuppression.IIR_COMB;
-        boolean mainsR = needR && MainsSuppression.fromNameOr(
-                prefs.getOscRightMainsSuppression(), MainsSuppression.NONE) == MainsSuppression.IIR_COMB;
+        boolean mainsL = needL && prefs.getOscLeftMainsSuppression()  == MainsSuppression.IIR_COMB;
+        boolean mainsR = needR && prefs.getOscRightMainsSuppression() == MainsSuppression.IIR_COMB;
         if (!mainsL && !mainsR) return;
         if (mainsCombSampleRate != sampleRate || mainsCombLeft == null) {
             mainsCombLeft  = new MainsCombFilter(sampleRate, MAINS_NOTCH_BW_HZ);
@@ -1345,129 +1272,9 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private static final String[] HEADERS       = {"cur", "avg", "min", "max", "σ"};
     private static final int[]    HEADER_RIGHTS = {COL_CUR_RIGHT, COL_AVG_RIGHT, COL_MIN_RIGHT, COL_MAX_RIGHT, COL_SIGMA_RIGHT};
 
-    /** Draws the row of header buttons at the top of the measurement-table
-     *  region: L / R channel selectors (always visible, always clickable —
-     *  they also drive the vertical-offset slider's channel), a gauge
-     *  toggle for the whole table, and — only when the table is shown —
-     *  the chart-column stats toggle and the rotate-left reset-statistics
-     *  button.  Hit-boxes for each visible button are recorded into the
-     *  matching {@code *Bounds} field; hidden buttons have their bounds
-     *  cleared so stale clicks don't fire. */
-    private void drawMeasurementHeaderButtons(GC gc, boolean showL, boolean showR,
-                                              Channel selected, boolean hasSignal) {
-        if (monoFont == null) {
-            monoFont = new Font(getDisplay(), "Consolas", 9, SWT.NORMAL);
-        }
-        if (chanButtonFont == null) {
-            chanButtonFont = new Font(getDisplay(), "Consolas", 12, SWT.BOLD);
-        }
-        ensureIconButtonResources();
-        Font prevFont = gc.getFont();
-        gc.setAntialias(SWT.OFF);
-        gc.setTextAntialias(SWT.ON);
-        gc.setForeground(color(ColorRole.TEXT));
-        gc.setBackground(color(ColorRole.BACKGROUND));
-
-        final int y = 5;
-        final int btnW = 22;
-        final int btnH = 22;
-
-        // 1) L / R channel-pick buttons — always visible.  They also pick
-        //    which channel the vertical-offset slider controls, so they
-        //    must stay clickable even when the channel is disabled.  Use
-        //    a larger bold font so the L / R glyph reads at a glance.
-        gc.setFont(chanButtonFont);
-        int lbX = COL_NAME_X;
-        int rbX = lbX + btnW + 2;
-        drawChannelButton(gc, lbX, y, btnW, btnH, "L", true,
-                selected == Channel.L, color(ColorRole.LEFT_TRACE), color(ColorRole.LEFT_CHANNEL_MID));
-        drawChannelButton(gc, rbX, y, btnW, btnH, "R", true,
-                selected == Channel.R, color(ColorRole.RIGHT_TRACE), color(ColorRole.RIGHT_CHANNEL_MID));
-        setBounds(leftChanButtonBounds,  lbX, y, btnW, btnH);
-        setBounds(rightChanButtonBounds, rbX, y, btnW, btnH);
-        gc.setFont(monoFont);
-
-        // 2) Auto-Setup — always visible.  When no signal is present the
-        //    click is a no-op (handled by the callback), but keeping the
-        //    button always shown means its position never shifts.
-        int asX = rbX + btnW + 6;
-        if (autoSetupIcon != null) {
-            drawIconPushButton(gc, asX, y, btnW, btnH, autoSetupIcon);
-            setBounds(autoSetupButtonBounds, asX, y, btnW, btnH);
-        } else {
-            autoSetupButtonBounds.width = 0; autoSetupButtonBounds.height = 0;
-        }
-
-        // 3) Gauge — independent toggle for showing / hiding the whole
-        //    measurement table.  Only visible once a signal is present
-        //    (recording in progress or a file loaded) — there's nothing
-        //    to measure otherwise.  Same 6 px gap from the previous
-        //    button as the R → Auto-Setup gap.
-        int gbX = asX + btnW + 6;
-        boolean showTable = Preferences.instance().isOscShowMeasurementTable();
-        if (hasSignal) {
-            drawIconToggleButton(gc, gbX, y, btnW, btnH,
-                    gaugeIconLight, gaugeIconDark, showTable);
-            setBounds(tableToggleBounds, gbX, y, btnW, btnH);
-        } else {
-            tableToggleBounds.width = 0; tableToggleBounds.height = 0;
-        }
-
-        // 4) External-window — toggles whether the table rows live in this
-        //    view or in a separate tool window.  Visible only when the
-        //    measurement table itself is on.
-        int ewX = gbX + btnW + 2;
-        if (hasSignal && showTable && windowRestoreIconLight != null) {
-            drawIconToggleButton(gc, ewX, y, btnW, btnH,
-                    windowRestoreIconLight, windowRestoreIconDark, tableExtracted);
-            setBounds(externalWindowButtonBounds, ewX, y, btnW, btnH);
-        } else {
-            externalWindowButtonBounds.width = 0; externalWindowButtonBounds.height = 0;
-        }
-
-        // 5) Stats-toggle (chart-column) — visible when there's a signal
-        //    AND the measurement table is shown AND the table is NOT
-        //    extracted (when extracted, this button moves to the tool
-        //    window — see paintExternalMeasurementTable).
-        // 6) Reset-statistics (rotate-left, red) — same gating as stats
-        //    toggle, plus only when statistics are enabled.
-        boolean showStats = Preferences.instance().isOscShowStats();
-        if (hasSignal && showTable && !tableExtracted) {
-            int sbX = ewX + btnW + 2;
-            drawIconToggleButton(gc, sbX, y, btnW, btnH,
-                    chartColumnIconLight, chartColumnIconDark, showStats);
-            setBounds(statsToggleBounds, sbX, y, btnW, btnH);
-
-            if (showStats) {
-                int rsX = sbX + btnW + 2;
-                drawIconPushButton(gc, rsX, y, btnW, btnH, resetStatIcon);
-                setBounds(resetButtonBoundsHeader, rsX, y, btnW, btnH);
-            } else {
-                resetButtonBoundsHeader.width = 0; resetButtonBoundsHeader.height = 0;
-            }
-        } else {
-            statsToggleBounds.width = 0;       statsToggleBounds.height = 0;
-            resetButtonBoundsHeader.width = 0; resetButtonBoundsHeader.height = 0;
-        }
-
-        gc.setFont(prevFont);
-    }
-
-    private static void setBounds(Rectangle r, int x, int y, int w, int h) {
-        r.x = x; r.y = y; r.width = w; r.height = h;
-    }
-
-    private void drawMeasurementTable(GC gc, MeasurementRow[] rows,
-                                      boolean showL, boolean showR, Channel selected) {
-        // Main-view call site: the button row sits at y ∈ [5, 27), so the
-        // table starts one line below.
-        drawMeasurementTableAt(gc, rows, showL, showR, selected, 5 + 22 + 2);
-    }
-
-    /** Same as {@link #drawMeasurementTable} but the caller controls the
-     *  starting y position.  The extracted tool window reuses this with a
-     *  smaller offset (or a button-row offset when the stats/reset
-     *  buttons live above the table). */
+    /** Renders the measurement table into {@code gc} from {@code startY} down.  Shared by the
+     *  in-canvas table (main-view paint, below the header button row) and the extracted tool
+     *  window's painter (below its stats/reset row). */
     private void drawMeasurementTableAt(GC gc, MeasurementRow[] rows,
                                         boolean showL, boolean showR, Channel selected,
                                         int startY) {
@@ -1518,93 +1325,6 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         }
         gc.setFont(prevFont);
     }
-
-    /**
-     * Draws an L or R channel-select button.
-     *
-     * <ul>
-     *   <li>Channel not captured ⇒ grey outline.  Click is ignored by the
-     *       mouse handler.</li>
-     *   <li>Captured + selected ⇒ filled with the bright channel colour,
-     *       black letter — high contrast so the active channel pops.</li>
-     *   <li>Captured + not selected ⇒ outlined with the dim channel colour;
-     *       letter in the same dim colour.</li>
-     * </ul>
-     */
-    private void drawChannelButton(GC gc, int x, int y, int w, int h,
-                                   String label, boolean enabled, boolean selected,
-                                   Color bright, Color dim) {
-        Color paint = !enabled ? color(ColorRole.DISABLED_CHANNEL) : (selected ? bright : dim);
-        if (enabled && selected) {
-            gc.setBackground(paint);
-            gc.fillRectangle(x, y, w, h);
-            gc.setForeground(color(ColorRole.BACKGROUND));
-        } else {
-            gc.setForeground(paint);
-            gc.setLineAttributes(lineAttrsThin);
-            gc.drawRectangle(x, y, w - 1, h - 1);
-            gc.setForeground(paint);
-        }
-        Point ts = gc.textExtent(label);
-        gc.drawText(label, x + (w - ts.x) / 2, y + (h - ts.y) / 2, true);
-    }
-
-    /**
-     * Draws the stats-toggle button: a small square with three white bars
-     * of increasing height (a 3-bar histogram glyph) painted directly as
-     * filled rectangles — no font dependency.  Outlined when stats are
-     * shown; filled white with black bars when stats are hidden (the
-     * "pressed" appearance, consistent with the L/R buttons' selected
-     * state).
-     */
-    /** Lazily renders the SVG header-button icons in both a light tint (used
-     *  when the button is outlined / off) and a dark tint (used when the
-     *  button is filled / on).  Disposed with the view. */
-    private void ensureIconButtonResources() {
-        if (gaugeIconLight != null) return;
-        Display d = getDisplay();
-        RGB text = rgb(ColorRole.TEXT);
-        RGB background  = rgb(ColorRole.BACKGROUND);
-        RGB reset   = rgb(ColorRole.RESET);
-        IconUtils icons = IconUtils.instance();
-        gaugeIconLight       = icons.renderAtHeight(d, SvgPaths.GAUGE_HIGH,         16, text);
-        gaugeIconDark        = icons.renderAtHeight(d, SvgPaths.GAUGE_HIGH,         16, background);
-        chartColumnIconLight = icons.renderAtHeight(d, SvgPaths.CHART_COLUMN,       16, text);
-        chartColumnIconDark  = icons.renderAtHeight(d, SvgPaths.CHART_COLUMN,       16, background);
-        // Reset icon has no frame so it can use the extra 2 px of room.
-        resetStatIcon       = icons.renderAtHeight(d, SvgPaths.ROTATE_LEFT,        18, reset);
-        autoSetupIcon          = icons.renderAtHeight(d, SvgPaths.ARROWS_TO_CIRCLE,   16, text);
-        windowRestoreIconLight = icons.renderAtHeight(d, SvgPaths.WINDOW_RESTORE,     16, text);
-        windowRestoreIconDark  = icons.renderAtHeight(d, SvgPaths.WINDOW_RESTORE,     16, background);
-    }
-
-    /** Draws a toggleable icon button (outlined when {@code on} is false,
-     *  filled with the overlay colour when {@code on} is true).  Uses the
-     *  light icon variant on the outlined background and the dark variant
-     *  on the filled background so the glyph stays readable in both states. */
-    private void drawIconToggleButton(GC gc, int x, int y, int w, int h,
-                                      Image iconLight, Image iconDark, boolean on) {
-        if (on) {
-            gc.setBackground(color(ColorRole.TEXT));
-            gc.fillRectangle(x, y, w, h);
-            drawCenteredIcon(gc, iconDark != null ? iconDark : iconLight, x, y, w, h);
-        } else {
-            gc.setForeground(color(ColorRole.TEXT));
-            gc.setLineAttributes(lineAttrsThin);
-            gc.drawRectangle(x, y, w - 1, h - 1);
-            drawCenteredIcon(gc, iconLight, x, y, w, h);
-        }
-    }
-
-    /** Draws a single-state push button — just the centred icon, no frame.
-     *  Used for the reset-stats button so the red rotate-left glyph reads
-     *  the same way the old red ↻ text glyph did. */
-    private void drawIconPushButton(GC gc, int x, int y, int w, int h, Image iconLight) {
-        drawCenteredIcon(gc, iconLight, x, y, w, h);
-    }
-
-
-
 
     /**
      * Draws the three pane-edge sliders (signal offset on the left, trigger
@@ -2229,7 +1949,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         float[] effectiveData = triggerData;
         boolean effectiveSinc = sincEnabled;
         debugBeatSignal = null;
-        if ("DUAL_TONE".equalsIgnoreCase(prefs.getGenSignalForm())) {
+        if (prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE) {
             int sr = b.getSampleRate();
             // Reconstruct from the frequencies the generator actually EMITS:
             // snapped to the FFT-bin grid when "snap generator freq to FFT

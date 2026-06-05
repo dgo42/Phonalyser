@@ -1,4 +1,6 @@
-package org.edgo.audio.measure.gui.bus;
+package org.edgo.audio.measure.enums;
+
+import org.edgo.audio.measure.gui.bus.Events;
 
 /**
  * Tag carried as the payload of {@link Events#GENERATOR_SIGNAL_CHANGED}

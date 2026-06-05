@@ -1,5 +1,7 @@
 package org.edgo.audio.measure.fft;
 
+import lombok.experimental.UtilityClass;
+
 /**
  * Pure-math helpers used by {@link FftAnalyzer}.  Side-effect-free —
  * trivially unit-testable in isolation.
@@ -8,9 +10,8 @@ package org.edgo.audio.measure.fft;
  * can reference the unqualified names; promote to a wider visibility
  * if other packages start needing the same building blocks.
  */
+@UtilityClass
 public final class MathUtil {
-
-    private MathUtil() {}
 
     /** Chebyshev polynomial of the first kind T_n(x).
      *  Uses the trigonometric identity inside |x| ≤ 1 and the

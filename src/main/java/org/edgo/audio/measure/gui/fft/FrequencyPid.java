@@ -1,5 +1,6 @@
 package org.edgo.audio.measure.gui.fft;
 
+import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.gui.bus.Events;
 
 /**
@@ -125,5 +126,9 @@ public final class FrequencyPid implements FrequencyAligner {
         prevErr    = 0.0;
         havePrev   = false;
         haveLast   = false;
+    }
+
+    public AlignGenerator getMode() {
+        return AlignGenerator.PID;
     }
 }

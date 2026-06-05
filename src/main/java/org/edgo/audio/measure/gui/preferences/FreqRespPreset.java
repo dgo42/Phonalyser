@@ -1,7 +1,6 @@
 package org.edgo.audio.measure.gui.preferences;
 
-import lombok.Getter;
-import lombok.Setter;
+import lombok.Data;
 
 /**
  * Snapshot of every Frequency-Response Settings-tab control whose value is
@@ -12,8 +11,7 @@ import lombok.Setter;
  * <p>Mirrors the shape of {@link FftPreset}; the YAML round-trip lives
  * alongside the FFT presets in {@code Preferences#save} / {@code load}.
  */
-@Getter
-@Setter
+@Data
 public class FreqRespPreset {
     // Sweep
     private double startHz        = 20.0;

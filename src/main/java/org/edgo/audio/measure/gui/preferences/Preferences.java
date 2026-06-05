@@ -13,10 +13,18 @@ import java.util.List;
 import java.util.Map;
 
 import org.edgo.audio.measure.enums.AlignGenerator;
+import org.edgo.audio.measure.enums.AmplitudeUnit;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.FftMagnitudeUnit;
+import org.edgo.audio.measure.enums.FftOverlap;
+import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.enums.LpfMode;
+import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
+import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.gui.enums.TabOrientation;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 
@@ -65,7 +73,7 @@ public final class Preferences {
      *  a conventional horizontal tab folder, {@code "LEFT"} for a vertical
      *  sidebar of large icon + label buttons.  Changing this triggers a
      *  shell recreate so the new layout takes effect immediately. */
-    @Getter @Setter private String tabOrientation = "TOP";
+    @Getter @Setter private TabOrientation tabOrientation = TabOrientation.TOP;
 
     /** Zero-based index of the most recently selected top-level tab,
      *  restored on the next launch.  Only honoured by the LEFT sidebar
@@ -129,12 +137,12 @@ public final class Preferences {
     /** Per-channel mains-hum suppression mode (MainsSuppression enum name);
      *  filters the captured signal before scope display / trigger /
      *  measurement.  DC-preserving (removes only 50/60 Hz + harmonics). */
-    @Getter @Setter private String         oscLeftMainsSuppression  = "NONE";
-    @Getter @Setter private String         oscRightMainsSuppression = "NONE";
+    @Getter @Setter private MainsSuppression oscLeftMainsSuppression  = MainsSuppression.NONE;
+    @Getter @Setter private MainsSuppression oscRightMainsSuppression = MainsSuppression.NONE;
     /** Per-channel HF low-pass mode (LpfMode enum name) — strips spikes
      *  above the audio band before scope display / measurement. */
-    @Getter @Setter private String         oscLeftLpf   = "NONE";
-    @Getter @Setter private String         oscRightLpf  = "NONE";
+    @Getter @Setter private LpfMode        oscLeftLpf   = LpfMode.NONE;
+    @Getter @Setter private LpfMode        oscRightLpf  = LpfMode.NONE;
 
     // Per-pane slider state.  All values are fractions of the visible window
     // (independent of V/div and t/div): 0.5 = centred, 0 = top/left edge,
@@ -196,7 +204,7 @@ public final class Preferences {
     // the user last entered is remembered separately so the field reformats
     // back into "their" unit on reload.
     // -------------------------------------------------------------------------
-    @Getter @Setter private String genSignalForm    = "SINE";
+    @Getter @Setter private GenSignalForm genSignalForm = GenSignalForm.SINE;
     @Getter @Setter private double genFrequencyHz   = 1000.0;
     /** First tone of the {@code DUAL_TONE} waveform — Hz. */
     @Getter @Setter private double genDualToneFreq1Hz = 1000.0;
@@ -208,7 +216,7 @@ public final class Preferences {
     @Getter @Setter private double genDualToneSplitPct = 50.0;
     @Getter @Setter private double genAmplitudeVrms = 0.5;
     /** Unit the amplitude field renders in: one of {@code mV}, {@code V}, {@code dBV}, {@code dBFS}. */
-    @Getter @Setter private String genAmplitudeUnit = "V";
+    @Getter @Setter private AmplitudeUnit genAmplitudeUnit = AmplitudeUnit.V;
     /** Dither bits 0..N; 0 means "Off". */
     @Getter @Setter private int    genDitherBits    = 0;
     /** Path to the harmonics-correction CSV, or {@code null} if none. */
@@ -290,13 +298,13 @@ public final class Preferences {
     @Getter @Setter private boolean fftFundFromGenerator = false;
     @Getter @Setter private boolean fftLogFreqAxis       = true;
     /** {@code WindowType} enum name. */
-    @Getter @Setter private String  fftWindow            = "HANN";
+    @Getter @Setter private WindowType fftWindow = WindowType.HANN;
     /** {@code FftOverlap} enum name. */
-    @Getter @Setter private String  fftOverlap           = "PCT_0";
+    @Getter @Setter private FftOverlap fftOverlap = FftOverlap.PCT_0;
     @Getter @Setter private boolean fftCoherentAveraging = true;
     /** {@code MainsSuppression} enum name — mains-hum filter applied to
      *  the captured signal before FFT averaging. */
-    @Getter @Setter private String  fftMainsSuppression  = "NONE";
+    @Getter @Setter private MainsSuppression fftMainsSuppression = MainsSuppression.NONE;
     /** When true, the FFT-side frequency-lock loop drives the generator
      *  to keep the fundamental on the nearest FFT bin centre.  Only
      *  takes effect when {@code genSnapToFftBin} AND
@@ -323,12 +331,12 @@ public final class Preferences {
     @Getter @Setter private double  fftFllKd             = 0.0;
     @Getter @Setter private double  fftManualFundVrms    = 1.0;
     /** Unit the manual-fundamental-amplitude field renders in: {@code mV}, {@code V}, or {@code dBV}. */
-    @Getter @Setter private String  fftManualFundUnit    = "V";
+    @Getter @Setter private AmplitudeUnit fftManualFundUnit = AmplitudeUnit.V;
     @Getter @Setter private boolean fftManualFundEnabled = false;
     /** Active analysis channel (L or R) — only one channel shown at a time. */
     @Getter @Setter private Channel fftChannel    = Channel.L;
     /** {@code FftMagnitudeUnit} enum name: {@code V}, {@code V_SQRT_HZ}, {@code DBV}, {@code DBFS}. */
-    @Getter @Setter private String  fftMagUnit           = "DBV";
+    @Getter @Setter private FftMagnitudeUnit fftMagUnit = FftMagnitudeUnit.DBV;
     /** Whether the THD overlay table is shown on top of the spectrum view. */
     @Getter @Setter private boolean fftDistortionTableVisible = true;
     @Getter @Setter private double  fftFreqMinHz         = 20;
@@ -612,7 +620,7 @@ public final class Preferences {
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("backend",                backend.name());
         if (uiLanguage != null) root.put("uiLanguage", uiLanguage);
-        if (tabOrientation != null) root.put("tabOrientation", tabOrientation);
+        root.put("tabOrientation", tabOrientation.name());
         root.put("activeTabIndex", activeTabIndex);
         root.put("smallIconsInMainTab", smallIconsInMainTab);
         root.put("checkForUpdatesOnStartup",  checkForUpdatesOnStartup);
@@ -639,10 +647,10 @@ public final class Preferences {
         root.put("oscShowReconstructedBeat",    oscShowReconstructedBeat);
         root.put("oscLeftSincInterpEnabled",  oscLeftSincInterpEnabled);
         root.put("oscRightSincInterpEnabled", oscRightSincInterpEnabled);
-        root.put("oscLeftMainsSuppression",  oscLeftMainsSuppression);
-        root.put("oscRightMainsSuppression", oscRightMainsSuppression);
-        root.put("oscLeftLpf",  oscLeftLpf);
-        root.put("oscRightLpf", oscRightLpf);
+        root.put("oscLeftMainsSuppression",  oscLeftMainsSuppression.name());
+        root.put("oscRightMainsSuppression", oscRightMainsSuppression.name());
+        root.put("oscLeftLpf",  oscLeftLpf.name());
+        root.put("oscRightLpf", oscRightLpf.name());
         root.put("oscLeftOffsetFrac",      oscLeftOffsetFrac);
         root.put("oscRightOffsetFrac",     oscRightOffsetFrac);
         root.put("oscTriggerLevelFrac",    oscTriggerLevelFrac);
@@ -653,13 +661,13 @@ public final class Preferences {
         root.put("oscShowMeasurementTable",      oscShowMeasurementTable);
         root.put("adcFsVoltageRms",              adcFsVoltageRms);
         root.put("dacFsVoltageRms",              dacFsVoltageRms);
-        root.put("genSignalForm",                genSignalForm);
+        root.put("genSignalForm",                genSignalForm.name());
         root.put("genFrequencyHz",               genFrequencyHz);
         root.put("genDualToneFreq1Hz",           genDualToneFreq1Hz);
         root.put("genDualToneFreq2Hz",           genDualToneFreq2Hz);
         root.put("genDualToneSplitPct",          genDualToneSplitPct);
         root.put("genAmplitudeVrms",             genAmplitudeVrms);
-        root.put("genAmplitudeUnit",             genAmplitudeUnit);
+        root.put("genAmplitudeUnit",             genAmplitudeUnit.name());
         root.put("genDitherBits",                genDitherBits);
         if (genCorrectionsCsv    != null) root.put("genCorrectionsCsv",    genCorrectionsCsv);
         if (genCorrectionsFolder != null) root.put("genCorrectionsFolder", genCorrectionsFolder);
@@ -703,10 +711,10 @@ public final class Preferences {
                 pm.put("rightAcMode",            p.isRightAcMode());
                 pm.put("leftSincInterpEnabled",  p.isLeftSincInterpEnabled());
                 pm.put("rightSincInterpEnabled", p.isRightSincInterpEnabled());
-                pm.put("leftMainsSuppression",   p.getLeftMainsSuppression());
-                pm.put("rightMainsSuppression",  p.getRightMainsSuppression());
-                pm.put("leftLpf",                p.getLeftLpf());
-                pm.put("rightLpf",               p.getRightLpf());
+                pm.put("leftMainsSuppression",   p.getLeftMainsSuppression().name());
+                pm.put("rightMainsSuppression",  p.getRightMainsSuppression().name());
+                pm.put("leftLpf",                p.getLeftLpf().name());
+                pm.put("rightLpf",               p.getRightLpf().name());
                 pm.put("leftVoltsPerDiv",        p.getLeftVoltsPerDiv());
                 pm.put("rightVoltsPerDiv",       p.getRightVoltsPerDiv());
                 pm.put("leftOffsetFrac",         p.getLeftOffsetFrac());
@@ -729,10 +737,10 @@ public final class Preferences {
         root.put("fftStopAfterN",             fftStopAfterN);
         root.put("fftFundFromGenerator",      fftFundFromGenerator);
         root.put("fftLogFreqAxis",            fftLogFreqAxis);
-        root.put("fftWindow",                 fftWindow);
-        root.put("fftOverlap",                fftOverlap);
+        root.put("fftWindow",                 fftWindow.name());
+        root.put("fftOverlap",                fftOverlap.name());
         root.put("fftCoherentAveraging",      fftCoherentAveraging);
-        root.put("fftMainsSuppression",       fftMainsSuppression);
+        root.put("fftMainsSuppression",       fftMainsSuppression.name());
         root.put("fftAlignGenerator",         fftAlignGenerator.name());
         root.put("fftDistMinHz",              fftDistMinHz);
         root.put("fftDistMaxHz",              fftDistMaxHz);
@@ -745,10 +753,10 @@ public final class Preferences {
         root.put("fftFllKi",                  fftFllKi);
         root.put("fftFllKd",                  fftFllKd);
         root.put("fftManualFundVrms",         fftManualFundVrms);
-        root.put("fftManualFundUnit",         fftManualFundUnit);
+        root.put("fftManualFundUnit",         fftManualFundUnit.name());
         root.put("fftManualFundEnabled",      fftManualFundEnabled);
         root.put("fftChannel",                fftChannel.name());
-        root.put("fftMagUnit",                fftMagUnit);
+        root.put("fftMagUnit",                fftMagUnit.name());
         root.put("fftDistortionTableVisible", fftDistortionTableVisible);
         root.put("fftFreqMinHz",              fftFreqMinHz);
         root.put("fftFreqMaxHz",              fftFreqMaxHz);
@@ -830,7 +838,7 @@ public final class Preferences {
                 FftPreset p = e.getValue();
                 Map<String, Object> pm = new LinkedHashMap<>();
                 pm.put("channel",           p.getChannel().name());
-                pm.put("magUnit",           p.getMagUnit());
+                pm.put("magUnit",           p.getMagUnit().name());
                 pm.put("logFreqAxis",       p.isLogFreqAxis());
                 pm.put("freqMinHz",         p.getFreqMinHz());
                 pm.put("freqMaxHz",         p.getFreqMaxHz());
@@ -841,8 +849,8 @@ public final class Preferences {
                 pm.put("stopAfterNEnabled", p.isStopAfterNEnabled());
                 pm.put("stopAfterN",        p.getStopAfterN());
                 pm.put("fundFromGenerator", p.isFundFromGenerator());
-                pm.put("window",            p.getWindow());
-                pm.put("overlap",           p.getOverlap());
+                pm.put("window",            p.getWindow().name());
+                pm.put("overlap",           p.getOverlap().name());
                 pm.put("coherentAveraging", p.isCoherentAveraging());
                 pm.put("distMinHz",         p.getDistMinHz());
                 pm.put("distMaxHz",         p.getDistMaxHz());
@@ -851,7 +859,7 @@ public final class Preferences {
                 pm.put("thdMaxHarmonic",    p.getThdMaxHarmonic());
                 pm.put("calcMaxHarmonic",   p.getCalcMaxHarmonic());
                 pm.put("manualFundVrms",    p.getManualFundVrms());
-                pm.put("manualFundUnit",    p.getManualFundUnit());
+                pm.put("manualFundUnit",    p.getManualFundUnit().name());
                 pm.put("manualFundEnabled", p.isManualFundEnabled());
                 fpMap.put(e.getKey(), pm);
             }
@@ -899,7 +907,7 @@ public final class Preferences {
 
     private void fromMap(Map<?, ?> root) {
         if (root.get("uiLanguage") instanceof String s) uiLanguage = s;
-        if (root.get("tabOrientation") instanceof String s) tabOrientation = s;
+        if (root.get("tabOrientation") instanceof String s) tabOrientation = enumOr(TabOrientation.class, s, tabOrientation);
         if (root.get("activeTabIndex") instanceof Number n) activeTabIndex = n.intValue();
         if (root.get("smallIconsInMainTab") instanceof Boolean b) smallIconsInMainTab = b;
         if (root.get("checkForUpdatesOnStartup")  instanceof Boolean b) checkForUpdatesOnStartup  = b;
@@ -931,10 +939,10 @@ public final class Preferences {
         if (root.get("oscShowReconstructedBeat")    instanceof Boolean b) oscShowReconstructedBeat    = b;
         if (root.get("oscLeftSincInterpEnabled")  instanceof Boolean b) oscLeftSincInterpEnabled  = b;
         if (root.get("oscRightSincInterpEnabled") instanceof Boolean b) oscRightSincInterpEnabled = b;
-        if (root.get("oscLeftMainsSuppression")  instanceof String s) oscLeftMainsSuppression  = s;
-        if (root.get("oscRightMainsSuppression") instanceof String s) oscRightMainsSuppression = s;
-        if (root.get("oscLeftLpf")  instanceof String s) oscLeftLpf  = s;
-        if (root.get("oscRightLpf") instanceof String s) oscRightLpf = s;
+        if (root.get("oscLeftMainsSuppression")  instanceof String s) oscLeftMainsSuppression  = enumOr(MainsSuppression.class, s, oscLeftMainsSuppression);
+        if (root.get("oscRightMainsSuppression") instanceof String s) oscRightMainsSuppression = enumOr(MainsSuppression.class, s, oscRightMainsSuppression);
+        if (root.get("oscLeftLpf")  instanceof String s) oscLeftLpf  = enumOr(LpfMode.class, s, oscLeftLpf);
+        if (root.get("oscRightLpf") instanceof String s) oscRightLpf = enumOr(LpfMode.class, s, oscRightLpf);
         if (root.get("oscLeftOffsetFrac")      instanceof Number n) oscLeftOffsetFrac      = n.doubleValue();
         if (root.get("oscRightOffsetFrac")     instanceof Number n) oscRightOffsetFrac     = n.doubleValue();
         if (root.get("oscTriggerLevelFrac")    instanceof Number n) oscTriggerLevelFrac    = n.doubleValue();
@@ -945,13 +953,13 @@ public final class Preferences {
         if (root.get("oscShowMeasurementTable")      instanceof Boolean b) oscShowMeasurementTable = b;
         if (root.get("adcFsVoltageRms")              instanceof Number n) adcFsVoltageRms      = n.doubleValue();
         if (root.get("dacFsVoltageRms")              instanceof Number n) dacFsVoltageRms      = n.doubleValue();
-        if (root.get("genSignalForm")                instanceof String s) genSignalForm        = s;
+        if (root.get("genSignalForm")                instanceof String s) genSignalForm        = enumOr(GenSignalForm.class, s, genSignalForm);
         if (root.get("genFrequencyHz")               instanceof Number n) genFrequencyHz       = n.doubleValue();
         if (root.get("genDualToneFreq1Hz")           instanceof Number n) genDualToneFreq1Hz   = n.doubleValue();
         if (root.get("genDualToneFreq2Hz")           instanceof Number n) genDualToneFreq2Hz   = n.doubleValue();
         if (root.get("genDualToneSplitPct")          instanceof Number n) genDualToneSplitPct  = n.doubleValue();
         if (root.get("genAmplitudeVrms")             instanceof Number n) genAmplitudeVrms     = n.doubleValue();
-        if (root.get("genAmplitudeUnit")             instanceof String s) genAmplitudeUnit     = s;
+        if (root.get("genAmplitudeUnit")             instanceof String s) genAmplitudeUnit     = enumOr(AmplitudeUnit.class, s, genAmplitudeUnit);
         if (root.get("genDitherBits")                instanceof Number n) genDitherBits        = n.intValue();
         if (root.get("genCorrectionsCsv")            instanceof String s) genCorrectionsCsv    = s;
         if (root.get("genCorrectionsFolder")         instanceof String s) genCorrectionsFolder    = s;
@@ -1000,10 +1008,10 @@ public final class Preferences {
                 if (pm.get("rightAcMode")            instanceof Boolean b) p.setRightAcMode(b);
                 if (pm.get("leftSincInterpEnabled")  instanceof Boolean b) p.setLeftSincInterpEnabled(b);
                 if (pm.get("rightSincInterpEnabled") instanceof Boolean b) p.setRightSincInterpEnabled(b);
-                if (pm.get("leftMainsSuppression")   instanceof String  s) p.setLeftMainsSuppression(s);
-                if (pm.get("rightMainsSuppression")  instanceof String  s) p.setRightMainsSuppression(s);
-                if (pm.get("leftLpf")                instanceof String  s) p.setLeftLpf(s);
-                if (pm.get("rightLpf")               instanceof String  s) p.setRightLpf(s);
+                if (pm.get("leftMainsSuppression")   instanceof String  s) p.setLeftMainsSuppression(enumOr(MainsSuppression.class, s, p.getLeftMainsSuppression()));
+                if (pm.get("rightMainsSuppression")  instanceof String  s) p.setRightMainsSuppression(enumOr(MainsSuppression.class, s, p.getRightMainsSuppression()));
+                if (pm.get("leftLpf")                instanceof String  s) p.setLeftLpf(enumOr(LpfMode.class, s, p.getLeftLpf()));
+                if (pm.get("rightLpf")               instanceof String  s) p.setRightLpf(enumOr(LpfMode.class, s, p.getRightLpf()));
                 if (pm.get("leftVoltsPerDiv")        instanceof Number  n) p.setLeftVoltsPerDiv(n.doubleValue());
                 if (pm.get("rightVoltsPerDiv")       instanceof Number  n) p.setRightVoltsPerDiv(n.doubleValue());
                 if (pm.get("leftOffsetFrac")         instanceof Number  n) p.setLeftOffsetFrac(n.doubleValue());
@@ -1025,10 +1033,10 @@ public final class Preferences {
         if (root.get("fftStopAfterN")             instanceof Number  n) fftStopAfterN        = n.intValue();
         if (root.get("fftFundFromGenerator")      instanceof Boolean b) fftFundFromGenerator = b;
         if (root.get("fftLogFreqAxis")            instanceof Boolean b) fftLogFreqAxis       = b;
-        if (root.get("fftWindow")                 instanceof String  s) fftWindow            = s;
-        if (root.get("fftOverlap")                instanceof String  s) fftOverlap           = s;
+        if (root.get("fftWindow")                 instanceof String  s) fftWindow            = enumOr(WindowType.class, s, fftWindow);
+        if (root.get("fftOverlap")                instanceof String  s) fftOverlap           = enumOr(FftOverlap.class, s, fftOverlap);
         if (root.get("fftCoherentAveraging")      instanceof Boolean b) fftCoherentAveraging = b;
-        if (root.get("fftMainsSuppression")       instanceof String  s) fftMainsSuppression  = s;
+        if (root.get("fftMainsSuppression")       instanceof String  s) fftMainsSuppression  = enumOr(MainsSuppression.class, s, fftMainsSuppression);
         if (root.get("fftAlignGenerator")         instanceof String  s) fftAlignGenerator    = AlignGenerator.fromString(s);
         else if (root.get("fftAlignGenToFreqDiff") instanceof Boolean b)   // migrate the old checkbox
             fftAlignGenerator = b ? AlignGenerator.PID : AlignGenerator.NONE;
@@ -1043,10 +1051,10 @@ public final class Preferences {
         if (root.get("fftFllKi")                  instanceof Number  n) fftFllKi             = n.doubleValue();
         if (root.get("fftFllKd")                  instanceof Number  n) fftFllKd             = n.doubleValue();
         if (root.get("fftManualFundVrms")         instanceof Number  n) fftManualFundVrms    = n.doubleValue();
-        if (root.get("fftManualFundUnit")         instanceof String  s) fftManualFundUnit    = s;
+        if (root.get("fftManualFundUnit")         instanceof String  s) fftManualFundUnit    = enumOr(AmplitudeUnit.class, s, fftManualFundUnit);
         if (root.get("fftManualFundEnabled")      instanceof Boolean b) fftManualFundEnabled = b;
         if (root.get("fftChannel")                instanceof String  s) fftChannel           = enumOr(Channel.class, s, fftChannel);
-        if (root.get("fftMagUnit")                instanceof String  s) fftMagUnit           = s;
+        if (root.get("fftMagUnit")                instanceof String  s) fftMagUnit           = enumOr(FftMagnitudeUnit.class, s, fftMagUnit);
         if (root.get("fftDistortionTableVisible") instanceof Boolean b) fftDistortionTableVisible = b;
         if (root.get("fftFreqMinHz")              instanceof Number  n) fftFreqMinHz         = n.doubleValue();
         if (root.get("fftFreqMaxHz")              instanceof Number  n) fftFreqMaxHz         = n.doubleValue();
@@ -1178,7 +1186,7 @@ public final class Preferences {
                 if (!(e.getValue() instanceof Map<?, ?> pm)) continue;
                 FftPreset p = new FftPreset();
                 if (pm.get("channel")           instanceof String  s) p.setChannel(enumOr(Channel.class, s, p.getChannel()));
-                if (pm.get("magUnit")           instanceof String  s) p.setMagUnit(s);
+                if (pm.get("magUnit")           instanceof String  s) p.setMagUnit(enumOr(FftMagnitudeUnit.class, s, p.getMagUnit()));
                 if (pm.get("logFreqAxis")       instanceof Boolean b) p.setLogFreqAxis(b);
                 if (pm.get("freqMinHz")         instanceof Number  n) p.setFreqMinHz(n.doubleValue());
                 if (pm.get("freqMaxHz")         instanceof Number  n) p.setFreqMaxHz(n.doubleValue());
@@ -1189,8 +1197,8 @@ public final class Preferences {
                 if (pm.get("stopAfterNEnabled") instanceof Boolean b) p.setStopAfterNEnabled(b);
                 if (pm.get("stopAfterN")        instanceof Number  n) p.setStopAfterN(n.intValue());
                 if (pm.get("fundFromGenerator") instanceof Boolean b) p.setFundFromGenerator(b);
-                if (pm.get("window")            instanceof String  s) p.setWindow(s);
-                if (pm.get("overlap")           instanceof String  s) p.setOverlap(s);
+                if (pm.get("window")            instanceof String  s) p.setWindow(enumOr(WindowType.class, s, p.getWindow()));
+                if (pm.get("overlap")           instanceof String  s) p.setOverlap(enumOr(FftOverlap.class, s, p.getOverlap()));
                 if (pm.get("coherentAveraging") instanceof Boolean b) p.setCoherentAveraging(b);
                 if (pm.get("distMinHz")         instanceof Number  n) p.setDistMinHz(n.doubleValue());
                 if (pm.get("distMaxHz")         instanceof Number  n) p.setDistMaxHz(n.doubleValue());
@@ -1199,7 +1207,7 @@ public final class Preferences {
                 if (pm.get("thdMaxHarmonic")    instanceof Number  n) p.setThdMaxHarmonic(n.intValue());
                 if (pm.get("calcMaxHarmonic")   instanceof Number  n) p.setCalcMaxHarmonic(n.intValue());
                 if (pm.get("manualFundVrms")    instanceof Number  n) p.setManualFundVrms(n.doubleValue());
-                if (pm.get("manualFundUnit")    instanceof String  s) p.setManualFundUnit(s);
+                if (pm.get("manualFundUnit")    instanceof String  s) p.setManualFundUnit(enumOr(AmplitudeUnit.class, s, p.getManualFundUnit()));
                 if (pm.get("manualFundEnabled") instanceof Boolean b) p.setManualFundEnabled(b);
                 fftPresets.put(key, p);
             }

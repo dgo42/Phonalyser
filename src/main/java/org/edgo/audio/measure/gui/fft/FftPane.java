@@ -48,6 +48,8 @@ import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.FftMagnitudeUnit;
 import org.edgo.audio.measure.enums.FftOverlap;
+import org.edgo.audio.measure.enums.GenChangeCause;
+import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
@@ -55,7 +57,6 @@ import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.MainTab;
 import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
@@ -848,15 +849,14 @@ public final class FftPane {
 
         addLabel(g, I18n.t("fft.settings.window"));
         windowCombo = new Combo(g, SWT.READ_ONLY);
-        windowCombo.setItems(FftPaneFormat.WINDOW_LABELS);
+        for (WindowType w : WindowType.values()) windowCombo.add(I18n.t(w.labelKey()));
         windowCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        WindowType currWin =
-                FftPaneFormat.enumOr(WindowType.class, prefs.getFftWindow(), WindowType.HANN);
+        WindowType currWin = prefs.getFftWindow();
         windowCombo.select(currWin.ordinal());
         windowCombo.addListener(SWT.Selection, e -> {
             int i = windowCombo.getSelectionIndex();
             if (i >= 0) {
-                prefs.setFftWindow(WindowType.values()[i].name());
+                prefs.setFftWindow(WindowType.values()[i]);
                 prefs.save();
                 refreshTabHeader(TAB_FFT_SETTINGS);
                 view.resetStatistics();
@@ -867,12 +867,12 @@ public final class FftPane {
         overlapCombo = new Combo(g, SWT.READ_ONLY);
         for (FftOverlap ov : FftOverlap.values()) overlapCombo.add(ov.label);
         overlapCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        FftOverlap currOv = FftPaneFormat.enumOr(FftOverlap.class, prefs.getFftOverlap(), FftOverlap.PCT_0);
+        FftOverlap currOv = prefs.getFftOverlap();
         overlapCombo.select(currOv.ordinal());
         overlapCombo.addListener(SWT.Selection, e -> {
             int i = overlapCombo.getSelectionIndex();
             if (i >= 0) {
-                prefs.setFftOverlap(FftOverlap.values()[i].name());
+                prefs.setFftOverlap(FftOverlap.values()[i]);
                 prefs.save();
                 refreshTabHeader(TAB_FFT_SETTINGS);
                 // Overlap only changes the hop, not the spectrum/accumulator —
@@ -961,13 +961,12 @@ public final class FftPane {
         mainsSuppressionCombo = new Combo(stopRow, SWT.READ_ONLY);
         mainsSuppressionCombo.setItems(MainsSuppression.LABELS);
         mainsSuppressionCombo.setToolTipText(I18n.t("fft.settings.mainsSuppression.tooltip"));
-        MainsSuppression currMains = MainsSuppression.fromNameOr(
-                prefs.getFftMainsSuppression(), MainsSuppression.NONE);
+        MainsSuppression currMains = prefs.getFftMainsSuppression();
         mainsSuppressionCombo.select(currMains.ordinal());
         mainsSuppressionCombo.addListener(SWT.Selection, e -> {
             int i = mainsSuppressionCombo.getSelectionIndex();
             if (i >= 0 && i < MainsSuppression.values().length) {
-                prefs.setFftMainsSuppression(MainsSuppression.values()[i].name());
+                prefs.setFftMainsSuppression(MainsSuppression.values()[i]);
                 prefs.save();
             }
         });
@@ -1149,7 +1148,7 @@ public final class FftPane {
         manualFundField = new NumericStepField(g,
                 prefs.getFftManualFundVrms(),
                 FftPaneFormat::parseAmplitudeWithUnit,
-                v -> FftPaneFormat.formatAmplitudeWithUnit(v, Preferences.instance().getFftManualFundUnit()),
+                v -> FftPaneFormat.formatAmplitudeWithUnit(v, Preferences.instance().getFftManualFundUnit().display),
                 (v, dir) -> v * (1.0 + 0.05 * dir),
                 (v, dir) -> v * (1.0 + 0.01 * dir),
                 110);
@@ -1303,41 +1302,10 @@ public final class FftPane {
             presetLoadBtn.setEnabled(false);
             presetDeleteBtn.setEnabled(false);
         } else {
-            presetSaveBtn.setEnabled(!presetsEqual(existing, captureCurrentFftPreset()));
+            presetSaveBtn.setEnabled(!existing.equals(captureCurrentFftPreset()));
             presetLoadBtn.setEnabled(true);
             presetDeleteBtn.setEnabled(true);
         }
-    }
-
-    private boolean presetsEqual(FftPreset a, FftPreset b) {
-        return a.getChannel() == b.getChannel()
-            && eq(a.getMagUnit(), b.getMagUnit())
-            && a.isLogFreqAxis()       == b.isLogFreqAxis()
-            && Double.compare(a.getFreqMinHz(),    b.getFreqMinHz())    == 0
-            && Double.compare(a.getFreqMaxHz(),    b.getFreqMaxHz())    == 0
-            && Double.compare(a.getMagTop(),       b.getMagTop())       == 0
-            && Double.compare(a.getMagBottom(),    b.getMagBottom())    == 0
-            && a.getFftLength()        == b.getFftLength()
-            && Double.compare(a.getAverages(),     b.getAverages())     == 0
-            && a.isStopAfterNEnabled() == b.isStopAfterNEnabled()
-            && a.getStopAfterN()       == b.getStopAfterN()
-            && a.isFundFromGenerator() == b.isFundFromGenerator()
-            && eq(a.getWindow(),  b.getWindow())
-            && eq(a.getOverlap(), b.getOverlap())
-            && a.isCoherentAveraging() == b.isCoherentAveraging()
-            && Double.compare(a.getDistMinHz(), b.getDistMinHz()) == 0
-            && Double.compare(a.getDistMaxHz(), b.getDistMaxHz()) == 0
-            && a.isDistMinEnabled() == b.isDistMinEnabled()
-            && a.isDistMaxEnabled() == b.isDistMaxEnabled()
-            && a.getThdMaxHarmonic()  == b.getThdMaxHarmonic()
-            && a.getCalcMaxHarmonic() == b.getCalcMaxHarmonic()
-            && Double.compare(a.getManualFundVrms(), b.getManualFundVrms()) == 0
-            && eq(a.getManualFundUnit(), b.getManualFundUnit())
-            && a.isManualFundEnabled() == b.isManualFundEnabled();
-    }
-
-    private boolean eq(String a, String b) {
-        return (a == null) ? b == null : a.equals(b);
     }
 
     private boolean confirmOverwritePreset(String name) {
@@ -1427,17 +1395,15 @@ public final class FftPane {
             averagesField.setValue(Math.max(1, prefs.getFftAverages()));
         }
         if (windowCombo  != null && !windowCombo .isDisposed()) {
-            WindowType wt = FftPaneFormat.enumOr(WindowType.class,
-                    prefs.getFftWindow(), WindowType.HANN);
+            WindowType wt = prefs.getFftWindow();
             windowCombo.select(wt.ordinal());
         }
         if (mainsSuppressionCombo != null && !mainsSuppressionCombo.isDisposed()) {
-            MainsSuppression ms = MainsSuppression.fromNameOr(
-                    prefs.getFftMainsSuppression(), MainsSuppression.NONE);
+            MainsSuppression ms = prefs.getFftMainsSuppression();
             mainsSuppressionCombo.select(ms.ordinal());
         }
         if (overlapCombo != null && !overlapCombo.isDisposed()) {
-            FftOverlap ov = FftPaneFormat.enumOr(FftOverlap.class, prefs.getFftOverlap(), FftOverlap.PCT_0);
+            FftOverlap ov = prefs.getFftOverlap();
             overlapCombo.select(ov.ordinal());
         }
         if (stopAfterNEnable != null && !stopAfterNEnable.isDisposed()) {
@@ -1502,7 +1468,7 @@ public final class FftPane {
         Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
         if (parent == null) return;
         Preferences prefs = Preferences.instance();
-        boolean sine = "SINE".equalsIgnoreCase(prefs.getGenSignalForm());
+        boolean sine = prefs.getGenSignalForm() == GenSignalForm.SINE;
         if (!view.isRunning() || !view.isGeneratorActive() || !sine
                 || !prefs.isGenSnapToFftBin() || !prefs.isFftFundFromGenerator()
                 || prefs.getFftAlignGenerator() != AlignGenerator.PID) {   // tunes the PID gains
@@ -1758,7 +1724,7 @@ public final class FftPane {
         if (fMax - fMin < binSize)  fMax = Math.min(nyq, fMin + binSize);
         prefs.setFftFreqMinHz(fMin);
         prefs.setFftFreqMaxHz(fMax);
-        FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
+        FftMagnitudeUnit unit = prefs.getFftMagUnit();
         double fs    = prefs.getAdcFsVoltageRms();
         double maxTp = FftFormat.magMaxFor(unit, fs);
         double minBt = FftFormat.magMinFor(unit, fs);
@@ -1837,7 +1803,7 @@ public final class FftPane {
         }
 
         // ---- Magnitude scrollbar
-        FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
+        FftMagnitudeUnit unit = prefs.getFftMagUnit();
         double fs    = prefs.getAdcFsVoltageRms();
         double maxTp = FftFormat.magMaxFor(unit, fs);
         double minBt = FftFormat.magMinFor(unit, fs);
@@ -1895,7 +1861,7 @@ public final class FftPane {
 
     private void applyMagScrollbar() {
         Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
+        FftMagnitudeUnit unit = prefs.getFftMagUnit();
         double fs    = prefs.getAdcFsVoltageRms();
         double maxTp = FftFormat.magMaxFor(unit, fs);
         double minBt = FftFormat.magMinFor(unit, fs);
@@ -2021,8 +1987,8 @@ public final class FftPane {
         List<String> out = new ArrayList<>();
         if (tabIndex == TAB_FFT_SETTINGS) {
             out.add(FftPaneFormat.shortFftLength(prefs.getFftLength()));
-            out.add(FftPaneFormat.shortWindow(prefs.getFftWindow()));
-            out.add(FftPaneFormat.shortOverlap(prefs.getFftOverlap()));
+            out.add(prefs.getFftWindow().name());
+            out.add(prefs.getFftOverlap().label);
             out.add(FftPaneFormat.formatAverages(prefs.getFftAverages()) + "×");
             out.add(prefs.isFftCoherentAveraging() ? "coh" : "inc");
         } else if (tabIndex == TAB_THD_SETTINGS) {
@@ -2060,12 +2026,12 @@ public final class FftPane {
             addTabRegion(x, y, w1, tileH, I18n.t("fft.tile.length", prefs.getFftLength()));
             x += w1 + gap;
             int w2 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                    FftPaneFormat.shortWindow(prefs.getFftWindow()));
-            addTabRegion(x, y, w2, tileH, I18n.t("fft.tile.window", FftPaneFormat.prettyWindow(prefs.getFftWindow())));
+                    prefs.getFftWindow().name());
+            addTabRegion(x, y, w2, tileH, I18n.t("fft.tile.window", I18n.t(prefs.getFftWindow().labelKey())));
             x += w2 + gap;
             int w3 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                    FftPaneFormat.shortOverlap(prefs.getFftOverlap()));
-            addTabRegion(x, y, w3, tileH, I18n.t("fft.tile.overlap", FftPaneFormat.prettyOverlap(prefs.getFftOverlap())));
+                    prefs.getFftOverlap().label);
+            addTabRegion(x, y, w3, tileH, I18n.t("fft.tile.overlap", prefs.getFftOverlap().label));
             x += w3 + gap;
             int w4 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
                     FftPaneFormat.formatAverages(prefs.getFftAverages()) + "×");

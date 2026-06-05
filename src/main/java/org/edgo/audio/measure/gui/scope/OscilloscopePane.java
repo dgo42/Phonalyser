@@ -35,6 +35,8 @@ import org.eclipse.swt.widgets.ProgressBar;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.GenChangeCause;
+import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.TriggerEdge;
@@ -42,7 +44,6 @@ import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.gui.MainTab;
 import org.edgo.audio.measure.gui.MainWindow;
 import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
@@ -1418,12 +1419,11 @@ public final class OscilloscopePane {
         leftMains = new Combo(g, SWT.READ_ONLY);
         leftMains.setItems(MainsSuppression.LABELS);
         leftMains.setToolTipText(I18n.t("scope.mains.tooltip"));
-        leftMains.select(MainsSuppression.fromNameOr(
-                prefs.getOscLeftMainsSuppression(), MainsSuppression.NONE).ordinal());
+        leftMains.select(prefs.getOscLeftMainsSuppression().ordinal());
         leftMains.addListener(SWT.Selection, e -> {
             int i = leftMains.getSelectionIndex();
             if (i >= 0 && i < MainsSuppression.values().length) {
-                prefs.setOscLeftMainsSuppression(MainsSuppression.values()[i].name());
+                prefs.setOscLeftMainsSuppression(MainsSuppression.values()[i]);
                 prefs.save();
                 requestRedraw();
                 refreshTabHeader(TAB_LEFT);
@@ -1434,11 +1434,11 @@ public final class OscilloscopePane {
         leftLpf = new Combo(g, SWT.READ_ONLY);
         leftLpf.setItems(LpfMode.LABELS);
         leftLpf.setToolTipText(I18n.t("scope.lpf.tooltip"));
-        leftLpf.select(LpfMode.fromNameOr(prefs.getOscLeftLpf(), LpfMode.NONE).ordinal());
+        leftLpf.select(prefs.getOscLeftLpf().ordinal());
         leftLpf.addListener(SWT.Selection, e -> {
             int i = leftLpf.getSelectionIndex();
             if (i >= 0 && i < LpfMode.values().length) {
-                prefs.setOscLeftLpf(LpfMode.values()[i].name());
+                prefs.setOscLeftLpf(LpfMode.values()[i]);
                 prefs.save();
                 requestRedraw();
                 refreshTabHeader(TAB_LEFT);
@@ -1504,12 +1504,11 @@ public final class OscilloscopePane {
         rightMains = new Combo(g, SWT.READ_ONLY);
         rightMains.setItems(MainsSuppression.LABELS);
         rightMains.setToolTipText(I18n.t("scope.mains.tooltip"));
-        rightMains.select(MainsSuppression.fromNameOr(
-                prefs.getOscRightMainsSuppression(), MainsSuppression.NONE).ordinal());
+        rightMains.select(prefs.getOscRightMainsSuppression().ordinal());
         rightMains.addListener(SWT.Selection, e -> {
             int i = rightMains.getSelectionIndex();
             if (i >= 0 && i < MainsSuppression.values().length) {
-                prefs.setOscRightMainsSuppression(MainsSuppression.values()[i].name());
+                prefs.setOscRightMainsSuppression(MainsSuppression.values()[i]);
                 prefs.save();
                 requestRedraw();
                 refreshTabHeader(TAB_RIGHT);
@@ -1520,11 +1519,11 @@ public final class OscilloscopePane {
         rightLpf = new Combo(g, SWT.READ_ONLY);
         rightLpf.setItems(LpfMode.LABELS);
         rightLpf.setToolTipText(I18n.t("scope.lpf.tooltip"));
-        rightLpf.select(LpfMode.fromNameOr(prefs.getOscRightLpf(), LpfMode.NONE).ordinal());
+        rightLpf.select(prefs.getOscRightLpf().ordinal());
         rightLpf.addListener(SWT.Selection, e -> {
             int i = rightLpf.getSelectionIndex();
             if (i >= 0 && i < LpfMode.values().length) {
-                prefs.setOscRightLpf(LpfMode.values()[i].name());
+                prefs.setOscRightLpf(LpfMode.values()[i]);
                 prefs.save();
                 requestRedraw();
                 refreshTabHeader(TAB_RIGHT);
@@ -1682,8 +1681,7 @@ public final class OscilloscopePane {
     /** True when the generator is currently in {@code DUAL_TONE} form
      *  (drives the "Reconstructed beat" checkbox's enabled state). */
     private boolean isGeneratorDualTone() {
-        return "DUAL_TONE".equalsIgnoreCase(
-                Preferences.instance().getGenSignalForm());
+        return Preferences.instance().getGenSignalForm() == GenSignalForm.DUAL_TONE;
     }
 
     /** Re-evaluates {@link #reconstructedBeatBtn}'s enabled state from
@@ -1799,36 +1797,10 @@ public final class OscilloscopePane {
             presetDeleteBtn.setEnabled(false);
         } else {
             // Existing — Save only if current settings differ; Load + Delete always.
-            presetSaveBtn  .setEnabled(!presetsEqual(existing, captureCurrentOscPreset()));
+            presetSaveBtn  .setEnabled(!existing.equals(captureCurrentOscPreset()));
             presetLoadBtn  .setEnabled(true);
             presetDeleteBtn.setEnabled(true);
         }
-    }
-
-    /** Field-by-field equality of two {@link OscPreset}s.
-     *  Used to decide whether the Save button should be active when an
-     *  existing preset is selected. */
-    private static boolean presetsEqual(OscPreset a, OscPreset b) {
-        return a.isLeftChannelEnabled()        == b.isLeftChannelEnabled()
-            && a.isRightChannelEnabled()       == b.isRightChannelEnabled()
-            && a.isLeftAcMode()                == b.isLeftAcMode()
-            && a.isRightAcMode()               == b.isRightAcMode()
-            && a.isLeftSincInterpEnabled()     == b.isLeftSincInterpEnabled()
-            && a.isRightSincInterpEnabled()    == b.isRightSincInterpEnabled()
-            && Objects.equals(a.getLeftMainsSuppression(),  b.getLeftMainsSuppression())
-            && Objects.equals(a.getRightMainsSuppression(), b.getRightMainsSuppression())
-            && Objects.equals(a.getLeftLpf(),  b.getLeftLpf())
-            && Objects.equals(a.getRightLpf(), b.getRightLpf())
-            && Double.compare(a.getLeftVoltsPerDiv(),     b.getLeftVoltsPerDiv())     == 0
-            && Double.compare(a.getRightVoltsPerDiv(),    b.getRightVoltsPerDiv())    == 0
-            && Double.compare(a.getLeftOffsetFrac(),      b.getLeftOffsetFrac())      == 0
-            && Double.compare(a.getRightOffsetFrac(),     b.getRightOffsetFrac())     == 0
-            && Double.compare(a.getTimePerDiv(),          b.getTimePerDiv())          == 0
-            && Double.compare(a.getTriggerPositionFrac(), b.getTriggerPositionFrac()) == 0
-            && a.getTriggerChannel() == b.getTriggerChannel()
-            && a.getTriggerEdge()    == b.getTriggerEdge()
-            && a.getTriggerMode()    == b.getTriggerMode()
-            && Double.compare(a.getTriggerLevelFrac(),    b.getTriggerLevelFrac())    == 0;
     }
 
     /** Yes/No confirmation prompt for overwriting an existing preset.
@@ -1911,7 +1883,7 @@ public final class OscilloscopePane {
         // full beat envelope — picking the carrier alone would render
         // a packed wall of cycles with no visible envelope.
         double scaleHz = freq;
-        if ("DUAL_TONE".equalsIgnoreCase(prefs.getGenSignalForm())) {
+        if (prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE) {
             double beatHz = Math.abs(prefs.getGenDualToneFreq2Hz()
                                    - prefs.getGenDualToneFreq1Hz());
             if (beatHz > 0 && (!Double.isFinite(scaleHz) || beatHz < scaleHz)) {
@@ -1970,14 +1942,10 @@ public final class OscilloscopePane {
         if (rightAc     != null && !rightAc    .isDisposed()) rightAc    .setSelection(p.isRightAcMode());
         if (leftSinc    != null && !leftSinc   .isDisposed()) leftSinc   .setSelection(p.isLeftSincInterpEnabled());
         if (rightSinc   != null && !rightSinc  .isDisposed()) rightSinc  .setSelection(p.isRightSincInterpEnabled());
-        if (leftMains   != null && !leftMains  .isDisposed()) leftMains  .select(
-                MainsSuppression.fromNameOr(p.getLeftMainsSuppression(),  MainsSuppression.NONE).ordinal());
-        if (rightMains  != null && !rightMains .isDisposed()) rightMains .select(
-                MainsSuppression.fromNameOr(p.getRightMainsSuppression(), MainsSuppression.NONE).ordinal());
-        if (leftLpf     != null && !leftLpf    .isDisposed()) leftLpf    .select(
-                LpfMode.fromNameOr(p.getLeftLpf(),  LpfMode.NONE).ordinal());
-        if (rightLpf    != null && !rightLpf   .isDisposed()) rightLpf   .select(
-                LpfMode.fromNameOr(p.getRightLpf(), LpfMode.NONE).ordinal());
+        if (leftMains   != null && !leftMains  .isDisposed()) leftMains  .select(p.getLeftMainsSuppression().ordinal());
+        if (rightMains  != null && !rightMains .isDisposed()) rightMains .select(p.getRightMainsSuppression().ordinal());
+        if (leftLpf     != null && !leftLpf    .isDisposed()) leftLpf    .select(p.getLeftLpf().ordinal());
+        if (rightLpf    != null && !rightLpf   .isDisposed()) rightLpf   .select(p.getRightLpf().ordinal());
         // Trigger channel / edge / mode radio groups.
         prefs.setOscTriggerChannel(p.getTriggerChannel());
         prefs.setOscTriggerEdge   (p.getTriggerEdge());

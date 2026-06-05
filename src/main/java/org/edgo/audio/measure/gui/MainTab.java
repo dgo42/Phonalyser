@@ -24,6 +24,7 @@ import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.fft.FftPane;
 import org.edgo.audio.measure.gui.generator.GeneratorPane;
+import org.edgo.audio.measure.gui.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.OscilloscopeController;
@@ -129,8 +130,8 @@ public final class MainTab {
     // -------------------------------------------------------------------------
 
     private void buildHost() {
-        String orientation = Preferences.instance().getTabOrientation();
-        if ("LEFT".equalsIgnoreCase(orientation)) {
+        TabOrientation orientation = Preferences.instance().getTabOrientation();
+        if (orientation == TabOrientation.LEFT) {
             buildLeftSidebar();
         } else {
             buildTopTabs();

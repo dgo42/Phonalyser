@@ -487,20 +487,6 @@ public final class FreqRespPane {
         view.redraw();
     }
 
-    private boolean freqRespPresetsEqual(FreqRespPreset a, FreqRespPreset b) {
-        return Double.compare(a.getStartHz(),       b.getStartHz())       == 0
-            && Double.compare(a.getStopHz(),        b.getStopHz())        == 0
-            && Double.compare(a.getAmplitudeVrms(), b.getAmplitudeVrms()) == 0
-            && a.getSweepPoints() == b.getSweepPoints()
-            && a.getFftSize()     == b.getFftSize()
-            && Double.compare(a.getLeadInSec(),     b.getLeadInSec())     == 0
-            && a.getDitherBits()  == b.getDitherBits()
-            && a.isShowRiaa()     == b.isShowRiaa()
-            && a.isReverseRiaa()  == b.isReverseRiaa()
-            && a.isIecAmendment() == b.isIecAmendment()
-            && a.isCompareMode()  == b.isCompareMode();
-    }
-
     private void refreshFreqRespPresetButtonState() {
         if (freqRespPresetCombo == null || freqRespPresetCombo.isDisposed()) return;
         if (freqRespPresetSaveBtn == null || freqRespPresetSaveBtn.isDisposed()) return;
@@ -519,7 +505,7 @@ public final class FreqRespPane {
             freqRespPresetLoadBtn.setEnabled(false);
             freqRespPresetDeleteBtn.setEnabled(false);
         } else {
-            freqRespPresetSaveBtn.setEnabled(!freqRespPresetsEqual(existing, captureCurrentFreqRespPreset()));
+            freqRespPresetSaveBtn.setEnabled(!existing.equals(captureCurrentFreqRespPreset()));
             freqRespPresetLoadBtn.setEnabled(true);
             freqRespPresetDeleteBtn.setEnabled(true);
         }

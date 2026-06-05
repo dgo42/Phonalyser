@@ -1538,7 +1538,7 @@ public class FftAnalyzer {
     double[] buildWindow(int N, WindowType type) {
         double[] w = new double[N];
         switch (type) {
-            case RECTANGULAR:
+            case RECT:
                 Arrays.fill(w, 1.0);
                 break;
 
@@ -1548,7 +1548,7 @@ public class FftAnalyzer {
                 }
                 break;
 
-            case BLACKMAN_HARRIS_4: {
+            case BH4: {
                 // Harris 1978 "minimum 4-term Blackman-Harris"
                 double a0 = 0.35875, a1 = 0.48829, a2 = 0.14128, a3 = 0.01168;
                 for (int n = 0; n < N; n++) {
@@ -1558,7 +1558,7 @@ public class FftAnalyzer {
                 break;
             }
 
-            case BLACKMAN_HARRIS_7: {
+            case BH7: {
                 // Nuttall 1981 7-term Blackman-Harris
                 double[] a = {
                     0.2712203606, 0.4334446123, 0.2180041184, 0.0657853433,
@@ -1575,7 +1575,7 @@ public class FftAnalyzer {
                 break;
             }
 
-            case FLAT_TOP: {
+            case FT: {
                 // SRS SR785 5-term flat-top (periodic normalization, N)
                 double a0 = 0.21557895, a1 = 0.41663158, a2 = 0.27726316,
                        a3 = 0.08357895, a4 = 0.00694737;
@@ -1587,10 +1587,10 @@ public class FftAnalyzer {
                 break;
             }
 
-            case DOLPH_CHEBYSHEV_150:
+            case DC150:
                 return buildChebyshevWindow(N, 150.0);
 
-            case DOLPH_CHEBYSHEV_200:
+            case DC200:
                 return buildChebyshevWindow(N, 200.0);
 
             default:

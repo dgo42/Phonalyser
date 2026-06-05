@@ -137,7 +137,7 @@ public class IterativeCompensateMode {
         int    chartHeight = Integer.parseInt(heightArg);
 
         WindowType windowType = windowArg  != null
-                ? WindowType.fromString(windowArg)  : WindowType.HANN;
+                ? WindowType.valueOf(windowArg)  : WindowType.HANN;
         FftOverlap overlap = overlapArg != null
                 ? FftOverlap.fromString(overlapArg)    : FftOverlap.PCT_0;
 

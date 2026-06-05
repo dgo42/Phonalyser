@@ -7,49 +7,45 @@ import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.IntToDoubleFunction;
 
-import org.apache.commons.lang3.ArrayUtils;
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.events.MouseAdapter;
 import org.eclipse.swt.events.MouseEvent;
 import org.eclipse.swt.events.PaintEvent;
-import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
-import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
-import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.FormAttachment;
 import org.eclipse.swt.layout.FormData;
 import org.eclipse.swt.layout.FormLayout;
-import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
-import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.FreqRespCalibration;
-import org.edgo.audio.measure.enums.AlignGenerator;
-import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.enums.FftMagnitudeUnit;
-import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.dsp.ToneLobeLift;
+import org.edgo.audio.measure.enums.AlignGenerator;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.FftMagnitudeUnit;
+import org.edgo.audio.measure.enums.GenChangeCause;
+import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
-import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.generator.FftBinSnap;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.gui.widgets.BlinkBanner;
+import org.edgo.audio.measure.gui.widgets.ToolButton;
+import org.edgo.audio.measure.gui.widgets.ToolWindow;
+import org.edgo.audio.measure.gui.widgets.Toolbar;
+import org.edgo.audio.measure.gui.widgets.TransparentComposite;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -72,28 +68,10 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class FftView extends AbstractFreqDomainView {
 
-    // ─── Colours ─────────────────────────────────────────────────────────
-    // All FFT palette colours (background, grid, axis, text, crosshair,
-    // overlay_bg, left/right btn chan, button frame, reset, spectrum,
-    // dim, harmonic_dot, before_cal_dot, freq_resp_response, cal_overlay)
-    // live in the AbstractMeasurementView palette — accessed via
-    // color(ColorRole.X).  syncFftColors() re-allocates the prefs-driven
-    // entries via setColor() (which short-circuits when the RGB hasn't
-    // changed, so there's no per-paint allocation cost).
-
     // ─── Fonts ────────────────────────────────────────────────────────────
     private Font monoFont;
     private Font monoBoldFont;
     private Font chanButtonFont;
-
-    // ─── Icons (lazy) ─────────────────────────────────────────────────────
-    private Image statIconLight;
-    private Image statIconDark;
-    private Image resetStatIcon;
-    private Image autoSetupIcon;
-    private Image maximizeIcon;
-    private Image windowRestoreIconLight;
-    private Image windowRestoreIconDark;
 
     // ─── Top-right overlay widgets ───────────────────────────────────────
     /** Magnitude unit selector (V / V·√Hz / dBV / dBFS). */
@@ -118,10 +96,8 @@ public final class FftView extends AbstractFreqDomainView {
      *  {@link #fll2} tracks the dual-tone tone-2 correction (used only
      *  when the generator form is DUAL_TONE).  Each loop is reset
      *  independently. */
-    private FrequencyAligner fll  =   // type follows the align-mode pref (PID/FLL), swapped via the factory
-            FrequencyAlignerFactory.instance().create(AlignGenerator.PID);
-    private FrequencyAligner fll2 =
-            FrequencyAlignerFactory.instance().create(AlignGenerator.PID);
+    private FrequencyAligner fll;
+    private FrequencyAligner fll2;
 
     /** When non-null and active, the relay-feedback autotune wizard owns the
      *  single-tone correction: {@link #applyFrequencyLockLoop} routes the
@@ -138,7 +114,7 @@ public final class FftView extends AbstractFreqDomainView {
     private MainsCombFilter mainsCorrector;
     /** Shared lobe lift for the manual-fundamental display (same algorithm the
      *  .frc cal uses, so a tone is rescaled identically in both paths). */
-    private static final ToneLobeLift LOBE = new ToneLobeLift();
+    private final ToneLobeLift LOBE = new ToneLobeLift();
     /** Re-derives the measurements (THD / SNR / N / fundamental / harmonics, all
      *  units + %) from the de-hummed spectrum after {@link #mainsCorrector} runs
      *  — the same {@code recomputeStats} the worker uses, so every readout
@@ -154,7 +130,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  generator form so the chosen table appears immediately on first
      *  paint, before the first analysis result arrives. */
     private boolean tableModeIsImd =
-            "DUAL_TONE".equalsIgnoreCase(Preferences.instance().getGenSignalForm());
+            Preferences.instance().getGenSignalForm() == GenSignalForm.DUAL_TONE;
 
     /** Subscriber for {@link Events#GENERATOR_SIGNAL_CHANGED} — held as
      *  a field so dispose can unsubscribe by reference.  On USER_INPUT
@@ -189,6 +165,7 @@ public final class FftView extends AbstractFreqDomainView {
             finalizeResult(slot);
             startRender = System.nanoTime();
             lastResult = slot.deepCopy();
+            syncDataButtons();
             // Frame / phase rejections slow the averaging — raise a sticky
             // (20 s, restarted on each fresh rejection) blinking warning with
             // the full detail in its tooltip.  Otherwise live data clears any
@@ -213,8 +190,8 @@ public final class FftView extends AbstractFreqDomainView {
             // tone source through a paused generator stays on whichever
             // mode was last selected the previous time recording ran.
             boolean prevTableModeIsImd = tableModeIsImd;
-            tableModeIsImd = "DUAL_TONE".equalsIgnoreCase(
-                    Preferences.instance().getGenSignalForm());
+            tableModeIsImd =
+                    Preferences.instance().getGenSignalForm() == GenSignalForm.DUAL_TONE;
             lastImd = tableModeIsImd
                     ? ImdAnalyzer.analyze(slot,
                             Preferences.instance().getGenDualToneFreq1Hz(),
@@ -248,40 +225,32 @@ public final class FftView extends AbstractFreqDomainView {
     private int crossX = -1, crossY = -1;
 
     // ─── Hit-test rectangles for header buttons (refreshed every paint) ──
-    private final Rectangle leftChanButtonBounds     = new Rectangle(0, 0, 0, 0);
-    private final Rectangle rightChanButtonBounds    = new Rectangle(0, 0, 0, 0);
-    private final Rectangle autoSetupButtonBounds    = new Rectangle(0, 0, 0, 0);
-    private final Rectangle maximizeButtonBounds     = new Rectangle(0, 0, 0, 0);
-    private final Rectangle distortionButtonBounds   = new Rectangle(0, 0, 0, 0);
-    private final Rectangle resetButtonBounds        = new Rectangle(0, 0, 0, 0);
-    private final Rectangle externalButtonBounds     = new Rectangle(0, 0, 0, 0);
+    private Toolbar    headerBar;       // L/R channel buttons (migrated from canvas-draw to widgets)
+    private ToolButton leftBtn;
+    private ToolButton rightBtn;
+    private ToolButton autoSetupBtn;
+    private ToolButton maximizeBtn;
+    private ToolButton distortionBtn;
+    private ToolButton resetBtn;
+    private ToolButton externalBtn;
+    private TransparentComposite dataSpacer;      // wide gap before the data trio
+    private boolean    dataButtonsShown = true;   // sync gate; the trio starts hidden (no data)
+    private boolean    externalShown    = true;   // sync gate for externalBtn (needs the table visible)
 
     // ─── Single blinking status banner (top-right) ───────────────────────
-    // All of the banner's parameters are stored as fields so onPaint just
-    // renders the current banner with no per-paint branching: either the
-    // loaded-spectrum path (set by the pane, persistent until live data
-    // arrives) or the frame-rejection warning (a sticky 20 s timer that a
-    // fresh rejection restarts).  A null/empty text means no banner.
-    private String    bannerText;
-    /** Hover tooltip for the banner; {@code null} = no tooltip. */
-    private String    bannerTooltip;
-    /** Blink colour roles the banner pulses between. */
-    private ColorRole bannerLit = ColorRole.BLINK_LIT;
-    private ColorRole bannerDim = ColorRole.BLINK_DIM;
+    // A self-painting, self-blinking BlinkBanner widget (gui.widgets) overlays the
+    // plot top-right: the loaded-spectrum path (persistent until live data arrives)
+    // or the frame-rejection warning (a sticky timer a fresh rejection restarts).
+    // The widget blinks itself — no canvas redraw — so only the expiry lives here.
+    private BlinkBanner banner;
     /** Expiry ({@code System.nanoTime}); {@code 0} = persistent (no timer). */
-    private long      bannerUntilNanos;
-    /** Hit-test rect for the banner tooltip (refreshed each paint). */
-    private final Rectangle bannerBounds = new Rectangle(0, 0, 0, 0);
-    /** Coalesces the 500 ms blink-toggle redraw so multiple paint calls
-     *  don't queue multiple timers. */
-    private boolean blinkRedrawScheduled;
+    private long        bannerUntilNanos;
     /** How long the rejection warning keeps blinking after the last hit. */
     private static final long REJECTION_WARN_NANOS = 10_000_000_000L;
 
     // ─── External tool window ────────────────────────────────────────────
-    private boolean tableExtracted;
-    private Shell   externalShell;
-    private Canvas  externalCanvas;
+    private boolean    tableExtracted;
+    private ToolWindow distortionWindow;   // extracted THD/IMD table window (when extracted)
 
     // Static-layer paint cache (traceBuffer Image + fingerprint) now
     // lives in AbstractFreqDomainView.  Mouse-move / crosshair redraws
@@ -299,11 +268,6 @@ public final class FftView extends AbstractFreqDomainView {
      *  pane title (no gap). */
     private static final int MARGIN_TOP    = 0;
     private static final int MARGIN_BOTTOM = 28;
-    /** Header-button row metrics. */
-    private static final int BTN_W = 22;
-    private static final int BTN_H = 22;
-    private static final int BTN_GAP_LARGE = 6;
-    private static final int BTN_GAP_SMALL = 2;
     /** THD table overlay y offset from top of canvas. */
     private static final int TABLE_TOP_Y = 5 + BTN_H + 6;
 
@@ -316,7 +280,10 @@ public final class FftView extends AbstractFreqDomainView {
         super(parent, SWT.DOUBLE_BUFFERED, Map.of(
                 ColorRole.BACKGROUND, Preferences.instance().getFftChartBackgroundColor(),
                 ColorRole.SPECTRUM,   Preferences.instance().getFftLineColor(),
-                ColorRole.DIM,        0xDCDCDC));
+                ColorRole.DIM,        0xDCDCDC,
+                // L/R channel buttons share the scope's channel colours (cyan/yellow).
+                ColorRole.LEFT_BTN_CHAN,  Preferences.instance().getOscLeftChannelColor(),
+                ColorRole.RIGHT_BTN_CHAN, Preferences.instance().getOscRightChannelColor()));
         // Chapter-level help anchor: Ctrl+F1 anywhere on the spectrum
         // canvas opens fft.html.  The header buttons / THD table /
         // crosshair aren't separate widgets (everything is custom-
@@ -340,37 +307,76 @@ public final class FftView extends AbstractFreqDomainView {
         // palette — kept as view-local fields below.
         syncFftColors();
 
-        // Register the header-row buttons as Hotspots with the shared base.
-        // The base owns the rect-by-reference list + lookup helper; the
-        // mouseDown handler below dispatches via hotspotAt(...) instead of
-        // running through seven explicit if/else branches.
-        registerHotspot(leftChanButtonBounds, () -> {
-            Preferences p = Preferences.instance();
-            p.setFftChannel(Channel.L); p.save(); redraw();
+        // L/R channel buttons — migrated to ToolButton widgets in a top-left Toolbar.
+        chanButtonFont = new Font(getDisplay(), "Consolas", 12, SWT.BOLD);
+        headerBar = new Toolbar(this, BTN_W, BTN_H);
+        FormData hbd = new FormData();
+        hbd.top  = new FormAttachment(0, 5);
+        hbd.left = new FormAttachment(0, MARGIN_LEFT + 4);
+        headerBar.setLayoutData(hbd);
+        Channel ch = Preferences.instance().getFftChannel();
+        leftBtn  = headerBar.chanButton("L", color(ColorRole.TEXT),
+                color(ColorRole.BUTTON_FRAME), color(ColorRole.LEFT_BTN_CHAN),
+                chanButtonFont, I18n.t("fft.button.left.tooltip"),  ch == Channel.L, "channel");
+        rightBtn = headerBar.chanButton("R", color(ColorRole.TEXT),
+                color(ColorRole.BUTTON_FRAME), color(ColorRole.RIGHT_BTN_CHAN),
+                chanButtonFont, I18n.t("fft.button.right.tooltip"), ch == Channel.R, "channel");
+        // Switching channel restarts the accumulation so it re-captures the new channel from 0.
+        leftBtn.addListener(SWT.Selection, e -> {
+            if (leftBtn.isToggled()) {
+                Preferences p = Preferences.instance();
+                p.setFftChannel(Channel.L); p.save();
+                resetStatistics();
+            }
         });
-        registerHotspot(rightChanButtonBounds, () -> {
-            Preferences p = Preferences.instance();
-            p.setFftChannel(Channel.R); p.save(); redraw();
+        rightBtn.addListener(SWT.Selection, e -> {
+            if (rightBtn.isToggled()) {
+                Preferences p = Preferences.instance();
+                p.setFftChannel(Channel.R); p.save();
+                resetStatistics();
+            }
         });
-        registerHotspot(autoSetupButtonBounds, this::autoSetup);
-        registerHotspot(maximizeButtonBounds, this::maximize);
-        registerHotspot(distortionButtonBounds, () -> {
+        headerBar.spacer(2);
+        autoSetupBtn = headerBar.pushButton(SvgPaths.ARROWS_TO_CIRCLE, 16,
+                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
+                I18n.t("fft.autosetup.tooltip"));
+        autoSetupBtn.addListener(SWT.Selection, e -> autoSetup());
+        maximizeBtn = headerBar.pushButton(SvgPaths.ARROWS_FROM_CIRCLE, 16,
+                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
+                I18n.t("fft.maximize.tooltip"));
+        maximizeBtn.addListener(SWT.Selection, e -> maximize());
+        // Distortion / Reset / External — widgets past a wide spacer, shown only while
+        // there's a result (hidden by syncDataButtons() when lastResult is null).
+        dataSpacer = headerBar.spacer(2);
+        distortionBtn = headerBar.toggleButton(SvgPaths.CHART_COLUMN, 16,
+                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.BUTTON_FRAME),
+                I18n.t("fft.distortion.tooltip"), Preferences.instance().isFftDistortionTableVisible());
+        distortionBtn.addListener(SWT.Selection, e -> {
             Preferences p = Preferences.instance();
-            p.setFftDistortionTableVisible(!p.isFftDistortionTableVisible());
+            p.setFftDistortionTableVisible(distortionBtn.isToggled());
             p.save();
+            syncDataButtons();   // external button follows the table's visibility
             syncExternalShell();
             redraw();
         });
-        registerHotspot(externalButtonBounds, () -> setTableExtracted(!tableExtracted));
-        registerHotspot(resetButtonBounds, () -> { resetStatistics(); redraw(); });
+        resetBtn = headerBar.pushButton(SvgPaths.ROTATE_LEFT, 18,
+                rgb(ColorRole.RESET), rgb(ColorRole.BACKGROUND), color(ColorRole.RESET),
+                I18n.t("fft.reset.tooltip"));
+        resetBtn.addListener(SWT.Selection, e -> { resetStatistics(); redraw(); });
+        externalBtn = headerBar.toggleButton(SvgPaths.WINDOW_RESTORE, 16,
+                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.BUTTON_FRAME),
+                I18n.t("fft.external.tooltip"), tableExtracted);
+        externalBtn.addListener(SWT.Selection, e -> {
+            if (externalBtn.isToggled() != tableExtracted) {
+                setTableExtracted(externalBtn.isToggled());
+            }
+        });
+        syncDataButtons();
 
         setBackground(color(ColorRole.BACKGROUND));
         addPaintListener(this::onPaint);
-        addMouseListener(new MouseAdapter() {
-            @Override
-            public void mouseDown(MouseEvent ev) { onMouseDown(ev); }
-        });
         addMouseMoveListener(this::onMouseMove);
+        setCursor(getDisplay().getSystemCursor(SWT.CURSOR_CROSS));   // plot crosshair cursor, set once
         addListener(SWT.MouseVerticalWheel, this::onMouseWheel);
         addMouseTrackListener(new org.eclipse.swt.events.MouseTrackAdapter() {
             @Override
@@ -387,15 +393,14 @@ public final class FftView extends AbstractFreqDomainView {
         setLayout(new FormLayout());
 
         // These children sit on top of the Canvas; without an explicit cursor
-        // they inherit the Canvas's crosshair (set in onMouseMove), so give
-        // them the normal arrow.  getSystemCursor returns a shared cursor that
-        // must not be disposed.
+        // they inherit the Canvas's crosshair cursor, so give them the normal
+        // arrow.  getSystemCursor returns a shared cursor that must not be disposed.
         magUnitCombo = new Combo(this, SWT.READ_ONLY);
         magUnitCombo.setItems(FftMagnitudeUnit.labels());
         magUnitCombo.setToolTipText(I18n.t("fft.magUnit.tooltip"));
         magUnitCombo.setData("helpAnchor", "fft.html#fft-mag-unit");
         magUnitCombo.setCursor(d.getSystemCursor(SWT.CURSOR_ARROW));
-        int magIdx = ArrayUtils.indexOf(FftMagnitudeUnit.names(), Preferences.instance().getFftMagUnit());
+        int magIdx = Preferences.instance().getFftMagUnit().ordinal();
         magUnitCombo.select(magIdx < 0 ? 2 : magIdx);
         magUnitCombo.addListener(SWT.Selection, e -> onMagUnitChanged());
 
@@ -431,6 +436,18 @@ public final class FftView extends AbstractFreqDomainView {
         fpd.width = 36;
         fillPercentLabel.setLayoutData(fpd);
 
+        // Status banner: a transparent self-blinking overlay spanning the plot
+        // (top-right), below the control row.  FormData keeps it edge-relative so the
+        // FormLayout resizes it with the canvas; the widget re-ellipsises to its
+        // width.  FFT has no right-side axis, so the right edge is the canvas edge.
+        banner = new BlinkBanner(this);
+        banner.setVisible(false);
+        FormData bnd = new FormData();
+        bnd.top   = new FormAttachment(averagesCountLabel, 4);
+        bnd.left  = new FormAttachment(0, MARGIN_LEFT);
+        bnd.right = new FormAttachment(100, -6);
+        banner.setLayoutData(bnd);
+
         startFillPercentTimer();
     }
 
@@ -443,8 +460,8 @@ public final class FftView extends AbstractFreqDomainView {
         int i = magUnitCombo.getSelectionIndex();
         if (i < 0) return;
         Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit oldUnit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
-        FftMagnitudeUnit newUnit = FftMagnitudeUnit.fromName(FftMagnitudeUnit.names()[i]);
+        FftMagnitudeUnit oldUnit = prefs.getFftMagUnit();
+        FftMagnitudeUnit newUnit = FftMagnitudeUnit.values()[i];
         double fs = prefs.getAdcFsVoltageRms();
         if (!(fs > 0)) fs = 1.0;
         double fsDbv = 20 * Math.log10(fs);
@@ -452,7 +469,7 @@ public final class FftView extends AbstractFreqDomainView {
                 oldUnit, newUnit, fsDbv);
         prefs.setFftMagTop(conv[0]);
         prefs.setFftMagBottom(conv[1]);
-        prefs.setFftMagUnit(FftMagnitudeUnit.names()[i]);
+        prefs.setFftMagUnit(FftMagnitudeUnit.values()[i]);
         prefs.save();
         fireRangeChanged();
         redraw();
@@ -463,8 +480,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  load or screenshot-pane wire-up. */
     public void refreshFromPrefs() {
         if (magUnitCombo == null || magUnitCombo.isDisposed()) return;
-        int i = ArrayUtils.indexOf(FftMagnitudeUnit.names(), Preferences.instance().getFftMagUnit());
-        if (i >= 0) magUnitCombo.select(i);
+        magUnitCombo.select(Preferences.instance().getFftMagUnit().ordinal());
     }
 
     /** Schedules a recurring ~100 ms timer that updates the fill-%
@@ -516,7 +532,7 @@ public final class FftView extends AbstractFreqDomainView {
         if (chanButtonFont != null) chanButtonFont.dispose();
         // Header icons are cached and owned by IconUtils — disposed
         // when the main shell tears down, not here.
-        if (externalShell != null && !externalShell.isDisposed()) externalShell.dispose();
+        if (distortionWindow != null) distortionWindow.dispose();
         disposeTraceBuffer();
     }
 
@@ -591,8 +607,8 @@ public final class FftView extends AbstractFreqDomainView {
      *  generator was perturbed by the relay. */
     public void setAutotuneSession(FllAutotuneSession session) {
         this.autotuneSession = session;
-        fll.reset();
-        fll2.reset();
+        if (fll != null) fll.reset();
+        if (fll2 != null) fll2.reset();
     }
 
     /** True if the analyser worker is currently running. */
@@ -611,8 +627,8 @@ public final class FftView extends AbstractFreqDomainView {
      *  it ramps up from zero again. */
     public void stop() {
         worker.stop();
-        fll.reset();
-        fll2.reset();
+        if (fll != null) fll.reset();
+        if (fll2 != null) fll2.reset();
     }
 
     /** Feeds the latest FFT result into the closed-loop integrator and
@@ -645,8 +661,7 @@ public final class FftView extends AbstractFreqDomainView {
         if (mode == AlignGenerator.NONE)      return;
         if (!isGeneratorActive())             return;
         // Swap the loop type to match the selected mode (a change resets both loops).
-        boolean wantPid = (mode == AlignGenerator.PID);
-        if ((fll instanceof FrequencyPid) != wantPid) {
+        if (fll == null || fll.getMode() != mode) {
             fll  = FrequencyAlignerFactory.instance().create(mode);
             fll2 = FrequencyAlignerFactory.instance().create(mode);
         }
@@ -658,7 +673,7 @@ public final class FftView extends AbstractFreqDomainView {
         }
         // Branch on generator form: single-tone runs one loop, dual-tone two
         // independent loops driven by the per-tone detected frequencies in lastImd.
-        boolean dualTone = "DUAL_TONE".equalsIgnoreCase(prefs.getGenSignalForm());
+        boolean dualTone = prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE;
         if (dualTone) {
             if (lastImd == null) return;
             double t1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
@@ -727,6 +742,7 @@ public final class FftView extends AbstractFreqDomainView {
             lastResult = null;
             lastImd    = null;
         }
+        syncDataButtons();
         Display d = getDisplay();
         if (d != null && !d.isDisposed()) {
             d.asyncExec(() -> { if (!isDisposed()) redraw(); });
@@ -739,8 +755,8 @@ public final class FftView extends AbstractFreqDomainView {
      *  {@link #resetStatistics()} so a manual statistics reset keeps
      *  the converged alignment intact. */
     public void resetFrequencyLock() {
-        fll.reset();
-        fll2.reset();
+        if (fll != null) fll.reset();
+        if (fll2 != null) fll2.reset();
     }
 
     /** Post-average pipeline, run ONCE per DISPLAYED frame (the worker now hands
@@ -835,6 +851,7 @@ public final class FftView extends AbstractFreqDomainView {
         lastResult = r;
         lastImd = null;
         tableModeIsImd = false;
+        syncDataButtons();
         if (!isDisposed()) { redraw(); update(); }
     }
 
@@ -850,24 +867,32 @@ public final class FftView extends AbstractFreqDomainView {
         if (!isDisposed()) redraw();
     }
 
-    /** Stores the current status banner's parameters; onPaint renders
-     *  whatever is set (see {@link #drawBlinkBanner}) with no branching.
-     *  @param untilNanos {@code 0} = persistent, else a {@code nanoTime}
-     *         expiry after which the banner stops blinking. */
+    /** Shows the status banner — the loaded-spectrum path or the frame-rejection
+     *  warning — on the {@link BlinkBanner} widget, which paints and blinks itself
+     *  (no canvas redraw).  The widget right-aligns and left-ellipsises the text to
+     *  its own width.
+     *  @param untilNanos {@code 0} = persistent, else a {@code nanoTime} expiry. */
     private void setBanner(String text, String tooltip,
                            ColorRole lit, ColorRole dim, long untilNanos) {
-        bannerText       = text;
-        bannerTooltip    = tooltip;
-        bannerLit        = lit;
-        bannerDim        = dim;
+        ensureFonts();
+        banner.setFont(monoFont);
+        banner.setText(text);
+        banner.setToolTipText(tooltip);
+        banner.setColors(color(lit), color(dim), color(ColorRole.BACKGROUND));
         bannerUntilNanos = untilNanos;
+        banner.setVisible(true);
+        banner.requestLayout();          // re-size to the new text height + re-position
+        if (untilNanos > 0L) {
+            scheduleBannerHide(untilNanos);
+        }
     }
 
-    /** Clears the banner so nothing is drawn and no tooltip fires. */
+    /** Hides the banner. */
     private void clearBanner() {
-        bannerText = null;
-        bannerTooltip = null;
-        bannerBounds.width = bannerBounds.height = 0;
+        bannerUntilNanos = 0L;
+        if (banner != null && !banner.isDisposed()) {
+            banner.setVisible(false);
+        }
     }
 
     /** Drops a persistent (loaded-path) banner or one whose timer has run
@@ -876,56 +901,17 @@ public final class FftView extends AbstractFreqDomainView {
         if (bannerUntilNanos == 0L || System.nanoTime() >= bannerUntilNanos) clearBanner();
     }
 
-    /** Wall-clock-phase blink toggle (flips every 500 ms), matching the
-     *  frequency-response view's loaded-file banner. */
-    private boolean blinkLit() {
-        return ((System.currentTimeMillis() / 500L) % 2L) == 0L;
-    }
-
-    /** Schedules a redraw 500 ms out so the blink keeps toggling even when
-     *  no other event repaints; coalesced via {@link #blinkRedrawScheduled}. */
-    private void scheduleBlinkRedraw() {
-        if (blinkRedrawScheduled || isDisposed()) return;
-        blinkRedrawScheduled = true;
-        getDisplay().timerExec(500, () -> {
-            blinkRedrawScheduled = false;
-            if (!isDisposed()) redraw();
+    /** Hides the banner once its expiry passes.  The widget blinks itself, so no
+     *  paint tick polls the timer — a one-shot {@code timerExec} does.  Guarded so a
+     *  newer banner (which moves {@link #bannerUntilNanos}) isn't hidden early. */
+    private void scheduleBannerHide(long untilNanos) {
+        long delayMs = (untilNanos - System.nanoTime()) / 1_000_000L;
+        int  delay   = (int) Math.max(1L, Math.min(delayMs, Integer.MAX_VALUE));
+        getDisplay().timerExec(delay, () -> {
+            if (!isDisposed() && bannerUntilNanos == untilNanos) {
+                clearBanner();
+            }
         });
-    }
-
-    /** Renders the current status banner — a right-aligned blinking line just
-     *  below the top control row (fill-% / averages / unit combo).  Fully
-     *  driven by the stored {@code banner*} fields, so onPaint calls it once
-     *  with no branching; an empty text or an elapsed timer draws nothing.
-     *  The text is left-ellipsised to fit the plot width. */
-    private void drawBlinkBanner(GC gc, Rectangle plot) {
-        boolean show = bannerText != null && !bannerText.isEmpty()
-                && (bannerUntilNanos == 0L || System.nanoTime() < bannerUntilNanos);
-        if (!show) {
-            bannerBounds.width = bannerBounds.height = 0;
-            return;
-        }
-        gc.setFont(monoFont);
-        String shown = fitRight(gc, bannerText, plot.width - 12);
-        Point ext = gc.textExtent(shown);
-        int x = plot.x + plot.width - ext.x - 6;
-        int y = plot.y + 2 * ext.y;
-        gc.setForeground(blinkLit() ? color(bannerLit) : color(bannerDim));
-        drawOutlinedText(gc, shown, x, y);
-        setBounds(bannerBounds, x, y, ext.x, ext.y);
-        scheduleBlinkRedraw();
-    }
-
-    /** Trims {@code text} from the left (prefixing "…") until it fits
-     *  {@code maxWidth} px in the current GC font; returned unchanged when it
-     *  already fits. */
-    private String fitRight(GC gc, String text, int maxWidth) {
-        if (gc.textExtent(text).x <= maxWidth) return text;
-        String s = text;
-        while (s.length() > 1 && gc.textExtent("…" + s).x > maxWidth) {
-            s = s.substring(1);
-        }
-        return "…" + s;
     }
 
     /** Publishes {@link Events#FFT_RANGE_CHANGED} so the owning pane's
@@ -943,7 +929,7 @@ public final class FftView extends AbstractFreqDomainView {
     private void autoSetup() {
         if (lastResult == null) return;
         Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
+        FftMagnitudeUnit unit = prefs.getFftMagUnit();
 
         // ── Frequency.  In DUAL_TONE / IMD mode the range needs to
         // span every measurement point we plot — F1, F2, the
@@ -1039,7 +1025,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  values for the bottom). */
     private void maximize() {
         Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
+        FftMagnitudeUnit unit = prefs.getFftMagUnit();
 
         // Frequency span: 0 (clamped to bin size) → Nyquist.  Fall back
         // to currentNyquist() when no result is available yet — that
@@ -1094,7 +1080,7 @@ public final class FftView extends AbstractFreqDomainView {
     @Override
     public void redraw() {
         super.redraw();
-        if (externalCanvas != null && !externalCanvas.isDisposed()) externalCanvas.redraw();
+        if (distortionWindow != null) distortionWindow.redraw();
     }
 
     // =========================================================================
@@ -1104,7 +1090,6 @@ public final class FftView extends AbstractFreqDomainView {
     private void onPaint(PaintEvent e) {
         GC gc = e.gc;
         ensureFonts();
-        ensureIconButtonResources();
         syncFftColors();
 
         Rectangle area = getClientArea();
@@ -1115,7 +1100,7 @@ public final class FftView extends AbstractFreqDomainView {
                                        Math.max(1, area.width  - MARGIN_LEFT - rightMargin),
                                        Math.max(1, area.height - MARGIN_TOP  - MARGIN_BOTTOM));
 
-        FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
+        FftMagnitudeUnit unit = prefs.getFftMagUnit();
         double freqMin = Math.max(0, prefs.getFftFreqMinHz());
         double freqMax = Math.max(freqMin + 1, prefs.getFftFreqMaxHz());
         double magTop  = prefs.getFftMagTop();
@@ -1173,7 +1158,6 @@ public final class FftView extends AbstractFreqDomainView {
         // ---- Dynamic overlay (drawn live on top of the cached image)
         gc.setAntialias(SWT.ON);
         gc.setTextAntialias(SWT.ON);
-        drawHeaderButtons(gc, lastResult != null);
         // Exactly one table.  Mode is sticky and only flipped inside
         // onResultReady (which fires only when the analyser is actually
         // recording), so the user's last-recorded mode persists while
@@ -1186,16 +1170,11 @@ public final class FftView extends AbstractFreqDomainView {
                 drawDistortionTable(gc, lastResult, unit);
             }
         }
-        // Single blinking top-right status banner — the loaded-spectrum path
-        // or the sticky frame-rejection warning.  All parameters live in the
-        // banner* fields, so there is no per-paint branching here.
-        drawBlinkBanner(gc, plot);
-        // Crosshair: only when inside the plot area AND not over any
-        // header button (so the crosshair / floating readout don't
-        // visually fight with the buttons that occupy the top-left).
+        // (The top-right status banner is now the self-painting BlinkBanner widget.)
+        // Crosshair: only when inside the plot area (the header buttons are child
+        // widgets now, so the canvas never receives moves over them).
         if (crossX >= plot.x && crossX < plot.x + plot.width
-                && crossY >= plot.y && crossY < plot.y + plot.height
-                && !pointerOverButton(crossX, crossY)) {
+                && crossY >= plot.y && crossY < plot.y + plot.height) {
             drawCrosshair(gc, plot, lastResult, unit, freqMin, freqMax, magTop, magBot, logFreq);
         }
         //log.warn("FFT result rendered in {} ms", (double)(System.nanoTime() - startRender) / 1_000_000);
@@ -2195,105 +2174,23 @@ public final class FftView extends AbstractFreqDomainView {
     // Header buttons
     // =========================================================================
 
-    private void drawHeaderButtons(GC gc, boolean hasData) {
-        Preferences prefs = Preferences.instance();
-        boolean isLeft  = prefs.getFftChannel() == Channel.L;
-        boolean isRight = prefs.getFftChannel() == Channel.R;
-        boolean distOn  = prefs.isFftDistortionTableVisible();
-
-        int y = 5;
-        int x = MARGIN_LEFT + 4;
-        // L / R always visible — toggle the active channel.
-        gc.setFont(chanButtonFont);
-        drawChannelButton(gc, x, y, BTN_W, BTN_H, "L", isLeft, color(ColorRole.LEFT_BTN_CHAN));
-        setBounds(leftChanButtonBounds, x, y, BTN_W, BTN_H);
-        x += BTN_W + BTN_GAP_SMALL;
-        drawChannelButton(gc, x, y, BTN_W, BTN_H, "R", isRight, color(ColorRole.RIGHT_BTN_CHAN));
-        setBounds(rightChanButtonBounds, x, y, BTN_W, BTN_H);
-        x += BTN_W + BTN_GAP_LARGE;
-        gc.setFont(monoFont);
-
-        // Auto-Setup push.
-        drawIconPushButton(gc, x, y, BTN_W, BTN_H, autoSetupIcon);
-        setBounds(autoSetupButtonBounds, x, y, BTN_W, BTN_H);
-        x += BTN_W + BTN_GAP_SMALL;
-
-        // Maximise push — always visible (uses a fixed +20 dB ceiling
-        // independent of any measured fundamental, so no live data is
-        // required).  The handler reads the noise floor when present
-        // and falls back to a default bottom otherwise.
-        drawIconPushButton(gc, x, y, BTN_W, BTN_H, maximizeIcon);
-        setBounds(maximizeButtonBounds, x, y, BTN_W, BTN_H);
-        x += BTN_W + BTN_GAP_LARGE;
-
-        // Distortion / Reset / External only when we have data.  Reset
-        // sits immediately after Distortion so the user can re-arm both
-        // the FFT averaging buffer and the THD running stats with one
-        // click — and it stays in the main view even when the THD table
-        // is extracted to the external window.
-        if (hasData) {
-            drawIconToggleButton(gc, x, y, BTN_W, BTN_H,
-                    statIconLight, statIconDark, distOn);
-            setBounds(distortionButtonBounds, x, y, BTN_W, BTN_H);
-            x += BTN_W + BTN_GAP_SMALL;
-
-            drawIconPushButton(gc, x, y, BTN_W, BTN_H, resetStatIcon);
-            setBounds(resetButtonBounds, x, y, BTN_W, BTN_H);
-            x += BTN_W + BTN_GAP_SMALL;
-
-            drawIconToggleButton(gc, x, y, BTN_W, BTN_H,
-                    windowRestoreIconLight, windowRestoreIconDark, tableExtracted);
-            setBounds(externalButtonBounds, x, y, BTN_W, BTN_H);
-        } else {
-            distortionButtonBounds.width = 0; distortionButtonBounds.height = 0;
-            externalButtonBounds  .width = 0; externalButtonBounds  .height = 0;
-            resetButtonBounds     .width = 0; resetButtonBounds     .height = 0;
+    /** Shows the data-only buttons (distortion / reset / external + their spacer) when a
+     *  result is present, hides them otherwise — re-laying out {@link #headerBar}.  Driven
+     *  by the result-arrival / reset hooks, never by paint. */
+    private void syncDataButtons() {
+        boolean hasData = lastResult != null;
+        // External only makes sense while the table itself shows (distortion ON).
+        boolean extVisible = hasData && Preferences.instance().isFftDistortionTableVisible();
+        if (hasData == dataButtonsShown && extVisible == externalShown) {
+            return;
         }
-    }
-
-    /** Returns true when {@code (px, py)} lies inside any header button —
-     *  caller uses this to suppress the crosshair / floating readout so
-     *  they don't visually fight with the button icons.  Delegates to
-     *  the shared {@link #hotspotAt} so any new button registered in
-     *  the constructor is picked up automatically. */
-    private boolean pointerOverButton(int px, int py) {
-        return hotspotAt(px, py) != null;
-    }
-
-    private void drawChannelButton(GC gc, int x, int y, int w, int h,
-                                   String label, boolean selected, Color tint) {
-        if (selected) {
-            gc.setBackground(tint);
-            gc.fillRoundRectangle(x, y, w, h, 4, 4);
-            gc.setForeground(color(ColorRole.TEXT));
-        } else {
-            gc.setForeground(color(ColorRole.BUTTON_FRAME));
-            gc.drawRoundRectangle(x, y, w, h, 4, 4);
-            gc.setForeground(color(ColorRole.TEXT));
-        }
-        Point ext = gc.textExtent(label);
-        gc.drawText(label, x + (w - ext.x) / 2, y + (h - ext.y) / 2, true);
-    }
-
-    private void drawIconToggleButton(GC gc, int x, int y, int w, int h,
-                                      Image lightIcon, Image darkIcon, boolean on) {
-        if (on) {
-            gc.setBackground(color(ColorRole.BUTTON_FRAME));
-            gc.fillRoundRectangle(x, y, w, h, 4, 4);
-            drawCenteredIcon(gc, (darkIcon != null) ? darkIcon : lightIcon, x, y, w, h);
-        } else {
-            gc.setForeground(color(ColorRole.BUTTON_FRAME));
-            gc.drawRoundRectangle(x, y, w, h, 4, 4);
-            drawCenteredIcon(gc, lightIcon, x, y, w, h);
-        }
-    }
-
-    private void drawIconPushButton(GC gc, int x, int y, int w, int h, Image icon) {
-        drawCenteredIcon(gc, icon, x, y, w, h);
-    }
-
-    private void setBounds(Rectangle r, int x, int y, int w, int h) {
-        r.x = x; r.y = y; r.width = w; r.height = h;
+        dataButtonsShown = hasData;
+        externalShown    = extVisible;
+        dataSpacer.setExcluded(!hasData);
+        distortionBtn.setExcluded(!hasData);
+        resetBtn.setExcluded(!hasData);
+        externalBtn.setExcluded(!extVisible);
+        headerBar.reflow();   // re-size the bar (its width changed), then re-flow the row
     }
 
     // =========================================================================
@@ -2681,34 +2578,33 @@ public final class FftView extends AbstractFreqDomainView {
      *  shell was sized at create time and otherwise wouldn't track new
      *  row counts.  No-op when the window isn't open. */
     public void resizeExternalShellToContent() {
-        if (externalShell == null || externalShell.isDisposed()) return;
+        if (distortionWindow == null) return;
         Point contentSz = computeExternalContentSize();
-        Rectangle trim = externalShell.computeTrim(0, 0, contentSz.x, contentSz.y);
-        externalShell.setSize(trim.width, trim.height);
+        distortionWindow.setSize(contentSz.x, contentSz.y);
     }
 
     public void setTableExtracted(boolean extracted) {
         if (extracted == tableExtracted) return;
         tableExtracted = extracted;
+        externalBtn.setToggled(extracted);
         syncExternalShell();
         redraw();
     }
 
     private void syncExternalShell() {
-        // External shell hosts the extracted distortion table — THD or IMD,
+        // External window hosts the extracted distortion table — THD or IMD,
         // matching the main canvas's sticky table mode.  Open it whenever the
         // table is extracted and visible; the painter picks THD vs IMD.
         boolean wantOpen = tableExtracted
                 && Preferences.instance().isFftDistortionTableVisible();
-        boolean isOpen = externalShell != null && !externalShell.isDisposed();
-        if (wantOpen && !isOpen) createExternalShell();
-        else if (!wantOpen && isOpen) {
-            externalShell.dispose();
-            externalShell  = null;
-            externalCanvas = null;
-        } else if (wantOpen && isOpen) {
+        if (wantOpen && distortionWindow == null) {
+            createToolWindow();
+        } else if (!wantOpen && distortionWindow != null) {
+            distortionWindow.dispose();
+            distortionWindow = null;
+        } else if (wantOpen) {
             // Table mode may have flipped (THD ↔ IMD) while open — retitle + refit.
-            externalShell.setText(externalTitle());
+            distortionWindow.setTitle(externalTitle());
             resizeExternalShellToContent();
         }
     }
@@ -2721,38 +2617,28 @@ public final class FftView extends AbstractFreqDomainView {
         return tableModeIsImd ? t.replace("THD", "IMD") : t;
     }
 
-    private void createExternalShell() {
-        Shell parent = getShell();
-        // RESIZE so the user can widen it if the auto-fit ever falls short.
-        Shell s = new Shell(parent, SWT.DIALOG_TRIM);
-        s.setText(externalTitle());
-        s.setLayout(new FillLayout());
-        Canvas c = new Canvas(s, SWT.DOUBLE_BUFFERED);
-        c.setBackground(color(ColorRole.BACKGROUND));
-        c.addPaintListener(this::paintExternalDistortion);
-        externalShell  = s;
-        externalCanvas = c;
-        // Size to content: harmonic-row width + table-height (no header
-        // button row — reset / distortion / external toggles stay in the
-        // main FFT view).  computeTrim wraps the title bar + native
-        // window borders around the client area.
-        Rectangle pb = parent.getBounds();
+    private void createToolWindow() {
+        ToolWindow w = new ToolWindow(this, color(ColorRole.BACKGROUND), color(ColorRole.TEXT), BTN_W, BTN_H);
+        w.setTitle(externalTitle());
+        w.setPainter(this::paintDistortion);
+        w.addCloseListener(e -> setTableExtracted(false));
+        distortionWindow = w;
+        // Size to content (harmonic-row width + table height; no button row — the reset /
+        // distortion / external toggles stay in the main FFT view), then place it at the
+        // parent shell's top-right.
         Point contentSz = computeExternalContentSize();
-        Rectangle trim = s.computeTrim(0, 0, contentSz.x, contentSz.y);
-        s.setSize(trim.width, trim.height);
-        s.setLocation(pb.x + pb.width - trim.width - 24, pb.y + 96);
-        s.addListener(SWT.Close, e -> {
-            e.doit = false;
-            setTableExtracted(false);
-        });
-        s.open();
+        w.setSize(contentSz.x, contentSz.y);
+        Point ws = w.getSize();
+        Rectangle pb = getShell().getBounds();
+        w.setLocation(pb.x + pb.width - ws.x - 24, pb.y + 96);
+        w.open();
     }
 
     /** Left padding (px) for the THD table inside the external window. */
     private static final int EXT_LEFT_PAD = 4;
 
     /** Computes the natural client size of the extracted THD table —
-     *  used by {@link #createExternalShell} so the tool window fits its
+     *  used by {@link #createToolWindow} so the tool window fits its
      *  content exactly (no excess whitespace, no clipping).  Width comes
      *  from the harmonic-row layout (the widest row in the table) and
      *  height counts the fixed rows + dynamic harmonic rows. */
@@ -2810,35 +2696,27 @@ public final class FftView extends AbstractFreqDomainView {
         } finally { gc.dispose(); }
     }
 
-    private void paintExternalDistortion(PaintEvent ev) {
+    /** {@link ToolWindow.ContentPainter} for the extracted distortion window — draws the THD
+     *  or IMD table straight into the window's GC, inset from its top-left so the keys don't
+     *  touch the border ({@code top} is 0 here: no button row, those toggles stay in the
+     *  main FFT view). */
+    private void paintDistortion(GC gc, int top) {
         if (lastResult == null) return;
-        GC gc = ev.gc;
         gc.setAntialias(SWT.ON);
         gc.setTextAntialias(SWT.ON);
         ensureFonts();
-        // Draw table with a small inset from the top-left so the keys
-        // don't touch the window border.  No reset button here — the
-        // button stays in the main FFT view.
+        int y = top + EXT_LEFT_PAD;
         if (tableModeIsImd && lastImd != null) {
-            drawImdTable(gc, lastImd, EXT_LEFT_PAD, EXT_LEFT_PAD);
+            drawImdTable(gc, lastImd, EXT_LEFT_PAD, y);
         } else {
-            FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(Preferences.instance().getFftMagUnit());
-            drawDistortionTable(gc, lastResult, unit, EXT_LEFT_PAD, EXT_LEFT_PAD, true);
+            FftMagnitudeUnit unit = Preferences.instance().getFftMagUnit();
+            drawDistortionTable(gc, lastResult, unit, EXT_LEFT_PAD, y, true);
         }
     }
 
     // =========================================================================
     // Mouse handlers
     // =========================================================================
-
-    private void onMouseDown(MouseEvent ev) {
-        if (ev.button != 1) return;
-        // All header-row buttons (L/R, Auto-Setup, Maximize, Distortion,
-        // External, Reset) are registered as Hotspots with the shared
-        // base — dispatch them through the registry.
-        Hotspot hot = hotspotAt(ev.x, ev.y);
-        if (hot != null) hot.onClick.run();
-    }
 
     /**
      * Mouse-wheel handling — mirrors the oscilloscope view's UX:
@@ -2877,7 +2755,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  on the log axis. */
     private void zoomMagnitudeAroundCursor(int mouseY, Rectangle plot, int dir) {
         Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
+        FftMagnitudeUnit unit = prefs.getFftMagUnit();
         double top = prefs.getFftMagTop();
         double bot = prefs.getFftMagBottom();
         if (top - bot <= 0) return;
@@ -2956,7 +2834,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  the bottom kept moving but the top stayed pinned. */
     private void panMagnitude(int dir) {
         Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit unit = FftMagnitudeUnit.fromName(prefs.getFftMagUnit());
+        FftMagnitudeUnit unit = prefs.getFftMagUnit();
         double top = prefs.getFftMagTop();
         double bot = prefs.getFftMagBottom();
         double[] lim = magLimits(unit, prefs.getAdcFsVoltageRms());
@@ -3072,41 +2950,6 @@ public final class FftView extends AbstractFreqDomainView {
     private void onMouseMove(MouseEvent ev) {
         crossX = ev.x;
         crossY = ev.y;
-        int cursorId = SWT.CURSOR_CROSS;
-        String tip = null;
-        if (leftChanButtonBounds.contains(ev.x, ev.y)) {
-            cursorId = SWT.CURSOR_HAND; tip = I18n.t("fft.button.left.tooltip");
-        } else if (rightChanButtonBounds.contains(ev.x, ev.y)) {
-            cursorId = SWT.CURSOR_HAND; tip = I18n.t("fft.button.right.tooltip");
-        } else if (autoSetupButtonBounds.contains(ev.x, ev.y)) {
-            cursorId = SWT.CURSOR_HAND; tip = I18n.t("fft.autosetup.tooltip");
-        } else if (maximizeButtonBounds.contains(ev.x, ev.y)) {
-            cursorId = SWT.CURSOR_HAND; tip = I18n.t("fft.maximize.tooltip");
-        } else if (distortionButtonBounds.contains(ev.x, ev.y)) {
-            cursorId = SWT.CURSOR_HAND; tip = I18n.t("fft.distortion.tooltip");
-        } else if (resetButtonBounds.contains(ev.x, ev.y)) {
-            cursorId = SWT.CURSOR_HAND; tip = I18n.t("fft.reset.tooltip");
-        } else if (externalButtonBounds.contains(ev.x, ev.y)) {
-            cursorId = SWT.CURSOR_HAND; tip = I18n.t("fft.external.tooltip");
-        } else if (bannerBounds.width > 0 && bannerBounds.contains(ev.x, ev.y)) {
-            // Over the blinking banner: plain arrow, its tooltip (the full
-            // rejection detail, if any), and no crosshair over it.
-            cursorId = SWT.CURSOR_ARROW;
-            tip = bannerTooltip;
-            crossX = crossY = -1;
-        }
-        // The top-row indicator widgets (fill-%, averages, unit combo) get
-        // their own arrow cursor at creation — they're real child controls, so
-        // the Canvas never receives move events while the pointer is over them.
-        setCursor(getDisplay().getSystemCursor(cursorId));
-        // Only push tooltip changes when the value actually changes —
-        // setToolTipText forces a re-show which fires more mouse-move
-        // events and would otherwise dim the trace from constant redraws.
-        String current = getToolTipText();
-        if ((tip == null && current != null)
-                || (tip != null && !tip.equals(current))) {
-            setToolTipText(tip);
-        }
         redraw();
     }
 
@@ -3135,22 +2978,6 @@ public final class FftView extends AbstractFreqDomainView {
         if (monoFont == null)       monoFont       = new Font(d, "Consolas", 9, SWT.NORMAL);
         if (monoBoldFont == null)   monoBoldFont   = new Font(d, "Consolas", 9, SWT.BOLD);
         if (chanButtonFont == null) chanButtonFont = new Font(d, "Consolas", 12, SWT.BOLD);
-    }
-
-    private void ensureIconButtonResources() {
-        if (statIconLight != null) return;
-        Display d = getDisplay();
-        RGB light = rgb(ColorRole.TEXT);
-        RGB dark  = rgb(ColorRole.BACKGROUND);
-        RGB red   = rgb(ColorRole.RESET);
-        IconUtils icons = IconUtils.instance();
-        statIconLight           = icons.renderAtHeight(d, SvgPaths.CHART_COLUMN,        16, light);
-        statIconDark            = icons.renderAtHeight(d, SvgPaths.CHART_COLUMN,        16, dark);
-        resetStatIcon           = icons.renderAtHeight(d, SvgPaths.ROTATE_LEFT,         18, red);
-        autoSetupIcon           = icons.renderAtHeight(d, SvgPaths.ARROWS_TO_CIRCLE,    16, light);
-        maximizeIcon            = icons.renderAtHeight(d, SvgPaths.ARROWS_FROM_CIRCLE,  16, light);
-        windowRestoreIconLight  = icons.renderAtHeight(d, SvgPaths.WINDOW_RESTORE,      16, light);
-        windowRestoreIconDark   = icons.renderAtHeight(d, SvgPaths.WINDOW_RESTORE,      16, dark);
     }
 
 }

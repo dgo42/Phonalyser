@@ -22,7 +22,6 @@ import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.gui.bus.GenChangeCause;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
@@ -37,6 +36,7 @@ import java.util.Locale;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import org.edgo.audio.measure.enums.AmplitudeUnit;
+import org.edgo.audio.measure.enums.GenChangeCause;
 
 /**
  * Generator pane — UI mirror of the CLI generator.  Hosts:
@@ -263,7 +263,7 @@ public final class GeneratorPane {
         onAirLabel.setFont(onAirFont);
         onAirLabel.setForeground(onAirGreyColor);
         onAirLabel.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false));
-        GenSignalForm initialForm = parseForm(prefs.getGenSignalForm());
+        GenSignalForm initialForm = prefs.getGenSignalForm();
         formCombo = new SignalFormCombo(group, initialForm);
         formCombo.setLayoutData(fillH());
         formCombo.setToolTipText(I18n.t("generator.signalForm.tooltip"));
@@ -380,8 +380,8 @@ public final class GeneratorPane {
             updateFreqLabel();
             // Dual-tone uses the same snap pref — refresh both tones
             // on a running generator AND the per-tone label brackets.
-            String form = prefs.getGenSignalForm();
-            if ("DUAL_TONE".equalsIgnoreCase(form)) {
+            GenSignalForm form = prefs.getGenSignalForm();
+            if (form == GenSignalForm.DUAL_TONE) {
                 int sr = currentOutputSampleRate();
                 controller.setFrequency(FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
                         sr, prefs.getGenDualToneFreq1Hz()));
@@ -572,9 +572,9 @@ public final class GeneratorPane {
         // mutate on the audio thread — the controller's setForm() returns
         // a hint via canLiveSwitchForm() and we surface that as a tooltip.
         formCombo.addSelectionListener(e -> {
-            GenSignalForm prevForm = parseForm(prefs.getGenSignalForm());
+            GenSignalForm prevForm = prefs.getGenSignalForm();
             GenSignalForm f = formCombo.getSelectedForm();
-            prefs.setGenSignalForm(f.name());
+            prefs.setGenSignalForm(f);
             prefs.save();
             boolean newIsSweep    = f == GenSignalForm.LINEAR_SWEEP || f == GenSignalForm.LOG_SWEEP;
             boolean newIsDualTone = f == GenSignalForm.DUAL_TONE;
@@ -625,7 +625,7 @@ public final class GeneratorPane {
 
         // --------------------------------------------------------- Amplitude
         addRowLabel(group, I18n.t("generator.amplitudeRms"));
-        currentUnit = parseUnit(prefs.getGenAmplitudeUnit(), AmplitudeUnit.V);
+        currentUnit = prefs.getGenAmplitudeUnit();
         ampField = new NumericStepField(group,
                 amplitudeDisplayValue(prefs.getGenAmplitudeVrms()),
                 this::parseAmplitudeText,
@@ -643,7 +643,7 @@ public final class GeneratorPane {
             double vrms = currentUnit.toVrms(ampField.getValue(),
                     AudioBackend.getAdcFsVoltageRms());
             prefs.setGenAmplitudeVrms(vrms);
-            prefs.setGenAmplitudeUnit(currentUnit.display);
+            prefs.setGenAmplitudeUnit(currentUnit);
             prefs.save();
             // Live-apply if running.
             controller.setAmplitudeVrms(vrms);
@@ -1253,7 +1253,7 @@ public final class GeneratorPane {
         // both tones' corrected-frequency brackets and (when DUAL_TONE
         // is the active form) live-re-snap the running tones too.
         Preferences prefs = Preferences.instance();
-        if ("DUAL_TONE".equalsIgnoreCase(prefs.getGenSignalForm())) {
+        if (prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE) {
             int sr = currentOutputSampleRate();
             controller.setFrequency(FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
                     sr, prefs.getGenDualToneFreq1Hz()));
@@ -1908,7 +1908,7 @@ public final class GeneratorPane {
     /** Builds a default file name encoding signal form + sample rate (kHz) + bit width.  WAV by default. */
     private String buildSuggestedSaveName() {
         Preferences prefs = Preferences.instance();
-        GenSignalForm form     = parseForm(prefs.getGenSignalForm());
+        GenSignalForm form     = prefs.getGenSignalForm();
         int        rateKhz  = prefs.current().getOutputSampleRate() / 1000;
         int        bitDepth = prefs.current().getOutputBitDepth();
         return String.format(Locale.ROOT, "%s_%dkHz_%dbit.wav",
@@ -1924,7 +1924,7 @@ public final class GeneratorPane {
                     I18n.t("generator.error.save.pickFirst"));
             return;
         }
-        GenSignalForm form = parseForm(prefs.getGenSignalForm());
+        GenSignalForm form = prefs.getGenSignalForm();
         if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
             Dialogs.error(group.getShell(),
                     I18n.t("generator.error.save"),
@@ -1986,17 +1986,6 @@ public final class GeneratorPane {
             s = s.substring(0, end);
         }
         return s;
-    }
-
-    private GenSignalForm parseForm(String s) {
-        if (s == null) return GenSignalForm.SINE;
-        try { return GenSignalForm.valueOf(s); }
-        catch (IllegalArgumentException ex) { return GenSignalForm.SINE; }
-    }
-
-    private AmplitudeUnit parseUnit(String s, AmplitudeUnit fallback) {
-        AmplitudeUnit u = AmplitudeUnit.fromString(s);
-        return u != null ? u : fallback;
     }
 
     private boolean isPeriodic(GenSignalForm f) {

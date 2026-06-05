@@ -1,15 +1,16 @@
 package org.edgo.audio.measure.gui.freqresp;
 
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
+
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
-import org.eclipse.swt.graphics.Cursor;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.GC;
-import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Event;
@@ -21,14 +22,12 @@ import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
-import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
-
-import java.util.List;
-import java.util.Map;
-import java.util.function.Consumer;
+import org.edgo.audio.measure.gui.widgets.BlinkBanner;
+import org.edgo.audio.measure.gui.widgets.ToolButton;
+import org.edgo.audio.measure.gui.widgets.Toolbar;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -73,11 +72,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private static final int MARGIN_RIGHT_NO_PHASE = 0;
     private static final int MARGIN_RIGHT_PHASE    = 52;
 
-    // --- Header button geometry ----------------------------------------------
-    private static final int BTN_H   = 22;
-    private static final int BTN_W   = 22;
-    private static final int BTN_GAP = 2;
-    private static final int BTN_TOP = 4;
     /** Horizontal offset of the header-button row past the dB-axis labels.
      *  Keeps the L/R/phase/max tile clear of the numeric tick labels that
      *  the axis renderer paints into the same vertical band. */
@@ -93,6 +87,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
     // --- Fonts ---------------------------------------------------------------
     private Font axisFont;
     private Font readoutFont;
+    private Font chanButtonFont;
+    private Color phaseFillGray;
 
     // --- State ---------------------------------------------------------------
     /** The captured (or loaded) result for each channel before any
@@ -107,6 +103,9 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private FreqRespResult leftResult;
     private FreqRespResult rightResult;
     private String         sourceFilePath;
+    /** Self-blinking overlay banner widgets (compare-mode + loaded-file path). */
+    private BlinkBanner    compareBanner;
+    private BlinkBanner    sourceBanner;
     /** Bus-handler reference kept so we can unsubscribe symmetrically. */
     private Consumer<Void> calibrationChangedListener;
     /** Bus-handler reference kept so we can unsubscribe symmetrically. */
@@ -175,19 +174,13 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private boolean        compareDiffCacheIec;
     private int            compareDiffCacheWindow;
 
-    // --- Header button rects (recomputed every paint) -----------------------
-    private final Rectangle btnL         = new Rectangle(0, 0, 0, 0);
-    private final Rectangle btnR         = new Rectangle(0, 0, 0, 0);
-    private final Rectangle btnPhase     = new Rectangle(0, 0, 0, 0);
-    private final Rectangle btnAutoSetup = new Rectangle(0, 0, 0, 0);
-    private final Rectangle btnMax       = new Rectangle(0, 0, 0, 0);
-
-    /** Lazily-loaded phase-toggle icon (two-tone sine), reused across paints. */
-    private Image phaseIcon;
-    /** Lazily-loaded auto-setup-button icon (arrows to circle). */
-    private Image autoSetupIcon;
-    /** Lazily-loaded maximize-button icon (arrows from circle). */
-    private Image maxIcon;
+    // --- Header buttons (migrated from canvas-draw to widgets) ---------------
+    private Toolbar    headerBar;
+    private ToolButton leftBtn;
+    private ToolButton rightBtn;
+    private ToolButton phaseBtn;
+    private ToolButton autoSetupBtn;
+    private ToolButton maxBtn;
 
     // Static-layer paint cache (traceBuffer Image + fingerprint) now
     // lives in AbstractFreqDomainView.  Call paintCachedStatic(...) from
@@ -205,57 +198,78 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 ColorRole.LEFT_TRACE,  Preferences.instance().getFreqRespSignalColor(),
                 ColorRole.RIGHT_TRACE, Preferences.instance().getFreqRespSignalColor(),
                 ColorRole.PHASE_TRACE, Preferences.instance().getFreqRespPhaseColor(),
-                ColorRole.RIAA_TRACE,  Preferences.instance().getFreqRespReferenceColor()));
+                ColorRole.RIAA_TRACE,  Preferences.instance().getFreqRespReferenceColor(),
+                // L/R channel buttons share the scope's channel colours (cyan/yellow).
+                ColorRole.LEFT_BTN_CHAN,  Preferences.instance().getOscLeftChannelColor(),
+                ColorRole.RIGHT_BTN_CHAN, Preferences.instance().getOscRightChannelColor()));
 
         allocateFonts();
 
-        // Register the header-row buttons as Hotspots with the shared base.
-        // The rects are mutated in place by drawHeaderButtons every paint,
-        // so the registry stays in sync automatically.  L and R behave as
-        // radio buttons (exactly one channel shown at a time); phase is
-        // independent; max is a push that resets the view.
+        // Self-blinking overlay banners (no canvas redraw); positioned in onPaint.
+        compareBanner = new BlinkBanner(this);
+        compareBanner.setVisible(false);
+        sourceBanner  = new BlinkBanner(this);
+        sourceBanner.setVisible(false);
+
+        // Header buttons (below): L and R are radio (exactly one channel shown at a
+        // time), phase is an independent toggle, max is a push that resets the view.
         // L / R behave as dependent (radio) toggles: clicking either
         // unconditionally activates that channel and deactivates the
         // other.  No early-return when the clicked side is already on —
         // a single normalize pass also corrects a stale "both true" /
         // "both false" state that a hand-edited YAML or older session
         // might have carried in.
-        registerHotspot(btnL, () -> {
-            Preferences p = Preferences.instance();
-            p.setFreqRespLeftVisible(true);
-            p.setFreqRespRightVisible(false);
-            p.save();
-            redraw();
-        });
-        registerHotspot(btnR, () -> {
-            Preferences p = Preferences.instance();
-            p.setFreqRespRightVisible(true);
-            p.setFreqRespLeftVisible(false);
-            p.save();
-            redraw();
-        });
-        // Normalise on construction: if the persisted state is both true
-        // or both false, snap to L-only so the radio invariant holds
-        // from the very first paint.
+        // Normalise on construction: if the persisted state is both true or both false,
+        // snap to L-only so the radio invariant holds from the very first paint.
         Preferences pInit = Preferences.instance();
         if (pInit.isFreqRespLeftVisible() == pInit.isFreqRespRightVisible()) {
             pInit.setFreqRespLeftVisible(true);
             pInit.setFreqRespRightVisible(false);
             pInit.save();
         }
-        registerHotspot(btnPhase, () -> {
-            Preferences p = Preferences.instance();
-            p.setFreqRespPhaseVisible(!p.isFreqRespPhaseVisible());
-            p.save();
-            redraw();
+        // Header buttons — ToolButton widgets in a Toolbar.  L/R is a radio (channel
+        // select); phase keeps its own coloured icon; auto-setup/max are icon pushes.
+        chanButtonFont = new Font(getDisplay(), "Consolas", 12, SWT.BOLD);   // same as FFT/scope
+        phaseFillGray  = new Color(getDisplay(), 0xE6, 0xE6, 0xE6);          // 90% grey so the icon reads
+        headerBar = new Toolbar(this, BTN_W, BTN_H);
+        leftBtn  = headerBar.chanButton("L", color(ColorRole.TEXT), color(ColorRole.BUTTON_FRAME),
+                color(ColorRole.LEFT_BTN_CHAN),  chanButtonFont, I18n.t("freqresp.button.left.tooltip"),  pInit.isFreqRespLeftVisible(),  "channel");
+        rightBtn = headerBar.chanButton("R", color(ColorRole.TEXT), color(ColorRole.BUTTON_FRAME),
+                color(ColorRole.RIGHT_BTN_CHAN), chanButtonFont, I18n.t("freqresp.button.right.tooltip"), pInit.isFreqRespRightVisible(), "channel");
+        phaseBtn = headerBar.coloredToggle(SvgPaths.PHASE_SINE, 18,
+                color(ColorRole.BUTTON_FRAME), phaseFillGray,
+                I18n.t("freqresp.button.phase.tooltip"), pInit.isFreqRespPhaseVisible());
+        autoSetupBtn = headerBar.pushButton(SvgPaths.ARROWS_TO_CIRCLE, 16,
+                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
+                I18n.t("freqresp.button.autosetup.tooltip"));
+        maxBtn = headerBar.pushButton(SvgPaths.ARROWS_FROM_CIRCLE, 16,
+                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
+                I18n.t("freqresp.button.maximize.tooltip"));
+        Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
+        headerBar.setBounds(MARGIN_LEFT + HEADER_BTN_INSET, BTN_TOP, hbSize.x, hbSize.y);
+        headerBar.layout();
+        leftBtn.addListener(SWT.Selection, e -> {
+            if (leftBtn.isToggled()) {
+                Preferences p = Preferences.instance();
+                p.setFreqRespLeftVisible(true); p.setFreqRespRightVisible(false); p.save(); redraw();
+            }
         });
-        registerHotspot(btnAutoSetup, this::autoSetupMagnitudeRange);
-        registerHotspot(btnMax, this::resetToDefaultView);
+        rightBtn.addListener(SWT.Selection, e -> {
+            if (rightBtn.isToggled()) {
+                Preferences p = Preferences.instance();
+                p.setFreqRespRightVisible(true); p.setFreqRespLeftVisible(false); p.save(); redraw();
+            }
+        });
+        phaseBtn.addListener(SWT.Selection, e -> {
+            Preferences p = Preferences.instance();
+            p.setFreqRespPhaseVisible(phaseBtn.isToggled()); p.save(); redraw();
+        });
+        autoSetupBtn.addListener(SWT.Selection, e -> autoSetupMagnitudeRange());
+        maxBtn.addListener(SWT.Selection, e -> resetToDefaultView());
 
         addPaintListener(this::onPaint);
         addListener(SWT.MouseWheel, this::onMouseWheel);
         addListener(SWT.MouseMove,  this::onMouseMove);
-        addListener(SWT.MouseDown,  this::onMouseDown);
         addListener(SWT.MouseExit,  e -> { mouseInPlot = false; redraw(); });
 
         // Re-trace whenever the active calibration changes (load, clear, or
@@ -281,11 +295,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
                         compareParamsChangedListener);
             }
             disposePalette();
-            if (axisFont    != null && !axisFont.isDisposed())    axisFont.dispose();
-            if (readoutFont != null && !readoutFont.isDisposed()) readoutFont.dispose();
-            if (phaseIcon     != null && !phaseIcon.isDisposed())     phaseIcon.dispose();
-            if (autoSetupIcon != null && !autoSetupIcon.isDisposed()) autoSetupIcon.dispose();
-            if (maxIcon       != null && !maxIcon.isDisposed())       maxIcon.dispose();
+            if (axisFont       != null && !axisFont.isDisposed())       axisFont.dispose();
+            if (readoutFont    != null && !readoutFont.isDisposed())    readoutFont.dispose();
+            if (chanButtonFont != null && !chanButtonFont.isDisposed()) chanButtonFont.dispose();
+            if (phaseFillGray  != null && !phaseFillGray.isDisposed())  phaseFillGray.dispose();
             disposeTraceBuffer();
         });
     }
@@ -713,10 +726,11 @@ public final class FreqRespView extends AbstractFreqDomainView {
         gc.setAntialias(SWT.ON);
         gc.setTextAntialias(SWT.ON);
         drawSourcePath(gc, plot);
-        drawHeaderButtons(gc, area, prefs, phaseVisible);
         if (prefs.isFreqRespCompareMode() && hasAnyResult() && prefs.isFreqRespShowRiaa()) {
             drawCompareBanner(gc, plot, prefs);
             drawCompareMeasurementTable(gc);
+        } else {
+            compareBanner.setVisible(false);
         }
         if (mouseInPlot) {
             drawCrosshair(gc, plot, freqMin, freqMax, magTop, magBot, phaseVisible);
@@ -1072,37 +1086,19 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 .replace("{1}", prefs.isFreqRespIecAmendment()
                         ? I18n.t("freqResp.compare.banner.iec") : "");
         gc.setFont(readoutFont);
-        Point ext = gc.textExtent(text);
-        // Right-aligned, padded so the phase-axis tick labels (when shown)
-        // have room on the right.  Mirrors drawSourcePath's positioning.
-        int x = plot.x + plot.width - ext.x - 6;
-        int y = plot.y + 6;
-        boolean lit = blinkLit();
-        gc.setForeground(lit ? color(ColorRole.BLINK_LIT) : color(ColorRole.BLINK_DIM));
-        drawOutlinedText(gc, text, x, y);
-        scheduleBlinkRedraw();
+        int h = gc.textExtent("X").y + 2;
+        // The widget right-aligns + blinks itself; plot.width excludes the phase axis,
+        // so spanning the plot keeps it clear of those tick labels (room on the right).
+        compareBanner.setFont(readoutFont);
+        compareBanner.setText(text);
+        compareBanner.setColors(color(ColorRole.BLINK_LIT), color(ColorRole.BLINK_DIM),
+                                color(ColorRole.BACKGROUND));
+        // drawSourcePath ran first this paint, so if the loaded-file banner is also up
+        // (both top-right) drop the compare banner one line below it to avoid overlap.
+        int y = sourceBanner.getVisible() ? plot.y + 4 + h + 2 : plot.y + 6;
+        compareBanner.setBounds(plot.x, y, plot.width - 6, h);
+        compareBanner.setVisible(true);
     }
-
-    /** Wall-clock-phase blink toggle used by both the compare banner and
-     *  the source-path label.  Computed per paint so we never store stale
-     *  state. */
-    private boolean blinkLit() {
-        return ((System.currentTimeMillis() / 500L) % 2L) == 0L;
-    }
-
-    /** Schedules a redraw 500 ms from now so the blink toggle stays visible
-     *  even when no other event triggers a repaint.  Coalesced so multiple
-     *  call sites in one paint don't queue multiple timers. */
-    private void scheduleBlinkRedraw() {
-        if (blinkRedrawScheduled || isDisposed()) return;
-        blinkRedrawScheduled = true;
-        getDisplay().timerExec(500, () -> {
-            blinkRedrawScheduled = false;
-            if (isDisposed()) return;
-            redraw();
-        });
-    }
-    private boolean blinkRedrawScheduled;
 
     private void drawTraces(GC gc, Rectangle plot, double freqMin, double freqMax,
                             double magTop, double magBot) {
@@ -1179,162 +1175,24 @@ public final class FreqRespView extends AbstractFreqDomainView {
     }
 
     private void drawSourcePath(GC gc, Rectangle plot) {
-        if (sourceFilePath == null || sourceFilePath.isEmpty()) return;
-        // Full path with a "Loaded:" prefix, blinking in the same dark
-        // lit/dim pair as the compare banner so it matches the scope's
-        // file-mode label style.  Right-aligned with a small pad so the
-        // phase-axis tick labels (when shown) don't collide with it.
-        String label = "Loaded: " + sourceFilePath;
+        if (sourceFilePath == null || sourceFilePath.isEmpty()) {
+            sourceBanner.setVisible(false);
+            return;
+        }
+        // Full path with a "Loaded:" prefix, in the same dark lit/dim blink pair as the
+        // compare banner (scope file-mode style).  The widget right-aligns + left-
+        // ellipsises to its width; plot.width excludes the phase axis, so spanning the
+        // plot keeps it clear of those tick labels.
         gc.setFont(readoutFont);
-        int avail = plot.width - 12;
-        if (gc.textExtent(label).x > avail) {
-            // Left-side ellipsis: prefer to keep the file name visible
-            // when the canvas is too narrow for the full path.
-            String shown = "…" + sourceFilePath;
-            while (shown.length() > 1 && gc.textExtent("Loaded: " + shown).x > avail) {
-                shown = "…" + shown.substring(2);
-            }
-            label = "Loaded: " + shown;
-        }
-        Point ext = gc.textExtent(label);
-        boolean lit = blinkLit();
-        gc.setForeground(lit ? color(ColorRole.BLINK_LIT) : color(ColorRole.BLINK_DIM));
-        int x = plot.x + plot.width - ext.x - 6;
-        drawOutlinedText(gc, label, x, plot.y + 4);
-        scheduleBlinkRedraw();
+        int h = gc.textExtent("X").y + 2;
+        sourceBanner.setFont(readoutFont);
+        sourceBanner.setText("Loaded: " + sourceFilePath);
+        sourceBanner.setColors(color(ColorRole.BLINK_LIT), color(ColorRole.BLINK_DIM),
+                               color(ColorRole.BACKGROUND));
+        sourceBanner.setBounds(plot.x, plot.y + 4, plot.width - 6, h);
+        sourceBanner.setVisible(true);
     }
 
-    // -------------------------------------------------------------------------
-    // Header buttons
-    // -------------------------------------------------------------------------
-
-    private void drawHeaderButtons(GC gc, Rectangle area, Preferences prefs, boolean phaseVisible) {
-        // All four header buttons are grouped on the left in a contiguous
-        // row (L, R, phase, maximize), offset by HEADER_BTN_INSET past the
-        // dB-axis labels so they don't sit on top of the numeric ticks.
-        int x = MARGIN_LEFT + HEADER_BTN_INSET;
-        int y = BTN_TOP;
-
-        layoutButton(btnL,         x, y); x += BTN_W + BTN_GAP;
-        layoutButton(btnR,         x, y); x += BTN_W + BTN_GAP;
-        layoutButton(btnPhase,     x, y); x += BTN_W + BTN_GAP;
-        layoutButton(btnAutoSetup, x, y); x += BTN_W + BTN_GAP;
-        layoutButton(btnMax,       x, y);
-
-        // Toggle buttons follow the FftView style: selected → fill with the
-        // channel's trace tint and draw label in color(ColorRole.TEXT); unselected →
-        // frame only.  Maximize is an icon push button.
-        paintToggleButton(gc, btnL,     "L", prefs.isFreqRespLeftVisible(),  color(ColorRole.LEFT_BTN_CHAN));
-        paintToggleButton(gc, btnR,     "R", prefs.isFreqRespRightVisible(), color(ColorRole.RIGHT_BTN_CHAN));
-        paintPhaseButton(gc, btnPhase, phaseVisible);
-        paintAutoSetupButton(gc, btnAutoSetup);
-        paintMaximizeButton(gc, btnMax);
-    }
-
-    /** Maximize button: a square frame with the arrows-from-circle icon
-     *  centred inside.  Push button, never reads as selected. */
-    private void paintMaximizeButton(GC gc, Rectangle r) {
-        gc.setForeground(color(ColorRole.BUTTON_FRAME));
-        gc.drawRectangle(r.x, r.y, r.width - 1, r.height - 1);
-        Image icon = maximizeIcon();
-        if (icon != null) {
-            Rectangle ib = icon.getBounds();
-            gc.drawImage(icon,
-                    r.x + (r.width  - ib.width)  / 2,
-                    r.y + (r.height - ib.height) / 2);
-        }
-    }
-
-    private Image maximizeIcon() {
-        if (maxIcon == null) {
-            maxIcon = IconUtils.instance().renderAtHeight(
-                    getDisplay(), SvgPaths.ARROWS_FROM_CIRCLE, BTN_H - 8,
-                    new RGB(0x20, 0x20, 0x20));
-        }
-        return maxIcon;
-    }
-
-    /** Frame-only push button with the "arrows pointing inward to a
-     *  circle" icon — fits the trace's vertical magnitude range to the
-     *  visible band with 10 % padding above and below. */
-    private void paintAutoSetupButton(GC gc, Rectangle r) {
-        gc.setForeground(color(ColorRole.BUTTON_FRAME));
-        gc.drawRectangle(r.x, r.y, r.width - 1, r.height - 1);
-        Image icon = autoSetupIcon();
-        if (icon != null) {
-            Rectangle ib = icon.getBounds();
-            gc.drawImage(icon,
-                    r.x + (r.width  - ib.width)  / 2,
-                    r.y + (r.height - ib.height) / 2);
-        }
-    }
-
-    private Image autoSetupIcon() {
-        if (autoSetupIcon == null) {
-            autoSetupIcon = IconUtils.instance().renderAtHeight(
-                    getDisplay(), SvgPaths.ARROWS_TO_CIRCLE, BTN_H - 8,
-                    new RGB(0x20, 0x20, 0x20));
-        }
-        return autoSetupIcon;
-    }
-
-    private void paintPhaseButton(GC gc, Rectangle r, boolean active) {
-        if (active) {
-            gc.setBackground(color(ColorRole.PHASE_TRACE));
-            gc.fillRectangle(r.x, r.y, r.width, r.height);
-        } else {
-            gc.setForeground(color(ColorRole.BUTTON_FRAME));
-            gc.drawRectangle(r.x, r.y, r.width - 1, r.height - 1);
-        }
-        Image icon = phaseIcon();
-        if (icon != null) {
-            Rectangle ib = icon.getBounds();
-            gc.drawImage(icon,
-                    r.x + (r.width  - ib.width)  / 2,
-                    r.y + (r.height - ib.height) / 2);
-        } else {
-            gc.setFont(getFont());
-            gc.setForeground(color(ColorRole.TEXT));
-            Point ext = gc.textExtent("φ");
-            gc.drawText("φ",
-                    r.x + (r.width  - ext.x) / 2,
-                    r.y + (r.height - ext.y) / 2,
-                    true);
-        }
-    }
-
-    private Image phaseIcon() {
-        if (phaseIcon == null) {
-            phaseIcon = IconUtils.instance().renderAtHeightColored(
-                    getDisplay(), SvgPaths.PHASE_SINE, BTN_H - 8);
-        }
-        return phaseIcon;
-    }
-
-    private void layoutButton(Rectangle r, int x, int y) {
-        r.x = x; r.y = y; r.width = BTN_W; r.height = BTN_H;
-    }
-
-    /** Channel toggle button styled like FftView: selected → tinted fill,
-     *  unselected → frame only.  Label is centred in {@code color(ColorRole.TEXT)}. */
-    private void paintToggleButton(GC gc, Rectangle r, String label,
-                                   boolean active, Color tint) {
-        if (active) {
-            gc.setBackground(tint);
-            gc.fillRectangle(r.x, r.y, r.width, r.height);
-            gc.setForeground(color(ColorRole.TEXT));
-        } else {
-            gc.setForeground(color(ColorRole.BUTTON_FRAME));
-            gc.drawRectangle(r.x, r.y, r.width - 1, r.height - 1);
-            gc.setForeground(color(ColorRole.TEXT));
-        }
-        gc.setFont(getFont());
-        Point ext = gc.textExtent(label);
-        gc.drawText(label,
-                r.x + (r.width  - ext.x) / 2,
-                r.y + (r.height - ext.y) / 2,
-                true);
-    }
 
     // -------------------------------------------------------------------------
     // Crosshair
@@ -1478,21 +1336,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         int rightMargin = prefs.isFreqRespPhaseVisible() ? MARGIN_RIGHT_PHASE : MARGIN_RIGHT_NO_PHASE;
         mouseInPlot = e.x >= MARGIN_LEFT && e.x <= area.width - rightMargin
                   && e.y >= MARGIN_TOP   && e.y <= area.height - MARGIN_BOTTOM;
-        // Hand cursor over any header button (matches scope / FFT idiom).
-        // Goes through the shared base's hotspot registry.
-        Cursor c = getDisplay().getSystemCursor(hoverCursorId(e.x, e.y));
-        if (getCursor() != c) setCursor(c);
         redraw();
-    }
-
-    private void onMouseDown(Event e) {
-        if (e.button != 1) return;
-        // All header buttons are registered as Hotspots with the shared
-        // base — dispatch via the registry.  Per-button radio / toggle /
-        // push semantics live inside the registered Runnables, each of
-        // which already calls redraw() on its own.
-        Hotspot hot = hotspotAt(e.x, e.y);
-        if (hot != null) hot.onClick.run();
     }
 
     private void onMouseWheel(Event e) {

@@ -1,5 +1,7 @@
 package org.edgo.audio.measure.gui.fft;
 
+import org.edgo.audio.measure.enums.AlignGenerator;
+
 /**
  * A closed-loop frequency aligner that steers the generator's commanded
  * frequency onto the FFT bin grid by feeding back the per-frame error between
@@ -25,4 +27,6 @@ public interface FrequencyAligner {
     /** Zeroes the loop state.  Call on Record stop and on user-initiated
      *  generator-frequency / FFT-length changes (both invalidate the lock). */
     void reset();
+
+    AlignGenerator getMode();
 }

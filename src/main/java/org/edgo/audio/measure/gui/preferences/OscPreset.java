@@ -1,8 +1,9 @@
 package org.edgo.audio.measure.gui.preferences;
 
-import lombok.Getter;
-import lombok.Setter;
+import lombok.Data;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.LpfMode;
+import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 
@@ -14,8 +15,7 @@ import org.edgo.audio.measure.enums.TriggerMode;
  * {@link Preferences} fields one-for-one so apply/capture in
  * {@code OscilloscopePane} is a straight assignment per field.
  */
-@Getter
-@Setter
+@Data
 public class OscPreset {
     private boolean leftChannelEnabled       = true;
     private boolean rightChannelEnabled      = true;
@@ -23,10 +23,10 @@ public class OscPreset {
     private boolean rightAcMode              = false;
     private boolean leftSincInterpEnabled    = true;
     private boolean rightSincInterpEnabled   = true;
-    private String  leftMainsSuppression     = "NONE";
-    private String  rightMainsSuppression    = "NONE";
-    private String  leftLpf                  = "NONE";
-    private String  rightLpf                 = "NONE";
+    private MainsSuppression leftMainsSuppression  = MainsSuppression.NONE;
+    private MainsSuppression rightMainsSuppression = MainsSuppression.NONE;
+    private LpfMode          leftLpf               = LpfMode.NONE;
+    private LpfMode          rightLpf              = LpfMode.NONE;
     private double  leftVoltsPerDiv          = 0.1;
     private double  rightVoltsPerDiv         = 0.1;
     private double  leftOffsetFrac           = 0.5;

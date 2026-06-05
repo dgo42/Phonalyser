@@ -65,7 +65,7 @@ public final class GeneratorController {
         final int    bitDepth      = bp.getOutputBitDepth();
         final int    ditherBits    = prefs.getGenDitherBits();
         final double amplitudeVRms = prefs.getGenAmplitudeVrms();
-        final GenSignalForm form      = parseForm(prefs.getGenSignalForm());
+        final GenSignalForm form      = prefs.getGenSignalForm();
         // First tone frequency: the generator constructor's
         // {@code frequency} parameter feeds the primary DDS, so for
         // DUAL_TONE this is tone 1.  Snapped to the nearest FFT bin
@@ -369,11 +369,5 @@ public final class GeneratorController {
             if (name.equals(d.name())) return d;
         }
         return null;
-    }
-
-    private GenSignalForm parseForm(String s) {
-        if (s == null) return GenSignalForm.SINE;
-        try { return GenSignalForm.valueOf(s); }
-        catch (IllegalArgumentException ex) { return GenSignalForm.SINE; }
     }
 }

@@ -36,7 +36,7 @@ class FftCrossTickDriftTest {
 
     private static final int        SAMPLE_RATE    = 384_000;
     private static final int        FFT_SIZE       = 65_536;
-    private static final WindowType WINDOW         = WindowType.BLACKMAN_HARRIS_7;
+    private static final WindowType WINDOW         = WindowType.BH7;
     private static final FftOverlap OVERLAP        = FftOverlap.PCT_75;
     private static final int        HARMONIC_COUNT = 8;                 // H2..H9
 

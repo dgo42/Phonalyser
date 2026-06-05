@@ -9,6 +9,7 @@ import org.edgo.audio.measure.dsp.LowPassFilter;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.MedianFilter;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.gui.preferences.Preferences;
@@ -290,8 +291,8 @@ public final class ScopeMeasurementWorker {
      *  overlap).  No-op below the LPF's Nyquist gate.  Worker-thread only. */
     private void applyHfLowPass(int sampleRate, int avail) {
         Preferences prefs = Preferences.instance();
-        LpfMode lm = LpfMode.fromNameOr(prefs.getOscLeftLpf(),  LpfMode.NONE);
-        LpfMode rm = LpfMode.fromNameOr(prefs.getOscRightLpf(), LpfMode.NONE);
+        LpfMode lm = prefs.getOscLeftLpf();
+        LpfMode rm = prefs.getOscRightLpf();
         if (lm == LpfMode.NONE && rm == LpfMode.NONE) return;
         if (measLpfSampleRate != sampleRate) {
             measLpfLeft = null; measLpfRight = null;
@@ -367,10 +368,8 @@ public final class ScopeMeasurementWorker {
         // raw per-channel means above are kept for AC-coupling display, but
         // the measurement reads the de-hummed signal.  DC-preserving so
         // Vmean stays meaningful.
-        MainsSuppression leftMode  = MainsSuppression.fromNameOr(
-                prefs.getOscLeftMainsSuppression(),  MainsSuppression.NONE);
-        MainsSuppression rightMode = MainsSuppression.fromNameOr(
-                prefs.getOscRightMainsSuppression(), MainsSuppression.NONE);
+        MainsSuppression leftMode  = prefs.getOscLeftMainsSuppression();
+        MainsSuppression rightMode = prefs.getOscRightMainsSuppression();
         MainsSuppression selMode = (selected == Channel.L) ? leftMode : rightMode;
         // When the comb is on, the frequency is found in two steps to avoid the
         // comb biasing it: the comb suppresses an often-dominant mains so the
@@ -434,7 +433,7 @@ public final class ScopeMeasurementWorker {
         // happened to win the Goertzel search on this tick.  Vpp /
         // Vrms / Vmean stay intact since they're well-defined for
         // any signal mode.
-        if ("DUAL_TONE".equalsIgnoreCase(prefs.getGenSignalForm())) {
+        if (prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE) {
             result = result.withoutTimes();
         }
         long now = System.nanoTime();

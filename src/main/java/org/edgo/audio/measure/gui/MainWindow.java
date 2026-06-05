@@ -30,6 +30,7 @@ import org.edgo.audio.measure.gui.helpviewer.AboutDialog;
 import org.edgo.audio.measure.gui.helpviewer.HelpUrls;
 import org.edgo.audio.measure.gui.helpviewer.HelpViewer;
 import org.edgo.audio.measure.gui.helpviewer.UpdateChecker;
+import org.edgo.audio.measure.gui.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
@@ -230,7 +231,7 @@ public final class MainWindow {
             // down so it doesn't keep using the old backend after the
             // user switched.
             Runnable resume = mainTab.pauseForDialog();
-            final String  origOrientation = Preferences.instance().getTabOrientation();
+            final TabOrientation origOrientation = Preferences.instance().getTabOrientation();
             final boolean origSmallIcons  = Preferences.instance().isSmallIconsInMainTab();
             new PreferencesDialog(shell).open(() -> {
                 resume.run();
@@ -238,7 +239,7 @@ public final class MainWindow {
                 // rebuild (top tabs ↔ left sidebar ↔ icon size); piggyback
                 // on the existing language-switch recreate mechanism.
                 Preferences prefs = Preferences.instance();
-                if (!origOrientation.equalsIgnoreCase(prefs.getTabOrientation())
+                if (origOrientation != prefs.getTabOrientation()
                         || origSmallIcons != prefs.isSmallIconsInMainTab()) {
                     requestRecreate();
                 }

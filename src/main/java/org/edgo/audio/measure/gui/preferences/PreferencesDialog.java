@@ -23,6 +23,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.generator.NumericStepField;
+import org.edgo.audio.measure.gui.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.StepSelector;
 import org.edgo.audio.measure.sound.DeviceRef;
@@ -115,7 +116,7 @@ public final class PreferencesDialog {
         AudioBackendType[] active = { originalBackend };
 
         // Snapshot the Look & Feel prefs too so Cancel rolls them back.
-        final String originalTabOrientation = prefs.getTabOrientation();
+        final TabOrientation originalTabOrientation = prefs.getTabOrientation();
         final boolean originalSmallIcons    = prefs.isSmallIconsInMainTab();
 
         // Snapshot the FreqResp Nyquist fraction.  It applies live (so
@@ -148,7 +149,7 @@ public final class PreferencesDialog {
         Combo orientationCombo = new Combo(lookFeelTab, SWT.READ_ONLY);
         orientationCombo.add(I18n.t("preferences.lookAndFeel.tabOrientation.top"));
         orientationCombo.add(I18n.t("preferences.lookAndFeel.tabOrientation.left"));
-        orientationCombo.select("LEFT".equalsIgnoreCase(originalTabOrientation) ? 1 : 0);
+        orientationCombo.select(originalTabOrientation == TabOrientation.LEFT ? 1 : 0);
         orientationCombo.setToolTipText(I18n.t("preferences.lookAndFeel.tabOrientation.tooltip"));
         orientationCombo.setLayoutData(comboData());
 
@@ -765,7 +766,7 @@ public final class PreferencesDialog {
             prefs.setBackend(active[0]);
             AudioBackend.instance().setActive(active[0]);
             // Look & Feel saves.
-            prefs.setTabOrientation(orientationCombo.getSelectionIndex() == 1 ? "LEFT" : "TOP");
+            prefs.setTabOrientation(orientationCombo.getSelectionIndex() == 1 ? TabOrientation.LEFT : TabOrientation.TOP);
             prefs.setSmallIconsInMainTab(smallIconsBtn.getSelection());
             BackendPrefs bp = prefs.current();
             log.info("Preferences saved: backend={}, in={} @ {} Hz / {} bits, out={} @ {} Hz / {} bits",

@@ -98,7 +98,7 @@ public final class UsagePrinter {
         log.info("    --fft-size <n>            FFT length, power of 2 (e.g. 65536 .. 2097152)");
         log.info("    --width <px> --height <px>  chart size");
         log.info("    [--harmonics <n>]         harmonics (H2..) to measure (default 10)");
-        log.info("    [--window-fn <type>]      RECTANGULAR | HANN | BH4 | BH7 | FLAT_TOP |");
+        log.info("    [--window-fn <type>]      RECT | HANN | BH4 | BH7 | FLAT_TOP |");
         log.info("                              DC150 | DC200 (default HANN)");
         log.info("    [--overlap <pct>]         0 | 50 | 75 | 87.5 | 93.75 (default 0)");
         log.info("    [--dist-min <hz>]         lower bound for SNR/noise integration (default 0)");

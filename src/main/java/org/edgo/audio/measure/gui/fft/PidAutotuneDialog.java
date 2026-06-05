@@ -333,9 +333,7 @@ public final class PidAutotuneDialog {
         fftSizeLbl.setText(I18n.t("fft.autotune.fft.size", String.valueOf(size), fmt(hzBin)));
         fftRateLbl.setText(I18n.t("fft.autotune.fft.rate", String.valueOf(rate)));
 
-        FftOverlap ov;
-        try { ov = FftOverlap.valueOf(p.getFftOverlap()); }
-        catch (RuntimeException ex) { ov = FftOverlap.PCT_0; }
+        FftOverlap ov = p.getFftOverlap();
         double frame = rate > 0 ? size / (double) rate : 0;
         double hop   = frame * (1.0 - ov.fraction);
         fftFrameLbl.setText(I18n.t("fft.autotune.fft.frame",

@@ -1,5 +1,7 @@
 package org.edgo.audio.measure.gui.bus;
 
+import org.edgo.audio.measure.enums.GenChangeCause;
+
 /**
  * Canonical names for every event passed through {@link MessageBus}.
  * Always reference these constants at call sites — never write a string

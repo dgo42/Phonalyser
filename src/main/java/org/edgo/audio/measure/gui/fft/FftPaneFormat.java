@@ -1,8 +1,7 @@
 package org.edgo.audio.measure.gui.fft;
 
 import lombok.experimental.UtilityClass;
-import org.edgo.audio.measure.enums.FftOverlap;
-import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.enums.AmplitudeUnit;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 
 import java.util.regex.Matcher;
@@ -18,24 +17,6 @@ import java.util.regex.Pattern;
 @UtilityClass
 public class FftPaneFormat {
 
-    /** Human-readable labels for {@link WindowType} values
-     *  (index-aligned with {@code WindowType.values()}). */
-    public static final String[] WINDOW_LABELS = {
-            "Rectangular",
-            "Hann",
-            "Blackman-Harris 4",
-            "Blackman-Harris 7",
-            "Flat top",
-            "Dolph-Chebyshev 150",
-            "Dolph-Chebyshev 200"
-    };
-
-    /** Short labels for the Window combo — used as the compact text in
-     *  the FFT-settings tab's tile row. */
-    public static final String[] WINDOW_SHORT_LABELS = {
-            "Rect", "Hann", "BH4", "BH7", "FT", "DC150", "DC200"
-    };
-
     /** Averages presets used by the cycling stepper (wheel / arrows). */
     public static final double[] AVERAGES_PRESETS = { 2, 4, 8, 16, 32, Double.POSITIVE_INFINITY };
 
@@ -43,30 +24,6 @@ public class FftPaneFormat {
         if (n >= 1 << 20) return (n >> 20) + "M";
         if (n >= 1 << 10) return (n >> 10) + "k";
         return Integer.toString(n);
-    }
-
-    public String shortWindow(String name) {
-        try {
-            WindowType wt = WindowType.valueOf(name);
-            return WINDOW_SHORT_LABELS[wt.ordinal()];
-        } catch (IllegalArgumentException e) { return "Hann"; }
-    }
-
-    public String prettyWindow(String name) {
-        try {
-            WindowType wt = WindowType.valueOf(name);
-            return WINDOW_LABELS[wt.ordinal()];
-        } catch (IllegalArgumentException e) { return "Hann"; }
-    }
-
-    public String shortOverlap(String name) {
-        try {
-            return FftOverlap.valueOf(name).label;
-        } catch (IllegalArgumentException e) { return "0%"; }
-    }
-
-    public String prettyOverlap(String name) {
-        return shortOverlap(name);
     }
 
     public String shortDistRange(Preferences prefs) {
@@ -129,7 +86,7 @@ public class FftPaneFormat {
             case "dBFS": v = Math.pow(10, raw / 20.0); break;
             default:     v = raw;
         }
-        Preferences.instance().setFftManualFundUnit(unit);
+        Preferences.instance().setFftManualFundUnit(AmplitudeUnit.fromString(unit));
         return v;
     }
 

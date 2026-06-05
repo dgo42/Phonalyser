@@ -2,44 +2,22 @@ package org.edgo.audio.measure.enums;
 
 import java.util.Locale;
 
-/** Window function used by the FFT analyser. */
+/** Window function used by the FFT analyser.  The constant name IS the short token
+ *  used at the CLI / yaml edge (parsed back via {@link #valueOf}) and as the compact
+ *  tile label; the long display label is i18n via {@link #labelKey()}. */
 public enum WindowType {
-    RECTANGULAR,
+    RECT,
     HANN,
-    BLACKMAN_HARRIS_4,
-    BLACKMAN_HARRIS_7,
-    FLAT_TOP,
-    DOLPH_CHEBYSHEV_150,
-    DOLPH_CHEBYSHEV_200;
+    BH4,
+    BH7,
+    FT,
+    DC150,
+    DC200;
 
     private WindowType() {}
 
-    public static WindowType fromString(String s) {
-        switch (s.toUpperCase(Locale.ROOT).replace('-', '_')) {
-            case "RECTANGULAR":
-            case "RECT":
-                return RECTANGULAR;
-            case "HANN":
-                return HANN;
-            case "BLACKMAN_HARRIS_4":
-            case "BH4":
-                return BLACKMAN_HARRIS_4;
-            case "BLACKMAN_HARRIS_7":
-            case "BH7":
-                return BLACKMAN_HARRIS_7;
-            case "FLAT_TOP":
-            case "FLATTOP":
-                return FLAT_TOP;
-            case "DOLPH_CHEBYSHEV_150":
-            case "DC150":
-            case "CHEBYSHEV_150":
-                return DOLPH_CHEBYSHEV_150;
-            case "DOLPH_CHEBYSHEV_200":
-            case "DC200":
-            case "CHEBYSHEV_200":
-                return DOLPH_CHEBYSHEV_200;
-            default:
-                throw new IllegalArgumentException("Unknown window type: " + s);
-        }
+    /** i18n key for the long display label (window combo + tile tooltip). */
+    public String labelKey() {
+        return "fft.window." + name().toLowerCase(Locale.ROOT);
     }
 }
