@@ -301,6 +301,67 @@ class FftCrossTickDriftTest {
         }
     }
 
+    /** Off-bin twin tones (fractional-bin F1/F2 → the tick-0 parabolic κ carries a
+     *  residual) accumulated over many ticks; products synthesized as tones at
+     *  a·F1+b·F2.  A/B on {@link FftAnalyzerWorker#MULTI_KAPPA_REFINE}: with the
+     *  per-tone κ refine OFF that residual slowly de-coheres the tones AND products
+     *  (the live ~0.01 dB/frame creep); ON, each tone's κ is refined from its phase
+     *  slope so all lock.  Reads tick-50 vs tick-last drift, refine OFF vs ON. */
+    @Test
+    void crossTickImdOffBinLock() {
+        int hop    = Math.max(1, (int) Math.round(FFT_SIZE * (1.0 - OVERLAP.fraction)));
+        int winLen = FFT_SIZE + hop;
+        int ticks  = 400;
+        int total  = (ticks - 1) * hop + winLen;
+        double binHz = (double) SAMPLE_RATE / FFT_SIZE;
+
+        // F1, F2 OFF-bin by a fractional bin; products at a·F1+b·F2 (also off-bin).
+        double f1 = (1000 + 0.37) * binHz, f2 = (1700 + 0.29) * binHz;
+        double[] freqs = { f1, f2, f2 - f1, 2 * f1 - f2, 2 * f1, 2 * f2 - f1, f1 + f2, 2 * f2 };
+        double[] dbfs  = { -30.0, -30.0, -100.0, -105.0, -110.0, -108.0, -112.0, -115.0 };
+        String[] lbl   = { "F1", "F2", "F2-F1", "2F1-F2", "2F1", "2F2-F1", "F1+F2", "2F2" };
+        int[] bins = new int[freqs.length];
+        for (int i = 0; i < freqs.length; i++) bins[i] = (int) Math.round(freqs[i] / binHz);
+
+        float[] sig = synthesizeTones(SEED, total, 0.0, freqs, dbfs);   // no drift — isolate the κ residual
+        LOG.info("=== CROSS-TICK IMD OFF-BIN LOCK: F1={} F2={} (off-bin), {} ticks ===",
+                String.format("%.3f", f1), String.format("%.3f", f2), ticks);
+
+        for (boolean refine : new boolean[]{false, true}) {
+            FftAnalyzerWorker.MULTI_KAPPA_REFINE = refine;
+            FftAnalyzer       analyzer = new FftAnalyzer();
+            FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
+            float[] win = new float[winLen];
+            double[] early = new double[freqs.length], late = new double[freqs.length];
+            long base = 0;
+            for (int t = 0; t < ticks; t++) {
+                System.arraycopy(sig, (int) base, win, 0, winLen);
+                analyzer.setSamplesAbsStart(base);
+                analyzer.setSpectrumOnly(true);
+                analyzer.setMultiTone(true);
+                analyzer.setSecondToneHintHz(f2);
+                FftResult r = analyzer.analyze(win, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
+                        WINDOW, OVERLAP, 0.0, 0.0, true, Double.NaN, false, Double.NaN);
+                worker.accumulateIntoForeverBuffer(r, base, true, Integer.MAX_VALUE);
+                if (t == 50 || t == ticks - 1) {
+                    worker.overlayAccumulatorOnto(r);
+                    double[] dst = (t == 50) ? early : late;
+                    for (int i = 0; i < freqs.length; i++) {
+                        dst[i] = (r.amplitudeDbFs != null && bins[i] < r.amplitudeDbFs.length)
+                                ? r.amplitudeDbFs[bins[i]] : Double.NaN;
+                    }
+                }
+                base += hop;
+            }
+            LOG.info(String.format("--- refine = %s  (tick 50 → %d) ---", refine ? "ON " : "OFF", ticks));
+            for (int i = 0; i < freqs.length; i++) {
+                LOG.info(String.format("  %-7s %8.2f → %8.2f dBFS   (drift %+.2f)",
+                        lbl[i], early[i], late[i], late[i] - early[i]));
+            }
+        }
+        FftAnalyzerWorker.MULTI_KAPPA_REFINE = true;
+    }
+
     /** Continuous sum of arbitrary tones {@code freqHz[i]} at {@code dbfs[i]}, all
      *  chirping at the SAME {@code driftPerSample} (one shared clock), plus noise +
      *  TPDF dither.  Re-seeded every 2^16 samples to the exact chirp phase. */

@@ -340,6 +340,20 @@ public final class FftAnalyzerWorker {
     private double  kappaCumPhase;     // Σ clean per-frame phase steps
     private double  kappaCleanSpan;    // Σ clean per-frame delta steps (slope denominator)
     private boolean kappaSkipNext;     // next frame is post-re-sync: re-anchor, don't fold
+    /** Per-tone analogue of the κ refine above, for the multi-tone path.  Each
+     *  detected tone's de-rotated phase slope over {@link #KAPPA_MEAS_FRAMES} clean
+     *  frames yields its own Δκ — folded into {@link #accumToneKappa} ONCE — so the
+     *  tones AND the IMD products built from them (a·κ1+b·κ2) lock instead of riding
+     *  the tick-0 parabolic κ's residual.  Per-tone phase arrays; the frame count /
+     *  clean span / skip flag are shared (one delta per frame).  PLL stays off until
+     *  refined, so the slope is measured against the pinned κ (not the tracked one). */
+    private boolean  multiKappaRefined;
+    private int      multiKappaMeasFrames;
+    private double   multiKappaLastDelta;
+    private double   multiKappaCleanSpan;
+    private boolean  multiKappaSkipNext;
+    private double[] multiKappaCumPhase;    // Σ clean per-frame phase steps, per tone
+    private double[] multiKappaLastPhase;   // de-rotated phase at the reference, per tone
     /** Phase-tracking loop (a PLL on the cross-tick fundamental).  Once κ is
      *  refined the de-rotated fundamental phase should be constant; a frozen
      *  pinned-κ residual lets it slowly ramp, and a re-sync (the event that sets
@@ -453,8 +467,9 @@ public final class FftAnalyzerWorker {
     private void onCaptureOverrun(SignalBufferReader rdr) {
         winValid = false;
         rdr.seekToLatest();
-        kappaSkipNext     = true;   // κ measurement: re-anchor on the jumped frame, don't fold its step
-        gapRecoverPending = true;   // re-sync: one-shot full realign on the next clean frame, then track
+        kappaSkipNext      = true;   // κ measurement: re-anchor on the jumped frame, don't fold its step
+        multiKappaSkipNext = true;   // multi-tone per-tone κ refine: same re-anchor
+        gapRecoverPending  = true;   // re-sync: one-shot full realign on the next clean frame, then track
         if (log.isWarnEnabled()) {
             log.warn("FFT ring overrun — analyser fell a full buffer behind; window re-anchored, "
                     + "averaging continues (lower the overlap or FFT length if this repeats)");
@@ -525,8 +540,9 @@ public final class FftAnalyzerWorker {
     private void onSignalDiscontinuity(SignalBufferReader reader) {
         winValid = false;
         reader.seekToLatest();
-        kappaSkipNext     = true;   // κ measurement: re-anchor on the jumped frame, don't fold its step
-        gapRecoverPending = true;   // re-sync: one-shot full realign on the next clean frame, then track
+        kappaSkipNext      = true;   // κ measurement: re-anchor on the jumped frame, don't fold its step
+        multiKappaSkipNext = true;   // multi-tone per-tone κ refine: same re-anchor
+        gapRecoverPending  = true;   // re-sync: one-shot full realign on the next clean frame, then track
         if (log.isWarnEnabled()) {
             log.warn("Found signal discontinuity — re-synced (glitched window discarded, "
                     + "averaging continues)");
@@ -619,6 +635,12 @@ public final class FftAnalyzerWorker {
             toneDroppedSamples     = new double[accumToneKappa.length];
             kappaRefined           = false;
             kappaMeasFrames        = 0;
+            multiKappaRefined      = false;
+            multiKappaMeasFrames   = 0;
+            multiKappaCleanSpan    = 0.0;
+            multiKappaSkipNext     = false;
+            multiKappaCumPhase     = null;
+            multiKappaLastPhase    = null;
             accumDroppedSamples    = 0.0;
             gapRecoverPending      = false;
             accumHasData = true;
@@ -835,6 +857,9 @@ public final class FftAnalyzerWorker {
      *  sink under drift.  Package-private + non-final so the cross-tick drift harness
      *  can A/B it; the intended production state is on. */
     static boolean FORK_NONTONE_DRIFT = true;
+    /** Per-tone κ refine (multi-tone path).  Package-private + non-final so the
+     *  cross-tick drift harness can A/B it; the intended production state is on. */
+    static boolean MULTI_KAPPA_REFINE = true;
 
     private void accumulateMultiTone(FftResult r, int N, int weight, double delta) {
         int fftSize = r.fftSize;
@@ -848,6 +873,16 @@ public final class FftAnalyzerWorker {
         // measures the same relative drift δ ≈ correction/delta.  Pool them
         // (strength-weighted) below and de-rotate the NON-tone bins by delta·(1+δ).
         double dsum = 0.0, wsum = 0.0;
+        // Per-tone κ refine (mirrors the single-reference one-shot refine): while
+        // unrefined, leave the PLL OFF and measure each tone's de-rotated phase slope
+        // vs the PINNED κ; fold Δκ into accumToneKappa once after KAPPA_MEAS_FRAMES.
+        boolean kRefining = MULTI_KAPPA_REFINE && accumRe != null && accumFrames > 0 && !multiKappaRefined;
+        boolean kAnchor   = kRefining && (multiKappaMeasFrames == 0 || multiKappaSkipNext);
+        if (kRefining && multiKappaMeasFrames == 0) {   // first refine frame: (re)allocate per-tone phase state
+            multiKappaCumPhase  = new double[nT];
+            multiKappaLastPhase = new double[nT];
+            multiKappaCleanSpan = 0.0;
+        }
         for (int t = 0; t < nT; t++) {
             double kappa = accumToneKappa[t];
             int    k0    = Math.min(Math.max(0, (int) Math.round(kappa)), N - 1);
@@ -867,27 +902,39 @@ public final class FftAnalyzerWorker {
             // on the first contributing frame (no reference yet).  On a re-sync
             // (gapRecoverPending) do a one-shot FULL realign of THIS frame too.
             if (accumRe != null && accumFrames > 0 && kappa > 0.0) {
-                double obsPhase   = Math.atan2(r.re[k0] * sr + r.im[k0] * cr,
-                                               r.re[k0] * cr - r.im[k0] * sr);
-                double accumPhase = Math.atan2(accumIm[k0], accumRe[k0]);
-                double residual   = Math.IEEEremainder(obsPhase - accumPhase, 2.0 * Math.PI);
-                // A residual far beyond the per-tick noise + κ-ramp is a phase
-                // DISCONTINUITY this tone suffered (DDS jump / reconnect) that the
-                // window glitch-gate missed — multi-tone disables the per-sample
-                // R-invariant test, so this is the cross-tick safety net.  Snap
-                // (gain 1) so the frame adds at its new phase instead of smearing.
-                boolean jump = Math.abs(residual) > PHASE_JUMP_RAD;
-                double gain  = (gapRecoverPending || jump) ? 1.0 : PHASE_TRACK_GAIN;
-                double corr  = gain * residual * fftSize / (2.0 * Math.PI * kappa);
-                toneDroppedSamples[t] += corr;
-                if (gapRecoverPending || jump) {
-                    ang = -2.0 * Math.PI * (effDelta + corr) * kappa / (double) fftSize;
-                    cr  = Math.cos(ang);
-                    sr  = Math.sin(ang);
-                    if (jump && !gapRecoverPending && log.isInfoEnabled()) {
-                        log.info("FFT dual-tone discontinuity: tone {} (~{} Hz) phase jump {} rad — realigned",
-                                t, String.format("%.1f", kappa * r.sampleRate / (double) fftSize),
-                                String.format("%.3f", residual));
+                double obsPhase = Math.atan2(r.re[k0] * sr + r.im[k0] * cr,
+                                             r.re[k0] * cr - r.im[k0] * sr);
+                if (kRefining) {
+                    // κ refine: accumulate this tone's clean phase step (pinned-κ
+                    // de-rotation; the anchor / re-anchor frame only sets the reference).
+                    if (kAnchor) {
+                        multiKappaLastPhase[t] = obsPhase;
+                    } else {
+                        multiKappaCumPhase[t] += Math.IEEEremainder(obsPhase - multiKappaLastPhase[t], 2.0 * Math.PI);
+                        multiKappaLastPhase[t] = obsPhase;
+                    }
+                } else {
+                    // Per-tone phase-lock loop: fold a fraction of the running
+                    // mis-alignment vs the DEEP accumulated phase into the tone's
+                    // correction.  A residual far beyond the per-tick noise is a phase
+                    // DISCONTINUITY (DDS jump / reconnect) the window gate missed — snap
+                    // (gain 1) so the frame adds at its new phase instead of smearing.
+                    // On a re-sync (gapRecoverPending) do a one-shot FULL realign too.
+                    double accumPhase = Math.atan2(accumIm[k0], accumRe[k0]);
+                    double residual   = Math.IEEEremainder(obsPhase - accumPhase, 2.0 * Math.PI);
+                    boolean jump = Math.abs(residual) > PHASE_JUMP_RAD;
+                    double gain  = (gapRecoverPending || jump) ? 1.0 : PHASE_TRACK_GAIN;
+                    double corr  = gain * residual * fftSize / (2.0 * Math.PI * kappa);
+                    toneDroppedSamples[t] += corr;
+                    if (gapRecoverPending || jump) {
+                        ang = -2.0 * Math.PI * (effDelta + corr) * kappa / (double) fftSize;
+                        cr  = Math.cos(ang);
+                        sr  = Math.sin(ang);
+                        if (jump && !gapRecoverPending && log.isInfoEnabled()) {
+                            log.info("FFT dual-tone discontinuity: tone {} (~{} Hz) phase jump {} rad — realigned",
+                                    t, String.format("%.1f", kappa * r.sampleRate / (double) fftSize),
+                                    String.format("%.3f", residual));
+                        }
                     }
                 }
             }
@@ -909,7 +956,6 @@ public final class FftAnalyzerWorker {
         // frequency (clock offset / wobble included) is de-rotated, not the integer
         // bin-centre.  Without this the off-bin products carry a (bin − κ_p)·delta
         // ramp that drifts (slow when aligned, wild at a raw ppm offset).
-        int   nProd   = 0;
         int[] prodIdx = null;
         double[] prodCos = null, prodSin = null;
         if (nT == 2 && accumToneKappa[0] > 0.0 && accumToneKappa[1] > 0.0) {
@@ -930,7 +976,6 @@ public final class FftAnalyzerWorker {
                     cap++;
                 }
             }
-            nProd   = cap;
             prodCos = new double[cap];
             prodSin = new double[cap];
             for (int p = 0; p < cap; p++) {
@@ -968,6 +1013,32 @@ public final class FftAnalyzerWorker {
             double nextRe = phRe * stepRe - phIm * stepIm;
             phIm = phRe * stepIm + phIm * stepRe;
             phRe = nextRe;
+        }
+        // Per-tone κ refine: advance the shared frame count / clean span; once the
+        // window is full fold each tone's Δκ (its phase slope) into accumToneKappa,
+        // so the tones AND the IMD grid (a·κ1+b·κ2) lock from the next frame on.
+        if (kRefining) {
+            if (kAnchor) {
+                if (multiKappaMeasFrames == 0) {
+                    multiKappaMeasFrames = 1;
+                }
+                multiKappaLastDelta = delta;
+                multiKappaSkipNext  = false;
+            } else {
+                multiKappaCleanSpan += delta - multiKappaLastDelta;
+                multiKappaLastDelta  = delta;
+                if (++multiKappaMeasFrames >= KAPPA_MEAS_FRAMES && multiKappaCleanSpan > 0.0) {
+                    for (int t = 0; t < nT; t++) {
+                        accumToneKappa[t] += multiKappaCumPhase[t] * fftSize
+                                / (2.0 * Math.PI * multiKappaCleanSpan);
+                    }
+                    multiKappaRefined = true;
+                    if (log.isInfoEnabled()) {
+                        log.info("FFT multi-tone κ refined from phase slope over {} clean frames ({} tones)",
+                                multiKappaMeasFrames, nT);
+                    }
+                }
+            }
         }
     }
 
