@@ -76,6 +76,7 @@ import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.MainTab;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bind.Property;
+import org.edgo.audio.measure.gui.preferences.CalibrationEntry;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -2102,21 +2103,19 @@ public final class FftPane {
     private static final class FftCalRow {
         Composite                composite;
         Text                     pathField;
-        /** "Active" toggle — the calibration is only added to
-         *  {@link FftCalibrationStore} when this is checked AND a file
-         *  is loaded.  Setting it ahead of loading the file is OK
-         *  (the load handler re-runs syncFftStoreFromRows). */
+        /** "Active" toggle — two-way bound to {@code entry.active()}; the
+         *  calibration is only added to {@link FftCalibrationStore} when this
+         *  is checked AND a file is loaded. */
         Button                   activeCheck;
-        /** "With noise" toggle — when checked, this row's correction
-         *  is applied to every FFT bin (including the noise floor),
-         *  not just the harmonic dot positions.  Only meaningful when
-         *  {@link #activeCheck} is on AND a file is loaded; disabled
-         *  otherwise. */
+        /** "With noise" toggle — two-way bound to {@code entry.withNoise()};
+         *  when checked this row's correction is applied to every FFT bin
+         *  (noise floor included).  Only meaningful when active AND a file is
+         *  loaded; disabled otherwise. */
         Button                   noiseCheck;
         StereoFreqRespCalibration calibration;
-        String                   path;  // null when row is empty
-        boolean                  active;
-        boolean                  withNoise;
+        /** Source of truth for path + Active + With-noise; lives in
+         *  {@code Preferences.getFftCalibrations()}. */
+        CalibrationEntry         entry;
     }
 
     private void buildCalibrationTab(CTabFolder folder) {
@@ -2136,30 +2135,21 @@ public final class FftPane {
         fftCalRowsContainer.setLayout(gl);
 
         Preferences prefs = Preferences.instance();
-        FftCalRow row0 = createFftCalRowUi();
-        row0.active    = prefs.isFftCalibrationActive();
-        row0.withNoise = prefs.isFftCalibrationWithNoise();
-        String p0 = prefs.getFftCalibrationPath();
-        if (p0 != null && !p0.isEmpty()) loadFileIntoFftCalRow(row0, p0, false);
-        updateFftCalRowEnable(row0);
-
-        List<String>  extras       = prefs.getFftCalibrationPathsExtra();
-        List<Boolean> extrasActive = prefs.getFftCalibrationActiveExtra();
-        List<Boolean> extrasNoise  = prefs.getFftCalibrationWithNoiseExtra();
-        if (extras != null) {
-            for (int i = 0; i < extras.size(); i++) {
-                FftCalRow rN = createFftCalRowUi();
-                rN.active    = (extrasActive != null && i < extrasActive.size()) ? extrasActive.get(i) : false;
-                rN.withNoise = (extrasNoise  != null && i < extrasNoise.size())  ? extrasNoise.get(i)  : false;
-                String pn = extras.get(i);
-                if (pn != null && !pn.isEmpty()) loadFileIntoFftCalRow(rN, pn, false);
-                updateFftCalRowEnable(rN);
-            }
+        List<CalibrationEntry> cals = prefs.getFftCalibrations();
+        if (cals.isEmpty()) {
+            prefs.addFftCalibration(new CalibrationEntry());  // row 0 always present
+        }
+        for (CalibrationEntry entry : cals) {
+            FftCalRow r = createFftCalRowUi(entry);
+            String p = entry.getPath();
+            if (p != null && !p.isEmpty()) loadFileIntoFftCalRow(r, p, false);
+            updateFftCalRowEnable(r);
         }
         FftCalibrationStore.instance().clearAll();
         for (FftCalRow r : fftCalRows) {
-            if (r.calibration != null && r.path != null && r.active) {
-                FftCalibrationStore.instance().addEntry(r.calibration, r.path, r.withNoise);
+            if (r.calibration != null && r.entry.getPath() != null && r.entry.active().get()) {
+                FftCalibrationStore.instance().addEntry(r.calibration, r.entry.getPath(),
+                        r.entry.withNoise().get());
             }
         }
     }
@@ -2179,7 +2169,7 @@ public final class FftPane {
      *        otherwise only harmonic / dot bins are corrected.  Only
      *        meaningful when Active is on; disabled otherwise.</li>
      *  </ul> */
-    private FftCalRow createFftCalRowUi() {
+    private FftCalRow createFftCalRowUi(CalibrationEntry entry) {
         boolean isRow0 = fftCalRows.isEmpty();
 
         Composite row = new Composite(fftCalRowsContainer, SWT.NONE);
@@ -2235,24 +2225,22 @@ public final class FftPane {
         r.pathField   = pathField;
         r.activeCheck = activeCheck;
         r.noiseCheck  = noiseCheck;
+        r.entry       = entry;
         fftCalRows.add(r);
         updateFftCalRowEnable(r);
+
+        Bindings.check(activeCheck, entry.active());
+        Bindings.check(noiseCheck,  entry.withNoise());
+        Bindings.onChange(activeCheck, entry.active(), v -> {
+            updateFftCalRowEnable(r);
+            syncFftStoreFromRows();
+        });
+        Bindings.onChange(noiseCheck, entry.withNoise(), v -> syncFftStoreFromRows());
 
         loadBtn.addListener(SWT.Selection,  e -> userLoadInFftCalRow(r));
         clearBtn.addListener(SWT.Selection, e -> userClearFftCalRow(r));
         addBtn.addListener(SWT.Selection,   e -> userAddFftCalRow());
         if (!isRow0) removeBtn.addListener(SWT.Selection, e -> userRemoveFftCalRow(r));
-        activeCheck.addListener(SWT.Selection, e -> {
-            r.active = activeCheck.getSelection();
-            updateFftCalRowEnable(r);
-            syncFftStoreFromRows();
-            persistFftRowsToPrefs();
-        });
-        noiseCheck.addListener(SWT.Selection, e -> {
-            r.withNoise = noiseCheck.getSelection();
-            syncFftStoreFromRows();
-            persistFftRowsToPrefs();
-        });
 
         relayoutFftCalRows();
         return r;
@@ -2264,14 +2252,12 @@ public final class FftPane {
      *  creation, file load, file clear, and the Active checkbox
      *  listener. */
     private void updateFftCalRowEnable(FftCalRow r) {
-        boolean fileLoaded = r.path != null && r.calibration != null;
+        boolean fileLoaded = r.entry.getPath() != null && r.calibration != null;
         if (r.activeCheck != null && !r.activeCheck.isDisposed()) {
             r.activeCheck.setEnabled(fileLoaded);
-            r.activeCheck.setSelection(r.active);
         }
         if (r.noiseCheck != null && !r.noiseCheck.isDisposed()) {
-            r.noiseCheck.setEnabled(fileLoaded && r.active);
-            r.noiseCheck.setSelection(r.withNoise);
+            r.noiseCheck.setEnabled(fileLoaded && r.entry.active().get());
         }
     }
 
@@ -2297,12 +2283,12 @@ public final class FftPane {
         String parent = new File(picked).getParent();
         if (parent != null) prefs.setFftLoadFolder(parent);
         syncFftStoreFromRows();
-        persistFftRowsToPrefs();
+        prefs.save();
     }
 
     private void userClearFftCalRow(FftCalRow r) {
         r.calibration = null;
-        r.path        = null;
+        r.entry.setPath(null);
         r.pathField.setText(I18n.t("freqResp.calibration.path.none"));
         r.pathField.setToolTipText(null);
         // Clearing the file forces the two checkboxes back to disabled
@@ -2312,12 +2298,13 @@ public final class FftPane {
         // "if checkbox active and file not loaded, apply once it loads".
         updateFftCalRowEnable(r);
         syncFftStoreFromRows();
-        persistFftRowsToPrefs();
+        Preferences.instance().save();
     }
 
     private void userAddFftCalRow() {
-        createFftCalRowUi();
-        persistFftRowsToPrefs();
+        CalibrationEntry entry = new CalibrationEntry();
+        Preferences.instance().addFftCalibration(entry);
+        createFftCalRowUi(entry);
     }
 
     private void userRemoveFftCalRow(FftCalRow r) {
@@ -2325,17 +2312,17 @@ public final class FftPane {
         int idx = fftCalRows.indexOf(r);
         if (idx <= 0) return;
         fftCalRows.remove(idx);
+        Preferences.instance().removeFftCalibration(r.entry);
         r.composite.dispose();
         relayoutFftCalRows();
         syncFftStoreFromRows();
-        persistFftRowsToPrefs();
     }
 
     private boolean loadFileIntoFftCalRow(FftCalRow r, String picked, boolean showErrors) {
         try {
             StereoFreqRespCalibration cal = FreqRespCalHelper.loadCsv(picked);
             r.calibration = cal;
-            r.path        = picked;
+            r.entry.setPath(picked);
             r.pathField.setText(picked);
             r.pathField.setToolTipText(picked);
             // File just loaded — refresh the checkboxes' enabled state
@@ -2362,31 +2349,10 @@ public final class FftPane {
             // Only push entries that have a loaded file AND the user
             // has checked "Active" — the per-row With-noise flag rides
             // with the entry into the store.
-            if (r.calibration != null && r.path != null && r.active) {
-                store.addEntry(r.calibration, r.path, r.withNoise);
+            if (r.calibration != null && r.entry.getPath() != null && r.entry.active().get()) {
+                store.addEntry(r.calibration, r.entry.getPath(), r.entry.withNoise().get());
             }
         }
-    }
-
-    private void persistFftRowsToPrefs() {
-        Preferences prefs = Preferences.instance();
-        FftCalRow row0 = fftCalRows.isEmpty() ? null : fftCalRows.get(0);
-        prefs.setFftCalibrationPath(row0 == null ? null : row0.path);
-        prefs.setFftCalibrationActive(row0 != null && row0.active);
-        prefs.setFftCalibrationWithNoise(row0 != null && row0.withNoise);
-        List<String>  extras       = new ArrayList<>();
-        List<Boolean> extrasActive = new ArrayList<>();
-        List<Boolean> extrasNoise  = new ArrayList<>();
-        for (int i = 1; i < fftCalRows.size(); i++) {
-            FftCalRow r = fftCalRows.get(i);
-            extras.add(r.path == null ? "" : r.path);
-            extrasActive.add(r.active);
-            extrasNoise.add(r.withNoise);
-        }
-        prefs.setFftCalibrationPathsExtra(extras);
-        prefs.setFftCalibrationActiveExtra(extrasActive);
-        prefs.setFftCalibrationWithNoiseExtra(extrasNoise);
-        prefs.save();
     }
 
     private Composite groupCell(CTabFolder folder, String title) {

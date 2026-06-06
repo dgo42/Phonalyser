@@ -60,6 +60,7 @@ import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bind.Property;
+import org.edgo.audio.measure.gui.preferences.CalibrationEntry;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -1078,14 +1079,15 @@ public final class FreqRespPane {
     private static final class CalRow {
         Composite                composite;
         Text                     pathField;
-        /** "Active" toggle — same semantics as the FFT pane: the
-         *  calibration is only pushed into the store when this is
-         *  checked AND a file is loaded.  Checking it ahead of loading
-         *  is OK; the next loadFileIntoRow re-runs syncStoreFromRows. */
+        /** "Active" toggle — two-way bound to {@code entry.active()}; the
+         *  calibration is only pushed into the store when this is checked AND
+         *  a file is loaded. */
         Button                   activeCheck;
         StereoFreqRespCalibration calibration;
-        String                   path; // null when the row is empty
-        boolean                  active;
+        /** Source of truth for path + Active; lives in
+         *  {@code Preferences.getFreqRespCalibrations()}.  With-noise is
+         *  unused by this pane. */
+        CalibrationEntry         entry;
     }
 
     private void buildCalibrationTab() {
@@ -1113,31 +1115,22 @@ public final class FreqRespPane {
         Preferences prefs = Preferences.instance();
         calMutationInFlight = true;
         try {
-            // Row 0 — always present.
-            CalRow row0 = createRowUi();
-            row0.active = prefs.isFreqRespCalibrationActive();
-            String p0 = prefs.getFreqRespCalibrationPath();
-            if (p0 != null && !p0.isEmpty()) loadFileIntoRow(row0, p0, false);
-            updateCalRowEnable(row0);
-
-            // Rows 1..N from the extras list (skipped silently when empty).
-            List<String>  extras       = prefs.getFreqRespCalibrationPathsExtra();
-            List<Boolean> extrasActive = prefs.getFreqRespCalibrationActiveExtra();
-            if (extras != null) {
-                for (int i = 0; i < extras.size(); i++) {
-                    CalRow rN = createRowUi();
-                    rN.active = (extrasActive != null && i < extrasActive.size()) ? extrasActive.get(i) : false;
-                    String pn = extras.get(i);
-                    if (pn != null && !pn.isEmpty()) loadFileIntoRow(rN, pn, false);
-                    updateCalRowEnable(rN);
-                }
+            List<CalibrationEntry> cals = prefs.getFreqRespCalibrations();
+            if (cals.isEmpty()) {
+                prefs.addFreqRespCalibration(new CalibrationEntry());  // row 0 always present
+            }
+            for (CalibrationEntry entry : cals) {
+                CalRow r = createRowUi(entry);
+                String p = entry.getPath();
+                if (p != null && !p.isEmpty()) loadFileIntoRow(r, p, false);
+                updateCalRowEnable(r);
             }
             // Push the loaded state into the store atomically — one event
             // fires so the view re-derives once.
             FreqRespCalibrationStore.instance().clearAll();
             for (CalRow r : calRows) {
-                if (r.calibration != null && r.path != null && r.active) {
-                    FreqRespCalibrationStore.instance().addEntry(r.calibration, r.path);
+                if (r.calibration != null && r.entry.getPath() != null && r.entry.active().get()) {
+                    FreqRespCalibrationStore.instance().addEntry(r.calibration, r.entry.getPath());
                 }
             }
         } finally {
@@ -1151,7 +1144,7 @@ public final class FreqRespPane {
      *  remove button is invisible so its grid cell stays reserved,
      *  keeping the load/clear/add columns vertically aligned across
      *  all rows. */
-    private CalRow createRowUi() {
+    private CalRow createRowUi(CalibrationEntry entry) {
         boolean isRow0 = calRows.isEmpty();
 
         Composite row = new Composite(calRowsContainer, SWT.NONE);
@@ -1212,8 +1205,15 @@ public final class FreqRespPane {
         r.composite   = row;
         r.pathField   = pathField;
         r.activeCheck = activeCheck;
+        r.entry       = entry;
         calRows.add(r);
         updateCalRowEnable(r);
+
+        Bindings.check(activeCheck, entry.active());
+        Bindings.onChange(activeCheck, entry.active(), v -> {
+            updateCalRowEnable(r);
+            syncStoreFromRows();
+        });
 
         loadBtn.addListener(SWT.Selection, e -> userLoadInRow(r));
         clearBtn.addListener(SWT.Selection, e -> userClearRow(r));
@@ -1221,11 +1221,6 @@ public final class FreqRespPane {
         if (!isRow0) {
             removeBtn.addListener(SWT.Selection, e -> userRemoveRow(r));
         }
-        activeCheck.addListener(SWT.Selection, e -> {
-            r.active = activeCheck.getSelection();
-            syncStoreFromRows();
-            persistRowsToPrefs();
-        });
 
         relayoutCalRows();
         return r;
@@ -1236,9 +1231,8 @@ public final class FreqRespPane {
      *  into the row. */
     private void updateCalRowEnable(CalRow r) {
         if (r.activeCheck == null || r.activeCheck.isDisposed()) return;
-        boolean fileLoaded = r.path != null && r.calibration != null;
+        boolean fileLoaded = r.entry.getPath() != null && r.calibration != null;
         r.activeCheck.setEnabled(fileLoaded);
-        r.activeCheck.setSelection(r.active);
     }
 
     /** Re-runs the rows container's layout AND tells the surrounding
@@ -1265,25 +1259,26 @@ public final class FreqRespPane {
         Preferences prefs = Preferences.instance();
         prefs.setFreqRespLoadFolder(new File(picked).getParent());
         syncStoreFromRows();
-        persistRowsToPrefs();
+        prefs.save();
     }
 
     private void userClearRow(CalRow r) {
         r.calibration = null;
-        r.path        = null;
+        r.entry.setPath(null);
         r.pathField.setText(I18n.t("freqResp.calibration.path.none"));
         r.pathField.setToolTipText(null);
-        // Clearing the file disables Active in the UI but we keep
-        // r.active so re-loading a file re-engages the row without
-        // the user having to re-tick the box — matches the FFT pane.
+        // Clearing the file disables Active in the UI but we keep the
+        // entry's Active flag so re-loading a file re-engages the row
+        // without the user having to re-tick the box — matches the FFT pane.
         updateCalRowEnable(r);
         syncStoreFromRows();
-        persistRowsToPrefs();
+        Preferences.instance().save();
     }
 
     private void userAddRow() {
-        createRowUi();
-        persistRowsToPrefs();
+        CalibrationEntry entry = new CalibrationEntry();
+        Preferences.instance().addFreqRespCalibration(entry);
+        createRowUi(entry);
     }
 
     private void userRemoveRow(CalRow r) {
@@ -1291,10 +1286,10 @@ public final class FreqRespPane {
         int idx = calRows.indexOf(r);
         if (idx <= 0) return; // never remove row 0
         calRows.remove(idx);
+        Preferences.instance().removeFreqRespCalibration(r.entry);
         r.composite.dispose();
         relayoutCalRows();
         syncStoreFromRows();
-        persistRowsToPrefs();
     }
 
     /** Reads a calibration file from disk and writes the result into
@@ -1305,7 +1300,7 @@ public final class FreqRespPane {
         try {
             StereoFreqRespCalibration cal = FreqRespCalHelper.loadCsv(picked);
             r.calibration = cal;
-            r.path        = picked;
+            r.entry.setPath(picked);
             r.pathField.setText(picked);
             r.pathField.setToolTipText(picked);
             updateCalRowEnable(r);
@@ -1334,8 +1329,8 @@ public final class FreqRespPane {
                 // Only push rows the user has explicitly activated; an
                 // unticked row is a "loaded but parked" calibration the
                 // user can re-engage with one click without re-browsing.
-                if (r.calibration != null && r.path != null && r.active) {
-                    store.addEntry(r.calibration, r.path);
+                if (r.calibration != null && r.entry.getPath() != null && r.entry.active().get()) {
+                    store.addEntry(r.calibration, r.entry.getPath());
                 }
             }
         } finally {
@@ -1348,23 +1343,6 @@ public final class FreqRespPane {
      *  {@code freqRespCalibrationPathsExtra}.  Empty rows are persisted
      *  as empty strings in the extras list so the row count is preserved
      *  across restarts. */
-    private void persistRowsToPrefs() {
-        Preferences prefs = Preferences.instance();
-        CalRow row0 = calRows.isEmpty() ? null : calRows.get(0);
-        prefs.setFreqRespCalibrationPath(row0 == null ? null : row0.path);
-        prefs.setFreqRespCalibrationActive(row0 != null && row0.active);
-        List<String>  extras       = new ArrayList<>();
-        List<Boolean> extrasActive = new ArrayList<>();
-        for (int i = 1; i < calRows.size(); i++) {
-            CalRow r = calRows.get(i);
-            extras.add(r.path == null ? "" : r.path);
-            extrasActive.add(r.active);
-        }
-        prefs.setFreqRespCalibrationPathsExtra(extras);
-        prefs.setFreqRespCalibrationActiveExtra(extrasActive);
-        prefs.save();
-    }
-
     /** Rebuilds the row UI from the store.  Used when an external source
      *  (e.g. the wizard's Apply step) replaces the calibration entries
      *  out-of-band — drops any user-added empty rows, leaving exactly
@@ -1383,19 +1361,25 @@ public final class FreqRespPane {
             if (r.composite != null && !r.composite.isDisposed()) r.composite.dispose();
         }
         calRows.clear();
+        Preferences prefs = Preferences.instance();
+        prefs.getFreqRespCalibrations().clear();
         int rowCount = Math.max(1, entries.size());
         for (int i = 0; i < rowCount; i++) {
-            CalRow r = createRowUi();
+            CalibrationEntry entry = (i < entries.size())
+                    ? new CalibrationEntry(entries.get(i).getPath(), true, false)
+                    : new CalibrationEntry();
+            prefs.addFreqRespCalibration(entry);
+            CalRow r = createRowUi(entry);
             if (i < entries.size()) {
                 FreqRespCalibrationStore.Entry e = entries.get(i);
                 r.calibration = e.getCalibration();
-                r.path        = e.getPath();
                 r.pathField.setText(e.getPath());
                 r.pathField.setToolTipText(e.getPath());
+                updateCalRowEnable(r);
             }
         }
         relayoutCalRows();
-        persistRowsToPrefs();
+        prefs.save();
     }
 
     /** True when the loaded subset of {@link #calRows} (skipping empty
@@ -1407,7 +1391,7 @@ public final class FreqRespPane {
             if (j >= entries.size()) return false;
             FreqRespCalibrationStore.Entry e = entries.get(j);
             if (r.calibration != e.getCalibration()) return false;
-            if (r.path == null || !r.path.equals(e.getPath())) return false;
+            if (r.entry.getPath() == null || !r.entry.getPath().equals(e.getPath())) return false;
             j++;
         }
         return j == entries.size();

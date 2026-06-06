@@ -422,7 +422,7 @@ public final class FreqRespWizardDialog {
             StereoFreqRespCalibration cal = FreqRespCalHelper.loadCsv(savedCalPath);
             FreqRespCalibrationStore.instance().setCurrent(cal, savedCalPath);
             Preferences prefs = Preferences.instance();
-            prefs.setFreqRespCalibrationPath(savedCalPath);
+            prefs.setFreqRespPrimaryCalibrationPath(savedCalPath);
             prefs.setFreqRespApplyCalibration(true);
             prefs.save();
             unsavedDirty = false;
