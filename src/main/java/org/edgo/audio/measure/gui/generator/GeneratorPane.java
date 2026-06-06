@@ -39,6 +39,7 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -86,6 +87,10 @@ public final class GeneratorPane {
     /** Pixel height of the floppy / folder glyphs that sit next to the
      *  file-path text fields. */
     private static final int FILE_ICON_HEIGHT    = 16;
+
+    /** Minimum generator / dual-tone frequency — a real floor so a field can
+     *  never hold a degenerate (sub-0.01 Hz) value. */
+    private static final double GEN_FREQ_MIN_HZ  = 0.01;
 
     /** Current dither values shown in the combo (rebuilt when output bit depth changes). */
     private int[] ditherBits;
@@ -300,23 +305,26 @@ public final class GeneratorPane {
         freqLabel.setText(I18n.t("generator.frequency"));
         freqLabel.setLayoutData(fillH());
         freqField = new NumericStepField(group,
-                Math.max(0.01, prefs.getGenFrequencyHz()),
+                Math.max(GEN_FREQ_MIN_HZ, prefs.getGenFrequencyHz()),
                 this::parseFrequency,
                 this::formatFrequency,
-                /* wheel:  ±5 % */ (v, dir) -> v * (1.0 + 0.05 * dir),
-                /* arrows: ±1 Hz */ (v, dir) -> Math.max(0.0, v + dir),
+                /* wheel:  ±5 % */ (v, dir) -> Math.max(GEN_FREQ_MIN_HZ, v * (1.0 + 0.05 * dir)),
+                /* arrows: ±1 Hz */ (v, dir) -> Math.max(GEN_FREQ_MIN_HZ, v + dir),
                 /* width: */ 160);
         freqField.setLayoutData(fillH());
         freqField.setToolTipText(I18n.t("generator.frequency.tooltip"));
         freqField.setEnabled(isPeriodic(initialForm));
-        freqField.addSelectionListener(e -> {
-            // Persist the EFFECTIVE (snapped if applicable) frequency
-            // — GeneratorController.start() reads this pref at start
-            // time, so writing the raw value here was making the first
-            // emission un-snapped even when snap was enabled.  All
-            // other forms / unchecked snap pass the entered value
-            // through unchanged.
-            persistRawFrequency();
+        // Two-way bind the RAW (as-entered) frequency to the pref; the
+        // bind auto-persists via Preferences.requestSave().  The live-
+        // apply of the EFFECTIVE (snapped if applicable) frequency, the
+        // FFT-invalidation publish, and the bracket-label refreshes stay
+        // as a side-effect subscription — GeneratorController.start()
+        // reads genFrequencyHz at start time so the field must persist
+        // the raw value while the controller emits the snapped one.
+        Bindings.stepField(freqField, prefs.genFrequencyHzProperty());
+        Bindings.onChange(group, prefs.genFrequencyHzProperty(), v -> {
+            controller.setFrequency(effectiveGeneratorFrequency());
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
             // Freq change shifts the rectangle period (samples per cycle),
             // which moves both the corrected freq AND the duty grid.
             updateFreqLabel();
@@ -335,22 +343,20 @@ public final class GeneratorPane {
         dt1lGd.horizontalSpan = 2;
         dualToneFreq1Label.setLayoutData(dt1lGd);
         dualToneFreq1Field = new NumericStepField(group,
-                Math.max(0.01, prefs.getGenDualToneFreq1Hz()),
+                Math.max(GEN_FREQ_MIN_HZ, prefs.getGenDualToneFreq1Hz()),
                 this::parseFrequency,
                 this::formatFrequency,
-                (v, dir) -> v * (1.0 + 0.05 * dir),
-                (v, dir) -> Math.max(0.0, v + dir),
+                (v, dir) -> Math.max(GEN_FREQ_MIN_HZ, v * (1.0 + 0.05 * dir)),
+                (v, dir) -> Math.max(GEN_FREQ_MIN_HZ, v + dir),
                 160);
         GridData dt1fGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         dt1fGd.horizontalSpan = 2;
         dualToneFreq1Field.setLayoutData(dt1fGd);
         dualToneFreq1Field.setToolTipText(I18n.t("generator.dualTone.freq1.tooltip"));
-        dualToneFreq1Field.addSelectionListener(e -> {
-            prefs.setGenDualToneFreq1Hz(dualToneFreq1Field.getValue());
-            prefs.save();
+        Bindings.stepField(dualToneFreq1Field, prefs.genDualToneFreq1HzProperty());
+        Bindings.onChange(group, prefs.genDualToneFreq1HzProperty(), v -> {
             int sr = currentOutputSampleRate();
-            double f1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
-                    dualToneFreq1Field.getValue());
+            double f1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, v);
             controller.setFrequency(f1);
             updateDualToneFreqLabels();
             updateFreqLabel();
@@ -364,22 +370,20 @@ public final class GeneratorPane {
         dt2lGd.horizontalSpan = 2;
         dualToneFreq2Label.setLayoutData(dt2lGd);
         dualToneFreq2Field = new NumericStepField(group,
-                Math.max(0.01, prefs.getGenDualToneFreq2Hz()),
+                Math.max(GEN_FREQ_MIN_HZ, prefs.getGenDualToneFreq2Hz()),
                 this::parseFrequency,
                 this::formatFrequency,
-                (v, dir) -> v * (1.0 + 0.05 * dir),
-                (v, dir) -> Math.max(0.0, v + dir),
+                (v, dir) -> Math.max(GEN_FREQ_MIN_HZ, v * (1.0 + 0.05 * dir)),
+                (v, dir) -> Math.max(GEN_FREQ_MIN_HZ, v + dir),
                 160);
         GridData dt2fGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         dt2fGd.horizontalSpan = 2;
         dualToneFreq2Field.setLayoutData(dt2fGd);
         dualToneFreq2Field.setToolTipText(I18n.t("generator.dualTone.freq2.tooltip"));
-        dualToneFreq2Field.addSelectionListener(e -> {
-            prefs.setGenDualToneFreq2Hz(dualToneFreq2Field.getValue());
-            prefs.save();
+        Bindings.stepField(dualToneFreq2Field, prefs.genDualToneFreq2HzProperty());
+        Bindings.onChange(group, prefs.genDualToneFreq2HzProperty(), v -> {
             int sr = currentOutputSampleRate();
-            double f2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
-                    dualToneFreq2Field.getValue());
+            double f2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, v);
             controller.setDualToneFrequency2(f2);
             updateDualToneFreqLabels();
             updateFreqLabel();
@@ -395,15 +399,21 @@ public final class GeneratorPane {
         fftSnapBtn.setText(I18n.t("generator.snapFft"));
         fftSnapBtn.setToolTipText(I18n.t("generator.snapFft.tooltip"));
         fftSnapBtn.setLayoutData(fillH());
-        fftSnapBtn.setSelection(prefs.isGenSnapToFftBin());
-        fftSnapBtn.addListener(SWT.Selection, e -> {
-            prefs.setGenSnapToFftBin(fftSnapBtn.getSelection());
-            persistRawFrequency();
+        // Two-way bind the snap flag (auto-persists via requestSave).  The
+        // running generator's EFFECTIVE frequency, the single-tone label
+        // bracket, the dual-tone re-snap and its label brackets all derive
+        // from this flag, so they stay as a side-effect subscription.  The
+        // raw genFrequencyHz pref is unchanged by a snap toggle (the field
+        // value didn't move), so there is no raw-freq re-write here, only
+        // the live-apply + FFT-invalidation publish.
+        Bindings.check(fftSnapBtn, prefs.genSnapToFftBinProperty());
+        Bindings.onChange(group, prefs.genSnapToFftBinProperty(), v -> {
+            controller.setFrequency(effectiveGeneratorFrequency());
+            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
             updateFreqLabel();
             // Dual-tone uses the same snap pref — refresh both tones
             // on a running generator AND the per-tone label brackets.
-            GenSignalForm form = prefs.getGenSignalForm();
-            if (form == GenSignalForm.DUAL_TONE) {
+            if (prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE) {
                 int sr = currentOutputSampleRate();
                 controller.setFrequency(FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
                         sr, prefs.getGenDualToneFreq1Hz()));
@@ -438,10 +448,9 @@ public final class GeneratorPane {
                 120);
         sweepStartField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepStartField.setToolTipText(I18n.t("generator.sweep.startFreq.tooltip"));
-        sweepStartField.addSelectionListener(e -> {
-            prefs.setGenSweepFreqStartHz(sweepStartField.getValue());
-            prefs.save();
-            controller.setSweepFreqStart(sweepStartField.getValue());
+        Bindings.stepField(sweepStartField, prefs.genSweepFreqStartHzProperty());
+        Bindings.onChange(group, prefs.genSweepFreqStartHzProperty(), v -> {
+            controller.setSweepFreqStart(v);
             MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
@@ -455,10 +464,9 @@ public final class GeneratorPane {
                 120);
         sweepEndField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepEndField.setToolTipText(I18n.t("generator.sweep.stopFreq.tooltip"));
-        sweepEndField.addSelectionListener(e -> {
-            prefs.setGenSweepFreqEndHz(sweepEndField.getValue());
-            prefs.save();
-            controller.setSweepFreqEnd(sweepEndField.getValue());
+        Bindings.stepField(sweepEndField, prefs.genSweepFreqEndHzProperty());
+        Bindings.onChange(group, prefs.genSweepFreqEndHzProperty(), v -> {
+            controller.setSweepFreqEnd(v);
             MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
@@ -472,10 +480,9 @@ public final class GeneratorPane {
                 120);
         sweepDurationField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepDurationField.setToolTipText(I18n.t("generator.sweep.duration.tooltip"));
-        sweepDurationField.addSelectionListener(e -> {
-            prefs.setGenSweepDurationSec(sweepDurationField.getValue());
-            prefs.save();
-            controller.setSweepDurationSeconds(sweepDurationField.getValue());
+        Bindings.stepField(sweepDurationField, prefs.genSweepDurationSecProperty());
+        Bindings.onChange(group, prefs.genSweepDurationSecProperty(), v -> {
+            controller.setSweepDurationSeconds(v);
             MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
@@ -489,10 +496,9 @@ public final class GeneratorPane {
                 120);
         sweepFadeInField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepFadeInField.setToolTipText(I18n.t("generator.sweep.fadeIn.tooltip"));
-        sweepFadeInField.addSelectionListener(e -> {
-            prefs.setGenSweepFadeInSec(sweepFadeInField.getValue());
-            prefs.save();
-            controller.setSweepFadeInSeconds(sweepFadeInField.getValue());
+        Bindings.stepField(sweepFadeInField, prefs.genSweepFadeInSecProperty());
+        Bindings.onChange(group, prefs.genSweepFadeInSecProperty(), v -> {
+            controller.setSweepFadeInSeconds(v);
             MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
@@ -506,10 +512,9 @@ public final class GeneratorPane {
                 120);
         sweepFadeOutField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepFadeOutField.setToolTipText(I18n.t("generator.sweep.fadeOut.tooltip"));
-        sweepFadeOutField.addSelectionListener(e -> {
-            prefs.setGenSweepFadeOutSec(sweepFadeOutField.getValue());
-            prefs.save();
-            controller.setSweepFadeOutSeconds(sweepFadeOutField.getValue());
+        Bindings.stepField(sweepFadeOutField, prefs.genSweepFadeOutSecProperty());
+        Bindings.onChange(group, prefs.genSweepFadeOutSecProperty(), v -> {
+            controller.setSweepFadeOutSeconds(v);
             MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
@@ -517,12 +522,10 @@ public final class GeneratorPane {
         sweepLoopBtn = new Button(sweepPanel, SWT.CHECK);
         sweepLoopBtn.setText(I18n.t("generator.sweep.loop"));
         sweepLoopBtn.setToolTipText(I18n.t("generator.sweep.loop.tooltip"));
-        sweepLoopBtn.setSelection(prefs.isGenSweepLoop());
         sweepLoopBtn.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        sweepLoopBtn.addListener(SWT.Selection, e -> {
-            prefs.setGenSweepLoop(sweepLoopBtn.getSelection());
-            prefs.save();
-            controller.setSweepLoop(sweepLoopBtn.getSelection());
+        Bindings.check(sweepLoopBtn, prefs.genSweepLoopProperty());
+        Bindings.onChange(group, prefs.genSweepLoopProperty(), v -> {
+            controller.setSweepLoop(v);
             MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
@@ -597,7 +600,6 @@ public final class GeneratorPane {
             GenSignalForm prevForm = prefs.getGenSignalForm();
             GenSignalForm f = formCombo.getSelectedForm();
             prefs.setGenSignalForm(f);
-            prefs.save();
             boolean newIsSweep    = f == GenSignalForm.LINEAR_SWEEP || f == GenSignalForm.LOG_SWEEP;
             boolean newIsDualTone = f == GenSignalForm.DUAL_TONE;
             boolean prevWasSweep    = prevForm == GenSignalForm.LINEAR_SWEEP
@@ -666,7 +668,6 @@ public final class GeneratorPane {
                     AudioBackend.getAdcFsVoltageRms());
             prefs.setGenAmplitudeVrms(vrms);
             prefs.setGenAmplitudeUnit(currentUnit);
-            prefs.save();
             // Live-apply if running.
             controller.setAmplitudeVrms(vrms);
             MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
@@ -699,11 +700,9 @@ public final class GeneratorPane {
             GenSignalForm f = formCombo.getSelectedForm();
             if (f == GenSignalForm.TRIANGLE) {
                 prefs.setGenTriangleDuty(frac);
-                prefs.save();
                 controller.setTriangleDuty(frac);
             } else {
                 prefs.setGenRectangleDuty(frac);
-                prefs.save();
                 controller.setRectangleDuty(frac);
             }
             updateDutyLabel();
@@ -729,7 +728,6 @@ public final class GeneratorPane {
         ditherCombo.addListener(SWT.Selection, e -> {
             int bits = ditherBits[ditherCombo.getSelectionIndex()];
             prefs.setGenDitherBits(bits);
-            prefs.save();
             controller.setDitherBits(bits);
         });
 
@@ -766,10 +764,9 @@ public final class GeneratorPane {
                 160);
         durationField.setLayoutData(fillH());
         durationField.setToolTipText(I18n.t("generator.duration.tooltip"));
-        durationField.addSelectionListener(e -> {
-            prefs.setGenWavDurationSeconds(durationField.getValue());
-            prefs.save();
-        });
+        // Pure persisted value (read only by Save-WAV) — two-way bind with
+        // no side-effects; the bind auto-persists via requestSave().
+        Bindings.stepField(durationField, prefs.genWavDurationSecondsProperty());
 
         // ----- Save-to: text + single saveTo (floppy-disk) button.
         // Picking a file in the dialog (and confirming overwrite when
@@ -814,15 +811,10 @@ public final class GeneratorPane {
         playFromLoopBtn.setText(I18n.t("generator.loadFrom.loop"));
         playFromLoopBtn.setToolTipText(I18n.t("generator.loadFrom.loop.tooltip"));
         playFromLoopBtn.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false));
-        playFromLoopBtn.setSelection(prefs.isGenPlayFromLoop());
-        playFromLoopBtn.addListener(SWT.Selection, e -> {
-            boolean enabled = playFromLoopBtn.getSelection();
-            prefs.setGenPlayFromLoop(enabled);
-            prefs.save();
-            // Live-apply so toggling the checkbox during playback takes
-            // effect at the next EOF.
-            filePlayer.setLoop(enabled);
-        });
+        Bindings.check(playFromLoopBtn, prefs.genPlayFromLoopProperty());
+        // Live-apply so toggling the checkbox during playback takes effect
+        // at the next EOF (filePlayer is a runtime object, not a view).
+        Bindings.onChange(group, prefs.genPlayFromLoopProperty(), filePlayer::setLoop);
 
         // Content row: text + browse (folder-open icon) + play (LED).
         // No Clear (✕) button — user spec.
@@ -1192,7 +1184,6 @@ public final class GeneratorPane {
             double newFs = oldFs * (measuredVrms / configuredVrms);
             SignalGenerator.FS_VOLTAGE = newFs;
             Preferences.instance().setDacFsVoltageRms(newFs);
-            Preferences.instance().save();
             // The running SignalGenerator captured its normalised `amplitude`
             // at start time using the OLD FS_VOLTAGE.  Re-applying the
             // user's requested Vrms recomputes it against the new FS so
@@ -1229,21 +1220,6 @@ public final class GeneratorPane {
     private double correctedRectangleHz() {
         int sr = Preferences.instance().current().getOutputSampleRate();
         return (double) sr / currentPeriodSamples();
-    }
-
-    /** Persists the RAW (as-entered) frequency to prefs and live-
-     *  applies the EFFECTIVE (snapped) frequency to the running
-     *  generator.  The two diverge when snap-to-FFT-bin is on with a
-     *  SINE waveform: the user keeps seeing 1000 Hz in the input
-     *  field while the generator emits e.g. 999.987 Hz (shown in the
-     *  bracket).  The split matters across restarts — without it the
-     *  field would reload at the snapped value and the raw user
-     *  intent would be lost. */
-    private void persistRawFrequency() {
-        Preferences.instance().setGenFrequencyHz(freqField.getValue());
-        Preferences.instance().save();
-        controller.setFrequency(effectiveGeneratorFrequency());
-        MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
     }
 
     /** Re-applies the FFT-bin snap to the current frequency.  Invoked
@@ -1386,7 +1362,7 @@ public final class GeneratorPane {
         if (num.isEmpty()) return null;
         try {
             double v = Double.parseDouble(num);
-            return v < 0 ? null : v;
+            return v < 0 ? null : Math.max(GEN_FREQ_MIN_HZ, v);
         } catch (NumberFormatException ex) {
             return null;
         }
@@ -1572,7 +1548,6 @@ public final class GeneratorPane {
         prefs.setGenCorrectionsCsv(picked);
         File parent = new File(picked).getParentFile();
         if (parent != null) prefs.setGenCorrectionsFolder(parent.getAbsolutePath());
-        prefs.save();
     }
 
     // -------------------------------------------------------------------------
@@ -1778,7 +1753,6 @@ public final class GeneratorPane {
             dualToneAmp1Field.setValue(a1);
         }
         prefs.setGenDualToneSplitPct(a1);
-        prefs.save();
         controller.setDualToneAmplitudes(a1, a2);
         // The tone balance changed — invalidate the FFT average / FLL.
         MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
@@ -1843,7 +1817,6 @@ public final class GeneratorPane {
         prefs.setGenWavPath(picked);
         File parent = new File(picked).getParentFile();
         if (parent != null) prefs.setGenWavFolder(parent.getAbsolutePath());
-        prefs.save();
         // Auto-save: write immediately after the path is chosen.
         saveWavNow();
     }
@@ -1866,7 +1839,6 @@ public final class GeneratorPane {
         prefs.setGenPlayFromPath(picked);
         File parent = new File(picked).getParentFile();
         if (parent != null) prefs.setGenPlayFromFolder(parent.getAbsolutePath());
-        prefs.save();
     }
 
     /**

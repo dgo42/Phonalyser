@@ -189,6 +189,51 @@ public final class AudioBackend {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Non-mutating, type-parameterised enumeration.  The active-backend
+    // overloads above dispatch on the live {@code active} field; these dispatch
+    // on the caller-supplied {@code type}, so the Preferences dialog can browse
+    // any backend's devices and formats without flipping the live active backend
+    // via {@link #setActive}.  They touch no mutable field — only the lazily
+    // built per-type managers, which enumerate independently of any open stream.
+    // -------------------------------------------------------------------------
+
+    public List<DeviceRef> listInputDevices(AudioBackendType type) {
+        switch (type) {
+            case WDMKS:     return wdmks().listInputDevices();
+            case JAVASOUND: return javaSound().listInputDevices();
+            case WASAPI:
+            default:        return wasapi().listInputDevices();
+        }
+    }
+
+    public List<DeviceRef> listOutputDevices(AudioBackendType type) {
+        switch (type) {
+            case WDMKS:     return wdmks().listOutputDevices();
+            case JAVASOUND: return javaSound().listOutputDevices();
+            case WASAPI:
+            default:        return wasapi().listOutputDevices();
+        }
+    }
+
+    public List<AudioFormat> listSupportedInputFormats(AudioBackendType type, DeviceRef device) {
+        switch (type) {
+            case WDMKS:     return wdmks().listSupportedFormats(device, false);
+            case JAVASOUND: return javaSound().listSupportedFormats(device, false);
+            case WASAPI:
+            default:        return wasapi().listSupportedFormats(device, false);
+        }
+    }
+
+    public List<AudioFormat> listSupportedOutputFormats(AudioBackendType type, DeviceRef device) {
+        switch (type) {
+            case WDMKS:     return wdmks().listSupportedFormats(device, true);
+            case JAVASOUND: return javaSound().listSupportedFormats(device, true);
+            case WASAPI:
+            default:        return wasapi().listSupportedFormats(device, true);
+        }
+    }
+
     public AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth) {
         switch (device.backend()) {
             case WDMKS:

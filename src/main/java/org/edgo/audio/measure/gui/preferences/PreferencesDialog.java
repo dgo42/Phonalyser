@@ -37,6 +37,8 @@ import org.eclipse.swt.widgets.TabItem;
 
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.gui.bind.Bindings;
+import org.edgo.audio.measure.gui.bind.Property;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -48,10 +50,8 @@ import org.edgo.audio.measure.sound.DeviceRef;
 
 import javax.sound.sampled.AudioFormat;
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.TreeSet;
 
 /**
@@ -61,10 +61,12 @@ import java.util.TreeSet;
  * backend remembers its own selections so switching backends preserves the
  * previously chosen values.
  *
- * <p>OK commits all per-backend edits to {@link Preferences} and propagates
- * the chosen backend to {@link AudioBackend}.  Cancel restores every
- * backend's preferences (and the active backend) from a snapshot taken at
- * open, so a canceled session leaves nothing behind.
+ * <p>The dialog edits a detached working copy obtained from
+ * {@link Preferences#copyForDialog()}; no live state is mutated until OK.
+ * OK hands the working copy to {@link Preferences#applyFromDialog(Preferences)},
+ * which commits every edit (including the chosen backend) and persists.
+ * Cancel just closes — nothing live was touched, so there is nothing to
+ * restore.
  */
 @Log4j2
 public final class PreferencesDialog {
@@ -117,36 +119,11 @@ public final class PreferencesDialog {
         outer.verticalSpacing = 8;
         dialog.setLayout(outer);
 
-        Preferences prefs = Preferences.instance();
-
-        // Snapshot for Cancel: deep-copy every backend's prefs + the active
-        // backend.  Both are mutated during the dialog session (so switching
-        // backends mid-session preserves edits), then restored on Cancel.
-        AudioBackendType originalBackend = prefs.getBackend();
-        Map<AudioBackendType, BackendPrefs> snapshots =
-                new EnumMap<>(AudioBackendType.class);
-        for (AudioBackendType t : AudioBackendType.values()) {
-            snapshots.put(t, prefs.prefsFor(t).snapshot());
-        }
-
-        // The backend currently shown in the combos.  Used by save/load
-        // helpers to know which backend's prefs to read/write.
-        AudioBackendType[] active = { originalBackend };
-
-        // Snapshot the Look & Feel prefs too so Cancel rolls them back.
-        final TabOrientation originalTabOrientation = prefs.getTabOrientation();
-        final boolean originalSmallIcons    = prefs.isSmallIconsInMainTab();
-
-        // Snapshot the FreqResp Nyquist fraction.  It applies live (so
-        // the user can see the band shrink/grow as they type), and the
-        // Cancel handler rolls it back.  Top-level pref — not part of
-        // any BackendPrefs snapshot — so kept in its own field.
-        final double originalNyquistFraction = prefs.getFreqRespNyquistFraction();
-        final double originalFreqMaxHz       = prefs.getFreqRespFreqMaxHz();
-        final double originalFreqMinHz       = prefs.getFreqRespFreqMinHz();
-        final int     originalSmoothWindow    = prefs.getFreqRespCompareSmoothWindow();
-        final boolean originalNotchEnabled    = prefs.isFreqRespNotchEnabled();
-        final int     originalNotchBaseHz     = prefs.getFreqRespNotchBaseHz();
+        // Detached working copy: EVERY control edits this and nothing live.
+        // OK commits it via applyFromDialog(); Cancel just drops it.  The
+        // backend currently shown in the combos is edit.getBackend() — the
+        // single source of truth, no separate active-backend tracking.
+        Preferences edit = Preferences.instance().copyForDialog();
 
         // --- Tab folder: Look & Feel + Audio + Oscilloscope + FFT -----------
         TabFolder tabs = new TabFolder(dialog, SWT.TOP);
@@ -167,7 +144,11 @@ public final class PreferencesDialog {
         Combo orientationCombo = new Combo(lookFeelTab, SWT.READ_ONLY);
         orientationCombo.add(I18n.t("preferences.lookAndFeel.tabOrientation.top"));
         orientationCombo.add(I18n.t("preferences.lookAndFeel.tabOrientation.left"));
-        orientationCombo.select(originalTabOrientation == TabOrientation.LEFT ? 1 : 0);
+        // Combo item order {TOP, LEFT} matches the TabOrientation ordinals, so a
+        // plain ordinal bind is correct.  The shell recreate that applies the new
+        // layout is driven by MainWindow's dialog-close callback (it compares the
+        // pref before/after), not from here; Cancel rolls the pref back below.
+        Bindings.combo(orientationCombo, edit.tabOrientationProperty(), TabOrientation.values());
         orientationCombo.setToolTipText(I18n.t("preferences.lookAndFeel.tabOrientation.tooltip"));
         orientationCombo.setLayoutData(comboData());
 
@@ -176,7 +157,7 @@ public final class PreferencesDialog {
         Button smallIconsBtn = new Button(lookFeelTab, SWT.CHECK);
         smallIconsBtn.setText(I18n.t("preferences.lookAndFeel.smallIcons"));
         smallIconsBtn.setToolTipText(I18n.t("preferences.lookAndFeel.smallIcons.tooltip"));
-        smallIconsBtn.setSelection(originalSmallIcons);
+        Bindings.check(smallIconsBtn, edit.smallIconsInMainTabProperty());
         smallIconsBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         // Footer note so the user knows Layout changes trigger a refresh.
@@ -215,8 +196,8 @@ public final class PreferencesDialog {
                 backendCombo.add(type.name());
             }
         }
-        int originalIdx = availableBackends.indexOf(originalBackend);
-        backendCombo.select(originalIdx >= 0 ? originalIdx : 0);
+        int selectedIdx = availableBackends.indexOf(edit.getBackend());
+        backendCombo.select(selectedIdx >= 0 ? selectedIdx : 0);
         backendCombo.setLayoutData(comboData());
 
         // --- Input group ---------------------------------------------------
@@ -264,7 +245,7 @@ public final class PreferencesDialog {
         String[] AVG_TIME_VALUES = avgTimeSteps();
         new Label(oscTab, SWT.NONE).setText(I18n.t("preferences.measAvg"));
         StepSelector avgSecondsSel = new StepSelector(oscTab, AVG_TIME_VALUES,
-                nearestIndex(AVG_TIME_VALUES, prefs.getOscMeasurementAverageSeconds()), 90);
+                nearestIndex(AVG_TIME_VALUES, edit.getOscMeasurementAverageSeconds()), 90);
         avgSecondsSel.setLayoutData(comboData());
         avgSecondsSel.setToolTipText(I18n.t("preferences.measAvg.tooltip"));
 
@@ -272,7 +253,7 @@ public final class PreferencesDialog {
         String[] LINE_WIDTH_VALUES = {"1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0", "4.5", "5.0"};
         new Label(oscTab, SWT.NONE).setText(I18n.t("preferences.lineWidth"));
         StepSelector lineWidthSel = new StepSelector(oscTab, LINE_WIDTH_VALUES,
-                nearestIndex(LINE_WIDTH_VALUES, prefs.getOscLineWidth()), 90);
+                nearestIndex(LINE_WIDTH_VALUES, edit.getOscLineWidth()), 90);
         lineWidthSel.setLayoutData(comboData());
         lineWidthSel.setToolTipText(I18n.t("preferences.lineWidth.tooltip"));
 
@@ -280,18 +261,19 @@ public final class PreferencesDialog {
         String[] DOT_DIAM_VALUES = {"3", "4", "5", "6", "7", "8", "9", "10", "11", "12"};
         new Label(oscTab, SWT.NONE).setText(I18n.t("preferences.dotDiameter"));
         StepSelector dotDiameterSel = new StepSelector(oscTab, DOT_DIAM_VALUES,
-                nearestIndex(DOT_DIAM_VALUES, prefs.getOscDotDiameter()), 90);
+                nearestIndex(DOT_DIAM_VALUES, edit.getOscDotDiameter()), 90);
         dotDiameterSel.setLayoutData(comboData());
         dotDiameterSel.setToolTipText(I18n.t("preferences.dotDiameter.tooltip"));
 
-        // Per-channel trace colour — button background reflects the current
-        // colour; click opens a ColorDialog and updates the pref live (Cancel
-        // does not roll the colour back yet — that'd require explicit snapshotting).
+        // Per-channel trace colour — button background reflects the picked
+        // colour, held in a local holder for the dialog session; click opens a
+        // ColorDialog and updates only the holder.  The live pref is written on
+        // OK (see okButton handler), so Cancel discards by simply not applying.
         new Label(oscTab, SWT.NONE).setText(I18n.t("preferences.leftColor"));
         Button leftColorBtn = new Button(oscTab, SWT.PUSH);
         leftColorBtn.setLayoutData(comboData());
-        int[] leftRgbHolder  = { prefs.getOscLeftChannelColor()  };
-        int[] rightRgbHolder = { prefs.getOscRightChannelColor() };
+        int[] leftRgbHolder  = { edit.getOscLeftChannelColor()  };
+        int[] rightRgbHolder = { edit.getOscRightChannelColor() };
         applyButtonColor(leftColorBtn,  leftRgbHolder[0]);
         leftColorBtn.addListener(SWT.Selection, e -> {
             ColorDialog dlg = new ColorDialog(dialog);
@@ -332,7 +314,7 @@ public final class PreferencesDialog {
         String[] FFT_LINE_WIDTH_VALUES = {"1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0", "4.5", "5.0"};
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.lineWidth"));
         StepSelector fftLineWidthSel = new StepSelector(fftTab, FFT_LINE_WIDTH_VALUES,
-                nearestIndex(FFT_LINE_WIDTH_VALUES, prefs.getFftLineWidth()), 90);
+                nearestIndex(FFT_LINE_WIDTH_VALUES, edit.getFftLineWidth()), 90);
         fftLineWidthSel.setLayoutData(comboData());
         fftLineWidthSel.setToolTipText(I18n.t("preferences.fft.lineWidth.tooltip"));
 
@@ -340,7 +322,7 @@ public final class PreferencesDialog {
         String[] FFT_DOT_DIAM_VALUES = {"3", "4", "5", "6", "7", "8", "9", "10", "11", "12"};
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.dotDiameter"));
         StepSelector fftDotDiameterSel = new StepSelector(fftTab, FFT_DOT_DIAM_VALUES,
-                nearestIndex(FFT_DOT_DIAM_VALUES, prefs.getFftHarmonicDotDiameter()), 90);
+                nearestIndex(FFT_DOT_DIAM_VALUES, edit.getFftHarmonicDotDiameter()), 90);
         fftDotDiameterSel.setLayoutData(comboData());
         fftDotDiameterSel.setToolTipText(I18n.t("preferences.fft.dotDiameter.tooltip"));
 
@@ -351,7 +333,7 @@ public final class PreferencesDialog {
         // (which would route the average onto the per-tone multi-tone path).
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.strongToneRelDb"));
         NumericStepField fftStrongToneRelDbField = new NumericStepField(fftTab,
-                prefs.getFftStrongToneRelDb(),
+                edit.getFftStrongToneRelDb(),
                 raw -> {
                     if (raw == null) return null;
                     String s = raw.trim().replace(',', '.').replace("dB", "").trim();
@@ -365,9 +347,10 @@ public final class PreferencesDialog {
                 90);
         fftStrongToneRelDbField.setLayoutData(comboData());
         fftStrongToneRelDbField.setToolTipText(I18n.t("preferences.fft.strongToneRelDb.tooltip"));
+        Bindings.stepField(fftStrongToneRelDbField, edit.fftStrongToneRelDbProperty());
 
         // Spectrum line colour.
-        int[] fftLineColorHolder = { prefs.getFftLineColor() };
+        int[] fftLineColorHolder = { edit.getFftLineColor() };
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.lineColor"));
         Button fftLineColorBtn = new Button(fftTab, SWT.PUSH);
         fftLineColorBtn.setLayoutData(comboData());
@@ -383,7 +366,7 @@ public final class PreferencesDialog {
         });
 
         // Chart background colour.
-        int[] fftBgColorHolder = { prefs.getFftChartBackgroundColor() };
+        int[] fftBgColorHolder = { edit.getFftChartBackgroundColor() };
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.bgColor"));
         Button fftBgColorBtn = new Button(fftTab, SWT.PUSH);
         fftBgColorBtn.setLayoutData(comboData());
@@ -399,7 +382,7 @@ public final class PreferencesDialog {
         });
 
         // Harmonic dot colour.
-        int[] fftDotColorHolder = { prefs.getFftHarmonicDotColor() };
+        int[] fftDotColorHolder = { edit.getFftHarmonicDotColor() };
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.dotColor"));
         Button fftDotColorBtn = new Button(fftTab, SWT.PUSH);
         fftDotColorBtn.setLayoutData(comboData());
@@ -415,7 +398,7 @@ public final class PreferencesDialog {
         });
 
         // Frequency response line colour.
-        int[] fftFreqRespColorHolder = { prefs.getFftFreqRespColor() };
+        int[] fftFreqRespColorHolder = { edit.getFftFreqRespColor() };
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.filterColor"));
         Button fftFreqRespColorBtn = new Button(fftTab, SWT.PUSH);
         fftFreqRespColorBtn.setLayoutData(comboData());
@@ -433,7 +416,7 @@ public final class PreferencesDialog {
         // Before-calibration dot colour — painted next to the
         // (red) corrected fundamental / harmonic dots so the user
         // can see how much the loaded .frc shifted each peak.
-        int[] fftBeforeCalDotColorHolder = { prefs.getFftBeforeCalDotColor() };
+        int[] fftBeforeCalDotColorHolder = { edit.getFftBeforeCalDotColor() };
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.beforeCalDotColor"));
         Button fftBeforeCalDotColorBtn = new Button(fftTab, SWT.PUSH);
         fftBeforeCalDotColorBtn.setLayoutData(comboData());
@@ -451,7 +434,7 @@ public final class PreferencesDialog {
         // Calibration overlay colour — the mirrored cascade of all loaded
         // .frc files, drawn parallel to the FFT spectrum so the user can
         // see at a glance which bands the calibration is lifting or cutting.
-        int[] fftCalOverlayColorHolder = { prefs.getFftCalOverlayColor() };
+        int[] fftCalOverlayColorHolder = { edit.getFftCalOverlayColor() };
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.calOverlayColor"));
         Button fftCalOverlayColorBtn = new Button(fftTab, SWT.PUSH);
         fftCalOverlayColorBtn.setLayoutData(comboData());
@@ -485,10 +468,10 @@ public final class PreferencesDialog {
         // concrete band, not just an abstract percent.
         Label nyqLabel = new Label(freqRespTab, SWT.NONE);
         nyqLabel.setText(formatMaxFreqLabel(
-                prefs.getFreqRespNyquistFraction(),
-                prefs.current().getInputSampleRate()));
+                edit.getFreqRespNyquistFraction(),
+                edit.current().getInputSampleRate()));
         NumericStepField nyqField = new NumericStepField(freqRespTab,
-                prefs.getFreqRespNyquistFraction() * 100.0,
+                edit.getFreqRespNyquistFraction() * 100.0,
                 raw -> {
                     if (raw == null) return null;
                     String s = raw.trim().replace(',', '.').replace("%", "").trim();
@@ -506,31 +489,41 @@ public final class PreferencesDialog {
                 90);
         nyqField.setLayoutData(comboData());
         nyqField.setToolTipText(I18n.t("preferences.freqResp.maxFreqPctNyquist.tooltip"));
-        // Apply changes live: every edit (wheel, arrow, typed text) updates
-        // the pref immediately, clamps the FreqResp view's right-edge if
-        // the new max moved below it, and publishes a range-changed event
-        // so the pane re-syncs scrollbars and the view redraws.  Cancel
-        // rolls every changed pref back via the originals captured above.
+        // Working copy: the field edits a working percent; nothing touches the
+        // live pref until OK.  The selection listener only refreshes the (Hz)
+        // label so the user still sees the concrete band track the typed
+        // percent — it reads the live input sample rate (display-only) and the
+        // working percent, never a live pref.  On OK the apply below writes the
+        // fraction, clamps the freq window down if the new max moved below the
+        // current right edge, and the OK handler fires FREQRESP_RANGE_CHANGED.
+        Property<Double> nyqWork = new Property<>(edit.getFreqRespNyquistFraction() * 100.0);
+        Bindings.stepField(nyqField, nyqWork);
         nyqField.addSelectionListener(e -> {
             double pct  = Math.max(FREQRESP_MAX_FREQ_PCT_MIN,
                     Math.min(FREQRESP_MAX_FREQ_PCT_MAX, nyqField.getValue()));
+            int sr = edit.current().getInputSampleRate();
+            // Refresh the label so the (Hz) suffix tracks the typed percent.
+            // layout() so the now-longer-or-shorter text doesn't get clipped.
+            nyqLabel.setText(formatMaxFreqLabel(pct / 100.0, sr));
+            nyqLabel.requestLayout();
+        });
+        // The percent → fraction conversion + freq-window clamp run on OK,
+        // straight into the working copy.  Held in a local so the OK handler
+        // can invoke it before applyFromDialog().
+        Runnable applyNyquistToEdit = () -> {
+            double pct  = Math.max(FREQRESP_MAX_FREQ_PCT_MIN,
+                    Math.min(FREQRESP_MAX_FREQ_PCT_MAX, nyqWork.get()));
             double frac = pct / 100.0;
-            prefs.setFreqRespNyquistFraction(frac);
-            int sr = prefs.current().getInputSampleRate();
+            edit.setFreqRespNyquistFraction(frac);
+            int sr = edit.current().getInputSampleRate();
             double maxBand = (sr > 0 ? sr * 0.5 : 24000.0) * frac;
-            if (prefs.getFreqRespFreqMaxHz() > maxBand) {
-                prefs.setFreqRespFreqMaxHz(maxBand);
-                if (prefs.getFreqRespFreqMinHz() > maxBand) {
-                    prefs.setFreqRespFreqMinHz(Math.max(1.0, maxBand * 0.5));
+            if (edit.getFreqRespFreqMaxHz() > maxBand) {
+                edit.setFreqRespFreqMaxHz(maxBand);
+                if (edit.getFreqRespFreqMinHz() > maxBand) {
+                    edit.setFreqRespFreqMinHz(Math.max(1.0, maxBand * 0.5));
                 }
             }
-            // Refresh the label so the (Hz) suffix tracks the typed
-            // percent.  layout() so the now-longer-or-shorter text
-            // doesn't get clipped by the surrounding grid.
-            nyqLabel.setText(formatMaxFreqLabel(frac, sr));
-            nyqLabel.requestLayout();
-            MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
-        });
+        };
 
         // Compare-mode smoothing window (points).  Used by the FreqResp
         // view's getSmoothedDiffDb to draw the (measured − reference)
@@ -541,16 +534,19 @@ public final class PreferencesDialog {
         // the current zoom.
         new Label(freqRespTab, SWT.NONE).setText(I18n.t("preferences.freqResp.compareSmoothWindow"));
         NumericStepField smoothField = new NumericStepField(freqRespTab,
-                prefs.getFreqRespCompareSmoothWindow(),
+                edit.getFreqRespCompareSmoothWindow(),
                 raw -> {
                     if (raw == null) return null;
                     String s = raw.trim().replace(',', '.');
                     if (s.isEmpty()) return null;
-                    try { return (double) Integer.parseInt(s); }
+                    Double parsed;
+                    try { parsed = (double) Integer.parseInt(s); }
                     catch (NumberFormatException ex) {
-                        try { return Math.rint(Double.parseDouble(s)); }
+                        try { parsed = Math.rint(Double.parseDouble(s)); }
                         catch (NumberFormatException ex2) { return null; }
                     }
+                    return Math.max(FREQRESP_SMOOTH_W_MIN,
+                            Math.min(FREQRESP_SMOOTH_W_MAX, parsed));
                 },
                 v -> String.format(Locale.ROOT, "%d", (int) Math.round(v)),
                 (v, dir) -> Math.max(FREQRESP_SMOOTH_W_MIN,
@@ -562,12 +558,11 @@ public final class PreferencesDialog {
                 90);
         smoothField.setLayoutData(comboData());
         smoothField.setToolTipText(I18n.t("preferences.freqResp.compareSmoothWindow.tooltip"));
-        smoothField.addSelectionListener(e -> {
-            int w = (int) Math.round(Math.max(FREQRESP_SMOOTH_W_MIN,
-                    Math.min(FREQRESP_SMOOTH_W_MAX, smoothField.getValue())));
-            prefs.setFreqRespCompareSmoothWindow(w);
-            MessageBus.instance().publish(Events.FREQRESP_COMPARE_PARAMS_CHANGED);
-        });
+        // Working copy: the field clamps to [0,100] and rounds to an int itself;
+        // it edits a working value applied on OK.  The view refresh
+        // (FREQRESP_COMPARE_PARAMS_CHANGED) fires once from the OK handler, not
+        // live, so there is no preview.
+        Bindings.stepFieldInt(smoothField, edit.freqRespCompareSmoothWindowProperty());
 
         // Industrial-noise notch filter.  When enabled, the FreqResp view
         // linearly interpolates across each harmonic of the chosen base
@@ -580,41 +575,35 @@ public final class PreferencesDialog {
         Button notchEnableBtn = new Button(freqRespTab, SWT.CHECK);
         notchEnableBtn.setText(I18n.t("preferences.freqResp.notch.enable"));
         notchEnableBtn.setToolTipText(I18n.t("preferences.freqResp.notch.enable.tooltip"));
-        notchEnableBtn.setSelection(prefs.isFreqRespNotchEnabled());
         notchEnableBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         new Label(freqRespTab, SWT.NONE).setText(I18n.t("preferences.freqResp.notch.baseHz"));
         Combo notchBaseCombo = new Combo(freqRespTab, SWT.READ_ONLY);
         notchBaseCombo.add("50 Hz");
         notchBaseCombo.add("60 Hz");
-        notchBaseCombo.select(prefs.getFreqRespNotchBaseHz() == 60 ? 1 : 0);
+        notchBaseCombo.select(edit.getFreqRespNotchBaseHz() == 60 ? 1 : 0);
         notchBaseCombo.setToolTipText(I18n.t("preferences.freqResp.notch.baseHz.tooltip"));
         notchBaseCombo.setLayoutData(comboData());
 
-        notchEnableBtn.addListener(SWT.Selection, e -> {
-            prefs.setFreqRespNotchEnabled(notchEnableBtn.getSelection());
-            MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED);
-        });
-        notchBaseCombo.addListener(SWT.Selection, e -> {
-            prefs.setFreqRespNotchBaseHz(notchBaseCombo.getSelectionIndex() == 1 ? 60 : 50);
-            // Only fires a redraw when the notch is currently active; the
-            // base-Hz pref affects nothing else, so a quiet listener would
-            // also work — but firing unconditionally keeps the wiring
-            // symmetric with the checkbox.
-            MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED);
-        });
+        // Working copy: the enable flag and the base-Hz combo edit working
+        // values applied on OK.  The view refresh (FREQRESP_CALIBRATION_CHANGED)
+        // fires once from the OK handler, not live, so there is no preview.
+        Bindings.check(notchEnableBtn, edit.freqRespNotchEnabledProperty());
+        notchBaseCombo.addListener(SWT.Selection, e ->
+                edit.setFreqRespNotchBaseHz(notchBaseCombo.getSelectionIndex() == 1 ? 60 : 50));
 
         // ── Chart colour pickers.  Pattern mirrors the FFT tab's colour
-        // buttons: each holder array carries the currently-selected RGB
-        // through the dialog session so OK / Cancel can commit / roll
-        // back atomically.  Each button shows its current colour as the
-        // background; clicking opens the system ColorDialog.  The
-        // FreqResp view reads these prefs every paint, so a committed
-        // OK takes effect on the next redraw without an extra event.
-        int[] freqRespSignalColorHolder     = { prefs.getFreqRespSignalColor() };
-        int[] freqRespPhaseColorHolder      = { prefs.getFreqRespPhaseColor() };
-        int[] freqRespReferenceColorHolder  = { prefs.getFreqRespReferenceColor() };
-        int[] freqRespBackgroundColorHolder = { prefs.getFreqRespBackgroundColor() };
+        // buttons: each holder array carries the picked RGB through the dialog
+        // session as a working copy.  Each button shows its current colour as
+        // the background; clicking opens the system ColorDialog and updates only
+        // the holder.  The live pref is written on OK; Cancel discards by not
+        // applying.  The FreqResp view reads these prefs every paint, and the
+        // OK handler fires FREQRESP_CALIBRATION_CHANGED so the next redraw uses
+        // the committed colours.
+        int[] freqRespSignalColorHolder     = { edit.getFreqRespSignalColor() };
+        int[] freqRespPhaseColorHolder      = { edit.getFreqRespPhaseColor() };
+        int[] freqRespReferenceColorHolder  = { edit.getFreqRespReferenceColor() };
+        int[] freqRespBackgroundColorHolder = { edit.getFreqRespBackgroundColor() };
 
         new Label(freqRespTab, SWT.NONE).setText(I18n.t("preferences.freqResp.signalColor"));
         Button signalColorBtn = new Button(freqRespTab, SWT.PUSH);
@@ -680,12 +669,12 @@ public final class PreferencesDialog {
         // is picked or the driver reports nothing.
         Runnable refreshInputRatesAndDepths = () -> {
             DeviceRef dev = pickedDevice(inputCombo, devices.inputs);
-            BackendPrefs bp = prefs.prefsFor(active[0]);
+            BackendPrefs bp = edit.current();
             TreeSet<Integer> rates  = (dev != null)
-                    ? ratesOf(AudioBackend.instance().listSupportedInputFormats(dev))
+                    ? ratesOf(AudioBackend.instance().listSupportedInputFormats(edit.getBackend(), dev))
                     : null;
             TreeSet<Integer> depths = (dev != null)
-                    ? depthsOf(AudioBackend.instance().listSupportedInputFormats(dev))
+                    ? depthsOf(AudioBackend.instance().listSupportedInputFormats(edit.getBackend(), dev))
                     : null;
             populateIntCombo(inputRateCombo,  fallback(rates,  DEFAULT_SAMPLE_RATES), " Hz",   bp.getInputSampleRate());
             populateIntCombo(inputDepthCombo, fallback(depths, DEFAULT_BIT_DEPTHS),   " bits", bp.getInputBitDepth());
@@ -694,12 +683,12 @@ public final class PreferencesDialog {
         // Mirror of {@code refreshInputRatesAndDepths} for the output side.
         Runnable refreshOutputRatesAndDepths = () -> {
             DeviceRef dev = pickedDevice(outputCombo, devices.outputs);
-            BackendPrefs bp = prefs.prefsFor(active[0]);
+            BackendPrefs bp = edit.current();
             TreeSet<Integer> rates  = (dev != null)
-                    ? ratesOf(AudioBackend.instance().listSupportedOutputFormats(dev))
+                    ? ratesOf(AudioBackend.instance().listSupportedOutputFormats(edit.getBackend(), dev))
                     : null;
             TreeSet<Integer> depths = (dev != null)
-                    ? depthsOf(AudioBackend.instance().listSupportedOutputFormats(dev))
+                    ? depthsOf(AudioBackend.instance().listSupportedOutputFormats(edit.getBackend(), dev))
                     : null;
             populateIntCombo(outputRateCombo,  fallback(rates,  DEFAULT_SAMPLE_RATES), " Hz",   bp.getOutputSampleRate());
             populateIntCombo(outputDepthCombo, fallback(depths, DEFAULT_BIT_DEPTHS),   " bits", bp.getOutputBitDepth());
@@ -710,7 +699,7 @@ public final class PreferencesDialog {
         // are stored by name (string) — the saved name is matched back to a
         // live DeviceRef on dialog open via populateDeviceCombo.
         Runnable captureUiToActive = () -> {
-            BackendPrefs bp = prefs.prefsFor(active[0]);
+            BackendPrefs bp = edit.current();
             bp.setInputDeviceName (nameOf(pickedDevice(inputCombo,  devices.inputs)));
             bp.setOutputDeviceName(nameOf(pickedDevice(outputCombo, devices.outputs)));
             int idx;
@@ -721,13 +710,13 @@ public final class PreferencesDialog {
         };
 
         Runnable refreshDevices = () -> {
-            // Switch the active backend so list*Devices dispatch to the right
-            // manager during this dialog session.  Reverted on Cancel; finalised
-            // on OK.
-            AudioBackend.instance().setActive(active[0]);
-            devices.inputs  = AudioBackend.instance().listInputDevices();
-            devices.outputs = AudioBackend.instance().listOutputDevices();
-            BackendPrefs bp = prefs.prefsFor(active[0]);
+            // Enumerate the chosen backend's hardware WITHOUT activating it —
+            // the type-parameterised overloads resolve the manager by
+            // edit.getBackend() and never touch the live `active` field.
+            AudioBackendType type = edit.getBackend();
+            devices.inputs  = AudioBackend.instance().listInputDevices(type);
+            devices.outputs = AudioBackend.instance().listOutputDevices(type);
+            BackendPrefs bp = edit.current();
             populateDeviceCombo(inputCombo,  devices.inputs,  bp.getInputDeviceName());
             populateDeviceCombo(outputCombo, devices.outputs, bp.getOutputDeviceName());
             refreshInputRatesAndDepths.run();
@@ -736,10 +725,12 @@ public final class PreferencesDialog {
 
         refreshDevices.run();
         backendCombo.addListener(SWT.Selection, e -> {
-            // Persist the outgoing backend's UI state before switching, so
-            // toggling back later restores what the user just chose.
+            // Persist the outgoing backend's UI state into the working copy
+            // before switching, so toggling back later restores what the user
+            // just chose.  capture() targets edit.current() (the OLD backend),
+            // then setBackend() makes current() the NEW backend.
             captureUiToActive.run();
-            active[0] = availableBackends.get(backendCombo.getSelectionIndex());
+            edit.setBackend(availableBackends.get(backendCombo.getSelectionIndex()));
             refreshDevices.run();
         });
         inputCombo.addListener (SWT.Selection, e -> refreshInputRatesAndDepths.run());
@@ -759,79 +750,58 @@ public final class PreferencesDialog {
         dialog.setDefaultButton(okButton);
 
         okButton.addListener(SWT.Selection, e -> {
+            // Fold every control's value into the working copy `edit`.
+            // --- Per-backend device / rate / depth for the shown backend.
             captureUiToActive.run();
-            prefs.setOscMeasurementAverageSeconds(Double.parseDouble(avgSecondsSel.getSelectedValue()));
-            prefs.setOscLineWidth                (Double.parseDouble(lineWidthSel.getSelectedValue()));
-            prefs.setOscDotDiameter              (Integer.parseInt(dotDiameterSel.getSelectedValue()));
-            prefs.setOscLeftChannelColor         (leftRgbHolder[0]);
-            prefs.setOscRightChannelColor        (rightRgbHolder[0]);
-            prefs.setFftLineWidth                (Double.parseDouble(fftLineWidthSel.getSelectedValue()));
-            prefs.setFftHarmonicDotDiameter      (Integer.parseInt(fftDotDiameterSel.getSelectedValue()));
-            prefs.setFftStrongToneRelDb          (fftStrongToneRelDbField.getValue());
-            prefs.setFftLineColor                (fftLineColorHolder[0]);
-            prefs.setFftChartBackgroundColor     (fftBgColorHolder[0]);
-            prefs.setFftHarmonicDotColor         (fftDotColorHolder[0]);
-            prefs.setFftFreqRespColor      (fftFreqRespColorHolder[0]);
-            prefs.setFftBeforeCalDotColor  (fftBeforeCalDotColorHolder[0]);
-            prefs.setFftCalOverlayColor    (fftCalOverlayColorHolder[0]);
-            prefs.setFreqRespSignalColor    (freqRespSignalColorHolder[0]);
-            prefs.setFreqRespPhaseColor     (freqRespPhaseColorHolder[0]);
-            prefs.setFreqRespReferenceColor (freqRespReferenceColorHolder[0]);
-            prefs.setFreqRespBackgroundColor(freqRespBackgroundColorHolder[0]);
-            MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED);
-            // Nyquist fraction is already saved live by the field listener;
-            // nothing extra to commit here.
-            prefs.setBackend(active[0]);
-            AudioBackend.instance().setActive(active[0]);
-            // Look & Feel saves.
-            prefs.setTabOrientation(orientationCombo.getSelectionIndex() == 1 ? TabOrientation.LEFT : TabOrientation.TOP);
-            prefs.setSmallIconsInMainTab(smallIconsBtn.getSelection());
-            BackendPrefs bp = prefs.current();
+            // --- Step selectors: read straight off the controls into edit.
+            edit.setOscMeasurementAverageSeconds(Double.parseDouble(avgSecondsSel.getSelectedValue()));
+            edit.setOscLineWidth                (Double.parseDouble(lineWidthSel.getSelectedValue()));
+            edit.setOscDotDiameter              (Integer.parseInt(dotDiameterSel.getSelectedValue()));
+            edit.setFftLineWidth                (Double.parseDouble(fftLineWidthSel.getSelectedValue()));
+            edit.setFftHarmonicDotDiameter      (Integer.parseInt(fftDotDiameterSel.getSelectedValue()));
+            // --- Colour holders into edit.
+            edit.setOscLeftChannelColor         (leftRgbHolder[0]);
+            edit.setOscRightChannelColor        (rightRgbHolder[0]);
+            edit.setFftLineColor                (fftLineColorHolder[0]);
+            edit.setFftChartBackgroundColor     (fftBgColorHolder[0]);
+            edit.setFftHarmonicDotColor         (fftDotColorHolder[0]);
+            edit.setFftFreqRespColor            (fftFreqRespColorHolder[0]);
+            edit.setFftBeforeCalDotColor        (fftBeforeCalDotColorHolder[0]);
+            edit.setFftCalOverlayColor          (fftCalOverlayColorHolder[0]);
+            edit.setFreqRespSignalColor         (freqRespSignalColorHolder[0]);
+            edit.setFreqRespPhaseColor          (freqRespPhaseColorHolder[0]);
+            edit.setFreqRespReferenceColor      (freqRespReferenceColorHolder[0]);
+            edit.setFreqRespBackgroundColor     (freqRespBackgroundColorHolder[0]);
+            // --- Nyquist percent → fraction + freq-window clamp, into edit.
+            applyNyquistToEdit.run();
+            // (orientation, small icons, strong-tone rel-dB, compare-smoothing
+            //  window, notch enable + base Hz already live on `edit` via their
+            //  two-way binds.)
+            BackendPrefs bp = edit.current();
             log.info("Preferences saved: backend={}, in={} @ {} Hz / {} bits, out={} @ {} Hz / {} bits",
-                    prefs.getBackend(),
+                    edit.getBackend(),
                     bp.getInputDeviceName()  != null ? bp.getInputDeviceName()  : "<none>",
                     bp.getInputSampleRate(),  bp.getInputBitDepth(),
                     bp.getOutputDeviceName() != null ? bp.getOutputDeviceName() : "<none>",
                     bp.getOutputSampleRate(), bp.getOutputBitDepth());
-            prefs.save();
+            // Single hand-off: commit the whole working copy to the live
+            // singleton (which also persists once).
+            Preferences.instance().applyFromDialog(edit);
+            // Activate the chosen backend on the live AudioBackend — kept in the
+            // dialog so Preferences stays free of the sound/hardware layer.
+            AudioBackend.instance().setActive(edit.getBackend());
+            // Fire the FreqResp refresh events once so the pane / view re-sync
+            // to the committed state (range / scrollbars, smoothing table,
+            // notch + colours).
+            MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
+            MessageBus.instance().publish(Events.FREQRESP_COMPARE_PARAMS_CHANGED);
+            MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED);
             dialog.close();
         });
 
         cancelButton.addListener(SWT.Selection, e -> {
-            // Roll every backend's prefs back to what they were at open, so
-            // mid-session edits across backends are fully discarded.
-            for (Map.Entry<AudioBackendType, BackendPrefs> entry : snapshots.entrySet()) {
-                prefs.prefsFor(entry.getKey()).copyFrom(entry.getValue());
-            }
-            prefs.setBackend(originalBackend);
-            AudioBackend.instance().setActive(originalBackend);
-            // Roll back Look & Feel too.
-            prefs.setTabOrientation(originalTabOrientation);
-            prefs.setSmallIconsInMainTab(originalSmallIcons);
-            // Roll back the FreqResp Nyquist fraction (and the freq
-            // window we may have clamped while the dialog was open).
-            // One range-changed publish so the pane re-syncs to the
-            // restored values.
-            boolean nyqMoved = prefs.getFreqRespNyquistFraction() != originalNyquistFraction
-                            || prefs.getFreqRespFreqMaxHz()       != originalFreqMaxHz
-                            || prefs.getFreqRespFreqMinHz()       != originalFreqMinHz;
-            prefs.setFreqRespNyquistFraction(originalNyquistFraction);
-            prefs.setFreqRespFreqMaxHz(originalFreqMaxHz);
-            prefs.setFreqRespFreqMinHz(originalFreqMinHz);
-            if (nyqMoved) MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
-            // Compare-smoothing pref rollback — separate event since it
-            // doesn't change the visible band.
-            if (prefs.getFreqRespCompareSmoothWindow() != originalSmoothWindow) {
-                prefs.setFreqRespCompareSmoothWindow(originalSmoothWindow);
-                MessageBus.instance().publish(Events.FREQRESP_COMPARE_PARAMS_CHANGED);
-            }
-            // Notch-filter pref rollback — restores both flag and base Hz,
-            // fires once so the view re-derives the displayed copy.
-            boolean notchMoved = prefs.isFreqRespNotchEnabled() != originalNotchEnabled
-                              || prefs.getFreqRespNotchBaseHz() != originalNotchBaseHz;
-            prefs.setFreqRespNotchEnabled(originalNotchEnabled);
-            prefs.setFreqRespNotchBaseHz(originalNotchBaseHz);
-            if (notchMoved) MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED);
+            // The dialog edited a detached working copy — nothing live was
+            // touched, so there is nothing to roll back.
             dialog.close();
         });
 

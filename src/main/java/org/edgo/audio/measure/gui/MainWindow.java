@@ -293,7 +293,6 @@ public final class MainWindow {
         helpCheckOnStartup.setSelection(prefs.isCheckForUpdatesOnStartup());
         helpCheckOnStartup.addListener(SWT.Selection, e -> {
             prefs.setCheckForUpdatesOnStartup(helpCheckOnStartup.getSelection());
-            prefs.save();
         });
 
         MenuItem helpIncludeBeta = new MenuItem(helpMenu, SWT.CHECK);
@@ -301,7 +300,6 @@ public final class MainWindow {
         helpIncludeBeta.setSelection(prefs.isIncludeBetaInUpdateChecks());
         helpIncludeBeta.addListener(SWT.Selection, e -> {
             prefs.setIncludeBetaInUpdateChecks(helpIncludeBeta.getSelection());
-            prefs.save();
         });
 
         new MenuItem(helpMenu, SWT.SEPARATOR);
@@ -408,7 +406,6 @@ public final class MainWindow {
             if (!item.getSelection()) return;
             if (tag.equals(Preferences.instance().getUiLanguage())) return;
             Preferences.instance().setUiLanguage(tag);
-            Preferences.instance().save();
             I18n.setLocale(Locale.forLanguageTag(tag));
             requestRecreate();
         });

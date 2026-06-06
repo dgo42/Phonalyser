@@ -42,6 +42,7 @@ import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OscSliderId;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
@@ -426,25 +427,29 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
         headerBar.setBounds(COL_NAME_X, 5, hbSize.x, hbSize.y);
         headerBar.layout();
+        // L / R measurement-channel pick (radio pair) — the click writes the
+        // now-bound pref (auto-saved); the history-clear + repaint side-effect
+        // and the mirror-back onto the ToolButtons live in the pref subscriber
+        // below, so a preset load drives both too.  ToolButton isn't an SWT
+        // Button, so Bindings.check can't bind it directly — the writer stays
+        // explicit, the reaction goes through Bindings.onChange.
         leftBtn.addListener(SWT.Selection, e -> {
-            if (leftBtn.isToggled()) {
-                Preferences p = Preferences.instance();
-                p.setOscMeasurementChannel(Channel.L); p.save();
-                measWorker.clearHistory(); redraw();
-            }
+            if (leftBtn.isToggled()) Preferences.instance().setOscMeasurementChannel(Channel.L);
         });
         rightBtn.addListener(SWT.Selection, e -> {
-            if (rightBtn.isToggled()) {
-                Preferences p = Preferences.instance();
-                p.setOscMeasurementChannel(Channel.R); p.save();
-                measWorker.clearHistory(); redraw();
-            }
+            if (rightBtn.isToggled()) Preferences.instance().setOscMeasurementChannel(Channel.R);
+        });
+        Bindings.onChange(this, Preferences.instance().oscMeasurementChannelProperty(), ch -> {
+            leftBtn.setToggled(ch == Channel.L);
+            rightBtn.setToggled(ch == Channel.R);
+            measWorker.clearHistory();
+            redraw();
         });
         autoSetupBtn.addListener(SWT.Selection, e -> MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP));
-        tableToggleBtn.addListener(SWT.Selection, e -> {
-            Preferences p = Preferences.instance();
-            p.setOscShowMeasurementTable(tableToggleBtn.isToggled());
-            p.save();
+        tableToggleBtn.addListener(SWT.Selection, e ->
+                Preferences.instance().setOscShowMeasurementTable(tableToggleBtn.isToggled()));
+        Bindings.onChange(this, Preferences.instance().oscShowMeasurementTableProperty(), show -> {
+            tableToggleBtn.setToggled(show);
             syncScopeButtons();   // external/stats/reset follow the table's visibility
             syncToolWindow();
             redraw();
@@ -454,10 +459,10 @@ public final class OscilloscopeView extends AbstractMeasurementView {
                 setTableExtracted(externalBtn.isToggled());
             }
         });
-        statsToggleBtn.addListener(SWT.Selection, e -> {
-            Preferences p = Preferences.instance();
-            p.setOscShowStats(statsToggleBtn.isToggled());
-            p.save();
+        statsToggleBtn.addListener(SWT.Selection, e ->
+                Preferences.instance().setOscShowStats(statsToggleBtn.isToggled()));
+        Bindings.onChange(this, Preferences.instance().oscShowStatsProperty(), stats -> {
+            statsToggleBtn.setToggled(stats);
             syncScopeButtons();   // reset follows the stats toggle
             redraw();
         });
@@ -1032,8 +1037,8 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         w.addButton(SvgPaths.CHART_COLUMN, 16, true, Preferences.instance().isOscShowStats(),
                 color(ColorRole.TEXT), I18n.t("scope.stats.toggle.tooltip"), e -> {
                     Preferences p = Preferences.instance();
-                    p.setOscShowStats(!p.isOscShowStats());
-                    p.save();
+                    p.setOscShowStats(!p.isOscShowStats());   // auto-saved; the main
+                    // stats-toggle's pref subscriber mirrors the header button + reflows.
                     sizeMeasurementWindow();
                     redraw();
                 });

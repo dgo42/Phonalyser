@@ -37,6 +37,7 @@ import org.edgo.audio.measure.cli.util.FreqRespCalibration;
 import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.fft.MathUtil;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
@@ -302,6 +303,23 @@ public final class FreqRespView extends AbstractFreqDomainView {
         compareParamsChangedListener = ignored -> onCompareParamsChanged();
         MessageBus.instance().subscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED,
                 compareParamsChangedListener);
+
+        // RIAA overlay prefs (Show / Reverse / IEC) are bound to their tab
+        // checkboxes in the pane; the view simply subscribes to repaint when
+        // any of them changes — onPaint reads the live flags, so a redraw is
+        // all that's needed.  Show additionally carries the one-shot compare
+        // auto-zoom: when Show turns on while Compare is already armed and a
+        // measurement exists, the compare trace becomes active for the first
+        // time, so fit it once (mirrors the Compare-toggle auto-zoom).
+        Preferences prefsBind = Preferences.instance();
+        Bindings.onChange(this, prefsBind.freqRespShowRiaaProperty(), show -> {
+            if (show && prefsBind.isFreqRespCompareMode() && hasAnyResult()) {
+                autoSetupCompare(prefsBind);
+            }
+            redraw();
+        });
+        Bindings.onChange(this, prefsBind.freqRespReverseRiaaProperty(), v -> redraw());
+        Bindings.onChange(this, prefsBind.freqRespIecAmendmentProperty(), v -> redraw());
 
         addDisposeListener(e -> {
             if (calibrationChangedListener != null) {

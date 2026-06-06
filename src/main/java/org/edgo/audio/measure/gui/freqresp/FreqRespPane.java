@@ -58,6 +58,8 @@ import org.edgo.audio.measure.cli.util.FreqRespCalibration;
 import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.gui.bind.Bindings;
+import org.edgo.audio.measure.gui.bind.Property;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -282,7 +284,6 @@ public final class FreqRespPane {
         if (toolbarTabs.getItemCount() > 0) toolbarTabs.setSelection(activeTab);
         toolbarTabs.addListener(SWT.Selection, e -> {
             Preferences.instance().setFreqRespActiveTabIndex(toolbarTabs.getSelectionIndex());
-            Preferences.instance().save();
         });
 
         // ─── Tab-header tiles ─────────────────────────────────────────────
@@ -586,19 +587,25 @@ public final class FreqRespPane {
         addLabel(g, I18n.t("freqResp.settings.start"));
         NumericStepField startField = freqField(g, prefs.getFreqRespStartHz());
         startField.setToolTipText(I18n.t("freqResp.settings.start.tooltip"));
-        startField.addSelectionListener(e -> {
-            prefs.setFreqRespStartHz(Math.max(1.0, startField.getValue()));
-            prefs.save();
+        // Two-way bind; the floor clamp (≥ 1 Hz) and the tab-tile refresh ride
+        // an onChange on the same pref, so a direct text entry below the floor
+        // is corrected in the pref (which echoes back to the field).
+        Bindings.stepField(startField, prefs.freqRespStartHzProperty());
+        Bindings.onChange(toolbarTabs, prefs.freqRespStartHzProperty(), v -> {
+            if (v < 1.0) prefs.setFreqRespStartHz(1.0);
             refreshTabHeader(TAB_FREQRESP_SETTINGS);
         });
 
         addLabel(g, I18n.t("freqResp.settings.stop"));
         NumericStepField stopField = freqField(g, prefs.getFreqRespStopHz());
         stopField.setToolTipText(I18n.t("freqResp.settings.stop.tooltip"));
-        stopField.addSelectionListener(e -> {
-            prefs.setFreqRespStopHz(Math.max(prefs.getFreqRespStartHz() + 1.0,
-                    stopField.getValue()));
-            prefs.save();
+        // Cross-field clamp: stop must stay at least start + 1.  A plain
+        // two-way bind would lose it, so it is re-applied on the pref via
+        // onChange (the re-set echoes to the field through the stepField bind).
+        Bindings.stepField(stopField, prefs.freqRespStopHzProperty());
+        Bindings.onChange(toolbarTabs, prefs.freqRespStopHzProperty(), v -> {
+            double floor = prefs.getFreqRespStartHz() + 1.0;
+            if (v < floor) prefs.setFreqRespStopHz(floor);
             refreshTabHeader(TAB_FREQRESP_SETTINGS);
         });
 
@@ -613,9 +620,11 @@ public final class FreqRespPane {
                 110);
         ampField.setLayoutData(comboGd());
         ampField.setToolTipText(I18n.t("freqResp.settings.amplitude.tooltip"));
-        ampField.addSelectionListener(e -> {
-            prefs.setFreqRespAmplitudeVrms(Math.max(0.0001, ampField.getValue()));
-            prefs.save();
+        // Two-way bind; the floor clamp (≥ 0.0001 V) and the tab-tile refresh
+        // ride an onChange so a sub-floor text entry is corrected in the pref.
+        Bindings.stepField(ampField, prefs.freqRespAmplitudeVrmsProperty());
+        Bindings.onChange(toolbarTabs, prefs.freqRespAmplitudeVrmsProperty(), v -> {
+            if (v < 0.0001) prefs.setFreqRespAmplitudeVrms(0.0001);
             refreshTabHeader(TAB_FREQRESP_SETTINGS);
         });
 
@@ -629,16 +638,16 @@ public final class FreqRespPane {
         fftSizeLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         Combo fftSizeCombo = new Combo(g, SWT.READ_ONLY);
         for (String s : FFT_SIZE_LABELS) fftSizeCombo.add(s);
-        selectFftSizeCombo(fftSizeCombo, prefs.getFreqRespFftSize());
         fftSizeCombo.setToolTipText(I18n.t("freqResp.settings.fftSize.tooltip"));
         fftSizeCombo.setLayoutData(comboGd());
-        fftSizeCombo.addListener(SWT.Selection, e -> {
-            int idx = fftSizeCombo.getSelectionIndex();
-            if (idx < 0 || idx >= FFT_SIZE_VALUES.length) return;
-            int n = FFT_SIZE_VALUES[idx];
-            prefs.setFreqRespFftSize(n);
+        // Index-mapped combo (selection index → FFT_SIZE_VALUES[idx] sample
+        // count), so it can't use the ordinal-based Bindings.combo — the
+        // hand-wired helper mirrors that contract over the int value array.
+        // The derived sweep duration + the label + the tab tile all ride an
+        // onChange on the same pref, since they depend on the chosen size.
+        bindFftSizeCombo(fftSizeCombo, prefs.freqRespFftSizeProperty());
+        Bindings.onChange(toolbarTabs, prefs.freqRespFftSizeProperty(), n -> {
             prefs.setFreqRespDurationSec(deriveDurationSecFromFftSize(n));
-            prefs.save();
             refreshFftSizeLabel();
             refreshTabHeader(TAB_FREQRESP_SETTINGS);
         });
@@ -656,8 +665,17 @@ public final class FreqRespPane {
         pointsCombo.add(I18n.t("freqResp.settings.points.manual"));
         pointsCombo.setToolTipText(I18n.t("freqResp.settings.points.tooltip"));
         pointsCombo.setLayoutData(comboGd());
+        // Not a plain ordinal bind: index 0 is a runtime "Sample rate / 2"
+        // entry and the last is a "Manual…" prompt, so the write stays in
+        // handlePointsCombo.  Seed from the pref, and re-select on an external
+        // pref change (preset load) so the binding pattern's "control reflects
+        // the pref" still holds; the tab-tile refresh rides the same onChange.
         selectPointsCombo(pointsCombo, prefs.getFreqRespSweepPoints());
         pointsCombo.addListener(SWT.Selection, e -> handlePointsCombo(pointsCombo));
+        Bindings.onChange(toolbarTabs, prefs.freqRespSweepPointsProperty(), v -> {
+            selectPointsCombo(pointsCombo, v);
+            refreshTabHeader(TAB_FREQRESP_SETTINGS);
+        });
 
         addLabel(g, I18n.t("freqResp.settings.leadIn"));
         NumericStepField leadInField = new NumericStepField(g,
@@ -669,13 +687,17 @@ public final class FreqRespPane {
                 90);
         leadInField.setLayoutData(comboGd());
         leadInField.setToolTipText(I18n.t("freqResp.settings.leadIn.tooltip"));
-        leadInField.addSelectionListener(e -> {
-            prefs.setFreqRespLeadInSec(Math.max(0.05, leadInField.getValue()));
-            // The derived sweep duration depends on lead-in (lead-in eats
-            // into the same FFT window), so a lead-in change ripples
-            // through to durationSec and the FFT-size label.
+        // Two-way bind; the floor clamp (≥ 0.05 s) and the derived-value
+        // coupling ride an onChange.  The derived sweep duration depends on
+        // lead-in (lead-in eats into the same FFT window), so a lead-in change
+        // ripples through to durationSec and the FFT-size label.
+        Bindings.stepField(leadInField, prefs.freqRespLeadInSecProperty());
+        Bindings.onChange(toolbarTabs, prefs.freqRespLeadInSecProperty(), v -> {
+            if (v < 0.05) {
+                prefs.setFreqRespLeadInSec(0.05);
+                return;   // the re-set re-enters here with the clamped value
+            }
             prefs.setFreqRespDurationSec(deriveDurationSecFromFftSize(prefs.getFreqRespFftSize()));
-            prefs.save();
             refreshFftSizeLabel();
             refreshTabHeader(TAB_FREQRESP_SETTINGS);
         });
@@ -684,14 +706,58 @@ public final class FreqRespPane {
         addLabel(g, I18n.t("freqResp.settings.dither"));
         Combo ditherCombo = new Combo(g, SWT.READ_ONLY);
         for (int i = 0; i <= 31; i++) ditherCombo.add(i == 0 ? "Off" : String.valueOf(i));
-        ditherCombo.select(Math.max(0, Math.min(31, prefs.getFreqRespDitherBits())));
         ditherCombo.setLayoutData(comboGd());
         ditherCombo.setToolTipText(I18n.t("freqResp.settings.dither.tooltip"));
-        ditherCombo.addListener(SWT.Selection, e -> {
-            prefs.setFreqRespDitherBits(ditherCombo.getSelectionIndex());
-            prefs.save();
-        });
+        // Index-mapped combo where the selection index IS the bit count, so
+        // it can't use the ordinal-based Bindings.combo (no enum) but needs no
+        // value-array indirection either.  No side-effects beyond the pref
+        // write, so no onChange.
+        bindDitherCombo(ditherCombo, prefs.freqRespDitherBitsProperty());
 
+    }
+
+    /** Two-way binds the dither {@link Combo} (index == bit count, 0 = Off)
+     *  to its {@code Integer} {@link Property}.  Mirrors {@link Bindings#combo}
+     *  but for an index-as-value READ_ONLY combo rather than an enum, with the
+     *  selection clamped to {@code [0, 31]} on seed and external change. */
+    private void bindDitherCombo(Combo combo, Property<Integer> property) {
+        combo.select(Math.max(0, Math.min(31, property.get())));
+        combo.addListener(SWT.Selection, e -> {
+            int i = combo.getSelectionIndex();
+            if (i >= 0) {
+                property.set(i);
+            }
+        });
+        Consumer<Integer> onChange = v -> {
+            int i = Math.max(0, Math.min(31, v));
+            if (!combo.isDisposed() && combo.getSelectionIndex() != i) {
+                combo.select(i);
+            }
+        };
+        property.addListener(onChange);
+        combo.addDisposeListener(e -> property.removeListener(onChange));
+    }
+
+    /** Two-way binds the FFT-size {@link Combo} (selection index →
+     *  {@link #FFT_SIZE_VALUES}{@code [idx]} sample count) to its
+     *  {@code Integer} {@link Property}.  Mirrors {@link Bindings#combo} over
+     *  the int value array; falls back to index 0 (64k) when the pref value
+     *  matches no entry, per {@link #selectFftSizeCombo}. */
+    private void bindFftSizeCombo(Combo combo, Property<Integer> property) {
+        selectFftSizeCombo(combo, property.get());
+        combo.addListener(SWT.Selection, e -> {
+            int idx = combo.getSelectionIndex();
+            if (idx >= 0 && idx < FFT_SIZE_VALUES.length) {
+                property.set(FFT_SIZE_VALUES[idx]);
+            }
+        });
+        Consumer<Integer> onChange = v -> {
+            if (!combo.isDisposed()) {
+                selectFftSizeCombo(combo, v);
+            }
+        };
+        property.addListener(onChange);
+        combo.addDisposeListener(e -> property.removeListener(onChange));
     }
 
     private NumericStepField freqField(Composite parent, double initial) {
@@ -805,8 +871,8 @@ public final class FreqRespPane {
             // Re-sync the visible selection to whatever's now in prefs.
             selectPointsCombo(combo, prefs.getFreqRespSweepPoints());
         }
-        prefs.save();
-        refreshTabHeader(TAB_FREQRESP_SETTINGS);
+        // The pref write auto-saves and the tab-tile refresh rides the
+        // sweep-points onChange subscriber wired in buildSettingsTab.
     }
 
     // -------------------------------------------------------------------------
@@ -838,46 +904,41 @@ public final class FreqRespPane {
         riaaCompareBtn = checkbox(g, "freqResp.riaa.compare", "freqResp.riaa.compare.tooltip",
                 prefs.isFreqRespCompareMode());
 
-        riaaShowBtn.addListener(SWT.Selection, e -> {
-            boolean show = riaaShowBtn.getSelection();
-            prefs.setFreqRespShowRiaa(show);
-            prefs.save();
+        // Show / Reverse / IEC are two-way bound to their prefs; the view
+        // subscribes to each (redraw, plus Show's one-shot compare auto-zoom)
+        // in its own constructor.  Only the pane-local effects stay here: the
+        // enable cascade (Show gates Reverse / IEC / Compare; Reverse re-runs
+        // it too) and the RIAA tab-tile refresh.  IEC gates nothing, so it
+        // skips refreshRiaaEnable, exactly as the old listener did.
+        Bindings.check(riaaShowBtn,    prefs.freqRespShowRiaaProperty());
+        Bindings.check(riaaReverseBtn, prefs.freqRespReverseRiaaProperty());
+        Bindings.check(riaaIecBtn,     prefs.freqRespIecAmendmentProperty());
+        Bindings.onChange(toolbarTabs, prefs.freqRespShowRiaaProperty(), v -> {
             refreshRiaaEnable();
-            // Compare mode only takes effect when both Show RIAA and
-            // Compare are on (see drawCompareTrace).  If Compare was
-            // already on and the user now turns Show RIAA on, the
-            // compare trace becomes active for the first time — run
-            // the one-shot auto-zoom so the difference series fits the
-            // view, just like toggling Compare itself does.
-            if (show && prefs.isFreqRespCompareMode() && view.hasAnyResult()) {
-                view.autoSetupCompare(prefs);
-            }
-            view.redraw();
             refreshTabHeader(TAB_FREQRESP_RIAA);
         });
-        riaaReverseBtn.addListener(SWT.Selection, e -> {
-            prefs.setFreqRespReverseRiaa(riaaReverseBtn.getSelection());
-            prefs.save();
+        Bindings.onChange(toolbarTabs, prefs.freqRespReverseRiaaProperty(), v -> {
             refreshRiaaEnable();
-            view.redraw();
             refreshTabHeader(TAB_FREQRESP_RIAA);
         });
-        riaaIecBtn.addListener(SWT.Selection, e -> {
-            prefs.setFreqRespIecAmendment(riaaIecBtn.getSelection());
-            prefs.save();
-            view.redraw();
-            refreshTabHeader(TAB_FREQRESP_RIAA);
-        });
-        riaaCompareBtn.addListener(SWT.Selection, e -> {
-            if (!view.hasAnyResult()) {
+        Bindings.onChange(toolbarTabs, prefs.freqRespIecAmendmentProperty(),
+                v -> refreshTabHeader(TAB_FREQRESP_RIAA));
+
+        // Compare is two-way bound; its pane-local effects (the no-measurement
+        // veto, the one-shot auto-zoom on entry, the view redraw and the tab-
+        // tile refresh) ride an onChange.  The view doesn't subscribe to the
+        // compare-mode pref itself, so the redraw stays here.
+        Bindings.check(riaaCompareBtn, prefs.freqRespCompareModeProperty());
+        Bindings.onChange(toolbarTabs, prefs.freqRespCompareModeProperty(), enable -> {
+            if (enable && !view.hasAnyResult()) {
                 Dialogs.info(g.getShell(), I18n.t("freqResp.tab.riaa"),
                         I18n.t("freqResp.error.compare.noMeasurement"));
-                riaaCompareBtn.setSelection(false);
+                // Veto: roll the pref back, which echoes through the bind to
+                // uncheck the box.  The re-entry sees enable == false and just
+                // redraws (a no-op repaint, compare was already off).
+                prefs.setFreqRespCompareMode(false);
                 return;
             }
-            boolean enable = riaaCompareBtn.getSelection();
-            prefs.setFreqRespCompareMode(enable);
-            prefs.save();
             // One-shot auto-zoom on entry only — the user's subsequent pan /
             // zoom must stick instead of being clobbered on every redraw.
             if (enable) view.autoSetupCompare(prefs);
@@ -1729,7 +1790,6 @@ public final class FreqRespPane {
         double lo = a + frac * Math.max(0, total - visible);
         prefs.setFreqRespFreqMinHz(Math.pow(10, lo));
         prefs.setFreqRespFreqMaxHz(Math.pow(10, lo + visible));
-        prefs.save();
         view.redraw();
     }
 
@@ -1743,7 +1803,6 @@ public final class FreqRespPane {
         double newTop = MAG_TOP_MAX - frac * Math.max(0, total - visible);
         prefs.setFreqRespMagTopDb(newTop);
         prefs.setFreqRespMagBotDb(newTop - visible);
-        prefs.save();
         view.redraw();
     }
 

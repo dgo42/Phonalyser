@@ -51,6 +51,7 @@ import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
@@ -346,6 +347,43 @@ public final class FftView extends AbstractFreqDomainView {
         MessageBus.instance().subscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
         MessageBus.instance().subscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
         MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
+        // Window-function changes reset the running statistics — the control
+        // writes the pref, the view reacts to the pref, neither calls the other.
+        // Every settings/THD parameter whose side-effect targets the view is
+        // wired the same way: the control binds the pref (two-way), the view
+        // subscribes to the pref here, and neither calls the other.
+        Preferences viewPrefs = Preferences.instance();
+        Bindings.onChange(this, viewPrefs.fftWindowProperty(),           w -> resetStatistics());
+        // Switching channel restarts the accumulation so it re-captures the new
+        // channel from 0 — the L/R ToolButtons write the pref, the view reacts here.
+        Bindings.onChange(this, viewPrefs.fftChannelProperty(),          v -> resetStatistics());
+        // Distortion-table toggle: the external button follows the table's
+        // visibility, then refresh the extracted shell + repaint.
+        Bindings.onChange(this, viewPrefs.fftDistortionTableVisibleProperty(), v -> {
+            syncDataButtons();
+            syncExternalShell();
+            redraw();
+        });
+        // FFT length re-snaps the generator's tone (pane publishes the bus
+        // event) AND invalidates the accumulator — the view restarts averaging.
+        Bindings.onChange(this, viewPrefs.fftLengthProperty(),           v -> resetStatistics());
+        // Coherent ↔ incoherent changes the accumulator semantics — restart.
+        Bindings.onChange(this, viewPrefs.fftCoherentAveragingProperty(), v -> resetStatistics());
+        // Selecting an active alignment mode (PID / FLL) resets its loop so each
+        // session converges fresh; NONE deliberately resets nothing (the
+        // generator stays at the stabilized frequency, the converged correction
+        // is retained).  Only a real change reaches here (equals-guarded).
+        Bindings.onChange(this, viewPrefs.fftAlignGeneratorProperty(),
+                mode -> { if (mode != AlignGenerator.NONE) resetFrequencyLock(); });
+        // Log-axis remap, distortion-range corners (THD tile) — pure repaints,
+        // no statistics reset.
+        Bindings.onChange(this, viewPrefs.fftLogFreqAxisProperty(),      v -> redraw());
+        Bindings.onChange(this, viewPrefs.fftDistMinEnabledProperty(),   v -> redraw());
+        Bindings.onChange(this, viewPrefs.fftDistMinHzProperty(),        v -> redraw());
+        Bindings.onChange(this, viewPrefs.fftDistMaxEnabledProperty(),   v -> redraw());
+        Bindings.onChange(this, viewPrefs.fftDistMaxHzProperty(),        v -> redraw());
+        // Calc-up-to-harmonic drives the external THD window's row count.
+        Bindings.onChange(this, viewPrefs.fftCalcMaxHarmonicProperty(),  v -> resizeExternalShellToContent());
         // Pick up FFT-only prefs (harmonic dot, freq-resp response,
         // before-cal dot, cal overlay) that aren't part of the base
         // palette — kept as view-local fields below.
@@ -365,20 +403,15 @@ public final class FftView extends AbstractFreqDomainView {
         rightBtn = headerBar.chanButton("R", color(ColorRole.TEXT),
                 color(ColorRole.BUTTON_FRAME), color(ColorRole.RIGHT_BTN_CHAN),
                 chanButtonFont, I18n.t("fft.button.right.tooltip"), ch == Channel.R, "channel");
-        // Switching channel restarts the accumulation so it re-captures the new channel from 0.
+        // L/R channel buttons are ToolButton radios (no Bindings helper covers
+        // a ToolButton) — each just writes the channel pref (auto-saved); the
+        // accumulation restart lives in the fftChannel subscription above, so it
+        // fires whoever changes the channel (a preset load too).
         leftBtn.addListener(SWT.Selection, e -> {
-            if (leftBtn.isToggled()) {
-                Preferences p = Preferences.instance();
-                p.setFftChannel(Channel.L); p.save();
-                resetStatistics();
-            }
+            if (leftBtn.isToggled()) Preferences.instance().setFftChannel(Channel.L);
         });
         rightBtn.addListener(SWT.Selection, e -> {
-            if (rightBtn.isToggled()) {
-                Preferences p = Preferences.instance();
-                p.setFftChannel(Channel.R); p.save();
-                resetStatistics();
-            }
+            if (rightBtn.isToggled()) Preferences.instance().setFftChannel(Channel.R);
         });
         headerBar.spacer(2);
         autoSetupBtn = headerBar.pushButton(SvgPaths.ARROWS_TO_CIRCLE, 16,
@@ -395,14 +428,12 @@ public final class FftView extends AbstractFreqDomainView {
         distortionBtn = headerBar.toggleButton(SvgPaths.CHART_COLUMN, 16,
                 rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.BUTTON_FRAME),
                 I18n.t("fft.distortion.tooltip"), Preferences.instance().isFftDistortionTableVisible());
-        distortionBtn.addListener(SWT.Selection, e -> {
-            Preferences p = Preferences.instance();
-            p.setFftDistortionTableVisible(distortionBtn.isToggled());
-            p.save();
-            syncDataButtons();   // external button follows the table's visibility
-            syncExternalShell();
-            redraw();
-        });
+        // ToolButton toggle (no Bindings helper covers a ToolButton) — writes
+        // the pref (auto-saved); the visibility side-effects live in the
+        // fftDistortionTableVisible subscription above so they fire on any
+        // change (a preset load too).
+        distortionBtn.addListener(SWT.Selection, e ->
+                Preferences.instance().setFftDistortionTableVisible(distortionBtn.isToggled()));
         resetBtn = headerBar.pushButton(SvgPaths.ROTATE_LEFT, 18,
                 rgb(ColorRole.RESET), rgb(ColorRole.BACKGROUND), color(ColorRole.RESET),
                 I18n.t("fft.reset.tooltip"));
@@ -444,9 +475,27 @@ public final class FftView extends AbstractFreqDomainView {
         magUnitCombo.setToolTipText(I18n.t("fft.magUnit.tooltip"));
         magUnitCombo.setData("helpAnchor", "fft.html#fft-mag-unit");
         magUnitCombo.setCursor(d.getSystemCursor(SWT.CURSOR_ARROW));
-        int magIdx = Preferences.instance().getFftMagUnit().ordinal();
-        magUnitCombo.select(magIdx < 0 ? 2 : magIdx);
-        magUnitCombo.addListener(SWT.Selection, e -> onMagUnitChanged());
+        // Two-way value bind; the unit-change side-effect (convert the visible
+        // mag range so it stays on the SAME signal level, then re-align the
+        // scrollbars + repaint) lives in the onChange below.  The conversion
+        // needs the PREVIOUS unit, which the property listener doesn't carry —
+        // so track it in a one-element holder, seeded from the current value
+        // and advanced after each conversion.
+        Bindings.combo(magUnitCombo, viewPrefs.fftMagUnitProperty(), FftMagnitudeUnit.values());
+        FftMagnitudeUnit[] prevMagUnit = { viewPrefs.getFftMagUnit() };
+        Bindings.onChange(this, viewPrefs.fftMagUnitProperty(), newUnit -> {
+            Preferences prefs = Preferences.instance();
+            double fs = prefs.getAdcFsVoltageRms();
+            if (!(fs > 0)) fs = 1.0;
+            double fsDbv = 20 * Math.log10(fs);
+            double[] conv = FftFormat.convertMagRange(prefs.getFftMagTop(), prefs.getFftMagBottom(),
+                    prevMagUnit[0], newUnit, fsDbv);
+            prefs.setFftMagTop(conv[0]);
+            prefs.setFftMagBottom(conv[1]);
+            prevMagUnit[0] = newUnit;
+            fireRangeChanged();
+            redraw();
+        });
 
         averagesCountLabel = new Label(this, SWT.NONE);
         averagesCountLabel.setText("0 average(s)");
@@ -493,30 +542,6 @@ public final class FftView extends AbstractFreqDomainView {
         banner.setLayoutData(bnd);
 
         startFillPercentTimer();
-    }
-
-    /** User picked a new magnitude unit.  Convert the current
-     *  magTop / magBottom into the new unit so the visible range stays
-     *  on the SAME signal level, persist, then publish
-     *  {@link Events#FFT_RANGE_CHANGED} so the pane's scrollbars
-     *  re-align. */
-    private void onMagUnitChanged() {
-        int i = magUnitCombo.getSelectionIndex();
-        if (i < 0) return;
-        Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit oldUnit = prefs.getFftMagUnit();
-        FftMagnitudeUnit newUnit = FftMagnitudeUnit.values()[i];
-        double fs = prefs.getAdcFsVoltageRms();
-        if (!(fs > 0)) fs = 1.0;
-        double fsDbv = 20 * Math.log10(fs);
-        double[] conv = FftFormat.convertMagRange(prefs.getFftMagTop(), prefs.getFftMagBottom(),
-                oldUnit, newUnit, fsDbv);
-        prefs.setFftMagTop(conv[0]);
-        prefs.setFftMagBottom(conv[1]);
-        prefs.setFftMagUnit(FftMagnitudeUnit.values()[i]);
-        prefs.save();
-        fireRangeChanged();
-        redraw();
     }
 
     /** Re-selects the magnitude-unit combo from the current Preferences
@@ -1293,7 +1318,7 @@ public final class FftView extends AbstractFreqDomainView {
                 unit, freqMin, freqMax, magTop, magBot, logFreq, fundRefDbV, binBw);
         if (r.harmonicHz != null && r.harmonicDbFs != null) {
             int n = Math.min(r.harmonicHz.length, r.harmonicDbFs.length);
-            int calcMax = Preferences.instance().getFftCalcMaxHarmonic();
+            int calcMax = Math.max(9, Preferences.instance().getFftCalcMaxHarmonic());
             for (int i = 0; i < n && (i + 2) <= calcMax; i++) {
                 drawHarmonicLabel(gc, plot, "H" + (i + 2),
                         r.harmonicHz[i], r.harmonicDbFs[i],

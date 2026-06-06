@@ -74,6 +74,8 @@ import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.MainTab;
+import org.edgo.audio.measure.gui.bind.Bindings;
+import org.edgo.audio.measure.gui.bind.Property;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -850,57 +852,40 @@ public final class FftPane {
         addLabel(g, I18n.t("fft.settings.length"));
         fftLengthCombo = new Combo(g, SWT.READ_ONLY);
         fftLengthCombo.setItems(FFT_LENGTH_LABELS);
-        int lenIdx = FftPaneFormat.indexOfInt(FFT_LENGTH_VALUES, prefs.getFftLength());
-        fftLengthCombo.select(lenIdx < 0 ? 3 : lenIdx);
         fftLengthCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        fftLengthCombo.addListener(SWT.Selection, e -> {
-            int i = fftLengthCombo.getSelectionIndex();
-            if (i >= 0) {
-                prefs.setFftLength(FFT_LENGTH_VALUES[i]);
-                prefs.save();
-                refreshTabHeader(TAB_FFT_SETTINGS);
-                // Generator's bin snap is anchored to fftLength via
-                // sampleRate / fftLength — broadcast the change so the
-                // generator pane can re-snap its running tone onto a
-                // fresh bin.  The new length is already in Preferences;
-                // subscribers read it from there.
-                MessageBus.instance().publish(Events.FFT_LENGTH_CHANGED);
-                view.resetStatistics();
-            }
-        });
+        // Index-mapped combo: the selection index maps through FFT_LENGTH_VALUES
+        // to the actual length, so it can't use the ordinal-based Bindings.combo.
+        // The two-way mirror is hand-wired but follows the same contract: seed
+        // from the pref, write the pref on input, re-select on an external change
+        // (preset load).  Default index 3 (64k) when the saved length is unknown.
+        bindFftLengthCombo(prefs.fftLengthProperty());
+        // Pane-local effect — refresh the FFT-settings tab tile.  The view's own
+        // resetStatistics is driven by the view subscribing to the same pref.
+        Bindings.onChange(toolbarTabs, prefs.fftLengthProperty(),
+                v -> refreshTabHeader(TAB_FFT_SETTINGS));
+        // Generator's bin snap is anchored to fftLength via sampleRate /
+        // fftLength — broadcast the change so the generator pane can re-snap its
+        // running tone onto a fresh bin.  The new length is already in
+        // Preferences; subscribers read it from there.
+        Bindings.onChange(toolbarTabs, prefs.fftLengthProperty(),
+                v -> MessageBus.instance().publish(Events.FFT_LENGTH_CHANGED));
 
         addLabel(g, I18n.t("fft.settings.window"));
         windowCombo = new Combo(g, SWT.READ_ONLY);
         for (WindowType w : WindowType.values()) windowCombo.add(I18n.t(w.labelKey()));
         windowCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        WindowType currWin = prefs.getFftWindow();
-        windowCombo.select(currWin.ordinal());
-        windowCombo.addListener(SWT.Selection, e -> {
-            int i = windowCombo.getSelectionIndex();
-            if (i >= 0) {
-                prefs.setFftWindow(WindowType.values()[i]);
-                prefs.save();
-                refreshTabHeader(TAB_FFT_SETTINGS);
-                view.resetStatistics();
-            }
-        });
+        Bindings.combo(windowCombo, prefs.fftWindowProperty(), WindowType.values());
+        Bindings.onChange(toolbarTabs, prefs.fftWindowProperty(), w -> refreshTabHeader(TAB_FFT_SETTINGS));
 
         addLabel(g, I18n.t("fft.settings.overlap"));
         overlapCombo = new Combo(g, SWT.READ_ONLY);
         for (FftOverlap ov : FftOverlap.values()) overlapCombo.add(ov.label);
         overlapCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        FftOverlap currOv = prefs.getFftOverlap();
-        overlapCombo.select(currOv.ordinal());
-        overlapCombo.addListener(SWT.Selection, e -> {
-            int i = overlapCombo.getSelectionIndex();
-            if (i >= 0) {
-                prefs.setFftOverlap(FftOverlap.values()[i]);
-                prefs.save();
-                refreshTabHeader(TAB_FFT_SETTINGS);
-                // Overlap only changes the hop, not the spectrum/accumulator —
-                // don't reset the average; the worker adapts on the next tick.
-            }
-        });
+        Bindings.combo(overlapCombo, prefs.fftOverlapProperty(), FftOverlap.values());
+        // Overlap only changes the hop, not the spectrum/accumulator — refresh
+        // the tab tile but DON'T reset the average; the worker adapts next tick.
+        Bindings.onChange(toolbarTabs, prefs.fftOverlapProperty(),
+                v -> refreshTabHeader(TAB_FFT_SETTINGS));
 
         addLabel(g, I18n.t("fft.settings.averages"));
         // Cycling stepper: wheel / arrow keys snap to the next /
@@ -920,13 +905,13 @@ public final class FftPane {
         // setText("∞") was being blocked by the digits-only regex and
         // the field silently fell back to the previous finite value.
         averagesField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        averagesField.addSelectionListener(e -> {
-            prefs.setFftAverages(Math.max(1, averagesField.getValue()));
-            prefs.save();
+        Bindings.stepField(averagesField, prefs.fftAveragesProperty());
+        // Pane-local effects only — the tab tile and the stop-after gate.  No
+        // reset here: the worker resets the average only on a ring↔∞ switch or a
+        // smaller ring (a larger ring keeps the depth).
+        Bindings.onChange(toolbarTabs, prefs.fftAveragesProperty(), v -> {
             refreshTabHeader(TAB_FFT_SETTINGS);
             refreshStopAfterEnable();
-            // No reset here — the worker resets the average only on a ring↔∞
-            // switch or a smaller ring (a larger ring keeps the depth).
         });
 
         // Stop-after row spans all 4 outer-grid columns and hosts its
@@ -948,8 +933,8 @@ public final class FftPane {
 
         stopAfterNEnable = new Button(stopRow, SWT.CHECK);
         stopAfterNEnable.setText(I18n.t("fft.settings.stopAfterN"));
-        stopAfterNEnable.setSelection(prefs.isFftStopAfterNEnabled());
         stopAfterNEnable.setToolTipText(I18n.t("fft.settings.stopAfterN.tooltip"));
+        Bindings.check(stopAfterNEnable, prefs.fftStopAfterNEnabledProperty());
         stopAfterNField = new NumericStepField(stopRow,
                 prefs.getFftStopAfterN(),
                 txt -> FftPaneFormat.parseIntStrict(txt),
@@ -958,23 +943,17 @@ public final class FftPane {
                 (v, dir) -> Math.max(1, v + dir),
                 70);
         stopAfterNField.enableStrictNumericInput(false);
-        // Initial enabled state reflects both "stop-after" toggle AND
-        // the rule that the row is only meaningful when averages is
-        // "forever" (a finite N already implements a moving window).
+        Bindings.stepFieldInt(stopAfterNField, prefs.fftStopAfterNProperty());
+        // Initial enabled state reflects both "stop-after" toggle AND the rule
+        // that the row is only meaningful when averages is "forever" (a finite N
+        // already implements a moving window).  The companion field's enabled
+        // state depends on BOTH the toggle and averages==forever, so the enable
+        // recompute is centralized in refreshStopAfterEnable() — driven here off
+        // the toggle pref and from the averages listener above.  Don't reset the
+        // average: the worker stops as soon as the collected count reaches N.
         refreshStopAfterEnable();
-        stopAfterNEnable.addListener(SWT.Selection, e -> {
-            prefs.setFftStopAfterNEnabled(stopAfterNEnable.getSelection());
-            stopAfterNField.setEnabled(stopAfterNEnable.getSelection()
-                    && Double.isInfinite(prefs.getFftAverages()));
-            prefs.save();
-            // Don't reset the average.  The worker stops as soon as the collected
-            // count reaches N (and keeps going if N is still ahead).
-        });
-        stopAfterNField.addSelectionListener(e -> {
-            prefs.setFftStopAfterN((int) Math.round(stopAfterNField.getValue()));
-            prefs.save();
-            // Don't reset the average — see the enable listener above.
-        });
+        Bindings.onChange(toolbarTabs, prefs.fftStopAfterNEnabledProperty(),
+                v -> refreshStopAfterEnable());
 
         // Mains-suppression selector shares the stop-after row.  Pre-filters
         // the captured signal (50/60 Hz + harmonics) before averaging; tracks
@@ -983,15 +962,8 @@ public final class FftPane {
         mainsSuppressionCombo = new Combo(stopRow, SWT.READ_ONLY);
         mainsSuppressionCombo.setItems(MainsSuppression.LABELS);
         mainsSuppressionCombo.setToolTipText(I18n.t("fft.settings.mainsSuppression.tooltip"));
-        MainsSuppression currMains = prefs.getFftMainsSuppression();
-        mainsSuppressionCombo.select(currMains.ordinal());
-        mainsSuppressionCombo.addListener(SWT.Selection, e -> {
-            int i = mainsSuppressionCombo.getSelectionIndex();
-            if (i >= 0 && i < MainsSuppression.values().length) {
-                prefs.setFftMainsSuppression(MainsSuppression.values()[i]);
-                prefs.save();
-            }
-        });
+        Bindings.combo(mainsSuppressionCombo, prefs.fftMainsSuppressionProperty(),
+                MainsSuppression.values());
 
         // Four boolean knobs packed onto two rows so the tab content
         // fits inside the typical FFT-pane height (the previous 3-rows-
@@ -1000,14 +972,10 @@ public final class FftPane {
         // Row: Get fundamental from generator (span 2) | Align generator (span 2)
         fundFromGenCheck = new Button(g, SWT.CHECK);
         fundFromGenCheck.setText(I18n.t("fft.settings.fundFromGen"));
-        fundFromGenCheck.setSelection(prefs.isFftFundFromGenerator());
         GridData fgGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         fgGd.horizontalSpan = 2;
         fundFromGenCheck.setLayoutData(fgGd);
-        fundFromGenCheck.addListener(SWT.Selection, e -> {
-            prefs.setFftFundFromGenerator(fundFromGenCheck.getSelection());
-            prefs.save();
-        });
+        Bindings.check(fundFromGenCheck, prefs.fftFundFromGeneratorProperty());
 
         // "Align generator" — None / PID / FLL — only meaningful when both
         // snap-to-bin (provides a target bin) and fund-from-generator (provides a
@@ -1021,53 +989,42 @@ public final class FftPane {
         for (AlignGenerator ag : AlignGenerator.values()) {
             alignGenCombo.add(ag.label);
         }
-        alignGenCombo.select(prefs.getFftAlignGenerator().ordinal());
         alignGenCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        alignGenCombo.addListener(SWT.Selection, e -> {
-            AlignGenerator sel = AlignGenerator.values()[alignGenCombo.getSelectionIndex()];
-            prefs.setFftAlignGenerator(sel);
-            prefs.save();
-            // (Re)selecting an active mode resets its loop so each session converges
-            // fresh from zero; NONE deliberately holds everything (the generator
-            // stays at the stabilized frequency, the spectrum is kept, and the
-            // converged correction is retained — so the user can reset statistics
-            // manually and collect a clean average at near-zero frequency difference).
-            if (sel != AlignGenerator.NONE) {
-                view.resetFrequencyLock();
-            }
-        });
+        // Selecting an active mode resets its loop so each session converges
+        // fresh; NONE deliberately holds everything — that side-effect lives in
+        // the view, which subscribes to this same pref.  Here it's a plain
+        // two-way value bind.
+        Bindings.combo(alignGenCombo, prefs.fftAlignGeneratorProperty(), AlignGenerator.values());
 
         // Row: Coherent averaging (span 2) | Log freq (span 2)
         coherentCheck = new Button(g, SWT.CHECK);
         coherentCheck.setText(I18n.t("fft.thd.coherent"));
-        coherentCheck.setSelection(prefs.isFftCoherentAveraging());
         GridData cohGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         cohGd.horizontalSpan = 2;
         coherentCheck.setLayoutData(cohGd);
-        coherentCheck.addListener(SWT.Selection, e -> {
-            prefs.setFftCoherentAveraging(coherentCheck.getSelection());
-            prefs.save();
-            refreshTabHeader(TAB_FFT_SETTINGS);
-            view.resetStatistics();
-        });
+        Bindings.check(coherentCheck, prefs.fftCoherentAveragingProperty());
+        // Pane-local tab-tile refresh; the accumulator reset (coherent ↔
+        // incoherent changes its semantics) lives in the view, which subscribes
+        // to this same pref.
+        Bindings.onChange(toolbarTabs, prefs.fftCoherentAveragingProperty(),
+                v -> refreshTabHeader(TAB_FFT_SETTINGS));
 
         logFreqCheck = new Button(g, SWT.CHECK);
         logFreqCheck.setText(I18n.t("fft.settings.logFreq"));
-        logFreqCheck.setSelection(prefs.isFftLogFreqAxis());
         GridData lgGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         lgGd.horizontalSpan = 2;
         logFreqCheck.setLayoutData(lgGd);
-        logFreqCheck.addListener(SWT.Selection, e -> {
-            prefs.setFftLogFreqAxis(logFreqCheck.getSelection());
-            prefs.save();
-            view.redraw();
-        });
+        // Pure repaint side-effect (axis remap) lives in the view, which
+        // subscribes to this same pref — a plain two-way value bind here.
+        Bindings.check(logFreqCheck, prefs.fftLogFreqAxisProperty());
 
-        // Initial enable state + update it when the fund-from-gen
-        // checkbox flips locally; snap-to-bin changes come via the bus
-        // (subscribe wired below in the bus block).
+        // Initial enable state + recompute it when fund-from-generator flips
+        // (subscribed to the pref, so a preset load drives it too); snap-to-bin
+        // changes arrive via the GENERATOR_SIGNAL_CHANGED bus subscriber, which
+        // also calls updateAlignGenEnabled().
         updateAlignGenEnabled();
-        fundFromGenCheck.addListener(SWT.Selection, e -> updateAlignGenEnabled());
+        Bindings.onChange(toolbarTabs, prefs.fftFundFromGeneratorProperty(),
+                v -> updateAlignGenEnabled());
     }
 
     /** Enables {@link #alignGenCombo} only when both prerequisites
@@ -1079,6 +1036,34 @@ public final class FftPane {
         if (alignGenCombo == null || alignGenCombo.isDisposed()) return;
         Preferences prefs = Preferences.instance();
         alignGenCombo.setEnabled(prefs.isGenSnapToFftBin() && prefs.isFftFundFromGenerator());
+    }
+
+    /** Two-way mirror for the index-mapped FFT-length combo and its
+     *  {@code Integer} length {@link Preferences} property.  The combo items
+     *  are {@link #FFT_LENGTH_LABELS} aligned with {@link #FFT_LENGTH_VALUES};
+     *  the selection index maps through the latter to the actual length (so it
+     *  can't use the ordinal-based {@link Bindings#combo}).  Seeds index 3
+     *  (64k) when the saved length isn't one of the presets, writes the mapped
+     *  length on user input, and re-selects the index when the length changes
+     *  elsewhere (a preset load). */
+    private void bindFftLengthCombo(Property<Integer> property) {
+        int seed = FftPaneFormat.indexOfInt(FFT_LENGTH_VALUES, property.get());
+        fftLengthCombo.select(seed < 0 ? 3 : seed);
+        fftLengthCombo.addListener(SWT.Selection, e -> {
+            int i = fftLengthCombo.getSelectionIndex();
+            if (i >= 0) {
+                property.set(FFT_LENGTH_VALUES[i]);
+            }
+        });
+        Consumer<Integer> onChange = v -> {
+            if (fftLengthCombo.isDisposed()) return;
+            int i = FftPaneFormat.indexOfInt(FFT_LENGTH_VALUES, v);
+            if (i >= 0 && fftLengthCombo.getSelectionIndex() != i) {
+                fftLengthCombo.select(i);
+            }
+        };
+        property.addListener(onChange);
+        fftLengthCombo.addDisposeListener(e -> property.removeListener(onChange));
     }
 
     // =========================================================================
@@ -1100,7 +1085,6 @@ public final class FftPane {
         // row layout matches the other rows.
         distMinEnable = new Button(g, SWT.CHECK);
         distMinEnable.setText(I18n.t("fft.thd.distMin"));
-        distMinEnable.setSelection(prefs.isFftDistMinEnabled());
         distMinField = new NumericStepField(g,
                 prefs.getFftDistMinHz(),
                 FftPaneFormat::parseDoubleStrict,
@@ -1112,25 +1096,22 @@ public final class FftPane {
         GridData distMinFieldGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         distMinFieldGd.horizontalSpan = 3;
         distMinField.setLayoutData(distMinFieldGd);
-        distMinField.setEnabled(distMinEnable.getSelection());
-        distMinEnable.addListener(SWT.Selection, e -> {
-            prefs.setFftDistMinEnabled(distMinEnable.getSelection());
-            distMinField.setEnabled(distMinEnable.getSelection());
-            prefs.save();
+        distMinField.setEnabled(prefs.isFftDistMinEnabled());
+        Bindings.check(distMinEnable, prefs.fftDistMinEnabledProperty());
+        Bindings.stepField(distMinField, prefs.fftDistMinHzProperty());
+        // Toggling also enables/disables the companion field, and the toggle
+        // feeds the THD tile (shortDistRange).  The redraw side-effect lives in
+        // the view, which subscribes to both these prefs.
+        Bindings.onChange(toolbarTabs, prefs.fftDistMinEnabledProperty(), v -> {
+            distMinField.setEnabled(v);
             refreshTabHeader(TAB_THD_SETTINGS);
-            if (view != null && !view.isDisposed()) view.redraw();
         });
-        distMinField.addSelectionListener(e -> {
-            prefs.setFftDistMinHz(distMinField.getValue());
-            prefs.save();
-            refreshTabHeader(TAB_THD_SETTINGS);
-            if (view != null && !view.isDisposed()) view.redraw();
-        });
+        Bindings.onChange(toolbarTabs, prefs.fftDistMinHzProperty(),
+                v -> refreshTabHeader(TAB_THD_SETTINGS));
 
         // Row: distortion low-pass.
         distMaxEnable = new Button(g, SWT.CHECK);
         distMaxEnable.setText(I18n.t("fft.thd.distMax"));
-        distMaxEnable.setSelection(prefs.isFftDistMaxEnabled());
         distMaxField = new NumericStepField(g,
                 prefs.getFftDistMaxHz(),
                 FftPaneFormat::parseDoubleStrict,
@@ -1142,27 +1123,23 @@ public final class FftPane {
         GridData distMaxFieldGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         distMaxFieldGd.horizontalSpan = 3;
         distMaxField.setLayoutData(distMaxFieldGd);
-        distMaxField.setEnabled(distMaxEnable.getSelection());
-        distMaxEnable.addListener(SWT.Selection, e -> {
-            prefs.setFftDistMaxEnabled(distMaxEnable.getSelection());
-            distMaxField.setEnabled(distMaxEnable.getSelection());
-            prefs.save();
+        distMaxField.setEnabled(prefs.isFftDistMaxEnabled());
+        Bindings.check(distMaxEnable, prefs.fftDistMaxEnabledProperty());
+        Bindings.stepField(distMaxField, prefs.fftDistMaxHzProperty());
+        // Mirror of distMin: toggling drives the companion field + THD tile;
+        // the redraw lives in the view, subscribed to both prefs.
+        Bindings.onChange(toolbarTabs, prefs.fftDistMaxEnabledProperty(), v -> {
+            distMaxField.setEnabled(v);
             refreshTabHeader(TAB_THD_SETTINGS);
-            if (view != null && !view.isDisposed()) view.redraw();
         });
-        distMaxField.addSelectionListener(e -> {
-            prefs.setFftDistMaxHz(distMaxField.getValue());
-            prefs.save();
-            refreshTabHeader(TAB_THD_SETTINGS);
-            if (view != null && !view.isDisposed()) view.redraw();
-        });
+        Bindings.onChange(toolbarTabs, prefs.fftDistMaxHzProperty(),
+                v -> refreshTabHeader(TAB_THD_SETTINGS));
 
         // Row: Manual fundamental — moved one row UP so it sits above
         // the harmonic-count row.  Checkbox text replaces the
         // separate Label here too.
         manualFundEnable = new Button(g, SWT.CHECK);
         manualFundEnable.setText(I18n.t("fft.thd.manualFund"));
-        manualFundEnable.setSelection(prefs.isFftManualFundEnabled());
         // Single field that accepts the value AND a unit suffix —
         // e.g. "1.5 V", "1500 mV", "-3.5 dBV".  The internal value is
         // stored in the canonical mV scale (small magnitudes won't lose
@@ -1178,11 +1155,12 @@ public final class FftPane {
         GridData manualFundFieldGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         manualFundFieldGd.horizontalSpan = 3;
         manualFundField.setLayoutData(manualFundFieldGd);
-        manualFundField.setEnabled(manualFundEnable.getSelection());
-        manualFundEnable.addListener(SWT.Selection, e -> {
-            prefs.setFftManualFundEnabled(manualFundEnable.getSelection());
-            manualFundField.setEnabled(manualFundEnable.getSelection());
-            prefs.save();
+        manualFundField.setEnabled(prefs.isFftManualFundEnabled());
+        Bindings.check(manualFundEnable, prefs.fftManualFundEnabledProperty());
+        // Toggling also enables/disables the companion field and drives the
+        // 'manF' THD tile (shown only when enabled).  No view redraw/reset.
+        Bindings.onChange(toolbarTabs, prefs.fftManualFundEnabledProperty(), v -> {
+            manualFundField.setEnabled(v);
             refreshTabHeader(TAB_THD_SETTINGS);
         });
 
@@ -1196,11 +1174,10 @@ public final class FftPane {
                 60);
         thdMaxHarmField.enableStrictNumericInput(false);
         thdMaxHarmField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        thdMaxHarmField.addSelectionListener(e -> {
-            prefs.setFftThdMaxHarmonic((int) Math.round(thdMaxHarmField.getValue()));
-            prefs.save();
-            refreshTabHeader(TAB_THD_SETTINGS);
-        });
+        Bindings.stepFieldInt(thdMaxHarmField, prefs.fftThdMaxHarmonicProperty());
+        // Drives the 'H{n}' THD tile.  No view redraw/reset.
+        Bindings.onChange(toolbarTabs, prefs.fftThdMaxHarmonicProperty(),
+                v -> refreshTabHeader(TAB_THD_SETTINGS));
 
         addLabel(g, I18n.t("fft.thd.maxCalc"));
         // Minimum 9 — the THD overlay table is laid out for the H2..H9
@@ -1216,19 +1193,16 @@ public final class FftPane {
                 60);
         calcMaxHarmField.enableStrictNumericInput(false);
         calcMaxHarmField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        calcMaxHarmField.addSelectionListener(e -> {
-            int n = Math.max(9, (int) Math.round(calcMaxHarmField.getValue()));
-            prefs.setFftCalcMaxHarmonic(n);
-            prefs.save();
-            // External THD window's row count tracks this value — resize
-            // it so the harmonic rows aren't clipped (or excess empty
-            // rows hidden) after a change.
-            if (view != null && !view.isDisposed()) view.resizeExternalShellToContent();
-        });
-        manualFundField.addSelectionListener(e -> {
-            prefs.setFftManualFundVrms(manualFundField.getValue());
-            prefs.save();
-        });
+        // The external THD window's row count tracks this value (resize so the
+        // harmonic rows aren't clipped) — that side-effect lives in the view,
+        // subscribed to this same pref.  The min-9 floor at the old write site
+        // was redundant: every reader of getFftCalcMaxHarmonic() already wraps
+        // it in Math.max(9, ...), so a plain two-way value bind is faithful.
+        Bindings.stepFieldInt(calcMaxHarmField, prefs.fftCalcMaxHarmonicProperty());
+        // Manual-fundamental value field — registered here, LATE (after the
+        // calc-max field is built), matching the original ordering.  Unit-aware
+        // parser/formatter is unchanged; this only mirrors the committed value.
+        Bindings.stepField(manualFundField, prefs.fftManualFundVrmsProperty());
         new Label(g, SWT.NONE);   // fill row
         // (The previous global "Calibrate with noise" checkbox moved to
         // the Load-calibration tab — it's now a per-row "With noise"
@@ -1365,7 +1339,7 @@ public final class FftPane {
         p.setDistMinEnabled(prefs.isFftDistMinEnabled());
         p.setDistMaxEnabled(prefs.isFftDistMaxEnabled());
         p.setThdMaxHarmonic(prefs.getFftThdMaxHarmonic());
-        p.setCalcMaxHarmonic(prefs.getFftCalcMaxHarmonic());
+        p.setCalcMaxHarmonic(Math.max(9, prefs.getFftCalcMaxHarmonic()));
         p.setManualFundVrms(prefs.getFftManualFundVrms());
         p.setManualFundUnit(prefs.getFftManualFundUnit());
         p.setManualFundEnabled(prefs.isFftManualFundEnabled());

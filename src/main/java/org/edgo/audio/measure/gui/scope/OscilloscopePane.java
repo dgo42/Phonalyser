@@ -20,8 +20,10 @@ package org.edgo.audio.measure.gui.scope;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -61,6 +63,7 @@ import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.gui.MainTab;
 import org.edgo.audio.measure.gui.MainWindow;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -1395,10 +1398,8 @@ public final class OscilloscopePane {
 
         leftToggle = squareToggle(g, "L");
         leftToggle.setToolTipText(I18n.t("scope.left.toggle.tooltip"));
-        leftToggle.setSelection(prefs.isOscLeftChannelEnabled());
-        leftToggle.addListener(SWT.Selection, e -> {
-            prefs.setOscLeftChannelEnabled(leftToggle.getSelection());
-            prefs.save();
+        Bindings.check(leftToggle, prefs.oscLeftChannelEnabledProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscLeftChannelEnabledProperty(), v -> {
             requestRedraw();
             refreshTabHeader(TAB_LEFT);
         });
@@ -1407,6 +1408,12 @@ public final class OscilloscopePane {
                 prefs.getOscLeftVoltsPerDiv(), 90,
                 OscParse::tryParseStepInput, OscParse::formatVoltsPerDiv);
         leftScale.setToolTipText(I18n.t("scope.left.scale.tooltip"));
+        // Coupled write: the offset fraction is re-derived from the OLD V/div
+        // (preserveCanvasMiddle needs the pre-change value), so this can't use
+        // Bindings.stepSelector — the offset must be set before V/div changes
+        // and no helper models that pairing.  Both prefs are now bound and
+        // auto-save, so the explicit save() is retired; the preset-load path
+        // keeps the selector in sync via leftScale.setValue(...).
         leftScale.addSelectionListener(e -> {
             double oldV = prefs.getOscLeftVoltsPerDiv();
             double newV = leftScale.getValue();
@@ -1416,17 +1423,14 @@ public final class OscilloscopePane {
             prefs.setOscLeftOffsetFrac(
                     ScopeFormat.preserveCanvasMiddle(prefs.getOscLeftOffsetFrac(), oldV, newV));
             prefs.setOscLeftVoltsPerDiv(newV);
-            prefs.save();
             requestRedraw();
             refreshTabHeader(TAB_LEFT);
         });
 
         leftAc = squareToggle(g, "AC");
         leftAc.setToolTipText(I18n.t("scope.left.ac.tooltip"));
-        leftAc.setSelection(prefs.isOscLeftAcMode());
-        leftAc.addListener(SWT.Selection, e -> {
-            prefs.setOscLeftAcMode(leftAc.getSelection());
-            prefs.save();
+        Bindings.check(leftAc, prefs.oscLeftAcModeProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscLeftAcModeProperty(), v -> {
             requestRedraw();
             refreshTabHeader(TAB_LEFT);
         });
@@ -1435,10 +1439,8 @@ public final class OscilloscopePane {
         leftSinc = new Button(g, SWT.CHECK);
         leftSinc.setImage(sincImg);
         leftSinc.setToolTipText(I18n.t("scope.sinc.tooltip"));
-        leftSinc.setSelection(prefs.isOscLeftSincInterpEnabled());
-        leftSinc.addListener(SWT.Selection, e -> {
-            prefs.setOscLeftSincInterpEnabled(leftSinc.getSelection());
-            prefs.save();
+        Bindings.check(leftSinc, prefs.oscLeftSincInterpEnabledProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscLeftSincInterpEnabledProperty(), v -> {
             requestRedraw();
             refreshTabHeader(TAB_LEFT);
         });
@@ -1448,30 +1450,20 @@ public final class OscilloscopePane {
         leftMains = new Combo(g, SWT.READ_ONLY);
         leftMains.setItems(MainsSuppression.LABELS);
         leftMains.setToolTipText(I18n.t("scope.mains.tooltip"));
-        leftMains.select(prefs.getOscLeftMainsSuppression().ordinal());
-        leftMains.addListener(SWT.Selection, e -> {
-            int i = leftMains.getSelectionIndex();
-            if (i >= 0 && i < MainsSuppression.values().length) {
-                prefs.setOscLeftMainsSuppression(MainsSuppression.values()[i]);
-                prefs.save();
-                requestRedraw();
-                refreshTabHeader(TAB_LEFT);
-            }
+        Bindings.combo(leftMains, prefs.oscLeftMainsSuppressionProperty(), MainsSuppression.values());
+        Bindings.onChange(toolbarTabs, prefs.oscLeftMainsSuppressionProperty(), v -> {
+            requestRedraw();
+            refreshTabHeader(TAB_LEFT);
         });
 
         new Label(g, SWT.NONE).setText(I18n.t("scope.lpf.label"));
         leftLpf = new Combo(g, SWT.READ_ONLY);
         leftLpf.setItems(LpfMode.LABELS);
         leftLpf.setToolTipText(I18n.t("scope.lpf.tooltip"));
-        leftLpf.select(prefs.getOscLeftLpf().ordinal());
-        leftLpf.addListener(SWT.Selection, e -> {
-            int i = leftLpf.getSelectionIndex();
-            if (i >= 0 && i < LpfMode.values().length) {
-                prefs.setOscLeftLpf(LpfMode.values()[i]);
-                prefs.save();
-                requestRedraw();
-                refreshTabHeader(TAB_LEFT);
-            }
+        Bindings.combo(leftLpf, prefs.oscLeftLpfProperty(), LpfMode.values());
+        Bindings.onChange(toolbarTabs, prefs.oscLeftLpfProperty(), v -> {
+            requestRedraw();
+            refreshTabHeader(TAB_LEFT);
         });
     }
 
@@ -1483,10 +1475,8 @@ public final class OscilloscopePane {
 
         rightToggle = squareToggle(g, "R");
         rightToggle.setToolTipText(I18n.t("scope.right.toggle.tooltip"));
-        rightToggle.setSelection(prefs.isOscRightChannelEnabled());
-        rightToggle.addListener(SWT.Selection, e -> {
-            prefs.setOscRightChannelEnabled(rightToggle.getSelection());
-            prefs.save();
+        Bindings.check(rightToggle, prefs.oscRightChannelEnabledProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscRightChannelEnabledProperty(), v -> {
             requestRedraw();
             refreshTabHeader(TAB_RIGHT);
         });
@@ -1495,23 +1485,23 @@ public final class OscilloscopePane {
                 prefs.getOscRightVoltsPerDiv(), 90,
                 OscParse::tryParseStepInput, OscParse::formatVoltsPerDiv);
         rightScale.setToolTipText(I18n.t("scope.right.scale.tooltip"));
+        // Coupled write (see leftScale): offset re-derived from the OLD V/div,
+        // so no Bindings helper fits.  Both prefs are bound + auto-save, so the
+        // explicit save() is retired.
         rightScale.addSelectionListener(e -> {
             double oldV = prefs.getOscRightVoltsPerDiv();
             double newV = rightScale.getValue();
             prefs.setOscRightOffsetFrac(
                     ScopeFormat.preserveCanvasMiddle(prefs.getOscRightOffsetFrac(), oldV, newV));
             prefs.setOscRightVoltsPerDiv(newV);
-            prefs.save();
             requestRedraw();
             refreshTabHeader(TAB_RIGHT);
         });
 
         rightAc = squareToggle(g, "AC");
         rightAc.setToolTipText(I18n.t("scope.right.ac.tooltip"));
-        rightAc.setSelection(prefs.isOscRightAcMode());
-        rightAc.addListener(SWT.Selection, e -> {
-            prefs.setOscRightAcMode(rightAc.getSelection());
-            prefs.save();
+        Bindings.check(rightAc, prefs.oscRightAcModeProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscRightAcModeProperty(), v -> {
             requestRedraw();
             refreshTabHeader(TAB_RIGHT);
         });
@@ -1520,10 +1510,8 @@ public final class OscilloscopePane {
         rightSinc = new Button(g, SWT.CHECK);
         rightSinc.setImage(sincImg);
         rightSinc.setToolTipText(I18n.t("scope.sinc.tooltip"));
-        rightSinc.setSelection(prefs.isOscRightSincInterpEnabled());
-        rightSinc.addListener(SWT.Selection, e -> {
-            prefs.setOscRightSincInterpEnabled(rightSinc.getSelection());
-            prefs.save();
+        Bindings.check(rightSinc, prefs.oscRightSincInterpEnabledProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscRightSincInterpEnabledProperty(), v -> {
             requestRedraw();
             refreshTabHeader(TAB_RIGHT);
         });
@@ -1533,30 +1521,20 @@ public final class OscilloscopePane {
         rightMains = new Combo(g, SWT.READ_ONLY);
         rightMains.setItems(MainsSuppression.LABELS);
         rightMains.setToolTipText(I18n.t("scope.mains.tooltip"));
-        rightMains.select(prefs.getOscRightMainsSuppression().ordinal());
-        rightMains.addListener(SWT.Selection, e -> {
-            int i = rightMains.getSelectionIndex();
-            if (i >= 0 && i < MainsSuppression.values().length) {
-                prefs.setOscRightMainsSuppression(MainsSuppression.values()[i]);
-                prefs.save();
-                requestRedraw();
-                refreshTabHeader(TAB_RIGHT);
-            }
+        Bindings.combo(rightMains, prefs.oscRightMainsSuppressionProperty(), MainsSuppression.values());
+        Bindings.onChange(toolbarTabs, prefs.oscRightMainsSuppressionProperty(), v -> {
+            requestRedraw();
+            refreshTabHeader(TAB_RIGHT);
         });
 
         new Label(g, SWT.NONE).setText(I18n.t("scope.lpf.label"));
         rightLpf = new Combo(g, SWT.READ_ONLY);
         rightLpf.setItems(LpfMode.LABELS);
         rightLpf.setToolTipText(I18n.t("scope.lpf.tooltip"));
-        rightLpf.select(prefs.getOscRightLpf().ordinal());
-        rightLpf.addListener(SWT.Selection, e -> {
-            int i = rightLpf.getSelectionIndex();
-            if (i >= 0 && i < LpfMode.values().length) {
-                prefs.setOscRightLpf(LpfMode.values()[i]);
-                prefs.save();
-                requestRedraw();
-                refreshTabHeader(TAB_RIGHT);
-            }
+        Bindings.combo(rightLpf, prefs.oscRightLpfProperty(), LpfMode.values());
+        Bindings.onChange(toolbarTabs, prefs.oscRightLpfProperty(), v -> {
+            requestRedraw();
+            refreshTabHeader(TAB_RIGHT);
         });
     }
 
@@ -1569,14 +1547,14 @@ public final class OscilloscopePane {
                 prefs.getOscTimePerDiv(), 90,
                 OscParse::tryParseStepInput, OscParse::formatTimePerDiv);
         timeScale.setToolTipText(I18n.t("scope.time.scale.tooltip"));
-        timeScale.addSelectionListener(e -> {
-            // viewCenterFrames is the primary state and does NOT change
-            // on t/div — only the window's width changes.  applyViewState
-            // re-derives slider thumb + position so the centred frame
-            // stays put.  In live-record mode viewCenterFrames is -1
-            // (follow-latest) so the trace continues tracking writePos.
-            prefs.setOscTimePerDiv(timeScale.getValue());
-            prefs.save();
+        Bindings.stepSelector(timeScale, prefs.oscTimePerDivProperty());
+        // viewCenterFrames is the primary state and does NOT change on
+        // t/div — only the window's width changes.  applyViewState
+        // re-derives slider thumb + position so the centred frame stays
+        // put (and ends in requestRedraw).  In live-record mode
+        // viewCenterFrames is -1 (follow-latest) so the trace continues
+        // tracking writePos.
+        Bindings.onChange(toolbarTabs, prefs.oscTimePerDivProperty(), v -> {
             applyViewState();
             refreshTabHeader(TAB_HORIZONTAL);
         });
@@ -1600,13 +1578,12 @@ public final class OscilloscopePane {
         chR = squareToggle(chSet, "R");
         chL.setToolTipText(I18n.t("scope.trigger.channel.left.tooltip"));
         chR.setToolTipText(I18n.t("scope.trigger.channel.right.tooltip"));
-        chL.setSelection(prefs.getOscTriggerChannel() == Channel.L);
-        chR.setSelection(prefs.getOscTriggerChannel() == Channel.R);
         makeDependentGroup(chL, chR);
-        chL.addListener(SWT.Selection,
-                e -> { if (chL.getSelection()) { prefs.setOscTriggerChannel(Channel.L); prefs.save(); refreshTabHeader(TAB_TRIGGER); } });
-        chR.addListener(SWT.Selection,
-                e -> { if (chR.getSelection()) { prefs.setOscTriggerChannel(Channel.R); prefs.save(); refreshTabHeader(TAB_TRIGGER); } });
+        Map<Button, Channel> chMap = new LinkedHashMap<>();
+        chMap.put(chL, Channel.L);
+        chMap.put(chR, Channel.R);
+        Bindings.radio(chMap, prefs.oscTriggerChannelProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscTriggerChannelProperty(), v -> refreshTabHeader(TAB_TRIGGER));
 
         Composite edgeSet = new Composite(g, SWT.NONE);
         edgeSet.setLayout(flushRowLayoutHorizontal(2));
@@ -1614,13 +1591,12 @@ public final class OscilloscopePane {
         edgeFall = squareToggle(edgeSet, "↓");
         edgeRise.setToolTipText(I18n.t("scope.trigger.edge.rise.tooltip"));
         edgeFall.setToolTipText(I18n.t("scope.trigger.edge.fall.tooltip"));
-        edgeRise.setSelection(prefs.getOscTriggerEdge() == TriggerEdge.RISE);
-        edgeFall.setSelection(prefs.getOscTriggerEdge() == TriggerEdge.FALL);
         makeDependentGroup(edgeRise, edgeFall);
-        edgeRise.addListener(SWT.Selection,
-                e -> { if (edgeRise.getSelection()) { prefs.setOscTriggerEdge(TriggerEdge.RISE); prefs.save(); refreshTabHeader(TAB_TRIGGER); } });
-        edgeFall.addListener(SWT.Selection,
-                e -> { if (edgeFall.getSelection()) { prefs.setOscTriggerEdge(TriggerEdge.FALL); prefs.save(); refreshTabHeader(TAB_TRIGGER); } });
+        Map<Button, TriggerEdge> edgeMap = new LinkedHashMap<>();
+        edgeMap.put(edgeRise, TriggerEdge.RISE);
+        edgeMap.put(edgeFall, TriggerEdge.FALL);
+        Bindings.radio(edgeMap, prefs.oscTriggerEdgeProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscTriggerEdgeProperty(), v -> refreshTabHeader(TAB_TRIGGER));
 
         Composite modeSet = new Composite(g, SWT.NONE);
         modeSet.setLayout(flushRowLayoutHorizontal(2));
@@ -1630,16 +1606,13 @@ public final class OscilloscopePane {
         modeAuto  .setToolTipText(I18n.t("scope.trigger.auto"));
         modeNormal.setToolTipText(I18n.t("scope.trigger.normal"));
         modeSingle.setToolTipText(I18n.t("scope.trigger.single"));
-        modeAuto  .setSelection(prefs.getOscTriggerMode() == TriggerMode.AUTO);
-        modeNormal.setSelection(prefs.getOscTriggerMode() == TriggerMode.NORMAL);
-        modeSingle.setSelection(prefs.getOscTriggerMode() == TriggerMode.SINGLE);
         makeDependentGroup(modeAuto, modeNormal, modeSingle);
-        modeAuto.addListener(SWT.Selection,
-                e -> { if (modeAuto.getSelection())   { prefs.setOscTriggerMode(TriggerMode.AUTO);   prefs.save(); refreshTabHeader(TAB_TRIGGER); } });
-        modeNormal.addListener(SWT.Selection,
-                e -> { if (modeNormal.getSelection()) { prefs.setOscTriggerMode(TriggerMode.NORMAL); prefs.save(); refreshTabHeader(TAB_TRIGGER); } });
-        modeSingle.addListener(SWT.Selection,
-                e -> { if (modeSingle.getSelection()) { prefs.setOscTriggerMode(TriggerMode.SINGLE); prefs.save(); refreshTabHeader(TAB_TRIGGER); } });
+        Map<Button, TriggerMode> modeMap = new LinkedHashMap<>();
+        modeMap.put(modeAuto,   TriggerMode.AUTO);
+        modeMap.put(modeNormal, TriggerMode.NORMAL);
+        modeMap.put(modeSingle, TriggerMode.SINGLE);
+        Bindings.radio(modeMap, prefs.oscTriggerModeProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscTriggerModeProperty(), v -> refreshTabHeader(TAB_TRIGGER));
 
         triggerStartBtn = new Button(g, SWT.PUSH);
         Image triggerPlayIcon = IconUtils.instance().renderAtHeight(g.getDisplay(),
@@ -1652,9 +1625,9 @@ public final class OscilloscopePane {
         triggerStartBtn.setEnabled(modeSingle.getSelection());
         triggerStartBtn.addListener(SWT.Selection, e -> onSingleStart.run());
 
-        modeAuto  .addListener(SWT.Selection, e -> syncTriggerStart());
-        modeNormal.addListener(SWT.Selection, e -> syncTriggerStart());
-        modeSingle.addListener(SWT.Selection, e -> syncTriggerStart());
+        // Registered AFTER the mode radio binding so the button selections
+        // are already updated when syncTriggerStart reads modeSingle's state.
+        Bindings.onChange(toolbarTabs, prefs.oscTriggerModeProperty(), v -> syncTriggerStart());
 
         // Hysteresis selector — 0.1-div steps from 0.0 (disabled) to 5.0 div.
         // Moved out of the global Preferences dialog so it lives alongside
@@ -1668,7 +1641,6 @@ public final class OscilloscopePane {
         // (or accidentally focussing the numeric field next to it).
         hysteresisEnable = new Button(hystSet, SWT.CHECK);
         hysteresisEnable.setText(I18n.t("scope.trigger.hysteresis"));
-        hysteresisEnable.setSelection(prefs.isOscTriggerHysteresisEnabled());
         hysteresisEnable.setToolTipText(I18n.t("scope.trigger.hysteresis.tooltip"));
 
         String[] hystValues = ScopeFormat.hysteresisDivSteps();
@@ -1676,15 +1648,16 @@ public final class OscilloscopePane {
                 ScopeFormat.nearestIndex(hystValues, prefs.getOscTriggerHysteresisDiv()), 50);
         hysteresisSel.setToolTipText(I18n.t("scope.trigger.hysteresis.tooltip"));
         hysteresisSel.setEnabled(prefs.isOscTriggerHysteresisEnabled());
+        // hysteresisSel is an index-mode StepSelector mapping to a double
+        // pref (value read via getSelectedValue()); no Bindings helper
+        // covers index-mode → double, so its writer stays manual.  The pref
+        // is bound and auto-saves, so the explicit save() is retired.
         hysteresisSel.addSelectionListener(e -> {
             prefs.setOscTriggerHysteresisDiv(Double.parseDouble(hysteresisSel.getSelectedValue()));
-            prefs.save();
             refreshTabHeader(TAB_TRIGGER);
         });
-        hysteresisEnable.addListener(SWT.Selection, e -> {
-            boolean on = hysteresisEnable.getSelection();
-            prefs.setOscTriggerHysteresisEnabled(on);
-            prefs.save();
+        Bindings.check(hysteresisEnable, prefs.oscTriggerHysteresisEnabledProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscTriggerHysteresisEnabledProperty(), on -> {
             hysteresisSel.setEnabled(on);
             refreshTabHeader(TAB_TRIGGER);
         });
@@ -1698,13 +1671,12 @@ public final class OscilloscopePane {
         reconstructedBeatBtn = new Button(g, SWT.CHECK);
         reconstructedBeatBtn.setText(I18n.t("scope.trigger.reconstructedBeat"));
         reconstructedBeatBtn.setToolTipText(I18n.t("scope.trigger.reconstructedBeat.tooltip"));
-        reconstructedBeatBtn.setSelection(prefs.isOscShowReconstructedBeat());
+        // Enabled state follows the generator form (DUAL_TONE), driven by
+        // syncReconstructedBeatEnabled on GENERATOR_SIGNAL_CHANGED — not a
+        // Preferences binding.  Only the checked value binds to the pref.
         reconstructedBeatBtn.setEnabled(isGeneratorDualTone());
-        reconstructedBeatBtn.addListener(SWT.Selection, e -> {
-            prefs.setOscShowReconstructedBeat(reconstructedBeatBtn.getSelection());
-            prefs.save();
-            requestRedraw();
-        });
+        Bindings.check(reconstructedBeatBtn, prefs.oscShowReconstructedBeatProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscShowReconstructedBeatProperty(), v -> requestRedraw());
     }
 
     /** True when the generator is currently in {@code DUAL_TONE} form
@@ -2059,17 +2031,14 @@ public final class OscilloscopePane {
         NumericStepField durField = new NumericStepField(
                 g,
                 Math.max(0.001, prefs.getOscSaveDurationSeconds()),
-                ScopeFormat::parseSeconds,
+                s -> { Double d = ScopeFormat.parseSeconds(s); return d == null ? null : Math.max(0.001, d); },
                 ScopeFormat::formatSecondsTrimmed,
                 /* wheel: ±5 % */ (v, dir) -> Math.max(0.001, v * (1.0 + 0.05 * dir)),
                 /* arrows: ±1 s */ (v, dir) -> Math.max(0.001, v + dir),
                 54);     // 60% of the previous 90 px width
         durField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         durField.setToolTipText(I18n.t("scope.save.duration.tooltip"));
-        durField.addSelectionListener(e -> {
-            prefs.setOscSaveDurationSeconds(durField.getValue());
-            prefs.save();
-        });
+        Bindings.stepField(durField, prefs.oscSaveDurationSecondsProperty());
 
         Button save = new Button(g, SWT.PUSH);
         save.setImage(floppyDiskIcon);
