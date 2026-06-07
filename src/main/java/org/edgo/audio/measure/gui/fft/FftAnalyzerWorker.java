@@ -816,17 +816,20 @@ public final class FftAnalyzerWorker {
                         }
                     }
                 }
-                // Single reference: PER-LOBE constant-phase de-rotation (matching
-                // FftAnalyzer Pass 2).  Each bin is snapped to its nearest harmonic
-                // h = round(signed-freq-bin / k0) and rotated by that lobe's CONSTANT
-                // phase h·Φ, Φ = −2π·delta·accumKFractional/N — NOT a per-bin ramp.
-                // The ramp is exact only at the harmonic bins and over-rotates the
-                // leakage skirt between them ∝ (bin-offset × tick), which the
-                // cross-tick sum turns into a comb on the skirt; constant phase per
-                // lobe aligns the whole lobe so the skirt stays clean.
+                // Single reference: PER-LOBE constant-phase de-rotation (the same
+                // math as FftAnalyzer Pass 2, but over the HALF spectrum
+                // [0, Nyquist]: every accumulator bin is a POSITIVE frequency, so —
+                // unlike Pass 2's full fftSize array — there is NO negative-bin wrap
+                // and the harmonics run all the way to Nyquist).  Each bin is snapped
+                // to its nearest harmonic h = round(bin / k0) and rotated by that
+                // lobe's CONSTANT phase h·Φ, Φ = −2π·delta·accumKFractional/N — NOT a
+                // per-bin ramp.  The ramp is exact only at the harmonic bins and
+                // over-rotates the leakage skirt between them ∝ (bin-offset × tick),
+                // which the cross-tick sum turns into a comb on the skirt; constant
+                // phase per lobe aligns the whole lobe so the skirt stays clean.
                 final int    k0x   = Math.max(1, accumIntFundBinRounded);
                 final double phiX  = -2.0 * Math.PI * delta * accumKFractional / (double) fftSize;
-                final int    hMaxX = Math.max(1, (N / 2) / k0x);
+                final int    hMaxX = Math.max(1, halfSize / k0x);
                 if (hcosScratch == null || hcosScratch.length != 2 * hMaxX + 1) {
                     hcosScratch = new double[2 * hMaxX + 1];
                     hsinScratch = new double[2 * hMaxX + 1];
@@ -840,15 +843,15 @@ public final class FftAnalyzerWorker {
                     hcx[hMaxX - h] =  hcx[hMaxX + h];           // exp(−j·h·Φ) = conjugate
                     hsx[hMaxX - h] = -hsx[hMaxX + h];
                 }
-                final int halfX = N / 2;
                 final int hmx   = hMaxX;
                 // Parallelized across cores: the accumRe/accumIm writes are disjoint
-                // per chunk; each bin looks up its lobe's cached phasor.
+                // per chunk; each bin looks up its lobe's cached phasor.  All bins
+                // are positive frequencies (half spectrum), so the harmonic index is
+                // round(k / k0x) directly — no signed-bin wrap.
                 parallelChunks(N, (lo, hi) -> {
                     for (int k = lo; k < hi; k++) {
-                        int kf = (k <= halfX) ? k : k - N;          // signed frequency bin
-                        int h  = Math.round(kf / (float) k0x);       // nearest harmonic lobe
-                        if (h > hmx) h = hmx; else if (h < -hmx) h = -hmx;
+                        int h  = Math.round(k / (float) k0x);        // nearest harmonic lobe (k ≥ 0)
+                        if (h > hmx) h = hmx;
                         double cr = hcx[h + hmx], ci = hsx[h + hmx];
                         double rRe = r.re[k] * weight;
                         double rIm = r.im[k] * weight;
@@ -1706,6 +1709,7 @@ public final class FftAnalyzerWorker {
                 : Double.NaN;
         r.channelLeft      = wantLeft;
         r.samplesAbsStart  = samplesAbsStart;   // for the FLL's real-time dt
+        r.writePos         = reader.getWritePos();   // live capture head — where a correction issued now lands
         r.gateRejectDbFs   = lastRejectBlockDbFs;   // debug: last gate-rejected block + verdict
         r.gateRejectGates  = lastRejectGates;
 

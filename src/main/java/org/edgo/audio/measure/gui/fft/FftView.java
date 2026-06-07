@@ -138,13 +138,6 @@ public final class FftView extends AbstractFreqDomainView {
     private FrequencyAligner fll;
     private FrequencyAligner fll2;
 
-    /** When non-null and active, the relay-feedback autotune wizard owns the
-     *  single-tone correction: {@link #applyFrequencyLockLoop} routes the
-     *  measurement to it instead of the PID and publishes its relay output.
-     *  Set/cleared by {@code PidAutotuneDialog} (clearing re-locks the PID
-     *  with the freshly-tuned gains). */
-    private FllAutotuneSession autotuneSession;
-
     /** Frequency-domain mains rejection for the DISPLAYED frame — the worker
      *  only tracks f0, this divides the comb's cached response out of the shown
      *  spectrum (see {@link MainsCombFilter#applySpectrumCorrection}).  Its OWN
@@ -250,13 +243,15 @@ public final class FftView extends AbstractFreqDomainView {
     /** Capture re-sync notification from the worker.  Payload is the i18n
      *  message-key, so one event presents distinct warnings — a ring overrun
      *  ({@code fft.warning.overrun}) vs a signal discontinuity
-     *  ({@code fft.warning.discontinuity}).  Raises the same sticky blinking
-     *  banner the frame-rejection path uses, so the re-sync is visible. */
+     *  ({@code fft.warning.discontinuity}).  Raises a PERSISTENT blinking banner
+     *  (no fixed timer): the worker emits no result on a re-sync tick and
+     *  re-anchors, so the next FFT result is the first fully-reloaded window —
+     *  whereupon {@link #onResultReady}'s {@link #clearBannerIfStale()} drops it.
+     *  Also cleared on a statistics reset and on Record stop. */
     private final Consumer<String> onCaptureResync = messageKey -> {
         if (isDisposed() || !isRunning() || messageKey == null) return;
         setBanner(I18n.t(messageKey), I18n.t(messageKey + ".tip"),
-                ColorRole.WARNING_LIT, ColorRole.WARNING_DIM,
-                System.nanoTime() + REJECTION_WARN_NANOS);
+                ColorRole.WARNING_LIT, ColorRole.WARNING_DIM, 0L);
         redraw();
     };
 
@@ -278,9 +273,11 @@ public final class FftView extends AbstractFreqDomainView {
 
     // ─── Single blinking status banner (top-right) ───────────────────────
     // A self-painting, self-blinking BlinkBanner widget (gui.widgets) overlays the
-    // plot top-right: the loaded-spectrum path (persistent until live data arrives)
-    // or the frame-rejection warning (a sticky timer a fresh rejection restarts).
-    // The widget blinks itself — no canvas redraw — so only the expiry lives here.
+    // plot top-right: the loaded-spectrum path (persistent until live data arrives),
+    // the frame-rejection warning (a sticky timer a fresh rejection restarts), or a
+    // capture re-sync / overrun warning (persistent until the buffer reloads — the
+    // next result — or a reset / stop).  The widget blinks itself — no canvas
+    // redraw — so only the expiry lives here.
     private BlinkBanner banner;
     /** Expiry ({@code System.nanoTime}); {@code 0} = persistent (no timer). */
     private long        bannerUntilNanos;
@@ -646,18 +643,6 @@ public final class FftView extends AbstractFreqDomainView {
         return worker.getCompletedAnalyses();
     }
 
-    /** Installs (or clears) the relay-feedback autotune session that takes
-     *  over the single-tone correction.  Always resets both PIDs: on install
-     *  so the relay starts from the snapped bin (a clean, known operating
-     *  point — never a diverging correction from bad gains); on clear so the
-     *  loop re-locks from scratch on the freshly-tuned gains after the
-     *  generator was perturbed by the relay. */
-    public void setAutotuneSession(FllAutotuneSession session) {
-        this.autotuneSession = session;
-        if (fll != null) fll.reset();
-        if (fll2 != null) fll2.reset();
-    }
-
     /** True if the analyser worker is currently running. */
     public boolean isRunning() {
         return worker.isRunning();
@@ -674,6 +659,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  it ramps up from zero again. */
     public void stop() {
         worker.stop();
+        clearBanner();              // a re-sync / overrun warning is moot once stopped
         if (fll != null) fll.reset();
         if (fll2 != null) fll2.reset();
     }
@@ -690,20 +676,6 @@ public final class FftView extends AbstractFreqDomainView {
         Preferences prefs = Preferences.instance();
         if (!prefs.isGenSnapToFftBin())       return;
         if (!prefs.isFftFundFromGenerator())  return;
-        // Relay-feedback autotune hijacks the single-tone correction while
-        // installed (independent of the align checkbox — the user opted in
-        // via the wizard).  It relays during the active phases and holds the
-        // bias once DONE; a FAILED session falls through so the PID recovers.
-        if (autotuneSession != null && !autotuneSession.isFailed()) {
-            if (!isGeneratorActive() || !Double.isFinite(slot.fundamentalHzRefined)) return;
-            double atTarget = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.SINE,
-                    slot.sampleRate, prefs.getGenFrequencyHz());
-            if (!(atTarget > 0)) return;
-            double atCorr = autotuneSession.process(atTarget, slot.fundamentalHzRefined,
-                    slot.samplesAbsStart, slot.sampleRate, slot.fftSize, slot.freqResolution);
-            MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM, atTarget + atCorr);
-            return;
-        }
         AlignGenerator mode = prefs.getFftAlignGenerator();
         if (mode == AlignGenerator.NONE)      return;
         if (!isGeneratorActive())             return;
@@ -711,12 +683,6 @@ public final class FftView extends AbstractFreqDomainView {
         if (fll == null || fll.getMode() != mode) {
             fll  = FrequencyAlignerFactory.instance().create(mode);
             fll2 = FrequencyAlignerFactory.instance().create(mode);
-        }
-        // PID: apply the current gains (autotune writes them to prefs).  FLL has none.
-        if (fll instanceof FrequencyPid pid) {
-            double kp = prefs.getFftFllKp(), ki = prefs.getFftFllKi(), kd = prefs.getFftFllKd();
-            pid.setGains(kp, ki, kd);
-            ((FrequencyPid) fll2).setGains(kp, ki, kd);
         }
         // Branch on generator form: single-tone runs one loop, dual-tone two
         // independent loops driven by the per-tone detected frequencies in lastImd.
@@ -728,12 +694,12 @@ public final class FftView extends AbstractFreqDomainView {
             double t2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
                     slot.sampleRate, prefs.getGenDualToneFreq2Hz());
             if (t1 > 0 && Double.isFinite(lastImd.f1Hz)) {
-                fll.update(t1, lastImd.f1Hz, slot.samplesAbsStart, slot.sampleRate, slot.fftSize);
+                fll.update(t1, lastImd.f1Hz, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
                 MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM,
                         t1 + fll.getCorrection());
             }
             if (t2 > 0 && Double.isFinite(lastImd.f2Hz)) {
-                fll2.update(t2, lastImd.f2Hz, slot.samplesAbsStart, slot.sampleRate, slot.fftSize);
+                fll2.update(t2, lastImd.f2Hz, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
                 MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM_2,
                         t2 + fll2.getCorrection());
             }
@@ -742,7 +708,7 @@ public final class FftView extends AbstractFreqDomainView {
             double target = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.SINE,
                     slot.sampleRate, prefs.getGenFrequencyHz());
             if (!(target > 0)) return;
-            fll.update(target, slot.fundamentalHzRefined, slot.samplesAbsStart, slot.sampleRate, slot.fftSize);
+            fll.update(target, slot.fundamentalHzRefined, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
             MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM,
                     target + fll.getCorrection());
         }
@@ -788,6 +754,7 @@ public final class FftView extends AbstractFreqDomainView {
         if (isRunning()) {
             lastResult = null;
             lastImd    = null;
+            clearBanner();          // drop any re-sync / overrun warning on reset
         }
         syncDataButtons();
         Display d = getDisplay();

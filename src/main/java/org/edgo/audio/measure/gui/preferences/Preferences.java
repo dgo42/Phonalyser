@@ -350,12 +350,6 @@ public final class Preferences {
      *  the single-reference phase-lock path; real dual-tone / IMD partners are
      *  comparable in level and survive. */
     private final Property<Double>  fftStrongToneRelDb   = bound(100.0);
-    /** Generator frequency-lock-loop PID gains (Kp, Ki [1/s], Kd [s]) —
-     *  defaults approximate the proven time-aware integrator; the PID
-     *  autotune wizard overwrites them. */
-    private final Property<Double>  fftFllKp             = bound(0.5);
-    private final Property<Double>  fftFllKi             = bound(0.5);
-    private final Property<Double>  fftFllKd             = bound(0.0);
     private final Property<Double>  fftManualFundVrms    = bound(1.0);
     /** Unit the manual-fundamental-amplitude field renders in: {@code mV}, {@code V}, or {@code dBV}. */
     private final Property<AmplitudeUnit> fftManualFundUnit = bound(AmplitudeUnit.V);
@@ -970,18 +964,6 @@ public final class Preferences {
     public boolean isFftManualFundEnabled()    { return fftManualFundEnabled.get(); }
     public void setFftManualFundEnabled(boolean v) { fftManualFundEnabled.set(v); }
     public Property<Boolean> fftManualFundEnabledProperty() { return fftManualFundEnabled; }
-
-    public double getFftFllKp()                { return fftFllKp.get(); }
-    public void setFftFllKp(double v)          { fftFllKp.set(v); }
-    public Property<Double> fftFllKpProperty() { return fftFllKp; }
-
-    public double getFftFllKi()                { return fftFllKi.get(); }
-    public void setFftFllKi(double v)          { fftFllKi.set(v); }
-    public Property<Double> fftFllKiProperty() { return fftFllKi; }
-
-    public double getFftFllKd()                { return fftFllKd.get(); }
-    public void setFftFllKd(double v)          { fftFllKd.set(v); }
-    public Property<Double> fftFllKdProperty() { return fftFllKd; }
 
     public AmplitudeUnit getFftManualFundUnit() { return fftManualFundUnit.get(); }
     public void setFftManualFundUnit(AmplitudeUnit v) { fftManualFundUnit.set(v); }
@@ -1620,9 +1602,6 @@ public final class Preferences {
         root.put("fftThdMaxHarmonic",         fftThdMaxHarmonic.get());
         root.put("fftCalcMaxHarmonic",        fftCalcMaxHarmonic.get());
         root.put("fftStrongToneRelDb",        fftStrongToneRelDb.get());
-        root.put("fftFllKp",                  fftFllKp.get());
-        root.put("fftFllKi",                  fftFllKi.get());
-        root.put("fftFllKd",                  fftFllKd.get());
         root.put("fftManualFundVrms",         fftManualFundVrms.get());
         root.put("fftManualFundUnit",         fftManualFundUnit.get().name());
         root.put("fftManualFundEnabled",      fftManualFundEnabled.get());
@@ -1910,7 +1889,7 @@ public final class Preferences {
         if (root.get("fftMainsSuppression")       instanceof String  s) fftMainsSuppression.set(enumOr(MainsSuppression.class, s, fftMainsSuppression.get()));
         if (root.get("fftAlignGenerator")         instanceof String  s) fftAlignGenerator.set(AlignGenerator.fromString(s));
         else if (root.get("fftAlignGenToFreqDiff") instanceof Boolean b)   // migrate the old checkbox
-            fftAlignGenerator.set(b ? AlignGenerator.PID : AlignGenerator.NONE);
+            fftAlignGenerator.set(b ? AlignGenerator.FLL : AlignGenerator.NONE);
         if (root.get("fftDistMinHz")              instanceof Number  n) fftDistMinHz.set(n.doubleValue());
         if (root.get("fftDistMaxHz")              instanceof Number  n) fftDistMaxHz.set(n.doubleValue());
         if (root.get("fftDistMinEnabled")         instanceof Boolean b) fftDistMinEnabled.set(b);
@@ -1918,9 +1897,6 @@ public final class Preferences {
         if (root.get("fftThdMaxHarmonic")         instanceof Number  n) fftThdMaxHarmonic.set(n.intValue());
         if (root.get("fftCalcMaxHarmonic")        instanceof Number  n) fftCalcMaxHarmonic.set(n.intValue());
         if (root.get("fftStrongToneRelDb")        instanceof Number  n) fftStrongToneRelDb.set(n.doubleValue());
-        if (root.get("fftFllKp")                  instanceof Number  n) fftFllKp.set(n.doubleValue());
-        if (root.get("fftFllKi")                  instanceof Number  n) fftFllKi.set(n.doubleValue());
-        if (root.get("fftFllKd")                  instanceof Number  n) fftFllKd.set(n.doubleValue());
         if (root.get("fftManualFundVrms")         instanceof Number  n) fftManualFundVrms.set(n.doubleValue());
         if (root.get("fftManualFundUnit")         instanceof String  s) fftManualFundUnit.set(enumOr(AmplitudeUnit.class, s, fftManualFundUnit.get()));
         if (root.get("fftManualFundEnabled")      instanceof Boolean b) fftManualFundEnabled.set(b);

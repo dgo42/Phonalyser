@@ -101,6 +101,11 @@ public class FftResult {
      *  the REAL elapsed time between corrections — {@code (Δstart)/sampleRate} —
      *  so its gain is time-correct under wildly varying tick durations. */
     public long samplesAbsStart;
+    /** Live capture {@code writePos} when this result was produced — where a
+     *  correction issued in response first lands in the capture stream.  Lets the
+     *  frequency-lock loop place the correction's change-point past the
+     *  analysis/publish backlog ({@code writePos − samplesAbsStart − fftSize}). */
+    public long writePos;
 
     // Harmonics (index 0 = 2nd harmonic, …)
     public int      harmonicCount;
@@ -313,6 +318,7 @@ public class FftResult {
         c.coherentKappa              = coherentKappa;
         c.channelLeft                = channelLeft;
         c.samplesAbsStart            = samplesAbsStart;
+        c.writePos                   = writePos;
         c.harmonicCount              = harmonicCount;
         c.harmonicBins               = harmonicBins  != null ? harmonicBins.clone()  : null;
         c.harmonicHz                 = harmonicHz    != null ? harmonicHz.clone()    : null;

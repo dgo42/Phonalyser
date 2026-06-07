@@ -48,7 +48,6 @@ public final class FrequencyAlignerFactory {
     /** A fresh aligner for {@code mode}, or {@code null} for {@link AlignGenerator#NONE}. */
     public FrequencyAligner create(AlignGenerator mode) {
         return switch (mode) {
-            case PID  -> new FrequencyPid();
             case FLL  -> new FrequencyFll();
             case NONE -> null;
         };

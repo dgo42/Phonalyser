@@ -25,6 +25,11 @@
               fileName="target/fft-cross-tick-drift.log" append="false">
             <PatternLayout pattern="%d{HH:mm:ss.SSS} %msg%n"/>
         </File>
+        <!-- Independent log for the FLL transport-delay sweep, overwritten each run. -->
+        <File name="FllTransportFile"
+              fileName="target/fll-transport.log" append="false">
+            <PatternLayout pattern="%msg%n"/>
+        </File>
     </Appenders>
     <Loggers>
         <!-- Its own file + console, kept OUT of the shared root file. -->
@@ -34,6 +39,10 @@
         </Logger>
         <Logger name="FftCrossTickDrift" level="INFO" additivity="false">
             <AppenderRef ref="FftCrossTickDriftFile"/>
+            <AppenderRef ref="Console"/>
+        </Logger>
+        <Logger name="FllTransport" level="INFO" additivity="false">
+            <AppenderRef ref="FllTransportFile"/>
             <AppenderRef ref="Console"/>
         </Logger>
         <Root level="INFO">

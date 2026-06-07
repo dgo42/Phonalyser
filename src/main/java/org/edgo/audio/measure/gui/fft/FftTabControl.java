@@ -53,7 +53,6 @@ import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenChangeCause;
-import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
@@ -131,7 +130,6 @@ public final class FftTabControl extends Composite {
     // disposal is handled centrally.
     private final Image cameraIcon;
     private final Image crosshairIcon;
-    private final Image pidAutotuneIcon;
 
     // ---- Tab-header tile rendering: the shared {@link TileTabFolder} owns
     //      the renderer, spacer images, collapse, hover tooltips and tile
@@ -189,11 +187,6 @@ public final class FftTabControl extends Composite {
                 (int) Math.round(UTILITY_ICON_HEIGHT * 1.27), UTILITY_ICON_HEIGHT);
         this.crosshairIcon = icons.render(d, SvgPaths.CROSSHAIR,
                 UTILITY_ICON_HEIGHT, UTILITY_ICON_HEIGHT);
-        // Stroke-based, two-colour illustration — render with native
-        // per-element stroke/fill (the monochrome path-fill renderer would
-        // flatten its open curves into a black silhouette).
-        this.pidAutotuneIcon = icons.renderAtHeightColored(d, SvgPaths.PID_AUTOTUNE,
-                UTILITY_ICON_HEIGHT);
 
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 0; gl.marginHeight = 0;
@@ -867,7 +860,7 @@ public final class FftTabControl extends Composite {
 
     private void buildUtilityTab(CTabFolder folder) {
         Composite g = groupCell(folder, I18n.t("fft.tab.utility"));
-        GridLayout gl = new GridLayout(3, false);
+        GridLayout gl = new GridLayout(4, false);
         gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);
 
@@ -882,11 +875,6 @@ public final class FftTabControl extends Composite {
         calBtn.setImage(crosshairIcon);
         calBtn.setToolTipText(I18n.t("fft.utility.calibrate.tooltip"));
         calBtn.addListener(SWT.Selection, e -> openCalibrationDialog());
-
-        Button autotuneBtn = new Button(g, SWT.PUSH);
-        autotuneBtn.setImage(pidAutotuneIcon);
-        autotuneBtn.setToolTipText(I18n.t("fft.utility.autotune.tooltip"));
-        autotuneBtn.addListener(SWT.Selection, e -> openPidAutotuneDialog());
     }
 
     /** Opens the ADC-calibration dialog using this pane's fundamental
@@ -908,24 +896,6 @@ public final class FftTabControl extends Composite {
             Preferences.instance().setAdcFsVoltageRms(newFs);
             Preferences.instance().save();
         }).open();
-    }
-
-    /** Opens the relay-feedback PID autotune wizard for the generator
-     *  frequency-lock loop.  Requires a live single-tone recording with
-     *  snap-to-bin enabled (the loop the wizard tunes); otherwise it just
-     *  reports what's missing rather than running against an idle loop. */
-    private void openPidAutotuneDialog() {
-        if (isDisposed()) return;
-        Shell parent = getShell();
-        Preferences prefs = Preferences.instance();
-        boolean sine = prefs.getGenSignalForm() == GenSignalForm.SINE;
-        if (!view.isRunning() || !view.isGeneratorActive() || !sine
-                || !prefs.isGenSnapToFftBin() || !prefs.isFftFundFromGenerator()
-                || prefs.getFftAlignGenerator() != AlignGenerator.PID) {   // tunes the PID gains
-            Dialogs.info(parent, I18n.t("fft.autotune.title"), I18n.t("fft.autotune.notReady"));
-            return;
-        }
-        new PidAutotuneDialog(parent, view).open();
     }
 
     // =========================================================================

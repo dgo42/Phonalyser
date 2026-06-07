@@ -22,13 +22,13 @@ package org.edgo.audio.measure.enums;
  * How the FFT view steers the DDS generator onto the FFT bin grid:
  * <ul>
  *   <li>{@link #NONE} — no alignment (the generator runs free),</li>
- *   <li>{@link #PID}  — a tunable PID controller (autotune-capable),</li>
- *   <li>{@link #FLL}  — a gain-ramped, transport-delay-aware integrator.</li>
+ *   <li>{@link #FLL}  — a frequency-lock loop that corrects then waits for the
+ *       measurement to settle within tolerance of the target before correcting
+ *       again.</li>
  * </ul>
  */
 public enum AlignGenerator {
     NONE("None"),
-    PID("PID"),
     FLL("FLL");
 
     public final String label;
