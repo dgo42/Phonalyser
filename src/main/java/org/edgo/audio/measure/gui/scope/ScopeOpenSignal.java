@@ -47,8 +47,8 @@ import org.edgo.audio.measure.wav.PcmFileLoader;
  *   <li>{@link #loadFile} is called on the SWT thread.</li>
  *   <li>The file is decoded fully; a buffer of exactly the file's
  *       frame count is allocated and populated.</li>
- *   <li>{@link OscilloscopeView#setBuffer} and
- *       {@link CondensedView#setBuffer} are invoked.</li>
+ *   <li>{@link ScopeView#setBuffer} and
+ *       {@link ZoomedView#setBuffer} are invoked.</li>
  *   <li>{@link #clear} reverses the attachment and forgets the file
  *       so subsequent record sessions get a fresh buffer.</li>
  * </ol>
@@ -56,13 +56,13 @@ import org.edgo.audio.measure.wav.PcmFileLoader;
 @Log4j2
 public final class ScopeOpenSignal {
 
-    private final OscilloscopeView mainView;
-    private final CondensedView    condensedView;
+    private final ScopeView mainView;
+    private final ZoomedView    condensedView;
 
     private File          loadedFile;
     private String        lastError;
 
-    public ScopeOpenSignal(OscilloscopeView mainView, CondensedView condensedView) {
+    public ScopeOpenSignal(ScopeView mainView, ZoomedView condensedView) {
         this.mainView      = mainView;
         this.condensedView = condensedView;
     }

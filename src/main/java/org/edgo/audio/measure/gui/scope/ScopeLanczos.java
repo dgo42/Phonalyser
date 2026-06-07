@@ -22,7 +22,7 @@ import lombok.experimental.UtilityClass;
 
 /**
  * Lanczos-windowed sinc reconstruction kernel for the oscilloscope's
- * waveform renderer.  Decoupled from {@link OscilloscopeView} so the
+ * waveform renderer.  Decoupled from {@link ScopeView} so the
  * kernel math is unit-testable and the per-scale kernel cache is
  * shared once across every view instance.
  *

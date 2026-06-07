@@ -126,6 +126,19 @@ public final class Events {
      *  capture.  No payload.  Published on the UI thread. */
     public static final String FFT_RECORDING_AUTO_STOPPED = "fft.recording.auto-stopped";
 
+    /** Request — the FFT tab control wants live recording stopped (the user
+     *  is loading a static spectrum that must not be overwritten).  No
+     *  payload.  Subscriber: the FFT pane, which owns the Record button and
+     *  the shared-capture reference; it flips Record off if it was on.
+     *  Published on the UI thread. */
+    public static final String FFT_RECORDING_STOP_REQUESTED = "fft.recording.stop-requested";
+
+    /** Request — the FFT tab control's Utility-tab camera button was
+     *  clicked.  No payload.  Subscriber: the FFT pane, which owns the
+     *  screenshot dialog (it clones the whole pane offscreen to render the
+     *  snapshot).  Published on the UI thread. */
+    public static final String FFT_SCREENSHOT_REQUESTED = "fft.screenshot.requested";
+
     /** Notification — a fresh FFT analyser result is ready for display.
      *  Payload: the {@code FftResult} slot (may be {@code null}
      *  when the worker just wants to nudge a repaint without new data,

@@ -35,12 +35,12 @@ import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 /**
- * Background measurement worker for {@link OscilloscopeView}.  Owns the
+ * Background measurement worker for {@link ScopeView}.  Owns the
  * compute thread, the latest {@link SignalMeasurements} snapshot, the
  * rolling history ring (for avg / min / max / σ stats), and the
  * per-channel DC mean used by the AC-coupling display.
  *
- * <p>Paint code in {@link OscilloscopeView} reads worker state via
+ * <p>Paint code in {@link ScopeView} reads worker state via
  * accessors and via {@link #walkRecentHistory} / {@link #averagedChannelMean}
  * — no direct field access, no shared lock with the view.
  */
@@ -52,14 +52,14 @@ public final class ScopeMeasurementWorker {
     /** Excluded prefix of the captured buffer to dodge ADC startup transient. */
     private static final long AC_WARMUP_NANOS = 500_000L;
     /** Cap on samples used per pass — 96 000 ≈ 1 s @ 96 kHz / ¼ s @ 384 kHz.
-     *  Exposed so {@link OscilloscopeView}'s paint code can size its
+     *  Exposed so {@link ScopeView}'s paint code can size its
      *  trigger-search lookback window to match this worker's read window
      *  (and not waste samples it'll never reach in the same paint). */
     public static final int  MEAS_MAX_SAMPLES = 96_000;
     /** Depth of the rolling history ring. */
     private static final int  MEAS_HISTORY_CAP = 1024;
     /** Butterworth order for the scope HF spike-removal low-pass — shared
-     *  with {@link OscilloscopeView} so display and measurement match.  The
+     *  with {@link ScopeView} so display and measurement match.  The
      *  cutoff is per-channel and comes from the {@code LpfMode} preference. */
     public static final int    SCOPE_HF_LPF_ORDER = 8;
     /** Notch −3 dB width (Hz) — matches the display-side combs. */
@@ -215,7 +215,7 @@ public final class ScopeMeasurementWorker {
     }
 
     /** Arithmetic mean of {@code data[0..n)}.  Returns 0 for empty inputs.
-     *  Exposed as {@code public static} so {@link OscilloscopeView}'s
+     *  Exposed as {@code public static} so {@link ScopeView}'s
      *  paint code can fall back to a per-frame DC mean when the worker
      *  hasn't published a measurement yet. */
     public static double sampleMean(float[] data, int n) {

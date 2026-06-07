@@ -45,7 +45,6 @@ import org.edgo.audio.measure.gui.generator.GeneratorPane;
 import org.edgo.audio.measure.gui.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
-import org.edgo.audio.measure.gui.scope.OscilloscopeController;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 
 import lombok.extern.log4j.Log4j2;
@@ -129,10 +128,6 @@ public final class MainTab {
 
     public void stopForRecreate() {
         if (multifunctional != null) multifunctional.stopForRecreate();
-    }
-
-    public OscilloscopeController getOscController() {
-        return (multifunctional != null) ? multifunctional.getOscController() : null;
     }
 
     public GeneratorPane getGenPane() {

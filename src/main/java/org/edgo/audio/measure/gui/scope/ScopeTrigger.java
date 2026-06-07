@@ -22,7 +22,7 @@ import lombok.experimental.UtilityClass;
 
 /**
  * Trigger-edge detection for the oscilloscope.  Pure math; decoupled
- * from {@link OscilloscopeView} so the Schmitt-trigger + sub-sample
+ * from {@link ScopeView} so the Schmitt-trigger + sub-sample
  * refinement logic is unit-testable without instantiating an SWT widget.
  *
  * <p>{@link #find} walks the captured buffer with a hysteresis-banded

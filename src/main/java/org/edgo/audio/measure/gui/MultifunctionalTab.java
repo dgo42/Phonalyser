@@ -38,8 +38,7 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.fft.FftPane;
 import org.edgo.audio.measure.gui.generator.GeneratorPane;
 import org.edgo.audio.measure.gui.preferences.Preferences;
-import org.edgo.audio.measure.gui.scope.OscilloscopeController;
-import org.edgo.audio.measure.gui.scope.OscilloscopePane;
+import org.edgo.audio.measure.gui.scope.ScopePane;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -67,10 +66,9 @@ public final class MultifunctionalTab {
 
     private SashForm hSplit;
     private SashForm vSplit;
-    @Getter private OscilloscopeController oscController;
     @Getter private GeneratorPane          genPane;
     @Getter private FftPane                fftPane;
-    private OscilloscopePane                oscPane;
+    private ScopePane                oscPane;
 
     /** SashForm weights snapshot at collapse time so toggle helpers can
      *  restore them on expand. */
@@ -109,8 +107,8 @@ public final class MultifunctionalTab {
      *  modal dialog (e.g. Preferences).  Returns a {@link Runnable} that
      *  resumes both when the dialog closes. */
     public Runnable pauseForDialog() {
-        boolean oscWasRunning = oscController != null && oscController.isRunning();
-        if (oscWasRunning) oscController.stop();
+        boolean oscWasRunning = oscPane != null && oscPane.isCapturing();
+        if (oscWasRunning) oscPane.stopCapture();
         // The FFT pane holds its own ref on SharedCapture when recording.
         // Without releasing it here, refCount stays > 0 across the dialog,
         // SharedCapture.acquire() short-circuits, and any sample-rate /
@@ -119,7 +117,7 @@ public final class MultifunctionalTab {
         Runnable resumeFft = (fftPane != null) ? fftPane.pauseForDialog() : () -> {};
         Runnable resumeGen = (genPane != null) ? genPane.pauseAroundDialog() : () -> {};
         return () -> {
-            if (oscWasRunning) oscController.start();
+            if (oscWasRunning) oscPane.startCapture();
             resumeFft.run();
             resumeGen.run();
         };
@@ -130,7 +128,7 @@ public final class MultifunctionalTab {
      *  resume hook — the next instance restores state from
      *  {@link Preferences}. */
     public void stopForRecreate() {
-        if (oscController != null && oscController.isRunning()) oscController.stop();
+        if (oscPane != null && oscPane.isCapturing()) oscPane.stopCapture();
         if (genPane != null) genPane.pauseAroundDialog();
     }
 
@@ -149,8 +147,7 @@ public final class MultifunctionalTab {
 
         vSplit = new SashForm(hSplit, SWT.VERTICAL | SWT.SMOOTH);
         vSplit.setSashWidth(4);
-        this.oscPane = new OscilloscopePane(vSplit, true);
-        this.oscController = oscPane.getController();
+        this.oscPane = new ScopePane(vSplit, true);
 
         fftPane = new FftPane(vSplit, true);
 

@@ -24,7 +24,7 @@ import java.util.Locale;
 
 /**
  * Pure-math number / colour / string helpers used by the oscilloscope's
- * rendering and measurement display.  Decoupled from {@link OscilloscopeView}
+ * rendering and measurement display.  Decoupled from {@link ScopeView}
  * so the formulas are unit-testable without instantiating an SWT widget.
  */
 @UtilityClass

@@ -68,7 +68,7 @@ import lombok.extern.log4j.Log4j2;
  * volts/division and time/division settings.
  */
 @Log4j2
-public final class OscilloscopeView extends AbstractMeasurementView {
+public final class ScopeView extends AbstractMeasurementView {
 
     /** Number of horizontal grid divisions.  Package-private so the pane's
      *  mouse-anchored t/div zoom can compute the time at the mouse using
@@ -246,7 +246,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
      * How many samples back from the live writePos the view should anchor
      * its right edge.  0 = follow latest (default); positive values let
      * the user scroll back through the ring buffer via the navigation
-     * slider in {@link OscilloscopePane}.
+     * slider in {@link ScopePane}.
      */
     private volatile long viewBackOffsetFrames;
     public long getViewBackOffsetFrames()        { return viewBackOffsetFrames; }
@@ -368,7 +368,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     private static final String[] HEADERS       = {"cur", "avg", "min", "max", "σ"};
     private static final int[]    HEADER_RIGHTS = {COL_CUR_RIGHT, COL_AVG_RIGHT, COL_MIN_RIGHT, COL_MAX_RIGHT, COL_SIGMA_RIGHT};
 
-    public OscilloscopeView(Composite parent) {
+    public ScopeView(Composite parent) {
         // Dark-theme overrides + prefs-driven trace colours, all consumed
         // by AbstractMeasurementView in a single per-role allocation
         // pass.  The mid-channel colours (~65 % attenuation of the trace
@@ -657,7 +657,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
      * view's {@link #lastMeasResult} stays {@code null} and
      * {@link #drawMeasurements} bails out early.
      */
-    public void copyMeasurementsFrom(OscilloscopeView source) {
+    public void copyMeasurementsFrom(ScopeView source) {
         if (source == null || source == this) return;
         this.measWorker.snapshotFrom(source.measWorker);
     }
@@ -1109,7 +1109,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
     /**
      * Starts the background measurement worker.  Idempotent — calling while
      * the worker is already running is a no-op.  Invoked by
-     * {@link OscilloscopeController#start()} once a fresh
+     * {@link ScopePane#startCapture()} once a fresh
      * {@link SignalBufferReader} has been attached via {@link #setBuffer}.
      */
     public void startMeasurementThread() {
@@ -1118,7 +1118,7 @@ public final class OscilloscopeView extends AbstractMeasurementView {
 
     /**
      * Stops the background measurement worker and waits up to 2 s for it to
-     * exit.  Called from {@link OscilloscopeController#stop()}.
+     * exit.  Called from {@link ScopePane#stopCapture()}.
      */
     public void stopMeasurementThread() {
         measWorker.stop();

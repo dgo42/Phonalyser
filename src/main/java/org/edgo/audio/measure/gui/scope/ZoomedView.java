@@ -36,7 +36,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 
 /**
- * Condensed time-axis strip below the main {@link OscilloscopeView}.  Always
+ * Condensed time-axis strip below the main {@link ScopeView}.  Always
  * displays the most recent <strong>1 second</strong> of captured signal —
  * its full pixel width maps to exactly one second of audio.  Useful as an
  * overview while the main scope is zoomed in on a much shorter window.
@@ -45,14 +45,14 @@ import org.eclipse.swt.widgets.Display;
  * sample value uses the full strip height, so the user doesn't have to
  * adjust V/div to keep the overview visible.
  */
-public final class CondensedView extends AbstractMeasurementView {
+public final class ZoomedView extends AbstractMeasurementView {
 
     private static final int DIVISIONS_X = 10;
 
-    /** See {@link OscilloscopeView#LANCZOS_A} — A=16 for sharper stop-band. */
+    /** See {@link ScopeView#LANCZOS_A} — A=16 for sharper stop-band. */
     private static final int LANCZOS_A = 16;
 
-    /** See {@link OscilloscopeView}'s {@code MAX_LANCZOS_DOWNSAMPLE} for rationale. */
+    /** See {@link ScopeView}'s {@code MAX_LANCZOS_DOWNSAMPLE} for rationale. */
     private static final int MAX_LANCZOS_DOWNSAMPLE = 5;
 
     /** Buffer padding (each side) so the widest kernel still has real context. */
@@ -67,10 +67,10 @@ public final class CondensedView extends AbstractMeasurementView {
     private SignalBufferReader reader;
     private float[] leftBuf  = new float[0];
     private float[] rightBuf = new float[0];
-    /** Same back-offset semantics as {@link OscilloscopeView#getViewBackOffsetFrames()}. */
+    /** Same back-offset semantics as {@link ScopeView#getViewBackOffsetFrames()}. */
     private volatile long viewBackOffsetFrames;
 
-    public CondensedView(Composite parent) {
+    public ZoomedView(Composite parent) {
         super(parent, SWT.DOUBLE_BUFFERED, Map.of(
                 ColorRole.BACKGROUND,  0x000000,
                 ColorRole.GRID,        0x3C3C3C,
@@ -185,7 +185,7 @@ public final class CondensedView extends AbstractMeasurementView {
     /**
      * Lanczos-windowed sinc reconstruction with the kernel scaled to the
      * output rate ({@code scale = max(1, samplesPerPx)}) — see
-     * {@link OscilloscopeView#lanczos} for the rationale.
+     * {@link ScopeView#lanczos} for the rationale.
      */
     private float lanczos(float[] data, int n, double t, double scale) {
         int halfWidth = (int) Math.ceil(LANCZOS_A * scale);

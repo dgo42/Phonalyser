@@ -382,6 +382,11 @@ public final class FftView extends AbstractFreqDomainView {
         Bindings.onChange(this, viewPrefs.fftDistMinHzProperty(),        v -> redraw());
         Bindings.onChange(this, viewPrefs.fftDistMaxEnabledProperty(),   v -> redraw());
         Bindings.onChange(this, viewPrefs.fftDistMaxHzProperty(),        v -> redraw());
+        Bindings.onChange(this, viewPrefs.fftMagUnitProperty(), v -> {
+            if (magUnitCombo == null || magUnitCombo.isDisposed()) return;
+            magUnitCombo.select(v.ordinal());
+        });
+
         // Calc-up-to-harmonic drives the external THD window's row count.
         Bindings.onChange(this, viewPrefs.fftCalcMaxHarmonicProperty(),  v -> resizeExternalShellToContent());
         // Pick up FFT-only prefs (harmonic dot, freq-resp response,
@@ -545,14 +550,6 @@ public final class FftView extends AbstractFreqDomainView {
         banner.setLayoutData(bnd);
 
         startFillPercentTimer();
-    }
-
-    /** Re-selects the magnitude-unit combo from the current Preferences
-     *  value.  Called by the pane's syncWidgetsFromPrefs after a preset
-     *  load or screenshot-pane wire-up. */
-    public void refreshFromPrefs() {
-        if (magUnitCombo == null || magUnitCombo.isDisposed()) return;
-        magUnitCombo.select(Preferences.instance().getFftMagUnit().ordinal());
     }
 
     /** Schedules a recurring ~100 ms timer that updates the fill-%
