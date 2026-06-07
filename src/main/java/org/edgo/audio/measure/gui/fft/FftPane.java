@@ -27,22 +27,14 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
-import org.eclipse.swt.custom.CTabFolderRenderer;
 import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.custom.ScrolledComposite;
-import org.eclipse.swt.graphics.Color;
-import org.eclipse.swt.graphics.Font;
-import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
-import org.eclipse.swt.graphics.ImageData;
-import org.eclipse.swt.graphics.PaletteData;
-import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
@@ -91,6 +83,7 @@ import org.edgo.audio.measure.gui.scope.AdcCalibrationDialog;
 import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
+import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.extern.log4j.Log4j2;
@@ -116,10 +109,15 @@ public final class FftPane {
      *  are mapped to fractional positions). */
     private static final int SCROLL_RANGE = 1_000_000;
 
-    /** Indices of the toolbar tabs we paint custom tile rows for. */
+    /** Indices of the toolbar tabs.  The first {@link #NUM_CUSTOM_TABS} are
+     *  custom-rendered (label + optional tile row); the Presets / Utility tabs
+     *  in that range simply carry no tiles (centred label), matching the
+     *  FreqResp pane.  Save / Load (live-capture only) render with the default
+     *  CTabFolder look. */
     private static final int TAB_FFT_SETTINGS = 0;
     private static final int TAB_THD_SETTINGS = 1;
-    private static final int NUM_CUSTOM_TABS  = 2;
+    private static final int TAB_CALIBRATION  = 4;
+    private static final int NUM_CUSTOM_TABS  = 5;
 
     /** Pixel height of the big record-LED button at the right of the top
      *  toolbar — matches the scope's record LED so the two panes look
@@ -145,24 +143,10 @@ public final class FftPane {
     private final Image recordLit;
     private Button recordButton;
 
-    // ---- Tab-header tile rendering (mirrors the scope's pattern) -----
-    private CTabFolder toolbarTabs;
-    /** GridData of the toolbar CTabFolder, captured so the public
-     *  {@link #setTabsCollapsed(boolean)} can toggle the tab body. */
-    private GridData   toolbarTabsGd;
-    private final String[] tabLabels = new String[NUM_CUSTOM_TABS];
-    private final Image[]  tabSpacerImages = new Image[NUM_CUSTOM_TABS];
-    private final List<TabRegion> tabRegions = new ArrayList<>();
-    private Color tabTileBg;
-    private Color tabTileFg;
-    private Font  tabTileFont;
-
-    /** A painted sub-region of a tab header (a tile) with its hover tip. */
-    private static final class TabRegion {
-        final Rectangle bounds;
-        final String    tooltip;
-        TabRegion(Rectangle b, String tip) { bounds = b; tooltip = tip; }
-    }
+    // ---- Tab-header tile rendering: the shared {@link TileTabFolder} owns
+    //      the renderer, spacer images, collapse, hover tooltips and tile
+    //      painting; this pane only feeds it tile content (see fftTilesFor).
+    private TileTabFolder toolbarTabs;
 
     // Widget references for preset apply/refresh — captured at build time.
     private Combo              fftLengthCombo;
@@ -322,17 +306,32 @@ public final class FftPane {
         trGl.marginWidth = 0; trGl.marginHeight = 0; trGl.horizontalSpacing = 4;
         toolbarRow.setLayout(trGl);
 
-        CTabFolder tabs = new CTabFolder(toolbarRow, SWT.NONE);
-        tabs.setSimple(false);
-        final GridData tabsGd = new GridData(SWT.FILL, SWT.FILL, true, true);
-        // SWT.DEFAULT lets the CTabFolder size itself to fit the
-        // active tab's content (header + body).  We used to pin this
-        // to a hard-coded 168 px but the value drifted out of sync
-        // as the Settings / THD layouts evolved, leaving a 24-px
-        // gap at the bottom.
-        tabs.setLayoutData(tabsGd);
+        TileTabFolder tabs = new TileTabFolder(toolbarRow, SWT.NONE);
+        // SWT.DEFAULT lets the folder size itself to fit the active tab's
+        // content (header + body).  We used to pin this to a hard-coded
+        // 168 px but the value drifted out of sync as the Settings / THD
+        // layouts evolved, leaving a 24-px gap at the bottom.
+        tabs.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         this.toolbarTabs = tabs;
-        tabs.setRenderer(new FftTabHeaderRenderer(tabs));
+        // The folder paints a live "tile" summary under the Settings / THD
+        // tab labels; feed it this pane's tile content + fallback tooltips.
+        tabs.setCustomTabs(NUM_CUSTOM_TABS, new TileTabFolder.TileSource() {
+            @Override
+            public List<TileTabFolder.Tile> tilesFor(int tabIndex) {
+                return fftTabTiles(tabIndex);
+            }
+            @Override
+            public String tabTooltip(int tabIndex) {
+                String key = tabLabelTooltipKey(tabIndex);
+                return key != null ? I18n.t(key) : null;
+            }
+        });
+        // Collapsing the tab body (strip double-click / Enter, or the
+        // screenshot path) frees vertical space — re-flow the pane so the
+        // chart above reclaims it.
+        tabs.setCollapseRelayout(() -> {
+            if (!group.isDisposed()) group.layout(true, true);
+        });
         buildSettingsTab(tabs);
         buildThdTab(tabs);
         buildPresetsTab(tabs);
@@ -343,108 +342,9 @@ public final class FftPane {
             buildLoadFromTab(tabs);
         }
         if (tabs.getItemCount() > 0) tabs.setSelection(0);
-        // Capture the i18n tab text for the 2 custom-rendered tabs, then
-        // clear the CTabItem text so CTabFolder's default centred-label
-        // rendering doesn't fight the renderer's top-aligned text.
-        for (int i = 0; i < NUM_CUSTOM_TABS && i < tabs.getItemCount(); i++) {
-            tabLabels[i] = tabs.getItem(i).getText();
-            tabs.getItem(i).setText("");
-        }
-        // Force the tab strip taller so the label + tile row both fit.
-        tabs.setTabHeight(46);
-        for (int i = 0; i < NUM_CUSTOM_TABS && i < tabs.getItemCount(); i++) {
-            updateTabSpacerImage(i);
-        }
-
-        // ── Tab-strip collapse: double-click on the tab strip (or
-        // press Enter when the folder has focus) hides the tab body
-        // so just the tab-header row stays visible.  Lets the user
-        // reclaim vertical space for the chart.  Implementation
-        // matches the oscilloscope pane: CTabFolder.computeSize(hHint)
-        // treats hHint as the CLIENT-area height and adds the strip
-        // trim on top, so heightHint=0 yields exactly "strip only" —
-        // anything larger leaves a sliver of empty body underneath.
-        // Capture the layout-data so the public
-        // {@link #setTabsCollapsed(boolean)} method can apply the
-        // collapse / expand recipe — used by the screenshot path to
-        // hide the tab body before rendering.
-        this.toolbarTabsGd      = tabsGd;
-        final boolean[] collapsed = { false };
-        Runnable toggleCollapse = () -> {
-            collapsed[0] = !collapsed[0];
-            setTabsCollapsed(collapsed[0]);
-        };
-        tabs.addListener(SWT.MouseDoubleClick, e -> {
-            // Use clientArea.y as the divider: above that line is the
-            // tab-strip, below is the body.  Only the strip triggers
-            // toggle so body widgets keep their own double-click
-            // semantics.
-            Rectangle ca = tabs.getClientArea();
-            if (e.y < ca.y) toggleCollapse.run();
-        });
-        tabs.addListener(SWT.KeyDown, e -> {
-            if (e.keyCode == SWT.CR || e.keyCode == SWT.KEYPAD_CR) {
-                toggleCollapse.run();
-                e.doit = false;
-            }
-        });
-        // Paint listener: draw tiles on top of CTabFolder's default tab
-        // strip + rebuild tabRegions for the hover-tooltip lookup below.
-        tabs.addPaintListener(e -> {
-            tabRegions.clear();
-            for (int i = 0; i < NUM_CUSTOM_TABS && i < tabs.getItemCount(); i++) {
-                if (!tabs.getItem(i).isDisposed()) {
-                    drawTabTiles(e.gc, tabs.getItem(i).getBounds(), i);
-                }
-            }
-        });
-        // Dynamic per-region hover tooltip — region tips resolved at
-        // paint time so they reflect current state without per-state
-        // lookup at hover.  Only changes when the hovered tab/region
-        // actually changes so the OS hover delay isn't reset on every
-        // mouse-move pixel.
-        final String[] currentTip = { null };
-        final int[]    currentIdx = { -1 };
-        tabs.addMouseMoveListener(e -> {
-            String tip = null;
-            for (TabRegion r : tabRegions) {
-                if (r.bounds.contains(e.x, e.y)) { tip = r.tooltip; break; }
-            }
-            int hoverIdx = -1;
-            for (int i = 0; i < tabs.getItemCount(); i++) {
-                if (!tabs.getItem(i).isDisposed()
-                        && tabs.getItem(i).getBounds().contains(e.x, e.y)) {
-                    hoverIdx = i;
-                    break;
-                }
-            }
-            if (tip == null && hoverIdx >= 0) {
-                String key = tabLabelTooltipKey(hoverIdx);
-                if (key != null) tip = I18n.t(key);
-            }
-            if (hoverIdx != currentIdx[0] || !Objects.equals(currentTip[0], tip)) {
-                currentTip[0] = tip;
-                currentIdx[0] = hoverIdx;
-                if (hoverIdx >= 0) {
-                    tabs.getItem(hoverIdx).setToolTipText(tip);
-                }
-            }
-        });
-        tabs.addListener(SWT.MouseExit, e -> {
-            if (currentIdx[0] >= 0 && currentIdx[0] < tabs.getItemCount()
-                    && !tabs.getItem(currentIdx[0]).isDisposed()) {
-                tabs.getItem(currentIdx[0]).setToolTipText(null);
-            }
-            currentTip[0] = null;
-            currentIdx[0] = -1;
-        });
-        // Dispose tile-resource bundle when the tab folder goes away.
-        tabs.addDisposeListener(e -> {
-            for (Image img : tabSpacerImages) if (img != null && !img.isDisposed()) img.dispose();
-            if (tabTileBg   != null) tabTileBg.dispose();
-            if (tabTileFg   != null) tabTileFg.dispose();
-            if (tabTileFont != null) tabTileFont.dispose();
-        });
+        // Capture labels, size the strip / spacer images and wire the
+        // paint, hover and collapse listeners now that the tabs exist.
+        tabs.init();
 
         recordButton = new Button(toolbarRow, SWT.TOGGLE);
         recordButton.setImage(recordDim);
@@ -551,64 +451,19 @@ public final class FftPane {
         }
     }
 
-    /** Paints the per-tab tile row into {@code gc}, translated to the
-     *  group's coordinate space.  Used by the screenshot path: SWT's
-     *  {@code Control.print()} captures the CTabFolder's native chrome
-     *  but doesn't fire the user-registered PaintListener that draws
-     *  the tiles, so the screenshot has to overlay them manually. */
+    /** Overlays the tab tile rows into {@code gc} for the screenshot path —
+     *  SWT's {@code Control.print()} captures the folder's native chrome but
+     *  not the paint listener that draws the tiles, so the snapshot overlays
+     *  them by hand.  Delegates to the shared {@link TileTabFolder}. */
     public void paintTabTilesInto(GC gc) {
-        if (toolbarTabs == null || toolbarTabs.isDisposed()) return;
-        int dx = 0, dy = 0;
-        Control c = toolbarTabs;
-        while (c != null && c != group) {
-            dx += c.getLocation().x;
-            dy += c.getLocation().y;
-            c = c.getParent();
-        }
-        for (int i = 0; i < NUM_CUSTOM_TABS && i < toolbarTabs.getItemCount(); i++) {
-            CTabItem item = toolbarTabs.getItem(i);
-            if (item.isDisposed()) continue;
-            Rectangle b = item.getBounds();
-            Rectangle abs = new Rectangle(b.x + dx, b.y + dy, b.width, b.height);
-            drawTabTiles(gc, abs, i);
-        }
+        if (toolbarTabs != null) toolbarTabs.paintTilesInto(gc, group);
     }
 
-    /** Collapses or expands the toolbar CTabFolder's tab body so the
-     *  screenshot path can hide the settings tabs before printing.
-     *  Same recipe used by the double-click / Enter-key handlers in
-     *  the toolbar — see the inline {@code toggleCollapse} runnable. */
+    /** Collapses or expands the toolbar tab body so the screenshot path can
+     *  hide the settings tabs before printing.  Delegates to the shared
+     *  {@link TileTabFolder}. */
     public void setTabsCollapsed(boolean collapsed) {
-        if (toolbarTabsGd == null || group == null || group.isDisposed()) return;
-        if (collapsed) {
-            // heightHint=0 — same recipe the scope uses.
-            // CTabFolder.computeSize(0) returns "client area = 0",
-            // which the widget translates into strip + chrome only.
-            // The body composite is positioned below the strip and
-            // gets clipped to the widget bounds, so no body content
-            // shows.  Anything > 0 starts allocating client area and
-            // the first body row leaks back into view.
-            toolbarTabsGd.heightHint              = 0;
-            toolbarTabsGd.verticalAlignment       = SWT.BEGINNING;
-            toolbarTabsGd.grabExcessVerticalSpace = false;
-        } else {
-            // SWT.DEFAULT lets the CTabFolder size itself to fit the
-            // current tab content.  Hard-coding heightHint=168 left
-            // a 24-px gap at the bottom once content was simplified
-            // (Stop-after row collapsed to a single RowLayout
-            // composite), since the prefs were sized for the larger
-            // earlier layout.
-            toolbarTabsGd.heightHint              = SWT.DEFAULT;
-            toolbarTabsGd.verticalAlignment       = SWT.FILL;
-            toolbarTabsGd.grabExcessVerticalSpace = true;
-        }
-        // Keep the Record button visible while the tabs are collapsed —
-        // it's the only interactive control on the toolbar row and the
-        // user expects it to stay accessible.  The 48-px button still
-        // sets the row height, leaving a sliver of empty space below
-        // the 24-px tab strip when collapsed; accepted as the lesser
-        // evil compared to the button disappearing.
-        group.layout(true, true);
+        if (toolbarTabs != null) toolbarTabs.setCollapsed(collapsed);
     }
 
     /** Invoked by the FFT controller on the UI thread when the
@@ -863,7 +718,7 @@ public final class FftPane {
         // Pane-local effect — refresh the FFT-settings tab tile.  The view's own
         // resetStatistics is driven by the view subscribing to the same pref.
         Bindings.onChange(toolbarTabs, prefs.fftLengthProperty(),
-                v -> refreshTabHeader(TAB_FFT_SETTINGS));
+                v -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
         // Generator's bin snap is anchored to fftLength via sampleRate /
         // fftLength — broadcast the change so the generator pane can re-snap its
         // running tone onto a fresh bin.  The new length is already in
@@ -876,7 +731,7 @@ public final class FftPane {
         for (WindowType w : WindowType.values()) windowCombo.add(I18n.t(w.labelKey()));
         windowCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         Bindings.combo(windowCombo, prefs.fftWindowProperty(), WindowType.values());
-        Bindings.onChange(toolbarTabs, prefs.fftWindowProperty(), w -> refreshTabHeader(TAB_FFT_SETTINGS));
+        Bindings.onChange(toolbarTabs, prefs.fftWindowProperty(), w -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
 
         addLabel(g, I18n.t("fft.settings.overlap"));
         overlapCombo = new Combo(g, SWT.READ_ONLY);
@@ -886,7 +741,7 @@ public final class FftPane {
         // Overlap only changes the hop, not the spectrum/accumulator — refresh
         // the tab tile but DON'T reset the average; the worker adapts next tick.
         Bindings.onChange(toolbarTabs, prefs.fftOverlapProperty(),
-                v -> refreshTabHeader(TAB_FFT_SETTINGS));
+                v -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
 
         addLabel(g, I18n.t("fft.settings.averages"));
         // Cycling stepper: wheel / arrow keys snap to the next /
@@ -911,7 +766,7 @@ public final class FftPane {
         // reset here: the worker resets the average only on a ring↔∞ switch or a
         // smaller ring (a larger ring keeps the depth).
         Bindings.onChange(toolbarTabs, prefs.fftAveragesProperty(), v -> {
-            refreshTabHeader(TAB_FFT_SETTINGS);
+            toolbarTabs.refreshTab(TAB_FFT_SETTINGS);
             refreshStopAfterEnable();
         });
 
@@ -1008,7 +863,7 @@ public final class FftPane {
         // incoherent changes its semantics) lives in the view, which subscribes
         // to this same pref.
         Bindings.onChange(toolbarTabs, prefs.fftCoherentAveragingProperty(),
-                v -> refreshTabHeader(TAB_FFT_SETTINGS));
+                v -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
 
         logFreqCheck = new Button(g, SWT.CHECK);
         logFreqCheck.setText(I18n.t("fft.settings.logFreq"));
@@ -1105,10 +960,10 @@ public final class FftPane {
         // the view, which subscribes to both these prefs.
         Bindings.onChange(toolbarTabs, prefs.fftDistMinEnabledProperty(), v -> {
             distMinField.setEnabled(v);
-            refreshTabHeader(TAB_THD_SETTINGS);
+            toolbarTabs.refreshTab(TAB_THD_SETTINGS);
         });
         Bindings.onChange(toolbarTabs, prefs.fftDistMinHzProperty(),
-                v -> refreshTabHeader(TAB_THD_SETTINGS));
+                v -> toolbarTabs.refreshTab(TAB_THD_SETTINGS));
 
         // Row: distortion low-pass.
         distMaxEnable = new Button(g, SWT.CHECK);
@@ -1131,10 +986,10 @@ public final class FftPane {
         // the redraw lives in the view, subscribed to both prefs.
         Bindings.onChange(toolbarTabs, prefs.fftDistMaxEnabledProperty(), v -> {
             distMaxField.setEnabled(v);
-            refreshTabHeader(TAB_THD_SETTINGS);
+            toolbarTabs.refreshTab(TAB_THD_SETTINGS);
         });
         Bindings.onChange(toolbarTabs, prefs.fftDistMaxHzProperty(),
-                v -> refreshTabHeader(TAB_THD_SETTINGS));
+                v -> toolbarTabs.refreshTab(TAB_THD_SETTINGS));
 
         // Row: Manual fundamental — moved one row UP so it sits above
         // the harmonic-count row.  Checkbox text replaces the
@@ -1162,7 +1017,7 @@ public final class FftPane {
         // 'manF' THD tile (shown only when enabled).  No view redraw/reset.
         Bindings.onChange(toolbarTabs, prefs.fftManualFundEnabledProperty(), v -> {
             manualFundField.setEnabled(v);
-            refreshTabHeader(TAB_THD_SETTINGS);
+            toolbarTabs.refreshTab(TAB_THD_SETTINGS);
         });
 
         addLabel(g, I18n.t("fft.thd.maxThd"));
@@ -1178,7 +1033,7 @@ public final class FftPane {
         Bindings.stepFieldInt(thdMaxHarmField, prefs.fftThdMaxHarmonicProperty());
         // Drives the 'H{n}' THD tile.  No view redraw/reset.
         Bindings.onChange(toolbarTabs, prefs.fftThdMaxHarmonicProperty(),
-                v -> refreshTabHeader(TAB_THD_SETTINGS));
+                v -> toolbarTabs.refreshTab(TAB_THD_SETTINGS));
 
         addLabel(g, I18n.t("fft.thd.maxCalc"));
         // Minimum 9 — the THD overlay table is laid out for the H2..H9
@@ -1376,8 +1231,8 @@ public final class FftPane {
         prefs.save();
         // Push values into the live widgets so the UI reflects the preset.
         syncWidgetsFromPrefs();
-        refreshTabHeader(TAB_FFT_SETTINGS);
-        refreshTabHeader(TAB_THD_SETTINGS);
+        toolbarTabs.refreshTab(TAB_FFT_SETTINGS);
+        toolbarTabs.refreshTab(TAB_THD_SETTINGS);
         view.redraw();
     }
 
@@ -1509,9 +1364,25 @@ public final class FftPane {
                 showError(I18n.t("fft.save.error.title"), I18n.t("fft.save.noData"));
                 return;
             }
+            // Capture the current table mode + (for IMD) its two tone
+            // frequencies so re-opening the file restores the same view.
+            boolean imd = view.isTableModeImd();
+            double tone1 = 0.0;
+            double tone2 = 0.0;
+            if (imd) {
+                ImdResult lastImd = view.getLastImd();
+                if (lastImd != null) {
+                    tone1 = lastImd.f1Hz;
+                    tone2 = lastImd.f2Hz;
+                } else {
+                    Preferences gp = Preferences.instance();
+                    tone1 = gp.getGenDualToneFreq1Hz();
+                    tone2 = gp.getGenDualToneFreq2Hz();
+                }
+            }
             FileDialog d = new FileDialog(group.getShell(), SWT.SAVE);
-            d.setFilterExtensions(new String[]{"*.csv"});
-            d.setFilterNames(new String[]{"CSV (frequency_hz;magnitude_dBV;phase_deg)"});
+            d.setFilterExtensions(new String[]{"*.fft"});
+            d.setFilterNames(new String[]{"Phonalyser FFT spectrum (*.fft)"});
             d.setOverwrite(true);
             // Seed the dialog with the previously-used file, if any —
             // lets the user write to the same target with one click +
@@ -1526,6 +1397,7 @@ public final class FftPane {
             }
             String chosen = d.open();
             if (chosen == null) return;
+            if (!chosen.toLowerCase().endsWith(".fft")) chosen = chosen + ".fft";
             pathField.setText(chosen);
             pathField.setToolTipText(chosen);
             prefs.setFftSavePath(chosen);
@@ -1533,7 +1405,7 @@ public final class FftPane {
             prefs.setFftSaveFolder(parent == null ? null : parent.toString());
             prefs.save();
             try {
-                writeSpectrumCsv(Paths.get(chosen), r);
+                writeSpectrumFft(Paths.get(chosen), r, imd, tone1, tone2);
             } catch (IOException ex) {
                 showError(I18n.t("fft.save.error.title"),
                         I18n.t("fft.save.error.message", chosen, ex.getMessage()));
@@ -1561,8 +1433,9 @@ public final class FftPane {
         browse.setToolTipText(I18n.t("fft.load.browse.tooltip"));
         browse.addListener(SWT.Selection, e -> {
             FileDialog d = new FileDialog(group.getShell(), SWT.OPEN);
-            d.setFilterExtensions(new String[]{"*.csv"});
-            d.setFilterNames(new String[]{"CSV (frequency_hz;magnitude_dBV;phase_deg)"});
+            d.setFilterExtensions(new String[]{"*.fft", "*.csv", "*.*"});
+            d.setFilterNames(new String[]{"Phonalyser FFT spectrum (*.fft)",
+                    "CSV (legacy)", "All files (*.*)"});
             if (prefs.getFftLoadFolder() != null) d.setFilterPath(prefs.getFftLoadFolder());
             String chosen = d.open();
             if (chosen != null) {
@@ -1572,22 +1445,34 @@ public final class FftPane {
                 prefs.setFftLoadFolder(Paths.get(chosen).getParent() == null ? null
                         : Paths.get(chosen).getParent().toString());
                 prefs.save();
-                loadSpectrumCsv(chosen);
+                loadSpectrumFft(chosen);
             }
         });
     }
 
-    /** Loads a spectrum CSV (as written by {@link #writeSpectrumCsv} —
-     *  {@code frequency_hz;magnitude_dBV;phase_deg}), reconstructs an
-     *  {@link FftResult}, recomputes its fundamental / harmonic /
-     *  THD / SNR metrics from the loaded bins, stops live recording, and
-     *  shows it as a static trace. */
-    private void loadSpectrumCsv(String path) {
+    /** Loads a spectrum {@code .fft} file (as written by
+     *  {@link #writeSpectrumFft} — {@code frequency_hz;magnitude_dBV;phase_deg}
+     *  rows under {@code # mode=} / {@code # tone*_hz=} header comments),
+     *  reconstructs an {@link FftResult}, recomputes its fundamental /
+     *  harmonic / THD / SNR metrics (and the IMD products when the file was
+     *  captured in IMD mode) from the loaded bins, stops live recording, and
+     *  shows it as a static trace in the matching THD / IMD table mode. */
+    private void loadSpectrumFft(String path) {
         List<double[]> rows = new ArrayList<>();
+        boolean modeImd = false;
+        double tone1Hz = Double.NaN;
+        double tone2Hz = Double.NaN;
         try {
             for (String line : Files.readAllLines(Paths.get(path), StandardCharsets.UTF_8)) {
                 String s = line.trim();
                 if (s.isEmpty()) continue;
+                // Capture-mode / tone header comments (see writeSpectrumFft).
+                if (s.startsWith("# mode=")) {
+                    modeImd = s.substring(s.indexOf('=') + 1).trim().equalsIgnoreCase("IMD");
+                    continue;
+                }
+                if (s.startsWith("# tone1_hz=")) { tone1Hz = parseHeaderHz(s); continue; }
+                if (s.startsWith("# tone2_hz=")) { tone2Hz = parseHeaderHz(s); continue; }
                 char c0 = s.charAt(0);
                 if (c0 != '-' && c0 != '+' && c0 != '.' && !Character.isDigit(c0)) continue; // header / comment
                 String[] p = s.split("[;,]");
@@ -1646,20 +1531,53 @@ public final class FftPane {
             r.harmonicBins[h] = (hb >= 1 && hb <= halfSize) ? hb : -1;
         }
         analyzer.recomputeStats(r);
-        // The CSV already stores dBV, so anchor the dBV scale with a zero
+        // The file already stores dBV, so anchor the dBV scale with a zero
         // offset (fundRefDbV − fundamentalDbFs = 0 ⇒ shown dBV == stored).
         r.fundRefDbV = r.fundamentalDbFs;
+
+        // Recompute the IMD products when the file was captured in IMD mode and
+        // carries its two tone frequencies: pin the refined tone positions
+        // (F1 = lower) so the result reports the saved frequencies, then measure
+        // the products from the loaded spectrum.  A non-null result switches the
+        // view to the IMD table; otherwise it stays in single-tone THD mode.
+        ImdResult imd = null;
+        if (modeImd && Double.isFinite(tone1Hz) && Double.isFinite(tone2Hz)
+                && tone1Hz > 0 && tone2Hz > 0) {
+            r.fundamentalHzRefined  = Math.min(tone1Hz, tone2Hz);
+            r.fundamental2HzRefined = Math.max(tone1Hz, tone2Hz);
+            imd = ImdAnalyzer.analyze(r, tone1Hz, tone2Hz);
+        }
 
         // Stop live capture so the loaded spectrum isn't overwritten.
         if (recordButton != null && !recordButton.isDisposed() && recordButton.getSelection()) {
             recordOff();
         }
-        view.displayLoadedResult(r);
+        view.displayLoadedResult(r, imd);
         view.setSourceFilePath(path);
     }
 
-    private void writeSpectrumCsv(Path file, FftResult r) throws IOException {
+    /** Parses the value of a {@code # key=value} spectrum-header comment as a
+     *  frequency in Hz, returning {@code NaN} when absent or malformed. */
+    private double parseHeaderHz(String line) {
+        try {
+            return Double.parseDouble(line.substring(line.indexOf('=') + 1).trim());
+        } catch (NumberFormatException ex) {
+            return Double.NaN;
+        }
+    }
+
+    private void writeSpectrumFft(Path file, FftResult r, boolean imd,
+                                 double tone1Hz, double tone2Hz) throws IOException {
         try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8))) {
+            // Header comments (skipped by the loader's value parser): record the
+            // capture mode so re-opening restores the THD or IMD table, plus the
+            // two tone frequencies IMD needs to re-measure its products.
+            pw.println("# Phonalyser FFT spectrum");
+            pw.println("# mode=" + (imd ? "IMD" : "THD"));
+            if (imd) {
+                pw.printf("# tone1_hz=%.6f%n", tone1Hz);
+                pw.printf("# tone2_hz=%.6f%n", tone2Hz);
+            }
             pw.println("frequency_hz;magnitude_dBV;phase_deg");
             double dbvOffset = Double.isNaN(r.fundRefDbV) ? 0.0 : (r.fundRefDbV - r.fundamentalDbFs);
             for (int k = 0; k < r.amplitudeDbFs.length; k++) {
@@ -1876,211 +1794,56 @@ public final class FftPane {
     }
 
     // =========================================================================
-    // Tab-header tile rendering (state-aware tiles under each custom tab)
+    // Tab-header tiles — the shared TileTabFolder measures / paints; this
+    // pane only supplies each custom tab's tile content + fallback tooltip.
     // =========================================================================
 
-    /** Custom renderer: widens the FFT-settings / THD-settings tabs so
-     *  their tile rows fit, and paints the label top-aligned so the tile
-     *  row can sit cleanly underneath.  All other tabs (Presets, Utility,
-     *  Save, Load) render with the default behaviour. */
-    private final class FftTabHeaderRenderer extends CTabFolderRenderer {
-        protected FftTabHeaderRenderer(CTabFolder parent) { super(parent); }
-
-        @Override
-        protected Point computeSize(int part, int state, GC gc, int wHint, int hHint) {
-            Point p = super.computeSize(part, state, gc, wHint, hHint);
-            if (part >= 0 && part < NUM_CUSTOM_TABS) {
-                ensureTabResources();
-                int required = computeRequiredTabWidth(gc, part);
-                p.x = Math.max(p.x, required);
-            }
-            return p;
-        }
-
-        @Override
-        protected void draw(int part, int state, Rectangle bounds, GC gc) {
-            super.draw(part, state, bounds, gc);
-            if (part < 0 || part >= NUM_CUSTOM_TABS) return;
-            String label = tabLabels[part];
-            if (label == null || label.isEmpty()) return;
-            boolean selected = (state & SWT.SELECTED) != 0;
-            int leftInset = selected ? 11 : 15;
-            Color fg = selected ? toolbarTabs.getSelectionForeground() : toolbarTabs.getForeground();
-            if (fg == null) fg = toolbarTabs.getDisplay().getSystemColor(SWT.COLOR_WIDGET_FOREGROUND);
-            gc.setForeground(fg);
-            Font prev = gc.getFont();
-            gc.setFont(toolbarTabs.getFont());
-            gc.drawText(label, bounds.x + leftInset, bounds.y + 3, true);
-            gc.setFont(prev);
-        }
-    }
-
-    /** Forces the CTabFolder to recompute a custom tab's width and repaint
-     *  so a related pref toggle visibly resizes the tab in real time. */
-    private void refreshTabHeader(int tabIndex) {
-        if (toolbarTabs == null || toolbarTabs.isDisposed()) return;
-        if (tabIndex < 0 || tabIndex >= NUM_CUSTOM_TABS) return;
-        updateTabSpacerImage(tabIndex);
-        toolbarTabs.layout(true, true);
-        toolbarTabs.redraw();
-    }
-
-    /** Recreates the invisible spacer image on a custom CTabItem so the
-     *  tab is always wide enough to hold the current state's tile row. */
-    private void updateTabSpacerImage(int tabIndex) {
-        if (toolbarTabs == null || toolbarTabs.isDisposed()) return;
-        if (tabIndex < 0 || tabIndex >= NUM_CUSTOM_TABS) return;
-        if (toolbarTabs.getItemCount() <= tabIndex) return;
-        Display d = toolbarTabs.getDisplay();
-        ensureTabResources();
-        int width;
-        GC gc = new GC(toolbarTabs);
-        try {
-            width = Math.max(50, computeRequiredTabWidth(gc, tabIndex));
-        } finally { gc.dispose(); }
-        Image existing = tabSpacerImages[tabIndex];
-        if (existing != null && !existing.isDisposed()) {
-            Rectangle b = existing.getBounds();
-            if (b.width == width && b.height == 1) return;
-            existing.dispose();
-        }
-        PaletteData palette = new PaletteData(0xFF0000, 0x00FF00, 0x0000FF);
-        ImageData id = new ImageData(width, 1, 24, palette);
-        id.alphaData = new byte[width];      // fully transparent
-        Image img = new Image(d, id);
-        tabSpacerImages[tabIndex] = img;
-        toolbarTabs.getItem(tabIndex).setImage(img);
-    }
-
-    /** Minimum tab width = max(label, tile row) + extra padding (a healthy
-     *  20 px so a long tile chain never under-allocates and clips the
-     *  rightmost tile). */
-    private int computeRequiredTabWidth(GC gc, int tabIndex) {
-        if (tabIndex < 0 || tabIndex >= NUM_CUSTOM_TABS) return 0;
-        Font prev = gc.getFont();
-        gc.setFont(tabTileFont);
-        int tilesW = computeTileRowWidth(gc, tabIndex);
-        gc.setFont(toolbarTabs.getFont());
-        String label = tabLabels[tabIndex];
-        int labelW = (label != null && !label.isEmpty()) ? gc.textExtent(label).x + 14 : 0;
-        gc.setFont(prev);
-        return Math.max(tilesW, labelW) + 28;
-    }
-
-    private int computeTileRowWidth(GC gc, int tabIndex) {
+    /** Builds the live tile row for a custom tab from the current
+     *  preferences, in visual order (left to right).  Each tile carries the
+     *  short chip text and its state-aware hover tooltip; the
+     *  {@link TileTabFolder} measures and paints them. */
+    private List<TileTabFolder.Tile> fftTabTiles(int tabIndex) {
         Preferences prefs = Preferences.instance();
-        final int hPadding = 4;
-        final int gap      = 3;
-        int total = 0;
-        for (String text : tileTexts(prefs, tabIndex)) {
-            total += gc.textExtent(text).x + 2 * hPadding + gap;
-        }
-        return Math.max(0, total - gap);
-    }
-
-    /** Returns the per-tile text strings for the given tab, derived from
-     *  the current prefs.  Order = visual order, left to right. */
-    private List<String> tileTexts(Preferences prefs, int tabIndex) {
-        List<String> out = new ArrayList<>();
+        List<TileTabFolder.Tile> tiles = new ArrayList<>();
         if (tabIndex == TAB_FFT_SETTINGS) {
-            out.add(FftPaneFormat.shortFftLength(prefs.getFftLength()));
-            out.add(prefs.getFftWindow().name());
-            out.add(prefs.getFftOverlap().label);
-            out.add(FftPaneFormat.formatAverages(prefs.getFftAverages()) + "×");
-            out.add(prefs.isFftCoherentAveraging() ? "coh" : "inc");
-        } else if (tabIndex == TAB_THD_SETTINGS) {
-            out.add(FftPaneFormat.shortDistRange(prefs));
-            out.add("H" + prefs.getFftThdMaxHarmonic());
-            if (prefs.isFftManualFundEnabled()) {
-                out.add("manF");
-            }
-        }
-        return out;
-    }
-
-    /** Paints a row of state-aware tiles under each custom tab's label. */
-    private void drawTabTiles(GC gc, Rectangle bounds, int tabIndex) {
-        if (bounds == null || bounds.width <= 0 || bounds.height <= 0) return;
-        if (tabIndex < 0 || tabIndex >= NUM_CUSTOM_TABS) return;
-        Preferences prefs = Preferences.instance();
-        ensureTabResources();
-        Font prev = gc.getFont();
-        gc.setFont(tabTileFont);
-        gc.setAntialias(SWT.ON);
-        gc.setTextAntialias(SWT.ON);
-        final int tileH    = 22;
-        final int cornerR  = 4;
-        final int hPadding = 4;
-        final int gap      = 3;
-        boolean selected = (toolbarTabs.getSelectionIndex() == tabIndex);
-        int leftInset    = selected ? 11 : 15;
-        int y = bounds.y + bounds.height - tileH - 2;
-        int x = bounds.x + leftInset;
-
-        if (tabIndex == TAB_FFT_SETTINGS) {
-            int w1 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                    FftPaneFormat.shortFftLength(prefs.getFftLength()));
-            addTabRegion(x, y, w1, tileH, I18n.t("fft.tile.length", prefs.getFftLength()));
-            x += w1 + gap;
-            int w2 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                    prefs.getFftWindow().name());
-            addTabRegion(x, y, w2, tileH, I18n.t("fft.tile.window", I18n.t(prefs.getFftWindow().labelKey())));
-            x += w2 + gap;
-            int w3 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                    prefs.getFftOverlap().label);
-            addTabRegion(x, y, w3, tileH, I18n.t("fft.tile.overlap", prefs.getFftOverlap().label));
-            x += w3 + gap;
-            int w4 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                    FftPaneFormat.formatAverages(prefs.getFftAverages()) + "×");
-            addTabRegion(x, y, w4, tileH,
-                    I18n.t("fft.tile.averages", FftPaneFormat.formatAverages(prefs.getFftAverages())));
-            x += w4 + gap;
-            int w5 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                    prefs.isFftCoherentAveraging() ? "coh" : "inc");
-            addTabRegion(x, y, w5, tileH, I18n.t(prefs.isFftCoherentAveraging()
-                    ? "fft.tile.coh" : "fft.tile.inc"));
+            tiles.add(TileTabFolder.Tile.text(
+                    FftPaneFormat.shortFftLength(prefs.getFftLength()),
+                    I18n.t("fft.tile.length", prefs.getFftLength())));
+            tiles.add(TileTabFolder.Tile.text(
+                    prefs.getFftWindow().name(),
+                    I18n.t("fft.tile.window", I18n.t(prefs.getFftWindow().labelKey()))));
+            tiles.add(TileTabFolder.Tile.text(
+                    prefs.getFftOverlap().label,
+                    I18n.t("fft.tile.overlap", prefs.getFftOverlap().label)));
+            tiles.add(TileTabFolder.Tile.text(
+                    FftPaneFormat.formatAverages(prefs.getFftAverages()) + "×",
+                    I18n.t("fft.tile.averages", FftPaneFormat.formatAverages(prefs.getFftAverages()))));
+            tiles.add(TileTabFolder.Tile.text(
+                    prefs.isFftCoherentAveraging() ? "coh" : "inc",
+                    I18n.t(prefs.isFftCoherentAveraging() ? "fft.tile.coh" : "fft.tile.inc")));
         } else if (tabIndex == TAB_THD_SETTINGS) {
             String dr = FftPaneFormat.shortDistRange(prefs);
-            int w1 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR, dr);
-            addTabRegion(x, y, w1, tileH, I18n.t("fft.tile.distRange", dr));
-            x += w1 + gap;
-            int w2 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                    "H" + prefs.getFftThdMaxHarmonic());
-            addTabRegion(x, y, w2, tileH, I18n.t("fft.tile.thdMaxHarmonic", prefs.getFftThdMaxHarmonic()));
-            x += w2 + gap;
+            tiles.add(TileTabFolder.Tile.text(dr, I18n.t("fft.tile.distRange", dr)));
+            tiles.add(TileTabFolder.Tile.text(
+                    "H" + prefs.getFftThdMaxHarmonic(),
+                    I18n.t("fft.tile.thdMaxHarmonic", prefs.getFftThdMaxHarmonic())));
             if (prefs.isFftManualFundEnabled()) {
-                int w3 = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR, "manF");
-                addTabRegion(x, y, w3, tileH, I18n.t("fft.tile.manualFund"));
+                tiles.add(TileTabFolder.Tile.text("manF", I18n.t("fft.tile.manualFund")));
+            }
+        } else if (tabIndex == TAB_CALIBRATION) {
+            // "loaded" / "N loaded" when at least one loaded .frc is active —
+            // the store only holds active+loaded entries (see
+            // syncFftStoreFromRows), mirroring the FreqResp pane's tile.
+            int n = FftCalibrationStore.instance().getEntries().size();
+            if (n == 1) {
+                String s = I18n.t("calibration.tile.loaded");
+                tiles.add(TileTabFolder.Tile.text(s, s));
+            } else if (n > 1) {
+                String s = I18n.t("calibration.tile.loadedN", n);
+                tiles.add(TileTabFolder.Tile.text(s, s));
             }
         }
-        gc.setFont(prev);
-    }
-
-    private int drawTabTextTile(GC gc, int x, int y, int h, int padding, int corner, String text) {
-        Point te = gc.textExtent(text);
-        int w = te.x + 2 * padding;
-        gc.setBackground(tabTileBg);
-        gc.fillRoundRectangle(x, y, w, h, corner, corner);
-        gc.setForeground(tabTileFg);
-        gc.drawText(text, x + padding, y + (h - te.y) / 2, true);
-        return w;
-    }
-
-    private void addTabRegion(int x, int y, int w, int h, String tooltip) {
-        if (tooltip == null || w <= 0 || h <= 0) return;
-        tabRegions.add(new TabRegion(new Rectangle(x, y, w, h), tooltip));
-    }
-
-    private void ensureTabResources() {
-        if (toolbarTabs == null) return;
-        Display d = toolbarTabs.getDisplay();
-        if (tabTileBg   == null) tabTileBg   = new Color(d, 0xE0, 0xE0, 0xE0);
-        if (tabTileFg   == null) tabTileFg   = new Color(d, 0x20, 0x20, 0x20);
-        if (tabTileFont == null) {
-            FontData[] fd = toolbarTabs.getFont().getFontData();
-            for (FontData f : fd) f.setHeight(10);
-            tabTileFont = new Font(d, fd);
-        }
+        return tiles;
     }
 
     /** Tab-level hover tooltip key — fallback when no tile is hovered. */
@@ -2353,6 +2116,8 @@ public final class FftPane {
                 store.addEntry(r.calibration, r.entry.getPath(), r.entry.withNoise().get());
             }
         }
+        // Reflect the active-loaded count in the Load-calibration tab tile.
+        if (toolbarTabs != null) toolbarTabs.refreshTab(TAB_CALIBRATION);
     }
 
     private Composite groupCell(CTabFolder folder, String title) {

@@ -537,8 +537,11 @@ public final class FftView extends AbstractFreqDomainView {
         banner.setVisible(false);
         FormData bnd = new FormData();
         bnd.top   = new FormAttachment(averagesCountLabel, 4);
-        bnd.left  = new FormAttachment(0, MARGIN_LEFT);
         bnd.right = new FormAttachment(100, -6);
+        // No left attachment: setBanner pins the width to the text (via
+        // BlinkBanner.fitFormDataWidth) so the right-anchored banner spans only
+        // the text, not the full plot — a full-width transparent banner covers
+        // (and shows its tooltip over) the THD/N+D table and dB axis on the left.
         banner.setLayoutData(bnd);
 
         startFillPercentTimer();
@@ -890,16 +893,29 @@ public final class FftView extends AbstractFreqDomainView {
         }
     }
 
-    /** Shows a static spectrum loaded from CSV instead of live data.  The
-     *  caller must have already stopped recording (so the worker won't
-     *  overwrite it).  Renders as a single-tone result — the THD / harmonic
-     *  table reflects the loaded spectrum (recomputed by the caller). */
+    /** Shows a static spectrum loaded from file instead of live data, in
+     *  single-tone THD mode.  The caller must have already stopped recording
+     *  (so the worker won't overwrite it). */
     public void displayLoadedResult(FftResult r) {
+        displayLoadedResult(r, null);
+    }
+
+    /** Shows a static loaded spectrum.  When {@code imd} is non-null the view
+     *  switches to IMD (dual-tone) table mode and renders that result;
+     *  otherwise it shows the single-tone THD / harmonic table.  The THD /
+     *  IMD metrics themselves are recomputed by the caller from the loaded
+     *  spectrum. */
+    public void displayLoadedResult(FftResult r, ImdResult imd) {
         lastResult = r;
-        lastImd = null;
-        tableModeIsImd = false;
+        lastImd = imd;
+        tableModeIsImd = (imd != null);
         syncDataButtons();
         if (!isDisposed()) { redraw(); update(); }
+    }
+
+    /** True when the table is currently in IMD (dual-tone) mode. */
+    public boolean isTableModeImd() {
+        return tableModeIsImd;
     }
 
     /** Sets the "Loaded: …" blinking-banner path (a statically loaded
@@ -928,6 +944,9 @@ public final class FftView extends AbstractFreqDomainView {
         banner.setColors(color(lit), color(dim), color(ColorRole.BACKGROUND));
         bannerUntilNanos = untilNanos;
         banner.setVisible(true);
+        // Size the right-anchored banner to its text so it doesn't span the full
+        // plot (clamped to the old MARGIN_LEFT..right-6 band), then lay it out.
+        banner.fitFormDataWidth(getClientArea().width - MARGIN_LEFT - 6);
         banner.requestLayout();          // re-size to the new text height + re-position
         if (untilNanos > 0L) {
             scheduleBannerHide(untilNanos);

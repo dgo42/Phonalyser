@@ -136,7 +136,7 @@ public final class FftAnalyzerWorker {
     private int             mainsCombSampleRate;
     private Thread worker;
 
-    @SuppressWarnings("unused")
+    //@SuppressWarnings("unused")
     private long startAnalyze;
     @SuppressWarnings("unused")
     private long startSendToUi;

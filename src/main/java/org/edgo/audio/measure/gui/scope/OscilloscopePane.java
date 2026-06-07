@@ -24,16 +24,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
-import org.eclipse.swt.custom.CTabFolderRenderer;
 import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.events.ControlListener;
-import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
@@ -78,6 +75,7 @@ import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.gui.widgets.StepSelector;
+import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.extern.log4j.Log4j2;
@@ -166,22 +164,11 @@ public final class OscilloscopePane {
     private Consumer<Void>               freqRespStoppedListener;
     /** Read-only text field showing the currently loaded openSignal file path. */
     private Text                         openSignalPathField;
-    /** CTabFolder hosting the six toolbar tabs (Vertical / Horizontal / Trigger /
-     *  Utility / Save to… / Open signal…).  Field-promoted so the double-click
-     *  collapse handler can resize it. */
-    private CTabFolder                    toolbarTabs;
-    /** True when the user has double-clicked a tab strip to hide the tab
-     *  content area — the strip stays visible so tabs can still be switched. */
-    private boolean                      toolbarTabsCollapsed;
-    /** Lazy-initialized resources shared between the Left and Right tab
-     *  headers — both paint identical-style status-tile rows (channel-
-     *  active LED, V/div, AC/DC, sinc interpolation) under their tab
-     *  labels.  Colour and font are channel-agnostic, so a single set
-     *  is enough. */
-    private Color                        tabTileLedColor;
-    private Color                        tabTileBg;
-    private Color                        tabTileFg;
-    private Font                         tabTileFont;
+    /** Toolbar tab folder.  The shared {@link TileTabFolder} owns the custom
+     *  renderer, spacer images, tab-body collapse, hover tooltips and tile
+     *  painting; this pane only supplies each custom tab's tile content (see
+     *  {@link #scopeTabTiles}), fallback tooltip and extra padding. */
+    private TileTabFolder                toolbarTabs;
     /** Tab indices we paint a custom header + tile row for. */
     private static final int             TAB_LEFT       = 0;
     private static final int             TAB_RIGHT      = 1;
@@ -195,37 +182,6 @@ public final class OscilloscopePane {
      *  remaining tabs (utility / save / load) render with the default
      *  CTabFolder rendering but still get tab-level hover tooltips. */
     private static final int             NUM_CUSTOM_TABS = 4;
-    /** Label texts for the custom-painted tabs — held separately because
-     *  each matching CTabItem's own text is cleared to {@code ""} so the
-     *  default centred-text rendering is suppressed.  Our custom renderer
-     *  paints these labels top-aligned. */
-    private final String[]               tabLabels = new String[NUM_CUSTOM_TABS];
-    /** Transparent dummy images attached to the custom-painted CTabItems
-     *  purely to force CTabFolder to size each tab wide enough for its
-     *  tile row.  The CTabFolderRenderer.computeSize override is honoured
-     *  by some code paths but bypassed by others, so adding an image is
-     *  the reliable lever for tab width.  The images themselves aren't
-     *  visually shown — our custom renderer paints the label and the
-     *  paint listener draws the tile row over the same area. */
-    private final Image[]                tabSpacerImages = new Image[NUM_CUSTOM_TABS];
-    /** Painted-region map used to show region-specific tooltips on hover.
-     *  Rebuilt on every CTabFolder paint; consumed by the MouseMove
-     *  listener that sets the CTabFolder's tooltip text dynamically. */
-    private final List<TabRegion> tabRegions = new ArrayList<>();
-
-    /** A painted sub-region of a tab header (a tile) paired with its
-     *  fully-resolved hover-tooltip text.  Resolved at paint time so the
-     *  text reflects the current state (e.g. "Left channel: AC coupling"
-     *  vs "Left channel: DC coupling") and changes when the state changes
-     *  without needing a separate per-state lookup at hover time. */
-    private static final class TabRegion {
-        final org.eclipse.swt.graphics.Rectangle bounds;
-        final String tooltip;
-        TabRegion(org.eclipse.swt.graphics.Rectangle b, String tip) {
-            this.bounds = b;
-            this.tooltip = tip;
-        }
-    }
 
     /** Horizontal navigation slider sitting above the condensed strip. */
     private FlatScrollbar                navSlider;
@@ -447,15 +403,29 @@ public final class OscilloscopePane {
         // on Win32 wraps the strip to a second row when the labels don't
         // fit, doubling the toolbar height.  CTabFolder shrinks tab labels
         // and shows scroll-chevrons instead.
-        CTabFolder tabs = new CTabFolder(toolbar, SWT.NONE);
-        tabs.setSimple(false);
+        TileTabFolder tabs = new TileTabFolder(toolbar, SWT.NONE);
         tabs.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         this.toolbarTabs = tabs;
-
-        // Custom renderer: gives the channel tabs (Left/Right) extra width
-        // to fit the tile row, and top-aligned text instead of vertically
-        // centred so the tiles can sit cleanly underneath.
-        tabs.setRenderer(new ChannelTabHeaderRenderer(tabs));
+        // Feed the folder this pane's per-tab tile content, fallback tooltip
+        // and extra padding (the channel tabs are tighter than the default).
+        tabs.setCustomTabs(NUM_CUSTOM_TABS, new TileTabFolder.TileSource() {
+            @Override
+            public List<TileTabFolder.Tile> tilesFor(int tabIndex) {
+                return scopeTabTiles(tabIndex);
+            }
+            @Override
+            public String tabTooltip(int tabIndex) {
+                String key = tabLabelTooltipKey(tabIndex);
+                return key != null ? I18n.t(key) : null;
+            }
+            @Override
+            public int extraPadding(int tabIndex) {
+                return extraTabPadding(tabIndex);
+            }
+        });
+        // Collapsing the tab body keeps the Record button reachable and
+        // re-flows the scope view into the freed space.
+        tabs.setCollapseRelayout(this::onToolbarTabsCollapsed);
 
         buildLeftGroup(tabs);
         buildRightGroup(tabs);
@@ -468,33 +438,19 @@ public final class OscilloscopePane {
             buildScopeOpenSignalGroup(tabs);
         }
 
-        // Select the first tab BEFORE setting tab height — CTabFolder's
-        // preferred-size calculation includes the selected tab's body in
-        // the total, and we want that body height baked in when the first
-        // layout pass uses our taller strip height (otherwise the body
-        // gets squeezed to 0 px on the first paint until a resize).
+        // Select the first tab BEFORE TileTabFolder.init() sets the strip
+        // height — CTabFolder's preferred-size calculation includes the
+        // selected tab's body in the total, and we want that body height
+        // baked in when the first layout pass uses the taller strip height
+        // (otherwise the body gets squeezed to 0 px on the first paint).
         if (tabs.getItemCount() > 0) tabs.setSelection(0);
-        tabs.setTabHeight(46);
-        // Capture each custom tab's label and clear the CTabItem's own text
-        // so the default renderer doesn't draw it.  The custom renderer
-        // (ChannelTabHeaderRenderer.draw) paints them top-aligned — no
-        // overpaint band needed because nothing is centred underneath.
-        for (int i = 0; i < NUM_CUSTOM_TABS && i < tabs.getItemCount(); i++) {
-            tabLabels[i] = tabs.getItem(i).getText();
-            tabs.getItem(i).setText("");
-        }
-        // Attach a transparent spacer image to each custom tab so CTabFolder
-        // sizes it wide enough for its tile row.
-        for (int i = 0; i < NUM_CUSTOM_TABS && i < tabs.getItemCount(); i++) {
-            updateTabSpacerImage(i);
-        }
+        // Capture labels, size the strip / spacer images and wire the paint,
+        // hover and collapse listeners now that the tabs exist.
+        tabs.init();
         // Flush layout caches up the parent chain so the toolbar's
         // GridLayout picks up the new (taller) CTabFolder preferred size.
         toolbar.layout(true, true);
         group.layout(true, true);
-
-        installTabPaintAndTooltips(tabs);
-        installTabCollapseShortcuts(tabs);
 
         recordButton = addToggleButton(toolbar, recordDim, recordLit);
         recordButton.setToolTipText(I18n.t("scope.record.tooltip"));
@@ -861,326 +817,13 @@ public final class OscilloscopePane {
         group.layout(true);
     }
 
-    /** Custom CTabFolderRenderer for the toolbar tabs.  For the custom-painted
-     *  tab indices (Left / Right / Horizontal / Trigger):
-     *  <ul>
-     *    <li>{@code computeSize} is widened so the status-tile row that
-     *        {@link #drawTabTiles} paints underneath the label fits inside
-     *        the tab.</li>
-     *    <li>The tab label is redrawn top-aligned (default is vertically
-     *        centred) so the tiles can sit cleanly underneath without
-     *        overlapping the text.</li>
-     *  </ul>
-     *  All other tabs render with the default behaviour. */
-    private final class ChannelTabHeaderRenderer extends CTabFolderRenderer {
-        protected ChannelTabHeaderRenderer(CTabFolder parent) {
-            super(parent);
-        }
-
-        @Override
-        protected org.eclipse.swt.graphics.Point computeSize(int part, int state, GC gc, int wHint, int hHint) {
-            org.eclipse.swt.graphics.Point p = super.computeSize(part, state, gc, wHint, hHint);
-            if (part >= 0 && part < NUM_CUSTOM_TABS) {
-                ensureTabResources();
-                int required = computeRequiredTabWidth(gc, part);
-                p.x = Math.max(p.x, required);
-            }
-            return p;
-        }
-
-        @Override
-        protected void draw(int part, int state, org.eclipse.swt.graphics.Rectangle bounds, GC gc) {
-            super.draw(part, state, bounds, gc);
-            if (part < 0 || part >= NUM_CUSTOM_TABS) return;
-
-            // The CTabItem's own text is "" (we cleared it after
-            // construction) so super.draw painted just the tab background
-            // + curves — no centred label to erase.  Paint our top-aligned
-            // label straight onto the existing background; no overpaint
-            // band needed.
-            String label = tabLabels[part];
-            if (label == null || label.isEmpty()) return;
-            boolean selected = (state & SWT.SELECTED) != 0;
-            int leftInset = selected ? 11 : 15;
-            Color fg = selected ? toolbarTabs.getSelectionForeground() : toolbarTabs.getForeground();
-            if (fg == null) fg = toolbarTabs.getDisplay().getSystemColor(SWT.COLOR_WIDGET_FOREGROUND);
-            gc.setForeground(fg);
-
-            Font prevFont = gc.getFont();
-            gc.setFont(toolbarTabs.getFont());
-            gc.drawText(label, bounds.x + leftInset, bounds.y + 3, true);
-            gc.setFont(prevFont);
-        }
-    }
-
-    /** Forces the CTabFolder to recompute a custom tab's width and repaint
-     *  so that toggling a related preference visibly resizes the tab on
-     *  the spot.  Width is controlled via a transparent image attached
-     *  to the CTabItem (see {@link #updateTabSpacerImage}). */
-    private void refreshTabHeader(int tabIndex) {
-        if (toolbarTabs == null || toolbarTabs.isDisposed()) return;
-        if (tabIndex < 0 || tabIndex >= NUM_CUSTOM_TABS) return;
-        updateTabSpacerImage(tabIndex);
-        toolbarTabs.layout(true, true);
-        toolbarTabs.redraw();
-    }
-
-    /** Resizes / recreates the invisible spacer image attached to a custom
-     *  {@link CTabItem} so the tab is always wide enough to hold the
-     *  current state's tile row. */
-    private void updateTabSpacerImage(int tabIndex) {
-        if (toolbarTabs == null || toolbarTabs.isDisposed()) return;
-        if (tabIndex < 0 || tabIndex >= NUM_CUSTOM_TABS) return;
-        if (toolbarTabs.getItemCount() <= tabIndex) return;
-        Display d = toolbarTabs.getDisplay();
-        ensureTabResources();
-
-        int width;
-        GC gc = new GC(toolbarTabs);
-        try {
-            // The CTabItem's text is "" (we cleared it so the default
-            // renderer wouldn't draw a centred label), so the tab's
-            // natural width = imageWidth + trim.  Size the spacer image
-            // to fit the wider of (tile row, label) plus the per-tab
-            // extra so the renderer's top-aligned label has room and the
-            // tile row fits underneath.
-            width = Math.max(50, computeRequiredTabWidth(gc, tabIndex));
-        } finally {
-            gc.dispose();
-        }
-
-        Image existing = tabSpacerImages[tabIndex];
-        if (existing != null && !existing.isDisposed()) {
-            org.eclipse.swt.graphics.Rectangle b = existing.getBounds();
-            if (b.width == width && b.height == 1) return;     // no change needed
-            existing.dispose();
-        }
-        // Build a transparent 1-px-tall image of the required width.
-        org.eclipse.swt.graphics.PaletteData palette =
-                new org.eclipse.swt.graphics.PaletteData(0xFF0000, 0x00FF00, 0x0000FF);
-        org.eclipse.swt.graphics.ImageData id =
-                new org.eclipse.swt.graphics.ImageData(width, 1, 24, palette);
-        id.alphaData = new byte[width];                      // all zeros → fully transparent
-        Image img = new Image(d, id);
-        tabSpacerImages[tabIndex] = img;
-        toolbarTabs.getItem(tabIndex).setImage(img);
-    }
-
-    /** Returns the minimum tab width needed to fit BOTH the label (drawn
-     *  by the renderer at the top, using the tab's normal font) AND the
-     *  tile row (drawn by the paint listener at the bottom, using the
-     *  smaller tab-tile font), plus any per-tab extra padding the user
-     *  asked for.  Used by the spacer-image sizer and the renderer's
-     *  computeSize so the tab always accommodates the wider of the two
-     *  rows — for tabs like "Horizontal" the label is the bigger driver,
-     *  for tabs like "Left" the tile row is. */
-    private int computeRequiredTabWidth(GC gc, int tabIndex) {
-        if (tabIndex < 0 || tabIndex >= NUM_CUSTOM_TABS) return 0;
-        Font prev = gc.getFont();
-        gc.setFont(tabTileFont);
-        int tilesW = computeTileRowWidth(gc, tabIndex);
-        gc.setFont(toolbarTabs.getFont());
-        String label = tabLabels[tabIndex];
-        // Label drawn at bounds.x + 12 (selected leftInset) — reserve 14 px
-        // total (left inset + tiny right margin) on top of the label width.
-        int labelW = (label != null && !label.isEmpty()) ? gc.textExtent(label).x + 14 : 0;
-        gc.setFont(prev);
-        return Math.max(tilesW, labelW) + extraTabPadding(tabIndex);
-    }
-
-    /** Per-tab additional padding the user has dialled in.  Applied on top
-     *  of {@code max(tilesW, labelW)} in {@link #computeRequiredTabWidth}. */
-    private int extraTabPadding(int tabIndex) {
-        switch (tabIndex) {
-            case TAB_LEFT:
-            case TAB_RIGHT:      return 7;
-            case TAB_HORIZONTAL: return 20;
-            case TAB_TRIGGER:    return 7;
-            default:             return 0;
-        }
-    }
-
-    /** Returns the total pixel width occupied by a tab's tile row, given
-     *  the current preferences.  The GC passed in must already have
-     *  {@link #tabTileFont} selected so the text widths match what
-     *  {@link #drawTabTiles} will paint. */
-    private int computeTileRowWidth(GC gc, int tabIndex) {
+    /** Builds the live tile row for a custom tab from the current
+     *  preferences, in visual order (left to right).  Each tile carries its
+     *  short chip text (or an LED dot) plus its state-aware hover tooltip;
+     *  the {@link TileTabFolder} measures and paints them. */
+    private List<TileTabFolder.Tile> scopeTabTiles(int tabIndex) {
         Preferences prefs = Preferences.instance();
-        final int tileH    = 22;
-        final int hPadding = 4;
-        final int gap      = 3;
-        int total = 0;
-        switch (tabIndex) {
-            case TAB_LEFT:
-            case TAB_RIGHT: {
-                boolean isLeft  = (tabIndex == TAB_LEFT);
-                boolean enabled = isLeft ? prefs.isOscLeftChannelEnabled() : prefs.isOscRightChannelEnabled();
-                double  vDiv    = isLeft ? prefs.getOscLeftVoltsPerDiv()   : prefs.getOscRightVoltsPerDiv();
-                boolean acMode  = isLeft ? prefs.isOscLeftAcMode()         : prefs.isOscRightAcMode();
-                boolean sinc    = isLeft ? prefs.isOscLeftSincInterpEnabled()
-                                         : prefs.isOscRightSincInterpEnabled();
-                if (enabled) total += tileH + gap;
-                total += gc.textExtent(ScopeFormat.shortVoltsPerDiv(vDiv)).x + 2 * hPadding + gap;
-                total += gc.textExtent(acMode ? "ac" : "dc").x + 2 * hPadding + gap;
-                total += gc.textExtent(sinc ? "sin" : "lin").x + 2 * hPadding;
-                break;
-            }
-            case TAB_HORIZONTAL: {
-                total += gc.textExtent(ScopeFormat.shortTimePerDiv(prefs.getOscTimePerDiv())).x + 2 * hPadding;
-                break;
-            }
-            case TAB_TRIGGER: {
-                total += gc.textExtent(triggerChannelLabel()).x + 2 * hPadding + gap;
-                total += gc.textExtent(triggerEdgeLabel()).x    + 2 * hPadding + gap;
-                total += gc.textExtent(triggerModeLabel()).x    + 2 * hPadding;
-                if (prefs.isOscTriggerHysteresisEnabled()) {
-                    total += gap + gc.textExtent(triggerHysteresisLabel()).x + 2 * hPadding;
-                }
-                break;
-            }
-        }
-        return total;
-    }
-
-    /** Paints a row of status tiles under a tab's label.  Drawn by the
-     *  {@link CTabFolder} paint listener AFTER the default tab rendering
-     *  so the tiles overlay the lower part of the tab.  All tiles share
-     *  a 22-px height, 2-px corner radius; widths follow each tile's
-     *  content.  Per-tab tile contents:
-     *  <ul>
-     *    <li>Left / Right: red LED (if channel active), V/div, ac/dc, sin/lin.</li>
-     *    <li>Horizontal: time/div (e.g. {@code "20m"}, {@code "50u"}).</li>
-     *    <li>Trigger: channel ({@code L}/{@code R}), edge ({@code ↑}/{@code ↓}),
-     *        mode ({@code A}/{@code N}/{@code S}).</li>
-     *  </ul> */
-    /** Installs the paint, mouse-move, mouse-exit and dispose listeners
-     *  that turn the CTabFolder header into a hover-tooltipped tile strip.
-     *  Paint draws the per-tab tile row; mouse-move re-resolves the
-     *  tooltip on movement; mouse-exit clears it; dispose tears down the
-     *  paint resources.  Extracted from the constructor so the wiring
-     *  reads as one call instead of 70 inline lines. */
-    private void installTabPaintAndTooltips(CTabFolder tabs) {
-        // Paint listener fires AFTER CTabFolder's internal renderer has
-        // drawn the default tab strip; we use it to add the tile row under
-        // each custom-tab's label.  Also rebuilds the painted-region map
-        // (label + each tile) so the MouseMove listener below can show a
-        // region-specific tooltip on hover.
-        tabs.addPaintListener(e -> {
-            tabRegions.clear();
-            for (int i = 0; i < NUM_CUSTOM_TABS && i < tabs.getItemCount(); i++) {
-                if (!tabs.getItem(i).isDisposed()) {
-                    drawTabTiles(e.gc, tabs.getItem(i).getBounds(), i);
-                }
-            }
-        });
-        // MouseMove → dynamic tooltip lookup against tabRegions.  Set
-        // the tooltip on the CTabItem the cursor is hovering, because
-        // CTabFolder's built-in tab-tooltip mechanism takes priority over
-        // the widget-level setToolTipText (the latter is suppressed while
-        // the cursor is inside a tab).  Only change the text when the
-        // resolved region actually changes so the OS-native hover delay
-        // isn't reset on every pixel of movement.
-        final String[] currentTip = { null };
-        final int[]    currentIdx = { -1 };
-        tabs.addMouseMoveListener(e -> {
-            // First check tile regions (state-aware tooltips, pre-resolved
-            // at paint time).
-            String tip = null;
-            for (TabRegion r : tabRegions) {
-                if (r.bounds.contains(e.x, e.y)) { tip = r.tooltip; break; }
-            }
-            // Find the hovered tab; if no tile matched, fall back to the
-            // tab-level tooltip so hovering anywhere on the tab header
-            // (curve, margin, label) still shows the tab description.
-            int hoverIdx = -1;
-            for (int i = 0; i < tabs.getItemCount(); i++) {
-                if (!tabs.getItem(i).isDisposed()
-                        && tabs.getItem(i).getBounds().contains(e.x, e.y)) {
-                    hoverIdx = i;
-                    break;
-                }
-            }
-            if (tip == null && hoverIdx >= 0) {
-                String key = tabLabelTooltipKey(hoverIdx);
-                if (key != null) tip = I18n.t(key);
-            }
-            if (hoverIdx != currentIdx[0] || !Objects.equals(currentTip[0], tip)) {
-                currentTip[0] = tip;
-                currentIdx[0] = hoverIdx;
-                if (hoverIdx >= 0) {
-                    tabs.getItem(hoverIdx).setToolTipText(tip);
-                }
-            }
-        });
-        tabs.addListener(SWT.MouseExit, e -> {
-            if (currentIdx[0] >= 0 && currentIdx[0] < tabs.getItemCount()
-                    && !tabs.getItem(currentIdx[0]).isDisposed()) {
-                tabs.getItem(currentIdx[0]).setToolTipText(null);
-            }
-            currentTip[0] = null;
-            currentIdx[0] = -1;
-        });
-        tabs.addDisposeListener(e -> {
-            if (tabTileLedColor != null) tabTileLedColor.dispose();
-            if (tabTileBg       != null) tabTileBg      .dispose();
-            if (tabTileFg       != null) tabTileFg      .dispose();
-            if (tabTileFont     != null) tabTileFont    .dispose();
-            for (Image img : tabSpacerImages) {
-                if (img != null) img.dispose();
-            }
-        });
-    }
-
-    /** Installs the double-click and Enter-key handlers on the tab strip
-     *  that toggle the tab CONTENT area's visibility.  Strip stays so the
-     *  user can still swap tabs; only the content area collapses. */
-    private void installTabCollapseShortcuts(CTabFolder tabs) {
-        // Double-click on the tab strip — detect "strip" by checking the
-        // click y is above the tab folder's client area (which starts
-        // below the tab header row).
-        tabs.addListener(SWT.MouseDoubleClick, e -> {
-            Rectangle ca = tabs.getClientArea();
-            if (e.y < ca.y) toggleToolbarTabsCollapse();
-        });
-        // Keyboard navigation when the CTabFolder has focus:
-        //   ←/→        cycle to previous / next tab (CTabFolder built-in)
-        //   Enter      same as double-click on the tab strip
-        // ARROW_LEFT / ARROW_RIGHT navigation is left to CTabFolder's
-        // built-in traversal — it already moves the selection by exactly
-        // one tab.  Layering our own handler on top double-stepped (the
-        // traversal moved by 1 and the KeyDown handler moved by 1 more).
-        // Only Enter is handled here, to toggle the tab content area.
-        tabs.addListener(SWT.KeyDown, e -> {
-            if (e.keyCode == SWT.CR || e.keyCode == SWT.KEYPAD_CR) {
-                toggleToolbarTabsCollapse();
-                e.doit = false;
-            }
-        });
-    }
-
-    private void drawTabTiles(GC gc, Rectangle bounds, int tabIndex) {
-        if (bounds == null || bounds.width <= 0 || bounds.height <= 0) return;
-        if (tabIndex < 0 || tabIndex >= NUM_CUSTOM_TABS) return;
-        Preferences prefs = Preferences.instance();
-        ensureTabResources();
-        Font prevFont = gc.getFont();
-        gc.setFont(tabTileFont);
-        gc.setAntialias(SWT.ON);
-        gc.setTextAntialias(SWT.ON);
-
-        final int tileH    = 22;
-        final int cornerR  = 4;    // arc-diameter (= 2-px radius)
-        final int hPadding = 4;    // horizontal padding inside each text tile
-        final int gap      = 3;    // gap between tiles
-
-        // Inset matches ChannelTabHeaderRenderer.draw — line up the tile
-        // row's left edge with the label above it, accounting for the
-        // wider curve on the selected tab.
-        boolean selected = (toolbarTabs.getSelectionIndex() == tabIndex);
-        int leftInset    = selected ? 11 : 15;
-        int y = bounds.y + bounds.height - tileH - 2;   // 2-px bottom margin
-        int x = bounds.x + leftInset;
-
+        List<TileTabFolder.Tile> tiles = new ArrayList<>();
         switch (tabIndex) {
             case TAB_LEFT:
             case TAB_RIGHT: {
@@ -1192,48 +835,30 @@ public final class OscilloscopePane {
                                          : prefs.isOscRightSincInterpEnabled();
                 String chName = I18n.t(isLeft ? "scope.tab.left" : "scope.tab.right");
                 if (enabled) {
-                    final int ledD = 16;
-                    int ledInset = (tileH - ledD) / 2;
-                    gc.setBackground(tabTileBg);
-                    gc.fillRoundRectangle(x, y, tileH, tileH, cornerR, cornerR);
-                    gc.setBackground(tabTileLedColor);
-                    gc.fillOval(x + ledInset, y + ledInset, ledD, ledD);
-                    addTabRegion(x, y, tileH, tileH, I18n.t("scope.tile.led.active", chName));
-                    x += tileH + gap;
+                    tiles.add(TileTabFolder.Tile.led(I18n.t("scope.tile.led.active", chName)));
                 }
-                int wv = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR, ScopeFormat.shortVoltsPerDiv(vDiv));
-                addTabRegion(x, y, wv, tileH,
-                        I18n.t("scope.tile.scale", chName, OscParse.formatVoltsPerDiv(vDiv)));
-                x += wv + gap;
-                int wc = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR, acMode ? "ac" : "dc");
-                addTabRegion(x, y, wc, tileH,
-                        I18n.t(acMode ? "scope.tile.coupling.ac" : "scope.tile.coupling.dc", chName));
-                x += wc + gap;
-                int ws = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR, sinc ? "sin" : "lin");
-                addTabRegion(x, y, ws, tileH,
-                        I18n.t(sinc ? "scope.tile.interp.sin" : "scope.tile.interp.lin", chName));
+                tiles.add(TileTabFolder.Tile.text(ScopeFormat.shortVoltsPerDiv(vDiv),
+                        I18n.t("scope.tile.scale", chName, OscParse.formatVoltsPerDiv(vDiv))));
+                tiles.add(TileTabFolder.Tile.text(acMode ? "ac" : "dc",
+                        I18n.t(acMode ? "scope.tile.coupling.ac" : "scope.tile.coupling.dc", chName)));
+                tiles.add(TileTabFolder.Tile.text(sinc ? "sin" : "lin",
+                        I18n.t(sinc ? "scope.tile.interp.sin" : "scope.tile.interp.lin", chName)));
                 break;
             }
-            case TAB_HORIZONTAL: {
-                int wt = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                                         ScopeFormat.shortTimePerDiv(prefs.getOscTimePerDiv()));
-                addTabRegion(x, y, wt, tileH,
-                        I18n.t("scope.tile.time", OscParse.formatTimePerDiv(prefs.getOscTimePerDiv())));
+            case TAB_HORIZONTAL:
+                tiles.add(TileTabFolder.Tile.text(
+                        ScopeFormat.shortTimePerDiv(prefs.getOscTimePerDiv()),
+                        I18n.t("scope.tile.time", OscParse.formatTimePerDiv(prefs.getOscTimePerDiv()))));
                 break;
-            }
             case TAB_TRIGGER: {
-                int wch = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR, triggerChannelLabel());
                 String trigCh = I18n.t(prefs.getOscTriggerChannel() == Channel.L
-                                ? "scope.tab.left" : "scope.tab.right");
-                addTabRegion(x, y, wch, tileH, I18n.t("scope.tile.trigger.channel", trigCh));
-                x += wch + gap;
-                int wed = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR, triggerEdgeLabel());
-                addTabRegion(x, y, wed, tileH,
+                        ? "scope.tab.left" : "scope.tab.right");
+                tiles.add(TileTabFolder.Tile.text(triggerChannelLabel(),
+                        I18n.t("scope.tile.trigger.channel", trigCh)));
+                tiles.add(TileTabFolder.Tile.text(triggerEdgeLabel(),
                         I18n.t(prefs.getOscTriggerEdge() == TriggerEdge.RISE
                                 ? "scope.tile.trigger.edge.rise"
-                                : "scope.tile.trigger.edge.fall"));
-                x += wed + gap;
-                int wmd = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR, triggerModeLabel());
+                                : "scope.tile.trigger.edge.fall")));
                 String modeKey;
                 switch (prefs.getOscTriggerMode()) {
                     case AUTO:   modeKey = "scope.tile.trigger.mode.auto";   break;
@@ -1241,44 +866,27 @@ public final class OscilloscopePane {
                     case SINGLE: modeKey = "scope.tile.trigger.mode.single"; break;
                     default:     modeKey = null;
                 }
-                if (modeKey != null) {
-                    addTabRegion(x, y, wmd, tileH, I18n.t(modeKey));
-                }
-                x += wmd + gap;
+                tiles.add(TileTabFolder.Tile.text(triggerModeLabel(),
+                        modeKey != null ? I18n.t(modeKey) : null));
                 if (prefs.isOscTriggerHysteresisEnabled()) {
-                    int why = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR,
-                            triggerHysteresisLabel());
-                    addTabRegion(x, y, why, tileH, I18n.t("scope.trigger.hysteresis.tooltip"));
+                    tiles.add(TileTabFolder.Tile.text(triggerHysteresisLabel(),
+                            I18n.t("scope.trigger.hysteresis.tooltip")));
                 }
                 break;
             }
         }
-
-        gc.setFont(prevFont);
+        return tiles;
     }
 
-    /** Draws a single rounded-rectangle text tile and returns its width. */
-    private int drawTabTextTile(GC gc, int x, int y, int h, int padding, int corner, String text) {
-        org.eclipse.swt.graphics.Point te = gc.textExtent(text);
-        int w = te.x + 2 * padding;
-        gc.setBackground(tabTileBg);
-        gc.fillRoundRectangle(x, y, w, h, corner, corner);
-        gc.setForeground(tabTileFg);
-        gc.drawText(text, x + padding, y + (h - te.y) / 2, true);
-        return w;
-    }
-
-    /** Lazily creates the colour / font resources the tab tiles need.
-     *  Resources are disposed when the parent CTabFolder is disposed. */
-    private void ensureTabResources() {
-        Display d = toolbarTabs.getDisplay();
-        if (tabTileLedColor == null) tabTileLedColor = new Color(d, 0xFF, 0x20, 0x20);
-        if (tabTileBg       == null) tabTileBg       = new Color(d, 0xE0, 0xE0, 0xE0);
-        if (tabTileFg       == null) tabTileFg       = new Color(d, 0x20, 0x20, 0x20);
-        if (tabTileFont     == null) {
-            org.eclipse.swt.graphics.FontData[] fd = toolbarTabs.getFont().getFontData();
-            for (org.eclipse.swt.graphics.FontData f : fd) f.setHeight(10);
-            tabTileFont = new Font(d, fd);
+    /** Per-tab additional padding the user has dialled in.  Applied on top
+     *  of {@code max(tilesW, labelW)} in {@link #computeRequiredTabWidth}. */
+    private int extraTabPadding(int tabIndex) {
+        switch (tabIndex) {
+            case TAB_LEFT:
+            case TAB_RIGHT:      return 7;
+            case TAB_HORIZONTAL: return 20;
+            case TAB_TRIGGER:    return 7;
+            default:             return 0;
         }
     }
 
@@ -1304,14 +912,6 @@ public final class OscilloscopePane {
         return String.format(Locale.ROOT, "H %.1f",
                 Preferences.instance().getOscTriggerHysteresisDiv());
     }
-    /** Records a painted region for hover-tooltip dispatch.  Called by
-     *  {@link #drawTabTiles} once per drawn tile, and by the paint listener
-     *  once per tab for the label area. */
-    private void addTabRegion(int x, int y, int w, int h, String tooltip) {
-        if (tooltip == null || w <= 0 || h <= 0) return;
-        tabRegions.add(new TabRegion(new org.eclipse.swt.graphics.Rectangle(x, y, w, h), tooltip));
-    }
-
     /** i18n key for the tab-level hover tooltip — used as a fallback in
      *  the MouseMove listener when the cursor isn't over any tile. */
     private static String tabLabelTooltipKey(int tabIndex) {
@@ -1328,49 +928,21 @@ public final class OscilloscopePane {
         }
     }
 
-    /** Formats a volts-per-division value as a compact label (no "V/div"
-     *  suffix, SI prefix u / m / none).  E.g. {@code 0.000050 → "50u"},
-     *  {@code 0.020 → "20m"}, {@code 0.5 → "500m"}, {@code 1 → "1"}. */
-    /** Toggles whether the toolbar CTabFolder shows its tab content area.
-     *  When collapsed, only the tab strip is visible — clicking a tab still
-     *  switches the active tab, but the controls underneath are hidden and
-     *  the freed vertical space is given back to the oscilloscope view
-     *  above.  The Record toggle button is also hidden while collapsed so
-     *  the toolbar can shrink all the way to the tab-strip height (a tall
-     *  Record LED would otherwise keep the row at ~60 px regardless of
-     *  what the CTabFolder reports). */
     /** Forces the toolbar tab body collapsed (only headers visible) or
      *  expanded.  Used by the screenshot renderer to show just the tab
      *  headers; no-op when already in the requested state. */
     public void setToolbarTabsCollapsed(boolean wantCollapsed) {
-        if (toolbarTabsCollapsed != wantCollapsed) toggleToolbarTabsCollapse();
+        if (toolbarTabs != null && toolbarTabs.isCollapsed() != wantCollapsed) {
+            toolbarTabs.setCollapsed(wantCollapsed);
+        }
     }
 
-    private void toggleToolbarTabsCollapse() {
-        if (toolbarTabs == null || toolbarTabs.isDisposed()) return;
-        toolbarTabsCollapsed = !toolbarTabsCollapsed;
-
-        // 1) CTabFolder height.  CTabFolder.computeSize(hHint) treats hHint
-        //    as the CLIENT-AREA height and adds the strip trim on top, so
-        //    passing heightHint=0 yields a total height of just the strip
-        //    overhead (~tab header row).  Anything larger leaves a visible
-        //    sliver of empty content area below the strip.
-        GridData tabsGd = (GridData) toolbarTabs.getLayoutData();
-        if (toolbarTabsCollapsed) {
-            tabsGd.heightHint              = 0;
-            tabsGd.verticalAlignment       = SWT.BEGINNING;
-            tabsGd.grabExcessVerticalSpace = false;
-        } else {
-            tabsGd.heightHint              = SWT.DEFAULT;
-            tabsGd.verticalAlignment       = SWT.FILL;
-            tabsGd.grabExcessVerticalSpace = true;
-        }
-
-        // The Record button stays visible (and in the layout) at all times —
-        // capture control needs to be reachable even when the tab content
-        // is collapsed.  It now anchors to the top of the toolbar row so
-        // it sits at the tab-strip level rather than centred against the
-        // (now-shorter) row when collapsed.
+    /** Re-flow after the {@link TileTabFolder} collapses / expands its tab
+     *  body: keep the Record button anchored to the top of the toolbar row
+     *  so it stays reachable, then cascade the layout toolbar → group so the
+     *  scope view reclaims / yields the freed vertical space.  The folder has
+     *  already applied the strip-only height to its own layout data. */
+    private void onToolbarTabsCollapsed() {
         if (recordButton != null && !recordButton.isDisposed()) {
             Object rd = recordButton.getLayoutData();
             if (rd instanceof GridData rgd) {
@@ -1379,11 +951,8 @@ public final class OscilloscopePane {
             }
             recordButton.setVisible(true);
         }
-
-        // Cascade the layout pass: toolbar → group so the oscilloscope
-        // view re-flows into / out of the freed vertical space.
-        toolbar.layout(true, true);
-        group.layout(true, true);
+        if (toolbar != null && !toolbar.isDisposed()) toolbar.layout(true, true);
+        if (group   != null && !group.isDisposed())   group.layout(true, true);
     }
 
     // -------------------------------------------------------------------------
@@ -1401,7 +970,7 @@ public final class OscilloscopePane {
         Bindings.check(leftToggle, prefs.oscLeftChannelEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscLeftChannelEnabledProperty(), v -> {
             requestRedraw();
-            refreshTabHeader(TAB_LEFT);
+            toolbarTabs.refreshTab(TAB_LEFT);
         });
 
         leftScale = new StepSelector(g, OscParse.voltsPerDivTargets(),
@@ -1424,7 +993,7 @@ public final class OscilloscopePane {
                     ScopeFormat.preserveCanvasMiddle(prefs.getOscLeftOffsetFrac(), oldV, newV));
             prefs.setOscLeftVoltsPerDiv(newV);
             requestRedraw();
-            refreshTabHeader(TAB_LEFT);
+            toolbarTabs.refreshTab(TAB_LEFT);
         });
 
         leftAc = squareToggle(g, "AC");
@@ -1432,7 +1001,7 @@ public final class OscilloscopePane {
         Bindings.check(leftAc, prefs.oscLeftAcModeProperty());
         Bindings.onChange(toolbarTabs, prefs.oscLeftAcModeProperty(), v -> {
             requestRedraw();
-            refreshTabHeader(TAB_LEFT);
+            toolbarTabs.refreshTab(TAB_LEFT);
         });
 
         Image sincImg = createSincFractionImage(g.getDisplay());
@@ -1442,7 +1011,7 @@ public final class OscilloscopePane {
         Bindings.check(leftSinc, prefs.oscLeftSincInterpEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscLeftSincInterpEnabledProperty(), v -> {
             requestRedraw();
-            refreshTabHeader(TAB_LEFT);
+            toolbarTabs.refreshTab(TAB_LEFT);
         });
         leftSinc.addDisposeListener(e -> sincImg.dispose());
 
@@ -1453,7 +1022,7 @@ public final class OscilloscopePane {
         Bindings.combo(leftMains, prefs.oscLeftMainsSuppressionProperty(), MainsSuppression.values());
         Bindings.onChange(toolbarTabs, prefs.oscLeftMainsSuppressionProperty(), v -> {
             requestRedraw();
-            refreshTabHeader(TAB_LEFT);
+            toolbarTabs.refreshTab(TAB_LEFT);
         });
 
         new Label(g, SWT.NONE).setText(I18n.t("scope.lpf.label"));
@@ -1463,7 +1032,7 @@ public final class OscilloscopePane {
         Bindings.combo(leftLpf, prefs.oscLeftLpfProperty(), LpfMode.values());
         Bindings.onChange(toolbarTabs, prefs.oscLeftLpfProperty(), v -> {
             requestRedraw();
-            refreshTabHeader(TAB_LEFT);
+            toolbarTabs.refreshTab(TAB_LEFT);
         });
     }
 
@@ -1478,7 +1047,7 @@ public final class OscilloscopePane {
         Bindings.check(rightToggle, prefs.oscRightChannelEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscRightChannelEnabledProperty(), v -> {
             requestRedraw();
-            refreshTabHeader(TAB_RIGHT);
+            toolbarTabs.refreshTab(TAB_RIGHT);
         });
 
         rightScale = new StepSelector(g, OscParse.voltsPerDivTargets(),
@@ -1495,7 +1064,7 @@ public final class OscilloscopePane {
                     ScopeFormat.preserveCanvasMiddle(prefs.getOscRightOffsetFrac(), oldV, newV));
             prefs.setOscRightVoltsPerDiv(newV);
             requestRedraw();
-            refreshTabHeader(TAB_RIGHT);
+            toolbarTabs.refreshTab(TAB_RIGHT);
         });
 
         rightAc = squareToggle(g, "AC");
@@ -1503,7 +1072,7 @@ public final class OscilloscopePane {
         Bindings.check(rightAc, prefs.oscRightAcModeProperty());
         Bindings.onChange(toolbarTabs, prefs.oscRightAcModeProperty(), v -> {
             requestRedraw();
-            refreshTabHeader(TAB_RIGHT);
+            toolbarTabs.refreshTab(TAB_RIGHT);
         });
 
         Image sincImg = createSincFractionImage(g.getDisplay());
@@ -1513,7 +1082,7 @@ public final class OscilloscopePane {
         Bindings.check(rightSinc, prefs.oscRightSincInterpEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscRightSincInterpEnabledProperty(), v -> {
             requestRedraw();
-            refreshTabHeader(TAB_RIGHT);
+            toolbarTabs.refreshTab(TAB_RIGHT);
         });
         rightSinc.addDisposeListener(e -> sincImg.dispose());
 
@@ -1524,7 +1093,7 @@ public final class OscilloscopePane {
         Bindings.combo(rightMains, prefs.oscRightMainsSuppressionProperty(), MainsSuppression.values());
         Bindings.onChange(toolbarTabs, prefs.oscRightMainsSuppressionProperty(), v -> {
             requestRedraw();
-            refreshTabHeader(TAB_RIGHT);
+            toolbarTabs.refreshTab(TAB_RIGHT);
         });
 
         new Label(g, SWT.NONE).setText(I18n.t("scope.lpf.label"));
@@ -1534,7 +1103,7 @@ public final class OscilloscopePane {
         Bindings.combo(rightLpf, prefs.oscRightLpfProperty(), LpfMode.values());
         Bindings.onChange(toolbarTabs, prefs.oscRightLpfProperty(), v -> {
             requestRedraw();
-            refreshTabHeader(TAB_RIGHT);
+            toolbarTabs.refreshTab(TAB_RIGHT);
         });
     }
 
@@ -1556,7 +1125,7 @@ public final class OscilloscopePane {
         // tracking writePos.
         Bindings.onChange(toolbarTabs, prefs.oscTimePerDivProperty(), v -> {
             applyViewState();
-            refreshTabHeader(TAB_HORIZONTAL);
+            toolbarTabs.refreshTab(TAB_HORIZONTAL);
         });
 
         // Zero-width, SQUARE_BUTTON-tall spacer so the row measures at the
@@ -1583,7 +1152,7 @@ public final class OscilloscopePane {
         chMap.put(chL, Channel.L);
         chMap.put(chR, Channel.R);
         Bindings.radio(chMap, prefs.oscTriggerChannelProperty());
-        Bindings.onChange(toolbarTabs, prefs.oscTriggerChannelProperty(), v -> refreshTabHeader(TAB_TRIGGER));
+        Bindings.onChange(toolbarTabs, prefs.oscTriggerChannelProperty(), v -> toolbarTabs.refreshTab(TAB_TRIGGER));
 
         Composite edgeSet = new Composite(g, SWT.NONE);
         edgeSet.setLayout(flushRowLayoutHorizontal(2));
@@ -1596,7 +1165,7 @@ public final class OscilloscopePane {
         edgeMap.put(edgeRise, TriggerEdge.RISE);
         edgeMap.put(edgeFall, TriggerEdge.FALL);
         Bindings.radio(edgeMap, prefs.oscTriggerEdgeProperty());
-        Bindings.onChange(toolbarTabs, prefs.oscTriggerEdgeProperty(), v -> refreshTabHeader(TAB_TRIGGER));
+        Bindings.onChange(toolbarTabs, prefs.oscTriggerEdgeProperty(), v -> toolbarTabs.refreshTab(TAB_TRIGGER));
 
         Composite modeSet = new Composite(g, SWT.NONE);
         modeSet.setLayout(flushRowLayoutHorizontal(2));
@@ -1612,7 +1181,7 @@ public final class OscilloscopePane {
         modeMap.put(modeNormal, TriggerMode.NORMAL);
         modeMap.put(modeSingle, TriggerMode.SINGLE);
         Bindings.radio(modeMap, prefs.oscTriggerModeProperty());
-        Bindings.onChange(toolbarTabs, prefs.oscTriggerModeProperty(), v -> refreshTabHeader(TAB_TRIGGER));
+        Bindings.onChange(toolbarTabs, prefs.oscTriggerModeProperty(), v -> toolbarTabs.refreshTab(TAB_TRIGGER));
 
         triggerStartBtn = new Button(g, SWT.PUSH);
         Image triggerPlayIcon = IconUtils.instance().renderAtHeight(g.getDisplay(),
@@ -1654,12 +1223,12 @@ public final class OscilloscopePane {
         // is bound and auto-saves, so the explicit save() is retired.
         hysteresisSel.addSelectionListener(e -> {
             prefs.setOscTriggerHysteresisDiv(Double.parseDouble(hysteresisSel.getSelectedValue()));
-            refreshTabHeader(TAB_TRIGGER);
+            toolbarTabs.refreshTab(TAB_TRIGGER);
         });
         Bindings.check(hysteresisEnable, prefs.oscTriggerHysteresisEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscTriggerHysteresisEnabledProperty(), on -> {
             hysteresisSel.setEnabled(on);
-            refreshTabHeader(TAB_TRIGGER);
+            toolbarTabs.refreshTab(TAB_TRIGGER);
         });
 
         // "Reconstructed beat" overlay toggle — paints the |F1-F2|
@@ -1966,10 +1535,10 @@ public final class OscilloscopePane {
         prefs.setOscTriggerPositionFrac(p.getTriggerPositionFrac());
         prefs.setOscTriggerLevelFrac   (p.getTriggerLevelFrac());
         prefs.save();
-        refreshTabHeader(TAB_LEFT);
-        refreshTabHeader(TAB_RIGHT);
-        refreshTabHeader(TAB_HORIZONTAL);
-        refreshTabHeader(TAB_TRIGGER);
+        toolbarTabs.refreshTab(TAB_LEFT);
+        toolbarTabs.refreshTab(TAB_RIGHT);
+        toolbarTabs.refreshTab(TAB_HORIZONTAL);
+        toolbarTabs.refreshTab(TAB_TRIGGER);
         requestRedraw();
     }
 

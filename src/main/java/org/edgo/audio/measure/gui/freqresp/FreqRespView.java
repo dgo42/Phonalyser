@@ -95,6 +95,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  Keeps the L/R/phase/max tile clear of the numeric tick labels that
      *  the axis renderer paints into the same vertical band. */
     private static final int HEADER_BTN_INSET = 23;
+    /** Gap kept between the header buttons' right edge and an overlay banner.
+     *  The banners are transparent but still capture clicks across their full
+     *  width, so they must never extend left over the L/R/phase/max buttons. */
+    private static final int BANNER_BTN_GAP  = 8;
 
     // --- Colours -------------------------------------------------------------
     // All FreqResp palette colours live in the AbstractMeasurementView
@@ -224,11 +228,16 @@ public final class FreqRespView extends AbstractFreqDomainView {
 
         allocateFonts();
 
-        // Self-blinking overlay banners (no canvas redraw); positioned in onPaint.
+        // Self-blinking overlay banners.  Font + colours are configured ONCE
+        // here (the palette already holds the prefs-driven BACKGROUND from the
+        // super() map); afterwards each show just sets the text + visibility.
+        // A later background recolour disposes the old palette Color, but
+        // BlinkBanner guards against that — it simply drops the halo (the text
+        // still draws) rather than crashing.
         compareBanner = new BlinkBanner(this);
-        compareBanner.setVisible(false);
+        configureBanner(compareBanner);
         sourceBanner  = new BlinkBanner(this);
-        sourceBanner.setVisible(false);
+        configureBanner(sourceBanner);
 
         // Header buttons (below): L and R are radio (exactly one channel shown at a
         // time), phase is an independent toggle, max is a push that resets the view.
@@ -281,12 +290,17 @@ public final class FreqRespView extends AbstractFreqDomainView {
         });
         phaseBtn.addListener(SWT.Selection, e -> {
             Preferences p = Preferences.instance();
-            p.setFreqRespPhaseVisible(phaseBtn.isToggled()); p.save(); redraw();
+            p.setFreqRespPhaseVisible(phaseBtn.isToggled()); p.save();
+            repositionBanners();   // the right margin (phase axis) moved
+            redraw();
         });
         autoSetupBtn.addListener(SWT.Selection, e -> autoSetupMagnitudeRange());
         maxBtn.addListener(SWT.Selection, e -> resetToDefaultView());
 
         addPaintListener(this::onPaint);
+        // The banners are right-anchored, so re-anchor them when the canvas
+        // resizes (they're event-driven, not repositioned per paint).
+        addListener(SWT.Resize, e -> repositionBanners());
         addListener(SWT.MouseWheel, this::onMouseWheel);
         addListener(SWT.MouseMove,  this::onMouseMove);
         addListener(SWT.MouseExit,  e -> { mouseInPlot = false; redraw(); });
@@ -316,10 +330,15 @@ public final class FreqRespView extends AbstractFreqDomainView {
             if (show && prefsBind.isFreqRespCompareMode() && hasAnyResult()) {
                 autoSetupCompare(prefsBind);
             }
-            redraw();
+            updateCompareBanner();   // Show gates the compare banner
+            redraw();                // RIAA overlay / compare trace changed
         });
-        Bindings.onChange(this, prefsBind.freqRespReverseRiaaProperty(), v -> redraw());
-        Bindings.onChange(this, prefsBind.freqRespIecAmendmentProperty(), v -> redraw());
+        // Compare mode + Reverse / IEC drive the compare banner's visibility /
+        // text AND the RIAA/compare trace; refresh the banner + repaint the
+        // canvas when any of them changes.
+        Bindings.onChange(this, prefsBind.freqRespCompareModeProperty(), v -> { updateCompareBanner(); redraw(); });
+        Bindings.onChange(this, prefsBind.freqRespReverseRiaaProperty(), v -> { updateCompareBanner(); redraw(); });
+        Bindings.onChange(this, prefsBind.freqRespIecAmendmentProperty(), v -> { updateCompareBanner(); redraw(); });
 
         addDisposeListener(e -> {
             if (calibrationChangedListener != null) {
@@ -377,7 +396,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
         this.rawLeftResult = result;
         this.leftResult    = applyCurrentCalibration(result);
         if (result != null) lastResultSampleRate = result.getSampleRate();
-        redraw();
+        updateCompareBanner();   // hasAnyResult changed → may show/hide compare
+        redraw();                // new trace
     }
 
     /** Replaces the right-channel result and triggers a repaint.  Same
@@ -386,7 +406,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
         this.rawRightResult = result;
         this.rightResult    = applyCurrentCalibration(result);
         if (result != null) lastResultSampleRate = result.getSampleRate();
-        redraw();
+        updateCompareBanner();   // hasAnyResult changed → may show/hide compare
+        redraw();                // new trace
     }
 
     /** Re-derives the displayed left/right results from their raw copies
@@ -570,7 +591,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  {@code null} to clear. */
     public void setSourceFilePath(String path) {
         this.sourceFilePath = path;
-        redraw();
+        showSourceBanner();   // shows for a non-null path, hides for null; repaints
     }
 
     /** Clears both result slots (raw and displayed). */
@@ -579,6 +600,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         this.rawRightResult = null;
         this.leftResult     = null;
         this.rightResult    = null;
+        updateCompareBanner();   // no result → hide the compare banner
         redraw();
     }
 
@@ -758,15 +780,14 @@ public final class FreqRespView extends AbstractFreqDomainView {
             }
         });
 
-        // Dynamic overlays — never cached because they change per frame.
+        // Dynamic overlays — never cached because they change per frame.  The
+        // banners are self-painting widgets driven entirely by events
+        // (showSourceBanner / updateCompareBanner / repositionBanners), so
+        // onPaint doesn't touch them; only the compare table is drawn here.
         gc.setAntialias(SWT.ON);
         gc.setTextAntialias(SWT.ON);
-        drawSourcePath(gc, plot);
         if (prefs.isFreqRespCompareMode() && hasAnyResult() && prefs.isFreqRespShowRiaa()) {
-            drawCompareBanner(gc, plot, prefs);
             drawCompareMeasurementTable(gc);
-        } else {
-            compareBanner.setVisible(false);
         }
         if (mouseInPlot) {
             drawCrosshair(gc, plot, freqMin, freqMax, magTop, magBot, phaseVisible);
@@ -1112,28 +1133,90 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 x, y + lineH);
     }
 
-    /** Paints the centred comparison-mode banner.  No background box; just
-     *  text in the blink-lit / blink-dim alternation so it matches the
-     *  scope's filemode label style.  Caller decides whether to show. */
-    private void drawCompareBanner(GC gc, Rectangle plot, Preferences prefs) {
-        String text = I18n.t("freqResp.compare.banner")
+    // -------------------------------------------------------------------------
+    // Overlay banners (loaded-file path + comparison mode).  Self-painting /
+    // self-blinking BlinkBanner widgets: font + colours are set once in
+    // configureBanner() at construction, so each show just sets text + makes the
+    // widget visible — onPaint never touches them.  Each is sized to its text at
+    // the plot's top-right but clamped clear of the header buttons, re-anchored
+    // only when the text or geometry (resize / phase-axis) changes.
+    // -------------------------------------------------------------------------
+
+    /** One-time banner setup: font + the blink / outline palette colours.  A
+     *  later background recolour disposes the old outline Color, but BlinkBanner
+     *  guards against that (it drops the halo, the text still draws), so the
+     *  colours never need re-pushing. */
+    private void configureBanner(BlinkBanner b) {
+        b.setFont(readoutFont);
+        b.setColors(color(ColorRole.BLINK_LIT), color(ColorRole.BLINK_DIM),
+                    color(ColorRole.BACKGROUND));
+        b.setVisible(false);
+    }
+
+    /** Shows the "Loaded: …" banner for the current {@link #sourceFilePath}, or
+     *  hides it when the path is cleared.  A pure overlay → no canvas repaint. */
+    private void showSourceBanner() {
+        if (sourceFilePath == null || sourceFilePath.isEmpty()) {
+            hideSourceBanner();
+            return;
+        }
+        sourceBanner.setText("Loaded: " + sourceFilePath);
+        sourceBanner.setVisible(true);
+        repositionBanners();
+    }
+
+    /** Hides the loaded-file banner (e.g. when a new measurement starts). */
+    private void hideSourceBanner() {
+        sourceBanner.setVisible(false);
+        repositionBanners();   // compare banner moves up into the freed line
+    }
+
+    /** Shows the compare banner with its current text when compare mode is
+     *  active over a measurement + RIAA overlay, else hides it.  Banner only;
+     *  the caller repaints the canvas for the compare trace / table. */
+    private void updateCompareBanner() {
+        Preferences prefs = Preferences.instance();
+        boolean show = prefs.isFreqRespCompareMode() && hasAnyResult()
+                && prefs.isFreqRespShowRiaa();
+        if (!show) {
+            compareBanner.setVisible(false);
+            repositionBanners();
+            return;
+        }
+        compareBanner.setText(I18n.t("freqResp.compare.banner")
                 .replace("{0}", prefs.isFreqRespReverseRiaa()
                         ? I18n.t("freqResp.compare.banner.reverse") : "")
                 .replace("{1}", prefs.isFreqRespIecAmendment()
-                        ? I18n.t("freqResp.compare.banner.iec") : "");
+                        ? I18n.t("freqResp.compare.banner.iec") : ""));
+        compareBanner.setVisible(true);
+        repositionBanners();
+    }
+
+    /** Anchors the visible banners at the plot's top-right, each sized to just
+     *  its text but never extending left past the header buttons (clamped via
+     *  {@link BlinkBanner#alignRight}).  The width tracks the text, so this runs
+     *  on show/hide (text set) + resize + phase toggle — never per paint. */
+    private void repositionBanners() {
+        if (!sourceBanner.getVisible() && !compareBanner.getVisible()) {
+            return;
+        }
+        Rectangle plot = plotRect(Preferences.instance());
+        if (plot == null) {
+            return;
+        }
+        GC gc = new GC(this);
         gc.setFont(readoutFont);
         int h = gc.textExtent("X").y + 2;
-        // The widget right-aligns + blinks itself; plot.width excludes the phase axis,
-        // so spanning the plot keeps it clear of those tick labels (room on the right).
-        compareBanner.setFont(readoutFont);
-        compareBanner.setText(text);
-        compareBanner.setColors(color(ColorRole.BLINK_LIT), color(ColorRole.BLINK_DIM),
-                                color(ColorRole.BACKGROUND));
-        // drawSourcePath ran first this paint, so if the loaded-file banner is also up
-        // (both top-right) drop the compare banner one line below it to avoid overlap.
-        int y = sourceBanner.getVisible() ? plot.y + 4 + h + 2 : plot.y + 6;
-        compareBanner.setBounds(plot.x, y, plot.width - 6, h);
-        compareBanner.setVisible(true);
+        gc.dispose();
+        int leftInset  = headerBar.getBounds().x + headerBar.getBounds().width + BANNER_BTN_GAP;
+        int rightInset = getClientArea().width - (plot.x + plot.width) + 6;
+        if (sourceBanner.getVisible()) {
+            sourceBanner.alignRight(leftInset, rightInset, plot.y + 4, h);
+        }
+        if (compareBanner.getVisible()) {
+            int y = sourceBanner.getVisible() ? plot.y + 4 + h + 2 : plot.y + 6;
+            compareBanner.alignRight(leftInset, rightInset, y, h);
+        }
     }
 
     private void drawTraces(GC gc, Rectangle plot, double freqMin, double freqMax,
@@ -1210,24 +1293,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         gc.setLineStyle(SWT.LINE_SOLID);
     }
 
-    private void drawSourcePath(GC gc, Rectangle plot) {
-        if (sourceFilePath == null || sourceFilePath.isEmpty()) {
-            sourceBanner.setVisible(false);
-            return;
-        }
-        // Full path with a "Loaded:" prefix, in the same dark lit/dim blink pair as the
-        // compare banner (scope file-mode style).  The widget right-aligns + left-
-        // ellipsises to its width; plot.width excludes the phase axis, so spanning the
-        // plot keeps it clear of those tick labels.
-        gc.setFont(readoutFont);
-        int h = gc.textExtent("X").y + 2;
-        sourceBanner.setFont(readoutFont);
-        sourceBanner.setText("Loaded: " + sourceFilePath);
-        sourceBanner.setColors(color(ColorRole.BLINK_LIT), color(ColorRole.BLINK_DIM),
-                               color(ColorRole.BACKGROUND));
-        sourceBanner.setBounds(plot.x, plot.y + 4, plot.width - 6, h);
-        sourceBanner.setVisible(true);
-    }
 
 
     // -------------------------------------------------------------------------

@@ -862,11 +862,13 @@ public final class OscilloscopeView extends AbstractMeasurementView {
         // Hand the path to the self-blinking widget: it right-aligns + left-ellipsises
         // to its width (the BACKGROUND halo keeps it readable over the trace) and blinks
         // itself — so the canvas no longer repaints twice a second just for the toggle.
+        // Size it to the text (right-anchored at rightEdge, never left of leftEdge) so
+        // the transparent widget doesn't capture hovers over the trace beside it.
         fileBanner.setFont(getFont());
         fileBanner.setText(path);
         fileBanner.setColors(color(ColorRole.BLINK_LIT), color(ColorRole.BLINK_DIM),
                              color(ColorRole.BACKGROUND));
-        fileBanner.setBounds(leftEdge, 5, avail, gc.textExtent("X").y + 2);
+        fileBanner.alignRight(leftEdge, w - rightEdge, 5, gc.textExtent("X").y + 2);
         fileBanner.setVisible(true);
     }
 

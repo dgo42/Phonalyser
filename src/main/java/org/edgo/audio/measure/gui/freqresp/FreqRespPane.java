@@ -24,17 +24,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.custom.CTabFolder;
-import org.eclipse.swt.custom.CTabFolderRenderer;
 import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.custom.ScrolledComposite;
-import org.eclipse.swt.graphics.Color;
-import org.eclipse.swt.graphics.Font;
-import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
@@ -73,6 +67,7 @@ import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
+import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -112,13 +107,15 @@ public final class FreqRespPane {
 
     private FlatScrollbar freqScrollbar;
     private FlatScrollbar magScrollbar;
-    private CTabFolder   toolbarTabs;
+    private TileTabFolder toolbarTabs;
     private Button       wizardButton;
     private Button       playButton;
 
-    // ---- Tab-header tile rendering (mirrors FftPane's pattern) -----
-    /** Tab indices, kept as constants so the renderer / tile builder /
-     *  refresh callers don't have to repeat magic numbers. */
+    // ---- Tab-header tiles: the shared TileTabFolder owns the renderer,
+    //      spacer images, tab-body collapse, hover tooltips and tile
+    //      painting; this pane only supplies tile content (freqRespTabTiles).
+    /** Tab indices, kept as constants so the tile builder / refresh callers
+     *  don't have to repeat magic numbers. */
     private static final int TAB_FREQRESP_SETTINGS    = 0;
     private static final int TAB_FREQRESP_RIAA        = 1;
     private static final int TAB_FREQRESP_PRESETS     = 2;
@@ -127,26 +124,9 @@ public final class FreqRespPane {
     private static final int TAB_FREQRESP_SAVE        = 5;
     private static final int TAB_FREQRESP_LOAD        = 6;
     private static final int NUM_CUSTOM_TABS          = 7;
-
-    /** Captured tab labels — the CTabItem text is cleared after build
-     *  so the renderer can draw the label + tile row itself. */
-    private final String[] tabLabels       = new String[NUM_CUSTOM_TABS];
-    /** Invisible spacer images on each tab; their width pads the tab to
-     *  fit the tile row + label. */
-    private final Image[]  tabSpacerImages = new Image[NUM_CUSTOM_TABS];
-    /** Per-tile hover rectangles built every paint, consumed by the
-     *  mouse-move listener for tooltips. */
-    private final List<TabRegion> tabRegions = new ArrayList<>();
-    private Color tabTileBg;
-    private Color tabTileFg;
-    private Font  tabTileFont;
-
-    /** A painted sub-region of a tab header (a tile) with its hover tip. */
-    private static final class TabRegion {
-        final Rectangle bounds;
-        final String    tooltip;
-        TabRegion(Rectangle b, String tip) { bounds = b; tooltip = tip; }
-    }
+    /** Fixed height of the toolbar row while the tab body is expanded;
+     *  released to strip-only height when the tabs are collapsed. */
+    private static final int TOOLBAR_ROW_HEIGHT       = 200;
 
     /** Daemon worker that runs the sweep + deconvolution off the UI
      *  thread.  Created lazily on the first Play click. */
@@ -264,15 +244,31 @@ public final class FreqRespPane {
         // (dither / Nyquist combos) clips out of view.
         Composite toolbarRow = new Composite(group, SWT.NONE);
         GridData trGd = new GridData(SWT.FILL, SWT.BEGINNING, true, false);
-        trGd.heightHint = 200;
+        trGd.heightHint = TOOLBAR_ROW_HEIGHT;
         toolbarRow.setLayoutData(trGd);
         GridLayout trGl = new GridLayout(3, false);
         trGl.marginWidth = 0; trGl.marginHeight = 0; trGl.horizontalSpacing = 4;
         toolbarRow.setLayout(trGl);
 
-        toolbarTabs = new CTabFolder(toolbarRow, SWT.NONE);
-        toolbarTabs.setSimple(false);
+        toolbarTabs = new TileTabFolder(toolbarRow, SWT.NONE);
         toolbarTabs.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        // Each tile's chip text doubles as its own hover tooltip.
+        toolbarTabs.setCustomTabs(NUM_CUSTOM_TABS, new TileTabFolder.TileSource() {
+            @Override
+            public List<TileTabFolder.Tile> tilesFor(int tabIndex) {
+                return freqRespTabTiles(tabIndex);
+            }
+        });
+        // Strip double-click / Enter collapses the tab body.  The toolbar row
+        // is pinned to a fixed height while expanded, so the collapse re-flow
+        // releases that pin (restoring it on expand) and re-lays the pane so
+        // the plot above reclaims the freed space.
+        toolbarTabs.setCollapseRelayout(() -> {
+            if (toolbarRow.isDisposed() || group.isDisposed()) return;
+            GridData rowGd = (GridData) toolbarRow.getLayoutData();
+            rowGd.heightHint = toolbarTabs.isCollapsed() ? SWT.DEFAULT : TOOLBAR_ROW_HEIGHT;
+            group.layout(true, true);
+        });
         buildSettingsTab();
         buildRiaaTab();
         buildPresetsTab();
@@ -286,63 +282,9 @@ public final class FreqRespPane {
         toolbarTabs.addListener(SWT.Selection, e -> {
             Preferences.instance().setFreqRespActiveTabIndex(toolbarTabs.getSelectionIndex());
         });
-
-        // ─── Tab-header tiles ─────────────────────────────────────────────
-        // Capture each tab's label, clear the CTabItem text (so CTabFolder's
-        // centred-label render doesn't fight the custom one), give the strip
-        // enough vertical room for a label + tile row, and seed an invisible
-        // spacer image so the tab is wide enough.
-        for (int i = 0; i < NUM_CUSTOM_TABS && i < toolbarTabs.getItemCount(); i++) {
-            tabLabels[i] = toolbarTabs.getItem(i).getText();
-            toolbarTabs.getItem(i).setText("");
-        }
-        toolbarTabs.setTabHeight(46);
-        toolbarTabs.setRenderer(new FreqRespTabHeaderRenderer(toolbarTabs));
-        for (int i = 0; i < NUM_CUSTOM_TABS && i < toolbarTabs.getItemCount(); i++) {
-            updateTabSpacerImage(i);
-        }
-        // Paint listener: draw tiles on top of CTabFolder's default chrome
-        // and rebuild the per-tile hover regions.
-        toolbarTabs.addPaintListener(e -> {
-            tabRegions.clear();
-            for (int i = 0; i < NUM_CUSTOM_TABS && i < toolbarTabs.getItemCount(); i++) {
-                if (!toolbarTabs.getItem(i).isDisposed()) {
-                    drawTabTiles(e.gc, toolbarTabs.getItem(i).getBounds(), i);
-                }
-            }
-        });
-        // Per-tile hover tooltip — region tips resolved at paint time so
-        // they reflect current state without an extra lookup at hover.
-        final String[] currentTip = { null };
-        final int[]    currentIdx = { -1 };
-        toolbarTabs.addMouseMoveListener(e -> {
-            String tip = null;
-            for (TabRegion r : tabRegions) {
-                if (r.bounds.contains(e.x, e.y)) { tip = r.tooltip; break; }
-            }
-            int hoverIdx = -1;
-            for (int i = 0; i < toolbarTabs.getItemCount(); i++) {
-                if (!toolbarTabs.getItem(i).isDisposed()
-                        && toolbarTabs.getItem(i).getBounds().contains(e.x, e.y)) {
-                    hoverIdx = i;
-                    break;
-                }
-            }
-            if (hoverIdx != currentIdx[0] || !Objects.equals(currentTip[0], tip)) {
-                currentIdx[0] = hoverIdx;
-                currentTip[0] = tip;
-                toolbarTabs.setToolTipText(tip);
-            }
-        });
-        // Dispose tile resources when the pane goes away.
-        group.addDisposeListener(e -> {
-            for (Image img : tabSpacerImages) {
-                if (img != null && !img.isDisposed()) img.dispose();
-            }
-            if (tabTileBg   != null && !tabTileBg.isDisposed())   tabTileBg.dispose();
-            if (tabTileFg   != null && !tabTileFg.isDisposed())   tabTileFg.dispose();
-            if (tabTileFont != null && !tabTileFont.isDisposed()) tabTileFont.dispose();
-        });
+        // Capture labels, size the strip / spacer images and wire the paint,
+        // hover and collapse listeners now that the tabs exist.
+        toolbarTabs.init();
 
         // Wizard button (left of Play) — opens the 3-page calibration
         // wizard in Phase 9.  For now the button paints with the wand
@@ -417,7 +359,7 @@ public final class FreqRespPane {
             if (freqRespPresetCombo.indexOf(name) < 0) freqRespPresetCombo.add(name);
             freqRespPresetCombo.setText(name);
             refreshFreqRespPresetButtonState();
-            refreshTabHeader(TAB_FREQRESP_PRESETS);
+            toolbarTabs.refreshTab(TAB_FREQRESP_PRESETS);
         });
 
         freqRespPresetLoadBtn = new Button(g, SWT.PUSH);
@@ -445,7 +387,7 @@ public final class FreqRespPane {
             if (idx >= 0) freqRespPresetCombo.remove(idx);
             freqRespPresetCombo.setText("");
             refreshFreqRespPresetButtonState();
-            refreshTabHeader(TAB_FREQRESP_PRESETS);
+            toolbarTabs.refreshTab(TAB_FREQRESP_PRESETS);
         });
 
         refreshFreqRespPresetButtonState();
@@ -501,8 +443,8 @@ public final class FreqRespPane {
         // settings-tab label + every tile header that depends on these
         // prefs, plus the view's redraw via the range-changed event.
         refreshFftSizeLabel();
-        refreshTabHeader(TAB_FREQRESP_SETTINGS);
-        refreshTabHeader(TAB_FREQRESP_RIAA);
+        toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
+        toolbarTabs.refreshTab(TAB_FREQRESP_RIAA);
         MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
         view.redraw();
     }
@@ -594,7 +536,7 @@ public final class FreqRespPane {
         Bindings.stepField(startField, prefs.freqRespStartHzProperty());
         Bindings.onChange(toolbarTabs, prefs.freqRespStartHzProperty(), v -> {
             if (v < 1.0) prefs.setFreqRespStartHz(1.0);
-            refreshTabHeader(TAB_FREQRESP_SETTINGS);
+            toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
         });
 
         addLabel(g, I18n.t("freqResp.settings.stop"));
@@ -607,7 +549,7 @@ public final class FreqRespPane {
         Bindings.onChange(toolbarTabs, prefs.freqRespStopHzProperty(), v -> {
             double floor = prefs.getFreqRespStartHz() + 1.0;
             if (v < floor) prefs.setFreqRespStopHz(floor);
-            refreshTabHeader(TAB_FREQRESP_SETTINGS);
+            toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
         });
 
         // ---- Row 2: amplitude (Vrms) + duration ----------------------------
@@ -626,7 +568,7 @@ public final class FreqRespPane {
         Bindings.stepField(ampField, prefs.freqRespAmplitudeVrmsProperty());
         Bindings.onChange(toolbarTabs, prefs.freqRespAmplitudeVrmsProperty(), v -> {
             if (v < 0.0001) prefs.setFreqRespAmplitudeVrms(0.0001);
-            refreshTabHeader(TAB_FREQRESP_SETTINGS);
+            toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
         });
 
         // FFT-size combo replaces the old sweep-duration field.  The
@@ -650,7 +592,7 @@ public final class FreqRespPane {
         Bindings.onChange(toolbarTabs, prefs.freqRespFftSizeProperty(), n -> {
             prefs.setFreqRespDurationSec(deriveDurationSecFromFftSize(n));
             refreshFftSizeLabel();
-            refreshTabHeader(TAB_FREQRESP_SETTINGS);
+            toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
         });
         // Initial sync: the YAML may carry a stale durationSec that no
         // longer matches the persisted fftSize (or vice versa).  Re-derive
@@ -675,7 +617,7 @@ public final class FreqRespPane {
         pointsCombo.addListener(SWT.Selection, e -> handlePointsCombo(pointsCombo));
         Bindings.onChange(toolbarTabs, prefs.freqRespSweepPointsProperty(), v -> {
             selectPointsCombo(pointsCombo, v);
-            refreshTabHeader(TAB_FREQRESP_SETTINGS);
+            toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
         });
 
         addLabel(g, I18n.t("freqResp.settings.leadIn"));
@@ -700,7 +642,7 @@ public final class FreqRespPane {
             }
             prefs.setFreqRespDurationSec(deriveDurationSecFromFftSize(prefs.getFreqRespFftSize()));
             refreshFftSizeLabel();
-            refreshTabHeader(TAB_FREQRESP_SETTINGS);
+            toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
         });
 
         // ---- Row 4: dither + nyquist fraction ------------------------------
@@ -916,14 +858,14 @@ public final class FreqRespPane {
         Bindings.check(riaaIecBtn,     prefs.freqRespIecAmendmentProperty());
         Bindings.onChange(toolbarTabs, prefs.freqRespShowRiaaProperty(), v -> {
             refreshRiaaEnable();
-            refreshTabHeader(TAB_FREQRESP_RIAA);
+            toolbarTabs.refreshTab(TAB_FREQRESP_RIAA);
         });
         Bindings.onChange(toolbarTabs, prefs.freqRespReverseRiaaProperty(), v -> {
             refreshRiaaEnable();
-            refreshTabHeader(TAB_FREQRESP_RIAA);
+            toolbarTabs.refreshTab(TAB_FREQRESP_RIAA);
         });
         Bindings.onChange(toolbarTabs, prefs.freqRespIecAmendmentProperty(),
-                v -> refreshTabHeader(TAB_FREQRESP_RIAA));
+                v -> toolbarTabs.refreshTab(TAB_FREQRESP_RIAA));
 
         // Compare is two-way bound; its pane-local effects (the no-measurement
         // veto, the one-shot auto-zoom on entry, the view redraw and the tab-
@@ -944,7 +886,7 @@ public final class FreqRespPane {
             // zoom must stick instead of being clobbered on every redraw.
             if (enable) view.autoSetupCompare(prefs);
             view.redraw();
-            refreshTabHeader(TAB_FREQRESP_RIAA);
+            toolbarTabs.refreshTab(TAB_FREQRESP_RIAA);
         });
 
         refreshRiaaEnable();
@@ -1473,7 +1415,7 @@ public final class FreqRespPane {
             saveToPathField.setToolTipText(picked);
         }
         prefs.setFreqRespSavePath(picked);
-        refreshTabHeader(TAB_FREQRESP_SAVE);
+        toolbarTabs.refreshTab(TAB_FREQRESP_SAVE);
         try {
             // Both channels are always written; the new file format is
             // strict stereo (5 columns: f, mag_L_dB, mag_R_dB, phase_L_deg,
@@ -1560,7 +1502,7 @@ public final class FreqRespPane {
             loadFromPathField.setToolTipText(picked);
         }
         prefs.setFreqRespLoadPath(picked);
-        refreshTabHeader(TAB_FREQRESP_LOAD);
+        toolbarTabs.refreshTab(TAB_FREQRESP_LOAD);
         try {
             StereoFreqRespCalibration st = FreqRespCalHelper.loadCsv(picked);
             FreqRespCalibration cL = st.left();
@@ -1576,6 +1518,12 @@ public final class FreqRespPane {
                     Channel.R, sr, cR.freqs, cR.magLin, cR.phaseRad,
                     params, picked, true));
             view.setSourceFilePath(picked);
+            // A loaded measurement counts as "has result" — refresh the RIAA
+            // enable cascade so Compare becomes available (when Show is on).
+            refreshRiaaEnable();
+            // Auto-fit the freq / magnitude window to the freshly-loaded curve,
+            // as if the header auto-setup button were pressed.
+            view.autoSetupMagnitudeRange();
             prefs.setFreqRespLoadFolder(new File(picked).getParent());
             prefs.save();
         } catch (Exception ex) {
@@ -1614,10 +1562,16 @@ public final class FreqRespPane {
      *  another action mid-measurement. */
     private void onPlayClicked() {
         if (worker != null && worker.isRunning()) return;
+        // A fresh sweep replaces any loaded file — drop the "Loaded: …" banner.
+        view.setSourceFilePath(null);
         if (worker == null) {
             worker = new FreqRespAnalyzerWorker(
                     group.getDisplay(), view,
-                    () -> { setLocked(false); closeBusyShell(); },
+                    // On completion: unlock first (re-enables the group), then
+                    // refresh the RIAA enable cascade so Compare picks up the
+                    // freshly-available measurement (setLocked alone restores
+                    // each child's prior flag, which kept Compare disabled).
+                    () -> { setLocked(false); closeBusyShell(); refreshRiaaEnable(); },
                     msg  -> { showError(msg); closeBusyShell(); });
         }
         setLocked(true);
@@ -1814,171 +1768,55 @@ public final class FreqRespPane {
         if (!calMutationInFlight) {
             rebuildRowsFromStore();
         }
-        refreshTabHeader(TAB_FREQRESP_CALIBRATION);
+        toolbarTabs.refreshTab(TAB_FREQRESP_CALIBRATION);
     }
 
     // =========================================================================
     // Tab-header tile rendering
     // =========================================================================
 
-    /** Lazily allocates the tile-row Color / Font palette.  Cheap to call
-     *  on every paint; the colours and font are reused across redraws and
-     *  disposed alongside the pane. */
-    private void ensureTabResources() {
-        if (toolbarTabs == null) return;
-        Display d = toolbarTabs.getDisplay();
-        if (tabTileBg   == null) tabTileBg   = new Color(d, 0xE0, 0xE0, 0xE0);
-        if (tabTileFg   == null) tabTileFg   = new Color(d, 0x20, 0x20, 0x20);
-        if (tabTileFont == null) {
-            FontData[] fd = toolbarTabs.getFont().getFontData();
-            for (FontData f : fd) f.setHeight(10);
-            tabTileFont = new Font(d, fd);
-        }
-    }
-
-    /** Returns the per-tile text strings for the given tab, derived from
-     *  the current prefs.  Order = visual order, left to right. */
-    private List<String> tileTexts(Preferences prefs, int tabIndex) {
-        List<String> out = new ArrayList<>();
+    /** Builds the live tile row for a tab from the current preferences, in
+     *  visual order (left to right).  Each tile's short chip text doubles as
+     *  its hover tooltip; the {@link TileTabFolder} measures and paints them.
+     *  The Utility / Save / Load tabs intentionally carry no tiles (the file
+     *  path lives in the tab body, not the header). */
+    private List<TileTabFolder.Tile> freqRespTabTiles(int tabIndex) {
+        Preferences prefs = Preferences.instance();
+        List<TileTabFolder.Tile> tiles = new ArrayList<>();
         if (tabIndex == TAB_FREQRESP_SETTINGS) {
-            out.add(String.format(Locale.US, "%s–%s",
+            tiles.add(tile(String.format(Locale.US, "%s–%s",
                     formatShortHz(prefs.getFreqRespStartHz()),
-                    formatShortHz(prefs.getFreqRespStopHz())));
-            out.add(String.format(Locale.US, "%.2fV", prefs.getFreqRespAmplitudeVrms()));
-            out.add(formatShortCount(prefs.getFreqRespSweepPoints()) + " pts");
-            // FFT size tile (replaces the old sweep-duration tile, which
-            // is now derived from FFT size and shown in the settings-tab
-            // label instead).
-            out.add(formatFftSize(prefs.getFreqRespFftSize()));
+                    formatShortHz(prefs.getFreqRespStopHz()))));
+            tiles.add(tile(String.format(Locale.US, "%.2fV", prefs.getFreqRespAmplitudeVrms())));
+            tiles.add(tile(formatShortCount(prefs.getFreqRespSweepPoints()) + " pts"));
+            // FFT size tile (replaces the old sweep-duration tile, which is
+            // now derived from FFT size and shown in the settings-tab label).
+            tiles.add(tile(formatFftSize(prefs.getFreqRespFftSize())));
         } else if (tabIndex == TAB_FREQRESP_RIAA) {
             if (prefs.isFreqRespShowRiaa()) {
-                out.add(prefs.isFreqRespReverseRiaa() ? "rec" : "play");
-                if (prefs.isFreqRespIecAmendment()) out.add("+IEC");
-                if (prefs.isFreqRespCompareMode())  out.add("comp");
+                tiles.add(tile(prefs.isFreqRespReverseRiaa() ? "rec" : "play"));
+                if (prefs.isFreqRespIecAmendment()) tiles.add(tile("+IEC"));
+                if (prefs.isFreqRespCompareMode())  tiles.add(tile("comp"));
             }
         } else if (tabIndex == TAB_FREQRESP_CALIBRATION) {
             int n = FreqRespCalibrationStore.instance().getEntries().size();
-            if (n == 1)      out.add("loaded");
-            else if (n  > 1) out.add(n + " loaded");
+            if (n == 1)      tiles.add(tile(I18n.t("calibration.tile.loaded")));
+            else if (n  > 1) tiles.add(tile(I18n.t("calibration.tile.loadedN", n)));
         } else if (tabIndex == TAB_FREQRESP_PRESETS) {
-            // Show the number of saved presets when there are any —
-            // gives the user a hint that there's something to load.
+            // Show the number of saved presets when there are any — a hint
+            // that there's something to load.
             int n = prefs.getFreqRespPresets().size();
-            if (n > 0) out.add(n + " saved");
+            if (n > 0) tiles.add(tile(n + " saved"));
         } else if (tabIndex == TAB_FREQRESP_UTILITY) {
-            // No persistent state on the Utility tab — the screenshot,
-            // DAC-cal and ADC-cal actions don't leave a per-run footprint
-            // visible in the tab header.  Branch left empty intentionally
-            // so the tile area stays clean; the constant reference here
-            // also keeps the switch exhaustive.
+            // No header tile — the Utility actions (screenshot, DAC/ADC cal)
+            // leave no per-run state; branch kept so the constant is used.
         }
-        // TAB_FREQRESP_SAVE and TAB_FREQRESP_LOAD intentionally render no
-        // tiles — per user spec the file path lives in the tab body's
-        // path field, not in the header.  The constants are still used
-        // by the refreshTabHeader callers that fire after a successful
-        // save / load (cheap no-op when the tile list is empty).
-        return out;
+        return tiles;
     }
 
-    /** Renders a single text tile and returns the width it occupied. */
-    private int drawTabTextTile(GC gc, int x, int y, int h, int padding,
-                                int corner, String text) {
-        Point te = gc.textExtent(text);
-        int w = te.x + 2 * padding;
-        gc.setBackground(tabTileBg);
-        gc.fillRoundRectangle(x, y, w, h, corner, corner);
-        gc.setForeground(tabTileFg);
-        gc.drawText(text, x + padding, y + (h - te.y) / 2, true);
-        return w;
-    }
-
-    /** Walks the current tile list for {@code tabIndex} and paints them
-     *  under the tab's label.  Also rebuilds per-tile hover regions. */
-    private void drawTabTiles(GC gc, Rectangle bounds, int tabIndex) {
-        if (bounds == null || bounds.width <= 0 || bounds.height <= 0) return;
-        if (tabIndex < 0 || tabIndex >= NUM_CUSTOM_TABS) return;
-        Preferences prefs = Preferences.instance();
-        List<String> texts = tileTexts(prefs, tabIndex);
-        if (texts.isEmpty()) return;
-        ensureTabResources();
-        Font prev = gc.getFont();
-        gc.setFont(tabTileFont);
-        gc.setAntialias(SWT.ON);
-        gc.setTextAntialias(SWT.ON);
-        final int tileH    = 18;
-        final int cornerR  = 4;
-        final int hPadding = 4;
-        final int gap      = 3;
-        boolean selected = (toolbarTabs.getSelectionIndex() == tabIndex);
-        int leftInset    = selected ? 11 : 15;
-        int y = bounds.y + bounds.height - tileH - 2;
-        int x = bounds.x + leftInset;
-        for (String t : texts) {
-            int w = drawTabTextTile(gc, x, y, tileH, hPadding, cornerR, t);
-            tabRegions.add(new TabRegion(new Rectangle(x, y, w, tileH), t));
-            x += w + gap;
-        }
-        gc.setFont(prev);
-    }
-
-    /** Total pixel width the tile row needs for the given tab.  Used by
-     *  the custom CTabFolderRenderer to pad the tab to fit. */
-    private int computeTileRowWidth(GC gc, int tabIndex) {
-        Preferences prefs = Preferences.instance();
-        final int hPadding = 4;
-        final int gap      = 3;
-        int total = 0;
-        for (String text : tileTexts(prefs, tabIndex)) {
-            total += gc.textExtent(text).x + 2 * hPadding + gap;
-        }
-        return Math.max(0, total - gap);
-    }
-
-    /** Final tab width = max(tile-row, label) + chrome padding. */
-    private int computeRequiredTabWidth(GC gc, int tabIndex) {
-        if (tabIndex < 0 || tabIndex >= NUM_CUSTOM_TABS) return 0;
-        Font prev = gc.getFont();
-        gc.setFont(tabTileFont);
-        int tilesW = computeTileRowWidth(gc, tabIndex);
-        gc.setFont(toolbarTabs.getFont());
-        String label = tabLabels[tabIndex];
-        int labelW = (label != null && !label.isEmpty()) ? gc.textExtent(label).x + 14 : 0;
-        gc.setFont(prev);
-        return Math.max(tilesW, labelW) + 28;
-    }
-
-    /** Recreates the invisible spacer image on a custom CTabItem so the
-     *  tab is always wide enough to hold the current state's tile row. */
-    private void updateTabSpacerImage(int tabIndex) {
-        if (toolbarTabs == null || toolbarTabs.isDisposed()) return;
-        if (tabIndex < 0 || tabIndex >= NUM_CUSTOM_TABS) return;
-        if (toolbarTabs.getItemCount() <= tabIndex) return;
-        Display d = toolbarTabs.getDisplay();
-        ensureTabResources();
-        int width;
-        GC gc = new GC(toolbarTabs);
-        try {
-            width = Math.max(50, computeRequiredTabWidth(gc, tabIndex));
-        } finally { gc.dispose(); }
-        Image existing = tabSpacerImages[tabIndex];
-        if (existing != null && !existing.isDisposed()) {
-            Rectangle b = existing.getBounds();
-            if (b.width == width) return;
-            existing.dispose();
-        }
-        Image img = new Image(d, Math.max(1, width), 1);
-        tabSpacerImages[tabIndex] = img;
-        toolbarTabs.getItem(tabIndex).setImage(img);
-    }
-
-    /** Forces the CTabFolder to recompute a custom tab's width and repaint
-     *  so a related pref toggle visibly resizes the tab in real time. */
-    private void refreshTabHeader(int tabIndex) {
-        if (toolbarTabs == null || toolbarTabs.isDisposed()) return;
-        if (tabIndex < 0 || tabIndex >= NUM_CUSTOM_TABS) return;
-        updateTabSpacerImage(tabIndex);
-        toolbarTabs.layout(true, true);
-        toolbarTabs.redraw();
+    /** A text tile whose chip text doubles as its hover tooltip. */
+    private TileTabFolder.Tile tile(String text) {
+        return TileTabFolder.Tile.text(text, text);
     }
 
     /** Short Hz format used in the Settings tile row: 1500 → "1.5k",
@@ -2011,58 +1849,5 @@ public final class FreqRespPane {
             if (FFT_SIZE_VALUES[i] == n) return FFT_SIZE_LABELS[i];
         }
         return formatShortCount(n);
-    }
-
-    /** Custom CTabFolderRenderer: pads each custom tab to fit its tile row
-     *  and re-renders the captured label on top of the default chrome.
-     *  Other tabs (currently none in this pane) would render with the
-     *  default behaviour. */
-    private final class FreqRespTabHeaderRenderer extends CTabFolderRenderer {
-        protected FreqRespTabHeaderRenderer(CTabFolder parent) { super(parent); }
-
-        @Override
-        protected Point computeSize(int part, int state, GC gc, int wHint, int hHint) {
-            Point p = super.computeSize(part, state, gc, wHint, hHint);
-            if (part >= 0 && part < NUM_CUSTOM_TABS) {
-                ensureTabResources();
-                int required = computeRequiredTabWidth(gc, part);
-                p.x = Math.max(p.x, required);
-            }
-            return p;
-        }
-
-        @Override
-        protected void draw(int part, int state, Rectangle bounds, GC gc) {
-            super.draw(part, state, bounds, gc);
-            if (part < 0 || part >= NUM_CUSTOM_TABS) return;
-            String label = tabLabels[part];
-            if (label == null || label.isEmpty()) return;
-            boolean selected = (state & SWT.SELECTED) != 0;
-            int leftInset = selected ? 11 : 15;
-            Color fg = selected ? toolbarTabs.getSelectionForeground()
-                                : toolbarTabs.getForeground();
-            if (fg == null) fg = toolbarTabs.getDisplay().getSystemColor(SWT.COLOR_WIDGET_FOREGROUND);
-            gc.setForeground(fg);
-            Font prev = gc.getFont();
-            gc.setFont(toolbarTabs.getFont());
-            // Y-position: when this tab has tiles painted underneath the
-            // label, sit just under the tab's top edge so there's room
-            // for the tile row at the bottom.  When there are NO tiles,
-            // centre the label vertically inside the tab so it doesn't
-            // float alone at the top of a header sized for tile-bearing
-            // siblings (CTabFolder enforces a uniform row height across
-            // all tabs).
-            ensureTabResources();
-            int textY;
-            Point te = gc.textExtent(label);
-            boolean hasTiles = !tileTexts(Preferences.instance(), part).isEmpty();
-            if (hasTiles) {
-                textY = bounds.y + 3;
-            } else {
-                textY = bounds.y + Math.max(3, (bounds.height - te.y) / 2);
-            }
-            gc.drawText(label, bounds.x + leftInset, textY, true);
-            gc.setFont(prev);
-        }
     }
 }

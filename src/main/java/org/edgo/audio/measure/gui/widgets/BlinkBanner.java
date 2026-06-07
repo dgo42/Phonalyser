@@ -23,6 +23,7 @@ import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.layout.FormData;
 import org.eclipse.swt.widgets.Composite;
 
 /**
@@ -90,6 +91,46 @@ public final class BlinkBanner extends TransparentComposite {
         return new Point(ext.x + 2 * PAD, ext.y + 2 * PAD);
     }
 
+    /**
+     * Right-anchors this banner inside its parent — {@code rightInset} px from
+     * the parent's right border — sized to its text but never extending left
+     * past {@code leftInset} px from the parent's left border.  A
+     * {@code BlinkBanner} paints transparently yet still captures clicks across
+     * its whole width, so a banner that overlays a button row (the views float
+     * these over their header buttons) MUST be clamped left of those buttons
+     * via {@code leftInset} or it silently swallows their clicks; the text is
+     * left-ellipsised to whatever width remains.
+     *
+     * @param leftInset  px from the parent's left border the banner may not cross
+     * @param rightInset px from the parent's right border the banner is pinned to
+     * @param y          the banner's top y
+     * @param height     the banner's height
+     */
+    public void alignRight(int leftInset, int rightInset, int y, int height) {
+        int rightEdge = getParent().getClientArea().width - rightInset;
+        int natW      = computeSize(SWT.DEFAULT, SWT.DEFAULT).x;
+        int width     = Math.max(0, Math.min(natW, rightEdge - leftInset));
+        setBounds(rightEdge - width, y, width, height);
+    }
+
+    /**
+     * The {@code FormLayout} counterpart of {@link #alignRight}: for a banner
+     * right-anchored by its {@link FormData}, pins the FormData width to the
+     * banner's text — clamped to {@code maxWidth} — so the transparent widget no
+     * longer spans, and captures clicks/tooltips across, more than the text
+     * occupies (a full-width banner sits over the axis / readout table beside
+     * it).  Call after {@link #setText}, before {@code requestLayout}; a no-op
+     * unless the layout data is a {@link FormData}.  Beyond {@code maxWidth} the
+     * text left-ellipsises.
+     *
+     * @param maxWidth the widest the banner may grow leftward from its right anchor
+     */
+    public void fitFormDataWidth(int maxWidth) {
+        if (getLayoutData() instanceof FormData fd) {
+            fd.width = Math.max(0, Math.min(computeSize(SWT.DEFAULT, SWT.DEFAULT).x, maxWidth));
+        }
+    }
+
     private void onPaint(PaintEvent e) {
         if (text.isEmpty()) {
             return;
@@ -100,7 +141,12 @@ public final class BlinkBanner extends TransparentComposite {
         String shown = fitRight(gc, text, w - 2 * PAD);   // left-ellipsise to fit the width
         Point ext = gc.textExtent(shown);
         int x = w - ext.x - PAD;                          // right-aligned within the widget
-        if (outline != null) {                            // 8-offset halo for contrast over the plot
+        // The colours belong to the caller's palette; setColor() disposes one
+        // when the user recolours, so a banner shown across that edit could be
+        // holding a disposed Color until the host re-pushes the new one.  Guard
+        // every use so a stale reference simply skips a layer instead of
+        // throwing — the halo / text reappears on the next setColors().
+        if (outline != null && !outline.isDisposed()) {   // 8-offset halo for contrast over the plot
             gc.setForeground(outline);
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dy = -1; dy <= 1; dy++) {
@@ -111,7 +157,7 @@ public final class BlinkBanner extends TransparentComposite {
             }
         }
         Color c = showingLit ? lit : dim;
-        if (c != null) {
+        if (c != null && !c.isDisposed()) {
             gc.setForeground(c);
             gc.drawText(shown, x, PAD, true);
         }

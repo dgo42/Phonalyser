@@ -80,6 +80,13 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class MainWindow {
 
+    /** Minimum shell footprint — a standard 1280×720 (720p) window.  The
+     *  content's computed natural layout is wider but shorter than this, so the
+     *  minimum is clamped to let the window shrink to 1280 wide while keeping at
+     *  least 720 tall (and never below the content's own natural height). */
+    private static final int MIN_SHELL_WIDTH  = 1280;
+    private static final int MIN_SHELL_HEIGHT = 720;
+
     /** Top-level "please wait" shell shown while a language switch is in
      *  flight.  Static so it survives the disposal of the old MainWindow
      *  and gets closed by the new instance's {@link #open()}.  Only one
@@ -123,13 +130,20 @@ public final class MainWindow {
      */
     private void applyMinimumShellSize() {
         Point natural = mainTab.computeNaturalShellSize();
-        shell.setMinimumSize(natural);
+        // Clamp the minimum toward a 1280×720 footprint: the content's natural
+        // box is over-wide but short, so allow the window narrower than that
+        // width yet never shorter than 720 (nor below the content's own height).
+        int minW = Math.min(natural.x, MIN_SHELL_WIDTH);
+        int minH = Math.max(natural.y, MIN_SHELL_HEIGHT);
+        shell.setMinimumSize(minW, minH);
 
         Preferences prefs = Preferences.instance();
         int savedW = prefs.getWindowWidth();
         int savedH = prefs.getWindowHeight();
-        int w = savedW > 0 ? Math.max(natural.x, savedW) : Math.max(1280, natural.x);
-        int h = savedH > 0 ? Math.max(natural.y, savedH) : Math.max(800,  natural.y);
+        // Restore the saved size, clamped to the minimum (NOT to the natural
+        // width — else a saved 1280 would be forced back up to the natural box).
+        int w = savedW > 0 ? Math.max(minW, savedW) : Math.max(MIN_SHELL_WIDTH, natural.x);
+        int h = savedH > 0 ? Math.max(minH, savedH) : Math.max(800, natural.y);
         shell.setSize(w, h);
     }
 
