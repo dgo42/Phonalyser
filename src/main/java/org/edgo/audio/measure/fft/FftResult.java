@@ -41,6 +41,11 @@ public class FftResult {
     public int frameCount;
     /** Frequency resolution in Hz per bin (= sampleRate / fftSize). */
     public double freqResolution;
+    /** √(bin bandwidth in Hz) the spectrum was captured with — non-null only
+     *  for results reconstructed from a saved file ({@code # bin_bw_hz=}
+     *  header); {@code null} for live results, where the V/√Hz conversion
+     *  uses the live-config cache in {@code Preferences} instead. */
+    public Double binBwSqrt;
     /** Window function used. */
     public WindowType windowType;
     /** FftOverlap used. */
@@ -226,6 +231,7 @@ public class FftResult {
         c.sampleRate                 = sampleRate;
         c.frameCount                 = frameCount;
         c.freqResolution             = freqResolution;
+        c.binBwSqrt                  = binBwSqrt;
         c.windowType                 = windowType;
         c.overlap                    = overlap;
         c.amplitudeDbFs              = amplitudeDbFs != null ? amplitudeDbFs.clone() : null;

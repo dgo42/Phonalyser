@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.gui.bind;
+package org.edgo.audio.measure.bind;
 
 import java.util.List;
 import java.util.Objects;
@@ -27,7 +27,7 @@ import java.util.function.Consumer;
  * An observable, mutable value — the unit of two-way binding between a settings
  * control and the {@code Preferences} model.  A parameter that lives in
  * preferences is exposed as a {@code Property}; a control binds to it (via
- * {@link Bindings}) and the view subscribes to it, so neither side ever calls
+ * {@code Bindings}) and the view subscribes to it, so neither side ever calls
  * the other — they communicate only through this value.
  *
  * <p>{@link #set} notifies listeners ONLY when the value actually changes
@@ -36,16 +36,21 @@ import java.util.function.Consumer;
  * is a no-op and fires nothing — so there is no control → property → control
  * feedback loop.
  *
- * <p>Not thread-safe for writes — parameters are set on the UI thread.  The
+ * <p>Threading contract: writes happen on the UI thread (listeners fire
+ * synchronously on the mutating thread), but {@link #get()} is safe from ANY
+ * thread — {@code value} is {@code volatile}, so worker threads (scope
+ * measurement, FFT analysis, audio render) always observe the latest committed
+ * value instead of a cached stale one.  Values must stay immutable
+ * (boxed primitives, enums, strings) for that hand-off to be sound.  The
  * listener list is a {@link CopyOnWriteArrayList} so a listener may
  * subscribe / unsubscribe during a notification.  Listeners are held strongly;
  * a control binding must {@link #removeListener} on widget dispose (handled by
- * {@link Bindings}) so the property doesn't keep disposed widgets alive.
+ * {@code Bindings}) so the property doesn't keep disposed widgets alive.
  */
 public final class Property<T> {
 
     private final List<Consumer<T>> listeners = new CopyOnWriteArrayList<>();
-    private T value;
+    private volatile T value;
 
     public Property(T initial) {
         this.value = initial;

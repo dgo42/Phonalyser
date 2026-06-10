@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.cli.util;
+package org.edgo.audio.measure.dsp;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -30,11 +30,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.function.IntToDoubleFunction;
 
-import org.edgo.audio.measure.dsp.ToneLobeLift;
+import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.MathUtil;
-import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.jtransforms.fft.DoubleFFT_1D;
 
 import lombok.experimental.UtilityClass;
@@ -116,9 +115,9 @@ public class FreqRespCalHelper {
      */
     public FreqRespCalibration computeFromLogSweep(
             float[] yRec, float[] sweepRef, int leadInSamples,
-            int sampleRate, double[] freqs, double amplitudeVRms) {
+            int sampleRate, double[] freqs, double amplitudeVRms, double adcFsVoltageRms) {
         return computeFromLogSweep(yRec, sweepRef, leadInSamples,
-                sampleRate, freqs, amplitudeVRms, 0, null);
+                sampleRate, freqs, amplitudeVRms, adcFsVoltageRms, 0, null);
     }
 
     /** Overload that tags every log line with {@code channelLabel}
@@ -135,7 +134,7 @@ public class FreqRespCalHelper {
      *  the reference is used raw. */
     public FreqRespCalibration computeFromLogSweep(
             float[] yRec, float[] sweepRef, int leadInSamples,
-            int sampleRate, double[] freqs, double amplitudeVRms,
+            int sampleRate, double[] freqs, double amplitudeVRms, double adcFsVoltageRms,
             int fadeSamples, String channelLabel) {
         final String tag = (channelLabel == null || channelLabel.isEmpty())
                 ? "" : "[" + channelLabel + "] ";
@@ -306,9 +305,8 @@ public class FreqRespCalHelper {
         // scale exactly equals the ADC peak full scale.  When they differ,
         // the result picked up an offset (e.g. +0.84 dB for an interface
         // with DAC FS=2.79 V_peak vs ADC FS=2.54 V_peak).
-        double adcFsRms = Preferences.instance().getAdcFsVoltageRms();
-        double adcPeakNormalised = (adcFsRms > 0.0)
-                ? amplitudeVRms / adcFsRms : 0.0;
+        double adcPeakNormalised = (adcFsVoltageRms > 0.0)
+                ? amplitudeVRms / adcFsVoltageRms : 0.0;
         if (adcPeakNormalised > 0.0) {
             for (int i = 0; i < nPoints; i++) {
                 magLin[i] /= adcPeakNormalised;
@@ -508,7 +506,7 @@ public class FreqRespCalHelper {
         try (PrintWriter pw = new PrintWriter(
                 new BufferedWriter(new FileWriter(outFile)))) {
             pw.printf(Locale.US, "# kind=filter_calibration%n");
-            pw.printf(Locale.US, "# format_version=6%n");
+            pw.printf(Locale.US, "# format_version=%d%n", FileVersions.FRC_CALIBRATION);
             pw.printf(Locale.US, "# sample_rate_hz=%d%n",  sampleRate);
             pw.printf(Locale.US, "# sweep_start_hz=%.6f%n", sweepStart);
             pw.printf(Locale.US, "# sweep_end_hz=%.6f%n",   sweepEnd);
@@ -648,20 +646,16 @@ public class FreqRespCalHelper {
 
         new FftAnalyzer().recomputeStats(r);
 
-        // dBV for the log only — the fundamental's absolute level using the cal
-        // CSV's own ADC full-scale; dBFS is the result's base scale.
-        String fundDbV = (!Double.isNaN(cal.adcFsVoltageRms) && cal.adcFsVoltageRms > 0.0)
-                ? String.format(Locale.US, "%.2f", r.fundamentalDbFs + 20.0 * Math.log10(cal.adcFsVoltageRms))
-                : "n/a";
-        log.info("Filter compensation applied to {} bins (out of {}, range {}-{} Hz); "
-                        + "fundamental: {} dBFS / {} dBV, SNR: {} dB, THD: {}%",
-                corrected, half,
-                String.format(Locale.US, "%.3f", fLo),
-                String.format(Locale.US, "%.3f", fHi),
-                String.format(Locale.US, "%.2f", r.fundamentalDbFs),
-                fundDbV,
-                String.format(Locale.US, "%.2f", r.snrDb),
-                String.format(Locale.US, "%.6f", r.thdPct));
+        if (log.isInfoEnabled()) {
+            log.info("Filter compensation applied to {} bins (out of {}, range {}-{} Hz); "
+                            + "fundamental: {} dBFS, SNR: {} dB, THD: {}%",
+                    corrected, half,
+                    String.format(Locale.US, "%.3f", fLo),
+                    String.format(Locale.US, "%.3f", fHi),
+                    String.format(Locale.US, "%.2f", r.fundamentalDbFs),
+                    String.format(Locale.US, "%.2f", r.snrDb),
+                    String.format(Locale.US, "%.6f", r.thdPct));
+        }
     }
 
     /** Applies the cal to a tone's WHOLE main lobe with ONE value taken at the

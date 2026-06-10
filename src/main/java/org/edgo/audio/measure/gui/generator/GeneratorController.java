@@ -23,8 +23,8 @@ import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.enums.GenSignalForm;
-import org.edgo.audio.measure.gui.preferences.BackendPrefs;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.BackendPrefs;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
@@ -137,27 +137,28 @@ public final class GeneratorController {
                                 GenSignalForm form, double frequency, double amplitudeVRms,
                                 long readyTimeoutSeconds) {
         SignalGenerator gen;
+        double dacFs = prefs.getDacFsVoltageRms();
         try {
             if (form == GenSignalForm.SINE_COMPENSATED) {
                 String csv = prefs.getGenCorrectionsCsv();
                 if (csv == null || csv.isEmpty()) {
                     return "Sine (compensated) needs a harmonics-correction CSV.  Pick one with the … button.";
                 }
-                gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms, csv);
+                gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms, dacFs, csv);
             } else if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
                 double f0 = prefs.getGenSweepFreqStartHz();
                 double f1 = prefs.getGenSweepFreqEndHz();
                 int durationSamples = Math.max(2,
                         (int) Math.round(prefs.getGenSweepDurationSec() * sampleRate));
                 if (form == GenSignalForm.LINEAR_SWEEP) {
-                    gen = new SignalGenerator(f0, f1, sampleRate, durationSamples, amplitudeVRms);
+                    gen = new SignalGenerator(f0, f1, sampleRate, durationSamples, amplitudeVRms, dacFs);
                 } else {
                     // No lead-in for the GUI-driven sweep — that's a CLI-
                     // measurement feature, not a music-style sweep control.
-                    gen = new SignalGenerator(f0, f1, durationSamples, 0, sampleRate, amplitudeVRms);
+                    gen = new SignalGenerator(f0, f1, durationSamples, 0, sampleRate, amplitudeVRms, dacFs);
                 }
             } else {
-                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms);
+                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, dacFs);
             }
         } catch (Exception ex) {
             return "Could not build the signal generator: " + ex.getMessage();
@@ -332,8 +333,9 @@ public final class GeneratorController {
     /** Recomputes the running generator's amplitude scale against the current DAC
      *  full-scale (the cached requested Vrms is unchanged).  No-op if not running.
      *  Driven by the DAC-calibration binding so a full-scale change takes effect live. */
-    public void refreshAmplitude() {
-        if (generator != null) generator.refreshAmplitude();
+    public void setDacFsVoltageRms(double v) {
+        SignalGenerator g = generator;
+        if (g != null) g.setDacFsVoltageRms(v);
     }
 
     /** Live-applies sweep start frequency (Hz). */

@@ -16,9 +16,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.gui.preferences;
+package org.edgo.audio.measure.preferences;
 
-import org.edgo.audio.measure.gui.bind.Property;
+import org.edgo.audio.measure.bind.Property;
 
 import lombok.Getter;
 import lombok.Setter;

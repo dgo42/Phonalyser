@@ -124,4 +124,66 @@ class ScopeLanczosTest {
         double recon = Lanczos.lanczos(data, n, 128.0, 3.0);
         assertEquals(1.5, recon, 1e-9);
     }
+
+    @Test
+    void lanczosDouble_cleanData_matchesFloatOverload() {
+        // On fully valid data the NaN-aware double[] overload must agree
+        // with the float[] one (Σw = 1 makes the renormalization a no-op).
+        int n = 256;
+        float[]  f = new float[n];
+        double[] d = new double[n];
+        for (int i = 0; i < n; i++) {
+            f[i] = (float) Math.sin(2 * Math.PI * i / 32.0);
+            d[i] = f[i];   // same float-precision values in both arrays
+        }
+        double[] positions = {100.0, 100.25, 100.5, 127.999};
+        for (double t : positions) {
+            assertEquals(Lanczos.lanczos(f, n, t, 1.0), Lanczos.lanczos(d, n, t, 1.0),
+                    1e-12, "overload mismatch at t=" + t);
+        }
+    }
+
+    @Test
+    void lanczosDouble_nanEdges_doNotPoisonValidCore() {
+        // Freq-domain compare traces carry NaN outside the swept band.  A DC
+        // core flanked by NaN must reconstruct to the constant right up to the
+        // first / last valid sample — NaN taps are skipped and renormalized
+        // out, not propagated.
+        int n = 64;
+        double[] data = new double[n];
+        for (int i = 0; i < n; i++) {
+            data[i] = (i < 10 || i >= 54) ? Double.NaN : 0.42;
+        }
+        // Valid-core positions whose ±LANCZOS_A kernel reaches into the NaN
+        // flanks (10 and 53 are the outermost valid samples).
+        double[] positions = {10.0, 12.5, 32.0, 50.5, 53.0};
+        for (double t : positions) {
+            assertEquals(0.42, Lanczos.lanczos(data, n, t, 1.0), 1e-9,
+                    "NaN flank poisoned reconstruction at t=" + t);
+        }
+    }
+
+    @Test
+    void lanczosDouble_nanCenter_returnsNaN() {
+        // A genuine gap (NaN center sample) must stay a gap so the painter
+        // drops the pixel — same semantics as the linear per-point feed.
+        int n = 64;
+        double[] data = new double[n];
+        for (int i = 0; i < n; i++) data[i] = (i == 32) ? Double.NaN : 1.0;
+
+        assertEquals(Double.NaN, Lanczos.lanczos(data, n, 32.25, 1.0));
+    }
+
+    @Test
+    void lanczosDouble_arrayEdge_keepsFullGain() {
+        // Where the kernel truncates at the array ends the renormalization
+        // keeps DC gain at 1 — a flat trace stays flat to the very last
+        // sample instead of drooping toward zero.
+        int n = 64;
+        double[] data = new double[n];
+        for (int i = 0; i < n; i++) data[i] = 2.5;
+
+        assertEquals(2.5, Lanczos.lanczos(data, n, 0.0, 1.0), 1e-9);
+        assertEquals(2.5, Lanczos.lanczos(data, n, n - 1.001, 1.0), 1e-9);
+    }
 }

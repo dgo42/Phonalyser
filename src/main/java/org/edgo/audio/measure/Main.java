@@ -34,7 +34,7 @@ import org.edgo.audio.measure.cli.RecordWavMode;
 import org.edgo.audio.measure.cli.RegressCalibrateMode;
 import org.edgo.audio.measure.cli.UsagePrinter;
 import org.edgo.audio.measure.enums.AudioBackendType;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 @Log4j2
@@ -52,17 +52,26 @@ public class Main {
         AudioBackend.instance().setActive(AudioBackendType.fromString(ArgParser.getArgValue(args, "--backend")));
         // CLI is headless and single-shot: mark Preferences transient so any value
         // injected for this run (e.g. --adc-fs-vrms) never overwrites the GUI's YAML.
-        Preferences.instance().setTransientMode(true);
+        // Main owns the instance and injects it into the modes that need it — the
+        // modes never reach into the singleton themselves.
+        Preferences prefs = Preferences.instance();
+        prefs.setTransientMode(true);
         if (ArgParser.hasArg(args, "--iterative-compensate")) {
-            IterativeCompensateMode.run(args);
+            IterativeCompensateMode mode = new IterativeCompensateMode();
+            mode.setPrefs(prefs);
+            mode.run(args);
             return;
         }
         if (ArgParser.hasArg(args, "--gen-fft")) {
-            GenFftMode.run(args);
+            GenFftMode mode = new GenFftMode();
+            mode.setPrefs(prefs);
+            mode.run(args);
             return;
         }
         if (ArgParser.hasArg(args, "--freq-response")) {
-            FreqRespMode.run(args);
+            FreqRespMode mode = new FreqRespMode();
+            mode.setPrefs(prefs);
+            mode.run(args);
             return;
         }
         if (ArgParser.getArgValue(args, "--analyze-histogram") != null) {
@@ -70,7 +79,9 @@ public class Main {
             return;
         }
         if (ArgParser.getArgValue(args, "--fft-analyze") != null) {
-            FftAnalyzeMode.run(args);
+            FftAnalyzeMode mode = new FftAnalyzeMode();
+            mode.setPrefs(prefs);
+            mode.run(args);
             return;
         }
         if (ArgParser.hasArg(args, "--deembed")) {
@@ -91,7 +102,9 @@ public class Main {
             return;
         }
         if (ArgParser.hasArg(args, "--generate")) {
-            GenerateMode.run(args);
+            GenerateMode mode = new GenerateMode();
+            mode.setPrefs(prefs);
+            mode.run(args);
             return;
         }
         if (ArgParser.hasArg(args, "--record-wav") || ArgParser.getArgValue(args, "--record-mapped-wav") != null) {
@@ -99,7 +112,9 @@ public class Main {
             return;
         }
         if (ArgParser.hasArg(args, "--histogram")) {
-            HistogramMode.run(args);
+            HistogramMode mode = new HistogramMode();
+            mode.setPrefs(prefs);
+            mode.run(args);
             return;
         }
         log.error("No mode flag given. Use --help for the list of modes.");

@@ -18,7 +18,7 @@
 
 package org.edgo.audio.measure.gui.scope;
 
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 
 import java.util.Locale;
 

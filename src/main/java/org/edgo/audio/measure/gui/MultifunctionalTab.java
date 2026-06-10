@@ -37,7 +37,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.fft.FftPane;
 import org.edgo.audio.measure.gui.generator.GeneratorPane;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.ScopePane;
 
 import lombok.Getter;

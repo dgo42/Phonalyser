@@ -18,9 +18,10 @@
 
 package org.edgo.audio.measure.cli;
 
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.cli.util.*;
 
-import lombok.experimental.UtilityClass;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.generator.SignalGenerator;
@@ -48,8 +49,11 @@ import java.util.Locale;
  * <p>Required: {@code --signal}, {@code --duration}.
  */
 @Log4j2
-@UtilityClass
 public class GenerateMode {
+
+    /** The CLI's single Preferences instance (transient mode) — injected by Main. */
+    @Setter
+    private Preferences prefs;
 
     public void run(String[] args) throws Exception {
         String samplerateArg = ArgParser.getArgValue(args, "--samplerate");
@@ -165,9 +169,9 @@ public class GenerateMode {
                 System.exit(1);
             }
             log.info("Harmonics : {}", harmonicsCsv);
-            generator = new SignalGenerator(frequency, sampleRate, amplitudeVRms, harmonicsCsv);
+            generator = new SignalGenerator(frequency, sampleRate, amplitudeVRms, prefs.getDacFsVoltageRms(), harmonicsCsv);
         } else {
-            generator = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms);
+            generator = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, prefs.getDacFsVoltageRms());
         }
         try (AudioPlayback ag = AudioBackend.instance().openPlayback(mixer, sampleRate, bitDepth, ditherBits)) {
             ag.open();

@@ -43,7 +43,7 @@ import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 
@@ -99,6 +99,11 @@ public final class FreqRespPane {
      *  same instance (method references compare by identity). */
     private Consumer<Void> rangeChangedListener;
 
+    /** Calibration-correction store the pane owns (IoC) and constructor-injects
+     *  into the view and tab control it builds, so both see the same entries.
+     *  Created before the builds run — it has no dependency on either. */
+    private final FreqRespCorrectionStore correctionStore;
+
     public FreqRespPane(Composite parent) {
         Display d = parent.getDisplay();
         IconUtils icons = IconUtils.instance();
@@ -119,20 +124,15 @@ public final class FreqRespPane {
                 I18n.t("freqResp.pane.toggle.tooltip"));
         paneTitle.setStaticMode(true);
 
+        // Build order matters: the view (created in buildPlotRow) receives the
+        // store first; the tab control's constructor then pushes the prefs rows
+        // into it, firing FREQRESP_CALIBRATION_CHANGED — which the view handles
+        // by re-deriving from the store it already holds.
+        correctionStore = new FreqRespCorrectionStore("FreqResp",
+                () -> MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED));
         buildPlotRow();
         buildFreqScrollbarRow();
         buildToolbarRow(wandIcon, playIcon);
-
-        // The pane owns the calibration-correction store (IoC) and injects the
-        // same instance into the view and tab control it just built.  Inject
-        // the view first: pushing the rows into the store (inside the tab
-        // control's setter) fires FREQRESP_CALIBRATION_CHANGED, which the view
-        // handles by re-deriving from its store — so that store must be set by
-        // then.
-        FreqRespCorrectionStore correctionStore = new FreqRespCorrectionStore("FreqResp",
-                () -> MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED));
-        view.setCorrectionStore(correctionStore);
-        tabControl.setCorrectionStore(correctionStore);
 
         // Bus subscription.  Range-changed re-aligns the scrollbars after the
         // view's wheel-driven pan / zoom (and after a preset load, which the
@@ -157,7 +157,7 @@ public final class FreqRespPane {
         plotRow.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         plotRow.setLayout(new FormLayout());
 
-        view = new FreqRespView(plotRow);
+        view = new FreqRespView(plotRow, correctionStore);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);
         magScrollbar.setMinimum(0);
         magScrollbar.setMaximum(SCROLL_RANGE);
@@ -220,7 +220,7 @@ public final class FreqRespPane {
         trGl.marginWidth = 0; trGl.marginHeight = 0; trGl.horizontalSpacing = 4;
         toolbarRow.setLayout(trGl);
 
-        tabControl = new FreqRespTabControl(toolbarRow, view);
+        tabControl = new FreqRespTabControl(toolbarRow, view, correctionStore);
         tabControl.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         // Strip double-click / Enter collapses the tab body.  The toolbar row
         // is pinned to a fixed height while expanded, so the collapse re-flow

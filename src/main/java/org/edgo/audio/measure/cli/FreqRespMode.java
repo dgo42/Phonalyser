@@ -20,11 +20,14 @@ package org.edgo.audio.measure.cli;
 
 import org.edgo.audio.measure.cli.util.*;
 
-import lombok.experimental.UtilityClass;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.chart.ChartStyle;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.edgo.audio.measure.generator.SignalGenerator;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.wav.WavWriter;
 import org.jfree.chart.ChartFactory;
@@ -76,8 +79,11 @@ import java.util.concurrent.CompletableFuture;
  * {@code --in-device}.
  */
 @Log4j2
-@UtilityClass
 public class FreqRespMode {
+
+    /** The CLI's single Preferences instance (transient mode) — injected by Main. */
+    @Setter
+    private Preferences prefs;
 
     public void run(String[] args) throws Exception {
         String samplerateArg    = ArgParser.getArgValue(args, "--samplerate");
@@ -99,7 +105,7 @@ public class FreqRespMode {
         if (amplitudeArg  == null) { log.error("--amplitude required");  System.exit(1); }
         if (adcFsArg != null) {
             // Inject for this run only — Main marked Preferences transient, so not persisted.
-            Preferences.instance().setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
+            prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         int sampleRate = Integer.parseInt(samplerateArg);
@@ -172,7 +178,7 @@ public class FreqRespMode {
         log.info("Amplitude   : {} V RMS", amp);
         log.info("Chart       : {}x{} px", chartWidth, chartHeight);
 
-        SignalGenerator gen = new SignalGenerator(fStart, fEnd, sweepSamples, leadInSamples, sampleRate, amp);
+        SignalGenerator gen = new SignalGenerator(fStart, fEnd, sweepSamples, leadInSamples, sampleRate, amp, prefs.getDacFsVoltageRms());
         // One-shot sweep for the measurement: emit silence after the buffer
         // ends instead of looping a second cycle into the capture window,
         // which would alias into the deconvolution.  Hann fade-in/fade-out
@@ -201,14 +207,15 @@ public class FreqRespMode {
         // but compute independently, so they run on separate futures off
         // the common ForkJoin pool.
         float[] sweepRef = gen.getLogSweepBuffer();
+        double adcFs = prefs.getAdcFsVoltageRms();
         CompletableFuture<FreqRespCalibration> calLFut = CompletableFuture.supplyAsync(
                 () -> FreqRespCalHelper.computeFromLogSweep(
                         rec.left(), sweepRef, leadInSamples, sampleRate, freqs, amp,
-                        fadeSamples, "L"));
+                        adcFs, fadeSamples, "L"));
         CompletableFuture<FreqRespCalibration> calRFut = CompletableFuture.supplyAsync(
                 () -> FreqRespCalHelper.computeFromLogSweep(
                         rec.right(), sweepRef, leadInSamples, sampleRate, freqs, amp,
-                        fadeSamples, "R"));
+                        adcFs, fadeSamples, "R"));
         FreqRespCalibration calL = calLFut.join();
         FreqRespCalibration calR = calRFut.join();
         StereoFreqRespCalibration stereo = new StereoFreqRespCalibration(calL, calR);

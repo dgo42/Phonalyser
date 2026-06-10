@@ -20,13 +20,13 @@ package org.edgo.audio.measure.cli;
 
 import org.edgo.audio.measure.cli.util.*;
 
-import lombok.experimental.UtilityClass;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.adc.AdcHistogram;
 import org.edgo.audio.measure.adc.WeightedBuffer;
 import org.edgo.audio.measure.chart.ChartExporter;
 import org.edgo.audio.measure.chart.HistogramExporter;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.DeviceRef;
@@ -54,8 +54,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@code --duration}/{@code --samplerate} in record mode.
  */
 @Log4j2
-@UtilityClass
 public class HistogramMode {
+
+    /** The CLI's single Preferences instance (transient mode) — injected by Main. */
+    @Setter
+    private Preferences prefs;
 
     public void run(String[] args) throws Exception {
         String loadArg       = ArgParser.getArgValue(args, "--load");
@@ -67,7 +70,6 @@ public class HistogramMode {
         String heightArg     = ArgParser.getArgValue(args, "--height");
         String bitsArg       = ArgParser.getArgValue(args, "--bits");
         String adcFsArg      = ArgParser.getArgValue(args, "--adc-fs-vrms");
-        Preferences prefs = Preferences.instance();
         if (adcFsArg != null) {
             prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }

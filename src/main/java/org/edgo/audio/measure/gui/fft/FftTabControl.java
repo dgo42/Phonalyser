@@ -50,8 +50,9 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
-import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
-import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
+import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.AmplitudeUnit;
@@ -63,7 +64,7 @@ import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.bind.Bindings;
-import org.edgo.audio.measure.gui.bind.Property;
+import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -72,9 +73,9 @@ import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.generator.NumericStepField;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.interfaces.Stepper;
-import org.edgo.audio.measure.gui.preferences.CalibrationEntry;
-import org.edgo.audio.measure.gui.preferences.FftPreset;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.CalibrationEntry;
+import org.edgo.audio.measure.preferences.FftPreset;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.AdcCalibrationDialog;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 
@@ -128,10 +129,9 @@ public final class FftTabControl extends Composite {
 
     private final FftView view;
 
-    /** Loaded {@code .frc} correction store, injected by {@link FftPane} (IoC)
-     *  and shared with the {@link FftView}.  {@code null} until
-     *  {@link #setCorrectionStore} runs right after construction. */
-    private FreqRespCorrectionStore correctionStore;
+    /** Loaded {@code .frc} correction store, constructor-injected by
+     *  {@link FftPane} (IoC) and shared with the {@link FftView}. */
+    private final FreqRespCorrectionStore correctionStore;
 
     // Image references retained so build methods past the constructor can
     // re-use them; all instances come from the shared IconUtils cache so
@@ -185,9 +185,11 @@ public final class FftTabControl extends Composite {
     private ScrolledComposite     fftCalRowsScroll;
     private final List<FftCalRow> fftCalRows = new ArrayList<>();
 
-    public FftTabControl(Composite parent, FftView view, boolean liveCapture) {
+    public FftTabControl(Composite parent, FftView view, boolean liveCapture,
+                         FreqRespCorrectionStore correctionStore) {
         super(parent, SWT.NONE);
         this.view = view;
+        this.correctionStore = correctionStore;
 
         IconUtils icons = IconUtils.instance();
         Display d = parent.getDisplay();
@@ -243,14 +245,10 @@ public final class FftTabControl extends Composite {
                 MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener));
 
         wireHelpAnchors();
-    }
 
-    /** Injects the calibration-correction store (IoC, from {@link FftPane})
-     *  and pushes the initially-loaded active rows into it.  Called once right
-     *  after construction — the store isn't available while the rows are built,
-     *  so the initial sync happens here rather than in the constructor. */
-    public void setCorrectionStore(FreqRespCorrectionStore correctionStore) {
-        this.correctionStore = correctionStore;
+        // Push the initially-loaded active rows into the store last — the view
+        // (built before this control) already holds the same store instance, so
+        // the change events this fires find it ready.
         syncFftStoreFromRows();
     }
 
@@ -1064,6 +1062,7 @@ public final class FftTabControl extends Composite {
         boolean modeImd = false;
         double tone1Hz = Double.NaN;
         double tone2Hz = Double.NaN;
+        double binBwHz = Double.NaN;
         try {
             for (String line : Files.readAllLines(Paths.get(path), StandardCharsets.UTF_8)) {
                 String s = line.trim();
@@ -1075,6 +1074,7 @@ public final class FftTabControl extends Composite {
                 }
                 if (s.startsWith("# tone1_hz=")) { tone1Hz = parseHeaderHz(s); continue; }
                 if (s.startsWith("# tone2_hz=")) { tone2Hz = parseHeaderHz(s); continue; }
+                if (s.startsWith("# bin_bw_hz=")) { binBwHz = parseHeaderHz(s); continue; }
                 char c0 = s.charAt(0);
                 if (c0 != '-' && c0 != '+' && c0 != '.' && !Character.isDigit(c0)) continue; // header / comment
                 String[] p = s.split("[;,]");
@@ -1102,6 +1102,9 @@ public final class FftTabControl extends Composite {
         int harmCount = Math.max(9, prefs.getFftCalcMaxHarmonic());
         r.ensureArrays(n, harmCount);
         r.freqResolution   = freqRes;
+        // Old files lack the bin-bandwidth header; there the row spacing IS the
+        // bandwidth the file was captured with.
+        r.binBwSqrt        = Math.sqrt((binBwHz > 0) ? binBwHz : freqRes);
         r.fftSize          = 2 * (n - 1);
         r.sampleRate       = (int) Math.round(freqRes * r.fftSize);
         r.harmonicCount    = harmCount;
@@ -1148,7 +1151,7 @@ public final class FftTabControl extends Composite {
                 && tone1Hz > 0 && tone2Hz > 0) {
             r.fundamentalHzRefined  = Math.min(tone1Hz, tone2Hz);
             r.fundamental2HzRefined = Math.max(tone1Hz, tone2Hz);
-            imd = ImdAnalyzer.analyze(r, tone1Hz, tone2Hz);
+            imd = new ImdAnalyzer().analyze(r, tone1Hz, tone2Hz, dbvOffsetDb);
         }
 
         // Stop live capture so the loaded spectrum isn't overwritten — the pane
@@ -1172,17 +1175,45 @@ public final class FftTabControl extends Composite {
     private void writeSpectrumFft(Path file, FftResult r, boolean imd,
                                  double tone1Hz, double tone2Hz) throws IOException {
         try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8))) {
-            // Header comments (skipped by the loader's value parser): record the
-            // capture mode so re-opening restores the THD or IMD table, plus the
-            // two tone frequencies IMD needs to re-measure its products.
+            // Header comments (skipped by the loader's value parser): the capture
+            // mode restores the THD or IMD table on re-open, the two tone
+            // frequencies let IMD re-measure its products, and the analysis
+            // parameters + applied calibrations are informational provenance.
+            Preferences prefs = Preferences.instance();
+            double dbvOffset = prefs.getDbvOffsetDb();   // dBV = dBFs + global ADC offset
             pw.println("# Phonalyser FFT spectrum");
+            pw.println("# format_version=" + FileVersions.FFT_SPECTRUM);
             pw.println("# mode=" + (imd ? "IMD" : "THD"));
+            pw.printf("# fft_size=%d%n", r.fftSize);
+            pw.printf("# sample_rate_hz=%d%n", r.sampleRate);
+            pw.printf("# window=%s%n", r.windowType != null ? r.windowType.name() : "n/a");
+            pw.printf("# averaging=%s%n", r.coherentAveraging ? "coherent" : "incoherent");
+            pw.printf("# averages=%d%n", r.frameCount);
+            if (r.snrFreqMin > 0 || r.snrFreqMax > 0) {
+                pw.printf("# snr_freq_min_hz=%.3f%n", r.snrFreqMin);
+                pw.printf("# snr_freq_max_hz=%.3f%n", r.snrFreqMax);
+            }
+            if (Double.isFinite(r.fundamentalTrueDbFs)) {
+                pw.printf("# manual_fund_dbv=%.4f%n", r.fundamentalTrueDbFs + dbvOffset);
+            }
+            pw.printf("# thd_max_harmonic=%d%n", r.harmonicCount);
+            if (correctionStore != null) {
+                for (FreqRespCorrectionStore.Entry e : correctionStore.getEntries()) {
+                    pw.printf("# calibration=%s%s%n",
+                            e.getPath(), e.isWithNoise() ? " (withNoise)" : "");
+                }
+            }
+            // Bin bandwidth (Hz) the spectrum was captured with — informational,
+            // and the loader derives the V/√Hz scale from it so a re-opened file
+            // keeps its own scale instead of the then-live config's.  Live
+            // results carry null and write the live-config cache.
+            double bwSqrt = (r.binBwSqrt != null) ? r.binBwSqrt : prefs.getBinBwSqrt();
+            pw.printf("# bin_bw_hz=%.9f%n", bwSqrt * bwSqrt);
             if (imd) {
                 pw.printf("# tone1_hz=%.6f%n", tone1Hz);
                 pw.printf("# tone2_hz=%.6f%n", tone2Hz);
             }
             pw.println("frequency_hz;magnitude_dBV;phase_deg");
-            double dbvOffset = Preferences.instance().getDbvOffsetDb();   // dBV = dBFs + global ADC offset
             for (int k = 0; k < r.amplitudeDbFs.length; k++) {
                 double f   = k * r.freqResolution;
                 double dbv = r.amplitudeDbFs[k] + dbvOffset;
@@ -1237,7 +1268,7 @@ public final class FftTabControl extends Composite {
             // "loaded" / "N loaded" when at least one loaded .frc is active —
             // the store only holds active+loaded entries (see
             // syncFftStoreFromRows), mirroring the FreqResp pane's tile.
-            int n = correctionStore == null ? 0 : correctionStore.getEntries().size();
+            int n = correctionStore.getEntries().size();
             if (n == 1) {
                 String s = I18n.t("calibration.tile.loaded");
                 tiles.add(TileTabFolder.Tile.text(s, s));
@@ -1441,9 +1472,8 @@ public final class FftTabControl extends Composite {
             if (p != null && !p.isEmpty()) loadFileIntoFftCalRow(r, p, false);
             updateFftCalRowEnable(r);
         }
-        // The store is populated from these rows in setCorrectionStore(), which
-        // the pane calls right after construction (the store is injected, so
-        // it isn't available here yet).
+        // The store is populated from these rows by the syncFftStoreFromRows()
+        // call at the end of the constructor, after every tab is built.
     }
 
     /** Builds and appends a fresh row.  7-column grid: pathField,

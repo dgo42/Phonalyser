@@ -38,10 +38,10 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 
-import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
-import org.edgo.audio.measure.cli.util.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
-import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
+import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -49,7 +49,7 @@ import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.DeviceRef;
 
@@ -302,6 +302,8 @@ public final class FreqRespWizardDialog {
                         .durationSec(prefs.getFreqRespDurationSec())
                         .leadInSec(prefs.getFreqRespLeadInSec())
                         .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
+                        .dacFsVoltageRms(prefs.getDacFsVoltageRms())
+                        .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
                         .applyCalibration(!directLeg)  // page 2 divides out the page-1 transfer
                         .captureProgress(progress)
                         .build();
