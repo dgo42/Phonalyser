@@ -27,6 +27,8 @@ import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.DataLine;
 import javax.sound.sampled.SourceDataLine;
 
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.gui.bus.Events;
@@ -54,12 +56,13 @@ public final class FilePlayController {
 
     private volatile Thread        playThread;
     private final    AtomicBoolean stopFlag = new AtomicBoolean(false);
+    @Getter
     private volatile boolean       running;
-    private volatile boolean       loop;
-    private volatile String        lastStartError;
-
     /** Live-updates the loop flag.  Picked up at the next EOF check by the play thread. */
-    public void setLoop(boolean loop) { this.loop = loop; }
+    @Setter
+    private volatile boolean       loop;
+    @Getter
+    private volatile String        lastStartError;
 
     /**
      * Spawns a daemon thread that decodes {@code file} and writes its
@@ -95,9 +98,6 @@ public final class FilePlayController {
         playThread = null;
         running    = false;
     }
-
-    public boolean isRunning()        { return running; }
-    public String  getLastStartError() { return lastStartError; }
 
     private void playLoop(File file) {
         SourceDataLine line = null;

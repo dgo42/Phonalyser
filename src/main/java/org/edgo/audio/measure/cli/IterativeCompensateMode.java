@@ -48,7 +48,7 @@ import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
 import org.edgo.audio.measure.generator.SignalGenerator;
-import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import lombok.Value;
@@ -132,7 +132,7 @@ public class IterativeCompensateMode {
         double compStep      = compStepArg  != null ? Double.parseDouble(compStepArg)  : 1.0;
         String adcFsArg      = ArgParser.getArgValue(args, "--adc-fs-vrms");
         if (adcFsArg != null) {
-            AudioBackend.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
+            Preferences.instance().setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         if (samplerateArg == null) { log.error("--samplerate required"); System.exit(1); }
@@ -283,7 +283,6 @@ public class IterativeCompensateMode {
                 preCorrDbFs0  = pp[1];
                 FreqRespCalHelper.applyCompensationInPlace(result0, freqRespCal, calNoise);
             }
-            FreqRespCalHelper.applyDefaultDbvScaling(result0);
             if (result0.fundamentalDynExclusionHz > MAX_FUND_EXCLUSION_HZ) {
                 log.warn("Iteration 0 retry {}: fundamental exclusion {} Hz > {} Hz — signal interrupted, retrying",
                         retry + 1,
@@ -406,7 +405,6 @@ public class IterativeCompensateMode {
                     preCorrDbFs  = pp[1];
                     FreqRespCalHelper.applyCompensationInPlace(result, freqRespCal, calNoise);
                 }
-                FreqRespCalHelper.applyDefaultDbvScaling(result);
                 if (result.fundamentalDynExclusionHz > MAX_FUND_EXCLUSION_HZ) {
                     log.warn("Iteration {} retry {}: fundamental exclusion {} Hz > {} Hz — signal interrupted, retrying",
                             iter, retry + 1,

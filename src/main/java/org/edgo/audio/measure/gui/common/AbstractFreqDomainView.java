@@ -18,15 +18,14 @@
 
 package org.edgo.audio.measure.gui.common;
 
-import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
+import org.edgo.audio.measure.enums.MagnitudeUnit;
 
-import java.util.Arrays;
 import java.util.Map;
 
 /**
@@ -72,10 +71,6 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
     /** Canvas width / height the {@link #traceBuffer} was built for —
      *  a resize always forces a rebuild. */
     private int   traceBufferW, traceBufferH;
-
-    protected AbstractFreqDomainView(Composite parent, int style) {
-        super(parent, style);
-    }
 
     /** Forwards to {@link AbstractMeasurementView#AbstractMeasurementView(Composite, int, Map)}
      *  so frequency-domain subclasses (FftView / FreqRespView) can pass
@@ -169,7 +164,11 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
                                 double freqMin, double freqMax, boolean logFreq) {
         if (logFreq) {
             double safeMin = Math.max(1, freqMin);
-            double safeMax = Math.max(safeMin + 1, freqMax);
+            // Never below the real freqMax — an additive "+1 Hz" floor would overshoot
+            // freqMax on a sub-1-Hz zoom and compress the trace away from the right edge
+            // (the axis uses freqMax directly).  The tiny multiplicative bump only guards
+            // a degenerate freqMin == freqMax range so log10(hi/lo) stays > 0.
+            double safeMax = Math.max(freqMax, safeMin * 1.0000001);
             double lo = Math.log10(safeMin);
             double hi = Math.log10(safeMax);
             double t  = (Math.log10(Math.max(1, f)) - lo) / (hi - lo);
@@ -186,7 +185,11 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
         double t = (double) (x - plot.x) / plot.width;
         if (logFreq) {
             double safeMin = Math.max(1, freqMin);
-            double safeMax = Math.max(safeMin + 1, freqMax);
+            // Never below the real freqMax — an additive "+1 Hz" floor would overshoot
+            // freqMax on a sub-1-Hz zoom and compress the trace away from the right edge
+            // (the axis uses freqMax directly).  The tiny multiplicative bump only guards
+            // a degenerate freqMin == freqMax range so log10(hi/lo) stays > 0.
+            double safeMax = Math.max(freqMax, safeMin * 1.0000001);
             double lo = Math.log10(safeMin);
             double hi = Math.log10(safeMax);
             return Math.pow(10, lo + t * (hi - lo));
@@ -203,7 +206,11 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
                                            double freqMin, double freqMax, boolean logFreq) {
         if (logFreq) {
             double safeMin = Math.max(1, freqMin);
-            double safeMax = Math.max(safeMin + 1, freqMax);
+            // Never below the real freqMax — an additive "+1 Hz" floor would overshoot
+            // freqMax on a sub-1-Hz zoom and compress the trace away from the right edge
+            // (the axis uses freqMax directly).  The tiny multiplicative bump only guards
+            // a degenerate freqMin == freqMax range so log10(hi/lo) stays > 0.
+            double safeMax = Math.max(freqMax, safeMin * 1.0000001);
             double lo = Math.log10(safeMin);
             double hi = Math.log10(safeMax);
             return Math.pow(10, lo + frac * (hi - lo));
@@ -214,24 +221,59 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
     /** Maps a dB value to its Y pixel inside {@code plot}.  At
      *  {@code db == magTop} returns {@code plot.y}; at
      *  {@code db == magBot} returns {@code plot.y + plot.height}.
-     *
-     *  <p>Linear-dB form used by FreqResp and by FFT for its dB-rel
-     *  magnitude unit.  FFT's other units (V, V/sqrt(Hz), dBFS) keep
-     *  their own per-view magToY because the fraction step is
-     *  unit-aware. */
+     *  No clamp — an over-range value runs off the plot edge and the trace painter's
+     *  GC clip cuts it flush.  Linear-dB form used by FreqResp and by FFT's dB-rel unit. */
     protected final int dbToY(double db, Rectangle plot,
                               double magTop, double magBot) {
         double t = (magTop - db) / (magTop - magBot);
         return plot.y + (int) Math.round(t * plot.height);
     }
 
-    // (Zoom / pan stay per-view: FFT's magnitude zoom branches between
-    // linear dB and log V / V·Hz^-½ on the FftMagnitudeUnit enum, which
-    // FreqResp never sees.  Forcing both views through a common
-    // template would either push view-specific branching into this base
-    // or hide it behind a strategy that adds more glue than it saves.
-    // The coordinate transforms above are the part that genuinely
-    // overlaps; the wheel-handler dispatch stays in the subclass.)
+    /** Sub-pixel ({@code double}) counterpart of {@link #dbToY} for the Lanczos-smoothed
+     *  traces — keeps the curve off the integer pixel grid so it strokes between rows.
+     *  Returns {@code NaN} for {@code NaN} input (propagates a gap to the painter). */
+    protected final double dbToYf(double db, Rectangle plot,
+                                  double magTop, double magBot) {
+        return plot.y + ((magTop - db) / (magTop - magBot)) * plot.height;
+    }
+
+    /**
+     * Shared mapping kernel: fractional position 0..1 of {@code v} within the
+     * {@code [bot, top]} range, where 0 = top and 1 = bot.  Linear-amplitude units
+     * (V, V/√Hz) map on a log axis; dB units stay linear.  No clamping — callers clip
+     * after they know the plot geometry.
+     */
+    protected final double magToYFraction(double v, double top, double bot, MagnitudeUnit unit) {
+        if (unit.isLog()) {
+            double vL   = (v   <= 0) ? Double.NEGATIVE_INFINITY : Math.log10(v);
+            double topL = (top <= 0) ? -30 : Math.log10(top);
+            double botL = (bot <= 0) ? -30 : Math.log10(bot);
+            if (topL <= botL) return 0;
+            return (topL - vL) / (topL - botL);
+        }
+        return (top - v) / (top - bot);
+    }
+
+    /** Unit-aware counterpart of {@link #dbToY} for FFT's V / V√Hz / dBFS / dBV axes,
+     *  via {@link #magToYFraction}.  Clamps to the plot rect; markers that must
+     *  drop when off-range test the fraction themselves before calling. */
+    protected final int magToY(double v, Rectangle plot, double top, double bot, MagnitudeUnit unit) {
+        double t = magToYFraction(v, top, bot, unit);
+        if (t < 0) t = 0;
+        if (t > 1) t = 1;
+        return plot.y + (int) Math.round(t * plot.height);
+    }
+
+    /** Like {@link #magToY} but for the spectrum trace: NO clamp, so an over-range peak's
+     *  flank is drawn to its true (off-screen) endpoint and the painter's GC clip cuts it
+     *  flush at the edge — keeping the correct slope, instead of pinning to the edge
+     *  (shifting flat-top) or to a fixed off-edge point (wrong slope).  Mirrors
+     *  {@link #dbToY}; the trace's {@code v} is always &gt; 0 so the log V/V√Hz fraction
+     *  never reaches ±∞ here. */
+    protected final int magToYTrace(double v, Rectangle plot, double top, double bot, MagnitudeUnit unit) {
+        double t = magToYFraction(v, top, bot, unit);
+        return plot.y + (int) Math.round(t * plot.height);
+    }
 
     /**
      * Paints a multi-line readout box anchored at {@code (x, y)} inside
@@ -277,172 +319,4 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
         }
     }
 
-    /**
-     * Helper for rendering a long sequence of data points as a polyline
-     * + envelope bars at no more than one drawLine per pixel column.
-     *
-     * <p>Usage:
-     * <pre>
-     *   ColumnBucketPainter p = new ColumnBucketPainter(plot);
-     *   for (...) p.add(xPixel, yPixel);
-     *   p.drawTo(gc);
-     * </pre>
-     *
-     * <p>Both call sites in FftView and FreqRespView had ~30 lines of
-     * the same bucketing logic open-coded.  Sharing it via this helper
-     * keeps the rendering identical (and any future tuning, e.g. line
-     * width or anti-aliasing, lands in one place).
-     */
-    public static final class ColumnBucketPainter {
-
-        private final Rectangle plot;
-        private final int[] yMins, yMaxs, cnts;
-        /** Optional anchor points just outside the plot rect.  When set,
-         *  the polyline pass extends from {@code leftAnchor*} into the
-         *  first column and from the last column out to {@code
-         *  rightAnchor*}.  The GC clip in {@link #drawTo} hides the
-         *  out-of-rect portion of each anchor line.  Used by FFT to
-         *  reach the canvas edges with one extra bin's worth of data. */
-        private int leftAnchorX  = Integer.MIN_VALUE, leftAnchorY  = 0;
-        private int rightAnchorX = Integer.MIN_VALUE, rightAnchorY = 0;
-
-        public ColumnBucketPainter(Rectangle plot) {
-            this.plot  = plot;
-            int w      = Math.max(1, plot.width);
-            this.yMins = new int[w];
-            this.yMaxs = new int[w];
-            this.cnts  = new int[w];
-            Arrays.fill(yMins, Integer.MAX_VALUE);
-            Arrays.fill(yMaxs, Integer.MIN_VALUE);
-        }
-
-        /** Records one data point.  Coordinates are absolute canvas
-         *  pixels (the same coordinate system the caller is about to
-         *  paint with).  Points outside the plot rect are silently
-         *  dropped — the caller doesn't need to filter ahead of time. */
-        public void add(int xAbs, int yAbs) {
-            int x = xAbs - plot.x;
-            if (x < 0 || x >= cnts.length) return;
-            if (yAbs < yMins[x]) yMins[x] = yAbs;
-            if (yAbs > yMaxs[x]) yMaxs[x] = yAbs;
-            cnts[x]++;
-        }
-
-        /** Sets the polyline's left edge anchor — a point at
-         *  {@code xAbs < plot.x} the first column connects back to.
-         *  Calling repeatedly keeps the rightmost candidate (the
-         *  one closest to the visible range), which is the bin that
-         *  most accurately reaches the left edge. */
-        public void setLeftAnchor(int xAbs, int yAbs) {
-            if (xAbs > leftAnchorX) { leftAnchorX = xAbs; leftAnchorY = yAbs; }
-        }
-
-        /** Sets the polyline's right edge anchor — a point at
-         *  {@code xAbs >= plot.x + plot.width} the last column connects
-         *  out to.  Calling repeatedly keeps the leftmost candidate. */
-        public void setRightAnchor(int xAbs, int yAbs) {
-            if (rightAnchorX == Integer.MIN_VALUE || xAbs < rightAnchorX) {
-                rightAnchorX = xAbs; rightAnchorY = yAbs;
-            }
-        }
-
-        /** Emits the accumulated points as vertical envelope bars
-         *  (one per multi-bin column, the "1 bin &lt; 1 px" dense
-         *  regime, AA off so single-bin spikes stay sharp) plus a
-         *  midpoint polyline through every non-empty column (carries
-         *  the trace through the sparse "1 bin &gt;= 1 px" regime,
-         *  AA on for a smooth line).  The GC's clip is temporarily
-         *  set to the plot rect; caller is responsible for setting
-         *  foreground / line width / line style before calling. */
-        // Previous implementation kept for reference — emitted
-        // up to 2 × plot.width drawLine calls (one envelope bar per
-        // multi-bin column + one polyline segment per inter-column
-        // gap).  Replaced by the fillPolygon + drawPolyline pass below
-        // because at 1000 px wide that was ~2000 GDI calls per spectrum
-        // rebuild — a measurable chunk of the FFT's 200 ms paint time.
-        //
-        // public void drawTo(GC gc) {
-        //     Rectangle prevClip = gc.getClipping();
-        //     gc.setClipping(plot);
-        //     try {
-        //         // Pass 1: vertical envelope bars for columns where
-        //         // multiple data points collapsed onto the same X pixel.
-        //         for (int x = 0; x < cnts.length; x++) {
-        //             if (cnts[x] == 0) continue;
-        //             if (yMins[x] != yMaxs[x]) {
-        //                 int px = plot.x + x;
-        //                 gc.drawLine(px, yMins[x], px, yMaxs[x]);
-        //             }
-        //         }
-        //         // Pass 2: polyline through column midpoints — bridges
-        //         // gaps between sparse columns so the trace reads as one
-        //         // continuous line.  Left / right anchors (when set)
-        //         // prepend / append a segment that reaches past the
-        //         // plot edge; the GC clip above hides the out-of-rect
-        //         // portion.
-        //         int prevX = leftAnchorX, prevY = leftAnchorY;
-        //         for (int x = 0; x < cnts.length; x++) {
-        //             if (cnts[x] == 0) continue;
-        //             int midY = (yMins[x] + yMaxs[x]) >>> 1;
-        //             int px   = plot.x + x;
-        //             if (prevX != Integer.MIN_VALUE) gc.drawLine(prevX, prevY, px, midY);
-        //             prevX = px; prevY = midY;
-        //         }
-        //         if (rightAnchorX != Integer.MIN_VALUE && prevX != Integer.MIN_VALUE) {
-        //             gc.drawLine(prevX, prevY, rightAnchorX, rightAnchorY);
-        //         }
-        //     } finally {
-        //         gc.setClipping(prevClip);
-        //     }
-        // }
-        public void drawTo(GC gc) {
-            Rectangle prevClip = gc.getClipping();
-            gc.setClipping(plot);
-            int prevAA = gc.getAntialias();
-            try {
-                // Pass 1: vertical envelope bars for the "1 bin < 1 px"
-                // (dense) columns.  AA OFF so 1-px-wide spikes — narrow
-                // harmonics, transients — render as a sharp stroke and
-                // don't get blended into the noise floor.  A fillPolygon
-                // envelope was tried previously but its diagonal top
-                // edge smeared single-bin spikes into adjacent columns.
-                gc.setAntialias(SWT.OFF);
-                for (int x = 0; x < cnts.length; x++) {
-                    if (cnts[x] < 2 || yMins[x] == yMaxs[x]) continue;
-                    int px = plot.x + x;
-                    gc.drawLine(px, yMins[x], px, yMaxs[x]);
-                }
-
-                // Pass 2: midpoint polyline (AA on) plus separate
-                // drawLine extensions to the anchors.  Keeping them as
-                // separate calls (instead of one combined polyline)
-                // sidesteps a render quirk where a polyline with many
-                // off-clip-rect vertices intermittently fails to
-                // render its in-rect segments at all.
-                // Pass 2: midpoint trace as per-segment drawLine calls
-                // (AA on).  Per-segment avoids a drawPolyline rendering
-                // quirk on Windows where many off-clip-rect vertices
-                // can cause the in-rect segments to drop out entirely.
-                // Left / right anchors prepend / append a connecting
-                // segment so the trace reaches past the plot edge; the
-                // clip above hides the out-of-rect portion.
-                gc.setAntialias(SWT.ON);
-                int prevX = leftAnchorX, prevY = leftAnchorY;
-                for (int x = 0; x < cnts.length; x++) {
-                    if (cnts[x] == 0) continue;
-                    int midY = (yMins[x] + yMaxs[x]) >>> 1;
-                    int px   = plot.x + x;
-                    if (prevX != Integer.MIN_VALUE) gc.drawLine(prevX, prevY, px, midY);
-                    prevX = px;
-                    prevY = midY;
-                }
-                if (rightAnchorX != Integer.MIN_VALUE && prevX != Integer.MIN_VALUE) {
-                    gc.drawLine(prevX, prevY, rightAnchorX, rightAnchorY);
-                }
-            } finally {
-                gc.setAntialias(prevAA);
-                gc.setClipping(prevClip);
-            }
-        }
-    }
 }

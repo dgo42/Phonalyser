@@ -18,7 +18,7 @@
 
 package org.edgo.audio.measure.gui.generator;
 
-import org.edgo.audio.measure.sound.AudioBackend;
+import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Color;
@@ -95,6 +95,7 @@ public final class GeneratorPane {
     /** Current dither values shown in the combo (rebuilt when output bit depth changes). */
     private int[] ditherBits;
 
+    @Getter
     private final Composite       group;
     private PaneTitle             title;
     private final SignalFormCombo formCombo;
@@ -199,6 +200,7 @@ public final class GeneratorPane {
     private Consumer<Double> freqTrim2Listener;
 
     /** True when the pane is collapsed.  See {@link #setCollapsed(boolean)}. */
+    @Getter
     private boolean    collapsed;
     /** Per-child visibility snapshot taken when the pane collapses,
      *  restored verbatim on expand. */
@@ -206,6 +208,7 @@ public final class GeneratorPane {
     private boolean[]  preCollapseChildExclude;
     /** Current pane pixel width as last seen by the sash filter, seeded
      *  from prefs in the constructor.  {@code -1} = not yet measured. */
+    @Getter
     private int        paneWidthPx = -1;
     /** Pixel width remembered at collapse time so {@link #setCollapsed}
      *  can restore it on expand. */
@@ -665,13 +668,18 @@ public final class GeneratorPane {
             // ampField's value is in the current display unit; canonicalise
             // to Vrms before saving so the unit-of-record is consistent.
             double vrms = currentUnit.toVrms(ampField.getValue(),
-                    AudioBackend.getAdcFsVoltageRms());
+                    prefs.getDacFsVoltageRms());
             prefs.setGenAmplitudeVrms(vrms);
             prefs.setGenAmplitudeUnit(currentUnit);
             // Live-apply if running.
             controller.setAmplitudeVrms(vrms);
             MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
+        // A DAC recalibration (Calibrate DAC dialog) changes the output full-scale:
+        // recompute the running generator's amplitude against it so the commanded
+        // Vrms still holds, without a restart.  The dialog only writes the pref;
+        // this binding applies it.
+        Bindings.onChange(group, prefs.dacFsVoltageRmsProperty(), v -> controller.refreshAmplitude());
 
         // ----- Duty cycle (RECTANGLE or TRIANGLE) -----------------------
         // 1 to 99 percent with 3 decimal places.  Applies to RECTANGLE
@@ -857,7 +865,8 @@ public final class GeneratorPane {
                 });
             }
         };
-        MessageBus.instance().subscribe(Events.FILE_PLAY_STOPPED, filePlayStoppedListener);
+        MessageBus bus = MessageBus.instance();
+        bus.subscribe(Events.FILE_PLAY_STOPPED, filePlayStoppedListener);
 
         // --------------------------------------------------------------- Play
         // Main play button sits on its own row, indented to the right
@@ -924,47 +933,47 @@ public final class GeneratorPane {
         // listener below can unsubscribe and let the bus release its
         // reference to this pane.
         fftLengthListener = ignored -> reapplyFrequencySnap();
-        MessageBus.instance().subscribe(Events.FFT_LENGTH_CHANGED, fftLengthListener);
+        bus.subscribe(Events.FFT_LENGTH_CHANGED, fftLengthListener);
         freqRespStartedListener = ignored -> onFreqRespMeasurementStarted();
         freqRespStoppedListener = ignored -> onFreqRespMeasurementStopped();
-        MessageBus.instance().subscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
-        MessageBus.instance().subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
+        bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
+        bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
         // FLL trim: the FFT view publishes the new DDS frequency in Hz
         // after each result; we live-apply it and republish as
         // FLL_TRIM so the FFT worker keeps its averaging accumulator.
         freqTrimListener = newHz -> {
             if (newHz == null || !Double.isFinite(newHz)) return;
             controller.setFrequency(newHz);
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
+            bus.publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
         };
-        MessageBus.instance().subscribe(Events.GENERATOR_FREQ_TRIM, freqTrimListener);
+        bus.subscribe(Events.GENERATOR_FREQ_TRIM, freqTrimListener);
         // Companion listener for the dual-tone second-tone FLL — same
         // FLL_TRIM republish so the FFT worker stays averaging.
         freqTrim2Listener = newHz -> {
             if (newHz == null || !Double.isFinite(newHz)) return;
             controller.setDualToneFrequency2(newHz);
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
+            bus.publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
         };
-        MessageBus.instance().subscribe(Events.GENERATOR_FREQ_TRIM_2, freqTrim2Listener);
+        bus.subscribe(Events.GENERATOR_FREQ_TRIM_2, freqTrim2Listener);
 
         // Respond to "is the generator running?" requests from the FFT
         // controller so it can decide whether to anchor the fundamental
         // to the generator's frequency.  One responder per event name
         // — registerResponder replaces any prior registration, so
         // language-switch shell rebuilds re-bind cleanly.
-        MessageBus.instance().registerResponder(Events.GENERATOR_RUNNING,
+        bus.registerResponder(Events.GENERATOR_RUNNING,
                 (Supplier<Boolean>) this::isRunning);
 
         // Dispose-time: stop the playback thread and tear down the icon
         // cache owned by this pane's display.
         group.addDisposeListener(e -> {
-            MessageBus.instance().unsubscribe(Events.FFT_LENGTH_CHANGED,            fftLengthListener);
-            MessageBus.instance().unsubscribe(Events.FILE_PLAY_STOPPED,             filePlayStoppedListener);
-            MessageBus.instance().unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
-            MessageBus.instance().unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
-            MessageBus.instance().unsubscribe(Events.GENERATOR_FREQ_TRIM,           freqTrimListener);
-            MessageBus.instance().unsubscribe(Events.GENERATOR_FREQ_TRIM_2,         freqTrim2Listener);
-            MessageBus.instance().unregisterResponder(Events.GENERATOR_RUNNING);
+            bus.unsubscribe(Events.FFT_LENGTH_CHANGED,            fftLengthListener);
+            bus.unsubscribe(Events.FILE_PLAY_STOPPED,             filePlayStoppedListener);
+            bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
+            bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
+            bus.unsubscribe(Events.GENERATOR_FREQ_TRIM,           freqTrimListener);
+            bus.unsubscribe(Events.GENERATOR_FREQ_TRIM_2,         freqTrim2Listener);
+            bus.unregisterResponder(Events.GENERATOR_RUNNING);
             controller.stop();
             filePlayer.stop();
             SignalFormIcon.instance().disposeAll(group.getDisplay());
@@ -1056,16 +1065,6 @@ public final class GeneratorPane {
             // have changed file/loop settings in the dialog anyway.
         };
     }
-
-    public Composite getGroup() { return group; }
-
-    /** True when this pane is collapsed to just its narrow title strip. */
-    public boolean isCollapsed() { return collapsed; }
-
-    /** Current pane pixel width as last reported by the host {@code SashForm}
-     *  (or restored from prefs at construction).  {@code -1} when not yet
-     *  measured. */
-    public int getPaneWidthPx() { return paneWidthPx; }
 
     /** Records the pane's current pixel width — called by the host
      *  {@code SashForm} sash filter on every drag.  Values below
@@ -1168,27 +1167,25 @@ public final class GeneratorPane {
      * Opens the DAC calibration dialog.  The dialog shows the
      * currently-commanded full-scale Vrms and lets the user enter the
      * voltage actually measured at the DAC output.  On accept, the new
-     * full-scale is stored in {@link SignalGenerator#FS_VOLTAGE} and
-     * persisted to {@link Preferences}.
+     * full-scale is persisted to {@link Preferences} — the generator reads
+     * {@link Preferences#getDacFsVoltageRms()} directly.
      */
     private void openDacCalibrationDialog() {
         Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
         if (parent == null) return;
-        final double configuredVrms = Preferences.instance().getGenAmplitudeVrms();
-        final double oldFs          = SignalGenerator.FS_VOLTAGE;
+        Preferences prefs = Preferences.instance();
+        final double configuredVrms = prefs.getGenAmplitudeVrms();
+        final double oldFs          = prefs.getDacFsVoltageRms();
         new DacCalibrationDialog(parent, configuredVrms, measuredVrms -> {
             // The DAC was commanded to output `configuredVrms` (computed
-            // against the OLD FS_VOLTAGE) and the user measured `measuredVrms`
+            // against the OLD DAC full-scale) and the user measured `measuredVrms`
             // at the output.  Output RMS scales linearly with FS, so the
             // true FS satisfies measured/configured = FS_true/FS_old.
             double newFs = oldFs * (measuredVrms / configuredVrms);
-            SignalGenerator.FS_VOLTAGE = newFs;
-            Preferences.instance().setDacFsVoltageRms(newFs);
-            // The running SignalGenerator captured its normalised `amplitude`
-            // at start time using the OLD FS_VOLTAGE.  Re-applying the
-            // user's requested Vrms recomputes it against the new FS so
-            // the calibration takes effect immediately, without a restart.
-            controller.setAmplitudeVrms(configuredVrms);
+            prefs.setDacFsVoltageRms(newFs);
+            // Writing the pref fires the dacFsVoltageRms binding, which recomputes
+            // the running generator's amplitude against the new full-scale — so the
+            // calibration takes effect immediately, without a restart.
         }).open();
     }
 
@@ -1496,7 +1493,7 @@ public final class GeneratorPane {
 
     /** Returns {@code vrms} converted into the current display unit. */
     private double amplitudeDisplayValue(double vrms) {
-        double fs = AudioBackend.getAdcFsVoltageRms();
+        double fs = Preferences.instance().getDacFsVoltageRms();
         return currentUnit.fromVrms(vrms, fs);
     }
 
@@ -1520,7 +1517,7 @@ public final class GeneratorPane {
      */
     private double rescaleAmplitudeUnit(double valueInCurrentUnit) {
         if (!currentUnit.isMetric()) return valueInCurrentUnit;
-        double fs = AudioBackend.getAdcFsVoltageRms();
+        double fs = Preferences.instance().getDacFsVoltageRms();
         double vrms = currentUnit.toVrms(valueInCurrentUnit, fs);
         if (Math.abs(vrms) < 1e-12) return valueInCurrentUnit;
         AmplitudeUnit best = AmplitudeUnit.bestMetricFor(Math.abs(vrms));

@@ -65,3 +65,34 @@ ZIP it up and you have a portable distribution.
 `${jpackage.type}` to (msi / deb / dmg), so the same command works on
 every OS — the launcher file is named `Phonalyser` on Linux,
 `Phonalyser.app` on macOS, `Phonalyser.exe` on Windows.
+
+# Generate documentation PDF (Markdown → PDF)
+
+Selected docs (currently `docs/ALGORITHMS.md`) can be rendered to PDF — with the
+internal `§`/anchor links kept clickable and the maths glyphs embedded — via the
+opt-in `pdf` profile:
+
+```pwsh
+mvn -Ppdf process-classes
+```
+
+Output: `target/ALGORITHMS.pdf`.
+
+How it works and what to know:
+
+- **Pure Java, no external tools.** flexmark renders Markdown → HTML and Open
+  HTML to PDF renders HTML → PDF. No `pandoc` and no LaTeX — only Maven
+  dependencies (resolved on first run). The DejaVu fonts that cover the maths
+  glyphs (`θ Δ √ ⁻ᴺ µ …`) are vendored under `pdf-tool/fonts/` and embedded.
+- **Only the designated files are converted** — the file list is the
+  `<argument>` lines of the `md-to-pdf` execution in the `pdf` profile, *not* a
+  glob of every `*.md`. To convert another document, add one more `<argument>`
+  line there pointing at it.
+- **Internal links are validated.** Every `[…](#anchor)` is checked against the
+  generated heading ids; a dangling link **fails the build** rather than
+  producing a PDF with dead links.
+- **Decoupled from the app build.** The profile compiles only the converter
+  (`pdf-tool/java`), bound to `process-classes` (before `package`), so it neither
+  builds the app/installer nor requires the application sources to compile — you
+  can regenerate the PDF while the app itself is mid-refactor. The profile is
+  fully self-contained, so a normal `mvn package` is completely unaffected.

@@ -45,6 +45,7 @@ import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.FreqRespCalibration;
 import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
+import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bind.Property;
@@ -116,6 +117,11 @@ public final class FreqRespTabControl extends Composite {
 
     private final FreqRespView view;
 
+    /** Loaded {@code .frc} correction store, injected by {@link FreqRespPane}
+     *  (IoC) and shared with the {@link FreqRespView}.  {@code null} until
+     *  {@link #setCorrectionStore} runs right after construction. */
+    private FreqRespCorrectionStore correctionStore;
+
     // ---- Tab-header tiles: the shared TileTabFolder owns the renderer,
     //      spacer images, tab-body collapse, hover tooltips and tile
     //      painting; this control only supplies tile content (freqRespTabTiles).
@@ -181,11 +187,12 @@ public final class FreqRespTabControl extends Composite {
         buildCalibrationTab();
         buildSaveToTab();
         buildLoadFromTab();
+        Preferences prefs = Preferences.instance();
         int activeTab = Math.max(0, Math.min(toolbarTabs.getItemCount() - 1,
-                Preferences.instance().getFreqRespActiveTabIndex()));
+                prefs.getFreqRespActiveTabIndex()));
         if (toolbarTabs.getItemCount() > 0) toolbarTabs.setSelection(activeTab);
         toolbarTabs.addListener(SWT.Selection, e ->
-                Preferences.instance().setFreqRespActiveTabIndex(toolbarTabs.getSelectionIndex()));
+                prefs.setFreqRespActiveTabIndex(toolbarTabs.getSelectionIndex()));
         // Capture labels, size the strip / spacer images and wire the paint,
         // hover and collapse listeners now that the tabs exist.
         toolbarTabs.init();
@@ -196,6 +203,15 @@ public final class FreqRespTabControl extends Composite {
         MessageBus.instance().subscribe(Events.FREQRESP_CALIBRATION_CHANGED, calibrationChangedListener);
         addDisposeListener(e ->
                 MessageBus.instance().unsubscribe(Events.FREQRESP_CALIBRATION_CHANGED, calibrationChangedListener));
+    }
+
+    /** Injects the calibration-correction store (IoC, from {@link FreqRespPane})
+     *  and pushes the initially-loaded active rows into it.  Called once right
+     *  after construction — the store isn't available while the rows are built,
+     *  so the initial sync happens here rather than in the constructor. */
+    public void setCorrectionStore(FreqRespCorrectionStore correctionStore) {
+        this.correctionStore = correctionStore;
+        syncStoreFromRows();
     }
 
     // -------------------------------------------------------------------------
@@ -257,7 +273,7 @@ public final class FreqRespTabControl extends Composite {
                 if (prefs.isFreqRespCompareMode())  tiles.add(tile("comp"));
             }
         } else if (tabIndex == TAB_FREQRESP_CALIBRATION) {
-            int n = FreqRespCalibrationStore.instance().getEntries().size();
+            int n = correctionStore == null ? 0 : correctionStore.getEntries().size();
             if (n == 1)      tiles.add(tile(I18n.t("calibration.tile.loaded")));
             else if (n  > 1) tiles.add(tile(I18n.t("calibration.tile.loadedN", n)));
         } else if (tabIndex == TAB_FREQRESP_PRESETS) {
@@ -932,8 +948,9 @@ public final class FreqRespTabControl extends Composite {
                 },
                 null,
                 folder -> {
-                    Preferences.instance().setFreqRespSaveFolder(folder);
-                    Preferences.instance().save();
+                    Preferences prefs = Preferences.instance();
+                    prefs.setFreqRespSaveFolder(folder);
+                    prefs.save();
                 });
         dlg.open();
     }
@@ -980,31 +997,19 @@ public final class FreqRespTabControl extends Composite {
         calRowsContainer.setLayout(gl);
 
         // Build the rows from prefs (always at least row 0) and load any
-        // referenced files into the store.  Suppress the change-listener's
-        // rebuild while we're populating ourselves.
+        // referenced .frc files into each row.  The store itself is populated
+        // from these rows in setCorrectionStore(), which the pane calls right
+        // after construction (the store is injected, not available here yet).
         Preferences prefs = Preferences.instance();
-        calMutationInFlight = true;
-        try {
-            List<CalibrationEntry> cals = prefs.getFreqRespCalibrations();
-            if (cals.isEmpty()) {
-                prefs.addFreqRespCalibration(new CalibrationEntry());  // row 0 always present
-            }
-            for (CalibrationEntry entry : cals) {
-                CalRow r = createRowUi(entry);
-                String p = entry.getPath();
-                if (p != null && !p.isEmpty()) loadFileIntoRow(r, p, false);
-                updateCalRowEnable(r);
-            }
-            // Push the loaded state into the store atomically — one event
-            // fires so the view re-derives once.
-            FreqRespCalibrationStore.instance().clearAll();
-            for (CalRow r : calRows) {
-                if (r.calibration != null && r.entry.getPath() != null && r.entry.active().get()) {
-                    FreqRespCalibrationStore.instance().addEntry(r.calibration, r.entry.getPath());
-                }
-            }
-        } finally {
-            calMutationInFlight = false;
+        List<CalibrationEntry> cals = prefs.getFreqRespCalibrations();
+        if (cals.isEmpty()) {
+            prefs.addFreqRespCalibration(new CalibrationEntry());  // row 0 always present
+        }
+        for (CalibrationEntry entry : cals) {
+            CalRow r = createRowUi(entry);
+            String p = entry.getPath();
+            if (p != null && !p.isEmpty()) loadFileIntoRow(r, p, false);
+            updateCalRowEnable(r);
         }
     }
 
@@ -1029,6 +1034,7 @@ public final class FreqRespTabControl extends Composite {
         pgd.widthHint = 320;
         pathField.setLayoutData(pgd);
         pathField.setText(I18n.t("freqResp.calibration.path.none"));
+        pathField.setToolTipText(I18n.t("freqResp.calibration.path.tooltip"));
 
         Button activeCheck = new Button(row, SWT.CHECK);
         activeCheck.setText(I18n.t("fft.calibration.active"));
@@ -1118,15 +1124,15 @@ public final class FreqRespTabControl extends Composite {
     }
 
     private void userLoadInRow(CalRow r) {
+        Preferences prefs = Preferences.instance();
         FileDialog fd = new FileDialog(getShell(), SWT.OPEN);
         fd.setText(I18n.t("freqResp.calibration.dialog"));
         fd.setFilterExtensions(new String[]{ "*.frc", "*.csv", "*.*" });
-        String memFolder = Preferences.instance().getFreqRespLoadFolder();
+        String memFolder = prefs.getFreqRespLoadFolder();
         if (memFolder != null) fd.setFilterPath(memFolder);
         String picked = fd.open();
         if (picked == null) return;
         if (!loadFileIntoRow(r, picked, true)) return;
-        Preferences prefs = Preferences.instance();
         prefs.setFreqRespLoadFolder(new File(picked).getParent());
         syncStoreFromRows();
         prefs.save();
@@ -1187,20 +1193,19 @@ public final class FreqRespTabControl extends Composite {
         }
     }
 
-    /** Pushes the current row state into the {@link FreqRespCalibrationStore}.
+    /** Pushes the current row state into the {@link FreqRespCorrectionStore}.
      *  Empty rows are skipped so the store holds only entries the view
      *  should divide by. */
     private void syncStoreFromRows() {
-        FreqRespCalibrationStore store = FreqRespCalibrationStore.instance();
         calMutationInFlight = true;
         try {
-            store.clearAll();
+            correctionStore.clearAll();
             for (CalRow r : calRows) {
                 // Only push rows the user has explicitly activated; an
                 // unticked row is a "loaded but parked" calibration the
                 // user can re-engage with one click without re-browsing.
                 if (r.calibration != null && r.entry.getPath() != null && r.entry.active().get()) {
-                    store.addEntry(r.calibration, r.entry.getPath());
+                    correctionStore.addEntry(r.calibration, r.entry.getPath());
                 }
             }
         } finally {
@@ -1214,8 +1219,7 @@ public final class FreqRespTabControl extends Composite {
      *  one row per loaded entry (with row 0 always present). */
     private void rebuildRowsFromStore() {
         if (calRowsContainer == null || calRowsContainer.isDisposed()) return;
-        List<FreqRespCalibrationStore.Entry> entries =
-                FreqRespCalibrationStore.instance().getEntries();
+        List<FreqRespCorrectionStore.Entry> entries = correctionStore.getEntries();
         // No-op when the store's loaded entries already line up with
         // the loaded rows in the UI (in the same order).  Skipping
         // here preserves user-added empty rows when the bus event is
@@ -1236,7 +1240,7 @@ public final class FreqRespTabControl extends Composite {
             prefs.addFreqRespCalibration(entry);
             CalRow r = createRowUi(entry);
             if (i < entries.size()) {
-                FreqRespCalibrationStore.Entry e = entries.get(i);
+                FreqRespCorrectionStore.Entry e = entries.get(i);
                 r.calibration = e.getCalibration();
                 r.pathField.setText(e.getPath());
                 r.pathField.setToolTipText(e.getPath());
@@ -1249,12 +1253,12 @@ public final class FreqRespTabControl extends Composite {
 
     /** True when the loaded subset of {@link #calRows} (skipping empty
      *  rows) is identical, in order, to {@code entries}. */
-    private boolean loadedRowsMatch(List<FreqRespCalibrationStore.Entry> entries) {
+    private boolean loadedRowsMatch(List<FreqRespCorrectionStore.Entry> entries) {
         int j = 0;
         for (CalRow r : calRows) {
             if (r.calibration == null) continue;
             if (j >= entries.size()) return false;
-            FreqRespCalibrationStore.Entry e = entries.get(j);
+            FreqRespCorrectionStore.Entry e = entries.get(j);
             if (r.calibration != e.getCalibration()) return false;
             if (r.entry.getPath() == null || !r.entry.getPath().equals(e.getPath())) return false;
             j++;
@@ -1283,7 +1287,7 @@ public final class FreqRespTabControl extends Composite {
         saveToPathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
         String savedPath = prefs.getFreqRespSavePath();
         saveToPathField.setText(savedPath == null ? "" : savedPath);
-        if (savedPath != null && !savedPath.isEmpty()) saveToPathField.setToolTipText(savedPath);
+        saveToPathField.setToolTipText(savedPath != null && !savedPath.isEmpty() ? savedPath : I18n.t("freqResp.saveTo.path.tooltip"));
         saveToPathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         Image floppyIcon = IconUtils.instance().renderAtHeight(
@@ -1386,7 +1390,7 @@ public final class FreqRespTabControl extends Composite {
         loadFromPathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
         String savedPath = prefs.getFreqRespLoadPath();
         loadFromPathField.setText(savedPath == null ? "" : savedPath);
-        if (savedPath != null && !savedPath.isEmpty()) loadFromPathField.setToolTipText(savedPath);
+        loadFromPathField.setToolTipText(savedPath != null && !savedPath.isEmpty() ? savedPath : I18n.t("freqResp.loadFrom.path.tooltip"));
         loadFromPathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         Image folderIcon = IconUtils.instance().renderAtHeight(

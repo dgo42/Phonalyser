@@ -42,6 +42,7 @@ import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.FreqRespCalibration;
 import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
+import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -62,7 +63,7 @@ import lombok.extern.log4j.Log4j2;
  * Next / Back / Cancel flow common to installer dialogs.
  *
  * <p>Cancellation discards every measurement taken inside the wizard and
- * restores the {@link FreqRespCalibrationStore} to whatever snapshot it
+ * restores the {@link FreqRespCorrectionStore} to whatever snapshot it
  * was at the moment {@link #open()} ran.  An "are you sure?" ack-confirm
  * fires on cancel whenever any of the three pages has captured fresh
  * data, regardless of which page the cancel was clicked from.
@@ -76,7 +77,7 @@ public final class FreqRespWizardDialog {
 
     private final Shell        parentShell;
     private final FreqRespView hostView;
-    private final FreqRespCalibrationStore.Snapshot preWizardSnapshot;
+    private final FreqRespCorrectionStore.Snapshot preWizardSnapshot;
 
     private Shell      dialog;
     private StackLayout stack;
@@ -104,7 +105,7 @@ public final class FreqRespWizardDialog {
     public FreqRespWizardDialog(Shell parent, FreqRespView view) {
         this.parentShell       = parent;
         this.hostView          = view;
-        this.preWizardSnapshot = FreqRespCalibrationStore.instance().snapshot();
+        this.preWizardSnapshot = hostView.getCorrectionStore().snapshot();
     }
 
     /** Opens the wizard and blocks until the user finishes / cancels. */
@@ -339,7 +340,7 @@ public final class FreqRespWizardDialog {
             // automatically alongside the entries list so page 2 gets
             // the page-1 loopback subtracted without polluting the
             // persistent calibration tab.
-            FreqRespCalibrationStore.instance().setDirect(cal);
+            hostView.getCorrectionStore().setDirect(cal);
             hostView.setLeftResult(r.left());
             hostView.setRightResult(r.right());
             hostView.setSourceFilePath(null);
@@ -392,7 +393,7 @@ public final class FreqRespWizardDialog {
             // populates it) the raw measurement is saved as-is.
             StereoFreqRespCalibration stereoCal = stereoCalFromResult(dutResult);
             StereoFreqRespCalibration direct =
-                    FreqRespCalibrationStore.instance().getDirect();
+                    hostView.getCorrectionStore().getDirect();
             if (direct != null) {
                 FreqRespCalHelper.divideInPlace(stereoCal.left(),  direct.left());
                 FreqRespCalHelper.divideInPlace(stereoCal.right(), direct.right());
@@ -420,7 +421,7 @@ public final class FreqRespWizardDialog {
         if (savedCalPath == null) return;
         try {
             StereoFreqRespCalibration cal = FreqRespCalHelper.loadCsv(savedCalPath);
-            FreqRespCalibrationStore.instance().setCurrent(cal, savedCalPath);
+            hostView.getCorrectionStore().setCurrent(cal, savedCalPath);
             Preferences prefs = Preferences.instance();
             prefs.setFreqRespPrimaryCalibrationPath(savedCalPath);
             prefs.setFreqRespApplyCalibration(true);
@@ -452,7 +453,7 @@ public final class FreqRespWizardDialog {
                     I18n.t("freqResp.wizard.unsaved.message"));
             if (code != SWT.YES) return false;
         }
-        FreqRespCalibrationStore.instance().restore(preWizardSnapshot);
+        hostView.getCorrectionStore().restore(preWizardSnapshot);
         return true;
     }
 

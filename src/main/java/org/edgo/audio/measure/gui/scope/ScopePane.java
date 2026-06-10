@@ -48,8 +48,8 @@ import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
-import org.edgo.audio.measure.sound.AudioBackend;
 
+import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -127,11 +127,16 @@ public final class ScopePane implements ScopeTabControl.Host {
     private final Image recordDim;
     private final Image recordLit;
 
+    @Getter
     private final Composite              group;
     private PaneTitle                    title;
+    @Getter
     private final ScopeView              view;
+    @Getter
     private final ZoomedView             condensed;
+    @Getter
     private final Composite              toolbar;
+    @Getter
     private final Button                 recordButton;
     /** The self-contained tile-tab folder hosting every channel / trigger /
      *  preset / utility / save-load tab; see {@link ScopeTabControl}. */
@@ -198,6 +203,7 @@ public final class ScopePane implements ScopeTabControl.Host {
      */
     private final ScopeOpenSignal        loader;
     /** Collapse state + per-child snapshot.  See {@link #setCollapsed(boolean)}. */
+    @Getter
     private boolean    collapsed;
     private boolean[]  preCollapseChildVisible;
     private boolean[]  preCollapseChildExclude;
@@ -495,12 +501,6 @@ public final class ScopePane implements ScopeTabControl.Host {
         tabControl.setCalibrateEnabled(recording);
     }
 
-    public Composite              getGroup()        { return group; }
-    public ScopeView              getView()         { return view; }
-    public ZoomedView             getCondensed()    { return condensed; }
-    public Composite              getToolbar()      { return toolbar; }
-    public Button                 getRecordButton() { return recordButton; }
-
     /** Forces the toolbar tab body collapsed (only headers visible) or
      *  expanded.  Used by the screenshot renderer to show just the tab
      *  headers; delegates to {@link ScopeTabControl}. */
@@ -645,9 +645,6 @@ public final class ScopePane implements ScopeTabControl.Host {
         }
         return output;
     }
-
-    /** True when this pane is collapsed to just its title bar. */
-    public boolean isCollapsed() { return collapsed; }
 
     /** Hides / shows every child except the title Label so the pane can
      *  collapse to its title bar (or restore).  Snapshots each child's
@@ -956,11 +953,12 @@ public final class ScopePane implements ScopeTabControl.Host {
      *  value and the next several wheel ticks would appear to "do nothing"
      *  while the value walks back into range. */
     private void stepHorizontalOffset(int dir) {
+        Preferences prefs = Preferences.instance();
         if (view.isFileMode()) {
             SignalBufferReader reader = view.getReader();
             if (reader == null) return;
             int displaySamples = ScopeFormat.displaySamplesFor(
-                    Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
+                    prefs.getOscTimePerDiv(), reader.getSampleRate());
             long writePos  = reader.getWritePos();
             long oldest    = Math.max(0L, writePos - reader.getCapacity());
             double minCenter = oldest   + displaySamples / 2.0;
@@ -977,7 +975,6 @@ public final class ScopePane implements ScopeTabControl.Host {
             viewCenterFrames = next;
             applyViewState();
         } else {
-            Preferences prefs = Preferences.instance();
             double cur = prefs.getOscTriggerPositionFrac();
             double next = ScopeFormat.clamp01(cur + dir * WHEEL_OFFSET_STEP_FRAC);
             if (next == cur) return;
@@ -1027,7 +1024,7 @@ public final class ScopePane implements ScopeTabControl.Host {
      *  collapses back to exactly [0, 1] — there's nothing to scroll. */
     private double[] offsetFracBounds() {
         double vpdiv = measurementChannelVPDiv();
-        double fs    = AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double fs    = Preferences.instance().getAdcFsVoltageRms() * Math.sqrt(2.0);
         double half  = (vpdiv <= 0 || fs <= 0)
                 ? 0.5
                 : fs / (ScopeView.DIVISIONS_Y * vpdiv);
@@ -1133,7 +1130,7 @@ public final class ScopePane implements ScopeTabControl.Host {
         boolean enable = running && !fileMode;
         if (enable) {
             double vpp = view.getLastVpp();
-            double fsVpp = 2.0 * AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
+            double fsVpp = 2.0 * Preferences.instance().getAdcFsVoltageRms() * Math.sqrt(2.0);
             enable = !Double.isNaN(vpp) && fsVpp > 0.0
                   && (vpp / fsVpp) >= CALIBRATE_MIN_VPP_FRACTION;
         }

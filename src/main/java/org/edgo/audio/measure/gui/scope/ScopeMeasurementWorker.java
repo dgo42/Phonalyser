@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.scope;
 import java.util.Arrays;
 import java.util.function.Consumer;
 
+import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 import org.edgo.audio.measure.dsp.LowPassFilter;
@@ -32,7 +33,6 @@ import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
-import org.edgo.audio.measure.sound.AudioBackend;
 
 /**
  * Background measurement worker for {@link ScopeView}.  Owns the
@@ -74,8 +74,11 @@ public final class ScopeMeasurementWorker {
     private Thread          measThread;
     private volatile boolean measThreadRunning;
 
+    @Getter
     private volatile SignalMeasurements lastMeasResult;
+    @Getter
     private volatile double             lastLeftMeanNormalized;
+    @Getter
     private volatile double             lastRightMeanNormalized;
 
     private float[] measLeftBuf;
@@ -110,9 +113,6 @@ public final class ScopeMeasurementWorker {
     // ─── External wiring ────────────────────────────────────────────────────
 
     public void setBuffer(SignalBufferReader r) { this.reader = r; }
-    public SignalMeasurements getLastMeasResult() { return lastMeasResult; }
-    public double getLastLeftMeanNormalized()  { return lastLeftMeanNormalized; }
-    public double getLastRightMeanNormalized() { return lastRightMeanNormalized; }
 
     /** Wipes accumulated history and the latest-result fields.  Safe to
      *  call from any thread; takes the history lock internally. */
@@ -379,7 +379,7 @@ public final class ScopeMeasurementWorker {
         // means, the comb, and Vpp/Vrms all see the de-spiked signal.  No-op
         // below the LPF's Nyquist gate.
         applyHfLowPass(sampleRate, avail);
-        double peakVolts = AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double peakVolts = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
         double leftMean  = sampleMean(measLeftBuf,  avail);
         double rightMean = sampleMean(measRightBuf, avail);
         // Mains suppression for the measured values (Vpp/Vrms/Vmean): the

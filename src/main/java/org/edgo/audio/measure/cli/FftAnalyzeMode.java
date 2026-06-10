@@ -35,7 +35,7 @@ import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
-import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.wav.WavReader;
 
 import lombok.experimental.UtilityClass;
@@ -84,7 +84,8 @@ public class FftAnalyzeMode {
         String  adcFsArg     = ArgParser.getArgValue(args, "--adc-fs-vrms");
         String  loadWeightedArg = ArgParser.getArgValue(args, "--load-weighted");
         if (adcFsArg != null) {
-            AudioBackend.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
+            // Inject for this run only — Main marked Preferences transient, so not persisted.
+            Preferences.instance().setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         if (fftSizeArg == null) {
@@ -221,8 +222,6 @@ public class FftAnalyzeMode {
                     String.format(Locale.US, "%.8f", result.thdPct),
                     String.format(Locale.US, "%.2f", result.thdDb));
         }
-
-        FreqRespCalHelper.applyDefaultDbvScaling(result);
 
         fftAnalyzer.exportFftCsv(result, "results");
         HarmonicsCsv.export(result, "results");

@@ -16,26 +16,27 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.gui.scope;
+package org.edgo.audio.measure.common;
 
 import lombok.experimental.UtilityClass;
 
 /**
- * Lanczos-windowed sinc reconstruction kernel for the oscilloscope's
- * waveform renderer.  Decoupled from {@link ScopeView} so the
- * kernel math is unit-testable and the per-scale kernel cache is
- * shared once across every view instance.
+ * Lanczos-windowed sinc reconstruction kernel.  Originally the oscilloscope's
+ * waveform renderer; now shared so the frequency-domain views can reconstruct
+ * a band-limited trace from their sample arrays too.  Decoupled from any view
+ * so the kernel math is unit-testable and the per-scale kernel cache is shared
+ * once across every caller.
  *
- * <p>{@link #lanczos(float[], int, double, double)} reconstructs the
- * trace at any fractional sample-domain position {@code t}, with the
- * kernel widened by {@code scale} so it acts as a low-pass filter at
- * the output rate (kills the energy between the output Nyquist and the
+ * <p>{@link #lanczos(float[], int, double, double)} (and its {@code double[]}
+ * overload) reconstructs the trace at any fractional sample-domain position
+ * {@code t}, with the kernel widened by {@code scale} so it acts as a low-pass
+ * filter at the output rate (kills the energy between the output Nyquist and the
  * input Nyquist that would otherwise fold into beat envelopes).  Phase
- * resolution and downsample limits are tuned for an audio sample rate
- * cap of ~768 kHz drawn on an SWT canvas.
+ * resolution and downsample limits are tuned for an audio sample rate cap of
+ * ~768 kHz drawn on an SWT canvas.
  */
 @UtilityClass
-public class ScopeLanczos {
+public class Lanczos {
 
     /**
      * Kernel half-width in samples.  Windowed-sinc with this many lobes
@@ -90,12 +91,35 @@ public class ScopeLanczos {
         double[] w = table[phase];
         int iLo = Math.max(0, center - halfWidth + 1);
         int iHi = Math.min(n - 1, center + halfWidth);
-        // Subtract a baseline from each sample before weighting so the
-        // accumulated sum reflects DIFFERENCES between samples, not their
-        // absolute magnitudes.  Critical at extreme V/div: with samples
-        // sitting near ±FS, ~1e-7 float epsilon multiplied by ~3e5 vScale
-        // becomes a visible pixel deflection.  Σ x[i]·w[j]
-        // = baseline·Σw[j] + Σ(x[i]−baseline)·w[j].
+        int centerClamped = (center < 0) ? 0 : (center >= n ? n - 1 : center);
+        double baseline = data[centerClamped];
+        double sumWeights = 0.0;
+        double sumDeltas  = 0.0;
+        for (int i = iLo; i <= iHi; i++) {
+            int j = i - center + halfWidth - 1;
+            double wj = w[j];
+            sumWeights += wj;
+            sumDeltas  += (data[i] - baseline) * wj;
+        }
+        return baseline * sumWeights + sumDeltas;
+    }
+
+    /**
+     * {@code double[]} overload of {@link #lanczos(float[], int, double, double)} —
+     * used by the frequency-domain views, whose magnitude / phase arrays are
+     * {@code double[]}.  Identical kernel, identical baseline-subtraction trick.
+     */
+    public double lanczos(double[] data, int n, double t, double scale) {
+        double[][] table = getKernelTable(scale);
+        int halfWidth = (int) Math.ceil(LANCZOS_A * scale);
+        int center = (int) Math.floor(t);
+        double frac = t - center;
+        int phase = (int) (frac * LANCZOS_PHASES);
+        if (phase < 0) phase = 0;
+        if (phase >= LANCZOS_PHASES) phase = LANCZOS_PHASES - 1;
+        double[] w = table[phase];
+        int iLo = Math.max(0, center - halfWidth + 1);
+        int iHi = Math.min(n - 1, center + halfWidth);
         int centerClamped = (center < 0) ? 0 : (center >= n ? n - 1 : center);
         double baseline = data[centerClamped];
         double sumWeights = 0.0;

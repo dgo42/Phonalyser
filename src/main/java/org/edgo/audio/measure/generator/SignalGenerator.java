@@ -28,8 +28,10 @@ import java.util.Random;
 
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
 
+import lombok.Getter;
 import lombok.Value;
 import lombok.extern.log4j.Log4j2;
 
@@ -50,16 +52,6 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public class SignalGenerator {
 
-
-    /**
-     * Full-scale peak voltage of the DAC path (V).  Mutable so the
-     * GUI / a CLI flag can keep it in step with the matching ADC
-     * calibration ({@code AudioBackend.adcFsVoltageRms × √2}).
-     * Mismatch between the generator's FS and the reader's assumed
-     * FS shows up as the file having "wrong" amplitude when opened
-     * in a tool calibrated against the ADC scale.
-     */
-    public static double FS_VOLTAGE = 2.79351;
 
     // -------------------------------------------------------------------------
     // DDS sine lookup table (full wave, 4096 entries)
@@ -172,6 +164,7 @@ public class SignalGenerator {
     // -------------------------------------------------------------------------
 
     /** Pre-rendered unit-amplitude (peak 1.0) log-sweep buffer. Reused as the reference X(t) by the analyzer. */
+    @Getter
     private float[] logSweepBuffer;
     /** Lead-in silent samples emitted before the sweep begins. */
     private int     logSweepLeadIn;
@@ -202,7 +195,7 @@ public class SignalGenerator {
     public SignalGenerator(GenSignalForm form, double frequency, int sampleRate, double amplitudeVRms) {
         this.form        = form;
         this.currentVrms = amplitudeVRms;
-        this.amplitude   = amplitudeVRms / (FS_VOLTAGE * rawRms(form));
+        this.amplitude   = amplitudeVRms / (Preferences.instance().getDacFsVoltageRms() * rawRms(form));
         this.phaseInc    = Math.round(frequency / sampleRate * 4294967296.0);
         this.sampleRate  = sampleRate;
         log.debug("DDS: form={} freq={}Hz rate={}Hz phaseInc={} amplitude={}V RMS",
@@ -298,7 +291,7 @@ public class SignalGenerator {
                            int periodSamples, double amplitudeVRms) {
         this.form               = GenSignalForm.LINEAR_SWEEP;
         this.currentVrms        = amplitudeVRms;
-        this.amplitude          = amplitudeVRms / (FS_VOLTAGE * rawRms(GenSignalForm.LINEAR_SWEEP));
+        this.amplitude          = amplitudeVRms / (Preferences.instance().getDacFsVoltageRms() * rawRms(GenSignalForm.LINEAR_SWEEP));
         this.phaseInc           = 0;            // unused for sweep
         this.sampleRate         = sampleRate;
         this.sweepFreqStart     = freqStart;
@@ -335,7 +328,7 @@ public class SignalGenerator {
                            int sampleRate, double amplitudeVRms) {
         this.form           = GenSignalForm.LOG_SWEEP;
         this.currentVrms    = amplitudeVRms;
-        this.amplitude      = amplitudeVRms / (FS_VOLTAGE * rawRms(GenSignalForm.LOG_SWEEP));
+        this.amplitude      = amplitudeVRms / (Preferences.instance().getDacFsVoltageRms() * rawRms(GenSignalForm.LOG_SWEEP));
         this.phaseInc       = 0;            // unused for sweep
         this.sampleRate     = sampleRate;
         this.logSweepBuffer = renderLogSweep(f0, f1, sweepSamples, sampleRate);
@@ -373,9 +366,6 @@ public class SignalGenerator {
         }
         return buf;
     }
-
-    /** Returns the pre-rendered unit-amplitude log-sweep buffer (LOG_SWEEP only). */
-    public float[] getLogSweepBuffer() { return logSweepBuffer; }
 
     /**
      * Resets the sweep playback position so the next {@link #nextSample()}
@@ -458,7 +448,7 @@ public class SignalGenerator {
         // {@link #currentVrms} is the cached "what the user dialled" and
         // gets re-divided against the new form's rawRms.
         this.form      = newForm;
-        this.amplitude = currentVrms / (FS_VOLTAGE * rawRms(newForm));
+        this.amplitude = currentVrms / (Preferences.instance().getDacFsVoltageRms() * rawRms(newForm));
     }
 
     /**
@@ -500,7 +490,7 @@ public class SignalGenerator {
         // Re-derive the amplitude scale from the cached Vrms so the
         // combined RMS stays equal to the Amplitude field's value
         // regardless of how the user splits the two tones.
-        this.amplitude = currentVrms / (FS_VOLTAGE * rawRmsForCurrentState());
+        this.amplitude = currentVrms / (Preferences.instance().getDacFsVoltageRms() * rawRmsForCurrentState());
     }
 
     /**
@@ -509,7 +499,18 @@ public class SignalGenerator {
      */
     public void setAmplitudeVrms(double amplitudeVRms) {
         this.currentVrms = amplitudeVRms;
-        this.amplitude   = amplitudeVRms / (FS_VOLTAGE * rawRms(form));
+        this.amplitude   = amplitudeVRms / (Preferences.instance().getDacFsVoltageRms() * rawRms(form));
+    }
+
+    /**
+     * Recomputes the output amplitude scale from the cached requested Vrms and
+     * the current DAC full-scale, leaving the requested Vrms unchanged.  Call
+     * when the DAC calibration ({@code Preferences#getDacFsVoltageRms()}) changes
+     * so a running generator tracks the new full-scale immediately without a
+     * restart.
+     */
+    public void refreshAmplitude() {
+        this.amplitude = currentVrms / (Preferences.instance().getDacFsVoltageRms() * rawRms(form));
     }
 
     /**

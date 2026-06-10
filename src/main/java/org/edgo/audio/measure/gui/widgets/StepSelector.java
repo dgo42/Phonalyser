@@ -32,6 +32,7 @@ import org.eclipse.swt.widgets.Text;
 
 import java.util.ArrayList;
 import java.util.List;
+import lombok.Getter;
 import org.edgo.audio.measure.gui.interfaces.Formatter;
 import org.edgo.audio.measure.gui.interfaces.Parser;
 
@@ -65,6 +66,7 @@ public final class StepSelector extends Composite {
     private int              index;
     /** Current free-form value (value mode only).  In index mode this
      *  field is unused. */
+    @Getter
     private double           value = Double.NaN;
 
     public StepSelector(Composite parent, String[] values, int initialIndex, int textWidthHint) {
@@ -329,10 +331,6 @@ public final class StepSelector extends Composite {
             l.handleEvent(e);
         }
     }
-
-    /** Returns the current free-form value (value-mode only) or
-     *  {@code NaN} for index-mode selectors. */
-    public double getValue() { return value; }
 
     /** Sets the current free-form value (value-mode only).  No-op in
      *  index mode and when {@code v} matches the current value. */

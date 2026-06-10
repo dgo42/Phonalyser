@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.gui.scope;
 
+import org.edgo.audio.measure.common.Lanczos;
+
 import lombok.experimental.UtilityClass;
 
 /**
@@ -29,7 +31,7 @@ import lombok.experimental.UtilityClass;
  * Schmitt trigger and returns the rightmost qualified crossing's
  * fractional sample index, sub-sample-refined via either linear
  * interpolation or band-limited sinc reconstruction (uses {@link
- * ScopeLanczos#lanczos}).
+ * Lanczos#lanczos}).
  */
 @UtilityClass
 public class ScopeTrigger {
@@ -149,7 +151,7 @@ public class ScopeTrigger {
                          float level, boolean rising) {
         for (int iter = 0; iter < 10; iter++) {
             double m = 0.5 * (a + b);
-            double val = ScopeLanczos.lanczos(data, n, m, 1.0);
+            double val = Lanczos.lanczos(data, n, m, 1.0);
             boolean atRightSide = rising ? (val >= level) : (val <= level);
             if (atRightSide) b = m;
             else             a = m;

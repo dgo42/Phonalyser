@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.fft;
 
+import lombok.Getter;
+
 /**
  * Phase-locked tracker for the FFT cross-tick coherent de-rotation frequency.
  *
@@ -53,6 +55,7 @@ public final class DerotationPhaseLock {
     private final int    maxWindows;     // fallback: lock anyway after this many windows
 
     private double  kappa;
+    @Getter
     private boolean locked;
 
     // Current window state.
@@ -131,7 +134,6 @@ public final class DerotationPhaseLock {
     }
 
     public double  kappa()    { return kappa; }
-    public boolean isLocked() { return locked; }
 
     /** Wraps an angle to (-π, π]. */
     public static double wrapToPi(double a) {

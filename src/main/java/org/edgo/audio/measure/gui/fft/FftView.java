@@ -41,12 +41,14 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.FreqRespCalibration;
+import org.edgo.audio.measure.common.Constants;
+import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.dsp.ToneLobeLift;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.enums.FftMagnitudeUnit;
+import org.edgo.audio.measure.enums.MagnitudeUnit;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftAnalyzer;
@@ -67,6 +69,7 @@ import org.edgo.audio.measure.gui.widgets.Toolbar;
 import org.edgo.audio.measure.gui.widgets.TransparentComposite;
 
 import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -123,7 +126,14 @@ public final class FftView extends AbstractFreqDomainView {
 
     private FftAnalyzerWorker worker = null;
 
-    @SuppressWarnings("unused")
+    /** Loaded {@code .frc} corrections divided out of the spectrum and drawn
+     *  as the overlay; injected by {@link FftPane} (IoC) right after
+     *  construction and shared with the calibration tab so both see the same
+     *  entries. */
+    @Setter
+    private FreqRespCorrectionStore correctionStore;
+
+    //@SuppressWarnings("unused")
     private long startRender;
 
     /** Closed-loop integrator that drives the DDS frequency onto the
@@ -222,12 +232,12 @@ public final class FftView extends AbstractFreqDomainView {
             // tone source through a paused generator stays on whichever
             // mode was last selected the previous time recording ran.
             boolean prevTableModeIsImd = tableModeIsImd;
-            tableModeIsImd =
-                    Preferences.instance().getGenSignalForm() == GenSignalForm.DUAL_TONE;
+            Preferences prefs = Preferences.instance();
+            tableModeIsImd = prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE;
             lastImd = tableModeIsImd
                     ? ImdAnalyzer.analyze(slot,
-                            Preferences.instance().getGenDualToneFreq1Hz(),
-                            Preferences.instance().getGenDualToneFreq2Hz())
+                            prefs.getGenDualToneFreq1Hz(),
+                            prefs.getGenDualToneFreq2Hz())
                     : null;
             // Mode just flipped (THD ↔ IMD): refresh the extracted window's
             // title + size.  It's set at create time and on form-change, but
@@ -341,9 +351,10 @@ public final class FftView extends AbstractFreqDomainView {
         // At typical analysis cadences (1–5 ticks per second) the
         // per-tick paint cost is well under the hop interval, so
         // blocking the UI thread for this paint is negligible.
-        MessageBus.instance().subscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
-        MessageBus.instance().subscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
-        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
+        MessageBus bus = MessageBus.instance();
+        bus.subscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
+        bus.subscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
+        bus.subscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
         // Window-function changes reset the running statistics — the control
         // writes the pref, the view reacts to the pref, neither calls the other.
         // Every settings/THD parameter whose side-effect targets the view is
@@ -366,6 +377,11 @@ public final class FftView extends AbstractFreqDomainView {
         Bindings.onChange(this, viewPrefs.fftLengthProperty(),           v -> resetStatistics());
         // Coherent ↔ incoherent changes the accumulator semantics — restart.
         Bindings.onChange(this, viewPrefs.fftCoherentAveragingProperty(), v -> resetStatistics());
+        // ADC re-calibration rescales every measured voltage; DAC re-calibration
+        // changes the generated (loopback) signal level — either invalidates the
+        // accumulated spectrum, so restart averaging on a calibration change.
+        Bindings.onChange(this, viewPrefs.adcFsVoltageRmsProperty(),      v -> resetStatistics());
+        Bindings.onChange(this, viewPrefs.dacFsVoltageRmsProperty(),      v -> resetStatistics());
         // Selecting an active alignment mode (PID / FLL) resets its loop so each
         // session converges fresh; NONE deliberately resets nothing (the
         // generator stays at the stabilized frequency, the converged correction
@@ -392,13 +408,13 @@ public final class FftView extends AbstractFreqDomainView {
         syncFftColors();
 
         // L/R channel buttons — migrated to ToolButton widgets in a top-left Toolbar.
-        chanButtonFont = new Font(getDisplay(), "Consolas", 12, SWT.BOLD);
+        chanButtonFont = new Font(d, "Consolas", 12, SWT.BOLD);
         headerBar = new Toolbar(this, BTN_W, BTN_H);
         FormData hbd = new FormData();
         hbd.top  = new FormAttachment(0, 5);
         hbd.left = new FormAttachment(0, MARGIN_LEFT + 4);
         headerBar.setLayoutData(hbd);
-        Channel ch = Preferences.instance().getFftChannel();
+        Channel ch = viewPrefs.getFftChannel();
         leftBtn  = headerBar.chanButton("L", color(ColorRole.TEXT),
                 color(ColorRole.BUTTON_FRAME), color(ColorRole.LEFT_BTN_CHAN),
                 chanButtonFont, I18n.t("fft.button.left.tooltip"),  ch == Channel.L, "channel");
@@ -410,10 +426,10 @@ public final class FftView extends AbstractFreqDomainView {
         // accumulation restart lives in the fftChannel subscription above, so it
         // fires whoever changes the channel (a preset load too).
         leftBtn.addListener(SWT.Selection, e -> {
-            if (leftBtn.isToggled()) Preferences.instance().setFftChannel(Channel.L);
+            if (leftBtn.isToggled()) viewPrefs.setFftChannel(Channel.L);
         });
         rightBtn.addListener(SWT.Selection, e -> {
-            if (rightBtn.isToggled()) Preferences.instance().setFftChannel(Channel.R);
+            if (rightBtn.isToggled()) viewPrefs.setFftChannel(Channel.R);
         });
         headerBar.spacer(2);
         autoSetupBtn = headerBar.pushButton(SvgPaths.ARROWS_TO_CIRCLE, 16,
@@ -429,13 +445,13 @@ public final class FftView extends AbstractFreqDomainView {
         dataSpacer = headerBar.spacer(2);
         distortionBtn = headerBar.toggleButton(SvgPaths.CHART_COLUMN, 16,
                 rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.BUTTON_FRAME),
-                I18n.t("fft.distortion.tooltip"), Preferences.instance().isFftDistortionTableVisible());
+                I18n.t("fft.distortion.tooltip"), viewPrefs.isFftDistortionTableVisible());
         // ToolButton toggle (no Bindings helper covers a ToolButton) — writes
         // the pref (auto-saved); the visibility side-effects live in the
         // fftDistortionTableVisible subscription above so they fire on any
         // change (a preset load too).
         distortionBtn.addListener(SWT.Selection, e ->
-                Preferences.instance().setFftDistortionTableVisible(distortionBtn.isToggled()));
+                viewPrefs.setFftDistortionTableVisible(distortionBtn.isToggled()));
         resetBtn = headerBar.pushButton(SvgPaths.ROTATE_LEFT, 18,
                 rgb(ColorRole.RESET), rgb(ColorRole.BACKGROUND), color(ColorRole.RESET),
                 I18n.t("fft.reset.tooltip"));
@@ -473,7 +489,7 @@ public final class FftView extends AbstractFreqDomainView {
         // they inherit the Canvas's crosshair cursor, so give them the normal
         // arrow.  getSystemCursor returns a shared cursor that must not be disposed.
         magUnitCombo = new Combo(this, SWT.READ_ONLY);
-        magUnitCombo.setItems(FftMagnitudeUnit.labels());
+        magUnitCombo.setItems(magUnitLabels());
         magUnitCombo.setToolTipText(I18n.t("fft.magUnit.tooltip"));
         magUnitCombo.setData("helpAnchor", "fft.html#fft-mag-unit");
         magUnitCombo.setCursor(d.getSystemCursor(SWT.CURSOR_ARROW));
@@ -483,18 +499,10 @@ public final class FftView extends AbstractFreqDomainView {
         // needs the PREVIOUS unit, which the property listener doesn't carry —
         // so track it in a one-element holder, seeded from the current value
         // and advanced after each conversion.
-        Bindings.combo(magUnitCombo, viewPrefs.fftMagUnitProperty(), FftMagnitudeUnit.values());
-        FftMagnitudeUnit[] prevMagUnit = { viewPrefs.getFftMagUnit() };
+        Bindings.combo(magUnitCombo, viewPrefs.fftMagUnitProperty(), MagnitudeUnit.values());
         Bindings.onChange(this, viewPrefs.fftMagUnitProperty(), newUnit -> {
-            Preferences prefs = Preferences.instance();
-            double fs = prefs.getAdcFsVoltageRms();
-            if (!(fs > 0)) fs = 1.0;
-            double fsDbv = 20 * Math.log10(fs);
-            double[] conv = FftFormat.convertMagRange(prefs.getFftMagTop(), prefs.getFftMagBottom(),
-                    prevMagUnit[0], newUnit, fsDbv);
-            prefs.setFftMagTop(conv[0]);
-            prefs.setFftMagBottom(conv[1]);
-            prevMagUnit[0] = newUnit;
+            // The magnitude range is stored in canonical dBFS, so switching the unit is
+            // a label-only change — the range itself doesn't move.
             fireRangeChanged();
             redraw();
         });
@@ -588,9 +596,10 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     private void disposeResources() {
-        MessageBus.instance().unsubscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
-        MessageBus.instance().unsubscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
-        MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
+        MessageBus bus = MessageBus.instance();
+        bus.unsubscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
+        bus.unsubscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
+        bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
         worker.stop();
         disposePalette();
         if (monoFont       != null) monoFont.dispose();
@@ -681,9 +690,11 @@ public final class FftView extends AbstractFreqDomainView {
         if (!isGeneratorActive())             return;
         // Swap the loop type to match the selected mode (a change resets both loops).
         if (fll == null || fll.getMode() != mode) {
-            fll  = FrequencyAlignerFactory.instance().create(mode);
-            fll2 = FrequencyAlignerFactory.instance().create(mode);
+            FrequencyAlignerFactory factory = FrequencyAlignerFactory.instance();
+            fll  = factory.create(mode);
+            fll2 = factory.create(mode);
         }
+        MessageBus bus = MessageBus.instance();
         // Branch on generator form: single-tone runs one loop, dual-tone two
         // independent loops driven by the per-tone detected frequencies in lastImd.
         boolean dualTone = prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE;
@@ -695,12 +706,12 @@ public final class FftView extends AbstractFreqDomainView {
                     slot.sampleRate, prefs.getGenDualToneFreq2Hz());
             if (t1 > 0 && Double.isFinite(lastImd.f1Hz)) {
                 fll.update(t1, lastImd.f1Hz, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
-                MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM,
+                bus.publish(Events.GENERATOR_FREQ_TRIM,
                         t1 + fll.getCorrection());
             }
             if (t2 > 0 && Double.isFinite(lastImd.f2Hz)) {
                 fll2.update(t2, lastImd.f2Hz, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
-                MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM_2,
+                bus.publish(Events.GENERATOR_FREQ_TRIM_2,
                         t2 + fll2.getCorrection());
             }
         } else {
@@ -709,7 +720,7 @@ public final class FftView extends AbstractFreqDomainView {
                     slot.sampleRate, prefs.getGenFrequencyHz());
             if (!(target > 0)) return;
             fll.update(target, slot.fundamentalHzRefined, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
-            MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM,
+            bus.publish(Events.GENERATOR_FREQ_TRIM,
                     target + fll.getCorrection());
         }
     }
@@ -775,17 +786,16 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** Post-average pipeline, run ONCE per DISPLAYED frame (the worker now hands
      *  over only the RAW averaged spectrum + the state below): mains rejection →
-     *  recompute every measurement → .frc calibration → dBV lift.  So all
+     *  recompute every measurement → .frc calibration.  So all
      *  readouts (THD / SNR / N / fundamental / harmonics, every unit + %) and the
      *  plot derive from one de-hummed, calibrated spectrum, computed only on
      *  frames the user actually sees. */
     private void finalizeResult(FftResult r) {
         if (r.amplitudeDbFs == null) return;
         boolean accumulated = !Double.isNaN(r.coherentKappa);
-        double  fs          = Preferences.instance().getAdcFsVoltageRms();
 
-        // 1. Mains rejection — de-hum amplitudeDbFs (the dBV scale is rebuilt from
-        //    it in step 4, so no need to correct it here too).
+        // 1. Mains rejection — de-hum amplitudeDbFs (dBV is just dBFS + the global
+        //    ADC offset, applied at display time, so nothing extra to correct here).
         boolean mainsApplied = false;
         if (r.mainsF0Hz > 0.0 && r.sampleRate > 0) {
             if (mainsCorrector == null) {
@@ -800,25 +810,19 @@ public final class FftView extends AbstractFreqDomainView {
         //    has changed the spectrum (analyze already produced the rest).
         if (accumulated || mainsApplied) {
             mainsStats.recomputeStats(r);
-            if (fs > 0 && Double.isFinite(r.fundamentalDbFs)) {
-                r.fundRefDbV = r.fundamentalDbFs + 20.0 * Math.log10(fs);
-            }
         }
 
         // 3. Frequency-response (.frc) calibration — adjusts spectrum + readouts;
         //    independent of mains, never on the cal (green) line.
-        List<FftCalibrationStore.Entry> calEntries = FftCalibrationStore.instance().getEntries();
+        List<FreqRespCorrectionStore.Entry> calEntries = correctionStore.getEntries();
         if (!calEntries.isEmpty()) {
             boolean wantLeft = r.channelLeft;
             r.preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
-            for (FftCalibrationStore.Entry e : calEntries) {
+            for (FreqRespCorrectionStore.Entry e : calEntries) {
                 FreqRespCalibration calForChan = wantLeft
                         ? e.getCalibration().left()
                         : e.getCalibration().right();
                 FreqRespCalHelper.applyCompensationInPlace(r, calForChan, e.isWithNoise());
-            }
-            if (fs > 0 && Double.isFinite(r.fundamentalDbFs)) {
-                r.fundRefDbV = r.fundamentalDbFs + 20.0 * Math.log10(fs);
             }
             if (accumulated) {
                 // Re-derive the BLUE "before-cal" dots on the cumulative spectrum
@@ -839,21 +843,6 @@ public final class FftView extends AbstractFreqDomainView {
                 }
                 r.preCorrectionPeaks = new double[][] { preFreqs, preDbFs };
             }
-        }
-
-        // 4. dBV lift — amplitudeDbV = amplitudeDbFs + ADC FS anchor (the source
-        //    of truth for ImdAnalyzer / TD+N / IMD %).
-        if (fs > 0) {
-            double anchor = 20.0 * Math.log10(fs);
-            r.dbvOffsetDb = anchor;
-            int n = r.amplitudeDbFs.length;
-            if (r.amplitudeDbV == null || r.amplitudeDbV.length != n) {
-                r.amplitudeDbV = new double[n];
-            }
-            for (int i = 0; i < n; i++) r.amplitudeDbV[i] = r.amplitudeDbFs[i] + anchor;
-        } else {
-            r.amplitudeDbV = null;
-            r.dbvOffsetDb = 0.0;
         }
     }
 
@@ -959,7 +948,6 @@ public final class FftView extends AbstractFreqDomainView {
     private void autoSetup() {
         if (lastResult == null) return;
         Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit unit = prefs.getFftMagUnit();
 
         // ── Frequency.  In DUAL_TONE / IMD mode the range needs to
         // span every measurement point we plot — F1, F2, the
@@ -1013,32 +1001,25 @@ public final class FftView extends AbstractFreqDomainView {
         // already latches on to that one, so we use both F1/F2
         // dBFS from the IMD slot to pick the maximum explicitly.
         if (Double.isFinite(lastResult.fundamentalDbFs) && Double.isFinite(lastResult.avgNoiseFloorDbFs)) {
-            double peakDbFs = lastResult.fundamentalDbFs;
+            // The fundamental's DISPLAYED dBFS — manual override (converted) when set,
+            // else the measured level (already .frc-corrected in place by the worker).
+            double peakDbFs = displayedFundDbFs();
+            if (!Double.isFinite(peakDbFs)) peakDbFs = lastResult.fundamentalDbFs;
             if (lastImd != null) {
-                double f1DbFs = dbvToDbFs(lastImd.f1DbV);
-                double f2DbFs = dbvToDbFs(lastImd.f2DbV);
+                double dbvOffsetDb = prefs.getDbvOffsetDb();
+                double f1DbFs = lastImd.f1DbV - dbvOffsetDb;
+                double f2DbFs = lastImd.f2DbV - dbvOffsetDb;
                 if (Double.isFinite(f1DbFs)) peakDbFs = Math.max(peakDbFs, f1DbFs);
                 if (Double.isFinite(f2DbFs)) peakDbFs = Math.max(peakDbFs, f2DbFs);
             }
-            double topDbFs = peakDbFs + 10;
+            // Range is stored canonically in dBFS; the unit conversion happens only at
+            // draw / readout time, so every unit pans + zooms identically.
+            double topDbFs = peakDbFs + 20;
             double botDbFs = lastResult.avgNoiseFloorDbFs - 20;
-            double calRefDbV = Double.isNaN(lastResult.fundRefDbV) ? 0
-                    : (lastResult.fundRefDbV - lastResult.fundamentalDbFs);
-            // The fundamental is rendered at the manual-override dBV
-            // when the user supplied one, so the auto-setup ceiling
-            // tracks that value (+10 dB headroom) instead of the
-            // calibrated peak; the noise floor stays on the calibrated
-            // anchor since non-fundamental bins aren't affected.
-            double topRefDbV = (Double.isFinite(lastResult.fundamentalTrueDbV)
-                    && Double.isFinite(lastResult.fundamentalDbFs))
-                    ? lastResult.fundamentalTrueDbV - lastResult.fundamentalDbFs
-                    : calRefDbV;
-            double top = unit.convertFromDbFs(topDbFs, topRefDbV,  lastResult.freqResolution);
-            double bot = unit.convertFromDbFs(botDbFs, calRefDbV, lastResult.freqResolution);
-            if (Double.isFinite(top) && Double.isFinite(bot) && top != bot) {
-                if (top < bot) { double s = top; top = bot; bot = s; }
-                prefs.setFftMagTop(top);
-                prefs.setFftMagBottom(bot);
+            if (Double.isFinite(topDbFs) && Double.isFinite(botDbFs) && topDbFs != botDbFs) {
+                if (topDbFs < botDbFs) { double s = topDbFs; topDbFs = botDbFs; botDbFs = s; }
+                prefs.setFftMagTop(topDbFs);
+                prefs.setFftMagBottom(botDbFs);
             }
         }
         prefs.save();
@@ -1055,7 +1036,6 @@ public final class FftView extends AbstractFreqDomainView {
      *  values for the bottom). */
     private void maximize() {
         Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit unit = prefs.getFftMagUnit();
 
         // Frequency span: 0 (clamped to bin size) → Nyquist.  Fall back
         // to currentNyquist() when no result is available yet — that
@@ -1070,27 +1050,43 @@ public final class FftView extends AbstractFreqDomainView {
         // Fixed +20 dBFS ceiling, noise-floor − 30 dB floor (when
         // present; otherwise default to −150 dBFS bottom to give a
         // sensible empty-chart layout).
-        double topDbFs = 20;
+        // Default +20 dBFS ceiling, but never below the DISPLAYED (correction-lifted)
+        // fundamental + 20 dB, so a notch un-notched above 0 dBFS still fits.
+        double fundTop = displayedFundDbFs();
+        double topDbFs = Double.isFinite(fundTop) ? Math.max(20.0, fundTop + 20.0) : 20.0;
         double botDbFs = (lastResult != null && Double.isFinite(lastResult.avgNoiseFloorDbFs))
                 ? lastResult.avgNoiseFloorDbFs - 30
                 : -150;
-        double calRefDbV = 0;
-        double binBw = 1.0;
-        if (lastResult != null) {
-            calRefDbV = Double.isNaN(lastResult.fundRefDbV) ? 0
-                    : (lastResult.fundRefDbV - lastResult.fundamentalDbFs);
-            binBw = lastResult.freqResolution;
-        }
-        double top = unit.convertFromDbFs(topDbFs, calRefDbV, binBw);
-        double bot = unit.convertFromDbFs(botDbFs, calRefDbV, binBw);
-        if (Double.isFinite(top) && Double.isFinite(bot) && top != bot) {
-            if (top < bot) { double s = top; top = bot; bot = s; }
-            prefs.setFftMagTop(top);
-            prefs.setFftMagBottom(bot);
+        // Range stored canonically in dBFS — unit conversion happens at draw / readout.
+        if (Double.isFinite(topDbFs) && Double.isFinite(botDbFs) && topDbFs != botDbFs) {
+            if (topDbFs < botDbFs) { double s = topDbFs; topDbFs = botDbFs; botDbFs = s; }
+            prefs.setFftMagTop(topDbFs);
+            prefs.setFftMagBottom(botDbFs);
         }
         prefs.save();
         fireRangeChanged();
         redraw();
+    }
+
+    /** The fundamental's DISPLAYED level in dBFS — what the spectrum actually draws at
+     *  the fundamental: the manual-override dBV (converted) when set, else the measured
+     *  level, which the worker already corrected in place for the loaded {@code .frc}
+     *  calibration.  {@code NaN} with no result. */
+    private double displayedFundDbFs() {
+        if (lastResult == null || !Double.isFinite(lastResult.fundamentalDbFs)) return Double.NaN;
+        if (Double.isFinite(lastResult.fundamentalTrueDbFs)) {
+            return lastResult.fundamentalTrueDbFs;               // manual fundamental, already dBFS
+        }
+        return lastResult.fundamentalDbFs;                       // already .frc-corrected
+    }
+
+    /** Magnitude-axis ceiling in dBFS: the 0 dBFS full-scale max, raised when a signal is
+     *  present to keep the DISPLAYED fundamental + 20 dB in range — so the axis can exceed
+     *  0 dBFS when calibration lifts the signal above full scale.  Used by the pane's
+     *  clamp / scrollbar sync / scroll handler so the corrected peak is reachable. */
+    public double magCeiling() {
+        double fundDbFs = displayedFundDbFs();
+        return Double.isFinite(fundDbFs) ? Math.max(0.0, fundDbFs + 20.0) : 0.0;
     }
 
     /** Latest fundamental frequency in Hz, or {@code NaN} if no analysis yet.
@@ -1130,11 +1126,13 @@ public final class FftView extends AbstractFreqDomainView {
                                        Math.max(1, area.width  - MARGIN_LEFT - rightMargin),
                                        Math.max(1, area.height - MARGIN_TOP  - MARGIN_BOTTOM));
 
-        FftMagnitudeUnit unit = prefs.getFftMagUnit();
+        MagnitudeUnit unit = prefs.getFftMagUnit();
         double freqMin = Math.max(0, prefs.getFftFreqMinHz());
         double freqMax = Math.max(freqMin + 1, prefs.getFftFreqMaxHz());
-        double magTop  = prefs.getFftMagTop();
-        double magBot  = prefs.getFftMagBottom();
+        // The magnitude range is stored canonically in dBFS; convert to the display unit
+        // for drawing (Preferences derives the 0-dBFS anchor + bin width from config).
+        double magBot   = prefs.convertFromDbFs(prefs.getFftMagBottom(), unit);
+        double magTop   = prefs.convertFromDbFs(prefs.getFftMagTop(),    unit);
         boolean logFreq = prefs.isFftLogFreqAxis();
         if (logFreq && freqMin < 1) freqMin = 1;
 
@@ -1151,7 +1149,7 @@ public final class FftView extends AbstractFreqDomainView {
             bgc.fillRectangle(0, 0, area.width, area.height);
             bgc.setAntialias(SWT.ON);
             bgc.setTextAntialias(SWT.ON);
-            boolean magLog = FftAxisTicks.isMagLog(unit);
+            boolean magLog = unit.isLog();
             AxisSpec xSpec = (logFreq
                     ? AxisSpec.log(fFreqMin, freqMax)
                     : AxisSpec.linearNice(fFreqMin, freqMax, 10, 0))
@@ -1160,10 +1158,10 @@ public final class FftView extends AbstractFreqDomainView {
                     ? AxisSpec.log(magBot, magTop)
                     : AxisSpec.linearNice(magBot, magTop, 10, 5.0))
                     .withFormat(magLog ? LabelFormat.VOLTS_SI : LabelFormat.DB)
-                    .withUnit(unit.getLabel());
+                    .withUnit(magUnitLabel(unit));
             drawGrid(bgc, plot, xSpec, ySpec, null,
                      color(ColorRole.GRID), color(ColorRole.AXIS), color(ColorRole.TEXT), monoFont,
-                     4, 2, null);
+                     MAJOR_TICK_LEN, MINOR_TICK_LEN, null);
             drawDistortionBands(bgc, plot, fFreqMin, freqMax, logFreq);
             if (lastResult != null) {
                 drawSpectrum(bgc, plot, lastResult, unit, fFreqMin, freqMax, magTop, magBot, logFreq);
@@ -1207,7 +1205,7 @@ public final class FftView extends AbstractFreqDomainView {
                 && crossY >= plot.y && crossY < plot.y + plot.height) {
             drawCrosshair(gc, plot, lastResult, unit, freqMin, freqMax, magTop, magBot, logFreq);
         }
-        //log.warn("FFT result rendered in {} ms", (double)(System.nanoTime() - startRender) / 1_000_000);
+        log.warn("FFT result rendered in {} ms", (double)(System.nanoTime() - startRender) / 1_000_000);
         startRender = System.nanoTime();
     }
 
@@ -1246,18 +1244,11 @@ public final class FftView extends AbstractFreqDomainView {
      *  FFT chart uses.  Helps the user see at a glance which peaks the
      *  analyser picked up. */
     private void drawHarmonicDots(GC gc, Rectangle plot, FftResult r,
-                                  FftMagnitudeUnit unit,
+                                  MagnitudeUnit unit,
                                   double freqMin, double freqMax,
                                   double magTop, double magBot,
                                   boolean logFreq) {
-        double calRefDbV = Double.isNaN(r.fundRefDbV) ? 0
-                : (r.fundRefDbV - r.fundamentalDbFs);
-        // Only the fundamental dot lifts to the manual-override dBV;
-        // harmonics stay on the calibrated anchor.
-        double fundRefDbV = (Double.isFinite(r.fundamentalTrueDbV)
-                && Double.isFinite(r.fundamentalDbFs))
-                ? r.fundamentalTrueDbV - r.fundamentalDbFs
-                : calRefDbV;
+        Preferences prefs = Preferences.instance();
         double binBw = r.freqResolution;
 
         // "Before-cal" dots — painted FIRST so the corrected (red)
@@ -1271,9 +1262,8 @@ public final class FftView extends AbstractFreqDomainView {
             gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
             int n = Math.min(before[0].length, before[1].length);
             for (int i = 0; i < n; i++) {
-                double anchor = (i == 0) ? fundRefDbV : calRefDbV;
                 plotDotAt(gc, plot, before[0][i], before[1][i],
-                        unit, freqMin, freqMax, magTop, magBot, logFreq, anchor, binBw);
+                        unit, freqMin, freqMax, magTop, magBot, logFreq);
             }
         }
 
@@ -1282,12 +1272,12 @@ public final class FftView extends AbstractFreqDomainView {
         // dots cleanly without snapping them to the chart edges.
         gc.setBackground(color(ColorRole.HARMONIC_DOT));
         plotDotAt(gc, plot, r.fundamentalHzRefined, r.fundamentalDbFs,
-                unit, freqMin, freqMax, magTop, magBot, logFreq, fundRefDbV, binBw);
+                unit, freqMin, freqMax, magTop, magBot, logFreq);
         if (r.harmonicHz != null && r.harmonicDbFs != null) {
             int n = Math.min(r.harmonicHz.length, r.harmonicDbFs.length);
             for (int i = 0; i < n; i++) {
                 plotDotAt(gc, plot, r.harmonicHz[i], r.harmonicDbFs[i],
-                        unit, freqMin, freqMax, magTop, magBot, logFreq, calRefDbV, binBw);
+                        unit, freqMin, freqMax, magTop, magBot, logFreq);
             }
         }
 
@@ -1298,25 +1288,25 @@ public final class FftView extends AbstractFreqDomainView {
         gc.setForeground(color(ColorRole.HARMONIC_DOT));
         drawHarmonicLabel(gc, plot, "F " + formatFrequency(r.fundamentalHzRefined),
                 r.fundamentalHzRefined, r.fundamentalDbFs,
-                unit, freqMin, freqMax, magTop, magBot, logFreq, fundRefDbV, binBw);
+                unit, freqMin, freqMax, magTop, magBot, logFreq);
         if (r.harmonicHz != null && r.harmonicDbFs != null) {
             int n = Math.min(r.harmonicHz.length, r.harmonicDbFs.length);
-            int calcMax = Math.max(9, Preferences.instance().getFftCalcMaxHarmonic());
+            int calcMax = Math.max(9, prefs.getFftCalcMaxHarmonic());
             for (int i = 0; i < n && (i + 2) <= calcMax; i++) {
                 drawHarmonicLabel(gc, plot, "H" + (i + 2),
                         r.harmonicHz[i], r.harmonicDbFs[i],
-                        unit, freqMin, freqMax, magTop, magBot, logFreq, calRefDbV, binBw);
+                        unit, freqMin, freqMax, magTop, magBot, logFreq);
             }
         }
 
         // DEBUG overlay: mains comb response (red), anchored at H2's level.
         if (r.harmonicDbFs != null && r.harmonicDbFs.length > 0) {
             drawMainsResponse(gc, plot, r, r.harmonicDbFs[0], unit,
-                    freqMin, freqMax, magTop, magBot, logFreq, calRefDbV, binBw);
+                    freqMin, freqMax, magTop, magBot, logFreq);
         }
         // DEBUG overlay: spectral discontinuity reject gates.
         drawDiscontinuityGates(gc, plot, r, unit,
-                freqMin, freqMax, magTop, magBot, logFreq, calRefDbV, binBw);
+                freqMin, freqMax, magTop, magBot, logFreq, binBw);
     }
 
     /** DEBUG: draws the mains comb's response as a red curve across the plot,
@@ -1325,18 +1315,18 @@ public final class FftView extends AbstractFreqDomainView {
      *  (anchored at H2) and the IMD path (anchored at d2L, since H2 isn't marked
      *  there).  No-op unless mains is locked. */
     private void drawMainsResponse(GC gc, Rectangle plot, FftResult r, double anchorDbFs,
-                                   FftMagnitudeUnit unit, double freqMin, double freqMax,
-                                   double magTop, double magBot, boolean logFreq,
-                                   double refDbV, double binBw) {
+                                   MagnitudeUnit unit, double freqMin, double freqMax,
+                                   double magTop, double magBot, boolean logFreq) {
         if (!DebugSwitches.SHOW_MAINS_COMB_RESPONSE || !(r.mainsF0Hz > 0.0) || mainsCorrector == null
                 || !Double.isFinite(anchorDbFs)) return;
         gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_RED));
+        Preferences prefs = Preferences.instance();
         int prevX = -1, prevY = 0;
         for (int x = plot.x; x <= plot.x + plot.width; x++) {
             double f = xToFreq(x, plot, freqMin, freqMax, logFreq);
             if (!(f > 0)) continue;
             double combDb = mainsCorrector.correctionDb(f);
-            double v = unit.convertFromDbFs(anchorDbFs + combDb, refDbV, binBw);
+            double v = prefs.convertFromDbFs(anchorDbFs + combDb, unit);
             int y = magToY(v, plot, magTop, magBot, unit);
             y = Math.max(plot.y, Math.min(plot.y + plot.height, y));
             if (prevX >= 0) gc.drawLine(prevX, prevY, x, y);
@@ -1355,12 +1345,13 @@ public final class FftView extends AbstractFreqDomainView {
      *  that fired this block is drawn thicker. */
     @SuppressWarnings("unused")
 	private void drawDiscontinuityGates(GC gc, Rectangle plot, FftResult r,
-                                        FftMagnitudeUnit unit, double freqMin, double freqMax,
+                                        MagnitudeUnit unit, double freqMin, double freqMax,
                                         double magTop, double magBot, boolean logFreq,
-                                        double refDbV, double binBw) {
+                                        double binBw) {
         SpectralDiscontinuityDetector.Gates g = r.gates;
         if (!DebugSwitches.SHOW_DISCONTINUITY_GATES || g == null
                 || binBw <= 0 || r.amplitudeDbFs == null) return;
+        Display display = getDisplay();
         double[] dbfs = r.amplitudeDbFs;
         int n = dbfs.length, nb = g.mref.length;
         SpectralDiscontinuityDetector.Gates rej = r.gateRejectGates;   // last rejection's verdict
@@ -1386,12 +1377,12 @@ public final class FftView extends AbstractFreqDomainView {
             if (line[b] || Double.isNaN(floorDisp[b])) { prevXr = prevXb = -1; continue; }
             int x = freqToX(0.5 * (g.bandLo[b] + g.bandHi[b]) * binBw, plot, freqMin, freqMax, logFreq);
             double ref = floorDisp[b] + (g.mref[b] - g.floorDb);
-            int yr = gateY(ref, unit, refDbV, binBw, plot, magTop, magBot);
-            int yb = gateY(ref + g.scoreThreshDb, unit, refDbV, binBw, plot, magTop, magBot);
-            gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_DARK_CYAN));
+            int yr = gateY(ref, unit, plot, magTop, magBot);
+            int yb = gateY(ref + g.scoreThreshDb, unit, plot, magTop, magBot);
+            gc.setForeground(display.getSystemColor(SWT.COLOR_DARK_CYAN));
             gc.setLineWidth(3);
             if (prevXr >= 0) gc.drawLine(prevXr, prevYr, x, yr);
-            gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_CYAN));
+            gc.setForeground(display.getSystemColor(SWT.COLOR_CYAN));
             gc.setLineWidth(rejScore ? 2 : 1);
             if (prevXb >= 0) gc.drawLine(prevXb, prevYb, x, yb);
             prevXr = x; prevYr = yr; prevXb = x; prevYb = yb;
@@ -1409,14 +1400,14 @@ public final class FftView extends AbstractFreqDomainView {
                 if (Double.isNaN(cf)) continue;
                 int xc = freqToX(pk * binBw, plot, freqMin, freqMax, logFreq);
                 int xL = Math.max(plot.x, xc - half), xR = Math.min(plot.x + plot.width, xc + half);
-                gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_DARK_YELLOW));
+                gc.setForeground(display.getSystemColor(SWT.COLOR_DARK_YELLOW));
                 gc.setLineWidth(1);
-                int yT = gateY(cf + threshExc, unit, refDbV, binBw, plot, magTop, magBot);
+                int yT = gateY(cf + threshExc, unit, plot, magTop, magBot);
                 gc.drawLine(xL, yT, xR, yT);
                 if (rej != null && !Double.isNaN(rej.pedestalExcessDb)) {
-                    gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_RED));
+                    gc.setForeground(display.getSystemColor(SWT.COLOR_RED));
                     gc.setLineWidth(rejPed ? 2 : 1);
-                    int yA = gateY(cf + rej.pedestalExcessDb, unit, refDbV, binBw, plot, magTop, magBot);
+                    int yA = gateY(cf + rej.pedestalExcessDb, unit, plot, magTop, magBot);
                     gc.drawLine(xL, yA, xR, yA);
                 }
             }
@@ -1427,31 +1418,31 @@ public final class FftView extends AbstractFreqDomainView {
         if (!Double.isNaN(medFloor) && g.bins > 0) {
             double perBin = 10.0 * Math.log10(g.bins);
             int xr = plot.x + plot.width;
-            gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_MAGENTA));
+            gc.setForeground(display.getSystemColor(SWT.COLOR_MAGENTA));
             gc.setLineWidth(rejPow ? 2 : 1);
-            int yCur = gateY(medFloor + g.powerDb - perBin - g.floorDb, unit, refDbV, binBw, plot, magTop, magBot);
+            int yCur = gateY(medFloor + g.powerDb - perBin - g.floorDb, unit, plot, magTop, magBot);
             gc.drawLine(plot.x, yCur, xr, yCur);
             if (g.powerThreshDb > 0) {
                 gc.setLineWidth(3);
                 gc.setLineStyle(SWT.LINE_DOT);
                 double mid = medFloor + g.powerMedDb - perBin - g.floorDb;
-                int yLo = gateY(mid - g.powerThreshDb, unit, refDbV, binBw, plot, magTop, magBot);
-                int yHi = gateY(mid + g.powerThreshDb, unit, refDbV, binBw, plot, magTop, magBot);
+                int yLo = gateY(mid - g.powerThreshDb, unit, plot, magTop, magBot);
+                int yHi = gateY(mid + g.powerThreshDb, unit, plot, magTop, magBot);
                 gc.drawLine(plot.x, yLo, xr, yLo);
                 gc.drawLine(plot.x, yHi, xr, yHi);
                 gc.setLineStyle(SWT.LINE_SOLID);
             }
             if (rej != null) {   // rejected block's total power vs the band
-                gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_RED));
+                gc.setForeground(display.getSystemColor(SWT.COLOR_RED));
                 gc.setLineWidth(rejPow ? 2 : 1);
-                int yRej = gateY(medFloor + rej.powerDb - perBin - rej.floorDb, unit, refDbV, binBw, plot, magTop, magBot);
+                int yRej = gateY(medFloor + rej.powerDb - perBin - rej.floorDb, unit, plot, magTop, magBot);
                 gc.drawLine(plot.x, yRej, xr, yRej);
             }
         }
 
         // Current accepted block — per-band level curve (grey, context).
         drawLevelCurve(gc, plot, curLvl, line, floorDisp, g, unit,
-                freqMin, freqMax, magTop, magBot, logFreq, refDbV, binBw, SWT.COLOR_GRAY, false);
+                freqMin, freqMax, magTop, magBot, logFreq, binBw, SWT.COLOR_GRAY, false);
         // Full REJECTED FFT (red) at bin resolution — its fundamental rigidly
         // shifted ONTO the displayed fundamental (no stretch) so the block's
         // near-carrier skirt reads at its TRUE height against the aligned peak:
@@ -1459,19 +1450,19 @@ public final class FftView extends AbstractFreqDomainView {
         int fundBin = (Double.isFinite(r.fundamentalHzRefined) && r.fundamentalHzRefined > 0)
                 ? (int) Math.round(r.fundamentalHzRefined / binBw)
                 : (g.peakBins != null && g.peakBins.length > 0 ? g.peakBins[0] : -1);
-        double[] rejPlot = buildRejectedBlockDbFs(r, fundBin, refDbV, binBw, freqMin, freqMax);
+        double[] rejPlot = buildRejectedBlockDbFs(r, fundBin, binBw, freqMin, freqMax);
         drawFullBlock(gc, plot, rejPlot, unit,
-                freqMin, freqMax, magTop, magBot, logFreq, refDbV, binBw, SWT.COLOR_RED);
+                freqMin, freqMax, magTop, magBot, logFreq, binBw, SWT.COLOR_RED);
 
         // Gate-status readout: value/threshold per gate for the last reject and the
         // current block, firing gate marked «<<» — over-rejection visible at a glance.
         gc.setLineWidth(1);
         if (rej != null) {
-            gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_RED));
+            gc.setForeground(display.getSystemColor(SWT.COLOR_RED));
             gc.drawString(gateLine("reject ", rej, rejScore, rejPed, rejPow),
                     plot.x + 8, plot.y + plot.height - 32, true);
         }
-        gc.setForeground(getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY));
+        gc.setForeground(display.getSystemColor(SWT.COLOR_DARK_GRAY));
         gc.drawString(gateLine("current", g, g.scoreOut, g.pedestalOut, g.powerOut),
                 plot.x + 8, plot.y + plot.height - 16, true);
     }
@@ -1479,8 +1470,8 @@ public final class FftView extends AbstractFreqDomainView {
     /** Draws a precomputed full-resolution block spectrum ({@code plotDbFs},
      *  one dBFs value per bin) as a per-column peak-hold envelope. */
     private void drawFullBlock(GC gc, Rectangle plot, double[] plotDbFs,
-                               FftMagnitudeUnit unit, double freqMin, double freqMax,
-                               double magTop, double magBot, boolean logFreq, double refDbV,
+                               MagnitudeUnit unit, double freqMin, double freqMax,
+                               double magTop, double magBot, boolean logFreq, 
                                double binBw, int swtColor) {
         if (plotDbFs == null || binBw <= 0) return;
         int nblk = plotDbFs.length;
@@ -1490,8 +1481,9 @@ public final class FftView extends AbstractFreqDomainView {
         int w = plot.width;
         int[] colY = new int[w + 1];
         Arrays.fill(colY, Integer.MAX_VALUE);
+        Preferences prefs = Preferences.instance();
         for (int k = kFirst; k <= kLast; k++) {
-            double v = unit.convertFromDbFs(plotDbFs[k], refDbV, binBw);
+            double v = prefs.convertFromDbFs(plotDbFs[k], unit);
             int y = Math.max(plot.y, Math.min(plot.y + plot.height, magToY(v, plot, magTop, magBot, unit)));
             int col = freqToX(k * binBw, plot, freqMin, freqMax, logFreq) - plot.x;
             if (col >= 0 && col <= w && y < colY[col]) colY[col] = y;
@@ -1520,7 +1512,7 @@ public final class FftView extends AbstractFreqDomainView {
      *       lifted onto the cal-corrected scale by the cascade gain.</li>
      *  </ul>
      *  Returns {@code null} when no fundamental / block data is available. */
-    private double[] buildRejectedBlockDbFs(FftResult r, int fundBin, double refDbV,
+    private double[] buildRejectedBlockDbFs(FftResult r, int fundBin,
                                             double binBw, double freqMin, double freqMax) {
         double[] block = r.gateRejectDbFs, disp = r.amplitudeDbFs;
         if (block == null || disp == null || fundBin < 1 || fundBin >= block.length) return null;
@@ -1537,7 +1529,7 @@ public final class FftView extends AbstractFreqDomainView {
         //    divides every bin by |H| at its own frequency; otherwise only each
         //    tone's data-derived lobe is stretched by 1/|H| at the tone (noise
         //    left raw) — mirroring FreqRespCalHelper.applyCompensationInPlace.
-        for (FftCalibrationStore.Entry e : FftCalibrationStore.instance().getEntries()) {
+        for (FreqRespCorrectionStore.Entry e : correctionStore.getEntries()) {
             FreqRespCalibration c = r.channelLeft ? e.getCalibration().left()
                                                   : e.getCalibration().right();
             if (e.isWithNoise()) {
@@ -1561,11 +1553,11 @@ public final class FftView extends AbstractFreqDomainView {
 
         // 2. Manual fundamental — its displayed peak is lifted at draw time (not in
         //    amplitudeDbFs), so lift red's fundamental lobe to the user value too.
-        boolean manual = Double.isFinite(r.fundamentalTrueDbV)
+        boolean manual = Double.isFinite(r.fundamentalTrueDbFs)
                 && Double.isFinite(r.fundamentalDbFs) && Double.isFinite(r.fundamentalHzRefined);
         double targetDbFs;
         if (manual) {
-            targetDbFs = r.fundamentalTrueDbV - refDbV;
+            targetDbFs = r.fundamentalTrueDbFs;
             stretchLobe(out, omag, fundBin, half,
                     Math.pow(10.0, (targetDbFs - out[fundBin]) / 20.0));
         } else {
@@ -1673,9 +1665,9 @@ public final class FftView extends AbstractFreqDomainView {
      *  each band's excess over the block's own floor (so it shares the gate
      *  reference's frame); line bands are skipped. */
     private void drawLevelCurve(GC gc, Rectangle plot, double[] lvl, boolean[] line, double[] floorDisp,
-                                SpectralDiscontinuityDetector.Gates g, FftMagnitudeUnit unit,
+                                SpectralDiscontinuityDetector.Gates g, MagnitudeUnit unit,
                                 double freqMin, double freqMax, double magTop, double magBot,
-                                boolean logFreq, double refDbV, double binBw, int swtColor, boolean dashed) {
+                                boolean logFreq, double binBw, int swtColor, boolean dashed) {
         if (lvl == null) return;
         double floor = bandFloor(lvl, line);
         gc.setForeground(getDisplay().getSystemColor(swtColor));
@@ -1685,7 +1677,7 @@ public final class FftView extends AbstractFreqDomainView {
         for (int b = 0; b < lvl.length; b++) {
             if (line[b] || Double.isNaN(lvl[b]) || Double.isNaN(floorDisp[b])) { prevX = -1; continue; }
             double dispDbFs = floorDisp[b] + (lvl[b] - floor);
-            int y = gateY(dispDbFs, unit, refDbV, binBw, plot, magTop, magBot);
+            int y = gateY(dispDbFs, unit, plot, magTop, magBot);
             int x = freqToX(0.5 * (g.bandLo[b] + g.bandHi[b]) * binBw, plot, freqMin, freqMax, logFreq);
             if (prevX >= 0) gc.drawLine(prevX, prevY, x, y);
             prevX = x; prevY = y;
@@ -1693,9 +1685,8 @@ public final class FftView extends AbstractFreqDomainView {
         gc.setLineStyle(SWT.LINE_SOLID);
     }
 
-    private int gateY(double dbFs, FftMagnitudeUnit unit, double refDbV, double binBw,
-                      Rectangle plot, double magTop, double magBot) {
-        double v = unit.convertFromDbFs(dbFs, refDbV, binBw);
+    private int gateY(double dbFs, MagnitudeUnit unit, Rectangle plot, double magTop, double magBot) {
+        double v = Preferences.instance().convertFromDbFs(dbFs, unit);
         int y = magToY(v, plot, magTop, magBot, unit);
         return Math.max(plot.y, Math.min(plot.y + plot.height, y));
     }
@@ -1739,14 +1730,14 @@ public final class FftView extends AbstractFreqDomainView {
      *  logic to anti-overlap labels while still anchoring each to its
      *  own dot's vertical position. */
     private Point dotScreenPos(Rectangle plot, double hz, double dbFs,
-                               FftMagnitudeUnit unit,
+                               MagnitudeUnit unit,
                                double freqMin, double freqMax,
                                double magTop, double magBot,
-                               boolean logFreq, double refDbV, double binBw) {
+                               boolean logFreq) {
         if (!Double.isFinite(hz) || hz < freqMin || hz > freqMax) return null;
         if (!Double.isFinite(dbFs)) return null;
-        double v = unit.convertFromDbFs(dbFs, refDbV, binBw);
-        double t = FftFormat.magToYFraction(v, magTop, magBot, unit);
+        double v = Preferences.instance().convertFromDbFs(dbFs, unit);
+        double t = magToYFraction(v, magTop, magBot, unit);
         if (t < 0 || t > 1) return null;
         int x = freqToX(hz, plot, freqMin, freqMax, logFreq);
         int y = magToY(v, plot, magTop, magBot, unit);
@@ -1757,14 +1748,14 @@ public final class FftView extends AbstractFreqDomainView {
      *  and just above the dot itself.  No-op when the dot would fall
      *  outside the visible plot. */
     private void drawHarmonicLabel(GC gc, Rectangle plot, String text,
-                                   double hz, double dbFs, FftMagnitudeUnit unit,
+                                   double hz, double dbFs, MagnitudeUnit unit,
                                    double freqMin, double freqMax,
                                    double magTop, double magBot,
-                                   boolean logFreq, double refDbV, double binBw) {
+                                   boolean logFreq) {
         if (!Double.isFinite(hz) || hz < freqMin || hz > freqMax) return;
         if (!Double.isFinite(dbFs)) return;
-        double v = unit.convertFromDbFs(dbFs, refDbV, binBw);
-        double t = FftFormat.magToYFraction(v, magTop, magBot, unit);
+        double v = Preferences.instance().convertFromDbFs(dbFs, unit);
+        double t = magToYFraction(v, magTop, magBot, unit);
         if (t < 0 || t > 1) return;
         int x = freqToX(hz, plot, freqMin, freqMax, logFreq);
         int y = magToY(v, plot, magTop, magBot, unit);
@@ -1784,14 +1775,15 @@ public final class FftView extends AbstractFreqDomainView {
      *  handles the bounds check). */
     private void drawImdDots(GC gc, Rectangle plot, ImdResult imd,
                              FftResult r,
-                             FftMagnitudeUnit unit,
+                             MagnitudeUnit unit,
                              double freqMin, double freqMax,
                              double magTop, double magBot,
                              boolean logFreq) {
         if (r == null) return;
-        double binBw  = r.freqResolution;
-        double refDbV = Double.isNaN(r.fundRefDbV) ? 0
-                      : (r.fundRefDbV - r.fundamentalDbFs);
+        Preferences prefs = Preferences.instance();
+        // dBV → dBFs is the fixed global ADC offset (dBFs = dBV − offset) — the
+        // same constant for every bin, not a per-result fundamental delta.
+        double refDbV = prefs.getDbvOffsetDb();
 
         // Aggregate every dot's (freq, post-cal dBFs) so the blue
         // pre-cal and red post-cal passes walk the same list.  Order:
@@ -1799,8 +1791,8 @@ public final class FftView extends AbstractFreqDomainView {
         int count = 2 + 2 * (ImdResult.MAX_ORDER - 1);
         double[] hz   = new double[count];
         double[] dbFs = new double[count];
-        hz[0]   = imd.f1Hz;  dbFs[0] = dbvToDbFs(imd.f1DbV);
-        hz[1]   = imd.f2Hz;  dbFs[1] = dbvToDbFs(imd.f2DbV);
+        hz[0]   = imd.f1Hz;  dbFs[0] = imd.f1DbV - refDbV;
+        hz[1]   = imd.f2Hz;  dbFs[1] = imd.f2DbV - refDbV;
         int idx = 2;
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
             hz[idx]   = imd.dnLHz[k];
@@ -1815,15 +1807,15 @@ public final class FftView extends AbstractFreqDomainView {
         // top.  Only drawn when at least one calibration file is
         // loaded — same gate the THD path uses (preCorrectionPeaks
         // null vs. non-null).
-        List<FftCalibrationStore.Entry> calEntries =
-                FftCalibrationStore.instance().getEntries();
+        List<FreqRespCorrectionStore.Entry> calEntries =
+                correctionStore.getEntries();
         if (!calEntries.isEmpty()) {
-            boolean wantLeft = Preferences.instance().getFftChannel() == Channel.L;
+            boolean wantLeft = prefs.getFftChannel() == Channel.L;
             gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
             for (int i = 0; i < count; i++) {
                 double preDbFs = dbFs[i] + sumCalDbAt(calEntries, wantLeft, hz[i]);
                 plotDotAt(gc, plot, hz[i], preDbFs,
-                        unit, freqMin, freqMax, magTop, magBot, logFreq, refDbV, binBw);
+                        unit, freqMin, freqMax, magTop, magBot, logFreq);
             }
         }
 
@@ -1831,13 +1823,13 @@ public final class FftView extends AbstractFreqDomainView {
         gc.setBackground(color(ColorRole.HARMONIC_DOT));
         for (int i = 0; i < count; i++) {
             plotDotAt(gc, plot, hz[i], dbFs[i],
-                    unit, freqMin, freqMax, magTop, magBot, logFreq, refDbV, binBw);
+                    unit, freqMin, freqMax, magTop, magBot, logFreq);
         }
 
         // DEBUG overlay: mains comb response (red), anchored at d2L's level
         // (the order-2 lower IMD product — H2 isn't present in IMD mode).
         drawMainsResponse(gc, plot, r, imd.dnLDbV[2] - refDbV, unit,
-                freqMin, freqMax, magTop, magBot, logFreq, refDbV, binBw);
+                freqMin, freqMax, magTop, magBot, logFreq);
 
         // F1 / F2 labels: each anchored just above its own dot, but if
         // the two labels would overlap the lower-dot's label slides up
@@ -1847,10 +1839,10 @@ public final class FftView extends AbstractFreqDomainView {
         // strictly above their own dots so the dot itself is never
         // obscured.
         gc.setForeground(color(ColorRole.HARMONIC_DOT));
-        Point p1 = dotScreenPos(plot, imd.f1Hz, dbvToDbFs(imd.f1DbV), unit, freqMin, freqMax,
-                magTop, magBot, logFreq, refDbV, binBw);
-        Point p2 = dotScreenPos(plot, imd.f2Hz, dbvToDbFs(imd.f2DbV), unit, freqMin, freqMax,
-                magTop, magBot, logFreq, refDbV, binBw);
+        Point p1 = dotScreenPos(plot, imd.f1Hz, imd.f1DbV - refDbV, unit, freqMin, freqMax,
+                magTop, magBot, logFreq);
+        Point p2 = dotScreenPos(plot, imd.f2Hz, imd.f2DbV - refDbV, unit, freqMin, freqMax,
+                magTop, magBot, logFreq);
         if (p1 != null || p2 != null) {
             String t1 = "F1 " + formatFrequency(imd.f1Hz);
             String t2 = "F2 " + formatFrequency(imd.f2Hz);
@@ -1905,10 +1897,10 @@ public final class FftView extends AbstractFreqDomainView {
             double hDbFs = imd.dnHDbV[k] - refDbV;
             drawHarmonicLabel(gc, plot, "d" + k + "L",
                     imd.dnLHz[k], lDbFs, unit, freqMin, freqMax,
-                    magTop, magBot, logFreq, refDbV, binBw);
+                    magTop, magBot, logFreq);
             drawHarmonicLabel(gc, plot, "d" + k + "H",
                     imd.dnHHz[k], hDbFs, unit, freqMin, freqMax,
-                    magTop, magBot, logFreq, refDbV, binBw);
+                    magTop, magBot, logFreq);
         }
     }
 
@@ -1921,11 +1913,11 @@ public final class FftView extends AbstractFreqDomainView {
      *  {@code FftAnalyzerWorker.sumCalDb} uses for the THD-path blue
      *  dots; kept local here so the IMD path doesn't reach into the
      *  worker's private helpers. */
-    private double sumCalDbAt(List<FftCalibrationStore.Entry> calEntries,
+    private double sumCalDbAt(List<FreqRespCorrectionStore.Entry> calEntries,
                               boolean wantLeft, double freqHz) {
         if (!(freqHz > 0)) return 0.0;
         double sum = 0.0;
-        for (FftCalibrationStore.Entry e : calEntries) {
+        for (FreqRespCorrectionStore.Entry e : calEntries) {
             FreqRespCalibration cal = wantLeft
                     ? e.getCalibration().left()
                     : e.getCalibration().right();
@@ -1936,21 +1928,22 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     private void plotDotAt(GC gc, Rectangle plot, double hz, double dbFs,
-                           FftMagnitudeUnit unit,
+                           MagnitudeUnit unit,
                            double freqMin, double freqMax,
                            double magTop, double magBot,
-                           boolean logFreq, double refDbV, double binBw) {
+                           boolean logFreq) {
         if (!Double.isFinite(hz) || hz < freqMin || hz > freqMax) return;
         if (!Double.isFinite(dbFs)) return;
-        double v = unit.convertFromDbFs(dbFs, refDbV, binBw);
+        Preferences prefs = Preferences.instance();
+        double v = prefs.convertFromDbFs(dbFs, unit);
         // Drop the dot entirely when its magnitude is outside the
         // visible range — dots clamped to the edge would otherwise
         // appear as misleading markers at the chart's top / bottom.
-        double t = FftFormat.magToYFraction(v, magTop, magBot, unit);
+        double t = magToYFraction(v, magTop, magBot, unit);
         if (t < 0 || t > 1) return;
         int x = freqToX(hz, plot, freqMin, freqMax, logFreq);
         int y = magToY(v, plot, magTop, magBot, unit);
-        int diameter = Math.max(2, Preferences.instance().getFftHarmonicDotDiameter());
+        int diameter = Math.max(2, prefs.getFftHarmonicDotDiameter());
         int radius   = diameter / 2;
         gc.fillOval(x - radius, y - radius, diameter, diameter);
     }
@@ -1961,7 +1954,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  the fields are simple primitives.  Two paints with the same
      *  fingerprint always produce the same cached image. */
     private long computeTraceFingerprint(FftResult r, Rectangle area,
-                                         FftMagnitudeUnit unit,
+                                         MagnitudeUnit unit,
                                          double freqMin, double freqMax,
                                          double magTop, double magBot,
                                          boolean logFreq) {
@@ -2007,7 +2000,7 @@ public final class FftView extends AbstractFreqDomainView {
         // Cal entry list contents — adding / removing a row would
         // otherwise leave the overlay curve stale until the next FFT
         // result swaps the result reference.
-        for (FftCalibrationStore.Entry e : FftCalibrationStore.instance().getEntries()) {
+        for (FreqRespCorrectionStore.Entry e : correctionStore.getEntries()) {
             h = 31 * h + System.identityHashCode(e.getCalibration());
         }
         return h;
@@ -2031,27 +2024,41 @@ public final class FftView extends AbstractFreqDomainView {
      * with no connection.  Now the trace is one continuous polyline at
      * any zoom level, and stays O(plotWidth) for huge FFTs.
      */
+    /** Display label for a magnitude unit — physics-unit symbols held in i18n (same in
+     *  every language) so the enum itself stays label-free. */
+    private String magUnitLabel(MagnitudeUnit unit) {
+        return I18n.t("unit.mag." + unit.name());
+    }
+
+    /** Combo items for the magnitude-unit selector, in {@code values()} order
+     *  (the combo binds by index). */
+    private String[] magUnitLabels() {
+        MagnitudeUnit[] all = MagnitudeUnit.values();
+        String[] out = new String[all.length];
+        for (int i = 0; i < all.length; i++) out[i] = magUnitLabel(all[i]);
+        return out;
+    }
+
     private void drawSpectrum(GC gc, Rectangle plot, FftResult r,
-                              FftMagnitudeUnit unit,
+                              MagnitudeUnit unit,
                               double freqMin, double freqMax,
                               double magTop, double magBot,
                               boolean logFreq) {
         if (r.amplitudeDbFs == null) return;
+        Preferences prefs = Preferences.instance();
         gc.setForeground(color(ColorRole.SPECTRUM));
-        gc.setLineWidth((int) Math.max(1, Math.round(Preferences.instance().getFftLineWidth())));
+        gc.setLineWidth((int) Math.max(1, Math.round(prefs.getFftLineWidth())));
         double binBw   = r.freqResolution;
-        double refDbV  = Double.isNaN(r.fundRefDbV) ? 0
-                : (r.fundRefDbV - r.fundamentalDbFs);
         int n = r.amplitudeDbFs.length;
         // Manual-fundamental: lift the fundamental's WHOLE main lobe to the user
         // value — not just its peak bin (that left a narrow spike on the
         // unlifted lobe) — PROPORTIONALLY above the local noise floor so the
         // wings stay on the floor.  Lobe + floor read from the data via the
-        // shared ToneLobeLift; applied as a per-bin dBV anchor so it works in
+        // shared ToneLobeLift; applied as a per-bin dBFS anchor so it works in
         // every magnitude unit.
         int    lobeLo = -1, lobeHi = -1;
         double floorLin = 0.0, liftFactor = 1.0, peakMagLin = 0.0;
-        if (Double.isFinite(r.fundamentalTrueDbV)
+        if (Double.isFinite(r.fundamentalTrueDbFs)
                 && Double.isFinite(r.fundamentalDbFs)
                 && Double.isFinite(r.fundamentalHzRefined)
                 && binBw > 0) {
@@ -2065,7 +2072,7 @@ public final class FftView extends AbstractFreqDomainView {
                 lobeLo = edges[0];
                 lobeHi = edges[1];
                 peakMagLin = mag.applyAsDouble(peak);
-                double targetDbFs = r.fundamentalTrueDbV - refDbV;   // manual dBV → dBFs-equiv
+                double targetDbFs = r.fundamentalTrueDbFs;   // manual fundamental, already dBFS
                 liftFactor = Math.pow(10.0, (targetDbFs - dbfs[peak]) / 20.0);
             }
         }
@@ -2094,15 +2101,14 @@ public final class FftView extends AbstractFreqDomainView {
         for (int k = kPrev; k <= kNext; k++) {
             double f = k * binBw;
             int xAbs = freqToX(f, plot, freqMin, freqMax, logFreq);
-            double binRefDbV = refDbV;
+            double binDbFs = r.amplitudeDbFs[k];
             if (lobeLo >= 0 && k >= lobeLo && k <= lobeHi) {
-                double m = Math.pow(10.0, r.amplitudeDbFs[k] / 20.0);
+                double m = Math.pow(10.0, binDbFs / 20.0);
                 double newMag = LOBE.stretch(m, floorLin, peakMagLin, liftFactor);
-                double liftedDbFs = newMag > 1e-15 ? 20.0 * Math.log10(newMag) : -300.0;
-                binRefDbV = liftedDbFs + refDbV - r.amplitudeDbFs[k];
+                binDbFs = newMag > 1e-15 ? 20.0 * Math.log10(newMag) : -300.0;
             }
-            double v = unit.convertFromDbFs(r.amplitudeDbFs[k], binRefDbV, binBw);
-            int y = magToY(v, plot, magTop, magBot, unit);
+            double v = prefs.convertFromDbFs(binDbFs, unit);
+            int y = magToYTrace(v, plot, magTop, magBot, unit);
             // Route by frequency, not pixel: on LOG scale freqToX
             // clamps any sub-freqMin bin to plot.x, so an x-based test
             // would silently add off-screen bins to column 0 with
@@ -2124,19 +2130,20 @@ public final class FftView extends AbstractFreqDomainView {
      *  loaded cals (cascade); the curve plots {@code -sumDb + offset}
      *  where {@code offset = h2DbFs + sumDb(h2Freq)}. */
     private void drawCalOverlay(GC gc, Rectangle plot, FftResult r,
-                                FftMagnitudeUnit unit,
+                                MagnitudeUnit unit,
                                 double freqMin, double freqMax,
                                 double magTop, double magBot,
                                 boolean logFreq) {
-        List<FftCalibrationStore.Entry> entries =
-                FftCalibrationStore.instance().getEntries();
+        List<FreqRespCorrectionStore.Entry> entries =
+                correctionStore.getEntries();
         if (entries.isEmpty()) return;
+        Preferences prefs = Preferences.instance();
         // Anchor at H2 in THD mode, or at d2L (the order-2 lower IMD product) in
         // IMD mode — H2 isn't marked there.
         double anchorFreq, anchorDbFs;
         if (lastImd != null && lastImd.dnLHz != null && lastImd.dnLHz.length > 2
                 && Double.isFinite(lastImd.dnLDbV[2])) {
-            double ref = Double.isNaN(r.fundRefDbV) ? 0 : (r.fundRefDbV - r.fundamentalDbFs);
+            double ref = prefs.getDbvOffsetDb();   // dBFs = dBV − global ADC offset
             anchorFreq = lastImd.dnLHz[2];
             anchorDbFs = lastImd.dnLDbV[2] - ref;
         } else if (r.harmonicCount > 0 && r.harmonicBins != null
@@ -2152,9 +2159,9 @@ public final class FftView extends AbstractFreqDomainView {
         // currently analysing — using .left() unconditionally would
         // mis-compensate the signal when the user picks the right
         // channel (their L/R cal curves are not identical).
-        boolean wantLeft = Preferences.instance().getFftChannel() == Channel.L;
+        boolean wantLeft = prefs.getFftChannel() == Channel.L;
         double sumDbAtAnchor = 0.0;
-        for (FftCalibrationStore.Entry e : entries) {
+        for (FreqRespCorrectionStore.Entry e : entries) {
             FreqRespCalibration cal = wantLeft
                     ? e.getCalibration().left()
                     : e.getCalibration().right();
@@ -2167,19 +2174,16 @@ public final class FftView extends AbstractFreqDomainView {
                 ? entries.get(0).getCalibration().left()
                 : entries.get(0).getCalibration().right();
         double[] freqs = first.freqs;
-        double calRefDbV = Double.isNaN(r.fundRefDbV) ? 0
-                : (r.fundRefDbV - r.fundamentalDbFs);
-        double binBw = r.freqResolution;
 
         gc.setForeground(color(ColorRole.CAL_OVERLAY));
-        gc.setLineWidth((int) Math.max(1, Math.round(Preferences.instance().getFftLineWidth())));
+        gc.setLineWidth((int) Math.max(1, Math.round(prefs.getFftLineWidth())));
         ColumnBucketPainter painter = new ColumnBucketPainter(plot);
         int W = plot.width;
         for (int i = 0; i < freqs.length; i++) {
             double f = freqs[i];
             if (!(f > 0.0)) continue;
             double sumDb = 0.0;
-            for (FftCalibrationStore.Entry e : entries) {
+            for (FreqRespCorrectionStore.Entry e : entries) {
                 FreqRespCalibration cal = wantLeft
                         ? e.getCalibration().left()
                         : e.getCalibration().right();
@@ -2189,7 +2193,7 @@ public final class FftView extends AbstractFreqDomainView {
                 sumDb += (m > 0.0) ? 20.0 * Math.log10(m) : -300.0;
             }
             double dbFs = -sumDb + offset;
-            double v = unit.convertFromDbFs(dbFs, calRefDbV, binBw);
+            double v = prefs.convertFromDbFs(dbFs, unit);
             int xAbs = freqToX(f, plot, freqMin, freqMax, logFreq);
             int x = xAbs - plot.x;
             int y = magToY(v, plot, magTop, magBot, unit);
@@ -2235,7 +2239,7 @@ public final class FftView extends AbstractFreqDomainView {
      * is 10⁻⁸ %.  Column positions are derived from monospaced font
      * extents so the H₂..H₉ key column never overlaps the value column.
      */
-    private int drawDistortionTable(GC gc, FftResult r, FftMagnitudeUnit unit) {
+    private int drawDistortionTable(GC gc, FftResult r, MagnitudeUnit unit) {
         return drawDistortionTable(gc, r, unit, MARGIN_LEFT + 6, TABLE_TOP_Y, true);
     }
 
@@ -2265,11 +2269,12 @@ public final class FftView extends AbstractFreqDomainView {
 
         // ── Centred F1 / F2 headers (bold). ────────────────────────────
         gc.setFont(monoBoldFont);
+        double dbvOffsetDb = prefs.getDbvOffsetDb();   // dBFs = dBV − global ADC offset
         drawCentred(gc, String.format("F1: %.4f Hz   %.2f dBFS   %.2f dBV",
-                imd.f1Hz, dbvToDbFs(imd.f1DbV), imd.f1DbV), centreX, y);
+                imd.f1Hz, imd.f1DbV - dbvOffsetDb, imd.f1DbV), centreX, y);
         y += lineH;
         drawCentred(gc, String.format("F2: %.4f Hz   %.2f dBFS   %.2f dBV",
-                imd.f2Hz, dbvToDbFs(imd.f2DbV), imd.f2DbV), centreX, y);
+                imd.f2Hz, imd.f2DbV - dbvOffsetDb, imd.f2DbV), centreX, y);
         y += lineH;
 
         // ── Span line (re-uses the THD format from a Result if any). ──
@@ -2359,8 +2364,9 @@ public final class FftView extends AbstractFreqDomainView {
      *  origin so the extracted tool window can place the table at (0,0)
      *  instead of leaving room for the header buttons that are only
      *  drawn in the main FFT view. */
-    private int drawDistortionTable(GC gc, FftResult r, FftMagnitudeUnit unit,
+    private int drawDistortionTable(GC gc, FftResult r, MagnitudeUnit unit,
                                      int xLeft, int yTop, boolean includeClockRow) {
+        Preferences prefs = Preferences.instance();
         gc.setFont(monoFont);
         gc.setForeground(color(ColorRole.TEXT));
         int y     = yTop;
@@ -2373,17 +2379,15 @@ public final class FftView extends AbstractFreqDomainView {
         int centreX = xLeft + tableW / 2;
 
         // ── Centred header (bold) ─────────────────────────────────────
-        double thdMaxH = Preferences.instance().getFftThdMaxHarmonic();
+        double thdMaxH = prefs.getFftThdMaxHarmonic();
         gc.setFont(monoBoldFont);
-        // Prefer the user-supplied "manual fundamental" dBV (carried
-        // in fundamentalTrueDbV) when it's set — this is the only
-        // place the manual override should land.  fundRefDbV stays
-        // anchored to the ADC calibration so every other bin
-        // (harmonics, noise floor, the spectrum trace) keeps its
-        // absolute dBV calibration.
-        double fundDbV = Double.isFinite(r.fundamentalTrueDbV)
-                ? r.fundamentalTrueDbV
-                : (Double.isNaN(r.fundRefDbV) ? Double.NaN : r.fundRefDbV);
+        // dBV column: the manual fundamental (fundamentalTrueDbFs) when set,
+        // else the measured fundamental — both lifted to dBV by the same global
+        // ADC offset every other bin uses.  The dBFS column stays the measured
+        // level.
+        double dbvOffsetDb = prefs.getDbvOffsetDb();
+        double fundDbV = (Double.isFinite(r.fundamentalTrueDbFs)
+                ? r.fundamentalTrueDbFs : r.fundamentalDbFs) + dbvOffsetDb;
         String header = String.format("%.4f Hz   %.2f dBFS   %.2f dBV",
                 r.fundamentalHzRefined, r.fundamentalDbFs, fundDbV);
         drawCentred(gc, header, centreX, y);
@@ -2397,7 +2401,6 @@ public final class FftView extends AbstractFreqDomainView {
         // Only shown when "Get fundamental from generator" is enabled
         // — without that anchor the row would be meaningless.
         if (includeClockRow) {
-            Preferences prefs = Preferences.instance();
             // Suppress the row when the generator isn't running — the
             // "expected" frequency would otherwise be a stale value
             // and the ΔF / Δosc readout would be meaningless.
@@ -2479,7 +2482,7 @@ public final class FftView extends AbstractFreqDomainView {
         int hVal = 24 * charW;         // covers "-109.72 dBV 0.00031899 %"
         int hRightColX = xLeft + hKey + hVal + colGap;
         int harmCount = (r.harmonicDbFs == null) ? 0 : r.harmonicDbFs.length;
-        double dbvOff = Double.isNaN(r.fundRefDbV) ? 0 : (r.fundRefDbV - r.fundamentalDbFs);
+        double dbvOff = prefs.getDbvOffsetDb();   // dBV = dBFs + global ADC offset
         for (int i = 0; i < harmCount; i += 2) {
             String l = String.format("H%d:", i + 2);
             String lv = String.format("%8.2f dBV %.8f %%",
@@ -2545,8 +2548,10 @@ public final class FftView extends AbstractFreqDomainView {
     }
 
     private double noiseDb(FftResult r) {
-        if (r.noisePower <= 0 || !Double.isFinite(r.fundRefDbV)) return Double.NaN;
-        return 10 * Math.log10(r.noisePower) + (r.fundRefDbV - r.fundamentalDbFs);
+        if (r.noisePower <= 0) return Double.NaN;
+        // 10·log10(noisePower) is the noise floor in dBFS; lift to dBV by the
+        // global ADC offset.
+        return 10 * Math.log10(r.noisePower) + Preferences.instance().getDbvOffsetDb();
     }
 
     private double thdNPct(FftResult r) {
@@ -2559,7 +2564,7 @@ public final class FftView extends AbstractFreqDomainView {
     // =========================================================================
 
     private void drawCrosshair(GC gc, Rectangle plot, FftResult r,
-                               FftMagnitudeUnit unit,
+                               MagnitudeUnit unit,
                                double freqMin, double freqMax,
                                double magTop, double magBot,
                                boolean logFreq) {
@@ -2578,19 +2583,16 @@ public final class FftView extends AbstractFreqDomainView {
         if (r != null && r.amplitudeDbFs != null && r.freqResolution > 0) {
             int bin = (int) Math.round(f / r.freqResolution);
             if (bin >= 0 && bin < r.amplitudeDbFs.length) {
-                // Calibrated anchor for non-fundamental bins; only the
-                // fundamental bin uses the manual-override anchor so the
-                // crosshair readout matches what the trace shows.
-                double calRefDbV = Double.isNaN(r.fundRefDbV) ? 0
-                        : (r.fundRefDbV - r.fundamentalDbFs);
-                double refDbV = calRefDbV;
-                if (Double.isFinite(r.fundamentalTrueDbV)
+                // The fundamental bin reads its manual-override level so the crosshair
+                // matches the displayed (lobe-lifted) trace; other bins read straight.
+                double dbFs = r.amplitudeDbFs[bin];
+                if (Double.isFinite(r.fundamentalTrueDbFs)
                         && Double.isFinite(r.fundamentalHzRefined)
-                        && r.freqResolution > 0) {
-                    int fb = (int) Math.round(r.fundamentalHzRefined / r.freqResolution);
-                    if (bin == fb) refDbV = r.fundamentalTrueDbV - r.fundamentalDbFs;
+                        && r.freqResolution > 0
+                        && bin == (int) Math.round(r.fundamentalHzRefined / r.freqResolution)) {
+                    dbFs = r.fundamentalTrueDbFs;   // manual fundamental, already dBFS
                 }
-                double v = unit.convertFromDbFs(r.amplitudeDbFs[bin], refDbV, r.freqResolution);
+                double v = Preferences.instance().convertFromDbFs(dbFs, unit);
                 sb.append('\n').append("|m| = ").append(formatMagnitudeWithUnit(v, unit));
             }
         }
@@ -2671,6 +2673,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  height counts the fixed rows + dynamic harmonic rows. */
     private Point computeExternalContentSize() {
         ensureFonts();
+        Preferences prefs = Preferences.instance();
         GC gc = new GC(this);
         try {
             gc.setFont(monoFont);
@@ -2686,7 +2689,7 @@ public final class FftView extends AbstractFreqDomainView {
                 String worstVal = String.format("%8.2f dBV %.8f %%", -9999.99, 99.99999999);
                 int contentW = EXT_LEFT_PAD + 38 * charW + gc.textExtent(worstVal).x + 34;
                 boolean clk = isGeneratorActive()
-                        && Preferences.instance().isFftFundFromGenerator();
+                        && prefs.isFftFundFromGenerator();
                 int rows = 2 + 1 + (clk ? 2 : 0) + 2 + (ImdResult.MAX_ORDER - 1);
                 int contentH = EXT_LEFT_PAD + rows * lineH + 8;
                 return new Point(contentW, contentH);
@@ -2707,9 +2710,9 @@ public final class FftView extends AbstractFreqDomainView {
             //   header + span + (clock?) + gap + 3 metric rows + gap + harm pairs
             // Pref value N means "compute up to HN" → N − 1 harmonics
             // (H2..HN) → ceil((N − 1) / 2) row pairs.
-            int maxH = Math.max(9, Preferences.instance().getFftCalcMaxHarmonic());
+            int maxH = Math.max(9, prefs.getFftCalcMaxHarmonic());
             int harmRows = ((maxH - 1) + 1) / 2;
-            int clockRow = Preferences.instance().isFftFundFromGenerator() ? lineH : 0;
+            int clockRow = prefs.isFftFundFromGenerator() ? lineH : 0;
             int contentH = EXT_LEFT_PAD                // top breathing room
                          + lineH                       // header
                          + lineH                       // span
@@ -2736,7 +2739,7 @@ public final class FftView extends AbstractFreqDomainView {
         if (tableModeIsImd && lastImd != null) {
             drawImdTable(gc, lastImd, EXT_LEFT_PAD, y);
         } else {
-            FftMagnitudeUnit unit = Preferences.instance().getFftMagUnit();
+            MagnitudeUnit unit = Preferences.instance().getFftMagUnit();
             drawDistortionTable(gc, lastResult, unit, EXT_LEFT_PAD, y, true);
         }
     }
@@ -2778,34 +2781,20 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** Magnitude zoom-around-cursor: keeps the magnitude value under the
      *  pointer fixed while shrinking / growing the visible range by 20 %.
-     *  Operates in log space for V / V/√Hz so the zoom feels symmetric
-     *  on the log axis. */
+     *  The range is canonical dBFS (linear in dB) for every unit, so the zoom
+     *  is a plain linear scale. */
     private void zoomMagnitudeAroundCursor(int mouseY, Rectangle plot, int dir) {
         Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit unit = prefs.getFftMagUnit();
         double top = prefs.getFftMagTop();
         double bot = prefs.getFftMagBottom();
         if (top - bot <= 0) return;
         double frac = (double) (mouseY - plot.y) / plot.height;
         if (frac < 0) frac = 0; else if (frac > 1) frac = 1;
         double scale = (dir > 0) ? 0.8 : 1.25;
-        double newTop, newBot;
-        if (FftAxisTicks.isMagLog(unit)) {
-            double lt = Math.log10(Math.max(1e-30, top));
-            double lb = Math.log10(Math.max(1e-30, bot));
-            if (lt <= lb) return;
-            double anchor = lt - frac * (lt - lb);
-            double newSpan = (lt - lb) * scale;
-            newTop = Math.pow(10, anchor + frac       * newSpan);
-            newBot = Math.pow(10, anchor - (1 - frac) * newSpan);
-        } else {
-            double anchor = top - frac * (top - bot);
-            double newSpan = (top - bot) * scale;
-            newTop = anchor + frac       * newSpan;
-            newBot = anchor - (1 - frac) * newSpan;
-        }
-        prefs.setFftMagTop(newTop);
-        prefs.setFftMagBottom(newBot);
+        double anchor  = top - frac * (top - bot);
+        double newSpan = (top - bot) * scale;
+        prefs.setFftMagTop(anchor + frac       * newSpan);
+        prefs.setFftMagBottom(anchor - (1 - frac) * newSpan);
         prefs.save();
         fireRangeChanged();
         redraw();
@@ -2861,55 +2850,20 @@ public final class FftView extends AbstractFreqDomainView {
      *  the bottom kept moving but the top stayed pinned. */
     private void panMagnitude(int dir) {
         Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit unit = prefs.getFftMagUnit();
         double top = prefs.getFftMagTop();
         double bot = prefs.getFftMagBottom();
-        double[] lim = magLimits(unit, prefs.getAdcFsVoltageRms());
-        double maxTp = lim[0], minBt = lim[1];
-        if (FftAxisTicks.isMagLog(unit)) {
-            double lt = Math.log10(Math.max(Double.MIN_NORMAL, top));
-            double lb = Math.log10(Math.max(Double.MIN_NORMAL, bot));
-            double step = (lt - lb) * 0.1 * dir;
-            double lmaxTp = Math.log10(Math.max(Double.MIN_NORMAL, maxTp));
-            double lminBt = Math.log10(Math.max(Double.MIN_NORMAL, minBt));
-            if (step > 0 && lt + step > lmaxTp) step = lmaxTp - lt;
-            else if (step < 0 && lb + step < lminBt) step = lminBt - lb;
-            prefs.setFftMagTop(Math.pow(10, lt + step));
-            prefs.setFftMagBottom(Math.pow(10, lb + step));
-        } else {
-            double step = (top - bot) * 0.1 * dir;
-            if (step > 0 && top + step > maxTp) step = maxTp - top;
-            else if (step < 0 && bot + step < minBt) step = minBt - bot;
-            prefs.setFftMagTop(top + step);
-            prefs.setFftMagBottom(bot + step);
-        }
+        double maxTp = magCeiling();              // dBFS ceiling (≥ 0, raised by a lifted signal)
+        double minBt = Constants.MAG_FLOOR_DBFS;  // dBFS floor
+        // Range is dBFS (linear in dB) for every unit — pan additively, clipping at the
+        // limits so neither bound overruns.
+        double step = (top - bot) * 0.1 * dir;
+        if (step > 0 && top + step > maxTp) step = maxTp - top;
+        else if (step < 0 && bot + step < minBt) step = minBt - bot;
+        prefs.setFftMagTop(top + step);
+        prefs.setFftMagBottom(bot + step);
         prefs.save();
         fireRangeChanged();
         redraw();
-    }
-
-    /** Returns {@code [maxTop, minBot]} for the given magnitude unit
-     *  using the active ADC full-scale calibration as the anchor.
-     *  Matches {@link org.edgo.audio.measure.gui.fft.FftPane}'s clamp
-     *  logic so the pan-step clip here lines up exactly with the
-     *  post-pan clamp the pane applies. */
-    private double[] magLimits(FftMagnitudeUnit unit, double adcFsVrms) {
-        double fs = (adcFsVrms > 0) ? adcFsVrms : 1.0;
-        switch (unit) {
-            case DBFS:
-                return new double[] { 0, -300 };
-            case DBV: {
-                double dbvFs = 20 * Math.log10(fs);
-                double maxTp = Math.ceil((dbvFs + 5) / 10.0) * 10;
-                return new double[] { maxTp, -300 + dbvFs };
-            }
-            case V:
-                return new double[] { Math.ceil(fs + 1), 1e-15 };       // 1 fV floor
-            case V_SQRT_HZ:
-                return new double[] { Math.max(1e-3, fs), 1e-15 };
-            default:
-                return new double[] { 0, -300 };
-        }
     }
 
     /** Shift-wheel pan: shifts the frequency window by ~10 % of its span.
@@ -2964,16 +2918,6 @@ public final class FftView extends AbstractFreqDomainView {
         return 192_000;
     }
 
-    /** Converts a dBV value to dBFs using the FFT result's cached
-     *  {@code dbvOffsetDb} (= 20·log10(adcFsVoltageRms), computed
-     *  once per analysis tick by {@code FftAnalyzerWorker}).  Used
-     *  by the IMD render path to drive chart Y-coord mapping / the
-     *  dBFs column from {@code ImdResult}'s dBV-only output without
-     *  recomputing the log per call. */
-    private double dbvToDbFs(double dbv) {
-        return (lastResult != null) ? dbv - lastResult.dbvOffsetDb : dbv;
-    }
-
     private void onMouseMove(MouseEvent ev) {
         crossX = ev.x;
         crossY = ev.y;
@@ -2984,17 +2928,8 @@ public final class FftView extends AbstractFreqDomainView {
     // Coordinate / formatting helpers
     // =========================================================================
 
-    // freqToX / xToFreq live on the shared AbstractFreqDomainView base
-    // (same body, same idiom); the magToY below stays per-view because
-    // it routes through FftFormat.magToYFraction for unit-aware (V /
-    // V/sqrt(Hz) / dBFS / dBV) scaling that FreqResp doesn't need.
-
-    private int magToY(double v, Rectangle plot, double top, double bot, FftMagnitudeUnit unit) {
-        double t = FftFormat.magToYFraction(v, top, bot, unit);
-        if (t < 0) t = 0;
-        if (t > 1) t = 1;
-        return plot.y + (int) Math.round(t * plot.height);
-    }
+    // freqToX / xToFreq / dbToY / magToY / magToYTrace all live on the shared
+    // AbstractFreqDomainView base.
 
     // =========================================================================
     // Resource lazy initialisation

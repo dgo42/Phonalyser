@@ -46,6 +46,7 @@ import org.edgo.audio.measure.gui.common.DebugSwitches;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 
+import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -95,9 +96,12 @@ public final class FftAnalyzerWorker {
      *  never accumulates more than one multi-MB spectrum however far the UI
      *  repaint falls behind the (parallelized, fast) per-tick production. */
     private final AtomicReference<FftResult> latestForUi = new AtomicReference<>();
+    @Getter
     private volatile int                completedAnalyses;
+    @Getter
     private volatile boolean            running;
     /** False until the very first analysis has run since {@link #start}. */
+    @Getter
     private volatile boolean firstFrameDone;
     /** Tracks generator on/off transitions so the data collection is
      *  reset whenever the user starts or stops the generator. */
@@ -311,19 +315,10 @@ public final class FftAnalyzerWorker {
      *  frequency drifts more than a few ppm during a long average loses phase
      *  coherence — a hardware-stability concern, not corrected here. */
     private double  accumKFractional;
-    /** A raw-window discontinuity is flagged when the PEAK 3rd-difference
-     *  {@code |Δ³s|} stands more than this many times above the window's
-     *  |Δ³s| RMS.  A clean oversampled signal (any tone count) gives a
-     *  near-sinusoidal Δ³s with peak/RMS ≈ √2, and broadband-noise Δ³s a
-     *  peak/RMS ≈ √(2·ln N) ≈ 5–6, so a margin of 12 cleanly separates a
-     *  localised glitch (peak ≫ RMS) without false-firing on noise/spurs. */
-    private static final double GLITCH_DIFF_K    = 16.0;
-    /** Discontinuity-detector selection.  The time-domain Δⁿ test is a
-     *  high-pass, so on a weak signal its own broadband noise buries the
-     *  glitch; the frequency-domain running-median rejector compares each
-     *  block's spectrum to the accepted history and catches exactly those
-     *  cases.  The Δⁿ test is kept (toggle the flag) but off by default. */
-    private static final boolean USE_TIME_DOMAIN_GLITCH     = false;
+    /** Discontinuity-detector selection.  The frequency-domain running-median 
+     *  rejector compares each block's spectrum to the accepted history and catches 
+     *  exactly those cases.  The Δⁿ test is kept (toggle the flag) but off by
+     *  default. */
     private static final boolean USE_SPECTRAL_DISCONTINUITY = true;
     /** Frequency-domain running-median glitch / stall rejector, run per tick
      *  on the freshly computed spectrum before it enters the cross-tick
@@ -521,46 +516,6 @@ public final class FftAnalyzerWorker {
             }
         });
         display.wake();
-    }
-
-    /** True if the raw analysis window {@link #winBuf} contains a band-limit-
-     *  violating discontinuity (a glitch).  The capture is heavily oversampled,
-     *  so a clean signal — any number of tones — is locally smooth and its 3rd
-     *  difference {@code Δ³s = s[n] − 3s[n−1] + 3s[n−2] − s[n−3]} is tiny and
-     *  near-uniform; a dropped sample / discontinuity injects out-of-band energy
-     *  that spikes one or a few {@code |Δ³s|} far above the window's |Δ³s| RMS.
-     *  Scale- and tone-count-invariant (it only assumes band-limiting), so it
-     *  works for single tone, dual tone, multitone and noise alike.  DC and any
-     *  slow trend are killed by the 3rd difference, so no mean removal needed. */
-    private boolean detectWindowDiscontinuity() {
-        int len = winLen;
-        if (len < 8) return false;
-        double sumSq  = 0.0;
-        double maxAbs = 0.0;
-/*        for (int n = 3; n < len; n++) {
-            double d3 = winBuf[n] - 3.0 * winBuf[n - 1] + 3.0 * winBuf[n - 2] - winBuf[n - 3];
-            sumSq += d3 * d3;
-            double a = Math.abs(d3);
-            if (a > maxAbs) maxAbs = a;
-        }
-        double rms = Math.sqrt(sumSq / (len - 3));
-*/
-        for (int n = 4; n < len; n++) {
-            double d4 = winBuf[n] - 4.0 * winBuf[n - 1] + 6.0 * winBuf[n - 2] - 4.0 * winBuf[n - 3] + winBuf[n - 4];
-            sumSq += d4 * d4;
-            double a = Math.abs(d4);
-            if (a > maxAbs) maxAbs = a;
-        }
-        double rms = Math.sqrt(sumSq / (len - 4));
-/*        for (int n = 5; n < len; n++) {
-            double d5 = winBuf[n] - 5.0 * winBuf[n - 1] + 10.0 * winBuf[n - 2] - 10.0 * winBuf[n - 3] + 5.0 * winBuf[n - 4] - winBuf[n - 5];
-            sumSq += d5 * d5;
-            double a = Math.abs(d5);
-            if (a > maxAbs) maxAbs = a;
-        }
-        double rms = Math.sqrt(sumSq / (len - 4));
-*/
-        return rms > 0.0 && maxAbs > GLITCH_DIFF_K * rms;
     }
 
     /** Recovery for a detected in-window signal discontinuity — the same re-sync
@@ -1239,15 +1194,12 @@ public final class FftAnalyzerWorker {
 
     // ─── External wiring ────────────────────────────────────────────────────
 
-    public int  getCompletedAnalyses()          { return completedAnalyses; }
     /** Cumulative frame count accumulated across all forever-mode ticks
      *  since the last reset.  Returns 0 outside forever mode or before
      *  any contribution.  This is the meaningful "N average(s)" depth
      *  for forever mode — equal to the SNR-improvement factor √N². */
     public int  getAccumulatedFrames()          { return accumFrames; }
-    public boolean isRunning()                  { return running; }
     public boolean isPaused()                   { return paused.get(); }
-    public boolean isFirstFrameDone()           { return firstFrameDone; }
 
     // ─── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -1273,8 +1225,9 @@ public final class FftAnalyzerWorker {
         completedAnalyses     = 0;
         resetStatistics();
         paused.set(false);
-        MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnGenChange);
-        MessageBus.instance().subscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
+        MessageBus bus = MessageBus.instance();
+        bus.subscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnGenChange);
+        bus.subscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
         worker = new Thread(this::workerLoop, "fft-analyzer");
         worker.setDaemon(true);
         worker.start();
@@ -1287,13 +1240,14 @@ public final class FftAnalyzerWorker {
             worker.interrupt();
             worker = null;
         }
-        MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnGenChange);
-        MessageBus.instance().unsubscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
+        MessageBus bus = MessageBus.instance();
+        bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnGenChange);
+        bus.unsubscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
         discardCacheAndPool();
         resetAccumulator();
         reader = null;
         if (captureHeld) {
-            MessageBus.instance().publish(Events.CAPTURE_RELEASE);
+            bus.publish(Events.CAPTURE_RELEASE);
             captureHeld = false;
         }
     }
@@ -1384,14 +1338,6 @@ public final class FftAnalyzerWorker {
         boolean genActiveNow = isGeneratorActive();
         if (lastGeneratorActive != null && lastGeneratorActive != genActiveNow) {
             resetStatistics();
-            // No fresh Result — just nudge the UI to repaint the (now
-            // empty) chart.  Subscribers receive null and just call
-            // redraw / update.
-            // Do not erase only if generator is toggled on/off
-            /*if (display != null && !display.isDisposed()) {
-                display.asyncExec(() ->
-                        MessageBus.instance().publish(Events.FFT_RESULT_AVAILABLE));
-            }*/
         }
         lastGeneratorActive = genActiveNow;
 
@@ -1493,16 +1439,6 @@ public final class FftAnalyzerWorker {
         }
         samplesAbsStart = winAbsStart;
 
-        // Pre-FFT discontinuity gate: a band-limit-violating glitch in the raw
-        // window (a dropped sample / DDS discontinuity) would splatter into a
-        // sinc across the whole spectrum and poison the average.  Detect it (any
-        // band-limited signal — single or multi-tone) and re-sync like an overrun
-        // so the glitched window never enters the average.
-        if (USE_TIME_DOMAIN_GLITCH && detectWindowDiscontinuity()) {
-            onSignalDiscontinuity(reader);
-            return IDLE_TICK_MS;
-        }
-
         // Per-tick analysis copy: the comb / FFT window mutate the samples in
         // place, so the retained sliding window must NOT be handed to analyze.
         if (analyzeBuf.length != winLen) analyzeBuf = new float[winLen];
@@ -1550,7 +1486,11 @@ public final class FftAnalyzerWorker {
         double distMax  = prefs.isFftDistMaxEnabled() ? prefs.getFftDistMaxHz() : 0;
         boolean coherent = prefs.isFftCoherentAveraging();
         boolean genActive = isGeneratorActive();
-        double fundRefDbV = genActive ? resolveFundRefDbV(prefs) : Double.NaN;
+        // Manual fundamental is a user-DECLARED true level — it applies to ANY source
+        // (external amplifier as much as our own generator), so it must NOT be gated on
+        // genActive; resolveFundRefDbV already returns NaN unless the user enabled it.
+        // (genActive still gates the generator FREQUENCY hints below, which do need it.)
+        double fundRefDbV = resolveFundRefDbV(prefs);
         // The coherent de-rotation locks onto the detected fundamental, so
         // in dual-tone the hint must point at a real tone (the lower one).
         // Hinting the single-tone frequency — usually nowhere near F1/F2 —
@@ -1601,17 +1541,13 @@ public final class FftAnalyzerWorker {
         try {
             r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH,
                     window, overlap, distMin, distMax, coherent, fundRefDbV,
-                    /*logSummary=*/ false, expectedFundHz);
+                    false, expectedFundHz);
         } catch (RuntimeException ex) {
             return IDLE_TICK_MS;
         }
-        // Anchor absolute dBV via the ADC full-scale calibration when
-        // available — used as the dBV/dBFS offset for every non-fundamental
-        // bin (harmonics, noise floor, spectrum trace).
-        double fs = prefs.getAdcFsVoltageRms();
-        if (fs > 0 && Double.isFinite(r.fundamentalDbFs)) {
-            r.fundRefDbV = r.fundamentalDbFs + 20.0 * Math.log10(fs);
-        }
+        // The dBFS→dBV offset is the global ADC calibration constant
+        // (Preferences#getDbvOffsetDb), applied at display time — nothing to
+        // anchor per result here; dBFS is the result's only base scale.
         // Mode-transition detection — reset the cross-tick average only when the
         // new bound discards collected depth: the averaging mode flips
         // (idle ↔ averaging), a ring ↔ infinite switch, or a SMALLER ring.  A

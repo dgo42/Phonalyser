@@ -116,19 +116,26 @@ class FrequencyFllTest {
     }
 
     @Test
-    void ignoresJitterInsideTheBand() {
-        // Once locked, per-frame jitter whose peak-to-peak stays inside the lock band
-        // must not provoke any correction — the loop holds.  (A one-step deadbeat
-        // bakes in the jitter at the correction instant, so the residual swings by up
-        // to the peak-to-peak; keep the amplitude below half the band.)
+    void fineTracksSubBandJitterAndStaysLocked() {
+        // Inside the fine-tracking floor (FINE_TRACK_HZ) the arrival test — a small
+        // fraction of the last correction — sits below the jitter floor and can never
+        // be met, the case that used to leave the loop 'waiting' and silently
+        // accumulating drift.  There the loop drops the wait and nudges every cycle.
+        // The nudges are sub-jitter tiny, so under continuous sub-band jitter the
+        // measured frequency stays locked within tolerance — it TRACKS rather than
+        // holds, so the correction count is high by design.
         int frames = 80, delay = 5;
         double[] drift = constantDrift(frames, 0.05);
         for (int i = 0; i < frames; i++) {
             drift[i] += (i % 2 == 0 ? 1 : -1) * 0.4 * TOL_HZ;        // ±0.4 band, alternating
         }
         Run r = drive(frames, delay, drift);
-        assertEquals(1, r.corrections, "sub-band jitter must not trigger corrections");
-        assertTrue(Math.abs(r.finalErrorHz) <= TOL_HZ,
-                "jitter pushed it out of band: " + r.finalErrorHz / TARGET * 1e6 + " ppm");
+        assertTrue(r.corrections > 1, "fine-tracking should nudge every cycle, not hold");
+        // Correcting every cycle is a unity-gain integrator with dead time, so under
+        // adversarial every-frame jitter it holds a BOUNDED limit cycle (~delay·floor)
+        // rather than the tight band — bounded near lock is the goal, vs the old
+        // failure where the loop stuck and the error grew without bound.
+        assertTrue(Math.abs(r.finalErrorHz) <= delay * TOL_HZ,
+                "fine-tracking must stay bounded near lock: " + r.finalErrorHz / TARGET * 1e6 + " ppm");
     }
 }

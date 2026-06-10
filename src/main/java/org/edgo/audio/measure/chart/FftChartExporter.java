@@ -36,6 +36,7 @@ import javax.imageio.ImageIO;
 
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.jfree.chart.ChartFactory;
 import org.jfree.chart.JFreeChart;
 import org.jfree.chart.annotations.XYTextAnnotation;
@@ -118,8 +119,8 @@ public class FftChartExporter {
      * trace (dashed green) and pre-correction harmonic peaks (blue dots), and
      * saves the result as PNG.  Pass null for either pair of overlay/preCorr
      * arrays to suppress that layer.  Y values supplied in dBFS are shifted
-     * internally onto whichever primary axis is in use (dBV when
-     * r.fundRefDbV is set, otherwise dBFS).
+     * internally onto whichever primary axis is in use (dBV when the ADC
+     * full-scale is set, otherwise dBFS).
      */
     public static String exportChart(FftResult r, int width, int height,
                                      String directory, String comment,
@@ -129,19 +130,20 @@ public class FftChartExporter {
                                      double[] preCorrFreqs, double[] preCorrDbFs) throws IOException {
         String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
 
-        boolean hasDbv = !Double.isNaN(r.fundRefDbV);
-        double  dbFsToDbV = hasDbv ? (r.fundRefDbV - r.fundamentalDbFs) : 0.0;
+        double  fs        = Preferences.instance().getAdcFsVoltageRms();
+        boolean hasDbv    = fs > 0.0;
+        double  dbFsToDbV = hasDbv ? 20.0 * Math.log10(fs) : 0.0;
         String  primaryAxisLabel = hasDbv ? "Amplitude (dBV)" : "Amplitude (dBFS)";
 
-        double fundDisplayDbV = !Double.isNaN(r.fundamentalTrueDbV)
-                ? r.fundamentalTrueDbV
-                : r.fundamentalDbFs + dbFsToDbV;
+        double fundDisplayDbV = (Double.isFinite(r.fundamentalTrueDbFs)
+                ? r.fundamentalTrueDbFs
+                : r.fundamentalDbFs) + dbFsToDbV;
 
         XYSeries spectrum = new XYSeries("Spectrum");
         for (int k = 1; k <= r.fftSize / 2; k++) {
             double freq = k * r.freqResolution;
             if (freq >= 1.0) {
-                double y = (k == r.fundamentalBin && !Double.isNaN(r.fundamentalTrueDbV))
+                double y = (k == r.fundamentalBin && Double.isFinite(r.fundamentalTrueDbFs))
                         ? fundDisplayDbV
                         : r.amplitudeDbFs[k] + dbFsToDbV;
                 spectrum.add(freq, y);
@@ -315,10 +317,9 @@ public class FftChartExporter {
 
         double enob = (r.sinadDb - 1.76) / 6.02;
 
-        boolean hasRef = !Double.isNaN(r.fundRefDbV);
-        double fundamentalDbV = !Double.isNaN(r.fundamentalTrueDbV)
-                ? r.fundamentalTrueDbV
-                : (hasRef ? r.fundRefDbV : r.fundamentalDbFs);
+        double fundamentalDbV = (Double.isFinite(r.fundamentalTrueDbFs)
+                ? r.fundamentalTrueDbFs
+                : r.fundamentalDbFs) + dbFsToDbV;
 
         double ndDbVA = r.thdNDb + fundamentalDbV;
 
@@ -339,10 +340,10 @@ public class FftChartExporter {
 
         List<String[]> rows = new ArrayList<>();
 
-        double fundHeaderDbFs = !Double.isNaN(r.fundamentalTrueDbV)
-                ? fundDisplayDbV - dbFsToDbV
+        double fundHeaderDbFs = Double.isFinite(r.fundamentalTrueDbFs)
+                ? r.fundamentalTrueDbFs
                 : r.fundamentalDbFs;
-        String fundHeader = hasRef
+        String fundHeader = hasDbv
                 ? String.format(Locale.US, "%.2f Hz  %.2f dBFS  %.2f dBV",
                         r.fundamentalHz, fundHeaderDbFs, fundamentalDbV)
                 : String.format(Locale.US, "%.2f Hz  %.2f dBFS",
@@ -392,7 +393,7 @@ public class FftChartExporter {
 
         for (int h = 0; h < r.harmonicCount; h += 2) {
             String lLabel = String.format(Locale.US, "H%d:", h + 2);
-            String lVal   = hasRef
+            String lVal   = hasDbv
                     ? String.format(Locale.US, "%.2f dBV  %.8f %%",
                             r.harmonicDbFs[h] + dbFsToDbV, r.harmonicPct[h])
                     : String.format(Locale.US, "%.2f dBFS  %.8f %%",
@@ -400,7 +401,7 @@ public class FftChartExporter {
             String rLabel = null, rVal = null;
             if (h + 1 < r.harmonicCount) {
                 rLabel = String.format(Locale.US, "H%d:", h + 3);
-                rVal   = hasRef
+                rVal   = hasDbv
                         ? String.format(Locale.US, "%.2f dBV  %.8f %%",
                                 r.harmonicDbFs[h + 1] + dbFsToDbV, r.harmonicPct[h + 1])
                         : String.format(Locale.US, "%.2f dBFS  %.8f %%",

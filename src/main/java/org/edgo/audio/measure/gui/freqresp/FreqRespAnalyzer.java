@@ -36,7 +36,7 @@ import java.util.concurrent.ExecutionException;
  * {@code H = Y/X} on each channel in parallel via
  * {@link FreqRespCalHelper#computeFromLogSweep}.  Optionally divides each
  * channel by the matching channel of the calibration in
- * {@link FreqRespCalibrationStore}.
+ * {@code FreqRespCorrectionStore}.
  *
  * <p>Three pieces of cross-cutting state are pluggable so the analyzer
  * stays unit-testable:

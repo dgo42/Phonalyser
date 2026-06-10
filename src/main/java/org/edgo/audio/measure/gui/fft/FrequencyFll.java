@@ -37,6 +37,7 @@ import org.edgo.audio.measure.enums.AlignGenerator;
  * (e.g. 1.75&nbsp;ppm → 0.0875&nbsp;ppm → …), so the loop settles well inside the band.
  * <pre>
  *   error = detected − target
+ *   |error| &lt; FINE_TRACK_HZ → correction −= error every cycle  // fine-track, no wait
  *   waiting:  hold while |error| &gt; ARRIVED_FRACTION · e₀     // correction still landing
  *   landed / steady:
  *       |error| ≤ LOCK_PPM·target → hold (locked / within noise)
@@ -63,6 +64,13 @@ public final class FrequencyFll implements FrequencyAligner {
      *  loop chases noise (chatter) and can't tell drift from jitter, so it can't be
      *  zero — it is the measurement's own frequency-noise floor. */
     private static final double LOCK_PPM         = 0.01;
+    /** Fine-tracking floor (Hz).  Once the error is below this, the relative
+     *  arrival test ({@link #ARRIVED_FRACTION} of the last correction) sits below
+     *  the measurement's frequency-jitter floor and can never be met — the loop
+     *  would stay {@code waiting} and silently accumulate drift.  In this regime
+     *  the wait is dropped and the (sub-jitter, harmless) correction applied every
+     *  cycle, pinning the error at the floor instead of collecting it. */
+    private static final double FINE_TRACK_HZ    = 1e-3;
 
     /** Current correction in Hz — add to the snap target before publishing the trim. */
     @Getter
@@ -81,14 +89,18 @@ public final class FrequencyFll implements FrequencyAligner {
         double error  = detected - target;
         double absErr = Math.abs(error);
 
-        if (waiting) {
-            if (absErr > ARRIVED_FRACTION * errorAtCorrection) {
-                return;                            // correction still landing — hold, don't stack another
+        // Fine-tracking regime: the arrival test is unachievable this close to
+        // lock, so stop waiting and nudge every cycle instead of collecting error.
+        if (absErr > FINE_TRACK_HZ) {
+            if (waiting) {
+                if (absErr > ARRIVED_FRACTION * errorAtCorrection) {
+                    return;                            // correction still landing — hold, don't stack another
+                }
+                waiting = false;                       // landed
             }
-            waiting = false;                       // landed
-        }
-        if (absErr <= LOCK_PPM * 1e-6 * target) {
-            return;                                // within the lock band — hold
+            if (absErr <= LOCK_PPM * 1e-6 * target) {
+                return;                                // within the lock band — hold
+            }
         }
         // Cancel the current (landed) error in one step, then wait for it to land.
         correction -= error;

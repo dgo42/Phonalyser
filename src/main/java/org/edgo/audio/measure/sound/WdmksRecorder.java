@@ -31,6 +31,8 @@ import org.edgo.audio.measure.common.StereoSample;
 import com.sun.jna.Pointer;
 import com.sun.jna.ptr.PointerByReference;
 
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -49,14 +51,18 @@ public class WdmksRecorder implements AudioCapture {
     private final int bitDepth;
     private final int sampleBytes;
     private int frameSize;
+    @Getter
     private final AudioFormat format;
 
     private Pointer stream;                 // PaStream*
     private final AtomicBoolean recording = new AtomicBoolean(false);
     private Thread consumerThread;
     private StereoSample[] sampleBuf;
+    @Setter
     private Consumer<StereoSample[]> sampleListener;
+    @Setter
     private PcmBatchListener pcmBatchListener;
+    @Setter
     private Consumer<byte[]> rawBytesListener;
 
     /**
@@ -115,21 +121,6 @@ public class WdmksRecorder implements AudioCapture {
                 AudioFormat.Encoding.PCM_SIGNED,
                 sampleRate, bitDepth, 2,
                 frameSize, sampleRate, false);
-    }
-
-    @Override
-    public void setSampleListener(Consumer<StereoSample[]> listener) {
-        this.sampleListener = listener;
-    }
-
-    @Override
-    public void setPcmBatchListener(PcmBatchListener listener) {
-        this.pcmBatchListener = listener;
-    }
-
-    @Override
-    public void setRawBytesListener(Consumer<byte[]> listener) {
-        this.rawBytesListener = listener;
     }
 
     @Override
@@ -284,9 +275,6 @@ public class WdmksRecorder implements AudioCapture {
                 throw new IllegalStateException("Unsupported sampleBytes: " + sampleBytes);
         }
     }
-
-    @Override
-    public AudioFormat getFormat() { return format; }
 
     @Override
     public boolean isRecording() { return recording.get(); }

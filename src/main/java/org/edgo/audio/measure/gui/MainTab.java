@@ -65,10 +65,12 @@ import lombok.extern.log4j.Log4j2;
  *       offers no built-in left-tab widget, so this is composed by hand.</li>
  * </ul>
  *
- * <p>Switching orientation re-creates the shell (see
- * {@link MainWindow#requestRecreate()}) so the layout takes effect
- * immediately.  All shell-bound resources allocated here register their
- * dispose listeners against the host shell.
+ * <p>Orientation / icon-size changes apply LIVE: the content composites
+ * (and the heavy panes inside them) are created once and re-parented
+ * into a freshly built host chrome — no shell rebuild, running
+ * capture / playback untouched.  The Preferences dialog just writes the
+ * prefs; the rebuild is driven by the property bindings registered in
+ * the constructor.
  */
 @Log4j2
 public final class MainTab {
@@ -152,7 +154,8 @@ public final class MainTab {
     }
 
     private void buildTopTabs() {
-        int iconPx = Preferences.instance().isSmallIconsInMainTab()
+        Preferences prefs = Preferences.instance();
+        int iconPx = prefs.isSmallIconsInMainTab()
                 ? TOP_ICON_SMALL_PX
                 : TOP_ICON_BIG_PX;
         TabFolder tabFolder = new TabFolder(shell, SWT.NONE);
@@ -173,21 +176,22 @@ public final class MainTab {
         frequencyResponse = new FrequencyResponseTab(frContent);
 
         // Restore the last-selected tab; default to Multifunctional.
-        int sel = clampSelection(Preferences.instance().getActiveTabIndex(), tabFolder.getItemCount());
+        int sel = clampSelection(prefs.getActiveTabIndex(), tabFolder.getItemCount());
         tabFolder.setSelection(sel);
         // Persist selection on dispose so the next launch reopens the
         // same tab regardless of orientation.
         shell.addDisposeListener(e -> {
             if (!tabFolder.isDisposed()) {
-                Preferences.instance().setActiveTabIndex(tabFolder.getSelectionIndex());
-                Preferences.instance().save();
+                prefs.setActiveTabIndex(tabFolder.getSelectionIndex());
+                prefs.save();
             }
         });
     }
 
     private void buildLeftSidebar() {
+        Preferences prefs = Preferences.instance();
         int iconPx = iconSizePx();
-        int barWidth = Preferences.instance().isSmallIconsInMainTab()
+        int barWidth = prefs.isSmallIconsInMainTab()
                 ? LEFT_BAR_WIDTH_SMALL_PX
                 : LEFT_BAR_WIDTH_BIG_PX;
         Composite root = new Composite(shell, SWT.NONE);
@@ -243,15 +247,15 @@ public final class MainTab {
         }
 
         // Restore the last-selected tab; default to Multifunctional.
-        int sel = clampSelection(Preferences.instance().getActiveTabIndex(), buttons.length);
+        int sel = clampSelection(prefs.getActiveTabIndex(), buttons.length);
         buttons[sel].select();
 
         // Persist active-tab selection on dispose.
         shell.addDisposeListener(e -> {
             for (int i = 0; i < buttons.length; i++) {
                 if (buttons[i].isSelected()) {
-                    Preferences.instance().setActiveTabIndex(i);
-                    Preferences.instance().save();
+                    prefs.setActiveTabIndex(i);
+                    prefs.save();
                     return;
                 }
             }
@@ -294,9 +298,10 @@ public final class MainTab {
         }));
 
         shell.addDisposeListener(e -> {
-            Preferences.instance().setWindowWidth (lastNormal[0]);
-            Preferences.instance().setWindowHeight(lastNormal[1]);
-            Preferences.instance().save();
+            Preferences prefs = Preferences.instance();
+            prefs.setWindowWidth (lastNormal[0]);
+            prefs.setWindowHeight(lastNormal[1]);
+            prefs.save();
         });
     }
 

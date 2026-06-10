@@ -32,6 +32,8 @@ import org.eclipse.swt.widgets.Listener;
 import java.util.ArrayList;
 import java.util.List;
 
+import lombok.Getter;
+
 /**
  * Custom Canvas-drawn scrollbar replacement for {@link org.eclipse.swt.widgets.Slider}.
  *
@@ -55,11 +57,17 @@ public final class FlatScrollbar extends Canvas {
     private static final int ARROW_SIZE = 18;
 
     private final boolean vertical;
+    @Getter
     private int minimum       = 0;
+    @Getter
     private int maximum       = 100;
+    @Getter
     private int selection     = 0;
+    @Getter
     private int thumb         = 10;
+    @Getter
     private int increment     = 1;
+    @Getter
     private int pageIncrement = 10;
 
     private final Color trackColor;
@@ -139,13 +147,6 @@ public final class FlatScrollbar extends Canvas {
     }
     public void setIncrement(int v)     { increment     = Math.max(1, v); }
     public void setPageIncrement(int v) { pageIncrement = Math.max(1, v); }
-
-    public int getMinimum()       { return minimum; }
-    public int getMaximum()       { return maximum; }
-    public int getSelection()     { return selection; }
-    public int getThumb()         { return thumb; }
-    public int getIncrement()     { return increment; }
-    public int getPageIncrement() { return pageIncrement; }
 
     /** Registers a {@link SWT#Selection} listener — fired whenever the user
      *  changes the selection via arrow click, track click, drag, or wheel. */

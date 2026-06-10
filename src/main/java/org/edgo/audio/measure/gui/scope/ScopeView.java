@@ -27,11 +27,11 @@ import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.LineAttributes;
-import org.eclipse.swt.graphics.Path;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
+import org.edgo.audio.measure.common.Lanczos;
 import org.edgo.audio.measure.dsp.LowPassFilter;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.MedianFilter;
@@ -56,8 +56,9 @@ import org.edgo.audio.measure.gui.widgets.ToolButton;
 import org.edgo.audio.measure.gui.widgets.Toolbar;
 import org.edgo.audio.measure.gui.widgets.ToolWindow;
 import org.edgo.audio.measure.gui.widgets.TransparentComposite;
-import org.edgo.audio.measure.sound.AudioBackend;
 
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -78,8 +79,6 @@ public final class ScopeView extends AbstractMeasurementView {
      *  vertical-scrollbar math can size its thumb against the same grid
      *  the renderer uses. */
     static final         int DIVISIONS_Y    = 10;
-    private static final int TICKS_PER_DIV  = 5;
-    private static final int TICK_HALF_LEN  = 3;
 
     // All scope colours live in the AbstractMeasurementView palette
     // (background, grid, text, crosshair, blink lit/dim, left/right
@@ -248,8 +247,8 @@ public final class ScopeView extends AbstractMeasurementView {
      * the user scroll back through the ring buffer via the navigation
      * slider in {@link ScopePane}.
      */
+    @Getter
     private volatile long viewBackOffsetFrames;
-    public long getViewBackOffsetFrames()        { return viewBackOffsetFrames; }
     public void setViewBackOffsetFrames(long v) { this.viewBackOffsetFrames = Math.max(0L, v); }
     /**
      * When true the view is showing a statically-loaded signal (no live
@@ -259,9 +258,8 @@ public final class ScopeView extends AbstractMeasurementView {
      * positions.  Set by {@link ScopeOpenSignal#loadFile} on load and
      * cleared by {@link ScopeOpenSignal#clear}.
      */
+    @Getter @Setter
     private volatile boolean fileMode;
-    public void    setFileMode(boolean v) { this.fileMode = v; }
-    public boolean isFileMode()           { return fileMode; }
 
     /** Path of the currently-loaded openSignal file ({@code null} = not in
      *  file mode).  Rendered in the canvas top-right corner with a 20 px
@@ -401,7 +399,8 @@ public final class ScopeView extends AbstractMeasurementView {
         // Dim "mid" colour unselected, bright trace colour filled when selected.
         chanButtonFont = new Font(getDisplay(), "Consolas", 12, SWT.BOLD);
         headerBar = new Toolbar(this, BTN_W, BTN_H);
-        Channel mc = Preferences.instance().getOscMeasurementChannel();
+        Preferences prefs = Preferences.instance();
+        Channel mc = prefs.getOscMeasurementChannel();
         leftBtn  = headerBar.chanButton("L", color(ColorRole.LEFT_CHANNEL_MID), color(ColorRole.LEFT_CHANNEL_MID),
                 color(ColorRole.LEFT_TRACE),  chanButtonFont, I18n.t("scope.stats.left.tooltip"),  mc == Channel.L, "channel");
         rightBtn = headerBar.chanButton("R", color(ColorRole.RIGHT_CHANNEL_MID), color(ColorRole.RIGHT_CHANNEL_MID),
@@ -414,13 +413,13 @@ public final class ScopeView extends AbstractMeasurementView {
         dataSpacer = headerBar.spacer(2);
         tableToggleBtn = headerBar.toggleButton(SvgPaths.GAUGE_HIGH, 16,
                 rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
-                I18n.t("scope.stats.table.tooltip"), Preferences.instance().isOscShowMeasurementTable());
+                I18n.t("scope.stats.table.tooltip"), prefs.isOscShowMeasurementTable());
         externalBtn = headerBar.toggleButton(SvgPaths.WINDOW_RESTORE, 16,
                 rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
                 I18n.t("scope.external.window.tooltip"), tableExtracted);
         statsToggleBtn = headerBar.toggleButton(SvgPaths.CHART_COLUMN, 16,
                 rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
-                I18n.t("scope.stats.toggle.tooltip"), Preferences.instance().isOscShowStats());
+                I18n.t("scope.stats.toggle.tooltip"), prefs.isOscShowStats());
         resetBtn = headerBar.pushButton(SvgPaths.ROTATE_LEFT, 18,
                 rgb(ColorRole.RESET), rgb(ColorRole.BACKGROUND), color(ColorRole.RESET),
                 I18n.t("scope.stats.reset.tooltip"));
@@ -434,12 +433,12 @@ public final class ScopeView extends AbstractMeasurementView {
         // Button, so Bindings.check can't bind it directly — the writer stays
         // explicit, the reaction goes through Bindings.onChange.
         leftBtn.addListener(SWT.Selection, e -> {
-            if (leftBtn.isToggled()) Preferences.instance().setOscMeasurementChannel(Channel.L);
+            if (leftBtn.isToggled()) prefs.setOscMeasurementChannel(Channel.L);
         });
         rightBtn.addListener(SWT.Selection, e -> {
-            if (rightBtn.isToggled()) Preferences.instance().setOscMeasurementChannel(Channel.R);
+            if (rightBtn.isToggled()) prefs.setOscMeasurementChannel(Channel.R);
         });
-        Bindings.onChange(this, Preferences.instance().oscMeasurementChannelProperty(), ch -> {
+        Bindings.onChange(this, prefs.oscMeasurementChannelProperty(), ch -> {
             leftBtn.setToggled(ch == Channel.L);
             rightBtn.setToggled(ch == Channel.R);
             measWorker.clearHistory();
@@ -447,8 +446,8 @@ public final class ScopeView extends AbstractMeasurementView {
         });
         autoSetupBtn.addListener(SWT.Selection, e -> MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP));
         tableToggleBtn.addListener(SWT.Selection, e ->
-                Preferences.instance().setOscShowMeasurementTable(tableToggleBtn.isToggled()));
-        Bindings.onChange(this, Preferences.instance().oscShowMeasurementTableProperty(), show -> {
+                prefs.setOscShowMeasurementTable(tableToggleBtn.isToggled()));
+        Bindings.onChange(this, prefs.oscShowMeasurementTableProperty(), show -> {
             tableToggleBtn.setToggled(show);
             syncScopeButtons();   // external/stats/reset follow the table's visibility
             syncToolWindow();
@@ -460,13 +459,18 @@ public final class ScopeView extends AbstractMeasurementView {
             }
         });
         statsToggleBtn.addListener(SWT.Selection, e ->
-                Preferences.instance().setOscShowStats(statsToggleBtn.isToggled()));
-        Bindings.onChange(this, Preferences.instance().oscShowStatsProperty(), stats -> {
+                prefs.setOscShowStats(statsToggleBtn.isToggled()));
+        Bindings.onChange(this, prefs.oscShowStatsProperty(), stats -> {
             statsToggleBtn.setToggled(stats);
             syncScopeButtons();   // reset follows the stats toggle
             redraw();
         });
         resetBtn.addListener(SWT.Selection, e -> { measWorker.clearHistory(); redraw(); });
+        // ADC re-calibration rescales every measured voltage; DAC re-calibration
+        // changes the generated (loopback) level — either makes the accumulated
+        // running statistics inconsistent, so clear them on a calibration change.
+        Bindings.onChange(this, prefs.adcFsVoltageRmsProperty(), v -> { measWorker.clearHistory(); redraw(); });
+        Bindings.onChange(this, prefs.dacFsVoltageRmsProperty(), v -> { measWorker.clearHistory(); redraw(); });
         syncScopeButtons();       // apply the initial signal-gated visibility
 
         setBackground(color(ColorRole.BACKGROUND));
@@ -736,7 +740,7 @@ public final class ScopeView extends AbstractMeasurementView {
                  null, null,
                  0, 0,
                  new CrossHairSpec(0.5, 0.5, color(ColorRole.CROSSHAIR),
-                                   TICKS_PER_DIV, TICK_HALF_LEN,
+                                   MAJOR_TICK_LEN, MINOR_TICK_LEN,
                                    DIVISIONS_X, DIVISIONS_Y));
         drawWaveforms(gc, w, h);
         drawSliders(gc, w, h);
@@ -1188,7 +1192,7 @@ public final class ScopeView extends AbstractMeasurementView {
                               int dispStart, double subSampleOffset, int dispCount,
                               boolean showL, boolean showR, double leftVDiv, double rightVDiv,
                               boolean sincL, boolean sincR, double dcL, double dcR) {
-        int pad = ScopeLanczos.LANCZOS_PADDING;
+        int pad = Lanczos.LANCZOS_PADDING;
         int lo  = Math.max(0, dispStart - pad);
         int hi  = Math.min(dataLen, dispStart + dispCount + pad);
         int n   = Math.max(0, hi - lo);
@@ -1495,7 +1499,7 @@ public final class ScopeView extends AbstractMeasurementView {
         // (typically ≥ 1 V/div); off-screen lines are naturally clipped.
         // Drawn before the offset track so the brighter offset zero-line
         // and triangle stay on top when they overlap.
-        double peakVolts = AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double peakVolts = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
         final int[] FS_DASH = { 2, 6 };
         if (showL) {
@@ -1847,11 +1851,11 @@ public final class ScopeView extends AbstractMeasurementView {
         // Read window must span at least one full display window before the
         // trigger AND one full display window after, so the trigger position
         // slider can be dragged from edge to edge without the display falling
-        // off the buffer.  Plus ScopeLanczos.LANCZOS_PADDING on each side for the sinc
+        // off the buffer.  Plus Lanczos.LANCZOS_PADDING on each side for the sinc
         // kernel, plus an extra lookback so the trigger search reliably
         // contains a rising edge even for low-frequency signals.
         int extraLookback = Math.min(b.getSampleRate(), ScopeMeasurementWorker.MEAS_MAX_SAMPLES);
-        int wanted = 2 * displaySamples + 2 * ScopeLanczos.LANCZOS_PADDING + extraLookback;
+        int wanted = 2 * displaySamples + 2 * Lanczos.LANCZOS_PADDING + extraLookback;
         // When SINGLE is armed, capture both channels so toggling L/R after
         // the freeze still shows real data instead of a stale buffer.
         boolean armedSingle = (triggerMode == TriggerMode.SINGLE) && singleArmed;
@@ -1891,7 +1895,7 @@ public final class ScopeView extends AbstractMeasurementView {
         // "signal jumps left/right".  Right-edge anchoring is stable
         // across both operations.
         if (viewBackOffsetFrames > 0 || fileMode) {
-            int rightPadN = Math.min(ScopeLanczos.LANCZOS_PADDING, Math.max(0, available - displaySamples));
+            int rightPadN = Math.min(Lanczos.LANCZOS_PADDING, Math.max(0, available - displaySamples));
             int dispEndN  = available - rightPadN;
             int dispStartN = Math.max(0, dispEndN - displaySamples);
             int dispCountN = dispEndN - dispStartN;
@@ -1906,7 +1910,7 @@ public final class ScopeView extends AbstractMeasurementView {
         }
 
         // Trigger search range: keep the resulting display window
-        // [windowLeftT, windowLeftT + displaySamples) plus ScopeLanczos.LANCZOS_PADDING on
+        // [windowLeftT, windowLeftT + displaySamples) plus Lanczos.LANCZOS_PADDING on
         // each side fully inside the read buffer.  The split is asymmetric
         // when the trigger-position slider isn't centred — at triggerPosFrac
         // = 0 the display extends one full window to the right of the
@@ -1915,8 +1919,8 @@ public final class ScopeView extends AbstractMeasurementView {
         // triggerPosFrac = 1.
         int leftHalf  = (int) Math.ceil(displaySamples * triggerPosFrac);
         int rightHalf = (int) Math.ceil(displaySamples * (1.0 - triggerPosFrac));
-        int searchFrom = Math.max(1, ScopeLanczos.LANCZOS_PADDING + leftHalf + 1);
-        int searchTo   = available - rightHalf - ScopeLanczos.LANCZOS_PADDING;
+        int searchFrom = Math.max(1, Lanczos.LANCZOS_PADDING + leftHalf + 1);
+        int searchTo   = available - rightHalf - Lanczos.LANCZOS_PADDING;
         float[] triggerData = (triggerCh == Channel.L) ? leftBuf : rightBuf;
         boolean rising = (triggerEdge == TriggerEdge.RISE);
         // Trigger uses the TRIGGER channel's sinc setting for sub-sample
@@ -1928,7 +1932,7 @@ public final class ScopeView extends AbstractMeasurementView {
         // channel's V/div and its current vertical offset (the channel's
         // zero-line lives at offsetFrac × h on screen).
         double triggerVDiv = (triggerCh == Channel.L) ? leftVDiv : rightVDiv;
-        double triggerPeakVolts = AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double triggerPeakVolts = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
         double vScaleTrig = triggerPeakVolts / triggerVDiv * pixelsPerDivY;
         double triggerCenterY = h * ((triggerCh == Channel.L)
@@ -2060,8 +2064,8 @@ public final class ScopeView extends AbstractMeasurementView {
             double localTriggerFrac = (lastTriggerAbsPos - bufStartAbs) + lastTriggerSubSampleOffset;
             double windowLeftT = localTriggerFrac - displaySamples * triggerPosFrac;
             int holdStart = (int) Math.floor(windowLeftT);
-            if (holdStart >= ScopeLanczos.LANCZOS_PADDING
-                    && holdStart + displaySamples + ScopeLanczos.LANCZOS_PADDING <= available) {
+            if (holdStart >= Lanczos.LANCZOS_PADDING
+                    && holdStart + displaySamples + Lanczos.LANCZOS_PADDING <= available) {
                 dispStart = holdStart;
                 subSampleOffset = windowLeftT - holdStart;
                 haveFrame = true;
@@ -2076,7 +2080,7 @@ public final class ScopeView extends AbstractMeasurementView {
         //    NORMAL deliberately leaves the pane blank in that case.
         if (!haveFrame) {
             if (triggerMode == TriggerMode.AUTO || triggerMode == TriggerMode.SINGLE) {
-                int rightPad = Math.min(ScopeLanczos.LANCZOS_PADDING, Math.max(0, available - displaySamples));
+                int rightPad = Math.min(Lanczos.LANCZOS_PADDING, Math.max(0, available - displaySamples));
                 int dispEnd  = available - rightPad;
                 dispStart = Math.max(0, dispEnd - displaySamples);
                 dispCount = dispEnd - dispStart;
@@ -2152,13 +2156,13 @@ public final class ScopeView extends AbstractMeasurementView {
                 ? prefs.getOscLeftOffsetFrac() : prefs.getOscRightOffsetFrac());
         double vDiv    = (triggerCh == Channel.L) ? leftVDiv : rightVDiv;
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
-        double peakVolts     = AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double peakVolts     = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
         double vScale        = peakVolts / vDiv * pixelsPerDivY;
         Color beatColor = (triggerCh == Channel.L)
                 ? color(ColorRole.LEFT_BEAT)
                 : color(ColorRole.RIGHT_BEAT);
         drawTrace(gc, beat, dataLen, dispStart, subSampleOffset, dispCount,
-                w, centerY, vScale, beatColor,
+                w, h, centerY, vScale, (float) prefs.getOscLineWidth(), beatColor,
                 /* sincEnabled = */ false, /* dcOffset = */ 0.0, /* dotDiameter = */ 0);
     }
 
@@ -2299,7 +2303,7 @@ public final class ScopeView extends AbstractMeasurementView {
      * Copies the samples around the just-found trigger into the captured-frame
      * arrays so they persist independently of the ring buffer.  Saves up to
      * two display windows centred on the trigger (i.e. {@code 2·displaySamples
-     * + 2·ScopeLanczos.LANCZOS_PADDING}) so the renderer has at least half-a-window of
+     * + 2·Lanczos.LANCZOS_PADDING}) so the renderer has at least half-a-window of
      * context on each side — that way the sinc kernel has full data even at
      * the pane edges, and a late Start that fires the trigger close to the
      * buffer end still shows the full screen.  When the ring buffer doesn't
@@ -2309,8 +2313,8 @@ public final class ScopeView extends AbstractMeasurementView {
     private void captureSingleFrame(int dispStart, int displaySamples,
                                     int available, double subSampleOffset) {
         int extra = displaySamples / 2;     // half a screen extra on each side → 2 screens total
-        int idealStart = dispStart - ScopeLanczos.LANCZOS_PADDING - extra;
-        int idealEnd   = dispStart + displaySamples + ScopeLanczos.LANCZOS_PADDING + extra;
+        int idealStart = dispStart - Lanczos.LANCZOS_PADDING - extra;
+        int idealEnd   = dispStart + displaySamples + Lanczos.LANCZOS_PADDING + extra;
         int srcStart = Math.max(0, idealStart);
         int srcEnd   = Math.min(available, idealEnd);
         int len = srcEnd - srcStart;
@@ -2359,7 +2363,7 @@ public final class ScopeView extends AbstractMeasurementView {
         double leftCenterY  = h * prefs.getOscLeftOffsetFrac();
         double rightCenterY = h * prefs.getOscRightOffsetFrac();
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
-        double peakVolts     = AudioBackend.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double peakVolts     = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
         float  lineWidth     = (float) prefs.getOscLineWidth();
         int    dotDiameter   = prefs.getOscDotDiameter();
 
@@ -2369,12 +2373,12 @@ public final class ScopeView extends AbstractMeasurementView {
         if (showL) {
             double vScale = peakVolts / leftVDiv * pixelsPerDivY;
             drawTrace(gc, dataLeft,  dataLen, dispStart, subSampleOffset, dispCount,
-                      w, leftCenterY, vScale, color(ColorRole.LEFT_TRACE), sincEnabledL, dcOffsetL, dotDiameter);
+                      w, h, leftCenterY, vScale, lineWidth, color(ColorRole.LEFT_TRACE), sincEnabledL, dcOffsetL, dotDiameter);
         }
         if (showR) {
             double vScale = peakVolts / rightVDiv * pixelsPerDivY;
             drawTrace(gc, dataRight, dataLen, dispStart, subSampleOffset, dispCount,
-                      w, rightCenterY, vScale, color(ColorRole.RIGHT_TRACE), sincEnabledR, dcOffsetR, dotDiameter);
+                      w, h, rightCenterY, vScale, lineWidth, color(ColorRole.RIGHT_TRACE), sincEnabledR, dcOffsetR, dotDiameter);
         }
     }
 
@@ -2403,7 +2407,7 @@ public final class ScopeView extends AbstractMeasurementView {
 
 
     /**
-     * Draws a waveform.  When {@code samplesPerPx ≤ ScopeLanczos.MAX_LANCZOS_DOWNSAMPLE}
+     * Draws a waveform.  When {@code samplesPerPx ≤ Lanczos.MAX_LANCZOS_DOWNSAMPLE}
      * the signal is band-limit-reconstructed via a Lanczos-windowed sinc kernel
      * scaled to the output rate (no aliasing into beat envelopes).  Above that
      * threshold per-column min/max bars take over.  A 5-px filled dot is
@@ -2416,51 +2420,40 @@ public final class ScopeView extends AbstractMeasurementView {
      */
     private void drawTrace(GC gc, float[] data, int n,
                                   int dispStart, double subSampleOffset, int dispCount,
-                                  int width, double centerY, double vScale, Color color,
+                                  int width, int height, double centerY, double vScale,
+                                  float lineWidth, Color color,
                                   boolean sincEnabled, double dcOffset, int dotDiameter) {
         if (dispCount < 2 || width <= 0) return;
         gc.setForeground(color);
         double samplesPerPx = (double) dispCount / width;
         double pxPerSample = (double) width / dispCount;
-        if (samplesPerPx <= ScopeLanczos.MAX_LANCZOS_DOWNSAMPLE) {
-            double scale = Math.max(1.0, samplesPerPx);
-            Path path = new Path(gc.getDevice());
-            try {
-                if (sincEnabled) {
-                    // Extend the path a few pixels past each canvas edge so
-                    // the stroke (with antialiased CAP_ROUND caps) lands inside
-                    // the canvas at full intensity instead of leaving a thin
-                    // empty band at the left and right edges.  SWT clips the
-                    // overshoot to the canvas naturally.  4 px each side covers
-                    // the configured-max 5 px line width with a small safety
-                    // margin.
-                    final int padPixels = 4;
-                    for (int x = -padPixels; x < width + padPixels; x++) {
-                        double t = dispStart + subSampleOffset + x * samplesPerPx;
-                        float yp = (float) (centerY - (ScopeLanczos.lanczos(data, n, t, scale) - dcOffset) * vScale);
-                        if (x == -padPixels) path.moveTo(x, yp);
-                        else                  path.lineTo(x, yp);
-                    }
-                } else {
-                    // Linear path: extend by a couple of samples past each end
-                    // so the straight-line segments cover the full canvas, not
-                    // only the displayed-window samples.  Clamps to valid
-                    // sample indices for the edges of the data buffer.
-                    double dotShift = subSampleOffset * pxPerSample;
-                    int padSamples = 2;
-                    for (int i = -padSamples; i < dispCount + padSamples; i++) {
-                        int dataIdx = dispStart + i;
-                        if (dataIdx < 0)    dataIdx = 0;
-                        if (dataIdx >= n)   dataIdx = n - 1;
-                        float xp = (float) (i * pxPerSample - dotShift);
-                        float yp = (float) (centerY - (data[dataIdx] - dcOffset) * vScale);
-                        if (i == -padSamples) path.moveTo(xp, yp);
-                        else                  path.lineTo(xp, yp);
-                    }
-                }
-                gc.drawPath(path);
-            } finally {
-                path.dispose();
+        if (samplesPerPx <= Lanczos.MAX_LANCZOS_DOWNSAMPLE) {
+            // Reconstruct one Y per pixel column (sinc or linear) and stroke it through the
+            // shared paintPolyline — the same clipped-Path renderer as the FFT / FreqResp
+            // traces.  One point per column, so the envelope-bars pass stays idle and only
+            // the smooth Pass-2 Path draws.  The lanczos kernel still reads its own
+            // LANCZOS_PADDING samples, so the edge values are accurate.
+            Rectangle plot = new Rectangle(0, 0, width, height);
+            int lw = Math.max(1, Math.round(lineWidth));
+            if (sincEnabled) {
+                double scale = Math.max(1.0, samplesPerPx);
+                paintPolyline(gc, plot, color, SWT.LINE_SOLID, lw, width,
+                        i -> i,
+                        i -> centerY - (Lanczos.lanczos(data, n,
+                                dispStart + subSampleOffset + i * samplesPerPx, scale) - dcOffset) * vScale);
+            } else {
+                // Linear: straight lines between samples — evaluate the linear interpolant
+                // at each pixel so the per-column point lands on the sample-to-sample segment.
+                paintPolyline(gc, plot, color, SWT.LINE_SOLID, lw, width,
+                        i -> i,
+                        i -> {
+                            double t  = dispStart + subSampleOffset + i * samplesPerPx;
+                            int    i0 = (int) Math.floor(t);
+                            int    ia = Math.max(0, Math.min(n - 1, i0));
+                            int    ib = Math.max(0, Math.min(n - 1, i0 + 1));
+                            double v  = data[ia] + (t - i0) * (data[ib] - data[ia]);
+                            return centerY - (v - dcOffset) * vScale;
+                        });
             }
             if (pxPerSample > 10.0) {
                 gc.setBackground(color);

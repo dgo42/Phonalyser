@@ -176,7 +176,7 @@ public final class Events {
 
     /** Notification — the active Frequency Response calibration changed
      *  (loaded from file, cleared, or replaced by the wizard).  No
-     *  payload — subscribers read from {@code FreqRespCalibrationStore}. */
+     *  payload — subscribers read from {@code FreqRespCorrectionStore}. */
     public static final String FREQRESP_CALIBRATION_CHANGED = "freqresp.calibration.changed";
 
     /** Notification — the FreqResp pane started a measurement.  No
@@ -205,7 +205,7 @@ public final class Events {
 
     /** Notification — the FFT pane's loaded calibration list changed
      *  (file added / removed / replaced / cleared).  No payload —
-     *  subscribers read {@code FftCalibrationStore}.  The view re-derives
+     *  subscribers read {@code FreqRespCorrectionStore}.  The view re-derives
      *  the calibrated spectrum / harmonic dot positions on next paint. */
     public static final String FFT_CALIBRATION_CHANGED = "fft.calibration.changed";
 

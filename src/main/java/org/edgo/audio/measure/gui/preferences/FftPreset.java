@@ -20,7 +20,7 @@ package org.edgo.audio.measure.gui.preferences;
 
 import org.edgo.audio.measure.enums.AmplitudeUnit;
 import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.enums.FftMagnitudeUnit;
+import org.edgo.audio.measure.enums.MagnitudeUnit;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 
@@ -37,7 +37,7 @@ import lombok.Data;
 @Data
 public class FftPreset {
     private Channel channel               = Channel.L;
-    private FftMagnitudeUnit magUnit              = FftMagnitudeUnit.DBV;
+    private MagnitudeUnit magUnit              = MagnitudeUnit.DBV;
     private boolean logFreqAxis                  = true;
     private double  freqMinHz                    = 20;
     private double  freqMaxHz                    = 20000;

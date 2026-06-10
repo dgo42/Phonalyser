@@ -26,6 +26,7 @@ import org.edgo.audio.measure.adc.AdcHistogram;
 import org.edgo.audio.measure.adc.WeightedBuffer;
 import org.edgo.audio.measure.chart.ChartExporter;
 import org.edgo.audio.measure.chart.HistogramExporter;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.DeviceRef;
@@ -66,8 +67,9 @@ public class HistogramMode {
         String heightArg     = ArgParser.getArgValue(args, "--height");
         String bitsArg       = ArgParser.getArgValue(args, "--bits");
         String adcFsArg      = ArgParser.getArgValue(args, "--adc-fs-vrms");
+        Preferences prefs = Preferences.instance();
         if (adcFsArg != null) {
-            AudioBackend.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
+            prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         boolean loadMode   = (loadArg != null);
@@ -104,7 +106,7 @@ public class HistogramMode {
         }
         double scaleVolts = scaleArg != null
                 ? Double.parseDouble(scaleArg)
-                : 2.0 * Math.sqrt(2.0) * AudioBackend.getAdcFsVoltageRms();
+                : 2.0 * Math.sqrt(2.0) * prefs.getAdcFsVoltageRms();
         if (scaleVolts <= 0) {
             log.error("--scale must be a positive number.");
             System.exit(1);

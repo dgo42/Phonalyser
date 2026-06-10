@@ -18,8 +18,6 @@
 
 package org.edgo.audio.measure.sound;
 
-import lombok.Getter;
-import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 import javax.sound.sampled.AudioFormat;
@@ -36,24 +34,9 @@ import org.edgo.audio.measure.enums.AudioBackendType;
  * backend, so the rest of the code can stay backend-agnostic by
  * working with {@link DeviceRef}, {@link AudioCapture} and
  * {@link AudioPlayback}.
- *
- * <p>Also hosts the {@link #adcFsVoltageRms} global, which used to live
- * on {@code CsjsoundRecorder} when csjsound was the only backend that
- * actually measured the ADC's full scale — now it sits on the
- * backend-agnostic dispatcher.
  */
 @Log4j2
 public final class AudioBackend {
-
-    /** ADC full-scale voltage in V_RMS.  Read from every render / FFT /
-     *  measurement path; encapsulated behind static {@code get}/{@code set}
-     *  accessors (Lombok-generated) so the in-process calibration dialog
-     *  and the CLI can both push fresh values without external callers
-     *  reaching into the field directly.  {@code Preferences} carries the
-     *  persisted copy across launches. */
-    @Getter
-    @Setter
-    private static double adcFsVoltageRms = 1.7931;
 
     private static volatile AudioBackend instance;
 

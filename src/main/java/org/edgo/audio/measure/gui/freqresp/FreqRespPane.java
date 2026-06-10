@@ -36,6 +36,7 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
+import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -71,8 +72,6 @@ public final class FreqRespPane {
     /** Lower bound for the log-frequency scrollbar.  The view clamps
      *  freqRespFreqMinHz to ≥ 1 Hz so the log mapping is well-defined. */
     private static final double FREQ_FLOOR_HZ = 1.0;
-    /** Upper bound for the magnitude axis (full dynamic range cap). */
-    private static final double MAG_TOP_MAX = 20.0;
     /** Lower bound for the magnitude axis — matches the view's wheel
      *  zoom-out limit (MAG_BOT_MIN_DB) so the scrollbar can reach the
      *  same outer edge the wheel allows. */
@@ -123,6 +122,17 @@ public final class FreqRespPane {
         buildPlotRow();
         buildFreqScrollbarRow();
         buildToolbarRow(wandIcon, playIcon);
+
+        // The pane owns the calibration-correction store (IoC) and injects the
+        // same instance into the view and tab control it just built.  Inject
+        // the view first: pushing the rows into the store (inside the tab
+        // control's setter) fires FREQRESP_CALIBRATION_CHANGED, which the view
+        // handles by re-deriving from its store — so that store must be set by
+        // then.
+        FreqRespCorrectionStore correctionStore = new FreqRespCorrectionStore("FreqResp",
+                () -> MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED));
+        view.setCorrectionStore(correctionStore);
+        tabControl.setCorrectionStore(correctionStore);
 
         // Bus subscription.  Range-changed re-aligns the scrollbars after the
         // view's wheel-driven pan / zoom (and after a preset load, which the
@@ -391,15 +401,16 @@ public final class FreqRespPane {
             freqScrollbar.setIncrement(Math.max(1, thumb / 10));
         }
 
-        // Magnitude scrollbar — linear dB range capped at MAG_TOP_MAX /
+        // Magnitude scrollbar — linear dB range capped at view.magCeilingDb() /
         // MAG_BOT_MIN.  Thumb size shows the visible slice's share.
+        double magTopMax = view.magCeilingDb();
         double visibleM = prefs.getFreqRespMagTopDb() - prefs.getFreqRespMagBotDb();
-        double totalM   = MAG_TOP_MAX - MAG_BOT_MIN;
+        double totalM   = magTopMax - MAG_BOT_MIN;
         if (totalM > 0 && visibleM > 0) {
             int thumb = (int) Math.max(1, Math.min(SCROLL_RANGE,
                     SCROLL_RANGE * (visibleM / totalM)));
             double pos = (totalM - visibleM) > 0
-                    ? (MAG_TOP_MAX - prefs.getFreqRespMagTopDb()) / (totalM - visibleM)
+                    ? (magTopMax - prefs.getFreqRespMagTopDb()) / (totalM - visibleM)
                     : 0.0;
             int sel = (int) Math.max(0, Math.min(SCROLL_RANGE - thumb,
                     pos * (SCROLL_RANGE - thumb)));
@@ -429,12 +440,13 @@ public final class FreqRespPane {
 
     private void applyMagScrollbar() {
         Preferences prefs = Preferences.instance();
-        double total   = MAG_TOP_MAX - MAG_BOT_MIN;
+        double magTopMax = view.magCeilingDb();
+        double total   = magTopMax - MAG_BOT_MIN;
         double visible = prefs.getFreqRespMagTopDb() - prefs.getFreqRespMagBotDb();
         int sel   = magScrollbar.getSelection();
         int thumb = magScrollbar.getThumb();
         double frac = (double) sel / Math.max(1, SCROLL_RANGE - thumb);
-        double newTop = MAG_TOP_MAX - frac * Math.max(0, total - visible);
+        double newTop = magTopMax - frac * Math.max(0, total - visible);
         prefs.setFreqRespMagTopDb(newTop);
         prefs.setFreqRespMagBotDb(newTop - visible);
         view.redraw();
@@ -445,9 +457,10 @@ public final class FreqRespPane {
      *  the scrollbar's outer travel at the same value the view uses for
      *  zoom-out. */
     private double nyquistHz() {
-        int sr = Preferences.instance().current().getInputSampleRate();
+        Preferences prefs = Preferences.instance();
+        int sr = prefs.current().getInputSampleRate();
         double base = sr > 0 ? sr / 2.0 : 24000.0;
-        double frac = Preferences.instance().getFreqRespNyquistFraction();
+        double frac = prefs.getFreqRespNyquistFraction();
         if (!Double.isFinite(frac) || frac <= 0.0) frac = 1.0;
         return base * frac;
     }

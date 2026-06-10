@@ -36,7 +36,7 @@ import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
 import org.edgo.audio.measure.generator.SignalGenerator;
-import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import lombok.experimental.UtilityClass;
@@ -94,7 +94,8 @@ public class GenFftMode {
         String loadWeightedArg = ArgParser.getArgValue(args, "--load-weighted");
         String syncPauseArg  = ArgParser.getArgValue(args, "--sync-pause");
         if (adcFsArg != null) {
-            AudioBackend.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
+            // Inject for this run only — Main marked Preferences transient, so not persisted.
+            Preferences.instance().setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         if (samplerateArg == null) { log.error("--samplerate required"); System.exit(1); }
@@ -244,8 +245,6 @@ public class GenFftMode {
                     String.format(Locale.US, "%.8f", result.thdPct),
                     String.format(Locale.US, "%.2f", result.thdDb));
         }
-        FreqRespCalHelper.applyDefaultDbvScaling(result);
-
         fftAnalyzer.exportFftCsv(result, outputDir);
         HarmonicsCsv.export(result, outputDir);
         FftChartExporter.exportChart(result, chartWidth, chartHeight, outputDir,

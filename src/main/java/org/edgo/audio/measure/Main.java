@@ -34,6 +34,7 @@ import org.edgo.audio.measure.cli.RecordWavMode;
 import org.edgo.audio.measure.cli.RegressCalibrateMode;
 import org.edgo.audio.measure.cli.UsagePrinter;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 @Log4j2
@@ -49,6 +50,9 @@ public class Main {
             return;
         }
         AudioBackend.instance().setActive(AudioBackendType.fromString(ArgParser.getArgValue(args, "--backend")));
+        // CLI is headless and single-shot: mark Preferences transient so any value
+        // injected for this run (e.g. --adc-fs-vrms) never overwrites the GUI's YAML.
+        Preferences.instance().setTransientMode(true);
         if (ArgParser.hasArg(args, "--iterative-compensate")) {
             IterativeCompensateMode.run(args);
             return;

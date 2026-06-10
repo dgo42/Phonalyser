@@ -23,6 +23,7 @@ import java.io.File;
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioInputStream;
 
+import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.wav.PcmFileLoader;
@@ -59,7 +60,9 @@ public final class ScopeOpenSignal {
     private final ScopeView mainView;
     private final ZoomedView    condensedView;
 
+    @Getter
     private File          loadedFile;
+    @Getter
     private String        lastError;
 
     public ScopeOpenSignal(ScopeView mainView, ZoomedView condensedView) {
@@ -67,8 +70,6 @@ public final class ScopeOpenSignal {
         this.condensedView = condensedView;
     }
 
-    public File   getLoadedFile() { return loadedFile;   }
-    public String getLastError()  { return lastError;    }
     public boolean isLoaded()     { return loadedFile != null; }
 
     /**

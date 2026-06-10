@@ -124,7 +124,7 @@ public final class UsagePrinter {
         log.info("    [--fund-v <vrms>]         true RMS voltage of the fundamental — anchors dBV scale");
         log.info("    [--fund-dbv <dbv>]        true fundamental level in dBV (alternative to --fund-v)");
         log.info("    [--adc-fs-vrms <vrms>]    ADC full-scale V_rms (sets dBV scale when --fund-v/-dbv");
-        log.info("                              absent; defaults to AudioBackend.getAdcFsVoltageRms())");
+        log.info("                              absent; defaults to the configured ADC full-scale)");
         log.info("    [--sub-harmonics <csv>]   subtract H2+ sinusoids loaded from this CSV before FFT");
         log.info("    [--sub-harmonics-reim]    use re/im columns of that CSV (default: phase_deg)");
         log.info("    [--no-coherent]           incoherent power averaging across frames");

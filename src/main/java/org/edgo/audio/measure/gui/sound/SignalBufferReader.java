@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.gui.sound;
 
+import lombok.Getter;
+
 /**
  * Per-consumer read cursor over a shared {@link SignalBuffer}.
  *
@@ -72,6 +74,7 @@ public final class SignalBufferReader {
      *  latest written sample.  Volatile so a status reader on another thread
      *  (e.g. the FFT pane's "next frame %") sees a consistent value while the
      *  owning consumer thread advances it. */
+    @Getter
     private volatile long readPos = -1;
 
     public SignalBufferReader(SignalBuffer buffer) {
@@ -113,10 +116,6 @@ public final class SignalBufferReader {
     }
 
     // ─── Contiguous cursor ──────────────────────────────────────────────────
-
-    /** Absolute index of the next sample {@link #read} will return, or
-     *  {@code -1} while unanchored. */
-    public long getReadPos() { return readPos; }
 
     /** {@code true} once the cursor has been anchored. */
     public boolean isAnchored() { return readPos >= 0; }

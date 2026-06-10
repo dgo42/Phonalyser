@@ -64,7 +64,7 @@ public final class FreqRespAnalyzerConfig {
     /** Generator drive amplitude in V RMS at the DAC. */
     private final double amplitudeVrms;
 
-    /** When {@code true} and {@link FreqRespCalibrationStore#getCurrent()}
+    /** When {@code true} and {@code FreqRespCorrectionStore.getCurrent()}
      *  is non-null, the analyzer divides each measured channel by the
      *  matching channel of the loaded calibration before returning;
      *  the resulting {@link FreqRespResult#isCalibrationApplied()} reads

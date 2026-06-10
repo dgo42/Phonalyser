@@ -227,6 +227,7 @@ public final class MainWindow {
     // -------------------------------------------------------------------------
 
     private void buildMenuBar() {
+        Preferences prefs = Preferences.instance();
         Menu menuBar = new Menu(shell, SWT.BAR);
         shell.setMenuBar(menuBar);
 
@@ -264,14 +265,13 @@ public final class MainWindow {
             // down so it doesn't keep using the old backend after the
             // user switched.
             Runnable resume = mainTab.pauseForDialog();
-            final TabOrientation origOrientation = Preferences.instance().getTabOrientation();
-            final boolean origSmallIcons  = Preferences.instance().isSmallIconsInMainTab();
+            final TabOrientation origOrientation = prefs.getTabOrientation();
+            final boolean origSmallIcons  = prefs.isSmallIconsInMainTab();
             new PreferencesDialog(shell).open(() -> {
                 resume.run();
                 // Layout-affecting Look & Feel prefs require a shell
                 // rebuild (top tabs ↔ left sidebar ↔ icon size); piggyback
                 // on the existing language-switch recreate mechanism.
-                Preferences prefs = Preferences.instance();
                 if (origOrientation != prefs.getTabOrientation()
                         || origSmallIcons != prefs.isSmallIconsInMainTab()) {
                     requestRecreate();
@@ -283,8 +283,6 @@ public final class MainWindow {
         helpCascade.setText(I18n.t("menu.help"));
         Menu helpMenu = new Menu(shell, SWT.DROP_DOWN);
         helpCascade.setMenu(helpMenu);
-
-        Preferences prefs = Preferences.instance();
 
         MenuItem helpShow = new MenuItem(helpMenu, SWT.PUSH);
         helpShow.setText(I18n.t("menu.help.show"));
@@ -408,9 +406,10 @@ public final class MainWindow {
      *  it persists the BCP-47 tag, applies the locale, and tears down /
      *  rebuilds the shell so every widget picks up the new translations. */
     private void addLanguageMenuItem(Menu menu, String tag, String label) {
+        Preferences prefs = Preferences.instance();
         MenuItem item = new MenuItem(menu, SWT.RADIO);
         item.setText(label);
-        boolean alreadyActive = tag.equals(Preferences.instance().getUiLanguage());
+        boolean alreadyActive = tag.equals(prefs.getUiLanguage());
         item.setSelection(alreadyActive);
         item.addListener(SWT.Selection, e -> {
             // RADIO fires both for the newly-selected item (selection=true)
@@ -418,8 +417,8 @@ public final class MainWindow {
             // on the gain event.  Also skip when the user re-clicks the
             // already-active language — saves an unnecessary shell rebuild.
             if (!item.getSelection()) return;
-            if (tag.equals(Preferences.instance().getUiLanguage())) return;
-            Preferences.instance().setUiLanguage(tag);
+            if (tag.equals(prefs.getUiLanguage())) return;
+            prefs.setUiLanguage(tag);
             I18n.setLocale(Locale.forLanguageTag(tag));
             requestRecreate();
         });

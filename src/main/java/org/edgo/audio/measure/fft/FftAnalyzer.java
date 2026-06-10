@@ -33,7 +33,7 @@ import java.util.stream.IntStream;
 
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 
 import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
@@ -1181,13 +1181,16 @@ public class FftAnalyzer {
         // refLin lives in the same FS-relative units as amplLinear[k];
         // otherwise harmonic % / THD / SNR scale by an unwanted factor of
         // adcFsVoltageRms (≈ 1.79 for a 1.7931 V_rms FS).
+        // The manual fundamental arrives in dBV; convert it to dBFS once here via
+        // the cached global ADC offset and store that (fundamentalTrueDbFs) — dBFS
+        // is the result's only base scale, dBV is re-derived for display.
+        double fundTrueDbFs = Double.NaN;
         double refLin;
         if (Double.isNaN(fundRefDbV)) {
             refLin = fundLinear;
         } else {
-            double fsV = AudioBackend.getAdcFsVoltageRms();
-            double trueDbFs = fsV > 0.0 ? fundRefDbV - 20.0 * Math.log10(fsV) : fundRefDbV;
-            refLin = Math.pow(10.0, trueDbFs / 20.0);
+            fundTrueDbFs = fundRefDbV - Preferences.instance().getDbvOffsetDb();
+            refLin = Math.pow(10.0, fundTrueDbFs / 20.0);
         }
 
         if (Double.isNaN(fundRefDbV)) {
@@ -1251,8 +1254,7 @@ public class FftAnalyzer {
             outResult.snrFreqMin                 = snrFreqMin;
             outResult.snrFreqMax                 = snrFreqMax;
             outResult.coherentAveraging          = coherentAveraging;
-            outResult.fundRefDbV                 = fundRefDbV;
-            outResult.fundamentalTrueDbV         = fundRefDbV;
+            outResult.fundamentalTrueDbFs        = fundTrueDbFs;
             outResult.thdPct                     = 0.0;
             outResult.thdDb                      = -300.0;
             outResult.thdNDb                     = 300.0;
@@ -1385,8 +1387,7 @@ public class FftAnalyzer {
         outResult.noisePower                 = noisePower;
         outResult.awNoisePower               = noisePower;
         outResult.avgNoiseFloorDbFs          = avgNoiseFloorDbFs;
-        outResult.fundRefDbV                 = fundRefDbV;
-        outResult.fundamentalTrueDbV         = fundRefDbV;
+        outResult.fundamentalTrueDbFs        = fundTrueDbFs;
         outResult.fundamentalDynExclusionHz  = dynWidthBins * freqRes;
         // preCorrectionPeaks is owned by the worker (set after analyze
         // returns when calibration is loaded); reset here so a previous
@@ -1437,24 +1438,14 @@ public class FftAnalyzer {
         double fundDbFs   = r.amplitudeDbFs[fundBin];
         r.fundamentalLinear = fundLinear;
         r.fundamentalDbFs   = fundDbFs;
-        // Mirror analyze(): when --fund-v / --fund-dbv was provided, use it
-        // as the ratio denominator (THD / SNR / THD+N / H%); the measured
-        // fundamental scalars above stay verbatim so downstream cal/chart
-        // logic keeps working.  Read fundamentalTrueDbV (not fundRefDbV)
-        // because the cal CSV overwrites fundRefDbV with a notched-fundamental
-        // anchor before recomputeStats runs in iterative paths.  Convert
-        // dBV → dBFS via adcFsVoltageRms so refLin is in the same FS-units
-        // as amplLinear[].
-        double refLin;
-        if (Double.isNaN(r.fundamentalTrueDbV)) {
-            refLin = fundLinear;
-        } else {
-            double fsV = AudioBackend.getAdcFsVoltageRms();
-            double trueDbFs = fsV > 0.0
-                    ? r.fundamentalTrueDbV - 20.0 * Math.log10(fsV)
-                    : r.fundamentalTrueDbV;
-            refLin = Math.pow(10.0, trueDbFs / 20.0);
-        }
+        // Mirror analyze(): when --fund-v / --fund-dbv (manual fundamental) was
+        // provided, use it as the ratio denominator (THD / SNR / THD+N / H%); the
+        // measured fundamental scalars above stay verbatim so downstream cal/chart
+        // logic keeps working.  fundamentalTrueDbFs is already in dBFS (converted
+        // once at the input boundary), so refLin reads straight off it.
+        double refLin = Double.isNaN(r.fundamentalTrueDbFs)
+                ? fundLinear
+                : Math.pow(10.0, r.fundamentalTrueDbFs / 20.0);
 
         // --- Harmonic table -------------------------------------------------
         // Mirror the proportional-bin combination from detectHarmonics: the

@@ -70,7 +70,6 @@ import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.StepSelector;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
-import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -1052,7 +1051,7 @@ public final class ScopeTabControl extends Composite {
      *  the pane's own scope view (no cross-pane fallback — the FFT pane
      *  has its own calibrate button on the FFT side); aborts with an
      *  info MessageBox when no live Vrms is available.  Rescales
-     *  {@code AudioBackend.getAdcFsVoltageRms()} so the displayed Vrms
+     *  {@code Preferences#getAdcFsVoltageRms()} so the displayed Vrms
      *  matches the entered value, and persists the new calibration. */
     private void openCalibrationDialog() {
         if (isDisposed()) return;
@@ -1064,11 +1063,11 @@ public final class ScopeTabControl extends Composite {
         }
         final double measuredVrms = currentVrms;
         new AdcCalibrationDialog(parent, measuredVrms, actualVrms -> {
+            Preferences prefs = Preferences.instance();
             double scale = actualVrms / measuredVrms;
-            double newFs = AudioBackend.getAdcFsVoltageRms() * scale;
-            AudioBackend.setAdcFsVoltageRms(newFs);
-            Preferences.instance().setAdcFsVoltageRms(newFs);
-            Preferences.instance().save();
+            double newFs = prefs.getAdcFsVoltageRms() * scale;
+            prefs.setAdcFsVoltageRms(newFs);
+            prefs.save();
         }).open();
     }
 

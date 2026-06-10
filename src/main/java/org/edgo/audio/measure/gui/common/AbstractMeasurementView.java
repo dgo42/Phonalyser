@@ -19,21 +19,26 @@
 package org.edgo.audio.measure.gui.common;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.IntToDoubleFunction;
+import java.util.function.IntUnaryOperator;
 
+import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.Path;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
-import org.edgo.audio.measure.enums.FftMagnitudeUnit;
+import org.edgo.audio.measure.enums.MagnitudeUnit;
 
 /**
  * Shared base for the project's measurement canvases — oscilloscope, FFT,
@@ -57,6 +62,10 @@ import org.edgo.audio.measure.enums.FftMagnitudeUnit;
  * and editable labels.
  */
 public abstract class AbstractMeasurementView extends Canvas {
+
+    protected static final int MAJOR_TICK_LEN = 6;
+    protected static final int MINOR_TICK_LEN = 2;
+    private static final int MAJOR_TICK_WIDTH = 2;
 
     // --- Header button geometry (shared by every view's header Toolbar / ToolWindow) ---
     protected static final int BTN_W   = 22;   // header button width
@@ -150,10 +159,6 @@ public abstract class AbstractMeasurementView extends Canvas {
     }
 
     private final EnumMap<ColorRole, Color> palette = new EnumMap<>(ColorRole.class);
-
-    protected AbstractMeasurementView(Composite parent, int style) {
-        this(parent, style, null);
-    }
 
     /** Constructor accepting per-role RGB overrides.  For each role the
      *  override (if present) wins over the {@link #DEFAULT_RGB} entry;
@@ -603,13 +608,16 @@ public abstract class AbstractMeasurementView extends Canvas {
 
         // --- Perpendicular edge tick marks on the frame ------------------
         if (majorEdgeMarkPx > 0 || minorEdgeMarkPx > 0) {
+            int prevLineWidth = gc.getLineWidth();
             // X axis ticks on the bottom edge, pointing down/outward.
             int xBottom = plot.y + plot.height;
             if (majorEdgeMarkPx > 0) {
+                gc.setLineWidth(MAJOR_TICK_WIDTH);
                 for (double v : xMajors) {
                     int px = valueToX(v, x, plot);
                     gc.drawLine(px, xBottom, px, xBottom + majorEdgeMarkPx);
                 }
+                gc.setLineWidth(prevLineWidth);
             }
             if (minorEdgeMarkPx > 0) {
                 for (double v : xMinors) {
@@ -619,10 +627,12 @@ public abstract class AbstractMeasurementView extends Canvas {
             }
             // Left Y axis ticks on the left edge, pointing outward (left).
             if (majorEdgeMarkPx > 0) {
+                gc.setLineWidth(MAJOR_TICK_WIDTH);
                 for (double v : yMajors) {
                     int py = valueToY(v, yLeft, plot);
                     gc.drawLine(plot.x - majorEdgeMarkPx, py, plot.x, py);
                 }
+                gc.setLineWidth(prevLineWidth);
             }
             if (minorEdgeMarkPx > 0) {
                 for (double v : yMinors) {
@@ -635,10 +645,12 @@ public abstract class AbstractMeasurementView extends Canvas {
                 double[] yrMinors = minorTicks(yRight);
                 int xRight = plot.x + plot.width;
                 if (majorEdgeMarkPx > 0) {
+                    gc.setLineWidth(MAJOR_TICK_WIDTH);
                     for (double v : yrMajors) {
                         int py = valueToY(v, yRight, plot);
                         gc.drawLine(xRight, py, xRight + majorEdgeMarkPx, py);
                     }
+                    gc.setLineWidth(prevLineWidth);
                 }
                 if (minorEdgeMarkPx > 0) {
                     for (double v : yrMinors) {
@@ -659,37 +671,80 @@ public abstract class AbstractMeasurementView extends Canvas {
             // X tick labels (along the bottom).  For LOG axes the label
             // set is adaptively thinned by adaptiveLogLabels.
             if (x.labelFormat != LabelFormat.NONE) {
-                double[] xLabelPositions =
-                        (x.scale == Scale.LOG) ? adaptiveLogLabels(x.min, x.max) : xMajors;
-                for (double v : xLabelPositions) {
-                    String s = applyLabelFormat(x.labelFormat, v);
-                    int sw   = gc.textExtent(s).x;
-                    int px   = valueToX(v, x, plot) - sw / 2;
-                    gc.drawText(s, px, plot.y + plot.height + majorEdgeMarkPx + 2,
-                                true);
+                // A log axis zoomed to less than one decade holds at most one
+                // decade gridpoint (e.g. only "1000" in a 990–1010 Hz window), so
+                // there the axis is ~linear: switch to evenly-spaced round
+                // (nice-linear) values formatted finely (Hz with as many decimals
+                // as the step needs) instead of a single lonely "1 kHz".
+                boolean wideLog = x.scale == Scale.LOG && !isSubDecade(x.min, x.max);
+                double[] xLabelPositions = wideLog ? adaptiveLogLabels(x.min, x.max) : xMajors;
+                // FREQ labels on a uniform-step axis (linear, or sub-decade log) get a
+                // step-aware format so fine zooms read 1.005 kHz / 1.010 kHz instead of
+                // several identical "1 kHz"; wide log keeps the decade formatter.
+                double fineStep = (x.labelFormat == LabelFormat.FREQ && !wideLog)
+                        ? minSpacing(xLabelPositions) : 0.0;
+                // Pixel-aware placement: reserve the decade majors (1 / 10 / 100 /
+                // 1 kHz…) FIRST so a round decade is never thinned away, then fill the
+                // remaining space with the other labels — skipping any whose box would
+                // touch one already placed.
+                int gap = gc.textExtent("0").x;
+                int m = xLabelPositions.length;
+                String[] str = new String[m];
+                int[] left = new int[m];
+                int[] right = new int[m];
+                for (int i = 0; i < m; i++) {
+                    double v = xLabelPositions[i];
+                    str[i]   = fineStep > 0 ? formatFreqTick(v, fineStep)
+                                            : applyLabelFormat(x.labelFormat, v);
+                    int sw   = gc.textExtent(str[i]).x;
+                    left[i]  = valueToX(v, x, plot) - sw / 2;
+                    right[i] = left[i] + sw;
+                }
+                boolean[] drawn = new boolean[m];
+                List<int[]> placed = new ArrayList<>();
+                for (int pass = 0; pass < 2; pass++) {           // pass 0: decades, pass 1: rest
+                    for (int i = 0; i < m; i++) {
+                        if (drawn[i] || (pass == 0) != isDecadeValue(xLabelPositions[i])) continue;
+                        boolean clash = false;
+                        for (int[] o : placed) {
+                            if (left[i] < o[1] + gap && right[i] + gap > o[0]) { clash = true; break; }
+                        }
+                        if (clash) continue;
+                        gc.drawText(str[i], left[i], plot.y + plot.height + majorEdgeMarkPx + 2, true);
+                        placed.add(new int[]{left[i], right[i]});
+                        drawn[i] = true;
+                    }
                 }
             }
-            // Left Y tick labels (to the left of the plot).
+            // Left Y tick labels (to the left of the plot).  Sub-decade log (a zoomed
+            // V / V√Hz axis) gets the same fine nice-linear values the grid drew, not the
+            // coarse decade-thinned set; a vertical overlap-skip keeps them legible.
             if (yLeft.labelFormat != LabelFormat.NONE) {
-                double[] yLabelPositions =
-                        (yLeft.scale == Scale.LOG) ? adaptiveLogLabels(yLeft.min, yLeft.max) : yMajors;
+                boolean yWideLog = yLeft.scale == Scale.LOG && !isSubDecade(yLeft.min, yLeft.max);
+                double[] yLabelPositions = yWideLog ? adaptiveLogLabels(yLeft.min, yLeft.max) : yMajors;
+                int fh = gc.getFontMetrics().getHeight();
+                int lastPy = Integer.MIN_VALUE;
                 for (double v : yLabelPositions) {
+                    int py = valueToY(v, yLeft, plot);
+                    if (lastPy != Integer.MIN_VALUE && Math.abs(py - lastPy) < fh) continue;
                     String s = applyLabelFormat(yLeft.labelFormat, v);
-                    int    sw = gc.textExtent(s).x;
-                    int    py = valueToY(v, yLeft, plot)
-                              - gc.getFontMetrics().getHeight() / 2;
-                    gc.drawText(s, plot.x - majorEdgeMarkPx - sw - 4, py, true);
+                    int sw = gc.textExtent(s).x;
+                    gc.drawText(s, plot.x - majorEdgeMarkPx - sw - 4, py - fh / 2, true);
+                    lastPy = py;
                 }
             }
             // Right Y tick labels (to the right of the plot).
             if (yRight != null && yRight.labelFormat != LabelFormat.NONE) {
-                double[] yrLabelPositions =
-                        (yRight.scale == Scale.LOG) ? adaptiveLogLabels(yRight.min, yRight.max) : yrMajors;
+                boolean yrWideLog = yRight.scale == Scale.LOG && !isSubDecade(yRight.min, yRight.max);
+                double[] yrLabelPositions = yrWideLog ? adaptiveLogLabels(yRight.min, yRight.max) : yrMajors;
+                int fh = gc.getFontMetrics().getHeight();
+                int lastPy = Integer.MIN_VALUE;
                 for (double v : yrLabelPositions) {
+                    int py = valueToY(v, yRight, plot);
+                    if (lastPy != Integer.MIN_VALUE && Math.abs(py - lastPy) < fh) continue;
                     String s = applyLabelFormat(yRight.labelFormat, v);
-                    int    py = valueToY(v, yRight, plot)
-                              - gc.getFontMetrics().getHeight() / 2;
-                    gc.drawText(s, plot.x + plot.width + majorEdgeMarkPx + 4, py, true);
+                    gc.drawText(s, plot.x + plot.width + majorEdgeMarkPx + 4, py - fh / 2, true);
+                    lastPy = py;
                 }
             }
             // Unit captions — overpaint a small background rectangle on
@@ -738,27 +793,68 @@ public abstract class AbstractMeasurementView extends Canvas {
     /** Returns the major tick positions for {@code axis}: evenly-spaced
      *  for LINEAR, nice-number stepping for LINEAR_NICE, decade boundaries
      *  for LOG. */
-    private static double[] majorTicks(AxisSpec axis) {
+    private double[] majorTicks(AxisSpec axis) {
         switch (axis.scale) {
             case LINEAR:      return linearTicks(axis.min, axis.max,
                                                  Math.max(1, axis.divisions));
             case LINEAR_NICE: return niceLinearMajors(axis.min, axis.max,
                                                       Math.max(2, axis.targetCount));
-            case LOG:         return logMajorTicks(axis.min, axis.max);
+            case LOG:         return isSubDecade(axis.min, axis.max)
+                                     ? niceLinearMajors(axis.min, axis.max, 12)
+                                     : logMajorTicks(axis.min, axis.max);
             default:          return new double[0];
         }
+    }
+
+    /** True when a LOG range spans less than one decade — there the 1..9 × 10ⁿ
+     *  decade grid holds at most one gridpoint, so ticks fall back to nice-linear. */
+    private boolean isSubDecade(double min, double max) {
+        double lo = Math.max(1e-15, min);
+        double hi = Math.max(lo + 1e-9, max);
+        return Math.log10(hi / lo) < 1.0;
+    }
+
+    /** True when {@code v} is a 1 × 10ⁿ decade value (1, 10, 100, 1 k…) — these
+     *  labels are placed before any others so a round decade is never thinned away. */
+    private boolean isDecadeValue(double v) {
+        if (!(v > 0)) return false;
+        double p = Math.pow(10, Math.round(Math.log10(v)));
+        return Math.abs(v - p) <= p * 1e-6;
+    }
+
+    /** Fine minor grid positions for a sub-decade LOG zoom: subdivisions of the
+     *  nice-linear major step (halves for a step-2 grid, fifths otherwise) minus
+     *  the majors — so the fine labels get matching grid lines between them. */
+    private double[] subDecadeMinors(double min, double max) {
+        double[] majors = niceLinearMajors(min, max, 12);
+        if (majors.length < 2) return new double[0];
+        double majorStep = majors[1] - majors[0];
+        double pow  = Math.pow(10, Math.floor(Math.log10(majorStep)));
+        double mant = majorStep / pow;
+        double minorStep = majorStep / (Math.abs(mant - 2.0) < 0.1 ? 2 : 5);
+        double first = Math.ceil(min / minorStep) * minorStep;
+        List<Double> out = new ArrayList<>();
+        for (double v = first; v <= max + minorStep * 1e-9; v += minorStep) {
+            if (v < min || v > max) continue;
+            boolean isMajor = false;
+            for (double M : majors) if (Math.abs(v - M) < minorStep * 0.5) { isMajor = true; break; }
+            if (!isMajor) out.add(v);
+        }
+        return toArray(out);
     }
 
     /** Returns the minor tick positions for {@code axis}: empty for
      *  LINEAR, the caller-supplied step for LINEAR_NICE, 2..9 × 10ⁿ
      *  for LOG. */
-    private static double[] minorTicks(AxisSpec axis) {
+    private double[] minorTicks(AxisSpec axis) {
         switch (axis.scale) {
             case LINEAR:      return new double[0];
             case LINEAR_NICE: return (axis.minorStep > 0)
                                      ? niceLinearMinors(axis.min, axis.max, axis.minorStep)
                                      : new double[0];
-            case LOG:         return logMinorTicks(axis.min, axis.max);
+            case LOG:         return isSubDecade(axis.min, axis.max)
+                                     ? subDecadeMinors(axis.min, axis.max)
+                                     : logMinorTicks(axis.min, axis.max);
             default:          return new double[0];
         }
     }
@@ -773,8 +869,8 @@ public abstract class AbstractMeasurementView extends Canvas {
     }
 
     /** Decade boundaries 10ⁿ inside [min, max]. */
-    private static double[] logMajorTicks(double min, double max) {
-        double safeMin = Math.max(1e-12, min);
+    static double[] logMajorTicks(double min, double max) {
+        double safeMin = Math.max(1e-15, min);
         // safeMax must MATCH the formula used by AbstractFreqDomainView.freqToX
         // (max(safeMin + ε, max)) — otherwise the labels and trace use
         // different log ranges and visually misalign at narrow zoom
@@ -793,8 +889,8 @@ public abstract class AbstractMeasurementView extends Canvas {
 
     /** Sub-decade ticks 2..9 × 10ⁿ inside (min, max), excluding the
      *  decade boundaries themselves (those are the majors). */
-    private static double[] logMinorTicks(double min, double max) {
-        double safeMin = Math.max(1e-12, min);
+    static double[] logMinorTicks(double min, double max) {
+        double safeMin = Math.max(1e-15, min);
         double safeMax = Math.max(safeMin + 1e-9, max);
         int lo = (int) Math.floor(Math.log10(safeMin)) - 1;
         int hi = (int) Math.ceil (Math.log10(safeMax)) + 1;
@@ -834,7 +930,7 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  by {@link AbstractFreqDomainView#freqToX}. */
     private static double axisFraction(double v, AxisSpec axis) {
         if (axis.scale == Scale.LOG) {
-            double safeMin = Math.max(1e-12, axis.min);
+            double safeMin = Math.max(1e-15, axis.min);
             // Match AbstractFreqDomainView.freqToX so labels and trace
             // span the same log range — a narrow zoom (less than one
             // decade) otherwise puts labels in compressed positions
@@ -848,9 +944,8 @@ public abstract class AbstractMeasurementView extends Canvas {
     }
 
     /** ~{@code targetCount} round-number tick positions between {@code min}
-     *  and {@code max}.  Step is 1 / 2 / 2.5 / 5 × 10ⁿ.  Port of
-     *  {@code FftAxisTicks.niceLinear}. */
-    private static double[] niceLinearMajors(double min, double max, int targetCount) {
+     *  and {@code max}.  Step is 1 / 2 / 2.5 / 5 × 10ⁿ. */
+    static double[] niceLinearMajors(double min, double max, int targetCount) {
         double range = Math.max(1e-9, max - min);
         double rough = range / Math.max(1, targetCount);
         double pow   = Math.pow(10, Math.floor(Math.log10(rough)));
@@ -891,9 +986,8 @@ public abstract class AbstractMeasurementView extends Canvas {
     // and readout strings across all measurement views.  drawGrid
     // dispatches to these via the LabelFormat on each AxisSpec, so
     // subclasses configure an axis declaratively (enum) instead of
-    // wiring a lambda per call site.  FftFormat / FreqRespFormat now
-    // hold only domain-specific helpers; none of them duplicate the
-    // methods below.
+    // wiring a lambda per call site.  FreqRespFormat now holds only
+    // domain-specific helpers; none of them duplicate the methods below.
     // =========================================================================
 
     /** Compact frequency label: "1.0 Hz" / "1.50 kHz". */
@@ -901,6 +995,28 @@ public abstract class AbstractMeasurementView extends Canvas {
         if (!Double.isFinite(f) || f <= 0) return "—";
         if (f >= 1000) return String.format("%.2f kHz", f / 1000);
         return String.format("%.2f Hz", f);
+    }
+
+    /** Frequency tick label for a narrow (sub-decade) zoom: plain Hz with just
+     *  enough decimals to resolve {@code step}, so adjacent fine ticks stay
+     *  distinct — a {@code %.2f kHz} label would otherwise collapse 1000 and
+     *  1002 Hz to the same "1.00 kHz". */
+    private static String formatFreqTick(double v, double step) {
+        if (!Double.isFinite(v) || v <= 0) return "—";
+        if (v >= 1000) {
+            double kStep = step / 1000.0;                     // kHz with enough decimals
+            int kd = (kStep > 0 && kStep < 1) ? (int) Math.min(4, Math.ceil(-Math.log10(kStep))) : 2;
+            return String.format("%." + kd + "f kHz", v / 1000.0);
+        }
+        int dec = (step > 0 && step < 1) ? (int) Math.min(4, Math.ceil(-Math.log10(step))) : 0;
+        return String.format("%." + dec + "f Hz", v);
+    }
+
+    /** Smallest gap between consecutive values (0 for fewer than two). */
+    private static double minSpacing(double[] vals) {
+        double m = Double.POSITIVE_INFINITY;
+        for (int i = 1; i < vals.length; i++) m = Math.min(m, Math.abs(vals[i] - vals[i - 1]));
+        return Double.isFinite(m) ? m : 0.0;
     }
 
     /** Fine-grained frequency formatter for crosshair readouts — four
@@ -970,7 +1086,7 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  readouts where the user sees the number and unit together.  dB
      *  units use one decimal; linear voltage units route through
      *  {@link #formatVoltsSi}. */
-    protected String formatMagnitudeWithUnit(double v, FftMagnitudeUnit unit) {
+    protected String formatMagnitudeWithUnit(double v, MagnitudeUnit unit) {
         if (!Double.isFinite(v)) return "—";
         switch (unit) {
             case DBFS:      return String.format(Locale.US, "%.1f dBFS", v);
@@ -997,14 +1113,14 @@ public abstract class AbstractMeasurementView extends Canvas {
         }
     }
 
-    /** Adaptively-thinned label set for LOG axes: as more decades become
-     *  visible we drop more of the sub-decade positions so labels never
-     *  overlap.  Grid lines and minor ticks at all 1..9 × 10ⁿ positions
-     *  are still drawn — only the set of values that get a printed
-     *  label thins.  Port of the {@code labelsOnly} branch of
-     *  {@code FftAxisTicks.logFreqAll}. */
-    private static double[] adaptiveLogLabels(double min, double max) {
-        double safeMin = Math.max(1e-12, min);
+    /** Adaptively-thinned label set for LOG axes spanning at least a decade:
+     *  as more decades become visible we drop more of the sub-decade positions.
+     *  Grid lines and minor ticks at all 1..9 × 10ⁿ positions are still drawn —
+     *  only the set of values that get a printed label thins.  (Sub-decade
+     *  zooms are handled in {@link #drawGrid} with nice-linear ticks; the
+     *  pixel-aware draw loop is the final overlap guard for both.) */
+    static double[] adaptiveLogLabels(double min, double max) {
+        double safeMin = Math.max(1e-15, min);
         double safeMax = Math.max(safeMin + 1e-9, max);
         int loDec = (int) Math.floor(Math.log10(safeMin));
         int hiDec = (int) Math.ceil (Math.log10(safeMax));
@@ -1025,5 +1141,185 @@ public abstract class AbstractMeasurementView extends Canvas {
             }
         }
         return toArray(out);
+    }
+
+    // =========================================================================
+    // Shared line-trace renderer — used by every freq / time-domain view.
+    // =========================================================================
+
+    /** Renders {@code n} samples as one polyline through a {@link ColumnBucketPainter}
+     *  with the given pen — the single rendering path behind every line trace (FFT
+     *  spectrum, FreqResp magnitude / phase / RIAA / compare, scope waveform), which
+     *  differ only in colour, line style and the per-sample X / Y.  In-range samples are
+     *  column-bucketed; samples whose X falls outside the plot become the painter's edge
+     *  anchors so the line reaches the plot edges; off-screen segments are
+     *  Liang-Barsky-clipped (a far-off coordinate never wraps past GDI's ±32k limit).
+     *  Y is carried as a {@code double} so the Pass-2 trace strokes sub-pixel; {@code yAt}
+     *  returns {@code NaN} to drop a sample (a gap). */
+    protected final void paintPolyline(GC gc, Rectangle plot, Color color,
+                                       int lineStyle, int lineWidth,
+                                       int n, IntUnaryOperator xAt, IntToDoubleFunction yAt) {
+        if (n < 2) return;
+        gc.setForeground(color);
+        gc.setLineStyle(lineStyle);
+        gc.setLineWidth(lineWidth);
+        ColumnBucketPainter painter = new ColumnBucketPainter(plot);
+        int right = plot.x + plot.width;
+        for (int i = 0; i < n; i++) {
+            double y = yAt.applyAsDouble(i);
+            if (Double.isNaN(y)) continue;
+            int x = xAt.applyAsInt(i);
+            if (x < plot.x)      painter.setLeftAnchor(x, y);
+            else if (x > right)  painter.setRightAnchor(x, y);
+            else                 painter.add(x, y);
+        }
+        painter.drawTo(gc);
+        if (lineStyle != SWT.LINE_SOLID) gc.setLineStyle(SWT.LINE_SOLID);
+    }
+
+    /** Renders a long sequence of data points as a polyline + envelope bars at no more
+     *  than one drawLine per pixel column.  {@link #add} the points (absolute canvas
+     *  pixels), optionally set {@link #setLeftAnchor} / {@link #setRightAnchor} for the
+     *  off-edge connection, then {@link #drawTo}.  Sharing the bucketing keeps every
+     *  trace's rendering identical. */
+    public static final class ColumnBucketPainter {
+
+        private final Rectangle plot;
+        private final double[] yMins, yMaxs;
+        private final int[] cnts;
+        /** Optional anchor points just outside the plot rect.  When set, the polyline
+         *  extends from {@code leftAnchor*} into the first column and from the last column
+         *  out to {@code rightAnchor*}; the clip in {@link #drawTo} hides the out-of-rect
+         *  portion so the trace reaches the canvas edges with one extra sample's data. */
+        private int    leftAnchorX  = Integer.MIN_VALUE; private double leftAnchorY  = 0;
+        private int    rightAnchorX = Integer.MIN_VALUE; private double rightAnchorY = 0;
+
+        public ColumnBucketPainter(Rectangle plot) {
+            this.plot  = plot;
+            int w      = Math.max(1, plot.width);
+            this.yMins = new double[w];
+            this.yMaxs = new double[w];
+            this.cnts  = new int[w];
+            Arrays.fill(yMins, Double.POSITIVE_INFINITY);
+            Arrays.fill(yMaxs, Double.NEGATIVE_INFINITY);
+        }
+
+        /** Records one data point — absolute canvas pixels, Y kept as a {@code double} so
+         *  the Pass-2 trace can stroke sub-pixel.  Points outside the plot rect are silently
+         *  dropped — the caller needn't pre-filter. */
+        public void add(int xAbs, double yAbs) {
+            int x = xAbs - plot.x;
+            // A sample landing exactly on the right edge (x == plot.width == cnts.length)
+            // maps to the last column — mirroring x == 0 on the left.  Without this the
+            // rightmost in-range sample is dropped and the trace stops one sample short
+            // of the right edge while the left edge is reached fine.
+            if (x == cnts.length) x = cnts.length - 1;
+            if (x < 0 || x >= cnts.length) return;
+            if (yAbs < yMins[x]) yMins[x] = yAbs;
+            if (yAbs > yMaxs[x]) yMaxs[x] = yAbs;
+            cnts[x]++;
+        }
+
+        /** Sets the left edge anchor — a point at {@code xAbs < plot.x} the first column
+         *  connects back to.  Keeps the rightmost candidate (closest to the visible range). */
+        public void setLeftAnchor(int xAbs, double yAbs) {
+            if (xAbs > leftAnchorX) { leftAnchorX = xAbs; leftAnchorY = yAbs; }
+        }
+
+        /** Sets the right edge anchor — a point at {@code xAbs > plot.x + plot.width} the
+         *  last column connects out to.  Keeps the leftmost candidate. */
+        public void setRightAnchor(int xAbs, double yAbs) {
+            if (rightAnchorX == Integer.MIN_VALUE || xAbs < rightAnchorX) {
+                rightAnchorX = xAbs; rightAnchorY = yAbs;
+            }
+        }
+
+        /** Emits vertical envelope bars (dense "1 bin &lt; 1 px" columns, AA off so 1-px
+         *  spikes stay sharp) plus a midpoint polyline through every non-empty column
+         *  (AA on, sub-pixel).  The caller sets foreground / line width / line style first. */
+        public void drawTo(GC gc) {
+            Rectangle prevClip = gc.getClipping();
+            gc.setClipping(plot);
+            int prevAA = gc.getAntialias();
+            int yTop = plot.y, yBot = plot.y + plot.height;
+            try {
+                // Pass 1: vertical envelope bars for the dense "1 bin < 1 px" columns.
+                // AA OFF so 1-px spikes stay sharp; rounded to int because a 1-px-wide bar
+                // gains nothing from sub-pixel Y.  Y is clamped to the plot (a vertical bar
+                // clips exactly by clamping) so an over-range column never pushes GDI past
+                // its ±32k coord limit, which would wrap the bar off-screen.
+                gc.setAntialias(SWT.OFF);
+                for (int x = 0; x < cnts.length; x++) {
+                    if (cnts[x] < 2 || yMins[x] == yMaxs[x]) continue;
+                    int lo = (int) Math.round(Math.max(yTop, Math.min(yBot, yMins[x])));
+                    int hi = (int) Math.round(Math.max(yTop, Math.min(yBot, yMaxs[x])));
+                    if (lo == hi) continue;
+                    int px = plot.x + x;
+                    gc.drawLine(px, lo, px, hi);
+                }
+                // Pass 2: midpoint trace as ONE anti-aliased Path with FLOAT (sub-pixel) Y,
+                // so the curve lands between pixel rows instead of stair-stepping (which also
+                // defeats the AA at the joints).  Each segment is Liang-Barsky-clipped to the
+                // plot and only its in-bounds part is appended, so every coordinate stays
+                // within GDI's ±32k range while the whole curve strokes in a single call with
+                // smooth round joins.  Left / right anchors extend it to the edges.
+                gc.setAntialias(SWT.ON);
+                Path path = new Path(gc.getDevice());
+                try {
+                    int prevX = leftAnchorX;
+                    double prevY = leftAnchorY;
+                    boolean penDown = false;
+                    for (int x = 0; x < cnts.length; x++) {
+                        if (cnts[x] == 0) continue;
+                        double midY = (yMins[x] + yMaxs[x]) / 2.0;
+                        int px = plot.x + x;
+                        if (prevX != Integer.MIN_VALUE) {
+                            penDown = clipSegmentToPath(path, prevX, prevY, px, midY, penDown);
+                        }
+                        prevX = px;
+                        prevY = midY;
+                    }
+                    if (rightAnchorX != Integer.MIN_VALUE && prevX != Integer.MIN_VALUE) {
+                        clipSegmentToPath(path, prevX, prevY, rightAnchorX, rightAnchorY, penDown);
+                    }
+                    gc.drawPath(path);
+                } finally {
+                    path.dispose();
+                }
+            } finally {
+                gc.setAntialias(prevAA);
+                gc.setClipping(prevClip);
+            }
+        }
+
+        /** Liang-Barsky-clips segment {@code (x0,y0)-(x1,y1)} to {@code plot} and appends
+         *  the in-bounds part to {@code path}: continues the current sub-path when this
+         *  segment's clipped start meets the previous segment's clipped end (an unclipped
+         *  interior vertex), otherwise begins a new sub-path with {@code moveTo}.  Every
+         *  coordinate appended is in-bounds, so the Path never hands GDI a value past its
+         *  ±32k limit while the whole curve still strokes in one {@code drawPath} with
+         *  smooth joins.  Returns whether the path now ends at this segment's true endpoint
+         *  (pen still down — the next segment may continue without a new {@code moveTo}). */
+        private boolean clipSegmentToPath(Path path, double x0, double y0, double x1, double y1, boolean penDown) {
+            double dx = x1 - x0, dy = y1 - y0;
+            double u0 = 0.0, u1 = 1.0;
+            double[] p = { -dx, dx, -dy, dy };
+            double[] q = { x0 - plot.x, (plot.x + plot.width) - x0,
+                           y0 - plot.y, (plot.y + plot.height) - y0 };
+            for (int i = 0; i < 4; i++) {
+                if (p[i] == 0) {
+                    if (q[i] < 0) return false;          // parallel to edge i and outside
+                } else {
+                    double r = q[i] / p[i];
+                    if (p[i] < 0) { if (r > u1) return false; if (r > u0) u0 = r; }
+                    else          { if (r < u0) return false; if (r < u1) u1 = r; }
+                }
+            }
+            if (!penDown || u0 > 0.0) {
+                path.moveTo((float) (x0 + u0 * dx), (float) (y0 + u0 * dy));
+            }
+            path.lineTo((float) (x0 + u1 * dx), (float) (y0 + u1 * dy));
+            return u1 >= 1.0;
+        }
     }
 }

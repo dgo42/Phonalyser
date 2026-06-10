@@ -120,11 +120,13 @@ public final class FreqRespAnalyzerWorker {
      *  false} on timeout / cancel.  Sleeps 20 ms between polls so the
      *  CPU isn't pinned during the typical 50-200 ms teardown window. */
     private boolean waitForOtherWorkersStopped(long timeoutMs) {
+        MessageBus bus = MessageBus.instance();
+        SharedCapture capture = SharedCapture.instance();
         long deadline = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < deadline) {
             if (cancelFlag.get()) return false;
-            boolean cap = SharedCapture.instance().isCapturing();
-            Boolean genRaw = MessageBus.instance().request(Events.GENERATOR_RUNNING);
+            boolean cap = capture.isCapturing();
+            Boolean genRaw = bus.request(Events.GENERATOR_RUNNING);
             boolean gen = Boolean.TRUE.equals(genRaw);
             if (!cap && !gen) return true;
             try {
@@ -200,8 +202,9 @@ public final class FreqRespAnalyzerWorker {
             StereoFreqRespResult stereo = new FreqRespAnalyzer(cfg).run(null, cancelFlag::get);
             if (stereo == null) return;
 
-            MessageBus.instance().publish(Events.FREQRESP_RESULT_AVAILABLE, stereo.left());
-            MessageBus.instance().publish(Events.FREQRESP_RESULT_AVAILABLE, stereo.right());
+            MessageBus bus = MessageBus.instance();
+            bus.publish(Events.FREQRESP_RESULT_AVAILABLE, stereo.left());
+            bus.publish(Events.FREQRESP_RESULT_AVAILABLE, stereo.right());
 
             display.asyncExec(() -> {
                 view.setLeftResult(stereo.left());

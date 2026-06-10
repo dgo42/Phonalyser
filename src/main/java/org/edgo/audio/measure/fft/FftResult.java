@@ -50,21 +50,6 @@ public class FftResult {
     // across analysis ticks via the pool; {@link #ensureArrays} grows
     // them when the FFT length changes.
     public double[] amplitudeDbFs;
-    /** Per-bin amplitude in dBV (= dBFs + 20·log10(adcFsVoltageRms)).
-     *  Populated by the analyser worker once the ADC full-scale
-     *  RMS calibration is known.  This is the SOURCE OF TRUTH for
-     *  voltage-based downstream analysis (e.g. {@code ImdAnalyzer})
-     *  — {@code amplitudeDbFs} stays around only as a display
-     *  alternative.  {@code null} when the ADC calibration
-     *  hasn't been set. */
-    public double[] amplitudeDbV;
-    /** {@code 20·log10(adcFsVoltageRms)} — the constant offset
-     *  between dBFs and dBV scales (dBV = dBFs + dbvOffsetDb).
-     *  Cached once per analysis so consumers that need to convert
-     *  between scales for display don't recompute the {@code log}
-     *  per pixel / per row.  {@code 0} when the ADC calibration
-     *  isn't set (i.e. dBFs == dBV in that case). */
-    public double dbvOffsetDb;
     public double[] phaseDeg;
     public double[] re;
     public double[] im;
@@ -153,36 +138,23 @@ public class FftResult {
      */
     public double fundamentalDynExclusionHz;
     /**
-     * Reference dBV for the fundamental.  When set, dBV is shown for every bin
-     * as {@code amplitudeDbFs[k] + (fundRefDbV - fundamentalDbFs)}; {@link Double#NaN}
-     * suppresses the dBV scale.  Sources, in priority order:
-     *   1. ADC full-scale voltage (from the cal CSV header or {@code --adc-fs-vrms}):
-     *      {@code fundRefDbV = fundamentalDbFs + 20·log10(adcFsVoltageRms)} —
-     *      gives every bin its calibrated absolute dBV (e.g. -82 dBFS → -76.93 dBV
-     *      with FS = 1.7931 V_rms).  This is the preferred source.
-     *   2. {@code --fund-v}/{@code --fund-dbv}: legacy, treats the fundamental's
-     *      dBV as fixed at the user-stated value.  Only used when the calibrated
-     *      ADC voltage is unknown.
-     * Mutable so post-processing (e.g. frequency response compensation) can refresh it once
-     * the corrected fundamentalDbFs is known.
-     */
-    public double fundRefDbV;
-    /**
-     * User-supplied true fundamental dBV (from {@code --fund-v} / {@code --fund-dbv}),
-     * preserved verbatim and never overwritten by post-processing.  When set:
+     * User-supplied true fundamental level in dBFS — the manual fundamental
+     * (from {@code --fund-v} / {@code --fund-dbv} or the FFT-tab manual-fund
+     * field), converted from the stated dBV to dBFS once at the input boundary
+     * via the global ADC offset and never overwritten by post-processing.
+     * When set:
      * <ul>
      *   <li>THD / SNR / THD+N / harmonic % use this as the ratio denominator,
      *       so an external twin-T notch on H1 cannot poison the metrics.</li>
-     *   <li>The chart's fundamental peak marker and info-table dBV column
-     *       show this value instead of the (notched-and-cal-converted)
-     *       {@code fundamentalDbFs + dbFsToDbV}.</li>
+     *   <li>The chart's fundamental peak marker and info-table show this
+     *       level (lifted by the global dBV offset for the dBV column)
+     *       instead of the notched, measured {@code fundamentalDbFs}.</li>
      * </ul>
-     * The global dBFS→dBV offset for spectrum/harmonics still comes from
-     * {@code fundRefDbV} (cal-CSV-derived when available), which is the
-     * correct anchor for bins outside the notch.  {@link Double#NaN} when
-     * no user override is supplied.
+     * It affects ONLY the fundamental — every other bin (harmonics, noise
+     * floor, the spectrum trace) keeps the global dBFS→dBV offset.
+     * {@link Double#NaN} when no manual override is supplied.
      */
-    public double fundamentalTrueDbV;
+    public double fundamentalTrueDbFs;
 
     // Frame-rejection diagnostics — rejections discard frames and slow the
     // averaging convergence.  Structured (not a pre-formatted string) so the
@@ -216,52 +188,6 @@ public class FftResult {
      *  slots.  All fields stay at Java defaults until the analyzer calls
      *  {@link #ensureArrays} and fills the result via direct field writes. */
     public FftResult() { }
-
-    FftResult(int fftSize, int sampleRate, int frameCount, double freqResolution,
-           WindowType windowType, FftOverlap overlap,
-           double[] amplitudeDbFs, double[] phaseDeg, double[] re, double[] im,
-           int fundamentalBin, double fundamentalHz, double fundamentalHzRefined,
-           double fundamentalDbFs, double fundamentalLinear,
-           int harmonicCount, int[] harmonicBins, double[] harmonicHz,
-           double[] harmonicDbFs, double[] harmonicPct,
-           double thdPct, double thdDb, double thdNDb, double snrDb,
-           double snrFreqMin, double snrFreqMax, boolean coherentAveraging,
-           double noisePower, double awNoisePower, double fundRefDbV,
-           double avgNoiseFloorDbFs, double fundamentalDynExclusionHz) {
-        this.fftSize           = fftSize;
-        this.sampleRate        = sampleRate;
-        this.frameCount        = frameCount;
-        this.freqResolution    = freqResolution;
-        this.windowType        = windowType;
-        this.overlap           = overlap;
-        this.amplitudeDbFs     = amplitudeDbFs;
-        this.phaseDeg          = phaseDeg;
-        this.re                = re;
-        this.im                = im;
-        this.fundamentalBin        = fundamentalBin;
-        this.fundamentalHz         = fundamentalHz;
-        this.fundamentalHzRefined  = fundamentalHzRefined;
-        this.fundamentalDbFs       = fundamentalDbFs;
-        this.fundamentalLinear = fundamentalLinear;
-        this.harmonicCount     = harmonicCount;
-        this.harmonicBins      = harmonicBins;
-        this.harmonicHz        = harmonicHz;
-        this.harmonicDbFs      = harmonicDbFs;
-        this.harmonicPct       = harmonicPct;
-        this.thdPct            = thdPct;
-        this.thdDb             = thdDb;
-        this.thdNDb            = thdNDb;
-        this.snrDb             = snrDb;
-        this.snrFreqMin        = snrFreqMin;
-        this.snrFreqMax        = snrFreqMax;
-        this.coherentAveraging = coherentAveraging;
-        this.noisePower           = noisePower;
-        this.awNoisePower         = awNoisePower;
-        this.fundRefDbV                = fundRefDbV;
-        this.fundamentalTrueDbV        = fundRefDbV;   // verbatim user input — cal CSV does not overwrite
-        this.avgNoiseFloorDbFs         = avgNoiseFloorDbFs;
-        this.fundamentalDynExclusionHz = fundamentalDynExclusionHz;
-    }
 
     /** Ensures the bin / harmonic arrays are sized for the next
      *  analysis.  Reuses the existing arrays when their length
@@ -303,8 +229,6 @@ public class FftResult {
         c.windowType                 = windowType;
         c.overlap                    = overlap;
         c.amplitudeDbFs              = amplitudeDbFs != null ? amplitudeDbFs.clone() : null;
-        c.amplitudeDbV               = amplitudeDbV  != null ? amplitudeDbV.clone()  : null;
-        c.dbvOffsetDb                = dbvOffsetDb;
         c.phaseDeg                   = phaseDeg      != null ? phaseDeg.clone()      : null;
         c.re                         = re            != null ? re.clone()            : null;
         c.im                         = im            != null ? im.clone()            : null;
@@ -336,8 +260,7 @@ public class FftResult {
         c.awNoisePower               = awNoisePower;
         c.avgNoiseFloorDbFs          = avgNoiseFloorDbFs;
         c.fundamentalDynExclusionHz  = fundamentalDynExclusionHz;
-        c.fundRefDbV                 = fundRefDbV;
-        c.fundamentalTrueDbV         = fundamentalTrueDbV;
+        c.fundamentalTrueDbFs        = fundamentalTrueDbFs;
         c.rejectedFrames             = rejectedFrames;
         c.rejectionTotalFrames       = rejectionTotalFrames;
         c.rejectionPhaseCoherence    = rejectionPhaseCoherence;

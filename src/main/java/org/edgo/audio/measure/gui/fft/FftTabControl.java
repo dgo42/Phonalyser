@@ -28,6 +28,8 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
@@ -50,7 +52,9 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
+import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.AlignGenerator;
+import org.edgo.audio.measure.enums.AmplitudeUnit;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.MainsSuppression;
@@ -73,7 +77,6 @@ import org.edgo.audio.measure.gui.preferences.FftPreset;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.AdcCalibrationDialog;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
-import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -124,6 +127,11 @@ public final class FftTabControl extends Composite {
     private static final int UTILITY_ICON_HEIGHT = 26;
 
     private final FftView view;
+
+    /** Loaded {@code .frc} correction store, injected by {@link FftPane} (IoC)
+     *  and shared with the {@link FftView}.  {@code null} until
+     *  {@link #setCorrectionStore} runs right after construction. */
+    private FreqRespCorrectionStore correctionStore;
 
     // Image references retained so build methods past the constructor can
     // re-use them; all instances come from the shared IconUtils cache so
@@ -237,6 +245,15 @@ public final class FftTabControl extends Composite {
         wireHelpAnchors();
     }
 
+    /** Injects the calibration-correction store (IoC, from {@link FftPane})
+     *  and pushes the initially-loaded active rows into it.  Called once right
+     *  after construction — the store isn't available while the rows are built,
+     *  so the initial sync happens here rather than in the constructor. */
+    public void setCorrectionStore(FreqRespCorrectionStore correctionStore) {
+        this.correctionStore = correctionStore;
+        syncFftStoreFromRows();
+    }
+
     // -------------------------------------------------------------------------
     // Pane delegation
     // -------------------------------------------------------------------------
@@ -318,6 +335,7 @@ public final class FftTabControl extends Composite {
         fftLengthCombo = new Combo(g, SWT.READ_ONLY);
         fftLengthCombo.setItems(FFT_LENGTH_LABELS);
         fftLengthCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        fftLengthCombo.setToolTipText(I18n.t("fft.settings.length.tooltip"));
         // Index-mapped combo: the selection index maps through FFT_LENGTH_VALUES
         // to the actual length, so it can't use the ordinal-based Bindings.combo.
         // The two-way mirror is hand-wired but follows the same contract: seed
@@ -339,6 +357,7 @@ public final class FftTabControl extends Composite {
         windowCombo = new Combo(g, SWT.READ_ONLY);
         for (WindowType w : WindowType.values()) windowCombo.add(I18n.t(w.labelKey()));
         windowCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        windowCombo.setToolTipText(I18n.t("fft.settings.window.tooltip"));
         Bindings.combo(windowCombo, prefs.fftWindowProperty(), WindowType.values());
         Bindings.onChange(toolbarTabs, prefs.fftWindowProperty(), w -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
 
@@ -346,6 +365,7 @@ public final class FftTabControl extends Composite {
         overlapCombo = new Combo(g, SWT.READ_ONLY);
         for (FftOverlap ov : FftOverlap.values()) overlapCombo.add(ov.label);
         overlapCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        overlapCombo.setToolTipText(I18n.t("fft.settings.overlap.tooltip"));
         Bindings.combo(overlapCombo, prefs.fftOverlapProperty(), FftOverlap.values());
         // Overlap only changes the hop, not the spectrum/accumulator — refresh
         // the tab tile but DON'T reset the average; the worker adapts next tick.
@@ -356,11 +376,11 @@ public final class FftTabControl extends Composite {
         // Cycling stepper: wheel / arrow keys snap to the next /
         // previous preset (2, 4, 8, 16, 32, ∞) while manual typing
         // still accepts any positive integer.
-        Stepper avgCycle = FftPaneFormat::stepAveragesCycle;
+        Stepper avgCycle = this::stepAveragesCycle;
         averagesField = new NumericStepField(g,
                 Math.max(1, prefs.getFftAverages()),
-                FftPaneFormat::parseAveragesNumeric,
-                FftPaneFormat::formatAverages,
+                this::parseAveragesNumeric,
+                this::formatAverages,
                 avgCycle,
                 avgCycle,
                 70);
@@ -370,6 +390,7 @@ public final class FftTabControl extends Composite {
         // setText("∞") was being blocked by the digits-only regex and
         // the field silently fell back to the previous finite value.
         averagesField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        averagesField.setToolTipText(I18n.t("fft.settings.averages.tooltip"));
         Bindings.stepField(averagesField, prefs.fftAveragesProperty());
         // Pane-local effects only — the tab tile and the stop-after gate.  No
         // reset here: the worker resets the average only on a ring↔∞ switch or a
@@ -402,12 +423,13 @@ public final class FftTabControl extends Composite {
         Bindings.check(stopAfterNEnable, prefs.fftStopAfterNEnabledProperty());
         stopAfterNField = new NumericStepField(stopRow,
                 prefs.getFftStopAfterN(),
-                txt -> FftPaneFormat.parseIntStrict(txt),
+                txt -> parseIntStrict(txt),
                 v -> Long.toString((long) Math.round(v)),
                 (v, dir) -> Math.max(1, v + dir),
                 (v, dir) -> Math.max(1, v + dir),
                 70);
         stopAfterNField.enableStrictNumericInput(false);
+        stopAfterNField.setToolTipText(I18n.t("fft.settings.stopAfterN.tooltip"));
         Bindings.stepFieldInt(stopAfterNField, prefs.fftStopAfterNProperty());
         // Initial enabled state reflects both "stop-after" toggle AND the rule
         // that the row is only meaningful when averages is "forever" (a finite N
@@ -440,9 +462,10 @@ public final class FftTabControl extends Composite {
         GridData fgGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         fgGd.horizontalSpan = 2;
         fundFromGenCheck.setLayoutData(fgGd);
+        fundFromGenCheck.setToolTipText(I18n.t("fft.settings.fundFromGen.tooltip"));
         Bindings.check(fundFromGenCheck, prefs.fftFundFromGeneratorProperty());
 
-        // "Align generator" — None / PID / FLL — only meaningful when both
+        // "Align generator" — None / FLL — only meaningful when both
         // snap-to-bin (provides a target bin) and fund-from-generator (provides a
         // target frequency) are on, so the combo is disabled otherwise.  Even when
         // a mode is selected the loop only fires if the other two are also on — see
@@ -455,6 +478,7 @@ public final class FftTabControl extends Composite {
             alignGenCombo.add(ag.label);
         }
         alignGenCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        alignGenCombo.setToolTipText(I18n.t("fft.settings.alignGen.tooltip"));
         // Selecting an active mode resets its loop so each session converges
         // fresh; NONE deliberately holds everything — that side-effect lives in
         // the view, which subscribes to this same pref.  Here it's a plain
@@ -467,6 +491,7 @@ public final class FftTabControl extends Composite {
         GridData cohGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         cohGd.horizontalSpan = 2;
         coherentCheck.setLayoutData(cohGd);
+        coherentCheck.setToolTipText(I18n.t("fft.thd.coherent.tooltip"));
         Bindings.check(coherentCheck, prefs.fftCoherentAveragingProperty());
         // Pane-local tab-tile refresh; the accumulator reset (coherent ↔
         // incoherent changes its semantics) lives in the view, which subscribes
@@ -479,6 +504,7 @@ public final class FftTabControl extends Composite {
         GridData lgGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         lgGd.horizontalSpan = 2;
         logFreqCheck.setLayoutData(lgGd);
+        logFreqCheck.setToolTipText(I18n.t("fft.settings.logFreq.tooltip"));
         // Pure repaint side-effect (axis remap) lives in the view, which
         // subscribes to this same pref — a plain two-way value bind here.
         Bindings.check(logFreqCheck, prefs.fftLogFreqAxisProperty());
@@ -512,7 +538,7 @@ public final class FftTabControl extends Composite {
      *  length on user input, and re-selects the index when the length changes
      *  elsewhere (a preset load). */
     private void bindFftLengthCombo(Property<Integer> property) {
-        int seed = FftPaneFormat.indexOfInt(FFT_LENGTH_VALUES, property.get());
+        int seed = indexOfInt(FFT_LENGTH_VALUES, property.get());
         fftLengthCombo.select(seed < 0 ? 3 : seed);
         fftLengthCombo.addListener(SWT.Selection, e -> {
             int i = fftLengthCombo.getSelectionIndex();
@@ -522,7 +548,7 @@ public final class FftTabControl extends Composite {
         });
         Consumer<Integer> onChange = v -> {
             if (fftLengthCombo.isDisposed()) return;
-            int i = FftPaneFormat.indexOfInt(FFT_LENGTH_VALUES, v);
+            int i = indexOfInt(FFT_LENGTH_VALUES, v);
             if (i >= 0 && fftLengthCombo.getSelectionIndex() != i) {
                 fftLengthCombo.select(i);
             }
@@ -550,9 +576,10 @@ public final class FftTabControl extends Composite {
         // row layout matches the other rows.
         distMinEnable = new Button(g, SWT.CHECK);
         distMinEnable.setText(I18n.t("fft.thd.distMin"));
+        distMinEnable.setToolTipText(I18n.t("fft.thd.distMin.tooltip"));
         distMinField = new NumericStepField(g,
                 prefs.getFftDistMinHz(),
-                FftPaneFormat::parseDoubleStrict,
+                this::parseDoubleStrict,
                 v -> String.format("%.1f", v),
                 (v, dir) -> Math.max(0, v + 50 * dir),
                 (v, dir) -> Math.max(0, v + dir),
@@ -561,6 +588,7 @@ public final class FftTabControl extends Composite {
         GridData distMinFieldGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         distMinFieldGd.horizontalSpan = 3;
         distMinField.setLayoutData(distMinFieldGd);
+        distMinField.setToolTipText(I18n.t("fft.thd.distMin.tooltip"));
         distMinField.setEnabled(prefs.isFftDistMinEnabled());
         Bindings.check(distMinEnable, prefs.fftDistMinEnabledProperty());
         Bindings.stepField(distMinField, prefs.fftDistMinHzProperty());
@@ -577,9 +605,10 @@ public final class FftTabControl extends Composite {
         // Row: distortion low-pass.
         distMaxEnable = new Button(g, SWT.CHECK);
         distMaxEnable.setText(I18n.t("fft.thd.distMax"));
+        distMaxEnable.setToolTipText(I18n.t("fft.thd.distMax.tooltip"));
         distMaxField = new NumericStepField(g,
                 prefs.getFftDistMaxHz(),
-                FftPaneFormat::parseDoubleStrict,
+                this::parseDoubleStrict,
                 v -> String.format("%.1f", v),
                 (v, dir) -> Math.max(0, v + 50 * dir),
                 (v, dir) -> Math.max(0, v + dir),
@@ -588,6 +617,7 @@ public final class FftTabControl extends Composite {
         GridData distMaxFieldGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         distMaxFieldGd.horizontalSpan = 3;
         distMaxField.setLayoutData(distMaxFieldGd);
+        distMaxField.setToolTipText(I18n.t("fft.thd.distMax.tooltip"));
         distMaxField.setEnabled(prefs.isFftDistMaxEnabled());
         Bindings.check(distMaxEnable, prefs.fftDistMaxEnabledProperty());
         Bindings.stepField(distMaxField, prefs.fftDistMaxHzProperty());
@@ -605,14 +635,15 @@ public final class FftTabControl extends Composite {
         // separate Label here too.
         manualFundEnable = new Button(g, SWT.CHECK);
         manualFundEnable.setText(I18n.t("fft.thd.manualFund"));
+        manualFundEnable.setToolTipText(I18n.t("fft.thd.manualFund.tooltip"));
         // Single field that accepts the value AND a unit suffix —
         // e.g. "1.5 V", "1500 mV", "-3.5 dBV".  The internal value is
         // stored in the canonical mV scale (small magnitudes won't lose
         // precision); the formatter re-renders in the user's last unit.
         manualFundField = new NumericStepField(g,
                 prefs.getFftManualFundVrms(),
-                FftPaneFormat::parseAmplitudeWithUnit,
-                v -> FftPaneFormat.formatAmplitudeWithUnit(v, Preferences.instance().getFftManualFundUnit().display),
+                this::parseAmplitudeWithUnit,
+                v -> formatAmplitudeWithUnit(v, Preferences.instance().getFftManualFundUnit().display),
                 (v, dir) -> v * (1.0 + 0.05 * dir),
                 (v, dir) -> v * (1.0 + 0.01 * dir),
                 110);
@@ -620,6 +651,7 @@ public final class FftTabControl extends Composite {
         GridData manualFundFieldGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         manualFundFieldGd.horizontalSpan = 3;
         manualFundField.setLayoutData(manualFundFieldGd);
+        manualFundField.setToolTipText(I18n.t("fft.thd.manualFund.tooltip"));
         manualFundField.setEnabled(prefs.isFftManualFundEnabled());
         Bindings.check(manualFundEnable, prefs.fftManualFundEnabledProperty());
         // Toggling also enables/disables the companion field and drives the
@@ -632,13 +664,14 @@ public final class FftTabControl extends Composite {
         addLabel(g, I18n.t("fft.thd.maxThd"));
         thdMaxHarmField = new NumericStepField(g,
                 prefs.getFftThdMaxHarmonic(),
-                FftPaneFormat::parseIntStrict,
+                this::parseIntStrict,
                 v -> Long.toString((long) Math.round(v)),
                 (v, dir) -> Math.min(9, Math.max(2, v + dir)),
                 (v, dir) -> Math.min(9, Math.max(2, v + dir)),
                 60);
         thdMaxHarmField.enableStrictNumericInput(false);
         thdMaxHarmField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        thdMaxHarmField.setToolTipText(I18n.t("fft.thd.maxThd.tooltip"));
         Bindings.stepFieldInt(thdMaxHarmField, prefs.fftThdMaxHarmonicProperty());
         // Drives the 'H{n}' THD tile.  No view redraw/reset.
         Bindings.onChange(toolbarTabs, prefs.fftThdMaxHarmonicProperty(),
@@ -651,13 +684,14 @@ public final class FftTabControl extends Composite {
         // up to HN" (N − 1 harmonics in the 2..N range).
         calcMaxHarmField = new NumericStepField(g,
                 prefs.getFftCalcMaxHarmonic(),
-                FftPaneFormat::parseIntStrict,
+                this::parseIntStrict,
                 v -> Long.toString((long) Math.round(v)),
                 (v, dir) -> Math.min(50, Math.max(9, v + dir)),
                 (v, dir) -> Math.min(50, Math.max(9, v + dir)),
                 60);
         calcMaxHarmField.enableStrictNumericInput(false);
         calcMaxHarmField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        calcMaxHarmField.setToolTipText(I18n.t("fft.thd.maxCalc.tooltip"));
         // The external THD window's row count tracks this value (resize so the
         // harmonic rows aren't clipped) — that side-effect lives in the view,
         // subscribed to this same pref.  The min-9 floor at the old write site
@@ -890,11 +924,11 @@ public final class FftTabControl extends Composite {
         }
         final double measuredVrms = currentVrms;
         new AdcCalibrationDialog(parent, measuredVrms, actualVrms -> {
+            Preferences prefs = Preferences.instance();
             double scale = actualVrms / measuredVrms;
-            double newFs = AudioBackend.getAdcFsVoltageRms() * scale;
-            AudioBackend.setAdcFsVoltageRms(newFs);
-            Preferences.instance().setAdcFsVoltageRms(newFs);
-            Preferences.instance().save();
+            double newFs = prefs.getAdcFsVoltageRms() * scale;
+            prefs.setAdcFsVoltageRms(newFs);
+            prefs.save();
         }).open();
     }
 
@@ -912,7 +946,7 @@ public final class FftTabControl extends Composite {
         Text pathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
         String saved = prefs.getFftSavePath();
         pathField.setText(saved == null ? "" : saved);
-        if (saved != null && !saved.isEmpty()) pathField.setToolTipText(saved);
+        pathField.setToolTipText(saved != null && !saved.isEmpty() ? saved : I18n.t("fft.save.path.tooltip"));
         pathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         // Single floppy-disk button collapses the old browse-then-save
@@ -991,7 +1025,7 @@ public final class FftTabControl extends Composite {
         Text pathField = new Text(g, SWT.BORDER | SWT.READ_ONLY);
         String saved = prefs.getFftLoadPath();
         pathField.setText(saved == null ? "" : saved);
-        if (saved != null && !saved.isEmpty()) pathField.setToolTipText(saved);
+        pathField.setToolTipText(saved != null && !saved.isEmpty() ? saved : I18n.t("fft.load.path.tooltip"));
         pathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         Image folderIcon = IconUtils.instance().renderAtHeight(
@@ -1064,21 +1098,25 @@ public final class FftTabControl extends Composite {
 
         FftAnalyzer analyzer = new FftAnalyzer();
         FftResult r = new FftResult();
-        int harmCount = Math.max(9, Preferences.instance().getFftCalcMaxHarmonic());
+        Preferences prefs = Preferences.instance();
+        int harmCount = Math.max(9, prefs.getFftCalcMaxHarmonic());
         r.ensureArrays(n, harmCount);
-        r.amplitudeDbV     = new double[n];
         r.freqResolution   = freqRes;
         r.fftSize          = 2 * (n - 1);
         r.sampleRate       = (int) Math.round(freqRes * r.fftSize);
         r.harmonicCount    = harmCount;
-        r.fundamentalTrueDbV = Double.NaN;
+        r.fundamentalTrueDbFs = Double.NaN;
         r.snrFreqMin = 0; r.snrFreqMax = 0;
+        // The file stores dBV; dBFS is the result's base scale, so subtract the
+        // global ADC offset once on load (the writer adds it back on save, so a
+        // round-trip is exact).
+        double dbvOffsetDb = prefs.getDbvOffsetDb();
         for (int k = 0; k < n; k++) {
             double dbv = rows.get(k)[1], ph = rows.get(k)[2];
-            r.amplitudeDbFs[k] = dbv;
-            r.amplitudeDbV[k]  = dbv;
+            double dbFs = dbv - dbvOffsetDb;
+            r.amplitudeDbFs[k] = dbFs;
             r.phaseDeg[k]      = ph;
-            double lin = Math.pow(10.0, dbv / 20.0);
+            double lin = Math.pow(10.0, dbFs / 20.0);
             double rad = Math.toRadians(ph);
             r.re[k] = lin * Math.cos(rad);
             r.im[k] = lin * Math.sin(rad);
@@ -1099,9 +1137,6 @@ public final class FftTabControl extends Composite {
             r.harmonicBins[h] = (hb >= 1 && hb <= halfSize) ? hb : -1;
         }
         analyzer.recomputeStats(r);
-        // The file already stores dBV, so anchor the dBV scale with a zero
-        // offset (fundRefDbV − fundamentalDbFs = 0 ⇒ shown dBV == stored).
-        r.fundRefDbV = r.fundamentalDbFs;
 
         // Recompute the IMD products when the file was captured in IMD mode and
         // carries its two tone frequencies: pin the refined tone positions
@@ -1147,7 +1182,7 @@ public final class FftTabControl extends Composite {
                 pw.printf("# tone2_hz=%.6f%n", tone2Hz);
             }
             pw.println("frequency_hz;magnitude_dBV;phase_deg");
-            double dbvOffset = Double.isNaN(r.fundRefDbV) ? 0.0 : (r.fundRefDbV - r.fundamentalDbFs);
+            double dbvOffset = Preferences.instance().getDbvOffsetDb();   // dBV = dBFs + global ADC offset
             for (int k = 0; k < r.amplitudeDbFs.length; k++) {
                 double f   = k * r.freqResolution;
                 double dbv = r.amplitudeDbFs[k] + dbvOffset;
@@ -1175,7 +1210,7 @@ public final class FftTabControl extends Composite {
         List<TileTabFolder.Tile> tiles = new ArrayList<>();
         if (tabIndex == TAB_FFT_SETTINGS) {
             tiles.add(TileTabFolder.Tile.text(
-                    FftPaneFormat.shortFftLength(prefs.getFftLength()),
+                    shortFftLength(prefs.getFftLength()),
                     I18n.t("fft.tile.length", prefs.getFftLength())));
             tiles.add(TileTabFolder.Tile.text(
                     prefs.getFftWindow().name(),
@@ -1184,13 +1219,13 @@ public final class FftTabControl extends Composite {
                     prefs.getFftOverlap().label,
                     I18n.t("fft.tile.overlap", prefs.getFftOverlap().label)));
             tiles.add(TileTabFolder.Tile.text(
-                    FftPaneFormat.formatAverages(prefs.getFftAverages()) + "×",
-                    I18n.t("fft.tile.averages", FftPaneFormat.formatAverages(prefs.getFftAverages()))));
+                    formatAverages(prefs.getFftAverages()) + "×",
+                    I18n.t("fft.tile.averages", formatAverages(prefs.getFftAverages()))));
             tiles.add(TileTabFolder.Tile.text(
                     prefs.isFftCoherentAveraging() ? "coh" : "inc",
                     I18n.t(prefs.isFftCoherentAveraging() ? "fft.tile.coh" : "fft.tile.inc")));
         } else if (tabIndex == TAB_THD_SETTINGS) {
-            String dr = FftPaneFormat.shortDistRange(prefs);
+            String dr = shortDistRange(prefs);
             tiles.add(TileTabFolder.Tile.text(dr, I18n.t("fft.tile.distRange", dr)));
             tiles.add(TileTabFolder.Tile.text(
                     "H" + prefs.getFftThdMaxHarmonic(),
@@ -1202,7 +1237,7 @@ public final class FftTabControl extends Composite {
             // "loaded" / "N loaded" when at least one loaded .frc is active —
             // the store only holds active+loaded entries (see
             // syncFftStoreFromRows), mirroring the FreqResp pane's tile.
-            int n = FftCalibrationStore.instance().getEntries().size();
+            int n = correctionStore == null ? 0 : correctionStore.getEntries().size();
             if (n == 1) {
                 String s = I18n.t("calibration.tile.loaded");
                 tiles.add(TileTabFolder.Tile.text(s, s));
@@ -1224,6 +1259,137 @@ public final class FftTabControl extends Composite {
     }
 
     // =========================================================================
+    // Pure text / number parsers + formatters for the FFT settings fields.
+    // Folded in from the former FftPaneFormat — used only here.
+    // =========================================================================
+
+    /** Averages presets used by the cycling stepper (wheel / arrows). */
+    private static final double[] AVERAGES_PRESETS = { 2, 4, 8, 16, 32, Double.POSITIVE_INFINITY };
+
+    private String shortFftLength(int n) {
+        if (n >= 1 << 20) return (n >> 20) + "M";
+        if (n >= 1 << 10) return (n >> 10) + "k";
+        return Integer.toString(n);
+    }
+
+    private String shortDistRange(Preferences prefs) {
+        if (!prefs.isFftDistMinEnabled() && !prefs.isFftDistMaxEnabled()) return "all";
+        String lo = prefs.isFftDistMinEnabled() ? shortHz(prefs.getFftDistMinHz()) : "0";
+        String hi = prefs.isFftDistMaxEnabled() ? shortHz(prefs.getFftDistMaxHz()) : "∞";
+        return lo + "-" + hi;
+    }
+
+    private String shortHz(double f) {
+        if (f >= 1000) return ((int) Math.round(f / 1000)) + "k";
+        return Long.toString(Math.round(f));
+    }
+
+    private int indexOfInt(int[] arr, int value) {
+        for (int i = 0; i < arr.length; i++) if (arr[i] == value) return i;
+        return -1;
+    }
+
+    /**
+     * Parses an amplitude with an embedded unit suffix.  Accepts trailing
+     * {@code mV}, {@code V} (or no suffix), {@code dBV}, {@code dBFS}.
+     * Side-effect: stores the chosen unit into Preferences so the
+     * formatter re-renders the value in the same unit the user typed.
+     * Canonical return value is volts (linear).
+     */
+    private Double parseAmplitudeWithUnit(String s) {
+        if (s == null) return null;
+        String t = s.trim().replace(',', '.');
+        if (t.isEmpty()) return null;
+        String unit = "V";
+        String numText;
+        Matcher m = Pattern
+                .compile("([+-]?[0-9]*\\.?[0-9]+(?:[eE][+-]?[0-9]+)?)\\s*([a-zA-Z]*)$")
+                .matcher(t);
+        if (!m.matches()) return null;
+        numText = m.group(1);
+        String u = m.group(2);
+        if (!u.isEmpty()) {
+            if      (u.equalsIgnoreCase("mV"))   unit = "mV";
+            else if (u.equalsIgnoreCase("V"))    unit = "V";
+            else if (u.equalsIgnoreCase("dBV"))  unit = "dBV";
+            else if (u.equalsIgnoreCase("dBFS")) unit = "dBFS";
+            else return null;
+        }
+        double raw;
+        try { raw = Double.parseDouble(numText); }
+        catch (NumberFormatException ex) { return null; }
+        double v;
+        switch (unit) {
+            case "mV":   v = raw * 0.001; break;
+            case "V":    v = raw;         break;
+            case "dBV":
+            case "dBFS": v = Math.pow(10, raw / 20.0); break;
+            default:     v = raw;
+        }
+        Preferences.instance().setFftManualFundUnit(AmplitudeUnit.fromString(unit));
+        return v;
+    }
+
+    private String formatAmplitudeWithUnit(double vrms, String unit) {
+        if (unit == null) unit = "V";
+        switch (unit) {
+            case "mV":   return String.format("%.3f mV",  vrms * 1000);
+            case "dBV":  return String.format("%+.3f dBV", 20 * Math.log10(Math.max(1e-30, vrms)));
+            case "dBFS": return String.format("%+.3f dBFS",20 * Math.log10(Math.max(1e-30, vrms)));
+            case "V":
+            default:     return String.format("%.4f V", vrms);
+        }
+    }
+
+    /** Wheel / arrow stepper for the averages field — snaps to the next
+     *  / previous preset rather than ±1.  Manual typing in the field is
+     *  unaffected because parsing goes through {@link #parseAveragesNumeric}. */
+    private double stepAveragesCycle(double current, int dir) {
+        if (dir > 0) {
+            for (double t : AVERAGES_PRESETS) if (t > current + 1e-9) return t;
+            return Double.POSITIVE_INFINITY;
+        }
+        double best = 2;
+        for (double t : AVERAGES_PRESETS) {
+            if (Double.isInfinite(t)) break;
+            if (t < current - 1e-9) best = t; else break;
+        }
+        return best;
+    }
+
+    /** Parses an averages-field value — accepts any positive integer
+     *  AND the special tokens {@code "∞"} / {@code "forever"} → +Infinity. */
+    private Double parseAveragesNumeric(String s) {
+        if (s == null) return null;
+        String t = s.trim();
+        if (t.isEmpty()) return null;
+        if (t.equals("∞") || t.equalsIgnoreCase("forever") || t.equalsIgnoreCase("inf")) {
+            return Double.POSITIVE_INFINITY;
+        }
+        try {
+            long n = Long.parseLong(t);
+            return n >= 1 ? (double) n : null;
+        } catch (NumberFormatException e) { return null; }
+    }
+
+    /** Formats an averages value — {@code +Infinity} → {@code "∞"},
+     *  finite values → plain integer string. */
+    private String formatAverages(double v) {
+        if (Double.isInfinite(v)) return "∞";
+        return Long.toString((long) Math.round(v));
+    }
+
+    private Double parseDoubleStrict(String s) {
+        try { return Double.parseDouble(s.trim().replace(',', '.')); }
+        catch (NumberFormatException e) { return null; }
+    }
+
+    private Double parseIntStrict(String s) {
+        try { return (double) Integer.parseInt(s.trim()); }
+        catch (NumberFormatException e) { return null; }
+    }
+
+    // =========================================================================
     // Load-calibration tab — multi-row .frc loader (mirrors FreqRespPane).
     // =========================================================================
 
@@ -1231,7 +1397,7 @@ public final class FftTabControl extends Composite {
         Composite                composite;
         Text                     pathField;
         /** "Active" toggle — two-way bound to {@code entry.active()}; the
-         *  calibration is only added to {@link FftCalibrationStore} when this
+         *  calibration is only added to {@link FreqRespCorrectionStore} when this
          *  is checked AND a file is loaded. */
         Button                   activeCheck;
         /** "With noise" toggle — two-way bound to {@code entry.withNoise()};
@@ -1275,13 +1441,9 @@ public final class FftTabControl extends Composite {
             if (p != null && !p.isEmpty()) loadFileIntoFftCalRow(r, p, false);
             updateFftCalRowEnable(r);
         }
-        FftCalibrationStore.instance().clearAll();
-        for (FftCalRow r : fftCalRows) {
-            if (r.calibration != null && r.entry.getPath() != null && r.entry.active().get()) {
-                FftCalibrationStore.instance().addEntry(r.calibration, r.entry.getPath(),
-                        r.entry.withNoise().get());
-            }
-        }
+        // The store is populated from these rows in setCorrectionStore(), which
+        // the pane calls right after construction (the store is injected, so
+        // it isn't available here yet).
     }
 
     /** Builds and appends a fresh row.  7-column grid: pathField,
@@ -1313,6 +1475,7 @@ public final class FftTabControl extends Composite {
         pgd.widthHint = 320;
         pathField.setLayoutData(pgd);
         pathField.setText(I18n.t("freqResp.calibration.path.none"));
+        pathField.setToolTipText(I18n.t("fft.calibration.path.tooltip"));
 
         Button activeCheck = new Button(row, SWT.CHECK);
         activeCheck.setText(I18n.t("fft.calibration.active"));
@@ -1401,15 +1564,15 @@ public final class FftTabControl extends Composite {
     }
 
     private void userLoadInFftCalRow(FftCalRow r) {
+        Preferences prefs = Preferences.instance();
         FileDialog fd = new FileDialog(getShell(), SWT.OPEN);
         fd.setText(I18n.t("freqResp.calibration.dialog"));
         fd.setFilterExtensions(new String[]{ "*.frc", "*.csv", "*.*" });
-        String memFolder = Preferences.instance().getFftLoadFolder();
+        String memFolder = prefs.getFftLoadFolder();
         if (memFolder != null) fd.setFilterPath(memFolder);
         String picked = fd.open();
         if (picked == null) return;
         if (!loadFileIntoFftCalRow(r, picked, true)) return;
-        Preferences prefs = Preferences.instance();
         String parent = new File(picked).getParent();
         if (parent != null) prefs.setFftLoadFolder(parent);
         syncFftStoreFromRows();
@@ -1473,14 +1636,13 @@ public final class FftTabControl extends Composite {
     }
 
     private void syncFftStoreFromRows() {
-        FftCalibrationStore store = FftCalibrationStore.instance();
-        store.clearAll();
+        correctionStore.clearAll();
         for (FftCalRow r : fftCalRows) {
             // Only push entries that have a loaded file AND the user
             // has checked "Active" — the per-row With-noise flag rides
             // with the entry into the store.
             if (r.calibration != null && r.entry.getPath() != null && r.entry.active().get()) {
-                store.addEntry(r.calibration, r.entry.getPath(), r.entry.withNoise().get());
+                correctionStore.addEntry(r.calibration, r.entry.getPath(), r.entry.withNoise().get());
             }
         }
         // Reflect the active-loaded count in the Load-calibration tab tile.

@@ -24,7 +24,7 @@ import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.chart.ChartStyle;
 import org.edgo.audio.measure.generator.SignalGenerator;
-import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.wav.WavWriter;
 import org.jfree.chart.ChartFactory;
@@ -98,7 +98,8 @@ public class FreqRespMode {
         if (samplerateArg == null) { log.error("--samplerate required"); System.exit(1); }
         if (amplitudeArg  == null) { log.error("--amplitude required");  System.exit(1); }
         if (adcFsArg != null) {
-            AudioBackend.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
+            // Inject for this run only — Main marked Preferences transient, so not persisted.
+            Preferences.instance().setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         int sampleRate = Integer.parseInt(samplerateArg);

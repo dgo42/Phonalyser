@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.sound;
 
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.common.StereoSample;
@@ -50,6 +52,7 @@ public class JavaSoundRecorder implements AudioCapture {
     private final int sampleRate;
     private final int sampleBytes;
     private final int frameSize;
+    @Getter
     private final AudioFormat format;
 
     private TargetDataLine line;
@@ -58,8 +61,11 @@ public class JavaSoundRecorder implements AudioCapture {
     private Thread captureThread;
     private StereoSample[] sampleBuf = new StereoSample[0];
 
+    @Setter
     private Consumer<StereoSample[]> sampleListener;
+    @Setter
     private PcmBatchListener         pcmBatchListener;
+    @Setter
     private Consumer<byte[]>         rawBytesListener;
 
     public JavaSoundRecorder(JavaSoundDeviceManager.JavaSoundDeviceRef device,
@@ -73,10 +79,6 @@ public class JavaSoundRecorder implements AudioCapture {
                 sampleRate, bitDepth, CHANNELS,
                 frameSize, sampleRate, false);
     }
-
-    @Override public void setSampleListener  (Consumer<StereoSample[]> l) { sampleListener   = l; }
-    @Override public void setPcmBatchListener(PcmBatchListener l)         { pcmBatchListener = l; }
-    @Override public void setRawBytesListener(Consumer<byte[]> l)         { rawBytesListener = l; }
 
     @Override
     public void open() throws LineUnavailableException {
@@ -181,7 +183,6 @@ public class JavaSoundRecorder implements AudioCapture {
         }
     }
 
-    @Override public AudioFormat getFormat()   { return format; }
     @Override public boolean     isRecording() { return recording.get(); }
 
     @Override

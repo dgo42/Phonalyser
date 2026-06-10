@@ -793,9 +793,10 @@ public final class PreferencesDialog {
             // Fire the FreqResp refresh events once so the pane / view re-sync
             // to the committed state (range / scrollbars, smoothing table,
             // notch + colours).
-            MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
-            MessageBus.instance().publish(Events.FREQRESP_COMPARE_PARAMS_CHANGED);
-            MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED);
+            MessageBus bus = MessageBus.instance();
+            bus.publish(Events.FREQRESP_RANGE_CHANGED);
+            bus.publish(Events.FREQRESP_COMPARE_PARAMS_CHANGED);
+            bus.publish(Events.FREQRESP_CALIBRATION_CHANGED);
             dialog.close();
         });
 

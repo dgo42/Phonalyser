@@ -19,6 +19,7 @@
 package org.edgo.audio.measure.generator;
 
 import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -42,16 +43,16 @@ class SignalGeneratorTest {
 
     @BeforeEach
     void rememberFsVoltage() {
-        // FS_VOLTAGE is a mutable static — capture the GUI / CLI value
-        // so the tests below can run with a known baseline and we can
-        // restore it after.
-        savedFsVoltage = SignalGenerator.FS_VOLTAGE;
-        SignalGenerator.FS_VOLTAGE = 2.79351;
+        // The DAC full-scale lives in Preferences — capture the live value so
+        // the tests below run against a known baseline and we can restore it.
+        Preferences prefs = Preferences.instance();
+        savedFsVoltage = prefs.getDacFsVoltageRms();
+        prefs.setDacFsVoltageRms(2.79351);
     }
 
     @AfterEach
     void restoreFsVoltage() {
-        SignalGenerator.FS_VOLTAGE = savedFsVoltage;
+        Preferences.instance().setDacFsVoltageRms(savedFsVoltage);
     }
 
     @Test
@@ -67,7 +68,7 @@ class SignalGeneratorTest {
         SignalGenerator gen = new SignalGenerator(
                 GenSignalForm.SINE, freqHz, sampleRate, vrms);
 
-        double expectedPeak = vrms * Math.sqrt(2.0) / SignalGenerator.FS_VOLTAGE;
+        double expectedPeak = vrms * Math.sqrt(2.0) / Preferences.instance().getDacFsVoltageRms();
         for (int n = 0; n < samples; n++) {
             double actual   = gen.nextSample();
             double expected = expectedPeak
@@ -80,8 +81,8 @@ class SignalGeneratorTest {
     @Test
     void sine_rmsMatchesRequestedAmplitude() {
         // Run for many full periods, compute RMS, expect it to land
-        // within 0.1 % of the requested V RMS (after dividing out
-        // FS_VOLTAGE since nextSample returns normalised samples).
+        // within 0.1 % of the requested V RMS (after dividing out the
+        // DAC full-scale since nextSample returns normalised samples).
         int    sampleRate = 48_000;
         double freqHz     = 1_000.0;
         double vrms       = 0.5;
@@ -96,7 +97,7 @@ class SignalGeneratorTest {
             sumSq += s * s;
         }
         double rmsNormalised = Math.sqrt(sumSq / samples);
-        double rmsVolts      = rmsNormalised * SignalGenerator.FS_VOLTAGE;
+        double rmsVolts      = rmsNormalised * Preferences.instance().getDacFsVoltageRms();
         assertEquals(vrms, rmsVolts, vrms * 1e-3,
                 "measured RMS should match the requested amplitude (1 ‰ tolerance)");
     }
@@ -105,7 +106,7 @@ class SignalGeneratorTest {
     void triangle_rmsMatchesAnalyticPeakOverSqrt3() {
         // Symmetric triangle has theoretical RMS = peak / √3.
         // SignalGenerator scales the raw triangle so requesting 1.0 V RMS
-        // produces samples whose long-run RMS = 1.0 / FS_VOLTAGE.
+        // produces samples whose long-run RMS = 1.0 / dacFsVoltageRms.
         int    sampleRate = 48_000;
         double freqHz     = 1_000.0;
         double vrms       = 1.0;
@@ -120,7 +121,7 @@ class SignalGeneratorTest {
             sumSq += s * s;
         }
         double rmsNormalised = Math.sqrt(sumSq / samples);
-        double rmsVolts      = rmsNormalised * SignalGenerator.FS_VOLTAGE;
+        double rmsVolts      = rmsNormalised * Preferences.instance().getDacFsVoltageRms();
         assertEquals(vrms, rmsVolts, vrms * 5e-3,
                 "triangle RMS should match the requested amplitude (5 ‰ tolerance)");
     }
@@ -145,7 +146,7 @@ class SignalGeneratorTest {
             sumSq += s * s;
         }
         double rmsNormalised = Math.sqrt(sumSq / samples);
-        double rmsVolts      = rmsNormalised * SignalGenerator.FS_VOLTAGE;
+        double rmsVolts      = rmsNormalised * Preferences.instance().getDacFsVoltageRms();
         assertEquals(vrms, rmsVolts, vrms * 1e-3,
                 "square-wave RMS should equal peak");
     }
@@ -166,8 +167,8 @@ class SignalGeneratorTest {
             peak = Math.max(peak, Math.abs(s));
         }
         // Peak should approach (within 1 %) the analytic value
-        // vrms * √2 / FS_VOLTAGE = 1.0 * √2 / 2.79351 ≈ 0.5063.
-        double expectedPeak = Math.sqrt(2.0) / SignalGenerator.FS_VOLTAGE;
+        // vrms * √2 / dacFsVoltageRms = 1.0 * √2 / 2.79351 ≈ 0.5063.
+        double expectedPeak = Math.sqrt(2.0) / Preferences.instance().getDacFsVoltageRms();
         assertEquals(expectedPeak, peak, expectedPeak * 1e-2);
     }
 }

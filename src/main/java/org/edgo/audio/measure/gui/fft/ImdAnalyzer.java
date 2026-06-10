@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.fft;
 import java.util.Arrays;
 
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 
 /**
  * Compiles a {@link ImdResult} from a {@link FftResult} when
@@ -69,17 +70,20 @@ public final class ImdAnalyzer {
      *  fall outside the analysed band). */
     public static ImdResult analyze(FftResult r,
                                     double f1Cmd, double f2Cmd) {
-        if (r == null || r.amplitudeDbV == null) return null;
+        if (r == null || r.amplitudeDbFs == null) return null;
         double binBw = r.freqResolution;
         if (!(binBw > 0)) return null;
-        // ImdAnalyzer is purely voltage-based.  It reads exactly one
-        // input from the FFT result — {@code amplitudeDbV} — and
-        // produces voltage-domain outputs (V_rms tone amplitudes,
-        // V_rms residual, dBV columns, voltage-ratio percents).
-        // {@code amplitudeDbFs} is never consulted: the FFT pipeline
-        // delivers a dBV-calibrated spectrum here, ImdAnalyzer just
-        // measures voltages on top of it.
-        double[] amplitudeDbV = r.amplitudeDbV;
+        // Only the ABSOLUTE outputs are voltage-referenced — the V_rms tone /
+        // product magnitudes and the dBV columns.  The figures of merit
+        // (dnL/dnH %, DFD2/3 %, IMD-power %, TD+N %) are dimensionless ratios:
+        // the dBFS→dBV offset cancels top and bottom, so they come out identical
+        // whatever scale the spectrum is in.  dBFS is the result's only base
+        // scale, so lift it to dBV once with the cached global ADC offset and
+        // read the absolute levels off that; the percentages don't care.
+        double dbvOffsetDb = Preferences.instance().getDbvOffsetDb();
+        int binCount = r.amplitudeDbFs.length;
+        double[] amplitudeDbV = new double[binCount];
+        for (int k = 0; k < binCount; k++) amplitudeDbV[k] = r.amplitudeDbFs[k] + dbvOffsetDb;
 
         // The smaller-index ("lower") fundamental is always F1 even if
         // the user typed them in the other order, so the IMD sideband

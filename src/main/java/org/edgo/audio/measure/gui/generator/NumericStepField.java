@@ -35,6 +35,7 @@ import org.edgo.audio.measure.gui.widgets.IconStepLabel;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
+import lombok.Getter;
 import org.edgo.audio.measure.gui.interfaces.Formatter;
 import org.edgo.audio.measure.gui.interfaces.Parser;
 import org.edgo.audio.measure.gui.interfaces.Stepper;
@@ -71,6 +72,7 @@ public final class NumericStepField extends Composite {
     private final Formatter  formatter;
     private final int        preferredHeight;
     private final List<Listener> selectionListeners = new ArrayList<>();
+    @Getter
     private double           value;
 
     public NumericStepField(Composite parent,
@@ -211,8 +213,6 @@ public final class NumericStepField extends Composite {
     public void addSelectionListener(Listener l) {
         selectionListeners.add(l);
     }
-
-    public double getValue() { return value; }
 
     public void setValue(double v) {
         if (Double.compare(value, v) == 0) return;

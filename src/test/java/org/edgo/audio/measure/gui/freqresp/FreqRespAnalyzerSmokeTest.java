@@ -21,7 +21,7 @@ package org.edgo.audio.measure.gui.freqresp;
 import org.edgo.audio.measure.cli.util.StereoSamples;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.junit.jupiter.api.Test;
 
@@ -191,7 +191,7 @@ class FreqRespAnalyzerSmokeTest {
             // the ADC reads back as that same fraction of full-scale.  The
             // deconvolution then divides this factor back out to recover
             // unity passband, so the test signal must include it.
-            double dacDrivePeak = AMP_VRMS * Math.sqrt(2.0) / SignalGenerator.FS_VOLTAGE;
+            double dacDrivePeak = AMP_VRMS * Math.sqrt(2.0) / Preferences.instance().getDacFsVoltageRms();
             for (int i = 0; i < sweep.length; i++) {
                 if (offset + i < y.length) {
                     y[offset + i] = (float) (sweep[i] * dacDrivePeak);

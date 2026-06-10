@@ -25,7 +25,6 @@ import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.config.LoggerConfig;
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.enums.AudioBackendType;
-import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -56,7 +55,8 @@ public final class GuiMain {
         // Apply the persisted UI language BEFORE the SWT shell is built —
         // every widget reads its labels via I18n.t() at construction time,
         // and ResourceBundle resolves them against the default Locale.
-        String langTag = Preferences.instance().getUiLanguage();
+        Preferences prefs = Preferences.instance();
+        String langTag = prefs.getUiLanguage();
         if (langTag != null && !langTag.isEmpty()) {
             I18n.setLocale(Locale.forLanguageTag(langTag));
         }
@@ -73,20 +73,14 @@ public final class GuiMain {
         // preferences file on Linux/macOS, WASAPI/WDM-KS won't work — fall
         // back to JAVASOUND (the only cross-platform backend) and rewrite
         // the prefs so the next launch starts clean.
-        AudioBackendType saved = Preferences.instance().getBackend();
+        AudioBackendType saved = prefs.getBackend();
         if (!saved.isAvailable()) {
             log.warn("Saved backend {} is not available on this OS; falling back to JAVASOUND", saved);
             saved = AudioBackendType.JAVASOUND;
-            Preferences.instance().setBackend(saved);
-            Preferences.instance().save();
+            prefs.setBackend(saved);
+            prefs.save();
         }
         AudioBackend.instance().setActive(saved);
-        // Apply the persisted ADC calibration (full-scale RMS voltage) so
-        // all voltage readouts reflect the user's last calibration result.
-        AudioBackend.setAdcFsVoltageRms(Preferences.instance().getAdcFsVoltageRms());
-        // Apply the persisted DAC calibration (full-scale RMS voltage) so the
-        // generator pane outputs at the user's last calibrated level.
-        SignalGenerator.FS_VOLTAGE = Preferences.instance().getDacFsVoltageRms();
 
         Display display = new Display();
         boolean recreate;

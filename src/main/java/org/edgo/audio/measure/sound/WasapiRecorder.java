@@ -25,6 +25,8 @@ import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.ptr.LongByReference;
 import com.sun.jna.ptr.PointerByReference;
 
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 import javax.sound.sampled.AudioFormat;
@@ -59,6 +61,7 @@ public class WasapiRecorder implements AudioCapture {
     private final int bitDepth;
     private final int sampleBytes;
     private final int frameSize;
+    @Getter
     private final AudioFormat format;
 
     private Pointer immDevice;
@@ -71,8 +74,11 @@ public class WasapiRecorder implements AudioCapture {
     private Thread captureThread;
     private StereoSample[] sampleBuf = new StereoSample[0];
 
+    @Setter
     private Consumer<StereoSample[]> sampleListener;
+    @Setter
     private PcmBatchListener         pcmBatchListener;
+    @Setter
     private Consumer<byte[]>         rawBytesListener;
 
     public WasapiRecorder(WasapiDeviceManager devices,
@@ -89,10 +95,6 @@ public class WasapiRecorder implements AudioCapture {
                 sampleRate, bitDepth, CHANNELS,
                 frameSize, sampleRate, false);
     }
-
-    @Override public void setSampleListener  (Consumer<StereoSample[]> l) { sampleListener   = l; }
-    @Override public void setPcmBatchListener(PcmBatchListener l)        { pcmBatchListener = l; }
-    @Override public void setRawBytesListener(Consumer<byte[]> l)        { rawBytesListener = l; }
 
     @Override
     public void open() {
@@ -404,7 +406,6 @@ public class WasapiRecorder implements AudioCapture {
         }
     }
 
-    @Override public AudioFormat getFormat()   { return format; }
     @Override public boolean     isRecording() { return recording.get(); }
 
     @Override

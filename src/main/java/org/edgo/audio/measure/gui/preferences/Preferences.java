@@ -38,7 +38,7 @@ import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.AmplitudeUnit;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.enums.FftMagnitudeUnit;
+import org.edgo.audio.measure.enums.MagnitudeUnit;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
@@ -205,10 +205,22 @@ public final class Preferences {
     private final Property<Boolean> oscShowMeasurementTable = bound(true);
     /** ADC full-scale RMS voltage — calibration constant used to translate normalised samples into volts.  Persisted across launches. */
     private final Property<Double> adcFsVoltageRms = bound(1.7931);
+    /** Cached dBV↔dBFS offset (= {@code 20·log10(adcFsVoltageRms)}).  Recomputed whenever the ADC
+     *  full-scale is set / loaded; {@code volatile} so the off-thread FFT consumers see the
+     *  update.  {@code dBV = dBFS + dbvOffsetDb}. */
+    @Getter
+    private volatile double dbvOffsetDb;
+    /** When {@code true}, {@link #save()} is a no-op.  Set by the CLI so a
+     *  {@code --adc-fs-vrms} (or any other) value injected into Preferences for
+     *  one headless run is never written back to the user's YAML.  Default
+     *  {@code false} — the GUI persists normally. */
+    @Getter
+    @Setter
+    private volatile boolean transientMode;
     /** DAC full-scale RMS voltage — the voltage the DAC outputs at digital
      *  full-scale.  Calibrated by the user via the "Calibrate DAC" button in
-     *  the generator pane.  Persisted across launches.  Default 2.79351
-     *  matches the original hard-coded {@code SignalGenerator.FS_VOLTAGE}. */
+     *  the generator pane and read directly by {@code SignalGenerator}.
+     *  Persisted across launches. */
     private final Property<Double> dacFsVoltageRms = bound(2.79351);
 
     /** Path to the most recently chosen scope "Save to…" file (last N seconds of capture). */
@@ -356,8 +368,8 @@ public final class Preferences {
     private final Property<Boolean> fftManualFundEnabled = bound(false);
     /** Active analysis channel (L or R) — only one channel shown at a time. */
     private final Property<Channel> fftChannel = bound(Channel.L);
-    /** {@code FftMagnitudeUnit} enum name: {@code V}, {@code V_SQRT_HZ}, {@code DBV}, {@code DBFS}. */
-    private final Property<FftMagnitudeUnit> fftMagUnit = bound(FftMagnitudeUnit.DBV);
+    /** {@code MagnitudeUnit} enum name: {@code V}, {@code V_SQRT_HZ}, {@code DBV}, {@code DBFS}. */
+    private final Property<MagnitudeUnit> fftMagUnit = bound(MagnitudeUnit.DBV);
     /** Whether the THD overlay table is shown on top of the spectrum view. */
     private final Property<Boolean> fftDistortionTableVisible = bound(true);
     private final Property<Double>  fftFreqMinHz         = bound(20.0);
@@ -692,8 +704,11 @@ public final class Preferences {
     // YAML persistence
     // -------------------------------------------------------------------------
 
-    /** Writes the current preferences to {@link #PREFS_FILE} in the working dir. */
+    /** Writes the current preferences to {@link #PREFS_FILE} in the working dir.
+     *  No-op in {@link #isTransientMode() transient mode} (CLI runs), so values
+     *  injected for one headless run never overwrite the user's saved YAML. */
     public synchronized void save() {
+        if (transientMode) return;
         Map<String, Object> root = toMap();
         DumperOptions opts = new DumperOptions();
         opts.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
@@ -973,9 +988,9 @@ public final class Preferences {
     public void setFftChannel(Channel v)       { fftChannel.set(v); }
     public Property<Channel> fftChannelProperty() { return fftChannel; }
 
-    public FftMagnitudeUnit getFftMagUnit()    { return fftMagUnit.get(); }
-    public void setFftMagUnit(FftMagnitudeUnit v) { fftMagUnit.set(v); }
-    public Property<FftMagnitudeUnit> fftMagUnitProperty() { return fftMagUnit; }
+    public MagnitudeUnit getFftMagUnit()    { return fftMagUnit.get(); }
+    public void setFftMagUnit(MagnitudeUnit v) { fftMagUnit.set(v); }
+    public Property<MagnitudeUnit> fftMagUnitProperty() { return fftMagUnit; }
 
     public boolean isFftDistortionTableVisible() { return fftDistortionTableVisible.get(); }
     public void setFftDistortionTableVisible(boolean v) { fftDistortionTableVisible.set(v); }
@@ -1182,8 +1197,41 @@ public final class Preferences {
     public Property<Boolean> oscShowMeasurementTableProperty() { return oscShowMeasurementTable; }
 
     public double getAdcFsVoltageRms()         { return adcFsVoltageRms.get(); }
-    public void setAdcFsVoltageRms(double v)   { adcFsVoltageRms.set(v); }
+    public void setAdcFsVoltageRms(double v)   { adcFsVoltageRms.set(v); recomputeDbvOffset(v); }
     public Property<Double> adcFsVoltageRmsProperty() { return adcFsVoltageRms; }
+
+    /** Recomputes the cached {@link #dbvOffsetDb} from the ADC full-scale.  Called from
+     *  {@link #setAdcFsVoltageRms} and {@link #load()} — the only places the ADC full-scale
+     *  changes — so the {@code log} runs only on a real change, not per consumer read. */
+    private void recomputeDbvOffset(double fsVrms) {
+        dbvOffsetDb = 20.0 * Math.log10(fsVrms);
+    }
+
+    /**
+     * Converts an analyser dBFS magnitude into {@code unit} for display, deriving the
+     * 0-dBFS→dBV anchor from the configured ADC full-scale and the bin bandwidth from
+     * the configured sample-rate / FFT-size.  These inputs are bidi-bound and any change
+     * restarts the FFT, so they always match the live measurement.
+     */
+    public double convertFromDbFs(double dbFs, MagnitudeUnit unit) {
+        double refDbV = dbvOffsetDb;
+        double binBw  = (double) current().getInputSampleRate() / getFftLength();
+        switch (unit) {
+            case DBFS: return dbFs;
+            case DBV:  return dbFs + refDbV;
+            case V: {
+                double dbv = dbFs + refDbV;
+                return Math.pow(10.0, dbv / 20.0);
+            }
+            case V_SQRT_HZ: {
+                double dbv = dbFs + refDbV;
+                double v   = Math.pow(10.0, dbv / 20.0);
+                double bw  = (binBw > 0) ? binBw : 1.0;
+                return v / Math.sqrt(bw);
+            }
+            default: return dbFs;
+        }
+    }
 
     public double getDacFsVoltageRms()         { return dacFsVoltageRms.get(); }
     public void setDacFsVoltageRms(double v)   { dacFsVoltageRms.set(v); }
@@ -1802,6 +1850,7 @@ public final class Preferences {
         if (root.get("oscShowStats")                 instanceof Boolean b) oscShowStats.set(b);
         if (root.get("oscShowMeasurementTable")      instanceof Boolean b) oscShowMeasurementTable.set(b);
         if (root.get("adcFsVoltageRms")              instanceof Number n) adcFsVoltageRms.set(n.doubleValue());
+        recomputeDbvOffset(adcFsVoltageRms.get());
         if (root.get("dacFsVoltageRms")              instanceof Number n) dacFsVoltageRms.set(n.doubleValue());
         if (root.get("genSignalForm")                instanceof String s) genSignalForm.set(enumOr(GenSignalForm.class, s, genSignalForm.get()));
         if (root.get("genFrequencyHz")               instanceof Number n) genFrequencyHz.set(n.doubleValue());
@@ -1901,7 +1950,7 @@ public final class Preferences {
         if (root.get("fftManualFundUnit")         instanceof String  s) fftManualFundUnit.set(enumOr(AmplitudeUnit.class, s, fftManualFundUnit.get()));
         if (root.get("fftManualFundEnabled")      instanceof Boolean b) fftManualFundEnabled.set(b);
         if (root.get("fftChannel")                instanceof String  s) fftChannel.set(enumOr(Channel.class, s, fftChannel.get()));
-        if (root.get("fftMagUnit")                instanceof String  s) fftMagUnit.set(enumOr(FftMagnitudeUnit.class, s, fftMagUnit.get()));
+        if (root.get("fftMagUnit")                instanceof String  s) fftMagUnit.set(enumOr(MagnitudeUnit.class, s, fftMagUnit.get()));
         if (root.get("fftDistortionTableVisible") instanceof Boolean b) fftDistortionTableVisible.set(b);
         if (root.get("fftFreqMinHz")              instanceof Number  n) fftFreqMinHz.set(n.doubleValue());
         if (root.get("fftFreqMaxHz")              instanceof Number  n) fftFreqMaxHz.set(n.doubleValue());
@@ -2028,7 +2077,7 @@ public final class Preferences {
                 if (!(e.getValue() instanceof Map<?, ?> pm)) continue;
                 FftPreset p = new FftPreset();
                 if (pm.get("channel")           instanceof String  s) p.setChannel(enumOr(Channel.class, s, p.getChannel()));
-                if (pm.get("magUnit")           instanceof String  s) p.setMagUnit(enumOr(FftMagnitudeUnit.class, s, p.getMagUnit()));
+                if (pm.get("magUnit")           instanceof String  s) p.setMagUnit(enumOr(MagnitudeUnit.class, s, p.getMagUnit()));
                 if (pm.get("logFreqAxis")       instanceof Boolean b) p.setLogFreqAxis(b);
                 if (pm.get("freqMinHz")         instanceof Number  n) p.setFreqMinHz(n.doubleValue());
                 if (pm.get("freqMaxHz")         instanceof Number  n) p.setFreqMaxHz(n.doubleValue());

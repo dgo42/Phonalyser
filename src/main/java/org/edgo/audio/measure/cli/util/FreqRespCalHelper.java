@@ -34,7 +34,7 @@ import org.edgo.audio.measure.dsp.ToneLobeLift;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.MathUtil;
-import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.jtransforms.fft.DoubleFFT_1D;
 
 import lombok.experimental.UtilityClass;
@@ -306,7 +306,7 @@ public class FreqRespCalHelper {
         // scale exactly equals the ADC peak full scale.  When they differ,
         // the result picked up an offset (e.g. +0.84 dB for an interface
         // with DAC FS=2.79 V_peak vs ADC FS=2.54 V_peak).
-        double adcFsRms = AudioBackend.getAdcFsVoltageRms();
+        double adcFsRms = Preferences.instance().getAdcFsVoltageRms();
         double adcPeakNormalised = (adcFsRms > 0.0)
                 ? amplitudeVRms / adcFsRms : 0.0;
         if (adcPeakNormalised > 0.0) {
@@ -648,18 +648,18 @@ public class FreqRespCalHelper {
 
         new FftAnalyzer().recomputeStats(r);
 
-        if (!Double.isNaN(cal.adcFsVoltageRms) && cal.adcFsVoltageRms > 0.0) {
-            r.fundRefDbV = r.fundamentalDbFs + 20.0 * Math.log10(cal.adcFsVoltageRms);
-        }
-
+        // dBV for the log only — the fundamental's absolute level using the cal
+        // CSV's own ADC full-scale; dBFS is the result's base scale.
+        String fundDbV = (!Double.isNaN(cal.adcFsVoltageRms) && cal.adcFsVoltageRms > 0.0)
+                ? String.format(Locale.US, "%.2f", r.fundamentalDbFs + 20.0 * Math.log10(cal.adcFsVoltageRms))
+                : "n/a";
         log.info("Filter compensation applied to {} bins (out of {}, range {}-{} Hz); "
                         + "fundamental: {} dBFS / {} dBV, SNR: {} dB, THD: {}%",
                 corrected, half,
                 String.format(Locale.US, "%.3f", fLo),
                 String.format(Locale.US, "%.3f", fHi),
                 String.format(Locale.US, "%.2f", r.fundamentalDbFs),
-                Double.isNaN(r.fundRefDbV) ? "n/a"
-                        : String.format(Locale.US, "%.2f", r.fundRefDbV),
+                fundDbV,
                 String.format(Locale.US, "%.2f", r.snrDb),
                 String.format(Locale.US, "%.6f", r.thdPct));
     }
@@ -710,17 +710,6 @@ public class FreqRespCalHelper {
             n++;
         }
         return n;
-    }
-
-    /**
-     * Sets {@code result.fundRefDbV} from the global ADC full-scale RMS voltage
-     * when no other source has anchored it.  No-op when fundRefDbV is already set.
-     */
-    public void applyDefaultDbvScaling(FftResult result) {
-        if (Double.isNaN(result.fundRefDbV) && AudioBackend.getAdcFsVoltageRms() > 0.0) {
-            result.fundRefDbV = result.fundamentalDbFs
-                    + 20.0 * Math.log10(AudioBackend.getAdcFsVoltageRms());
-        }
     }
 
     /**

@@ -388,6 +388,91 @@
                 </plugins>
             </build>
         </profile>
+
+        <!-- =============================== Docs → PDF ================================== -->
+        <!-- Opt-in Markdown→PDF for the designated docs listed in the exec
+             <arguments> below — NOT a glob of every *.md.  Run with:
+                 mvn -Ppdf process-classes
+             Bound to process-classes (after compile, before package) so it does
+             NOT trigger the assembly / jpackage installer build.  Everything —
+             flexmark, the converter source root, the embedded fonts — is scoped
+             to this profile, so a normal build and the shipped JAR are untouched.
+             To convert another file, add one more <argument> line. -->
+        <profile>
+            <id>pdf</id>
+            <dependencies>
+                <!-- flexmark (MD→HTML) pulls Open HTML to PDF (HTML→PDF)
+                     transitively.  Resolved only under -Ppdf (which builds to
+                     process-classes, never package), so it never reaches a normal
+                     app build or the assembly fat JAR. -->
+                <dependency>
+                    <groupId>com.vladsch.flexmark</groupId>
+                    <artifactId>flexmark-all</artifactId>
+                    <version>0.64.8</version>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <!-- Add the converter's own source root (only under this
+                         profile, so the app build never sees it or needs flexmark). -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.0</version>
+                        <executions>
+                            <execution>
+                                <id>add-pdf-tool-source</id>
+                                <phase>generate-sources</phase>
+                                <goals>
+                                    <goal>add-source</goal>
+                                </goals>
+                                <configuration>
+                                    <sources>
+                                        <source>${project.basedir}/pdf-tool/java</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- Compile ONLY the converter, never src/main/java, so doc PDF
+                         generation is independent of the app's compile state (a
+                         work-in-progress app needn't compile to regenerate a PDF). -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>org/edgo/build/pdf/**</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                    <!-- Run the converter after compile.  Args: fonts dir, output
+                         dir, then one designated Markdown file per <argument>. -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.2.0</version>
+                        <executions>
+                            <execution>
+                                <id>md-to-pdf</id>
+                                <phase>process-classes</phase>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <mainClass>org.edgo.build.pdf.MarkdownToPdf</mainClass>
+                                    <arguments>
+                                        <argument>${project.basedir}/pdf-tool/fonts</argument>
+                                        <argument>${project.build.directory}</argument>
+                                        <argument>${project.basedir}/docs/ALGORITHMS.md</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 
     <build>

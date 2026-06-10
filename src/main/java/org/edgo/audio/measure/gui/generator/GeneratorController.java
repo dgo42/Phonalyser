@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui.generator;
 
+import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.generator.SignalGenerator;
@@ -52,7 +53,9 @@ public final class GeneratorController {
     private volatile SignalGenerator generator;
     private volatile AudioPlayback   playback;
     private final    AtomicBoolean   stopFlag    = new AtomicBoolean(false);
+    @Getter
     private volatile boolean         running;
+    @Getter
     private volatile String          lastStartError;
 
     /**
@@ -326,6 +329,13 @@ public final class GeneratorController {
         if (g != null) g.setAmplitudeVrms(vrms);
     }
 
+    /** Recomputes the running generator's amplitude scale against the current DAC
+     *  full-scale (the cached requested Vrms is unchanged).  No-op if not running.
+     *  Driven by the DAC-calibration binding so a full-scale change takes effect live. */
+    public void refreshAmplitude() {
+        if (generator != null) generator.refreshAmplitude();
+    }
+
     /** Live-applies sweep start frequency (Hz). */
     public void setSweepFreqStart(double hz) {
         SignalGenerator g = generator;
@@ -377,9 +387,6 @@ public final class GeneratorController {
         if (target == GenSignalForm.SINE_COMPENSATED) return false;
         return true;
     }
-
-    public boolean isRunning()         { return running; }
-    public String  getLastStartError() { return lastStartError; }
 
     private DeviceRef findOutputDevice(String name) {
         List<DeviceRef> devices = AudioBackend.instance().listOutputDevices();

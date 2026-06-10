@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.freqresp;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.DoubleUnaryOperator;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;
@@ -35,6 +36,8 @@ import org.eclipse.swt.widgets.Event;
 import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
 import org.edgo.audio.measure.cli.util.FreqRespCalibration;
 import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
+import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.Lanczos;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.bind.Bindings;
@@ -48,6 +51,8 @@ import org.edgo.audio.measure.gui.widgets.BlinkBanner;
 import org.edgo.audio.measure.gui.widgets.ToolButton;
 import org.edgo.audio.measure.gui.widgets.Toolbar;
 
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -119,6 +124,13 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  the displayed trace without losing the original measurement. */
     private FreqRespResult rawLeftResult;
     private FreqRespResult rawRightResult;
+
+    /** Loaded {@code .frc} correction store, injected by {@link FreqRespPane}
+     *  (IoC) right after construction and shared with the calibration tab.
+     *  The wizard reads it through the getter. */
+    @Getter
+    @Setter
+    private FreqRespCorrectionStore correctionStore;
     /** Display copies, with the currently-loaded calibration divided in (if
      *  any).  {@link #onCalibrationChanged()} keeps these in sync with the
      *  store every time the user loads / clears / wizard-applies a new
@@ -249,11 +261,11 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // might have carried in.
         // Normalise on construction: if the persisted state is both true or both false,
         // snap to L-only so the radio invariant holds from the very first paint.
-        Preferences pInit = Preferences.instance();
-        if (pInit.isFreqRespLeftVisible() == pInit.isFreqRespRightVisible()) {
-            pInit.setFreqRespLeftVisible(true);
-            pInit.setFreqRespRightVisible(false);
-            pInit.save();
+        Preferences prefs = Preferences.instance();
+        if (prefs.isFreqRespLeftVisible() == prefs.isFreqRespRightVisible()) {
+            prefs.setFreqRespLeftVisible(true);
+            prefs.setFreqRespRightVisible(false);
+            prefs.save();
         }
         // Header buttons — ToolButton widgets in a Toolbar.  L/R is a radio (channel
         // select); phase keeps its own coloured icon; auto-setup/max are icon pushes.
@@ -261,12 +273,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
         phaseFillGray  = new Color(getDisplay(), 0xE6, 0xE6, 0xE6);          // 90% grey so the icon reads
         headerBar = new Toolbar(this, BTN_W, BTN_H);
         leftBtn  = headerBar.chanButton("L", color(ColorRole.TEXT), color(ColorRole.BUTTON_FRAME),
-                color(ColorRole.LEFT_BTN_CHAN),  chanButtonFont, I18n.t("freqresp.button.left.tooltip"),  pInit.isFreqRespLeftVisible(),  "channel");
+                color(ColorRole.LEFT_BTN_CHAN),  chanButtonFont, I18n.t("freqresp.button.left.tooltip"),  prefs.isFreqRespLeftVisible(),  "channel");
         rightBtn = headerBar.chanButton("R", color(ColorRole.TEXT), color(ColorRole.BUTTON_FRAME),
-                color(ColorRole.RIGHT_BTN_CHAN), chanButtonFont, I18n.t("freqresp.button.right.tooltip"), pInit.isFreqRespRightVisible(), "channel");
+                color(ColorRole.RIGHT_BTN_CHAN), chanButtonFont, I18n.t("freqresp.button.right.tooltip"), prefs.isFreqRespRightVisible(), "channel");
         phaseBtn = headerBar.coloredToggle(SvgPaths.PHASE_SINE, 18,
                 color(ColorRole.BUTTON_FRAME), phaseFillGray,
-                I18n.t("freqresp.button.phase.tooltip"), pInit.isFreqRespPhaseVisible());
+                I18n.t("freqresp.button.phase.tooltip"), prefs.isFreqRespPhaseVisible());
         autoSetupBtn = headerBar.pushButton(SvgPaths.ARROWS_TO_CIRCLE, 16,
                 rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
                 I18n.t("freqresp.button.autosetup.tooltip"));
@@ -308,14 +320,15 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // Re-trace whenever the active calibration changes (load, clear, or
         // wizard Apply).  The view divides the raw result by the new
         // calibration to keep what's painted in sync with the store.
+        MessageBus bus = MessageBus.instance();
         calibrationChangedListener = ignored -> onCalibrationChanged();
-        MessageBus.instance().subscribe(Events.FREQRESP_CALIBRATION_CHANGED,
+        bus.subscribe(Events.FREQRESP_CALIBRATION_CHANGED,
                 calibrationChangedListener);
         // Compare-params changed (e.g. the smoothing-window pref): refresh
         // the anchor + min/max table from the new smoothed array, then
         // redraw.  Does NOT alter the view's zoom — see recomputeCompareAnchor.
         compareParamsChangedListener = ignored -> onCompareParamsChanged();
-        MessageBus.instance().subscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED,
+        bus.subscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED,
                 compareParamsChangedListener);
 
         // RIAA overlay prefs (Show / Reverse / IEC) are bound to their tab
@@ -325,10 +338,9 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // auto-zoom: when Show turns on while Compare is already armed and a
         // measurement exists, the compare trace becomes active for the first
         // time, so fit it once (mirrors the Compare-toggle auto-zoom).
-        Preferences prefsBind = Preferences.instance();
-        Bindings.onChange(this, prefsBind.freqRespShowRiaaProperty(), show -> {
-            if (show && prefsBind.isFreqRespCompareMode() && hasAnyResult()) {
-                autoSetupCompare(prefsBind);
+        Bindings.onChange(this, prefs.freqRespShowRiaaProperty(), show -> {
+            if (show && prefs.isFreqRespCompareMode() && hasAnyResult()) {
+                autoSetupCompare(prefs);
             }
             updateCompareBanner();   // Show gates the compare banner
             redraw();                // RIAA overlay / compare trace changed
@@ -336,17 +348,17 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // Compare mode + Reverse / IEC drive the compare banner's visibility /
         // text AND the RIAA/compare trace; refresh the banner + repaint the
         // canvas when any of them changes.
-        Bindings.onChange(this, prefsBind.freqRespCompareModeProperty(), v -> { updateCompareBanner(); redraw(); });
-        Bindings.onChange(this, prefsBind.freqRespReverseRiaaProperty(), v -> { updateCompareBanner(); redraw(); });
-        Bindings.onChange(this, prefsBind.freqRespIecAmendmentProperty(), v -> { updateCompareBanner(); redraw(); });
+        Bindings.onChange(this, prefs.freqRespCompareModeProperty(), v -> { updateCompareBanner(); redraw(); });
+        Bindings.onChange(this, prefs.freqRespReverseRiaaProperty(), v -> { updateCompareBanner(); redraw(); });
+        Bindings.onChange(this, prefs.freqRespIecAmendmentProperty(), v -> { updateCompareBanner(); redraw(); });
 
         addDisposeListener(e -> {
             if (calibrationChangedListener != null) {
-                MessageBus.instance().unsubscribe(Events.FREQRESP_CALIBRATION_CHANGED,
+                bus.unsubscribe(Events.FREQRESP_CALIBRATION_CHANGED,
                         calibrationChangedListener);
             }
             if (compareParamsChangedListener != null) {
-                MessageBus.instance().unsubscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED,
+                bus.unsubscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED,
                         compareParamsChangedListener);
             }
             disposePalette();
@@ -391,7 +403,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
     /** Replaces the left-channel result and triggers a repaint.  The argument
      *  is the raw measurement; the displayed copy is derived by dividing it
      *  by whichever calibration is currently active in
-     *  {@link FreqRespCalibrationStore} (when {@code applyCalibration} is on). */
+     *  {@link FreqRespCorrectionStore} (when {@code applyCalibration} is on). */
     public void setLeftResult(FreqRespResult result) {
         this.rawLeftResult = result;
         this.leftResult    = applyCurrentCalibration(result);
@@ -461,9 +473,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // at save time — applying it again here would double-correct.
         if (raw.isCalibrationApplied()) return raw;
         Preferences prefs = Preferences.instance();
-        FreqRespCalibrationStore store = FreqRespCalibrationStore.instance();
-        List<FreqRespCalibrationStore.Entry> entries = store.getEntries();
-        StereoFreqRespCalibration direct = store.getDirect();
+        List<FreqRespCorrectionStore.Entry> entries = correctionStore.getEntries();
+        StereoFreqRespCalibration direct = correctionStore.getDirect();
         boolean wantCal   = prefs.isFreqRespApplyCalibration()
                             && (!entries.isEmpty() || direct != null);
         boolean wantNotch = prefs.isFreqRespNotchEnabled();
@@ -478,7 +489,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
             // Chain every loaded calibration in order — linear-mag divide,
             // phase subtract — so the final displayed values reflect the
             // composition of all loaded files.
-            for (FreqRespCalibrationStore.Entry entry : entries) {
+            for (FreqRespCorrectionStore.Entry entry : entries) {
                 divideByStereoCal(entry.getCalibration(), rChan, freqs, outMag, outPhase);
             }
             // Plus the wizard's transient page-1 calibration (when set) so
@@ -627,7 +638,9 @@ public final class FreqRespView extends AbstractFreqDomainView {
         Preferences prefs = Preferences.instance();
         prefs.setFreqRespFreqMinHz(FREQ_MIN_FLOOR_HZ);
         prefs.setFreqRespFreqMaxHz(nyquistHz());
-        prefs.setFreqRespMagTopDb(MAG_TOP_MAX_DB);
+        // Default +20 dB ceiling, but never below the corrected signal — a notch
+        // un-notched well above 0 dB must still fit with headroom, not clip.
+        prefs.setFreqRespMagTopDb(softMagTopDb(MAG_TOP_MAX_DB, FREQ_MIN_FLOOR_HZ, nyquistHz()));
         prefs.setFreqRespMagBotDb(MAG_DEFAULT_BOT_DB);
         prefs.save();
         publishRangeChanged();
@@ -687,7 +700,9 @@ public final class FreqRespView extends AbstractFreqDomainView {
         newBot = Math.max(MAG_BOT_MIN_DB, newBot);
         prefs.setFreqRespFreqMinHz(FREQ_MIN_FLOOR_HZ);
         prefs.setFreqRespFreqMaxHz(fHi);
-        prefs.setFreqRespMagTopDb(newTop);
+        // Bake the +20 dB headroom above the corrected peak into the STORED top — autosetup
+        // is one of the two fit actions allowed to set it; scroll/zoom stay free above it.
+        prefs.setFreqRespMagTopDb(softMagTopDb(newTop, FREQ_MIN_FLOOR_HZ, fHi));
         prefs.setFreqRespMagBotDb(newBot);
         prefs.save();
         publishRangeChanged();
@@ -714,6 +729,38 @@ public final class FreqRespView extends AbstractFreqDomainView {
         }
         if (!Double.isFinite(minDb) || !Double.isFinite(maxDb)) return null;
         return new double[] { minDb, maxDb };
+    }
+
+    /** The drawn magnitude top: {@code topPref}, extended upward to keep ≥ 20 dB of
+     *  headroom above the highest DISPLAYED (correction-applied) trace point in the
+     *  visible band {@code [fLo, fHi]}, so a corrected peak — e.g. a notch un-notched
+     *  tens of dB above 0 dBFS — is never clipped at the ceiling.  No visible trace ⇒
+     *  {@code topPref} unchanged; only the drawn range widens, never the stored pref. */
+    private double softMagTopDb(double topPref, double fLo, double fHi) {
+        Preferences prefs = Preferences.instance();
+        // Compare mode draws the diff curve, not the raw traces — keep the headroom
+        // above the compared-signal peak (compareSmoothedMax), not leftResult/right.
+        if (prefs.isFreqRespCompareMode()) {
+            return Double.isFinite(compareSmoothedMax)
+                    ? Math.max(topPref, compareSmoothedMax + 20.0) : topPref;
+        }
+        double maxDb = Double.NEGATIVE_INFINITY;
+        if (prefs.isFreqRespLeftVisible()  && leftResult  != null) {
+            double[] ext = magExtremaInBand(leftResult,  fLo, fHi);
+            if (ext != null) maxDb = Math.max(maxDb, ext[1]);
+        }
+        if (prefs.isFreqRespRightVisible() && rightResult != null) {
+            double[] ext = magExtremaInBand(rightResult, fLo, fHi);
+            if (ext != null) maxDb = Math.max(maxDb, ext[1]);
+        }
+        return Double.isFinite(maxDb) ? Math.max(topPref, maxDb + 20.0) : topPref;
+    }
+
+    /** Magnitude scrollbar ceiling (dB): the +20 dB default raised, when a signal is
+     *  present, to keep the corrected peak + 20 dB reachable — so the pane's vertical
+     *  scrollbar can represent a correction-lifted signal above the default. */
+    public double magCeilingDb() {
+        return softMagTopDb(MAG_TOP_MAX_DB, FREQ_MIN_FLOOR_HZ, nyquistHz());
     }
 
     // -------------------------------------------------------------------------
@@ -769,7 +816,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
                     : null;
             drawGrid(bgc, plot, xSpec, yLeftSpec, yRightSpec,
                      color(ColorRole.GRID), color(ColorRole.AXIS), color(ColorRole.TEXT), axisFont,
-                     4, 2, null);
+                     MAJOR_TICK_LEN, MINOR_TICK_LEN, null);
             if (prefs.isFreqRespCompareMode() && hasAnyResult() && prefs.isFreqRespShowRiaa()) {
                 drawCompareTrace(bgc, plot, fFreqMin, freqMax, magTop, magBot, prefs);
             } else {
@@ -840,31 +887,20 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private void drawRiaaOverlay(GC gc, Rectangle plot, double freqMin, double freqMax,
                                  double magTop, double magBot, Preferences prefs) {
         double anchorDb = riaaAnchorDb(prefs);
-        gc.setForeground(color(ColorRole.RIAA_TRACE));
-        gc.setLineStyle(SWT.LINE_DASH);
-        gc.setLineWidth(2);
-        int prevX = -1, prevY = -1;
-        // Sample finely — 5 px steps across the plot width — so curvature
-        // stays smooth even on a wide screen.  SWT clipping is set to the
-        // plot rect so off-axis segments are cut cleanly at the edge with
-        // no gap (the user's spec).
-        gc.setClipping(plot);
-        try {
-            for (int x = plot.x; x <= plot.x + plot.width; x += 5) {
-                double frac = (x - plot.x) / (double) plot.width;
-                double f = FreqRespFormat.xFractionToFreq(frac, freqMin, freqMax);
-                double db = anchorDb + RiaaCurve.evalDb(
-                        f,
-                        prefs.isFreqRespReverseRiaa(),
-                        prefs.isFreqRespIecAmendment());
-                int y = dbToY(db, plot, magTop, magBot);
-                if (prevX >= 0) gc.drawLine(prevX, prevY, x, y);
-                prevX = x; prevY = y;
-            }
-        } finally {
-            gc.setClipping((Rectangle) null);
-        }
-        gc.setLineStyle(SWT.LINE_SOLID);
+        boolean reverse = prefs.isFreqRespReverseRiaa();
+        boolean iec     = prefs.isFreqRespIecAmendment();
+        // The RIAA curve is analytic — sample it every `step` px across the plot (X is
+        // always in-range, so no anchors) and feed the shared renderer for the clip and
+        // identical pen handling.
+        int step = 5;
+        int n = plot.width / step + 1;
+        paintPolyline(gc, plot, color(ColorRole.RIAA_TRACE), SWT.LINE_DASH, 2, n,
+                i -> plot.x + i * step,
+                i -> {
+                    double f = FreqRespFormat.xFractionToFreq((double) (i * step) / plot.width,
+                            freqMin, freqMax);
+                    return dbToYf(anchorDb + RiaaCurve.evalDb(f, reverse, iec), plot, magTop, magBot);
+                });
     }
 
     /** Returns the magnitude in dB at 1 kHz of the active trace.  Prefers
@@ -910,27 +946,11 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // inside getCompareDiff), so we draw smoothed[i] DIRECTLY with
         // no further subtraction.  Same array is read by the min/max
         // table and the crosshair Δ readout for guaranteed agreement.
-        CompareDiff diff = getCompareDiff(src, reverse, iec);
-        double[] smoothed = diff.smoothed;
-
-        gc.setForeground(color(ColorRole.COMPARE_TRACE));
-        gc.setLineWidth(2);
-        int prevX = -1, prevY = -1;
-        gc.setClipping(plot);
-        try {
-            for (int i = 0; i < freqs.length; i++) {
-                double f = freqs[i];
-                if (f < freqMin || f > freqMax) continue;
-                double s = smoothed[i];
-                if (Double.isNaN(s)) continue;
-                int x = freqToX(f, plot, freqMin, freqMax, true);
-                int y = dbToY(s, plot, magTop, magBot);
-                if (prevX >= 0) gc.drawLine(prevX, prevY, x, y);
-                prevX = x; prevY = y;
-            }
-        } finally {
-            gc.setClipping((Rectangle) null);
-        }
+        double[] smoothed = getCompareDiff(src, reverse, iec).smoothed;
+        // Lanczos-smoothed where the span is sparse, else linear; NaN smoothed values
+        // (smoothing-window edges) → NaN Y → dropped by the painter.
+        paintDataTrace(gc, plot, freqMin, freqMax, color(ColorRole.COMPARE_TRACE), SWT.LINE_SOLID,
+                freqs, smoothed, v -> dbToYf(v, plot, magTop, magBot));
     }
 
     /** Returns the cached W-point moving-averaged copy of
@@ -1068,15 +1088,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
     public void autoSetupCompare(Preferences prefs) {
         if (!recomputeCompareAnchor(prefs)) return;
 
-        // Vertical window — at least ±1 dB around 0 dB; expand with
-        // a 1 dB padding above / below the actual extrema only when
-        // the signal exceeds that minimum on the respective side.
-        //   • flat trace          → window = [−1, +1]
-        //   • max reaches +2.9 dB → top = +2.9 + 1 = +3.9
-        //   • min stays at −0.5   → bot stays at −1 (within minimum)
-        double newTop = (compareSmoothedMax > 1.0)  ? compareSmoothedMax + 1.0 : 1.0;
+        // Vertical window — keep ≥ 20 dB of headroom above the compared-signal
+        // peak so its marker never clips (the same +20 dB rule the other views and
+        // modes use); below stays a tight 1 dB pad (min −1 dB) around the 0 dB anchor.
+        double newTop = compareSmoothedMax + 20.0;
         double newBot = (compareSmoothedMin < -1.0) ? compareSmoothedMin - 1.0 : -1.0;
-        newTop = Math.min(MAG_TOP_MAX_DB, newTop);
+        newTop = Math.min(MAG_TOP_ZOOM_MAX_DB, newTop);
         newBot = Math.max(MAG_BOT_MIN_DB, newBot);
 
         prefs.setFreqRespFreqMinHz(20.0);
@@ -1242,55 +1259,119 @@ public final class FreqRespView extends AbstractFreqDomainView {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Lanczos trace smoothing — reconstruct one band-limited sample per pixel
+    // (sinx/x) instead of joining the data points with straight segments.  A
+    // hardcoded switch so it can be A/B-compared by flipping + rebuilding.
+    // -------------------------------------------------------------------------
+
+    /** Master on/off for sinc (Lanczos) trace smoothing.  Off = linear segments. */
+    private static final boolean LANCZOS_TRACES = true;
+
+    /** Linear-amplitude floor that keeps a Lanczos overshoot from driving the
+     *  reconstructed magnitude negative (→ {@code log10} of a negative number). */
+    private static final double LANCZOS_MAG_FLOOR_LIN = 1e-15;
+
+    /** Lanczos downsample factor for the visible data span, or 0 to fall back to the
+     *  linear per-point feed (smoothing off, or the span carries more than
+     *  {@link Lanczos#MAX_LANCZOS_DOWNSAMPLE} samples per pixel — too dense to upsample). */
+    private double lanczosScale(double[] freqs, double freqMin, double freqMax, int width) {
+        if (!LANCZOS_TRACES || freqs == null || freqs.length < 2 || width < 2) return 0;
+        int lo = indexBelow(freqs, freqMin);
+        int hi = indexBelow(freqs, freqMax);
+        double samplesPerPx = Math.max(1, hi - lo) / (double) width;
+        return samplesPerPx <= Lanczos.MAX_LANCZOS_DOWNSAMPLE ? Math.max(1.0, samplesPerPx) : 0;
+    }
+
+    /** Largest index {@code i} with {@code freqs[i] <= f} (binary search), clamped to range. */
+    private int indexBelow(double[] freqs, double f) {
+        int lo = 0, hi = freqs.length - 1;
+        if (f <= freqs[0])  return 0;
+        if (f >= freqs[hi]) return hi;
+        while (hi - lo > 1) {
+            int mid = (lo + hi) >>> 1;
+            if (freqs[mid] <= f) lo = mid; else hi = mid;
+        }
+        return lo;
+    }
+
+    /** Fractional data index for frequency {@code f}, interpolated in log-freq so the
+     *  index advances uniformly along the log axis the kernel reconstructs against. */
+    private double fracIndex(double[] freqs, double f) {
+        int lo = indexBelow(freqs, f);
+        if (lo >= freqs.length - 1) return freqs.length - 1;
+        double f0 = freqs[lo], f1 = freqs[lo + 1];
+        if (f1 <= f0 || f <= f0) return lo;
+        return lo + (Math.log(f) - Math.log(f0)) / (Math.log(f1) - Math.log(f0));
+    }
+
+    /** Draws one data-driven trace through {@link #paintPolyline}: a per-pixel Lanczos
+     *  reconstruction of {@code data} (aligned with {@code freqs}) when smoothing is on and
+     *  the span is sparse enough, else the linear per-point feed.  {@code toY} maps a
+     *  reconstructed-or-raw sample value to its sub-pixel Y (or {@code NaN} to drop it). */
+    private void paintDataTrace(GC gc, Rectangle plot, double freqMin, double freqMax,
+                                Color color, int lineStyle, double[] freqs, double[] data,
+                                DoubleUnaryOperator toY) {
+        double scale = lanczosScale(freqs, freqMin, freqMax, plot.width);
+        int n = freqs.length;
+        if (scale > 0) {
+            paintPolyline(gc, plot, color, lineStyle, 2, plot.width,
+                    i -> plot.x + i,
+                    i -> toY.applyAsDouble(Lanczos.lanczos(data, n,
+                            fracIndex(freqs, xToFreq(plot.x + i, plot, freqMin, freqMax, true)), scale)));
+        } else {
+            paintPolyline(gc, plot, color, lineStyle, 2, n,
+                    i -> freqToX(freqs[i], plot, freqMin, freqMax, true),
+                    i -> toY.applyAsDouble(data[i]));
+        }
+    }
+
     private void paintTrace(GC gc, FreqRespResult result, Rectangle plot,
                             double freqMin, double freqMax,
                             double magTop, double magBot, Color color) {
-        gc.setForeground(color);
         double[] freqs  = result.getFreqs();
         double[] magLin = result.getMagLin();
-        if (freqs == null || magLin == null || freqs.length < 2) return;
-
-        // Column-bucketed polyline rendering — see ColumnBucketPainter
-        // in the shared base.  One drawLine per pixel column instead of
-        // one per data point, so a 65 k-point sweep renders in
-        // ~plot.width draws instead of 65 k.
-        //
-        // Points just outside the visible range are routed to the
-        // painter's left / right anchors so a polyline can still be
-        // drawn (clipped to the plot rect) when only 0–1 sweep points
-        // fall inside the visible window — that's the "very strong
-        // zoom" case where the bucket pass alone would produce an
-        // empty polyline and the trace would disappear.
-        ColumnBucketPainter painter = new ColumnBucketPainter(plot);
-        for (int i = 0; i < freqs.length; i++) {
-            double f = freqs[i];
-            int xAbs = freqToX(f, plot, freqMin, freqMax, true);
-            int y    = dbToY(FreqRespFormat.linToDb(magLin[i]), plot, magTop, magBot);
-            if (f < freqMin)        painter.setLeftAnchor(xAbs, y);
-            else if (f > freqMax)   painter.setRightAnchor(xAbs, y);
-            else                    painter.add(xAbs, y);
-        }
-        painter.drawTo(gc);
+        if (freqs == null || magLin == null) return;
+        paintDataTrace(gc, plot, freqMin, freqMax, color, SWT.LINE_SOLID, freqs, magLin,
+                v -> dbToYf(FreqRespFormat.linToDb(Math.max(LANCZOS_MAG_FLOOR_LIN, v)), plot, magTop, magBot));
     }
 
     private void paintPhase(GC gc, FreqRespResult result, Rectangle plot,
                             double freqMin, double freqMax, Color color) {
-        gc.setForeground(color);
-        gc.setLineStyle(SWT.LINE_DOT);
         double[] freqs    = result.getFreqs();
         double[] phaseRad = result.getPhaseRad();
-        if (freqs == null || phaseRad == null || freqs.length < 2) return;
-
-        ColumnBucketPainter painter = new ColumnBucketPainter(plot);
-        for (int i = 0; i < freqs.length; i++) {
-            double f = freqs[i];
-            if (f < freqMin || f > freqMax) continue;
-            painter.add(
-                    freqToX(f, plot, freqMin, freqMax, true),
-                    phaseToY(Math.toDegrees(phaseRad[i]), plot));
+        if (freqs == null || phaseRad == null) return;
+        double scale = lanczosScale(freqs, freqMin, freqMax, plot.width);
+        if (scale <= 0) {
+            paintPolyline(gc, plot, color, SWT.LINE_DOT, 2, freqs.length,
+                    i -> freqToX(freqs[i], plot, freqMin, freqMax, true),
+                    i -> phaseToYf(Math.toDegrees(phaseRad[i]), plot));
+            return;
         }
-        painter.drawTo(gc);
-        gc.setLineStyle(SWT.LINE_SOLID);
+        // Lanczos with a LOCAL phase unwrap so the kernel never rings across a ±180° wrap;
+        // re-wrapped at draw time so the wrap still shows as a clean vertical jump with
+        // smooth curves either side.  Only the visible span (+ kernel padding) is unwrapped
+        // — cheap, no per-result cache.
+        int pad  = (int) Math.ceil(Lanczos.LANCZOS_A * scale) + 1;
+        int from = Math.max(0, indexBelow(freqs, freqMin) - pad);
+        int to   = Math.min(freqs.length - 1, indexBelow(freqs, freqMax) + pad);
+        int len  = to - from + 1;
+        double[] uw = new double[len];
+        uw[0] = phaseRad[from];
+        for (int k = 1; k < len; k++) {
+            uw[k] = uw[k - 1] + wrapToPi(phaseRad[from + k] - phaseRad[from + k - 1]);
+        }
+        paintPolyline(gc, plot, color, SWT.LINE_DOT, 2, plot.width,
+                i -> plot.x + i,
+                i -> phaseToYf(Math.toDegrees(wrapToPi(Lanczos.lanczos(uw, len,
+                        fracIndex(freqs, xToFreq(plot.x + i, plot, freqMin, freqMax, true)) - from, scale))), plot));
+    }
+
+    /** Wraps a radian angle to (−π, π] — used to unwrap the phase before Lanczos and to
+     *  re-wrap the reconstructed value for display. */
+    private double wrapToPi(double r) {
+        double twoPi = 2.0 * Math.PI;
+        return r - twoPi * Math.floor((r + Math.PI) / twoPi);
     }
 
 
@@ -1490,9 +1571,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  at this fraction of Nyquist instead of going right up to Fs/2
      *  (where the deconvolution kernel's energy rolls off). */
     private double nyquistHz() {
+        Preferences prefs = Preferences.instance();
         int sr = lastResultSampleRate > 0 ? lastResultSampleRate
-                : Preferences.instance().current().getInputSampleRate();
-        double frac = Preferences.instance().getFreqRespNyquistFraction();
+                : prefs.current().getInputSampleRate();
+        double frac = prefs.getFreqRespNyquistFraction();
         if (!Double.isFinite(frac) || frac <= 0.0) frac = 1.0;
         return Math.max(1.0, sr * 0.5 * frac);
     }
@@ -1624,8 +1706,9 @@ public final class FreqRespView extends AbstractFreqDomainView {
     // a phase trace).
     // -------------------------------------------------------------------------
 
-    private int phaseToY(double deg, Rectangle plot) {
-        double frac = FreqRespFormat.phaseToYFraction(deg);
-        return plot.y + (int) Math.round(frac * plot.height);
+    /** Maps a phase in degrees to its sub-pixel ({@code double}) Y on the φ axis — the
+     *  dotted phase trace strokes between integer pixel rows. */
+    private double phaseToYf(double deg, Rectangle plot) {
+        return plot.y + FreqRespFormat.phaseToYFraction(deg) * plot.height;
     }
 }

@@ -18,12 +18,13 @@
 
 package org.edgo.audio.measure.gui.scope;
 
+import org.edgo.audio.measure.common.Lanczos;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Tests for {@link ScopeLanczos} — the band-limited reconstruction
+ * Tests for {@link Lanczos} — the band-limited reconstruction
  * kernel used by every scope trace render path.  A regression here
  * shows up as wrong amplitudes, beat-envelope aliasing, or visible
  * shrinkage at slow time/div.
@@ -32,16 +33,16 @@ class ScopeLanczosTest {
 
     @Test
     void sinc_atZero_returns1() {
-        assertEquals(1.0, ScopeLanczos.sinc(0.0), 1e-15);
+        assertEquals(1.0, Lanczos.sinc(0.0), 1e-15);
     }
 
     @Test
     void sinc_atIntegers_returns0() {
         // sin(πn)/(πn) = 0 for n ∈ ℤ⁺.
         for (int n = 1; n <= 8; n++) {
-            assertEquals(0.0, ScopeLanczos.sinc(n), 1e-13,
+            assertEquals(0.0, Lanczos.sinc(n), 1e-13,
                     "sinc(" + n + ") should be 0");
-            assertEquals(0.0, ScopeLanczos.sinc(-n), 1e-13);
+            assertEquals(0.0, Lanczos.sinc(-n), 1e-13);
         }
     }
 
@@ -53,7 +54,7 @@ class ScopeLanczosTest {
         for (double x : xs) {
             double pix = Math.PI * x;
             double analytic = Math.sin(pix) / pix;
-            assertEquals(analytic, ScopeLanczos.sinc(x), 1e-14,
+            assertEquals(analytic, Lanczos.sinc(x), 1e-14,
                     "Taylor branch mismatch at x=" + x);
         }
     }
@@ -67,11 +68,11 @@ class ScopeLanczosTest {
         for (int i = 0; i < n; i++) data[i] = (float) Math.sin(2 * Math.PI * i / 16.0);
 
         // Centre sample.
-        double recon = ScopeLanczos.lanczos(data, n, 64, 1.0);
+        double recon = Lanczos.lanczos(data, n, 64, 1.0);
         assertEquals(data[64], recon, 1e-9);
 
         // Another well-inside index.
-        recon = ScopeLanczos.lanczos(data, n, 80, 1.0);
+        recon = Lanczos.lanczos(data, n, 80, 1.0);
         assertEquals(data[80], recon, 1e-9);
     }
 
@@ -87,7 +88,7 @@ class ScopeLanczosTest {
 
         double[] positions = {32.0, 32.25, 32.5, 32.75, 64.0, 64.999};
         for (double t : positions) {
-            double v = ScopeLanczos.lanczos(data, n, t, 1.0);
+            double v = Lanczos.lanczos(data, n, t, 1.0);
             assertEquals(expected, v, 1e-6, "DC passthrough failed at t=" + t);
         }
     }
@@ -106,7 +107,7 @@ class ScopeLanczosTest {
         }
         // Far enough from the rails for the kernel to have full context.
         double t = 100.5;
-        double recon   = ScopeLanczos.lanczos(data, n, t, 1.0);
+        double recon   = Lanczos.lanczos(data, n, t, 1.0);
         double analytic = Math.sin(2 * Math.PI * f * t);
         assertEquals(analytic, recon, 1e-3,
                 "band-limited sine reconstruction off by " + Math.abs(recon - analytic));
@@ -120,7 +121,7 @@ class ScopeLanczosTest {
         float[] data = new float[n];
         for (int i = 0; i < n; i++) data[i] = 1.5f;
 
-        double recon = ScopeLanczos.lanczos(data, n, 128.0, 3.0);
+        double recon = Lanczos.lanczos(data, n, 128.0, 3.0);
         assertEquals(1.5, recon, 1e-9);
     }
 }

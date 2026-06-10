@@ -35,7 +35,8 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
-import org.edgo.audio.measure.enums.FftMagnitudeUnit;
+import org.edgo.audio.measure.common.Constants;
+import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.MainTab;
 import org.edgo.audio.measure.gui.bus.Events;
@@ -46,6 +47,8 @@ import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
+
+import lombok.Getter;
 
 /**
  * Live FFT analysis pane.  Hosts the {@link FftView} canvas, two flat
@@ -64,8 +67,10 @@ public final class FftPane {
      *  visually aligned. */
     private static final int RECORD_LED_SIZE = 33;
 
+    @Getter
     private final Composite group;
     private PaneTitle title;
+    @Getter
     private FftView         view;
     private FlatScrollbar   freqScrollbar;
     private FlatScrollbar   magScrollbar;
@@ -108,6 +113,7 @@ public final class FftPane {
     private Consumer<Void> freqRespStoppedListener;
 
     /** Collapse state + per-child snapshot.  See {@link #setCollapsed(boolean)}. */
+    @Getter
     private boolean    collapsed;
     private boolean[]  preCollapseChildVisible;
     private boolean[]  preCollapseChildExclude;
@@ -141,7 +147,17 @@ public final class FftPane {
         plotRow.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         plotRow.setLayout(new FormLayout());
 
+        // The pane owns the calibration-correction store and injects the same
+        // instance into the view and tab control (IoC).  A live pane bridges
+        // store changes onto the bus event the worker + tab subscribe to; the
+        // offscreen screenshot clone (liveCapture=false) gets a silent store so
+        // building its calibration tab fires no events — corrections are still
+        // applied because the tab repopulates the store from prefs.
+        FreqRespCorrectionStore correctionStore = new FreqRespCorrectionStore("FFT",
+                liveCapture ? () -> MessageBus.instance().publish(Events.FFT_CALIBRATION_CHANGED)
+                            : null);
         view = new FftView(plotRow);
+        view.setCorrectionStore(correctionStore);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);
         magScrollbar.setMinimum(0);
         magScrollbar.setMaximum(SCROLL_RANGE);
@@ -205,6 +221,7 @@ public final class FftPane {
         // recording on file load, open the screenshot dialog) are routed back
         // here over the MessageBus.
         toolbarTabs = new FftTabControl(toolbarRow, view, liveCapture);
+        toolbarTabs.setCorrectionStore(correctionStore);
         toolbarTabs.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         // Collapsing the tab body (strip double-click / Enter, or the
         // screenshot path) frees vertical space — re-flow the pane so the
@@ -274,7 +291,12 @@ public final class FftPane {
         // Settings tab — a subsequent collapse/expand cycle "fixed"
         // it because the second pass had the right metrics.
         group.getDisplay().asyncExec(() -> {
-            if (!group.isDisposed()) group.layout(true, true);
+            if (group.isDisposed()) return;
+            group.layout(true, true);
+            // Startup: nothing has fired a range-change yet, so align the scrollbar
+            // thumbs to the pan window restored from Preferences — otherwise they keep
+            // their constructor defaults and a saved zoom shows no scrollbar feedback.
+            syncFftPan();
         });
 
         wireHelpAnchors();
@@ -396,9 +418,6 @@ public final class FftPane {
         recordButton.setImage(recordDim);
     }
 
-    public Composite getGroup() { return group; }
-    public FftView   getView()  { return view; }
-
     // -------------------------------------------------------------------------
     // Pane-owned dialogs
     // -------------------------------------------------------------------------
@@ -478,9 +497,6 @@ public final class FftPane {
         view.copySnapshotFrom(source.view);
     }
 
-    /** True when this pane is collapsed to just its title bar. */
-    public boolean isCollapsed() { return collapsed; }
-
     /** Hides / shows every child except the title Label so the pane can
      *  collapse to its title bar (or restore).  Pure pane-internal — the
      *  parent {@code SashForm}'s weights are owned by {@link MainTab}. */
@@ -559,27 +575,14 @@ public final class FftPane {
         if (fMax - fMin < binSize)  fMax = Math.min(nyq, fMin + binSize);
         prefs.setFftFreqMinHz(fMin);
         prefs.setFftFreqMaxHz(fMax);
-        FftMagnitudeUnit unit = prefs.getFftMagUnit();
-        double fs    = prefs.getAdcFsVoltageRms();
-        double maxTp = FftFormat.magMaxFor(unit, fs);
-        double minBt = FftFormat.magMinFor(unit, fs);
+        // Magnitude range is canonical dBFS for every unit — clamp linearly.
+        double maxTp = view.magCeiling();            // dBFS ceiling (≥ 0, raised by a lifted signal)
+        double minBt = Constants.MAG_FLOOR_DBFS;     // dBFS floor
         double mTop = prefs.getFftMagTop();
         double mBot = prefs.getFftMagBottom();
         if (mTop > maxTp) mTop = maxTp;
         if (mBot < minBt) mBot = minBt;
-        // Minimum visible range: 1 unit on a linear (dB) axis; at least
-        // a factor of 1.001 on a log axis (V / V/√Hz) so the log mapping
-        // stays well-defined while still allowing the user to zoom in
-        // very tight.  Without the log branch the "+1" rule pinned
-        // zoom-in at the magMinFor floor.
-        boolean magLog = (unit == FftMagnitudeUnit.V || unit == FftMagnitudeUnit.V_SQRT_HZ);
-        if (magLog) {
-            if (mTop / Math.max(Double.MIN_NORMAL, mBot) < 1.001) {
-                mBot = mTop / 1.001;
-            }
-        } else if (mTop - mBot < 1) {
-            mBot = mTop - 1;
-        }
+        if (mTop - mBot < 1) mBot = mTop - 1;    // keep ≥ 1 dB visible
         prefs.setFftMagTop(mTop);
         prefs.setFftMagBottom(mBot);
     }
@@ -637,11 +640,9 @@ public final class FftPane {
             freqScrollbar.setIncrement(Math.max(1, thumb / 10));
         }
 
-        // ---- Magnitude scrollbar
-        FftMagnitudeUnit unit = prefs.getFftMagUnit();
-        double fs    = prefs.getAdcFsVoltageRms();
-        double maxTp = FftFormat.magMaxFor(unit, fs);
-        double minBt = FftFormat.magMinFor(unit, fs);
+        // ---- Magnitude scrollbar (canonical dBFS range — linear for every unit)
+        double maxTp = view.magCeiling();
+        double minBt = Constants.MAG_FLOOR_DBFS;
         double mTop  = prefs.getFftMagTop();
         double mBot  = prefs.getFftMagBottom();
         double magVis = mTop - mBot;
@@ -696,10 +697,9 @@ public final class FftPane {
 
     private void applyMagScrollbar() {
         Preferences prefs = Preferences.instance();
-        FftMagnitudeUnit unit = prefs.getFftMagUnit();
-        double fs    = prefs.getAdcFsVoltageRms();
-        double maxTp = FftFormat.magMaxFor(unit, fs);
-        double minBt = FftFormat.magMinFor(unit, fs);
+        // Canonical dBFS range — pan linearly, identically for every unit.
+        double maxTp = view.magCeiling();
+        double minBt = Constants.MAG_FLOOR_DBFS;
         double visible = prefs.getFftMagTop() - prefs.getFftMagBottom();
         double total   = maxTp - minBt;
         int sel   = magScrollbar.getSelection();
