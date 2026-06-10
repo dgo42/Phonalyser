@@ -63,6 +63,11 @@ public final class FreqRespAnalyzerConfig {
 
     /** Generator drive amplitude in V RMS at the DAC. */
     private final double amplitudeVrms;
+    /** DAC full-scale RMS voltage the sweep generator's amplitude scale divides by. */
+    private final double dacFsVoltageRms;
+    /** ADC full-scale RMS voltage normalising the deconvolved magnitude to a
+     *  physical transfer function (1.0 = 0 dB at unity loopback). */
+    private final double adcFsVoltageRms;
 
     /** When {@code true} and {@code FreqRespCorrectionStore.getCurrent()}
      *  is non-null, the analyzer divides each measured channel by the

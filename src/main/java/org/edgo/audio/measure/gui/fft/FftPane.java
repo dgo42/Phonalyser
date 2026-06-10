@@ -43,7 +43,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
@@ -156,8 +156,7 @@ public final class FftPane {
         FreqRespCorrectionStore correctionStore = new FreqRespCorrectionStore("FFT",
                 liveCapture ? () -> MessageBus.instance().publish(Events.FFT_CALIBRATION_CHANGED)
                             : null);
-        view = new FftView(plotRow);
-        view.setCorrectionStore(correctionStore);
+        view = new FftView(plotRow, correctionStore);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);
         magScrollbar.setMinimum(0);
         magScrollbar.setMaximum(SCROLL_RANGE);
@@ -220,8 +219,7 @@ public final class FftPane {
         // the chart, scrollbars and Record button.  Cross-pane concerns (stop
         // recording on file load, open the screenshot dialog) are routed back
         // here over the MessageBus.
-        toolbarTabs = new FftTabControl(toolbarRow, view, liveCapture);
-        toolbarTabs.setCorrectionStore(correctionStore);
+        toolbarTabs = new FftTabControl(toolbarRow, view, liveCapture, correctionStore);
         toolbarTabs.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         // Collapsing the tab body (strip double-click / Enter, or the
         // screenshot path) frees vertical space — re-flow the pane so the

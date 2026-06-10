@@ -16,13 +16,13 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.gui.enums;
+package org.edgo.audio.measure.dsp;
 
-/** Placement of the main window's tab strip — a look-and-feel preference.
- *  The constant name is the token stored in preferences ({@link #valueOf}). */
-public enum TabOrientation {
-    TOP,
-    LEFT;
-
-    private TabOrientation() {}
-}
+/**
+ * Stereo pair of frequency-response calibrations — one per ADC channel.
+ * Used by {@code FreqRespCorrectionStore} so cal-L can be divided into
+ * measured-L and cal-R into measured-R independently.  Both fields are
+ * non-null and share the same {@code freqs} array length (the loader and
+ * the analyzer always produce paired curves on a common frequency grid).
+ */
+public record StereoFreqRespCalibration(FreqRespCalibration left, FreqRespCalibration right) {}

@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.cli.util;
+package org.edgo.audio.measure.dsp;
 
 /**
  * In-memory representation of a filter calibration: a sparse set of measured
@@ -37,9 +37,6 @@ public class FreqRespCalibration {
     public final double[] freqs;       // length N, strictly ascending Hz
     public final double[] magLin;      // |H| linear, passband normalised to 1.0
     public final double[] phaseRad;    // phase in radians, unwrapped
-    /** ADC full-scale RMS voltage at the time of measurement, from the CSV header
-     *  ({@code adc_fs_voltage_rms}); {@link Double#NaN} when absent. */
-    public double         adcFsVoltageRms = Double.NaN;
 
     public FreqRespCalibration(double[] freqs, double[] magLin, double[] phaseRad) {
         this.freqs    = freqs;

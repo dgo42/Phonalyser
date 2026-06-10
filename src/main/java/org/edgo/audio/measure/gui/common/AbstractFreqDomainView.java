@@ -160,15 +160,31 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
      *  {@code safeMin = max(1, freqMin)} and {@code safeMax =
      *  max(safeMin + 1, freqMax)} so a degenerate viewport doesn't
      *  NaN out. */
+    /** Multiplicative guard for a degenerate log-axis viewport — see {@link #safeLogMax}. */
+    private static final double LOG_RANGE_MIN_RATIO = 1.0000001;
+
+    /** Substitute log10 value for a non-positive linear-unit range bound
+     *  (≡ 10⁻³⁰, far below any representable signal) so a degenerate top/bottom
+     *  doesn't NaN the magnitude→Y mapping. */
+    private static final double LOG_MAG_FLOOR_DECADES = -30;
+
+    /** Upper bound of the log-axis range with the degenerate-viewport guard
+     *  applied: never below the real {@code freqMax} — an additive "+1 Hz"
+     *  floor would overshoot freqMax on a sub-1-Hz zoom and compress the trace
+     *  away from the right edge (the axis uses freqMax directly).  The tiny
+     *  multiplicative bump only guards a {@code freqMin == freqMax} range so
+     *  {@code log10(hi/lo)} stays {@code > 0}.  Shared by {@link #freqToX},
+     *  {@link #xToFreq} and {@link #xFractionToFreq} so all three use the
+     *  identical mapping. */
+    private double safeLogMax(double safeMin, double freqMax) {
+        return Math.max(freqMax, safeMin * LOG_RANGE_MIN_RATIO);
+    }
+
     protected final int freqToX(double f, Rectangle plot,
                                 double freqMin, double freqMax, boolean logFreq) {
         if (logFreq) {
             double safeMin = Math.max(1, freqMin);
-            // Never below the real freqMax — an additive "+1 Hz" floor would overshoot
-            // freqMax on a sub-1-Hz zoom and compress the trace away from the right edge
-            // (the axis uses freqMax directly).  The tiny multiplicative bump only guards
-            // a degenerate freqMin == freqMax range so log10(hi/lo) stays > 0.
-            double safeMax = Math.max(freqMax, safeMin * 1.0000001);
+            double safeMax = safeLogMax(safeMin, freqMax);
             double lo = Math.log10(safeMin);
             double hi = Math.log10(safeMax);
             double t  = (Math.log10(Math.max(1, f)) - lo) / (hi - lo);
@@ -185,11 +201,7 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
         double t = (double) (x - plot.x) / plot.width;
         if (logFreq) {
             double safeMin = Math.max(1, freqMin);
-            // Never below the real freqMax — an additive "+1 Hz" floor would overshoot
-            // freqMax on a sub-1-Hz zoom and compress the trace away from the right edge
-            // (the axis uses freqMax directly).  The tiny multiplicative bump only guards
-            // a degenerate freqMin == freqMax range so log10(hi/lo) stays > 0.
-            double safeMax = Math.max(freqMax, safeMin * 1.0000001);
+            double safeMax = safeLogMax(safeMin, freqMax);
             double lo = Math.log10(safeMin);
             double hi = Math.log10(safeMax);
             return Math.pow(10, lo + t * (hi - lo));
@@ -206,11 +218,7 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
                                            double freqMin, double freqMax, boolean logFreq) {
         if (logFreq) {
             double safeMin = Math.max(1, freqMin);
-            // Never below the real freqMax — an additive "+1 Hz" floor would overshoot
-            // freqMax on a sub-1-Hz zoom and compress the trace away from the right edge
-            // (the axis uses freqMax directly).  The tiny multiplicative bump only guards
-            // a degenerate freqMin == freqMax range so log10(hi/lo) stays > 0.
-            double safeMax = Math.max(freqMax, safeMin * 1.0000001);
+            double safeMax = safeLogMax(safeMin, freqMax);
             double lo = Math.log10(safeMin);
             double hi = Math.log10(safeMax);
             return Math.pow(10, lo + frac * (hi - lo));
@@ -246,8 +254,8 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
     protected final double magToYFraction(double v, double top, double bot, MagnitudeUnit unit) {
         if (unit.isLog()) {
             double vL   = (v   <= 0) ? Double.NEGATIVE_INFINITY : Math.log10(v);
-            double topL = (top <= 0) ? -30 : Math.log10(top);
-            double botL = (bot <= 0) ? -30 : Math.log10(bot);
+            double topL = (top <= 0) ? LOG_MAG_FLOOR_DECADES : Math.log10(top);
+            double botL = (bot <= 0) ? LOG_MAG_FLOOR_DECADES : Math.log10(bot);
             if (topL <= botL) return 0;
             return (topL - vL) / (topL - botL);
         }

@@ -19,9 +19,6 @@
 package org.edgo.audio.measure.generator;
 
 import org.edgo.audio.measure.enums.GenSignalForm;
-import org.edgo.audio.measure.gui.preferences.Preferences;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -36,24 +33,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>Audit ranked this as the #1 highest-value test: a regression here
  * silently corrupts every WAV file the user exports, every CLI tone,
  * and every iterative-distortion-compensation pass.
+ *
+ * <p>The DAC full-scale is a plain constructor argument since the
+ * Preferences-injection rework, so the tests run against a literal value
+ * with no singleton (and no disk) involved at all.
  */
 class SignalGeneratorTest {
 
-    private double savedFsVoltage;
-
-    @BeforeEach
-    void rememberFsVoltage() {
-        // The DAC full-scale lives in Preferences — capture the live value so
-        // the tests below run against a known baseline and we can restore it.
-        Preferences prefs = Preferences.instance();
-        savedFsVoltage = prefs.getDacFsVoltageRms();
-        prefs.setDacFsVoltageRms(2.79351);
-    }
-
-    @AfterEach
-    void restoreFsVoltage() {
-        Preferences.instance().setDacFsVoltageRms(savedFsVoltage);
-    }
+    /** DAC full-scale RMS voltage used by every test — a literal, not Preferences. */
+    private static final double DAC_FS_VRMS = 2.79351;
 
     @Test
     void sine_matchesAnalyticForm() {
@@ -66,9 +54,9 @@ class SignalGeneratorTest {
         int    samples    = 480;
 
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.SINE, freqHz, sampleRate, vrms);
+                GenSignalForm.SINE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
 
-        double expectedPeak = vrms * Math.sqrt(2.0) / Preferences.instance().getDacFsVoltageRms();
+        double expectedPeak = vrms * Math.sqrt(2.0) / DAC_FS_VRMS;
         for (int n = 0; n < samples; n++) {
             double actual   = gen.nextSample();
             double expected = expectedPeak
@@ -89,7 +77,7 @@ class SignalGeneratorTest {
         int    samples    = sampleRate;  // 1 second → 1000 full periods
 
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.SINE, freqHz, sampleRate, vrms);
+                GenSignalForm.SINE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
 
         double sumSq = 0.0;
         for (int n = 0; n < samples; n++) {
@@ -97,7 +85,7 @@ class SignalGeneratorTest {
             sumSq += s * s;
         }
         double rmsNormalised = Math.sqrt(sumSq / samples);
-        double rmsVolts      = rmsNormalised * Preferences.instance().getDacFsVoltageRms();
+        double rmsVolts      = rmsNormalised * DAC_FS_VRMS;
         assertEquals(vrms, rmsVolts, vrms * 1e-3,
                 "measured RMS should match the requested amplitude (1 ‰ tolerance)");
     }
@@ -113,7 +101,7 @@ class SignalGeneratorTest {
         int    samples    = sampleRate;
 
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.TRIANGLE, freqHz, sampleRate, vrms);
+                GenSignalForm.TRIANGLE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
 
         double sumSq = 0.0;
         for (int n = 0; n < samples; n++) {
@@ -121,7 +109,7 @@ class SignalGeneratorTest {
             sumSq += s * s;
         }
         double rmsNormalised = Math.sqrt(sumSq / samples);
-        double rmsVolts      = rmsNormalised * Preferences.instance().getDacFsVoltageRms();
+        double rmsVolts      = rmsNormalised * DAC_FS_VRMS;
         assertEquals(vrms, rmsVolts, vrms * 5e-3,
                 "triangle RMS should match the requested amplitude (5 ‰ tolerance)");
     }
@@ -138,7 +126,7 @@ class SignalGeneratorTest {
         int    samples    = sampleRate;
 
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.RECTANGLE, freqHz, sampleRate, vrms);
+                GenSignalForm.RECTANGLE, freqHz, sampleRate, vrms, DAC_FS_VRMS);
 
         double sumSq = 0.0;
         for (int n = 0; n < samples; n++) {
@@ -146,7 +134,7 @@ class SignalGeneratorTest {
             sumSq += s * s;
         }
         double rmsNormalised = Math.sqrt(sumSq / samples);
-        double rmsVolts      = rmsNormalised * Preferences.instance().getDacFsVoltageRms();
+        double rmsVolts      = rmsNormalised * DAC_FS_VRMS;
         assertEquals(vrms, rmsVolts, vrms * 1e-3,
                 "square-wave RMS should equal peak");
     }
@@ -158,7 +146,7 @@ class SignalGeneratorTest {
         // reasonable amplitude (< full-scale) every sample should stay
         // within the normalised range with room to spare.
         SignalGenerator gen = new SignalGenerator(
-                GenSignalForm.SINE, 1_000.0, 48_000, 1.0);
+                GenSignalForm.SINE, 1_000.0, 48_000, 1.0, DAC_FS_VRMS);
         double peak = 0.0;
         for (int n = 0; n < 48_000; n++) {
             double s = gen.nextSample();
@@ -168,7 +156,7 @@ class SignalGeneratorTest {
         }
         // Peak should approach (within 1 %) the analytic value
         // vrms * √2 / dacFsVoltageRms = 1.0 * √2 / 2.79351 ≈ 0.5063.
-        double expectedPeak = Math.sqrt(2.0) / Preferences.instance().getDacFsVoltageRms();
+        double expectedPeak = Math.sqrt(2.0) / DAC_FS_VRMS;
         assertEquals(expectedPeak, peak, expectedPeak * 1e-2);
     }
 }

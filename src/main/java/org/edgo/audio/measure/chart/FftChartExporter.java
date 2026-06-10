@@ -36,7 +36,6 @@ import javax.imageio.ImageIO;
 
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
-import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.jfree.chart.ChartFactory;
 import org.jfree.chart.JFreeChart;
 import org.jfree.chart.annotations.XYTextAnnotation;
@@ -57,6 +56,7 @@ import org.jfree.chart.ui.TextAnchor;
 import org.jfree.data.xy.XYSeries;
 import org.jfree.data.xy.XYSeriesCollection;
 
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -73,31 +73,35 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public class FftChartExporter {
 
-    private FftChartExporter() {}
+    /** ADC full-scale RMS voltage anchoring the dBV axis — injected by the caller
+     *  (the CLI modes pass their Preferences value); the exporter never reaches
+     *  into Preferences itself.  > 0 enables the dBV axis, otherwise dBFS. */
+    @Setter
+    private double adcFsVoltageRms;
 
-    public static String exportChart(FftResult r, int width, int height,
+    public String exportChart(FftResult r, int width, int height,
                                      String directory) throws IOException {
         return exportChart(r, width, height, directory, null);
     }
 
-    public static String exportChart(FftResult r, int width, int height,
+    public String exportChart(FftResult r, int width, int height,
                                      String directory, String comment) throws IOException {
         return exportChart(r, width, height, directory, comment, false);
     }
 
-    public static String exportChart(FftResult r, int width, int height,
+    public String exportChart(FftResult r, int width, int height,
                                      String directory, String comment,
                                      boolean harmonicsSubtracted) throws IOException {
         return exportChart(r, width, height, directory, comment, harmonicsSubtracted, null);
     }
 
-    public static String exportChart(FftResult r, int width, int height,
+    public String exportChart(FftResult r, int width, int height,
                                      String directory, String comment,
                                      boolean harmonicsSubtracted, String filePrefix) throws IOException {
         return exportChart(r, width, height, directory, comment, harmonicsSubtracted, filePrefix, null);
     }
 
-    public static String exportChart(FftResult r, int width, int height,
+    public String exportChart(FftResult r, int width, int height,
                                      String directory, String comment,
                                      boolean harmonicsSubtracted, String filePrefix,
                                      Double genFreqHz) throws IOException {
@@ -105,7 +109,7 @@ public class FftChartExporter {
                 filePrefix, genFreqHz, null, null, null, null);
     }
 
-    public static String exportChart(FftResult r, int width, int height,
+    public String exportChart(FftResult r, int width, int height,
                                      String directory, String comment,
                                      boolean harmonicsSubtracted, String filePrefix,
                                      Double genFreqHz,
@@ -122,7 +126,7 @@ public class FftChartExporter {
      * internally onto whichever primary axis is in use (dBV when the ADC
      * full-scale is set, otherwise dBFS).
      */
-    public static String exportChart(FftResult r, int width, int height,
+    public String exportChart(FftResult r, int width, int height,
                                      String directory, String comment,
                                      boolean harmonicsSubtracted, String filePrefix,
                                      Double genFreqHz,
@@ -130,7 +134,7 @@ public class FftChartExporter {
                                      double[] preCorrFreqs, double[] preCorrDbFs) throws IOException {
         String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
 
-        double  fs        = Preferences.instance().getAdcFsVoltageRms();
+        double  fs        = adcFsVoltageRms;
         boolean hasDbv    = fs > 0.0;
         double  dbFsToDbV = hasDbv ? 20.0 * Math.log10(fs) : 0.0;
         String  primaryAxisLabel = hasDbv ? "Amplitude (dBV)" : "Amplitude (dBFS)";
@@ -421,7 +425,7 @@ public class FftChartExporter {
         return outFile.getAbsolutePath();
     }
 
-    private static void drawInfoTable(BufferedImage img,
+    private void drawInfoTable(BufferedImage img,
                                       List<String[]> rows,
                                       int imgWidth, int imgHeight) {
         Graphics2D g = img.createGraphics();
@@ -493,7 +497,7 @@ public class FftChartExporter {
         g.dispose();
     }
 
-    private static void drawCornerInfo(BufferedImage img,
+    private void drawCornerInfo(BufferedImage img,
                                        String comment, boolean harmonicsSubtracted,
                                        int frameCount, int imgWidth, int imgHeight) {
         List<String> lines = new ArrayList<>();

@@ -26,8 +26,8 @@ import org.edgo.audio.measure.cli.util.ArgParser;
 import org.edgo.audio.measure.cli.util.CaptureWithGenerator;
 import org.edgo.audio.measure.cli.util.ClockMismatch;
 import org.edgo.audio.measure.cli.util.DeviceSelector;
-import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
-import org.edgo.audio.measure.cli.util.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.cli.util.SampleRates;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
@@ -36,10 +36,10 @@ import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
 import org.edgo.audio.measure.generator.SignalGenerator;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.DeviceRef;
 
-import lombok.experimental.UtilityClass;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -63,8 +63,11 @@ import lombok.extern.log4j.Log4j2;
  * {@code --in-device}.
  */
 @Log4j2
-@UtilityClass
 public class GenFftMode {
+
+    /** The CLI's single Preferences instance (transient mode) — injected by Main. */
+    @Setter
+    private Preferences prefs;
 
     public void run(String[] args) throws Exception {
         String samplerateArg = ArgParser.getArgValue(args, "--samplerate");
@@ -95,7 +98,7 @@ public class GenFftMode {
         String syncPauseArg  = ArgParser.getArgValue(args, "--sync-pause");
         if (adcFsArg != null) {
             // Inject for this run only — Main marked Preferences transient, so not persisted.
-            Preferences.instance().setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
+            prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         if (samplerateArg == null) { log.error("--samplerate required"); System.exit(1); }
@@ -143,6 +146,8 @@ public class GenFftMode {
         } else {
             fundRefDbV = Double.NaN;
         }
+        // The analyzer speaks dBFS only — convert the user-supplied dBV anchor at the boundary.
+        double fundRefDbFs = fundRefDbV - prefs.getDbvOffsetDb();
 
         double freqRequested = frequency;
         long   alignedBin    = Math.round(frequency * fftSize / (double) sampleRate);
@@ -214,12 +219,12 @@ public class GenFftMode {
                 log.error("--harmonics-csv <file> is required for --signal sine_compensated");
                 System.exit(1);
             }
-            gen = new SignalGenerator(frequency, sampleRate, amplitude, harmonicsCsv);
+            gen = new SignalGenerator(frequency, sampleRate, amplitude, prefs.getDacFsVoltageRms(), harmonicsCsv);
         } else {
             if (harmonicsCsv != null) {
                 log.warn("--harmonics-csv is only used with --signal sine_compensated; ignoring");
             }
-            gen = new SignalGenerator(form, frequency, sampleRate, amplitude);
+            gen = new SignalGenerator(form, frequency, sampleRate, amplitude, prefs.getDacFsVoltageRms());
         }
         float[] samples = CaptureWithGenerator.run(gen, outDevice, inDevice,
                 sampleRate, bitDepth, ditherBits, duration, weights, syncPauseSec);
@@ -227,7 +232,7 @@ public class GenFftMode {
         FftAnalyzer fftAnalyzer = new FftAnalyzer();
         FftResult result = fftAnalyzer.analyze(
                 samples, sampleRate, fftSize, harmonics,
-                windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbV,
+                windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbFs,
                 freqRespCal == null, frequency);
 
         double[] overlayFreqs = null;
@@ -247,7 +252,9 @@ public class GenFftMode {
         }
         fftAnalyzer.exportFftCsv(result, outputDir);
         HarmonicsCsv.export(result, outputDir);
-        FftChartExporter.exportChart(result, chartWidth, chartHeight, outputDir,
+        FftChartExporter exporter = new FftChartExporter();
+        exporter.setAdcFsVoltageRms(prefs.getAdcFsVoltageRms());
+        exporter.exportChart(result, chartWidth, chartHeight, outputDir,
                 commentArg, false, null, frequency,
                 overlayFreqs, overlayDbFs, preCorrFreqs, preCorrDbFs);
         ClockMismatch.log(0, frequency, result.fundamentalHzRefined, sampleRate);

@@ -33,7 +33,6 @@ import java.util.stream.IntStream;
 
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.gui.preferences.Preferences;
 
 import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
@@ -323,17 +322,17 @@ public class FftAnalyzer {
      * @param snrFreqMax         upper bound for SNR noise integration in Hz (0 = no limit)
      * @param coherentAveraging  true = accumulate complex spectra (noise cancels across frames);
      *                           false = accumulate power per bin (no phase coherence required)
-     * @param fundRefDbV    known real level of the fundamental in dBV; {@link Double#NaN} = unknown
+     * @param fundRefDbFs   known real level of the fundamental in dBFS (callers convert dBV inputs at the boundary); {@link Double#NaN} = unknown
      * @return fully populated {@link FftResult}
      */
     public FftResult analyze(float[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
                                  WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
-                                 boolean coherentAveraging, double fundRefDbV) {
+                                 boolean coherentAveraging, double fundRefDbFs) {
         return analyze(samples, sampleRate, fftSize, harmonicCount,
                 windowType, overlap, snrFreqMin, snrFreqMax, coherentAveraging,
-                fundRefDbV, true);
+                fundRefDbFs, true);
     }
 
     /**
@@ -346,11 +345,11 @@ public class FftAnalyzer {
                                  int fftSize, int harmonicCount,
                                  WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
-                                 boolean coherentAveraging, double fundRefDbV,
+                                 boolean coherentAveraging, double fundRefDbFs,
                                  boolean logSummary) {
         return analyze(samples, sampleRate, fftSize, harmonicCount,
                 windowType, overlap, snrFreqMin, snrFreqMax, coherentAveraging,
-                fundRefDbV, logSummary, Double.NaN);
+                fundRefDbFs, logSummary, Double.NaN);
     }
 
     /**
@@ -373,11 +372,11 @@ public class FftAnalyzer {
                                  int fftSize, int harmonicCount,
                                  WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
-                                 boolean coherentAveraging, double fundRefDbV,
+                                 boolean coherentAveraging, double fundRefDbFs,
                                  boolean logSummary, double expectedFundHz) {
         return analyze(samples, sampleRate, fftSize, harmonicCount,
                 windowType, overlap, snrFreqMin, snrFreqMax, coherentAveraging,
-                fundRefDbV, logSummary, expectedFundHz, new FftResult());
+                fundRefDbFs, logSummary, expectedFundHz, new FftResult());
     }
 
     /** A contiguous half-open [lo, hi) bin range to process. */
@@ -413,7 +412,7 @@ public class FftAnalyzer {
                                  int fftSize, int harmonicCount,
                                  WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
-                                 boolean coherentAveraging, double fundRefDbV,
+                                 boolean coherentAveraging, double fundRefDbFs,
                                  boolean logSummary, double expectedFundHz,
                                  FftResult outResult) {
         if (Integer.bitCount(fftSize) != 1) {
@@ -1170,42 +1169,40 @@ public class FftAnalyzer {
         double fundLinear     = amplLinear[fundBin];
 
         // refLin is the fundamental amplitude used as the *denominator* for
-        // every ratio: THD, SNR, THD+N, harmonic %.  When fundRefDbV is set
+        // every ratio: THD, SNR, THD+N, harmonic %.  When fundRefDbFs is set
         // (e.g. an external twin-T notch suppresses only H1 by a drift-prone
         // amount, so amplLinear[fundBin] is unreliable while H2..Hn stay
         // valid as measured), use the user's true fundamental as the anchor.
         // The measured fundDbFs / fundLinear are still stored verbatim into
         // Result — downstream code (frequency response calibration scale, chart, cal-CSV anchor)
         // depends on those reflecting the actual FFT measurement.
-        // Convert dBV → dBFS-equivalent via the ADC full-scale voltage so
-        // refLin lives in the same FS-relative units as amplLinear[k];
-        // otherwise harmonic % / THD / SNR scale by an unwanted factor of
-        // adcFsVoltageRms (≈ 1.79 for a 1.7931 V_rms FS).
-        // The manual fundamental arrives in dBV; convert it to dBFS once here via
-        // the cached global ADC offset and store that (fundamentalTrueDbFs) — dBFS
-        // is the result's only base scale, dBV is re-derived for display.
+        // The reference arrives already in dBFS — the analyzer speaks one scale
+        // only; the GUI / CLI callers convert their dBV inputs at the boundary
+        // (unit translation is a presentation concern, not a measurement one).
+        // refLin then lives in the same FS-relative units as amplLinear[k], so
+        // harmonic % / THD / SNR don't pick up a spurious adcFsVoltageRms factor.
         double fundTrueDbFs = Double.NaN;
         double refLin;
-        if (Double.isNaN(fundRefDbV)) {
+        if (Double.isNaN(fundRefDbFs)) {
             refLin = fundLinear;
         } else {
-            fundTrueDbFs = fundRefDbV - Preferences.instance().getDbvOffsetDb();
+            fundTrueDbFs = fundRefDbFs;
             refLin = Math.pow(10.0, fundTrueDbFs / 20.0);
         }
 
-        if (Double.isNaN(fundRefDbV)) {
+        if (Double.isNaN(fundRefDbFs)) {
             log.info("Fundamental: bin={}, freq={} Hz, refined={} Hz, level={} dBFS",
                     fundBin,
                     String.format(Locale.US, "%.3f", fundHz),
                     String.format(Locale.US, "%.6f", fundHzRefined),
                     String.format(Locale.US, "%.3f", fundDbFs));
         } else {
-            log.info("Fundamental: bin={}, freq={} Hz, refined={} Hz, measured={} dBFS, ref={} dBV",
+            log.info("Fundamental: bin={}, freq={} Hz, refined={} Hz, measured={} dBFS, ref={} dBFS",
                     fundBin,
                     String.format(Locale.US, "%.3f", fundHz),
                     String.format(Locale.US, "%.6f", fundHzRefined),
                     String.format(Locale.US, "%.3f", fundDbFs),
-                    String.format(Locale.US, "%.3f", fundRefDbV));
+                    String.format(Locale.US, "%.3f", fundRefDbFs));
         }
 
         // --- Harmonics -------------------------------------------------------

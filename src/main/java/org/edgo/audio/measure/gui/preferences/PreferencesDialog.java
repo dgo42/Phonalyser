@@ -38,12 +38,14 @@ import org.eclipse.swt.widgets.TabItem;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.gui.bind.Bindings;
-import org.edgo.audio.measure.gui.bind.Property;
+import org.edgo.audio.measure.bind.Property;
+import org.edgo.audio.measure.preferences.BackendPrefs;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.generator.NumericStepField;
-import org.edgo.audio.measure.gui.enums.TabOrientation;
+import org.edgo.audio.measure.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.StepSelector;
 import org.edgo.audio.measure.sound.DeviceRef;
@@ -460,6 +462,15 @@ public final class PreferencesDialog {
         freqRespTab.setLayout(freqRespLayout);
         freqRespTabItem.setControl(freqRespTab);
 
+        // FreqResp trace line width — same 1.0..5.0 / 0.5 step grid as the
+        // scope and FFT traces.
+        String[] FREQ_RESP_LINE_WIDTH_VALUES = {"1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0", "4.5", "5.0"};
+        new Label(freqRespTab, SWT.NONE).setText(I18n.t("preferences.freqResp.lineWidth"));
+        StepSelector freqRespLineWidthSel = new StepSelector(freqRespTab, FREQ_RESP_LINE_WIDTH_VALUES,
+                nearestIndex(FREQ_RESP_LINE_WIDTH_VALUES, edit.getFreqRespLineWidth()), 90);
+        freqRespLineWidthSel.setLayoutData(comboData());
+        freqRespLineWidthSel.setToolTipText(I18n.t("preferences.freqResp.lineWidth.tooltip"));
+
         // Maximal analyzed frequency as % of Nyquist.  Pref value is a
         // fraction in [0.83, 1.00]; the field displays it as a percent.
         // 100 % = strict Nyquist; the user usually wants 83–99 % to avoid
@@ -759,6 +770,7 @@ public final class PreferencesDialog {
             edit.setOscDotDiameter              (Integer.parseInt(dotDiameterSel.getSelectedValue()));
             edit.setFftLineWidth                (Double.parseDouble(fftLineWidthSel.getSelectedValue()));
             edit.setFftHarmonicDotDiameter      (Integer.parseInt(fftDotDiameterSel.getSelectedValue()));
+            edit.setFreqRespLineWidth           (Double.parseDouble(freqRespLineWidthSel.getSelectedValue()));
             // --- Colour holders into edit.
             edit.setOscLeftChannelColor         (leftRgbHolder[0]);
             edit.setOscRightChannelColor        (rightRgbHolder[0]);

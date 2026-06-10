@@ -32,6 +32,7 @@ import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.LineAttributes;
 import org.eclipse.swt.graphics.Path;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.RGB;
@@ -66,6 +67,10 @@ public abstract class AbstractMeasurementView extends Canvas {
     protected static final int MAJOR_TICK_LEN = 6;
     protected static final int MINOR_TICK_LEN = 2;
     private static final int MAJOR_TICK_WIDTH = 2;
+    /** Major-tick target count for a LOG axis zoomed inside one decade, where
+     *  decade boundaries alone would leave ≤ 1 tick — nice-number linear
+     *  stepping takes over with roughly this many labels across the span. */
+    private static final int SUB_DECADE_TICK_TARGET = 12;
 
     // --- Header button geometry (shared by every view's header Toolbar / ToolWindow) ---
     protected static final int BTN_W   = 22;   // header button width
@@ -800,7 +805,7 @@ public abstract class AbstractMeasurementView extends Canvas {
             case LINEAR_NICE: return niceLinearMajors(axis.min, axis.max,
                                                       Math.max(2, axis.targetCount));
             case LOG:         return isSubDecade(axis.min, axis.max)
-                                     ? niceLinearMajors(axis.min, axis.max, 12)
+                                     ? niceLinearMajors(axis.min, axis.max, SUB_DECADE_TICK_TARGET)
                                      : logMajorTicks(axis.min, axis.max);
             default:          return new double[0];
         }
@@ -1163,6 +1168,43 @@ public abstract class AbstractMeasurementView extends Canvas {
         gc.setForeground(color);
         gc.setLineStyle(lineStyle);
         gc.setLineWidth(lineWidth);
+        paintPolylineImpl(gc, plot, n, xAt, yAt);
+        if (lineStyle != SWT.LINE_SOLID) gc.setLineStyle(SWT.LINE_SOLID);
+    }
+
+    /** Float-width variant of {@link #paintPolyline(GC, Rectangle, Color, int, int,
+     *  int, IntUnaryOperator, IntToDoubleFunction)} — strokes through the pooled
+     *  {@link #traceLineAttributes} (round cap / join), so the preferences' 0.5-px
+     *  width steps render sub-pixel and antialiased joins keep full intensity.
+     *  Used by every user-visible data trace; the {@code int} overload remains for
+     *  fixed-width overlay / debug strokes. */
+    protected final void paintPolyline(GC gc, Rectangle plot, Color color,
+                                       int lineStyle, float lineWidth,
+                                       int n, IntUnaryOperator xAt, IntToDoubleFunction yAt) {
+        if (n < 2) return;
+        gc.setForeground(color);
+        setTraceLineAttributes(gc, lineWidth, lineStyle);
+        paintPolylineImpl(gc, plot, n, xAt, yAt);
+        if (lineStyle != SWT.LINE_SOLID) gc.setLineStyle(SWT.LINE_SOLID);
+    }
+
+    /** Applies the pooled float-width round-cap stroke to {@code gc}.  Exposed for
+     *  views that drive a {@link ColumnBucketPainter} directly (the FFT spectrum)
+     *  instead of going through {@code paintPolyline}.  The attributes instance is
+     *  pooled — at 65+ paints/s a fresh {@code LineAttributes} per frame measurably
+     *  loads the young generation. */
+    protected final void setTraceLineAttributes(GC gc, float width, int style) {
+        traceLineAttributes.width = Math.max(0.5f, width);
+        traceLineAttributes.style = style;
+        gc.setLineAttributes(traceLineAttributes);
+    }
+
+    /** Pooled stroke for {@link #setTraceLineAttributes} — see its pooling note. */
+    private final LineAttributes traceLineAttributes =
+            new LineAttributes(1.0f, SWT.CAP_ROUND, SWT.JOIN_ROUND);
+
+    private void paintPolylineImpl(GC gc, Rectangle plot,
+                                   int n, IntUnaryOperator xAt, IntToDoubleFunction yAt) {
         ColumnBucketPainter painter = new ColumnBucketPainter(plot);
         int right = plot.x + plot.width;
         for (int i = 0; i < n; i++) {
@@ -1174,7 +1216,6 @@ public abstract class AbstractMeasurementView extends Canvas {
             else                 painter.add(x, y);
         }
         painter.drawTo(gc);
-        if (lineStyle != SWT.LINE_SOLID) gc.setLineStyle(SWT.LINE_SOLID);
     }
 
     /** Renders a long sequence of data points as a polyline + envelope bars at no more

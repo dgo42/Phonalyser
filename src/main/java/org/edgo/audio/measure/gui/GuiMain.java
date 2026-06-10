@@ -26,7 +26,7 @@ import org.apache.logging.log4j.core.config.LoggerConfig;
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 
 import lombok.extern.log4j.Log4j2;

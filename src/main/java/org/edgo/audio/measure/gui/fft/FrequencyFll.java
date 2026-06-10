@@ -37,7 +37,7 @@ import org.edgo.audio.measure.enums.AlignGenerator;
  * (e.g. 1.75&nbsp;ppm → 0.0875&nbsp;ppm → …), so the loop settles well inside the band.
  * <pre>
  *   error = detected − target
- *   |error| &lt; FINE_TRACK_HZ → correction −= error every cycle  // fine-track, no wait
+ *   |error| &lt; FINE_TRACK_HZ → correction −= error / (2·deadTime) every cycle  // fine-track, no wait
  *   waiting:  hold while |error| &gt; ARRIVED_FRACTION · e₀     // correction still landing
  *   landed / steady:
  *       |error| ≤ LOCK_PPM·target → hold (locked / within noise)
@@ -68,9 +68,18 @@ public final class FrequencyFll implements FrequencyAligner {
      *  arrival test ({@link #ARRIVED_FRACTION} of the last correction) sits below
      *  the measurement's frequency-jitter floor and can never be met — the loop
      *  would stay {@code waiting} and silently accumulate drift.  In this regime
-     *  the wait is dropped and the (sub-jitter, harmless) correction applied every
-     *  cycle, pinning the error at the floor instead of collecting it. */
+     *  the wait is dropped and a reduced-gain nudge applied every cycle, pinning
+     *  the error at the floor instead of collecting it.  The gain is
+     *  {@code 1 / (2·deadTimeFrames)}: an every-cycle integrator inside a loop
+     *  with {@code d} frames of dead time is only stable for gain · d &lt; π/2 (a
+     *  full-error nudge gets re-issued ~d times before its effect is visible), so
+     *  the gain is scaled to the dead time measured in the coarse phase, leaving
+     *  ~π/2 − 0.5 of phase margin at any transport delay. */
     private static final double FINE_TRACK_HZ    = 1e-3;
+    /** Assumed loop dead time (update calls from issuing a correction to seeing it
+     *  reflected in the measurement) until the first coarse correction measures the
+     *  real one. */
+    private static final int    DEFAULT_DEAD_TIME_FRAMES = 20;
 
     /** Current correction in Hz — add to the snap target before publishing the trim. */
     @Getter
@@ -79,6 +88,11 @@ public final class FrequencyFll implements FrequencyAligner {
      *  relative arrival threshold scales from. */
     private double  errorAtCorrection = 0.0;
     private boolean waiting           = false;
+    /** Update calls since the last coarse correction was issued — at the moment the
+     *  arrival test passes this IS the measured loop dead time. */
+    private int     framesSinceCorrection = 0;
+    /** Measured loop dead time in update calls; scales the fine-track gain. */
+    private int     deadTimeFrames        = DEFAULT_DEAD_TIME_FRAMES;
 
     @Override
     public void update(double target, double detected, long absStartSamples, long latestSamplePos,
@@ -88,31 +102,43 @@ public final class FrequencyFll implements FrequencyAligner {
         }
         double error  = detected - target;
         double absErr = Math.abs(error);
+        framesSinceCorrection++;
 
         // Fine-tracking regime: the arrival test is unachievable this close to
-        // lock, so stop waiting and nudge every cycle instead of collecting error.
-        if (absErr > FINE_TRACK_HZ) {
+        // lock, so nudge every cycle at a dead-time-stable gain and never arm the
+        // wait state — a later escape from the floor is a fresh disturbance.
+        if (absErr <= FINE_TRACK_HZ) {
             if (waiting) {
-                if (absErr > ARRIVED_FRACTION * errorAtCorrection) {
-                    return;                            // correction still landing — hold, don't stack another
-                }
-                waiting = false;                       // landed
+                deadTimeFrames = framesSinceCorrection;  // coarse correction just landed
+                waiting = false;
             }
-            if (absErr <= LOCK_PPM * 1e-6 * target) {
-                return;                                // within the lock band — hold
+            correction -= error / (2.0 * deadTimeFrames);
+            return;
+        }
+        if (waiting) {
+            if (absErr > ARRIVED_FRACTION * errorAtCorrection) {
+                return;                                // correction still landing — hold, don't stack another
             }
+            deadTimeFrames = framesSinceCorrection;    // landed — measured dead time
+            waiting = false;
+        }
+        if (absErr <= LOCK_PPM * 1e-6 * target) {
+            return;                                    // within the lock band — hold
         }
         // Cancel the current (landed) error in one step, then wait for it to land.
         correction -= error;
         errorAtCorrection = absErr;
         waiting = true;
+        framesSinceCorrection = 0;
     }
 
     @Override
     public void reset() {
-        correction        = 0.0;
-        errorAtCorrection = 0.0;
-        waiting           = false;
+        correction            = 0.0;
+        errorAtCorrection     = 0.0;
+        waiting               = false;
+        framesSinceCorrection = 0;
+        deadTimeFrames        = DEFAULT_DEAD_TIME_FRAMES;
     }
 
     public AlignGenerator getMode() {
