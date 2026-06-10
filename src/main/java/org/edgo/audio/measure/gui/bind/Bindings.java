@@ -26,6 +26,7 @@ import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Widget;
 import org.edgo.audio.measure.gui.generator.NumericStepField;
+import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.gui.widgets.StepSelector;
 
 /**

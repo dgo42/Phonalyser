@@ -19,9 +19,9 @@
 package org.edgo.audio.measure.common;
 
 import lombok.Getter;
-import lombok.RequiredArgsConstructor;
+import lombok.Value;
 import lombok.extern.log4j.Log4j2;
-import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
+import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -75,17 +75,20 @@ import java.util.List;
 public final class FreqRespCorrectionStore {
 
     /** Pairs a loaded calibration with the file path it came from.
-     *  Both fields are non-null. */
-    @RequiredArgsConstructor
-    public static final class Entry {
-        @Getter private final StereoFreqRespCalibration calibration;
-        @Getter private final String                    path;
+     *  Both fields are non-null.  {@code @Value} supplies the all-field
+     *  {@code equals} the snapshot/restore comparison relies on — including
+     *  {@link #isWithNoise()}, so a restore that only flips the flag still
+     *  fires a change notification. */
+    @Value
+    public static class Entry {
+        StereoFreqRespCalibration calibration;
+        String                    path;
         /** FFT-only: when {@code true}, this entry's correction is subtracted
          *  from every FFT bin (including the noise floor); when {@code false},
          *  only the fundamental + harmonic dot positions get the
          *  per-frequency offset.  Always {@code false} for the FreqResp
          *  instance, which divides the whole trace regardless. */
-        @Getter private final boolean                   withNoise;
+        boolean                   withNoise;
     }
 
     /** Opaque snapshot of every slot — only created by
@@ -233,24 +236,15 @@ public final class FreqRespCorrectionStore {
     }
 
     /** Restores from a prior {@link #snapshot()} and fires one change
-     *  notification when the entries list actually moved. */
+     *  notification when the entries list actually moved.  Element comparison
+     *  is {@link Entry}'s Lombok-generated all-field {@code equals}
+     *  (calibration record identity + path + withNoise). */
     public void restore(Snapshot s) {
-        boolean changed = !entriesEqual(entries, s.entries);
+        boolean changed = !entries.equals(s.entries);
         entries.clear();
         entries.addAll(s.entries);
         this.direct = s.direct;
         if (changed) fire();
-    }
-
-    private boolean entriesEqual(List<Entry> a, List<Entry> b) {
-        if (a.size() != b.size()) return false;
-        for (int i = 0; i < a.size(); i++) {
-            Entry x = a.get(i);
-            Entry y = b.get(i);
-            if (x.getCalibration() != y.getCalibration()) return false;
-            if (!x.getPath().equals(y.getPath())) return false;
-        }
-        return true;
     }
 
     private void fire() {

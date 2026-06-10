@@ -107,7 +107,16 @@ public class Lanczos {
     /**
      * {@code double[]} overload of {@link #lanczos(float[], int, double, double)} —
      * used by the frequency-domain views, whose magnitude / phase arrays are
-     * {@code double[]}.  Identical kernel, identical baseline-subtraction trick.
+     * {@code double[]}.  Same kernel, but deliberately NOT a twin of the
+     * {@code float[]} overload: frequency-domain arrays carry {@code NaN} for
+     * invalid points (unswept regions, non-positive magnitudes), so NaN taps are
+     * treated as <em>missing</em> and the remaining taps renormalized — a pixel
+     * whose kernel merely touches a NaN region reconstructs from its valid
+     * neighbours instead of going NaN.  A NaN <em>center</em> sample still
+     * returns NaN, so genuine gaps render as gaps, matching the linear
+     * per-point feed.  The renormalization also keeps full gain where the
+     * kernel truncates at the array ends.  (The {@code float[]} scope overload
+     * stays branch-free: scope buffers cannot contain NaN by construction.)
      */
     public double lanczos(double[] data, int n, double t, double scale) {
         double[][] table = getKernelTable(scale);
@@ -122,15 +131,20 @@ public class Lanczos {
         int iHi = Math.min(n - 1, center + halfWidth);
         int centerClamped = (center < 0) ? 0 : (center >= n ? n - 1 : center);
         double baseline = data[centerClamped];
+        if (Double.isNaN(baseline)) return Double.NaN;   // genuine gap stays a gap
         double sumWeights = 0.0;
         double sumDeltas  = 0.0;
         for (int i = iLo; i <= iHi; i++) {
-            int j = i - center + halfWidth - 1;
-            double wj = w[j];
+            double di = data[i];
+            if (Double.isNaN(di)) continue;              // missing sample — renormalized out
+            double wj = w[i - center + halfWidth - 1];
             sumWeights += wj;
-            sumDeltas  += (data[i] - baseline) * wj;
+            sumDeltas  += (di - baseline) * wj;
         }
-        return baseline * sumWeights + sumDeltas;
+        // Σw = 1 for a full clean kernel, so this equals the float[] overload's
+        // baseline·Σw + Σdeltas there; with skipped / truncated taps it is the
+        // properly renormalized weighted mean instead.
+        return (sumWeights > 0.0) ? baseline + sumDeltas / sumWeights : Double.NaN;
     }
 
     /**

@@ -20,7 +20,7 @@ package org.edgo.audio.measure.gui.generator;
 
 import lombok.experimental.UtilityClass;
 import org.edgo.audio.measure.enums.GenSignalForm;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 
 /**
  * Pure math for "snap a frequency to the nearest FFT-bin centre" — shared

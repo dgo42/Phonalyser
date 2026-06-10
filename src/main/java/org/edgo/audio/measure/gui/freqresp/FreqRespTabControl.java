@@ -42,13 +42,13 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
-import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
-import org.edgo.audio.measure.cli.util.FreqRespCalibration;
-import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bind.Bindings;
-import org.edgo.audio.measure.gui.bind.Property;
+import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -56,9 +56,9 @@ import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.generator.NumericStepField;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.preferences.CalibrationEntry;
-import org.edgo.audio.measure.gui.preferences.FreqRespPreset;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.CalibrationEntry;
+import org.edgo.audio.measure.preferences.FreqRespPreset;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 
@@ -117,10 +117,9 @@ public final class FreqRespTabControl extends Composite {
 
     private final FreqRespView view;
 
-    /** Loaded {@code .frc} correction store, injected by {@link FreqRespPane}
-     *  (IoC) and shared with the {@link FreqRespView}.  {@code null} until
-     *  {@link #setCorrectionStore} runs right after construction. */
-    private FreqRespCorrectionStore correctionStore;
+    /** Loaded {@code .frc} correction store, constructor-injected by
+     *  {@link FreqRespPane} (IoC) and shared with the {@link FreqRespView}. */
+    private final FreqRespCorrectionStore correctionStore;
 
     // ---- Tab-header tiles: the shared TileTabFolder owns the renderer,
     //      spacer images, tab-body collapse, hover tooltips and tile
@@ -163,9 +162,11 @@ public final class FreqRespTabControl extends Composite {
      *  same instance (method references compare by identity). */
     private Consumer<Void> calibrationChangedListener;
 
-    public FreqRespTabControl(Composite parent, FreqRespView view) {
+    public FreqRespTabControl(Composite parent, FreqRespView view,
+                              FreqRespCorrectionStore correctionStore) {
         super(parent, SWT.NONE);
         this.view = view;
+        this.correctionStore = correctionStore;
 
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 0; gl.marginHeight = 0;
@@ -203,14 +204,10 @@ public final class FreqRespTabControl extends Composite {
         MessageBus.instance().subscribe(Events.FREQRESP_CALIBRATION_CHANGED, calibrationChangedListener);
         addDisposeListener(e ->
                 MessageBus.instance().unsubscribe(Events.FREQRESP_CALIBRATION_CHANGED, calibrationChangedListener));
-    }
 
-    /** Injects the calibration-correction store (IoC, from {@link FreqRespPane})
-     *  and pushes the initially-loaded active rows into it.  Called once right
-     *  after construction — the store isn't available while the rows are built,
-     *  so the initial sync happens here rather than in the constructor. */
-    public void setCorrectionStore(FreqRespCorrectionStore correctionStore) {
-        this.correctionStore = correctionStore;
+        // Push the initially-loaded active rows into the store last — the view
+        // (built before this control) already holds the same store instance, so
+        // the change events this fires find it ready.
         syncStoreFromRows();
     }
 
@@ -273,7 +270,7 @@ public final class FreqRespTabControl extends Composite {
                 if (prefs.isFreqRespCompareMode())  tiles.add(tile("comp"));
             }
         } else if (tabIndex == TAB_FREQRESP_CALIBRATION) {
-            int n = correctionStore == null ? 0 : correctionStore.getEntries().size();
+            int n = correctionStore.getEntries().size();
             if (n == 1)      tiles.add(tile(I18n.t("calibration.tile.loaded")));
             else if (n  > 1) tiles.add(tile(I18n.t("calibration.tile.loadedN", n)));
         } else if (tabIndex == TAB_FREQRESP_PRESETS) {
@@ -998,8 +995,8 @@ public final class FreqRespTabControl extends Composite {
 
         // Build the rows from prefs (always at least row 0) and load any
         // referenced .frc files into each row.  The store itself is populated
-        // from these rows in setCorrectionStore(), which the pane calls right
-        // after construction (the store is injected, not available here yet).
+        // from these rows by the syncStoreFromRows() call at the end of the
+        // constructor, after every tab is built.
         Preferences prefs = Preferences.instance();
         List<CalibrationEntry> cals = prefs.getFreqRespCalibrations();
         if (cals.isEmpty()) {

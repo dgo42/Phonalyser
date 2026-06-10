@@ -28,7 +28,6 @@ import java.util.Random;
 
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
-import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
 
 import lombok.Getter;
@@ -112,6 +111,12 @@ public class SignalGenerator {
     private volatile GenSignalForm form;
     /** Linear peak amplitude [0..1].  Live-swappable via {@link #setAmplitudeVrms}. */
     private volatile double     amplitude;
+    /** DAC full-scale RMS voltage the amplitude scale divides by — injected via the
+     *  constructors and pushed by the owner on recalibration
+     *  ({@link #setDacFsVoltageRms}); the generator never reaches into Preferences
+     *  itself.  {@code volatile}: written from the UI thread, read on the audio
+     *  render thread. */
+    private volatile double     dacFsVoltageRms;
     /** Sample rate cached for live frequency / amplitude updates from the GUI. */
     private final    int        sampleRate;
     /** Duty cycle for {@link GenSignalForm#RECTANGLE} as a fraction [0.01, 0.99].  Default 50 %. */
@@ -191,11 +196,14 @@ public class SignalGenerator {
      * @param frequency       output frequency in Hz (ignored for noise types)
      * @param sampleRate      sample rate in Hz
      * @param amplitudeVRms   desired output amplitude in V RMS
+     * @param dacFsVoltageRms DAC full-scale RMS voltage (the owner's calibration value)
      */
-    public SignalGenerator(GenSignalForm form, double frequency, int sampleRate, double amplitudeVRms) {
-        this.form        = form;
-        this.currentVrms = amplitudeVRms;
-        this.amplitude   = amplitudeVRms / (Preferences.instance().getDacFsVoltageRms() * rawRms(form));
+    public SignalGenerator(GenSignalForm form, double frequency, int sampleRate, double amplitudeVRms,
+                           double dacFsVoltageRms) {
+        this.form            = form;
+        this.currentVrms     = amplitudeVRms;
+        this.dacFsVoltageRms = dacFsVoltageRms;
+        this.amplitude       = amplitudeVRms / (dacFsVoltageRms * rawRms(form));
         this.phaseInc    = Math.round(frequency / sampleRate * 4294967296.0);
         this.sampleRate  = sampleRate;
         log.debug("DDS: form={} freq={}Hz rate={}Hz phaseInc={} amplitude={}V RMS",
@@ -220,8 +228,8 @@ public class SignalGenerator {
      * @param harmonicsCsvPath path to the harmonics CSV file
      */
     public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
-                           String harmonicsCsvPath) throws IOException {
-        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms);
+                           double dacFsVoltageRms, String harmonicsCsvPath) throws IOException {
+        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms, dacFsVoltageRms);
         loadHarmonics(frequency, sampleRate, harmonicsCsvPath);
     }
 
@@ -237,8 +245,8 @@ public class SignalGenerator {
      * @param result        FFT analysis result containing harmonic amplitudes and phases
      */
     public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
-                           FftResult result) {
-        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms);
+                           double dacFsVoltageRms, FftResult result) {
+        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms, dacFsVoltageRms);
         loadHarmonicsFromResult(frequency, sampleRate, result);
     }
 
@@ -256,8 +264,8 @@ public class SignalGenerator {
      * @param freqsHz       per-harmonic frequencies in Hz
      */
     public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
-                           double[] ampRatios, double[] phiInits, double[] freqsHz) {
-        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms);
+                           double dacFsVoltageRms, double[] ampRatios, double[] phiInits, double[] freqsHz) {
+        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms, dacFsVoltageRms);
         int n = ampRatios.length;
         hAmpRatio = new double[n];
         hNum      = new int[n];
@@ -288,10 +296,11 @@ public class SignalGenerator {
      * @param amplitudeVRms  desired output amplitude in V RMS
      */
     public SignalGenerator(double freqStart, double freqEnd, int sampleRate,
-                           int periodSamples, double amplitudeVRms) {
+                           int periodSamples, double amplitudeVRms, double dacFsVoltageRms) {
         this.form               = GenSignalForm.LINEAR_SWEEP;
         this.currentVrms        = amplitudeVRms;
-        this.amplitude          = amplitudeVRms / (Preferences.instance().getDacFsVoltageRms() * rawRms(GenSignalForm.LINEAR_SWEEP));
+        this.dacFsVoltageRms    = dacFsVoltageRms;
+        this.amplitude          = amplitudeVRms / (dacFsVoltageRms * rawRms(GenSignalForm.LINEAR_SWEEP));
         this.phaseInc           = 0;            // unused for sweep
         this.sampleRate         = sampleRate;
         this.sweepFreqStart     = freqStart;
@@ -325,10 +334,11 @@ public class SignalGenerator {
      * @param amplitudeVRms  sweep amplitude in V RMS
      */
     public SignalGenerator(double f0, double f1, int sweepSamples, int leadInSamples,
-                           int sampleRate, double amplitudeVRms) {
+                           int sampleRate, double amplitudeVRms, double dacFsVoltageRms) {
         this.form           = GenSignalForm.LOG_SWEEP;
         this.currentVrms    = amplitudeVRms;
-        this.amplitude      = amplitudeVRms / (Preferences.instance().getDacFsVoltageRms() * rawRms(GenSignalForm.LOG_SWEEP));
+        this.dacFsVoltageRms = dacFsVoltageRms;
+        this.amplitude      = amplitudeVRms / (dacFsVoltageRms * rawRms(GenSignalForm.LOG_SWEEP));
         this.phaseInc       = 0;            // unused for sweep
         this.sampleRate     = sampleRate;
         this.logSweepBuffer = renderLogSweep(f0, f1, sweepSamples, sampleRate);
@@ -448,7 +458,7 @@ public class SignalGenerator {
         // {@link #currentVrms} is the cached "what the user dialled" and
         // gets re-divided against the new form's rawRms.
         this.form      = newForm;
-        this.amplitude = currentVrms / (Preferences.instance().getDacFsVoltageRms() * rawRms(newForm));
+        this.amplitude = currentVrms / (dacFsVoltageRms * rawRms(newForm));
     }
 
     /**
@@ -490,7 +500,7 @@ public class SignalGenerator {
         // Re-derive the amplitude scale from the cached Vrms so the
         // combined RMS stays equal to the Amplitude field's value
         // regardless of how the user splits the two tones.
-        this.amplitude = currentVrms / (Preferences.instance().getDacFsVoltageRms() * rawRmsForCurrentState());
+        this.amplitude = currentVrms / (dacFsVoltageRms * rawRmsForCurrentState());
     }
 
     /**
@@ -499,18 +509,18 @@ public class SignalGenerator {
      */
     public void setAmplitudeVrms(double amplitudeVRms) {
         this.currentVrms = amplitudeVRms;
-        this.amplitude   = amplitudeVRms / (Preferences.instance().getDacFsVoltageRms() * rawRms(form));
+        this.amplitude   = amplitudeVRms / (dacFsVoltageRms * rawRms(form));
     }
 
     /**
-     * Recomputes the output amplitude scale from the cached requested Vrms and
-     * the current DAC full-scale, leaving the requested Vrms unchanged.  Call
-     * when the DAC calibration ({@code Preferences#getDacFsVoltageRms()}) changes
-     * so a running generator tracks the new full-scale immediately without a
-     * restart.
+     * Pushes a new DAC full-scale voltage (the user recalibrated) and recomputes
+     * the output amplitude scale from the cached requested Vrms, so a running
+     * generator tracks the new full-scale immediately without a restart.  The
+     * owner observes the calibration preference and forwards the value here.
      */
-    public void refreshAmplitude() {
-        this.amplitude = currentVrms / (Preferences.instance().getDacFsVoltageRms() * rawRms(form));
+    public void setDacFsVoltageRms(double v) {
+        this.dacFsVoltageRms = v;
+        this.amplitude = currentVrms / (v * rawRms(form));
     }
 
     /**

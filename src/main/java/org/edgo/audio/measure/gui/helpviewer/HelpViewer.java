@@ -30,7 +30,7 @@ import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 
 import java.io.IOException;
 import java.io.InputStream;

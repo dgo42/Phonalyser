@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.gui.preferences;
+package org.edgo.audio.measure.preferences;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -34,6 +34,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.AmplitudeUnit;
 import org.edgo.audio.measure.enums.AudioBackendType;
@@ -46,8 +47,8 @@ import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.gui.bind.Property;
-import org.edgo.audio.measure.gui.enums.TabOrientation;
+import org.edgo.audio.measure.bind.Property;
+import org.edgo.audio.measure.enums.TabOrientation;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 
@@ -85,6 +86,9 @@ public final class Preferences {
      *  (a drag, a resize, fast typing) coalesces into a single file write
      *  this many milliseconds after the last change. */
     private static final long SAVE_COALESCE_MS = 250;
+
+    /** Factory-default ADC full-scale RMS voltage, used until the user calibrates. */
+    private static final double DEFAULT_ADC_FS_VRMS = 1.7931;
 
     private static volatile Preferences instance;
 
@@ -204,12 +208,22 @@ public final class Preferences {
      *  buttons are hidden. */
     private final Property<Boolean> oscShowMeasurementTable = bound(true);
     /** ADC full-scale RMS voltage — calibration constant used to translate normalised samples into volts.  Persisted across launches. */
-    private final Property<Double> adcFsVoltageRms = bound(1.7931);
-    /** Cached dBV↔dBFS offset (= {@code 20·log10(adcFsVoltageRms)}).  Recomputed whenever the ADC
-     *  full-scale is set / loaded; {@code volatile} so the off-thread FFT consumers see the
-     *  update.  {@code dBV = dBFS + dbvOffsetDb}. */
+    private final Property<Double> adcFsVoltageRms = bound(DEFAULT_ADC_FS_VRMS);
+    /** Cached dBV↔dBFS offset (= {@code 20·log10(adcFsVoltageRms)}).  Initialised from the
+     *  default and recomputed whenever the ADC full-scale is set / loaded, so it is valid even
+     *  when no {@code preferences.yaml} exists (or lacks the key) and in detached dialog copies;
+     *  {@code volatile} so the off-thread FFT consumers see the update.
+     *  {@code dBV = dBFS + dbvOffsetDb}. */
     @Getter
-    private volatile double dbvOffsetDb;
+    private volatile double dbvOffsetDb = 20.0 * Math.log10(DEFAULT_ADC_FS_VRMS);
+    /** Cached √(bin bandwidth) of the live FFT config (= {@code √(inputSampleRate /
+     *  fftLength)}) — the V→V/√Hz divisor in {@link #convertFromDbFs}.  Recomputed via
+     *  the {@code fftLength} / {@code backend} property listeners (bidi-bound GUI edits
+     *  bypass the setters) and after load / dialog-apply (the per-backend sample rate
+     *  is a plain POJO write that fires no property event); {@code volatile} so
+     *  off-thread consumers see the update. */
+    @Getter
+    private volatile double binBwSqrt = 1.0;
     /** When {@code true}, {@link #save()} is a no-op.  Set by the CLI so a
      *  {@code --adc-fs-vrms} (or any other) value injected into Preferences for
      *  one headless run is never written back to the user's YAML.  Default
@@ -496,6 +510,8 @@ public final class Preferences {
      *  single colour covers both).  Packed RGB int, default {@code #0064C8}
      *  (a saturated blue). */
     private final Property<Integer> freqRespSignalColor     = bound(0x0064C8);
+    /** Magnitude / phase / RIAA / compare trace line width in pixels (0.5 steps). */
+    private final Property<Double>  freqRespLineWidth       = bound(2.0);
     /** Trace colour for the phase overlay.  Default {@code #FF0000} (red). */
     private final Property<Integer> freqRespPhaseColor      = bound(0xFF0000);
     /** Trace colour for the RIAA / IEC reference curve.  Default
@@ -547,7 +563,14 @@ public final class Preferences {
 
     private Preferences() {
         this.detached = false;
+        // Bidi-bound GUI edits write these properties directly (no setter), so
+        // the bin-bandwidth cache listens on the properties themselves.
+        fftLength.addListener(v -> recomputeBinBw());
+        backend.addListener(v -> recomputeBinBw());
         load();
+        // Covers the no-file / partial-file case AND the per-backend sample
+        // rate, which is a plain POJO field the listeners can't observe.
+        recomputeBinBw();
         // Flush any debounced save on JVM exit — saveScheduler is a daemon
         // thread the runtime abandons at shutdown, so a change made within the
         // coalesce window before close would otherwise be lost.
@@ -559,6 +582,7 @@ public final class Preferences {
      *  out on {@code detached} — never starts the save thread. */
     private Preferences(boolean detached) {
         this.detached = detached;
+        recomputeBinBw();
     }
 
     public static Preferences instance() {
@@ -602,7 +626,7 @@ public final class Preferences {
      * Cancel just drops it, and OK funnels the edited copy back through
      * {@link #applyFromDialog(Preferences)}.  Only for PreferencesDialog.
      */
-    Preferences copyForDialog() {
+    public Preferences copyForDialog() {
         Preferences c = new Preferences(true);
 
         c.tabOrientation.set(tabOrientation.get());
@@ -619,6 +643,7 @@ public final class Preferences {
         c.oscLineWidth.set(oscLineWidth.get());
         c.oscDotDiameter.set(oscDotDiameter.get());
         c.fftLineWidth.set(fftLineWidth.get());
+        c.freqRespLineWidth.set(freqRespLineWidth.get());
         c.fftHarmonicDotDiameter.set(fftHarmonicDotDiameter.get());
 
         c.oscLeftChannelColor.set(oscLeftChannelColor.get());
@@ -649,13 +674,16 @@ public final class Preferences {
      * there so this state class stays free of the sound/hardware layer.
      * Only for PreferencesDialog.
      */
-    void applyFromDialog(Preferences edit) {
+    public void applyFromDialog(Preferences edit) {
         // Backend selection first: the Nyquist clamp below reads current()'s
         // input sample rate, which must reflect the just-chosen backend.
         setBackend(edit.backend.get());
         for (AudioBackendType t : AudioBackendType.values()) {
             prefsFor(t).copyFrom(edit.prefsFor(t));
         }
+        // The copyFrom above may have changed the current backend's input
+        // sample rate — a POJO write the property listeners can't observe.
+        recomputeBinBw();
 
         setTabOrientation(edit.tabOrientation.get());
         setSmallIconsInMainTab(edit.smallIconsInMainTab.get());
@@ -668,6 +696,7 @@ public final class Preferences {
         setOscLineWidth(edit.oscLineWidth.get());
         setOscDotDiameter(edit.oscDotDiameter.get());
         setFftLineWidth(edit.fftLineWidth.get());
+        setFreqRespLineWidth(edit.freqRespLineWidth.get());
         setFftHarmonicDotDiameter(edit.fftHarmonicDotDiameter.get());
 
         setOscLeftChannelColor(edit.oscLeftChannelColor.get());
@@ -1032,6 +1061,10 @@ public final class Preferences {
     public void setFftLineWidth(double v)      { fftLineWidth.set(v); }
     public Property<Double> fftLineWidthProperty() { return fftLineWidth; }
 
+    public double getFreqRespLineWidth()       { return freqRespLineWidth.get(); }
+    public void setFreqRespLineWidth(double v) { freqRespLineWidth.set(v); }
+    public Property<Double> freqRespLineWidthProperty() { return freqRespLineWidth; }
+
     public int getFftHarmonicDotDiameter()     { return fftHarmonicDotDiameter.get(); }
     public void setFftHarmonicDotDiameter(int v) { fftHarmonicDotDiameter.set(v); }
     public Property<Integer> fftHarmonicDotDiameterProperty() { return fftHarmonicDotDiameter; }
@@ -1197,44 +1230,83 @@ public final class Preferences {
     public Property<Boolean> oscShowMeasurementTableProperty() { return oscShowMeasurementTable; }
 
     public double getAdcFsVoltageRms()         { return adcFsVoltageRms.get(); }
-    public void setAdcFsVoltageRms(double v)   { adcFsVoltageRms.set(v); recomputeDbvOffset(v); }
+    public void setAdcFsVoltageRms(double v)   {
+        if (!(v > 0.0)) {
+            if (log.isWarnEnabled()) {
+                log.warn("Rejecting invalid ADC full-scale {} Vrms — keeping {} Vrms", v, adcFsVoltageRms.get());
+            }
+            return;
+        }
+        adcFsVoltageRms.set(v);
+        recomputeDbvOffset(v);
+    }
     public Property<Double> adcFsVoltageRmsProperty() { return adcFsVoltageRms; }
 
     /** Recomputes the cached {@link #dbvOffsetDb} from the ADC full-scale.  Called from
      *  {@link #setAdcFsVoltageRms} and {@link #load()} — the only places the ADC full-scale
-     *  changes — so the {@code log} runs only on a real change, not per consumer read. */
+     *  changes — so the {@code log} runs only on a real change, not per consumer read.
+     *  A non-positive (or NaN) full-scale would put {@code -Infinity}/NaN into every dBV
+     *  conversion, so the offset falls back to 0 dB (dBV ≡ dBFS) instead. */
     private void recomputeDbvOffset(double fsVrms) {
+        if (!(fsVrms > 0.0)) {
+            if (log.isWarnEnabled()) {
+                log.warn("Invalid ADC full-scale {} Vrms — falling back to 0 dB dBV offset", fsVrms);
+            }
+            dbvOffsetDb = 0.0;
+            return;
+        }
         dbvOffsetDb = 20.0 * Math.log10(fsVrms);
     }
 
-    /**
-     * Converts an analyser dBFS magnitude into {@code unit} for display, deriving the
-     * 0-dBFS→dBV anchor from the configured ADC full-scale and the bin bandwidth from
-     * the configured sample-rate / FFT-size.  These inputs are bidi-bound and any change
-     * restarts the FFT, so they always match the live measurement.
-     */
+    /** Recomputes the cached {@link #binBwSqrt} from the live capture config.  Hooked to
+     *  the {@code fftLength} / {@code backend} property listeners and called after
+     *  {@link #load()} / {@link #applyFromDialog} — see the field doc for why both are
+     *  needed.  Falls back to 1 (plain V) on a not-yet-valid config. */
+    private void recomputeBinBw() {
+        int rate = current().getInputSampleRate();
+        int len  = getFftLength();
+        binBwSqrt = (rate > 0 && len > 0) ? Math.sqrt((double) rate / len) : 1.0;
+    }
+
+    /** Live-spectrum variant of {@link #convertFromDbFs(double, MagnitudeUnit, Double)}:
+     *  the V/√Hz scale comes from the cached live capture config. */
     public double convertFromDbFs(double dbFs, MagnitudeUnit unit) {
-        double refDbV = dbvOffsetDb;
-        double binBw  = (double) current().getInputSampleRate() / getFftLength();
+        return convertFromDbFs(dbFs, unit, null);
+    }
+
+    /**
+     * Converts an analyser dBFS magnitude into {@code unit} for display.  Pure
+     * cached-constant math, safe to call per bin in paint loops: dBV is a constant
+     * offset from dBFS ({@link #dbvOffsetDb}), V is the same value read linearly
+     * (0&nbsp;dBV = 1&nbsp;V), and V/√Hz additionally divides by √(bin bandwidth).
+     *
+     * @param binBwSqrt √(bin bandwidth in Hz) of the spectrum being converted —
+     *                  carried by file-loaded results ({@code FftResult#binBwSqrt});
+     *                  {@code null} uses the cached live config, which is bidi-bound
+     *                  and restarts the FFT on change, so it always matches the live
+     *                  measurement
+     */
+    public double convertFromDbFs(double dbFs, MagnitudeUnit unit, Double binBwSqrt) {
         switch (unit) {
             case DBFS: return dbFs;
-            case DBV:  return dbFs + refDbV;
-            case V: {
-                double dbv = dbFs + refDbV;
-                return Math.pow(10.0, dbv / 20.0);
-            }
-            case V_SQRT_HZ: {
-                double dbv = dbFs + refDbV;
-                double v   = Math.pow(10.0, dbv / 20.0);
-                double bw  = (binBw > 0) ? binBw : 1.0;
-                return v / Math.sqrt(bw);
-            }
+            case DBV:  return dbFs + dbvOffsetDb;
+            case V:         return Math.pow(10.0, (dbFs + dbvOffsetDb) / 20.0);
+            case V_SQRT_HZ: return Math.pow(10.0, (dbFs + dbvOffsetDb) / 20.0)
+                    / (binBwSqrt != null ? binBwSqrt : this.binBwSqrt);
             default: return dbFs;
         }
     }
 
     public double getDacFsVoltageRms()         { return dacFsVoltageRms.get(); }
-    public void setDacFsVoltageRms(double v)   { dacFsVoltageRms.set(v); }
+    public void setDacFsVoltageRms(double v)   {
+        if (!(v > 0.0)) {
+            if (log.isWarnEnabled()) {
+                log.warn("Rejecting invalid DAC full-scale {} Vrms — keeping {} Vrms", v, dacFsVoltageRms.get());
+            }
+            return;
+        }
+        dacFsVoltageRms.set(v);
+    }
     public Property<Double> dacFsVoltageRmsProperty() { return dacFsVoltageRms; }
 
     public String getOscSavePath()             { return oscSavePath.get(); }
@@ -1519,6 +1591,7 @@ public final class Preferences {
 
     private Map<String, Object> toMap() {
         Map<String, Object> root = new LinkedHashMap<>();
+        root.put("formatVersion",          FileVersions.PREFERENCES_YAML);
         root.put("backend",                backend.get().name());
         if (uiLanguage.get() != null) root.put("uiLanguage", uiLanguage.get());
         root.put("tabOrientation", tabOrientation.get().name());
@@ -1678,6 +1751,7 @@ public final class Preferences {
         root.put("fftBeforeCalDotColor", fftBeforeCalDotColor.get());
         root.put("fftCalOverlayColor",   fftCalOverlayColor.get());
         root.put("fftLineWidth",              fftLineWidth.get());
+        root.put("freqRespLineWidth",         freqRespLineWidth.get());
         root.put("fftHarmonicDotDiameter",    fftHarmonicDotDiameter.get());
         root.put("fftLineColor",              formatHtmlColor(fftLineColor.get()));
         root.put("fftChartBackgroundColor",   formatHtmlColor(fftChartBackgroundColor.get()));
@@ -1849,9 +1923,9 @@ public final class Preferences {
         if (root.get("oscMeasurementChannel")        instanceof String s) oscMeasurementChannel.set(enumOr(Channel.class, s, oscMeasurementChannel.get()));
         if (root.get("oscShowStats")                 instanceof Boolean b) oscShowStats.set(b);
         if (root.get("oscShowMeasurementTable")      instanceof Boolean b) oscShowMeasurementTable.set(b);
-        if (root.get("adcFsVoltageRms")              instanceof Number n) adcFsVoltageRms.set(n.doubleValue());
+        if (root.get("adcFsVoltageRms")              instanceof Number n && n.doubleValue() > 0.0) adcFsVoltageRms.set(n.doubleValue());
         recomputeDbvOffset(adcFsVoltageRms.get());
-        if (root.get("dacFsVoltageRms")              instanceof Number n) dacFsVoltageRms.set(n.doubleValue());
+        if (root.get("dacFsVoltageRms")              instanceof Number n && n.doubleValue() > 0.0) dacFsVoltageRms.set(n.doubleValue());
         if (root.get("genSignalForm")                instanceof String s) genSignalForm.set(enumOr(GenSignalForm.class, s, genSignalForm.get()));
         if (root.get("genFrequencyHz")               instanceof Number n) genFrequencyHz.set(n.doubleValue());
         if (root.get("genDualToneFreq1Hz")           instanceof Number n) genDualToneFreq1Hz.set(n.doubleValue());
@@ -2056,6 +2130,7 @@ public final class Preferences {
         if (calOverlayColorObj instanceof String s) fftCalOverlayColor.set(parseHtmlColor(s, fftCalOverlayColor.get()));
         else if (calOverlayColorObj instanceof Number n) fftCalOverlayColor.set(n.intValue());
         if (root.get("fftLineWidth")              instanceof Number  n) fftLineWidth.set(n.doubleValue());
+        if (root.get("freqRespLineWidth")         instanceof Number  n) freqRespLineWidth.set(n.doubleValue());
         if (root.get("fftHarmonicDotDiameter")    instanceof Number  n) fftHarmonicDotDiameter.set(n.intValue());
         Object fftLineColorObj   = root.get("fftLineColor");
         if (fftLineColorObj   instanceof String s) fftLineColor.set(parseHtmlColor(s, fftLineColor.get()));

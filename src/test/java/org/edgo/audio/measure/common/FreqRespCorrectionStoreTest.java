@@ -20,8 +20,8 @@ package org.edgo.audio.measure.common;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.edgo.audio.measure.cli.util.FreqRespCalibration;
-import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 

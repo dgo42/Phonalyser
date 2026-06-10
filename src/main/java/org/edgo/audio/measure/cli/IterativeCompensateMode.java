@@ -38,8 +38,8 @@ import org.edgo.audio.measure.cli.util.ArgParser;
 import org.edgo.audio.measure.cli.util.CaptureWithGenerator;
 import org.edgo.audio.measure.cli.util.ClockMismatch;
 import org.edgo.audio.measure.cli.util.DeviceSelector;
-import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
-import org.edgo.audio.measure.cli.util.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.cli.util.SampleRates;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
@@ -48,11 +48,11 @@ import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
 import org.edgo.audio.measure.generator.SignalGenerator;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.DeviceRef;
 
+import lombok.Setter;
 import lombok.Value;
-import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -86,8 +86,11 @@ import lombok.extern.log4j.Log4j2;
  * {@code --width}, {@code --height}, {@code --out-device}, {@code --in-device}.
  */
 @Log4j2
-@UtilityClass
 public class IterativeCompensateMode {
+
+    /** The CLI's single Preferences instance (transient mode) — injected by Main. */
+    @Setter
+    private Preferences prefs;
 
     /**
      * Per-iteration snapshot used by iterative-compensate so the user can
@@ -132,7 +135,7 @@ public class IterativeCompensateMode {
         double compStep      = compStepArg  != null ? Double.parseDouble(compStepArg)  : 1.0;
         String adcFsArg      = ArgParser.getArgValue(args, "--adc-fs-vrms");
         if (adcFsArg != null) {
-            Preferences.instance().setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
+            prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         if (samplerateArg == null) { log.error("--samplerate required"); System.exit(1); }
@@ -170,6 +173,8 @@ public class IterativeCompensateMode {
         } else {
             fundRefDbV = Double.NaN;
         }
+        // The analyzer speaks dBFS only — convert the user-supplied dBV anchor at the boundary.
+        double fundRefDbFs = fundRefDbV - prefs.getDbvOffsetDb();
 
         if (!SampleRates.isValid(sampleRate)) {
             log.error("--samplerate must be one of the supported rates");
@@ -259,12 +264,12 @@ public class IterativeCompensateMode {
         double[] preCorrDbFs0  = null;
         for (int retry = 0; ; retry++) {
             float[] s0 = CaptureWithGenerator.run(
-                    new SignalGenerator(GenSignalForm.SINE, frequency, sampleRate, amplitude),
+                    new SignalGenerator(GenSignalForm.SINE, frequency, sampleRate, amplitude, prefs.getDacFsVoltageRms()),
                     outDevice, inDevice, sampleRate, bitDepth, ditherBits, duration);
             try {
                 result0 = fftAnalyzer.analyze(
                         s0, sampleRate, fftSize, harmonics,
-                        windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbV,
+                        windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbFs,
                         freqRespCal == null, frequency);
             } catch (IllegalStateException e) {
                 log.warn("Iteration 0 retry {}: {} — signal interrupted, retrying",
@@ -316,7 +321,9 @@ public class IterativeCompensateMode {
                     compSnrMargin, compStep);
         }
 
-        FftChartExporter.exportChart(result0, chartWidth, chartHeight, "results",
+        FftChartExporter exporter = new FftChartExporter();
+        exporter.setAdcFsVoltageRms(prefs.getAdcFsVoltageRms());
+        exporter.exportChart(result0, chartWidth, chartHeight, "results",
                 "Iteration 0 (uncompensated)", false,
                 "fft_chart_iter0_" + wfTs, frequency,
                 overlayFreqs0, overlayDbFs0, preCorrFreqs0, preCorrDbFs0);
@@ -380,13 +387,13 @@ public class IterativeCompensateMode {
                 SignalGenerator gen = accumulate
                         ? buildAccumulatedGenerator(frequency, sampleRate, amplitude,
                                 accCorrRe, accCorrIm, hFreqs)
-                        : new SignalGenerator(frequency, sampleRate, amplitude, lastResult);
+                        : new SignalGenerator(frequency, sampleRate, amplitude, prefs.getDacFsVoltageRms(), lastResult);
                 float[] s = CaptureWithGenerator.run(gen,
                         outDevice, inDevice, sampleRate, bitDepth, ditherBits, duration);
                 try {
                     result = fftAnalyzer.analyze(
                             s, sampleRate, fftSize, harmonics,
-                            windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbV,
+                            windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbFs,
                             freqRespCal == null, frequency);
                 } catch (IllegalStateException e) {
                     log.warn("Iteration {} retry {}: {} — signal interrupted, retrying",
@@ -436,7 +443,8 @@ public class IterativeCompensateMode {
                         compSnrMargin, compStep);
             }
 
-            FftChartExporter.exportChart(result, chartWidth, chartHeight, "results",
+            // Reuses the exporter configured for iteration 0 — same ADC full-scale.
+            exporter.exportChart(result, chartWidth, chartHeight, "results",
                     String.format("Iteration %d", iter), false,
                     String.format("fft_chart_iter%d_", iter) + wfTs, frequency,
                     overlayFreqs, overlayDbFs, preCorrFreqs, preCorrDbFs);
@@ -609,7 +617,7 @@ public class IterativeCompensateMode {
             freqs[i]     = hFreqs[h];
             i++;
         }
-        return new SignalGenerator(frequency, sampleRate, amplitude,
+        return new SignalGenerator(frequency, sampleRate, amplitude, prefs.getDacFsVoltageRms(),
                 ampRatios, phiInits, freqs);
     }
 

@@ -47,7 +47,7 @@ import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.eclipse.swt.widgets.Display;
 
 import java.io.File;
@@ -679,7 +679,7 @@ public final class GeneratorPane {
         // recompute the running generator's amplitude against it so the commanded
         // Vrms still holds, without a restart.  The dialog only writes the pref;
         // this binding applies it.
-        Bindings.onChange(group, prefs.dacFsVoltageRmsProperty(), v -> controller.refreshAmplitude());
+        Bindings.onChange(group, prefs.dacFsVoltageRmsProperty(), v -> controller.setDacFsVoltageRms(v));
 
         // ----- Duty cycle (RECTANGLE or TRIANGLE) -----------------------
         // 1 to 99 percent with 3 decimal places.  Applies to RECTANGLE
@@ -1922,9 +1922,11 @@ public final class GeneratorPane {
                             I18n.t("generator.error.save.compensatedNeedsCsv"));
                     return;
                 }
-                gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms, csv);
+                gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms,
+                        prefs.getDacFsVoltageRms(), csv);
             } else {
-                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms);
+                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms,
+                        prefs.getDacFsVoltageRms());
             }
             gen.setRectangleDuty(prefs.getGenRectangleDuty());
             // Periodic forms truncate to integer-period count; noise has

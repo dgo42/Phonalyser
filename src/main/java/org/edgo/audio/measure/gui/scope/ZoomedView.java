@@ -21,7 +21,7 @@ package org.edgo.audio.measure.gui.scope;
 import java.util.Map;
 
 import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 
 import org.eclipse.swt.SWT;

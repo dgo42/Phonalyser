@@ -43,7 +43,7 @@ import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 
 import lombok.Getter;
@@ -140,9 +140,15 @@ public final class FftAnalyzerWorker {
     private int             mainsCombSampleRate;
     private Thread worker;
 
-    //@SuppressWarnings("unused")
+    // Perf instrumentation for DebugSwitches.SHOW_FFT_ANALYZE_TIME — two
+    // nanoTime marks splitting a tick's latency into its two legs.
+    /** Set at the top of {@code doAnalysis()}; logged against it at the end of
+     *  the analysis ("1. FFT analyze took") — the pure worker-thread compute time. */
     private long startAnalyze;
-    @SuppressWarnings("unused")
+    /** Set in {@code publishResult()} when the result is handed to the SWT
+     *  asyncExec queue; logged against it in {@link #uiGotResult} ("2. FFT result
+     *  achieved UI") — the worker → UI-thread hand-off latency, including any
+     *  coalescing wait behind a slow repaint. */
     private long startSendToUi;
 
     // ─── Per-frame FFT cache (perf) ─────────────────────────────────────────
@@ -315,10 +321,10 @@ public final class FftAnalyzerWorker {
      *  frequency drifts more than a few ppm during a long average loses phase
      *  coherence — a hardware-stability concern, not corrected here. */
     private double  accumKFractional;
-    /** Discontinuity-detector selection.  The frequency-domain running-median 
-     *  rejector compares each block's spectrum to the accepted history and catches 
-     *  exactly those cases.  The Δⁿ test is kept (toggle the flag) but off by
-     *  default. */
+    /** Discontinuity-detector toggle.  The frequency-domain running-median
+     *  rejector compares each block's spectrum to the accepted history; the
+     *  earlier time-domain Δⁿ test was removed entirely once this proved the
+     *  better detector ({@code false} disables rejection altogether). */
     private static final boolean USE_SPECTRAL_DISCONTINUITY = true;
     /** Frequency-domain running-median glitch / stall rejector, run per tick
      *  on the freshly computed spectrum before it enters the cross-tick
@@ -1330,7 +1336,6 @@ public final class FftAnalyzerWorker {
      *  in milliseconds before the next attempt — derived from the
      *  configured overlap so the FFT update rate scales with the hop
      *  size. */
-    @SuppressWarnings("unused")
 	private int doAnalysis() {
         startAnalyze = System.nanoTime();
         // Generator-state transition: wipe accumulated stats so the next
@@ -1488,9 +1493,9 @@ public final class FftAnalyzerWorker {
         boolean genActive = isGeneratorActive();
         // Manual fundamental is a user-DECLARED true level — it applies to ANY source
         // (external amplifier as much as our own generator), so it must NOT be gated on
-        // genActive; resolveFundRefDbV already returns NaN unless the user enabled it.
+        // genActive; resolveFundRefDbFs already returns NaN unless the user enabled it.
         // (genActive still gates the generator FREQUENCY hints below, which do need it.)
-        double fundRefDbV = resolveFundRefDbV(prefs);
+        double fundRefDbFs = resolveFundRefDbFs(prefs);
         // The coherent de-rotation locks onto the detected fundamental, so
         // in dual-tone the hint must point at a real tone (the lower one).
         // Hinting the single-tone frequency — usually nowhere near F1/F2 —
@@ -1540,7 +1545,7 @@ public final class FftAnalyzerWorker {
         FftResult r;
         try {
             r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH,
-                    window, overlap, distMin, distMax, coherent, fundRefDbV,
+                    window, overlap, distMin, distMax, coherent, fundRefDbFs,
                     false, expectedFundHz);
         } catch (RuntimeException ex) {
             return IDLE_TICK_MS;
@@ -1653,8 +1658,8 @@ public final class FftAnalyzerWorker {
         // FftResult each tick (the worker never mutates a handed-off {@code r}),
         // and the view deep-copies on receipt.  publishResult coalesces, so a
         // slow repaint can't pile spectra up on the asyncExec queue.
-        if (log.isWarnEnabled()) {
-            log.warn("FFT took {} ms (cache MISS)", 
+        if (log.isWarnEnabled() && DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
+            log.warn("1. FFT analyze took {} ms", 
                     String.format("%.2f", (System.nanoTime() - startAnalyze) / 1_000_000.0));
         }
         publishResult(r);
@@ -1697,7 +1702,9 @@ public final class FftAnalyzerWorker {
     }
 
     public void uiGotResult() {
-        //log.warn("FFT result achieved UI in {} ms", (double)(System.nanoTime() - startSendToUi) / 1_000_000);
+        if (log.isWarnEnabled() && DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
+            log.warn("2. FFT result achieved UI in {} ms", (double)(System.nanoTime() - startSendToUi) / 1_000_000);
+        }
     }
 
     private int msForSamples(int samples, int sampleRate) {
@@ -1706,17 +1713,23 @@ public final class FftAnalyzerWorker {
     }
 
 
-    /** Computes the dBV reference anchor passed into {@link FftAnalyzer}.
-     *  In manual-fundamental mode we pass the user's value directly;
-     *  otherwise we pass {@code NaN} so the analyser uses the measured
-     *  {@code fundLinear} as its anchor. */
-    private double resolveFundRefDbV(Preferences prefs) {
+    /** Computes the dBFS reference anchor passed into {@link FftAnalyzer}:
+     *  the user's manual fundamental is resolved to its dBV anchor exactly as
+     *  before, then converted to dBFS here at the boundary — the analyzer
+     *  speaks dBFS only.  Returns {@code NaN} (no anchor) unless
+     *  manual-fundamental mode is enabled. */
+    private double resolveFundRefDbFs(Preferences prefs) {
         if (prefs.isFftManualFundEnabled()) {
             AmplitudeUnit unit = prefs.getFftManualFundUnit();
             double v = prefs.getFftManualFundVrms();
-            if (unit == AmplitudeUnit.DBV) return v;
-            if (unit == AmplitudeUnit.MV) v *= 0.001;
-            return (v > 0) ? 20.0 * Math.log10(v) : Double.NaN;
+            double dbv;
+            if (unit == AmplitudeUnit.DBV) {
+                dbv = v;
+            } else {
+                if (unit == AmplitudeUnit.MV) v *= 0.001;
+                dbv = (v > 0) ? 20.0 * Math.log10(v) : Double.NaN;
+            }
+            return dbv - prefs.getDbvOffsetDb();   // NaN propagates
         }
         return Double.NaN;
     }

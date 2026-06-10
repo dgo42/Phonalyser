@@ -33,9 +33,9 @@ import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Event;
-import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
-import org.edgo.audio.measure.cli.util.FreqRespCalibration;
-import org.edgo.audio.measure.cli.util.StereoFreqRespCalibration;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.common.Lanczos;
 import org.edgo.audio.measure.enums.Channel;
@@ -46,13 +46,14 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.widgets.BlinkBanner;
 import org.edgo.audio.measure.gui.widgets.ToolButton;
 import org.edgo.audio.measure.gui.widgets.Toolbar;
 
+import lombok.EqualsAndHashCode;
 import lombok.Getter;
-import lombok.Setter;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -125,12 +126,11 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private FreqRespResult rawLeftResult;
     private FreqRespResult rawRightResult;
 
-    /** Loaded {@code .frc} correction store, injected by {@link FreqRespPane}
-     *  (IoC) right after construction and shared with the calibration tab.
+    /** Loaded {@code .frc} correction store, constructor-injected by
+     *  {@link FreqRespPane} (IoC) and shared with the calibration tab.
      *  The wizard reads it through the getter. */
     @Getter
-    @Setter
-    private FreqRespCorrectionStore correctionStore;
+    private final FreqRespCorrectionStore correctionStore;
     /** Display copies, with the currently-loaded calibration divided in (if
      *  any).  {@link #onCalibrationChanged()} keeps these in sync with the
      *  store every time the user loads / clears / wizard-applies a new
@@ -221,7 +221,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
     // lives in AbstractFreqDomainView.  Call paintCachedStatic(...) from
     // onPaint; the base owns disposal via disposeTraceBuffer().
 
-    public FreqRespView(Composite parent) {
+    public FreqRespView(Composite parent, FreqRespCorrectionStore correctionStore) {
         // Push prefs-driven entries (background, L/R trace, phase, RIAA)
         // through the super override map so the base allocates each
         // colour exactly once.  Common entries (grid, axis, text,
@@ -237,6 +237,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 // L/R channel buttons share the scope's channel colours (cyan/yellow).
                 ColorRole.LEFT_BTN_CHAN,  Preferences.instance().getOscLeftChannelColor(),
                 ColorRole.RIGHT_BTN_CHAN, Preferences.instance().getOscRightChannelColor()));
+        this.correctionStore = correctionStore;
 
         allocateFonts();
 
@@ -731,18 +732,22 @@ public final class FreqRespView extends AbstractFreqDomainView {
         return new double[] { minDb, maxDb };
     }
 
-    /** The drawn magnitude top: {@code topPref}, extended upward to keep ≥ 20 dB of
-     *  headroom above the highest DISPLAYED (correction-applied) trace point in the
-     *  visible band {@code [fLo, fHi]}, so a corrected peak — e.g. a notch un-notched
-     *  tens of dB above 0 dBFS — is never clipped at the ceiling.  No visible trace ⇒
-     *  {@code topPref} unchanged; only the drawn range widens, never the stored pref. */
+    /** Returns {@code topPref}, raised as needed to keep ≥ {@link #MAG_HEADROOM_DB}
+     *  of headroom above the highest DISPLAYED (correction-applied) trace point in
+     *  the visible band {@code [fLo, fHi]}, so a corrected peak — e.g. a notch
+     *  un-notched tens of dB above 0 dBFS — is never clipped at the ceiling.  No
+     *  visible trace ⇒ {@code topPref} unchanged.  The Maximize button
+     *  ({@link #resetToDefaultView}) and Auto-setup
+     *  ({@link #autoSetupMagnitudeRange}) PERSIST the returned value via
+     *  {@code setFreqRespMagTopDb}; only {@link #magCeilingDb()} uses it as a
+     *  transient scrollbar bound. */
     private double softMagTopDb(double topPref, double fLo, double fHi) {
         Preferences prefs = Preferences.instance();
         // Compare mode draws the diff curve, not the raw traces — keep the headroom
         // above the compared-signal peak (compareSmoothedMax), not leftResult/right.
         if (prefs.isFreqRespCompareMode()) {
             return Double.isFinite(compareSmoothedMax)
-                    ? Math.max(topPref, compareSmoothedMax + 20.0) : topPref;
+                    ? Math.max(topPref, compareSmoothedMax + MAG_HEADROOM_DB) : topPref;
         }
         double maxDb = Double.NEGATIVE_INFINITY;
         if (prefs.isFreqRespLeftVisible()  && leftResult  != null) {
@@ -753,7 +758,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
             double[] ext = magExtremaInBand(rightResult, fLo, fHi);
             if (ext != null) maxDb = Math.max(maxDb, ext[1]);
         }
-        return Double.isFinite(maxDb) ? Math.max(topPref, maxDb + 20.0) : topPref;
+        return Double.isFinite(maxDb) ? Math.max(topPref, maxDb + MAG_HEADROOM_DB) : topPref;
     }
 
     /** Magnitude scrollbar ceiling (dB): the +20 dB default raised, when a signal is
@@ -841,40 +846,58 @@ public final class FreqRespView extends AbstractFreqDomainView {
         }
     }
 
-    /** Builds a 64-bit fingerprint that changes whenever any input to the
+    /** Static-trace-layer cache key.  Lombok {@code @EqualsAndHashCode} derives
+     *  the fingerprint hash from every rendering input — adding an input is
+     *  adding a field, with no hand-rolled hash chain to forget it in.  The
+     *  result fields contribute their identity hash (no {@code hashCode}
+     *  override), matching the previous behaviour. */
+    @RequiredArgsConstructor
+    @EqualsAndHashCode
+    private static final class TraceFingerprint {
+        private final int width;
+        private final int height;
+        private final double freqMin;
+        private final double freqMax;
+        private final double magTop;
+        private final double magBot;
+        private final boolean phaseVisible;
+        private final boolean leftVisible;
+        private final boolean rightVisible;
+        private final boolean showRiaa;
+        private final boolean reverseRiaa;
+        private final boolean iecAmendment;
+        private final boolean compareMode;
+        private final int compareSmoothWindow;
+        // Appearance prefs — included so a Preferences-dialog OK that changes
+        // the width / signal / phase / reference / background invalidates the
+        // static-layer cache and the trace rebuilds in the new look.
+        private final double lineWidth;
+        private final int signalColor;
+        private final int phaseColor;
+        private final int referenceColor;
+        private final int backgroundColor;
+        private final FreqRespResult leftResult;
+        private final FreqRespResult rightResult;
+    }
+
+    /** Builds the fingerprint hash that changes whenever any input to the
      *  static-layer rendering changes.  When the fingerprint matches, the
      *  cached trace buffer is blitted instead of re-rendered. */
     private long computeFingerprint(Rectangle area, Preferences prefs,
                                     boolean phaseVisible,
                                     double freqMin, double freqMax,
                                     double magTop, double magBot) {
-        long h = 1469598103934665603L;
-        long P = 1099511628211L;
-        h = (h ^ area.width)  * P;
-        h = (h ^ area.height) * P;
-        h = (h ^ Double.doubleToLongBits(freqMin)) * P;
-        h = (h ^ Double.doubleToLongBits(freqMax)) * P;
-        h = (h ^ Double.doubleToLongBits(magTop))  * P;
-        h = (h ^ Double.doubleToLongBits(magBot))  * P;
-        h = (h ^ (phaseVisible ? 1 : 0)) * P;
-        h = (h ^ (prefs.isFreqRespLeftVisible()  ? 1 : 0)) * P;
-        h = (h ^ (prefs.isFreqRespRightVisible() ? 1 : 0)) * P;
-        h = (h ^ (prefs.isFreqRespShowRiaa()     ? 1 : 0)) * P;
-        h = (h ^ (prefs.isFreqRespReverseRiaa()  ? 1 : 0)) * P;
-        h = (h ^ (prefs.isFreqRespIecAmendment() ? 1 : 0)) * P;
-        h = (h ^ (prefs.isFreqRespCompareMode()  ? 1 : 0)) * P;
-        h = (h ^ prefs.getFreqRespCompareSmoothWindow()) * P;
-        // Colour prefs — included so a Preferences-dialog OK that
-        // changes the signal / phase / reference / background colour
-        // invalidates the static-layer paint cache and the trace
-        // buffer rebuilds in the new palette on the next paint.
-        h = (h ^ prefs.getFreqRespSignalColor())     * P;
-        h = (h ^ prefs.getFreqRespPhaseColor())      * P;
-        h = (h ^ prefs.getFreqRespReferenceColor())  * P;
-        h = (h ^ prefs.getFreqRespBackgroundColor()) * P;
-        h = (h ^ System.identityHashCode(leftResult))  * P;
-        h = (h ^ System.identityHashCode(rightResult)) * P;
-        return h;
+        return new TraceFingerprint(
+                area.width, area.height,
+                freqMin, freqMax, magTop, magBot, phaseVisible,
+                prefs.isFreqRespLeftVisible(), prefs.isFreqRespRightVisible(),
+                prefs.isFreqRespShowRiaa(), prefs.isFreqRespReverseRiaa(),
+                prefs.isFreqRespIecAmendment(), prefs.isFreqRespCompareMode(),
+                prefs.getFreqRespCompareSmoothWindow(),
+                prefs.getFreqRespLineWidth(),
+                prefs.getFreqRespSignalColor(), prefs.getFreqRespPhaseColor(),
+                prefs.getFreqRespReferenceColor(), prefs.getFreqRespBackgroundColor(),
+                leftResult, rightResult).hashCode();
     }
 
     // -------------------------------------------------------------------------
@@ -894,7 +917,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // identical pen handling.
         int step = 5;
         int n = plot.width / step + 1;
-        paintPolyline(gc, plot, color(ColorRole.RIAA_TRACE), SWT.LINE_DASH, 2, n,
+        paintPolyline(gc, plot, color(ColorRole.RIAA_TRACE), SWT.LINE_DASH,
+                (float) prefs.getFreqRespLineWidth(), n,
                 i -> plot.x + i * step,
                 i -> {
                     double f = FreqRespFormat.xFractionToFreq((double) (i * step) / plot.width,
@@ -947,8 +971,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // no further subtraction.  Same array is read by the min/max
         // table and the crosshair Δ readout for guaranteed agreement.
         double[] smoothed = getCompareDiff(src, reverse, iec).smoothed;
-        // Lanczos-smoothed where the span is sparse, else linear; NaN smoothed values
-        // (smoothing-window edges) → NaN Y → dropped by the painter.
+        // Lanczos-smoothed where the span is sparse, else linear.  NaN smoothed
+        // values (no valid point in the smoothing window) render as gaps; the
+        // NaN-aware double[] kernel skips them as taps, so valid points draw all
+        // the way up to a gap instead of blanking a kernel-width around it.
         paintDataTrace(gc, plot, freqMin, freqMax, color(ColorRole.COMPARE_TRACE), SWT.LINE_SOLID,
                 freqs, smoothed, v -> dbToYf(v, plot, magTop, magBot));
     }
@@ -1088,10 +1114,11 @@ public final class FreqRespView extends AbstractFreqDomainView {
     public void autoSetupCompare(Preferences prefs) {
         if (!recomputeCompareAnchor(prefs)) return;
 
-        // Vertical window — keep ≥ 20 dB of headroom above the compared-signal
-        // peak so its marker never clips (the same +20 dB rule the other views and
-        // modes use); below stays a tight 1 dB pad (min −1 dB) around the 0 dB anchor.
-        double newTop = compareSmoothedMax + 20.0;
+        // Vertical window — keep ≥ MAG_HEADROOM_DB of headroom above the
+        // compared-signal peak so its marker never clips (the same rule the other
+        // views and modes use); below stays a tight 1 dB pad (min −1 dB) around
+        // the 0 dB anchor.
+        double newTop = compareSmoothedMax + MAG_HEADROOM_DB;
         double newBot = (compareSmoothedMin < -1.0) ? compareSmoothedMin - 1.0 : -1.0;
         newTop = Math.min(MAG_TOP_ZOOM_MAX_DB, newTop);
         newBot = Math.max(MAG_BOT_MIN_DB, newBot);
@@ -1239,7 +1266,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private void drawTraces(GC gc, Rectangle plot, double freqMin, double freqMax,
                             double magTop, double magBot) {
         Preferences prefs = Preferences.instance();
-        gc.setLineWidth(2);
 
         if (prefs.isFreqRespLeftVisible() && leftResult != null) {
             paintTrace(gc, leftResult, plot, freqMin, freqMax, magTop, magBot,
@@ -1314,13 +1340,14 @@ public final class FreqRespView extends AbstractFreqDomainView {
                                 DoubleUnaryOperator toY) {
         double scale = lanczosScale(freqs, freqMin, freqMax, plot.width);
         int n = freqs.length;
+        float lw = (float) Preferences.instance().getFreqRespLineWidth();
         if (scale > 0) {
-            paintPolyline(gc, plot, color, lineStyle, 2, plot.width,
+            paintPolyline(gc, plot, color, lineStyle, lw, plot.width,
                     i -> plot.x + i,
                     i -> toY.applyAsDouble(Lanczos.lanczos(data, n,
                             fracIndex(freqs, xToFreq(plot.x + i, plot, freqMin, freqMax, true)), scale)));
         } else {
-            paintPolyline(gc, plot, color, lineStyle, 2, n,
+            paintPolyline(gc, plot, color, lineStyle, lw, n,
                     i -> freqToX(freqs[i], plot, freqMin, freqMax, true),
                     i -> toY.applyAsDouble(data[i]));
         }
@@ -1342,8 +1369,9 @@ public final class FreqRespView extends AbstractFreqDomainView {
         double[] phaseRad = result.getPhaseRad();
         if (freqs == null || phaseRad == null) return;
         double scale = lanczosScale(freqs, freqMin, freqMax, plot.width);
+        float lw = (float) Preferences.instance().getFreqRespLineWidth();
         if (scale <= 0) {
-            paintPolyline(gc, plot, color, SWT.LINE_DOT, 2, freqs.length,
+            paintPolyline(gc, plot, color, SWT.LINE_DOT, lw, freqs.length,
                     i -> freqToX(freqs[i], plot, freqMin, freqMax, true),
                     i -> phaseToYf(Math.toDegrees(phaseRad[i]), plot));
             return;
@@ -1361,7 +1389,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         for (int k = 1; k < len; k++) {
             uw[k] = uw[k - 1] + wrapToPi(phaseRad[from + k] - phaseRad[from + k - 1]);
         }
-        paintPolyline(gc, plot, color, SWT.LINE_DOT, 2, plot.width,
+        paintPolyline(gc, plot, color, SWT.LINE_DOT, lw, plot.width,
                 i -> plot.x + i,
                 i -> phaseToYf(Math.toDegrees(wrapToPi(Lanczos.lanczos(uw, len,
                         fracIndex(freqs, xToFreq(plot.x + i, plot, freqMin, freqMax, true)) - from, scale))), plot));
@@ -1544,6 +1572,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  ever lives.  Horizontal: 0 Hz to Nyquist (sampleRate / 2).
      *  Vertical: +20 dB to −300 dB. */
     private static final double MAG_TOP_MAX_DB  =   20.0;
+    /** Headroom kept above the highest displayed trace point when Maximize /
+     *  Auto-setup fit the magnitude top — room for a correction-lifted peak to
+     *  breathe without clipping at the ceiling. */
+    private static final double MAG_HEADROOM_DB =   20.0;
     /** Upper bound when zooming / panning via the mouse wheel (Ctrl /
      *  Ctrl+Shift / plain wheel).  Wider than the maximize default so
      *  the user can scroll up into the "signal is louder than DAC FS"

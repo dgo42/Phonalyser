@@ -98,7 +98,15 @@ public class WasapiGenerator implements AudioPlayback {
 
             boolean exclusive = initializeExclusive(bufDuration);
             if (!exclusive) {
-                log.info("WASAPI exclusive refused — re-trying in shared mode");
+                // WARN, not info: in shared mode the Windows audio engine sits in
+                // the signal path — its per-channel session volume / balance and
+                // any APO scale the samples, so playback levels are no longer the
+                // raw measurement-grade output exclusive mode guarantees.
+                if (log.isWarnEnabled()) {
+                    log.warn("WASAPI exclusive refused — falling back to SHARED mode: "
+                            + "the Windows mixer (volume/balance/APOs) now scales the output; "
+                            + "absolute levels are not measurement-grade");
+                }
                 release(audioClient);
                 audioClient = activateAudioClient(immDevice);
                 initializeShared();

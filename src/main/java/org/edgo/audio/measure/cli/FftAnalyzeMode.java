@@ -28,17 +28,17 @@ import org.edgo.audio.measure.cli.util.AdcCorrection;
 import org.edgo.audio.measure.cli.util.AdcCorrectionHelper;
 import org.edgo.audio.measure.cli.util.ArgParser;
 import org.edgo.audio.measure.cli.util.ClockMismatch;
-import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
-import org.edgo.audio.measure.cli.util.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.wav.WavReader;
 
-import lombok.experimental.UtilityClass;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -58,8 +58,11 @@ import lombok.extern.log4j.Log4j2;
  * <p>Required: {@code --fft-size}, {@code --width}, {@code --height}.
  */
 @Log4j2
-@UtilityClass
 public class FftAnalyzeMode {
+
+    /** The CLI's single Preferences instance (transient mode) — injected by Main. */
+    @Setter
+    private Preferences prefs;
 
     public void run(String[] args) throws Exception {
         String fileArg      = ArgParser.getArgValue(args, "--fft-analyze");
@@ -85,7 +88,7 @@ public class FftAnalyzeMode {
         String  loadWeightedArg = ArgParser.getArgValue(args, "--load-weighted");
         if (adcFsArg != null) {
             // Inject for this run only — Main marked Preferences transient, so not persisted.
-            Preferences.instance().setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
+            prefs.setAdcFsVoltageRms(Double.parseDouble(adcFsArg));
         }
 
         if (fftSizeArg == null) {
@@ -131,6 +134,8 @@ public class FftAnalyzeMode {
         } else {
             fundRefDbV = Double.NaN;
         }
+        // The analyzer speaks dBFS only — convert the user-supplied dBV anchor at the boundary.
+        double fundRefDbFs = fundRefDbV - prefs.getDbvOffsetDb();
 
         Double genFreqHz = freqArg != null ? Double.parseDouble(freqArg) : null;
 
@@ -186,7 +191,7 @@ public class FftAnalyzeMode {
         boolean willPostCorrect = adcCompArg != null || freqRespCalArg != null;
         double expectedFundHz = genFreqHz != null ? genFreqHz : Double.NaN;
         FftResult result = fftAnalyzer.analyze(trimmed, sampleRate, fftSize, harmonics,
-                windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbV,
+                windowType, overlap, snrFreqMin, snrFreqMax, coherent, fundRefDbFs,
                 !willPostCorrect, expectedFundHz);
 
         if (adcCompArg != null) {
@@ -225,7 +230,9 @@ public class FftAnalyzeMode {
 
         fftAnalyzer.exportFftCsv(result, "results");
         HarmonicsCsv.export(result, "results");
-        FftChartExporter.exportChart(result, chartWidth, chartHeight, "results",
+        FftChartExporter exporter = new FftChartExporter();
+        exporter.setAdcFsVoltageRms(prefs.getAdcFsVoltageRms());
+        exporter.exportChart(result, chartWidth, chartHeight, "results",
                 commentArg, subHarmArg != null, null, genFreqHz,
                 overlayFreqs, overlayDbFs, preCorrFreqs, preCorrDbFs);
         if (genFreqHz != null) {

@@ -27,7 +27,7 @@ import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.DeviceRef;
@@ -196,6 +196,8 @@ public final class FreqRespAnalyzerWorker {
                     .durationSec(prefs.getFreqRespDurationSec())
                     .leadInSec(prefs.getFreqRespLeadInSec())
                     .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
+                    .dacFsVoltageRms(prefs.getDacFsVoltageRms())
+                    .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
                     .applyCalibration(prefs.isFreqRespApplyCalibration())
                     .captureProgress(activeProgress)
                     .build();

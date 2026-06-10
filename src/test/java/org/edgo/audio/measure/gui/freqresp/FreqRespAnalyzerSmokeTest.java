@@ -21,7 +21,6 @@ package org.edgo.audio.measure.gui.freqresp;
 import org.edgo.audio.measure.cli.util.StereoSamples;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.gui.preferences.Preferences;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.junit.jupiter.api.Test;
 
@@ -53,6 +52,11 @@ class FreqRespAnalyzerSmokeTest {
     private static final double DURATION_SEC   = 1.0;
     private static final double LEAD_IN_SEC    = 0.1;
     private static final double AMP_VRMS       = 0.5;
+    /** Literal calibration values (the factory defaults) — both the stub's
+     *  capture-side scaling and the analyzer's normalisation use these, so the
+     *  test is self-consistent and needs no Preferences singleton. */
+    private static final double DAC_FS_VRMS    = 2.79351;
+    private static final double ADC_FS_VRMS    = 1.7931;
 
     @Test
     void deconvolutionRecoversFlatResponseFromDelayLineOnBothChannels() throws Exception {
@@ -172,6 +176,8 @@ class FreqRespAnalyzerSmokeTest {
                 .durationSec(DURATION_SEC)
                 .leadInSec(LEAD_IN_SEC)
                 .amplitudeVrms(AMP_VRMS)
+                .dacFsVoltageRms(DAC_FS_VRMS)
+                .adcFsVoltageRms(ADC_FS_VRMS)
                 .applyCalibration(false);
     }
 
@@ -191,7 +197,7 @@ class FreqRespAnalyzerSmokeTest {
             // the ADC reads back as that same fraction of full-scale.  The
             // deconvolution then divides this factor back out to recover
             // unity passband, so the test signal must include it.
-            double dacDrivePeak = AMP_VRMS * Math.sqrt(2.0) / Preferences.instance().getDacFsVoltageRms();
+            double dacDrivePeak = AMP_VRMS * Math.sqrt(2.0) / DAC_FS_VRMS;
             for (int i = 0; i < sweep.length; i++) {
                 if (offset + i < y.length) {
                     y[offset + i] = (float) (sweep[i] * dacDrivePeak);

@@ -18,24 +18,33 @@
 
 package org.edgo.audio.measure.gui.common;
 
+import lombok.experimental.UtilityClass;
+
 /**
  * Central home for compile-time DEBUG switches — hand-toggled overlays and
  * diagnostics that never reach the UI.  Collecting them here makes it easy to
  * see at a glance what is currently turned on (and to switch it all off before
  * a release).
  */
+@UtilityClass
 public final class DebugSwitches {
 
     /** DEBUG hard switch: Overlay the mains comb's frequency response (red) on the FFT, anchored
      *  at H2's level, so the notch positions vs the harmonics are visible.
      *  {@code false} removes the overlay. */
-    public static final boolean SHOW_MAINS_COMB_RESPONSE = true;
+    public static final boolean SHOW_MAINS_COMB_RESPONSE = Boolean.parseBoolean("true");
 
     /** DEBUG hard switch: overlay the spectral discontinuity detector's three
      *  reject gates (gate-2 floor-reference curve, gate-1 near-carrier pedestal
      *  line, gate-3 total-power line) on the FFT, anchored to the displayed
      *  floor, so it is visible what each gate would reject. */
-    public static final boolean SHOW_DISCONTINUITY_GATES = false;
+    public static final boolean SHOW_DISCONTINUITY_GATES = Boolean.parseBoolean("false");
 
-    private DebugSwitches() {}
+    /** DEBUG hard switch: log the three stages of FFT result latency, one WARN
+     *  line each per displayed frame — 1. worker analyze time
+     *  ({@code FftAnalyzerWorker}), 2. worker→UI handoff (asyncExec coalescing
+     *  queue), 3. first repaint of the fresh result ({@code FftView}, timed via
+     *  {@code startRender}/{@code gotFftResult}).  WARN so the timings show up
+     *  without touching the logger config. */
+    public static final boolean SHOW_FFT_ANALYZE_TIME = Boolean.parseBoolean("false");
 }

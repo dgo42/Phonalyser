@@ -48,9 +48,8 @@ import org.edgo.audio.measure.gui.helpviewer.AboutDialog;
 import org.edgo.audio.measure.gui.helpviewer.HelpUrls;
 import org.edgo.audio.measure.gui.helpviewer.HelpViewer;
 import org.edgo.audio.measure.gui.helpviewer.UpdateChecker;
-import org.edgo.audio.measure.gui.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
 
 import lombok.extern.log4j.Log4j2;
@@ -265,18 +264,10 @@ public final class MainWindow {
             // down so it doesn't keep using the old backend after the
             // user switched.
             Runnable resume = mainTab.pauseForDialog();
-            final TabOrientation origOrientation = prefs.getTabOrientation();
-            final boolean origSmallIcons  = prefs.isSmallIconsInMainTab();
-            new PreferencesDialog(shell).open(() -> {
-                resume.run();
-                // Layout-affecting Look & Feel prefs require a shell
-                // rebuild (top tabs ↔ left sidebar ↔ icon size); piggyback
-                // on the existing language-switch recreate mechanism.
-                if (origOrientation != prefs.getTabOrientation()
-                        || origSmallIcons != prefs.isSmallIconsInMainTab()) {
-                    requestRecreate();
-                }
-            });
+            // Look & Feel layout prefs (tab orientation / icon size) apply
+            // LIVE — MainTab rebuilds its host chrome from the property
+            // bindings; no shell recreate needed.
+            new PreferencesDialog(shell).open(resume);
         });
 
         MenuItem helpCascade = new MenuItem(menuBar, SWT.CASCADE);

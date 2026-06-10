@@ -38,13 +38,14 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.TabFolder;
 import org.eclipse.swt.widgets.TabItem;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.fft.FftPane;
 import org.edgo.audio.measure.gui.generator.GeneratorPane;
-import org.edgo.audio.measure.gui.enums.TabOrientation;
+import org.edgo.audio.measure.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 
 import lombok.extern.log4j.Log4j2;
@@ -97,6 +98,17 @@ public final class MainTab {
     private MultifunctionalTab    multifunctional;
     @SuppressWarnings("unused") // Tab class instances are created for their UI; we don't need to keep a method reference yet.
     private FrequencyResponseTab  frequencyResponse;
+    /** Content composites — created ONCE; the host builders re-parent them
+     *  into whichever chrome (top TabFolder / left sidebar) is active. */
+    private Composite multiContent;
+    private Composite frContent;
+    /** Root of the current host chrome (TabFolder or sidebar composite) —
+     *  disposed and rebuilt on an orientation / icon-size change. */
+    private Composite hostChrome;
+    /** Live selected-tab index, updated by both hosts' selection events;
+     *  restored across chrome rebuilds and persisted once on shell dispose. */
+    private int activeTabIndex;
+    private boolean chromeRebuildPending;
 
     public MainTab(Shell shell) {
         this.shell   = shell;
@@ -106,7 +118,27 @@ public final class MainTab {
         // request — otherwise the request returns null and the user
         // thinks the device failed to open.
         SharedCapture.instance();
+        Preferences prefs = Preferences.instance();
+        activeTabIndex = clampSelection(prefs.getActiveTabIndex(), 2);
+        // Content first (parented to the shell), chrome around it after —
+        // buildHost() re-parents the content into the active chrome.
+        multiContent = new Composite(shell, SWT.NONE);
+        multiContent.setLayout(new FillLayout());
+        multifunctional = new MultifunctionalTab(multiContent, shell);
+        frContent = new Composite(shell, SWT.NONE);
+        frequencyResponse = new FrequencyResponseTab(frContent);
         buildHost();
+        // Look & Feel layout prefs apply LIVE: the dialog writes the pref,
+        // the chrome rebuilds around the untouched content.  Apply can
+        // change both prefs at once — coalesce to a single rebuild.
+        Bindings.onChange(shell, prefs.tabOrientationProperty(),      v -> scheduleChromeRebuild());
+        Bindings.onChange(shell, prefs.smallIconsInMainTabProperty(), v -> scheduleChromeRebuild());
+        // Persist the selected tab once, on shell dispose (per-build
+        // listeners would go stale across chrome rebuilds).
+        shell.addDisposeListener(e -> {
+            prefs.setActiveTabIndex(activeTabIndex);
+            prefs.save();
+        });
     }
 
     /** Two-phase setup: {@link MainWindow} calls this after it has read
@@ -153,39 +185,47 @@ public final class MainTab {
         }
     }
 
+    /** Coalesces the orientation + icon-size property events (the dialog's
+     *  Apply can fire both) into one chrome rebuild on the next UI tick. */
+    private void scheduleChromeRebuild() {
+        if (chromeRebuildPending) return;
+        chromeRebuildPending = true;
+        display.asyncExec(() -> {
+            chromeRebuildPending = false;
+            if (shell.isDisposed()) return;
+            // Park the content composites on the shell so disposing the
+            // old chrome can't take them (and the panes inside) with it.
+            multiContent.setParent(shell);
+            frContent.setParent(shell);
+            hostChrome.dispose();
+            buildHost();
+            shell.layout(true, true);
+        });
+    }
+
     private void buildTopTabs() {
         Preferences prefs = Preferences.instance();
         int iconPx = prefs.isSmallIconsInMainTab()
                 ? TOP_ICON_SMALL_PX
                 : TOP_ICON_BIG_PX;
         TabFolder tabFolder = new TabFolder(shell, SWT.NONE);
+        hostChrome = tabFolder;
 
         TabItem multiItem = new TabItem(tabFolder, SWT.NONE);
         multiItem.setText(I18n.t("tab.multifunctional"));
         multiItem.setImage(renderTabIcon(SvgPaths.SWISS_ARMY_KNIFE, iconPx));
-        Composite multiContent = new Composite(tabFolder, SWT.NONE);
-        multiContent.setLayout(new FillLayout());
+        multiContent.setParent(tabFolder);
         multiItem.setControl(multiContent);
-        multifunctional = new MultifunctionalTab(multiContent, shell);
 
         TabItem frItem = new TabItem(tabFolder, SWT.NONE);
         frItem.setText(I18n.t("tab.frequencyResponse"));
         frItem.setImage(renderTabIcon(SvgPaths.RIAA_IEC_CURVE, iconPx));
-        Composite frContent = new Composite(tabFolder, SWT.NONE);
+        frContent.setParent(tabFolder);
         frItem.setControl(frContent);
-        frequencyResponse = new FrequencyResponseTab(frContent);
 
-        // Restore the last-selected tab; default to Multifunctional.
-        int sel = clampSelection(prefs.getActiveTabIndex(), tabFolder.getItemCount());
-        tabFolder.setSelection(sel);
-        // Persist selection on dispose so the next launch reopens the
-        // same tab regardless of orientation.
-        shell.addDisposeListener(e -> {
-            if (!tabFolder.isDisposed()) {
-                prefs.setActiveTabIndex(tabFolder.getSelectionIndex());
-                prefs.save();
-            }
-        });
+        tabFolder.setSelection(activeTabIndex);
+        tabFolder.addListener(SWT.Selection,
+                e -> activeTabIndex = tabFolder.getSelectionIndex());
     }
 
     private void buildLeftSidebar() {
@@ -195,6 +235,7 @@ public final class MainTab {
                 ? LEFT_BAR_WIDTH_SMALL_PX
                 : LEFT_BAR_WIDTH_BIG_PX;
         Composite root = new Composite(shell, SWT.NONE);
+        hostChrome = root;
         GridLayout rootLayout = new GridLayout(2, false);
         rootLayout.marginWidth = 0;
         rootLayout.marginHeight = 0;
@@ -217,16 +258,14 @@ public final class MainTab {
         StackLayout stack = new StackLayout();
         contentHost.setLayout(stack);
 
-        Composite multiContent = new Composite(contentHost, SWT.NONE);
-        multiContent.setLayout(new FillLayout());
-        multifunctional = new MultifunctionalTab(multiContent, shell);
+        multiContent.setParent(contentHost);
+        frContent.setParent(contentHost);
 
-        Composite frContent = new Composite(contentHost, SWT.NONE);
-        frequencyResponse = new FrequencyResponseTab(frContent);
-
+        // Owned by this chrome generation — disposed with it, not with the
+        // shell, so orientation round-trips don't accumulate colours.
         Color hoverBg    = new Color(display, 0xE6, 0xEE, 0xF8);
         Color selectedBg = new Color(display, 0xCD, 0xDD, 0xF5);
-        shell.addDisposeListener(e -> {
+        root.addDisposeListener(e -> {
             hoverBg.dispose();
             selectedBg.dispose();
         });
@@ -241,25 +280,14 @@ public final class MainTab {
                 I18n.t("tab.frequencyResponse"),
                 frContent, hoverBg, selectedBg);
 
-        for (SidebarButton b : buttons) {
-            b.setSiblings(buttons);
-            b.setStack(stack, contentHost);
+        for (int i = 0; i < buttons.length; i++) {
+            buttons[i].setSiblings(buttons);
+            buttons[i].setStack(stack, contentHost);
+            final int idx = i;
+            buttons[i].addListener(SWT.MouseDown, e -> activeTabIndex = idx);
         }
 
-        // Restore the last-selected tab; default to Multifunctional.
-        int sel = clampSelection(prefs.getActiveTabIndex(), buttons.length);
-        buttons[sel].select();
-
-        // Persist active-tab selection on dispose.
-        shell.addDisposeListener(e -> {
-            for (int i = 0; i < buttons.length; i++) {
-                if (buttons[i].isSelected()) {
-                    prefs.setActiveTabIndex(i);
-                    prefs.save();
-                    return;
-                }
-            }
-        });
+        buttons[activeTabIndex].select();
     }
 
     private static int clampSelection(int v, int n) {
@@ -358,10 +386,6 @@ public final class MainTab {
         void setStack(StackLayout stack, Composite host) {
             this.stack = stack;
             this.contentHost = host;
-        }
-
-        boolean isSelected() {
-            return selected;
         }
 
         void select() {

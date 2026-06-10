@@ -49,7 +49,7 @@ import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.generator.FftBinSnap;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.preferences.Preferences;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.BlinkBanner;
 import org.edgo.audio.measure.gui.widgets.ToolButton;
@@ -79,6 +79,23 @@ public final class ScopeView extends AbstractMeasurementView {
      *  vertical-scrollbar math can size its thumb against the same grid
      *  the renderer uses. */
     static final         int DIVISIONS_Y    = 10;
+
+    /** Sub-ticks per grid division along each cross-hair arm
+     *  ({@code CrossHairSpec.subTicksPerDivision}) — a tick COUNT, not a length:
+     *  5 gives the classic 0.2-div minor marks of a scope graticule. */
+    private final static int TICKS_PER_DIV = 5;
+    /** Half-length in px of each cross-hair sub-tick, drawn perpendicular to the
+     *  arm ({@code CrossHairSpec.subTickHalfLen}) — distinct from the views' axis
+     *  tick lengths, which size the ticks along the chart edges instead. */
+    private final static int TICK_HALF_LEN = 4;
+
+    /** How far (px) the trace polyline's end points are pushed OUTSIDE the
+     *  canvas: the painter's clip hides the overhang, but the stroke's
+     *  CAP_ROUND endpoint then lies beyond the visible area, so the
+     *  antialiased trace reaches both edges at full intensity instead of
+     *  fading where a cap would sit.  Must exceed the largest line width's
+     *  cap radius (5 px wide → 2.5 px). */
+    private final static int TRACE_EDGE_OVERHANG_PX = 4;
 
     // All scope colours live in the AbstractMeasurementView palette
     // (background, grid, text, crosshair, blink lit/dim, left/right
@@ -740,7 +757,7 @@ public final class ScopeView extends AbstractMeasurementView {
                  null, null,
                  0, 0,
                  new CrossHairSpec(0.5, 0.5, color(ColorRole.CROSSHAIR),
-                                   MAJOR_TICK_LEN, MINOR_TICK_LEN,
+                                   TICKS_PER_DIV, TICK_HALF_LEN,
                                    DIVISIONS_X, DIVISIONS_Y));
         drawWaveforms(gc, w, h);
         drawSliders(gc, w, h);
@@ -2406,6 +2423,15 @@ public final class ScopeView extends AbstractMeasurementView {
 
 
 
+    /** X position for sinc-trace point {@code i} of {@code width + 2}: the first
+     *  and last point map {@link #TRACE_EDGE_OVERHANG_PX} outside the canvas (see
+     *  the constant's doc), the rest one per pixel column. */
+    private int sincTraceX(int i, int width) {
+        if (i == 0)         return -TRACE_EDGE_OVERHANG_PX;
+        if (i == width + 1) return width - 1 + TRACE_EDGE_OVERHANG_PX;
+        return i - 1;
+    }
+
     /**
      * Draws a waveform.  When {@code samplesPerPx ≤ Lanczos.MAX_LANCZOS_DOWNSAMPLE}
      * the signal is band-limit-reconstructed via a Lanczos-windowed sinc kernel
@@ -2428,31 +2454,41 @@ public final class ScopeView extends AbstractMeasurementView {
         double samplesPerPx = (double) dispCount / width;
         double pxPerSample = (double) width / dispCount;
         if (samplesPerPx <= Lanczos.MAX_LANCZOS_DOWNSAMPLE) {
-            // Reconstruct one Y per pixel column (sinc or linear) and stroke it through the
-            // shared paintPolyline — the same clipped-Path renderer as the FFT / FreqResp
-            // traces.  One point per column, so the envelope-bars pass stays idle and only
-            // the smooth Pass-2 Path draws.  The lanczos kernel still reads its own
-            // LANCZOS_PADDING samples, so the edge values are accurate.
+            // Stroke through the shared paintPolyline — the same clipped-Path renderer as
+            // the FFT / FreqResp traces.  Sinc reconstructs one Y per pixel column (the
+            // kernel's scale = samplesPerPx integrates the in-between samples, and it
+            // still reads its own LANCZOS_PADDING samples, so edge values are accurate);
+            // linear strokes one point per SAMPLE so no peak between columns is lost.
             Rectangle plot = new Rectangle(0, 0, width, height);
-            int lw = Math.max(1, Math.round(lineWidth));
             if (sincEnabled) {
                 double scale = Math.max(1.0, samplesPerPx);
-                paintPolyline(gc, plot, color, SWT.LINE_SOLID, lw, width,
-                        i -> i,
+                // One reconstructed point per pixel column, plus one anchor point
+                // TRACE_EDGE_OVERHANG_PX outside each edge so the stroke caps
+                // render beyond the clip (full edge intensity).
+                paintPolyline(gc, plot, color, SWT.LINE_SOLID, lineWidth, width + 2,
+                        i -> sincTraceX(i, width),
                         i -> centerY - (Lanczos.lanczos(data, n,
-                                dispStart + subSampleOffset + i * samplesPerPx, scale) - dcOffset) * vScale);
+                                dispStart + subSampleOffset + sincTraceX(i, width) * samplesPerPx,
+                                scale) - dcOffset) * vScale);
             } else {
-                // Linear: straight lines between samples — evaluate the linear interpolant
-                // at each pixel so the per-column point lands on the sample-to-sample segment.
-                paintPolyline(gc, plot, color, SWT.LINE_SOLID, lw, width,
-                        i -> i,
+                // Linear: stroke the actual samples — the linear trace IS the polyline
+                // through the samples, exact at any zoom.  Unlike per-column interpolation
+                // it keeps peaks that fall between pixel columns when samplesPerPx > 1;
+                // paintPolyline column-buckets the surplus points.  The two end points
+                // are pushed TRACE_EDGE_OVERHANG_PX outside the canvas so the stroke
+                // caps render beyond the clip (full edge intensity).
+                double shiftPx = subSampleOffset * pxPerSample;
+                int last = dispCount + 1;
+                paintPolyline(gc, plot, color, SWT.LINE_SOLID, lineWidth, dispCount + 2,
                         i -> {
-                            double t  = dispStart + subSampleOffset + i * samplesPerPx;
-                            int    i0 = (int) Math.floor(t);
-                            int    ia = Math.max(0, Math.min(n - 1, i0));
-                            int    ib = Math.max(0, Math.min(n - 1, i0 + 1));
-                            double v  = data[ia] + (t - i0) * (data[ib] - data[ia]);
-                            return centerY - (v - dcOffset) * vScale;
+                            int x = (int) Math.round(i * pxPerSample - shiftPx);
+                            if (i == 0)    x -= TRACE_EDGE_OVERHANG_PX;
+                            if (i == last) x += TRACE_EDGE_OVERHANG_PX;
+                            return x;
+                        },
+                        i -> {
+                            int idx = Math.max(0, Math.min(n - 1, dispStart + i));
+                            return centerY - (data[idx] - dcOffset) * vScale;
                         });
             }
             if (pxPerSample > 10.0) {

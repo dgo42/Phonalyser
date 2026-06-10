@@ -19,8 +19,8 @@
 package org.edgo.audio.measure.gui.freqresp;
 
 import lombok.extern.log4j.Log4j2;
-import org.edgo.audio.measure.cli.util.FreqRespCalHelper;
-import org.edgo.audio.measure.cli.util.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.cli.util.StereoSamples;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.generator.SignalGenerator;
@@ -92,7 +92,7 @@ public final class FreqRespAnalyzer {
         reportProgress(progress, 0.0, "Preparing sweep");
         SignalGenerator gen = new SignalGenerator(
                 cfg.getStartHz(), cfg.getStopHz(), sweepSamples, leadInSamples,
-                cfg.getSampleRate(), cfg.getAmplitudeVrms());
+                cfg.getSampleRate(), cfg.getAmplitudeVrms(), cfg.getDacFsVoltageRms());
         // One-shot sweep: emit silence after the buffer ends instead of looping
         // a second cycle into the capture window (which would alias into the
         // deconvolution and pollute the response).
@@ -128,12 +128,12 @@ public final class FreqRespAnalyzer {
                 () -> FreqRespCalHelper.computeFromLogSweep(
                         rec.left(), sweepRef, leadInSamples,
                         cfg.getSampleRate(), freqs, cfg.getAmplitudeVrms(),
-                        fadeSamples, "L"));
+                        cfg.getAdcFsVoltageRms(), fadeSamples, "L"));
         CompletableFuture<FreqRespCalibration> calRFut = CompletableFuture.supplyAsync(
                 () -> FreqRespCalHelper.computeFromLogSweep(
                         rec.right(), sweepRef, leadInSamples,
                         cfg.getSampleRate(), freqs, cfg.getAmplitudeVrms(),
-                        fadeSamples, "R"));
+                        cfg.getAdcFsVoltageRms(), fadeSamples, "R"));
         FreqRespCalibration calL = awaitOrFail(calLFut);
         FreqRespCalibration calR = awaitOrFail(calRFut);
 
