@@ -18,7 +18,6 @@
 
 package org.edgo.audio.measure.gui.widgets;
 
-import java.util.Arrays;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -62,10 +61,11 @@ public final class NumericStepModel {
             Pattern.compile("([+-]?[0-9]*\\.?[0-9]+(?:[eE][+-]?[0-9]+)?)\\s*([%µμ\\w./]*)");
     /** Lenient mid-edit grammar for the SWT Verify filter: any prefix of a
      *  valid number-with-unit (sign alone, dangling separator, exponent
-     *  fragment, unit characters incl. µ and the per-div slash, ∞).
-     *  {@link #commit} remains the strict gate. */
+     *  fragment, unit characters incl. µ and the per-div slash, ∞) or of a
+     *  named-value label ("Nyquist/2").  {@link #commit} remains the strict
+     *  gate. */
     private static final Pattern PARTIAL_INPUT =
-            Pattern.compile("[+-]?[0-9]*[.,]?[0-9]*(?:[eE][+-]?[0-9]*)?[\\sa-zA-Zµμ%/∞]*");
+            Pattern.compile("[+-]?[0-9]*[.,]?[0-9]*(?:[eE][+-]?[0-9]*)?[\\sa-zA-Z0-9µμ%/∞]*");
     /** Relative tolerance for grid / series membership checks. */
     private static final double REL_EPS = 1e-9;
     /** Significant digits every computed value is rounded to — kills the
@@ -74,6 +74,10 @@ public final class NumericStepModel {
     private static final int VALUE_SIG_DIGITS = 12;
     /** The PERCENT policy's wheel ratio: one notch targets ±10 %. */
     private static final double PERCENT_STEP_FACTOR = 1.1;
+    /** PERCENT-policy wheel step while a log unit (dBV) is displayed: one
+     *  notch walks the 10-dB grid (0 → −10 → −20 …) — stepping the linear
+     *  value by 10 % would produce 0.83-dB crumbs. */
+    private static final double LOG_WHEEL_STEP_DB = 10;
 
     private enum Policy {
         FIXED, LIST, PERCENT;
@@ -94,6 +98,10 @@ public final class NumericStepModel {
     private final int maxDecimals;
     /** Unit the user last typed explicitly; {@code null} = automatic. */
     private Unit stickyUnit;
+    /** Optional value rendered / accepted as a label instead of a number
+     *  (the sweep-points "Nyquist/2" entry); NaN = none. */
+    private double namedValue = Double.NaN;
+    private String namedValueLabel;
     @Getter
     private double value;
 
@@ -113,9 +121,10 @@ public final class NumericStepModel {
         this.value      = min;
     }
 
-    /** LIST policy: wheel and arrows jump along {@code series} (sorted copy is
-     *  taken); manual entry off the list is allowed.  Values render with up to
-     *  {@code maxDecimals} decimals, trailing zeros trimmed. */
+    /** LIST policy: wheel and arrows jump along {@code series} in the GIVEN
+     *  order (a copy is taken) — pass the intended wheel order, usually
+     *  ascending; manual entry off the list is allowed.  Values render with
+     *  up to {@code maxDecimals} decimals, trailing zeros trimmed. */
     public NumericStepModel(UnitFamily family, double min, double max,
                             double[] series, int maxDecimals) {
         this.family     = family;
@@ -124,7 +133,7 @@ public final class NumericStepModel {
         this.max        = max;
         this.wheelStep  = 0;
         this.arrowStep  = 0;
-        this.series     = sortedCopy(series);
+        this.series     = series.clone();
         this.decimals   = -1;
         this.maxDecimals = maxDecimals;
         this.value      = min;
@@ -171,9 +180,18 @@ public final class NumericStepModel {
     }
 
     /** Replaces the LIST series (e.g. the sweep-points list whose head follows
-     *  the sample rate).  No-op for other policies. */
+     *  the sample rate), in the given wheel order.  No-op for other
+     *  policies. */
     public void setSeries(double[] series) {
-        if (policy == Policy.LIST) this.series = sortedCopy(series);
+        if (policy == Policy.LIST) this.series = series.clone();
+    }
+
+    /** Declares one value that renders and parses as {@code label} instead of
+     *  a number — the sweep-points "Nyquist/2" entry, whose numeric value
+     *  follows the sample rate.  Stepping treats it as its plain number. */
+    public void setNamedValue(double value, String label) {
+        this.namedValue = value;
+        this.namedValueLabel = label;
     }
 
     // -------------------------------------------------------------------------
@@ -185,7 +203,14 @@ public final class NumericStepModel {
         switch (policy) {
             case FIXED:   setValue(value + dir * wheelStep); break;
             case LIST:    setValue(listJump(dir));           break;
-            case PERCENT: setValue(dir > 0 ? percentUp(value) : percentDown(value)); break;
+            case PERCENT:
+                Unit u = currentUnit();
+                if (u.log()) {
+                    setValue(u.toCanonical(logGridStep(u.fromCanonical(value), dir)));
+                } else {
+                    setValue(dir > 0 ? percentUp(value) : percentDown(value));
+                }
+                break;
         }
     }
 
@@ -196,6 +221,17 @@ public final class NumericStepModel {
             case LIST:    setValue(listJump(dir));           break;
             case PERCENT: setValue(plusOneDisplayedUnit(dir)); break;
         }
+    }
+
+    /** Next multiple of {@link #LOG_WHEEL_STEP_DB} from {@code db} in
+     *  {@code dir}: 0 → −10 → −20 going down; an off-grid −3.5 snaps to
+     *  −10 down and 0 up. */
+    private double logGridStep(double db, int dir) {
+        double d = roundSig(db) / LOG_WHEEL_STEP_DB;
+        double next = (dir > 0)
+                ? Math.floor(d + REL_EPS) + 1
+                : Math.ceil(d - REL_EPS) - 1;
+        return next * LOG_WHEEL_STEP_DB;
     }
 
     /** ±1 in the unit currently displayed: ±1 kHz at 192 kHz, ±1 mV at
@@ -260,21 +296,49 @@ public final class NumericStepModel {
         return Math.pow(10, Math.floor(Math.log10(v) + REL_EPS)) / 10.0;
     }
 
-    /** Next series entry in {@code dir} from the current value; off-list
-     *  values jump to the nearest entry in the step direction; the ends
-     *  saturate — including a manually-entered value BEYOND the series end,
-     *  which stays put (an up-gesture must never decrease the value). */
+    /** Next series entry in {@code dir} from the current value.  A value ON
+     *  the list walks it in GIVEN order (the sweep-points list pins the
+     *  rate-derived "Nyquist/2" entry first, ahead of numerically smaller
+     *  presets); an off-list value jumps to the numerically nearest entry in
+     *  the step direction.  The ends saturate — including a manually-entered
+     *  value beyond the numeric extremes, which stays put (an up-gesture
+     *  must never decrease the value). */
     private double listJump(int dir) {
-        if (dir > 0) {
-            for (double s : series) {
-                if (s > value * (1 + REL_EPS) + Double.MIN_NORMAL) return s;
+        for (int i = 0; i < series.length; i++) {
+            if (sameValue(series[i], value)) {
+                int next = i + dir;
+                if (next < 0 || next >= series.length) return value;   // end of list
+                return series[next];
             }
-            return value;   // at or beyond the top entry
         }
-        for (int i = series.length - 1; i >= 0; i--) {
-            if (series[i] < value * (1 - REL_EPS) - Double.MIN_NORMAL) return series[i];
+        // Off-list: nearest entry in the numeric direction.
+        if (dir > 0) {
+            double best = Double.POSITIVE_INFINITY;
+            for (double s : series) {
+                if (s > value * (1 + REL_EPS) + Double.MIN_NORMAL && s < best) best = s;
+            }
+            return Double.isInfinite(best) && !contains(series, best) ? value : best;
         }
-        return value;       // at or below the bottom entry
+        double best = Double.NEGATIVE_INFINITY;
+        for (double s : series) {
+            if (s < value * (1 - REL_EPS) - Double.MIN_NORMAL && s > best) best = s;
+        }
+        return Double.isInfinite(best) ? value : best;
+    }
+
+    private boolean sameValue(double a, double b) {
+        if (a == b) return true;   // covers equal infinities
+        // A mixed finite/infinite pair must compare unequal — the relative
+        // epsilon below degenerates to ∞ <= ∞ and would match everything.
+        if (Double.isInfinite(a) || Double.isInfinite(b)) return false;
+        return Math.abs(a - b) <= Math.max(Math.abs(a), Math.abs(b)) * REL_EPS;
+    }
+
+    private boolean contains(double[] arr, double v) {
+        for (double s : arr) {
+            if (sameValue(s, v)) return true;
+        }
+        return false;
     }
 
     // -------------------------------------------------------------------------
@@ -286,6 +350,7 @@ public final class NumericStepModel {
      *  otherwise.  Infinity renders as {@code ∞}. */
     public String text() {
         if (Double.isInfinite(value)) return "∞";
+        if (isNamedValue(value)) return namedValueLabel;
         Unit u = currentUnit();
         double x = u.fromCanonical(value);
         String num = (decimals >= 0)
@@ -317,6 +382,11 @@ public final class NumericStepModel {
                 && (t.equals("∞") || t.equalsIgnoreCase("inf") || t.equalsIgnoreCase("infinity"))) {
             stickyUnit = null;
             value = Double.POSITIVE_INFINITY;
+            return true;
+        }
+        if (namedValueLabel != null && t.equalsIgnoreCase(namedValueLabel.trim())) {
+            stickyUnit = null;
+            value = clamp(roundSig(namedValue));
             return true;
         }
         Matcher m = NUMBER_WITH_UNIT.matcher(t);
@@ -351,6 +421,26 @@ public final class NumericStepModel {
         return stickyUnit != null ? stickyUnit : family.displayUnit(value);
     }
 
+    /** True while the log unit (dBV) is the sticky display unit — the one
+     *  display choice worth persisting, since the automatic range switching
+     *  can never select it. */
+    public boolean isLogDisplay() {
+        return stickyUnit != null && stickyUnit.log();
+    }
+
+    /** Restores ({@code true}) or clears ({@code false}) the log display
+     *  unit — the persisted counterpart of typing an explicit dBV suffix.
+     *  No-op for families without a log unit. */
+    public void setLogDisplay(boolean on) {
+        Unit log = family.logUnit();
+        if (log == null) return;
+        if (on) {
+            stickyUnit = log;
+        } else if (isLogDisplay()) {
+            stickyUnit = null;
+        }
+    }
+
     /** Lenient mid-edit acceptance for the SWT Verify filter — any prefix of a
      *  valid entry passes (bare sign, dangling separator, exponent fragment,
      *  unit characters, ∞) so typing is never blocked halfway; {@link #commit}
@@ -368,18 +458,17 @@ public final class NumericStepModel {
         return Math.max(min, Math.min(max, v));
     }
 
+    private boolean isNamedValue(double v) {
+        return namedValueLabel != null
+                && Math.abs(v - namedValue) <= Math.abs(namedValue) * REL_EPS;
+    }
+
     /** Rounds to {@link #VALUE_SIG_DIGITS} significant digits so wheel walks
      *  stay exactly on their grids. */
     private double roundSig(double v) {
         if (v == 0 || !Double.isFinite(v)) return v;
         double scale = Math.pow(10, VALUE_SIG_DIGITS - 1 - Math.floor(Math.log10(Math.abs(v))));
         return Math.round(v * scale) / scale;
-    }
-
-    private double[] sortedCopy(double[] src) {
-        double[] copy = src.clone();
-        Arrays.sort(copy);
-        return copy;
     }
 
     private String trimTrailingZeros(String num) {
