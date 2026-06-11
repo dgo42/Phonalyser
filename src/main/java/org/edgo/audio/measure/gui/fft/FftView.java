@@ -111,6 +111,16 @@ public final class FftView extends AbstractFreqDomainView {
     /** Left padding (px) for the THD table inside the external window. */
     private static final int EXT_LEFT_PAD = 4;
 
+    /** FLL measurement plausibility bound, relative part: generator-vs-ADC
+     *  clock drift is ppm-scale (observed ≤ ~130 ppm), so 500 ppm is a
+     *  generous ceiling for a REAL mistune; anything beyond it is a
+     *  mis-measurement that must not reach the loop. */
+    private static final double FLL_MAX_ERROR_PPM  = 500;
+    /** FLL measurement plausibility bound, absolute floor in FFT bins —
+     *  keeps the gate permissive at low target frequencies where the
+     *  ppm part collapses below the spectral resolution. */
+    private static final double FLL_MAX_ERROR_BINS = 5;
+
     // ─── Fonts ────────────────────────────────────────────────────────────
     private Font monoFont;
     private Font monoBoldFont;
@@ -717,12 +727,14 @@ public final class FftView extends AbstractFreqDomainView {
                     slot.sampleRate, prefs.getGenDualToneFreq1Hz());
             double t2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
                     slot.sampleRate, prefs.getGenDualToneFreq2Hz());
-            if (t1 > 0 && Double.isFinite(lastImd.f1Hz)) {
+            if (t1 > 0 && Double.isFinite(lastImd.f1Hz)
+                    && plausibleFllMeasurement(t1, lastImd.f1Hz, slot.sampleRate, slot.fftSize)) {
                 fll.update(t1, lastImd.f1Hz, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
                 bus.publish(Events.GENERATOR_FREQ_TRIM,
                         t1 + fll.getCorrection());
             }
-            if (t2 > 0 && Double.isFinite(lastImd.f2Hz)) {
+            if (t2 > 0 && Double.isFinite(lastImd.f2Hz)
+                    && plausibleFllMeasurement(t2, lastImd.f2Hz, slot.sampleRate, slot.fftSize)) {
                 fll2.update(t2, lastImd.f2Hz, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
                 bus.publish(Events.GENERATOR_FREQ_TRIM_2,
                         t2 + fll2.getCorrection());
@@ -732,10 +744,29 @@ public final class FftView extends AbstractFreqDomainView {
             double target = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.SINE,
                     slot.sampleRate, prefs.getGenFrequencyHz());
             if (!(target > 0)) return;
+            if (!plausibleFllMeasurement(target, slot.fundamentalHzRefined,
+                    slot.sampleRate, slot.fftSize)) {
+                return;
+            }
             fll.update(target, slot.fundamentalHzRefined, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
             bus.publish(Events.GENERATOR_FREQ_TRIM,
                     target + fll.getCorrection());
         }
+    }
+
+    /** True when the measured frequency is close enough to the target to
+     *  plausibly be the generator's own tone — clock drift is ppm-scale.
+     *  A larger mismatch is a mis-measurement (a window still containing
+     *  the OLD signal draining through the output buffer after a form /
+     *  frequency switch, a harmonic mis-lock, a capture glitch); feeding
+     *  it to the FLL published corrections like "19 kHz target − 1 kHz
+     *  measured = +18 kHz" that trimmed the live generator to 37 kHz. */
+    private boolean plausibleFllMeasurement(double targetHz, double measuredHz,
+                                            int sampleRate, int fftSize) {
+        double binHz = sampleRate / (double) fftSize;
+        double maxErrHz = Math.max(FLL_MAX_ERROR_BINS * binHz,
+                targetHz * FLL_MAX_ERROR_PPM * 1e-6);
+        return Math.abs(measuredHz - targetHz) <= maxErrHz;
     }
 
     /** True when the audio generator is currently producing a signal.

@@ -23,6 +23,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.stream.IntStream;
@@ -89,6 +90,13 @@ public final class FftAnalyzerWorker {
      *  capture lifecycle, so the view / pane never touch the sample buffer. */
     private boolean captureHeld;
     private final    AtomicBoolean      paused = new AtomicBoolean(false);
+    /** Bumped by every {@link #resetStatistics()}.  An analysis tick stamps
+     *  the epoch at its start and discards its result when a reset landed
+     *  while it was assembling / analyzing: such a window straddles the
+     *  signal change — accumulating it would poison the freshly cleared
+     *  average, and its stale fundamental would feed the FLL one garbage
+     *  trim (enough to drag the live generator far off-frequency). */
+    private final    AtomicLong         resetEpoch = new AtomicLong();
     /** Single-slot, coalescing handoff of the latest result to the UI thread.
      *  The worker overwrites it every tick (newest wins) and posts ONE drain
      *  runnable only on the empty→full transition, so the SWT asyncExec queue
@@ -1262,6 +1270,7 @@ public final class FftAnalyzerWorker {
      *  Safe to call from any thread.  Does NOT post the redraw — the
      *  caller does that. */
     public void resetStatistics() {
+        resetEpoch.incrementAndGet();   // first: a mid-tick analysis must see it
         paused.set(false);
         completedAnalyses     = 0;
         firstFrameDone        = false;
@@ -1344,6 +1353,9 @@ public final class FftAnalyzerWorker {
             resetStatistics();
         }
         lastGeneratorActive = genActiveNow;
+        // Stamp AFTER the transition reset above so this tick doesn't
+        // discard itself; see the epoch check below the analyze call.
+        final long epochAtStart = resetEpoch.get();
 
         if (reader == null) return IDLE_TICK_MS;
         int sampleRate = reader.getSampleRate();
@@ -1547,6 +1559,18 @@ public final class FftAnalyzerWorker {
                     window, overlap, distMin, distMax, coherent, fundRefDbFs,
                     false, expectedFundHz);
         } catch (RuntimeException ex) {
+            return IDLE_TICK_MS;
+        }
+        // A signal change (resetStatistics) landed while this window was
+        // being assembled / analyzed — it straddles the old and the new
+        // signal.  Discard it: neither accumulate (it would poison the
+        // freshly cleared average) nor publish (its stale fundamental would
+        // step the FLL and trim the live generator to a garbage frequency).
+        // The reset's pending re-anchor rebuilds from post-change samples.
+        if (epochAtStart != resetEpoch.get()) {
+            if (log.isInfoEnabled()) {
+                log.info("Signal changed mid-analysis — straddling window discarded");
+            }
             return IDLE_TICK_MS;
         }
         // The dBFS→dBV offset is the global ADC calibration constant
