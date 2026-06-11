@@ -20,9 +20,6 @@ package org.edgo.audio.measure.gui.fft;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.PrintWriter;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -50,16 +47,13 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
-import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
-import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.gui.bus.Events;
@@ -153,6 +147,10 @@ public final class FftTabControl extends Composite {
      *  {@link FftPane} (IoC) and shared with the {@link FftView}. */
     private final FreqRespCorrectionStore correctionStore;
 
+    /** Controller owning the {@code .fft} spectrum file round-trip (and the
+     *  analyser lifecycle); constructor-injected by {@link FftPane}. */
+    private final FftController controller;
+
     // Image references retained so build methods past the constructor can
     // re-use them; all instances come from the shared IconUtils cache so
     // disposal is handled centrally.
@@ -206,10 +204,12 @@ public final class FftTabControl extends Composite {
     private final List<FftCalRow> fftCalRows = new ArrayList<>();
 
     public FftTabControl(Composite parent, FftView view, boolean liveCapture,
-                         FreqRespCorrectionStore correctionStore) {
+                         FreqRespCorrectionStore correctionStore,
+                         FftController controller) {
         super(parent, SWT.NONE);
         this.view = view;
         this.correctionStore = correctionStore;
+        this.controller = controller;
 
         IconUtils icons = IconUtils.instance();
         Display d = parent.getDisplay();
@@ -993,7 +993,7 @@ public final class FftTabControl extends Composite {
             prefs.setFftSaveFolder(parent == null ? null : parent.toString());
             prefs.save();
             try {
-                writeSpectrumFft(Paths.get(chosen), r, imd, tone1, tone2);
+                controller.saveSpectrum(Paths.get(chosen), r, imd, tone1, tone2);
             } catch (IOException ex) {
                 showError(I18n.t("fft.save.error.title"),
                         I18n.t("fft.save.error.message", chosen, ex.getMessage()));
@@ -1038,177 +1038,27 @@ public final class FftTabControl extends Composite {
         });
     }
 
-    /** Loads a spectrum {@code .fft} file (as written by
-     *  {@link #writeSpectrumFft} — {@code frequency_hz;magnitude_dBV;phase_deg}
-     *  rows under {@code # mode=} / {@code # tone*_hz=} header comments),
-     *  reconstructs an {@link FftResult}, recomputes its fundamental /
-     *  harmonic / THD / SNR metrics (and the IMD products when the file was
-     *  captured in IMD mode) from the loaded bins, stops live recording, and
-     *  shows it as a static trace in the matching THD / IMD table mode. */
+    /** Loads a spectrum {@code .fft} file via the controller, stops live
+     *  recording, and shows it as a static trace in the matching THD / IMD
+     *  table mode. */
     private void loadSpectrumFft(String path) {
-        List<double[]> rows = new ArrayList<>();
-        boolean modeImd = false;
-        double tone1Hz = Double.NaN;
-        double tone2Hz = Double.NaN;
-        double binBwHz = Double.NaN;
+        FftController.LoadedSpectrum loaded;
         try {
-            for (String line : Files.readAllLines(Paths.get(path), StandardCharsets.UTF_8)) {
-                String s = line.trim();
-                if (s.isEmpty()) continue;
-                // Capture-mode / tone header comments (see writeSpectrumFft).
-                if (s.startsWith("# mode=")) {
-                    modeImd = s.substring(s.indexOf('=') + 1).trim().equalsIgnoreCase("IMD");
-                    continue;
-                }
-                if (s.startsWith("# tone1_hz=")) { tone1Hz = parseHeaderHz(s); continue; }
-                if (s.startsWith("# tone2_hz=")) { tone2Hz = parseHeaderHz(s); continue; }
-                if (s.startsWith("# bin_bw_hz=")) { binBwHz = parseHeaderHz(s); continue; }
-                char c0 = s.charAt(0);
-                if (c0 != '-' && c0 != '+' && c0 != '.' && !Character.isDigit(c0)) continue; // header / comment
-                String[] p = s.split("[;,]");
-                if (p.length < 2) continue;
-                double f   = Double.parseDouble(p[0].trim());
-                double dbv = Double.parseDouble(p[1].trim());
-                double ph  = (p.length >= 3) ? Double.parseDouble(p[2].trim()) : 0.0;
-                rows.add(new double[]{ f, dbv, ph });
-            }
-        } catch (IOException | NumberFormatException ex) {
+            loaded = controller.loadSpectrum(path);
+        } catch (IOException ex) {
             showError(I18n.t("fft.load.notImplemented.title"),
                     I18n.t("fft.load.error.read", ex.getMessage()));
             return;
-        }
-        int n = rows.size();
-        double freqRes = (n >= 2) ? (rows.get(n - 1)[0] - rows.get(0)[0]) / (n - 1) : 0.0;
-        if (n < 4 || !(freqRes > 0)) {
+        } catch (IllegalArgumentException ex) {
             showError(I18n.t("fft.load.notImplemented.title"), I18n.t("fft.load.error.format"));
             return;
         }
-
-        FftAnalyzer analyzer = new FftAnalyzer();
-        FftResult r = new FftResult();
-        Preferences prefs = Preferences.instance();
-        int harmCount = Math.max(9, prefs.getFftCalcMaxHarmonic());
-        r.ensureArrays(n, harmCount);
-        r.freqResolution   = freqRes;
-        // Old files lack the bin-bandwidth header; there the row spacing IS the
-        // bandwidth the file was captured with.
-        r.binBwSqrt        = Math.sqrt((binBwHz > 0) ? binBwHz : freqRes);
-        r.fftSize          = 2 * (n - 1);
-        r.sampleRate       = (int) Math.round(freqRes * r.fftSize);
-        r.harmonicCount    = harmCount;
-        r.fundamentalTrueDbFs = Double.NaN;
-        r.snrFreqMin = 0; r.snrFreqMax = 0;
-        // The file stores dBV; dBFS is the result's base scale, so subtract the
-        // global ADC offset once on load (the writer adds it back on save, so a
-        // round-trip is exact).
-        double dbvOffsetDb = prefs.getDbvOffsetDb();
-        for (int k = 0; k < n; k++) {
-            double dbv = rows.get(k)[1], ph = rows.get(k)[2];
-            double dbFs = dbv - dbvOffsetDb;
-            r.amplitudeDbFs[k] = dbFs;
-            r.phaseDeg[k]      = ph;
-            double lin = Math.pow(10.0, dbFs / 20.0);
-            double rad = Math.toRadians(ph);
-            r.re[k] = lin * Math.cos(rad);
-            r.im[k] = lin * Math.sin(rad);
-        }
-        // Fundamental = strongest bin above ~10 Hz, refined to sub-bin.
-        int halfSize = n - 1;
-        int minBin = Math.min(halfSize, Math.max(1, (int) Math.ceil(10.0 / freqRes)));
-        int fb = minBin;
-        for (int k = minBin; k <= halfSize; k++) if (r.amplitudeDbFs[k] > r.amplitudeDbFs[fb]) fb = k;
-        r.fundamentalBin       = fb;
-        r.fundamentalHz        = fb * freqRes;
-        r.fundamentalHzRefined = MathUtil.parabolicBinInterp(r.re, r.im, fb, r.fftSize) * freqRes;
-        // Theoretical harmonic positions for recomputeStats to measure at.
-        for (int h = 0; h < harmCount; h++) {
-            double hz = (h + 2) * r.fundamentalHzRefined;
-            int hb = (int) Math.round(hz / freqRes);
-            r.harmonicHz[h]   = hz;
-            r.harmonicBins[h] = (hb >= 1 && hb <= halfSize) ? hb : -1;
-        }
-        analyzer.recomputeStats(r);
-
-        // Recompute the IMD products when the file was captured in IMD mode and
-        // carries its two tone frequencies: pin the refined tone positions
-        // (F1 = lower) so the result reports the saved frequencies, then measure
-        // the products from the loaded spectrum.  A non-null result switches the
-        // view to the IMD table; otherwise it stays in single-tone THD mode.
-        ImdResult imd = null;
-        if (modeImd && Double.isFinite(tone1Hz) && Double.isFinite(tone2Hz)
-                && tone1Hz > 0 && tone2Hz > 0) {
-            r.fundamentalHzRefined  = Math.min(tone1Hz, tone2Hz);
-            r.fundamental2HzRefined = Math.max(tone1Hz, tone2Hz);
-            imd = new ImdAnalyzer().analyze(r, tone1Hz, tone2Hz, dbvOffsetDb);
-        }
-
         // Stop live capture so the loaded spectrum isn't overwritten — the pane
         // owns the Record button and shared capture, so request the stop on the
         // bus instead of reaching into it.
         MessageBus.instance().publish(Events.FFT_RECORDING_STOP_REQUESTED);
-        view.displayLoadedResult(r, imd);
+        view.displayLoadedResult(loaded.result(), loaded.imd());
         view.setSourceFilePath(path);
-    }
-
-    /** Parses the value of a {@code # key=value} spectrum-header comment as a
-     *  frequency in Hz, returning {@code NaN} when absent or malformed. */
-    private double parseHeaderHz(String line) {
-        try {
-            return Double.parseDouble(line.substring(line.indexOf('=') + 1).trim());
-        } catch (NumberFormatException ex) {
-            return Double.NaN;
-        }
-    }
-
-    private void writeSpectrumFft(Path file, FftResult r, boolean imd,
-                                 double tone1Hz, double tone2Hz) throws IOException {
-        try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8))) {
-            // Header comments (skipped by the loader's value parser): the capture
-            // mode restores the THD or IMD table on re-open, the two tone
-            // frequencies let IMD re-measure its products, and the analysis
-            // parameters + applied calibrations are informational provenance.
-            Preferences prefs = Preferences.instance();
-            double dbvOffset = prefs.getDbvOffsetDb();   // dBV = dBFs + global ADC offset
-            pw.println("# Phonalyser FFT spectrum");
-            pw.println("# format_version=" + FileVersions.FFT_SPECTRUM);
-            pw.println("# mode=" + (imd ? "IMD" : "THD"));
-            pw.printf("# fft_size=%d%n", r.fftSize);
-            pw.printf("# sample_rate_hz=%d%n", r.sampleRate);
-            pw.printf("# window=%s%n", r.windowType != null ? r.windowType.name() : "n/a");
-            pw.printf("# averaging=%s%n", r.coherentAveraging ? "coherent" : "incoherent");
-            pw.printf("# averages=%d%n", r.frameCount);
-            if (r.snrFreqMin > 0 || r.snrFreqMax > 0) {
-                pw.printf("# snr_freq_min_hz=%.3f%n", r.snrFreqMin);
-                pw.printf("# snr_freq_max_hz=%.3f%n", r.snrFreqMax);
-            }
-            if (Double.isFinite(r.fundamentalTrueDbFs)) {
-                pw.printf("# manual_fund_dbv=%.4f%n", r.fundamentalTrueDbFs + dbvOffset);
-            }
-            pw.printf("# thd_max_harmonic=%d%n", r.harmonicCount);
-            if (correctionStore != null) {
-                for (FreqRespCorrectionStore.Entry e : correctionStore.getEntries()) {
-                    pw.printf("# calibration=%s%s%n",
-                            e.getPath(), e.isWithNoise() ? " (withNoise)" : "");
-                }
-            }
-            // Bin bandwidth (Hz) the spectrum was captured with — informational,
-            // and the loader derives the V/√Hz scale from it so a re-opened file
-            // keeps its own scale instead of the then-live config's.  Live
-            // results carry null and write the live-config cache.
-            double bwSqrt = (r.binBwSqrt != null) ? r.binBwSqrt : prefs.getBinBwSqrt();
-            pw.printf("# bin_bw_hz=%.9f%n", bwSqrt * bwSqrt);
-            if (imd) {
-                pw.printf("# tone1_hz=%.6f%n", tone1Hz);
-                pw.printf("# tone2_hz=%.6f%n", tone2Hz);
-            }
-            pw.println("frequency_hz;magnitude_dBV;phase_deg");
-            for (int k = 0; k < r.amplitudeDbFs.length; k++) {
-                double f   = k * r.freqResolution;
-                double dbv = r.amplitudeDbFs[k] + dbvOffset;
-                double ph  = (r.phaseDeg != null && k < r.phaseDeg.length) ? r.phaseDeg[k] : 0;
-                pw.printf("%.6f;%.6f;%.6f%n", f, dbv, ph);
-            }
-        }
     }
 
     private void showError(String title, String message) {
