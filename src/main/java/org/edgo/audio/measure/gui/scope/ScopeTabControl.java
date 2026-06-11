@@ -62,13 +62,13 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
-import org.edgo.audio.measure.gui.generator.NumericStepField;
+import org.edgo.audio.measure.gui.widgets.NumericStepField;
+import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.OscPreset;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
-import org.edgo.audio.measure.gui.widgets.StepSelector;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 
 import lombok.extern.log4j.Log4j2;
@@ -123,6 +123,21 @@ public final class ScopeTabControl extends Composite {
 
     /** Side length of every small in-group toggle button (px). */
     public  static final int SQUARE_BUTTON = 32;
+
+    /** Vertical / horizontal resolution bounds (canonical V and s per div). */
+    private static final double V_PER_DIV_MIN = 1e-6;
+    private static final double V_PER_DIV_MAX = 500;
+    private static final double T_PER_DIV_MIN = 1e-6;
+    private static final double T_PER_DIV_MAX = 1.0;
+    /** Trigger hysteresis: 0…5 divisions in 0.1-div steps, one decimal. */
+    private static final double HYST_MAX_DIV  = 5;
+    private static final double HYST_STEP_DIV = 0.1;
+    /** Save-duration field bounds (s). */
+    private static final double SAVE_DURATION_MIN_SEC = 0.001;
+    private static final double TIME_MAX_SEC          = 1_000_000;
+    // Display precision caps per the numeric-field spec.
+    private static final int PER_DIV_MAX_DECIMALS = 3;
+    private static final int TIME_MAX_DECIMALS    = 3;
     /** Pixel height of the toolbar utility icons (camera / crosshair). */
     private static final int UTILITY_ICON_HEIGHT = 26;
     /** Pixel height of the file-row glyphs (floppy disk / folder open). */
@@ -163,10 +178,10 @@ public final class ScopeTabControl extends Composite {
 
     /** Step selectors for V/div (left + right) and t/div — fields so the
      *  mouse-wheel zoom on the main scope (driven by the pane) can step them. */
-    private StepSelector                 leftScale;
-    private StepSelector                 rightScale;
-    private StepSelector                 timeScale;
-    private StepSelector                 hysteresisSel;
+    private NumericStepField             leftScale;
+    private NumericStepField             rightScale;
+    private NumericStepField             timeScale;
+    private NumericStepField             hysteresisSel;
     private Button                       hysteresisEnable;
     /** "Reconstructed beat" overlay toggle — enabled only when the
      *  generator is in DUAL_TONE mode; field-promoted so the
@@ -522,9 +537,10 @@ public final class ScopeTabControl extends Composite {
             toolbarTabs.refreshTab(TAB_LEFT);
         });
 
-        leftScale = new StepSelector(g, OscParse.voltsPerDivTargets(),
-                prefs.getOscLeftVoltsPerDiv(), 90,
-                OscParse::tryParseStepInput, OscParse::formatVoltsPerDiv);
+        leftScale = new NumericStepField(g, UnitFamily.VOLTS_PER_DIV,
+                V_PER_DIV_MIN, V_PER_DIV_MAX, OscParse.voltsPerDivTargets(),
+                PER_DIV_MAX_DECIMALS, 90);
+        leftScale.setValue(prefs.getOscLeftVoltsPerDiv());
         leftScale.setToolTipText(I18n.t("scope.left.scale.tooltip"));
         // Coupled write: the offset fraction is re-derived from the OLD V/div
         // (preserveCanvasMiddle needs the pre-change value), so this can't use
@@ -599,9 +615,10 @@ public final class ScopeTabControl extends Composite {
             toolbarTabs.refreshTab(TAB_RIGHT);
         });
 
-        rightScale = new StepSelector(g, OscParse.voltsPerDivTargets(),
-                prefs.getOscRightVoltsPerDiv(), 90,
-                OscParse::tryParseStepInput, OscParse::formatVoltsPerDiv);
+        rightScale = new NumericStepField(g, UnitFamily.VOLTS_PER_DIV,
+                V_PER_DIV_MIN, V_PER_DIV_MAX, OscParse.voltsPerDivTargets(),
+                PER_DIV_MAX_DECIMALS, 90);
+        rightScale.setValue(prefs.getOscRightVoltsPerDiv());
         rightScale.setToolTipText(I18n.t("scope.right.scale.tooltip"));
         // Coupled write (see leftScale): offset re-derived from the OLD V/div,
         // so no Bindings helper fits.  Both prefs are bound + auto-save, so the
@@ -661,11 +678,11 @@ public final class ScopeTabControl extends Composite {
         g.setLayout(rowLayoutHorizontal(6));
 
         Preferences prefs = Preferences.instance();
-        timeScale = new StepSelector(g, OscParse.timePerDivTargets(),
-                prefs.getOscTimePerDiv(), 90,
-                OscParse::tryParseStepInput, OscParse::formatTimePerDiv);
+        timeScale = new NumericStepField(g, UnitFamily.TIME_PER_DIV,
+                T_PER_DIV_MIN, T_PER_DIV_MAX, OscParse.timePerDivTargets(),
+                PER_DIV_MAX_DECIMALS, 90);
         timeScale.setToolTipText(I18n.t("scope.time.scale.tooltip"));
-        Bindings.stepSelector(timeScale, prefs.oscTimePerDivProperty());
+        Bindings.stepField(timeScale, prefs.oscTimePerDivProperty());
         // viewCenterFrames is the primary state and does NOT change on
         // t/div — only the window's width changes.  applyViewState
         // re-derives slider thumb + position so the centred frame stays
@@ -761,17 +778,13 @@ public final class ScopeTabControl extends Composite {
         hysteresisEnable.setText(I18n.t("scope.trigger.hysteresis"));
         hysteresisEnable.setToolTipText(I18n.t("scope.trigger.hysteresis.tooltip"));
 
-        String[] hystValues = ScopeFormat.hysteresisDivSteps();
-        hysteresisSel = new StepSelector(hystSet, hystValues,
-                ScopeFormat.nearestIndex(hystValues, prefs.getOscTriggerHysteresisDiv()), 50);
+        hysteresisSel = new NumericStepField(hystSet, UnitFamily.DIVISIONS,
+                0, HYST_MAX_DIV, HYST_STEP_DIV, HYST_STEP_DIV, 1, 50);
+        hysteresisSel.setValue(prefs.getOscTriggerHysteresisDiv());
         hysteresisSel.setToolTipText(I18n.t("scope.trigger.hysteresis.tooltip"));
         hysteresisSel.setEnabled(prefs.isOscTriggerHysteresisEnabled());
-        // hysteresisSel is an index-mode StepSelector mapping to a double
-        // pref (value read via getSelectedValue()); no Bindings helper
-        // covers index-mode → double, so its writer stays manual.  The pref
-        // is bound and auto-saves, so the explicit save() is retired.
         hysteresisSel.addSelectionListener(e -> {
-            prefs.setOscTriggerHysteresisDiv(Double.parseDouble(hysteresisSel.getSelectedValue()));
+            prefs.setOscTriggerHysteresisDiv(hysteresisSel.getValue());
             toolbarTabs.refreshTab(TAB_TRIGGER);
         });
         Bindings.check(hysteresisEnable, prefs.oscTriggerHysteresisEnabledProperty());
@@ -966,7 +979,7 @@ public final class ScopeTabControl extends Composite {
     }
 
     /** Pushes every preset value into the live {@link Preferences} AND the
-     *  UI widgets.  {@code StepSelector.setValue} fires its selection
+     *  UI widgets.  {@code NumericStepField.setValue} fires its selection
      *  listener (which writes vDiv/tDiv + adjusts offsetFrac via
      *  preserveCanvasMiddle), so we re-write the offsetFracs / triggerPos
      *  AFTER the scale updates so the preset values win.  Button widgets
@@ -1097,13 +1110,8 @@ public final class ScopeTabControl extends Composite {
         browse.setToolTipText(I18n.t("scope.save.browse.tooltip"));
         browse.addListener(SWT.Selection, e -> openScopeSaveBrowse(pathField));
 
-        NumericStepField durField = new NumericStepField(
-                g,
-                Math.max(0.001, prefs.getOscSaveDurationSeconds()),
-                s -> { Double d = ScopeFormat.parseSeconds(s); return d == null ? null : Math.max(0.001, d); },
-                ScopeFormat::formatSecondsTrimmed,
-                /* wheel: ±5 % */ (v, dir) -> Math.max(0.001, v * (1.0 + 0.05 * dir)),
-                /* arrows: ±1 s */ (v, dir) -> Math.max(0.001, v + dir),
+        NumericStepField durField = new NumericStepField(g, UnitFamily.TIME,
+                SAVE_DURATION_MIN_SEC, TIME_MAX_SEC, TIME_MAX_DECIMALS,
                 54);     // 60% of the previous 90 px width
         durField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         durField.setToolTipText(I18n.t("scope.save.duration.tooltip"));
@@ -1346,11 +1354,11 @@ public final class ScopeTabControl extends Composite {
     // -------------------------------------------------------------------------
 
     /**
-     * Steps both visible channels' V/div selectors by {@code delta} (negative
+     * Steps both visible channels' V/div fields by {@code delta} (negative
      * = zoom in / smaller V/div, positive = zoom out).  Each call drives the
-     * value-mode StepSelector to the next standard 1-2-5-10 value above /
-     * below the current free-form value; the existing selection listener
-     * then persists the result into Preferences.
+     * field to the next standard 1-2-5-10 value above / below the current
+     * free-form value; the existing selection listener then persists the
+     * result into Preferences.
      */
     private void stepVoltsPerDiv(int delta) {
         Preferences prefs = Preferences.instance();

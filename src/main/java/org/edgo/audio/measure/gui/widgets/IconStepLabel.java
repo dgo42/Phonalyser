@@ -29,8 +29,8 @@ import org.eclipse.swt.widgets.Listener;
 import org.edgo.audio.measure.gui.common.IconUtils;
 
 /**
- * Click-able SVG-icon "arrow" label used by {@link StepSelector},
- * {@code NumericStepField} and {@code SignalFormCombo}'s drop caret.
+ * Click-able SVG-icon "arrow" label used by {@link NumericStepField}'s
+ * step buttons and {@code SignalFormCombo}'s drop caret.
  * Replaces the native {@code SWT.ARROW | UP/DOWN} Button which renders
  * inconsistently across GTK / win32.
  *

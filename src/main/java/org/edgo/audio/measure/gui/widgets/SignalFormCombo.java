@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.gui.generator;
+package org.edgo.audio.measure.gui.widgets;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.GC;
@@ -37,7 +37,6 @@ import org.eclipse.swt.widgets.Table;
 import org.eclipse.swt.widgets.TableColumn;
 import org.eclipse.swt.widgets.TableItem;
 import org.edgo.audio.measure.enums.GenSignalForm;
-import org.edgo.audio.measure.gui.widgets.IconStepLabel;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -51,7 +50,7 @@ import java.util.Map;
  * <ul>
  *   <li>Closed display: an icon {@link Label} + a text {@link Label} +
  *       a native {@code SWT.ARROW | SWT.DOWN} {@link Button} on the right
- *       (same arrow style as {@code StepSelector}).</li>
+ *       (same arrow style as {@code NumericStepField}).</li>
  *   <li>Dropdown: a borderless {@link Shell} containing a {@link Table}
  *       with one column; each {@link TableItem} carries the form's
  *       pictogram + label.  Table provides native scrollbars when the

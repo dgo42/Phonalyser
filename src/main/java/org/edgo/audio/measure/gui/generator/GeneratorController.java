@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui.generator;
 
+import org.edgo.audio.measure.gui.common.FftBinSnap;
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.common.Closeables;

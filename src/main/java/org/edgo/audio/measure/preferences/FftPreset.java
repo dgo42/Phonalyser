@@ -18,7 +18,6 @@
 
 package org.edgo.audio.measure.preferences;
 
-import org.edgo.audio.measure.enums.AmplitudeUnit;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
 import org.edgo.audio.measure.enums.FftOverlap;
@@ -60,6 +59,5 @@ public class FftPreset {
     private int     thdMaxHarmonic               = 9;
     private int     calcMaxHarmonic              = 9;
     private double  manualFundVrms               = 1.0;
-    private AmplitudeUnit manualFundUnit          = AmplitudeUnit.V;
     private boolean manualFundEnabled            = false;
 }

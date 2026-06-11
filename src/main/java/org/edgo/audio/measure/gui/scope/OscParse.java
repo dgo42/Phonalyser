@@ -74,8 +74,8 @@ public final class OscParse {
     }
 
     /** Returns the standard V/div step list as an array of values in volts,
-     *  ascending.  Used by {@link org.edgo.audio.measure.gui.StepSelector}
-     *  to step through "nice" values from a free-form current value. */
+     *  ascending.  Series for the scope's V/div field — its wheel and arrows
+     *  step through these "nice" values from a free-form current value. */
     public static double[] voltsPerDivTargets() {
         double[] out = new double[VOLT_PER_DIV.length];
         for (int i = 0; i < VOLT_PER_DIV.length; i++) {
@@ -94,8 +94,8 @@ public final class OscParse {
     }
 
     /** Pretty-prints {@code volts} as "{@code N μV/div}", "{@code N mV/div}"
-     *  or "{@code N V/div}" with auto-prefix; the StepSelector uses this
-     *  as its display formatter. */
+     *  or "{@code N V/div}" with auto-prefix — the scope measurement rows'
+     *  display format. */
     public static String formatVoltsPerDiv(double volts) {
         return formatWithUnit(volts, "V") + "/div";
     }
@@ -145,61 +145,6 @@ public final class OscParse {
         else if (unit.startsWith("m"))                    mult = 1e-3;
         // bare "V" / "s" → mult = 1.0
         return value * mult;
-    }
-
-    /**
-     * Lenient parser used by editable {@code StepSelector}s — accepts
-     * short forms the user is likely to type: {@code "100m"}, {@code "100mV"},
-     * {@code "100 mV"}, {@code "100 mV/div"}, {@code "100u"}, {@code "100µs"},
-     * {@code "5"} (bare number → base unit), with the unit-prefix letter
-     * driving the scale ({@code n}=10⁻⁹, {@code μ}/{@code µ}/{@code u}=10⁻⁶,
-     * {@code m}=10⁻³, bare or {@code V}/{@code s}=1).  Returns the value in
-     * base units, or {@code null} when the input doesn't look like a
-     * number at all.
-     */
-    public static Double tryParseStepInput(String input) {
-        if (input == null) return null;
-        String s = input.trim();
-        if (s.isEmpty()) return null;
-        // Strip a trailing "/div" so labels copied from the dropdown round-
-        // trip cleanly.
-        if (s.endsWith("/div")) s = s.substring(0, s.length() - 4).trim();
-        if (s.isEmpty()) return null;
-
-        // Walk the leading characters that make up a number (including
-        // optional sign, decimals and exponent) so the remainder is the
-        // unit suffix.
-        int i = 0;
-        if (i < s.length() && (s.charAt(i) == '+' || s.charAt(i) == '-')) i++;
-        while (i < s.length()
-                && (Character.isDigit(s.charAt(i)) || s.charAt(i) == '.' || s.charAt(i) == ',')) {
-            i++;
-        }
-        if (i < s.length() && (s.charAt(i) == 'e' || s.charAt(i) == 'E')) {
-            i++;
-            if (i < s.length() && (s.charAt(i) == '+' || s.charAt(i) == '-')) i++;
-            while (i < s.length() && Character.isDigit(s.charAt(i))) i++;
-        }
-        String numPart  = s.substring(0, i).trim();
-        String unitPart = s.substring(i).trim();
-        if (numPart.isEmpty()) return null;
-
-        double n;
-        try { n = Double.parseDouble(numPart.replace(',', '.')); }
-        catch (NumberFormatException ex) { return null; }
-
-        double scale;
-        if (unitPart.isEmpty()) {
-            scale = 1.0;
-        } else {
-            char c0 = unitPart.charAt(0);
-            if      (c0 == 'n')                                  scale = 1e-9;
-            else if (c0 == 'μ' || c0 == 'µ' || c0 == 'u' || c0 == 'U') scale = 1e-6;
-            else if (c0 == 'm')                                  scale = 1e-3;
-            else if (c0 == 'V' || c0 == 'v' || c0 == 's' || c0 == 'S') scale = 1.0;
-            else return null;
-        }
-        return n * scale;
     }
 
 }

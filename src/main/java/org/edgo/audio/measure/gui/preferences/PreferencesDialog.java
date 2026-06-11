@@ -44,10 +44,10 @@ import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
-import org.edgo.audio.measure.gui.generator.NumericStepField;
+import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.widgets.StepSelector;
+import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import javax.sound.sampled.AudioFormat;
@@ -96,6 +96,22 @@ public final class PreferencesDialog {
     private static final int    FREQRESP_SMOOTH_W_MAX  = 100;
     /** Wheel / arrow step size (in points) for the same field. */
     private static final int    FREQRESP_SMOOTH_W_STEP =   1;
+
+    /** Scope measurement-average window (s): 0.5…100 in 0.5-s steps. */
+    private static final double MEAS_AVG_MIN_SEC  = 0.5;
+    private static final double MEAS_AVG_MAX_SEC  = 100;
+    private static final double MEAS_AVG_STEP_SEC = 0.5;
+    /** Trace line widths (px): 1…5 in 0.5-px steps, one decimal shown. */
+    private static final double LINE_WIDTH_MIN_PX  = 1;
+    private static final double LINE_WIDTH_MAX_PX  = 5;
+    private static final double LINE_WIDTH_STEP_PX = 0.5;
+    /** Dot diameters (px): 3…12 in 1-px steps. */
+    private static final double DOT_DIAM_MIN_PX = 3;
+    private static final double DOT_DIAM_MAX_PX = 12;
+    /** Multi-tone detect threshold (dB): wheel ±10 dB, arrows ±1 dB. */
+    private static final double STRONG_TONE_MIN_DB   = 10;
+    private static final double STRONG_TONE_MAX_DB   = 140;
+    private static final double STRONG_TONE_WHEEL_DB = 10;
 
     private final Shell parent;
 
@@ -243,29 +259,30 @@ public final class PreferencesDialog {
         oscTab.setLayout(oscLayout);
         oscTabItem.setControl(oscTab);
 
-        // Measurement averaging window — 0.5 s steps up to 60 s.
-        String[] AVG_TIME_VALUES = avgTimeSteps();
+        // Measurement averaging window — 0.5 s steps, bound to the working copy
+        // (OK commits via applyFromDialog; Cancel drops the copy).
         new Label(oscTab, SWT.NONE).setText(I18n.t("preferences.measAvg"));
-        StepSelector avgSecondsSel = new StepSelector(oscTab, AVG_TIME_VALUES,
-                nearestIndex(AVG_TIME_VALUES, edit.getOscMeasurementAverageSeconds()), 90);
+        NumericStepField avgSecondsSel = new NumericStepField(oscTab, UnitFamily.SECONDS,
+                MEAS_AVG_MIN_SEC, MEAS_AVG_MAX_SEC, MEAS_AVG_STEP_SEC, MEAS_AVG_STEP_SEC, 1, 90);
         avgSecondsSel.setLayoutData(comboData());
         avgSecondsSel.setToolTipText(I18n.t("preferences.measAvg.tooltip"));
+        Bindings.stepField(avgSecondsSel, edit.oscMeasurementAverageSecondsProperty());
 
-        // Trace line width — 1.5 px increments from 1.0 to 5.0.
-        String[] LINE_WIDTH_VALUES = {"1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0", "4.5", "5.0"};
+        // Trace line width — 0.5 px increments from 1.0 to 5.0.
         new Label(oscTab, SWT.NONE).setText(I18n.t("preferences.lineWidth"));
-        StepSelector lineWidthSel = new StepSelector(oscTab, LINE_WIDTH_VALUES,
-                nearestIndex(LINE_WIDTH_VALUES, edit.getOscLineWidth()), 90);
+        NumericStepField lineWidthSel = new NumericStepField(oscTab, UnitFamily.PIXEL,
+                LINE_WIDTH_MIN_PX, LINE_WIDTH_MAX_PX, LINE_WIDTH_STEP_PX, LINE_WIDTH_STEP_PX, 1, 90);
         lineWidthSel.setLayoutData(comboData());
         lineWidthSel.setToolTipText(I18n.t("preferences.lineWidth.tooltip"));
+        Bindings.stepField(lineWidthSel, edit.oscLineWidthProperty());
 
         // Sample-dot diameter — 1 px increments from 3 to 12.
-        String[] DOT_DIAM_VALUES = {"3", "4", "5", "6", "7", "8", "9", "10", "11", "12"};
         new Label(oscTab, SWT.NONE).setText(I18n.t("preferences.dotDiameter"));
-        StepSelector dotDiameterSel = new StepSelector(oscTab, DOT_DIAM_VALUES,
-                nearestIndex(DOT_DIAM_VALUES, edit.getOscDotDiameter()), 90);
+        NumericStepField dotDiameterSel = new NumericStepField(oscTab, UnitFamily.PIXEL,
+                DOT_DIAM_MIN_PX, DOT_DIAM_MAX_PX, 1, 1, 0, 90);
         dotDiameterSel.setLayoutData(comboData());
         dotDiameterSel.setToolTipText(I18n.t("preferences.dotDiameter.tooltip"));
+        Bindings.stepFieldInt(dotDiameterSel, edit.oscDotDiameterProperty());
 
         // Per-channel trace colour — button background reflects the picked
         // colour, held in a local holder for the dialog session; click opens a
@@ -313,20 +330,20 @@ public final class PreferencesDialog {
         fftTabItem.setControl(fftTab);
 
         // FFT trace line width — same 1.0..5.0 / 0.5 step grid as the scope.
-        String[] FFT_LINE_WIDTH_VALUES = {"1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0", "4.5", "5.0"};
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.lineWidth"));
-        StepSelector fftLineWidthSel = new StepSelector(fftTab, FFT_LINE_WIDTH_VALUES,
-                nearestIndex(FFT_LINE_WIDTH_VALUES, edit.getFftLineWidth()), 90);
+        NumericStepField fftLineWidthSel = new NumericStepField(fftTab, UnitFamily.PIXEL,
+                LINE_WIDTH_MIN_PX, LINE_WIDTH_MAX_PX, LINE_WIDTH_STEP_PX, LINE_WIDTH_STEP_PX, 1, 90);
         fftLineWidthSel.setLayoutData(comboData());
         fftLineWidthSel.setToolTipText(I18n.t("preferences.fft.lineWidth.tooltip"));
+        Bindings.stepField(fftLineWidthSel, edit.fftLineWidthProperty());
 
         // Harmonic dot diameter — 1 px increments, same range as scope sample dot.
-        String[] FFT_DOT_DIAM_VALUES = {"3", "4", "5", "6", "7", "8", "9", "10", "11", "12"};
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.dotDiameter"));
-        StepSelector fftDotDiameterSel = new StepSelector(fftTab, FFT_DOT_DIAM_VALUES,
-                nearestIndex(FFT_DOT_DIAM_VALUES, edit.getFftHarmonicDotDiameter()), 90);
+        NumericStepField fftDotDiameterSel = new NumericStepField(fftTab, UnitFamily.PIXEL,
+                DOT_DIAM_MIN_PX, DOT_DIAM_MAX_PX, 1, 1, 0, 90);
         fftDotDiameterSel.setLayoutData(comboData());
         fftDotDiameterSel.setToolTipText(I18n.t("preferences.fft.dotDiameter.tooltip"));
+        Bindings.stepFieldInt(fftDotDiameterSel, edit.fftHarmonicDotDiameterProperty());
 
         // Multi-tone detect threshold (dB below the strongest peak): for
         // cross-tick coherent averaging a spectral peak is treated as a separate
@@ -334,19 +351,8 @@ public final class PreferencesDialog {
         // tone's harmonics / IMD products aren't taken as independent tones
         // (which would route the average onto the per-tone multi-tone path).
         new Label(fftTab, SWT.NONE).setText(I18n.t("preferences.fft.strongToneRelDb"));
-        NumericStepField fftStrongToneRelDbField = new NumericStepField(fftTab,
-                edit.getFftStrongToneRelDb(),
-                raw -> {
-                    if (raw == null) return null;
-                    String s = raw.trim().replace(',', '.').replace("dB", "").trim();
-                    if (s.isEmpty()) return null;
-                    try { return Math.max(10.0, Math.min(140.0, Double.parseDouble(s))); }
-                    catch (NumberFormatException ex) { return null; }
-                },
-                v -> String.format(Locale.ROOT, "%.0f dB", v),
-                (v, dir) -> Math.max(10.0, Math.min(140.0, v + 10.0 * dir)),   // wheel ±10
-                (v, dir) -> Math.max(10.0, Math.min(140.0, v +  1.0 * dir)),   // arrows ±1
-                90);
+        NumericStepField fftStrongToneRelDbField = new NumericStepField(fftTab, UnitFamily.DECIBEL,
+                STRONG_TONE_MIN_DB, STRONG_TONE_MAX_DB, STRONG_TONE_WHEEL_DB, 1, 1, 90);
         fftStrongToneRelDbField.setLayoutData(comboData());
         fftStrongToneRelDbField.setToolTipText(I18n.t("preferences.fft.strongToneRelDb.tooltip"));
         Bindings.stepField(fftStrongToneRelDbField, edit.fftStrongToneRelDbProperty());
@@ -464,12 +470,12 @@ public final class PreferencesDialog {
 
         // FreqResp trace line width — same 1.0..5.0 / 0.5 step grid as the
         // scope and FFT traces.
-        String[] FREQ_RESP_LINE_WIDTH_VALUES = {"1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0", "4.5", "5.0"};
         new Label(freqRespTab, SWT.NONE).setText(I18n.t("preferences.freqResp.lineWidth"));
-        StepSelector freqRespLineWidthSel = new StepSelector(freqRespTab, FREQ_RESP_LINE_WIDTH_VALUES,
-                nearestIndex(FREQ_RESP_LINE_WIDTH_VALUES, edit.getFreqRespLineWidth()), 90);
+        NumericStepField freqRespLineWidthSel = new NumericStepField(freqRespTab, UnitFamily.PIXEL,
+                LINE_WIDTH_MIN_PX, LINE_WIDTH_MAX_PX, LINE_WIDTH_STEP_PX, LINE_WIDTH_STEP_PX, 1, 90);
         freqRespLineWidthSel.setLayoutData(comboData());
         freqRespLineWidthSel.setToolTipText(I18n.t("preferences.freqResp.lineWidth.tooltip"));
+        Bindings.stepField(freqRespLineWidthSel, edit.freqRespLineWidthProperty());
 
         // Maximal analyzed frequency as % of Nyquist.  Pref value is a
         // fraction in [0.83, 1.00]; the field displays it as a percent.
@@ -481,23 +487,9 @@ public final class PreferencesDialog {
         nyqLabel.setText(formatMaxFreqLabel(
                 edit.getFreqRespNyquistFraction(),
                 edit.current().getInputSampleRate()));
-        NumericStepField nyqField = new NumericStepField(freqRespTab,
-                edit.getFreqRespNyquistFraction() * 100.0,
-                raw -> {
-                    if (raw == null) return null;
-                    String s = raw.trim().replace(',', '.').replace("%", "").trim();
-                    if (s.isEmpty()) return null;
-                    try { return Double.parseDouble(s); }
-                    catch (NumberFormatException ex) { return null; }
-                },
-                v -> String.format(Locale.ROOT, "%.1f %%", v),
-                (v, dir) -> Math.max(FREQRESP_MAX_FREQ_PCT_MIN,
-                        Math.min(FREQRESP_MAX_FREQ_PCT_MAX,
-                                v + FREQRESP_MAX_FREQ_PCT_STEP * dir)),    // wheel
-                (v, dir) -> Math.max(FREQRESP_MAX_FREQ_PCT_MIN,
-                        Math.min(FREQRESP_MAX_FREQ_PCT_MAX,
-                                v + FREQRESP_MAX_FREQ_PCT_STEP * dir)),    // arrows
-                90);
+        NumericStepField nyqField = new NumericStepField(freqRespTab, UnitFamily.PERCENT,
+                FREQRESP_MAX_FREQ_PCT_MIN, FREQRESP_MAX_FREQ_PCT_MAX,
+                FREQRESP_MAX_FREQ_PCT_STEP, 1, 1, 90);
         nyqField.setLayoutData(comboData());
         nyqField.setToolTipText(I18n.t("preferences.freqResp.maxFreqPctNyquist.tooltip"));
         // Working copy: the field edits a working percent; nothing touches the
@@ -544,29 +536,9 @@ public final class PreferencesDialog {
         // smoothed array and refreshes the table without disturbing
         // the current zoom.
         new Label(freqRespTab, SWT.NONE).setText(I18n.t("preferences.freqResp.compareSmoothWindow"));
-        NumericStepField smoothField = new NumericStepField(freqRespTab,
-                edit.getFreqRespCompareSmoothWindow(),
-                raw -> {
-                    if (raw == null) return null;
-                    String s = raw.trim().replace(',', '.');
-                    if (s.isEmpty()) return null;
-                    Double parsed;
-                    try { parsed = (double) Integer.parseInt(s); }
-                    catch (NumberFormatException ex) {
-                        try { parsed = Math.rint(Double.parseDouble(s)); }
-                        catch (NumberFormatException ex2) { return null; }
-                    }
-                    return Math.max(FREQRESP_SMOOTH_W_MIN,
-                            Math.min(FREQRESP_SMOOTH_W_MAX, parsed));
-                },
-                v -> String.format(Locale.ROOT, "%d", (int) Math.round(v)),
-                (v, dir) -> Math.max(FREQRESP_SMOOTH_W_MIN,
-                        Math.min(FREQRESP_SMOOTH_W_MAX,
-                                Math.rint(v) + FREQRESP_SMOOTH_W_STEP * dir)),  // wheel
-                (v, dir) -> Math.max(FREQRESP_SMOOTH_W_MIN,
-                        Math.min(FREQRESP_SMOOTH_W_MAX,
-                                Math.rint(v) + FREQRESP_SMOOTH_W_STEP * dir)),  // arrows
-                90);
+        NumericStepField smoothField = new NumericStepField(freqRespTab, UnitFamily.NONE,
+                FREQRESP_SMOOTH_W_MIN, FREQRESP_SMOOTH_W_MAX,
+                FREQRESP_SMOOTH_W_STEP, FREQRESP_SMOOTH_W_STEP, 0, 90);
         smoothField.setLayoutData(comboData());
         smoothField.setToolTipText(I18n.t("preferences.freqResp.compareSmoothWindow.tooltip"));
         // Working copy: the field clamps to [0,100] and rounds to an int itself;
@@ -764,13 +736,6 @@ public final class PreferencesDialog {
             // Fold every control's value into the working copy `edit`.
             // --- Per-backend device / rate / depth for the shown backend.
             captureUiToActive.run();
-            // --- Step selectors: read straight off the controls into edit.
-            edit.setOscMeasurementAverageSeconds(Double.parseDouble(avgSecondsSel.getSelectedValue()));
-            edit.setOscLineWidth                (Double.parseDouble(lineWidthSel.getSelectedValue()));
-            edit.setOscDotDiameter              (Integer.parseInt(dotDiameterSel.getSelectedValue()));
-            edit.setFftLineWidth                (Double.parseDouble(fftLineWidthSel.getSelectedValue()));
-            edit.setFftHarmonicDotDiameter      (Integer.parseInt(fftDotDiameterSel.getSelectedValue()));
-            edit.setFreqRespLineWidth           (Double.parseDouble(freqRespLineWidthSel.getSelectedValue()));
             // --- Colour holders into edit.
             edit.setOscLeftChannelColor         (leftRgbHolder[0]);
             edit.setOscRightChannelColor        (rightRgbHolder[0]);
@@ -809,6 +774,9 @@ public final class PreferencesDialog {
             bus.publish(Events.FREQRESP_RANGE_CHANGED);
             bus.publish(Events.FREQRESP_COMPARE_PARAMS_CHANGED);
             bus.publish(Events.FREQRESP_CALIBRATION_CHANGED);
+            // Backend / device / rate edits move the Nyquist-derived field
+            // bounds — let the panes re-pull them from the committed prefs.
+            bus.publish(Events.AUDIO_FORMAT_CHANGED);
             dialog.close();
         });
 
@@ -849,36 +817,6 @@ public final class PreferencesDialog {
             }
         }
         return base + " (" + hz + ")";
-    }
-
-    /**
-     * "0.5", "1.0", ... "60.0" — 0.5-second steps for the measurement
-     * averaging selector.  Formatted with {@link Locale#ROOT} so the decimal
-     * separator is always a period (matching {@link Double#parseDouble}'s
-     * input contract regardless of the platform locale).
-     */
-    private String[] avgTimeSteps() {
-        int count = 120;
-        String[] out = new String[count];
-        for (int i = 0; i < count; i++) out[i] = String.format(Locale.ROOT, "%.1f", 0.5 * (i + 1));
-        return out;
-    }
-
-    /** Index of the entry in {@code values} whose parsed double is closest to {@code target}. */
-    private int nearestIndex(String[] values, double target) {
-        int best = 0;
-        double bestDist = Double.POSITIVE_INFINITY;
-        for (int i = 0; i < values.length; i++) {
-            double v = Double.parseDouble(values[i]);
-            double d = Math.abs(v - target);
-            if (d < bestDist) { bestDist = d; best = i; }
-        }
-        return best;
-    }
-
-    /** Index of the entry closest to an integer target — used by the dot-diameter selector. */
-    private int nearestIndex(String[] values, int target) {
-        return nearestIndex(values, (double) target);
     }
 
     /** Recolours the button's swatch and replaces its label with a fresh hex string. */

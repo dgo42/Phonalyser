@@ -28,8 +28,6 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
@@ -55,7 +53,6 @@ import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.AlignGenerator;
-import org.edgo.audio.measure.enums.AmplitudeUnit;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.MainsSuppression;
@@ -70,9 +67,9 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
-import org.edgo.audio.measure.gui.generator.NumericStepField;
+import org.edgo.audio.measure.gui.widgets.NumericStepField;
+import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.interfaces.Stepper;
 import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FftPreset;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -126,6 +123,29 @@ public final class FftTabControl extends Composite {
     /** Pixel height of the utility-row icons (camera screenshot, crosshair
      *  calibrate). */
     private static final int UTILITY_ICON_HEIGHT = 26;
+
+    /** Averages presets the field's wheel / arrows jump along; ∞ = forever. */
+    private static final double[] AVERAGES_SERIES =
+            { 2, 4, 8, 16, 32, 64, 128, Double.POSITIVE_INFINITY };
+    /** Stop-after-N bounds and wheel step (arrows step by 1). */
+    private static final double STOP_AFTER_MIN        = 2;
+    private static final double STOP_AFTER_MAX        = 1_000_000;
+    private static final double STOP_AFTER_WHEEL_STEP = 100;
+    /** Manual-fundamental ceiling (Vrms): declared external levels — e.g. a
+     *  power amplifier measured through a divider — can far exceed the DAC
+     *  full-scale. */
+    private static final double MANUAL_FUND_MAX_VRMS  = 200.0;
+    /** Amplitude floor (Vrms) — keeps log-unit (dBV) entry finite. */
+    private static final double AMP_MIN_VRMS          = 1e-6;
+    /** Harmonic-count bounds: THD measures H2…H9; the calc ceiling feeds the
+     *  compensation workflows. */
+    private static final double THD_HARM_MIN  = 2;
+    private static final double THD_HARM_MAX  = 9;
+    private static final double CALC_HARM_MIN = 9;
+    private static final double CALC_HARM_MAX = 50;
+    // Display precision caps per the numeric-field spec.
+    private static final int FREQ_MAX_DECIMALS = 9;
+    private static final int AMP_MAX_DECIMALS  = 5;
 
     private final FftView view;
 
@@ -241,8 +261,19 @@ public final class FftTabControl extends Composite {
         // state whenever the generator signal changes.
         genChangeListener = cause -> updateAlignGenEnabled();
         MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener);
-        addDisposeListener(e ->
-                MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener));
+        // Audio-format edits (Preferences OK, UI thread) move the Nyquist
+        // ceiling of the distortion band-edge fields.
+        Consumer<Void> audioFormatListener = ignored -> {
+            if (isDisposed()) return;
+            double nyquist = Preferences.instance().current().getInputSampleRate() / 2.0;
+            distMinField.setMax(nyquist);
+            distMaxField.setMax(nyquist);
+        };
+        MessageBus.instance().subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
+        addDisposeListener(e -> {
+            MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener);
+            MessageBus.instance().unsubscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
+        });
 
         wireHelpAnchors();
 
@@ -371,22 +402,11 @@ public final class FftTabControl extends Composite {
                 v -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
 
         addLabel(g, I18n.t("fft.settings.averages"));
-        // Cycling stepper: wheel / arrow keys snap to the next /
-        // previous preset (2, 4, 8, 16, 32, ∞) while manual typing
-        // still accepts any positive integer.
-        Stepper avgCycle = this::stepAveragesCycle;
-        averagesField = new NumericStepField(g,
-                Math.max(1, prefs.getFftAverages()),
-                this::parseAveragesNumeric,
-                this::formatAverages,
-                avgCycle,
-                avgCycle,
-                70);
-        // No strict-numeric filter here — the field accepts the special
-        // "∞" / "forever" token that the cycle stepper produces, and the
-        // parser rejects anything else on commit.  With the filter on,
-        // setText("∞") was being blocked by the digits-only regex and
-        // the field silently fell back to the previous finite value.
+        // List stepper: wheel / arrow keys snap to the next / previous
+        // preset (2 … 128, ∞) while manual typing still accepts any
+        // count ≥ 2 (and the ∞ / inf token, since max is unbounded).
+        averagesField = new NumericStepField(g, UnitFamily.NONE,
+                AVERAGES_SERIES[0], Double.POSITIVE_INFINITY, AVERAGES_SERIES, 0, 70);
         averagesField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         averagesField.setToolTipText(I18n.t("fft.settings.averages.tooltip"));
         Bindings.stepField(averagesField, prefs.fftAveragesProperty());
@@ -419,14 +439,8 @@ public final class FftTabControl extends Composite {
         stopAfterNEnable.setText(I18n.t("fft.settings.stopAfterN"));
         stopAfterNEnable.setToolTipText(I18n.t("fft.settings.stopAfterN.tooltip"));
         Bindings.check(stopAfterNEnable, prefs.fftStopAfterNEnabledProperty());
-        stopAfterNField = new NumericStepField(stopRow,
-                prefs.getFftStopAfterN(),
-                txt -> parseIntStrict(txt),
-                v -> Long.toString((long) Math.round(v)),
-                (v, dir) -> Math.max(1, v + dir),
-                (v, dir) -> Math.max(1, v + dir),
-                70);
-        stopAfterNField.enableStrictNumericInput(false);
+        stopAfterNField = new NumericStepField(stopRow, UnitFamily.NONE,
+                STOP_AFTER_MIN, STOP_AFTER_MAX, STOP_AFTER_WHEEL_STEP, 1, 0, 70);
         stopAfterNField.setToolTipText(I18n.t("fft.settings.stopAfterN.tooltip"));
         Bindings.stepFieldInt(stopAfterNField, prefs.fftStopAfterNProperty());
         // Initial enabled state reflects both "stop-after" toggle AND the rule
@@ -575,14 +589,9 @@ public final class FftTabControl extends Composite {
         distMinEnable = new Button(g, SWT.CHECK);
         distMinEnable.setText(I18n.t("fft.thd.distMin"));
         distMinEnable.setToolTipText(I18n.t("fft.thd.distMin.tooltip"));
-        distMinField = new NumericStepField(g,
-                prefs.getFftDistMinHz(),
-                this::parseDoubleStrict,
-                v -> String.format("%.1f", v),
-                (v, dir) -> Math.max(0, v + 50 * dir),
-                (v, dir) -> Math.max(0, v + dir),
-                90);
-        distMinField.enableStrictNumericInput(false);
+        distMinField = new NumericStepField(g, UnitFamily.FREQUENCY,
+                0, Preferences.instance().current().getInputSampleRate() / 2.0,
+                FREQ_MAX_DECIMALS, 90);
         GridData distMinFieldGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         distMinFieldGd.horizontalSpan = 3;
         distMinField.setLayoutData(distMinFieldGd);
@@ -604,14 +613,9 @@ public final class FftTabControl extends Composite {
         distMaxEnable = new Button(g, SWT.CHECK);
         distMaxEnable.setText(I18n.t("fft.thd.distMax"));
         distMaxEnable.setToolTipText(I18n.t("fft.thd.distMax.tooltip"));
-        distMaxField = new NumericStepField(g,
-                prefs.getFftDistMaxHz(),
-                this::parseDoubleStrict,
-                v -> String.format("%.1f", v),
-                (v, dir) -> Math.max(0, v + 50 * dir),
-                (v, dir) -> Math.max(0, v + dir),
-                90);
-        distMaxField.enableStrictNumericInput(false);
+        distMaxField = new NumericStepField(g, UnitFamily.FREQUENCY,
+                0, Preferences.instance().current().getInputSampleRate() / 2.0,
+                FREQ_MAX_DECIMALS, 90);
         GridData distMaxFieldGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         distMaxFieldGd.horizontalSpan = 3;
         distMaxField.setLayoutData(distMaxFieldGd);
@@ -635,17 +639,12 @@ public final class FftTabControl extends Composite {
         manualFundEnable.setText(I18n.t("fft.thd.manualFund"));
         manualFundEnable.setToolTipText(I18n.t("fft.thd.manualFund.tooltip"));
         // Single field that accepts the value AND a unit suffix —
-        // e.g. "1.5 V", "1500 mV", "-3.5 dBV".  The internal value is
-        // stored in the canonical mV scale (small magnitudes won't lose
-        // precision); the formatter re-renders in the user's last unit.
-        manualFundField = new NumericStepField(g,
-                prefs.getFftManualFundVrms(),
-                this::parseAmplitudeWithUnit,
-                v -> formatAmplitudeWithUnit(v, Preferences.instance().getFftManualFundUnit().display),
-                (v, dir) -> v * (1.0 + 0.05 * dir),
-                (v, dir) -> v * (1.0 + 0.01 * dir),
-                110);
-        manualFundField.enableStrictNumericInput(true);   // allow trailing unit suffix
+        // e.g. "1.5 V", "1500 mV", "-3.5 dBV".  The value is canonical Vrms;
+        // unit parsing / display switching is the field's own concern.  The
+        // 200 V ceiling covers declared external levels (amplifier output
+        // measured through a divider), far above the DAC full-scale.
+        manualFundField = new NumericStepField(g, UnitFamily.AMPLITUDE,
+                AMP_MIN_VRMS, MANUAL_FUND_MAX_VRMS, AMP_MAX_DECIMALS, 110);
         GridData manualFundFieldGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         manualFundFieldGd.horizontalSpan = 3;
         manualFundField.setLayoutData(manualFundFieldGd);
@@ -660,14 +659,8 @@ public final class FftTabControl extends Composite {
         });
 
         addLabel(g, I18n.t("fft.thd.maxThd"));
-        thdMaxHarmField = new NumericStepField(g,
-                prefs.getFftThdMaxHarmonic(),
-                this::parseIntStrict,
-                v -> Long.toString((long) Math.round(v)),
-                (v, dir) -> Math.min(9, Math.max(2, v + dir)),
-                (v, dir) -> Math.min(9, Math.max(2, v + dir)),
-                60);
-        thdMaxHarmField.enableStrictNumericInput(false);
+        thdMaxHarmField = new NumericStepField(g, UnitFamily.NONE,
+                THD_HARM_MIN, THD_HARM_MAX, 1, 1, 0, 60);
         thdMaxHarmField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         thdMaxHarmField.setToolTipText(I18n.t("fft.thd.maxThd.tooltip"));
         Bindings.stepFieldInt(thdMaxHarmField, prefs.fftThdMaxHarmonicProperty());
@@ -680,14 +673,8 @@ public final class FftTabControl extends Composite {
         // range and shrinking below that leaves empty rows on the
         // bottom that look like a rendering bug.  Value N means "calc
         // up to HN" (N − 1 harmonics in the 2..N range).
-        calcMaxHarmField = new NumericStepField(g,
-                prefs.getFftCalcMaxHarmonic(),
-                this::parseIntStrict,
-                v -> Long.toString((long) Math.round(v)),
-                (v, dir) -> Math.min(50, Math.max(9, v + dir)),
-                (v, dir) -> Math.min(50, Math.max(9, v + dir)),
-                60);
-        calcMaxHarmField.enableStrictNumericInput(false);
+        calcMaxHarmField = new NumericStepField(g, UnitFamily.NONE,
+                CALC_HARM_MIN, CALC_HARM_MAX, 1, 1, 0, 60);
         calcMaxHarmField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         calcMaxHarmField.setToolTipText(I18n.t("fft.thd.maxCalc.tooltip"));
         // The external THD window's row count tracks this value (resize so the
@@ -700,13 +687,6 @@ public final class FftTabControl extends Composite {
         // calc-max field is built), matching the original ordering.  Unit-aware
         // parser/formatter is unchanged; this only mirrors the committed value.
         Bindings.stepField(manualFundField, prefs.fftManualFundVrmsProperty());
-        // The field renders its value in the user's last amplitude unit (mV / V /
-        // dBV), which lives in its own pref with no widget of its own here.  A
-        // preset load can change the unit without changing the value, so reformat
-        // the field whenever the unit pref changes — refresh() re-runs the
-        // formatter against the current value.
-        Bindings.onChange(manualFundField, prefs.fftManualFundUnitProperty(),
-                u -> manualFundField.refresh());
         new Label(g, SWT.NONE);   // fill row
         // (The previous global "Calibrate with noise" checkbox moved to
         // the Load-calibration tab — it's now a per-row "With noise"
@@ -845,7 +825,6 @@ public final class FftTabControl extends Composite {
         p.setThdMaxHarmonic(prefs.getFftThdMaxHarmonic());
         p.setCalcMaxHarmonic(Math.max(9, prefs.getFftCalcMaxHarmonic()));
         p.setManualFundVrms(prefs.getFftManualFundVrms());
-        p.setManualFundUnit(prefs.getFftManualFundUnit());
         p.setManualFundEnabled(prefs.isFftManualFundEnabled());
         return p;
     }
@@ -874,7 +853,6 @@ public final class FftTabControl extends Composite {
         prefs.setFftThdMaxHarmonic(p.getThdMaxHarmonic());
         prefs.setFftCalcMaxHarmonic(p.getCalcMaxHarmonic());
         prefs.setFftManualFundVrms(p.getManualFundVrms());
-        prefs.setFftManualFundUnit(p.getManualFundUnit());
         prefs.setFftManualFundEnabled(p.isManualFundEnabled());
         prefs.save();
         // Every settings / THD widget is two-way bound to these prefs, so the
@@ -1295,8 +1273,6 @@ public final class FftTabControl extends Composite {
     // =========================================================================
 
     /** Averages presets used by the cycling stepper (wheel / arrows). */
-    private static final double[] AVERAGES_PRESETS = { 2, 4, 8, 16, 32, Double.POSITIVE_INFINITY };
-
     private String shortFftLength(int n) {
         if (n >= 1 << 20) return (n >> 20) + "M";
         if (n >= 1 << 10) return (n >> 10) + "k";
@@ -1320,104 +1296,11 @@ public final class FftTabControl extends Composite {
         return -1;
     }
 
-    /**
-     * Parses an amplitude with an embedded unit suffix.  Accepts trailing
-     * {@code mV}, {@code V} (or no suffix), {@code dBV}, {@code dBFS}.
-     * Side-effect: stores the chosen unit into Preferences so the
-     * formatter re-renders the value in the same unit the user typed.
-     * Canonical return value is volts (linear).
-     */
-    private Double parseAmplitudeWithUnit(String s) {
-        if (s == null) return null;
-        String t = s.trim().replace(',', '.');
-        if (t.isEmpty()) return null;
-        String unit = "V";
-        String numText;
-        Matcher m = Pattern
-                .compile("([+-]?[0-9]*\\.?[0-9]+(?:[eE][+-]?[0-9]+)?)\\s*([a-zA-Z]*)$")
-                .matcher(t);
-        if (!m.matches()) return null;
-        numText = m.group(1);
-        String u = m.group(2);
-        if (!u.isEmpty()) {
-            if      (u.equalsIgnoreCase("mV"))   unit = "mV";
-            else if (u.equalsIgnoreCase("V"))    unit = "V";
-            else if (u.equalsIgnoreCase("dBV"))  unit = "dBV";
-            else if (u.equalsIgnoreCase("dBFS")) unit = "dBFS";
-            else return null;
-        }
-        double raw;
-        try { raw = Double.parseDouble(numText); }
-        catch (NumberFormatException ex) { return null; }
-        double v;
-        switch (unit) {
-            case "mV":   v = raw * 0.001; break;
-            case "V":    v = raw;         break;
-            case "dBV":
-            case "dBFS": v = Math.pow(10, raw / 20.0); break;
-            default:     v = raw;
-        }
-        Preferences.instance().setFftManualFundUnit(AmplitudeUnit.fromString(unit));
-        return v;
-    }
-
-    private String formatAmplitudeWithUnit(double vrms, String unit) {
-        if (unit == null) unit = "V";
-        switch (unit) {
-            case "mV":   return String.format("%.3f mV",  vrms * 1000);
-            case "dBV":  return String.format("%+.3f dBV", 20 * Math.log10(Math.max(1e-30, vrms)));
-            case "dBFS": return String.format("%+.3f dBFS",20 * Math.log10(Math.max(1e-30, vrms)));
-            case "V":
-            default:     return String.format("%.4f V", vrms);
-        }
-    }
-
-    /** Wheel / arrow stepper for the averages field — snaps to the next
-     *  / previous preset rather than ±1.  Manual typing in the field is
-     *  unaffected because parsing goes through {@link #parseAveragesNumeric}. */
-    private double stepAveragesCycle(double current, int dir) {
-        if (dir > 0) {
-            for (double t : AVERAGES_PRESETS) if (t > current + 1e-9) return t;
-            return Double.POSITIVE_INFINITY;
-        }
-        double best = 2;
-        for (double t : AVERAGES_PRESETS) {
-            if (Double.isInfinite(t)) break;
-            if (t < current - 1e-9) best = t; else break;
-        }
-        return best;
-    }
-
-    /** Parses an averages-field value — accepts any positive integer
-     *  AND the special tokens {@code "∞"} / {@code "forever"} → +Infinity. */
-    private Double parseAveragesNumeric(String s) {
-        if (s == null) return null;
-        String t = s.trim();
-        if (t.isEmpty()) return null;
-        if (t.equals("∞") || t.equalsIgnoreCase("forever") || t.equalsIgnoreCase("inf")) {
-            return Double.POSITIVE_INFINITY;
-        }
-        try {
-            long n = Long.parseLong(t);
-            return n >= 1 ? (double) n : null;
-        } catch (NumberFormatException e) { return null; }
-    }
-
     /** Formats an averages value — {@code +Infinity} → {@code "∞"},
      *  finite values → plain integer string. */
     private String formatAverages(double v) {
         if (Double.isInfinite(v)) return "∞";
         return Long.toString((long) Math.round(v));
-    }
-
-    private Double parseDoubleStrict(String s) {
-        try { return Double.parseDouble(s.trim().replace(',', '.')); }
-        catch (NumberFormatException e) { return null; }
-    }
-
-    private Double parseIntStrict(String s) {
-        try { return (double) Integer.parseInt(s.trim()); }
-        catch (NumberFormatException e) { return null; }
     }
 
     // =========================================================================

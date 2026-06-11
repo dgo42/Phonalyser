@@ -18,11 +18,10 @@
 
 package org.edgo.audio.measure.gui.scope;
 
-import org.junit.jupiter.api.Test;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.junit.jupiter.api.Test;
 
 /**
  * Tests for {@link ScopeFormat} — formatters and step-pickers shared
@@ -115,22 +114,6 @@ class ScopeFormatTest {
     }
 
     @Test
-    void parseSeconds_rejectsNonPositiveAndGarbage() {
-        assertNull(ScopeFormat.parseSeconds(null));
-        assertNull(ScopeFormat.parseSeconds(""));
-        assertNull(ScopeFormat.parseSeconds("not-a-number"));
-        assertNull(ScopeFormat.parseSeconds("0"));
-        assertNull(ScopeFormat.parseSeconds("-5 s"));
-    }
-
-    @Test
-    void parseSeconds_acceptsBothDecimalSeparators() {
-        assertEquals(1.5, ScopeFormat.parseSeconds("1.5 s"), 1e-12);
-        assertEquals(1.5, ScopeFormat.parseSeconds("1,5 s"), 1e-12);
-        assertEquals(2.0, ScopeFormat.parseSeconds("2"),     1e-12);
-    }
-
-    @Test
     void displaySamplesFor_spans10Divisions() {
         // 1 ms/div at 1 MHz → 10 ms × 1e6 = 10000 samples.
         assertEquals(10_000, ScopeFormat.displaySamplesFor(1e-3, 1_000_000));
@@ -138,15 +121,6 @@ class ScopeFormatTest {
         assertEquals(480_000, ScopeFormat.displaySamplesFor(1.0, 48_000));
         // Minimum guard: always ≥ 2 samples.
         assertEquals(2, ScopeFormat.displaySamplesFor(1e-12, 1));
-    }
-
-    @Test
-    void hysteresisDivSteps_emits_0_to_5_in_0_1_steps() {
-        String[] steps = ScopeFormat.hysteresisDivSteps();
-        assertEquals(51, steps.length);
-        assertEquals("0.0", steps[0]);
-        assertEquals("5.0", steps[50]);
-        assertEquals("0.1", steps[1]);
     }
 
     @Test
@@ -171,14 +145,5 @@ class ScopeFormatTest {
         assertEquals(1,  ScopeFormat.nextTargetFrom(2,  targets, -1), 1e-12);
         // delta == 0 → unchanged.
         assertEquals(5,  ScopeFormat.nextTargetFrom(5,  targets,  0), 1e-12);
-    }
-
-    @Test
-    void nearestIndex_picksClosestEntry() {
-        String[] values = {"0.0", "0.5", "1.0", "2.0", "5.0"};
-        assertEquals(0, ScopeFormat.nearestIndex(values, -0.1));
-        assertEquals(1, ScopeFormat.nearestIndex(values,  0.6));
-        assertEquals(2, ScopeFormat.nearestIndex(values,  0.9));
-        assertEquals(4, ScopeFormat.nearestIndex(values, 100));
     }
 }

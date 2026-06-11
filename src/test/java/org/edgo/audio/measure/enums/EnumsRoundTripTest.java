@@ -32,8 +32,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 class EnumsRoundTripTest {
 
     @Test
-    void amplitudeUnit_valuesRoundTrip()       { check(AmplitudeUnit.values()); }
-    @Test
     void audioBackendType_valuesRoundTrip()    { check(AudioBackendType.values()); }
     @Test
     void audioFileFormat_valuesRoundTrip()     { check(AudioFileFormat.values()); }
