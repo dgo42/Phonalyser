@@ -182,17 +182,13 @@ public final class ScopePane implements ScopeTabControl.Host {
      */
     private double viewCenterFrames = -1.0;
     private final GridData               condensedGd;
-    /** True while the scope's own Record button is on — drives the periodic
-     *  view redraws and {@link #isCapturing()}.  Independent of the shared-
-     *  capture lifecycle: the FFT pane can keep the device open via
-     *  {@code SharedCapture} without flipping this flag.  Stays {@code false}
-     *  on the screenshot-only pane variant ({@code liveCapture = false}). */
-    private volatile boolean             scopeLive;
-    /** Live capture buffer held while {@link #scopeLive} is true — acquired
-     *  from {@link Events#CAPTURE_ACQUIRE} on {@link #startCapture()} and
-     *  snapshotted by {@link #stopCapture()} before release.  {@code null}
-     *  when the scope isn't recording. */
-    private SignalBufferReader           currentBuffer;
+    /** Controller owning the scope's capture-device handshake — the Record
+     *  state ({@code isCapturing}), the live buffer reference and the
+     *  ACQUIRE/RELEASE bus round-trip.  The pane wires the views around
+     *  it: buffer attach + measurement thread + redraw timer on start,
+     *  frozen-snapshot re-attach on stop.  Stays idle on the
+     *  screenshot-only pane variant ({@code liveCapture = false}). */
+    private final ScopeController controller = new ScopeController();
     /** Main-view redraws elapsed since the last condensed-view redraw. */
     private int                          redrawCounter;
     /**
@@ -1166,31 +1162,27 @@ public final class ScopePane implements ScopeTabControl.Host {
      *  reflect the shared capture device — the FFT pane can hold it open via
      *  {@code SharedCapture} while this stays {@code false}. */
     public boolean isCapturing() {
-        return scopeLive;
+        return controller.isCapturing();
     }
 
     /** Human-readable description of the last {@link #startCapture()} failure
-     *  (or {@code null} if it succeeded / wasn't attempted).  Forwarded from
-     *  {@code SharedCapture}. */
+     *  (or {@code null} if it succeeded / wasn't attempted). */
     private String getLastStartError() {
-        return SharedCapture.instance().getLastStartError();
+        return controller.getLastStartError();
     }
 
-    /** Requests the shared capture via the bus, attaches both views to the
-     *  live buffer, and starts the measurement worker + redraw timer.  Bails
-     *  out (without flipping {@link #scopeLive}) if the device fails to open —
-     *  the reason is then available via {@link #getLastStartError()}. */
+    /** Acquires the shared capture via the controller, attaches both views
+     *  to the live buffer, and starts the measurement worker + redraw
+     *  timer.  Bails out if the device fails to open — the reason is then
+     *  available via {@link #getLastStartError()}. */
     public synchronized void startCapture() {
-        if (scopeLive) return;
-        SignalBufferReader buf = MessageBus.instance().request(Events.CAPTURE_ACQUIRE);
+        SignalBufferReader buf = controller.acquireCapture();
         if (buf == null) return;
-        scopeLive = true;
-        currentBuffer = buf;
         // Attach the views to the live buffer only when the scope's own Record
         // button is on.  If the FFT pane held the device open first, the views
         // stay detached until the user explicitly starts the scope — otherwise
-        // paint events would draw what the audio thread writes while
-        // scopeLive == false.
+        // paint events would draw what the audio thread writes while the
+        // scope isn't capturing.
         view.setBuffer(buf);
         condensed.setBuffer(buf);
         // Measurement compute runs on its own daemon thread so the SWT paint
@@ -1204,8 +1196,7 @@ public final class ScopePane implements ScopeTabControl.Host {
      *  frame attached to both views.  A subsequent {@link #startCapture()}
      *  replaces the snapshot with a fresh live buffer. */
     public synchronized void stopCapture() {
-        if (!scopeLive) return;
-        scopeLive = false;
+        if (!controller.isCapturing()) return;
         // Stop the measurement worker first so it doesn't try to read from the
         // buffer while capture is being torn down.
         if (!view.isDisposed()) view.stopMeasurementThread();
@@ -1213,14 +1204,11 @@ public final class ScopePane implements ScopeTabControl.Host {
         // frame after stop.  If the views stayed attached to the shared buffer,
         // any continued writes (because the FFT pane is still recording) would
         // visually resume the trace whenever a paint event fires.
-        if (currentBuffer != null) {
-            SignalBufferReader frozen = currentBuffer.frozenSnapshot();
+        SignalBufferReader frozen = controller.releaseCapture();
+        if (frozen != null) {
             if (!view.isDisposed())      view.setBuffer(frozen);
             if (!condensed.isDisposed()) condensed.setBuffer(frozen);
         }
-        currentBuffer = null;
-        MessageBus.instance().publish(Events.CAPTURE_RELEASE);
-        log.info("Oscilloscope stopped.");
     }
 
     /** Schedules the next paint pass via {@link Display#timerExec}.  The
@@ -1233,9 +1221,9 @@ public final class ScopePane implements ScopeTabControl.Host {
      *  than the period leaves the next timer permanently armed and back-to-back
      *  scope paints starve every other UI work item. */
     private void scheduleRedraw() {
-        if (!scopeLive) return;
+        if (!controller.isCapturing()) return;
         view.getDisplay().timerExec(REDRAW_PERIOD_MS, () -> {
-            if (!scopeLive) return;
+            if (!controller.isCapturing()) return;
             if (!view.isDisposed()) {
                 view.redraw();
                 view.update();
