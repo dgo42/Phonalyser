@@ -59,5 +59,6 @@ public class FftPreset {
     private int     thdMaxHarmonic               = 9;
     private int     calcMaxHarmonic              = 9;
     private double  manualFundVrms               = 1.0;
+    private boolean manualFundDbvDisplay         = false;
     private boolean manualFundEnabled            = false;
 }

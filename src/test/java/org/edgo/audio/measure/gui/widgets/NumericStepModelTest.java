@@ -110,6 +110,74 @@ class NumericStepModelTest {
     }
 
     @Test
+    void percentWheel_stickyDbv_walksTheTenDecibelGrid() {
+        // In log display the wheel steps dB, not linear volts: 0 → −10 → −20;
+        // an off-grid −3.5 snaps to −10 down and 0 up.
+        NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-6, 10, 5);
+        assertTrue(m.commit("0 dBV"));
+        m.wheel(-1);
+        assertEquals(Math.pow(10, -10 / 20.0), m.getValue(), EPS, "0 → −10 dBV");
+        m.wheel(-1);
+        assertEquals(Math.pow(10, -20 / 20.0), m.getValue(), EPS, "−10 → −20 dBV");
+        m.wheel(+1);
+        assertEquals(Math.pow(10, -10 / 20.0), m.getValue(), EPS, "−20 → −10 dBV");
+        assertTrue(m.commit("-3.5 dBV"));
+        m.wheel(-1);
+        assertEquals(Math.pow(10, -10 / 20.0), m.getValue(), EPS, "−3.5 snaps to −10 down");
+        assertTrue(m.commit("-3.5 dBV"));
+        m.wheel(+1);
+        assertEquals(1.0, m.getValue(), EPS, "−3.5 snaps to 0 dBV up");
+    }
+
+    @Test
+    void list_namedFirstEntry_walksInGivenOrder() {
+        // The sweep-points list pins "Nyquist/2" FIRST despite its larger
+        // numeric value — the wheel walks the list order, not sorted order.
+        double[] series = {192_000, 8192, 16384};
+        NumericStepModel m = new NumericStepModel(UnitFamily.NONE, 4096, 10_000_000, series, 0);
+        m.setValue(192_000);
+        m.wheel(+1);
+        assertEquals(8192, m.getValue(), EPS, "head steps to the first preset");
+        m.wheel(-1);
+        assertEquals(192_000, m.getValue(), EPS, "and back to the head");
+        m.wheel(-1);
+        assertEquals(192_000, m.getValue(), EPS, "list start saturates");
+        m.setValue(16384);
+        m.wheel(+1);
+        assertEquals(16384, m.getValue(), EPS, "list end saturates");
+    }
+
+    @Test
+    void logDisplay_persistRestoreAndRelease() {
+        NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-6, 10, 5);
+        m.setValue(0.5);
+        m.setLogDisplay(true);                // the persisted-choice restore path
+        assertTrue(m.isLogDisplay());
+        assertTrue(m.text().endsWith("dBV"), m.text());
+        assertTrue(m.commit("0.7"));          // suffix-less entry releases it
+        assertFalse(m.isLogDisplay());
+        assertTrue(m.commit("-6 dBV"));       // typing dBV sets it
+        assertTrue(m.isLogDisplay());
+    }
+
+    @Test
+    void namedValue_rendersAndParsesAsLabel() {
+        // The sweep-points "Nyquist/2" entry: rate-derived value shown as text.
+        double[] series = {8192, 131_072, 262_144};
+        NumericStepModel m = new NumericStepModel(UnitFamily.NONE, 8192, 10_000_000, series, 0);
+        m.setNamedValue(192_000, "Nyquist/2");
+        m.setValue(192_000);
+        assertEquals("Nyquist/2", m.text());
+        assertTrue(m.commit("nyquist/2"), "label parses case-insensitively");
+        assertEquals(192_000, m.getValue(), EPS);
+        assertTrue(m.acceptsPartial("Nyquist/2"), "label survives the mid-edit filter");
+        m.wheel(+1);
+        assertEquals(262_144, m.getValue(), EPS, "stepping treats it as its number");
+        assertTrue(m.commit("8192"));
+        assertEquals("8192", m.text(), "plain values still render numerically");
+    }
+
+    @Test
     void percentArrow_stickyDbv_stepsOneDecibel() {
         NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-6, 10, 5);
         assertTrue(m.commit("-3 dBV"));

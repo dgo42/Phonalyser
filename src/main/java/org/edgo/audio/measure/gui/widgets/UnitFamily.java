@@ -165,4 +165,13 @@ public enum UnitFamily {
         }
         return null;
     }
+
+    /** The family's logarithmic unit (dBV), or {@code null} when it has
+     *  none — used to restore a persisted dB display choice. */
+    public Unit logUnit() {
+        for (Unit u : units) {
+            if (u.log()) return u;
+        }
+        return null;
+    }
 }

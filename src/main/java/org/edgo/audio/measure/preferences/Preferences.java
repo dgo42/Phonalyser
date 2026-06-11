@@ -267,6 +267,9 @@ public final class Preferences {
      *  Range [0, 100], default 50 = equal split. */
     private final Property<Double> genDualToneSplitPct = bound(50.0);
     private final Property<Double> genAmplitudeVrms = bound(0.5);
+    /** True = the generator amplitude field displays in dBV (the user typed
+     *  an explicit dBV suffix); persisted so a restart keeps the choice. */
+    private final Property<Boolean> genAmplitudeDbvDisplay = bound(false);
     /** Unit the amplitude field renders in: one of {@code mV}, {@code V}, {@code dBV}, {@code dBFS}. */
     /** Dither bits 0..N; 0 means "Off". */
     private final Property<Integer> genDitherBits  = bound(0);
@@ -375,6 +378,8 @@ public final class Preferences {
      *  comparable in level and survive. */
     private final Property<Double>  fftStrongToneRelDb   = bound(100.0);
     private final Property<Double>  fftManualFundVrms    = bound(1.0);
+    /** True = the manual-fundamental field displays in dBV; persisted. */
+    private final Property<Boolean> fftManualFundDbvDisplay = bound(false);
     /** Unit the manual-fundamental-amplitude field renders in: {@code mV}, {@code V}, or {@code dBV}. */
     private final Property<Boolean> fftManualFundEnabled = bound(false);
     /** Active analysis channel (L or R) — only one channel shown at a time. */
@@ -440,6 +445,8 @@ public final class Preferences {
     private final Property<Double>  freqRespStopHz           = bound(20000.0);
     /** Generator drive amplitude at the DAC, V RMS. */
     private final Property<Double>  freqRespAmplitudeVrms    = bound(0.5);
+    /** True = the sweep amplitude field displays in dBV; persisted. */
+    private final Property<Boolean> freqRespAmplitudeDbvDisplay = bound(false);
     /** Number of log-spaced output frequency points the deconvolution emits.
      *  Default 65536 (64 k) is a safe trade-off between resolution and
      *  memory for a single sweep. */
@@ -1001,6 +1008,9 @@ public final class Preferences {
     public double getFftManualFundVrms()       { return fftManualFundVrms.get(); }
     public void setFftManualFundVrms(double v) { fftManualFundVrms.set(v); }
     public Property<Double> fftManualFundVrmsProperty() { return fftManualFundVrms; }
+    public boolean isFftManualFundDbvDisplay() { return fftManualFundDbvDisplay.get(); }
+    public void setFftManualFundDbvDisplay(boolean v) { fftManualFundDbvDisplay.set(v); }
+    public Property<Boolean> fftManualFundDbvDisplayProperty() { return fftManualFundDbvDisplay; }
 
     public boolean isFftManualFundEnabled()    { return fftManualFundEnabled.get(); }
     public void setFftManualFundEnabled(boolean v) { fftManualFundEnabled.set(v); }
@@ -1350,6 +1360,8 @@ public final class Preferences {
     public double getGenAmplitudeVrms()        { return genAmplitudeVrms.get(); }
     public void setGenAmplitudeVrms(double v)  { genAmplitudeVrms.set(v); }
     public Property<Double> genAmplitudeVrmsProperty() { return genAmplitudeVrms; }
+    public boolean isGenAmplitudeDbvDisplay() { return genAmplitudeDbvDisplay.get(); }
+    public void setGenAmplitudeDbvDisplay(boolean v) { genAmplitudeDbvDisplay.set(v); }
 
 
     public int getGenDitherBits()              { return genDitherBits.get(); }
@@ -1435,6 +1447,8 @@ public final class Preferences {
     public double getFreqRespAmplitudeVrms()   { return freqRespAmplitudeVrms.get(); }
     public void setFreqRespAmplitudeVrms(double v) { freqRespAmplitudeVrms.set(v); }
     public Property<Double> freqRespAmplitudeVrmsProperty() { return freqRespAmplitudeVrms; }
+    public boolean isFreqRespAmplitudeDbvDisplay() { return freqRespAmplitudeDbvDisplay.get(); }
+    public void setFreqRespAmplitudeDbvDisplay(boolean v) { freqRespAmplitudeDbvDisplay.set(v); }
 
     public int getFreqRespSweepPoints()        { return freqRespSweepPoints.get(); }
     public void setFreqRespSweepPoints(int v)  { freqRespSweepPoints.set(v); }
@@ -1632,6 +1646,7 @@ public final class Preferences {
         root.put("genDualToneFreq2Hz",           genDualToneFreq2Hz.get());
         root.put("genDualToneSplitPct",          genDualToneSplitPct.get());
         root.put("genAmplitudeVrms",             genAmplitudeVrms.get());
+        root.put("genAmplitudeDbvDisplay",       genAmplitudeDbvDisplay.get());
         root.put("genDitherBits",                genDitherBits.get());
         if (genCorrectionsCsv.get()    != null) root.put("genCorrectionsCsv",    genCorrectionsCsv.get());
         if (genCorrectionsFolder.get() != null) root.put("genCorrectionsFolder", genCorrectionsFolder.get());
@@ -1714,6 +1729,7 @@ public final class Preferences {
         root.put("fftCalcMaxHarmonic",        fftCalcMaxHarmonic.get());
         root.put("fftStrongToneRelDb",        fftStrongToneRelDb.get());
         root.put("fftManualFundVrms",         fftManualFundVrms.get());
+        root.put("fftManualFundDbvDisplay",   fftManualFundDbvDisplay.get());
         root.put("fftManualFundEnabled",      fftManualFundEnabled.get());
         root.put("fftChannel",                fftChannel.get().name());
         root.put("fftMagUnit",                fftMagUnit.get().name());
@@ -1751,6 +1767,7 @@ public final class Preferences {
         root.put("freqRespStartHz",           freqRespStartHz.get());
         root.put("freqRespStopHz",            freqRespStopHz.get());
         root.put("freqRespAmplitudeVrms",     freqRespAmplitudeVrms.get());
+        root.put("freqRespAmplitudeDbvDisplay", freqRespAmplitudeDbvDisplay.get());
         root.put("freqRespSweepPoints",       freqRespSweepPoints.get());
         root.put("freqRespDurationSec",       freqRespDurationSec.get());
         root.put("freqRespFftSize",           freqRespFftSize.get());
@@ -1820,6 +1837,7 @@ public final class Preferences {
                 pm.put("thdMaxHarmonic",    p.getThdMaxHarmonic());
                 pm.put("calcMaxHarmonic",   p.getCalcMaxHarmonic());
                 pm.put("manualFundVrms",    p.getManualFundVrms());
+                pm.put("manualFundDbvDisplay", p.isManualFundDbvDisplay());
                 pm.put("manualFundEnabled", p.isManualFundEnabled());
                 fpMap.put(e.getKey(), pm);
             }
@@ -1920,6 +1938,7 @@ public final class Preferences {
         if (root.get("genDualToneFreq2Hz")           instanceof Number n) genDualToneFreq2Hz.set(n.doubleValue());
         if (root.get("genDualToneSplitPct")          instanceof Number n) genDualToneSplitPct.set(n.doubleValue());
         if (root.get("genAmplitudeVrms")             instanceof Number n) genAmplitudeVrms.set(n.doubleValue());
+        if (root.get("genAmplitudeDbvDisplay")       instanceof Boolean b) genAmplitudeDbvDisplay.set(b);
         if (root.get("genDitherBits")                instanceof Number n) genDitherBits.set(n.intValue());
         if (root.get("genCorrectionsCsv")            instanceof String s) genCorrectionsCsv.set(s);
         if (root.get("genCorrectionsFolder")         instanceof String s) genCorrectionsFolder.set(s);
@@ -2008,6 +2027,7 @@ public final class Preferences {
         if (root.get("fftCalcMaxHarmonic")        instanceof Number  n) fftCalcMaxHarmonic.set(n.intValue());
         if (root.get("fftStrongToneRelDb")        instanceof Number  n) fftStrongToneRelDb.set(n.doubleValue());
         if (root.get("fftManualFundVrms")         instanceof Number  n) fftManualFundVrms.set(n.doubleValue());
+        if (root.get("fftManualFundDbvDisplay")   instanceof Boolean b) fftManualFundDbvDisplay.set(b);
         if (root.get("fftManualFundEnabled")      instanceof Boolean b) fftManualFundEnabled.set(b);
         if (root.get("fftChannel")                instanceof String  s) fftChannel.set(enumOr(Channel.class, s, fftChannel.get()));
         if (root.get("fftMagUnit")                instanceof String  s) fftMagUnit.set(enumOr(MagnitudeUnit.class, s, fftMagUnit.get()));
@@ -2024,6 +2044,7 @@ public final class Preferences {
         if (root.get("freqRespStartHz")           instanceof Number  n) freqRespStartHz.set(n.doubleValue());
         if (root.get("freqRespStopHz")            instanceof Number  n) freqRespStopHz.set(n.doubleValue());
         if (root.get("freqRespAmplitudeVrms")     instanceof Number  n) freqRespAmplitudeVrms.set(n.doubleValue());
+        if (root.get("freqRespAmplitudeDbvDisplay") instanceof Boolean b) freqRespAmplitudeDbvDisplay.set(b);
         if (root.get("freqRespSweepPoints")       instanceof Number  n) freqRespSweepPoints.set(n.intValue());
         if (root.get("freqRespDurationSec")       instanceof Number  n) freqRespDurationSec.set(n.doubleValue());
         if (root.get("freqRespFftSize")           instanceof Number  n) {
@@ -2159,6 +2180,7 @@ public final class Preferences {
                 if (pm.get("thdMaxHarmonic")    instanceof Number  n) p.setThdMaxHarmonic(n.intValue());
                 if (pm.get("calcMaxHarmonic")   instanceof Number  n) p.setCalcMaxHarmonic(n.intValue());
                 if (pm.get("manualFundVrms")    instanceof Number  n) p.setManualFundVrms(n.doubleValue());
+                if (pm.get("manualFundDbvDisplay") instanceof Boolean b) p.setManualFundDbvDisplay(b);
                 if (pm.get("manualFundEnabled") instanceof Boolean b) p.setManualFundEnabled(b);
                 fftPresets.put(key, p);
             }

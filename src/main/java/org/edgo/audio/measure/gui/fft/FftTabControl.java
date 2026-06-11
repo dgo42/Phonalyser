@@ -687,6 +687,14 @@ public final class FftTabControl extends Composite {
         // calc-max field is built), matching the original ordering.  Unit-aware
         // parser/formatter is unchanged; this only mirrors the committed value.
         Bindings.stepField(manualFundField, prefs.fftManualFundVrmsProperty());
+        // dBV display choice: seed from the persisted pref, persist the user's
+        // typed unit, and follow external writes (preset load) — setLogDisplay
+        // is idempotent and fires no listener, so the loop terminates.
+        manualFundField.setLogDisplay(prefs.isFftManualFundDbvDisplay());
+        manualFundField.addSelectionListener(e ->
+                prefs.setFftManualFundDbvDisplay(manualFundField.isLogDisplay()));
+        Bindings.onChange(manualFundField, prefs.fftManualFundDbvDisplayProperty(),
+                v -> manualFundField.setLogDisplay(v));
         new Label(g, SWT.NONE);   // fill row
         // (The previous global "Calibrate with noise" checkbox moved to
         // the Load-calibration tab — it's now a per-row "With noise"
@@ -825,6 +833,7 @@ public final class FftTabControl extends Composite {
         p.setThdMaxHarmonic(prefs.getFftThdMaxHarmonic());
         p.setCalcMaxHarmonic(Math.max(9, prefs.getFftCalcMaxHarmonic()));
         p.setManualFundVrms(prefs.getFftManualFundVrms());
+        p.setManualFundDbvDisplay(prefs.isFftManualFundDbvDisplay());
         p.setManualFundEnabled(prefs.isFftManualFundEnabled());
         return p;
     }
@@ -853,6 +862,7 @@ public final class FftTabControl extends Composite {
         prefs.setFftThdMaxHarmonic(p.getThdMaxHarmonic());
         prefs.setFftCalcMaxHarmonic(p.getCalcMaxHarmonic());
         prefs.setFftManualFundVrms(p.getManualFundVrms());
+        prefs.setFftManualFundDbvDisplay(p.isManualFundDbvDisplay());
         prefs.setFftManualFundEnabled(p.isManualFundEnabled());
         prefs.save();
         // Every settings / THD widget is two-way bound to these prefs, so the

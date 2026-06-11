@@ -631,6 +631,11 @@ public final class GeneratorPane {
         // internal) — two-way bind it like the frequency; live-apply and the
         // FFT-invalidation publish stay as a side-effect subscription.
         Bindings.stepField(ampField, prefs.genAmplitudeVrmsProperty());
+        // dBV display choice: seed from the persisted pref and persist the
+        // user's typed unit (the field fires on display-unit changes too).
+        ampField.setLogDisplay(prefs.isGenAmplitudeDbvDisplay());
+        ampField.addSelectionListener(e ->
+                prefs.setGenAmplitudeDbvDisplay(ampField.isLogDisplay()));
         Bindings.onChange(group, prefs.genAmplitudeVrmsProperty(), v -> {
             controller.setAmplitudeVrms(v);
             MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);

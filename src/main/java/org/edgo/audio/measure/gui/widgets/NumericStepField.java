@@ -230,7 +230,7 @@ public final class NumericStepField extends Composite {
     public void setValue(double v) {
         double before = model.getValue();
         model.setValue(v);
-        afterMutation(before);
+        afterMutation(before, model.isLogDisplay());
     }
 
     /** Updates the lower bound; the re-clamped value is mirrored to the
@@ -239,7 +239,7 @@ public final class NumericStepField extends Composite {
     public void setMin(double min) {
         double before = model.getValue();
         model.setMin(min);
-        afterMutation(before);
+        afterMutation(before, model.isLogDisplay());
     }
 
     /** Updates the upper bound (e.g. Nyquist after a sample-rate change, the
@@ -247,7 +247,7 @@ public final class NumericStepField extends Composite {
     public void setMax(double max) {
         double before = model.getValue();
         model.setMax(max);
-        afterMutation(before);
+        afterMutation(before, model.isLogDisplay());
     }
 
     /** Replaces a LIST field's series (e.g. the sweep-points list whose head
@@ -255,7 +255,28 @@ public final class NumericStepField extends Composite {
     public void setSeries(double[] series) {
         double before = model.getValue();
         model.setSeries(series);
-        afterMutation(before);
+        afterMutation(before, model.isLogDisplay());
+    }
+
+    /** Declares one value that renders and parses as {@code label} instead of
+     *  a number (the sweep-points "Nyquist/2" entry). */
+    public void setNamedValue(double value, String label) {
+        model.setNamedValue(value, label);
+        refresh();
+    }
+
+    /** True while the field displays in its log unit (dBV) — persisted per
+     *  field so a restart restores the user's display choice. */
+    public boolean isLogDisplay() {
+        return model.isLogDisplay();
+    }
+
+    /** Programmatically restores ({@code true}) or clears ({@code false}) the
+     *  dBV display — the seed path for a persisted choice; no listener
+     *  fires. */
+    public void setLogDisplay(boolean on) {
+        model.setLogDisplay(on);
+        refresh();
     }
 
     /** Force a reformat of the current value (e.g. after a locale change). */
@@ -306,35 +327,44 @@ public final class NumericStepField extends Composite {
 
     private void stepWheel(int direction) {
         double before = model.getValue();
+        boolean logBefore = model.isLogDisplay();
         model.commit(field.getText());   // step from the ENTERED value, not the last committed
         model.wheel(direction);
-        afterMutation(before);
+        afterMutation(before, logBefore);
     }
 
     private void stepArrow(int direction) {
         double before = model.getValue();
+        boolean logBefore = model.isLogDisplay();
         model.commit(field.getText());   // step from the ENTERED value, not the last committed
         model.arrow(direction);
-        afterMutation(before);
+        afterMutation(before, logBefore);
     }
 
     private void commitText() {
         double before = model.getValue();
+        boolean logBefore = model.isLogDisplay();
         if (!model.commit(field.getText())) {
             // Reject: restore the last good value.
             refresh();
             return;
         }
-        afterMutation(before);
+        afterMutation(before, logBefore);
     }
 
     /** Refreshes the display and fires the listeners only when the canonical
-     *  value moved away from {@code before} — the single funnel every model
-     *  mutation goes through, so the no-event-on-unchanged contract can't be
-     *  missed at one of the call sites. */
-    private void afterMutation(double before) {
+     *  value — or the persisted-worthy dBV display choice — moved away from
+     *  the snapshot; the single funnel every model mutation goes through, so
+     *  the no-event-on-unchanged contract can't be missed at one of the call
+     *  sites.  (Typing "0.5 V" over a dBV display changes the unit without
+     *  the value; the pane's display-unit persistence still needs the
+     *  event.) */
+    private void afterMutation(double beforeValue, boolean logBefore) {
         refresh();
-        if (Double.compare(before, model.getValue()) != 0) fire();
+        if (Double.compare(beforeValue, model.getValue()) != 0
+                || logBefore != model.isLogDisplay()) {
+            fire();
+        }
     }
 
     private void fire() {
