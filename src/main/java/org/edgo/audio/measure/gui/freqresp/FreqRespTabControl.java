@@ -40,27 +40,27 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
-import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
+import org.edgo.audio.measure.bind.Property;
+import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bind.Bindings;
-import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
-import org.edgo.audio.measure.gui.generator.NumericStepField;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
+import org.edgo.audio.measure.gui.widgets.NumericStepField;
+import org.edgo.audio.measure.gui.widgets.TileTabFolder;
+import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FreqRespPreset;
 import org.edgo.audio.measure.preferences.Preferences;
-import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
-import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -94,15 +94,27 @@ public final class FreqRespTabControl extends Composite {
     private static final int TAB_FREQRESP_LOAD        = 6;
     private static final int NUM_CUSTOM_TABS          = 7;
 
-    /** Power-of-2 sweep-point options offered by the dropdown.  "Sample
-     *  rate / 2" and "Manual…" are added at runtime ahead of these. */
-    private static final int[] SWEEP_POINT_VALUES = {
+    /** Power-of-2 sweep-point presets the points field's wheel jumps along;
+     *  the runtime "sample rate / 2" entry is merged in by
+     *  {@link #sweepPointSeries()}.  Manual entry between or beyond the
+     *  presets is allowed. */
+    private static final double[] SWEEP_POINT_SERIES = {
             8192, 16384, 65536, 131072, 262144,
             524288, 1048576, 2097152, 4194304
     };
-    private static final String[] SWEEP_POINT_LABELS = {
-            "8k", "16k", "64k", "128k", "256k", "512k", "1M", "2M", "4M"
-    };
+    private static final double SWEEP_POINTS_MIN = 8192;
+    private static final double SWEEP_POINTS_MAX = 10_000_000;
+    /** Sweep frequency floor — sub-hertz sweep limits are degenerate. */
+    private static final double FREQ_MIN_HZ      = 1.0;
+    /** Amplitude floor (Vrms) — the pre-rework field's clamp, kept. */
+    private static final double AMP_MIN_VRMS     = 1e-4;
+    /** Lead-in floor — the pre-rework field's clamp, kept. */
+    private static final double LEAD_IN_MIN_SEC  = 0.05;
+    private static final double TIME_MAX_SEC     = 1_000_000;
+    // Display precision caps per the numeric-field spec.
+    private static final int FREQ_MAX_DECIMALS = 9;
+    private static final int AMP_MAX_DECIMALS  = 5;
+    private static final int TIME_MAX_DECIMALS = 3;
 
     /** Deconvolution FFT length offered by the FFT-size combo.  Every
      *  entry is a power of 2; the larger the size, the longer the
@@ -339,7 +351,7 @@ public final class FreqRespTabControl extends Composite {
 
         // ---- Row 1: start freq + stop freq ----------------------------------
         addLabel(g, I18n.t("freqResp.settings.start"));
-        NumericStepField startField = freqField(g, prefs.getFreqRespStartHz());
+        NumericStepField startField = freqField(g);
         startField.setToolTipText(I18n.t("freqResp.settings.start.tooltip"));
         // Two-way bind; the floor clamp (≥ 1 Hz) and the tab-tile refresh ride
         // an onChange on the same pref, so a direct text entry below the floor
@@ -351,7 +363,7 @@ public final class FreqRespTabControl extends Composite {
         });
 
         addLabel(g, I18n.t("freqResp.settings.stop"));
-        NumericStepField stopField = freqField(g, prefs.getFreqRespStopHz());
+        NumericStepField stopField = freqField(g);
         stopField.setToolTipText(I18n.t("freqResp.settings.stop.tooltip"));
         // Cross-field clamp: stop must stay at least start + 1.  A plain
         // two-way bind would lose it, so it is re-applied on the pref via
@@ -365,13 +377,8 @@ public final class FreqRespTabControl extends Composite {
 
         // ---- Row 2: amplitude (Vrms) + duration ----------------------------
         addLabel(g, I18n.t("freqResp.settings.amplitude"));
-        NumericStepField ampField = new NumericStepField(g,
-                prefs.getFreqRespAmplitudeVrms(),
-                this::parseDouble,
-                v -> String.format(Locale.ROOT, "%.4f V", v),
-                (v, dir) -> v * (1.0 + 0.05 * dir),   // wheel: ±5 %
-                (v, dir) -> Math.max(0.0001, v + 0.1 * dir),  // arrows: ±0.1 V
-                110);
+        NumericStepField ampField = new NumericStepField(g, UnitFamily.AMPLITUDE,
+                AMP_MIN_VRMS, prefs.getDacFsVoltageRms(), AMP_MAX_DECIMALS, 110);
         ampField.setLayoutData(comboGd());
         ampField.setToolTipText(I18n.t("freqResp.settings.amplitude.tooltip"));
         // Two-way bind; the floor clamp (≥ 0.0001 V) and the tab-tile refresh
@@ -411,34 +418,22 @@ public final class FreqRespTabControl extends Composite {
         prefs.setFreqRespDurationSec(deriveDurationSecFromFftSize(prefs.getFreqRespFftSize()));
         refreshFftSizeLabel();
 
-        // ---- Row 3: sweep points combo + lead-in ---------------------------
+        // ---- Row 3: sweep points + lead-in ---------------------------------
         addLabel(g, I18n.t("freqResp.settings.points"));
-        Combo pointsCombo = new Combo(g, SWT.READ_ONLY);
-        pointsCombo.add(I18n.t("freqResp.settings.points.sampleRateHalf"));
-        for (String s : SWEEP_POINT_LABELS) pointsCombo.add(s);
-        pointsCombo.add(I18n.t("freqResp.settings.points.manual"));
-        pointsCombo.setToolTipText(I18n.t("freqResp.settings.points.tooltip"));
-        pointsCombo.setLayoutData(comboGd());
-        // Not a plain ordinal bind: index 0 is a runtime "Sample rate / 2"
-        // entry and the last is a "Manual…" prompt, so the write stays in
-        // handlePointsCombo.  Seed from the pref, and re-select on an external
-        // pref change (preset load) so the binding pattern's "control reflects
-        // the pref" still holds; the tab-tile refresh rides the same onChange.
-        selectPointsCombo(pointsCombo, prefs.getFreqRespSweepPoints());
-        pointsCombo.addListener(SWT.Selection, e -> handlePointsCombo(pointsCombo));
-        Bindings.onChange(toolbarTabs, prefs.freqRespSweepPointsProperty(), v -> {
-            selectPointsCombo(pointsCombo, v);
-            toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
-        });
+        // List field replacing the old preset dropdown + "Manual…" prompt:
+        // the wheel jumps along the power-of-2 presets (plus the runtime
+        // "sample rate / 2" entry), free typing covers everything between.
+        NumericStepField pointsField = new NumericStepField(g, UnitFamily.NONE,
+                SWEEP_POINTS_MIN, SWEEP_POINTS_MAX, sweepPointSeries(), 0, 110);
+        pointsField.setToolTipText(I18n.t("freqResp.settings.points.tooltip"));
+        pointsField.setLayoutData(comboGd());
+        Bindings.stepFieldInt(pointsField, prefs.freqRespSweepPointsProperty());
+        Bindings.onChange(toolbarTabs, prefs.freqRespSweepPointsProperty(),
+                v -> toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS));
 
         addLabel(g, I18n.t("freqResp.settings.leadIn"));
-        NumericStepField leadInField = new NumericStepField(g,
-                prefs.getFreqRespLeadInSec(),
-                this::parseDouble,
-                v -> String.format(Locale.ROOT, "%.2f s", v),
-                (v, dir) -> Math.max(0.05, v + 1.0 * dir),    // wheel: ±1 s
-                (v, dir) -> Math.max(0.05, v + 0.5 * dir),    // arrows: ±0.5 s
-                90);
+        NumericStepField leadInField = new NumericStepField(g, UnitFamily.TIME,
+                LEAD_IN_MIN_SEC, TIME_MAX_SEC, TIME_MAX_DECIMALS, 90);
         leadInField.setLayoutData(comboGd());
         leadInField.setToolTipText(I18n.t("freqResp.settings.leadIn.tooltip"));
         // Two-way bind; the floor clamp (≥ 0.05 s) and the derived-value
@@ -468,6 +463,19 @@ public final class FreqRespTabControl extends Composite {
         // write, so no onChange.
         bindDitherCombo(ditherCombo, prefs.freqRespDitherBitsProperty());
 
+        // Audio-format edits (Preferences OK, UI thread) move the Nyquist
+        // ceiling of the sweep band edges and the sample-rate/2 entry of the
+        // sweep-points series — re-pull both from the committed prefs.
+        Consumer<Void> audioFormatListener = ignored -> {
+            if (isDisposed()) return;
+            double nyquist = Preferences.instance().current().getInputSampleRate() / 2.0;
+            startField.setMax(nyquist);
+            stopField.setMax(nyquist);
+            pointsField.setSeries(sweepPointSeries());
+        };
+        MessageBus.instance().subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
+        addDisposeListener(e ->
+                MessageBus.instance().unsubscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener));
     }
 
     /** Two-way binds the dither {@link Combo} (index == bit count, 0 = Off)
@@ -514,51 +522,22 @@ public final class FreqRespTabControl extends Composite {
         combo.addDisposeListener(e -> property.removeListener(onChange));
     }
 
-    private NumericStepField freqField(Composite parent, double initial) {
-        NumericStepField f = new NumericStepField(parent, initial,
-                this::parseDouble,
-                v -> {
-                    if (v >= 1000) return String.format(Locale.ROOT, "%.3f kHz", v / 1000);
-                    return String.format(Locale.ROOT, "%.2f Hz", v);
-                },
-                (v, dir) -> v * (1.0 + 0.05 * dir),         // wheel: ±5 %
-                (v, dir) -> Math.max(1.0, v + 1.0 * dir),   // arrows: ±1 Hz
-                110);
+    private NumericStepField freqField(Composite parent) {
+        NumericStepField f = new NumericStepField(parent, UnitFamily.FREQUENCY,
+                FREQ_MIN_HZ, Preferences.instance().current().getInputSampleRate() / 2.0,
+                FREQ_MAX_DECIMALS, 110);
         f.setLayoutData(comboGd());
         return f;
     }
 
-    /** Parses a free-form numeric string like "1000", "1k", "20 kHz", "20Hz",
-     *  "0.5", "−6 dBV" → double.  For dBV inputs returns the corresponding
-     *  linear voltage so the amplitude field's caller can pass dBV-friendly
-     *  text without a separate parser.  Returns {@code null} on failure. */
-    private Double parseDouble(String raw) {
-        if (raw == null) return null;
-        String s = raw.trim().toLowerCase(Locale.ROOT)
-                .replace(',', '.')
-                .replace("hz", "").replace(" ", "");
-        if (s.isEmpty()) return null;
-        boolean dbv = s.endsWith("dbv");
-        if (dbv) s = s.substring(0, s.length() - 3);
-        double mult = 1.0;
-        if (s.endsWith("k")) { mult = 1000.0;     s = s.substring(0, s.length() - 1); }
-        else if (s.endsWith("m")) { mult = 1.0e-3; s = s.substring(0, s.length() - 1); }
-        try {
-            double v = Double.parseDouble(s) * mult;
-            return dbv ? Math.pow(10, v / 20.0) : v;
-        } catch (NumberFormatException ex) {
-            return null;
-        }
-    }
-
-    private void selectPointsCombo(Combo combo, int currentPoints) {
-        for (int i = 0; i < SWEEP_POINT_VALUES.length; i++) {
-            if (SWEEP_POINT_VALUES[i] == currentPoints) {
-                combo.select(i + 1);  // +1 because "SR/2" is at index 0
-                return;
-            }
-        }
-        combo.select(0);  // default to SR/2 when no exact match
+    /** Sweep-point series for the points field: the power-of-2 presets plus
+     *  the current "sample rate / 2" entry (the model sorts its copy). */
+    private double[] sweepPointSeries() {
+        double[] s = new double[SWEEP_POINT_SERIES.length + 1];
+        System.arraycopy(SWEEP_POINT_SERIES, 0, s, 0, SWEEP_POINT_SERIES.length);
+        s[SWEEP_POINT_SERIES.length] =
+                Preferences.instance().current().getInputSampleRate() / 2.0;
+        return s;
     }
 
     /** Selects the combo row whose FFT-size value matches the given
@@ -598,35 +577,6 @@ public final class FreqRespTabControl extends Composite {
         fftSizeLabel.setText(I18n.t("freqResp.settings.fftSize")
                 + " (" + String.format(Locale.ROOT, "%.1f", dur) + "s)");
         fftSizeLabel.requestLayout();
-    }
-
-    private void handlePointsCombo(Combo combo) {
-        Preferences prefs = Preferences.instance();
-        int idx = combo.getSelectionIndex();
-        int srHalf = prefs.current().getInputSampleRate() / 2;
-        if (idx == 0) {
-            // Sample rate / 2 — use the active backend's input sample rate.
-            prefs.setFreqRespSweepPoints(Math.max(4, srHalf));
-        } else if (idx >= 1 && idx <= SWEEP_POINT_VALUES.length) {
-            prefs.setFreqRespSweepPoints(SWEEP_POINT_VALUES[idx - 1]);
-        } else {
-            // "Manual..." — prompt the user for an integer.
-            Shell shell = combo.getShell();
-            String entered = Dialogs.promptString(shell,
-                    I18n.t("freqResp.settings.points.manual.title"),
-                    I18n.t("freqResp.settings.points.manual.prompt"),
-                    String.valueOf(prefs.getFreqRespSweepPoints()));
-            if (entered != null) {
-                try {
-                    int n = Integer.parseInt(entered.trim());
-                    if (n >= 4) prefs.setFreqRespSweepPoints(n);
-                } catch (NumberFormatException ignored) {}
-            }
-            // Re-sync the visible selection to whatever's now in prefs.
-            selectPointsCombo(combo, prefs.getFreqRespSweepPoints());
-        }
-        // The pref write auto-saves and the tab-tile refresh rides the
-        // sweep-points onChange subscriber wired in buildSettingsTab.
     }
 
     // -------------------------------------------------------------------------

@@ -43,10 +43,15 @@ import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.FftBinSnap;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
+import org.edgo.audio.measure.gui.widgets.SignalFormCombo;
+import org.edgo.audio.measure.gui.widgets.SignalFormIcon;
+import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.eclipse.swt.widgets.Display;
 
@@ -54,7 +59,6 @@ import java.io.File;
 import java.util.Locale;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import org.edgo.audio.measure.enums.AmplitudeUnit;
 import org.edgo.audio.measure.enums.GenChangeCause;
 
 /**
@@ -91,6 +95,20 @@ public final class GeneratorPane {
     /** Minimum generator / dual-tone frequency — a real floor so a field can
      *  never hold a degenerate (sub-0.01 Hz) value. */
     private static final double GEN_FREQ_MIN_HZ  = 0.01;
+
+    // Display precision caps per the numeric-field spec: frequencies show
+    // every significant digit, amplitudes up to 5, times / percentages up to 3.
+    private static final int FREQ_MAX_DECIMALS    = 9;
+    private static final int AMP_MAX_DECIMALS     = 5;
+    private static final int TIME_MAX_DECIMALS    = 3;
+    private static final int PERCENT_MAX_DECIMALS = 3;
+    /** Duty-cycle / dual-tone-split bounds (%): a pulse never fully collapses. */
+    private static final double DUTY_MIN_PCT = 0.001;
+    private static final double DUTY_MAX_PCT = 99.999;
+    /** Upper bound for every duration-type field (s). */
+    private static final double TIME_MAX_SEC = 1_000_000;
+    /** Amplitude floor (Vrms) — keeps log-unit (dBV) entry finite. */
+    private static final double AMP_MIN_VRMS = 1e-6;
 
     /** Current dither values shown in the combo (rebuilt when output bit depth changes). */
     private int[] ditherBits;
@@ -155,8 +173,6 @@ public final class GeneratorPane {
 
     private final GeneratorController controller = new GeneratorController();
 
-    private AmplitudeUnit         currentUnit;
-
     /** "ON AIR" banner LED + label at the top right of the pane.
      *  When active: LED is always solid #FF0000, the "ON AIR" text blinks
      *  between #AA0000 and #FF0000 at ~1 Hz.  When idle: both LED and
@@ -198,6 +214,9 @@ public final class GeneratorPane {
      *  Same FLL_TRIM republish so the FFT worker's averaging
      *  accumulator survives the per-tone correction. */
     private Consumer<Double> freqTrim2Listener;
+    /** Re-pulls the Nyquist-derived frequency-field ceilings after the
+     *  Preferences dialog commits an audio-format change. */
+    private Consumer<Void> audioFormatListener;
 
     /** True when the pane is collapsed.  See {@link #setCollapsed(boolean)}. */
     @Getter
@@ -307,13 +326,8 @@ public final class GeneratorPane {
         freqLabel = new Label(group, SWT.NONE);
         freqLabel.setText(I18n.t("generator.frequency"));
         freqLabel.setLayoutData(fillH());
-        freqField = new NumericStepField(group,
-                Math.max(GEN_FREQ_MIN_HZ, prefs.getGenFrequencyHz()),
-                this::parseFrequency,
-                this::formatFrequency,
-                /* wheel:  ±5 % */ (v, dir) -> Math.max(GEN_FREQ_MIN_HZ, v * (1.0 + 0.05 * dir)),
-                /* arrows: ±1 Hz */ (v, dir) -> Math.max(GEN_FREQ_MIN_HZ, v + dir),
-                /* width: */ 160);
+        freqField = new NumericStepField(group, UnitFamily.FREQUENCY,
+                GEN_FREQ_MIN_HZ, currentOutputSampleRate() / 2.0, FREQ_MAX_DECIMALS, 160);
         freqField.setLayoutData(fillH());
         freqField.setToolTipText(I18n.t("generator.frequency.tooltip"));
         freqField.setEnabled(isPeriodic(initialForm));
@@ -345,13 +359,8 @@ public final class GeneratorPane {
         GridData dt1lGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         dt1lGd.horizontalSpan = 2;
         dualToneFreq1Label.setLayoutData(dt1lGd);
-        dualToneFreq1Field = new NumericStepField(group,
-                Math.max(GEN_FREQ_MIN_HZ, prefs.getGenDualToneFreq1Hz()),
-                this::parseFrequency,
-                this::formatFrequency,
-                (v, dir) -> Math.max(GEN_FREQ_MIN_HZ, v * (1.0 + 0.05 * dir)),
-                (v, dir) -> Math.max(GEN_FREQ_MIN_HZ, v + dir),
-                160);
+        dualToneFreq1Field = new NumericStepField(group, UnitFamily.FREQUENCY,
+                GEN_FREQ_MIN_HZ, currentOutputSampleRate() / 2.0, FREQ_MAX_DECIMALS, 160);
         GridData dt1fGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         dt1fGd.horizontalSpan = 2;
         dualToneFreq1Field.setLayoutData(dt1fGd);
@@ -372,13 +381,8 @@ public final class GeneratorPane {
         GridData dt2lGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         dt2lGd.horizontalSpan = 2;
         dualToneFreq2Label.setLayoutData(dt2lGd);
-        dualToneFreq2Field = new NumericStepField(group,
-                Math.max(GEN_FREQ_MIN_HZ, prefs.getGenDualToneFreq2Hz()),
-                this::parseFrequency,
-                this::formatFrequency,
-                (v, dir) -> Math.max(GEN_FREQ_MIN_HZ, v * (1.0 + 0.05 * dir)),
-                (v, dir) -> Math.max(GEN_FREQ_MIN_HZ, v + dir),
-                160);
+        dualToneFreq2Field = new NumericStepField(group, UnitFamily.FREQUENCY,
+                GEN_FREQ_MIN_HZ, currentOutputSampleRate() / 2.0, FREQ_MAX_DECIMALS, 160);
         GridData dt2fGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         dt2fGd.horizontalSpan = 2;
         dualToneFreq2Field.setLayoutData(dt2fGd);
@@ -442,13 +446,8 @@ public final class GeneratorPane {
         sweepPanel.setLayout(spGl);
 
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.startFreq"));
-        sweepStartField = new NumericStepField(sweepPanel,
-                Math.max(0.0, prefs.getGenSweepFreqStartHz()),
-                this::parseFrequency,
-                this::formatFrequency,
-                /* wheel: ±5 % */ (v, dir) -> Math.max(0.0, v * (1.0 + 0.05 * dir)),
-                /* arrows: ±1 Hz */ (v, dir) -> Math.max(0.0, v + dir),
-                120);
+        sweepStartField = new NumericStepField(sweepPanel, UnitFamily.FREQUENCY,
+                GEN_FREQ_MIN_HZ, currentOutputSampleRate() / 2.0, FREQ_MAX_DECIMALS, 120);
         sweepStartField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepStartField.setToolTipText(I18n.t("generator.sweep.startFreq.tooltip"));
         Bindings.stepField(sweepStartField, prefs.genSweepFreqStartHzProperty());
@@ -458,13 +457,8 @@ public final class GeneratorPane {
         });
 
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.stopFreq"));
-        sweepEndField = new NumericStepField(sweepPanel,
-                Math.max(0.0, prefs.getGenSweepFreqEndHz()),
-                this::parseFrequency,
-                this::formatFrequency,
-                (v, dir) -> Math.max(0.0, v * (1.0 + 0.05 * dir)),
-                (v, dir) -> Math.max(0.0, v + dir),
-                120);
+        sweepEndField = new NumericStepField(sweepPanel, UnitFamily.FREQUENCY,
+                GEN_FREQ_MIN_HZ, currentOutputSampleRate() / 2.0, FREQ_MAX_DECIMALS, 120);
         sweepEndField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepEndField.setToolTipText(I18n.t("generator.sweep.stopFreq.tooltip"));
         Bindings.stepField(sweepEndField, prefs.genSweepFreqEndHzProperty());
@@ -474,13 +468,8 @@ public final class GeneratorPane {
         });
 
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.duration"));
-        sweepDurationField = new NumericStepField(sweepPanel,
-                Math.max(0.001, prefs.getGenSweepDurationSec()),
-                this::parseSeconds,
-                this::formatSeconds,
-                (v, dir) -> Math.max(0.001, v * (1.0 + 0.05 * dir)),
-                (v, dir) -> Math.max(0.001, v + dir),
-                120);
+        sweepDurationField = new NumericStepField(sweepPanel, UnitFamily.TIME,
+                0.001, TIME_MAX_SEC, TIME_MAX_DECIMALS, 120);
         sweepDurationField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepDurationField.setToolTipText(I18n.t("generator.sweep.duration.tooltip"));
         Bindings.stepField(sweepDurationField, prefs.genSweepDurationSecProperty());
@@ -490,13 +479,8 @@ public final class GeneratorPane {
         });
 
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.fadeIn"));
-        sweepFadeInField = new NumericStepField(sweepPanel,
-                Math.max(0.0, prefs.getGenSweepFadeInSec()),
-                this::parseSecondsOrZero,
-                this::formatSeconds,
-                (v, dir) -> Math.max(0.0, v + dir * 0.001),
-                (v, dir) -> Math.max(0.0, v + dir * 0.001),
-                120);
+        sweepFadeInField = new NumericStepField(sweepPanel, UnitFamily.TIME,
+                0, TIME_MAX_SEC, TIME_MAX_DECIMALS, 120);
         sweepFadeInField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepFadeInField.setToolTipText(I18n.t("generator.sweep.fadeIn.tooltip"));
         Bindings.stepField(sweepFadeInField, prefs.genSweepFadeInSecProperty());
@@ -506,13 +490,8 @@ public final class GeneratorPane {
         });
 
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.fadeOut"));
-        sweepFadeOutField = new NumericStepField(sweepPanel,
-                Math.max(0.0, prefs.getGenSweepFadeOutSec()),
-                this::parseSecondsOrZero,
-                this::formatSeconds,
-                (v, dir) -> Math.max(0.0, v + dir * 0.001),
-                (v, dir) -> Math.max(0.0, v + dir * 0.001),
-                120);
+        sweepFadeOutField = new NumericStepField(sweepPanel, UnitFamily.TIME,
+                0, TIME_MAX_SEC, TIME_MAX_DECIMALS, 120);
         sweepFadeOutField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepFadeOutField.setToolTipText(I18n.t("generator.sweep.fadeOut.tooltip"));
         Bindings.stepField(sweepFadeOutField, prefs.genSweepFadeOutSecProperty());
@@ -552,13 +531,9 @@ public final class GeneratorPane {
         dtAmp1Label.setText(I18n.t("generator.dualTone.amp1"));
         dtAmp1Label.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         double initAmp1 = clampPct(prefs.getGenDualToneSplitPct());
-        dualToneAmp1Field = new NumericStepField(dualTonePanel,
-                initAmp1,
-                this::parsePercent,
-                this::formatPercent,
-                (v, dir) -> clampPct(v + 5.0 * dir),
-                (v, dir) -> clampPct(v + dir),
-                160);
+        dualToneAmp1Field = new NumericStepField(dualTonePanel, UnitFamily.PERCENT,
+                DUTY_MIN_PCT, DUTY_MAX_PCT, PERCENT_MAX_DECIMALS, 160);
+        dualToneAmp1Field.setValue(initAmp1);
         dualToneAmp1Field.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         dualToneAmp1Field.setToolTipText(I18n.t("generator.dualTone.amp1.tooltip"));
 
@@ -566,13 +541,9 @@ public final class GeneratorPane {
         Label dtAmp2Label = new Label(dualTonePanel, SWT.NONE);
         dtAmp2Label.setText(I18n.t("generator.dualTone.amp2"));
         dtAmp2Label.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        dualToneAmp2Field = new NumericStepField(dualTonePanel,
-                clampPct(100.0 - initAmp1),
-                this::parsePercent,
-                this::formatPercent,
-                (v, dir) -> clampPct(v + 5.0 * dir),
-                (v, dir) -> clampPct(v + dir),
-                160);
+        dualToneAmp2Field = new NumericStepField(dualTonePanel, UnitFamily.PERCENT,
+                DUTY_MIN_PCT, DUTY_MAX_PCT, PERCENT_MAX_DECIMALS, 160);
+        dualToneAmp2Field.setValue(clampPct(100.0 - initAmp1));
         dualToneAmp2Field.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         dualToneAmp2Field.setToolTipText(I18n.t("generator.dualTone.amp2.tooltip"));
 
@@ -652,34 +623,26 @@ public final class GeneratorPane {
 
         // --------------------------------------------------------- Amplitude
         addRowLabel(group, I18n.t("generator.amplitudeRms"));
-        currentUnit = prefs.getGenAmplitudeUnit();
-        ampField = new NumericStepField(group,
-                amplitudeDisplayValue(prefs.getGenAmplitudeVrms()),
-                this::parseAmplitudeText,
-                this::formatAmplitudeValue,
-                /* wheel:  ±5 % of value (in current unit), then auto-rescale */
-                (v, dir) -> rescaleAmplitudeUnit(clampAmplitudeSign(v * (1.0 + 0.05 * dir))),
-                /* arrows: ±1 of base unit, then auto-rescale */
-                (v, dir) -> rescaleAmplitudeUnit(clampAmplitudeSign(v + dir)),
-                /* width: */ 160);
+        ampField = new NumericStepField(group, UnitFamily.AMPLITUDE,
+                AMP_MIN_VRMS, prefs.getDacFsVoltageRms(), AMP_MAX_DECIMALS, 160);
         ampField.setLayoutData(fillH());
         ampField.setToolTipText(I18n.t("generator.amplitudeRms.tooltip"));
-        ampField.addSelectionListener(e -> {
-            // ampField's value is in the current display unit; canonicalise
-            // to Vrms before saving so the unit-of-record is consistent.
-            double vrms = currentUnit.toVrms(ampField.getValue(),
-                    prefs.getDacFsVoltageRms());
-            prefs.setGenAmplitudeVrms(vrms);
-            prefs.setGenAmplitudeUnit(currentUnit);
-            // Live-apply if running.
-            controller.setAmplitudeVrms(vrms);
+        // The field holds canonical Vrms (unit parsing / display switching is
+        // internal) — two-way bind it like the frequency; live-apply and the
+        // FFT-invalidation publish stay as a side-effect subscription.
+        Bindings.stepField(ampField, prefs.genAmplitudeVrmsProperty());
+        Bindings.onChange(group, prefs.genAmplitudeVrmsProperty(), v -> {
+            controller.setAmplitudeVrms(v);
             MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
         // A DAC recalibration (Calibrate DAC dialog) changes the output full-scale:
         // recompute the running generator's amplitude against it so the commanded
-        // Vrms still holds, without a restart.  The dialog only writes the pref;
-        // this binding applies it.
-        Bindings.onChange(group, prefs.dacFsVoltageRmsProperty(), v -> controller.setDacFsVoltageRms(v));
+        // Vrms still holds (no restart), and move the field's ceiling with it.
+        // The dialog only writes the pref; this binding applies it.
+        Bindings.onChange(group, prefs.dacFsVoltageRmsProperty(), v -> {
+            ampField.setMax(v);
+            controller.setDacFsVoltageRms(v);
+        });
 
         // ----- Duty cycle (RECTANGLE or TRIANGLE) -----------------------
         // 1 to 99 percent with 3 decimal places.  Applies to RECTANGLE
@@ -692,15 +655,9 @@ public final class GeneratorPane {
         double initialDutyPct = (initialForm == GenSignalForm.TRIANGLE)
                 ? prefs.getGenTriangleDuty()  * 100.0
                 : prefs.getGenRectangleDuty() * 100.0;
-        dutyField = new NumericStepField(group,
-                clampDutyPercent(initialDutyPct),
-                this::parseDutyPercent,
-                this::formatDutyPercent,
-                /* wheel:  ±1 sample of the current period */
-                (v, dir) -> stepDutyBySamples(v, dir),
-                /* arrows: ±1 sample of the current period */
-                (v, dir) -> stepDutyBySamples(v, dir),
-                160);
+        dutyField = new NumericStepField(group, UnitFamily.PERCENT,
+                DUTY_MIN_PCT, DUTY_MAX_PCT, PERCENT_MAX_DECIMALS, 160);
+        dutyField.setValue(initialDutyPct);
         dutyField.setLayoutData(fillH());
         dutyField.setToolTipText(I18n.t("generator.dutyCycle.tooltip"));
         dutyField.addSelectionListener(e -> {
@@ -763,13 +720,8 @@ public final class GeneratorPane {
 
         // ----- Duration (seconds, used by Save WAV) ---------------------
         addRowLabel(group, I18n.t("generator.duration"));
-        durationField = new NumericStepField(group,
-                Math.max(0.001, prefs.getGenWavDurationSeconds()),
-                this::parseSeconds,
-                this::formatSeconds,
-                /* wheel: ±5 % */ (v, dir) -> Math.max(0.001, v * (1.0 + 0.05 * dir)),
-                /* arrows: ±1 s */ (v, dir) -> Math.max(0.001, v + dir),
-                160);
+        durationField = new NumericStepField(group, UnitFamily.TIME,
+                0.001, TIME_MAX_SEC, TIME_MAX_DECIMALS, 160);
         durationField.setLayoutData(fillH());
         durationField.setToolTipText(I18n.t("generator.duration.tooltip"));
         // Pure persisted value (read only by Save-WAV) — two-way bind with
@@ -955,6 +907,20 @@ public final class GeneratorPane {
             bus.publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
         };
         bus.subscribe(Events.GENERATOR_FREQ_TRIM_2, freqTrim2Listener);
+        // Audio-format edits (Preferences OK, UI thread) move the Nyquist
+        // ceiling of every frequency field — re-pull it from the committed
+        // prefs.  The fields re-clamp and echo a clamped value back to their
+        // bound preference if the rate dropped below the entered frequency.
+        audioFormatListener = ignored -> {
+            if (group.isDisposed()) return;
+            double nyquist = currentOutputSampleRate() / 2.0;
+            freqField.setMax(nyquist);
+            dualToneFreq1Field.setMax(nyquist);
+            dualToneFreq2Field.setMax(nyquist);
+            sweepStartField.setMax(nyquist);
+            sweepEndField.setMax(nyquist);
+        };
+        bus.subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
 
         // Respond to "is the generator running?" requests from the FFT
         // controller so it can decide whether to anchor the fundamental
@@ -973,6 +939,7 @@ public final class GeneratorPane {
             bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
             bus.unsubscribe(Events.GENERATOR_FREQ_TRIM,           freqTrimListener);
             bus.unsubscribe(Events.GENERATOR_FREQ_TRIM_2,         freqTrim2Listener);
+            bus.unsubscribe(Events.AUDIO_FORMAT_CHANGED,          audioFormatListener);
             bus.unregisterResponder(Events.GENERATOR_RUNNING);
             controller.stop();
             filePlayer.stop();
@@ -1266,23 +1233,6 @@ public final class GeneratorPane {
     }
 
     /**
-     * One-sample step for the duty cycle field.  Reads the current
-     * period in samples from the rate × freq, increments / decrements
-     * the high-sample count by one, and converts back to a percent.
-     * Clamped to the [1 %, 99 %] band the user specified.
-     */
-    private double stepDutyBySamples(double currentPct, int dir) {
-        int n = currentPeriodSamples();
-        int kMin = Math.max(1, (int) Math.ceil(n * 0.01));
-        int kMax = Math.min(n - 1, (int) Math.floor(n * 0.99));
-        if (kMax < kMin) { kMax = kMin; }
-        int k = (int) Math.round(currentPct / 100.0 * n) + dir;
-        if (k < kMin) k = kMin;
-        if (k > kMax) k = kMax;
-        return k * 100.0 / n;
-    }
-
-    /**
      * Refreshes the "Frequency" label text.  Appends a bracketed
      * correction for forms that have one: RECTANGLE shows the
      * integer-sample-period frequency, SINE (when "snap to FFT bin"
@@ -1341,50 +1291,6 @@ public final class GeneratorPane {
         return new GridData(SWT.FILL, SWT.CENTER, true, false);
     }
 
-    // -------------------------------------------------------------------------
-    // Frequency parse/format
-    // -------------------------------------------------------------------------
-    private Double parseFrequency(String s) {
-        if (s == null) return null;
-        // Strip an optional trailing "Hz" (case-insensitive) before parsing.
-        String trimmed = s.trim();
-        int hzAt = -1;
-        for (int i = trimmed.length() - 1; i >= 0; i--) {
-            char c = trimmed.charAt(i);
-            if (Character.isLetter(c)) hzAt = i;
-            else break;
-        }
-        String num = (hzAt >= 0 ? trimmed.substring(0, hzAt) : trimmed)
-                .trim().replace(',', '.');
-        if (num.isEmpty()) return null;
-        try {
-            double v = Double.parseDouble(num);
-            return v < 0 ? null : Math.max(GEN_FREQ_MIN_HZ, v);
-        } catch (NumberFormatException ex) {
-            return null;
-        }
-    }
-    private String formatFrequency(double v) {
-        return formatNumber(v) + " Hz";
-    }
-
-    /** Parses a percent value — accepts plain numbers and an optional
-     *  trailing {@code %} or {@code percent} token.  Returns {@code null}
-     *  when the input doesn't contain a valid number. */
-    private Double parsePercent(String raw) {
-        if (raw == null) return null;
-        String trimmed = raw.trim().replace(',', '.');
-        if (trimmed.endsWith("%")) trimmed = trimmed.substring(0, trimmed.length() - 1).trim();
-        if (trimmed.isEmpty()) return null;
-        try {
-            return Double.parseDouble(trimmed);
-        } catch (NumberFormatException ex) {
-            return null;
-        }
-    }
-    private String formatPercent(double v) {
-        return formatNumber(v) + " %";
-    }
     /** Clamps a percentage to {@code [0, 100]} — used as the value
      *  transform for the dual-tone split spinner so the field can't be
      *  scrolled out of physical bounds. */
@@ -1397,51 +1303,6 @@ public final class GeneratorPane {
      *  live-apply to a running generator. */
     private int currentOutputSampleRate() {
         return Preferences.instance().current().getOutputSampleRate();
-    }
-
-    // -------------------------------------------------------------------------
-    // Amplitude parse/format
-    // -------------------------------------------------------------------------
-    /**
-     * Parses {@code raw}.  If a unit token is present it switches the
-     * field's working unit to that; the returned {@code Double} is the
-     * numeric value in the (possibly new) working unit, NOT in Vrms.
-     */
-    private Double parseAmplitudeText(String raw) {
-        if (raw == null) return null;
-        String trimmed = raw.trim();
-        int unitStart = -1;
-        for (int i = trimmed.length() - 1; i >= 0; i--) {
-            char c = trimmed.charAt(i);
-            if (Character.isLetter(c)) unitStart = i;
-            else break;
-        }
-        String numPart, unitPart;
-        if (unitStart < 0) {
-            numPart  = trimmed;
-            unitPart = null;
-        } else {
-            numPart  = trimmed.substring(0, unitStart).trim();
-            unitPart = trimmed.substring(unitStart).trim();
-        }
-        if (numPart.isEmpty()) return null;
-        double n;
-        try {
-            n = Double.parseDouble(numPart.replace(',', '.'));
-        } catch (NumberFormatException ex) {
-            return null;
-        }
-        AmplitudeUnit u = (unitPart == null) ? currentUnit : AmplitudeUnit.fromString(unitPart);
-        if (u == null) return null;
-        // Linear voltage units carry an absolute RMS magnitude — negative
-        // values are nonsensical (RMS is always ≥ 0).  dB units stay
-        // signed because e.g. -20 dBFS is a perfectly normal level.
-        if (u.isMetric() && n < 0) return null;
-        currentUnit = u;
-        return rescaleAmplitudeUnit(n);
-    }
-    private String formatAmplitudeValue(double v) {
-        return formatNumber(v) + " " + currentUnit.display;
     }
 
     // -------------------------------------------------------------------------
@@ -1491,41 +1352,6 @@ public final class GeneratorPane {
         });
     }
 
-    /** Returns {@code vrms} converted into the current display unit. */
-    private double amplitudeDisplayValue(double vrms) {
-        double fs = Preferences.instance().getDacFsVoltageRms();
-        return currentUnit.fromVrms(vrms, fs);
-    }
-
-    /**
-     * Clamps the amplitude value to ≥ 0 when the current unit is one of
-     * the linear voltage units (µV / mV / V), since RMS magnitude can't be
-     * negative.  dB units pass through unchanged — e.g. arrow-down from
-     * 0 dBV → -1 dBV is a legitimate -20 dB step.
-     */
-    private double clampAmplitudeSign(double v) {
-        return currentUnit.isMetric() ? Math.max(0.0, v) : v;
-    }
-
-    /**
-     * Auto-rescale within the µV / mV / V metric group so the displayed
-     * value stays in a human-readable range (no "0.0005 V" or "5000 mV").
-     * No-op for dB units (absolute log scales) and for zero values
-     * (rescaling 0 V → 0 µV would be visually jarring).  Updates
-     * {@link #currentUnit} as a side effect and returns the value
-     * expressed in the (possibly new) unit.
-     */
-    private double rescaleAmplitudeUnit(double valueInCurrentUnit) {
-        if (!currentUnit.isMetric()) return valueInCurrentUnit;
-        double fs = Preferences.instance().getDacFsVoltageRms();
-        double vrms = currentUnit.toVrms(valueInCurrentUnit, fs);
-        if (Math.abs(vrms) < 1e-12) return valueInCurrentUnit;
-        AmplitudeUnit best = AmplitudeUnit.bestMetricFor(Math.abs(vrms));
-        if (best == currentUnit) return valueInCurrentUnit;
-        currentUnit = best;
-        return best.fromVrms(vrms, fs);
-    }
-
     // -------------------------------------------------------------------------
     // Browse dialog (remembers its last folder separately from other dialogs)
     // -------------------------------------------------------------------------
@@ -1547,38 +1373,6 @@ public final class GeneratorPane {
         if (parent != null) prefs.setGenCorrectionsFolder(parent.getAbsolutePath());
     }
 
-    // -------------------------------------------------------------------------
-    // Duty / duration parse + format
-    // -------------------------------------------------------------------------
-    private Double parseDutyPercent(String s) {
-        if (s == null) return null;
-        String t = s.trim();
-        if (t.endsWith("%")) t = t.substring(0, t.length() - 1).trim();
-        if (t.isEmpty()) return null;
-        try {
-            double v = Double.parseDouble(t.replace(',', '.'));
-            return clampDutyPercent(v);
-        } catch (NumberFormatException ex) {
-            return null;
-        }
-    }
-    /** Renders a duty-percent with up to 3 decimal places, dropping trailing zeros and a "%" suffix. */
-    private String formatDutyPercent(double v) {
-        String s = String.format(Locale.ROOT, "%.3f", v);
-        if (s.contains(".")) {
-            int end = s.length();
-            while (end > 0 && s.charAt(end - 1) == '0') end--;
-            if (end > 0 && s.charAt(end - 1) == '.') end--;
-            s = s.substring(0, end);
-        }
-        return s + " %";
-    }
-    private double clampDutyPercent(double v) {
-        if (Double.isNaN(v)) return 50.0;
-        if (v < 1.0)  return 1.0;
-        if (v > 99.0) return 99.0;
-        return v;
-    }
     /** Enables / disables the duty field+label depending on whether {@code form}
      *  is one of the duty-aware shapes (RECTANGLE or TRIANGLE). */
     private void updateDutyFieldEnabled(GenSignalForm form) {
@@ -1589,44 +1383,15 @@ public final class GeneratorPane {
 
     /** Refreshes the duty field's value from whichever preference is current
      *  for {@code form}; called when the user switches between RECTANGLE
-     *  and TRIANGLE so each form keeps its own remembered duty. */
+     *  and TRIANGLE so each form keeps its own remembered duty.  The field
+     *  clamps to its own [0.001, 99.999] % bounds. */
     private void reloadDutyForForm(GenSignalForm form) {
         Preferences prefs = Preferences.instance();
         if (form == GenSignalForm.TRIANGLE) {
-            dutyField.setValue(clampDutyPercent(prefs.getGenTriangleDuty() * 100.0));
+            dutyField.setValue(prefs.getGenTriangleDuty() * 100.0);
         } else if (form == GenSignalForm.RECTANGLE) {
-            dutyField.setValue(clampDutyPercent(prefs.getGenRectangleDuty() * 100.0));
+            dutyField.setValue(prefs.getGenRectangleDuty() * 100.0);
         }
-    }
-
-    private Double parseSeconds(String s) {
-        if (s == null) return null;
-        String t = s.trim();
-        if (t.endsWith("s")) t = t.substring(0, t.length() - 1).trim();
-        if (t.isEmpty()) return null;
-        try {
-            double v = Double.parseDouble(t.replace(',', '.'));
-            return v <= 0 ? null : v;
-        } catch (NumberFormatException ex) {
-            return null;
-        }
-    }
-    /** Like {@link #parseSeconds} but accepts 0 — used by the sweep
-     *  fade-in / fade-out fields where 0 = no fade is a legitimate value. */
-    private Double parseSecondsOrZero(String s) {
-        if (s == null) return null;
-        String t = s.trim();
-        if (t.endsWith("s")) t = t.substring(0, t.length() - 1).trim();
-        if (t.isEmpty()) return null;
-        try {
-            double v = Double.parseDouble(t.replace(',', '.'));
-            return v < 0 ? null : v;
-        } catch (NumberFormatException ex) {
-            return null;
-        }
-    }
-    private String formatSeconds(double v) {
-        return formatNumber(v) + " s";
     }
 
     /** Stops the running generator and immediately starts it again so a
@@ -1721,8 +1486,8 @@ public final class GeneratorPane {
                     ? dualToneFreq2Field.getValue() : prefs.getGenDualToneFreq2Hz();
             double snap1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, raw1);
             double snap2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, raw2);
-            dualToneFreq1Label.setText(base1 + "  (" + formatFrequency(snap1) + ")");
-            dualToneFreq2Label.setText(base2 + "  (" + formatFrequency(snap2) + ")");
+            dualToneFreq1Label.setText(base1 + "  (" + formatLabelHz(snap1) + ")");
+            dualToneFreq2Label.setText(base2 + "  (" + formatLabelHz(snap2) + ")");
         } else {
             dualToneFreq1Label.setText(base1);
             dualToneFreq2Label.setText(base2);
@@ -1946,25 +1711,6 @@ public final class GeneratorPane {
     // -------------------------------------------------------------------------
     // Misc helpers
     // -------------------------------------------------------------------------
-    /**
-     * Formats {@code v} with up to four non-zero decimal places, trimming
-     * trailing zeros so an integer comes out clean.  Examples:
-     * {@code 1000 → "1000"}, {@code 1000.5 → "1000.5"},
-     * {@code 0.00012345 → "0.0001"}.
-     */
-    private String formatNumber(double v) {
-        if (v == 0) return "0";
-        String s = String.format(Locale.ROOT, "%.4f", v);
-        if (s.contains(".")) {
-            // Strip trailing zeros, then a dangling decimal point.
-            int end = s.length();
-            while (end > 0 && s.charAt(end - 1) == '0') end--;
-            if (end > 0 && s.charAt(end - 1) == '.') end--;
-            s = s.substring(0, end);
-        }
-        return s;
-    }
-
     private boolean isPeriodic(GenSignalForm f) {
         switch (f) {
             case WHITE_NOISE:

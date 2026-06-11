@@ -36,7 +36,6 @@ import java.util.concurrent.TimeUnit;
 
 import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.enums.AlignGenerator;
-import org.edgo.audio.measure.enums.AmplitudeUnit;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
@@ -269,7 +268,6 @@ public final class Preferences {
     private final Property<Double> genDualToneSplitPct = bound(50.0);
     private final Property<Double> genAmplitudeVrms = bound(0.5);
     /** Unit the amplitude field renders in: one of {@code mV}, {@code V}, {@code dBV}, {@code dBFS}. */
-    private final Property<AmplitudeUnit> genAmplitudeUnit = bound(AmplitudeUnit.V);
     /** Dither bits 0..N; 0 means "Off". */
     private final Property<Integer> genDitherBits  = bound(0);
     /** Path to the harmonics-correction CSV, or {@code null} if none. */
@@ -378,7 +376,6 @@ public final class Preferences {
     private final Property<Double>  fftStrongToneRelDb   = bound(100.0);
     private final Property<Double>  fftManualFundVrms    = bound(1.0);
     /** Unit the manual-fundamental-amplitude field renders in: {@code mV}, {@code V}, or {@code dBV}. */
-    private final Property<AmplitudeUnit> fftManualFundUnit = bound(AmplitudeUnit.V);
     private final Property<Boolean> fftManualFundEnabled = bound(false);
     /** Active analysis channel (L or R) — only one channel shown at a time. */
     private final Property<Channel> fftChannel = bound(Channel.L);
@@ -1009,9 +1006,6 @@ public final class Preferences {
     public void setFftManualFundEnabled(boolean v) { fftManualFundEnabled.set(v); }
     public Property<Boolean> fftManualFundEnabledProperty() { return fftManualFundEnabled; }
 
-    public AmplitudeUnit getFftManualFundUnit() { return fftManualFundUnit.get(); }
-    public void setFftManualFundUnit(AmplitudeUnit v) { fftManualFundUnit.set(v); }
-    public Property<AmplitudeUnit> fftManualFundUnitProperty() { return fftManualFundUnit; }
 
     public Channel getFftChannel()             { return fftChannel.get(); }
     public void setFftChannel(Channel v)       { fftChannel.set(v); }
@@ -1357,9 +1351,6 @@ public final class Preferences {
     public void setGenAmplitudeVrms(double v)  { genAmplitudeVrms.set(v); }
     public Property<Double> genAmplitudeVrmsProperty() { return genAmplitudeVrms; }
 
-    public AmplitudeUnit getGenAmplitudeUnit() { return genAmplitudeUnit.get(); }
-    public void setGenAmplitudeUnit(AmplitudeUnit v) { genAmplitudeUnit.set(v); }
-    public Property<AmplitudeUnit> genAmplitudeUnitProperty() { return genAmplitudeUnit; }
 
     public int getGenDitherBits()              { return genDitherBits.get(); }
     public void setGenDitherBits(int v)        { genDitherBits.set(v); }
@@ -1641,7 +1632,6 @@ public final class Preferences {
         root.put("genDualToneFreq2Hz",           genDualToneFreq2Hz.get());
         root.put("genDualToneSplitPct",          genDualToneSplitPct.get());
         root.put("genAmplitudeVrms",             genAmplitudeVrms.get());
-        root.put("genAmplitudeUnit",             genAmplitudeUnit.get().name());
         root.put("genDitherBits",                genDitherBits.get());
         if (genCorrectionsCsv.get()    != null) root.put("genCorrectionsCsv",    genCorrectionsCsv.get());
         if (genCorrectionsFolder.get() != null) root.put("genCorrectionsFolder", genCorrectionsFolder.get());
@@ -1724,7 +1714,6 @@ public final class Preferences {
         root.put("fftCalcMaxHarmonic",        fftCalcMaxHarmonic.get());
         root.put("fftStrongToneRelDb",        fftStrongToneRelDb.get());
         root.put("fftManualFundVrms",         fftManualFundVrms.get());
-        root.put("fftManualFundUnit",         fftManualFundUnit.get().name());
         root.put("fftManualFundEnabled",      fftManualFundEnabled.get());
         root.put("fftChannel",                fftChannel.get().name());
         root.put("fftMagUnit",                fftMagUnit.get().name());
@@ -1831,7 +1820,6 @@ public final class Preferences {
                 pm.put("thdMaxHarmonic",    p.getThdMaxHarmonic());
                 pm.put("calcMaxHarmonic",   p.getCalcMaxHarmonic());
                 pm.put("manualFundVrms",    p.getManualFundVrms());
-                pm.put("manualFundUnit",    p.getManualFundUnit().name());
                 pm.put("manualFundEnabled", p.isManualFundEnabled());
                 fpMap.put(e.getKey(), pm);
             }
@@ -1932,7 +1920,6 @@ public final class Preferences {
         if (root.get("genDualToneFreq2Hz")           instanceof Number n) genDualToneFreq2Hz.set(n.doubleValue());
         if (root.get("genDualToneSplitPct")          instanceof Number n) genDualToneSplitPct.set(n.doubleValue());
         if (root.get("genAmplitudeVrms")             instanceof Number n) genAmplitudeVrms.set(n.doubleValue());
-        if (root.get("genAmplitudeUnit")             instanceof String s) genAmplitudeUnit.set(enumOr(AmplitudeUnit.class, s, genAmplitudeUnit.get()));
         if (root.get("genDitherBits")                instanceof Number n) genDitherBits.set(n.intValue());
         if (root.get("genCorrectionsCsv")            instanceof String s) genCorrectionsCsv.set(s);
         if (root.get("genCorrectionsFolder")         instanceof String s) genCorrectionsFolder.set(s);
@@ -2021,7 +2008,6 @@ public final class Preferences {
         if (root.get("fftCalcMaxHarmonic")        instanceof Number  n) fftCalcMaxHarmonic.set(n.intValue());
         if (root.get("fftStrongToneRelDb")        instanceof Number  n) fftStrongToneRelDb.set(n.doubleValue());
         if (root.get("fftManualFundVrms")         instanceof Number  n) fftManualFundVrms.set(n.doubleValue());
-        if (root.get("fftManualFundUnit")         instanceof String  s) fftManualFundUnit.set(enumOr(AmplitudeUnit.class, s, fftManualFundUnit.get()));
         if (root.get("fftManualFundEnabled")      instanceof Boolean b) fftManualFundEnabled.set(b);
         if (root.get("fftChannel")                instanceof String  s) fftChannel.set(enumOr(Channel.class, s, fftChannel.get()));
         if (root.get("fftMagUnit")                instanceof String  s) fftMagUnit.set(enumOr(MagnitudeUnit.class, s, fftMagUnit.get()));
@@ -2173,7 +2159,6 @@ public final class Preferences {
                 if (pm.get("thdMaxHarmonic")    instanceof Number  n) p.setThdMaxHarmonic(n.intValue());
                 if (pm.get("calcMaxHarmonic")   instanceof Number  n) p.setCalcMaxHarmonic(n.intValue());
                 if (pm.get("manualFundVrms")    instanceof Number  n) p.setManualFundVrms(n.doubleValue());
-                if (pm.get("manualFundUnit")    instanceof String  s) p.setManualFundUnit(enumOr(AmplitudeUnit.class, s, p.getManualFundUnit()));
                 if (pm.get("manualFundEnabled") instanceof Boolean b) p.setManualFundEnabled(b);
                 fftPresets.put(key, p);
             }

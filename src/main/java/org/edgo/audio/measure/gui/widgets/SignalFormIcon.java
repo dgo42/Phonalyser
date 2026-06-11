@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.gui.generator;
+package org.edgo.audio.measure.gui.widgets;
 
 import lombok.extern.log4j.Log4j2;
 import org.eclipse.swt.SWT;

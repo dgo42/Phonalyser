@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.gui.generator;
+package org.edgo.audio.measure.gui.common;
 
 import lombok.experimental.UtilityClass;
 import org.edgo.audio.measure.enums.GenSignalForm;
