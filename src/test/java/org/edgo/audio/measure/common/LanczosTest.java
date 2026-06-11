@@ -16,20 +16,20 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.gui.scope;
+package org.edgo.audio.measure.common;
 
-import org.edgo.audio.measure.common.Lanczos;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Tests for {@link Lanczos} — the band-limited reconstruction
- * kernel used by every scope trace render path.  A regression here
+ * Tests for {@link Lanczos} — the band-limited reconstruction kernel shared
+ * by the scope trace renderer ({@code float[]} overload) and the
+ * frequency-domain views ({@code double[]} overload).  A regression here
  * shows up as wrong amplitudes, beat-envelope aliasing, or visible
  * shrinkage at slow time/div.
  */
-class ScopeLanczosTest {
+class LanczosTest {
 
     @Test
     void sinc_atZero_returns1() {
