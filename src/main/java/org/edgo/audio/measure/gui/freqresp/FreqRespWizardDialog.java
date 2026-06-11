@@ -377,13 +377,13 @@ public final class FreqRespWizardDialog {
         }
         FileDialog fd = new FileDialog(dialog, SWT.SAVE);
         fd.setText(I18n.t("freqResp.saveTo.dialog"));
-        fd.setFilterExtensions(new String[]{ "*.csv" });
+        fd.setFilterExtensions(new String[]{ "*.frc" });
         fd.setOverwrite(true);
         Preferences prefs = Preferences.instance();
         String memFolder = prefs.getFreqRespSaveFolder();
         if (memFolder != null) fd.setFilterPath(memFolder);
         fd.setFileName("freqresp_cal_" + LocalDateTime.now()
-                .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".csv");
+                .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".frc");
         String picked = fd.open();
         if (picked == null) return;
         try {
@@ -472,7 +472,12 @@ public final class FreqRespWizardDialog {
         l.setText(I18n.t("freqResp.busy.message"));
         l.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
-        busyMeter = new FreqRespLiveMeter(s, totalDurationSec);
+        // Sweep geometry feeds the meter's time → instantaneous-frequency
+        // mapping, which scales the trace smoothing with the period.
+        Preferences prefs = Preferences.instance();
+        busyMeter = new FreqRespLiveMeter(s, totalDurationSec,
+                prefs.getFreqRespLeadInSec(), prefs.getFreqRespDurationSec(),
+                prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz());
         GridData mg = new GridData(SWT.FILL, SWT.CENTER, true, false);
         mg.widthHint  = 520;
         mg.heightHint = 100;

@@ -19,10 +19,8 @@
 package org.edgo.audio.measure.gui.freqresp;
 
 import java.util.List;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
-
-import org.eclipse.swt.widgets.Display;
 
 import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.gui.bus.Events;
@@ -38,16 +36,19 @@ import lombok.extern.log4j.Log4j2;
  * Daemon-thread driver for the Frequency Response measurement.  Reads the
  * current sweep configuration from {@link Preferences} and runs ONE
  * stereo sweep via {@link FreqRespAnalyzer}, which captures both ADC
- * channels in a single playback and deconvolves them in parallel.  The
- * resulting L and R {@link FreqRespResult}s are posted back to the UI
- * thread via {@link Display#asyncExec(Runnable)}.
+ * channels in a single playback and deconvolves them in parallel.
  *
- * <p>Publishes {@link Events#FREQRESP_MEASUREMENT_STARTED} on start and
- * {@link Events#FREQRESP_MEASUREMENT_STOPPED} when the run ends (whether
- * by completion, cancellation, or error).  The host pane uses these to
- * lock its own controls; the FFT / scope / generator panes subscribe so
- * they release the shared capture device and gray their Record / Play
- * buttons for the duration.
+ * <p>All reporting goes through the bus: {@link
+ * Events#FREQRESP_MEASUREMENT_STARTED} on start, {@link
+ * Events#FREQRESP_RESULT_AVAILABLE} with the {@link StereoFreqRespResult}
+ * on success, {@link Events#FREQRESP_MEASUREMENT_FAILED} with a message on
+ * error, and {@link Events#FREQRESP_MEASUREMENT_STOPPED} when the run ends
+ * (completion, cancellation, or error).  The host pane locks its controls
+ * on STARTED/STOPPED; the FFT / scope / generator panes subscribe so they
+ * release the shared capture device and gray their Record / Play buttons
+ * for the duration.  FAILED and STOPPED are marshalled through the
+ * injected UI executor so widget-touching subscribers run on the SWT
+ * thread, exactly as before.
  *
  * <p>Cancellation is cooperative — {@link #cancel()} sets a flag the
  * analyzer polls at every checkpoint and inside the capture sleep loop;
@@ -56,21 +57,16 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class FreqRespAnalyzerWorker {
 
-    private final Display              display;
-    private final FreqRespView         view;
-    private final Runnable             onComplete;
-    private final Consumer<String>     onError;
+    /** UI-thread marshaller ({@code display::asyncExec}) for the FAILED /
+     *  STOPPED publishes — their subscribers touch widgets. */
+    private final Executor uiExecutor;
 
     private volatile Thread             workerThread;
     private final AtomicBoolean         cancelFlag       = new AtomicBoolean(false);
     private volatile StereoCaptureProgress activeProgress;
 
-    public FreqRespAnalyzerWorker(Display display, FreqRespView view,
-                                  Runnable onComplete, Consumer<String> onError) {
-        this.display    = display;
-        this.view       = view;
-        this.onComplete = onComplete;
-        this.onError    = onError;
+    public FreqRespAnalyzerWorker(Executor uiExecutor) {
+        this.uiExecutor = uiExecutor;
     }
 
     /** Starts the worker thread (no-op if already running).  See
@@ -90,10 +86,6 @@ public final class FreqRespAnalyzerWorker {
         }
         cancelFlag.set(false);
         activeProgress = progress;
-        // Clear previous results from the view so the user sees an empty
-        // chart while the sweep runs (avoids confusion about whether the
-        // displayed trace is the current or previous measurement).
-        display.asyncExec(view::clearResults);
         // Publish FIRST so subscribers (FFT pane, scope pane, generator
         // pane) run their stop logic synchronously on this thread before
         // the worker thread launches.  The worker still spin-waits for
@@ -204,27 +196,18 @@ public final class FreqRespAnalyzerWorker {
             StereoFreqRespResult stereo = new FreqRespAnalyzer(cfg).run(null, cancelFlag::get);
             if (stereo == null) return;
 
-            MessageBus bus = MessageBus.instance();
-            bus.publish(Events.FREQRESP_RESULT_AVAILABLE, stereo.left());
-            bus.publish(Events.FREQRESP_RESULT_AVAILABLE, stereo.right());
-
-            display.asyncExec(() -> {
-                view.setLeftResult(stereo.left());
-                view.setRightResult(stereo.right());
-            });
+            MessageBus.instance().publish(Events.FREQRESP_RESULT_AVAILABLE, stereo);
         } catch (InterruptedException ex) {
             log.info("FreqResp measurement cancelled");
         } catch (Exception ex) {
             log.error("FreqResp measurement failed", ex);
             reportError(ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName());
         } finally {
-            // Publish STOPPED + run the completion callback on the UI
-            // thread.  The host pane uses both to re-enable its controls
-            // and reset the Play button state.
-            display.asyncExec(() -> {
-                MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STOPPED);
-                if (onComplete != null) onComplete.run();
-            });
+            // Publish STOPPED on the UI thread.  The host pane re-enables
+            // its controls and closes the busy shell on it; the other
+            // panes' subscribers restore their Record / Play buttons.
+            uiExecutor.execute(() ->
+                    MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STOPPED));
             synchronized (this) { workerThread = null; }
         }
     }
@@ -242,6 +225,7 @@ public final class FreqRespAnalyzerWorker {
 
     private void reportError(String message) {
         log.warn("FreqResp worker: {}", message);
-        display.asyncExec(() -> { if (onError != null) onError.accept(message); });
+        uiExecutor.execute(() ->
+                MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_FAILED, message));
     }
 }

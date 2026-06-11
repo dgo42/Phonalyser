@@ -198,10 +198,17 @@ public final class Events {
      *  {@link #FREQRESP_MEASUREMENT_STARTED}. */
     public static final String FREQRESP_MEASUREMENT_STOPPED = "freqresp.measurement.stopped";
 
-    /** Notification — a fresh {@code FreqRespResult} is available for
-     *  display.  Payload: the {@code FreqRespResult} itself.  Published
-     *  by the analyzer worker on the UI thread. */
+    /** Notification — a fresh sweep measurement is available for display.
+     *  Payload: the {@code StereoFreqRespResult} (both channels).
+     *  Published by the analyzer worker on its worker thread —
+     *  widget-touching subscribers must marshal. */
     public static final String FREQRESP_RESULT_AVAILABLE = "freqresp.result.available";
+
+    /** Notification — a sweep measurement aborted with an error.
+     *  Payload: the human-readable failure reason ({@code String}).
+     *  Published on the UI thread; always followed by
+     *  {@link #FREQRESP_MEASUREMENT_STOPPED}. */
+    public static final String FREQRESP_MEASUREMENT_FAILED = "freqresp.measurement.failed";
 
     /** Notification — a parameter that affects how the compare-mode
      *  curve is derived (e.g. the smoothing window size) changed.

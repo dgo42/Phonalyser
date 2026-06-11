@@ -409,18 +409,18 @@ public final class FreqRespTabControl extends Composite {
         // Index-mapped combo (selection index → FFT_SIZE_VALUES[idx] sample
         // count), so it can't use the ordinal-based Bindings.combo — the
         // hand-wired helper mirrors that contract over the int value array.
-        // The derived sweep duration + the label + the tab tile all ride an
-        // onChange on the same pref, since they depend on the chosen size.
+        // The sweep duration is DERIVED by the controller's own fftSize /
+        // leadIn subscriptions; the tab only renders it — the label + tile
+        // follow the derived pref and the chosen size.
         bindFftSizeCombo(fftSizeCombo, prefs.freqRespFftSizeProperty());
         Bindings.onChange(toolbarTabs, prefs.freqRespFftSizeProperty(), n -> {
-            prefs.setFreqRespDurationSec(deriveDurationSecFromFftSize(n));
             refreshFftSizeLabel();
             toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
         });
-        // Initial sync: the YAML may carry a stale durationSec that no
-        // longer matches the persisted fftSize (or vice versa).  Re-derive
-        // and persist on every pane build so the analyzer + label agree.
-        prefs.setFreqRespDurationSec(deriveDurationSecFromFftSize(prefs.getFreqRespFftSize()));
+        Bindings.onChange(toolbarTabs, prefs.freqRespDurationSecProperty(), v -> {
+            refreshFftSizeLabel();
+            toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
+        });
         refreshFftSizeLabel();
 
         // ---- Row 3: sweep points + lead-in ---------------------------------
@@ -444,20 +444,11 @@ public final class FreqRespTabControl extends Composite {
                 LEAD_IN_MIN_SEC, TIME_MAX_SEC, TIME_MAX_DECIMALS, 90);
         leadInField.setLayoutData(comboGd());
         leadInField.setToolTipText(I18n.t("freqResp.settings.leadIn.tooltip"));
-        // Two-way bind; the floor clamp (≥ 0.05 s) and the derived-value
-        // coupling ride an onChange.  The derived sweep duration depends on
-        // lead-in (lead-in eats into the same FFT window), so a lead-in change
-        // ripples through to durationSec and the FFT-size label.
+        // Two-way bind.  The ≥ 0.05 s floor clamp and the derived-duration
+        // coupling (lead-in eats into the same FFT window) are the
+        // controller's leadIn subscription; the label follows the derived
+        // durationSec pref via the onChange above.
         Bindings.stepField(leadInField, prefs.freqRespLeadInSecProperty());
-        Bindings.onChange(toolbarTabs, prefs.freqRespLeadInSecProperty(), v -> {
-            if (v < 0.05) {
-                prefs.setFreqRespLeadInSec(0.05);
-                return;   // the re-set re-enters here with the clamped value
-            }
-            prefs.setFreqRespDurationSec(deriveDurationSecFromFftSize(prefs.getFreqRespFftSize()));
-            refreshFftSizeLabel();
-            toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
-        });
 
         // ---- Row 4: dither + nyquist fraction ------------------------------
         addLabel(g, I18n.t("freqResp.settings.dither"));
@@ -566,23 +557,6 @@ public final class FreqRespTabControl extends Composite {
             if (FFT_SIZE_VALUES[i] == currentFftSize) { combo.select(i); return; }
         }
         combo.select(0);
-    }
-
-    /** Derives the sweep duration (in seconds) that pairs with the
-     *  chosen FFT size so the analyzer's
-     *  {@code nextPow2(leadIn + sweep + tail)} lands exactly on
-     *  {@code fftSize}.  Clamped to ≥ 0.5 s so a small FFT size with a
-     *  long lead-in doesn't produce a negative or unworkable sweep. */
-    private double deriveDurationSecFromFftSize(int fftSize) {
-        Preferences prefs = Preferences.instance();
-        int sr = Math.max(1, prefs.current().getInputSampleRate());
-        long leadIn = Math.round(prefs.getFreqRespLeadInSec() * sr);
-        long tail   = sr / 2L;
-        long sweep  = fftSize - leadIn - tail;
-        if (sweep < (long) Math.round(0.5 * sr)) {
-            sweep = (long) Math.round(0.5 * sr);
-        }
-        return sweep / (double) sr;
     }
 
     /** Updates the FFT-size label's caption to "FFT size (D.Ds)" where
@@ -783,10 +757,8 @@ public final class FreqRespTabControl extends Composite {
         prefs.setFreqRespReverseRiaa(p.isReverseRiaa());
         prefs.setFreqRespIecAmendment(p.isIecAmendment());
         prefs.setFreqRespCompareMode(p.isCompareMode());
-        // Re-derive the derived sweep duration from the loaded FFT size
-        // + lead-in so the analyzer + Settings-tab label both reflect
-        // the preset's values.
-        prefs.setFreqRespDurationSec(deriveDurationSecFromFftSize(p.getFftSize()));
+        // The fftSize / leadIn writes above already re-derived the sweep
+        // duration via the controller's subscriptions.
         prefs.save();
         // Every Settings / RIAA widget is two-way bound to these prefs, so the
         // setters above already pushed the preset into the live widgets.  Only

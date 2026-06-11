@@ -91,13 +91,16 @@ public final class FreqRespPane {
     private Button       wizardButton;
     private Button       playButton;
 
-    /** Daemon worker that runs the sweep + deconvolution off the UI
-     *  thread.  Created lazily on the first Play click. */
-    private FreqRespAnalyzerWorker worker;
+    /** Controller owning the measurement worker's lifecycle and the
+     *  sweep-timing rules; the pane only issues commands and renders the
+     *  bus events back. */
+    private final FreqRespController controller;
 
-    /** Bus subscriber kept as a field so dispose can unsubscribe the
-     *  same instance (method references compare by identity). */
+    /** Bus subscribers kept as fields so dispose can unsubscribe the
+     *  same instances (method references compare by identity). */
     private Consumer<Void> rangeChangedListener;
+    private Consumer<Void> measurementStoppedListener;
+    private Consumer<String> measurementFailedListener;
 
     /** Calibration-correction store the pane owns (IoC) and constructor-injects
      *  into the view and tab control it builds, so both see the same entries.
@@ -130,19 +133,39 @@ public final class FreqRespPane {
         // by re-deriving from the store it already holds.
         correctionStore = new FreqRespCorrectionStore("FreqResp",
                 () -> MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED));
+        controller = new FreqRespController(d::asyncExec);
         buildPlotRow();
         buildFreqScrollbarRow();
         buildToolbarRow(wandIcon, playIcon);
 
-        // Bus subscription.  Range-changed re-aligns the scrollbars after the
+        // Bus subscriptions.  Range-changed re-aligns the scrollbars after the
         // view's wheel-driven pan / zoom (and after a preset load, which the
-        // tab control publishes).  The calibration-changed subscription lives
-        // inside FreqRespTabControl now (it owns the calibration tab).
+        // tab control publishes).  STOPPED (always published, on the UI
+        // thread) unlocks the pane + closes the busy shell; FAILED carries
+        // the error dialog text.  The calibration-changed subscription lives
+        // inside FreqRespTabControl (it owns the calibration tab).
         rangeChangedListener = ignored -> syncScrollbars();
+        measurementStoppedListener = ignored -> {
+            if (group.isDisposed()) return;
+            // Unlock first (re-enables the group), then refresh the RIAA
+            // enable cascade so Compare picks up the freshly-available
+            // measurement (setLocked alone restores each child's prior
+            // flag, which kept Compare disabled).
+            setLocked(false);
+            closeBusyShell();
+            tabControl.refreshRiaaEnable();
+        };
+        measurementFailedListener = this::showError;
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.FREQRESP_RANGE_CHANGED, rangeChangedListener);
-        group.addDisposeListener(e ->
-                bus.unsubscribe(Events.FREQRESP_RANGE_CHANGED, rangeChangedListener));
+        bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, measurementStoppedListener);
+        bus.subscribe(Events.FREQRESP_MEASUREMENT_FAILED, measurementFailedListener);
+        group.addDisposeListener(e -> {
+            bus.unsubscribe(Events.FREQRESP_RANGE_CHANGED, rangeChangedListener);
+            bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED, measurementStoppedListener);
+            bus.unsubscribe(Events.FREQRESP_MEASUREMENT_FAILED, measurementFailedListener);
+            controller.shutdown();
+        });
 
         // Initial scrollbar sync with the persisted pan window.
         syncScrollbars();
@@ -261,36 +284,21 @@ public final class FreqRespPane {
     // Play / measurement orchestration
     // -------------------------------------------------------------------------
 
-    /** Handler for the big Play button.  Lazily creates the worker, then
-     *  kicks off a sweep.  While the worker is running, the entire pane
-     *  (including this button) is locked via {@link #setLocked(boolean)}
-     *  and a modal "please wait" shell is shown so the user can't trigger
-     *  another action mid-measurement. */
+    /** Handler for the big Play button — locks the pane, opens the busy
+     *  shell, and hands the sweep to the controller.  Unlock + close ride
+     *  the {@link Events#FREQRESP_MEASUREMENT_STOPPED} subscription, the
+     *  error dialog rides {@link Events#FREQRESP_MEASUREMENT_FAILED}. */
     private void onPlayClicked() {
-        if (worker != null && worker.isRunning()) return;
+        if (controller.isMeasurementRunning()) return;
         // A fresh sweep replaces any loaded file — drop the "Loaded: …" banner.
         view.setSourceFilePath(null);
-        if (worker == null) {
-            worker = new FreqRespAnalyzerWorker(
-                    group.getDisplay(), view,
-                    // On completion: unlock first (re-enables the group), then
-                    // refresh the RIAA enable cascade so Compare picks up the
-                    // freshly-available measurement (setLocked alone restores
-                    // each child's prior flag, which kept Compare disabled).
-                    () -> { setLocked(false); closeBusyShell(); tabControl.refreshRiaaEnable(); },
-                    msg  -> { showError(msg); closeBusyShell(); });
-        }
         setLocked(true);
-        Preferences prefs = Preferences.instance();
-        int sr = Math.max(1, prefs.current().getInputSampleRate());
-        double totalSec = prefs.getFreqRespLeadInSec()
-                        + prefs.getFreqRespDurationSec()
-                        + 0.5;  // matches analyzer's tail
-        openBusyShell(totalSec);
+        openBusyShell(controller.expectedMeasurementSeconds());
         // Marshal each capture block's RMS to the SWT UI thread and
         // forward it to the live meter.  The callback fires on the audio
         // capture thread so we MUST asyncExec — touching the meter
         // directly here would deadlock or crash.
+        int sr = Math.max(1, Preferences.instance().current().getInputSampleRate());
         Display d = group.getDisplay();
         StereoCaptureProgress progress = (totalSamples, rmsLin) -> {
             double tSec = totalSamples / (double) sr;
@@ -300,7 +308,7 @@ public final class FreqRespPane {
                 }
             });
         };
-        worker.start(progress);
+        controller.startMeasurement(progress);
     }
 
     /** Shell shown for the duration of a measurement / deconvolution.
@@ -325,7 +333,12 @@ public final class FreqRespPane {
         l.setText(I18n.t("freqResp.busy.message"));
         l.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
-        busyMeter = new FreqRespLiveMeter(s, totalDurationSec);
+        // Sweep geometry feeds the meter's time → instantaneous-frequency
+        // mapping, which scales the trace smoothing with the period.
+        Preferences prefs = Preferences.instance();
+        busyMeter = new FreqRespLiveMeter(s, totalDurationSec,
+                prefs.getFreqRespLeadInSec(), prefs.getFreqRespDurationSec(),
+                prefs.getFreqRespStartHz(), prefs.getFreqRespStopHz());
         GridData mg = new GridData(SWT.FILL, SWT.CENTER, true, false);
         mg.widthHint  = 520;
         mg.heightHint = 100;

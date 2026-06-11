@@ -145,6 +145,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private Consumer<Void> calibrationChangedListener;
     /** Bus-handler reference kept so we can unsubscribe symmetrically. */
     private Consumer<Void> compareParamsChangedListener;
+    /** Clears the chart when a sweep starts (UI thread). */
+    private Consumer<Void> measurementStartedListener;
+    /** Receives the finished stereo sweep from the worker thread. */
+    private Consumer<StereoFreqRespResult> resultAvailableListener;
 
     private int    mouseX = -1;
     private int    mouseY = -1;
@@ -331,6 +335,20 @@ public final class FreqRespView extends AbstractFreqDomainView {
         compareParamsChangedListener = ignored -> onCompareParamsChanged();
         bus.subscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED,
                 compareParamsChangedListener);
+        // Measurement lifecycle: clear the previous traces when a sweep
+        // starts (STARTED is published on the UI thread, so the user sees
+        // an empty chart while it runs — no confusion about whether the
+        // displayed trace is the current or previous measurement) and show
+        // both channels when the worker delivers them (worker thread —
+        // marshal before touching the canvas).
+        measurementStartedListener = ignored -> clearResults();
+        bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, measurementStartedListener);
+        resultAvailableListener = stereo -> getDisplay().asyncExec(() -> {
+            if (isDisposed() || stereo == null) return;
+            setLeftResult(stereo.left());
+            setRightResult(stereo.right());
+        });
+        bus.subscribe(Events.FREQRESP_RESULT_AVAILABLE, resultAvailableListener);
 
         // RIAA overlay prefs (Show / Reverse / IEC) are bound to their tab
         // checkboxes in the pane; the view simply subscribes to repaint when
@@ -361,6 +379,14 @@ public final class FreqRespView extends AbstractFreqDomainView {
             if (compareParamsChangedListener != null) {
                 bus.unsubscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED,
                         compareParamsChangedListener);
+            }
+            if (measurementStartedListener != null) {
+                bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,
+                        measurementStartedListener);
+            }
+            if (resultAvailableListener != null) {
+                bus.unsubscribe(Events.FREQRESP_RESULT_AVAILABLE,
+                        resultAvailableListener);
             }
             disposePalette();
             if (axisFont       != null && !axisFont.isDisposed())       axisFont.dispose();
