@@ -37,7 +37,6 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
-import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
@@ -58,8 +57,6 @@ import org.eclipse.swt.widgets.Display;
 import java.io.File;
 import java.util.Locale;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
-import org.edgo.audio.measure.enums.GenChangeCause;
 
 /**
  * Generator pane — UI mirror of the CLI generator.  Hosts:
@@ -168,7 +165,6 @@ public final class GeneratorPane {
     private final Image           floppyDiskIcon;
     private final Image           folderOpenIcon;
     private final Image           calibrateDacIcon;
-    private final FilePlayController filePlayer = new FilePlayController();
     private final Button          playBtn;
 
     private final GeneratorController controller = new GeneratorController();
@@ -201,19 +197,6 @@ public final class GeneratorPane {
     private Consumer<Void> freqRespStartedListener;
     /** Counterpart that re-enables both play buttons after the sweep. */
     private Consumer<Void> freqRespStoppedListener;
-    /** Handler for {@link Events#GENERATOR_FREQ_TRIM} — sub-Hz frequency
-     *  alignment from the FFT-side frequency-lock loop.  Live-applies
-     *  the new freq to the DDS and republishes
-     *  {@link Events#GENERATOR_SIGNAL_CHANGED} with cause
-     *  {@link GenChangeCause#FLL_TRIM} so the FFT worker keeps its
-     *  averaging accumulator alive (a USER_INPUT republish would
-     *  trash it). */
-    private Consumer<Double> freqTrimListener;
-    /** Handler for {@link Events#GENERATOR_FREQ_TRIM_2} — the
-     *  dual-tone second-tone variant of {@link #freqTrimListener}.
-     *  Same FLL_TRIM republish so the FFT worker's averaging
-     *  accumulator survives the per-tone correction. */
-    private Consumer<Double> freqTrim2Listener;
     /** Re-pulls the Nyquist-derived frequency-field ceilings after the
      *  Preferences dialog commits an audio-format change. */
     private Consumer<Void> audioFormatListener;
@@ -330,20 +313,16 @@ public final class GeneratorPane {
                 GEN_FREQ_MIN_HZ, currentOutputSampleRate() / 2.0, FREQ_MAX_DECIMALS, 160);
         freqField.setLayoutData(fillH());
         freqField.setToolTipText(I18n.t("generator.frequency.tooltip"));
-        freqField.setEnabled(isPeriodic(initialForm));
+        freqField.setEnabled(initialForm.isPeriodic());
         // Two-way bind the RAW (as-entered) frequency to the pref; the
-        // bind auto-persists via Preferences.requestSave().  The live-
-        // apply of the EFFECTIVE (snapped if applicable) frequency, the
-        // FFT-invalidation publish, and the bracket-label refreshes stay
-        // as a side-effect subscription — GeneratorController.start()
-        // reads genFrequencyHz at start time so the field must persist
-        // the raw value while the controller emits the snapped one.
+        // bind auto-persists via Preferences.requestSave().  The live-apply
+        // of the EFFECTIVE (snapped) frequency + the FFT-invalidation
+        // publish are the controller's own subscription; the pane only
+        // follows with its bracket labels.  A freq change shifts the
+        // rectangle period (samples per cycle), which moves both the
+        // corrected freq AND the duty grid.
         Bindings.stepField(freqField, prefs.genFrequencyHzProperty());
         Bindings.onChange(group, prefs.genFrequencyHzProperty(), v -> {
-            controller.setFrequency(effectiveGeneratorFrequency());
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
-            // Freq change shifts the rectangle period (samples per cycle),
-            // which moves both the corrected freq AND the duty grid.
             updateFreqLabel();
             updateDutyLabel();
         });
@@ -367,13 +346,8 @@ public final class GeneratorPane {
         dualToneFreq1Field.setToolTipText(I18n.t("generator.dualTone.freq1.tooltip"));
         Bindings.stepField(dualToneFreq1Field, prefs.genDualToneFreq1HzProperty());
         Bindings.onChange(group, prefs.genDualToneFreq1HzProperty(), v -> {
-            int sr = currentOutputSampleRate();
-            double f1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, v);
-            controller.setFrequency(f1);
             updateDualToneFreqLabels();
             updateFreqLabel();
-            // Tone 1 moved — invalidate the FFT average / FLL.
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
         dualToneFreq2Label = new Label(group, SWT.NONE);
@@ -389,13 +363,8 @@ public final class GeneratorPane {
         dualToneFreq2Field.setToolTipText(I18n.t("generator.dualTone.freq2.tooltip"));
         Bindings.stepField(dualToneFreq2Field, prefs.genDualToneFreq2HzProperty());
         Bindings.onChange(group, prefs.genDualToneFreq2HzProperty(), v -> {
-            int sr = currentOutputSampleRate();
-            double f2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr, v);
-            controller.setDualToneFrequency2(f2);
             updateDualToneFreqLabels();
             updateFreqLabel();
-            // Tone 2 moved — invalidate the FFT average / FLL.
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
 
         // ------- FFT-bin snap checkbox.  Persisted, and live-applied:
@@ -407,26 +376,12 @@ public final class GeneratorPane {
         fftSnapBtn.setToolTipText(I18n.t("generator.snapFft.tooltip"));
         fftSnapBtn.setLayoutData(fillH());
         // Two-way bind the snap flag (auto-persists via requestSave).  The
-        // running generator's EFFECTIVE frequency, the single-tone label
-        // bracket, the dual-tone re-snap and its label brackets all derive
-        // from this flag, so they stay as a side-effect subscription.  The
-        // raw genFrequencyHz pref is unchanged by a snap toggle (the field
-        // value didn't move), so there is no raw-freq re-write here, only
-        // the live-apply + FFT-invalidation publish.
+        // running generator's re-snap + FFT-invalidation publish are the
+        // controller's subscription; the pane follows with the single-tone
+        // and per-tone bracket labels.
         Bindings.check(fftSnapBtn, prefs.genSnapToFftBinProperty());
         Bindings.onChange(group, prefs.genSnapToFftBinProperty(), v -> {
-            controller.setFrequency(effectiveGeneratorFrequency());
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
             updateFreqLabel();
-            // Dual-tone uses the same snap pref — refresh both tones
-            // on a running generator AND the per-tone label brackets.
-            if (prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE) {
-                int sr = currentOutputSampleRate();
-                controller.setFrequency(FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
-                        sr, prefs.getGenDualToneFreq1Hz()));
-                controller.setDualToneFrequency2(FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
-                        sr, prefs.getGenDualToneFreq2Hz()));
-            }
             updateDualToneFreqLabels();
         });
 
@@ -451,10 +406,6 @@ public final class GeneratorPane {
         sweepStartField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepStartField.setToolTipText(I18n.t("generator.sweep.startFreq.tooltip"));
         Bindings.stepField(sweepStartField, prefs.genSweepFreqStartHzProperty());
-        Bindings.onChange(group, prefs.genSweepFreqStartHzProperty(), v -> {
-            controller.setSweepFreqStart(v);
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
-        });
 
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.stopFreq"));
         sweepEndField = new NumericStepField(sweepPanel, UnitFamily.FREQUENCY,
@@ -462,10 +413,6 @@ public final class GeneratorPane {
         sweepEndField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepEndField.setToolTipText(I18n.t("generator.sweep.stopFreq.tooltip"));
         Bindings.stepField(sweepEndField, prefs.genSweepFreqEndHzProperty());
-        Bindings.onChange(group, prefs.genSweepFreqEndHzProperty(), v -> {
-            controller.setSweepFreqEnd(v);
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
-        });
 
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.duration"));
         sweepDurationField = new NumericStepField(sweepPanel, UnitFamily.TIME,
@@ -473,10 +420,6 @@ public final class GeneratorPane {
         sweepDurationField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepDurationField.setToolTipText(I18n.t("generator.sweep.duration.tooltip"));
         Bindings.stepField(sweepDurationField, prefs.genSweepDurationSecProperty());
-        Bindings.onChange(group, prefs.genSweepDurationSecProperty(), v -> {
-            controller.setSweepDurationSeconds(v);
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
-        });
 
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.fadeIn"));
         sweepFadeInField = new NumericStepField(sweepPanel, UnitFamily.TIME,
@@ -484,10 +427,6 @@ public final class GeneratorPane {
         sweepFadeInField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepFadeInField.setToolTipText(I18n.t("generator.sweep.fadeIn.tooltip"));
         Bindings.stepField(sweepFadeInField, prefs.genSweepFadeInSecProperty());
-        Bindings.onChange(group, prefs.genSweepFadeInSecProperty(), v -> {
-            controller.setSweepFadeInSeconds(v);
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
-        });
 
         new Label(sweepPanel, SWT.NONE).setText(I18n.t("generator.sweep.fadeOut"));
         sweepFadeOutField = new NumericStepField(sweepPanel, UnitFamily.TIME,
@@ -495,10 +434,6 @@ public final class GeneratorPane {
         sweepFadeOutField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         sweepFadeOutField.setToolTipText(I18n.t("generator.sweep.fadeOut.tooltip"));
         Bindings.stepField(sweepFadeOutField, prefs.genSweepFadeOutSecProperty());
-        Bindings.onChange(group, prefs.genSweepFadeOutSecProperty(), v -> {
-            controller.setSweepFadeOutSeconds(v);
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
-        });
 
         new Label(sweepPanel, SWT.NONE).setText("");   // spacer for col 0
         sweepLoopBtn = new Button(sweepPanel, SWT.CHECK);
@@ -506,10 +441,6 @@ public final class GeneratorPane {
         sweepLoopBtn.setToolTipText(I18n.t("generator.sweep.loop.tooltip"));
         sweepLoopBtn.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         Bindings.check(sweepLoopBtn, prefs.genSweepLoopProperty());
-        Bindings.onChange(group, prefs.genSweepLoopProperty(), v -> {
-            controller.setSweepLoop(v);
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
-        });
 
         // ----- Dual-tone amplitude controls (DUAL_TONE only) ----------
         // Only the two amplitude % fields live in this panel; Freq 1
@@ -564,21 +495,17 @@ public final class GeneratorPane {
         setSweepPanelVisible(initialIsSweep);
         setDualTonePanelVisible(initialIsDualTone);
 
-        // Form change: persist, grey-out frequency for noise forms, and
-        // live-apply to the running generator when the target form is
-        // safely live-swappable.  Sweep / SINE_COMPENSATED transitions
-        // need a stop+start since their state machines aren't safe to
-        // mutate on the audio thread — the controller's setForm() returns
-        // a hint via canLiveSwitchForm() and we surface that as a tooltip.
+        // Form change: persist, then adjust the pane.  The engine side —
+        // live-swap vs. stop+start (sweep / dual-tone set up dedicated DDS
+        // state) and the FFT-invalidation publish — runs in the
+        // controller's genSignalForm subscription the moment the pref is
+        // written; everything below is visuals.
         formCombo.addSelectionListener(e -> {
-            GenSignalForm prevForm = prefs.getGenSignalForm();
             GenSignalForm f = formCombo.getSelectedForm();
+            boolean wasRunning = controller.isRunning();
             prefs.setGenSignalForm(f);
             boolean newIsSweep    = f == GenSignalForm.LINEAR_SWEEP || f == GenSignalForm.LOG_SWEEP;
             boolean newIsDualTone = f == GenSignalForm.DUAL_TONE;
-            boolean prevWasSweep    = prevForm == GenSignalForm.LINEAR_SWEEP
-                                   || prevForm == GenSignalForm.LOG_SWEEP;
-            boolean prevWasDualTone = prevForm == GenSignalForm.DUAL_TONE;
             // Sweep + dual-tone each hijack the single-frequency input
             // — hide the regular Frequency row.  For DUAL_TONE, show
             // the Freq 1 / Freq 2 rows instead (placed just under the
@@ -590,7 +517,7 @@ public final class GeneratorPane {
             setRegularFreqRowVisible(!newIsSweep && !newIsDualTone);
             setDualToneFreqRowsVisible(newIsDualTone);
             setSnapBtnVisible(!newIsSweep);
-            freqField.setEnabled(!newIsSweep && !newIsDualTone && isPeriodic(f));
+            freqField.setEnabled(!newIsSweep && !newIsDualTone && f.isPeriodic());
             updateDutyFieldEnabled(f);
             // Reload duty field from the appropriate pref so RECTANGLE and
             // TRIANGLE each remember their own duty independently.
@@ -598,27 +525,18 @@ public final class GeneratorPane {
             // Parameter panels: each visible only for its own form.
             setSweepPanelVisible(newIsSweep);
             setDualTonePanelVisible(newIsDualTone);
-            // Sweep + dual-tone transitions need a full stop+start
-            // because their constructors set up dedicated DDS state
-            // (dual-tone's second accumulator, sweep's state machine)
-            // that the simple {@code controller.setForm()} can't
-            // hot-swap.  Plain periodic forms still hot-swap.
-            boolean needsRestart = (newIsSweep || prevWasSweep
-                                 || newIsDualTone || prevWasDualTone);
-            if (needsRestart && controller.isRunning()) {
-                restartGenerator();
-            } else {
-                controller.setForm(f);
-            }
             // Different forms get different bracket annotations (or none).
             updateFreqLabel();
             updateDutyLabel();
-            // Notify subscribers (FFT view, scope, FreqResp pane) that the
-            // generated signal changed.  Without this the form-combo
-            // change wouldn't reach the FFT view's form-change detector
-            // and stale stats (THD averages from the old waveform) would
-            // pollute the new measurement.
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
+            // A not-live-swappable change restarted the generator inside
+            // the pref write above — surface a failed restart.
+            syncPlayButtonVisuals();
+            if (wasRunning && !controller.isRunning()) {
+                String err = controller.getLastStartError();
+                if (err != null) {
+                    Dialogs.error(group.getShell(), I18n.t("generator.error.restart"), err);
+                }
+            }
         });
 
         // --------------------------------------------------------- Amplitude
@@ -629,25 +547,18 @@ public final class GeneratorPane {
         ampField.setToolTipText(I18n.t("generator.amplitudeRms.tooltip"));
         // The field holds canonical Vrms (unit parsing / display switching is
         // internal) — two-way bind it like the frequency; live-apply and the
-        // FFT-invalidation publish stay as a side-effect subscription.
+        // FFT-invalidation publish are the controller's subscription.
         Bindings.stepField(ampField, prefs.genAmplitudeVrmsProperty());
         // dBV display choice: seed from the persisted pref and persist the
         // user's typed unit (the field fires on display-unit changes too).
         ampField.setLogDisplay(prefs.isGenAmplitudeDbvDisplay());
         ampField.addSelectionListener(e ->
                 prefs.setGenAmplitudeDbvDisplay(ampField.isLogDisplay()));
-        Bindings.onChange(group, prefs.genAmplitudeVrmsProperty(), v -> {
-            controller.setAmplitudeVrms(v);
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
-        });
         // A DAC recalibration (Calibrate DAC dialog) changes the output full-scale:
         // recompute the running generator's amplitude against it so the commanded
-        // Vrms still holds (no restart), and move the field's ceiling with it.
-        // The dialog only writes the pref; this binding applies it.
-        Bindings.onChange(group, prefs.dacFsVoltageRmsProperty(), v -> {
-            ampField.setMax(v);
-            controller.setDacFsVoltageRms(v);
-        });
+        // Vrms still holds (no restart, controller subscription) — the pane
+        // only moves the field's ceiling with the new full-scale.
+        Bindings.onChange(group, prefs.dacFsVoltageRmsProperty(), ampField::setMax);
 
         // ----- Duty cycle (RECTANGLE or TRIANGLE) -----------------------
         // 1 to 99 percent with 3 decimal places.  Applies to RECTANGLE
@@ -665,19 +576,16 @@ public final class GeneratorPane {
         dutyField.setValue(initialDutyPct);
         dutyField.setLayoutData(fillH());
         dutyField.setToolTipText(I18n.t("generator.dutyCycle.tooltip"));
+        // Write only the active form's duty pref — the controller's per-pref
+        // subscription live-applies it and publishes the FFT invalidation.
         dutyField.addSelectionListener(e -> {
             double frac = dutyField.getValue() / 100.0;
-            GenSignalForm f = formCombo.getSelectedForm();
-            if (f == GenSignalForm.TRIANGLE) {
+            if (formCombo.getSelectedForm() == GenSignalForm.TRIANGLE) {
                 prefs.setGenTriangleDuty(frac);
-                controller.setTriangleDuty(frac);
             } else {
                 prefs.setGenRectangleDuty(frac);
-                controller.setRectangleDuty(frac);
             }
             updateDutyLabel();
-            // The emitted waveform changed — invalidate the FFT average / FLL.
-            MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
         });
         updateDutyFieldEnabled(initialForm);
 
@@ -695,11 +603,8 @@ public final class GeneratorPane {
         ditherCombo.setToolTipText(I18n.t("generator.dither.tooltip"));
         ditherCombo.addListener(SWT.MouseDown, e -> refreshDitherList());
         ditherCombo.addListener(SWT.FocusIn,   e -> refreshDitherList());
-        ditherCombo.addListener(SWT.Selection, e -> {
-            int bits = ditherBits[ditherCombo.getSelectionIndex()];
-            prefs.setGenDitherBits(bits);
-            controller.setDitherBits(bits);
-        });
+        ditherCombo.addListener(SWT.Selection, e ->
+                prefs.setGenDitherBits(ditherBits[ditherCombo.getSelectionIndex()]));
 
         // ------------------------------------------------------- Corrections
         addRowLabel(group, I18n.t("generator.corrections"));
@@ -777,9 +682,8 @@ public final class GeneratorPane {
         playFromLoopBtn.setToolTipText(I18n.t("generator.loadFrom.loop.tooltip"));
         playFromLoopBtn.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false));
         Bindings.check(playFromLoopBtn, prefs.genPlayFromLoopProperty());
-        // Live-apply so toggling the checkbox during playback takes effect
-        // at the next EOF (filePlayer is a runtime object, not a view).
-        Bindings.onChange(group, prefs.genPlayFromLoopProperty(), filePlayer::setLoop);
+        // The live-apply to a running playback (loop change takes effect at
+        // the next EOF) is the controller's subscription.
 
         // Content row: text + browse (folder-open icon) + play (LED).
         // No Clear (✕) button — user spec.
@@ -852,28 +756,15 @@ public final class GeneratorPane {
         playBtn.addListener(SWT.Selection, e -> {
             if (controller.isRunning()) {
                 controller.stop();
-                playBtn.setImage(playDimImg);
-                playBtn.setToolTipText(I18n.t("generator.play.start"));
-                stopOnAirBlink();
+                syncPlayButtonVisuals();
             } else {
                 // Generator DDS and Play-from-file share the audio output
-                // device — only one of them may drive it at a time.
-                if (filePlayer.isRunning()) {
-                    filePlayer.stop();
-                    playFromBtn.setImage(tinyPlayDimImg);
-                    playFromBtn.setToolTipText(I18n.t("generator.loadFrom.play"));
-                }
-                // Re-apply the effective frequency at start so a freshly
-                // loaded preset / persisted value goes out bin-snapped
-                // when snap-to-FFT is on — without this, snap only kicked
-                // in after the user manually toggled the checkbox.
-                controller.setFrequency(effectiveGeneratorFrequency());
+                // device — start() stops a running file playback itself;
+                // re-sync both buttons' visuals from the controller state.
                 controller.start();
-                if (controller.isRunning()) {
-                    playBtn.setImage(playLitImg);
-                    playBtn.setToolTipText(I18n.t("generator.play.stop"));
-                    startOnAirBlink();
-                } else {
+                syncPlayButtonVisuals();
+                syncFilePlayVisuals();
+                if (!controller.isRunning()) {
                     String err = controller.getLastStartError();
                     Dialogs.error(group.getShell(),
                             I18n.t("generator.error.start"),
@@ -882,36 +773,21 @@ public final class GeneratorPane {
             }
         });
 
-        // Listen for FFT length changes published by the FFT pane —
-        // re-snap the running tone onto a fresh bin without the user
-        // having to toggle the snap checkbox.  The new length is read
-        // from Preferences by reapplyFrequencySnap, so the event itself
-        // carries no payload.  Stored as a field so the dispose
+        // FFT length changes re-snap the running tone in the controller;
+        // the pane only follows with its bracket labels (they show the
+        // bin-snapped frequency).  Stored as a field so the dispose
         // listener below can unsubscribe and let the bus release its
         // reference to this pane.
-        fftLengthListener = ignored -> reapplyFrequencySnap();
+        fftLengthListener = ignored -> {
+            if (group.isDisposed()) return;
+            updateFreqLabel();
+            updateDualToneFreqLabels();
+        };
         bus.subscribe(Events.FFT_LENGTH_CHANGED, fftLengthListener);
         freqRespStartedListener = ignored -> onFreqRespMeasurementStarted();
         freqRespStoppedListener = ignored -> onFreqRespMeasurementStopped();
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
-        // FLL trim: the FFT view publishes the new DDS frequency in Hz
-        // after each result; we live-apply it and republish as
-        // FLL_TRIM so the FFT worker keeps its averaging accumulator.
-        freqTrimListener = newHz -> {
-            if (newHz == null || !Double.isFinite(newHz)) return;
-            controller.setFrequency(newHz);
-            bus.publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
-        };
-        bus.subscribe(Events.GENERATOR_FREQ_TRIM, freqTrimListener);
-        // Companion listener for the dual-tone second-tone FLL — same
-        // FLL_TRIM republish so the FFT worker stays averaging.
-        freqTrim2Listener = newHz -> {
-            if (newHz == null || !Double.isFinite(newHz)) return;
-            controller.setDualToneFrequency2(newHz);
-            bus.publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
-        };
-        bus.subscribe(Events.GENERATOR_FREQ_TRIM_2, freqTrim2Listener);
         // Audio-format edits (Preferences OK, UI thread) move the Nyquist
         // ceiling of every frequency field — re-pull it from the committed
         // prefs.  The fields re-clamp and echo a clamped value back to their
@@ -927,27 +803,16 @@ public final class GeneratorPane {
         };
         bus.subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
 
-        // Respond to "is the generator running?" requests from the FFT
-        // controller so it can decide whether to anchor the fundamental
-        // to the generator's frequency.  One responder per event name
-        // — registerResponder replaces any prior registration, so
-        // language-switch shell rebuilds re-bind cleanly.
-        bus.registerResponder(Events.GENERATOR_RUNNING,
-                (Supplier<Boolean>) this::isRunning);
-
-        // Dispose-time: stop the playback thread and tear down the icon
-        // cache owned by this pane's display.
+        // Dispose-time: shut the controller down (engines + its own bus /
+        // preference subscriptions) and tear down the icon cache owned by
+        // this pane's display.
         group.addDisposeListener(e -> {
             bus.unsubscribe(Events.FFT_LENGTH_CHANGED,            fftLengthListener);
             bus.unsubscribe(Events.FILE_PLAY_STOPPED,             filePlayStoppedListener);
             bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
-            bus.unsubscribe(Events.GENERATOR_FREQ_TRIM,           freqTrimListener);
-            bus.unsubscribe(Events.GENERATOR_FREQ_TRIM_2,         freqTrim2Listener);
             bus.unsubscribe(Events.AUDIO_FORMAT_CHANGED,          audioFormatListener);
-            bus.unregisterResponder(Events.GENERATOR_RUNNING);
-            controller.stop();
-            filePlayer.stop();
+            controller.shutdown();
             SignalFormIcon.instance().disposeAll(group.getDisplay());
             if (onAirRedColor    != null && !onAirRedColor.isDisposed())    onAirRedColor.dispose();
             if (onAirRedDimColor != null && !onAirRedDimColor.isDisposed()) onAirRedDimColor.dispose();
@@ -1002,29 +867,18 @@ public final class GeneratorPane {
      */
     public Runnable pauseAroundDialog() {
         boolean genWasRunning  = controller.isRunning();
-        boolean fileWasRunning = filePlayer.isRunning();
+        boolean fileWasRunning = controller.isFilePlaying();
         if (genWasRunning || fileWasRunning) {
             stopOnAirBlink();
         }
-        if (genWasRunning) {
-            controller.stop();
-            playBtn.setImage(playDimImg);
-            playBtn.setToolTipText(I18n.t("generator.play.start"));
-        }
-        if (fileWasRunning) {
-            filePlayer.stop();
-            playFromBtn.setImage(tinyPlayDimImg);
-            playFromBtn.setToolTipText(I18n.t("generator.loadFrom.play"));
-        }
+        controller.stopEngines();
+        syncPlayButtonVisuals();
+        syncFilePlayVisuals();
         return () -> {
             if (genWasRunning) {
-                controller.setFrequency(effectiveGeneratorFrequency());
                 controller.start();
-                if (controller.isRunning()) {
-                    playBtn.setImage(playLitImg);
-                    playBtn.setToolTipText(I18n.t("generator.play.stop"));
-                    startOnAirBlink();
-                } else {
+                syncPlayButtonVisuals();
+                if (!controller.isRunning()) {
                     String err = controller.getLastStartError();
                     Dialogs.error(group.getShell(),
                             I18n.t("generator.error.resume"),
@@ -1095,35 +949,14 @@ public final class GeneratorPane {
         group.layout(true);
     }
 
-    /** True when the audio generator is currently producing a signal —
-     *  either the tone {@link GeneratorController} or the WAV file
-     *  player is running.  Exposed so the FFT controller can fall back
-     *  to auto-detection of the fundamental when the user isn't feeding
-     *  in a signal. */
-    public boolean isRunning() {
-        return controller.isRunning() || filePlayer.isRunning();
-    }
-
-    /** {@link Events#FREQRESP_MEASUREMENT_STARTED} handler — stops the
-     *  running DDS tone + file player and grays both Play buttons so the
-     *  Frequency Response analyzer can drive the DAC exclusively. */
+    /** {@link Events#FREQRESP_MEASUREMENT_STARTED} handler — the controller
+     *  stops both engines in its own subscription; here only the visuals:
+     *  dim and gray both Play buttons while the sweep drives the DAC. */
     private void onFreqRespMeasurementStarted() {
         if (group.isDisposed()) return;
-        if (controller.isRunning()) {
-            controller.stop();
-            if (playBtn != null && !playBtn.isDisposed()) {
-                playBtn.setImage(playDimImg);
-                playBtn.setToolTipText(I18n.t("generator.play.start"));
-            }
-            stopOnAirBlink();
-        }
-        if (filePlayer.isRunning()) {
-            filePlayer.stop();
-            if (playFromBtn != null && !playFromBtn.isDisposed()) {
-                playFromBtn.setImage(tinyPlayDimImg);
-                playFromBtn.setToolTipText(I18n.t("generator.loadFrom.play"));
-            }
-        }
+        stopOnAirBlink();
+        syncPlayButtonVisuals();
+        syncFilePlayVisuals();
         if (playBtn      != null && !playBtn.isDisposed())      playBtn.setEnabled(false);
         if (playFromBtn  != null && !playFromBtn.isDisposed())  playFromBtn.setEnabled(false);
     }
@@ -1133,6 +966,32 @@ public final class GeneratorPane {
         if (group.isDisposed()) return;
         if (playBtn     != null && !playBtn.isDisposed())     playBtn.setEnabled(true);
         if (playFromBtn != null && !playFromBtn.isDisposed()) playFromBtn.setEnabled(true);
+    }
+
+    /** Mirrors the DDS engine state on the main Play button and the ON-AIR
+     *  banner — called after every controller command that may have started
+     *  or stopped the tone (including implicitly, e.g. a form change
+     *  restart or file playback claiming the device). */
+    private void syncPlayButtonVisuals() {
+        if (playBtn == null || playBtn.isDisposed()) return;
+        boolean running = controller.isRunning();
+        playBtn.setImage(running ? playLitImg : playDimImg);
+        playBtn.setToolTipText(I18n.t(running ? "generator.play.stop" : "generator.play.start"));
+        if (running) {
+            startOnAirBlink();
+        } else if (!controller.isFilePlaying()) {
+            stopOnAirBlink();
+        }
+    }
+
+    /** Mirrors the file-playback engine state on the small play LED. */
+    private void syncFilePlayVisuals() {
+        if (playFromBtn == null || playFromBtn.isDisposed()) return;
+        boolean playing = controller.isFilePlaying();
+        playFromBtn.setImage(playing ? tinyPlayLitImg : tinyPlayDimImg);
+        playFromBtn.setToolTipText(I18n.t(playing ? "generator.loadFrom.stop"
+                                                  : "generator.loadFrom.play"));
+        if (playing) startOnAirBlink();
     }
 
     /**
@@ -1162,80 +1021,8 @@ public final class GeneratorPane {
     }
 
     // -------------------------------------------------------------------------
-    // Frequency / duty correction
+    // Frequency / duty correction labels (math lives in the controller)
     // -------------------------------------------------------------------------
-
-    /** Returns the FFT size the snap should use — the active value from
-     *  the FFT pane's Preferences.  Falls back to 65536 if the preference
-     *  is unset (which shouldn't happen after first launch). */
-    private int fftSizeForSnap() {
-        int n = Preferences.instance().getFftLength();
-        return (n >= 8 && (n & (n - 1)) == 0) ? n : 65536;
-    }
-
-    /**
-     * Number of samples in one rectangle period at the currently
-     * configured output sample rate and entered frequency.  Always
-     * &ge; 2 so duty-cycle math has something to work with.
-     */
-    private int currentPeriodSamples() {
-        int sr = Preferences.instance().current().getOutputSampleRate();
-        double f = freqField.getValue();
-        if (f <= 0.0 || sr <= 0) return 2;
-        return Math.max(2, (int) Math.round(sr / (double) f));
-    }
-
-    /** Closest frequency the DDS rectangle can produce with an integer-sample period. */
-    private double correctedRectangleHz() {
-        int sr = Preferences.instance().current().getOutputSampleRate();
-        return (double) sr / currentPeriodSamples();
-    }
-
-    /** Re-applies the FFT-bin snap to the current frequency.  Invoked
-     *  by {@code FftPane} when the FFT length changes so the running
-     *  generator slides onto a fresh-bin position without the user
-     *  having to toggle the snap checkbox.  No-op when snap is off
-     *  or the active waveform isn't a sine. */
-    public void reapplyFrequencySnap() {
-        if (fftSnapBtn == null || !fftSnapBtn.getSelection()) return;
-        controller.setFrequency(effectiveGeneratorFrequency());
-        updateFreqLabel();
-        // Dual-tone uses the same FFT-length-driven bin grid — refresh
-        // both tones' corrected-frequency brackets and (when DUAL_TONE
-        // is the active form) live-re-snap the running tones too.
-        Preferences prefs = Preferences.instance();
-        if (prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE) {
-            int sr = currentOutputSampleRate();
-            controller.setFrequency(FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
-                    sr, prefs.getGenDualToneFreq1Hz()));
-            controller.setDualToneFrequency2(FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
-                    sr, prefs.getGenDualToneFreq2Hz()));
-        }
-        updateDualToneFreqLabels();
-    }
-
-    /** Returns the frequency the controller should actually emit — the
-     *  bin-snapped value when SINE + snap-to-bin is selected, otherwise
-     *  the raw entered value.  Other waveforms ignore the snap. */
-    private double effectiveGeneratorFrequency() {
-        if (fftSnapBtn != null && fftSnapBtn.getSelection()
-                && formCombo.getSelectedForm() == GenSignalForm.SINE) {
-            return correctedFftBinHz();
-        }
-        return freqField.getValue();
-    }
-
-    /** Closest FFT-bin frequency to the entered value, using the current
-     *  {@code fftLength} from the FFT pane's preferences so the snap
-     *  stays in sync with whatever FFT size the user has configured. */
-    private double correctedFftBinHz() {
-        int sr = Preferences.instance().current().getOutputSampleRate();
-        double f = freqField.getValue();
-        if (sr <= 0) return f;
-        double binHz = (double) sr / fftSizeForSnap();
-        if (binHz <= 0.0) return f;
-        return Math.round(f / binHz) * binHz;
-    }
 
     /**
      * Refreshes the "Frequency" label text.  Appends a bracketed
@@ -1248,9 +1035,9 @@ public final class GeneratorPane {
         GenSignalForm form = formCombo.getSelectedForm();
         String corrected = null;
         if (form == GenSignalForm.RECTANGLE) {
-            corrected = formatLabelHz(correctedRectangleHz());
+            corrected = formatLabelHz(controller.correctedRectangleHz());
         } else if (form == GenSignalForm.SINE && fftSnapBtn.getSelection()) {
-            corrected = formatLabelHz(correctedFftBinHz());
+            corrected = formatLabelHz(controller.effectiveFrequency());
         }
         freqLabel.setText(corrected == null ? "Frequency"
                                             : "Frequency (" + corrected + ")");
@@ -1269,7 +1056,7 @@ public final class GeneratorPane {
             dutyLabel.getParent().layout();
             return;
         }
-        int n = currentPeriodSamples();
+        int n = controller.periodSamples();
         int k = (int) Math.round(dutyField.getValue() / 100.0 * n);
         double pct = k * 100.0 / n;
         dutyLabel.setText(I18n.t("generator.dutyCycle.bracket", formatLabelPct(pct)));
@@ -1399,26 +1186,6 @@ public final class GeneratorPane {
         }
     }
 
-    /** Stops the running generator and immediately starts it again so a
-     *  not-live-swappable form change (e.g. SINE ↔ LINEAR_SWEEP, LINEAR_SWEEP
-     *  ↔ LOG_SWEEP) actually takes effect.  On failure rolls the play
-     *  button + on-air banner back to the stopped state and surfaces the
-     *  controller error. */
-    private void restartGenerator() {
-        controller.stop();
-        controller.setFrequency(effectiveGeneratorFrequency());
-        controller.start();
-        if (!controller.isRunning()) {
-            playBtn.setImage(playDimImg);
-            playBtn.setToolTipText(I18n.t("generator.play.start"));
-            stopOnAirBlink();
-            String err = controller.getLastStartError();
-            if (err != null) {
-                Dialogs.error(group.getShell(), I18n.t("generator.error.restart"), err);
-            }
-        }
-    }
-
     /** Shows / hides the dual-tone Freq 1 / Freq 2 rows that live in
      *  the outer group right under the regular Frequency row.
      *  Visibility is flipped between the regular Frequency row and
@@ -1519,10 +1286,9 @@ public final class GeneratorPane {
             a1 = clampPct(100.0 - a2);
             dualToneAmp1Field.setValue(a1);
         }
+        // The controller's split subscription live-applies both percentages
+        // and publishes the FFT invalidation.
         prefs.setGenDualToneSplitPct(a1);
-        controller.setDualToneAmplitudes(a1, a2);
-        // The tone balance changed — invalidate the FFT average / FLL.
-        MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
     }
 
     /** Flips a control's GridData.exclude flag and visibility together. */
@@ -1614,10 +1380,9 @@ public final class GeneratorPane {
      * LED button image accordingly.
      */
     private void togglePlayFrom() {
-        if (filePlayer.isRunning()) {
-            filePlayer.stop();
-            playFromBtn.setImage(tinyPlayDimImg);
-            playFromBtn.setToolTipText(I18n.t("generator.loadFrom.play"));
+        if (controller.isFilePlaying()) {
+            controller.stopFilePlayback();
+            syncFilePlayVisuals();
             stopOnAirBlink();
             return;
         }
@@ -1629,21 +1394,13 @@ public final class GeneratorPane {
                     I18n.t("generator.error.playFile.pickFirst"));
             return;
         }
-        // Generator DDS and Play-from-file share the audio output device.
-        if (controller.isRunning()) {
-            controller.stop();
-            if (playBtn != null && !playBtn.isDisposed()) {
-                playBtn.setImage(playDimImg);
-                playBtn.setToolTipText(I18n.t("generator.play.start"));
-            }
-        }
-        filePlayer.start(new File(path), prefs.isGenPlayFromLoop());
-        if (filePlayer.isRunning()) {
-            playFromBtn.setImage(tinyPlayLitImg);
-            playFromBtn.setToolTipText(I18n.t("generator.loadFrom.stop"));
-            startOnAirBlink();
-        } else {
-            String err = filePlayer.getLastStartError();
+        // startFilePlayback stops the DDS tone itself (shared output
+        // device) — re-sync both buttons from the controller state.
+        controller.startFilePlayback(new File(path), prefs.isGenPlayFromLoop());
+        syncPlayButtonVisuals();
+        syncFilePlayVisuals();
+        if (!controller.isFilePlaying()) {
+            String err = controller.getFilePlayError();
             Dialogs.error(group.getShell(),
                     I18n.t("generator.error.playFile"),
                     err != null ? err : "Unknown error opening the file.");
@@ -1659,7 +1416,8 @@ public final class GeneratorPane {
         return String.format(Locale.ROOT, "%s_%dkHz_%dbit.wav",
                 form.name().toLowerCase(Locale.ROOT), rateKhz, bitDepth);
     }
-    /** Writes the WAV file using the current generator settings + saved duration. */
+    /** Writes the signal file via the controller; surfaces a failure
+     *  reason in an error dialog. */
     private void saveWavNow() {
         Preferences prefs = Preferences.instance();
         String path = prefs.getGenWavPath();
@@ -1669,61 +1427,11 @@ public final class GeneratorPane {
                     I18n.t("generator.error.save.pickFirst"));
             return;
         }
-        GenSignalForm form = prefs.getGenSignalForm();
-        if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
-            Dialogs.error(group.getShell(),
-                    I18n.t("generator.error.save"),
-                    I18n.t("generator.error.save.sweepUnsupported"));
-            return;
-        }
-        int    sampleRate    = prefs.current().getOutputSampleRate();
-        int    bitDepth      = prefs.current().getOutputBitDepth();
-        int    ditherBits    = prefs.getGenDitherBits();
-        double frequency     = prefs.getGenFrequencyHz();
-        double amplitudeVRms = prefs.getGenAmplitudeVrms();
-        double duration      = prefs.getGenWavDurationSeconds();
-        try {
-            SignalGenerator gen;
-            if (form == GenSignalForm.SINE_COMPENSATED) {
-                String csv = prefs.getGenCorrectionsCsv();
-                if (csv == null || csv.isEmpty()) {
-                    Dialogs.error(group.getShell(),
-                            I18n.t("generator.error.save"),
-                            I18n.t("generator.error.save.compensatedNeedsCsv"));
-                    return;
-                }
-                gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms,
-                        prefs.getDacFsVoltageRms(), csv);
-            } else {
-                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms,
-                        prefs.getDacFsVoltageRms());
-            }
-            gen.setRectangleDuty(prefs.getGenRectangleDuty());
-            // Periodic forms truncate to integer-period count; noise has
-            // no period, pass 0 so the exporter uses the raw duration.
-            double freqForTruncation = isPeriodic(form) ? frequency : 0.0;
-            long bytes = SignalFileExporter.export(gen, new File(path),
-                    sampleRate, bitDepth, duration, ditherBits, freqForTruncation);
-            log.info("File saved: {} ({} bytes)", path, bytes);
-        } catch (Exception ex) {
-            log.warn("Save failed", ex);
+        String err = controller.exportSignal(path);
+        if (err != null) {
             Dialogs.error(group.getShell(),
                     I18n.t("generator.error.save.failed"),
-                    I18n.t("generator.error.save.failedMessage", path, ex.getMessage()));
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Misc helpers
-    // -------------------------------------------------------------------------
-    private boolean isPeriodic(GenSignalForm f) {
-        switch (f) {
-            case WHITE_NOISE:
-            case PINK_NOISE:
-            case PINK_NOISE_LINEAR:
-                return false;
-            default:
-                return true;
+                    I18n.t("generator.error.save.failedMessage", path, err));
         }
     }
 

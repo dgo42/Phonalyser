@@ -18,11 +18,15 @@
 
 package org.edgo.audio.measure.gui.generator;
 
+import org.edgo.audio.measure.gui.bus.Events;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -30,22 +34,33 @@ import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
 
+import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
- * Lifecycle manager for the GUI generator's playback thread.  Mirrors
- * {@code OscilloscopeController}'s pattern: {@link #start()} resolves the
+ * Controller of the generator pane: owns both output engines — the DDS
+ * playback thread and the WAV/FLAC {@link FilePlayController} — plus the
+ * signal math around them (FFT-bin snap, effective frequency, period
+ * samples) and the signal file export.  {@link #start()} resolves the
  * current output device + sample rate + bit depth from {@link Preferences},
- * constructs a {@link SignalGenerator} from the generator pane's saved
- * settings, opens an {@link AudioPlayback} on a background thread, and
- * runs continuously until {@link #stop()} is called.
+ * constructs a {@link SignalGenerator} from the saved settings, opens an
+ * {@link AudioPlayback} on a background thread, and runs continuously until
+ * {@link #stop()} is called.
  *
- * <p>The pane checks {@link #isRunning()} when toggling its Play button
- * and reads {@link #getLastStartError()} on a failed start so it can
- * display the reason in a MessageBox.
+ * <p>The constructor subscribes to every generator preference the engines
+ * follow live (frequency, amplitude, duty, sweep params, dither, …) and to
+ * the bus events that drive them (FLL trims, FFT-length re-snap, the
+ * FreqResp sweep claiming the DAC) — the pane never relays.  Towards the
+ * view the controller only publishes bus events and answers state getters:
+ * the pane checks {@link #isRunning()} when toggling its Play button and
+ * reads {@link #getLastStartError()} on a failed start so it can display
+ * the reason in a MessageBox.
  */
 @Log4j2
 public final class GeneratorController {
@@ -58,6 +73,147 @@ public final class GeneratorController {
     private volatile boolean         running;
     @Getter
     private volatile String          lastStartError;
+    /** WAV/FLAC file playback engine — shares the output device with the
+     *  DDS tone, so starting either engine stops the other. */
+    private final FilePlayController filePlayer = new FilePlayController();
+    /** Previous waveform — the restart-vs-live-swap decision needs both
+     *  sides of a form change. */
+    private GenSignalForm lastForm;
+    /** Detach actions for every Preferences / bus subscription made in the
+     *  constructor; run by {@link #shutdown()}. */
+    private final List<Runnable> unsubscribes = new ArrayList<>();
+
+    public GeneratorController() {
+        Preferences prefs = Preferences.instance();
+        lastForm = prefs.getGenSignalForm();
+        bindPreferences(prefs);
+        bindBus();
+    }
+
+    /** Engine-driving preference subscriptions.  Each live-applies to the
+     *  running engine and publishes {@link Events#GENERATOR_SIGNAL_CHANGED}
+     *  exactly once where the emitted signal changes (the FFT averaging
+     *  restart hangs off that event). */
+    private void bindPreferences(Preferences prefs) {
+        onPref(prefs.genFrequencyHzProperty(), v -> {
+            setFrequency(effectiveFrequency());
+            publishSignalChanged();
+        });
+        onPref(prefs.genDualToneFreq1HzProperty(), v -> {
+            setFrequency(snapDualTone(v));
+            publishSignalChanged();
+        });
+        onPref(prefs.genDualToneFreq2HzProperty(), v -> {
+            setDualToneFrequency2(snapDualTone(v));
+            publishSignalChanged();
+        });
+        onPref(prefs.genSnapToFftBinProperty(), v -> {
+            reapplySnap();
+            publishSignalChanged();
+        });
+        onPref(prefs.genSignalFormProperty(), this::onFormChanged);
+        onPref(prefs.genAmplitudeVrmsProperty(), v -> {
+            setAmplitudeVrms(v);
+            publishSignalChanged();
+        });
+        onPref(prefs.dacFsVoltageRmsProperty(), this::setDacFsVoltageRms);
+        onPref(prefs.genRectangleDutyProperty(), v -> {
+            setRectangleDuty(v);
+            publishSignalChanged();
+        });
+        onPref(prefs.genTriangleDutyProperty(), v -> {
+            setTriangleDuty(v);
+            publishSignalChanged();
+        });
+        onPref(prefs.genDualToneSplitPctProperty(), a1 -> {
+            setDualToneAmplitudes(a1, 100.0 - a1);
+            publishSignalChanged();
+        });
+        onPref(prefs.genDitherBitsProperty(), this::setDitherBits);
+        onPref(prefs.genSweepFreqStartHzProperty(), v -> {
+            setSweepFreqStart(v);
+            publishSignalChanged();
+        });
+        onPref(prefs.genSweepFreqEndHzProperty(), v -> {
+            setSweepFreqEnd(v);
+            publishSignalChanged();
+        });
+        onPref(prefs.genSweepDurationSecProperty(), v -> {
+            setSweepDurationSeconds(v);
+            publishSignalChanged();
+        });
+        onPref(prefs.genSweepFadeInSecProperty(), v -> {
+            setSweepFadeInSeconds(v);
+            publishSignalChanged();
+        });
+        onPref(prefs.genSweepFadeOutSecProperty(), v -> {
+            setSweepFadeOutSeconds(v);
+            publishSignalChanged();
+        });
+        onPref(prefs.genSweepLoopProperty(), v -> {
+            setSweepLoop(v);
+            publishSignalChanged();
+        });
+        onPref(prefs.genPlayFromLoopProperty(), filePlayer::setLoop);
+    }
+
+    /** Bus subscriptions that drive the engines. */
+    private void bindBus() {
+        MessageBus bus = MessageBus.instance();
+        // FLL trim: the FFT view publishes the corrected DDS frequency after
+        // each result; live-apply and republish as FLL_TRIM so the FFT
+        // worker keeps its averaging accumulator.
+        Consumer<Double> freqTrim = newHz -> {
+            if (newHz == null || !Double.isFinite(newHz)) return;
+            setFrequency(newHz);
+            bus.publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
+        };
+        onBus(Events.GENERATOR_FREQ_TRIM, freqTrim);
+        // Companion for the dual-tone second-tone FLL.
+        Consumer<Double> freqTrim2 = newHz -> {
+            if (newHz == null || !Double.isFinite(newHz)) return;
+            setDualToneFrequency2(newHz);
+            bus.publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
+        };
+        onBus(Events.GENERATOR_FREQ_TRIM_2, freqTrim2);
+        // FFT length changed: slide the running tone(s) onto the new bin
+        // grid without the user having to toggle the snap checkbox.
+        Consumer<Void> fftLength = ignored -> {
+            if (Preferences.instance().isGenSnapToFftBin()) reapplySnap();
+        };
+        onBus(Events.FFT_LENGTH_CHANGED, fftLength);
+        // The FreqResp sweep needs the DAC exclusively — stop both engines.
+        Consumer<Void> freqRespStarted = ignored -> stopEngines();
+        onBus(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStarted);
+        // "Is the generator running?" — read by the FFT worker to decide
+        // whether to anchor the fundamental to the generator's frequency.
+        bus.registerResponder(Events.GENERATOR_RUNNING,
+                (Supplier<Boolean>) this::isProducingSignal);
+        unsubscribes.add(() -> bus.unregisterResponder(Events.GENERATOR_RUNNING));
+    }
+
+    private <T> void onPref(Property<T> property, Consumer<T> action) {
+        property.addListener(action);
+        unsubscribes.add(() -> property.removeListener(action));
+    }
+
+    private <T> void onBus(String eventName, Consumer<T> listener) {
+        MessageBus bus = MessageBus.instance();
+        bus.subscribe(eventName, listener);
+        unsubscribes.add(() -> bus.unsubscribe(eventName, listener));
+    }
+
+    private void publishSignalChanged() {
+        MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT);
+    }
+
+    /** Detaches every Preferences / bus subscription and stops both
+     *  engines — called from the pane's dispose listener. */
+    public void shutdown() {
+        for (Runnable r : unsubscribes) r.run();
+        unsubscribes.clear();
+        stopEngines();
+    }
 
     /**
      * Reads the current generator settings + output device from {@link
@@ -69,6 +225,9 @@ public final class GeneratorController {
     public synchronized void start() {
         if (running) return;
         lastStartError = null;
+        // DDS tone and file playback share the output device — only one of
+        // them may drive it at a time.
+        filePlayer.stop();
 
         Preferences prefs = Preferences.instance();
         BackendPrefs bp = prefs.current();
@@ -389,6 +548,170 @@ public final class GeneratorController {
         if (target == GenSignalForm.LINEAR_SWEEP || target == GenSignalForm.LOG_SWEEP) return false;
         if (target == GenSignalForm.SINE_COMPENSATED) return false;
         return true;
+    }
+
+    /** Stops and immediately restarts the playback so a not-live-swappable
+     *  change takes effect.  On failure {@link #isRunning()} turns false
+     *  and {@link #getLastStartError()} carries the reason. */
+    public synchronized void restart() {
+        stop();
+        start();
+    }
+
+    /** Stops both engines — used when the FreqResp sweep claims the DAC
+     *  and on shutdown. */
+    public synchronized void stopEngines() {
+        stop();
+        filePlayer.stop();
+    }
+
+    /** True while either engine drives the output — the
+     *  {@link Events#GENERATOR_RUNNING} responder, read by the FFT worker's
+     *  fundamental anchoring. */
+    public boolean isProducingSignal() {
+        return running || filePlayer.isRunning();
+    }
+
+    // -------------------------------------------------------------------------
+    // File playback (shares the output device with the DDS tone)
+    // -------------------------------------------------------------------------
+
+    /** Starts WAV/FLAC file playback, stopping the DDS tone first.  Check
+     *  {@link #isFilePlaying()} and {@link #getFilePlayError()} after. */
+    public synchronized void startFilePlayback(File file, boolean loop) {
+        stop();
+        filePlayer.start(file, loop);
+    }
+
+    public void stopFilePlayback() {
+        filePlayer.stop();
+    }
+
+    public boolean isFilePlaying() {
+        return filePlayer.isRunning();
+    }
+
+    public String getFilePlayError() {
+        return filePlayer.getLastStartError();
+    }
+
+    // -------------------------------------------------------------------------
+    // Signal math (FFT-bin snap, period samples)
+    // -------------------------------------------------------------------------
+
+    /** The frequency the primary DDS should emit for the current prefs —
+     *  the bin-snapped value when snap-to-FFT-bin applies (SINE/DUAL_TONE),
+     *  else the raw entered value.  Mirrors {@link #start()}'s own
+     *  resolution; also feeds the pane's bracket label. */
+    public double effectiveFrequency() {
+        Preferences prefs = Preferences.instance();
+        GenSignalForm form = prefs.getGenSignalForm();
+        double raw = (form == GenSignalForm.DUAL_TONE)
+                ? prefs.getGenDualToneFreq1Hz()
+                : prefs.getGenFrequencyHz();
+        return FftBinSnap.snapIfEnabled(prefs, form,
+                prefs.current().getOutputSampleRate(), raw);
+    }
+
+    /** Samples in one waveform period at the current rate + entered
+     *  frequency; always ≥ 2 so duty-cycle math has something to work
+     *  with.  Feeds the pane's duty bracket label. */
+    public int periodSamples() {
+        Preferences prefs = Preferences.instance();
+        int sr = prefs.current().getOutputSampleRate();
+        double f = prefs.getGenFrequencyHz();
+        if (f <= 0.0 || sr <= 0) return 2;
+        return Math.max(2, (int) Math.round(sr / f));
+    }
+
+    /** Closest frequency the DDS rectangle can produce with an
+     *  integer-sample period — the pane's Frequency bracket label. */
+    public double correctedRectangleHz() {
+        int sr = Preferences.instance().current().getOutputSampleRate();
+        return (double) sr / periodSamples();
+    }
+
+    private double snapDualTone(double rawHz) {
+        Preferences prefs = Preferences.instance();
+        return FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
+                prefs.current().getOutputSampleRate(), rawHz);
+    }
+
+    /** Re-applies the FFT-bin snap to the running tone(s) — fired on a
+     *  snap toggle and on FFT-length changes. */
+    private void reapplySnap() {
+        setFrequency(effectiveFrequency());
+        Preferences prefs = Preferences.instance();
+        if (prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE) {
+            setDualToneFrequency2(snapDualTone(prefs.getGenDualToneFreq2Hz()));
+        }
+    }
+
+    /** Waveform pref change: live-swap when the generator supports it,
+     *  else a full stop+start — sweep and dual-tone set up dedicated DDS
+     *  state (second accumulator, sweep state machine) that
+     *  {@link #setForm} can't hot-swap. */
+    private void onFormChanged(GenSignalForm f) {
+        boolean needsRestart = requiresRestart(lastForm) || requiresRestart(f);
+        lastForm = f;
+        if (needsRestart && running) {
+            restart();
+        } else {
+            setForm(f);
+        }
+        publishSignalChanged();
+    }
+
+    private boolean requiresRestart(GenSignalForm f) {
+        return f == GenSignalForm.LINEAR_SWEEP || f == GenSignalForm.LOG_SWEEP
+                || f == GenSignalForm.DUAL_TONE;
+    }
+
+    // -------------------------------------------------------------------------
+    // Signal file export
+    // -------------------------------------------------------------------------
+
+    /** Renders the current generator settings to a WAV / FLAC / AIFF file
+     *  (extension picks the format).  Returns {@code null} on success,
+     *  else a human-readable failure reason — the same contract as
+     *  {@link #start()}'s {@code lastStartError}. */
+    public String exportSignal(String path) {
+        Preferences prefs = Preferences.instance();
+        GenSignalForm form = prefs.getGenSignalForm();
+        if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
+            return "Sweep waveforms cannot be exported to a file.";
+        }
+        int    sampleRate    = prefs.current().getOutputSampleRate();
+        int    bitDepth      = prefs.current().getOutputBitDepth();
+        int    ditherBits    = prefs.getGenDitherBits();
+        double frequency     = prefs.getGenFrequencyHz();
+        double amplitudeVRms = prefs.getGenAmplitudeVrms();
+        double duration      = prefs.getGenWavDurationSeconds();
+        try {
+            SignalGenerator gen;
+            if (form == GenSignalForm.SINE_COMPENSATED) {
+                String csv = prefs.getGenCorrectionsCsv();
+                if (csv == null || csv.isEmpty()) {
+                    return "Sine (compensated) needs a harmonics-correction CSV.  Pick one with the … button.";
+                }
+                gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms,
+                        prefs.getDacFsVoltageRms(), csv);
+            } else {
+                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms,
+                        prefs.getDacFsVoltageRms());
+            }
+            gen.setRectangleDuty(prefs.getGenRectangleDuty());
+            // Periodic forms truncate to an integer-period count; noise has
+            // no period — 0 makes the exporter use the raw duration.
+            double freqForTruncation = form.isPeriodic() ? frequency : 0.0;
+            long bytes = SignalFileExporter.export(gen, new File(path),
+                    sampleRate, bitDepth, duration, ditherBits, freqForTruncation);
+            log.info("File saved: {} ({} bytes)", path, bytes);
+            return null;
+        } catch (Exception ex) {
+            log.warn("Save failed", ex);
+            return ex.getMessage();
+        }
     }
 
     private DeviceRef findOutputDevice(String name) {
