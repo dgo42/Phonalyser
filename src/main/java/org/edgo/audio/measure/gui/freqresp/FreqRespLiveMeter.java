@@ -30,6 +30,8 @@ import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 
+import org.edgo.audio.measure.preferences.Preferences;
+
 import java.util.Locale;
 
 /**
@@ -78,14 +80,23 @@ public final class FreqRespLiveMeter extends Canvas {
      *  canvas, not clipped at the bottom edge. */
     private static final int MARGIN_BOTTOM = 18;
 
-    /** Exponential-moving-average smoothing factor applied to incoming
-     *  RMS values.  Closer to 1 → heavier smoothing; closer to 0 → no
-     *  smoothing.  0.85 wipes the low-frequency "teeth" from partial-
-     *  cycle blocks (each ~1024-sample block at 50 Hz captures a fraction
-     *  of one period and its raw RMS swings wildly) without lagging the
-     *  trace enough that the user can't see the sweep's amplitude
-     *  envelope. */
-    private static final double EMA_ALPHA = 0.95;
+    /** EMA smoothing time constant, expressed in PERIODS of the sweep's
+     *  instantaneous frequency.  The low-frequency "teeth" come from each
+     *  capture block holding only a fraction of one signal period (its raw
+     *  RMS swings between near-zero and the peak), so the right amount of
+     *  smoothing is proportional to the period: at 1 Hz this gives a ~5 s
+     *  time constant (super smooth), at 10 Hz 0.5 s, at 100 Hz 50 ms. */
+    private static final double SMOOTHING_PERIODS = 5.0;
+    /** Above this frequency the period count itself shrinks with
+     *  (corner/f)² — smoothing collapses to nothing within a fraction of
+     *  an octave.  Blocks up there already span several periods, and any
+     *  residual EMA caps how fast the trace can FALL (a linear-domain EMA
+     *  drops at most −20·log10(α) dB per block), which clipped the −80 dB
+     *  sinkhole of a swept notch to a shallow dent. */
+    private static final double SMOOTHING_HF_CORNER_HZ = 100.0;
+    /** Upper cap for the per-block EMA factor so the trace never freezes
+     *  entirely, however low the sweep starts. */
+    private static final double ALPHA_MAX = 0.999;
 
     private static final int MAX_POINTS = 4096;
 
@@ -97,28 +108,46 @@ public final class FreqRespLiveMeter extends Canvas {
     private final Font  labelFont;
 
     private final double totalDurationSec;
+    /** Sweep geometry for the time → instantaneous-frequency mapping that
+     *  drives the frequency-proportional smoothing. */
+    private final double leadInSec;
+    private final double sweepSec;
+    private final double startHz;
+    private final double stopHz;
 
     // Two parallel arrays grown together — avoids boxing.
     private final float[] timesSec = new float[MAX_POINTS];
     private final float[] levelsDb = new float[MAX_POINTS];
     private int           pointCount;
 
-    /** Smoothed RMS state for {@link #EMA_ALPHA}; seeded on the first
-     *  incoming sample so the trace starts at the right value instead
-     *  of ramping from 0 over several blocks. */
+    /** Smoothed RMS state; seeded on the first incoming sample so the
+     *  trace starts at the right value instead of ramping from 0 over
+     *  several blocks. */
     private double  emaRmsLin;
     private boolean emaSeeded;
+    /** Time of the previous sample — the EMA factor needs the block
+     *  interval. */
+    private double  lastTimeSec;
 
-    public FreqRespLiveMeter(Composite parent, double totalDurationSec) {
+    public FreqRespLiveMeter(Composite parent, double totalDurationSec,
+                             double leadInSec, double sweepSec,
+                             double startHz, double stopHz) {
         super(parent, SWT.NO_BACKGROUND | SWT.DOUBLE_BUFFERED);
         this.totalDurationSec = Math.max(0.001, totalDurationSec);
+        this.leadInSec        = Math.max(0.0, leadInSec);
+        this.sweepSec         = Math.max(1e-9, sweepSec);
+        this.startHz          = Math.max(0.001, startHz);
+        this.stopHz           = Math.max(this.startHz, stopHz);
         Display d = getDisplay();
 
         background = new Color(d, 0xFF, 0xFF, 0xFF);
         gridColor  = new Color(d, 0xD0, 0xD0, 0xD0);
         axisColor  = new Color(d, 0x60, 0x60, 0x60);
         textColor  = new Color(d, 0x20, 0x20, 0x20);
-        traceColor = new Color(d, 0x1B, 0x5E, 0x20);  // dark green — same family as the FreqResp compare trace
+        // Same colour as the FFT spectrum trace (user-configurable pref),
+        // so the live level reads as "the same signal, different lens".
+        int rgb = Preferences.instance().getFftLineColor();
+        traceColor = new Color(d, (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
 
         FontData fd = getFont().getFontData()[0];
         labelFont = new Font(d, fd.getName(), Math.max(7, fd.getHeight() - 1), SWT.NORMAL);
@@ -138,12 +167,12 @@ public final class FreqRespLiveMeter extends Canvas {
      *  the SWT UI thread; the caller is responsible for marshalling from
      *  the audio thread via {@link Display#asyncExec}.
      *
-     *  <p>The incoming linear RMS is run through an EMA filter first
-     *  ({@link #EMA_ALPHA}).  At low frequencies each captured block
-     *  contains only a partial cycle so the raw RMS swings wildly
-     *  between near-zero and the peak — without smoothing the trace
-     *  paints as a comb of vertical teeth.  EMA collapses that into a
-     *  steady envelope and is cheap (one multiply-add per block). */
+     *  <p>The incoming linear RMS is run through an EMA whose time
+     *  constant tracks the sweep's instantaneous frequency
+     *  ({@link #SMOOTHING_PERIODS} periods): heavy where single blocks
+     *  hold partial cycles (1–10 Hz would otherwise paint as a comb of
+     *  vertical teeth), fading to none once each block spans several
+     *  periods — so the envelope stays crisp over most of the sweep. */
     public void appendSample(double timeSec, double rmsLin) {
         if (isDisposed()) return;
         if (rmsLin < 0.0 || !Double.isFinite(rmsLin)) rmsLin = 0.0;
@@ -151,8 +180,14 @@ public final class FreqRespLiveMeter extends Canvas {
             emaRmsLin = rmsLin;
             emaSeeded = true;
         } else {
-            emaRmsLin = EMA_ALPHA * emaRmsLin + (1.0 - EMA_ALPHA) * rmsLin;
+            double dt = Math.max(0.0, timeSec - lastTimeSec);
+            double f  = instantaneousHz(timeSec);
+            double hfRatio = Math.min(1.0, SMOOTHING_HF_CORNER_HZ / f);
+            double periods = SMOOTHING_PERIODS * hfRatio * hfRatio;
+            double alpha = Math.min(ALPHA_MAX, Math.exp(-dt * f / periods));
+            emaRmsLin = alpha * emaRmsLin + (1.0 - alpha) * rmsLin;
         }
+        lastTimeSec = timeSec;
         double smoothed = emaRmsLin;
         double db = (smoothed > 0.0) ? 20.0 * Math.log10(smoothed) : DB_MIN;
         if (db < DB_MIN) db = DB_MIN;
@@ -182,10 +217,21 @@ public final class FreqRespLiveMeter extends Canvas {
     /** Resets the trace.  Used when the same meter widget is reused for
      *  a fresh capture. */
     public void clear() {
-        pointCount = 0;
-        emaRmsLin  = 0.0;
-        emaSeeded  = false;
+        pointCount  = 0;
+        emaRmsLin   = 0.0;
+        emaSeeded   = false;
+        lastTimeSec = 0.0;
         if (!isDisposed()) redraw();
+    }
+
+    /** The log sweep's instantaneous frequency at elapsed capture time
+     *  {@code t}: {@code startHz} during the lead-in, the logarithmic
+     *  interpolation across the sweep span, {@code stopHz} in the tail. */
+    private double instantaneousHz(double t) {
+        double tSweep = t - leadInSec;
+        if (tSweep <= 0) return startHz;
+        if (tSweep >= sweepSec) return stopHz;
+        return startHz * Math.pow(stopHz / startHz, tSweep / sweepSec);
     }
 
     private void onPaint(PaintEvent e) {
