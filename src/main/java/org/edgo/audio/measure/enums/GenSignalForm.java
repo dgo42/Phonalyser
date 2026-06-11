@@ -18,12 +18,30 @@
 
 package org.edgo.audio.measure.enums;
 
+import lombok.Getter;
+
 /** Waveform produced by the audio signal generator. */
 public enum GenSignalForm {
-    SINE, TRIANGLE, RECTANGLE, WHITE_NOISE, PINK_NOISE, PINK_NOISE_LINEAR, SINE_COMPENSATED,
-    LINEAR_SWEEP, LOG_SWEEP, DUAL_TONE;
+    SINE(true),
+    TRIANGLE(true),
+    RECTANGLE(true),
+    WHITE_NOISE(false),
+    PINK_NOISE(false),
+    PINK_NOISE_LINEAR(false),
+    SINE_COMPENSATED(true),
+    LINEAR_SWEEP(true),
+    LOG_SWEEP(true),
+    DUAL_TONE(true);
 
-    private GenSignalForm() {}
+    /** True for waveforms with a repeating period — the noise forms are the
+     *  exception.  Periodic forms truncate file exports to a whole number of
+     *  periods and keep the generator frequency field meaningful. */
+    @Getter
+    private final boolean periodic;
+
+    private GenSignalForm(boolean periodic) {
+        this.periodic = periodic;
+    }
 
     public static GenSignalForm fromString(String s) {
         return switch (s.toLowerCase()) {
