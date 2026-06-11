@@ -25,9 +25,8 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Widget;
-import org.edgo.audio.measure.gui.generator.NumericStepField;
+import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.bind.Property;
-import org.edgo.audio.measure.gui.widgets.StepSelector;
 
 /**
  * Two-way wiring between SWT controls and {@link Property} values.  Each helper
@@ -112,21 +111,6 @@ public final class Bindings {
         };
         property.addListener(onChange);
         field.addDisposeListener(e -> property.removeListener(onChange));
-    }
-
-    /** Two-way binds a value-mode {@link StepSelector} (free-form double with
-     *  snap-to-targets arrows / wheel) to a {@code Double} {@link Property}.
-     *  No-op for index-mode selectors, which carry no comparable double. */
-    public static void stepSelector(StepSelector selector, Property<Double> property) {
-        selector.setValue(property.get());
-        selector.addSelectionListener(e -> property.set(selector.getValue()));
-        Consumer<Double> onChange = v -> {
-            if (!selector.isDisposed() && Double.compare(selector.getValue(), v) != 0) {
-                selector.setValue(v);
-            }
-        };
-        property.addListener(onChange);
-        selector.addDisposeListener(e -> property.removeListener(onChange));
     }
 
     /** Two-way binds a group of mutually-exclusive toggle / radio

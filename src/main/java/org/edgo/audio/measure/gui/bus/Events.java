@@ -35,6 +35,14 @@ public final class Events {
      *  {@code Preferences.instance().getFftLength()}. */
     public static final String FFT_LENGTH_CHANGED = "fft.length.changed";
 
+    /** Fired once by the Preferences dialog's OK after the working copy is
+     *  committed — the audio backend, devices, sample rates or bit depths may
+     *  have changed.  No payload — subscribers read the fresh values from
+     *  {@code Preferences.instance().current()}.  Used by the numeric fields
+     *  whose bounds derive from the audio format (frequency ceilings at
+     *  Nyquist, the sweep-points series' sample-rate/2 entry). */
+    public static final String AUDIO_FORMAT_CHANGED = "preferences.audioFormat.changed";
+
     /** Prefix for pane-title click events.  The full event name is
      *  built by {@link #paneTitleClick(int)} from the ID passed to
      *  {@code PaneTitle}'s constructor.  Subscribers pick their pane

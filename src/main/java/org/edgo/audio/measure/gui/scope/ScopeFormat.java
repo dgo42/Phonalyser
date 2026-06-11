@@ -156,39 +156,6 @@ public class ScopeFormat {
     }
 
     /**
-     * Index of the entry in {@code values} whose parsed double is closest
-     * to {@code target} — used to seed the hysteresis selector from prefs.
-     */
-    public int nearestIndex(String[] values, double target) {
-        int best = 0;
-        double bestDist = Double.POSITIVE_INFINITY;
-        for (int i = 0; i < values.length; i++) {
-            double v = Double.parseDouble(values[i]);
-            double d = Math.abs(v - target);
-            if (d < bestDist) { bestDist = d; best = i; }
-        }
-        return best;
-    }
-
-    /**
-     * Parses a seconds value accepting an optional trailing "s" and either
-     * '.' or ',' as decimal separator.  Returns {@code null} on parse
-     * failure or non-positive values.
-     */
-    public Double parseSeconds(String s) {
-        if (s == null) return null;
-        String t = s.trim();
-        if (t.endsWith("s")) t = t.substring(0, t.length() - 1).trim();
-        if (t.isEmpty()) return null;
-        try {
-            double v = Double.parseDouble(t.replace(',', '.'));
-            return v <= 0 ? null : v;
-        } catch (NumberFormatException ex) {
-            return null;
-        }
-    }
-
-    /**
      * Number of samples the main view shows for a {@code timePerDiv} (in
      * seconds) and the buffer's {@code sampleRate} (Hz).  The display
      * spans 10 horizontal divisions, so {@code windowSeconds = 10 ·
@@ -211,35 +178,5 @@ public class ScopeFormat {
     public double preserveCanvasMiddle(double offsetFrac, double oldVpdiv, double newVpdiv) {
         if (oldVpdiv <= 0 || newVpdiv <= 0) return offsetFrac;
         return (offsetFrac - 0.5) * oldVpdiv / newVpdiv + 0.5;
-    }
-
-    /**
-     * "0.0", "0.1", … "5.0" — 0.1-division steps for the trigger-
-     * hysteresis selector.  Formatted with {@link Locale#ROOT} so the
-     * decimal separator is always a period (matches
-     * {@link Double#parseDouble}).
-     */
-    public String[] hysteresisDivSteps() {
-        int count = 51;
-        String[] out = new String[count];
-        for (int i = 0; i < count; i++) out[i] = String.format(Locale.ROOT, "%.1f", 0.1 * i);
-        return out;
-    }
-
-    /**
-     * Formats {@code v} as plain seconds with up to 3 decimal places,
-     * trailing zeros and dot stripped.  Used by the trigger-mode "auto
-     * timeout = X s" label.  Distinct from {@link #formatSeconds(double)}
-     * which switches to ms / µs / ns prefixes.
-     */
-    public String formatSecondsTrimmed(double v) {
-        String s = String.format(Locale.ROOT, "%.3f", v);
-        if (s.contains(".")) {
-            int end = s.length();
-            while (end > 0 && s.charAt(end - 1) == '0') end--;
-            if (end > 0 && s.charAt(end - 1) == '.') end--;
-            s = s.substring(0, end);
-        }
-        return s + " s";
     }
 }

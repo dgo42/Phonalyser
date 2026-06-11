@@ -30,7 +30,6 @@ import java.util.stream.IntStream;
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
-import org.edgo.audio.measure.enums.AmplitudeUnit;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenChangeCause;
@@ -1714,21 +1713,15 @@ public final class FftAnalyzerWorker {
 
 
     /** Computes the dBFS reference anchor passed into {@link FftAnalyzer}:
-     *  the user's manual fundamental is resolved to its dBV anchor exactly as
-     *  before, then converted to dBFS here at the boundary — the analyzer
-     *  speaks dBFS only.  Returns {@code NaN} (no anchor) unless
-     *  manual-fundamental mode is enabled. */
+     *  the manual fundamental (canonical Vrms — the field stores nothing
+     *  else, whatever unit the user typed in) is resolved to its dBV anchor,
+     *  then converted to dBFS here at the boundary — the analyzer speaks
+     *  dBFS only.  Returns {@code NaN} (no anchor) unless manual-fundamental
+     *  mode is enabled. */
     private double resolveFundRefDbFs(Preferences prefs) {
         if (prefs.isFftManualFundEnabled()) {
-            AmplitudeUnit unit = prefs.getFftManualFundUnit();
             double v = prefs.getFftManualFundVrms();
-            double dbv;
-            if (unit == AmplitudeUnit.DBV) {
-                dbv = v;
-            } else {
-                if (unit == AmplitudeUnit.MV) v *= 0.001;
-                dbv = (v > 0) ? 20.0 * Math.log10(v) : Double.NaN;
-            }
+            double dbv = (v > 0) ? 20.0 * Math.log10(v) : Double.NaN;
             return dbv - prefs.getDbvOffsetDb();   // NaN propagates
         }
         return Double.NaN;
