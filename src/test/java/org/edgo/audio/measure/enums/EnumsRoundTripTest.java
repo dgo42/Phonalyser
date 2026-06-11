@@ -40,7 +40,7 @@ class EnumsRoundTripTest {
     @Test
     void channel_valuesRoundTrip()             { check(Channel.values()); }
     @Test
-    void fftMagnitudeUnit_valuesRoundTrip()    { check(MagnitudeUnit.values()); }
+    void magnitudeUnit_valuesRoundTrip()       { check(MagnitudeUnit.values()); }
     @Test
     void fftOverlap_valuesRoundTrip()          { check(FftOverlap.values()); }
     @Test
