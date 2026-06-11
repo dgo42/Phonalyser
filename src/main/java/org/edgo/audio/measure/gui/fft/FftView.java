@@ -135,7 +135,13 @@ public final class FftView extends AbstractFreqDomainView {
     /** Count of completed analyses since the last reset / record-start. */
     private Label averagesCountLabel;
 
-    private FftAnalyzerWorker worker = null;
+    /** Controller owning the analyser worker, the frequency-lock loops and
+     *  the IMD analysis — the view issues commands / queries and renders.
+     *  Assigned exactly once in the constructor; NOT {@code final} because
+     *  the field-initializer lambdas below ({@code onGenChangeForFll},
+     *  {@code onResultReady}) read it and javac's definite-assignment
+     *  analysis rejects blank-final reads in initializers. */
+    private FftController controller;
 
     /** Loaded {@code .frc} corrections divided out of the spectrum and drawn
      *  as the overlay; constructor-injected by {@link FftPane} (IoC) and shared
@@ -150,18 +156,6 @@ public final class FftView extends AbstractFreqDomainView {
      *  rendering. */
     private long startRender;
     private boolean gotFftResult = false;
-
-    /** Closed-loop integrator that drives the DDS frequency onto the
-     *  nearest FFT bin centre.  Active only when snap-to-FFT-bin is on
-     *  AND the generator is running AND the worker is running.  Reset
-     *  on Record stop and on any user-initiated generator change.
-     *
-     *  <p>{@link #fll} tracks the SINE / dual-tone-tone-1 correction;
-     *  {@link #fll2} tracks the dual-tone tone-2 correction (used only
-     *  when the generator form is DUAL_TONE).  Each loop is reset
-     *  independently. */
-    private FrequencyAligner fll;
-    private FrequencyAligner fll2;
 
     /** Frequency-domain mains rejection for the DISPLAYED frame — the worker
      *  only tracks f0, this divides the comb's cached response out of the shown
@@ -199,17 +193,16 @@ public final class FftView extends AbstractFreqDomainView {
      *  Ignores FLL_TRIM (that's our own trim coming back round the bus). */
     private final Consumer<GenChangeCause> onGenChangeForFll = cause -> {
         if (cause == GenChangeCause.USER_INPUT) {
-            resetFrequencyLock();
+            // this-qualified: controller is a blank final at initializer
+            // time (assigned in the ctor); a simple-name read here fails
+            // javac's definite-assignment analysis.
+            this.controller.resetFrequencyLock();
             lastImd = null;
             resetStatistics();   // accumulator + (while recording) lastResult / lastImd
             syncExternalShell();
             if (!isDisposed()) redraw();
         }
     };
-    /** One analyzer instance for the view's lifetime — its internal scratch
-     *  buffer (noise-floor quickselect) is only reused this way.  Declared
-     *  before {@link #onResultReady}, whose initializer lambda reads it. */
-    private final ImdAnalyzer imdAnalyzer = new ImdAnalyzer();
 
     /** Subscription handler held as a field so the same instance is
      *  passed to both {@code subscribe} and {@code unsubscribe} — the
@@ -219,7 +212,9 @@ public final class FftView extends AbstractFreqDomainView {
      *  redraw — paint code reads {@link #lastResult} directly. */
     private final Consumer<FftResult> onResultReady = slot -> {
         if (isDisposed()) return;
-        if (worker != null) worker.uiGotResult();
+        // this-qualified controller reads throughout this initializer
+        // lambda — see onGenChangeForFll.
+        this.controller.resultConsumed();
         if (isRunning()) {
             // Post-average pipeline (mains → recompute → .frc → dBV), run ONCE
             // here on the DISPLAYED frame (post throttle + coalescing) — before
@@ -255,12 +250,7 @@ public final class FftView extends AbstractFreqDomainView {
             boolean prevTableModeIsImd = tableModeIsImd;
             Preferences prefs = Preferences.instance();
             tableModeIsImd = prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE;
-            lastImd = tableModeIsImd
-                    ? imdAnalyzer.analyze(slot,
-                            prefs.getGenDualToneFreq1Hz(),
-                            prefs.getGenDualToneFreq2Hz(),
-                            prefs.getDbvOffsetDb())
-                    : null;
+            lastImd = tableModeIsImd ? this.controller.analyzeImd(slot) : null;
             // Mode just flipped (THD ↔ IMD): refresh the extracted window's
             // title + size.  It's set at create time and on form-change, but
             // tableModeIsImd only updates here — one tick later — so without
@@ -268,7 +258,9 @@ public final class FftView extends AbstractFreqDomainView {
             if (tableModeIsImd != prevTableModeIsImd) syncExternalShell();
             redraw();
             update();
-            applyFrequencyLockLoop(slot);
+            // this-qualified: lastImd is declared below this initializer
+            // lambda (a simple-name read would be an illegal forward ref).
+            controller.applyFrequencyLock(slot, this.lastImd);
         }
     };
 
@@ -345,7 +337,8 @@ public final class FftView extends AbstractFreqDomainView {
     // hit the blit path via paintCachedStatic and never re-walk the
     // 64 k spectrum bins.
 
-    public FftView(Composite parent, FreqRespCorrectionStore correctionStore) {
+    public FftView(Composite parent, FreqRespCorrectionStore correctionStore,
+                   FftController controller) {
         // Pass prefs-driven BACKGROUND + SPECTRUM through the override
         // map so the base allocates the right colour once; everything
         // else uses the light-theme defaults from AbstractMeasurementView.
@@ -359,6 +352,7 @@ public final class FftView extends AbstractFreqDomainView {
                 ColorRole.LEFT_BTN_CHAN,  Preferences.instance().getOscLeftChannelColor(),
                 ColorRole.RIGHT_BTN_CHAN, Preferences.instance().getOscRightChannelColor()));
         this.correctionStore = correctionStore;
+        this.controller      = controller;
         // Chapter-level help anchor: Ctrl+F1 anywhere on the spectrum
         // canvas opens fft.html.  The header buttons / THD table /
         // crosshair aren't separate widgets (everything is custom-
@@ -366,7 +360,6 @@ public final class FftView extends AbstractFreqDomainView {
         // bottom-out at the chapter and the user navigates within.
         setData("helpAnchor", "fft.html");
         Display d = getDisplay();
-        worker = new FftAnalyzerWorker(d);
         // Paint-on-result: subscribe to FFT_RESULT_AVAILABLE (published
         // by the worker on the UI thread after each analysis) and force
         // the paint to fire synchronously rather than letting SWT
@@ -410,7 +403,7 @@ public final class FftView extends AbstractFreqDomainView {
         // generator stays at the stabilized frequency, the converged correction
         // is retained).  Only a real change reaches here (equals-guarded).
         Bindings.onChange(this, viewPrefs.fftAlignGeneratorProperty(),
-                mode -> { if (mode != AlignGenerator.NONE) resetFrequencyLock(); });
+                mode -> { if (mode != AlignGenerator.NONE) controller.resetFrequencyLock(); });
         // Log-axis remap, distortion-range corners (THD tile) — pure repaints,
         // no statistics reset.
         Bindings.onChange(this, viewPrefs.fftLogFreqAxisProperty(),      v -> redraw());
@@ -623,7 +616,6 @@ public final class FftView extends AbstractFreqDomainView {
         bus.unsubscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
         bus.unsubscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
         bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
-        worker.stop();
         disposePalette();
         if (monoFont       != null) monoFont.dispose();
         if (monoBoldFont   != null) monoBoldFont.dispose();
@@ -672,101 +664,19 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** Number of analyses completed since the last reset. */
     public int getCompletedAnalyses() {
-        return worker.getCompletedAnalyses();
+        return controller.completedAnalyses();
     }
 
     /** True if the analyser worker is currently running. */
     public boolean isRunning() {
-        return worker.isRunning();
+        return controller.isRecording();
     }
 
-    /** Starts the analyser on a daemon worker thread.  Idempotent. */
-    public void start() {
-        worker.start();
-    }
-
-    /** Stops the analyser and interrupts the worker.  Idempotent.
-     *  Also clears the FLL — the locked clock-drift estimate is only
-     *  meaningful while the capture is live; on the next Record start
-     *  it ramps up from zero again. */
-    public void stop() {
-        worker.stop();
-        clearBanner();              // a re-sync / overrun warning is moot once stopped
-        if (fll != null) fll.reset();
-        if (fll2 != null) fll2.reset();
-    }
-
-    /** Feeds the latest FFT result into the closed-loop integrator and
-     *  publishes the next generator frequency as a trim event.  Gated
-     *  on the three prerequisite prefs (snap-to-bin, fund-from-gen,
-     *  align-gen-to-freq-diff) AND the generator being actively
-     *  emitting; the UI mirrors the first three as a single checkbox
-     *  in the FFT settings tab whose enabled state already reflects
-     *  the first two prerequisites. */
-    private void applyFrequencyLockLoop(FftResult slot) {
-        if (slot == null) return;
-        Preferences prefs = Preferences.instance();
-        if (!prefs.isGenSnapToFftBin())       return;
-        if (!prefs.isFftFundFromGenerator())  return;
-        AlignGenerator mode = prefs.getFftAlignGenerator();
-        if (mode == AlignGenerator.NONE)      return;
-        if (!isGeneratorActive())             return;
-        // Swap the loop type to match the selected mode (a change resets both loops).
-        if (fll == null || fll.getMode() != mode) {
-            FrequencyAlignerFactory factory = FrequencyAlignerFactory.instance();
-            fll  = factory.create(mode);
-            fll2 = factory.create(mode);
-        }
-        MessageBus bus = MessageBus.instance();
-        // Branch on generator form: single-tone runs one loop, dual-tone two
-        // independent loops driven by the per-tone detected frequencies in lastImd.
-        boolean dualTone = prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE;
-        if (dualTone) {
-            if (lastImd == null) return;
-            double t1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
-                    slot.sampleRate, prefs.getGenDualToneFreq1Hz());
-            double t2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
-                    slot.sampleRate, prefs.getGenDualToneFreq2Hz());
-            if (t1 > 0 && Double.isFinite(lastImd.f1Hz)
-                    && plausibleFllMeasurement(t1, lastImd.f1Hz, slot.sampleRate, slot.fftSize)) {
-                fll.update(t1, lastImd.f1Hz, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
-                bus.publish(Events.GENERATOR_FREQ_TRIM,
-                        t1 + fll.getCorrection());
-            }
-            if (t2 > 0 && Double.isFinite(lastImd.f2Hz)
-                    && plausibleFllMeasurement(t2, lastImd.f2Hz, slot.sampleRate, slot.fftSize)) {
-                fll2.update(t2, lastImd.f2Hz, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
-                bus.publish(Events.GENERATOR_FREQ_TRIM_2,
-                        t2 + fll2.getCorrection());
-            }
-        } else {
-            if (!Double.isFinite(slot.fundamentalHzRefined)) return;
-            double target = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.SINE,
-                    slot.sampleRate, prefs.getGenFrequencyHz());
-            if (!(target > 0)) return;
-            if (!plausibleFllMeasurement(target, slot.fundamentalHzRefined,
-                    slot.sampleRate, slot.fftSize)) {
-                return;
-            }
-            fll.update(target, slot.fundamentalHzRefined, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
-            bus.publish(Events.GENERATOR_FREQ_TRIM,
-                    target + fll.getCorrection());
-        }
-    }
-
-    /** True when the measured frequency is close enough to the target to
-     *  plausibly be the generator's own tone — clock drift is ppm-scale.
-     *  A larger mismatch is a mis-measurement (a window still containing
-     *  the OLD signal draining through the output buffer after a form /
-     *  frequency switch, a harmonic mis-lock, a capture glitch); feeding
-     *  it to the FLL published corrections like "19 kHz target − 1 kHz
-     *  measured = +18 kHz" that trimmed the live generator to 37 kHz. */
-    private boolean plausibleFllMeasurement(double targetHz, double measuredHz,
-                                            int sampleRate, int fftSize) {
-        double binHz = sampleRate / (double) fftSize;
-        double maxErrHz = Math.max(FLL_MAX_ERROR_BINS * binHz,
-                targetHz * FLL_MAX_ERROR_PPM * 1e-6);
-        return Math.abs(measuredHz - targetHz) <= maxErrHz;
+    /** Clears the status banner — a re-sync / overrun warning is moot
+     *  once recording stopped; the pane calls this alongside
+     *  {@code controller.stopRecording()}. */
+    public void clearWarningBanner() {
+        clearBanner();
     }
 
     /** True when the audio generator is currently producing a signal.
@@ -775,14 +685,14 @@ public final class FftView extends AbstractFreqDomainView {
      *  {@code true} when no responder is registered.  Used by the THD
      *  table to decide whether to draw the generator-anchored Δf row. */
     public boolean isGeneratorActive() {
-        return worker.isGeneratorActive();
+        return controller.isGeneratorActive();
     }
 
     /** Fraction (0..1) of the data needed for the *current* FFT frame
      *  that has already been captured.  Drives the "NN%" indicator next
      *  to the magnitude-unit combo. */
     public double getNextFrameProgress() {
-        return worker.getNextFrameProgress();
+        return controller.nextFrameProgress();
     }
 
     /** Clears the completed-analyses counter, drops the retained
@@ -796,10 +706,10 @@ public final class FftView extends AbstractFreqDomainView {
      *  then reset statistics to collect a clean average at near-zero
      *  frequency difference.  Resetting the FLL here would throw away
      *  exactly that converged correction.  The FLL is reset only when
-     *  align is turned ON ({@link #resetFrequencyLock()}) or the record
-     *  is restarted ({@link #stop()}). */
+     *  align is turned ON ({@code controller.resetFrequencyLock()}) or
+     *  recording is restarted ({@code controller.stopRecording()}). */
     public void resetStatistics() {
-        worker.resetStatistics();
+        controller.resetStatistics();
         // Drop the retained result so the readouts (fundamental, THD,
         // SNR, harmonics) and the plotted curve clear immediately and
         // repopulate from the fresh accumulation — otherwise the stale
@@ -816,16 +726,6 @@ public final class FftView extends AbstractFreqDomainView {
         if (d != null && !d.isDisposed()) {
             d.asyncExec(() -> { if (!isDisposed()) redraw(); });
         }
-    }
-
-    /** Resets the frequency-lock loop(s) so alignment converges fresh
-     *  from zero.  Called when the user turns "align generator to
-     *  frequency difference" ON — kept separate from
-     *  {@link #resetStatistics()} so a manual statistics reset keeps
-     *  the converged alignment intact. */
-    public void resetFrequencyLock() {
-        if (fll != null) fll.reset();
-        if (fll2 != null) fll2.reset();
     }
 
     /** Post-average pipeline, run ONCE per DISPLAYED frame (the worker now hands
@@ -2064,7 +1964,7 @@ public final class FftView extends AbstractFreqDomainView {
                                          boolean logFreq) {
         Preferences prefs = Preferences.instance();
         return new TraceFingerprint(
-                r, worker.getCompletedAnalyses(), lastImd,
+                r, controller.completedAnalyses(), lastImd,
                 area.width, area.height, unit,
                 freqMin, freqMax, magTop, magBot, logFreq,
                 prefs.isFftDistMinEnabled(), prefs.isFftDistMaxEnabled(),

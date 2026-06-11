@@ -72,6 +72,10 @@ public final class FftPane {
     private PaneTitle title;
     @Getter
     private FftView         view;
+    /** Controller owning the analyser worker, the frequency-lock loops and
+     *  the .fft file round-trip; built here (with the pane's worker) and
+     *  injected into the view + tab control. */
+    private final FftController controller;
     private FlatScrollbar   freqScrollbar;
     private FlatScrollbar   magScrollbar;
 
@@ -156,7 +160,12 @@ public final class FftPane {
         FreqRespCorrectionStore correctionStore = new FreqRespCorrectionStore("FFT",
                 liveCapture ? () -> MessageBus.instance().publish(Events.FFT_CALIBRATION_CHANGED)
                             : null);
-        view = new FftView(plotRow, correctionStore);
+        // The pane builds the analyser worker (its result hand-off marshals
+        // through the SWT Display) and injects it into the controller, which
+        // owns its lifecycle plus the FLL / IMD / .fft-file concerns; the
+        // view and tab control receive the controller for commands/queries.
+        controller = new FftController(new FftAnalyzerWorker(d), correctionStore);
+        view = new FftView(plotRow, correctionStore, controller);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);
         magScrollbar.setMinimum(0);
         magScrollbar.setMaximum(SCROLL_RANGE);
@@ -219,7 +228,8 @@ public final class FftPane {
         // the chart, scrollbars and Record button.  Cross-pane concerns (stop
         // recording on file load, open the screenshot dialog) are routed back
         // here over the MessageBus.
-        toolbarTabs = new FftTabControl(toolbarRow, view, liveCapture, correctionStore);
+        toolbarTabs = new FftTabControl(toolbarRow, view, liveCapture, correctionStore,
+                controller);
         toolbarTabs.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         // Collapsing the tab body (strip double-click / Enter, or the
         // screenshot path) frees vertical space — re-flow the pane so the
@@ -278,7 +288,7 @@ public final class FftPane {
             bus2.unsubscribe(Events.FFT_SCREENSHOT_REQUESTED,      screenshotRequestedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
-            view.stop();   // the worker releases its shared-capture reference
+            controller.shutdown();   // the worker releases its shared-capture reference
         });
 
         // Re-layout once the event loop spins up.  At constructor exit
@@ -379,8 +389,8 @@ public final class FftPane {
      *  device, already-busy device, etc.) — detected via {@link FftView#isRunning}. */
     private void recordOn() {
         if (recordButton == null || recordButton.isDisposed()) return;
-        view.start();
-        if (!view.isRunning()) {
+        controller.startRecording();
+        if (!controller.isRecording()) {
             recordButton.setSelection(false);
             return;
         }
@@ -411,7 +421,8 @@ public final class FftPane {
      *  when the analyser's stop-after-N counter trips. */
     private void recordOff() {
         if (recordButton.isDisposed()) return;
-        view.stop();
+        controller.stopRecording();
+        view.clearWarningBanner();   // a re-sync / overrun warning is moot once stopped
         recordButton.setSelection(false);
         recordButton.setImage(recordDim);
     }
