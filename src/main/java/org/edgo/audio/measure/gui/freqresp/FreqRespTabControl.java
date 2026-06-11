@@ -384,6 +384,11 @@ public final class FreqRespTabControl extends Composite {
         // Two-way bind; the floor clamp (≥ 0.0001 V) and the tab-tile refresh
         // ride an onChange so a sub-floor text entry is corrected in the pref.
         Bindings.stepField(ampField, prefs.freqRespAmplitudeVrmsProperty());
+        // dBV display choice: seed from the persisted pref and persist the
+        // user's typed unit (the field fires on display-unit changes too).
+        ampField.setLogDisplay(prefs.isFreqRespAmplitudeDbvDisplay());
+        ampField.addSelectionListener(e ->
+                prefs.setFreqRespAmplitudeDbvDisplay(ampField.isLogDisplay()));
         Bindings.onChange(toolbarTabs, prefs.freqRespAmplitudeVrmsProperty(), v -> {
             if (v < 0.0001) prefs.setFreqRespAmplitudeVrms(0.0001);
             toolbarTabs.refreshTab(TAB_FREQRESP_SETTINGS);
@@ -422,9 +427,12 @@ public final class FreqRespTabControl extends Composite {
         addLabel(g, I18n.t("freqResp.settings.points"));
         // List field replacing the old preset dropdown + "Manual…" prompt:
         // the wheel jumps along the power-of-2 presets (plus the runtime
-        // "sample rate / 2" entry), free typing covers everything between.
+        // "Nyquist/2" entry, shown as text), free typing covers everything
+        // between.
         NumericStepField pointsField = new NumericStepField(g, UnitFamily.NONE,
                 SWEEP_POINTS_MIN, SWEEP_POINTS_MAX, sweepPointSeries(), 0, 110);
+        pointsField.setNamedValue(nyquistPointCount(),
+                I18n.t("freqResp.settings.points.nyquistHalf"));
         pointsField.setToolTipText(I18n.t("freqResp.settings.points.tooltip"));
         pointsField.setLayoutData(comboGd());
         Bindings.stepFieldInt(pointsField, prefs.freqRespSweepPointsProperty());
@@ -472,6 +480,8 @@ public final class FreqRespTabControl extends Composite {
             startField.setMax(nyquist);
             stopField.setMax(nyquist);
             pointsField.setSeries(sweepPointSeries());
+            pointsField.setNamedValue(nyquistPointCount(),
+                    I18n.t("freqResp.settings.points.nyquistHalf"));
         };
         MessageBus.instance().subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
         addDisposeListener(e ->
@@ -530,14 +540,20 @@ public final class FreqRespTabControl extends Composite {
         return f;
     }
 
-    /** Sweep-point series for the points field: the power-of-2 presets plus
-     *  the current "sample rate / 2" entry (the model sorts its copy). */
+    /** Sweep-point series for the points field in wheel order: the
+     *  {@link #nyquistPointCount()} entry FIRST (matching the old dropdown),
+     *  then the ascending power-of-2 presets. */
     private double[] sweepPointSeries() {
         double[] s = new double[SWEEP_POINT_SERIES.length + 1];
-        System.arraycopy(SWEEP_POINT_SERIES, 0, s, 0, SWEEP_POINT_SERIES.length);
-        s[SWEEP_POINT_SERIES.length] =
-                Preferences.instance().current().getInputSampleRate() / 2.0;
+        s[0] = nyquistPointCount();
+        System.arraycopy(SWEEP_POINT_SERIES, 0, s, 1, SWEEP_POINT_SERIES.length);
         return s;
+    }
+
+    /** The rate-derived sweep-points entry — one point per FFT bin up to
+     *  Nyquist (sample rate / 2 points), rendered as the "Nyquist/2" label. */
+    private double nyquistPointCount() {
+        return Preferences.instance().current().getInputSampleRate() / 2.0;
     }
 
     /** Selects the combo row whose FFT-size value matches the given
