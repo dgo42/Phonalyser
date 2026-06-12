@@ -55,7 +55,10 @@ import org.edgo.audio.measure.wav.PcmFileLoader;
 public final class FilePlayController {
 
     private volatile Thread        playThread;
-    private final    AtomicBoolean stopFlag = new AtomicBoolean(false);
+    /** Per-session stop flag — a fresh instance per start so a stop request
+     *  to a previous (possibly join-timed-out) play thread can never be
+     *  revoked by the next session's reset. */
+    private volatile AtomicBoolean stopFlag = new AtomicBoolean(false);
     @Getter
     private volatile boolean       running;
     /** Live-updates the loop flag.  Picked up at the next EOF check by the play thread. */
@@ -73,13 +76,19 @@ public final class FilePlayController {
     public synchronized void start(File file, boolean loop) {
         if (running) return;
         lastStartError = null;
+        Thread old = playThread;
+        if (old != null && old.isAlive()) {
+            lastStartError = "The previous playback is still shutting down — try again in a moment.";
+            return;
+        }
         if (file == null || !file.isFile()) {
             lastStartError = "Pick a file first (the … button).";
             return;
         }
         this.loop = loop;
-        stopFlag.set(false);
-        Thread t = new Thread(() -> playLoop(file), "file-play");
+        AtomicBoolean sessionStop = new AtomicBoolean(false);
+        stopFlag = sessionStop;
+        Thread t = new Thread(() -> playLoop(file, sessionStop), "file-play");
         t.setDaemon(true);
         t.setPriority(Thread.MAX_PRIORITY);
         playThread = t;
@@ -94,12 +103,18 @@ public final class FilePlayController {
         if (t != null) {
             try { t.join(2_000); }
             catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+            if (t.isAlive()) {
+                // Keep the reference so start() refuses a second session while
+                // this one is wedged; its session stop flag stays set.
+                log.warn("File-play thread did not exit within 2 s — restart refused until it does.");
+            } else {
+                playThread = null;
+            }
         }
-        playThread = null;
-        running    = false;
+        running = false;
     }
 
-    private void playLoop(File file) {
+    private void playLoop(File file, AtomicBoolean sessionStop) {
         SourceDataLine line = null;
         AudioInputStream in = null;
         try {
@@ -114,7 +129,7 @@ public final class FilePlayController {
                     file.getName(), fmt, loop ? ", looping" : "");
 
             byte[] buf = new byte[8192];
-            while (!stopFlag.get()) {
+            while (!sessionStop.get()) {
                 int n = in.read(buf, 0, buf.length);
                 if (n <= 0) {
                     if (!loop) break;        // volatile — re-read each EOF
@@ -136,8 +151,12 @@ public final class FilePlayController {
             }
             Closeables.closeQuietly(line);
             Closeables.closeQuietly(in);
-            running = false;
-            MessageBus.instance().publish(Events.FILE_PLAY_STOPPED);
+            // A join-timed-out session finishing late must not clear the
+            // flag (or notify) for a session started after it.
+            if (Thread.currentThread() == playThread) {
+                running = false;
+                MessageBus.instance().publish(Events.FILE_PLAY_STOPPED);
+            }
         }
     }
 }

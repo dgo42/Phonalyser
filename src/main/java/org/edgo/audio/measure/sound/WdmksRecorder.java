@@ -84,6 +84,11 @@ public class WdmksRecorder implements AudioCapture {
     /** PortAudio status-flag counters since the last consumer log. */
     private final AtomicLong        paInputOverflowCount  = new AtomicLong();
     private final AtomicLong        paInputUnderflowCount = new AtomicLong();
+    /** Audio-thread-only spare: keeps a queue-rejected buffer for the next
+     *  callback instead of offering it back to {@link #bufferPool} — the
+     *  pool ring is SPSC with the consume thread as its sole producer, and
+     *  a second producer can silently lose a slot. */
+    private byte[] callbackSpare;
 
     /**
      * Audio-thread callback. Pulls a same-sized scratch buffer from
@@ -100,13 +105,15 @@ public class WdmksRecorder implements AudioCapture {
         if ((flags & PortAudio.paInputUnderflow) != 0) paInputUnderflowCount.incrementAndGet();
         int frames = frameCount.intValue();
         int bytes  = frames * frameSize;
-        byte[] buf = bufferPool.poll();
+        byte[] buf = callbackSpare;
+        callbackSpare = null;
+        if (buf == null) buf = bufferPool.poll();
         if (buf == null || buf.length != bytes) buf = new byte[bytes];
         input.read(0, buf, 0, bytes);
         if (!queue.offer(buf)) {
             overflowCount.incrementAndGet();
             droppedFramesSinceLog.addAndGet(frames);
-            bufferPool.offer(buf);
+            callbackSpare = buf;
         }
         return PortAudio.paContinue;
     };

@@ -97,6 +97,12 @@ public final class FftAnalyzerWorker {
      *  average, and its stale fundamental would feed the FLL one garbage
      *  trim (enough to drag the live generator far off-frequency). */
     private final    AtomicLong         resetEpoch = new AtomicLong();
+    /** Set by {@link #resetStatistics()} while the worker runs; consumed at
+     *  the top of the next tick, where the worker itself wipes the
+     *  accumulator / mains tracking.  Those structures are worker-owned and
+     *  not thread-safe — wiping them from the resetting thread mid-tick can
+     *  NPE the accumulate loops or leave the detector half-reset. */
+    private final    AtomicBoolean      resetPending = new AtomicBoolean();
     /** Single-slot, coalescing handoff of the latest result to the UI thread.
      *  The worker overwrites it every tick (newest wins) and posts ONE drain
      *  runnable only on the empty→full transition, so the SWT asyncExec queue
@@ -1246,18 +1252,33 @@ public final class FftAnalyzerWorker {
         worker.start();
     }
 
-    /** Stops the analyser and interrupts the worker.  Idempotent. */
+    /** Stops the analyser and interrupts the worker.  Idempotent.  Joins the
+     *  worker (it exits within one tick — the interrupt breaks any sleep) so
+     *  the teardown below can't race a tick still in flight. */
     public synchronized void stop() {
         running = false;
-        if (worker != null) {
-            worker.interrupt();
-            worker = null;
+        Thread w = worker;
+        worker = null;
+        if (w != null) {
+            w.interrupt();
+            try {
+                w.join(3_000);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
         }
         MessageBus bus = MessageBus.instance();
         bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, invalidateOnGenChange);
         bus.unsubscribe(Events.FFT_CALIBRATION_CHANGED, invalidateOnEvent);
-        discardCacheAndPool();
-        resetAccumulator();
+        if (w == null || !w.isAlive()) {
+            discardCacheAndPool();
+            resetAccumulator();
+        } else {
+            // A monster-FFT tick outlived the join: leave its state alone and
+            // let the next start's pending reset wipe it on the worker side.
+            log.warn("FFT worker did not exit within 3 s — cache/accumulator cleanup deferred to the next start.");
+            resetPending.set(true);
+        }
         reader = null;
         if (captureHeld) {
             bus.publish(Events.CAPTURE_RELEASE);
@@ -1276,8 +1297,23 @@ public final class FftAnalyzerWorker {
         firstFrameDone        = false;
         winValid              = false;
         reanchorPending       = true;
-        recycleAndClearCache();
+        recycleAndClearCache();         // lock-guarded — safe from any thread
+        if (running) {
+            // Worker-owned state (accumulator, mains tracking) is wiped by the
+            // worker itself at the next tick boundary — see resetPending.
+            resetPending.set(true);
+        } else {
+            resetWorkerOwnedState();    // no worker thread to race with
+        }
+    }
+
+    /** Wipes the worker-owned, non-thread-safe analysis state.  Called only
+     *  on the worker thread (via {@link #resetPending}) or while no worker
+     *  is alive ({@link #resetStatistics} when stopped, {@link #stop} after
+     *  the join). */
+    private void resetWorkerOwnedState() {
         resetAccumulator();
+        completedAnalyses = 0;          // re-zero: a racing worker-side ++ may have resurrected a stale count
         if (mainsComb != null) mainsComb.resetTracking();   // re-lock mains from scratch
     }
 
@@ -1326,6 +1362,9 @@ public final class FftAnalyzerWorker {
                 try {
                     sleepMs = doAnalysis();
                 } catch (Throwable t) {
+                    if (log.isWarnEnabled()) {
+                        log.warn("FFT analysis tick failed", t);
+                    }
                     sleepMs = IDLE_TICK_MS;
                 }
             }
@@ -1353,12 +1392,23 @@ public final class FftAnalyzerWorker {
             resetStatistics();
         }
         lastGeneratorActive = genActiveNow;
+        // Consume a pending foreign reset (or the transition reset just
+        // above): the accumulator / mains-tracking wipe runs HERE, on the
+        // worker thread, so it can never race the accumulate loops.
+        if (resetPending.getAndSet(false)) {
+            resetWorkerOwnedState();
+        }
         // Stamp AFTER the transition reset above so this tick doesn't
         // discard itself; see the epoch check below the analyze call.
         final long epochAtStart = resetEpoch.get();
 
-        if (reader == null) return IDLE_TICK_MS;
-        int sampleRate = reader.getSampleRate();
+        // Single per-tick snapshot: stop() nulls the field (and a quick
+        // stop→start swaps in a NEW cursor) while a tick is in flight —
+        // re-reading the field mid-tick would let an outgoing worker consume
+        // from the new worker's cursor.
+        final SignalBufferReader rdr = reader;
+        if (rdr == null) return IDLE_TICK_MS;
+        int sampleRate = rdr.getSampleRate();
         if (sampleRate <= 0) return IDLE_TICK_MS;
 
         Preferences prefs = Preferences.instance();
@@ -1391,7 +1441,7 @@ public final class FftAnalyzerWorker {
         if (hop < 1) hop = 1;
         int hopSamples = (int) Math.max(1, Math.round(hop));
         int needed = (int) Math.ceil(fftLength + (averages - 1) * hop);
-        needed = Math.min(needed, reader.getCapacity());
+        needed = Math.min(needed, rdr.getCapacity());
 
         Channel channel = prefs.getFftChannel();
         boolean wantLeft = (channel == Channel.L);
@@ -1401,7 +1451,7 @@ public final class FftAnalyzerWorker {
         // generator stops).  Done on the worker thread to keep the cursor's
         // read position single-owner even though resets arrive from others.
         if (reanchorPending) {
-            reader.seekToLatest();
+            rdr.seekToLatest();
             reanchorPending = false;
             winValid = false;
         }
@@ -1414,7 +1464,7 @@ public final class FftAnalyzerWorker {
             if (winBuf.length != needed) winBuf = new float[needed];
         }
 
-        long avail = reader.available();
+        long avail = rdr.available();
         if (avail == SignalBufferReader.OVERRUN) {
             // The writer lapped the cursor — the contiguous stream tore (the
             // worker fell a full ring behind).  Drop the cross-tick accumulator
@@ -1422,7 +1472,7 @@ public final class FftAnalyzerWorker {
             // restarts from a fresh unbroken span (overlap can only resume once
             // there are no breaks).  A reset the user can SEE — not a silent
             // torn-read glitch.
-            onCaptureOverrun(reader);
+            onCaptureOverrun(rdr);
             return IDLE_TICK_MS;
         }
 
@@ -1432,11 +1482,11 @@ public final class FftAnalyzerWorker {
             if (avail < needed) {
                 return Math.max(20, msForSamples((int) (needed - avail), sampleRate));
             }
-            int got = reader.read(needed, wantLeft ? winBuf : null, wantLeft ? null : winBuf);
-            if (got == SignalBufferReader.OVERRUN) { onCaptureOverrun(reader); return IDLE_TICK_MS; }
+            int got = rdr.read(needed, wantLeft ? winBuf : null, wantLeft ? null : winBuf);
+            if (got == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
             if (got < needed) return IDLE_TICK_MS;        // gated by avail≥needed; defensive
             winLen      = got;
-            winAbsStart = reader.getReadPos() - got;
+            winAbsStart = rdr.getReadPos() - got;
             winValid    = true;
         } else {
             // Slide forward exactly one hop: pull the fresh hop, drop the oldest
@@ -1446,8 +1496,8 @@ public final class FftAnalyzerWorker {
                 return Math.max(20, msForSamples(hopSamples - (int) avail, sampleRate));
             }
             if (hopBuf.length != hopSamples) hopBuf = new float[hopSamples];
-            int got = reader.read(hopSamples, wantLeft ? hopBuf : null, wantLeft ? null : hopBuf);
-            if (got == SignalBufferReader.OVERRUN) { onCaptureOverrun(reader); return IDLE_TICK_MS; }
+            int got = rdr.read(hopSamples, wantLeft ? hopBuf : null, wantLeft ? null : hopBuf);
+            if (got == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
             if (got < hopSamples) return IDLE_TICK_MS;    // gated by avail≥hop; defensive
             System.arraycopy(winBuf, hopSamples, winBuf, 0, winLen - hopSamples);
             System.arraycopy(hopBuf, 0, winBuf, winLen - hopSamples, hopSamples);
@@ -1616,11 +1666,20 @@ public final class FftAnalyzerWorker {
                     lastRejectBlockDbFs = dbgBlock;
                     lastRejectGates     = spectralDetector.gates();
                 }
-                onSignalDiscontinuity(reader);
+                onSignalDiscontinuity(rdr);
                 return IDLE_TICK_MS;
             }
             r.gates         = spectralDetector.gates();   // debug overlay snapshot
             r.gateBlockDbFs = dbgBlock;                    // current accepted block (pre-average)
+        }
+        // Second epoch gate: the detector pass above takes tens of ms at large
+        // fftSize — a reset landing there must still keep this straddling
+        // window OUT of the freshly cleared accumulator.
+        if (epochAtStart != resetEpoch.get()) {
+            if (log.isInfoEnabled()) {
+                log.info("Signal changed mid-analysis — straddling window discarded before accumulation");
+            }
+            return IDLE_TICK_MS;
         }
         boolean accumulated = accumulate
                 && accumulateIntoForeverBuffer(r, samplesAbsStart, coherent, targetFrames);
@@ -1646,7 +1705,7 @@ public final class FftAnalyzerWorker {
         // does NOT need to.  Skip it while the capture backlog is high — catch up
         // rather than overrun — throttle it to DISPLAY_MIN_NANOS when caught up,
         // but force it by DISPLAY_MAX_NANOS so the view never freezes.
-        long backlog   = reader.getWritePos() - reader.getReadPos();
+        long backlog   = rdr.getWritePos() - rdr.getReadPos();
         long sinceShow = System.nanoTime() - lastShowNanos;
         boolean showNow = paused.get()
                 || sinceShow >= DISPLAY_MAX_NANOS
@@ -1673,7 +1732,7 @@ public final class FftAnalyzerWorker {
                 : Double.NaN;
         r.channelLeft      = wantLeft;
         r.samplesAbsStart  = samplesAbsStart;   // for the FLL's real-time dt
-        r.writePos         = reader.getWritePos();   // live capture head — where a correction issued now lands
+        r.writePos         = rdr.getWritePos();   // live capture head — where a correction issued now lands
         r.gateRejectDbFs   = lastRejectBlockDbFs;   // debug: last gate-rejected block + verdict
         r.gateRejectGates  = lastRejectGates;
 
@@ -1682,8 +1741,16 @@ public final class FftAnalyzerWorker {
         // and the view deep-copies on receipt.  publishResult coalesces, so a
         // slow repaint can't pile spectra up on the asyncExec queue.
         if (log.isWarnEnabled() && DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
-            log.warn("1. FFT analyze took {} ms", 
+            log.warn("1. FFT analyze took {} ms",
                     String.format("%.2f", (System.nanoTime() - startAnalyze) / 1_000_000.0));
+        }
+        // Final epoch gate before the hand-off: a stale fundamental published
+        // after a reset would feed the FLL one garbage trim.
+        if (epochAtStart != resetEpoch.get()) {
+            if (log.isInfoEnabled()) {
+                log.info("Signal changed mid-analysis — straddling window discarded before publish");
+            }
+            return IDLE_TICK_MS;
         }
         publishResult(r);
         return msForSamples(hopSamples, sampleRate);

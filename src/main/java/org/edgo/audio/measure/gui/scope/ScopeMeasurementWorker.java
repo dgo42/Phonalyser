@@ -19,6 +19,7 @@
 package org.edgo.audio.measure.gui.scope;
 
 import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import lombok.Getter;
@@ -72,7 +73,10 @@ public final class ScopeMeasurementWorker {
     private volatile SignalBufferReader reader;
 
     private Thread          measThread;
-    private volatile boolean measThreadRunning;
+    /** Per-session run flag — a fresh instance per {@link #start()}, captured
+     *  by the loop, so a join-timed-out predecessor polling its own (stale)
+     *  flag can never be revived by the next start. */
+    private volatile AtomicBoolean measThreadRunning = new AtomicBoolean(false);
 
     @Getter
     private volatile SignalMeasurements lastMeasResult;
@@ -144,15 +148,16 @@ public final class ScopeMeasurementWorker {
      * {@code measThreadRunning == true} from a dying thread).
      */
     public synchronized void start() {
-        if (measThreadRunning || measThread != null) {
+        if (measThreadRunning.get() || measThread != null) {
             stop();
         }
-        measThreadRunning = true;
+        AtomicBoolean session = new AtomicBoolean(true);
+        measThreadRunning = session;
         // Clear stale state so the first paint after start doesn't show
         // measurements from the previous session.
         lastMeasResult = null;
         clearHistory();
-        Thread t = new Thread(this::measurementLoop, "osc-measurement");
+        Thread t = new Thread(() -> measurementLoop(session), "osc-measurement");
         t.setDaemon(true);
         t.start();
         measThread = t;
@@ -160,7 +165,7 @@ public final class ScopeMeasurementWorker {
 
     /** Stops the worker and waits up to 2 s for it to exit.  Idempotent. */
     public synchronized void stop() {
-        measThreadRunning = false;
+        measThreadRunning.set(false);
         Thread t = measThread;
         if (t != null) {
             try { t.join(2000); } catch (InterruptedException ignored) {
@@ -275,9 +280,9 @@ public final class ScopeMeasurementWorker {
      * (drift-compensated) so the avg / min / max / σ stats are evenly
      * spaced even if a single compute occasionally overruns the period.
      */
-    private void measurementLoop() {
+    private void measurementLoop(AtomicBoolean sessionRunning) {
         long nextWake = System.nanoTime() + MEAS_COMPUTE_PERIOD_NANOS;
-        while (measThreadRunning) {
+        while (sessionRunning.get()) {
             long now = System.nanoTime();
             long sleepNs = nextWake - now;
             if (sleepNs > 0) {
@@ -288,7 +293,7 @@ public final class ScopeMeasurementWorker {
                     return;
                 }
             }
-            if (!measThreadRunning) return;
+            if (!sessionRunning.get()) return;
             try {
                 computeMeasurementOnce();
             } catch (RuntimeException ex) {
