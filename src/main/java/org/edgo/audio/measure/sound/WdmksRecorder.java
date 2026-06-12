@@ -297,64 +297,6 @@ public class WdmksRecorder implements AudioCapture {
         }
     }
 
-    /**
-     * Lock-free single-producer single-consumer ring buffer of {@code byte[]}
-     * references.  Replaces {@code LinkedBlockingQueue} / {@code
-     * ConcurrentLinkedQueue} so the audio thread and the consume thread
-     * exchange chunks without any per-call {@code Node} allocation.
-     *
-     * <p>Capacity must be a power of two — {@link #mask} reduces the
-     * modulo-arithmetic to a bitwise AND on the hot path.  Memory ordering
-     * is provided by the {@code volatile} {@link #writePos} / {@link
-     * #readPos} cursors: a release-store of {@code writePos} happens-before
-     * the matching acquire-load by the consumer, so a slot written by the
-     * producer is visible to the consumer when it reads at that index.
-     */
-    private static final class SpscByteArrayRing {
-        private final byte[][] slots;
-        private final int mask;
-        /** Producer-only writes; consumer reads via volatile semantics. */
-        private volatile long writePos;
-        /** Consumer-only writes; producer reads via volatile semantics. */
-        private volatile long readPos;
-
-        SpscByteArrayRing(int capacity) {
-            if (Integer.bitCount(capacity) != 1) {
-                throw new IllegalArgumentException("capacity must be a power of two: " + capacity);
-            }
-            this.slots = new byte[capacity][];
-            this.mask  = capacity - 1;
-        }
-
-        /** Producer call: returns {@code true} if accepted, {@code false} if full. */
-        boolean offer(byte[] item) {
-            long w = writePos;
-            if (w - readPos >= slots.length) return false;
-            slots[(int) (w & mask)] = item;
-            writePos = w + 1;
-            return true;
-        }
-
-        /** Consumer call: returns the next item or {@code null} if empty. */
-        byte[] poll() {
-            long r = readPos;
-            if (r >= writePos) return null;
-            int idx = (int) (r & mask);
-            byte[] item = slots[idx];
-            slots[idx] = null;       // release reference for GC
-            readPos = r + 1;
-            return item;
-        }
-
-        boolean isEmpty() {
-            return readPos >= writePos;
-        }
-
-        /** Resets both cursors and clears slot references.  Call only while neither thread is using the ring. */
-        void clear() {
-            for (int i = 0; i < slots.length; i++) slots[i] = null;
-            writePos = 0;
-            readPos  = 0;
-        }
-    }
+    // SpscByteArrayRing was extracted to its own top-level class when
+    // WasapiRecorder adopted the same capture→consumer decoupling.
 }

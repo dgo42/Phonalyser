@@ -32,6 +32,8 @@ import lombok.extern.log4j.Log4j2;
 import javax.sound.sampled.AudioFormat;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
 
 import org.edgo.audio.measure.common.StereoSample;
@@ -45,6 +47,13 @@ import static org.edgo.audio.measure.sound.WasapiNative.*;
  * {@code AUDCLNT_STREAMFLAGS_EVENTCALLBACK}, sets an event handle, and
  * loops on the audio thread waiting on that handle and draining
  * {@code IAudioCaptureClient::GetBuffer}.
+ *
+ * <p>The capture-event thread only copies packet bytes into pooled buffers
+ * and hands them to a consume thread over an {@link SpscByteArrayRing} —
+ * the same decoupling {@link WdmksRecorder} uses.  Listener work (per-sample
+ * decode, ring append, bus publish) therefore can never delay the next
+ * {@code WaitForSingleObject} past the event deadline, however expensive a
+ * consumer gets.
  *
  * <p>Mirrors {@link WdmksRecorder}'s public surface so the GUI scope
  * view and CLI tools can drive it identically through
@@ -72,7 +81,25 @@ public class WasapiRecorder implements AudioCapture {
 
     private final AtomicBoolean recording = new AtomicBoolean(false);
     private Thread captureThread;
+    private Thread consumerThread;
+    /** Consume-thread-only decode staging for {@link #sampleListener}. */
     private StereoSample[] sampleBuf = new StereoSample[0];
+
+    /** SPSC ring of filled packets — capture-event thread → consume thread. */
+    private final SpscByteArrayRing queue      = new SpscByteArrayRing(64);
+    /** Recycled buffer pool — consume thread → capture-event thread (the
+     *  SPSC roles simply reversed). */
+    private final SpscByteArrayRing bufferPool = new SpscByteArrayRing(64);
+    /** Capture-thread-only spare: holds a queue-rejected buffer for the next
+     *  packet instead of offering it back to {@link #bufferPool} (which
+     *  would make the capture thread a second producer on that ring). */
+    private byte[] captureSpare;
+    /** Frames dropped on a full queue since the last consumer-side log. */
+    private final AtomicLong droppedFramesSinceLog  = new AtomicLong();
+    /** WASAPI packet-flag counters since the last consumer-side log. */
+    private final AtomicLong silentPacketsSinceLog  = new AtomicLong();
+    private final AtomicLong silentFramesSinceLog   = new AtomicLong();
+    private final AtomicLong discontinuitiesSinceLog = new AtomicLong();
 
     @Setter
     private Consumer<StereoSample[]> sampleListener;
@@ -269,9 +296,22 @@ public class WasapiRecorder implements AudioCapture {
             throw new IllegalStateException("Call open() before startRecording()");
         }
         recording.set(true);
+        // Rings are safe to clear here: stopRecording joined both threads
+        // (or none ever ran).
+        queue.clear();
+        bufferPool.clear();
+        captureSpare = null;
+        droppedFramesSinceLog.set(0);
+        silentPacketsSinceLog.set(0);
+        silentFramesSinceLog.set(0);
+        discontinuitiesSinceLog.set(0);
+        consumerThread = new Thread(this::consumeLoop, "wasapi-consume");
+        consumerThread.setDaemon(true);
+        consumerThread.setPriority(Thread.NORM_PRIORITY + 1);
+        consumerThread.start();
         int hr = callHR(audioClient, VT_AC_START);
         if (hr != S_OK) {
-            recording.set(false);
+            recording.set(false);   // consumer exits on its next flag check
             throw new IllegalStateException(
                     "IAudioClient.Start failed: 0x" + Integer.toHexString(hr));
         }
@@ -292,28 +332,30 @@ public class WasapiRecorder implements AudioCapture {
                 log.warn("IAudioClient.Stop threw: {}", t.getMessage());
             }
         }
-        if (captureThread != null) captureThread.join(2000);
+        if (captureThread  != null) captureThread.join(2000);
+        if (consumerThread != null) consumerThread.join(2000);
+        long dropped = droppedFramesSinceLog.getAndSet(0);
+        if (dropped > 0) {
+            log.warn("WASAPI capture queue dropped {} frames in total", dropped);
+        }
         log.info("WASAPI recording stopped.");
     }
 
     /**
-     * Audio-thread loop.  Waits on the event handle (signalled by
-     * WASAPI when a fresh packet is available), drains every queued
-     * packet via {@code GetBuffer/ReleaseBuffer}, copies into a reused
-     * heap byte[], and dispatches to the configured listener.
+     * Capture-event thread loop.  Waits on the event handle (signalled by
+     * WASAPI when a fresh packet is available), drains every queued packet
+     * via {@code GetBuffer/ReleaseBuffer} into a pooled buffer and hands it
+     * to the consume thread over {@link #queue}.  Copy-only: all listener
+     * work runs on the consume thread, so a slow consumer can never delay
+     * the next event wait (it costs queued buffers, counted and logged,
+     * instead of capture stalls).
      */
     private void captureLoop() {
         ensureComInit();
-        byte[] heap = new byte[Math.max(bufferFrames, 1024) * frameSize];
         PointerByReference ppData       = new PointerByReference();
         IntByReference     framesAvail  = new IntByReference();
         IntByReference     flags        = new IntByReference();
         IntByReference     nextPacket   = new IntByReference();
-        long silentPackets        = 0;
-        long silentFrames         = 0;
-        long discontinuityPackets = 0;
-        long lastFlagLogNanos     = 0L;
-        final long FLAG_LOG_INTERVAL_NANOS = 1_000_000_000L;
 
         while (recording.get()) {
             int waitRc = Kernel32.INSTANCE.WaitForSingleObject(eventHandle, 200);
@@ -337,43 +379,77 @@ public class WasapiRecorder implements AudioCapture {
                 int frames    = framesAvail.getValue();
                 int bytes     = frames * frameSize;
                 int flagValue = flags.getValue();
-                if (heap.length < bytes) heap = new byte[bytes];
+                // Pooled buffer; allocation only on cold start or a packet-size
+                // change (exclusive event mode delivers fixed period-size
+                // packets, so steady state is allocation-free).
+                byte[] buf = captureSpare;
+                captureSpare = null;
+                if (buf == null) buf = bufferPool.poll();
+                if (buf == null || buf.length != bytes) buf = new byte[bytes];
 
-                boolean silent = (flagValue & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
-                boolean discontinuity = (flagValue & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0;
-                if (silent) {
-                    silentPackets++;
-                    silentFrames += frames;
-                    Arrays.fill(heap, 0, bytes, (byte) 0);
+                if ((flagValue & AUDCLNT_BUFFERFLAGS_SILENT) != 0) {
+                    silentPacketsSinceLog.incrementAndGet();
+                    silentFramesSinceLog.addAndGet(frames);
+                    Arrays.fill(buf, 0, bytes, (byte) 0);
                 } else {
                     Pointer data = ppData.getValue();
-                    if (data != null) data.read(0, heap, 0, bytes);
+                    if (data != null) data.read(0, buf, 0, bytes);
                 }
-                if (discontinuity) discontinuityPackets++;
+                if ((flagValue & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0) {
+                    discontinuitiesSinceLog.incrementAndGet();
+                }
                 callHR(captureClient, VT_CC_RELEASE_BUFFER, frames);
 
-                long now = System.nanoTime();
-                if ((silentPackets > 0 || discontinuityPackets > 0)
-                        && now - lastFlagLogNanos >= FLAG_LOG_INTERVAL_NANOS) {
-                    log.warn("WASAPI gaps: silent={} packets ({} frames, ~{} ms), discontinuities={}",
-                            silentPackets, silentFrames,
-                            silentFrames * 1000L / Math.max(1, sampleRate),
-                            discontinuityPackets);
-                    silentPackets = 0;
-                    silentFrames  = 0;
-                    discontinuityPackets = 0;
-                    lastFlagLogNanos = now;
+                if (!queue.offer(buf)) {
+                    droppedFramesSinceLog.addAndGet(frames);
+                    captureSpare = buf;   // keep thread-local — never offer to the pool from here
                 }
-
-                dispatch(heap, bytes);
             }
         }
     }
 
+    /** Consume-thread loop: drains {@link #queue}, runs the listener
+     *  dispatch, recycles buffers into {@link #bufferPool}, and emits the
+     *  rate-limited gap diagnostics the capture thread only counts. */
+    private void consumeLoop() {
+        long lastLogNanos = 0L;
+        final long LOG_INTERVAL_NANOS = 1_000_000_000L;
+        while (recording.get() || !queue.isEmpty()) {
+            long now = System.nanoTime();
+            if (now - lastLogNanos >= LOG_INTERVAL_NANOS) {
+                long silent  = silentPacketsSinceLog.getAndSet(0);
+                long sFrames = silentFramesSinceLog.getAndSet(0);
+                long disc    = discontinuitiesSinceLog.getAndSet(0);
+                long dropped = droppedFramesSinceLog.getAndSet(0);
+                if (silent > 0 || disc > 0 || dropped > 0) {
+                    log.warn("WASAPI gaps: silent={} packets ({} frames, ~{} ms), discontinuities={}, queue-dropped={} frames",
+                            silent, sFrames,
+                            sFrames * 1000L / Math.max(1, sampleRate),
+                            disc, dropped);
+                }
+                lastLogNanos = now;
+            }
+            byte[] buffer = queue.poll();
+            if (buffer == null) {
+                // Ring empty — park briefly instead of busy-spinning; the
+                // packet period is ms-scale, 500 µs is plenty of resolution.
+                LockSupport.parkNanos(500_000L);
+                continue;
+            }
+            try {
+                dispatch(buffer, buffer.length);
+            } finally {
+                bufferPool.offer(buffer);
+            }
+        }
+    }
+
+    /** Listener dispatch — consume thread only.  Buffers are recycled after
+     *  this returns, so listeners must consume synchronously (the same
+     *  contract {@link WdmksRecorder}'s consume loop has always had). */
     private void dispatch(byte[] buffer, int bytes) {
         if (rawBytesListener != null) {
-            byte[] copy = Arrays.copyOf(buffer, bytes);
-            rawBytesListener.accept(copy);
+            rawBytesListener.accept(buffer);
         }
         if (pcmBatchListener != null) {
             pcmBatchListener.accept(buffer, bytes);
