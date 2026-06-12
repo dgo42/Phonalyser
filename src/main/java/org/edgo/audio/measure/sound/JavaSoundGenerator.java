@@ -18,7 +18,6 @@
 
 package org.edgo.audio.measure.sound;
 
-import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -53,13 +52,11 @@ public class JavaSoundGenerator implements AudioPlayback {
     private static final int CHANNELS      = 2;
     private static final int BUFFER_FRAMES = 4096;
 
-    private final int        sampleRate;
-    private final int        bitDepth;
-    private final int        bytesPerSample;
-    private final int        bytesPerFrame;
-    private final String     deviceName;   // null = JavaSound default mixer
-    private volatile int     ditherBits;
-    private final Random     rng;
+    private final int          sampleRate;
+    private final int          bitDepth;
+    private final int          bytesPerFrame;
+    private final String       deviceName;   // null = JavaSound default mixer
+    private final PcmQuantizer quantizer;
 
     private SourceDataLine   line;
 
@@ -76,11 +73,9 @@ public class JavaSoundGenerator implements AudioPlayback {
     public JavaSoundGenerator(int sampleRate, int bitDepth, int ditherBits, String deviceName) {
         this.sampleRate     = sampleRate;
         this.bitDepth       = bitDepth;
-        this.ditherBits     = ditherBits;
         this.deviceName     = deviceName;
-        this.bytesPerSample = bitDepth / 8;
-        this.bytesPerFrame  = bytesPerSample * CHANNELS;
-        this.rng            = new Random();
+        this.bytesPerFrame  = (bitDepth / 8) * CHANNELS;
+        this.quantizer      = new PcmQuantizer(bitDepth, ditherBits);
     }
 
     @Override
@@ -101,7 +96,7 @@ public class JavaSoundGenerator implements AudioPlayback {
         log.info("JavaSound generator opened: format={}, hw-buffer={} frames ({} ms), mixer={}",
                 fmt, hwFrames, hwFrames * 1000 / sampleRate,
                 chosenMixer != null ? chosenMixer.getName() : "<JavaSound default>");
-        if (ditherBits > 0) log.info("Dithering: TPDF {} bit", ditherBits);
+        if (quantizer.getDitherBits() > 0) log.info("Dithering: TPDF {} bit", quantizer.getDitherBits());
     }
 
     /**
@@ -176,7 +171,7 @@ public class JavaSoundGenerator implements AudioPlayback {
 
     @Override
     public void setDitherBits(int bits) {
-        this.ditherBits = Math.max(0, bits);
+        quantizer.setDitherBits(bits);
     }
 
     @Override
@@ -199,35 +194,6 @@ public class JavaSoundGenerator implements AudioPlayback {
     }
 
     private void fillBuffer(SignalGenerator gen, byte[] buf, int frames) {
-        if (bitDepth == 8) {
-            for (int i = 0; i < frames; i++) {
-                double sample = clamp(gen.nextSample() + tpdfNoise());
-                byte   val    = (byte) Math.round(sample * 127.0);
-                int    offset = i * bytesPerFrame;
-                buf[offset]     = val;
-                buf[offset + 1] = val;
-            }
-        } else {
-            long maxVal = (1L << (bitDepth - 1)) - 1;
-            for (int i = 0; i < frames; i++) {
-                double sample = clamp(gen.nextSample() + tpdfNoise());
-                long   pcm    = (long) Math.round(sample * maxVal);
-                int    offset = i * bytesPerFrame;
-                for (int b = 0; b < bytesPerSample; b++) {
-                    byte byteVal = (byte) (pcm >> (8 * b));
-                    buf[offset + b]                  = byteVal;
-                    buf[offset + bytesPerSample + b] = byteVal;
-                }
-            }
-        }
-    }
-
-    private double tpdfNoise() {
-        if (ditherBits == 0) return 0.0;
-        return (rng.nextDouble() - rng.nextDouble()) / (1L << (ditherBits - 1));
-    }
-
-    private double clamp(double v) {
-        return v > 1.0 ? 1.0 : (v < -1.0 ? -1.0 : v);
+        quantizer.encode(gen, buf, frames);
     }
 }

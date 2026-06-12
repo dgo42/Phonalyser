@@ -122,6 +122,26 @@ public final class Events {
      *  averaging accumulator alive. */
     public static final String GENERATOR_FREQ_TRIM_2 = "generator.freq.trim.2";
 
+    /** Notification — the FFT-side frequency-lock loops were reset; the
+     *  generator must drop any residual FLL trim and return its running
+     *  tone(s) to the configured (snapped) frequencies.  Without this, a
+     *  loop reset alone leaves the generator at the last published trim:
+     *  the fresh loop's "generator = target + correction" assumption is
+     *  then wrong by exactly that stale trim and its first correction
+     *  overshoots by the same amount — visible as a frequency diff stuck
+     *  at ±the stale trim until the generator is restarted.  No payload.
+     *  Subscriber: {@code GeneratorPane} (re-applies the snap targets). */
+    public static final String GENERATOR_FREQ_TRIM_RESET = "generator.freq.trim.reset";
+
+    /** Notification — the fundamental magnitude(s) moved by more than the
+     *  drift threshold between the FIRST result after a generator change
+     *  and the result where the frequency lock finished aligning.  The
+     *  running average then still contains pre-alignment frames measured
+     *  at a depressed level, so the user should reset statistics.
+     *  Payload: the largest per-tone delta in dB ({@code Double}).
+     *  Subscriber: {@code FftView} (20 s blinking warning banner). */
+    public static final String FFT_ALIGN_MAG_DRIFT = "fft.align.mag.drift";
+
     /** Notification — the FFT view's visible freq / magnitude pan
      *  window changed (mouse-wheel zoom, drag, auto-setup, maximize).
      *  No payload — subscribers (the FFT pane's scrollbars) read the

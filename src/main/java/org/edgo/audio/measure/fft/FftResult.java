@@ -96,6 +96,14 @@ public class FftResult {
      *  frequency-lock loop place the correction's change-point past the
      *  analysis/publish backlog ({@code writePos − samplesAbsStart − fftSize}). */
     public long writePos;
+    /** The producing worker's reset epoch at analysis start.  A result can sit
+     *  parked in the coalescing UI hand-off across a signal change (the worker's
+     *  epoch gates only cover production, not consumption); consumers compare
+     *  this against the worker's CURRENT epoch and drop stale frames — without
+     *  it, a pre-change spectrum reaches the FLL after the change, and e.g. the
+     *  old 1 kHz tone's H20 (2.6 Hz from a 20 kHz target — inside the
+     *  plausibility gate) trims the live generator to a garbage frequency. */
+    public long epoch;
 
     // Harmonics (index 0 = 2nd harmonic, …)
     public int      harmonicCount;
@@ -249,6 +257,7 @@ public class FftResult {
         c.channelLeft                = channelLeft;
         c.samplesAbsStart            = samplesAbsStart;
         c.writePos                   = writePos;
+        c.epoch                      = epoch;
         c.harmonicCount              = harmonicCount;
         c.harmonicBins               = harmonicBins  != null ? harmonicBins.clone()  : null;
         c.harmonicHz                 = harmonicHz    != null ? harmonicHz.clone()    : null;

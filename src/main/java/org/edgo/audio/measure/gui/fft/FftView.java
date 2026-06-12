@@ -94,6 +94,8 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** How long the rejection warning keeps blinking after the last hit. */
     private static final long REJECTION_WARN_NANOS = 10_000_000_000L;
+    /** How long the alignment magnitude-drift hint keeps blinking. */
+    private static final long ALIGN_DRIFT_WARN_NANOS = 20_000_000_000L;
 
     // ─── Plot region constants ───────────────────────────────────────────
     /** Pixel margins around the plotting area inside the canvas.
@@ -189,7 +191,11 @@ public final class FftView extends AbstractFreqDomainView {
             // javac's definite-assignment analysis.
             this.controller.resetFrequencyLock();
             lastImd = null;
-            resetStatistics();   // accumulator + (while recording) lastResult / lastImd
+            // Signal-change variant: the worker also skips the DAC-buffer
+            // drain after re-anchoring, so the fresh accumulator and the
+            // FLL's first measurement never see the old tone.
+            this.controller.resetStatisticsAfterSignalChange();
+            clearRetainedResultsAfterReset();
             syncExternalShell();
             if (!isDisposed()) redraw();
         }
@@ -203,6 +209,11 @@ public final class FftView extends AbstractFreqDomainView {
      *  redraw — paint code reads {@link #lastResult} directly. */
     private final Consumer<FftResult> onResultReady = slot -> {
         if (isDisposed()) return;
+        // Stale-frame guard: a result parked in the worker's coalescing
+        // hand-off across a signal change drains AFTER the change — its
+        // spectrum is the old signal's.  Displaying it flashes stale data;
+        // feeding it onward poisons the FLL/IMD (see isResultCurrent).
+        if (!this.controller.isResultCurrent(slot)) return;
         // this-qualified controller reads throughout this initializer
         // lambda — see onGenChangeForFll.
         this.controller.resultConsumed();
@@ -267,6 +278,22 @@ public final class FftView extends AbstractFreqDomainView {
         if (isDisposed() || !isRunning() || messageKey == null) return;
         setBanner(I18n.t(messageKey), I18n.t(messageKey + ".tip"),
                 ColorRole.WARNING_LIT, ColorRole.WARNING_DIM, 0L);
+        redraw();
+    };
+
+    /** Subscriber for {@link Events#FFT_ALIGN_MAG_DRIFT}: the fundamental
+     *  level(s) moved by more than the controller's drift threshold while
+     *  the frequency lock pulled the generator onto the bin grid — the
+     *  running average still contains pre-alignment frames, so hint at a
+     *  statistics reset with a 20 s blinking banner.  Payload: the largest
+     *  per-tone delta in dB. */
+    private final Consumer<Double> onAlignMagDrift = deltaDb -> {
+        if (isDisposed() || !isRunning() || deltaDb == null) return;
+        String delta = String.format(Locale.US, "%.1f", deltaDb);
+        setBanner(I18n.t("fft.warning.alignDrift"),
+                I18n.t("fft.warning.alignDrift.tip", delta),
+                ColorRole.WARNING_LIT, ColorRole.WARNING_DIM,
+                System.nanoTime() + ALIGN_DRIFT_WARN_NANOS);
         redraw();
     };
 
@@ -362,6 +389,7 @@ public final class FftView extends AbstractFreqDomainView {
         bus.subscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
         bus.subscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
         bus.subscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
+        bus.subscribe(Events.FFT_ALIGN_MAG_DRIFT, onAlignMagDrift);
         // Window-function changes reset the running statistics — the control
         // writes the pref, the view reacts to the pref, neither calls the other.
         // Every settings/THD parameter whose side-effect targets the view is
@@ -607,6 +635,7 @@ public final class FftView extends AbstractFreqDomainView {
         bus.unsubscribe(Events.FFT_RESULT_AVAILABLE, onResultReady);
         bus.unsubscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
         bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
+        bus.unsubscribe(Events.FFT_ALIGN_MAG_DRIFT, onAlignMagDrift);
         disposePalette();
         // monoFont / monoBoldFont / chanButtonFont are shared instances
         // owned by Fonts — never disposed here.
@@ -700,12 +729,16 @@ public final class FftView extends AbstractFreqDomainView {
      *  recording is restarted ({@code controller.stopRecording()}). */
     public void resetStatistics() {
         controller.resetStatistics();
-        // Drop the retained result so the readouts (fundamental, THD,
-        // SNR, harmonics) and the plotted curve clear immediately and
-        // repopulate from the fresh accumulation — otherwise the stale
-        // last values linger on screen.  Only while recording: a
-        // statically loaded CSV (worker stopped) must survive an
-        // unrelated setting change that also calls resetStatistics.
+        clearRetainedResultsAfterReset();
+    }
+
+    /** View-side companion of a statistics reset: drops the retained
+     *  result so the readouts (fundamental, THD, SNR, harmonics) and the
+     *  plotted curve clear immediately and repopulate from the fresh
+     *  accumulation — otherwise the stale last values linger on screen.
+     *  Only while recording: a statically loaded CSV (worker stopped)
+     *  must survive an unrelated setting change that also resets. */
+    private void clearRetainedResultsAfterReset() {
         if (isRunning()) {
             lastResult = null;
             lastImd    = null;

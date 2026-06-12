@@ -26,7 +26,9 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
+import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.AlignGenerator;
@@ -36,6 +38,7 @@ import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.DebugSwitches;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
 import org.edgo.audio.measure.preferences.Preferences;
 
@@ -55,6 +58,7 @@ import org.edgo.audio.measure.preferences.Preferences;
  * controller never references the view — everything it emits goes over
  * the bus.
  */
+@Log4j2
 public final class FftController {
 
     /** FLL measurement plausibility bound, relative part: generator-vs-ADC
@@ -69,6 +73,17 @@ public final class FftController {
     /** Minimum fundamental frequency a loaded spectrum's peak search
      *  considers (Hz) — skips the DC/mains foot. */
     private static final double LOADED_FUND_MIN_HZ = 10.0;
+    /** Alignment-done threshold for the magnitude-drift watch (ppm of the
+     *  tone target): once every locked tone measures within this of its
+     *  target, the FLL is considered settled and the drift comparison
+     *  fires.  Comfortably above the converged loop's frequency jitter
+     *  (~0.005 ppm) and below the raw clock offset (~1.5 ppm). */
+    private static final double ALIGN_DONE_PPM  = 0.1;
+    /** Magnitude-drift threshold (dB): a fundamental whose level moved by
+     *  more than this between the first post-change result and the aligned
+     *  result means the running average still carries pre-alignment frames
+     *  at a depressed level — worth suggesting a statistics reset. */
+    private static final double ALIGN_DRIFT_DB  = 0.1;
 
     /** Analysis engine (capture + FFT + averaging on a daemon thread). */
     private final FftAnalyzerWorker worker;
@@ -82,6 +97,15 @@ public final class FftController {
      *  lazily when an alignment mode is active. */
     private FrequencyAligner fll;
     private FrequencyAligner fll2;
+
+    /** Magnitude-drift watch state — armed by {@link #resetFrequencyLock()}
+     *  (generator change / align-on / record stop), baselined from the first
+     *  result that reaches {@link #applyFrequencyLock}, resolved one-shot
+     *  when the loop(s) report aligned.  See {@link #ALIGN_DRIFT_DB}. */
+    private boolean alignWatchArmed;
+    private boolean alignWatchBaselined;
+    private double  alignWatchBaseF1Db;
+    private double  alignWatchBaseF2Db;
 
     /** A loaded {@code .fft} spectrum: the reconstructed result plus the
      *  re-measured IMD products when the file was captured in IMD mode
@@ -143,19 +167,51 @@ public final class FftController {
         worker.resetStatistics();
     }
 
+    /** {@link #resetStatistics()} variant for resets caused by a change of
+     *  the GENERATED SIGNAL: the worker additionally skips the DAC-buffer
+     *  drain after re-anchoring, so the first fresh window (and the FLL's
+     *  first measurement) hold none of the old tone. */
+    public void resetStatisticsAfterSignalChange() {
+        worker.resetStatisticsAfterSignalChange();
+    }
+
     /** The UI consumed the published result — the worker's result-throttle
      *  handshake. */
     public void resultConsumed() {
         worker.uiGotResult();
     }
 
+    /** True when {@code slot} was produced under the worker's CURRENT reset
+     *  epoch.  A result can sit parked in the coalescing hand-off across a
+     *  signal change and drain afterwards — the worker's production-side
+     *  epoch gates can't catch that, so consumers must drop it here.
+     *  Without this the pre-change spectrum reaches the FLL: the old 1 kHz
+     *  tone's H20 sits 2.6 Hz from a 20 kHz tone-2 target — inside the
+     *  plausibility gate — and one such frame trims the live generator
+     *  ~2.6 Hz off, taking the loop ~30 s to dig itself back out. */
+    public boolean isResultCurrent(FftResult slot) {
+        return slot != null && slot.epoch == worker.currentResetEpoch();
+    }
+
     /** Resets the frequency-lock loop(s) so alignment converges fresh from
      *  zero.  Called when the user turns alignment ON and on Record stop —
      *  kept separate from {@link #resetStatistics()} so a manual
-     *  statistics reset keeps the converged alignment intact. */
+     *  statistics reset keeps the converged alignment intact.
+     *
+     *  <p>Also tells the generator to drop any residual trim
+     *  ({@link Events#GENERATOR_FREQ_TRIM_RESET}): clearing only the loop
+     *  state would leave the generator at the last published trim, and the
+     *  fresh loop — which assumes "generator = target + correction" — would
+     *  overshoot by exactly that stale amount on its first correction. */
     public void resetFrequencyLock() {
-        if (fll != null) fll.reset();
+        // Re-arm the magnitude-drift watch: the next result baselines the
+        // fundamental level(s); the comparison fires once alignment settles.
+        alignWatchArmed     = true;
+        alignWatchBaselined = false;
+        if (fll == null && fll2 == null) return;   // alignment never engaged — no trims published
+        if (fll  != null) fll.reset();
         if (fll2 != null) fll2.reset();
+        MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM_RESET);
     }
 
     /** Stops the worker — called from the pane's dispose listener. */
@@ -202,7 +258,12 @@ public final class FftController {
         // independent loops driven by the per-tone detected frequencies in imd.
         boolean dualTone = prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE;
         if (dualTone) {
-            if (imd == null) return;
+            if (imd == null) {
+                if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
+                    log.warn("FLL: dual-tone but imd=null — no loop update this frame");
+                }
+                return;
+            }
             double t1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
                     slot.sampleRate, prefs.getGenDualToneFreq1Hz());
             double t2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE,
@@ -210,15 +271,41 @@ public final class FftController {
             if (t1 > 0 && Double.isFinite(imd.f1Hz)
                     && plausibleFllMeasurement(t1, imd.f1Hz, slot.sampleRate, slot.fftSize)) {
                 fll.update(t1, imd.f1Hz, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
-                bus.publish(Events.GENERATOR_FREQ_TRIM,
-                        t1 + fll.getCorrection());
+                double pub1 = t1 + fll.getCorrection();
+                if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
+                    log.warn("FLL t1: target={} meas={} corr={} pub={}",
+                            String.format(Locale.US, "%.6f", t1),
+                            String.format(Locale.US, "%.6f", imd.f1Hz),
+                            String.format(Locale.US, "%+.6f", fll.getCorrection()),
+                            String.format(Locale.US, "%.6f", pub1));
+                }
+                bus.publish(Events.GENERATOR_FREQ_TRIM, pub1);
+            } else if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
+                log.warn("FLL t1 GATED: target={} meas={}",
+                        String.format(Locale.US, "%.6f", t1),
+                        String.format(Locale.US, "%.6f", imd.f1Hz));
             }
             if (t2 > 0 && Double.isFinite(imd.f2Hz)
                     && plausibleFllMeasurement(t2, imd.f2Hz, slot.sampleRate, slot.fftSize)) {
                 fll2.update(t2, imd.f2Hz, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
-                bus.publish(Events.GENERATOR_FREQ_TRIM_2,
-                        t2 + fll2.getCorrection());
+                double pub2 = t2 + fll2.getCorrection();
+                if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
+                    log.warn("FLL t2: target={} meas={} corr={} pub={}",
+                            String.format(Locale.US, "%.6f", t2),
+                            String.format(Locale.US, "%.6f", imd.f2Hz),
+                            String.format(Locale.US, "%+.6f", fll2.getCorrection()),
+                            String.format(Locale.US, "%.6f", pub2));
+                }
+                bus.publish(Events.GENERATOR_FREQ_TRIM_2, pub2);
+            } else if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
+                log.warn("FLL t2 GATED: target={} meas={}",
+                        String.format(Locale.US, "%.6f", t2),
+                        String.format(Locale.US, "%.6f", imd.f2Hz));
             }
+            boolean aligned = t1 > 0 && t2 > 0
+                    && Math.abs(imd.f1Hz - t1) <= t1 * ALIGN_DONE_PPM * 1e-6
+                    && Math.abs(imd.f2Hz - t2) <= t2 * ALIGN_DONE_PPM * 1e-6;
+            watchAlignmentMagnitudeDrift(imd.f1DbV, imd.f2DbV, aligned);
         } else {
             if (!Double.isFinite(slot.fundamentalHzRefined)) return;
             double target = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.SINE,
@@ -231,6 +318,36 @@ public final class FftController {
             fll.update(target, slot.fundamentalHzRefined, slot.samplesAbsStart, slot.writePos, slot.sampleRate, slot.fftSize);
             bus.publish(Events.GENERATOR_FREQ_TRIM,
                     target + fll.getCorrection());
+            boolean aligned = Math.abs(slot.fundamentalHzRefined - target)
+                    <= target * ALIGN_DONE_PPM * 1e-6;
+            watchAlignmentMagnitudeDrift(slot.fundamentalDbFs, Double.NaN, aligned);
+        }
+    }
+
+    /** Magnitude-drift watch: baselines the fundamental level(s) on the
+     *  first result after {@link #resetFrequencyLock()} re-armed it, then —
+     *  once the loop(s) report aligned — compares the current level(s)
+     *  against that baseline ONE time.  A drift beyond
+     *  {@link #ALIGN_DRIFT_DB} means the running average still contains
+     *  pre-alignment frames at a depressed level; the view shows a blinking
+     *  hint to reset statistics.  {@code f2Db} is {@code NaN} in
+     *  single-tone mode. */
+    private void watchAlignmentMagnitudeDrift(double f1Db, double f2Db, boolean aligned) {
+        if (!alignWatchArmed || Double.isNaN(f1Db)) return;
+        if (!alignWatchBaselined) {
+            alignWatchBaseF1Db  = f1Db;
+            alignWatchBaseF2Db  = f2Db;
+            alignWatchBaselined = true;
+            return;
+        }
+        if (!aligned) return;                       // loop still pulling — keep waiting
+        alignWatchArmed = false;                    // one-shot per re-arm
+        double delta = Math.abs(f1Db - alignWatchBaseF1Db);
+        if (!Double.isNaN(f2Db) && !Double.isNaN(alignWatchBaseF2Db)) {
+            delta = Math.max(delta, Math.abs(f2Db - alignWatchBaseF2Db));
+        }
+        if (delta > ALIGN_DRIFT_DB) {
+            MessageBus.instance().publish(Events.FFT_ALIGN_MAG_DRIFT, delta);
         }
     }
 

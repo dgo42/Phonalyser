@@ -24,7 +24,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Random;
+import java.util.SplittableRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.edgo.audio.measure.enums.GenSignalForm;
@@ -136,7 +136,11 @@ public class SignalGenerator {
     private double           pinkRunningSum = 0.0;
     private long             pinkCounter    = 0;
 
-    private final Random rng = new Random();
+    /** {@link SplittableRandom}, not {@code Random}: confined to the render
+     *  thread, and Random's synchronized nextGaussian() / CAS-looped
+     *  nextDouble() cost a monitor-enter per sample at up to 768 k calls/s
+     *  in the noise kernels. */
+    private final SplittableRandom rng = new SplittableRandom();
 
     // -------------------------------------------------------------------------
     // Linear sweep state (LINEAR_SWEEP only)

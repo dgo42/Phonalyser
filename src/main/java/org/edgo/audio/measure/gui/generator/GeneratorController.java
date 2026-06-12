@@ -20,6 +20,9 @@ package org.edgo.audio.measure.gui.generator;
 
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import java.util.Locale;
+
+import org.edgo.audio.measure.gui.common.DebugSwitches;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -168,6 +171,10 @@ public final class GeneratorController {
         // worker keeps its averaging accumulator.
         Consumer<Double> freqTrim = newHz -> {
             if (newHz == null || !Double.isFinite(newHz)) return;
+            if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
+                log.warn("FLL apply t1: {} Hz (generator running={})",
+                        String.format(Locale.US, "%.6f", newHz), generator != null);
+            }
             setFrequency(newHz);
             bus.publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
         };
@@ -175,10 +182,25 @@ public final class GeneratorController {
         // Companion for the dual-tone second-tone FLL.
         Consumer<Double> freqTrim2 = newHz -> {
             if (newHz == null || !Double.isFinite(newHz)) return;
+            if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
+                log.warn("FLL apply t2: {} Hz (generator running={})",
+                        String.format(Locale.US, "%.6f", newHz), generator != null);
+            }
             setDualToneFrequency2(newHz);
             bus.publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.FLL_TRIM);
         };
         onBus(Events.GENERATOR_FREQ_TRIM_2, freqTrim2);
+        // FLL reset: drop any residual trim — slide the running tone(s)
+        // back onto the configured (snapped) frequencies.  reapplySnap
+        // publishes no signal-changed event itself, so no feedback loop.
+        Consumer<Void> freqTrimReset = ignored -> {
+            if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {
+                log.warn("FLL trim reset: re-applying snap targets (generator running={})",
+                        generator != null);
+            }
+            reapplySnap();
+        };
+        onBus(Events.GENERATOR_FREQ_TRIM_RESET, freqTrimReset);
         // FFT length changed: slide the running tone(s) onto the new bin
         // grid without the user having to toggle the snap checkbox.
         Consumer<Void> fftLength = ignored -> {
