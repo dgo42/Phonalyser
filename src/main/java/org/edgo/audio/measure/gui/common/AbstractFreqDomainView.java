@@ -194,6 +194,25 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
         return plot.x + (int) Math.round(t * plot.width);
     }
 
+    /** Frequency at which {@link #freqToX} first rounds PAST the pixel
+     *  column containing {@code xAbs} — the half-pixel right boundary,
+     *  inverted through the same safeMin/safeLogMax mapping.  Lets a
+     *  column-batched trace walk advance per ascending-frequency point
+     *  with one compare instead of one {@code freqToX} (log10) per point;
+     *  see {@code FftView.drawSpectrum}. */
+    protected final double columnRightBoundaryFreq(int xAbs, Rectangle plot,
+                                                   double freqMin, double freqMax,
+                                                   boolean logFreq) {
+        double tB = (xAbs - plot.x + 0.5) / Math.max(1, plot.width);
+        if (logFreq) {
+            double safeMin = Math.max(1, freqMin);
+            double safeMax = safeLogMax(safeMin, freqMax);
+            double lo = Math.log10(safeMin);
+            return Math.pow(10.0, lo + tB * (Math.log10(safeMax) - lo));
+        }
+        return freqMin + tB * (freqMax - freqMin);
+    }
+
     /** Inverse of {@link #freqToX}: maps an absolute canvas X pixel
      *  back to the corresponding frequency in Hz. */
     protected final double xToFreq(int x, Rectangle plot,

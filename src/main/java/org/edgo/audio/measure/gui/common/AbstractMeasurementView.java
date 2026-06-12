@@ -210,18 +210,20 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  underneath.  The outline matches the chart background — black
      *  on the scope, white on FFT / FreqResp — giving a background-
      *  coloured halo that always contrasts the foreground.  Stamps
-     *  the outline colour at the eight ±1-px neighbours then the
-     *  original foreground on top; restores the foreground before
-     *  returning so the caller's GC state is unchanged. */
+     *  the outline colour at the four N/S/E/W ±1-px neighbours (the
+     *  anti-aliased glyph edges fill the diagonals visually — an
+     *  8-neighbour halo reads the same at nearly double the GDI text
+     *  calls, and the scope's readout table alone is ~50 labels per
+     *  paint at 50 fps), then the original foreground on top; restores
+     *  the foreground before returning so the caller's GC state is
+     *  unchanged. */
     protected final void drawOutlinedText(GC gc, String s, int x, int y) {
         Color fg = gc.getForeground();
         gc.setForeground(color(ColorRole.BACKGROUND));
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dy = -1; dy <= 1; dy++) {
-                if (dx == 0 && dy == 0) continue;
-                gc.drawText(s, x + dx, y + dy, true);
-            }
-        }
+        gc.drawText(s, x - 1, y, true);
+        gc.drawText(s, x + 1, y, true);
+        gc.drawText(s, x, y - 1, true);
+        gc.drawText(s, x, y + 1, true);
         gc.setForeground(fg);
         gc.drawText(s, x, y, true);
     }

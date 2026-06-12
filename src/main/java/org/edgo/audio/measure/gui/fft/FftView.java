@@ -355,6 +355,13 @@ public final class FftView extends AbstractFreqDomainView {
     // hit the blit path via paintCachedStatic and never re-walk the
     // 64 k spectrum bins.
 
+    /** Cached calibration cascade-sum curve + its key — see
+     *  {@link #calCascadeSumDb}.  Invalidation matches the static-layer
+     *  fingerprint's calEntries semantics (entry identity + channel). */
+    private double[] calOverlaySumDb;
+    private List<FreqRespCorrectionStore.Entry> calOverlayKeyEntries;
+    private boolean calOverlayKeyLeft;
+
     public FftView(Composite parent, FreqRespCorrectionStore correctionStore,
                    FftController controller) {
         // Pass prefs-driven BACKGROUND + SPECTRUM through the override
@@ -2150,18 +2157,7 @@ public final class FftView extends AbstractFreqDomainView {
                 curMinDb = binDbFs;
                 curMaxDb = binDbFs;
                 curBins  = 1;
-                // Boundary where round(t·width) advances past this column:
-                // t = (curX − plot.x + 0.5) / width, inverted through the
-                // same safeMin/safeLogMax mapping freqToX uses.
-                double tB = (curX - plot.x + 0.5) / Math.max(1, plot.width);
-                if (logFreq) {
-                    double safeMin = Math.max(1, freqMin);
-                    double safeMax = Math.max(freqMax, safeMin * 1.0000001);
-                    double lg      = Math.log10(safeMin);
-                    fBound = Math.pow(10.0, lg + tB * (Math.log10(safeMax) - lg));
-                } else {
-                    fBound = freqMin + tB * (freqMax - freqMin);
-                }
+                fBound = columnRightBoundaryFreq(curX, plot, freqMin, freqMax, logFreq);
                 if (fBound <= f) fBound = Math.nextUp(f);   // degenerate viewport guard
             } else {
                 if (binDbFs < curMinDb) curMinDb = binDbFs;
@@ -2251,15 +2247,73 @@ public final class FftView extends AbstractFreqDomainView {
                 ? entries.get(0).getCalibration().left()
                 : entries.get(0).getCalibration().right();
         double[] freqs = first.freqs;
+        // The cascade sum depends only on (entries, channel) — not on the
+        // result or viewport — so it is cached across rebuilds: the per-point
+        // log10 over every entry (~400 k at two 192 k-point cals) used to
+        // rerun on every rebuilt frame.
+        double[] sumDbCurve = calCascadeSumDb(entries, wantLeft, first);
 
         gc.setForeground(color(ColorRole.CAL_OVERLAY));
         setTraceLineAttributes(gc, (float) prefs.getFftLineWidth(), SWT.LINE_SOLID);
+        // Column-batched walk, same scheme as drawSpectrum: cal points come
+        // in ascending frequency, the conversion is monotonic in dB, so only
+        // each pixel column's two dB extremes are converted and emitted.
         ColumnBucketPainter painter = new ColumnBucketPainter(plot);
-        int W = plot.width;
+        int    curX     = Integer.MIN_VALUE;
+        double curMinDb = Double.POSITIVE_INFINITY;
+        double curMaxDb = Double.NEGATIVE_INFINITY;
+        int    curPts   = 0;
+        double fBound   = Double.NEGATIVE_INFINITY;
         for (int i = 0; i < freqs.length; i++) {
             double f = freqs[i];
             if (!(f > 0.0)) continue;
-            double sumDb = 0.0;
+            double dbFs = -sumDbCurve[i] + offset;
+            if (f < freqMin) {
+                painter.setLeftAnchor(freqToX(f, plot, freqMin, freqMax, logFreq),
+                        magToY(prefs.convertFromDbFs(dbFs, unit), plot, magTop, magBot, unit));
+                continue;
+            }
+            if (f > freqMax) {
+                painter.setRightAnchor(freqToX(f, plot, freqMin, freqMax, logFreq),
+                        magToY(prefs.convertFromDbFs(dbFs, unit), plot, magTop, magBot, unit));
+                continue;
+            }
+            if (f >= fBound) {
+                flushCalColumn(painter, prefs, plot, unit, magTop, magBot,
+                        curX, curMinDb, curMaxDb, curPts);
+                curX     = freqToX(f, plot, freqMin, freqMax, logFreq);
+                curMinDb = dbFs;
+                curMaxDb = dbFs;
+                curPts   = 1;
+                fBound = columnRightBoundaryFreq(curX, plot, freqMin, freqMax, logFreq);
+                if (fBound <= f) fBound = Math.nextUp(f);
+            } else {
+                if (dbFs < curMinDb) curMinDb = dbFs;
+                if (dbFs > curMaxDb) curMaxDb = dbFs;
+                curPts++;
+            }
+        }
+        flushCalColumn(painter, prefs, plot, unit, magTop, magBot,
+                curX, curMinDb, curMaxDb, curPts);
+        painter.drawTo(gc);
+    }
+
+    /** Cached cascade-sum curve (dB per cal point of the FIRST entry's
+     *  frequency grid) — see {@link #drawCalOverlay}.  Keyed on the entry
+     *  list content (entries compare by identity) and the analysed
+     *  channel. */
+    private double[] calCascadeSumDb(List<FreqRespCorrectionStore.Entry> entries,
+                                     boolean wantLeft, FreqRespCalibration first) {
+        if (calOverlaySumDb != null && wantLeft == calOverlayKeyLeft
+                && entries.equals(calOverlayKeyEntries)) {
+            return calOverlaySumDb;
+        }
+        double[] freqs = first.freqs;
+        double[] sum = new double[freqs.length];
+        for (int i = 0; i < freqs.length; i++) {
+            double f = freqs[i];
+            if (!(f > 0.0)) continue;       // skipped by the draw loop too
+            double s = 0.0;
             for (FreqRespCorrectionStore.Entry e : entries) {
                 FreqRespCalibration cal = wantLeft
                         ? e.getCalibration().left()
@@ -2267,18 +2321,28 @@ public final class FftView extends AbstractFreqDomainView {
                 double m = (cal == first)
                         ? cal.magLin[i]
                         : FreqRespCalHelper.interpolate(cal, f)[0];
-                sumDb += (m > 0.0) ? 20.0 * Math.log10(m) : -300.0;
+                s += (m > 0.0) ? 20.0 * Math.log10(m) : -300.0;
             }
-            double dbFs = -sumDb + offset;
-            double v = prefs.convertFromDbFs(dbFs, unit);
-            int xAbs = freqToX(f, plot, freqMin, freqMax, logFreq);
-            int x = xAbs - plot.x;
-            int y = magToY(v, plot, magTop, magBot, unit);
-            if (x < 0)         painter.setLeftAnchor(xAbs, y);
-            else if (x >= W)   painter.setRightAnchor(xAbs, y);
-            else               painter.add(xAbs, y);
+            sum[i] = s;
         }
-        painter.drawTo(gc);
+        calOverlaySumDb     = sum;
+        calOverlayKeyEntries = entries;
+        calOverlayKeyLeft    = wantLeft;
+        return sum;
+    }
+
+    /** Emits one accumulated cal-overlay column — min/max dB extremes
+     *  converted to the display unit and Y (single-point columns add one
+     *  point, matching the per-point path's count semantics). */
+    private void flushCalColumn(ColumnBucketPainter painter, Preferences prefs,
+                                Rectangle plot, MagnitudeUnit unit,
+                                double magTop, double magBot,
+                                int xAbs, double minDb, double maxDb, int pts) {
+        if (pts <= 0) return;
+        painter.add(xAbs, magToY(prefs.convertFromDbFs(maxDb, unit), plot, magTop, magBot, unit));
+        if (pts > 1) {
+            painter.add(xAbs, magToY(prefs.convertFromDbFs(minDb, unit), plot, magTop, magBot, unit));
+        }
     }
 
     // =========================================================================

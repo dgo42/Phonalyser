@@ -1041,23 +1041,34 @@ public final class FftAnalyzerWorker {
         double deltaEff  = wsum > 0.0 ? delta * (1.0 + dsum / wsum) : delta;
         double rampSlope = -2.0 * Math.PI * deltaEff / (double) fftSize;
         double stepRe = Math.cos(rampSlope), stepIm = Math.sin(rampSlope);
-        double phRe = 1.0, phIm = 0.0;   // exp(j·k·rampSlope)
-        int curT = 0;
-        for (int k = 0; k < N; k++) {
-            while (curT < nT && k > hi[curT]) curT++;
-            double rotRe, rotIm;
-            int p = (prodIdx != null) ? prodIdx[k] : -1;
-            if (curT < nT && k >= lo[curT]) { rotRe = cRe[curT];   rotIm = cIm[curT];   }   // tone lobe
-            else if (p >= 0)                { rotRe = prodCos[p];   rotIm = prodSin[p];   }   // IMD product
-            else                            { rotRe = phRe;        rotIm = phIm;         }   // fork
-            double rRe = r.re[k] * weight;
-            double rIm = r.im[k] * weight;
-            accumRe[k] += rRe * rotRe - rIm * rotIm;
-            accumIm[k] += rRe * rotIm + rIm * rotRe;
-            double nextRe = phRe * stepRe - phIm * stepIm;
-            phIm = phRe * stepIm + phIm * stepRe;
-            phRe = nextRe;
-        }
+        final int[]    fProdIdx = prodIdx;
+        final double[] fProdCos = prodCos;
+        final double[] fProdSin = prodSin;
+        // Parallel like the single-reference accumulate: chunks write
+        // disjoint bins; each seeds its own fork phasor exp(j·kLo·rampSlope)
+        // (one cos/sin — also a SHORTER recurrence chain than the old full-
+        // length serial one) and its own tone-lobe cursor.
+        parallelChunks(N, (kLo, kHi) -> {
+            double phRe = Math.cos(rampSlope * kLo);
+            double phIm = Math.sin(rampSlope * kLo);
+            int curT = 0;
+            while (curT < nT && kLo > hi[curT]) curT++;
+            for (int k = kLo; k < kHi; k++) {
+                while (curT < nT && k > hi[curT]) curT++;
+                double rotRe, rotIm;
+                int p = (fProdIdx != null) ? fProdIdx[k] : -1;
+                if (curT < nT && k >= lo[curT]) { rotRe = cRe[curT];    rotIm = cIm[curT];    }   // tone lobe
+                else if (p >= 0)                { rotRe = fProdCos[p];  rotIm = fProdSin[p];  }   // IMD product
+                else                            { rotRe = phRe;         rotIm = phIm;         }   // fork
+                double rRe = r.re[k] * weight;
+                double rIm = r.im[k] * weight;
+                accumRe[k] += rRe * rotRe - rIm * rotIm;
+                accumIm[k] += rRe * rotIm + rIm * rotRe;
+                double nextRe = phRe * stepRe - phIm * stepIm;
+                phIm = phRe * stepIm + phIm * stepRe;
+                phRe = nextRe;
+            }
+        });
         // Per-tone κ refine: advance the shared frame count / clean span; once the
         // window is full fold each tone's Δκ (its phase slope) into accumToneKappa,
         // so the tones AND the IMD grid (a·κ1+b·κ2) lock from the next frame on.
