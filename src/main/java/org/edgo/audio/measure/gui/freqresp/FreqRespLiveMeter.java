@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui.freqresp;
 
+import java.util.Arrays;
 import java.util.Locale;
 
 import org.eclipse.swt.SWT;
@@ -118,6 +119,8 @@ public final class FreqRespLiveMeter extends Canvas {
     private final float[] timesSec = new float[MAX_POINTS];
     private final float[] levelsDb = new float[MAX_POINTS];
     private int           pointCount;
+    /** Reused x/y pair buffer for {@code drawPolyline} — see drawTrace. */
+    private int[]         polyXy;
 
     /** Smoothed RMS state; seeded on the first incoming sample so the
      *  trace starts at the right value instead of ramping from 0 over
@@ -293,14 +296,18 @@ public final class FreqRespLiveMeter extends Canvas {
         if (pointCount < 1) return;
         gc.setForeground(traceColor);
         gc.setLineWidth(2);
-        int prevX = -1, prevY = -1;
-        for (int i = 0; i < pointCount; i++) {
-            int x = timeToX(timesSec[i], plot);
-            int y = dbToY(levelsDb[i], plot);
-            if (prevX >= 0) gc.drawLine(prevX, prevY, x, y);
-            prevX = x;
-            prevY = y;
+        // One drawPolyline instead of one GDI call per segment (up to 4096
+        // per repaint, and the meter repaints per appended sweep block).
+        if (polyXy == null || polyXy.length < 2 * pointCount) {
+            polyXy = new int[2 * timesSec.length];
         }
+        for (int i = 0; i < pointCount; i++) {
+            polyXy[2 * i]     = timeToX(timesSec[i], plot);
+            polyXy[2 * i + 1] = dbToY(levelsDb[i], plot);
+        }
+        int[] xy = (2 * pointCount == polyXy.length)
+                ? polyXy : Arrays.copyOf(polyXy, 2 * pointCount);
+        gc.drawPolyline(xy);
     }
 
     private int dbToY(double db, Rectangle plot) {

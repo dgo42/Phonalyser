@@ -1153,23 +1153,28 @@ public final class FftView extends AbstractFreqDomainView {
                 drawImdDots(bgc, plot, lastImd, lastResult, unit, fFreqMin, freqMax,
                         magTop, magBot, logFreq);
             }
+            // THD / IMD readout table — static per result, so it renders
+            // into the cached layer: its ~35 outlined labels (≈315 GDI text
+            // calls) used to re-draw on every crosshair mouse-move.
+            if (lastResult != null && Preferences.instance().isFftDistortionTableVisible()
+                    && !tableExtracted) {
+                if (tableModeIsImd && lastImd != null) {
+                    drawImdTable(bgc, lastImd, MARGIN_LEFT + 6, TABLE_TOP_Y);
+                } else {
+                    drawDistortionTable(bgc, lastResult, unit);
+                }
+            }
         });
 
         // ---- Dynamic overlay (drawn live on top of the cached image)
         gc.setAntialias(SWT.ON);
         gc.setTextAntialias(SWT.ON);
-        // Exactly one table.  Mode is sticky and only flipped inside
+        // The THD / IMD table renders inside the cached static layer above —
+        // exactly one table; mode is sticky and only flipped inside
         // onResultReady (which fires only when the analyser is actually
         // recording), so the user's last-recorded mode persists while
         // recording is paused even if they toggle the generator form
         // in the meantime.
-        if (lastResult != null && prefs.isFftDistortionTableVisible() && !tableExtracted) {
-            if (tableModeIsImd && lastImd != null) {
-                drawImdTable(gc, lastImd, MARGIN_LEFT + 6, TABLE_TOP_Y);
-            } else {
-                drawDistortionTable(gc, lastResult, unit);
-            }
-        }
         // (The top-right status banner is now the self-painting BlinkBanner widget.)
         // Crosshair: only when inside the plot area (the header buttons are child
         // widgets now, so the canvas never receives moves over them).
@@ -1978,6 +1983,13 @@ public final class FftView extends AbstractFreqDomainView {
          *  would otherwise leave the overlay curve stale until the next FFT
          *  result swaps the result reference. */
         private final List<FreqRespCorrectionStore.Entry> calEntries;
+        // THD / IMD readout table inputs — the table renders into the cached
+        // layer, so its visibility / mode / extraction state must invalidate
+        // the image (its data identity is already covered by result + imd +
+        // completedAnalyses above).
+        private final boolean tableVisible;
+        private final boolean tableImd;
+        private final boolean tableIsExtracted;
     }
 
     private long computeTraceFingerprint(FftResult r, Rectangle area,
@@ -1996,7 +2008,8 @@ public final class FftView extends AbstractFreqDomainView {
                 prefs.getFftLineColor(), prefs.getFftChartBackgroundColor(),
                 prefs.getFftHarmonicDotColor(), prefs.getFftBeforeCalDotColor(),
                 prefs.getFftFreqRespColor(), prefs.getFftCalOverlayColor(),
-                correctionStore.getEntries()).hashCode();
+                correctionStore.getEntries(),
+                prefs.isFftDistortionTableVisible(), tableModeIsImd, tableExtracted).hashCode();
     }
 
     // =========================================================================

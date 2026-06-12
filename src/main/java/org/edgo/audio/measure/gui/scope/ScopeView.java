@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui.scope;
 
+import java.util.Arrays;
 import java.util.Map;
 
 import org.eclipse.swt.SWT;
@@ -122,6 +123,12 @@ public final class ScopeView extends AbstractMeasurementView {
      *  screen — including a frozen / stopped trace — instead of re-reading
      *  fresh samples from the buffer. */
     private RenderedFrame lastFrame;
+    /** Grow-only staging buffers behind {@link #lastFrame} — overwritten
+     *  every paint; see {@link #captureFrame}. */
+    private float[] capStageL, capStageR;
+    /** Grow-only scratch for {@link #reconstructBeatSignal} (output + the
+     *  two boxcar cascade stages) — rebuilt every paint while DUAL_TONE. */
+    private float[] beatOut, beatTmp, beatAbsLp;
     /** When non-null this view renders {@code frozenFrame} verbatim and
      *  ignores the live buffer — used by the offscreen screenshot view. */
     private RenderedFrame frozenFrame;
@@ -1192,9 +1199,20 @@ public final class ScopeView extends AbstractMeasurementView {
 
     /** Returns a carbon-copy of the most recently rendered frame, or
      *  {@code null} if nothing has been drawn yet.  Used by the screenshot
-     *  pane so the image matches the (possibly frozen) on-screen trace. */
+     *  pane so the image matches the (possibly frozen) on-screen trace.
+     *  Materialises an OWNING copy here: {@link #captureFrame} stages into
+     *  grow-only buffers that the next paint overwrites, so the per-paint
+     *  cost is a memcpy instead of ~75 MB/s of fresh allocations, and only
+     *  the rare screenshot pays for stable arrays. */
     public RenderedFrame getRenderedFrameSnapshot() {
-        return lastFrame;
+        RenderedFrame f = lastFrame;
+        if (f == null) return null;
+        return new RenderedFrame(
+                f.left  != null ? Arrays.copyOf(f.left,  f.len) : null,
+                f.right != null ? Arrays.copyOf(f.right, f.len) : null,
+                f.len, f.dispStart, f.dispCount, f.subSampleOffset,
+                f.showL, f.showR, f.sincL, f.sincR,
+                f.leftVDiv, f.rightVDiv, f.dcL, f.dcR);
     }
 
     /** Makes this view render {@code f} verbatim instead of reading the live
@@ -1214,10 +1232,21 @@ public final class ScopeView extends AbstractMeasurementView {
         int lo  = Math.max(0, dispStart - pad);
         int hi  = Math.min(dataLen, dispStart + dispCount + pad);
         int n   = Math.max(0, hi - lo);
-        float[] l = (showL && dataLeft  != null) ? new float[n] : null;
-        float[] r = (showR && dataRight != null) ? new float[n] : null;
-        if (l != null) System.arraycopy(dataLeft,  lo, l, 0, n);
-        if (r != null) System.arraycopy(dataRight, lo, r, 0, n);
+        // Stage into grow-only buffers — the snapshot getter materialises an
+        // owning copy when (rarely) asked, so the per-paint cost is a memcpy
+        // rather than two fresh multi-100k float[] every frame.
+        float[] l = null;
+        float[] r = null;
+        if (showL && dataLeft != null) {
+            if (capStageL == null || capStageL.length < n) capStageL = new float[n];
+            System.arraycopy(dataLeft, lo, capStageL, 0, n);
+            l = capStageL;
+        }
+        if (showR && dataRight != null) {
+            if (capStageR == null || capStageR.length < n) capStageR = new float[n];
+            System.arraycopy(dataRight, lo, capStageR, 0, n);
+            r = capStageR;
+        }
         lastFrame = new RenderedFrame(l, r, n, dispStart - lo, dispCount, subSampleOffset,
                 showL, showR, sincL, sincR, leftVDiv, rightVDiv, dcL, dcR);
     }
@@ -2218,7 +2247,17 @@ public final class ScopeView extends AbstractMeasurementView {
     private float[] reconstructBeatSignal(float[] data, int available,
                                           int sampleRate,
                                           double f1Hz, double f2Hz) {
-        float[] out = new float[available];
+        // Grow-only scratch: this runs EVERY paint while the form is
+        // DUAL_TONE (it feeds the trigger), and three fresh ~100k+ float[]
+        // per paint were ~60-180 MB/s of churn.  The result is consumed
+        // within the same paint pass (debugBeatSignal is rebuilt per pass).
+        if (beatOut == null || beatOut.length < available) {
+            beatOut   = new float[available];
+            beatTmp   = new float[available];
+            beatAbsLp = new float[available];
+        }
+        float[] out = beatOut;
+        Arrays.fill(out, 0, available, 0f);   // early returns must yield silence
         double beatHz = Math.abs(f2Hz - f1Hz);
         if (!(beatHz > 0) || sampleRate <= 0) return out;
         // L = quarter-beat-period samples — bracketed so a tiny beat
@@ -2243,7 +2282,7 @@ public final class ScopeView extends AbstractMeasurementView {
         // with the raw trace.  Boundaries of each pass are filled
         // with the nearest valid value so the next stage's running
         // sum doesn't ingest zero-initialised edge samples.
-        float[] tmp = new float[available];
+        float[] tmp = beatTmp;
         double sum = 0.0;
         for (int i = 0; i < L; i++) sum += Math.abs(data[i]);
         for (int i = L; i < available; i++) {
@@ -2255,7 +2294,7 @@ public final class ScopeView extends AbstractMeasurementView {
         for (int i = 0; i < halfL; i++) tmp[i] = tmpFirst;
         for (int i = available - halfL; i < available; i++) tmp[i] = tmpLast;
 
-        float[] absLp = new float[available];
+        float[] absLp = beatAbsLp;
         sum = 0.0;
         for (int i = 0; i < L; i++) sum += tmp[i];
         for (int i = L; i < available; i++) {
@@ -2303,16 +2342,30 @@ public final class ScopeView extends AbstractMeasurementView {
         double omega = 2.0 * Math.PI * beatHz / sampleRate;
         double iSum = 0.0;
         double qSum = 0.0;
+        // Phase-recurrence oscillator (2 mul + 2 add per sample) instead of
+        // Math.cos + Math.sin per sample — this and the synthesis loop below
+        // were 300-900k transcendental calls per paint.  Rotation drift over
+        // a window is ~n·ulp, far below the correlation's own noise.
+        double rotC = Math.cos(omega), rotS = Math.sin(omega);
+        double c = Math.cos(omega * halfL), s = Math.sin(omega * halfL);
         for (int i = halfL; i < available - halfL; i++) {
             double ac = absLp[i] - dc;
-            iSum += ac * Math.cos(omega * i);
-            qSum += ac * Math.sin(omega * i);
+            iSum += ac * c;
+            qSum += ac * s;
+            double cNext = c * rotC - s * rotS;
+            s = s * rotC + c * rotS;
+            c = cNext;
         }
         double phase    = Math.atan2(qSum, iSum);
         double omegaMod = omega / 2.0;
         double phaseMod = phase  / 2.0;
+        double rotMc = Math.cos(omegaMod), rotMs = Math.sin(omegaMod);
+        double mc = Math.cos(-phaseMod),   ms = Math.sin(-phaseMod);
         for (int i = 0; i < available; i++) {
-            out[i] = (float) (rawPeak * Math.cos(omegaMod * i - phaseMod));
+            out[i] = (float) (rawPeak * mc);
+            double mcNext = mc * rotMc - ms * rotMs;
+            ms = ms * rotMc + mc * rotMs;
+            mc = mcNext;
         }
         return out;
     }

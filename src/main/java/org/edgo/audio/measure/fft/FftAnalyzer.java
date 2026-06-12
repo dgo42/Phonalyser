@@ -788,11 +788,23 @@ public class FftAnalyzer {
         // We use the first frame of the segment + one frame `step` later when
         // available, otherwise fall back to parabolic interpolation.
         int    segBaseSample = bestStart * step;
-        scratchS0Re = scratchOrAlloc(scratchS0Re, fftSize);
-        scratchS0Im = scratchOrAlloc(scratchS0Im, fftSize);
-        double[] s0Re = scratchS0Re;
-        double[] s0Im = scratchS0Im;
-        cachedFrameFft(samples, segBaseSample, fftSize, window, s0Re, s0Im);
+        double[] s0Re;
+        double[] s0Im;
+        if (segBaseSample == 0) {
+            // The segment's first frame IS the pre-pass frame (bestStart is 0
+            // whenever rejection is off — the only shipping configuration):
+            // alias it instead of re-fetching the same cached FFT into a
+            // second scratch pair (2 × 8.4 MB memcpy per tick at 1 M).
+            // Both pairs are write-once-then-read-only in this method.
+            s0Re = f0Re;
+            s0Im = f0Im;
+        } else {
+            scratchS0Re = scratchOrAlloc(scratchS0Re, fftSize);
+            scratchS0Im = scratchOrAlloc(scratchS0Im, fftSize);
+            s0Re = scratchS0Re;
+            s0Im = scratchS0Im;
+            cachedFrameFft(samples, segBaseSample, fftSize, window, s0Re, s0Im);
+        }
         // refine intFundBin within ±2 bins of the pre-pass estimate (in case of drift)
         int refIntBin = peakBin(s0Re, s0Im,
                 Math.max(1, intFundBin - 2),
