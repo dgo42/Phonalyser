@@ -857,6 +857,25 @@ public final class GeneratorPane {
         playBtn            .setData("helpAnchor", "generator.html#generator-play");
     }
 
+    /** True while the DDS tone is playing. */
+    public boolean isToneRunning() {
+        return controller.isRunning();
+    }
+
+    /** Programmatically starts the DDS tone and syncs the Play button +
+     *  ON-AIR visuals — used when a content rebuild (language / font
+     *  change) restores the pre-rebuild running state. */
+    public void resumeTone() {
+        controller.start();
+        syncPlayButtonVisuals();
+        if (!controller.isRunning()) {
+            String err = controller.getLastStartError();
+            Dialogs.error(group.getShell(),
+                    I18n.t("generator.error.resume"),
+                    err != null ? err : "Generator could not be restarted.");
+        }
+    }
+
     /**
      * Stops the DDS generator + file player ahead of an operation that
      * mutates the audio backend (e.g. the Preferences dialog switching
