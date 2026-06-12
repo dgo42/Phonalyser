@@ -40,6 +40,7 @@ import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftAnalyzer.FrameFftCache;
 import org.edgo.audio.measure.fft.FftResult;
+import org.edgo.audio.measure.fft.FftResultPool;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
@@ -78,6 +79,20 @@ public final class FftAnalyzerWorker {
      *  so the view can't freeze. */
     private static final long DISPLAY_MIN_NANOS =  40_000_000L;   // ≤25 Hz refresh when keeping up
     private static final long DISPLAY_MAX_NANOS = 500_000_000L;   // ≥2 Hz even while behind
+    /** Output-pipeline drain to skip after a signal change, in seconds.
+     *  The DAC's hardware buffer (≈480 ms on the JavaSound render path)
+     *  keeps the OLD tone flowing into the ADC after the generator
+     *  changed; a window built before it drains straddles both signals —
+     *  poisoning the fresh accumulator AND feeding the FLL a smeared,
+     *  plausible-looking first measurement. */
+    private static final double OUTPUT_DRAIN_SKIP_SEC = 0.7;
+    /** Mains-comb re-track cadence in analysis ticks.  The tracker's lock
+     *  is an EWMA with ≈33-detection memory, so tracking every Nth tick
+     *  changes the smoothed lock negligibly while freeing the ~208
+     *  Goertzel sweeps (30–80 ms at large fftSize) from most ticks —
+     *  budget that 93.75 % overlap at 1 M needs to stay under its 170 ms
+     *  hop. */
+    private static final int MAINS_TRACK_TICK_INTERVAL = 5;
     private long lastShowNanos;
 
     private final Display  display;
@@ -103,12 +118,33 @@ public final class FftAnalyzerWorker {
      *  not thread-safe — wiping them from the resetting thread mid-tick can
      *  NPE the accumulate loops or leave the detector half-reset. */
     private final    AtomicBoolean      resetPending = new AtomicBoolean();
+    /** Companion to {@link #resetPending} for resets caused by a change of
+     *  the GENERATED SIGNAL: the worker discards
+     *  {@link #OUTPUT_DRAIN_SKIP_SEC} of samples after the re-anchor before
+     *  building the first window — see
+     *  {@link #resetStatisticsAfterSignalChange()}. */
+    private final    AtomicBoolean      drainSkipPending = new AtomicBoolean();
+    /** Samples still to discard after a signal-change re-anchor
+     *  (worker-thread only). */
+    private long drainSkipRemaining;
+    /** Ticks since the mains comb was last re-tracked (worker-thread
+     *  only); see {@link #MAINS_TRACK_TICK_INTERVAL}. */
+    private int  mainsTrackTick;
     /** Single-slot, coalescing handoff of the latest result to the UI thread.
      *  The worker overwrites it every tick (newest wins) and posts ONE drain
      *  runnable only on the empty→full transition, so the SWT asyncExec queue
      *  never accumulates more than one multi-MB spectrum however far the UI
      *  repaint falls behind the (parallelized, fast) per-tick production. */
     private final AtomicReference<FftResult> latestForUi = new AtomicReference<>();
+    /** Recycled {@link FftResult} slots.  A slot is acquired at the top of
+     *  a tick and released exactly once — on every discard path, on a
+     *  coalesce overwrite in {@link #publishResult}, or after the
+     *  synchronous bus dispatch in the drain runnable (subscribers
+     *  deep-copy what they keep, so the slot is free once {@code publish}
+     *  returns).  In steady state at most 3 slots circulate (one being
+     *  filled, one parked in {@link #latestForUi}, one in the UI
+     *  dispatch). */
+    private final FftResultPool resultPool = new FftResultPool();
     @Getter
     private volatile int                completedAnalyses;
     @Getter
@@ -1186,7 +1222,10 @@ public final class FftAnalyzerWorker {
                     double avgIm = accumIm[k] / accumFrames;
                     r.re[k] = avgRe;
                     r.im[k] = avgIm;
-                    double mag = Math.hypot(avgRe, avgIm);
+                    // sqrt form, not Math.hypot: hypot's over/underflow
+                    // armour costs 5-10× and FFT magnitudes live mid-range;
+                    // same form the analyzer's own magnitude pass uses.
+                    double mag = Math.sqrt(avgRe * avgRe + avgIm * avgIm);
                     double scale = (k == 0 || k == halfSize) ? 0.5 : 1.0;
                     double amp = mag * conv * scale;
                     r.amplitudeDbFs[k] = amp > 1e-15 ? 20.0 * Math.log10(amp) : -300.0;
@@ -1273,6 +1312,12 @@ public final class FftAnalyzerWorker {
         if (w == null || !w.isAlive()) {
             discardCacheAndPool();
             resetAccumulator();
+            // Reclaim an undrained slot, then drop the pool — at fftSize
+            // 4 M the slots idle on ~100 MB of spectrum arrays while
+            // nothing is recording.  (No race with the drain runnable:
+            // both run on the UI thread and both use getAndSet(null).)
+            resultPool.release(latestForUi.getAndSet(null));
+            resultPool.clear();
         } else {
             // A monster-FFT tick outlived the join: leave its state alone and
             // let the next start's pending reset wipe it on the worker side.
@@ -1307,6 +1352,26 @@ public final class FftAnalyzerWorker {
         }
     }
 
+    /** {@link #resetStatistics()} variant for resets caused by a change of
+     *  the GENERATED SIGNAL (user input on the generator pane, generator
+     *  start/stop): additionally arms the post-re-anchor drain skip so the
+     *  first window holds none of the old tone still flowing out of the
+     *  DAC's hardware buffer — see {@link #OUTPUT_DRAIN_SKIP_SEC}.
+     *  Setting-only resets (window / channel / fftLength) use plain
+     *  {@link #resetStatistics()}: the signal didn't change, so there is
+     *  nothing to drain. */
+    public void resetStatisticsAfterSignalChange() {
+        drainSkipPending.set(true);     // before resetStatistics: its reanchorPending publishes this too
+        resetStatistics();
+    }
+
+    /** Current reset epoch — compare against {@link FftResult#epoch} to
+     *  detect a result produced before the latest reset (e.g. one that sat
+     *  parked in the coalescing UI hand-off across a signal change). */
+    public long currentResetEpoch() {
+        return resetEpoch.get();
+    }
+
     /** Wipes the worker-owned, non-thread-safe analysis state.  Called only
      *  on the worker thread (via {@link #resetPending}) or while no worker
      *  is alive ({@link #resetStatistics} when stopped, {@link #stop} after
@@ -1314,6 +1379,7 @@ public final class FftAnalyzerWorker {
     private void resetWorkerOwnedState() {
         resetAccumulator();
         completedAnalyses = 0;          // re-zero: a racing worker-side ++ may have resurrected a stale count
+        mainsTrackTick = 0;             // re-lock mains on the very next tick
         if (mainsComb != null) mainsComb.resetTracking();   // re-lock mains from scratch
     }
 
@@ -1389,7 +1455,7 @@ public final class FftAnalyzerWorker {
         // analysis starts with a clean slate.
         boolean genActiveNow = isGeneratorActive();
         if (lastGeneratorActive != null && lastGeneratorActive != genActiveNow) {
-            resetStatistics();
+            resetStatisticsAfterSignalChange();
         }
         lastGeneratorActive = genActiveNow;
         // Consume a pending foreign reset (or the transition reset just
@@ -1454,6 +1520,24 @@ public final class FftAnalyzerWorker {
             rdr.seekToLatest();
             reanchorPending = false;
             winValid = false;
+            if (drainSkipPending.getAndSet(false)) {
+                drainSkipRemaining = (long) Math.ceil(OUTPUT_DRAIN_SKIP_SEC * sampleRate);
+            }
+        }
+        // Output-drain skip: after a signal-change re-anchor, consume and
+        // discard the span still carrying the old tone (the DAC buffer
+        // keeps it flowing into the ADC after the change) so the first
+        // window — and the FLL's first measurement — see only the new
+        // signal.
+        if (drainSkipRemaining > 0) {
+            long skipAvail = rdr.available();
+            if (skipAvail > 0) {
+                int got = rdr.read((int) Math.min(skipAvail, drainSkipRemaining), null, null);
+                if (got > 0) drainSkipRemaining -= got;
+            }
+            if (drainSkipRemaining > 0) {
+                return msForSamples((int) Math.min(drainSkipRemaining, Integer.MAX_VALUE), sampleRate);
+            }
         }
         // A change in window size (fftLength / overlap / averages) or channel
         // forces a rebuild from a fresh contiguous span.
@@ -1581,7 +1665,10 @@ public final class FftAnalyzerWorker {
         // like the .frc cal, but independent of it.  Input stays pristine, so
         // the per-frame cache works normally.
         if (mainsSuppress) {
-            mainsComb(sampleRate).track(samples, Math.min(samples.length, sampleRate));
+            // Re-track every Nth tick only — see MAINS_TRACK_TICK_INTERVAL.
+            if (mainsTrackTick++ % MAINS_TRACK_TICK_INTERVAL == 0) {
+                mainsComb(sampleRate).track(samples, Math.min(samples.length, sampleRate));
+            }
         }
         analyzer.setFrameCache(frameFftCacheImpl);
 
@@ -1603,14 +1690,21 @@ public final class FftAnalyzerWorker {
         // (incl. the two O(N log N) noise sorts) and only produce the spectrum
         // + fundamental/harmonic bins.  Single-tick mode keeps the full stats.
         analyzer.setSpectrumOnly(accumulate);
+        FftResult slot = resultPool.acquire();
         FftResult r;
         try {
             r = analyzer.analyze(samples, sampleRate, fftLength, calcMaxH,
                     window, overlap, distMin, distMax, coherent, fundRefDbFs,
-                    false, expectedFundHz);
+                    false, expectedFundHz, slot);
         } catch (RuntimeException ex) {
+            resultPool.release(slot);
             return IDLE_TICK_MS;
         }
+        // Pooled slot: clear the conditionally-written debug fields so a tick
+        // that doesn't reach their assignment below can't republish a
+        // previous tick's snapshots.
+        r.gates         = null;
+        r.gateBlockDbFs = null;
         // A signal change (resetStatistics) landed while this window was
         // being assembled / analyzed — it straddles the old and the new
         // signal.  Discard it: neither accumulate (it would poison the
@@ -1621,6 +1715,7 @@ public final class FftAnalyzerWorker {
             if (log.isInfoEnabled()) {
                 log.info("Signal changed mid-analysis — straddling window discarded");
             }
+            resultPool.release(r);
             return IDLE_TICK_MS;
         }
         // The dBFS→dBV offset is the global ADC calibration constant
@@ -1667,6 +1762,7 @@ public final class FftAnalyzerWorker {
                     lastRejectGates     = spectralDetector.gates();
                 }
                 onSignalDiscontinuity(rdr);
+                resultPool.release(r);
                 return IDLE_TICK_MS;
             }
             r.gates         = spectralDetector.gates();   // debug overlay snapshot
@@ -1679,6 +1775,7 @@ public final class FftAnalyzerWorker {
             if (log.isInfoEnabled()) {
                 log.info("Signal changed mid-analysis — straddling window discarded before accumulation");
             }
+            resultPool.release(r);
             return IDLE_TICK_MS;
         }
         boolean accumulated = accumulate
@@ -1711,7 +1808,8 @@ public final class FftAnalyzerWorker {
                 || sinceShow >= DISPLAY_MAX_NANOS
                 || (sinceShow >= DISPLAY_MIN_NANOS && backlog <= 2L * needed);
         if (!showNow) {
-            return msForSamples(hopSamples, sampleRate);   // accumulated; defer the rebuild
+            resultPool.release(r);                         // accumulated; defer the rebuild
+            return msForSamples(hopSamples, sampleRate);
         }
         lastShowNanos = System.nanoTime();
 
@@ -1733,6 +1831,7 @@ public final class FftAnalyzerWorker {
         r.channelLeft      = wantLeft;
         r.samplesAbsStart  = samplesAbsStart;   // for the FLL's real-time dt
         r.writePos         = rdr.getWritePos();   // live capture head — where a correction issued now lands
+        r.epoch            = epochAtStart;      // consumers drop frames from a pre-reset epoch
         r.gateRejectDbFs   = lastRejectBlockDbFs;   // debug: last gate-rejected block + verdict
         r.gateRejectGates  = lastRejectGates;
 
@@ -1750,6 +1849,7 @@ public final class FftAnalyzerWorker {
             if (log.isInfoEnabled()) {
                 log.info("Signal changed mid-analysis — straddling window discarded before publish");
             }
+            resultPool.release(r);
             return IDLE_TICK_MS;
         }
         publishResult(r);
@@ -1763,7 +1863,10 @@ public final class FftAnalyzerWorker {
      *  mutating its working {@code r}) from {@link FftView} (which
      *  paints from the published snapshot for many frames). */
     private void publishResult(FftResult newSlot) {
-        if (display == null || display.isDisposed()) return;
+        if (display == null || display.isDisposed()) {
+            resultPool.release(newSlot);
+            return;
+        }
         startSendToUi = System.nanoTime();
         // Coalescing handoff: stash the newest result and post a drain runnable
         // ONLY when the slot was empty.  If the UI hasn't drained the previous
@@ -1773,8 +1876,12 @@ public final class FftAnalyzerWorker {
         // bound until recording stops.  Averaging keeps running every tick; only
         // the DISPLAY is throttled to the UI's paint rate, which is lossless for
         // a coherent average (the next frame carries the deeper accumulation).
-        boolean wasEmpty = latestForUi.getAndSet(newSlot) == null;
-        if (!wasEmpty) return;
+        FftResult coalesced = latestForUi.getAndSet(newSlot);
+        if (coalesced != null) {
+            // The UI never saw the overwritten result — recycle it.
+            resultPool.release(coalesced);
+            return;
+        }
         display.asyncExec(() -> {
             FftResult slot = latestForUi.getAndSet(null);
             if (slot == null) return;
@@ -1782,6 +1889,10 @@ public final class FftAnalyzerWorker {
                 MessageBus.instance().publish(Events.FFT_RESULT_AVAILABLE, slot);
             } catch (Exception e) {
                 log.error("Can't dispatch Events.FFT_RESULT_AVAILABLE", e);
+            } finally {
+                // Subscribers ran synchronously in publish() above and
+                // deep-copied what they keep — the slot is free again.
+                resultPool.release(slot);
             }
         });
         // Force the SWT main loop to wake from Display.sleep() if it was

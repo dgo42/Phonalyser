@@ -24,75 +24,58 @@ import org.edgo.audio.measure.enums.AlignGenerator;
 
 /**
  * Frequency-lock loop that aligns the generator's DDS frequency with the FFT bin
- * grid.  It cancels the measured error in one step, then <b>waits for that
- * correction to land</b> before issuing the next — never stacking corrections on an
- * error the in-flight one will already fix (the cause of dead-time over-regulation).
+ * grid.  One-step deadbeat with <b>exact transport bookkeeping</b>: when a
+ * correction is issued, the loop records the absolute capture position where the
+ * corrected signal can first appear in a measurement
+ * ({@code writePos + DAC-drain guard}); until a result's analysis window
+ * <em>starts</em> past that position, every update is held unconditionally —
+ * such a measurement provably predates the correction, and acting on it would
+ * stack a second correction onto an error the in-flight one already cancels.
  *
  * <h2>Update law</h2>
- * <p>"Landed" is judged <b>relative to the size of the correction</b>: after
- * correcting an error {@code e₀}, the loop holds until the measured error has fallen
- * to {@link #ARRIVED_FRACTION} of {@code e₀} (≈95&nbsp;% of the correction is
- * reflected).  Only then does it act again — correcting the residual if it is still
- * outside the lock band, otherwise holding.  Successive residuals shrink toward zero
- * (e.g. 1.75&nbsp;ppm → 0.0875&nbsp;ppm → …), so the loop settles well inside the band.
  * <pre>
- *   error = detected − target
- *   |error| &lt; FINE_TRACK_HZ → correction −= error / (2·deadTime) every cycle  // fine-track, no wait
- *   waiting:  hold while |error| &gt; ARRIVED_FRACTION · e₀     // correction still landing
- *   landed / steady:
- *       |error| ≤ LOCK_PPM·target → hold (locked / within noise)
- *       else                      → correction −= error, wait  // one-step deadbeat
+ *   measurement window starts before correctionVisibleFrom → hold (in flight)
+ *   |detected − target| ≤ LOCK_PPM·target                  → hold (locked / noise)
+ *   else → correction −= error;  correctionVisibleFrom = writePos + drain
  * </pre>
- * The relative arrival test is what lets a correction be judged landed at any scale
- * and lets the residual be chased below {@link #LOCK_PPM}.  {@code LOCK_PPM} is the
- * steady-state band: it must be ≈ the measurement's own frequency jitter — below it
- * the loop would chase noise (chatter) and a wide relative band would miss real
- * drift, so it cannot be zero, but it is small (the noise floor), not a coarse lock.
+ *
+ * <p>Earlier revisions modelled the transport heuristically — update-call
+ * counts, a relative arrival test, a measured dead time, a give-up timeout.
+ * Those mis-measured the dead time under fine-track noise and then re-corrected
+ * faster than the ~3–4 s physical loop delay (DAC buffer drain + the analysis
+ * window, whose measurement frames sit at the window START), stacking full-size
+ * corrections every second — a runaway that walked the generator hundreds of
+ * ppm off grid.  Gating on capture sample positions replaces all of it and is
+ * immune to IRREGULAR delays too: a buffer overrun / re-sync jumps
+ * {@code samplesAbsStart} forward past the gap, display throttling and GC
+ * pauses change only the update cadence — none of which the gate even sees.
+ * Corrections can neither stack nor wedge, by construction; a transient
+ * mis-measurement costs exactly one bounded, fully observed round trip.
  *
  * <h2>Threading</h2>
  * <p>Not synchronized.  Called from the SWT UI thread.
  */
 public final class FrequencyFll implements FrequencyAligner {
 
-    /** A correction has landed once the measured error has fallen to this fraction of
-     *  the amount that was corrected (≈98 % reflected). */
-    private static final double ARRIVED_FRACTION = 0.02;
-    /** Steady-state lock band (ppm of target): hold within it, re-correct when drift
-     *  leaves it.  Must be ≥ the measurement's <em>peak-to-peak</em> frequency jitter,
-     *  because a one-step deadbeat bakes in the jitter present at the correction
-     *  instant, so the residual can swing by up to that peak-to-peak.  Below it the
-     *  loop chases noise (chatter) and can't tell drift from jitter, so it can't be
-     *  zero — it is the measurement's own frequency-noise floor. */
-    private static final double LOCK_PPM         = 0.01;
-    /** Fine-tracking floor (Hz).  Once the error is below this, the relative
-     *  arrival test ({@link #ARRIVED_FRACTION} of the last correction) sits below
-     *  the measurement's frequency-jitter floor and can never be met — the loop
-     *  would stay {@code waiting} and silently accumulate drift.  In this regime
-     *  the wait is dropped and a reduced-gain nudge applied every cycle, pinning
-     *  the error at the floor instead of collecting it.  The gain is
-     *  {@code 1 / (2·deadTimeFrames)}: an every-cycle integrator inside a loop
-     *  with {@code d} frames of dead time is only stable for gain · d &lt; π/2 (a
-     *  full-error nudge gets re-issued ~d times before its effect is visible), so
-     *  the gain is scaled to the dead time measured in the coarse phase, leaving
-     *  ~π/2 − 0.5 of phase margin at any transport delay. */
-    private static final double FINE_TRACK_HZ    = 1e-3;
-    /** Assumed loop dead time (update calls from issuing a correction to seeing it
-     *  reflected in the measurement) until the first coarse correction measures the
-     *  real one. */
-    private static final int    DEFAULT_DEAD_TIME_FRAMES = 20;
+    /** Steady-state lock band (ppm of target): hold within it, re-correct when
+     *  drift leaves it.  Must be ≈ the measurement's own frequency jitter —
+     *  below it the loop chases noise, far above it real drift goes
+     *  uncorrected. */
+    private static final double LOCK_PPM        = 0.01;
+    /** Output-pipeline drain guard (seconds): a correction published now still
+     *  has the OLD tone queued ahead of it in the DAC's hardware buffer
+     *  (≈480 ms on the JavaSound render path).  Added past the publish-time
+     *  capture head when computing where the corrected signal becomes
+     *  measurable. */
+    private static final double DRAIN_GUARD_SEC = 0.7;
 
     /** Current correction in Hz — add to the snap target before publishing the trim. */
     @Getter
-    private double  correction        = 0.0;
-    /** |error| at the moment the current correction was issued — the reference the
-     *  relative arrival threshold scales from. */
-    private double  errorAtCorrection = 0.0;
-    private boolean waiting           = false;
-    /** Update calls since the last coarse correction was issued — at the moment the
-     *  arrival test passes this IS the measured loop dead time. */
-    private int     framesSinceCorrection = 0;
-    /** Measured loop dead time in update calls; scales the fine-track gain. */
-    private int     deadTimeFrames        = DEFAULT_DEAD_TIME_FRAMES;
+    private double correction = 0.0;
+    /** Absolute capture sample position from which a measurement window
+     *  reflects the last issued correction; {@code -1} = nothing in flight
+     *  (every measurement is usable). */
+    private long correctionVisibleFrom = -1;
 
     @Override
     public void update(double target, double detected, long absStartSamples, long latestSamplePos,
@@ -100,45 +83,30 @@ public final class FrequencyFll implements FrequencyAligner {
         if (!Double.isFinite(target) || !Double.isFinite(detected) || !(target > 0.0)) {
             return;
         }
-        double error  = detected - target;
-        double absErr = Math.abs(error);
-        framesSinceCorrection++;
-
-        // Fine-tracking regime: the arrival test is unachievable this close to
-        // lock, so nudge every cycle at a dead-time-stable gain and never arm the
-        // wait state — a later escape from the floor is a fresh disturbance.
-        if (absErr <= FINE_TRACK_HZ) {
-            if (waiting) {
-                deadTimeFrames = framesSinceCorrection;  // coarse correction just landed
-                waiting = false;
-            }
-            correction -= error / (2.0 * deadTimeFrames);
+        // Transport gate: the measurement's frames begin at absStartSamples —
+        // if that predates the point where the last correction reached the
+        // ADC, the measurement reflects the UNcorrected signal.  Hold.
+        if (correctionVisibleFrom >= 0 && absStartSamples < correctionVisibleFrom) {
             return;
         }
-        if (waiting) {
-            if (absErr > ARRIVED_FRACTION * errorAtCorrection) {
-                return;                                // correction still landing — hold, don't stack another
-            }
-            deadTimeFrames = framesSinceCorrection;    // landed — measured dead time
-            waiting = false;
+        correctionVisibleFrom = -1;            // in-flight correction fully observed
+        double error = detected - target;
+        if (Math.abs(error) <= LOCK_PPM * 1e-6 * target) {
+            return;                            // within the lock band — hold
         }
-        if (absErr <= LOCK_PPM * 1e-6 * target) {
-            return;                                    // within the lock band — hold
-        }
-        // Cancel the current (landed) error in one step, then wait for it to land.
+        // Cancel the (fully observed) error in one step, then wait until the
+        // capture provably contains the corrected signal.
         correction -= error;
-        errorAtCorrection = absErr;
-        waiting = true;
-        framesSinceCorrection = 0;
+        if (sampleRate > 0) {
+            correctionVisibleFrom = latestSamplePos
+                    + (long) Math.ceil(DRAIN_GUARD_SEC * sampleRate);
+        }
     }
 
     @Override
     public void reset() {
         correction            = 0.0;
-        errorAtCorrection     = 0.0;
-        waiting               = false;
-        framesSinceCorrection = 0;
-        deadTimeFrames        = DEFAULT_DEAD_TIME_FRAMES;
+        correctionVisibleFrom = -1;
     }
 
     public AlignGenerator getMode() {

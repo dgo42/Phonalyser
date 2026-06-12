@@ -116,26 +116,49 @@ class FrequencyFllTest {
     }
 
     @Test
-    void fineTracksSubBandJitterAndStaysLocked() {
-        // Inside the fine-tracking floor (FINE_TRACK_HZ) the arrival test — a small
-        // fraction of the last correction — sits below the jitter floor and can never
-        // be met, the case that used to leave the loop 'waiting' and silently
-        // accumulating drift.  There the loop drops the wait and nudges every cycle.
-        // The nudges are sub-jitter tiny, so under continuous sub-band jitter the
-        // measured frequency stays locked within tolerance — it TRACKS rather than
-        // holds, so the correction count is high by design.
+    void subBandJitterIsHeldNotChased() {
+        // Measurement jitter INSIDE the lock band must not provoke corrections —
+        // the loop holds instead of chasing noise.  (The old fine-track regime
+        // nudged every cycle; with exact transport gating the band hold is safe,
+        // because a real escape from the band is corrected on the very next
+        // measurement that post-dates the in-flight correction.)
         int frames = 80, delay = 5;
         double[] drift = constantDrift(frames, 0.05);
         for (int i = 0; i < frames; i++) {
             drift[i] += (i % 2 == 0 ? 1 : -1) * 0.4 * TOL_HZ;        // ±0.4 band, alternating
         }
         Run r = drive(frames, delay, drift);
-        assertTrue(r.corrections > 1, "fine-tracking should nudge every cycle, not hold");
-        // Correcting every cycle is a unity-gain integrator with dead time, so under
-        // adversarial every-frame jitter it holds a BOUNDED limit cycle (~delay·floor)
-        // rather than the tight band — bounded near lock is the goal, vs the old
-        // failure where the loop stuck and the error grew without bound.
-        assertTrue(Math.abs(r.finalErrorHz) <= delay * TOL_HZ,
-                "fine-tracking must stay bounded near lock: " + r.finalErrorHz / TARGET * 1e6 + " ppm");
+        assertEquals(1, r.corrections, "sub-band jitter must be held, not chased");
+        assertTrue(Math.abs(r.finalErrorHz) <= TOL_HZ,
+                "must stay inside the lock band: " + r.finalErrorHz / TARGET * 1e6 + " ppm");
+    }
+
+    @Test
+    void stuckMeasurementCannotStackCorrections() {
+        // Worst-case transport fault: the plant NEVER reflects corrections (e.g.
+        // trim events not reaching the generator, or a measurement pinned by a
+        // poisoned average).  The loop may keep re-correcting, but only once per
+        // transport-visibility window — never faster than the corrected signal
+        // could physically arrive.  Regression test for the runaway that walked
+        // the generator hundreds of ppm off grid: heuristic dead-time tracking
+        // mis-measured the loop delay and stacked full-size corrections every
+        // second against a ~3.6 s physical round trip.
+        FrequencyFll fll = new FrequencyFll();
+        long absStart = 0;
+        int changes = 0;
+        double prev = fll.getCorrection();
+        int frames = 200;
+        for (int i = 0; i < frames; i++) {
+            fll.update(TARGET, TARGET + 0.05, absStart, absStart + N, SR, N);
+            if (fll.getCorrection() != prev) changes++;
+            prev = fll.getCorrection();
+            absStart += N;
+        }
+        // Visibility window = ceil(0.7 s · SR) samples ≈ 33 frames of N — the
+        // total correction count is bounded by the number of windows that fit.
+        int maxAllowed = (int) (frames * (long) N / (0.7 * SR)) + 2;
+        assertTrue(changes <= maxAllowed,
+                "corrections stacked faster than transport visibility: " + changes
+                        + " in " + frames + " frames (max " + maxAllowed + ")");
     }
 }

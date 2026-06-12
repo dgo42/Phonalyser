@@ -61,6 +61,10 @@ public class FftAnalyzer {
     private double[]   cachedWindow;
     private int        cachedWindowSize;
     private WindowType cachedWindowType;
+    /** Coherent gain (mean) of {@link #cachedWindow} — cached alongside it
+     *  so {@code analyze} doesn't re-sum the multi-million-entry table
+     *  every tick. */
+    private double     cachedCohGain;
 
     /** Cache instance to consult during {@link #analyze}; {@code null}
      *  disables caching (CLI default).  Set by the caller via
@@ -122,6 +126,14 @@ public class FftAnalyzer {
      *  {@code analyze} call by the harmonic-detection and noise-floor
      *  paths; never returned. */
     private double[] scratchAmplLinear;
+    /** Signal-bin mask scratch for the stats passes — see
+     *  {@link #buildSignalBinMask}; never returned. */
+    private boolean[] scratchSignalMask;
+    /** Grow-only scratch pools for the noise-floor selection (candidate /
+     *  global bin powers) — see {@link #computeNoiseFloorAndExtendSignalMask};
+     *  never returned. */
+    private double[] scratchNoiseCand;
+    private double[] scratchNoiseGlob;
 
     /** Returns the cached window table for {@code (N, type)}, rebuilding
      *  it via {@link #buildWindow} only when the (size, type) pair
@@ -133,6 +145,11 @@ public class FftAnalyzer {
         cachedWindow     = buildWindow(N, type);
         cachedWindowSize = N;
         cachedWindowType = type;
+        double sum = 0.0;
+        for (double v : cachedWindow) {
+            sum += v;
+        }
+        cachedCohGain = sum / N;
         return cachedWindow;
     }
 
@@ -440,11 +457,7 @@ public class FftAnalyzer {
         // fftSize = 1 M this avoids 8 MB / call plus ~1 M Math.cos()
         // evaluations.
         double[] window  = getCachedWindow(fftSize, windowType);
-        double   cohGain = 0.0;
-        for (double v : window) {
-            cohGain += v;
-        }
-        cohGain /= fftSize;
+        double   cohGain = cachedCohGain;   // cached with the window table
 
         // --- Estimate fundamental fractional bin (always, for both averaging modes) --
         // The true signal frequency is k_f × Fs/N where k_f is non-integer.
@@ -514,12 +527,6 @@ public class FftAnalyzer {
         // inflates peakAmp by √2·DC, and R for every sample drifts
         // ~29% away from peakAmp regardless of glitches — flagging
         // half the samples and rejecting every frame.
-        final double dcMean  = sampleMean(samples);
-        double       rms     = dcRemovedRms(samples, dcMean);
-        double       peakAmp = rms * Math.sqrt(2.0);
-        double estFundHz = intFundBin * freqRes;
-        double omegaPerSample = 2.0 * Math.PI * estFundHz / sampleRate;
-        final double R_TOLERANCE = 0.10;      // |R−A|/A > 10 %  → flag sample
         // FRAME REJECTION DISABLED — capture glitches of every origin are now
         // handled by the cross-tick gap recovery, and per-frame rejection also
         // (harmlessly) flags AGC amplitude wobble.  This one switch gates BOTH
@@ -527,6 +534,21 @@ public class FftAnalyzer {
         // their per-sample work so a disabled analysis costs nothing.  Flip to
         // true to restore.
         final boolean frameRejection = false;
+        // DC mean + RMS feed only the rejection-feasibility test and the DEBUG
+        // diagnostic — two full passes over the multi-million-sample window
+        // that are pure waste while both are off.
+        final double dcMean;
+        final double peakAmp;
+        if (frameRejection || log.isDebugEnabled()) {
+            dcMean  = sampleMean(samples);
+            peakAmp = dcRemovedRms(samples, dcMean) * Math.sqrt(2.0);
+        } else {
+            dcMean  = 0.0;
+            peakAmp = 0.0;
+        }
+        double estFundHz = intFundBin * freqRes;
+        double omegaPerSample = 2.0 * Math.PI * estFundHz / sampleRate;
+        final double R_TOLERANCE = 0.10;      // |R−A|/A > 10 %  → flag sample
 
         // The R-invariant test assumes s(n) ≈ A·sin(ωn); when the fundamental
         // sine is not the dominant component of the time-domain signal (typical
@@ -1420,7 +1442,11 @@ public class FftAnalyzer {
         double snrHi    = r.snrFreqMax > 0.0 ? r.snrFreqMax : Double.MAX_VALUE;
 
         // Derive properly-scaled linear amplitudes from amplitudeDbFs.
-        double[] amplLinear = new double[halfSize + 1];
+        // Reuses the instance scratch (the view retains its analyzer for
+        // exactly this) — otherwise 8.4 MB allocated per displayed frame at
+        // fftSize 2 M.  Every cell is overwritten below, so no zero-fill.
+        final double[] amplLinear = scratchOrAlloc(scratchAmplLinear, halfSize + 1);
+        scratchAmplLinear = amplLinear;
         parallelChunks(halfSize + 1, (lo, hi) -> {
             for (int k = lo; k < hi; k++) {
                 amplLinear[k] = r.amplitudeDbFs[k] > -290.0
@@ -1871,9 +1897,15 @@ public class FftAnalyzer {
      *  as the starting mask for the noise-floor computation; the mask is
      *  then extended by {@link #computeNoiseFloorAndExtendSignalMask}
      *  with the dynamic fundamental-exclusion walk and phase-noise zone. */
-    private static boolean[] buildSignalBinMask(int halfSize, int fundBin,
-                                                int[] hBins, int harmonicCount, int exclBins) {
-        boolean[] isSignalBin = new boolean[halfSize + 1];
+    private boolean[] buildSignalBinMask(int halfSize, int fundBin,
+                                         int[] hBins, int harmonicCount, int exclBins) {
+        // Reused scratch (1 MB at fftSize 2 M, rebuilt per stats pass) —
+        // must be re-zeroed since previous masks marked other bins.
+        boolean[] isSignalBin =
+                (scratchSignalMask != null && scratchSignalMask.length == halfSize + 1)
+                        ? scratchSignalMask : new boolean[halfSize + 1];
+        scratchSignalMask = isSignalBin;
+        Arrays.fill(isSignalBin, false);
         for (int d = -exclBins; d <= exclBins; d++) {
             int bin = fundBin + d;
             if (bin >= 0 && bin <= halfSize) isSignalBin[bin] = true;
@@ -1909,43 +1941,43 @@ public class FftAnalyzer {
      *  <p>Pulled out of {@link #analyze} and {@code recomputeStats}
      *  where the same ~60 lines of bookkeeping appeared verbatim.
      *  Single point of truth for the SNR/THD-N noise-floor model. */
-    private static NoiseFloor computeNoiseFloorAndExtendSignalMask(
+    private NoiseFloor computeNoiseFloorAndExtendSignalMask(
             double[] amplLinear, boolean[] isSignalBin,
             int halfSize, double freqRes,
             double snrLo, double snrHi,
             int fundBin, int exclBins) {
 
-        // Pass 1 — two medians in one scan:
-        //   globalMedianNoisePow : full spectrum (no range limit) — used only for the
-        //                          dynamic fundamental exclusion walk, so it is never
-        //                          contaminated by leakage bins inside a narrow range.
-        //   medianNoisePow       : range-restricted — used for spike threshold / SNR.
+        // One scan collects both pools (grow-only scratch — no per-call
+        // allocation):
+        //   globalPow    : full spectrum (no range limit) — used only for the
+        //                  dynamic fundamental exclusion walk, so it is never
+        //                  contaminated by leakage bins inside a narrow range.
+        //   candidatePow : range-restricted — used for spike threshold / SNR.
+        if (scratchNoiseCand == null || scratchNoiseCand.length < halfSize) {
+            scratchNoiseCand = new double[halfSize];
+            scratchNoiseGlob = new double[halfSize];
+        }
+        double[] candidatePow = scratchNoiseCand;
+        double[] globalPow    = scratchNoiseGlob;
         int candidateCount = 0;
         int globalCount    = 0;
         for (int k = 1; k <= halfSize; k++) {
             double freq = k * freqRes;
             if (!isSignalBin[k]) {
-                globalCount++;
-                if (freq >= snrLo && freq <= snrHi) candidateCount++;
-            }
-        }
-        double[] candidatePow = new double[candidateCount];
-        double[] globalPow    = new double[globalCount];
-        int ci = 0, gi = 0;
-        for (int k = 1; k <= halfSize; k++) {
-            double freq = k * freqRes;
-            if (!isSignalBin[k]) {
                 double pow = amplLinear[k] * amplLinear[k];
-                globalPow[gi++] = pow;
-                if (freq >= snrLo && freq <= snrHi) candidatePow[ci++] = pow;
+                globalPow[globalCount++] = pow;
+                if (freq >= snrLo && freq <= snrHi) candidatePow[candidateCount++] = pow;
             }
         }
-        Arrays.parallelSort(candidatePow);
-        Arrays.parallelSort(globalPow);
-        double medianNoisePow       = candidateCount > 0 ? candidatePow[candidateCount / 2] : 0.0;
+        // Order statistics via in-place quickselect — only ONE rank of each
+        // pool is ever read, so the full O(n log n) sorts this replaced were
+        // 20-50 ms of waste per stats pass at fftSize 2 M.
+        double medianNoisePow       = candidateCount > 0
+                ? selectKth(candidatePow, candidateCount, candidateCount / 2) : 0.0;
         // 10th-percentile of the full-spectrum powers: closer to the true quantization
         // noise floor than the median, which is pulled up by non-harmonic spurs.
-        double globalMedianNoisePow = globalCount    > 0 ? globalPow[globalCount / 10]      : 0.0;
+        double globalMedianNoisePow = globalCount    > 0
+                ? selectKth(globalPow, globalCount, globalCount / 10)         : 0.0;
 
         // Inter-pass — dynamic fundamental exclusion at noise floor level.
         // Uses globalMedianNoisePow so the exclusion width is independent of the
@@ -1970,18 +2002,13 @@ public class FftAnalyzer {
                 candidateCount = 0;
                 for (int k = 1; k <= halfSize; k++) {
                     double freq = k * freqRes;
-                    if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) candidateCount++;
-                }
-                candidatePow = new double[candidateCount];
-                ci = 0;
-                for (int k = 1; k <= halfSize; k++) {
-                    double freq = k * freqRes;
                     if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) {
-                        candidatePow[ci++] = amplLinear[k] * amplLinear[k];
+                        candidatePow[candidateCount++] = amplLinear[k] * amplLinear[k];
                     }
                 }
-                Arrays.parallelSort(candidatePow);
-                medianNoisePow = candidateCount > 0 ? candidatePow[candidateCount / 2] : medianNoisePow;
+                medianNoisePow = candidateCount > 0
+                        ? selectKth(candidatePow, candidateCount, candidateCount / 2)
+                        : medianNoisePow;
             }
         }
 
@@ -2001,6 +2028,34 @@ public class FftAnalyzer {
             }
         }
         return new NoiseFloor(medianNoisePow, dynWidthBins);
+    }
+
+    /** In-place Hoare quickselect: returns the {@code k}-th smallest element
+     *  of {@code a[0..len)}, partially reordering the array (callers treat
+     *  the pools as scratch).  O(len) average vs the O(len·log len) full
+     *  sorts it replaced — only one order statistic per pool is ever read.
+     *  Package-private for the unit test. */
+    double selectKth(double[] a, int len, int k) {
+        int lo = 0, hi = len - 1;
+        while (lo < hi) {
+            // Median-of-3 pivot: cheap insurance against the sorted /
+            // constant runs a quiet noise floor produces.
+            double p1 = a[lo], p2 = a[(lo + hi) >>> 1], p3 = a[hi];
+            double pivot = Math.max(Math.min(p1, p2), Math.min(Math.max(p1, p2), p3));
+            int i = lo, j = hi;
+            while (i <= j) {
+                while (a[i] < pivot) i++;
+                while (a[j] > pivot) j--;
+                if (i <= j) {
+                    double t = a[i]; a[i] = a[j]; a[j] = t;
+                    i++; j--;
+                }
+            }
+            if (k <= j)      hi = j;
+            else if (k >= i) lo = i;
+            else             return a[k];
+        }
+        return a[k];
     }
 
     /** Returns the bin index in {@code [kLo, kHi]} with the largest
