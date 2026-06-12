@@ -421,6 +421,18 @@ public class WasapiRecorder implements AudioCapture {
         if (recording.get()) {
             try { stopRecording(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         }
+        // Never release the COM objects while the capture thread may still
+        // be calling into them (vtable call on a released object is a native
+        // crash, not an exception).  If the thread won't die, leak the
+        // objects deliberately.
+        Thread t = captureThread;
+        if (t != null && t.isAlive()) {
+            try { t.join(3000); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            if (t.isAlive()) {
+                log.error("WASAPI capture thread still alive — leaking COM objects instead of releasing under it.");
+                return;
+            }
+        }
         closeQuietly();
     }
 

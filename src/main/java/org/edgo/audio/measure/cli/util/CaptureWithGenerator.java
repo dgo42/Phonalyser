@@ -106,7 +106,14 @@ public class CaptureWithGenerator {
 
             recorder.open();
             genThread.start();
-            genReady.await(10, TimeUnit.SECONDS);
+            if (!genReady.await(10, TimeUnit.SECONDS)) {
+                // The generator never started streaming — recording anyway
+                // would deliver a full-duration capture of silence presented
+                // as a valid measurement.
+                genStop.set(true);
+                throw new IllegalStateException(
+                        "Generator did not start streaming within 10 s — capture aborted.");
+            }
             if (syncPauseSec > 0) {
                 log.info("Sync pause: holding capture for {} s while generator runs (analog sync settle)", syncPauseSec);
                 Thread.sleep(syncPauseSec * 1000L);
@@ -117,6 +124,9 @@ public class CaptureWithGenerator {
         }
         genStop.set(true);
         genThread.join(5000L);
+        if (genThread.isAlive()) {
+            log.warn("Generator thread still running after 5 s — the playback device may remain busy.");
+        }
 
         int actual = Math.min(writePos.get(), maxSamples);
         return actual < maxSamples ? Arrays.copyOf(samples, actual) : samples;
@@ -200,7 +210,11 @@ public class CaptureWithGenerator {
 
             recorder.open();
             genThread.start();
-            genReady.await(10, TimeUnit.SECONDS);
+            if (!genReady.await(10, TimeUnit.SECONDS)) {
+                genStop.set(true);
+                throw new IllegalStateException(
+                        "Generator did not start streaming within 10 s — capture aborted.");
+            }
             if (syncPauseSec > 0) {
                 log.info("Sync pause: holding capture for {} s while generator runs (analog sync settle)", syncPauseSec);
                 Thread.sleep(syncPauseSec * 1000L);
@@ -211,6 +225,9 @@ public class CaptureWithGenerator {
         }
         genStop.set(true);
         genThread.join(5000L);
+        if (genThread.isAlive()) {
+            log.warn("Generator thread still running after 5 s — the playback device may remain busy.");
+        }
 
         int actual = Math.min(writePos.get(), maxSamples);
         float[] outLeft  = actual < maxSamples ? Arrays.copyOf(leftBuf,  actual) : leftBuf;

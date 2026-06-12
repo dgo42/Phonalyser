@@ -21,9 +21,11 @@ package org.edgo.audio.measure.preferences;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.Writer;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
@@ -762,8 +764,20 @@ public final class Preferences {
         opts.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
         opts.setIndent(2);
         opts.setPrettyFlow(true);
-        try (Writer w = Files.newBufferedWriter(prefsPath())) {
-            new Yaml(opts).dump(root, w);
+        // Write to a sibling temp file and move it into place atomically, so
+        // a JVM exit mid-write (the save daemon is killed hard at shutdown)
+        // can never leave a truncated preferences.yaml behind.
+        Path target = prefsPath();
+        Path tmp    = target.resolveSibling(target.getFileName() + ".tmp");
+        try {
+            try (Writer w = Files.newBufferedWriter(tmp)) {
+                new Yaml(opts).dump(root, w);
+            }
+            try {
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
+            }
         } catch (IOException e) {
             log.warn("Failed to save preferences to {}: {}", PREFS_FILE, e.getMessage());
         }
@@ -824,15 +838,17 @@ public final class Preferences {
     }
 
     /** Appends an FFT calibration entry, wires its toggles to auto-save, and
-     *  requests a save (covers the structural change). */
-    public void addFftCalibration(CalibrationEntry entry) {
+     *  requests a save (covers the structural change).  Synchronized (like
+     *  the preset mutators) so the structural change can't race the save
+     *  daemon iterating the list in {@link #toMap()}. */
+    public synchronized void addFftCalibration(CalibrationEntry entry) {
         fftCalibrations.add(entry);
         trackCalibration(entry);
         requestSave();
     }
 
     /** Removes an FFT calibration entry and requests a save. */
-    public void removeFftCalibration(CalibrationEntry entry) {
+    public synchronized void removeFftCalibration(CalibrationEntry entry) {
         if (fftCalibrations.remove(entry)) {
             requestSave();
         }
@@ -845,14 +861,14 @@ public final class Preferences {
 
     /** Appends a FreqResp calibration entry, wires its toggles to auto-save,
      *  and requests a save. */
-    public void addFreqRespCalibration(CalibrationEntry entry) {
+    public synchronized void addFreqRespCalibration(CalibrationEntry entry) {
         freqRespCalibrations.add(entry);
         trackCalibration(entry);
         requestSave();
     }
 
     /** Removes a FreqResp calibration entry and requests a save. */
-    public void removeFreqRespCalibration(CalibrationEntry entry) {
+    public synchronized void removeFreqRespCalibration(CalibrationEntry entry) {
         if (freqRespCalibrations.remove(entry)) {
             requestSave();
         }
@@ -862,7 +878,7 @@ public final class Preferences {
      *  entry 0 when the list is empty, then requests a save.  Used by the
      *  FreqResp wizard's Apply step to record the just-applied file without
      *  flipping the row's Active flag. */
-    public void setFreqRespPrimaryCalibrationPath(String path) {
+    public synchronized void setFreqRespPrimaryCalibrationPath(String path) {
         if (freqRespCalibrations.isEmpty()) {
             addFreqRespCalibration(new CalibrationEntry());
         }

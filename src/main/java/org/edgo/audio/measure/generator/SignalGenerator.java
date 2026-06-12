@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
@@ -141,15 +142,17 @@ public class SignalGenerator {
     // Linear sweep state (LINEAR_SWEEP only)
     // -------------------------------------------------------------------------
 
-    /** Sweep period in samples — chirp restarts after this many samples. */
-    private int    sweepPeriodSamples;
-    /** Sweep start frequency (Hz). */
-    private double sweepFreqStart;
-    /** Sweep end frequency (Hz). */
-    private double sweepFreqEnd;
+    /** Sweep period in samples — chirp restarts after this many samples.
+     *  Volatile: live-tuned from the UI thread, read by the audio thread. */
+    private volatile int    sweepPeriodSamples;
+    /** Sweep start frequency (Hz).  Volatile: UI writes, audio reads. */
+    private volatile double sweepFreqStart;
+    /** Sweep end frequency (Hz).  Volatile: UI writes, audio reads. */
+    private volatile double sweepFreqEnd;
     /** Sample rate cached for instantaneous-frequency → phase-step conversion. */
     private double sweepSampleRate;
-    /** Sample index within the current sweep period. */
+    /** Sample index within the current sweep period.  Audio-thread-owned:
+     *  only {@link #linearSweepNext()} (and pre-stream resets) write it. */
     private int    sweepIdx;
     /** Accumulated phase in radians for the sweep. */
     private double sweepPhase;
@@ -168,13 +171,21 @@ public class SignalGenerator {
     // Log-sweep state (LOG_SWEEP only) — Farina-style exponential chirp
     // -------------------------------------------------------------------------
 
-    /** Pre-rendered unit-amplitude (peak 1.0) log-sweep buffer. Reused as the reference X(t) by the analyzer. */
+    /** Pre-rendered unit-amplitude (peak 1.0) log-sweep buffer. Reused as the reference X(t) by the analyzer.
+     *  Volatile: the UI thread swaps in a freshly rendered buffer on live
+     *  parameter changes while the audio thread replays it. */
     @Getter
-    private float[] logSweepBuffer;
+    private volatile float[] logSweepBuffer;
     /** Lead-in silent samples emitted before the sweep begins. */
     private int     logSweepLeadIn;
-    /** Total samples emitted since construction (lead-in + sweep + trailing silence). */
+    /** Total samples emitted since construction (lead-in + sweep + trailing silence).
+     *  Audio-thread-owned: only {@link #logSweepNext()} (and pre-stream
+     *  resets) write it — UI-side restarts go through {@link #logSweepRestart}. */
     private long    logSweepIdx;
+    /** Restart request from the UI thread (set after a live buffer rebuild);
+     *  consumed by {@link #logSweepNext()} so playback-position state keeps a
+     *  single writer. */
+    private final AtomicBoolean logSweepRestart = new AtomicBoolean(false);
 
     // -------------------------------------------------------------------------
     // Harmonic compensation state (SINE_COMPENSATED only)
@@ -387,6 +398,7 @@ public class SignalGenerator {
      * reference would not align with the captured signal.
      */
     public void resetSweepPosition() {
+        logSweepRestart.set(false);
         this.logSweepIdx = 0L;
         this.sweepIdx    = 0;
         this.sweepPhase  = 0.0;
@@ -610,10 +622,18 @@ public class SignalGenerator {
      * after the first cycle.  Hann fade in/out is applied per cycle.
      */
     private double logSweepNext() {
+        // Snapshot the buffer reference: the UI thread swaps in a new array
+        // on live parameter changes, and indexing the field directly after
+        // validating against an earlier read can index past a shorter
+        // replacement (AIOOBE on the audio thread).
+        float[] buf = logSweepBuffer;
+        if (logSweepRestart.get() && logSweepRestart.getAndSet(false)) {
+            logSweepIdx = logSweepLeadIn;
+        }
         long idx = logSweepIdx++;
         if (idx < logSweepLeadIn) return 0.0;
         long sIdx = idx - logSweepLeadIn;
-        int bufLen = logSweepBuffer.length;
+        int bufLen = buf.length;
         if (sIdx >= bufLen) {
             if (!sweepLoop) return 0.0;
             // Wrap back to the start of the buffer (skip lead-in on
@@ -626,7 +646,7 @@ public class SignalGenerator {
         }
         int bufIdx = (int) sIdx;
         double env = sweepEnvelope(bufIdx, bufLen);
-        return logSweepBuffer[bufIdx] * env;
+        return buf[bufIdx] * env;
     }
 
     /** Returns the Hann fade envelope value for sample {@code idx} within a
@@ -688,17 +708,20 @@ public class SignalGenerator {
     public void setSweepDurationSamples(int samples) {
         if (samples < 2) samples = 2;
         if (form == GenSignalForm.LINEAR_SWEEP) {
+            // No sweepIdx reset here: linearSweepNext() wraps an
+            // out-of-range index itself, and position state is
+            // audio-thread-owned.
             sweepPeriodSamples = samples;
-            if (sweepIdx >= sweepPeriodSamples) sweepIdx = 0;
             reclampFadeToCycle();
         } else if (form == GenSignalForm.LOG_SWEEP) {
             // Allocate a new buffer at the requested length so subsequent
-            // logSweepNext() reads see the new size.  Position is reset
-            // to the start of the buffer (skip lead-in) so the user
-            // doesn't get stuck halfway through an outdated cycle.
+            // logSweepNext() reads see the new size.  The restart request
+            // makes the audio thread rewind to the start of the buffer
+            // (skip lead-in) so the user doesn't get stuck halfway through
+            // an outdated cycle.
             float[] fresh = renderLogSweep(sweepFreqStart, sweepFreqEnd, samples, sampleRate);
             this.logSweepBuffer = fresh;
-            this.logSweepIdx    = logSweepLeadIn;
+            logSweepRestart.set(true);
             reclampFadeToCycle();
         }
     }
@@ -711,9 +734,10 @@ public class SignalGenerator {
         int len = (logSweepBuffer != null) ? logSweepBuffer.length : 0;
         if (len < 2) return;
         this.logSweepBuffer = renderLogSweep(sweepFreqStart, sweepFreqEnd, len, sampleRate);
-        // Reset playback to the start of the new buffer so the user hears
-        // the new sweep from the beginning instead of a discontinuity.
-        this.logSweepIdx = logSweepLeadIn;
+        // Rewind playback to the start of the new buffer so the user hears
+        // the new sweep from the beginning instead of a discontinuity —
+        // via the restart request so only the audio thread writes position.
+        logSweepRestart.set(true);
     }
 
     /** Returns the current sweep-cycle length in samples (period for
