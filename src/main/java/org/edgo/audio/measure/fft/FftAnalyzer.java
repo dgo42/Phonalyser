@@ -1593,16 +1593,106 @@ public class FftAnalyzer {
                 break;
             }
 
+            case HFT144D:
+                return buildHftWindow(N, HFT144D_COEFFS);
+
+            case HFT248D:
+                return buildHftWindow(N, HFT248D_COEFFS);
+
+            case KB24:
+                return buildKaiserWindow(N, 24.0);
+
+            case KB38:
+                return buildKaiserWindow(N, 38.0);
+
             case DC150:
                 return buildChebyshevWindow(N, 150.0);
 
             case DC200:
                 return buildChebyshevWindow(N, 200.0);
 
+            case DC250:
+                return buildChebyshevWindow(N, 250.0);
+
+            case DC300:
+                return buildChebyshevWindow(N, 300.0);
+
             default:
                 throw new IllegalArgumentException("Unknown window type: " + type);
         }
         return w;
+    }
+
+    /** HFT144D cosine-sum coefficients (Heinzel/Rüdiger/Schilling 2002,
+     *  "Spectrum and spectral density estimation by the DFT…") — flat-top,
+     *  −144.1 dB highest sidelobe, ±0.0001 dB amplitude flatness,
+     *  differentiable. */
+    private static final double[] HFT144D_COEFFS = {
+            1.0, -1.96760033, 1.57983607, -0.81123644,
+            0.22583558, -0.02773848, 0.00090360 };
+
+    /** HFT248D coefficients (same paper) — flat-top, −248.4 dB highest
+     *  sidelobe, ±0.0001 dB amplitude flatness; sidelobes below anything a
+     *  physical ADC produces. */
+    private static final double[] HFT248D_COEFFS = {
+            1.0, -1.985844164102, 1.791176438506, -1.282075284005,
+            0.667777530266, -0.240160796576, 0.056656381764,
+            -0.008134974479, 0.000624544650, -0.000019808998,
+            0.000000132974 };
+
+    /** Builds an HFT-family flat-top window: a PERIODIC cosine sum
+     *  {@code w(z) = Σ cₖ·cos(k·z)}, {@code z = 2πn/N} (signs live in the
+     *  coefficients), normalized to peak 1.  The amplitude scaling
+     *  self-normalizes via the coherent gain — peak-1 just keeps the
+     *  window family consistent. */
+    private double[] buildHftWindow(int N, double[] coeffs) {
+        double[] w = new double[N];
+        double max = 0.0;
+        for (int n = 0; n < N; n++) {
+            double z = 2.0 * Math.PI * n / N;
+            double val = 0.0;
+            for (int k = 0; k < coeffs.length; k++) {
+                val += coeffs[k] * Math.cos(k * z);
+            }
+            w[n] = val;
+            if (val > max) max = val;
+        }
+        for (int n = 0; n < N; n++) {
+            w[n] /= max;
+        }
+        return w;
+    }
+
+    /** Builds a symmetric Kaiser-Bessel window,
+     *  {@code w[n] = I₀(β·√(1−x²)) / I₀(β)} with {@code x = 2n/(N−1) − 1}.
+     *  Sidelobe suppression follows Kaiser's {@code A ≈ 8.7 + β/0.1102} dB
+     *  relation — β=24 ≈ −226 dB with a narrower main lobe than equally
+     *  suppressing cosine windows; β=38 sits below the double-precision
+     *  FFT floor (like DC300). */
+    private double[] buildKaiserWindow(int N, double beta) {
+        double[] w = new double[N];
+        double denom = besselI0(beta);
+        for (int n = 0; n < N; n++) {
+            double x = 2.0 * n / (N - 1) - 1.0;
+            w[n] = besselI0(beta * Math.sqrt(Math.max(0.0, 1.0 - x * x))) / denom;
+        }
+        return w;
+    }
+
+    /** Modified Bessel function of the first kind, order 0 — power series
+     *  {@code Σ ((x/2)ᵏ/k!)²}; converges to double precision well within
+     *  the iteration cap for the β range used here. */
+    private double besselI0(double x) {
+        double sum  = 1.0;
+        double term = 1.0;
+        double half = x / 2.0;
+        for (int k = 1; k < 200; k++) {
+            double f = half / k;
+            term *= f * f;
+            sum  += term;
+            if (term < sum * 1e-17) break;
+        }
+        return sum;
     }
 
     /**

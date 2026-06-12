@@ -132,6 +132,30 @@ public final class MultifunctionalTab {
         if (genPane != null) genPane.pauseAroundDialog();
     }
 
+    /** Which engines are live right now — snapshotted by
+     *  {@code MainWindow.rebuildContent()} before the teardown so the
+     *  REBUILT panes can pick the same engines back up. */
+    public record RunningState(boolean generator, boolean scope, boolean fft) {}
+
+    public RunningState runningState() {
+        return new RunningState(
+                genPane != null && genPane.isToneRunning(),
+                oscPane != null && oscPane.isCapturing(),
+                fftPane != null && fftPane.isRecording());
+    }
+
+    /** Restores the engines captured by {@link #runningState()} on THIS
+     *  (freshly rebuilt) instance's panes. */
+    public void restoreRunningState(RunningState state) {
+        if (state == null) return;
+        if (state.generator() && genPane != null) genPane.resumeTone();
+        if (state.scope() && oscPane != null && !oscPane.isCapturing()) {
+            oscPane.startCapture();
+            oscPane.setRecordingState(oscPane.isCapturing());
+        }
+        if (state.fft() && fftPane != null) fftPane.engageRecord();
+    }
+
     // -------------------------------------------------------------------------
     // Pane construction
     // -------------------------------------------------------------------------

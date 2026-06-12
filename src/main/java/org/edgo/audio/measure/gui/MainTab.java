@@ -24,7 +24,6 @@ import org.eclipse.swt.events.ControlListener;
 import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
-import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
@@ -38,15 +37,16 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.TabFolder;
 import org.eclipse.swt.widgets.TabItem;
+import org.edgo.audio.measure.enums.TabOrientation;
 import org.edgo.audio.measure.gui.bind.Bindings;
+import org.edgo.audio.measure.gui.common.Fonts;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.fft.FftPane;
 import org.edgo.audio.measure.gui.generator.GeneratorPane;
-import org.edgo.audio.measure.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
+import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -162,6 +162,16 @@ public final class MainTab {
 
     public void stopForRecreate() {
         if (multifunctional != null) multifunctional.stopForRecreate();
+    }
+
+    /** Live-engine snapshot for {@code MainWindow.rebuildContent()}. */
+    public MultifunctionalTab.RunningState runningState() {
+        return (multifunctional != null) ? multifunctional.runningState() : null;
+    }
+
+    /** Restores a {@link #runningState()} snapshot on the rebuilt panes. */
+    public void restoreRunningState(MultifunctionalTab.RunningState state) {
+        if (multifunctional != null) multifunctional.restoreRunningState(state);
     }
 
     public GeneratorPane getGenPane() {
@@ -364,10 +374,9 @@ public final class MainTab {
             this.selectedBg = selectedBg;
             this.content    = content;
 
-            FontData fd = getFont().getFontData()[0];
-            this.labelFont = new Font(parent.getDisplay(), fd.getName(),
-                                      Math.max(8, fd.getHeight() - 1), SWT.NORMAL);
-            addDisposeListener(e -> { if (!labelFont.isDisposed()) labelFont.dispose(); });
+            // Shared, centrally configured font — owned by Fonts, never
+            // disposed here.
+            this.labelFont = Fonts.instance().normal(parent.getDisplay());
 
             GridData gd = new GridData(SWT.FILL, SWT.TOP, true, false);
             gd.heightHint = computePreferredHeight();

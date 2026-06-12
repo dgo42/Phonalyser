@@ -398,6 +398,17 @@ public final class FftPane {
         recordButton.setImage(recordLit);
     }
 
+    /** Programmatically engages Record — used when a content rebuild
+     *  (language / font change) restores the pre-rebuild running state. */
+    public void engageRecord() {
+        recordOn();
+    }
+
+    /** True while the FFT analyser is recording. */
+    public boolean isRecording() {
+        return controller.isRecording();
+    }
+
     /** Pauses FFT recording for the lifetime of a modal dialog (e.g.
      *  Preferences).  Mirrors the oscilloscope's pause-around-dialog
      *  contract: returns a {@link Runnable} that restores the previous

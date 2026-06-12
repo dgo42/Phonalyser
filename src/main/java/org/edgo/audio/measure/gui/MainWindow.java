@@ -37,6 +37,7 @@ import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.program.Program;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
@@ -49,6 +50,7 @@ import org.edgo.audio.measure.gui.helpviewer.HelpUrls;
 import org.edgo.audio.measure.gui.helpviewer.HelpViewer;
 import org.edgo.audio.measure.gui.helpviewer.UpdateChecker;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
 
@@ -94,9 +96,9 @@ public final class MainWindow {
 
     private final Display display;
     private final Shell   shell;
-    private final MainTab mainTab;
-
-    private boolean recreateRequested;
+    /** Rebuilt in place by {@link #rebuildContent()} (language / UI-font
+     *  changes) — the shell itself survives. */
+    private MainTab mainTab;
 
     public MainWindow(Display display) {
         this.display = display;
@@ -151,7 +153,7 @@ public final class MainWindow {
      *  up by the previous instance's {@link #requestRecreate()}. */
     public void open() {
         shell.open();
-        closeLanguageSwitchDialog();
+        closeRebuildSplash();
         log.info("GUI started.");
         // Fire the silent update check once the shell is up.  The
         // checker spawns its own daemon thread; doing the check from
@@ -167,39 +169,60 @@ public final class MainWindow {
         return shell.isDisposed();
     }
 
-    /** True when {@link #requestRecreate()} was invoked — tells the event
-     *  loop in {@code GuiMain} to construct a fresh {@code MainWindow}
-     *  instead of dropping out of the loop on shell-dispose. */
-    public boolean isRecreateRequested() {
-        return recreateRequested;
+    /** Rebuilds the menu bar + tab content INSIDE the live shell — the
+     *  window itself (position, size, maximized state) survives.  Used by
+     *  the language switch and by UI-font changes.  The live engines are
+     *  snapshotted before the teardown and restarted on the rebuilt panes
+     *  afterwards, so a font / language change never silences a running
+     *  measurement; a brief "Applying settings…" splash covers the work. */
+    public void rebuildContent() {
+        showRebuildSplash(display);
+        try {
+            MultifunctionalTab.RunningState running = mainTab.runningState();
+            mainTab.stopForRecreate();
+            Menu oldMenu = shell.getMenuBar();
+            for (Control c : shell.getChildren()) {
+                c.dispose();
+            }
+            if (oldMenu != null) oldMenu.dispose();
+            shell.setText(I18n.t("app.title"));
+            buildMenuBar();
+            mainTab = new MainTab(shell);
+            // Recompute only the MINIMUM size — the current window size and
+            // position deliberately stay untouched.
+            Point natural = mainTab.computeNaturalShellSize();
+            shell.setMinimumSize(Math.min(natural.x, MIN_SHELL_WIDTH),
+                    Math.max(natural.y, MIN_SHELL_HEIGHT));
+            mainTab.applySavedLayoutState();
+            shell.layout(true, true);
+            mainTab.restoreRunningState(running);
+        } finally {
+            closeRebuildSplash();
+        }
     }
 
-    /** Tears the current shell down so the {@code GuiMain} loop builds a
-     *  fresh one with the just-changed locale.  Running playback / capture
-     *  is stopped first (state lives in {@link Preferences}, so the new
-     *  shell picks everything else back up from there).  A modal-looking
-     *  "Switching language…" Shell is shown first and persists across the
-     *  old-shell teardown so the user has feedback while the recreate is
-     *  in flight; the new instance's {@link #open()} disposes it. */
-    public void requestRecreate() {
-        if (recreateRequested) return;
-        recreateRequested = true;
-        showLanguageSwitchDialog(display);
-        mainTab.stopForRecreate();
-        if (!shell.isDisposed()) shell.close();
+    /** The audio configuration the running streams depend on — backend +
+     *  the active backend's devices, sample rates and bit depths.  Compared
+     *  before/after the Preferences dialog: only a committed change here
+     *  bounces the running playback / capture. */
+    private String audioConfigFingerprint(Preferences prefs) {
+        BackendPrefs bp = prefs.current();
+        return prefs.getBackend() + "|"
+                + bp.getInputDeviceName()  + "|" + bp.getInputSampleRate()  + "|" + bp.getInputBitDepth() + "|"
+                + bp.getOutputDeviceName() + "|" + bp.getOutputSampleRate() + "|" + bp.getOutputBitDepth();
     }
 
-    /** Builds and shows the language-switch dialog. */
-    private static void showLanguageSwitchDialog(Display d) {
+    /** Builds and shows the brief splash covering a content rebuild. */
+    private static void showRebuildSplash(Display d) {
         if (languageSwitchShell != null && !languageSwitchShell.isDisposed()) return;
         Shell ld = new Shell(d, SWT.ON_TOP | SWT.TITLE | SWT.BORDER);
-        ld.setText(I18n.t("language.switchingTitle"));
+        ld.setText(I18n.t("ui.applying.title"));
         FillLayout fl = new FillLayout();
         fl.marginWidth  = 24;
         fl.marginHeight = 18;
         ld.setLayout(fl);
         Label l = new Label(ld, SWT.CENTER);
-        l.setText(I18n.t("language.switching"));
+        l.setText(I18n.t("ui.applying"));
         ld.pack();
         Rectangle screen = d.getPrimaryMonitor().getBounds();
         Point sz = ld.getSize();
@@ -214,7 +237,7 @@ public final class MainWindow {
         languageSwitchShell = ld;
     }
 
-    private static void closeLanguageSwitchDialog() {
+    private static void closeRebuildSplash() {
         if (languageSwitchShell != null && !languageSwitchShell.isDisposed()) {
             languageSwitchShell.close();
         }
@@ -258,16 +281,26 @@ public final class MainWindow {
         MenuItem preferencesItem = new MenuItem(toolsMenu, SWT.PUSH);
         preferencesItem.setText(I18n.t("menu.tools.preferences"));
         preferencesItem.addListener(SWT.Selection, e -> {
-            // Device enumeration inside the dialog (especially WDM-KS via
-            // PortAudio) can disturb running streams; a backend change
-            // additionally needs the *running* playback / capture torn
-            // down so it doesn't keep using the old backend after the
-            // user switched.
-            Runnable resume = mainTab.pauseForDialog();
-            // Look & Feel layout prefs (tab orientation / icon size) apply
-            // LIVE — MainTab rebuilds its host chrome from the property
-            // bindings; no shell recreate needed.
-            new PreferencesDialog(shell).open(resume);
+            // Streams keep running while the dialog is up.  Only when OK
+            // committed a change to the AUDIO configuration are the running
+            // playback / capture bounced (stop + restart picks the new
+            // backend / device / format up); Cancel leaves the prefs — and
+            // therefore the streams — untouched.  Caveat: device enumeration
+            // inside the dialog may still disturb a running WDM-KS stream.
+            Preferences mwPrefs = Preferences.instance();
+            String audioBefore = audioConfigFingerprint(mwPrefs);
+            String fontsBefore = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
+            new PreferencesDialog(shell).open(() -> {
+                String fontsAfter = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
+                if (!fontsAfter.equals(fontsBefore)) {
+                    // Fonts are woven into every painter — rebuild the
+                    // content in place (panes come back stopped, like a
+                    // language switch); an audio change is covered too.
+                    rebuildContent();
+                } else if (!audioConfigFingerprint(mwPrefs).equals(audioBefore)) {
+                    mainTab.pauseForDialog().run();   // stop + restart on the new config
+                }
+            });
         });
 
         MenuItem helpCascade = new MenuItem(menuBar, SWT.CASCADE);
@@ -411,7 +444,7 @@ public final class MainWindow {
             if (tag.equals(prefs.getUiLanguage())) return;
             prefs.setUiLanguage(tag);
             I18n.setLocale(Locale.forLanguageTag(tag));
-            requestRecreate();
+            rebuildContent();
         });
     }
 }
