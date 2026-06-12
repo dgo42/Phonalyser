@@ -68,7 +68,10 @@ public final class GeneratorController {
     private volatile Thread          playThread;
     private volatile SignalGenerator generator;
     private volatile AudioPlayback   playback;
-    private final    AtomicBoolean   stopFlag    = new AtomicBoolean(false);
+    /** Per-session stop flag — a fresh instance per start so a stop request
+     *  to a previous (possibly join-timed-out) playback thread can never be
+     *  revoked by the next session's {@code set(false)}. */
+    private volatile AtomicBoolean   stopFlag    = new AtomicBoolean(false);
     @Getter
     private volatile boolean         running;
     @Getter
@@ -296,6 +299,10 @@ public final class GeneratorController {
                                 int sampleRate, int bitDepth, int ditherBits,
                                 GenSignalForm form, double frequency, double amplitudeVRms,
                                 long readyTimeoutSeconds) {
+        Thread old = playThread;
+        if (old != null && old.isAlive()) {
+            return "The previous playback is still shutting down — try again in a moment.";
+        }
         SignalGenerator gen;
         double dacFs = prefs.getDacFsVoltageRms();
         try {
@@ -359,12 +366,13 @@ public final class GeneratorController {
             return "Could not open the output device: " + ex.getMessage();
         }
         this.playback = ag;
-        stopFlag.set(false);
+        final AtomicBoolean sessionStop = new AtomicBoolean(false);
+        this.stopFlag = sessionStop;
 
         final CountDownLatch readyLatch = new CountDownLatch(1);
         Thread t = new Thread(() -> {
             try {
-                ag.play(generator, stopFlag, readyLatch);
+                ag.play(generator, sessionStop, readyLatch);
             } catch (Exception ex) {
                 log.warn("Playback thread terminated abnormally", ex);
             } finally {
@@ -410,8 +418,15 @@ public final class GeneratorController {
             } catch (InterruptedException ignored) {
                 Thread.currentThread().interrupt();
             }
+            if (t.isAlive()) {
+                // Keep the reference so tryStartOnce refuses to open a second
+                // playback on the same device while this one is wedged.  Its
+                // session stop flag stays set, so it can never resume.
+                log.warn("Playback thread did not exit within 2 s — restart refused until it does.");
+            } else {
+                playThread = null;
+            }
         }
-        playThread = null;
         generator  = null;
         playback   = null;
         running    = false;

@@ -160,6 +160,12 @@ public final class SignalBufferReader {
         int n = (int) Math.min((long) maxCount, write - readPos);
         if (n <= 0) return 0;
         buffer.readStartingAt(readPos, n, outLeft, outRight);   // forward, wrap-aware copy
+        // The copy runs outside the buffer lock.  When the cursor sits close
+        // to a full ring behind (large-FFT backlog), the writer can lap into
+        // the region being copied DURING the copy — the pre-check above can't
+        // see that, and the out arrays would hold a silently torn window.
+        // Re-check against the post-copy write position.
+        if (readPos < buffer.getWritePos() - buffer.getCapacity()) return OVERRUN;
         readPos += n;                                           // consume
         return n;
     }

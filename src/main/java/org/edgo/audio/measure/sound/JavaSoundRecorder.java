@@ -89,7 +89,12 @@ public class JavaSoundRecorder implements AudioCapture {
                     "Mixer '" + device.name() + "' does not support " + format);
         }
         line = (TargetDataLine) mixer.getLine(info);
-        line.open(format, BUFFER_FRAMES * frameSize);
+        // Open with the provider's default buffer (csjsound: 500 ms) like
+        // JavaSoundGenerator does.  Requesting an explicit small buffer
+        // breaks csjsound's native capture ring (nGetBufferBytes=0, no
+        // samples ever delivered, stop() wedges in native code) — and the
+        // capture loop must read chunks SMALLER than the ring anyway.
+        line.open(format);
         int hwFrames = line.getBufferSize() / frameSize;
         log.info("JavaSound recorder opened : {}", device.name());
         log.info("Capture format             : {}", format);
