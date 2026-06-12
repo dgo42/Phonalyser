@@ -27,7 +27,6 @@ import com.sun.jna.ptr.PointerByReference;
 
 import lombok.extern.log4j.Log4j2;
 
-import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -55,10 +54,8 @@ public class WasapiGenerator implements AudioPlayback {
     private final WasapiDeviceManager.WasapiDeviceRef device;
     private final int sampleRate;
     private final int bitDepth;
-    private final int bytesPerSample;
     private final int bytesPerFrame;
-    private volatile int ditherBits;
-    private final Random rng;
+    private final PcmQuantizer quantizer;
 
     private Pointer immDevice;
     private Pointer audioClient;
@@ -73,11 +70,8 @@ public class WasapiGenerator implements AudioPlayback {
         this.device         = device;
         this.sampleRate     = sampleRate;
         this.bitDepth       = bitDepth;
-        this.ditherBits     = ditherBits;
-        this.bytesPerSample = bitDepth / 8;
-        this.bytesPerFrame  = bytesPerSample * CHANNELS;
-        // Always allocate so live setDitherBits(>0) doesn't NPE in tpdfNoise().
-        this.rng            = new Random();
+        this.bytesPerFrame  = (bitDepth / 8) * CHANNELS;
+        this.quantizer      = new PcmQuantizer(bitDepth, ditherBits);
     }
 
     @Override
@@ -135,7 +129,7 @@ public class WasapiGenerator implements AudioPlayback {
             log.info("HW buffer               : {} frames ({} ms)",
                     bufferFrames,
                     bufferFrames * 1000 / sampleRate);
-            if (ditherBits > 0) log.info("Dithering               : TPDF {} bit", ditherBits);
+            if (quantizer.getDitherBits() > 0) log.info("Dithering               : TPDF {} bit", quantizer.getDitherBits());
         } catch (RuntimeException ex) {
             closeQuietly();
             throw ex;
@@ -408,42 +402,12 @@ public class WasapiGenerator implements AudioPlayback {
      * No allocation on the audio hot path.
      */
     private void encodeIntoScratch(SignalGenerator gen, byte[] scratch, int frames) {
-        if (bitDepth == 8) {
-            // WASAPI 8-bit PCM is signed (unlike JavaSound's unsigned 8-bit).
-            for (int i = 0; i < frames; i++) {
-                double sample = clamp(gen.nextSample() + tpdfNoise());
-                byte   val    = (byte) Math.round(sample * 127.0);
-                int    offset = i * bytesPerFrame;
-                scratch[offset]     = val;
-                scratch[offset + 1] = val;
-            }
-        } else {
-            long maxVal = (1L << (bitDepth - 1)) - 1;
-            for (int i = 0; i < frames; i++) {
-                double sample = clamp(gen.nextSample() + tpdfNoise());
-                long   pcm    = (long) Math.round(sample * maxVal);
-                int    offset = i * bytesPerFrame;
-                for (int b = 0; b < bytesPerSample; b++) {
-                    byte byteVal = (byte) (pcm >> (8 * b));
-                    scratch[offset + b]                  = byteVal;
-                    scratch[offset + bytesPerSample + b] = byteVal;
-                }
-            }
-        }
+        quantizer.encode(gen, scratch, frames);
     }
 
     @Override
     public void setDitherBits(int bits) {
-        this.ditherBits = Math.max(0, bits);
-    }
-
-    private double tpdfNoise() {
-        if (ditherBits == 0) return 0.0;
-        return (rng.nextDouble() - rng.nextDouble()) / (1L << (ditherBits - 1));
-    }
-
-    private double clamp(double v) {
-        return v > 1.0 ? 1.0 : (v < -1.0 ? -1.0 : v);
+        quantizer.setDitherBits(bits);
     }
 
     @Override

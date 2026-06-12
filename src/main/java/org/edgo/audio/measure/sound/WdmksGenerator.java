@@ -19,7 +19,6 @@
 package org.edgo.audio.measure.sound;
 
 import java.util.Arrays;
-import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -47,11 +46,10 @@ public class WdmksGenerator implements AudioPlayback {
     private static final int CHANNELS = 2;
 
     private final WdmksDeviceManager.WdmksDeviceRef device;
-    private final int    sampleRate;
-    private final int    bitDepth;
-    private volatile int ditherBits;
+    private final int          sampleRate;
+    private final int          bitDepth;
+    private final PcmQuantizer quantizer;
     private int    bytesPerFrame;
-    private final Random rng;
 
     private Pointer stream;
 
@@ -102,10 +100,8 @@ public class WdmksGenerator implements AudioPlayback {
         this.device        = device;
         this.sampleRate    = sampleRate;
         this.bitDepth      = bitDepth;
-        this.ditherBits    = ditherBits;
+        this.quantizer     = new PcmQuantizer(bitDepth, ditherBits);
         this.bytesPerFrame = (bitDepth / 8) * CHANNELS;
-        // Always allocate so live setDitherBits(>0) calls don't NPE in tpdfNoise().
-        this.rng           = new Random();
     }
 
     @Override
@@ -145,7 +141,7 @@ public class WdmksGenerator implements AudioPlayback {
         log.info("Output rate/bits        : {} Hz / {} bit", sampleRate, bitDepth);
         log.info("Suggested latency       : {} ms (host-picked buffer size)",
                 Math.round(suggestedLatency * 1000));
-        if (ditherBits > 0) log.info("Dithering               : TPDF {} bit", ditherBits);
+        if (quantizer.getDitherBits() > 0) log.info("Dithering               : TPDF {} bit", quantizer.getDitherBits());
     }
 
     @Override
@@ -253,45 +249,12 @@ public class WdmksGenerator implements AudioPlayback {
     }
 
     private void fillBuffer(SignalGenerator gen, byte[] buf, int frames) {
-        int bytesPerSample = bitDepth / 8;
-
-        if (bitDepth == 8) {
-            // PortAudio paInt8 is signed [-128, +127]; CsjsoundGenerator uses unsigned 8-bit
-            // for JavaSound. Here we emit signed-PCM directly.
-            for (int i = 0; i < frames; i++) {
-                double sample = clamp(gen.nextSample() + tpdfNoise());
-                byte   val    = (byte) Math.round(sample * 127.0);
-                int    offset = i * bytesPerFrame;
-                buf[offset]     = val; // left
-                buf[offset + 1] = val; // right
-            }
-        } else {
-            long maxVal = (1L << (bitDepth - 1)) - 1;
-            for (int i = 0; i < frames; i++) {
-                double sample = clamp(gen.nextSample() + tpdfNoise());
-                long   pcm    = (long) Math.round(sample * maxVal);
-                int    offset = i * bytesPerFrame;
-                for (int b = 0; b < bytesPerSample; b++) {
-                    byte byteVal = (byte) (pcm >> (8 * b));
-                    buf[offset + b]                  = byteVal; // left
-                    buf[offset + bytesPerSample + b] = byteVal; // right
-                }
-            }
-        }
+        quantizer.encode(gen, buf, frames);
     }
 
     @Override
     public void setDitherBits(int bits) {
-        this.ditherBits = Math.max(0, bits);
-    }
-
-    private double tpdfNoise() {
-        if (ditherBits == 0) return 0.0;
-        return (rng.nextDouble() - rng.nextDouble()) / (1L << (ditherBits - 1));
-    }
-
-    private double clamp(double v) {
-        return v > 1.0 ? 1.0 : (v < -1.0 ? -1.0 : v);
+        quantizer.setDitherBits(bits);
     }
 
     @Override
