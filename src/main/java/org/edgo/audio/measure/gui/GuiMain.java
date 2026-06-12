@@ -83,17 +83,16 @@ public final class GuiMain {
         AudioBackend.instance().setActive(saved);
 
         Display display = new Display();
-        boolean recreate;
-        do {
-            MainWindow window = new MainWindow(display);
-            window.open();
-            while (!window.isDisposed()) {
-                if (!display.readAndDispatch()) {
-                    display.sleep();
-                }
+        // Language / font changes rebuild the window CONTENT in place
+        // (MainWindow.rebuildContent) — the shell lives for the whole
+        // session, so no recreate loop is needed.
+        MainWindow window = new MainWindow(display);
+        window.open();
+        while (!window.isDisposed()) {
+            if (!display.readAndDispatch()) {
+                display.sleep();
             }
-            recreate = window.isRecreateRequested();
-        } while (recreate);
+        }
         display.dispose();
     }
 }

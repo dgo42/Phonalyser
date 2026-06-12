@@ -116,6 +116,17 @@ public final class Preferences {
      *  real estate for the actual measurement panes. */
     private final Property<Boolean> smallIconsInMainTab = bound(false);
 
+    /** UI font specs, format {@code name|height|style} (style: normal /
+     *  bold).  NORMAL covers axis labels, readouts and measurement-table
+     *  body text across the FFT / scope / FreqResp views; BOLD the
+     *  emphasised measurement-table text; CHANNEL the big L/R channel
+     *  buttons (central creation point only — no dialog UI).  Changing
+     *  the first two in the Preferences dialog triggers a shell recreate
+     *  so every painter picks the new fonts up. */
+    private final Property<String> uiFontNormal  = bound("Consolas|9|normal");
+    private final Property<String> uiFontBold    = bound("Consolas|9|bold");
+    private final Property<String> uiFontChannel = bound("Consolas|12|bold");
+
     /** When true, the GUI checks GitHub releases for a newer version on
      *  startup.  Stays off by default so the app never makes network
      *  calls without explicit user opt-in. */
@@ -635,6 +646,8 @@ public final class Preferences {
 
         c.tabOrientation.set(tabOrientation.get());
         c.smallIconsInMainTab.set(smallIconsInMainTab.get());
+        c.uiFontNormal.set(uiFontNormal.get());
+        c.uiFontBold.set(uiFontBold.get());
         c.fftStrongToneRelDb.set(fftStrongToneRelDb.get());
         c.freqRespNyquistFraction.set(freqRespNyquistFraction.get());
         c.freqRespFreqMaxHz.set(freqRespFreqMaxHz.get());
@@ -691,6 +704,8 @@ public final class Preferences {
 
         setTabOrientation(edit.tabOrientation.get());
         setSmallIconsInMainTab(edit.smallIconsInMainTab.get());
+        setUiFontNormal(edit.uiFontNormal.get());
+        setUiFontBold(edit.uiFontBold.get());
         setFftStrongToneRelDb(edit.fftStrongToneRelDb.get());
         setFreqRespCompareSmoothWindow(edit.freqRespCompareSmoothWindow.get());
         setFreqRespNotchEnabled(edit.freqRespNotchEnabled.get());
@@ -904,6 +919,15 @@ public final class Preferences {
     public TabOrientation getTabOrientation()  { return tabOrientation.get(); }
     public void setTabOrientation(TabOrientation v) { tabOrientation.set(v); }
     public Property<TabOrientation> tabOrientationProperty() { return tabOrientation; }
+    public String getUiFontNormal()            { return uiFontNormal.get(); }
+    public void setUiFontNormal(String v)      { uiFontNormal.set(v); }
+    public Property<String> uiFontNormalProperty() { return uiFontNormal; }
+    public String getUiFontBold()              { return uiFontBold.get(); }
+    public void setUiFontBold(String v)        { uiFontBold.set(v); }
+    public Property<String> uiFontBoldProperty() { return uiFontBold; }
+    public String getUiFontChannel()           { return uiFontChannel.get(); }
+    public void setUiFontChannel(String v)     { uiFontChannel.set(v); }
+    public Property<String> uiFontChannelProperty() { return uiFontChannel; }
 
     public boolean isSmallIconsInMainTab()     { return smallIconsInMainTab.get(); }
     public void setSmallIconsInMainTab(boolean v) { smallIconsInMainTab.set(v); }
@@ -1600,6 +1624,9 @@ public final class Preferences {
         root.put("backend",                backend.get().name());
         if (uiLanguage.get() != null) root.put("uiLanguage", uiLanguage.get());
         root.put("tabOrientation", tabOrientation.get().name());
+        root.put("uiFontNormal",  uiFontNormal.get());
+        root.put("uiFontBold",    uiFontBold.get());
+        root.put("uiFontChannel", uiFontChannel.get());
         root.put("activeTabIndex", activeTabIndex.get());
         root.put("smallIconsInMainTab", smallIconsInMainTab.get());
         root.put("checkForUpdatesOnStartup",  checkForUpdatesOnStartup.get());
@@ -1886,6 +1913,9 @@ public final class Preferences {
     private void fromMap(Map<?, ?> root) {
         if (root.get("uiLanguage") instanceof String s) uiLanguage.set(s);
         if (root.get("tabOrientation") instanceof String s) tabOrientation.set(enumOr(TabOrientation.class, s, tabOrientation.get()));
+        if (root.get("uiFontNormal")  instanceof String s) uiFontNormal.set(s);
+        if (root.get("uiFontBold")    instanceof String s) uiFontBold.set(s);
+        if (root.get("uiFontChannel") instanceof String s) uiFontChannel.set(s);
         if (root.get("activeTabIndex") instanceof Number n) activeTabIndex.set(n.intValue());
         if (root.get("smallIconsInMainTab") instanceof Boolean b) smallIconsInMainTab.set(b);
         if (root.get("checkForUpdatesOnStartup")  instanceof Boolean b) checkForUpdatesOnStartup.set(b);

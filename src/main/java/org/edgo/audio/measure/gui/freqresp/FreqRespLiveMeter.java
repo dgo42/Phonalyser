@@ -18,21 +18,20 @@
 
 package org.edgo.audio.measure.gui.freqresp;
 
+import java.util.Locale;
+
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
-import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
-
+import org.edgo.audio.measure.gui.common.Fonts;
 import org.edgo.audio.measure.preferences.Preferences;
-
-import java.util.Locale;
 
 /**
  * Compact live "input-level over time" chart shown inside the FreqResp
@@ -149,8 +148,8 @@ public final class FreqRespLiveMeter extends Canvas {
         int rgb = Preferences.instance().getFftLineColor();
         traceColor = new Color(d, (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
 
-        FontData fd = getFont().getFontData()[0];
-        labelFont = new Font(d, fd.getName(), Math.max(7, fd.getHeight() - 1), SWT.NORMAL);
+        // Shared, centrally configured font — owned by Fonts.
+        labelFont = Fonts.instance().normal(d);
 
         addPaintListener(this::onPaint);
         addDisposeListener(e -> {
@@ -159,7 +158,7 @@ public final class FreqRespLiveMeter extends Canvas {
             axisColor.dispose();
             textColor.dispose();
             traceColor.dispose();
-            if (labelFont != null && !labelFont.isDisposed()) labelFont.dispose();
+            // labelFont is a shared instance owned by Fonts — not disposed here.
         });
     }
 

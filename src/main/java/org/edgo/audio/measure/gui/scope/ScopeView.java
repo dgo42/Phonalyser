@@ -48,6 +48,7 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
+import org.edgo.audio.measure.gui.common.Fonts;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
@@ -414,7 +415,7 @@ public final class ScopeView extends AbstractMeasurementView {
 
         // L/R channel-pick buttons — migrated to ToolButton widgets in a top-left Toolbar.
         // Dim "mid" colour unselected, bright trace colour filled when selected.
-        chanButtonFont = new Font(getDisplay(), "Consolas", 12, SWT.BOLD);
+        chanButtonFont = Fonts.instance().channel(getDisplay());
         headerBar = new Toolbar(this, BTN_W, BTN_H);
         Preferences prefs = Preferences.instance();
         Channel mc = prefs.getOscMeasurementChannel();
@@ -597,8 +598,8 @@ public final class ScopeView extends AbstractMeasurementView {
         addDisposeListener(e -> {
             measWorker.stop();
             disposePalette();
-            if (monoFont != null) monoFont.dispose();
-            if (chanButtonFont != null) chanButtonFont.dispose();
+            // monoFont / chanButtonFont are shared instances owned by
+            // Fonts — never disposed here.
             // Header icons are cached and owned by IconUtils — disposed
             // when the main shell tears down, not here.
             if (measurementWindow != null) {
@@ -870,7 +871,7 @@ public final class ScopeView extends AbstractMeasurementView {
             // Use the same monoFont drawEdgeLabels does so the bound matches
             // the actual rendered label width.
             Font prev = gc.getFont();
-            if (monoFont == null) monoFont = new Font(getDisplay(), "Consolas", 9, SWT.NORMAL);
+            if (monoFont == null) monoFont = Fonts.instance().normal(getDisplay());
             gc.setFont(monoFont);
             int rightLabelWidth = gc.textExtent(ScopeFormat.formatVolts(maxV, rightVDiv)).x;
             gc.setFont(prev);
@@ -1325,7 +1326,7 @@ public final class ScopeView extends AbstractMeasurementView {
                                         boolean showL, boolean showR, Channel selected,
                                         int startY) {
         if (monoFont == null) {
-            monoFont = new Font(getDisplay(), "Consolas", 9, SWT.NORMAL);
+            monoFont = Fonts.instance().normal(getDisplay());
         }
         Font prevFont = gc.getFont();
         gc.setFont(monoFont);
@@ -1402,7 +1403,7 @@ public final class ScopeView extends AbstractMeasurementView {
         final int[] DASH       = { 4, 4 };
 
         if (monoFont == null) {
-            monoFont = new Font(getDisplay(), "Consolas", 9, SWT.NORMAL);
+            monoFont = Fonts.instance().normal(getDisplay());
         }
         Font prevFont = gc.getFont();
         gc.setFont(monoFont);
@@ -1672,7 +1673,7 @@ public final class ScopeView extends AbstractMeasurementView {
         boolean showR = prefs.isOscRightChannelEnabled();
 
         if (monoFont == null) {
-            monoFont = new Font(getDisplay(), "Consolas", 9, SWT.NORMAL);
+            monoFont = Fonts.instance().normal(getDisplay());
         }
         Font prevFont = gc.getFont();
         gc.setFont(monoFont);

@@ -60,6 +60,7 @@ import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
+import org.edgo.audio.measure.gui.common.Fonts;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.widgets.BlinkBanner;
@@ -110,16 +111,6 @@ public final class FftView extends AbstractFreqDomainView {
 
     /** Left padding (px) for the THD table inside the external window. */
     private static final int EXT_LEFT_PAD = 4;
-
-    /** FLL measurement plausibility bound, relative part: generator-vs-ADC
-     *  clock drift is ppm-scale (observed ≤ ~130 ppm), so 500 ppm is a
-     *  generous ceiling for a REAL mistune; anything beyond it is a
-     *  mis-measurement that must not reach the loop. */
-    private static final double FLL_MAX_ERROR_PPM  = 500;
-    /** FLL measurement plausibility bound, absolute floor in FFT bins —
-     *  keeps the gate permissive at low target frequencies where the
-     *  ppm part collapses below the spectral resolution. */
-    private static final double FLL_MAX_ERROR_BINS = 5;
 
     // ─── Fonts ────────────────────────────────────────────────────────────
     private Font monoFont;
@@ -424,7 +415,7 @@ public final class FftView extends AbstractFreqDomainView {
         syncFftColors();
 
         // L/R channel buttons — migrated to ToolButton widgets in a top-left Toolbar.
-        chanButtonFont = new Font(d, "Consolas", 12, SWT.BOLD);
+        chanButtonFont = Fonts.instance().channel(d);
         headerBar = new Toolbar(this, BTN_W, BTN_H);
         FormData hbd = new FormData();
         hbd.top  = new FormAttachment(0, 5);
@@ -617,9 +608,8 @@ public final class FftView extends AbstractFreqDomainView {
         bus.unsubscribe(Events.FFT_CAPTURE_RESYNC, onCaptureResync);
         bus.unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, onGenChangeForFll);
         disposePalette();
-        if (monoFont       != null) monoFont.dispose();
-        if (monoBoldFont   != null) monoBoldFont.dispose();
-        if (chanButtonFont != null) chanButtonFont.dispose();
+        // monoFont / monoBoldFont / chanButtonFont are shared instances
+        // owned by Fonts — never disposed here.
         // Header icons are cached and owned by IconUtils — disposed
         // when the main shell tears down, not here.
         if (distortionWindow != null) distortionWindow.dispose();
@@ -2906,10 +2896,13 @@ public final class FftView extends AbstractFreqDomainView {
     // =========================================================================
 
     private void ensureFonts() {
+        // Shared, centrally configured fonts — owned by Fonts, never
+        // disposed here.
+        Fonts fonts = Fonts.instance();
         Display d = getDisplay();
-        if (monoFont == null)       monoFont       = new Font(d, "Consolas", 9, SWT.NORMAL);
-        if (monoBoldFont == null)   monoBoldFont   = new Font(d, "Consolas", 9, SWT.BOLD);
-        if (chanButtonFont == null) chanButtonFont = new Font(d, "Consolas", 12, SWT.BOLD);
+        if (monoFont == null)       monoFont       = fonts.normal(d);
+        if (monoBoldFont == null)   monoBoldFont   = fonts.bold(d);
+        if (chanButtonFont == null) chanButtonFont = fonts.channel(d);
     }
 
 }

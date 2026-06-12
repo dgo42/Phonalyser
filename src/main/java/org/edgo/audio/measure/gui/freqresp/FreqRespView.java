@@ -27,29 +27,29 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
-import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Event;
+import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.Lanczos;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
-import org.edgo.audio.measure.common.Lanczos;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
+import org.edgo.audio.measure.gui.common.Fonts;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.widgets.BlinkBanner;
 import org.edgo.audio.measure.gui.widgets.ToolButton;
 import org.edgo.audio.measure.gui.widgets.Toolbar;
+import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -243,7 +243,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 ColorRole.RIGHT_BTN_CHAN, Preferences.instance().getOscRightChannelColor()));
         this.correctionStore = correctionStore;
 
-        allocateFonts();
+        axisFont    = Fonts.instance().normal(getDisplay());
+        readoutFont = Fonts.instance().normal(getDisplay());
 
         // Self-blinking overlay banners.  Font + colours are configured ONCE
         // here (the palette already holds the prefs-driven BACKGROUND from the
@@ -274,7 +275,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         }
         // Header buttons — ToolButton widgets in a Toolbar.  L/R is a radio (channel
         // select); phase keeps its own coloured icon; auto-setup/max are icon pushes.
-        chanButtonFont = new Font(getDisplay(), "Consolas", 12, SWT.BOLD);   // same as FFT/scope
+        chanButtonFont = Fonts.instance().channel(getDisplay());   // same as FFT/scope
         phaseFillGray  = new Color(getDisplay(), 0xE6, 0xE6, 0xE6);          // 90% grey so the icon reads
         headerBar = new Toolbar(this, BTN_W, BTN_H);
         leftBtn  = headerBar.chanButton("L", color(ColorRole.TEXT), color(ColorRole.BUTTON_FRAME),
@@ -389,19 +390,13 @@ public final class FreqRespView extends AbstractFreqDomainView {
                         resultAvailableListener);
             }
             disposePalette();
-            if (axisFont       != null && !axisFont.isDisposed())       axisFont.dispose();
-            if (readoutFont    != null && !readoutFont.isDisposed())    readoutFont.dispose();
-            if (chanButtonFont != null && !chanButtonFont.isDisposed()) chanButtonFont.dispose();
+            // chanButtonFont / axisFont / readoutFont are shared instances
+            // owned by Fonts — never disposed here.
             if (phaseFillGray  != null && !phaseFillGray.isDisposed())  phaseFillGray.dispose();
             disposeTraceBuffer();
         });
     }
 
-    private void allocateFonts() {
-        FontData fd = getFont().getFontData()[0];
-        axisFont    = new Font(getDisplay(), fd.getName(), Math.max(7, fd.getHeight() - 1), SWT.NORMAL);
-        readoutFont = new Font(getDisplay(), fd.getName(), Math.max(7, fd.getHeight() - 1), SWT.NORMAL);
-    }
 
     /** (Re-)allocates the user-configurable colours from
      *  {@link Preferences} when the packed-RGB value of any slot has

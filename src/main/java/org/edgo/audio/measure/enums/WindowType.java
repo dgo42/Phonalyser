@@ -29,8 +29,14 @@ public enum WindowType {
     BH4,
     BH7,
     FT,
+    HFT144D,
+    HFT248D,
+    KB24,
+    KB38,
     DC150,
-    DC200;
+    DC200,
+    DC250,
+    DC300;
 
     private WindowType() {}
 

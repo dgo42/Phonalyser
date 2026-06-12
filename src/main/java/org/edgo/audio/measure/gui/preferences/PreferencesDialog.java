@@ -34,6 +34,9 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.TabFolder;
 import org.eclipse.swt.widgets.TabItem;
+import org.eclipse.swt.widgets.Text;
+import org.eclipse.swt.widgets.FontDialog;
+import org.eclipse.swt.graphics.FontData;
 
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.enums.AudioBackendType;
@@ -44,6 +47,7 @@ import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.Fonts;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -176,6 +180,17 @@ public final class PreferencesDialog {
         smallIconsBtn.setText(I18n.t("preferences.lookAndFeel.smallIcons"));
         smallIconsBtn.setToolTipText(I18n.t("preferences.lookAndFeel.smallIcons.tooltip"));
         Bindings.check(smallIconsBtn, edit.smallIconsInMainTabProperty());
+
+        // UI fonts (normal / bold) — applied via a shell recreate on OK,
+        // driven by MainWindow's dialog-close compare (like the language
+        // switch).  The channel-button font is centralised in Fonts but
+        // deliberately not user-editable here.
+        new Label(lookFeelTab, SWT.NONE).setText(I18n.t("preferences.lookAndFeel.fontNormal"));
+        buildFontRow(lookFeelTab, edit.uiFontNormalProperty(),
+                I18n.t("preferences.lookAndFeel.fontNormal.tooltip"));
+        new Label(lookFeelTab, SWT.NONE).setText(I18n.t("preferences.lookAndFeel.fontBold"));
+        buildFontRow(lookFeelTab, edit.uiFontBoldProperty(),
+                I18n.t("preferences.lookAndFeel.fontBold.tooltip"));
         smallIconsBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         // Footer note so the user knows Layout changes trigger a refresh.
@@ -795,6 +810,37 @@ public final class PreferencesDialog {
         GridData gd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         gd.widthHint = 360;
         return gd;
+    }
+
+    /** One Look&Feel font row: a read-only text showing the current spec
+     *  ("Consolas 9 bold") plus a … button opening the system FontDialog
+     *  seeded with it.  A picked font is written straight to the dialog's
+     *  detached {@code edit} property — OK commits, Cancel drops it. */
+    private void buildFontRow(Composite parent, Property<String> fontSpec, String tooltip) {
+        Composite row = new Composite(parent, SWT.NONE);
+        GridLayout gl = new GridLayout(2, false);
+        gl.marginWidth = 0; gl.marginHeight = 0; gl.horizontalSpacing = 4;
+        row.setLayout(gl);
+        row.setLayoutData(comboData());
+
+        Fonts fonts = Fonts.instance();
+        Text preview = new Text(row, SWT.BORDER | SWT.READ_ONLY);
+        preview.setText(fonts.describe(fontSpec.get()));
+        preview.setToolTipText(tooltip);
+        preview.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        Button browse = new Button(row, SWT.PUSH);
+        browse.setText("…");
+        browse.setToolTipText(tooltip);
+        browse.addListener(SWT.Selection, e -> {
+            FontDialog fd = new FontDialog(row.getShell());
+            fd.setText(tooltip);
+            fd.setFontList(new FontData[]{ fonts.toFontData(fontSpec.get()) });
+            FontData picked = fd.open();
+            if (picked == null) return;
+            fontSpec.set(fonts.toSpec(picked));
+            preview.setText(fonts.describe(fontSpec.get()));
+        });
     }
 
     /** Formats the FreqResp "Maximal analyzed frequency" label as
