@@ -2103,27 +2103,98 @@ public final class FftView extends AbstractFreqDomainView {
         // visible range on each side so the polyline reaches the chart
         // edges; the helper exposes setLeftAnchor / setRightAnchor for
         // exactly that.
+        //
+        // The bin walk is COLUMN-batched: the painter only ever keeps a
+        // column's min/max, so it suffices to compare raw dBFS per bin
+        // (every magnitude-unit conversion is monotonic in dBFS) and run
+        // freqToX + the unit conversion on the two extremes of each pixel
+        // column.  That cuts the transcendental count from one log10+pow
+        // PER BIN (~1 M at fftSize 2 M — a 10-40 ms UI stall per rebuilt
+        // frame) to ~4 per pixel column.  Only the manual-fundamental
+        // lobe stretch stays per-bin — it spans a few thousand bins at most.
         ColumnBucketPainter painter = new ColumnBucketPainter(plot);
+        int    curX     = Integer.MIN_VALUE;          // column being accumulated
+        double curMinDb = Double.POSITIVE_INFINITY;   // its raw-dBFS extremes
+        double curMaxDb = Double.NEGATIVE_INFINITY;
+        int    curBins  = 0;
+        double fBound   = Double.NEGATIVE_INFINITY;   // f where x rounds to the next column
         for (int k = kPrev; k <= kNext; k++) {
             double f = k * binBw;
-            int xAbs = freqToX(f, plot, freqMin, freqMax, logFreq);
             double binDbFs = r.amplitudeDbFs[k];
             if (lobeLo >= 0 && k >= lobeLo && k <= lobeHi) {
                 double m = Math.pow(10.0, binDbFs / 20.0);
                 double newMag = LOBE.stretch(m, floorLin, peakMagLin, liftFactor);
                 binDbFs = newMag > 1e-15 ? 20.0 * Math.log10(newMag) : -300.0;
             }
-            double v = prefs.convertFromDbFs(binDbFs, unit, r.binBwSqrt);
-            int y = magToYTrace(v, plot, magTop, magBot, unit);
-            // Route by frequency, not pixel: on LOG scale freqToX
-            // clamps any sub-freqMin bin to plot.x, so an x-based test
-            // would silently add off-screen bins to column 0 with
-            // their own y values — that's the triangle artefact.
-            if (f < freqMin)        painter.setLeftAnchor(xAbs, y);
-            else if (f > freqMax)   painter.setRightAnchor(xAbs, y);
-            else                    painter.add(xAbs, y);
+            // Route by frequency, not pixel: on LOG scale freqToX clamps any
+            // sub-freqMin bin to plot.x, so an x-based test would silently
+            // add off-screen bins to column 0 with their own y values —
+            // that's the triangle artefact.  The two off-range anchor bins
+            // take the per-bin path (there are at most two of them).
+            if (f < freqMin) {
+                painter.setLeftAnchor(freqToX(f, plot, freqMin, freqMax, logFreq),
+                        binYTrace(prefs, r, binDbFs, plot, unit, magTop, magBot));
+                continue;
+            }
+            if (f > freqMax) {
+                painter.setRightAnchor(freqToX(f, plot, freqMin, freqMax, logFreq),
+                        binYTrace(prefs, r, binDbFs, plot, unit, magTop, magBot));
+                continue;
+            }
+            if (f >= fBound) {
+                // Column crossing: flush the finished column, then locate the
+                // new one (one log10) and its right boundary (one pow).
+                flushSpectrumColumn(painter, prefs, r, plot, unit, magTop, magBot,
+                        curX, curMinDb, curMaxDb, curBins);
+                curX     = freqToX(f, plot, freqMin, freqMax, logFreq);
+                curMinDb = binDbFs;
+                curMaxDb = binDbFs;
+                curBins  = 1;
+                // Boundary where round(t·width) advances past this column:
+                // t = (curX − plot.x + 0.5) / width, inverted through the
+                // same safeMin/safeLogMax mapping freqToX uses.
+                double tB = (curX - plot.x + 0.5) / Math.max(1, plot.width);
+                if (logFreq) {
+                    double safeMin = Math.max(1, freqMin);
+                    double safeMax = Math.max(freqMax, safeMin * 1.0000001);
+                    double lg      = Math.log10(safeMin);
+                    fBound = Math.pow(10.0, lg + tB * (Math.log10(safeMax) - lg));
+                } else {
+                    fBound = freqMin + tB * (freqMax - freqMin);
+                }
+                if (fBound <= f) fBound = Math.nextUp(f);   // degenerate viewport guard
+            } else {
+                if (binDbFs < curMinDb) curMinDb = binDbFs;
+                if (binDbFs > curMaxDb) curMaxDb = binDbFs;
+                curBins++;
+            }
         }
+        flushSpectrumColumn(painter, prefs, r, plot, unit, magTop, magBot,
+                curX, curMinDb, curMaxDb, curBins);
         painter.drawTo(gc);
+    }
+
+    /** Emits one accumulated spectrum column to the painter: the column's
+     *  min/max raw-dBFS extremes converted to the display unit and Y.  A
+     *  single-bin column adds one point (no envelope bar — matching the
+     *  per-bin path's count semantics); a multi-bin column adds both
+     *  extremes. */
+    private void flushSpectrumColumn(ColumnBucketPainter painter, Preferences prefs,
+                                     FftResult r, Rectangle plot, MagnitudeUnit unit,
+                                     double magTop, double magBot,
+                                     int xAbs, double minDb, double maxDb, int bins) {
+        if (bins <= 0) return;
+        painter.add(xAbs, binYTrace(prefs, r, maxDb, plot, unit, magTop, magBot));
+        if (bins > 1) {
+            painter.add(xAbs, binYTrace(prefs, r, minDb, plot, unit, magTop, magBot));
+        }
+    }
+
+    /** dBFS → display-unit → trace Y for one spectrum value. */
+    private int binYTrace(Preferences prefs, FftResult r, double binDbFs, Rectangle plot,
+                          MagnitudeUnit unit, double magTop, double magBot) {
+        double v = prefs.convertFromDbFs(binDbFs, unit, r.binBwSqrt);
+        return magToYTrace(v, plot, magTop, magBot, unit);
     }
 
     /** Paints the cascade of every loaded FFT calibration as an inverted
