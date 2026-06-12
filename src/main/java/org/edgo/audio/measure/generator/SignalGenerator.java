@@ -201,6 +201,12 @@ public class SignalGenerator {
     private int[]    hNum;
     /** Per-harmonic initial phase offset (radians). */
     private double[] hPhiInit;
+    /** {@link #hPhiInit} converted to 32-bit DDS phase offsets — derived
+     *  lazily on first use (audio-thread-only) so the compensated kernel
+     *  runs on the sine/cos table instead of one {@code Math.cos} per
+     *  harmonic per sample (~1.9 M calls/s at 5 harmonics / 384 kHz).
+     *  Quantization ≤ π/2³² rad — far below the harmonics' own error. */
+    private long[] hPhaseOff32;
 
     // -------------------------------------------------------------------------
     // Constructor
@@ -1054,13 +1060,40 @@ public class SignalGenerator {
     private double ddsSineCompensated() {
         double s = ddsSine();
         if (hAmpRatio != null) {
+            if (hPhaseOff32 == null) {
+                long[] off = new long[hPhiInit.length];
+                for (int i = 0; i < off.length; i++) {
+                    double turns = hPhiInit[i] / (2.0 * Math.PI);
+                    off[i] = Math.round((turns - Math.floor(turns)) * 4294967296.0) & 0xFFFFFFFFL;
+                }
+                hPhaseOff32 = off;
+            }
             for (int i = 0; i < hAmpRatio.length; i++) {
-                long hPhase  = (phaseAcc * hNum[i]) & 0xFFFFFFFFL;
-                double angle = hPhase * TWO_PI_OVER_2_32 + hPhiInit[i];
-                s -= hAmpRatio[i] * Math.cos(angle);
+                long hPhase = (phaseAcc * hNum[i] + hPhaseOff32[i]) & 0xFFFFFFFFL;
+                s -= hAmpRatio[i] * ddsCos(hPhase);
             }
         }
         return s;
+    }
+
+    /** Table + Taylor cosine of an arbitrary 32-bit DDS phase accumulator —
+     *  the {@link #ddsSine()} kernel's angle-addition with the cosine
+     *  identity, same error budget.  Used by the harmonic-compensation
+     *  kernel so no {@code Math.cos} runs on the per-sample path. */
+    private double ddsCos(long acc) {
+        int    idx  = (int) (acc >>> (32 - TABLE_BITS));
+        long   frac = acc & ((1L << (32 - TABLE_BITS)) - 1);
+        double dx   = frac * TWO_PI_OVER_2_32;
+        double dx2  = dx * dx;
+        double cosDx = 1.0 + dx2 * (-0.5
+                              + dx2 * (1.0 / 24.0
+                              + dx2 * (-1.0 / 720.0
+                              + dx2 * (1.0 / 40320.0))));
+        double sinDx = dx * (1.0 + dx2 * (-1.0 / 6.0
+                                  + dx2 * (1.0 / 120.0
+                                  + dx2 * (-1.0 / 5040.0
+                                  + dx2 * (1.0 / 362880.0)))));
+        return COS_TABLE[idx] * cosDx - SINE_TABLE[idx] * sinDx;
     }
 
     // -------------------------------------------------------------------------
