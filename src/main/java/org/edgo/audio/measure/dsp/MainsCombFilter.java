@@ -308,24 +308,24 @@ public final class MainsCombFilter {
         // 2nd harmonic — lets us lock even when the 50/60 fundamental is
         // buried but 100/120 stands tall.  H2 bands use twice the span since
         // the harmonic drifts 2× as far in Hz as the fundamental.
-        double[] h1a = scanBand(w, len, 50.0,  DETECT_SPAN_HZ);
-        double[] h2a = scanBand(w, len, 100.0, 2 * DETECT_SPAN_HZ);
-        double[] h1b = scanBand(w, len, 60.0,  DETECT_SPAN_HZ);
-        double[] h2b = scanBand(w, len, 120.0, 2 * DETECT_SPAN_HZ);
+        BandScan h1a = scanBand(w, len, 50.0,  DETECT_SPAN_HZ);
+        BandScan h2a = scanBand(w, len, 100.0, 2 * DETECT_SPAN_HZ);
+        BandScan h1b = scanBand(w, len, 60.0,  DETECT_SPAN_HZ);
+        BandScan h2b = scanBand(w, len, 120.0, 2 * DETECT_SPAN_HZ);
 
-        boolean is50 = (h1a[1] + h2a[1]) >= (h1b[1] + h2b[1]);
-        double[] h1 = is50 ? h1a : h1b;
-        double[] h2 = is50 ? h2a : h2b;
+        boolean is50 = (h1a.peakPower + h2a.peakPower) >= (h1b.peakPower + h2b.peakPower);
+        BandScan h1 = is50 ? h1a : h1b;
+        BandScan h2 = is50 ? h2a : h2b;
 
         // Lock when EITHER harmonic is a genuine line (≥ LOCK_RATIO over the
         // noise floor) — so a strong-H2 / weak-H1 rectifier hum still locks.
         // On a miss, HOLD the existing smoothed lock rather than dropping it.
-        double baseline = scannedBaseline(w, len);
-        if (baseline <= 0 || Math.max(h1[1], h2[1]) < LOCK_RATIO * baseline) return lockHz;
+        double baseline = scannedBaseline(h1a, h1b, h2a, h2b);
+        if (baseline <= 0 || Math.max(h1.peakPower, h2.peakPower) < LOCK_RATIO * baseline) return lockHz;
 
         // Derive f0 from the cleaner (stronger) harmonic: H2 refined / 2 when
         // the 2nd harmonic dominates (also halves the Hz error), else H1.
-        double f0 = (h2[1] > h1[1]) ? h2[0] / 2.0 : h1[0];
+        double f0 = (h2.peakPower > h1.peakPower) ? h2.refinedHz / 2.0 : h1.refinedHz;
         // Smooth the lock: snap on first detection, EWMA-blend thereafter,
         // reject outliers (keep the current lock).
         if (Double.isNaN(lockHz)) {
@@ -389,10 +389,15 @@ public final class MainsCombFilter {
 
     // ─── Detection helpers ───────────────────────────────────────────────────
 
-    /** Scans {@code ±spanHz} around {@code centerHz}, returns
-     *  {@code {refinedHz, peakPower}} with the peak refined to sub-step
-     *  by parabolic interpolation on log-power. */
-    private double[] scanBand(double[] w, int len, double centerHz, double spanHz) {
+    /** One band scan's result: the sub-step-refined peak plus the raw power
+     *  grid, so {@link #scannedBaseline} can reuse the Goertzels instead of
+     *  recomputing them. */
+    private record BandScan(double refinedHz, double peakPower,
+                            double loHz, double[] mags) {}
+
+    /** Scans {@code ±spanHz} around {@code centerHz}; the peak is refined
+     *  to sub-step by parabolic interpolation on log-power. */
+    private BandScan scanBand(double[] w, int len, double centerHz, double spanHz) {
         double lo = centerHz - spanHz;
         int m = (int) Math.round(2 * spanHz / DETECT_STEP_HZ) + 1;
         double[] mag = new double[m];
@@ -412,23 +417,45 @@ public final class MainsCombFilter {
             if (delta >  0.5) delta =  0.5;
             refinedHz = lo + (bestK + delta) * DETECT_STEP_HZ;
         }
-        return new double[] { refinedHz, mag[bestK] };
+        return new BandScan(refinedHz, mag[bestK], lo, mag);
     }
 
-    /** Median Goertzel power across the four detection bands (50/60 Hz +
-     *  100/120 Hz harmonics) — a robust floor estimate the strongest line
-     *  must clear to count as real mains. */
-    private double scannedBaseline(double[] w, int len) {
+    /** Median Goertzel power across the four detection bands (±{@code
+     *  DETECT_SPAN_HZ} around 50/60/100/120 Hz) — a robust floor estimate
+     *  the strongest line must clear to count as real mains.  Reads the
+     *  powers straight out of the four {@link BandScan} grids: the H1 scans
+     *  cover their band exactly, the H2 scans (2× span) contain it as their
+     *  middle half — half of {@code track()}'s Goertzel work used to be
+     *  recomputing these same frequencies. */
+    private double scannedBaseline(BandScan h1a, BandScan h1b,
+                                   BandScan h2a, BandScan h2b) {
         int m = (int) Math.round(2 * DETECT_SPAN_HZ / DETECT_STEP_HZ) + 1;
         double[] all = new double[4 * m];
-        double[] centers = { 50.0, 60.0, 100.0, 120.0 };
         int idx = 0;
-        for (double c : centers) {
-            double lo = c - DETECT_SPAN_HZ;
-            for (int k = 0; k < m; k++) all[idx++] = goertzelPower(w, len, lo + k * DETECT_STEP_HZ);
+        idx = copyBandPowers(all, idx, h1a, 50.0,  m);
+        idx = copyBandPowers(all, idx, h1b, 60.0,  m);
+        idx = copyBandPowers(all, idx, h2a, 100.0, m);
+        idx = copyBandPowers(all, idx, h2b, 120.0, m);
+        if (idx == 0) return 0.0;
+        Arrays.sort(all, 0, idx);
+        return all[idx / 2];
+    }
+
+    /** Copies the {@code m} powers spanning ±{@link #DETECT_SPAN_HZ} around
+     *  {@code centerHz} from a scan's grid into {@code out}; returns the
+     *  advanced fill index.  Tolerates a grid that doesn't fully cover the
+     *  range (skips out-of-grid steps). */
+    private int copyBandPowers(double[] out, int idx, BandScan scan,
+                               double centerHz, int m) {
+        double lo = centerHz - DETECT_SPAN_HZ;
+        int start = (int) Math.round((lo - scan.loHz()) / DETECT_STEP_HZ);
+        for (int k = 0; k < m; k++) {
+            int src = start + k;
+            if (src >= 0 && src < scan.mags().length) {
+                out[idx++] = scan.mags()[src];
+            }
         }
-        Arrays.sort(all);
-        return all[all.length / 2];
+        return idx;
     }
 
     /** Goertzel single-frequency power |X(f)|² over a windowed block. */

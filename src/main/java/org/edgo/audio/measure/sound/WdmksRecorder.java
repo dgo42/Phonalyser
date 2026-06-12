@@ -84,6 +84,11 @@ public class WdmksRecorder implements AudioCapture {
     /** PortAudio status-flag counters since the last consumer log. */
     private final AtomicLong        paInputOverflowCount  = new AtomicLong();
     private final AtomicLong        paInputUnderflowCount = new AtomicLong();
+    /** Pool misses (callback had to allocate) since the last consumer log —
+     *  steady state must be 0; non-zero means the pool is poisoned with
+     *  wrong-sized buffers (PortAudio changed its block size mid-stream)
+     *  and the audio thread is allocating per callback. */
+    private final AtomicLong        poolMissAllocSinceLog = new AtomicLong();
     /** Audio-thread-only spare: keeps a queue-rejected buffer for the next
      *  callback instead of offering it back to {@link #bufferPool} — the
      *  pool ring is SPSC with the consume thread as its sole producer, and
@@ -108,7 +113,10 @@ public class WdmksRecorder implements AudioCapture {
         byte[] buf = callbackSpare;
         callbackSpare = null;
         if (buf == null) buf = bufferPool.poll();
-        if (buf == null || buf.length != bytes) buf = new byte[bytes];
+        if (buf == null || buf.length != bytes) {
+            buf = new byte[bytes];
+            poolMissAllocSinceLog.incrementAndGet();
+        }
         input.read(0, buf, 0, bytes);
         if (!queue.offer(buf)) {
             overflowCount.incrementAndGet();
@@ -216,9 +224,12 @@ public class WdmksRecorder implements AudioCapture {
                 long dropped = droppedFramesSinceLog.getAndSet(0);
                 long paOver  = paInputOverflowCount.getAndSet(0);
                 long paUnder = paInputUnderflowCount.getAndSet(0);
-                if (dropped > 0 || paOver > 0 || paUnder > 0) {
-                    log.warn("WDM-KS gaps: queue-dropped={} frames (~{} ms), paInputOverflow={}, paInputUnderflow={}",
-                            dropped, dropped * 1000L / Math.max(1, sampleRate), paOver, paUnder);
+                long allocs  = poolMissAllocSinceLog.getAndSet(0);
+                if (dropped > 0 || paOver > 0 || paUnder > 0 || allocs > 1) {
+                    // allocs == 1 per second can be the cold-start fill; a
+                    // sustained rate means GC pressure on the audio thread.
+                    log.warn("WDM-KS gaps: queue-dropped={} frames (~{} ms), paInputOverflow={}, paInputUnderflow={}, pool-miss-allocs={}",
+                            dropped, dropped * 1000L / Math.max(1, sampleRate), paOver, paUnder, allocs);
                 }
                 lastOverflowLogNanos = now;
             }

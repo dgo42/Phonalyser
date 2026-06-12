@@ -27,6 +27,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import lombok.experimental.UtilityClass;
+
 /**
  * Cooley-Tukey radix-2 decimation-in-time FFT, in-place.  Size must be
  * a power of two.  Pure function on {@code double[]} arrays — no state,
@@ -40,22 +42,31 @@ import java.util.concurrent.atomic.AtomicInteger;
  * independent (each touches a disjoint {@code [i, i+len)} slice), so for
  * large transforms the groups are split across a small daemon thread pool
  * with a barrier between stages — the big-FFT cost that otherwise can't
- * keep up with the capture rate at high overlap.  Below
- * {@link #PARALLEL_THRESHOLD} (or on ≤2-core machines) it stays serial,
- * where the fork/join overhead would dominate.  Results are bit-identical
- * to the serial path (the same butterflies, only partitioned).
+ * keep up with the capture rate at high overlap.  The final
+ * {@code log2(THREADS)} stages have fewer groups than threads; there the
+ * {@code k}-loop inside each group is chunked instead, each chunk seeding
+ * its own twiddle with one {@code cos/sin} — without this the largest
+ * ~15-20 % of the butterfly work ran serial and Amdahl capped the whole
+ * transform at ~4-5× regardless of cores.  Chunk seeding makes those
+ * stages no longer bit-identical to the serial path, but numerically
+ * equal-or-better: each twiddle recurrence chain is SHORTER than the
+ * serial one it replaces.  Below {@link #PARALLEL_THRESHOLD} (or on
+ * ≤2-core machines) everything stays serial, where fork/join overhead
+ * would dominate.
  */
+@UtilityClass
 public final class Fft {
 
     /** Below this transform size the serial path is faster (fork overhead). */
     private static final int PARALLEL_THRESHOLD = 1 << 16;   // 64k points
+    /** Minimum butterflies per k-chunk in the final stages — below this the
+     *  per-chunk cos/sin seed + fork overhead outweighs the parallelism. */
+    private static final int MIN_K_CHUNK = 1 << 14;          // 16k butterflies
     /** Worker threads — leave one core for the rest of the analysis pipeline. */
     private static final int THREADS = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
     /** Shared daemon pool; null (⇒ always serial) on ≤2-core machines. */
     private static final ExecutorService POOL =
             THREADS < 2 ? null : Executors.newFixedThreadPool(THREADS, daemonFactory());
-
-    private Fft() {}
 
     private static ThreadFactory daemonFactory() {
         AtomicInteger n = new AtomicInteger();
@@ -110,18 +121,45 @@ public final class Fft {
             final double wIm  = Math.sin(ang);
             final int    flen = len;
             int groups = n / len;                       // independent groups this stage
-            int tasks  = Math.min(THREADS, groups);     // 1 for the last log2(THREADS) stages
-            if (tasks <= 1) {
-                stageGroups(re, im, 0, groups, flen, wRe, wIm);
-                continue;
-            }
-            int per = (groups + tasks - 1) / tasks;     // groups per task (ceil)
-            List<Callable<Void>> work = new ArrayList<>(tasks);
-            for (int t = 0; t < tasks; t++) {
-                final int gStart = t * per;
-                final int gEnd   = Math.min(groups, gStart + per);
-                if (gStart >= gEnd) break;
-                work.add(() -> { stageGroups(re, im, gStart, gEnd, flen, wRe, wIm); return null; });
+            int tasks  = Math.min(THREADS, groups);     // few/1 for the last log2(THREADS) stages
+            List<Callable<Void>> work;
+            if (tasks * 2 > THREADS + 1) {
+                // Plenty of groups: split across groups (bit-identical
+                // butterflies, only partitioned).
+                int per = (groups + tasks - 1) / tasks; // groups per task (ceil)
+                work = new ArrayList<>(tasks);
+                for (int t = 0; t < tasks; t++) {
+                    final int gStart = t * per;
+                    final int gEnd   = Math.min(groups, gStart + per);
+                    if (gStart >= gEnd) break;
+                    work.add(() -> { stageGroups(re, im, gStart, gEnd, flen, wRe, wIm); return null; });
+                }
+            } else {
+                // Final stages: fewer groups than threads — chunk each
+                // group's k-loop instead, seeding the twiddle per chunk
+                // (see the class doc's numerics note).
+                int half    = flen >> 1;
+                int kChunks = Math.min(Math.max(1, THREADS / groups),
+                                       Math.max(1, half / MIN_K_CHUNK));
+                if (groups * kChunks <= 1) {
+                    stageGroups(re, im, 0, groups, flen, wRe, wIm);
+                    continue;
+                }
+                int kPer = (half + kChunks - 1) / kChunks;
+                final double fAng = ang;
+                work = new ArrayList<>(groups * kChunks);
+                for (int g = 0; g < groups; g++) {
+                    final int base = g * flen;
+                    for (int c = 0; c < kChunks; c++) {
+                        final int kStart = c * kPer;
+                        final int kEnd   = Math.min(half, kStart + kPer);
+                        if (kStart >= kEnd) break;
+                        work.add(() -> {
+                            stageKRange(re, im, base, flen, kStart, kEnd, fAng, wRe, wIm);
+                            return null;
+                        });
+                    }
+                }
             }
             try {
                 for (Future<Void> f : POOL.invokeAll(work)) f.get();   // barrier
@@ -131,6 +169,33 @@ public final class Fft {
             } catch (Exception e) {
                 throw new IllegalStateException("Parallel FFT stage failed", e);
             }
+        }
+    }
+
+    /** Processes butterflies {@code [kStart, kEnd)} of the single group at
+     *  array offset {@code base} in a stage of length {@code len}, seeding
+     *  the twiddle recurrence at {@code kStart} with one cos/sin.  Lets the
+     *  final stages (few groups, huge halves) parallelise across {@code k}. */
+    private static void stageKRange(double[] re, double[] im, int base, int len,
+                                    int kStart, int kEnd, double ang,
+                                    double wRe, double wIm) {
+        int half = len >> 1;
+        double curRe = Math.cos(ang * kStart);
+        double curIm = Math.sin(ang * kStart);
+        for (int k = kStart; k < kEnd; k++) {
+            int    p  = base + k;
+            int    q  = p + half;
+            double uR = re[p];
+            double uI = im[p];
+            double vR = re[q] * curRe - im[q] * curIm;
+            double vI = re[q] * curIm + im[q] * curRe;
+            re[p] = uR + vR;
+            im[p] = uI + vI;
+            re[q] = uR - vR;
+            im[q] = uI - vI;
+            double nextRe = curRe * wRe - curIm * wIm;
+            curIm         = curRe * wIm + curIm * wRe;
+            curRe         = nextRe;
         }
     }
 
