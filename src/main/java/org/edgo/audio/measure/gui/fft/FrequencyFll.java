@@ -68,6 +68,17 @@ public final class FrequencyFll implements FrequencyAligner {
      *  capture head when computing where the corrected signal becomes
      *  measurable. */
     private static final double DRAIN_GUARD_SEC = 0.7;
+    /** EWMA weight on the previous drift estimate when a deadbeat folds a
+     *  fresh slope measurement in — smooths the estimator noise riding on
+     *  each band exit. */
+    private static final double DRIFT_SMOOTH    = 0.7;
+    /** Drift sanity cap (ppm of target per second): non-disciplined crystals
+     *  wander orders below this; anything larger is a mis-measurement. */
+    private static final double MAX_DRIFT_PPM_PER_SEC = 0.01;
+    /** Minimum capture-time baseline between two deadbeats for the residual
+     *  to qualify as a slope measurement — closer exits are estimator noise,
+     *  not wander, and would poison the drift estimate. */
+    private static final double MIN_DRIFT_BASELINE_SEC = 2.0;
 
     /** Current correction in Hz — add to the snap target before publishing the trim. */
     @Getter
@@ -76,6 +87,16 @@ public final class FrequencyFll implements FrequencyAligner {
      *  reflects the last issued correction; {@code -1} = nothing in flight
      *  (every measurement is usable). */
     private long correctionVisibleFrom = -1;
+    /** Drift-rate feedforward (Hz/s): the EWMA-tracked rate at which the
+     *  measured error rebuilds between corrections — the relative wander of
+     *  the two free-running converter crystals.  Applied predictively every
+     *  update so the error stays near zero INSTEAD of sawtoothing to the
+     *  band edge once per transport round-trip. */
+    private double driftHzPerSec = 0.0;
+    /** Capture position of the previous update — feedforward dt baseline. */
+    private long lastUpdateAbsPos = -1;
+    /** Capture position of the previous deadbeat — slope-measurement baseline. */
+    private long lastDeadbeatAbsPos = -1;
 
     @Override
     public void update(double target, double detected, long absStartSamples, long latestSamplePos,
@@ -83,6 +104,15 @@ public final class FrequencyFll implements FrequencyAligner {
         if (!Double.isFinite(target) || !Double.isFinite(detected) || !(target > 0.0)) {
             return;
         }
+        // Drift feedforward: predictive sub-band microsteps on EVERY update
+        // (held ones included — prediction needs no transport verification;
+        // its residual is folded back in at the next deadbeat).  dt comes
+        // from capture positions, so display cadence / GC pauses don't skew it.
+        if (lastUpdateAbsPos >= 0 && sampleRate > 0 && absStartSamples > lastUpdateAbsPos) {
+            double dt = (absStartSamples - lastUpdateAbsPos) / (double) sampleRate;
+            correction -= driftHzPerSec * dt;
+        }
+        lastUpdateAbsPos = absStartSamples;
         // Transport gate: the measurement's frames begin at absStartSamples —
         // if that predates the point where the last correction reached the
         // ADC, the measurement reflects the UNcorrected signal.  Hold.
@@ -94,6 +124,20 @@ public final class FrequencyFll implements FrequencyAligner {
         if (Math.abs(error) <= LOCK_PPM * 1e-6 * target) {
             return;                            // within the lock band — hold
         }
+        // Fold the residual into the drift estimate: error that accumulated
+        // since the last deadbeat DESPITE the feedforward measures the slope
+        // estimation error.  Gated on a sane baseline and clamped so a noisy
+        // band exit can't poison the estimate.
+        if (lastDeadbeatAbsPos >= 0 && sampleRate > 0) {
+            double dtc = (absStartSamples - lastDeadbeatAbsPos) / (double) sampleRate;
+            if (dtc >= MIN_DRIFT_BASELINE_SEC) {
+                double cap   = target * MAX_DRIFT_PPM_PER_SEC * 1e-6;
+                double sMeas = Math.max(-cap, Math.min(cap, error / dtc));
+                driftHzPerSec = DRIFT_SMOOTH * driftHzPerSec + (1.0 - DRIFT_SMOOTH) * sMeas;
+                driftHzPerSec = Math.max(-cap, Math.min(cap, driftHzPerSec));
+            }
+        }
+        lastDeadbeatAbsPos = absStartSamples;
         // Cancel the (fully observed) error in one step, then wait until the
         // capture provably contains the corrected signal.
         correction -= error;
@@ -107,6 +151,9 @@ public final class FrequencyFll implements FrequencyAligner {
     public void reset() {
         correction            = 0.0;
         correctionVisibleFrom = -1;
+        driftHzPerSec         = 0.0;
+        lastUpdateAbsPos      = -1;
+        lastDeadbeatAbsPos    = -1;
     }
 
     public AlignGenerator getMode() {
