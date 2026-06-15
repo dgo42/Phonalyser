@@ -51,7 +51,6 @@ import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.GenChangeCause;
-import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.TriggerEdge;
@@ -65,6 +64,7 @@ import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.preferences.OscPreset;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
@@ -333,6 +333,31 @@ public final class ScopeTabControl extends Composite {
         }
     }
 
+    /** Registers each settings tab in the component registry under
+     *  {@code prefix} (e.g. {@code "multifunctional/scope/tabs"}) so automation
+     *  can select a tab by path — {@code activate} expands the tab body and
+     *  selects that tab — then screenshot this tab control showing it.  Slugs
+     *  are language-independent; tabs not built are skipped. */
+    public void registerTabs(String prefix) {
+        registerTab(prefix, "left",       TAB_LEFT);
+        registerTab(prefix, "right",      TAB_RIGHT);
+        registerTab(prefix, "horizontal", TAB_HORIZONTAL);
+        registerTab(prefix, "trigger",    TAB_TRIGGER);
+        registerTab(prefix, "presets",    TAB_PRESETS);
+        registerTab(prefix, "utility",    TAB_UTILITY);
+        registerTab(prefix, "save",       TAB_SAVE);
+        registerTab(prefix, "load",       TAB_LOAD);
+    }
+
+    private void registerTab(String prefix, String slug, int index) {
+        if (toolbarTabs == null || index >= toolbarTabs.getItemCount()) return;
+        UiRegistry.instance().register(prefix + "/" + slug, this)
+                .onActivate(() -> {
+                    setTabsCollapsed(false);
+                    toolbarTabs.setSelection(index);
+                });
+    }
+
     /** Sets the t/div selector (fires its listener → pref write + view-state
      *  recompute).  Used by the pane's auto-setup. */
     public void setTimePerDiv(double v) {
@@ -349,11 +374,20 @@ public final class ScopeTabControl extends Composite {
         if (rightScale != null && !rightScale.isDisposed()) rightScale.setValue(v);
     }
 
-    /** Enables / disables the whole trigger tab (record vs file mode); when
-     *  enabling, re-applies the "Start iff Single mode" rule. */
+    /** Enables / disables the whole trigger tab (record vs file mode).  When
+     *  enabling, the blanket subtree-enable above turns ON every control, so
+     *  re-apply the per-control gates it clobbered: Start only in Single mode,
+     *  the hysteresis selector only when hysteresis is on, and Reconstructed
+     *  beat only when the generator is in dual-tone form. */
     public void setTriggerControlsEnabled(boolean enabled) {
         setSubtreeEnabled(triggerGroup, enabled);
-        if (enabled) syncTriggerStart();
+        if (enabled) {
+            syncTriggerStart();
+            syncReconstructedBeatEnabled();
+            if (hysteresisSel != null && !hysteresisSel.isDisposed()) {
+                hysteresisSel.setEnabled(Preferences.instance().isOscTriggerHysteresisEnabled());
+            }
+        }
     }
 
     /** Clears the open-signal path field — called when live recording starts
@@ -813,7 +847,7 @@ public final class ScopeTabControl extends Composite {
     /** True when the generator is currently in {@code DUAL_TONE} form
      *  (drives the "Reconstructed beat" checkbox's enabled state). */
     private boolean isGeneratorDualTone() {
-        return Preferences.instance().getGenSignalForm() == GenSignalForm.DUAL_TONE;
+        return Preferences.instance().getGenSignalForm().isDualTone();
     }
 
     /** Re-evaluates {@link #reconstructedBeatBtn}'s enabled state from
@@ -1363,42 +1397,43 @@ public final class ScopeTabControl extends Composite {
     private void stepVoltsPerDiv(int delta) {
         Preferences prefs = Preferences.instance();
         if (leftScale != null && !leftScale.isDisposed() && prefs.isOscLeftChannelEnabled()) {
-            leftScale.setValue(ScopeFormat.nextTargetFrom(prefs.getOscLeftVoltsPerDiv(),
-                    OscParse.voltsPerDivTargets(), delta));
+            leftScale.step(delta);
         }
         if (rightScale != null && !rightScale.isDisposed() && prefs.isOscRightChannelEnabled()) {
-            rightScale.setValue(ScopeFormat.nextTargetFrom(prefs.getOscRightVoltsPerDiv(),
-                    OscParse.voltsPerDivTargets(), delta));
+            rightScale.step(delta);
         }
     }
 
     /** Steps the t/div selector by {@code delta}.  Same routing as {@link #stepVoltsPerDiv}. */
     private void stepTimePerDiv(int delta) {
         if (timeScale == null || timeScale.isDisposed()) return;
-        timeScale.setValue(ScopeFormat.nextTargetFrom(Preferences.instance().getOscTimePerDiv(),
-                OscParse.timePerDivTargets(), delta));
+        timeScale.step(delta);
     }
 
     /** V/div zoom anchored at mouse Y: after the zoom, the same voltage that
      *  was under the mouse before the zoom is still under the mouse.  Per
      *  channel — each channel's V/div + offsetFrac are adjusted using that
      *  channel's voltage-at-mouse, since the two channels can have different
-     *  scales.  Note: the {@code *Scale} selection listeners overwrite
-     *  offsetFrac with {@code ScopeFormat.preserveCanvasMiddle(...)} (center-anchored
-     *  zoom).  We re-apply the mouse-anchored offsetFrac AFTER
-     *  {@code setValue(...)} so our value wins and the redraw scheduled by
-     *  the listener picks it up. */
+     *  scales.  The V/div change itself is one step of the field's OWN value
+     *  list ({@link NumericStepField#step}) — so the wheel walks the same
+     *  1-2-5-10 ladder the field's arrows do, with no separate float-target
+     *  calculation that could stall on rounding.  Note: the {@code *Scale}
+     *  selection listener overwrites offsetFrac with
+     *  {@code ScopeFormat.preserveCanvasMiddle(...)} (center-anchored zoom) as
+     *  it fires inside {@code step(...)}; we re-apply the mouse-anchored
+     *  offsetFrac AFTER, so our value wins and the redraw the listener
+     *  scheduled picks it up. */
     public void stepVoltsPerDivAround(int delta, int mouseY, int height) {
         if (height <= 0) { stepVoltsPerDiv(delta); return; }
         Preferences prefs = Preferences.instance();
         double mouseFrac = (double) mouseY / height;
         if (leftScale != null && !leftScale.isDisposed() && prefs.isOscLeftChannelEnabled()) {
-            double vDivOld = prefs.getOscLeftVoltsPerDiv();
-            double vDivNew = ScopeFormat.nextTargetFrom(vDivOld, OscParse.voltsPerDivTargets(), delta);
+            double vDivOld = leftScale.getValue();
+            double offOld  = prefs.getOscLeftOffsetFrac();
+            leftScale.step(delta);
+            double vDivNew = leftScale.getValue();
             if (vDivNew != vDivOld) {
-                double offOld = prefs.getOscLeftOffsetFrac();
                 double vAtMouse = (offOld - mouseFrac) * ScopeView.DIVISIONS_Y * vDivOld;
-                leftScale.setValue(vDivNew);
                 prefs.setOscLeftOffsetFrac(
                         mouseFrac + vAtMouse / (ScopeView.DIVISIONS_Y * vDivNew));
                 prefs.save();
@@ -1406,12 +1441,12 @@ public final class ScopeTabControl extends Composite {
             }
         }
         if (rightScale != null && !rightScale.isDisposed() && prefs.isOscRightChannelEnabled()) {
-            double vDivOld = prefs.getOscRightVoltsPerDiv();
-            double vDivNew = ScopeFormat.nextTargetFrom(vDivOld, OscParse.voltsPerDivTargets(), delta);
+            double vDivOld = rightScale.getValue();
+            double offOld  = prefs.getOscRightOffsetFrac();
+            rightScale.step(delta);
+            double vDivNew = rightScale.getValue();
             if (vDivNew != vDivOld) {
-                double offOld = prefs.getOscRightOffsetFrac();
                 double vAtMouse = (offOld - mouseFrac) * ScopeView.DIVISIONS_Y * vDivOld;
-                rightScale.setValue(vDivNew);
                 prefs.setOscRightOffsetFrac(
                         mouseFrac + vAtMouse / (ScopeView.DIVISIONS_Y * vDivNew));
                 prefs.save();
@@ -1436,16 +1471,16 @@ public final class ScopeTabControl extends Composite {
             return;
         }
         Preferences prefs = Preferences.instance();
-        double tDivOld = prefs.getOscTimePerDiv();
-        double tDivNew = ScopeFormat.nextTargetFrom(tDivOld, OscParse.timePerDivTargets(), delta);
+        double tDivOld   = timeScale.getValue();
+        double posOld    = prefs.getOscTriggerPositionFrac();
+        timeScale.step(delta);
+        double tDivNew   = timeScale.getValue();
         if (tDivNew == tDivOld) return;
         double mouseFrac = (double) mouseX / width;
-        double posOld    = prefs.getOscTriggerPositionFrac();
         double posNew    = mouseFrac - (mouseFrac - posOld) * (tDivOld / tDivNew);
         if (posNew < 0.0) posNew = 0.0;
         if (posNew > 1.0) posNew = 1.0;
         prefs.setOscTriggerPositionFrac(posNew);
-        timeScale.setValue(tDivNew);
     }
 
     // -------------------------------------------------------------------------

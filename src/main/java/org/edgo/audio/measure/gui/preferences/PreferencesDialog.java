@@ -48,6 +48,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Fonts;
+import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.enums.TabOrientation;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -123,15 +124,18 @@ public final class PreferencesDialog {
         this.parent = parent;
     }
 
-    public void open() { open(null); }
+    public Shell open() { return open(null); }
 
     /**
-     * Opens the dialog.  When {@code onClose} is non-null it is invoked
-     * (on the SWT UI thread) after the dialog's shell is disposed — used
-     * by the menu listener to restart the oscilloscope capture that was
-     * paused while the dialog was up.
+     * Opens the dialog and returns its shell.  When {@code onClose} is
+     * non-null it is invoked (on the SWT UI thread) after the dialog's shell
+     * is disposed — used by the menu listener to restart the oscilloscope
+     * capture that was paused while the dialog was up.  The returned shell is
+     * a handle for callers that drive the dialog programmatically (e.g. the
+     * help-screenshot automation, which closes it when done); interactive
+     * callers ignore it.
      */
-    public void open(Runnable onClose) {
+    public Shell open(Runnable onClose) {
         Shell dialog = new Shell(parent, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL);
         if (onClose != null) dialog.addDisposeListener(e -> onClose.run());
         dialog.setText(I18n.t("preferences.title"));
@@ -180,6 +184,14 @@ public final class PreferencesDialog {
         smallIconsBtn.setText(I18n.t("preferences.lookAndFeel.smallIcons"));
         smallIconsBtn.setToolTipText(I18n.t("preferences.lookAndFeel.smallIcons.tooltip"));
         Bindings.check(smallIconsBtn, edit.smallIconsInMainTabProperty());
+
+        // Spacer label so the checkbox lines up under the combo (column 2).
+        new Label(lookFeelTab, SWT.NONE);
+        Button showTipsBtn = new Button(lookFeelTab, SWT.CHECK);
+        showTipsBtn.setText(I18n.t("preferences.lookAndFeel.showTipsAtStartup"));
+        showTipsBtn.setToolTipText(I18n.t("preferences.lookAndFeel.showTipsAtStartup.tooltip"));
+        Bindings.check(showTipsBtn, edit.showTipsAtStartupProperty());
+        showTipsBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         // UI fonts (normal / bold) — applied via a shell recreate on OK,
         // driven by MainWindow's dialog-close compare (like the language
@@ -659,6 +671,18 @@ public final class PreferencesDialog {
             }
         });
 
+        // Register the tab folder (the screenshot target) and each tab so an
+        // automation script can select a tab and snapshot the dialog by path —
+        // the same self-registration the measurement panes use for their
+        // settings tabs.  Used by the help-screenshot capture.
+        UiRegistry reg = UiRegistry.instance();
+        reg.register("preferences", tabs);
+        reg.register("preferences/tabs/lookfeel")    .onActivate(() -> tabs.setSelection(lookFeelTabItem));
+        reg.register("preferences/tabs/audio")       .onActivate(() -> tabs.setSelection(audioTabItem));
+        reg.register("preferences/tabs/oscilloscope").onActivate(() -> tabs.setSelection(oscTabItem));
+        reg.register("preferences/tabs/fft")         .onActivate(() -> tabs.setSelection(fftTabItem));
+        reg.register("preferences/tabs/freqresp")    .onActivate(() -> tabs.setSelection(freqRespTabItem));
+
         // --- Device list state + refresh logic -----------------------------
         DeviceListState devices = new DeviceListState();
 
@@ -804,6 +828,7 @@ public final class PreferencesDialog {
         dialog.pack();
         Dialogs.centerOnParent(dialog);
         dialog.open();
+        return dialog;
     }
 
     private GridData comboData() {

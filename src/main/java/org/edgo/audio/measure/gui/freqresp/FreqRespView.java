@@ -1450,6 +1450,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
 
         StringBuilder sb = new StringBuilder();
         sb.append("f = ").append(formatFrequencyFine(cursorFreq));
+        // Magnitude (dB) at the cursor's height on the left axis — the level
+        // under the pointer, independent of the traces.
+        double magFrac = (mouseY - plot.y) / (double) plot.height;
+        if (magFrac < 0) magFrac = 0;
+        if (magFrac > 1) magFrac = 1;
+        sb.append('\n').append("y = ").append(FreqRespFormat.formatDbReadout(magTop - magFrac * (magTop - magBot)));
         boolean compareActive = prefs.isFreqRespCompareMode()
                 && prefs.isFreqRespShowRiaa()
                 && hasAnyResult();

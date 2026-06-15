@@ -94,6 +94,10 @@ public class WdmksRecorder implements AudioCapture {
      *  pool ring is SPSC with the consume thread as its sole producer, and
      *  a second producer can silently lose a slot. */
     private byte[] callbackSpare;
+    /** Logged once when the audio callback or a consumer listener faults, so a
+     *  per-block failure logs a single stack trace, not a flood. */
+    private final AtomicBoolean callbackFaultLogged = new AtomicBoolean();
+    private final AtomicBoolean consumerFaultLogged = new AtomicBoolean();
 
     /**
      * Audio-thread callback. Pulls a same-sized scratch buffer from
@@ -117,7 +121,18 @@ public class WdmksRecorder implements AudioCapture {
             buf = new byte[bytes];
             poolMissAllocSinceLog.incrementAndGet();
         }
-        input.read(0, buf, 0, bytes);
+        try {
+            input.read(0, buf, 0, bytes);
+        } catch (Throwable th) {
+            // JNA would otherwise swallow this (stderr + return 0) and the
+            // capture would silently stop delivering.  Log once, keep the
+            // buffer as the next spare, keep the stream running.
+            if (callbackFaultLogged.compareAndSet(false, true)) {
+                log.error("WDM-KS capture callback failed — dropping block: {}", th.toString(), th);
+            }
+            callbackSpare = buf;
+            return PortAudio.paContinue;
+        }
         if (!queue.offer(buf)) {
             overflowCount.incrementAndGet();
             droppedFramesSinceLog.addAndGet(frames);
@@ -265,6 +280,13 @@ public class WdmksRecorder implements AudioCapture {
                         sampleBuf[f].ch1 = readSample(buffer, offset + sampleBytes);
                     }
                     sampleListener.accept(sampleBuf);
+                }
+            } catch (Throwable th) {
+                // A listener throwing must not kill the consumer thread (which
+                // would freeze every capture-driven view while capture keeps
+                // running).  Log the cause once and keep draining.
+                if (consumerFaultLogged.compareAndSet(false, true)) {
+                    log.error("WDM-KS capture consumer listener failed (continuing): {}", th.toString(), th);
                 }
             } finally {
                 bufferPool.offer(buffer);

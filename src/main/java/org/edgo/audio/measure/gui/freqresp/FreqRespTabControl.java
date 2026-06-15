@@ -56,6 +56,7 @@ import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
+import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.preferences.CalibrationEntry;
@@ -172,7 +173,8 @@ public final class FreqRespTabControl extends Composite {
 
     /** Bus subscriber kept as a field so dispose can unsubscribe the
      *  same instance (method references compare by identity). */
-    private Consumer<Void> calibrationChangedListener;
+    private Consumer<Void>   calibrationChangedListener;
+    private Consumer<String> calFileSavedListener;
 
     public FreqRespTabControl(Composite parent, FreqRespView view,
                               FreqRespCorrectionStore correctionStore) {
@@ -214,8 +216,15 @@ public final class FreqRespTabControl extends Composite {
         // changes out-of-band (e.g. the wizard's Apply step), without polling.
         calibrationChangedListener = ignored -> onCalibrationChanged();
         MessageBus.instance().subscribe(Events.FREQRESP_CALIBRATION_CHANGED, calibrationChangedListener);
-        addDisposeListener(e ->
-                MessageBus.instance().unsubscribe(Events.FREQRESP_CALIBRATION_CHANGED, calibrationChangedListener));
+        // A .frc just saved to disk: reload any loaded row pointing at it so the
+        // freshly-saved curve applies without re-browsing (this very pane often
+        // both saves and has the same file loaded as its "direct" calibration).
+        calFileSavedListener = path -> onCalibrationFileSaved(path);
+        MessageBus.instance().subscribe(Events.CALIBRATION_FILE_SAVED, calFileSavedListener);
+        addDisposeListener(e -> {
+            MessageBus.instance().unsubscribe(Events.FREQRESP_CALIBRATION_CHANGED, calibrationChangedListener);
+            MessageBus.instance().unsubscribe(Events.CALIBRATION_FILE_SAVED, calFileSavedListener);
+        });
 
         // Push the initially-loaded active rows into the store last — the view
         // (built before this control) already holds the same store instance, so
@@ -237,6 +246,30 @@ public final class FreqRespTabControl extends Composite {
     /** True when the tab body is collapsed to just the strip. */
     public boolean isTabsCollapsed() {
         return toolbarTabs != null && toolbarTabs.isCollapsed();
+    }
+
+    /** Registers every settings tab under {@code prefix} so an automation
+     *  script can select a tab by path (e.g. {@code prefix + "/riaa"}) — it
+     *  expands the strip and selects that tab — then screenshot this control
+     *  showing it.  Slugs are language-independent; tabs not built are skipped.
+     *  Mirrors {@code ScopeTabControl.registerTabs}. */
+    public void registerTabs(String prefix) {
+        registerTab(prefix, "settings",    TAB_FREQRESP_SETTINGS);
+        registerTab(prefix, "riaa",        TAB_FREQRESP_RIAA);
+        registerTab(prefix, "presets",     TAB_FREQRESP_PRESETS);
+        registerTab(prefix, "utility",     TAB_FREQRESP_UTILITY);
+        registerTab(prefix, "calibration", TAB_FREQRESP_CALIBRATION);
+        registerTab(prefix, "save",        TAB_FREQRESP_SAVE);
+        registerTab(prefix, "load",        TAB_FREQRESP_LOAD);
+    }
+
+    private void registerTab(String prefix, String slug, int index) {
+        if (toolbarTabs == null || index >= toolbarTabs.getItemCount()) return;
+        UiRegistry.instance().register(prefix + "/" + slug, this)
+                .onActivate(() -> {
+                    toolbarTabs.setCollapsed(false);
+                    toolbarTabs.setSelection(index);
+                });
     }
 
     /** Re-runs the RIAA enable cascade.  Public because the pane calls it when
@@ -267,29 +300,38 @@ public final class FreqRespTabControl extends Composite {
         Preferences prefs = Preferences.instance();
         List<TileTabFolder.Tile> tiles = new ArrayList<>();
         if (tabIndex == TAB_FREQRESP_SETTINGS) {
-            tiles.add(tile(String.format(Locale.US, "%s–%s",
-                    formatShortHz(prefs.getFreqRespStartHz()),
-                    formatShortHz(prefs.getFreqRespStopHz()))));
-            tiles.add(tile(String.format(Locale.US, "%.2fV", prefs.getFreqRespAmplitudeVrms())));
-            tiles.add(tile(formatShortCount(prefs.getFreqRespSweepPoints()) + " pts"));
+            String lo = formatShortHz(prefs.getFreqRespStartHz());
+            String hi = formatShortHz(prefs.getFreqRespStopHz());
+            tiles.add(tile(String.format(Locale.US, "%s–%s", lo, hi),
+                    I18n.t("freqResp.tile.range", lo, hi)));
+            tiles.add(tile(String.format(Locale.US, "%.2fV", prefs.getFreqRespAmplitudeVrms()),
+                    I18n.t("freqResp.tile.amplitude",
+                            String.format(Locale.US, "%.2f V", prefs.getFreqRespAmplitudeVrms()))));
+            tiles.add(tile(formatShortCount(prefs.getFreqRespSweepPoints()) + " pts",
+                    I18n.t("freqResp.tile.points", prefs.getFreqRespSweepPoints())));
             // FFT size tile (replaces the old sweep-duration tile, which is
             // now derived from FFT size and shown in the settings-tab label).
-            tiles.add(tile(formatFftSize(prefs.getFreqRespFftSize())));
+            tiles.add(tile(formatFftSize(prefs.getFreqRespFftSize()),
+                    I18n.t("freqResp.tile.fftSize", formatFftSize(prefs.getFreqRespFftSize()))));
         } else if (tabIndex == TAB_FREQRESP_RIAA) {
             if (prefs.isFreqRespShowRiaa()) {
-                tiles.add(tile(prefs.isFreqRespReverseRiaa() ? "rec" : "play"));
-                if (prefs.isFreqRespIecAmendment()) tiles.add(tile("+IEC"));
-                if (prefs.isFreqRespCompareMode())  tiles.add(tile("comp"));
+                tiles.add(prefs.isFreqRespReverseRiaa()
+                        ? tile("rec",  I18n.t("freqResp.tile.rec"))
+                        : tile("play", I18n.t("freqResp.tile.play")));
+                if (prefs.isFreqRespIecAmendment()) tiles.add(tile("+IEC", I18n.t("freqResp.tile.iec")));
+                if (prefs.isFreqRespCompareMode())  tiles.add(tile("comp", I18n.t("freqResp.tile.compare")));
             }
         } else if (tabIndex == TAB_FREQRESP_CALIBRATION) {
             int n = correctionStore.getEntries().size();
-            if (n == 1)      tiles.add(tile(I18n.t("calibration.tile.loaded")));
-            else if (n  > 1) tiles.add(tile(I18n.t("calibration.tile.loadedN", n)));
+            if (n == 1)      tiles.add(tile(I18n.t("calibration.tile.loaded"),
+                    I18n.t("calibration.tile.loaded.tooltip")));
+            else if (n  > 1) tiles.add(tile(I18n.t("calibration.tile.loadedN", n),
+                    I18n.t("calibration.tile.loadedN.tooltip", n)));
         } else if (tabIndex == TAB_FREQRESP_PRESETS) {
             // Show the number of saved presets when there are any — a hint
             // that there's something to load.
             int n = prefs.getFreqRespPresets().size();
-            if (n > 0) tiles.add(tile(n + " saved"));
+            if (n > 0) tiles.add(tile(n + " saved", I18n.t("freqResp.tile.presets", n)));
         } else if (tabIndex == TAB_FREQRESP_UTILITY) {
             // No header tile — the Utility actions (screenshot, DAC/ADC cal)
             // leave no per-run state; branch kept so the constant is used.
@@ -297,9 +339,9 @@ public final class FreqRespTabControl extends Composite {
         return tiles;
     }
 
-    /** A text tile whose chip text doubles as its hover tooltip. */
-    private TileTabFolder.Tile tile(String text) {
-        return TileTabFolder.Tile.text(text, text);
+    /** A text tile with an explicit descriptive hover tooltip. */
+    private TileTabFolder.Tile tile(String text, String tooltip) {
+        return TileTabFolder.Tile.text(text, tooltip);
     }
 
     /** Short Hz format used in the Settings tile row: 1500 → "1.5k",
@@ -1131,6 +1173,20 @@ public final class FreqRespTabControl extends Composite {
     /** Pushes the current row state into the {@link FreqRespCorrectionStore}.
      *  Empty rows are skipped so the store holds only entries the view
      *  should divide by. */
+    /** Re-reads any loaded calibration row that references the just-saved
+     *  {@code .frc} ({@link Events#CALIBRATION_FILE_SAVED}) and re-pushes the
+     *  store, so the new curve takes effect immediately. */
+    private void onCalibrationFileSaved(String path) {
+        if (isDisposed() || path == null) return;
+        boolean reloaded = false;
+        for (CalRow r : calRows) {
+            if (r.entry.matchesPath(path) && loadFileIntoRow(r, r.entry.getPath(), false)) {
+                reloaded = true;
+            }
+        }
+        if (reloaded) syncStoreFromRows();
+    }
+
     private void syncStoreFromRows() {
         calMutationInFlight = true;
         try {
@@ -1294,6 +1350,9 @@ public final class FreqRespTabControl extends Composite {
             prefs.setFreqRespSaveFolder(new File(picked).getParent());
             prefs.save();
             log.info("FreqResp measurement saved to {}", picked);
+            // If this .frc is already loaded as a calibration anywhere, reload it
+            // so the freshly-saved curve takes effect without re-browsing.
+            MessageBus.instance().publish(Events.CALIBRATION_FILE_SAVED, picked);
         } catch (Exception ex) {
             log.warn("FreqResp save failed", ex);
             Dialogs.error(getShell(),

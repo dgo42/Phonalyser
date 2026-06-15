@@ -143,7 +143,8 @@ public final class SignalFormIcon {
             switch (form) {
                 case SINE:              drawSine(gc, false);            break;
                 case SINE_COMPENSATED:  drawSine(gc, true);             break;
-                case DUAL_TONE:         drawDualTone(gc);               break;
+                case DUAL_TONE:         drawDualTone(gc, false);        break;
+                case DUAL_TONE_COMPENSATED: drawDualTone(gc, true);     break;
                 case TRIANGLE:          drawTriangle(gc);               break;
                 case RECTANGLE:         drawRectangle(gc);              break;
                 case WHITE_NOISE:       drawNoise(gc, 31, 1);           break;
@@ -173,8 +174,10 @@ public final class SignalFormIcon {
      *  scope when running dual tone.  Drawn as the sum of two sines
      *  at the slightly different rates {@code 5·t} and {@code 6·t};
      *  the slow {@code (6−5)·t/2} envelope is what gives the
-     *  characteristic "fading in and out" visual. */
-    private void drawDualTone(GC gc) {
+     *  characteristic "fading in and out" visual.  When {@code compensated}
+     *  a small "★" marks the intermod-corrected variant, matching the
+     *  compensated-sine glyph. */
+    private void drawDualTone(GC gc, boolean compensated) {
         Path p = new Path(gc.getDevice());
         try {
             int steps = 80;
@@ -193,6 +196,12 @@ public final class SignalFormIcon {
             gc.drawPath(p);
         } finally {
             p.dispose();
+        }
+        if (compensated) {
+            // Small "★" hint that the intermod products are corrected.
+            gc.setLineAttributes(new LineAttributes(1f));
+            gc.drawLine(17, 4, 21, 4);
+            gc.drawLine(19, 2, 19, 6);
         }
     }
 

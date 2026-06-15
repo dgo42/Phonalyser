@@ -19,16 +19,11 @@
 package org.edgo.audio.measure.cli;
 
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
 import java.io.InputStreamReader;
-import java.io.PrintWriter;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -40,6 +35,8 @@ import org.edgo.audio.measure.cli.util.ClockMismatch;
 import org.edgo.audio.measure.cli.util.DeviceSelector;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
+import org.edgo.audio.measure.dsp.HarmonicCompensation;
+import org.edgo.audio.measure.dsp.HarmonicCompensation.GeneratorCorrections;
 import org.edgo.audio.measure.cli.util.SampleRates;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
@@ -101,9 +98,9 @@ public class IterativeCompensateMode {
     static class IterSnapshot {
         int iter;
         FftResult result;
-        double[] appliedRe;
-        double[] appliedIm;
-        double[] hFreqs;
+        /** The accumulated correction that was APPLIED to produce
+         *  {@link #result}; {@code null} outside accumulate mode. */
+        HarmonicCompensation applied;
     }
 
     public void run(String[] args) throws Exception {
@@ -240,19 +237,18 @@ public class IterativeCompensateMode {
         final double MAX_FUND_EXCLUSION_HZ = 500.0;
         final double MAX_FREQ_DRIFT_PPM = 3.0;
 
-        double[] accCorrRe = accumulate ? new double[harmonics] : null;
-        double[] accCorrIm = accumulate ? new double[harmonics] : null;
-        double[] hFreqs    = accumulate ? new double[harmonics] : null;
+        // The running correction accumulator (accumulate mode only) — the
+        // single home of the per-iteration phasor update + the applied-
+        // compensation CSV, shared with the GUI predistortion wizard.
+        HarmonicCompensation comp = accumulate ? new HarmonicCompensation(harmonics) : null;
 
         List<Double> thdHistory = new ArrayList<>();
         FftResult lastResult;
         FftResult bestResult = null;
         double bestThd = Double.MAX_VALUE;
-        double[] bestAccRe = accumulate ? new double[harmonics] : null;
-        double[] bestAccIm = accumulate ? new double[harmonics] : null;
-        double[] bestHFreqs = accumulate ? new double[harmonics] : null;
-        double[] bestAppliedRe = accumulate ? new double[harmonics] : null;
-        double[] bestAppliedIm = accumulate ? new double[harmonics] : null;
+        // The correction that produced the best-THD iteration (iteration 0 is
+        // uncompensated, so it starts empty).
+        HarmonicCompensation bestApplied = accumulate ? new HarmonicCompensation(harmonics) : null;
 
         FftAnalyzer fftAnalyzer = new FftAnalyzer();
 
@@ -317,8 +313,7 @@ public class IterativeCompensateMode {
                 String.format(Locale.US, "%.4f", amplitude));
 
         if (accumulate) {
-            accumulateHarmonics(result0, accCorrRe, accCorrIm, hFreqs,
-                    compSnrMargin, compStep);
+            comp.accumulate(result0, compSnrMargin, compStep);
         }
 
         FftChartExporter exporter = new FftChartExporter();
@@ -334,18 +329,11 @@ public class IterativeCompensateMode {
         bestResult = result0;
         bestThd = result0.thdPct;
         int bestIter = 0;
-        if (accumulate) {
-            System.arraycopy(accCorrRe, 0, bestAccRe, 0, harmonics);
-            System.arraycopy(accCorrIm, 0, bestAccIm, 0, harmonics);
-            System.arraycopy(hFreqs, 0, bestHFreqs, 0, harmonics);
-        }
         log.info("Iteration 0 THD: {} %", String.format(Locale.US, "%.8f", result0.thdPct));
 
         List<IterSnapshot> snapshots = new ArrayList<>();
         snapshots.add(new IterSnapshot(0, result0,
-                accumulate ? new double[harmonics] : null,
-                accumulate ? new double[harmonics] : null,
-                accumulate ? Arrays.copyOf(hFreqs, harmonics) : null));
+                accumulate ? new HarmonicCompensation(harmonics) : null));
 
         final AtomicBoolean stopRequested =
                 new AtomicBoolean(false);
@@ -386,7 +374,7 @@ public class IterativeCompensateMode {
             for (int retry = 0; ; retry++) {
                 SignalGenerator gen = accumulate
                         ? buildAccumulatedGenerator(frequency, sampleRate, amplitude,
-                                accCorrRe, accCorrIm, hFreqs)
+                                prefs.getDacFsVoltageRms(), comp)
                         : new SignalGenerator(frequency, sampleRate, amplitude, prefs.getDacFsVoltageRms(), lastResult);
                 float[] s = CaptureWithGenerator.run(gen,
                         outDevice, inDevice, sampleRate, bitDepth, ditherBits, duration);
@@ -432,15 +420,11 @@ public class IterativeCompensateMode {
                 break;
             }
 
-            double[] appliedRe = null, appliedIm = null;
+            // The correction applied to produce THIS result is the
+            // accumulator state before this round's update.
+            HarmonicCompensation applied = accumulate ? comp.copy() : null;
             if (accumulate) {
-                appliedRe = Arrays.copyOf(accCorrRe, harmonics);
-                appliedIm = Arrays.copyOf(accCorrIm, harmonics);
-            }
-
-            if (accumulate) {
-                accumulateHarmonics(result, accCorrRe, accCorrIm, hFreqs,
-                        compSnrMargin, compStep);
+                comp.accumulate(result, compSnrMargin, compStep);
             }
 
             // Reuses the exporter configured for iteration 0 — same ADC full-scale.
@@ -456,21 +440,12 @@ public class IterativeCompensateMode {
                 bestThd = result.thdPct;
                 bestResult = result;
                 bestIter = iter;
-                if (accumulate) {
-                    System.arraycopy(accCorrRe, 0, bestAccRe, 0, harmonics);
-                    System.arraycopy(accCorrIm, 0, bestAccIm, 0, harmonics);
-                    System.arraycopy(hFreqs, 0, bestHFreqs, 0, harmonics);
-                    System.arraycopy(appliedRe, 0, bestAppliedRe, 0, harmonics);
-                    System.arraycopy(appliedIm, 0, bestAppliedIm, 0, harmonics);
-                }
+                if (accumulate) bestApplied = applied;
             }
             log.info("Iteration {} THD: {} %",
                     iter, String.format(Locale.US, "%.8f", result.thdPct));
 
-            snapshots.add(new IterSnapshot(iter, result,
-                    appliedRe == null ? null : Arrays.copyOf(appliedRe, harmonics),
-                    appliedIm == null ? null : Arrays.copyOf(appliedIm, harmonics),
-                    accumulate ? Arrays.copyOf(hFreqs, harmonics) : null));
+            snapshots.add(new IterSnapshot(iter, result, applied));
 
             if (targetThd > 0 && result.thdPct <= targetThd) {
                 log.info("THD {} % reached target {} % — stopping.",
@@ -506,7 +481,7 @@ public class IterativeCompensateMode {
                 log.info("{} | {} | {}{}",
                         String.format("%3d", snap.getIter()),
                         String.format(Locale.US, "%12.8f", snap.getResult().thdPct),
-                        snap.getAppliedRe() != null ? "yes" : "no",
+                        snap.getApplied() != null ? "yes" : "no",
                         mark);
             }
             log.info("Enter iteration number to save (blank = keep BEST iter {}): ", bestIter);
@@ -527,11 +502,7 @@ public class IterativeCompensateMode {
                         bestIter   = chosen.getIter();
                         bestResult = chosen.getResult();
                         bestThd    = chosen.getResult().thdPct;
-                        if (accumulate) {
-                            System.arraycopy(chosen.getAppliedRe(), 0, bestAppliedRe, 0, harmonics);
-                            System.arraycopy(chosen.getAppliedIm(), 0, bestAppliedIm, 0, harmonics);
-                            System.arraycopy(chosen.getHFreqs(),    0, bestHFreqs,    0, harmonics);
-                        }
+                        if (accumulate) bestApplied = chosen.getApplied();
                         log.info("User picked iteration {} (THD {} %).",
                                 bestIter, String.format(Locale.US, "%.8f", bestThd));
                     }
@@ -550,12 +521,11 @@ public class IterativeCompensateMode {
         log.info("Best-iteration residual harmonics CSV (iter {}): {}", bestIter, csvPath);
 
         if (accumulate) {
-            String appliedCsv = exportAppliedCompensationCsv(
-                    bestAppliedRe, bestAppliedIm, bestHFreqs,
+            File appliedDpd = new File("results", "applied_compensation_" + wfTs + ".dpd");
+            bestApplied.writeCsv(appliedDpd.toPath(), null,
                     bestResult.fundamentalHzRefined, bestResult.fundamentalDbFs,
-                    sampleRate, bitDepth, amplitude,
-                    "results", "applied_compensation_" + wfTs);
-            log.info("Applied compensation for best iter {}: {}", bestIter, appliedCsv);
+                    sampleRate, bitDepth, amplitude);
+            log.info("Applied compensation for best iter {}: {}", bestIter, appliedDpd.getAbsolutePath());
         }
 
         log.info("=== THD history ===");
@@ -567,86 +537,18 @@ public class IterativeCompensateMode {
                 bestIter, String.format(Locale.US, "%.8f", bestThd));
     }
 
-    private void accumulateHarmonics(FftResult r,
-            double[] accRe, double[] accIm, double[] hFreqs,
-            double snrMarginDb, double step) {
-        double phi1   = Math.atan2(r.im[r.fundamentalBin], r.re[r.fundamentalBin]);
-        double omegaD = -(phi1 + Math.PI / 2.0);
-        double delayRadPerHz = omegaD / r.fundamentalHzRefined;
-
-        int count = Math.min(r.harmonicCount, accRe.length);
-        double skipBelowDbFs = r.avgNoiseFloorDbFs + snrMarginDb;
-
-        for (int h = 0; h < count; h++) {
-            int bin = r.harmonicBins[h];
-            if (bin <= 0) continue;
-            if (r.harmonicDbFs[h] < skipBelowDbFs) {
-                log.info("H{} skipped ({} dBFS < noise floor {} dBFS + {} dB margin) — near noise",
-                        h + 2,
-                        String.format(Locale.US, "%.2f", r.harmonicDbFs[h]),
-                        String.format(Locale.US, "%.2f", r.avgNoiseFloorDbFs),
-                        String.format(Locale.US, "%.1f", snrMarginDb));
-                continue;
-            }
-            double ampRatio = r.harmonicPct[h] / 100.0;
-            double phiH     = Math.atan2(r.im[bin], r.re[bin]);
-            double freqHz   = r.harmonicHz[h];
-            double phiInit  = phiH + freqHz * delayRadPerHz;
-            accRe[h]  += step * ampRatio * Math.cos(phiInit);
-            accIm[h]  += step * ampRatio * Math.sin(phiInit);
-            hFreqs[h]  = r.harmonicHz[h];
+    /** Builds a {@code SINE_COMPENSATED} generator from the accumulated
+     *  corrections.  The frequencies handed to the generator are the exact
+     *  integer multiples {@code hNum·f} the compensation locks each harmonic
+     *  to (the generator derives the same {@code hNum} internally). */
+    private SignalGenerator buildAccumulatedGenerator(double frequency, int sampleRate,
+            double amplitude, double dacFsVoltageRms, HarmonicCompensation comp) {
+        GeneratorCorrections gc = comp.toGeneratorCorrections(frequency);
+        double[] freqs = new double[gc.harmonicNumbers().length];
+        for (int i = 0; i < freqs.length; i++) {
+            freqs[i] = gc.harmonicNumbers()[i] * frequency;
         }
-    }
-
-    private SignalGenerator buildAccumulatedGenerator(
-            double frequency, int sampleRate, double amplitude,
-            double[] accRe, double[] accIm, double[] hFreqs) {
-        int valid = 0;
-        for (int h = 0; h < accRe.length; h++) {
-            if (accRe[h] != 0.0 || accIm[h] != 0.0) valid++;
-        }
-        double[] ampRatios = new double[valid];
-        double[] phiInits  = new double[valid];
-        double[] freqs     = new double[valid];
-        int i = 0;
-        for (int h = 0; h < accRe.length; h++) {
-            double re = accRe[h], im = accIm[h];
-            if (re == 0.0 && im == 0.0) continue;
-            ampRatios[i] = Math.sqrt(re * re + im * im);
-            phiInits[i]  = Math.atan2(im, re);
-            freqs[i]     = hFreqs[h];
-            i++;
-        }
-        return new SignalGenerator(frequency, sampleRate, amplitude, prefs.getDacFsVoltageRms(),
-                ampRatios, phiInits, freqs);
-    }
-
-    private String exportAppliedCompensationCsv(
-            double[] accRe, double[] accIm, double[] hFreqs,
-            double fundamentalHz, double fundamentalDbFs,
-            int sampleRate, int bitDepth, double amplitudeVRms,
-            String directory, String filePrefix) throws IOException {
-        File outFile = new File(directory, filePrefix + ".csv");
-        try (PrintWriter pw = new PrintWriter(
-                new BufferedWriter(new FileWriter(outFile)))) {
-            pw.printf(Locale.US, "# sample_rate_hz=%d%n", sampleRate);
-            pw.printf(Locale.US, "# bit_depth=%d%n",      bitDepth);
-            pw.printf(Locale.US, "# amplitude_vrms=%.10f%n", amplitudeVRms);
-            pw.printf(Locale.US, "# frequency_hz=%.10f%n",   fundamentalHz);
-            pw.println("harmonic;frequency_hz;amplitude_dbfs;amplitude_pct;phase_deg;re;im");
-            pw.printf(Locale.GERMAN, "1;%.6f;%.4f;100.000000;-90.0000;%.10e;%.10e%n",
-                    fundamentalHz, fundamentalDbFs, 0.0, -1.0);
-            for (int h = 0; h < accRe.length; h++) {
-                double re = accRe[h], im = accIm[h];
-                double amp = Math.sqrt(re * re + im * im);
-                if (amp == 0.0) continue;
-                double phaseDeg = Math.toDegrees(Math.atan2(im, re));
-                double ampPct   = amp * 100.0;
-                double ampDbFs  = fundamentalDbFs + 20.0 * Math.log10(amp);
-                pw.printf(Locale.GERMAN, "%d;%.6f;%.4f;%.9f;%.4f;%.10e;%.10e%n",
-                        h + 2, hFreqs[h], ampDbFs, ampPct, phaseDeg, re, im);
-            }
-        }
-        return outFile.getAbsolutePath();
+        return new SignalGenerator(frequency, sampleRate, amplitude, dacFsVoltageRms,
+                gc.ampRatios(), gc.phiInits(), freqs);
     }
 }

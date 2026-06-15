@@ -128,24 +128,6 @@ public class ScopeFormat {
     }
 
     /**
-     * Returns the next "nice" step target strictly above (delta &gt; 0) /
-     * below (delta &lt; 0) {@code current}, or {@code current} unchanged
-     * if no such target exists in {@code targets} (sorted ascending).
-     */
-    public double nextTargetFrom(double current, double[] targets, int delta) {
-        if (delta > 0) {
-            for (double t : targets) {
-                if (t > current) return t;
-            }
-        } else if (delta < 0) {
-            for (int i = targets.length - 1; i >= 0; i--) {
-                if (targets[i] < current) return targets[i];
-            }
-        }
-        return current;
-    }
-
-    /**
      * Returns the smallest target {@code >= value}, or the largest target
      * if {@code value} exceeds them all.  {@code targets} must be sorted
      * ascending.

@@ -55,6 +55,13 @@ public final class FlatScrollbar extends Canvas {
 
     /** Pixel size of each end-arrow along the scrolling axis. */
     private static final int ARROW_SIZE = 18;
+    /** Initial hold delay before any click action auto-repeats, in ms. */
+    private static final int REPEAT_DELAY_MS = 300;
+    /** Auto-repeat interval while an arrow is held, in ms (10 Hz). */
+    private static final int ARROW_REPEAT_MS = 100;
+    /** Auto-repeat interval while the free track is held, in ms — faster than
+     *  the arrows so a held track-click pages briskly toward the pointer. */
+    private static final int TRACK_REPEAT_MS = 50;
 
     private final boolean vertical;
     @Getter
@@ -286,8 +293,10 @@ public final class FlatScrollbar extends Canvas {
             dragOffset = axisPx - thumbStart;
         } else if (axisPx < thumbStart) {
             stepBy(-pageIncrement);
+            startTrackRepeat(-pageIncrement, axisPx);
         } else {
             stepBy(+pageIncrement);
+            startTrackRepeat(+pageIncrement, axisPx);
         }
     }
 
@@ -394,11 +403,41 @@ public final class FlatScrollbar extends Canvas {
             @Override public void run() {
                 if (isDisposed() || autoRepeatTask != holder[0]) return;
                 stepBy(delta);
-                getDisplay().timerExec(100, holder[0]);   // 10 Hz
+                getDisplay().timerExec(ARROW_REPEAT_MS, holder[0]);
             }
         };
         autoRepeatTask = holder[0];
-        getDisplay().timerExec(300, holder[0]);            // 300 ms initial delay
+        getDisplay().timerExec(REPEAT_DELAY_MS, holder[0]);
+    }
+
+    /** Page-repeat while the left button is held down on the FREE track: keeps
+     *  paging toward the pointer every {@value #TRACK_REPEAT_MS} ms (after the
+     *  same initial hold delay as the arrows) until the thumb has travelled
+     *  under the cursor — so it stops exactly when the thumb reaches the click,
+     *  never overshooting — or until it hits an end / the button is released. */
+    private void startTrackRepeat(int delta, int axisPx) {
+        stopAutoRepeat();
+        Runnable[] holder = new Runnable[1];
+        holder[0] = new Runnable() {
+            @Override public void run() {
+                if (isDisposed() || autoRepeatTask != holder[0]) return;
+                if (thumbCovers(axisPx)) { stopAutoRepeat(); return; }
+                int before = selection;
+                stepBy(delta);
+                if (selection == before) { stopAutoRepeat(); return; }   // hit an end
+                getDisplay().timerExec(TRACK_REPEAT_MS, holder[0]);
+            }
+        };
+        autoRepeatTask = holder[0];
+        getDisplay().timerExec(REPEAT_DELAY_MS, holder[0]);
+    }
+
+    /** True when the thumb currently covers the given axis pixel. */
+    private boolean thumbCovers(int axisPx) {
+        int[] tr = thumbRect();
+        int start = vertical ? tr[1] : tr[0];
+        int size  = vertical ? tr[3] : tr[2];
+        return axisPx >= start && axisPx < start + size;
     }
 
     private void stopAutoRepeat() {

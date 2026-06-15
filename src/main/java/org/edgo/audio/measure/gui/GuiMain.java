@@ -25,6 +25,7 @@ import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.config.LoggerConfig;
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.gui.automation.AutomationRunner;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -40,6 +41,13 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class GuiMain {
 
+    /** CLI switch selecting a {@code gui.automation} script to run
+     *  against the freshly opened window — either a class name already on
+     *  the classpath ({@code --automation=<fully.qualified.ClassName>})
+     *  or a {@code .java} source file compiled on the fly
+     *  ({@code --automation=<path/Script.java>}). */
+    private static final String AUTOMATION_ARG_PREFIX = "--automation=";
+
     private GuiMain() {}
 
     public static void main(String[] args) {
@@ -51,6 +59,14 @@ public final class GuiMain {
         LoggerConfig rootLogger = logCtx.getConfiguration().getRootLogger();
         rootLogger.removeAppender("Console");
         logCtx.updateLoggers();
+
+        // Route any worker-thread death through log4j.  Without this, an
+        // uncaught exception on a background thread (FFT analyser, scope
+        // measurement, capture consumer) only prints to stderr — which a
+        // windowed launch discards — so the view silently freezes with no
+        // trace in logs/phonalyser.log.  Now the stack lands in the file.
+        Thread.setDefaultUncaughtExceptionHandler((t, e) ->
+                log.error("Uncaught exception on thread '{}': {}", t.getName(), e.toString(), e));
 
         // Apply the persisted UI language BEFORE the SWT shell is built —
         // every widget reads its labels via I18n.t() at construction time,
@@ -83,11 +99,29 @@ public final class GuiMain {
         AudioBackend.instance().setActive(saved);
 
         Display display = new Display();
+        boolean automation = false;
+        for (String arg : args) {
+            if (arg.startsWith(AUTOMATION_ARG_PREFIX)) { automation = true; break; }
+        }
+        // Branded splash while the window is built.  Skipped for automation
+        // runs so it never sits in front of a screenshot capture.
+        StartupSplash splash = automation ? null : new StartupSplash(display);
+        if (splash != null) splash.open();
         // Language / font changes rebuild the window CONTENT in place
         // (MainWindow.rebuildContent) — the shell lives for the whole
         // session, so no recreate loop is needed.
         MainWindow window = new MainWindow(display);
         window.open();
+        if (splash != null) splash.close();
+        for (String arg : args) {
+            if (arg.startsWith(AUTOMATION_ARG_PREFIX)) {
+                String scriptClass = arg.substring(AUTOMATION_ARG_PREFIX.length()).trim();
+                if (!scriptClass.isEmpty()) {
+                    new AutomationRunner(display, window, scriptClass).start();
+                }
+                break;
+            }
+        }
         while (!window.isDisposed()) {
             if (!display.readAndDispatch()) {
                 display.sleep();

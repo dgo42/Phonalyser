@@ -129,6 +129,18 @@
             <version>3.14.0</version>
         </dependency>
 
+        <!-- Eclipse batch compiler (ECJ) — runtime compilation of GUI
+             automation scripts handed over as .java source files (the
+             "automation" CLI switch with a path instead of a class name).
+             Bundled so the jpackaged app (JRE-only runtime image) can
+             compile scripts too; on a dev JDK the javax.tools system
+             compiler would also work. -->
+        <dependency>
+            <groupId>org.eclipse.jdt</groupId>
+            <artifactId>ecj</artifactId>
+            <version>3.38.0</version>
+        </dependency>
+
         <!-- JUnit 5 for testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -463,8 +475,9 @@
                                     <mainClass>org.edgo.build.pdf.MarkdownToPdf</mainClass>
                                     <arguments>
                                         <argument>${project.basedir}/pdf-tool/fonts</argument>
-                                        <argument>${project.build.directory}</argument>
+                                        <argument>${project.basedir}/docs</argument>
                                         <argument>${project.basedir}/docs/ALGORITHMS.md</argument>
+                                        <argument>${project.basedir}/docs/ALGORITHMS.uk.md</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
@@ -477,6 +490,26 @@
 
     <build>
         <finalName>${project.artifactId}-${project.version}</finalName>
+        <!-- Filter ONLY version.properties so it carries the pom version at
+             build time (single source of truth for the splash + About).  All
+             other resources — notably the 32 i18n bundles — stay unfiltered to
+             keep their ${}/$ content untouched. -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>version.properties</exclude>
+                </excludes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>version.properties</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <!-- Force UTF-8 across the whole build.  project.build.sourceEncoding
                  is already set in <properties> so most plugins read it from

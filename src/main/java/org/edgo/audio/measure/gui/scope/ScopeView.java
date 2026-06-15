@@ -2025,7 +2025,7 @@ public final class ScopeView extends AbstractMeasurementView {
         float[] effectiveData = triggerData;
         boolean effectiveSinc = sincEnabled;
         debugBeatSignal = null;
-        if (prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE) {
+        if (prefs.getGenSignalForm().isDualTone()) {
             int sr = b.getSampleRate();
             // Reconstruct from the frequencies the generator actually EMITS:
             // snapped to the FFT-bin grid when "snap generator freq to FFT

@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.preferences;
 
+import java.nio.file.Path;
+
 import org.edgo.audio.measure.bind.Property;
 
 import lombok.Getter;
@@ -65,6 +67,20 @@ public final class CalibrationEntry {
         this.path      = path;
         this.active    = new Property<>(active);
         this.withNoise = new Property<>(withNoise);
+    }
+
+    /** True when this row references the same file as {@code other}, comparing
+     *  normalised absolute paths so {@code ./} segments and separator
+     *  differences don't cause a spurious mismatch (Windows paths are also
+     *  case-insensitive, which the normalised compare honours on that OS). */
+    public boolean matchesPath(String other) {
+        if (path == null || other == null) return false;
+        try {
+            return Path.of(path).toAbsolutePath().normalize()
+                    .equals(Path.of(other).toAbsolutePath().normalize());
+        } catch (RuntimeException e) {
+            return path.equals(other);
+        }
     }
 
     public Property<Boolean> active() {
