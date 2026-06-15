@@ -30,17 +30,15 @@ import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.enums.GenSignalForm;
-import org.edgo.audio.measure.gui.MainTab;
 import org.edgo.audio.measure.gui.MainWindow;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
@@ -69,12 +67,8 @@ import lombok.extern.log4j.Log4j2;
  * the screenshot dialog without holding a reference to the whole pane.
  */
 @Log4j2
-public final class ScopePane implements ScopeTabControl.Host {
+public final class ScopePane extends AbstractPane implements ScopeTabControl.Host {
 
-    /** Side length of the Record toggle (px). */
-    public  static final int TOGGLE_BUTTON = 48;
-    /** Pixel height of the big record-LED button at the top toolbar. */
-    private static final int RECORD_LED_SIZE  = 33;
     /**
      * Minimum peak-to-peak signal amplitude (as a fraction of the ADC's
      * full-scale p-p) required for the calibrate button to be active.
@@ -126,9 +120,6 @@ public final class ScopePane implements ScopeTabControl.Host {
     private final Image recordDim;
     private final Image recordLit;
 
-    @Getter
-    private final Composite              group;
-    private PaneTitle                    title;
     @Getter
     private final ScopeView              view;
     @Getter
@@ -185,9 +176,11 @@ public final class ScopePane implements ScopeTabControl.Host {
      *  state ({@code isCapturing}), the live buffer reference and the
      *  ACQUIRE/RELEASE bus round-trip.  The pane wires the views around
      *  it: buffer attach + measurement thread + redraw timer on start,
-     *  frozen-snapshot re-attach on stop.  Stays idle on the
-     *  screenshot-only pane variant ({@code liveCapture = false}). */
-    private final ScopeController controller = new ScopeController();
+     *  frozen-snapshot re-attach on stop.  The live pane receives the
+     *  app-lifetime instance (lives in {@code UIEngines}, survives content
+     *  rebuilds — a rebuilt pane re-attaches to a still-running capture);
+     *  the screenshot-only variant builds its own, which stays idle. */
+    private final ScopeController controller;
     /** Main-view redraws elapsed since the last condensed-view redraw. */
     private int                          redrawCounter;
     /**
@@ -197,32 +190,34 @@ public final class ScopePane implements ScopeTabControl.Host {
      * screenshot-only variant.
      */
     private final ScopeOpenSignal        loader;
-    /** Collapse state + per-child snapshot.  See {@link #setCollapsed(boolean)}. */
-    @Getter
-    private boolean    collapsed;
-    private boolean[]  preCollapseChildVisible;
-    private boolean[]  preCollapseChildExclude;
 
     /**
-     * Constructs the pane and all its children.
-     * @param parent       host composite for the pane's Group.
-     * @param liveCapture  when {@code true}, wires the Record toggle to the
-     *                     pane's own capture lifecycle (showing an error
-     *                     MessageBox on capture-open failure) and stops it on
-     *                     Group dispose.  The screenshot pane variant
-     *                     passes {@code false} — its camera / calibrate
-     *                     buttons still exist for layout fidelity but are
-     *                     never clicked.
+     * Constructs the live pane around the injected app-lifetime capture
+     * controller: the Record toggle drives it (showing an error MessageBox
+     * on capture-open failure), and when the controller is already
+     * capturing — this is a rebuilt pane after a language / font change —
+     * the views re-attach to the live buffer immediately.
      */
-    public ScopePane(Composite parent, boolean liveCapture) {
+    public ScopePane(Composite parent, ScopeController controller) {
+        this(parent, controller, true);
+    }
+
+    /**
+     * Screenshot-only variant: builds its own (idle) controller and never
+     * opens an audio device.  Its camera / calibrate buttons still exist
+     * for layout fidelity but are never clicked.
+     */
+    public ScopePane(Composite parent) {
+        this(parent, new ScopeController(), false);
+    }
+
+    private ScopePane(Composite parent, ScopeController controller, boolean liveCapture) {
+        super(parent);
+        this.controller = controller;
         IconUtils icons = IconUtils.instance();
         Display d = parent.getDisplay();
-        this.recordDim      = icons.createRecordLed(d, 200,  40,  40, false, RECORD_LED_SIZE);
-        this.recordLit      = icons.createRecordLed(d, 255,   0,   0, true,  RECORD_LED_SIZE);
-        // Composite + SWT.BORDER instead of Group — on GTK the Group's
-        // GtkFrame label widget consumes title-bar clicks, breaking the
-        // collapse UX.  Visual frame is preserved by SWT.BORDER.
-        group = new Composite(parent, SWT.BORDER);
+        this.recordDim      = icons.createRecordLed(d, 200,  40,  40, false, ACTION_ICON_SIZE);
+        this.recordLit      = icons.createRecordLed(d, 255,   0,   0, true,  ACTION_ICON_SIZE);
         group.setLayout(paneLayout());
         // Clickable Label inside the content area replaces the Group's
         // native chrome title — GTK's GtkFrame label widget consumes
@@ -294,11 +289,12 @@ public final class ScopePane implements ScopeTabControl.Host {
 
         // Condensed overview strip just above the toolbar.  Its heightHint is
         // recomputed on every pane resize so the strip stays roughly 1.2 of
-        // 11.2 divisions tall (the area above the toolbar).  Also spans both
-        // columns for the same reason as the nav slider above.
+        // 11.2 divisions tall (the area above the toolbar).  Stays in column 0
+        // only (NOT spanning the vertical-scrollbar gutter) so its width
+        // matches the main scope view's instead of stretching to the pane's
+        // right edge.
         condensed = new ZoomedView(group);
         condensedGd = new GridData(SWT.FILL, SWT.FILL, true, false);
-        condensedGd.horizontalSpan = 2;
         condensed.setLayoutData(condensedGd);
 
         // Toolbar area: the ScopeTabControl on the left (fills) + Record toggle
@@ -358,6 +354,7 @@ public final class ScopePane implements ScopeTabControl.Host {
 
         if (liveCapture) {
             wireLiveCaptureLifecycle();
+            reattachLiveCapture();
         }
 
         // Keep the Utility-tab calibrate button's gate honest as recording
@@ -369,8 +366,9 @@ public final class ScopePane implements ScopeTabControl.Host {
     }
 
     /** Live-pane capture wiring: Record button, Auto-Setup bus subscription,
-     *  and a dispose listener that unsubscribes and stops live capture.
-     *  Called only when {@code liveCapture} is true — the
+     *  and a dispose listener that unsubscribes the pane's bus handlers
+     *  (a running capture deliberately survives the pane — see the
+     *  controller field).  Called only when {@code liveCapture} is true — the
      *  screenshot pane mirrors the Record-button visual state externally
      *  via {@link #setRecordingState} but never opens an audio device of
      *  its own.  The "Reconstructed beat" generator-form subscription lives
@@ -390,8 +388,26 @@ public final class ScopePane implements ScopeTabControl.Host {
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
             loader.clear();
-            stopCapture();
+            // The injected controller deliberately keeps capturing — a
+            // content rebuild (language / font change) must not drop the
+            // device; the rebuilt pane re-attaches to the live buffer.
+            // UIEngines releases the capture at application exit.  The
+            // view's own dispose listener stops its measurement worker.
         });
+    }
+
+    /** A rebuilt pane may find the injected controller still capturing
+     *  (the engines survive content rebuilds): re-attach both views to the
+     *  live buffer, restart the measurement worker + redraw timer and
+     *  light the Record LED. */
+    private void reattachLiveCapture() {
+        SignalBufferReader buf = controller.liveBuffer();
+        if (buf == null) return;
+        view.setBuffer(buf);
+        condensed.setBuffer(buf);
+        view.startMeasurementThread();
+        scheduleRedraw();
+        setRecordingState(true);
     }
 
     /** Stops a running capture and grays the Record button — fired by the
@@ -503,6 +519,13 @@ public final class ScopePane implements ScopeTabControl.Host {
         if (tabControl != null) tabControl.setTabsCollapsed(wantCollapsed);
     }
 
+    /** Registers this pane's settings tabs in the component registry under
+     *  {@code prefix} so automation can select each by path.  See
+     *  {@link ScopeTabControl#registerTabs}. */
+    public void registerTabs(String prefix) {
+        if (tabControl != null) tabControl.registerTabs(prefix);
+    }
+
     /** Re-flow after the tab body collapses / expands: keep the Record button
      *  anchored to the top of the toolbar row so it stays reachable, then
      *  cascade the layout toolbar → group so the scope view reclaims / yields
@@ -589,8 +612,9 @@ public final class ScopePane implements ScopeTabControl.Host {
      *  state into it, and printing the result.  Because the chrome is
      *  laid out by SWT (rather than bitmap-scaled), toolbar buttons stay
      *  at their native pixel size with extra space distributed by the
-     *  layout. */
-    private Image renderOffscreen(Display d, int targetW, int targetH) {
+     *  layout.  Public for the screenshot dialog's renderer hook and the
+     *  {@code gui.automation} snapshot helpers; UI thread only. */
+    public Image renderOffscreen(Display d, int targetW, int targetH) {
         targetW = Math.max(1, targetW);
         targetH = Math.max(1, targetH);
         // Hidden Shell sized to the target.  On GTK: setSize BEFORE
@@ -599,7 +623,7 @@ public final class ScopePane implements ScopeTabControl.Host {
         // it at (0,0) anyway.
         Shell offscreen = new Shell(d, SWT.NO_TRIM);
         offscreen.setLayout(new FillLayout());
-        ScopePane shotPane = new ScopePane(offscreen, false);
+        ScopePane shotPane = new ScopePane(offscreen);
         Image output = new Image(d, targetW, targetH);
         try {
             if (view != null && !view.isDisposed()) {
@@ -641,48 +665,6 @@ public final class ScopePane implements ScopeTabControl.Host {
         return output;
     }
 
-    /** Hides / shows every child except the title Label so the pane can
-     *  collapse to its title bar (or restore).  Snapshots each child's
-     *  pre-collapse {@code visible} / {@code GridData.exclude} on the way
-     *  down so per-child state (e.g. the navSlider's mutually-exclusive
-     *  height spacer) survives the round-trip.  Pure pane-internal — the
-     *  parent {@code SashForm}'s weights are owned by {@link MainTab}. */
-    public void setCollapsed(boolean wantCollapsed) {
-        if (collapsed == wantCollapsed) return;
-        if (group == null || group.isDisposed()) return;
-        collapsed = wantCollapsed;
-        Control[] children = group.getChildren();
-        if (collapsed) {
-            preCollapseChildVisible = new boolean[children.length];
-            preCollapseChildExclude = new boolean[children.length];
-            for (int i = 0; i < children.length; i++) {
-                if (children[i] == title) continue;
-                preCollapseChildVisible[i] = children[i].getVisible();
-                if (children[i].getLayoutData() instanceof GridData gd) {
-                    preCollapseChildExclude[i] = gd.exclude;
-                    gd.exclude = true;
-                }
-                children[i].setVisible(false);
-            }
-            title.setCollapsed(true);
-        } else {
-            if (preCollapseChildVisible != null
-                    && preCollapseChildVisible.length == children.length) {
-                for (int i = 0; i < children.length; i++) {
-                    if (children[i] == title) continue;
-                    children[i].setVisible(preCollapseChildVisible[i]);
-                    if (children[i].getLayoutData() instanceof GridData gd) {
-                        gd.exclude = preCollapseChildExclude[i];
-                    }
-                }
-                preCollapseChildVisible = null;
-                preCollapseChildExclude = null;
-            }
-            title.setCollapsed(false);
-        }
-        group.layout(true);
-    }
-
     /**
      * Auto-setup: picks a t/div that fits ~1.5 periods on screen and a V/div
      * that makes the signal span ~0.75 of the vertical range, then resets
@@ -713,7 +695,7 @@ public final class ScopePane implements ScopeTabControl.Host {
         // full beat envelope — picking the carrier alone would render
         // a packed wall of cycles with no visible envelope.
         double scaleHz = freq;
-        if (prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE) {
+        if (prefs.getGenSignalForm().isDualTone()) {
             double beatHz = Math.abs(prefs.getGenDualToneFreq2Hz()
                                    - prefs.getGenDualToneFreq1Hz());
             if (beatHz > 0 && (!Double.isFinite(scaleHz) || beatHz < scaleHz)) {
@@ -1191,6 +1173,19 @@ public final class ScopePane implements ScopeTabControl.Host {
         scheduleRedraw();
     }
 
+    /** Programmatically engages live capture and lights the Record LED —
+     *  the {@code gui.automation} scripts' Record.  A failure is only
+     *  logged (no modal dialog in an unattended run); callers can check
+     *  {@link #isCapturing()}. */
+    public void engageRecord() {
+        if (isCapturing()) return;
+        startCapture();
+        setRecordingState(isCapturing());
+        if (!isCapturing() && log.isWarnEnabled()) {
+            log.warn("Scope capture start failed: {}", getLastStartError());
+        }
+    }
+
     /** Stops the capture but keeps a frozen snapshot of the last captured
      *  frame attached to both views.  A subsequent {@link #startCapture()}
      *  replaces the snapshot with a fresh live buffer. */
@@ -1223,10 +1218,11 @@ public final class ScopePane implements ScopeTabControl.Host {
         if (!controller.isCapturing()) return;
         view.getDisplay().timerExec(REDRAW_PERIOD_MS, () -> {
             if (!controller.isCapturing()) return;
-            if (!view.isDisposed()) {
-                view.redraw();
-                view.update();
-            }
+            // Pane torn down while the capture survived (content rebuild)
+            // — stop THIS timer chain; the rebuilt pane runs its own.
+            if (view.isDisposed()) return;
+            view.redraw();
+            view.update();
             if (redrawCounter++ >= CONDENSED_DECIMATION) {
                 redrawCounter = 0;
                 if (!condensed.isDisposed()) condensed.redraw();
@@ -1255,12 +1251,8 @@ public final class ScopePane implements ScopeTabControl.Host {
     }
 
     private Button addToggleButton(Composite t, Image dim, Image lit) {
-        Button btn = new Button(t, SWT.TOGGLE);
+        Button btn = createActionButton(t, SWT.TOGGLE);
         btn.setImage(dim);
-        GridData gd = new GridData(SWT.END, SWT.END, true, false);
-        gd.widthHint  = TOGGLE_BUTTON;
-        gd.heightHint = TOGGLE_BUTTON;
-        btn.setLayoutData(gd);
         btn.addListener(SWT.Selection,
                 e -> btn.setImage(btn.getSelection() ? lit : dim));
         return btn;

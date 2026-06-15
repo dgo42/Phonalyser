@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Further reading: The exponential sine sweep in practice</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="../theory/index.html">◀ Back to Theory of operation</a></p>
+
+  <h1>The exponential sine sweep in practice</h1>
+
+  <div class="note"><b>About this page.</b>  This is a short summary, in our
+     own words, of a hands-on article:
+     <a href="https://medium.com/@baranov.mv/how-i-was-listening-to-a-sine-sweep-all-day-long-294c374995f6">"How
+     I was listening to a sine sweep all day long"</a> by Mikhail Baranov
+     (Medium, 2016), which walks through implementing Angelo Farina's
+     exponential-sweep measurement end to end.  All credit belongs to the
+     original — read it there for the full story, code and plots.  The
+     underlying method is Farina's AES paper, referenced below.</div>
+
+  <h2>The problem</h2>
+  <p>A linear, time-invariant system — a room, an amplifier, a filter — is
+     completely described by its <b>impulse
+     response</b><sup><a href="#ref-bg">[3]</a></sup>: what comes out
+     when an infinitely short click goes in.  Measuring it directly with a
+     real click is hopeless (far too little energy), so the practical
+     methods all play a long, energy-rich probe signal and mathematically
+     compress the recording back into an impulse.</p>
+
+  <h2>Why the exponential sweep wins</h2>
+  <p>Farina's probe<sup><a href="#ref-paper">[2]</a></sup> is a sine whose
+     frequency rises <em>exponentially</em> with time — the same signal as
+     equation (9) of the
+     <a href="../theory/generator.html#sweeps">generator chapter</a>.
+     Compared to noise-like probes (MLS and relatives) it delivers a
+     substantially better signal-to-noise ratio for the same measurement
+     time (the article<sup><a href="#ref-article">[1]</a></sup> demonstrates
+     a ~20 dB advantage in its test setup),
+     and it has one almost magical property: <b>harmonic distortion
+     separates itself from the linear response</b>.  Because each frequency
+     occurs at a known time, a distortion harmonic of the momentary tone
+     arrives as if it belonged to a frequency the sweep reaches only
+     <em>later</em> — after deconvolution, all distortion products land at
+     negative delays, cleanly ahead of the linear impulse response, where
+     they can simply be windowed away (or analysed on purpose).</p>
+
+  <h2>The recipe</h2>
+  <ol>
+    <li>Play the exponential sweep through the system and record the
+        result.</li>
+    <li>Build the <b>inverse filter</b>: the sweep reversed in time, with a
+        gain tilt of −6 dB per octave to compensate for the sweep spending
+        exponentially longer in the low octaves.</li>
+    <li>Convolve the recording with the inverse filter.  The result is the
+        impulse response; a Fourier transform of it is the complex frequency
+        response — magnitude and phase.</li>
+  </ol>
+  <p>This is precisely the pipeline behind Phonalyser's frequency-response
+     module, with one engineering refinement described in the
+     <a href="../theory/generator.html#sweeps">generator chapter</a>: the
+     sweep is pre-rendered, so the deconvolution reference is identical,
+     sample for sample, to what the DAC actually played.</p>
+
+  <h2 id="refs">References</h2>
+  <ol class="refs">
+    <li id="ref-article">M. Baranov,
+        <a href="https://medium.com/@baranov.mv/how-i-was-listening-to-a-sine-sweep-all-day-long-294c374995f6">"How I was listening to a sine sweep all day long"</a>,
+        Medium, 2016 — the original article this page summarises.</li>
+    <li id="ref-paper">A. Farina,
+        <a href="http://pcfarina.eng.unipr.it/Public/Papers/226-AES00.PDF">"Simultaneous measurement of impulse response and distortion with a swept-sine technique"</a>,
+        108th AES Convention, 2000 — the method itself.</li>
+    <li id="ref-bg"><a href="https://en.wikipedia.org/wiki/Impulse_response">Wikipedia: Impulse response</a> and
+        <a href="https://en.wikipedia.org/wiki/Deconvolution">Wikipedia: Deconvolution</a> —
+        background on the concepts.</li>
+  </ol>
+
+  <p class="back"><a href="../theory/index.html">◀ Back to Theory of operation</a></p>
+
+</body>
+</html>

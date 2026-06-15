@@ -14,21 +14,39 @@
      Press <kbd>Ctrl</kbd>+<kbd>F1</kbd> to jump directly to the section
      covering the control that currently has focus.</p>
 
+  <p>🔍 <a href="help-index.html"><b>Index &amp; search</b></a> — search the
+     whole manual, or browse the A–Z list of topics and terms.</p>
+
+  <p>💡 <a href="tips.html"><b>Tips</b></a> — small things that make a big
+     difference, also shown one at a time at startup.</p>
+
+  <p>🙏 <a href="credits.html"><b>Credits &amp; acknowledgements</b></a> —
+     inspiration and thanks.</p>
+
   <h2>Modules</h2>
   <div class="toc">
     <a href="generator.html"><b>Generator</b> — tone generation, sweep, noise, WAV-file playback</a>
     <a href="oscilloscope.html"><b>Oscilloscope</b> — live time-domain view, trigger, measurement table</a>
     <a href="fft.html"><b>FFT analyser</b> — spectrum, harmonics, THD / SNR / ENOB</a>
+    <a href="freqresp.html"><b>Frequency response</b> — swept magnitude &amp; phase, RIAA / IEC reference, compare mode</a>
+    <a href="preferences.html"><b>Preferences</b> — audio backend &amp; devices, scope and FFT appearance</a>
+  </div>
+
+  <h2>Theory of operation</h2>
+  <div class="toc">
+    <a href="theory/index.html"><b>Theory of operation</b> — how the instrument works inside: audio backend, ring buffer &amp; consumers, DDS signal generator</a>
   </div>
 
   <h2>Layout</h2>
+  <p><img src="img/multifunctional.png" alt="Main window — multifunctional tab" style="max-width:100%;height:auto;border:1px solid #dde;"/></p>
   <div class="pane">
-    <p>The main window is split into a fixed-width <b>Generator</b> pane on the
-       left and a vertical sash between <b>Oscilloscope</b> (top) and
+    <p>The main window is split into a <b>Generator</b> pane on the left
+       (its width is adjustable — drag the sash, or set it in Preferences)
+       and a vertical sash between <b>Oscilloscope</b> (top) and
        <b>FFT analyser</b> (bottom) on the right.  Each pane can be collapsed
        to its title strip by double-clicking the title bar; double-clicking
        again restores it.</p>
-    <p>Each module has its own toolbar — a <code>CTabFolder</code> below the
+    <p>Each module has its own toolbar — a settings-tab strip below the
        main view with tabs for the per-module settings.  The tab strip can
        be collapsed in turn (double-click the strip) to reclaim vertical
        space for the visible chart.</p>

@@ -43,12 +43,12 @@ public enum UnitFamily {
             new Unit("unit.hz",  1.0,   false, List.of("hz")),
             new Unit("unit.khz", 1e3,   false, List.of("khz"))),
 
-    /** µV / mV / V / dBV; display switches mV below 0.5 V.  µV is parse-only
-     *  (it renders as mV); dBV sticks for display once typed — the only unit
-     *  the range switching can never choose.  Suffix-less input is V. */
+    /** µV / mV / V / dBV; display switches µV below 1 mV, mV below 0.5 V, V
+     *  above.  dBV sticks for display once typed — the only unit the range
+     *  switching can never choose.  Suffix-less input is V. */
     AMPLITUDE(2,
-            new Unit("unit.uv",  1e-6,  false, List.of("uv")),
-            new Unit("unit.mv",  1e-3,  false, List.of("mv")),
+            new Unit("unit.uv",  1e-6,  false, List.of("uv", "u", "µ", "μ")),
+            new Unit("unit.mv",  1e-3,  false, List.of("mv", "m")),
             new Unit("unit.v",   1.0,   false, List.of("v")),
             new Unit("unit.dbv", 1.0,   true,  List.of("dbv"))),
 
@@ -67,8 +67,8 @@ public enum UnitFamily {
     /** µV/div … V/div for the scope's vertical resolution; suffix-less input
      *  uses the unit currently displayed. */
     VOLTS_PER_DIV(-1,
-            new Unit("unit.uvdiv", 1e-6, false, List.of("uv/div", "uv", "µv")),
-            new Unit("unit.mvdiv", 1e-3, false, List.of("mv/div", "mv")),
+            new Unit("unit.uvdiv", 1e-6, false, List.of("uv/div", "uv", "µv", "u", "µ", "μ")),
+            new Unit("unit.mvdiv", 1e-3, false, List.of("mv/div", "mv", "m")),
             new Unit("unit.vdiv",  1.0,  false, List.of("v/div", "v"))),
 
     PERCENT(0,   new Unit("unit.percent", 1.0, false, List.of("%"))),
@@ -140,7 +140,8 @@ public enum UnitFamily {
     public Unit displayUnit(double canonical) {
         switch (this) {
             case FREQUENCY:     return canonical < KILO_SWITCH_HZ   ? units[0] : units[1];
-            case AMPLITUDE:     return canonical < HALF_UNIT_SWITCH ? units[1] : units[2];
+            case AMPLITUDE:     return canonical < MILLI_SWITCH ? units[0]
+                                     : (canonical < HALF_UNIT_SWITCH ? units[1] : units[2]);
             case TIME:          return canonical < HALF_UNIT_SWITCH ? units[0] : units[1];
             case TIME_PER_DIV:
             case VOLTS_PER_DIV: return canonical < MILLI_SWITCH ? units[0]

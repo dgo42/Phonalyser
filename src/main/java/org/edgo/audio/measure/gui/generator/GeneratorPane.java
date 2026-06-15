@@ -43,6 +43,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
+import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -76,13 +77,10 @@ import java.util.function.Consumer;
  * just snapshots the current settings into Preferences and logs them.
  */
 @Log4j2
-public final class GeneratorPane {
+public final class GeneratorPane extends AbstractPane {
 
     /** Minimum width (px) the pane will accept in the horizontal split. */
     public static final int MIN_WIDTH_PX = 200;
-
-    /** Pixel height of the main play button at the bottom of the pane. */
-    private static final int PLAY_LED_SIZE       = 33;
     /** Pixel height of the small play button in the Load-from row. */
     private static final int TINY_LED_SIZE       = 16;
     /** Pixel height of the floppy / folder glyphs that sit next to the
@@ -110,9 +108,6 @@ public final class GeneratorPane {
     /** Current dither values shown in the combo (rebuilt when output bit depth changes). */
     private int[] ditherBits;
 
-    @Getter
-    private final Composite       group;
-    private PaneTitle             title;
     private final SignalFormCombo formCombo;
     private final Label           freqLabel;
     private final NumericStepField freqField;
@@ -167,7 +162,11 @@ public final class GeneratorPane {
     private final Image           calibrateDacIcon;
     private final Button          playBtn;
 
-    private final GeneratorController controller = new GeneratorController();
+    /** App-lifetime engine controller, injected by the host (lives in
+     *  {@code UIEngines}) — survives the in-place content rebuilds, so a
+     *  freshly built pane may find the tone already playing and only has
+     *  to sync its visuals. */
+    private final GeneratorController controller;
 
     /** "ON AIR" banner LED + label at the top right of the pane.
      *  When active: LED is always solid #FF0000, the "ON AIR" text blinks
@@ -201,13 +200,6 @@ public final class GeneratorPane {
      *  Preferences dialog commits an audio-format change. */
     private Consumer<Void> audioFormatListener;
 
-    /** True when the pane is collapsed.  See {@link #setCollapsed(boolean)}. */
-    @Getter
-    private boolean    collapsed;
-    /** Per-child visibility snapshot taken when the pane collapses,
-     *  restored verbatim on expand. */
-    private boolean[]  preCollapseChildVisible;
-    private boolean[]  preCollapseChildExclude;
     /** Current pane pixel width as last seen by the sash filter, seeded
      *  from prefs in the constructor.  {@code -1} = not yet measured. */
     @Getter
@@ -216,7 +208,9 @@ public final class GeneratorPane {
      *  can restore it on expand. */
     private int        preCollapseWidthPx;
 
-    public GeneratorPane(Composite parent) {
+    public GeneratorPane(Composite parent, GeneratorController controller) {
+        super(parent);
+        this.controller = controller;
         // Seed the tracked pane width from prefs BEFORE the host
         // SashForm's first layout pass — the controlListener that picks
         // up paneWidthPx fires immediately after construction and we
@@ -229,19 +223,14 @@ public final class GeneratorPane {
         Display d = parent.getDisplay();
         RGB greenDim = new RGB(0x00, 0xAA, 0x00);
         RGB greenLit = new RGB(0x00, 0xFF, 0x00);
-        this.playDimImg     = icons.renderAtHeight(d, SvgPaths.PLAY, PLAY_LED_SIZE,  greenDim);
-        this.playLitImg     = icons.renderAtHeight(d, SvgPaths.PLAY, PLAY_LED_SIZE,  greenLit);
+        this.playDimImg     = icons.renderAtHeight(d, SvgPaths.PLAY, ACTION_ICON_SIZE,  greenDim);
+        this.playLitImg     = icons.renderAtHeight(d, SvgPaths.PLAY, ACTION_ICON_SIZE,  greenLit);
         this.tinyPlayDimImg = icons.renderAtHeight(d, SvgPaths.PLAY, TINY_LED_SIZE,  greenDim);
         this.tinyPlayLitImg = icons.renderAtHeight(d, SvgPaths.PLAY, TINY_LED_SIZE,  greenLit);
         this.floppyDiskIcon = icons.renderAtHeight(d, SvgPaths.FLOPPY_DISK, FILE_ICON_HEIGHT, null);
         this.folderOpenIcon = icons.renderAtHeight(d, SvgPaths.FOLDER_OPEN, FILE_ICON_HEIGHT, null);
-        this.calibrateDacIcon = icons.renderAtHeight(d, SvgPaths.CROSSHAIR, PLAY_LED_SIZE, null);
+        this.calibrateDacIcon = icons.renderAtHeight(d, SvgPaths.CROSSHAIR, ACTION_ICON_SIZE, null);
 
-        // Composite + SWT.BORDER replaces the legacy Group widget — the
-        // Group's GtkFrame label widget on GTK consumes title-bar mouse
-        // clicks, breaking the collapse-on-title-click UX.  Visual frame
-        // is preserved via SWT.BORDER.
-        group = new Composite(parent, SWT.BORDER);
         GridLayout gl = new GridLayout(1, false);
         // 2 px padding on all four sides so the content doesn't touch the
         // SWT.BORDER.  verticalSpacing = 2 gives the same 2 px gap between
@@ -488,7 +477,7 @@ public final class GeneratorPane {
         // poke the form combo.
         boolean initialIsSweep    = initialForm == GenSignalForm.LINEAR_SWEEP
                                  || initialForm == GenSignalForm.LOG_SWEEP;
-        boolean initialIsDualTone = initialForm == GenSignalForm.DUAL_TONE;
+        boolean initialIsDualTone = initialForm.isDualTone();
         setRegularFreqRowVisible(!initialIsSweep && !initialIsDualTone);
         setDualToneFreqRowsVisible(initialIsDualTone);
         setSnapBtnVisible(!initialIsSweep);   // snap applies to SINE AND DUAL_TONE
@@ -505,7 +494,7 @@ public final class GeneratorPane {
             boolean wasRunning = controller.isRunning();
             prefs.setGenSignalForm(f);
             boolean newIsSweep    = f == GenSignalForm.LINEAR_SWEEP || f == GenSignalForm.LOG_SWEEP;
-            boolean newIsDualTone = f == GenSignalForm.DUAL_TONE;
+            boolean newIsDualTone = f.isDualTone();
             // Sweep + dual-tone each hijack the single-frequency input
             // — hide the regular Frequency row.  For DUAL_TONE, show
             // the Freq 1 / Freq 2 rows instead (placed just under the
@@ -609,24 +598,42 @@ public final class GeneratorPane {
         // ------------------------------------------------------- Corrections
         addRowLabel(group, I18n.t("generator.corrections"));
         Composite corrRow = new Composite(group, SWT.NONE);
-        GridLayout corrGl = new GridLayout(2, false);
+        GridLayout corrGl = new GridLayout(3, false);
         corrGl.marginWidth = 0; corrGl.marginHeight = 0;
         corrGl.horizontalSpacing = 4;
         corrRow.setLayout(corrGl);
         corrRow.setLayoutData(fillH());
 
         correctionsField = new Text(corrRow, SWT.BORDER | SWT.READ_ONLY);
-        String savedCorr = nullToEmpty(prefs.getGenCorrectionsCsv());
+        String savedCorr = nullToEmpty(prefs.getGenCorrectionsFile());
         correctionsField.setText(savedCorr);
         if (!savedCorr.isEmpty()) correctionsField.setToolTipText(savedCorr);
         GridData corrGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         corrGd.widthHint = 220;
         correctionsField.setLayoutData(corrGd);
+        // Follow external changes to the corrections path — the predistortion
+        // wizard's Apply writes the saved .dpd path here, so the field shows
+        // the currently-loaded file without the user re-browsing.
+        Bindings.onChange(group, prefs.genCorrectionsFileProperty(), v -> {
+            if (correctionsField.isDisposed()) return;
+            String s = nullToEmpty(v);
+            correctionsField.setText(s);
+            correctionsField.setToolTipText(s.isEmpty() ? null : s);
+        });
 
         Button browseBtn = new Button(corrRow, SWT.PUSH);
         browseBtn.setImage(folderOpenIcon);
         browseBtn.setToolTipText(I18n.t("generator.corrections.browse"));
         browseBtn.addListener(SWT.Selection, e -> openCorrectionsBrowse());
+
+        // Clear (×) — unloads the correction file so the field empties and the
+        // compensated-sine form stops pre-distorting.
+        Button corrClearBtn = new Button(corrRow, SWT.PUSH);
+        Image corrXmark = icons.renderAtHeight(d, SvgPaths.RECTANGLE_XMARK,
+                FILE_ICON_HEIGHT, new RGB(0xC8, 0x28, 0x28));
+        if (corrXmark != null) corrClearBtn.setImage(corrXmark);
+        corrClearBtn.setToolTipText(I18n.t("generator.corrections.clear"));
+        corrClearBtn.addListener(SWT.Selection, e -> clearCorrections());
 
         // ----- Duration (seconds, used by Save WAV) ---------------------
         addRowLabel(group, I18n.t("generator.duration"));
@@ -803,16 +810,17 @@ public final class GeneratorPane {
         };
         bus.subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
 
-        // Dispose-time: shut the controller down (engines + its own bus /
-        // preference subscriptions) and tear down the icon cache owned by
-        // this pane's display.
+        // Dispose-time: detach the pane's own bus subscriptions and tear
+        // down the icon cache owned by this pane's display.  The injected
+        // controller deliberately keeps running — a content rebuild
+        // (language / font change) must not silence the tone; it is shut
+        // down by UIEngines at application exit.
         group.addDisposeListener(e -> {
             bus.unsubscribe(Events.FFT_LENGTH_CHANGED,            fftLengthListener);
             bus.unsubscribe(Events.FILE_PLAY_STOPPED,             filePlayStoppedListener);
             bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
             bus.unsubscribe(Events.AUDIO_FORMAT_CHANGED,          audioFormatListener);
-            controller.shutdown();
             SignalFormIcon.instance().disposeAll(group.getDisplay());
             if (onAirRedColor    != null && !onAirRedColor.isDisposed())    onAirRedColor.dispose();
             if (onAirRedDimColor != null && !onAirRedDimColor.isDisposed()) onAirRedDimColor.dispose();
@@ -825,6 +833,12 @@ public final class GeneratorPane {
         // saved form, if any.
         updateFreqLabel();
         updateDutyLabel();
+
+        // The injected controller survives content rebuilds — when this
+        // pane is a rebuilt instance the tone / file playback may already
+        // be running; light the Play LEDs + ON-AIR banner accordingly.
+        syncPlayButtonVisuals();
+        syncFilePlayVisuals();
 
         wireHelpAnchors();
     }
@@ -863,16 +877,16 @@ public final class GeneratorPane {
     }
 
     /** Programmatically starts the DDS tone and syncs the Play button +
-     *  ON-AIR visuals — used when a content rebuild (language / font
-     *  change) restores the pre-rebuild running state. */
-    public void resumeTone() {
+     *  ON-AIR visuals — the {@code gui.automation} scripts' Play.  Unlike
+     *  the Play-button click a failure is only logged: a modal error
+     *  dialog would hang an unattended run.  Callers can check
+     *  {@link #isToneRunning()}. */
+    public void startTone() {
         controller.start();
         syncPlayButtonVisuals();
-        if (!controller.isRunning()) {
-            String err = controller.getLastStartError();
-            Dialogs.error(group.getShell(),
-                    I18n.t("generator.error.resume"),
-                    err != null ? err : "Generator could not be restarted.");
+        syncFilePlayVisuals();
+        if (!controller.isRunning() && log.isWarnEnabled()) {
+            log.warn("Generator start failed: {}", controller.getLastStartError());
         }
     }
 
@@ -919,53 +933,19 @@ public final class GeneratorPane {
         if (px >= MIN_WIDTH_PX) paneWidthPx = px;
     }
 
-    /** Hides / shows every child except the title Label so the pane can
-     *  be collapsed down to the title bar (or restored).  Persists each
-     *  child's pre-collapse {@code visible} / {@code GridData.exclude}
-     *  state so mode-specific visibility (e.g. sweep vs non-sweep fields)
-     *  survives the round-trip.  Also snapshots the current pixel width
-     *  on the way down and restores it on the way up — the parent
-     *  {@code SashForm} reads {@link #getPaneWidthPx()} to apply the
-     *  matching weights. */
-    public void setCollapsed(boolean wantCollapsed) {
-        if (collapsed == wantCollapsed) return;
-        if (group == null || group.isDisposed()) return;
-        collapsed = wantCollapsed;
-        Control[] children = group.getChildren();
-        if (collapsed) {
-            if (paneWidthPx >= MIN_WIDTH_PX) preCollapseWidthPx = paneWidthPx;
-            preCollapseChildVisible = new boolean[children.length];
-            preCollapseChildExclude = new boolean[children.length];
-            for (int i = 0; i < children.length; i++) {
-                // Keep the clickable title visible — without it the
-                // user can no longer expand the pane.
-                if (children[i] == title) continue;
-                preCollapseChildVisible[i] = children[i].getVisible();
-                if (children[i].getLayoutData() instanceof GridData gd) {
-                    preCollapseChildExclude[i] = gd.exclude;
-                    gd.exclude = true;
-                }
-                children[i].setVisible(false);
-            }
-            title.setCollapsed(true);
-        } else {
-            if (preCollapseWidthPx >= MIN_WIDTH_PX) paneWidthPx = preCollapseWidthPx;
-            else if (paneWidthPx < MIN_WIDTH_PX)    paneWidthPx = MIN_WIDTH_PX;
-            if (preCollapseChildVisible != null
-                    && preCollapseChildVisible.length == children.length) {
-                for (int i = 0; i < children.length; i++) {
-                    if (children[i] == title) continue;
-                    children[i].setVisible(preCollapseChildVisible[i]);
-                    if (children[i].getLayoutData() instanceof GridData gd) {
-                        gd.exclude = preCollapseChildExclude[i];
-                    }
-                }
-                preCollapseChildVisible = null;
-                preCollapseChildExclude = null;
-            }
-            title.setCollapsed(false);
-        }
-        group.layout(true);
+    /** Generator-pane collapse extra: snapshot the pixel width on the way
+     *  down so {@link #onExpanding()} can restore it — the parent
+     *  {@code SashForm} reads {@link #getPaneWidthPx()} for the weights.
+     *  The child hide/restore itself is the base {@code setCollapsed}. */
+    @Override
+    protected void onCollapsing() {
+        if (paneWidthPx >= MIN_WIDTH_PX) preCollapseWidthPx = paneWidthPx;
+    }
+
+    @Override
+    protected void onExpanding() {
+        if (preCollapseWidthPx >= MIN_WIDTH_PX) paneWidthPx = preCollapseWidthPx;
+        else if (paneWidthPx < MIN_WIDTH_PX)    paneWidthPx = MIN_WIDTH_PX;
     }
 
     /** {@link Events#FREQRESP_MEASUREMENT_STARTED} handler — the controller
@@ -1070,13 +1050,23 @@ public final class GeneratorPane {
      */
     private void updateDutyLabel() {
         GenSignalForm form = formCombo.getSelectedForm();
-        if (form != GenSignalForm.RECTANGLE && form != GenSignalForm.TRIANGLE) {
+        // Only RECTANGLE is sample-quantised: its +1/−1 step edge can land only
+        // ON a sample, so the emitted duty snaps to whole samples and the
+        // bracket shows the adapted value.  TRIANGLE uses real continuous-phase
+        // DDS (the samples ride the exact ramps, so the corner is sub-sample) —
+        // its duty is exact and gets the plain label, like the non-duty forms.
+        if (form != GenSignalForm.RECTANGLE) {
             dutyLabel.setText(I18n.t("generator.dutyCycle"));
             dutyLabel.getParent().layout();
             return;
         }
         int n = controller.periodSamples();
         int k = (int) Math.round(dutyField.getValue() / 100.0 * n);
+        // Match the DDS kernel, which never collapses the pulse to a constant
+        // level — at least one sample high and one low.  Without this clamp a
+        // sub-one-sample duty rounds to 0 % in the label while the generator
+        // actually emits ~one sample (the smallest achievable, f/fs).
+        if (n > 1) k = Math.max(1, Math.min(n - 1, k));
         double pct = k * 100.0 / n;
         dutyLabel.setText(I18n.t("generator.dutyCycle.bracket", formatLabelPct(pct)));
         dutyLabel.getParent().layout();
@@ -1170,8 +1160,8 @@ public final class GeneratorPane {
         Preferences prefs = Preferences.instance();
         FileDialog fd = new FileDialog(group.getShell(), SWT.OPEN);
         fd.setText(I18n.t("generator.corrections.dialog"));
-        fd.setFilterExtensions(new String[] { "*.csv", "*.*" });
-        fd.setFilterNames     (new String[] { "CSV files (*.csv)", "All files" });
+        fd.setFilterExtensions(new String[] { "*.dpd", "*.*" });
+        fd.setFilterNames     (new String[] { "Predistortion (*.dpd)", "All files" });
         if (prefs.getGenCorrectionsFolder() != null) {
             fd.setFilterPath(prefs.getGenCorrectionsFolder());
         }
@@ -1179,9 +1169,17 @@ public final class GeneratorPane {
         if (picked == null) return;
         correctionsField.setText(picked);
         correctionsField.setToolTipText(picked);
-        prefs.setGenCorrectionsCsv(picked);
+        prefs.setGenCorrectionsFile(picked);
         File parent = new File(picked).getParentFile();
         if (parent != null) prefs.setGenCorrectionsFolder(parent.getAbsolutePath());
+    }
+
+    /** Unloads the harmonic-correction file: empties the path field and clears
+     *  the preference so the compensated-sine form no longer pre-distorts. */
+    private void clearCorrections() {
+        correctionsField.setText("");
+        correctionsField.setToolTipText(null);
+        Preferences.instance().setGenCorrectionsFile(null);
     }
 
     /** Enables / disables the duty field+label depending on whether {@code form}

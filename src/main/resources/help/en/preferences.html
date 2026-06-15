@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Preferences</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>Preferences</h1>
+  <p>This page covers the preference settings.  For why the audio settings
+     decide whether a measurement is trustworthy — bit-exact, exclusive
+     capture and playback — see
+     <a href="theory/audio-backend.html">Theory of operation ▸ Audio
+     backend</a>.</p>
+  <p>Opened from <b>Tools ▸ Preferences</b>.  Live capture and generator
+     playback are paused while the dialog is open, so device or format
+     changes don't tear a running stream; <b>OK</b> applies and saves,
+     <b>Cancel</b> reverts.  The dialog is organised into five tabs:
+     <a href="#prefs-lookfeel">Look&nbsp;&amp;&nbsp;Feel</a>,
+     <a href="#prefs-audio">Audio</a>,
+     <a href="#prefs-oscilloscope">Oscilloscope</a>,
+     <a href="#prefs-fft">FFT</a> and
+     <a href="#prefs-freqresp">Frequency&nbsp;response</a>.</p>
+
+  <h2 id="prefs-lookfeel">Look &amp; Feel</h2>
+  <p><img src="img/Preferences Look and Feel.png" alt="Preferences — Look &amp; Feel tab"/></p>
+  <table class="controls">
+    <tr><th>Setting</th><th>Notes</th></tr>
+    <tr><td>Tab orientation</td>
+        <td><code>Top</code> (a conventional tab strip) or <code>Left</code>
+            (a vertical sidebar of large icon buttons).  Applies live — no
+            restart.</td></tr>
+    <tr><td>Small icons in main tab</td>
+        <td>Shrinks the main-tab icons.  Applies live.</td></tr>
+    <tr><td>UI font / UI font (bold)</td>
+        <td>Fonts for axis labels, readouts and measurement tables (bold for
+            emphasised table text).  Applied on OK.</td></tr>
+  </table>
+
+  <h2 id="prefs-audio">Audio</h2>
+  <p><img src="img/Preferences Audio.png" alt="Preferences — Audio tab"/></p>
+  <p>Selects the sound back end and the input / output devices and formats —
+     the settings that decide whether a measurement is bit-exact (see
+     <a href="theory/audio-backend.html">Theory ▸ Audio backend</a>).</p>
+  <table class="controls">
+    <tr><th>Setting</th><th>Notes</th></tr>
+    <tr><td>Backend</td>
+        <td>WASAPI (default, exclusive bit-exact), WDM-KS (lowest-level,
+            highest capture throughput) or JavaSound (portable / only option
+            off Windows).  Changing it re-enumerates the device lists.</td></tr>
+    <tr><td>Input — Device / Sample rate / Bit depth</td>
+        <td>The capture (ADC) device and the exact rate &amp; depth it opens
+            at.  16/24 bit at 48/96/192/384 kHz are almost universally
+            accepted; an unsupported combination is reported when capture
+            starts.</td></tr>
+    <tr><td>Output — Device / Sample rate / Bit depth</td>
+        <td>The playback (DAC) device and format, used by the generator and
+            the frequency-response sweep.</td></tr>
+  </table>
+  <div class="note">In exclusive mode a device admits one application at a
+     time.  If a list is empty or a device won't open, close other audio apps
+     and re-open the dialog to re-enumerate.</div>
+
+  <h2 id="prefs-oscilloscope">Oscilloscope</h2>
+  <p><img src="img/Preferences Oscilloscope.png" alt="Preferences — Oscilloscope tab"/></p>
+  <table class="controls">
+    <tr><th>Setting</th><th>Notes</th></tr>
+    <tr><td>Measurement average, s</td>
+        <td>Window length over which the scope's avg / min / max / σ
+            statistics are accumulated.</td></tr>
+    <tr><td>Trace line width, px</td><td>Stroke width of the waveform.</td></tr>
+    <tr><td>Sample dot diameter, px</td>
+        <td>Size of the per-sample dots drawn when zoomed in.</td></tr>
+    <tr><td>Left / Right channel colour</td>
+        <td>Trace colour per channel (defaults cyan <code>#28DCF0</code> /
+            yellow <code>#F0DC28</code>).</td></tr>
+  </table>
+
+  <h2 id="prefs-fft">FFT</h2>
+  <p><img src="img/Preferences FFT.png" alt="Preferences — FFT tab"/></p>
+  <table class="controls">
+    <tr><th>Setting</th><th>Notes</th></tr>
+    <tr><td>Trace line width, px</td><td>Stroke width of the spectrum.</td></tr>
+    <tr><td>Harmonic dot diameter, px</td>
+        <td>Size of the fundamental / harmonic marker dots.</td></tr>
+    <tr><td>Strong-tone relative level, dB</td>
+        <td>How far below the strongest peak a second peak may sit and still
+            be tracked as its own tone (vs treated as a harmonic) — the
+            single- vs multi-tone routing in
+            <a href="theory/fft.html#phaseref">Theory ▸ choosing the phase
+            reference</a>.</td></tr>
+    <tr><td>Line colour</td><td>Spectrum trace (default blue <code>#0064C8</code>).</td></tr>
+    <tr><td>Chart background colour</td><td>Plot background (default white).</td></tr>
+    <tr><td>Harmonic dot colour</td>
+        <td>The harmonic / fundamental dots — with a calibration loaded this
+            is the <em>corrected</em> (red) marker.  Default red
+            <code>#FF0000</code>.</td></tr>
+    <tr><td>Before-calibration dot colour</td>
+        <td>The second marker showing where each peak sat <em>before</em> the
+            loaded calibration was de-embedded — see the
+            <a href="theory/fft.html#cal">red / blue calibration dots</a>.</td></tr>
+    <tr><td>Calibration-overlay colour</td>
+        <td>Colour of the drawn calibration / correction curve.</td></tr>
+    <tr><td>Filter response line colour</td>
+        <td>The overlaid mains-comb / filter response (default green
+            <code>#009600</code>).</td></tr>
+  </table>
+
+  <h2 id="prefs-freqresp">Frequency response</h2>
+  <p><img src="img/Preferences Frequency response.png" alt="Preferences — Frequency response tab"/></p>
+  <table class="controls">
+    <tr><th>Setting</th><th>Notes</th></tr>
+    <tr><td>Trace line width, px</td>
+        <td>Thickness of the magnitude, phase, RIAA-reference and compare
+            curves.</td></tr>
+    <tr><td>Maximal analyzed frequency, % Nyquist</td>
+        <td>Caps the view's upper bound at this fraction of Nyquist (96–100 %);
+            below 100 % trims the band where the sweep deconvolution rolls
+            off.</td></tr>
+    <tr><td>Compare smoothing window, 1/N octave</td>
+        <td>Width of the moving average on the compare-mode (measured −
+            reference) curve.  N = 0 disables it; smaller N = wider = more
+            smoothing (N ≈ 3 broad, N ≈ 24 light).</td></tr>
+    <tr><td>Allow notch filter for industrial noise</td>
+        <td>When on, interpolates across each harmonic of the chosen mains
+            frequency to remove hum spikes from the displayed response
+            without re-measuring.</td></tr>
+    <tr><td>Industrial frequency</td>
+        <td>The base mains frequency (50 / 60 Hz) whose harmonics are notched
+            when the box above is on.</td></tr>
+    <tr><td>Signal / Phase / Reference (RIAA) / Chart background colour</td>
+        <td>Per-curve and background colours for the frequency-response
+            view.</td></tr>
+  </table>
+
+</body>
+</html>

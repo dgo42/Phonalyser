@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theory: Signal generator</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to Theory of operation</a></p>
+
+  <h1>Signal generator</h1>
+  <p>The generator is a <b>DDS</b> (Direct Digital Synthesis) engine: it
+     computes the signal one sample at a time, in full numeric precision, in
+     the normalised range [−1, +1].  Synthesis is kept mathematically ideal —
+     dither and quantization happen only at the very last step before the
+     DAC — so the same waveform also serves as the bit-exact reference for
+     deconvolution measurements and file export.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 150" width="100%" height="150" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="garr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+    <rect x="10"  y="40" width="140" height="60" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="80"  y="64" text-anchor="middle" font-weight="bold">phase accumulator</text>
+    <text x="80"  y="82" text-anchor="middle" fill="#557">φₐ, 64 bit</text>
+
+    <rect x="200" y="40" width="150" height="60" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="275" y="64" text-anchor="middle" font-weight="bold">waveform kernel</text>
+    <text x="275" y="82" text-anchor="middle" fill="#557">table + Taylor / exact</text>
+
+    <rect x="400" y="40" width="120" height="60" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="460" y="64" text-anchor="middle" font-weight="bold">× A</text>
+    <text x="460" y="82" text-anchor="middle" fill="#557">amplitude scale</text>
+
+    <rect x="570" y="40" width="130" height="60" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="635" y="64" text-anchor="middle" font-weight="bold">quantizer</text>
+    <text x="635" y="82" text-anchor="middle" fill="#557">TPDF dither → PCM</text>
+
+    <rect x="750" y="40" width="60" height="60" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="780" y="74" text-anchor="middle" font-weight="bold">DAC</text>
+
+    <line x1="150" y1="70" x2="198" y2="70" stroke="#446" stroke-width="1.5" marker-end="url(#garr)"/>
+    <line x1="350" y1="70" x2="398" y2="70" stroke="#446" stroke-width="1.5" marker-end="url(#garr)"/>
+    <line x1="520" y1="70" x2="568" y2="70" stroke="#446" stroke-width="1.5" marker-end="url(#garr)"/>
+    <line x1="700" y1="70" x2="748" y2="70" stroke="#446" stroke-width="1.5" marker-end="url(#garr)"/>
+    <text x="275" y="126" text-anchor="middle" fill="#557">full precision, normalised [−1, +1]</text>
+    <text x="635" y="126" text-anchor="middle" fill="#557">integer PCM (8/16/24/32 bit)</text>
+  </svg>
+  </div>
+
+  <h2 id="dds">The phase accumulator</h2>
+  <p>All periodic waveforms are driven by a 64-bit <b>phase accumulator</b>
+     φₐ: an unsigned integer representing the phase as a fraction of one
+     period, 0 … 2⁶⁴−1 ≙ 0 … 2π.  For an output frequency <i>f</i> at sample
+     rate <i>f</i><sub>s</sub>, each sample advances the phase by a fixed
+     increment<sup><a href="#ref-dds">[1]</a></sup>:</p>
+
+  <div class="eq">Δφ = ⌊<i>f</i> / <i>f</i><sub>s</sub> · 2⁶⁴⌉<span class="no">(1)</span></div>
+  <div class="eq">φₐ ← (φₐ + Δφ) mod 2⁶⁴<span class="no">(2)</span></div>
+
+  <p>This integer arithmetic gives three properties that a floating-point
+     phase cannot match:</p>
+  <ul>
+    <li><b>Headroom for the frequency-lock loop.</b>  The accumulator's own
+        frequency step is
+        <div class="eq">Δ<i>f</i><sub>min</sub> = <i>f</i><sub>s</sub> / 2⁶⁴<span class="no">(3)</span></div>
+        and the increment computation (1), performed in floating point,
+        still resolves <i>f</i><sub>s</sub>/2⁵³ ≈ 43 pHz at 384 kHz.  The
+        point of this enormous reserve is not the resolution itself — it is
+        that the frequency-lock loop can apply trim corrections in the
+        sub-ppb range without the trim being quantized away, so the lock
+        settles instead of hunting around the nearest representable
+        frequency.</li>
+    <li><b>No phase drift.</b>  Addition modulo 2⁶⁴ is exact forever; a
+        floating-point phase would accumulate rounding error over hours.</li>
+    <li><b>Click-free changes.</b>  Changing frequency only replaces Δφ; the
+        accumulated phase stays where it is, so the waveform continues
+        without a step.  The same holds for switching between the
+        phase-domain waveforms.</li>
+  </ul>
+
+  <h2 id="sine">Sine: lookup table + Taylor correction</h2>
+  <p>The sine of the accumulator phase is computed by splitting φₐ into a
+     coarse table index and a fine remainder:</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 170" width="100%" height="170" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="garr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+    <!-- 64-bit word -->
+    <rect x="60"  y="30" width="270" height="40" fill="#cdf" stroke="#88a"/>
+    <rect x="330" y="30" width="430" height="40" fill="#ffe9d6" stroke="#c96"/>
+    <text x="195" y="55" text-anchor="middle" font-weight="bold">top 12 bits — coarse angle θ₀</text>
+    <text x="545" y="55" text-anchor="middle" font-weight="bold">bottom 52 bits — remainder Δθ</text>
+    <text x="60"  y="20" fill="#557">bit 63</text>
+    <text x="760" y="20" text-anchor="end" fill="#557">bit 0</text>
+
+    <line x1="195" y1="70" x2="195" y2="100" stroke="#446" stroke-width="1.5" marker-end="url(#garr2)"/>
+    <rect x="80" y="104" width="230" height="44" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="195" y="124" text-anchor="middle">sine/cosine table</text>
+    <text x="195" y="140" text-anchor="middle" fill="#557">4096 entries, full wave</text>
+
+    <line x1="545" y1="70" x2="545" y2="100" stroke="#446" stroke-width="1.5" marker-end="url(#garr2)"/>
+    <rect x="400" y="104" width="290" height="44" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="545" y="124" text-anchor="middle">Taylor series for sin Δθ, cos Δθ</text>
+    <text x="545" y="140" text-anchor="middle" fill="#557">Δθ &lt; 2π/4096 ≈ 1.53 mrad</text>
+  </svg>
+  </div>
+
+  <p>The two parts are recombined with the angle-addition identity:</p>
+  <div class="eq">sin(θ₀ + Δθ) = sin θ₀ · cos Δθ + cos θ₀ · sin Δθ<span class="no">(4)</span></div>
+  <p>where sin Δθ and cos Δθ are short Taylor series of the small
+     remainder, truncated at the 5th order:</p>
+  <div class="eq">sin Δθ ≈ Δθ − Δθ³/3! + Δθ⁵/5!,&nbsp;&nbsp;&nbsp;
+      cos Δθ ≈ 1 − Δθ²/2! + Δθ⁴/4!<span class="no">(5)</span></div>
+  <p>With Δθ bounded by one table step (≈ 1.53·10⁻³ rad), the truncation
+     error of (5) is of order Δθ⁷/7! ≈ 10⁻²⁴ — far below the precision of
+     the arithmetic itself.  The kernel is, for every measurement purpose,
+     an <em>exact</em> sine at a fraction of the computational cost; the
+     harmonic purity of the generated tone is therefore limited by the DAC,
+     never by the synthesis.</p>
+
+  <h2 id="amplitude">Amplitude calibration</h2>
+  <p>You set the output level in V<sub>rms</sub>.  Internally one linear
+     factor maps the unit-amplitude waveform to the normalised DAC domain:</p>
+  <div class="eq"><i>A</i> = <i>V</i><sub>rms</sub> / (<i>V</i><sub>fs</sub> · ρ)<span class="no">(6)</span></div>
+  <p>where <i>V</i><sub>fs</sub> is the calibrated DAC full-scale RMS voltage
+     (set once in the <em>Calibrate DAC</em> dialog; a recalibration
+     re-scales a running generator immediately) and ρ is the RMS value of the
+     unit-amplitude waveform — analytic for every form, so the requested
+     V<sub>rms</sub> holds regardless of wave shape:</p>
+  <table class="controls">
+    <tr><th>Form</th><th>ρ (RMS at unit amplitude)</th></tr>
+    <tr><td>Sine, sweeps</td><td>1/√2</td></tr>
+    <tr><td>Triangle (any duty)</td><td>1/√3</td></tr>
+    <tr><td>Rectangle (any duty)</td><td>1</td></tr>
+    <tr><td>White noise (Gaussian, σ = 1)</td><td>1</td></tr>
+    <tr><td>Pink noise</td><td>1/√17</td></tr>
+    <tr><td>Pink noise linear</td><td>1/√51</td></tr>
+    <tr><td>Dual tone, weights w₁ / w₂</td><td>√((w₁² + w₂²)/2)</td></tr>
+  </table>
+
+  <h2 id="kernels">The waveforms</h2>
+
+  <h3>Triangle and rectangle — exact in the phase domain</h3>
+  <p>Both map the phase fraction φₐ/2³² ∈ [0, 1) piecewise-linearly, so the
+     output is exact by construction:</p>
+  <ul>
+    <li><b>Rectangle:</b> +1 for the first <i>duty</i> fraction of the
+        period, −1 for the rest.  Duty ≠ 50 % deliberately carries a DC
+        component — that is the point of a pulse-train test signal.</li>
+    <li><b>Triangle:</b> rises −1 → +1 over the <i>duty</i> fraction, falls
+        back over the remainder.  Duty → 1 approaches a sawtooth, duty → 0
+        an inverted sawtooth.</li>
+  </ul>
+  <p>(Both use the phase fraction φₐ/2⁶⁴ ∈ [0, 1).)</p>
+
+  <h4 id="duty">Rectangle duty is quantised to the sample grid</h4>
+  <p>The duty threshold lives in continuous phase, but a rectangle's output is a
+     hard +1 → −1 <em>step</em>, and a step can only fall <em>on</em> a sample.
+     So the duty a rectangle actually emits is a whole number of samples out of
+     the period, and the finest duty step is one sample:</p>
+  <div class="eq">Δ<i>D</i> = <i>f</i> / <i>f</i><sub>s</sub></div>
+  <p>where <i>f</i> is the output frequency and <i>f</i><sub>s</sub> the sample
+     rate. A 10&nbsp;kHz pulse at 384&nbsp;kHz has 38.4 samples per period, so
+     the smallest duty step is ≈ 1/38.4 ≈ 2.6&nbsp;%, and a typed duty snaps to
+     the nearest achievable multiple. The generator pane shows the emitted
+     (snapped) duty in brackets. The lower the frequency relative to the sample
+     rate, the finer the duty resolution.</p>
+  <p>The <b>triangle</b> is different: it has no step, only a change of slope at
+     the corner, and the samples on either side ride the exact ramps — so the
+     corner's position (and hence the duty) is represented sub-sample, with no
+     quantisation. A triangle's duty is exact at any frequency.</p>
+
+  <h3 id="dualtone">Dual tone</h3>
+  <p>Two independent phase accumulators advance in lock-step; the output is</p>
+  <div class="eq"><i>x</i> = w₁ · sin φ₁ + w₂ · sin φ₂<span class="no">(7)</span></div>
+  <p>with per-tone weights w₁, w₂ (the amplitude-split percentages / 100).
+     The tones are uncorrelated, so the combined RMS is
+     √((w₁² + w₂²)/2) — and the amplitude factor (6) is recomputed whenever
+     the split changes, keeping the <em>combined</em> level equal to the
+     dialled V<sub>rms</sub>.  Both frequencies are individually trimmable
+     while running — the FFT pane's two frequency-lock loops use exactly that
+     during intermodulation measurements.</p>
+
+  <h3>Noise</h3>
+  <ul>
+    <li><b>White:</b> one Gaussian sample per tick (σ = 1).</li>
+    <li><b>Pink:</b> Voss–McCartney<sup><a href="#ref-pink">[2]</a></sup> —
+        16 octave generators plus one always-fresh white term, averaged.  Generator <i>k</i> produces a new
+        value every 2<sup><i>k</i></sup> samples, so each octave of the
+        spectrum receives equal power, which is the definition of pink.  A
+        running sum keeps the per-sample cost constant.  The <em>linear</em>
+        variant draws from a uniform (flat, strictly bounded) distribution
+        instead of a Gaussian.</li>
+  </ul>
+
+  <h3 id="sweeps">Sweeps</h3>
+  <p>A sweep's instantaneous frequency is a function of time, so the phase is
+     integrated explicitly instead of using the fixed increment (1):</p>
+  <ul>
+    <li><b>Linear sweep:</b> per sample
+        <div class="eq">φ ← φ + 2π · <i>f</i>(<i>n</i>) / <i>f</i><sub>s</sub>,&nbsp;&nbsp;
+        <i>f</i>(<i>n</i>) rising linearly <i>f</i>₀ → <i>f</i>₁<span class="no">(8)</span></div>
+        Loops phase-continuously; optional fade-in/out (raised-cosine) per
+        cycle removes the spectral splash of hard edges.</li>
+    <li><b>Log sweep (Farina<sup><a href="#ref-farina">[3]</a><a href="#ref-sweep">[4]</a></sup>):</b> the exponential chirp
+        <div class="eq"><i>x</i>(<i>t</i>) = sin( <i>K</i> · (e<sup><i>t</i>/<i>L</i></sup> − 1) ),&nbsp;&nbsp;
+        <i>L</i> = <i>T</i> / ln(<i>f</i>₁/<i>f</i>₀),&nbsp;&nbsp;
+        <i>K</i> = 2π <i>f</i>₀ <i>L</i><span class="no">(9)</span></div>
+        — equal energy per octave.  It is <b>pre-rendered into a buffer</b>
+        rather than synthesized live, for one decisive reason: the
+        frequency-response measurement needs the exact reference signal
+        <i>X</i>(<i>t</i>) for the deconvolution
+        <i>H</i>(<i>f</i>) = <i>Y</i>(<i>f</i>)/<i>X</i>(<i>f</i>), and
+        replaying a rendered buffer guarantees the reference is identical —
+        sample for sample — to what the DAC played.  Playback emits the
+        configured lead-in silence first, then the buffer.</li>
+  </ul>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 120" width="100%" height="120" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <rect x="60" y="40" width="80" height="36" fill="#f4f4ff" stroke="#88a"/>
+    <text x="100" y="62" text-anchor="middle" fill="#557">lead-in</text>
+    <rect x="140" y="40" width="520" height="36" fill="#cdf" stroke="#88a"/>
+    <text x="400" y="62" text-anchor="middle">pre-rendered log sweep f₀ → f₁</text>
+    <rect x="660" y="40" width="100" height="36" fill="#f4f4ff" stroke="#88a" stroke-dasharray="4 3"/>
+    <text x="710" y="62" text-anchor="middle" fill="#557">loop / silence</text>
+    <path d="M 150 36 Q 200 30 240 33 T 660 12" fill="none" stroke="#c33" stroke-width="1.2"/>
+    <text x="690" y="16" fill="#c33">instantaneous f (log scale)</text>
+    <text x="100" y="100" text-anchor="middle" fill="#557">silence</text>
+    <text x="400" y="100" text-anchor="middle" fill="#557">also handed to the analyser as deconvolution reference X(t)</text>
+  </svg>
+  </div>
+
+  <h3 id="compensated">Compensated sine — active distortion cancellation</h3>
+  <p>This form subtracts the <em>measured</em> harmonic distortion of the
+     playback chain from the generated signal, so the device under test
+     receives a cleaner stimulus than the DAC alone can produce.  The
+     correction data — each harmonic's relative amplitude and phase — comes
+     from a coherently-averaged FFT measurement of the loop.</p>
+  <ul>
+    <li><b>Exact frequency lock.</b>  Harmonic <i>h</i>'s phase is derived by
+        integer multiplication of the master accumulator:
+        <div class="eq">φ<sub>h</sub> = (φₐ · <i>h</i> + φ<sub>0,h</sub>) mod 2⁶⁴<span class="no">(10)</span></div>
+        so every correction tone sits <em>exactly</em> at <i>h·f</i> — no
+        drift, no beating against the real distortion harmonics, however long
+        the generator runs.</li>
+    <li><b>Loop-delay compensation.</b>  The DAC→ADC round trip delays each
+        harmonic by a phase proportional to its frequency.  The fundamental's
+        measured phase φ₁ reveals that delay (a DDS sine starts with measured
+        phase −π/2, hence ω<i>D</i> = −(φ₁ + π/2)); each harmonic's launch
+        phase φ<sub>0,h</sub> is pre-rotated by its own share so the
+        correction arrives at the ADC exactly anti-phase to the distortion it
+        cancels.</li>
+    <li><b>Phase needs coherent averaging.</b>  An incoherent (power-averaged)
+        FFT result carries no phase; the generator then applies
+        amplitude-only correction and notes it in the log.</li>
+  </ul>
+
+  <h2 id="quantizer">Quantization and dither</h2>
+  <p>The synthesis chain stays in full precision until the playback engine
+     converts to the device's integer PCM format.  Immediately before
+     rounding — the only place where it is meaningful — optional <b>TPDF
+     dither</b><sup><a href="#ref-dither">[5]</a></sup> (triangular
+     probability density, ±1 LSB at the <em>target</em> bit depth) is
+     added.  Dither decorrelates the
+     quantization error from the signal: instead of harmonically-related
+     distortion products, quantization contributes only a flat, benign noise
+     floor.  Exports and the deconvolution reference are taken before this
+     stage, so they remain the ideal waveform.</p>
+
+  <h2 id="savefile">Saving a signal — a perfect reference</h2>
+  <p>When you save the generator output to a file (<b>Save&nbsp;to…</b> on the
+     generator pane), the samples are written <em>straight from the synthesis
+     math</em> — the same exact waveform the kernels above produce, with no
+     analogue stage anywhere in the path. There is no DAC, no analogue
+     reconstruction filter, no amplifier and no cabling, so the file carries
+     <b>none of the distortion, noise or frequency-response error</b> that a
+     real playback chain would add: it is a mathematically ideal signal,
+     limited only by the chosen sample format. (Dither, if enabled, is the one
+     deliberate addition — and even that is a flat, benign noise floor, not
+     distortion.)</p>
+  <p>That makes a saved file a <b>known-perfect reference</b>: feed it to
+     another instrument or DUT and any imperfection you then measure belongs to
+     that device, not to the source. It is also how the frequency-response
+     sweep keeps its deconvolution honest — the reference it divides by is the
+     exact emitted sweep, not a re-measured copy.</p>
+
+  <h2 id="lifecycle">Live behaviour</h2>
+  <p>Every parameter is adjustable while the generator runs: frequency and
+     amplitude (phase-continuous, see above), duty cycles, sweep bounds and
+     fades, dual-tone split, dither depth, DAC recalibration.  Playback
+     start follows the sequence described in the
+     <a href="audio-backend.html#how">audio-backend chapter</a>: warm-up
+     (with sweep rewind), hardware-buffer pre-fill, then the "ready" signal
+     that measurement workers wait for.</p>
+
+  <div class="note"><b>Frequency-lock integration.</b>  With
+     <em>snap-to-FFT-bin</em> active the generator rounds its frequency to
+     the exact FFT bin centre — but the DAC and the ADC run on different
+     crystal oscillators, so the <em>captured</em> frequency never exactly
+     matches the commanded one.  With an alignment mode active, the FFT
+     view measures the actually-captured frequency each tick and sends back
+     a trim, which the generator applies through (1); the closed loop holds
+     the captured tone on its bin to better than <b>±0.05 ppm</b> (see the
+     <a href="fft.html#ongrid">FFT chapter</a>).  The picohertz-class
+     granularity behind (3) is what lets those corrections land without
+     being quantized away.</div>
+
+  <h2 id="refs">References</h2>
+  <ol class="refs">
+    <li id="ref-dds">Direct digital synthesis —
+        <a href="https://en.wikipedia.org/wiki/Direct_digital_synthesis">Wikipedia: Direct digital synthesis</a>;
+        in depth: Analog Devices tutorial MT-085,
+        <a href="https://www.analog.com/media/en/training-seminars/tutorials/MT-085.pdf">"Fundamentals of Direct Digital Synthesis (DDS)"</a>.</li>
+    <li id="ref-pink">Voss–McCartney pink-noise algorithm —
+        <a href="https://www.firstpr.com.au/dsp/pink-noise/">"DSP generation of pink noise"</a>
+        (collected analysis and the original McCartney postings).</li>
+    <li id="ref-farina">A. Farina,
+        <a href="http://pcfarina.eng.unipr.it/Public/Papers/226-AES00.PDF">"Simultaneous measurement of impulse response and distortion with a swept-sine technique"</a>,
+        108th AES Convention, 2000 — the log-sweep deconvolution method of (9).</li>
+    <li id="ref-sweep">M. Baranov, "How I was listening to a sine sweep all
+        day long" — a hands-on walk through the exponential-sweep
+        measurement; <a href="../external/sine-sweep.html">local summary</a>,
+        <a href="https://medium.com/@baranov.mv/how-i-was-listening-to-a-sine-sweep-all-day-long-294c374995f6">original article</a>.</li>
+    <li id="ref-dither">TPDF dither —
+        <a href="https://en.wikipedia.org/wiki/Dither">Wikipedia: Dither</a>;
+        the theory is due to Lipshitz, Wannamaker &amp; Vanderkooy,
+        "Quantization and Dither: A Theoretical Survey", J. AES, 1992.</li>
+  </ol>
+
+  <p class="back"><a href="ring-buffer.html">◀ Ring buffer &amp; consumers</a> ·
+     <a href="index.html">Theory of operation</a></p>
+
+</body>
+</html>

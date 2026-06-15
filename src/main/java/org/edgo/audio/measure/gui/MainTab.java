@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.gui;
 
+import java.util.function.IntConsumer;
+
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StackLayout;
 import org.eclipse.swt.events.ControlListener;
@@ -43,9 +45,11 @@ import org.edgo.audio.measure.gui.common.Fonts;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.fft.FftPane;
+import org.edgo.audio.measure.gui.freqresp.FreqRespPane;
 import org.edgo.audio.measure.gui.generator.GeneratorPane;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.sound.SharedCapture;
+import org.edgo.audio.measure.gui.registry.UiRegistry;
+import org.edgo.audio.measure.gui.scope.ScopePane;
 import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.extern.log4j.Log4j2;
@@ -96,7 +100,7 @@ public final class MainTab {
     private final Shell   shell;
 
     private MultifunctionalTab    multifunctional;
-    @SuppressWarnings("unused") // Tab class instances are created for their UI; we don't need to keep a method reference yet.
+    //@SuppressWarnings("unused") // Tab class instances are created for their UI; we don't need to keep a method reference yet.
     private FrequencyResponseTab  frequencyResponse;
     /** Content composites — created ONCE; the host builders re-parent them
      *  into whichever chrome (top TabFolder / left sidebar) is active. */
@@ -109,25 +113,35 @@ public final class MainTab {
      *  restored across chrome rebuilds and persisted once on shell dispose. */
     private int activeTabIndex;
     private boolean chromeRebuildPending;
+    /** Selects a top-level tab in whatever chrome is active (top TabFolder or
+     *  left sidebar); reassigned on every {@link #buildHost()} so it always
+     *  drives the current chrome. */
+    private IntConsumer topTabSelector;
 
-    public MainTab(Shell shell) {
+    public MainTab(Shell shell, UIEngines engines) {
         this.shell   = shell;
         this.display = shell.getDisplay();
-        // Eager init of the SharedCapture singleton so its MessageBus
-        // responder is registered BEFORE any pane fires a CAPTURE_ACQUIRE
-        // request — otherwise the request returns null and the user
-        // thinks the device failed to open.
-        SharedCapture.instance();
         Preferences prefs = Preferences.instance();
         activeTabIndex = clampSelection(prefs.getActiveTabIndex(), 2);
+        // A language / font change builds a fresh MainTab; reset the component
+        // registry so the panes below re-register their new controls instead
+        // of leaving the disposed ones behind.
+        UiRegistry.instance().clear();
         // Content first (parented to the shell), chrome around it after —
         // buildHost() re-parents the content into the active chrome.
         multiContent = new Composite(shell, SWT.NONE);
         multiContent.setLayout(new FillLayout());
-        multifunctional = new MultifunctionalTab(multiContent, shell);
+        multifunctional = new MultifunctionalTab(multiContent, shell, engines);
         frContent = new Composite(shell, SWT.NONE);
         frequencyResponse = new FrequencyResponseTab(frContent);
         buildHost();
+        // Register the Frequency Response top-level tab and its settings tabs
+        // so the help-screenshot automation can select + capture them by path
+        // (the multifunctional panes register themselves in MultifunctionalTab).
+        UiRegistry.instance()
+                .register("frequencyResponse", frequencyResponse.getPane().getGroup())
+                .onActivate(() -> selectTopTab(1));
+        frequencyResponse.getPane().registerTabs("frequencyResponse/tabs");
         // Look & Feel layout prefs apply LIVE: the dialog writes the pref,
         // the chrome rebuilds around the untouched content.  Apply can
         // change both prefs at once — coalesce to a single rebuild.
@@ -160,26 +174,30 @@ public final class MainTab {
         return (multifunctional != null) ? multifunctional.pauseForDialog() : () -> {};
     }
 
-    public void stopForRecreate() {
-        if (multifunctional != null) multifunctional.stopForRecreate();
-    }
-
-    /** Live-engine snapshot for {@code MainWindow.rebuildContent()}. */
-    public MultifunctionalTab.RunningState runningState() {
-        return (multifunctional != null) ? multifunctional.runningState() : null;
-    }
-
-    /** Restores a {@link #runningState()} snapshot on the rebuilt panes. */
-    public void restoreRunningState(MultifunctionalTab.RunningState state) {
-        if (multifunctional != null) multifunctional.restoreRunningState(state);
-    }
-
     public GeneratorPane getGenPane() {
         return (multifunctional != null) ? multifunctional.getGenPane() : null;
     }
 
     public FftPane getFftPane() {
         return (multifunctional != null) ? multifunctional.getFftPane() : null;
+    }
+
+    public ScopePane getOscPane() {
+        return (multifunctional != null) ? multifunctional.getOscPane() : null;
+    }
+
+    public FreqRespPane getFreqRespPane() {
+        return (frequencyResponse != null) ? frequencyResponse.getPane() : null;
+    }
+
+    /** Brings a top-level tab forward regardless of the active chrome (top
+     *  tabs or left sidebar) — used by the component registry so automation
+     *  can reveal the Frequency Response tab before screenshotting it. */
+    private void selectTopTab(int index) {
+        if (topTabSelector != null) {
+            topTabSelector.accept(index);
+            activeTabIndex = index;
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -236,6 +254,7 @@ public final class MainTab {
         tabFolder.setSelection(activeTabIndex);
         tabFolder.addListener(SWT.Selection,
                 e -> activeTabIndex = tabFolder.getSelectionIndex());
+        topTabSelector = tabFolder::setSelection;
     }
 
     private void buildLeftSidebar() {
@@ -298,6 +317,7 @@ public final class MainTab {
         }
 
         buttons[activeTabIndex].select();
+        topTabSelector = i -> buttons[i].select();
     }
 
     private static int clampSelection(int v, int n) {

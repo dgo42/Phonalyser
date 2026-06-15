@@ -40,6 +40,7 @@ import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -63,11 +64,9 @@ import lombok.Getter;
  * lands.  Scrollbars round-trip through {@link Preferences} +
  * {@link Events#FREQRESP_RANGE_CHANGED}.
  */
-public final class FreqRespPane {
+public final class FreqRespPane extends AbstractPane {
 
     private static final int SCROLL_RANGE = 1_000_000;
-    private static final int PLAY_BTN_SIZE   = 48;
-    private static final int WIZARD_BTN_SIZE = 48;
 
     /** Lower bound for the log-frequency scrollbar.  The view clamps
      *  freqRespFreqMinHz to ≥ 1 Hz so the log mapping is well-defined. */
@@ -80,7 +79,6 @@ public final class FreqRespPane {
      *  released to strip-only height when the tabs are collapsed. */
     private static final int TOOLBAR_ROW_HEIGHT = 200;
 
-    @Getter private final Composite group;
     @Getter private FreqRespView view;
 
     private FlatScrollbar freqScrollbar;
@@ -108,15 +106,15 @@ public final class FreqRespPane {
     private final FreqRespCorrectionStore correctionStore;
 
     public FreqRespPane(Composite parent) {
+        super(parent);
         Display d = parent.getDisplay();
         IconUtils icons = IconUtils.instance();
-        Image wandIcon = icons.renderAtHeightColored(d, SvgPaths.WAND, WIZARD_BTN_SIZE);
+        Image wandIcon = icons.renderAtHeightColored(d, SvgPaths.WAND, ACTION_ICON_SIZE);
         // Play button uses the same green LED that the generator pane shows
         // so the visual language is consistent across measurement features.
-        Image playIcon = icons.renderAtHeight(d, SvgPaths.PLAY, PLAY_BTN_SIZE,
+        Image playIcon = icons.renderAtHeight(d, SvgPaths.PLAY, ACTION_ICON_SIZE,
                 new RGB(0x00, 0xAA, 0x00));
 
-        group = new Composite(parent, SWT.BORDER);
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth  = 0; gl.marginHeight = 0; gl.verticalSpacing = 2;
         group.setLayout(gl);
@@ -169,6 +167,13 @@ public final class FreqRespPane {
 
         // Initial scrollbar sync with the persisted pan window.
         syncScrollbars();
+    }
+
+    /** Registers this pane's settings tabs in the component registry under
+     *  {@code prefix} so automation can select + screenshot each by path —
+     *  delegates to {@link FreqRespTabControl#registerTabs}. */
+    public void registerTabs(String prefix) {
+        if (tabControl != null) tabControl.registerTabs(prefix);
     }
 
     // -------------------------------------------------------------------------
@@ -257,26 +262,18 @@ public final class FreqRespPane {
         });
 
         // Wizard button (left of Play) — opens the 3-page calibration wizard.
-        wizardButton = new Button(toolbarRow, SWT.PUSH);
+        wizardButton = createActionButton(toolbarRow, SWT.PUSH);
         if (wandIcon != null) wizardButton.setImage(wandIcon);
         wizardButton.setToolTipText(I18n.t("freqResp.button.wizard.tooltip"));
-        GridData wbGd = new GridData(SWT.END, SWT.BEGINNING, false, false);
-        wbGd.widthHint  = WIZARD_BTN_SIZE + 8;
-        wbGd.heightHint = WIZARD_BTN_SIZE + 8;
-        wizardButton.setLayoutData(wbGd);
         wizardButton.addListener(SWT.Selection, e ->
                 new FreqRespWizardDialog(group.getShell(), view).open());
 
         // Play button — kicks off a sweep measurement.  Click is ignored
         // while a measurement is already in flight (the lock helper has
         // disabled it anyway but the listener guards defensively).
-        playButton = new Button(toolbarRow, SWT.PUSH);
+        playButton = createActionButton(toolbarRow, SWT.PUSH);
         if (playIcon != null) playButton.setImage(playIcon);
         playButton.setToolTipText(I18n.t("freqResp.button.play.start"));
-        GridData pbGd = new GridData(SWT.END, SWT.BEGINNING, false, false);
-        pbGd.widthHint  = PLAY_BTN_SIZE + 8;
-        pbGd.heightHint = PLAY_BTN_SIZE + 8;
-        playButton.setLayoutData(pbGd);
         playButton.addListener(SWT.Selection, e -> onPlayClicked());
     }
 

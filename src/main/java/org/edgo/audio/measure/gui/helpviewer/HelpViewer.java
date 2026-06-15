@@ -22,6 +22,9 @@ import lombok.extern.log4j.Log4j2;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.SWTError;
 import org.eclipse.swt.browser.Browser;
+import org.eclipse.swt.browser.ProgressListener;
+import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
@@ -74,6 +77,96 @@ public final class HelpViewer {
      *  directory. */
     private static final String INDEX_FILE = "index.html";
 
+    /** Injected into every loaded page: maps the mouse thumb buttons
+     *  (X1 = back, X2 = forward; DOM {@code button} 3 / 4) and the
+     *  horizontal tilt-wheel to history navigation.
+     *  <ul>
+     *    <li>Thumb buttons are hooked only on non-Chromium engines (the IE
+     *        fallback) — WebView2 navigates on them natively, and a JS hook
+     *        there would double-navigate.  Pointer events are preferred over
+     *        mouse events because the IE engine delivers X-buttons more
+     *        reliably through them.</li>
+     *    <li>Tilt is reserved for navigation: {@code preventDefault} stops
+     *        the engine's own horizontal scroll ({@code passive:false} so
+     *        Chromium honours it).  deltaX accumulates against a threshold
+     *        with a short cooldown so one tilt gesture navigates exactly
+     *        once instead of per wheel tick.</li>
+     *  </ul>
+     *  Guarded by a window flag because the script is re-executed after
+     *  every navigation, including in-page anchor jumps. */
+    private static final String NAV_BUTTONS_SCRIPT = """
+        if (!window.__phNavHooked) { window.__phNavHooked = true;
+          if (!window.chrome) {
+            var navUp = function (e) {
+              if (e.button === 3)      { e.preventDefault(); history.back(); }
+              else if (e.button === 4) { e.preventDefault(); history.forward(); }
+            };
+            document.addEventListener('mousedown', function (e) {
+              if (e.button === 3 || e.button === 4) { e.preventDefault(); }
+            });
+            if (window.PointerEvent) { document.addEventListener('pointerup', navUp); }
+            else                     { document.addEventListener('mouseup',  navUp); }
+          }
+          var tiltAcc = 0, tiltCoolUntil = 0;
+          document.addEventListener('wheel', function (e) {
+            if (!e.deltaX) { return; }
+            e.preventDefault();
+            var now = new Date().getTime();
+            if (now < tiltCoolUntil) { return; }
+            tiltAcc += e.deltaX;
+            if (tiltAcc <= -120)     { tiltAcc = 0; tiltCoolUntil = now + 400; history.back(); }
+            else if (tiltAcc >= 120) { tiltAcc = 0; tiltCoolUntil = now + 400; history.forward(); }
+          }, { passive: false });
+        }
+        """;
+
+    /** Injected into every loaded page: when the URL carries a
+     *  {@code ?hl=<space-separated terms>} query (added by the search page to
+     *  its result links), wraps every occurrence of those terms in
+     *  {@code <mark>} and — when there is no {@code #anchor} steering the
+     *  scroll — brings the first match into view.  Guarded per location so an
+     *  in-page anchor jump doesn't double-wrap.  ES5 / IE11-safe (4-arg
+     *  {@code createTreeWalker}, no arrow functions). */
+    private static final String HIGHLIGHT_SCRIPT = """
+        (function () {
+          try {
+            var m = /[?&]hl=([^#&]+)/.exec(location.search || location.href);
+            if (!m || !document.body) { return; }
+            var key = location.pathname + location.search;
+            if (window.__phHlFor === key) { return; }
+            window.__phHlFor = key;
+            var raw = decodeURIComponent(m[1]).toLowerCase().split(/\\s+/);
+            var terms = [];
+            for (var i = 0; i < raw.length; i++) { if (raw[i].length > 1) terms.push(raw[i]); }
+            if (!terms.length) { return; }
+            function esc(s) { return s.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'); }
+            var pat = terms.map(esc).join('|');
+            var reTest = new RegExp(pat, 'i');
+            var reRepl = new RegExp('(' + pat + ')', 'ig');
+            var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+            var nodes = [], n;
+            while ((n = walker.nextNode())) {
+              var p = n.parentNode; if (!p) { continue; }
+              var tag = p.nodeName.toLowerCase();
+              if (tag === 'script' || tag === 'style' || tag === 'mark') { continue; }
+              if (reTest.test(n.nodeValue)) { nodes.push(n); }
+            }
+            var first = null;
+            for (var k = 0; k < nodes.length; k++) {
+              var node = nodes[k];
+              var span = document.createElement('span');
+              span.innerHTML = node.nodeValue.replace(reRepl, '<mark>$1</mark>');
+              node.parentNode.replaceChild(span, node);
+              if (!first) { first = span.getElementsByTagName('mark')[0]; }
+            }
+            if (first && !location.hash && first.scrollIntoView) {
+              first.scrollIntoView();
+              if (window.scrollBy) { window.scrollBy(0, -60); }
+            }
+          } catch (e) { }
+        })();
+        """;
+
     /** Classpath fallback files, used only when no external help dir
      *  is found.  Listing them explicitly keeps the extractor portable
      *  across packaging modes. */
@@ -82,13 +175,28 @@ public final class HelpViewer {
             "generator.html",
             "oscilloscope.html",
             "fft.html",
+            "freqresp.html",
+            "preferences.html",
+            "theory/index.html",
+            "theory/audio-backend.html",
+            "theory/ring-buffer.html",
+            "theory/generator.html",
+            "theory/oscilloscope.html",
+            "theory/fft.html",
+            "theory/freq-resp.html",
+            "theory/algorithms.html",
+            "external/fft-analysis.html",
+            "external/sine-sweep.html",
+            "tips.html",
+            "credits.html",
+            "help-index.html",
+            "search-index.js",
+            "lunr.min.js",
             "style.css",
     };
     private static final String[] IMAGE_FILES = {
-            "img/Phonalyser.png",
-            "img/Generator.png",
             "img/Generator - sweep mode.png",
-            "img/Oscilloscope.png",
+            "img/Generator - dual tone.png",
             "img/Oscilloscope - Left.png",
             "img/Oscilloscope - Right.png",
             "img/Oscilloscope - Horizontal.png",
@@ -97,16 +205,30 @@ public final class HelpViewer {
             "img/Oscilloscope - Utility.png",
             "img/Oscilloscope - Save to.png",
             "img/Oscilloscope - Load signal.png",
-            "img/FFT Analyser.png",
             "img/FFT - FFT settings.png",
             "img/FFT - THD settings.png",
             "img/FFT - Presets.png",
             "img/FFT - Utility.png",
+            "img/FFT - Load calibration.png",
             "img/FFT - Save to.png",
             "img/FFT - Load from.png",
+            "img/freqresp-pane.png",
+            "img/FreqResp - Settings.png",
+            "img/FreqResp - RIAA IEC.png",
+            "img/FreqResp - Presets.png",
+            "img/FreqResp - Utility.png",
+            "img/FreqResp - Load calibration.png",
+            "img/FreqResp - Save to.png",
+            "img/FreqResp - Load from.png",
+            "img/Preferences Look and Feel.png",
             "img/Preferences Audio.png",
             "img/Preferences Oscilloscope.png",
             "img/Preferences FFT.png",
+            "img/Preferences Frequency response.png",
+            "img/multifunctional.png",
+            "img/generator-pane.png",
+            "img/oscilloscope-pane.png",
+            "img/fft-pane.png",
     };
 
     private static volatile HelpViewer instance;
@@ -202,10 +324,31 @@ public final class HelpViewer {
         ShellIcons.apply(s);
         s.setLayout(new FillLayout());
         s.setSize(900, 700);
+        // Open docked to the right of the main window, visible frames flush.
+        // getBounds() is the OS window rect, which on Windows 10/11 includes an
+        // invisible resize border (~7 px) beyond the painted edge — so a raw
+        // main.x+main.width would leave that border (plus the help window's own
+        // left border) as a visible gap.  toDisplay(0,0).x - bounds.x is the
+        // left inset = invisible resize border + the ~1 px visible frame.  We
+        // want the two VISIBLE frames to touch, which is one invisible border
+        // per window, so we subtract 2·inset but add back the two ~1 px visible
+        // frames the inset over-counts (without the +2 the help window overlaps
+        // the main one by ~2 px).  Clamped to the monitor so it can't open
+        // (partly) off-screen.
+        if (parent != null && !parent.isDisposed()) {
+            Rectangle main   = parent.getBounds();
+            Rectangle mon    = parent.getMonitor().getClientArea();
+            Point     size   = s.getSize();
+            int       inset  = Math.max(0, Math.min(32, parent.toDisplay(0, 0).x - main.x));
+            int       dock   = main.x + main.width - 2 * inset + 2;
+            int x = Math.min(dock, mon.x + mon.width - size.x);
+            int y = Math.min(main.y, mon.y + mon.height - size.y);
+            s.setLocation(Math.max(mon.x, x), Math.max(mon.y, y));
+        }
 
         Browser browser;
         try {
-            browser = new Browser(s, SWT.NONE);
+            browser = createBrowser(s);
         } catch (SWTError ex) {
             log.error("SWT Browser unavailable on this platform: {}", ex.getMessage());
             Dialogs.error(parent,
@@ -214,11 +357,34 @@ public final class HelpViewer {
             s.dispose();
             return;
         }
+        // Mouse back/forward (thumb buttons + tilt wheel): the native
+        // browser control swallows SWT mouse events, so the mapping is a
+        // script injected into each loaded document.  Re-executed on every
+        // completed navigation; the script itself guards double-hooking.
+        browser.addProgressListener(ProgressListener.completedAdapter(e -> {
+            browser.execute(NAV_BUTTONS_SCRIPT);
+            browser.execute(HIGHLIGHT_SCRIPT);
+        }));
         browser.setUrl(url);
 
         s.addDisposeListener(e -> openShell = null);
         s.open();
         openShell = s;
+    }
+
+    /** Creates the browser widget, preferring the Edge (WebView2) engine on
+     *  Windows: it renders sharper and handles the mouse thumb buttons
+     *  (back / forward) natively.  Falls back to the platform default (the
+     *  IE engine) when the WebView2 runtime is not installed; on Linux the
+     *  EDGE style is meaningless and WebKit is used either way. */
+    private Browser createBrowser(Shell s) {
+        try {
+            return new Browser(s, SWT.EDGE);
+        } catch (SWTError edgeUnavailable) {
+            log.info("Help: WebView2 unavailable ({}) — using the platform default browser",
+                    edgeUnavailable.getMessage());
+            return new Browser(s, SWT.NONE);
+        }
     }
 
     /** Walks the shell's child tree looking for the embedded Browser. */

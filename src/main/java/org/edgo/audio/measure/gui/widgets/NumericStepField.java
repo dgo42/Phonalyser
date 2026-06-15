@@ -233,6 +233,19 @@ public final class NumericStepField extends Composite {
         afterMutation(before, model.isLogDisplay());
     }
 
+    /** Advances one step in {@code direction} (+1 up, −1 down) from the current
+     *  value — the programmatic equivalent of one mouse-wheel notch over the
+     *  field, so callers that want to step the field (e.g. the scope's
+     *  wheel-zoom) reuse the field's OWN list / increment navigation and
+     *  clamping instead of recomputing the next value themselves.  Fires the
+     *  listeners only when the value actually moved. */
+    public void step(int direction) {
+        double before = model.getValue();
+        boolean logBefore = model.isLogDisplay();
+        model.wheel(direction);
+        afterMutation(before, logBefore);
+    }
+
     /** Updates the lower bound; the re-clamped value is mirrored to the
      *  display and, when it moved, to the listeners (so a bound preference
      *  follows a tightened range). */
