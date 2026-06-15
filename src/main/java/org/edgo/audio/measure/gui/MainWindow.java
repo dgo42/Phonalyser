@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui;
 
+import java.io.IOException;
 import java.net.JarURLConnection;
 import java.net.URL;
 import java.nio.file.DirectoryStream;
@@ -38,22 +39,26 @@ import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.DirectoryDialog;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Shell;
+import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ShellIcons;
-import org.edgo.audio.measure.gui.helpviewer.AboutDialog;
+import org.edgo.audio.measure.gui.helpviewer.HelpIndexBuilder;
 import org.edgo.audio.measure.gui.helpviewer.HelpUrls;
 import org.edgo.audio.measure.gui.helpviewer.HelpViewer;
 import org.edgo.audio.measure.gui.helpviewer.UpdateChecker;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.tips.TipOfTheDayDialog;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
 
+import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -96,8 +101,15 @@ public final class MainWindow {
 
     private final Display display;
     private final Shell   shell;
+    /** App-lifetime audio engines (generator / scope / FFT) — created once
+     *  here and injected down into the panes, so they keep running through
+     *  every {@link #rebuildContent()}; shut down on shell dispose. */
+    private final UIEngines engines;
     /** Rebuilt in place by {@link #rebuildContent()} (language / UI-font
-     *  changes) — the shell itself survives. */
+     *  changes) — the shell itself survives.  Consumers (the
+     *  {@code gui.automation} scripts) must re-read this after every
+     *  rebuild instead of caching the instance. */
+    @Getter
     private MainTab mainTab;
 
     public MainWindow(Display display) {
@@ -111,9 +123,12 @@ public final class MainWindow {
         // IconUtils.instance() is disposed automatically on shell teardown.
         IconUtils.instance().registerShell(shell);
 
+        this.engines = new UIEngines(display);
+        shell.addDisposeListener(e -> engines.shutdown());
+
         buildMenuBar();
 
-        this.mainTab = new MainTab(shell);
+        this.mainTab = new MainTab(shell, engines);
         // applyMinimumShellSize MUST run before any saved collapse state is
         // restored: a collapsed pane sets SashForm weights to {N, 28}, and
         // SashForm.computeSize balloons the natural size to whatever total
@@ -163,23 +178,31 @@ public final class MainWindow {
         if (prefs.isCheckForUpdatesOnStartup()) {
             UpdateChecker.checkOnStartup(shell, prefs.isIncludeBetaInUpdateChecks());
         }
+        if (prefs.isShowTipsAtStartup()) {
+            new TipOfTheDayDialog(shell).open();
+        }
     }
 
     public boolean isDisposed() {
         return shell.isDisposed();
     }
 
+    /** Closes the shell, ending the SWT event loop — how an automation
+     *  run exits the application when its script completes. */
+    public void close() {
+        if (!shell.isDisposed()) shell.close();
+    }
+
     /** Rebuilds the menu bar + tab content INSIDE the live shell — the
      *  window itself (position, size, maximized state) survives.  Used by
-     *  the language switch and by UI-font changes.  The live engines are
-     *  snapshotted before the teardown and restarted on the rebuilt panes
-     *  afterwards, so a font / language change never silences a running
-     *  measurement; a brief "Applying settings…" splash covers the work. */
+     *  the language switch and by UI-font changes.  The audio engines live
+     *  in {@link UIEngines}, outside the widget tree, and keep running
+     *  through the teardown — the rebuilt panes re-attach to them, so a
+     *  font / language change never silences a running measurement; a
+     *  brief "Applying settings…" splash covers the work. */
     public void rebuildContent() {
         showRebuildSplash(display);
         try {
-            MultifunctionalTab.RunningState running = mainTab.runningState();
-            mainTab.stopForRecreate();
             Menu oldMenu = shell.getMenuBar();
             for (Control c : shell.getChildren()) {
                 c.dispose();
@@ -187,7 +210,7 @@ public final class MainWindow {
             if (oldMenu != null) oldMenu.dispose();
             shell.setText(I18n.t("app.title"));
             buildMenuBar();
-            mainTab = new MainTab(shell);
+            mainTab = new MainTab(shell, engines);
             // Recompute only the MINIMUM size — the current window size and
             // position deliberately stay untouched.
             Point natural = mainTab.computeNaturalShellSize();
@@ -195,7 +218,6 @@ public final class MainWindow {
                     Math.max(natural.y, MIN_SHELL_HEIGHT));
             mainTab.applySavedLayoutState();
             shell.layout(true, true);
-            mainTab.restoreRunningState(running);
         } finally {
             closeRebuildSplash();
         }
@@ -292,13 +314,19 @@ public final class MainWindow {
             String fontsBefore = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
             new PreferencesDialog(shell).open(() -> {
                 String fontsAfter = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
+                // A committed AUDIO change bounces the running playback /
+                // capture (stop + restart picks the new backend / device /
+                // format up).  Bounce BEFORE a font rebuild: the resume
+                // hook belongs to the CURRENT panes — running it after
+                // rebuildContent would drive disposed widgets.
+                if (!audioConfigFingerprint(mwPrefs).equals(audioBefore)) {
+                    mainTab.pauseForDialog().run();
+                }
                 if (!fontsAfter.equals(fontsBefore)) {
                     // Fonts are woven into every painter — rebuild the
-                    // content in place (panes come back stopped, like a
-                    // language switch); an audio change is covered too.
+                    // content in place; the engines keep running and the
+                    // rebuilt panes re-attach to them.
                     rebuildContent();
-                } else if (!audioConfigFingerprint(mwPrefs).equals(audioBefore)) {
-                    mainTab.pauseForDialog().run();   // stop + restart on the new config
                 }
             });
         });
@@ -346,9 +374,45 @@ public final class MainWindow {
 
         new MenuItem(helpMenu, SWT.SEPARATOR);
 
+        MenuItem helpTip = new MenuItem(helpMenu, SWT.PUSH);
+        helpTip.setText(I18n.t("menu.help.tipOfDay"));
+        helpTip.addListener(SWT.Selection, e -> new TipOfTheDayDialog(shell).open());
+
+        MenuItem helpRebuildIndex = new MenuItem(helpMenu, SWT.PUSH);
+        helpRebuildIndex.setText(I18n.t("menu.help.rebuildIndex"));
+        helpRebuildIndex.addListener(SWT.Selection, e -> rebuildHelpIndex());
+
+        new MenuItem(helpMenu, SWT.SEPARATOR);
+
         MenuItem helpAbout = new MenuItem(helpMenu, SWT.PUSH);
         helpAbout.setText(I18n.t("menu.help.about"));
-        helpAbout.addListener(SWT.Selection, e -> AboutDialog.show(shell));
+        helpAbout.addListener(SWT.Selection, e -> new StartupSplash(shell.getDisplay()).showAsAbout(shell));
+    }
+
+    /** Lets a translator regenerate a help bundle's search index in place:
+     *  pick the {@code help/<lang>} folder, rebuild {@code search-index.js}
+     *  and {@code help-index.html} from its current pages. */
+    private void rebuildHelpIndex() {
+        DirectoryDialog dd = new DirectoryDialog(shell);
+        dd.setText(I18n.t("help.index.rebuild.title"));
+        dd.setMessage(I18n.t("help.index.rebuild.choose"));
+        String picked = dd.open();
+        if (picked == null) return;
+        Path dir = Paths.get(picked);
+        if (!Files.isRegularFile(dir.resolve("index.html"))) {
+            Dialogs.error(shell, I18n.t("help.index.rebuild.title"),
+                    I18n.t("help.index.rebuild.notHelpDir"));
+            return;
+        }
+        try {
+            int[] s = new HelpIndexBuilder(dir).build();
+            Dialogs.info(shell, I18n.t("help.index.rebuild.title"),
+                    I18n.t("help.index.rebuild.done", s[0], s[1], s[2]));
+        } catch (IOException ex) {
+            log.error("Help index rebuild failed for {}: {}", dir, ex.getMessage(), ex);
+            Dialogs.error(shell, I18n.t("help.index.rebuild.title"),
+                    I18n.t("help.index.rebuild.failed", ex.getMessage()));
+        }
     }
 
     /** Scans the active i18n source for {@code messages*.properties}

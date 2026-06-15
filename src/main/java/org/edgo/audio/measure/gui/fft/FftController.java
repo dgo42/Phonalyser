@@ -214,7 +214,7 @@ public final class FftController {
         MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM_RESET);
     }
 
-    /** Stops the worker — called from the pane's dispose listener. */
+    /** Stops the worker — called by {@code UIEngines} at application exit. */
     public void shutdown() {
         worker.stop();
     }
@@ -256,7 +256,7 @@ public final class FftController {
         MessageBus bus = MessageBus.instance();
         // Branch on generator form: single-tone runs one loop, dual-tone two
         // independent loops driven by the per-tone detected frequencies in imd.
-        boolean dualTone = prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE;
+        boolean dualTone = prefs.getGenSignalForm().isDualTone();
         if (dualTone) {
             if (imd == null) {
                 if (DebugSwitches.TRACE_FLL && log.isWarnEnabled()) {

@@ -411,6 +411,8 @@ public final class FreqRespWizardDialog {
             unsavedDirty = false;
             page3Apply.setEnabled(true);
             log.info("Wizard calibration saved to {}", picked);
+            // Reload this .frc anywhere it is already loaded as a calibration.
+            MessageBus.instance().publish(Events.CALIBRATION_FILE_SAVED, picked);
         } catch (Exception ex) {
             log.warn("Wizard save failed", ex);
             Dialogs.error(dialog, I18n.t("freqResp.saveTo.dialog"),

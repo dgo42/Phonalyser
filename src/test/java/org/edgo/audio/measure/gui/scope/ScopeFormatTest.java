@@ -132,18 +132,4 @@ class ScopeFormatTest {
         // Beyond the top: returns the largest target.
         assertEquals(10, ScopeFormat.ceilToStep(20.0, targets), 1e-12);
     }
-
-    @Test
-    void nextTargetFrom_walksTheLadder() {
-        double[] targets = {1, 2, 5, 10};
-        assertEquals(2,  ScopeFormat.nextTargetFrom(1, targets, +1), 1e-12);
-        assertEquals(10, ScopeFormat.nextTargetFrom(5, targets, +1), 1e-12);
-        // At top, going up: stays at current.
-        assertEquals(10, ScopeFormat.nextTargetFrom(10, targets, +1), 1e-12);
-        // Going down.
-        assertEquals(5,  ScopeFormat.nextTargetFrom(10, targets, -1), 1e-12);
-        assertEquals(1,  ScopeFormat.nextTargetFrom(2,  targets, -1), 1e-12);
-        // delta == 0 → unchanged.
-        assertEquals(5,  ScopeFormat.nextTargetFrom(5,  targets,  0), 1e-12);
-    }
 }

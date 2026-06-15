@@ -137,6 +137,9 @@ public final class Preferences {
      *  startup update check.  Ignored when
      *  {@link #checkForUpdatesOnStartup} is false. */
     private final Property<Boolean> includeBetaInUpdateChecks = bound(false);
+    /** When true, a "Tip of the day" popup is shown at startup.  Cleared by
+     *  the dialog's "Don't show again" checkbox or in Preferences. */
+    private final Property<Boolean> showTipsAtStartup = bound(true);
 
     private final Map<AudioBackendType, BackendPrefs> perBackend =
             new EnumMap<>(AudioBackendType.class);
@@ -286,10 +289,15 @@ public final class Preferences {
     /** Unit the amplitude field renders in: one of {@code mV}, {@code V}, {@code dBV}, {@code dBFS}. */
     /** Dither bits 0..N; 0 means "Off". */
     private final Property<Integer> genDitherBits  = bound(0);
-    /** Path to the harmonics-correction CSV, or {@code null} if none. */
-    private final Property<String> genCorrectionsCsv    = bound(null);
-    /** Folder remembered for the generator's "browse for corrections CSV" dialog. */
+    /** Path to the predistortion-correction file (.dpd), or {@code null} if none. */
+    private final Property<String> genCorrectionsFile    = bound(null);
+    /** Folder remembered for the generator's "browse for corrections" dialog. */
     private final Property<String> genCorrectionsFolder = bound(null);
+    /** DAC predistortion wizard: averaging duration per round (s).  Persisted so
+     *  the user's choice survives reopening the wizard and restarting the app. */
+    private final Property<Double>  predistortionDurationSec = bound(60.0);
+    /** DAC predistortion wizard: target distortion to stop at (%); 0 = run to stall. */
+    private final Property<Double>  predistortionTargetPct   = bound(0.0);
     /** Rectangle / pulse duty cycle as a fraction in [0.001, 0.999].  Default 50 %. */
     private final Property<Double>  genRectangleDuty = bound(0.5);
     /** Triangle duty cycle (rise-portion fraction) in [0.001, 0.999].  Default 50 %
@@ -648,6 +656,7 @@ public final class Preferences {
 
         c.tabOrientation.set(tabOrientation.get());
         c.smallIconsInMainTab.set(smallIconsInMainTab.get());
+        c.showTipsAtStartup.set(showTipsAtStartup.get());
         c.uiFontNormal.set(uiFontNormal.get());
         c.uiFontBold.set(uiFontBold.get());
         c.fftStrongToneRelDb.set(fftStrongToneRelDb.get());
@@ -706,6 +715,7 @@ public final class Preferences {
 
         setTabOrientation(edit.tabOrientation.get());
         setSmallIconsInMainTab(edit.smallIconsInMainTab.get());
+        setShowTipsAtStartup(edit.showTipsAtStartup.get());
         setUiFontNormal(edit.uiFontNormal.get());
         setUiFontBold(edit.uiFontBold.get());
         setFftStrongToneRelDb(edit.fftStrongToneRelDb.get());
@@ -931,6 +941,10 @@ public final class Preferences {
     public boolean isIncludeBetaInUpdateChecks() { return includeBetaInUpdateChecks.get(); }
     public void setIncludeBetaInUpdateChecks(boolean v) { includeBetaInUpdateChecks.set(v); }
     public Property<Boolean> includeBetaInUpdateChecksProperty() { return includeBetaInUpdateChecks; }
+
+    public boolean isShowTipsAtStartup() { return showTipsAtStartup.get(); }
+    public void setShowTipsAtStartup(boolean v) { showTipsAtStartup.set(v); }
+    public Property<Boolean> showTipsAtStartupProperty() { return showTipsAtStartup; }
 
     public TabOrientation getTabOrientation()  { return tabOrientation.get(); }
     public void setTabOrientation(TabOrientation v) { tabOrientation.set(v); }
@@ -1452,13 +1466,18 @@ public final class Preferences {
     public void setGenPlayFromLoop(boolean v)  { genPlayFromLoop.set(v); }
     public Property<Boolean> genPlayFromLoopProperty() { return genPlayFromLoop; }
 
-    public String getGenCorrectionsCsv()       { return genCorrectionsCsv.get(); }
-    public void setGenCorrectionsCsv(String v) { genCorrectionsCsv.set(v); }
-    public Property<String> genCorrectionsCsvProperty() { return genCorrectionsCsv; }
+    public String getGenCorrectionsFile()       { return genCorrectionsFile.get(); }
+    public void setGenCorrectionsFile(String v) { genCorrectionsFile.set(v); }
+    public Property<String> genCorrectionsFileProperty() { return genCorrectionsFile; }
 
     public String getGenCorrectionsFolder()    { return genCorrectionsFolder.get(); }
     public void setGenCorrectionsFolder(String v) { genCorrectionsFolder.set(v); }
     public Property<String> genCorrectionsFolderProperty() { return genCorrectionsFolder; }
+
+    public double getPredistortionDurationSec()        { return predistortionDurationSec.get(); }
+    public void   setPredistortionDurationSec(double v) { predistortionDurationSec.set(v); }
+    public double getPredistortionTargetPct()          { return predistortionTargetPct.get(); }
+    public void   setPredistortionTargetPct(double v)   { predistortionTargetPct.set(v); }
 
     public String getGenWavPath()              { return genWavPath.get(); }
     public void setGenWavPath(String v)        { genWavPath.set(v); }
@@ -1647,6 +1666,7 @@ public final class Preferences {
         root.put("smallIconsInMainTab", smallIconsInMainTab.get());
         root.put("checkForUpdatesOnStartup",  checkForUpdatesOnStartup.get());
         root.put("includeBetaInUpdateChecks", includeBetaInUpdateChecks.get());
+        root.put("showTipsAtStartup",         showTipsAtStartup.get());
         root.put("windowWidth",            windowWidth.get());
         root.put("windowHeight",           windowHeight.get());
         if (genPaneWidth.get() > 0) root.put("genPaneWidth", genPaneWidth.get());
@@ -1691,8 +1711,10 @@ public final class Preferences {
         root.put("genAmplitudeVrms",             genAmplitudeVrms.get());
         root.put("genAmplitudeDbvDisplay",       genAmplitudeDbvDisplay.get());
         root.put("genDitherBits",                genDitherBits.get());
-        if (genCorrectionsCsv.get()    != null) root.put("genCorrectionsCsv",    genCorrectionsCsv.get());
+        if (genCorrectionsFile.get()    != null) root.put("genCorrectionsFile",    genCorrectionsFile.get());
         if (genCorrectionsFolder.get() != null) root.put("genCorrectionsFolder", genCorrectionsFolder.get());
+        root.put("predistortionDurationSec", predistortionDurationSec.get());
+        root.put("predistortionTargetPct",   predistortionTargetPct.get());
         root.put("genRectangleDuty",      genRectangleDuty.get());
         root.put("genTriangleDuty",       genTriangleDuty.get());
         root.put("genSweepFreqStartHz",   genSweepFreqStartHz.get());
@@ -1936,6 +1958,7 @@ public final class Preferences {
         if (root.get("smallIconsInMainTab") instanceof Boolean b) smallIconsInMainTab.set(b);
         if (root.get("checkForUpdatesOnStartup")  instanceof Boolean b) checkForUpdatesOnStartup.set(b);
         if (root.get("includeBetaInUpdateChecks") instanceof Boolean b) includeBetaInUpdateChecks.set(b);
+        if (root.get("showTipsAtStartup")         instanceof Boolean b) showTipsAtStartup.set(b);
         if (root.get("backend") instanceof String s) {
             backend.set(enumOr(AudioBackendType.class, s, backend.get()));
         }
@@ -1986,8 +2009,10 @@ public final class Preferences {
         if (root.get("genAmplitudeVrms")             instanceof Number n) genAmplitudeVrms.set(n.doubleValue());
         if (root.get("genAmplitudeDbvDisplay")       instanceof Boolean b) genAmplitudeDbvDisplay.set(b);
         if (root.get("genDitherBits")                instanceof Number n) genDitherBits.set(n.intValue());
-        if (root.get("genCorrectionsCsv")            instanceof String s) genCorrectionsCsv.set(s);
+        if (root.get("genCorrectionsFile")            instanceof String s) genCorrectionsFile.set(s);
         if (root.get("genCorrectionsFolder")         instanceof String s) genCorrectionsFolder.set(s);
+        if (root.get("predistortionDurationSec")     instanceof Number n) predistortionDurationSec.set(n.doubleValue());
+        if (root.get("predistortionTargetPct")       instanceof Number n) predistortionTargetPct.set(n.doubleValue());
         if (root.get("genRectangleDuty")             instanceof Number n) genRectangleDuty.set(n.doubleValue());
         if (root.get("genTriangleDuty")              instanceof Number n) genTriangleDuty.set(n.doubleValue());
         if (root.get("genSweepFreqStartHz")          instanceof Number n) genSweepFreqStartHz.set(n.doubleValue());

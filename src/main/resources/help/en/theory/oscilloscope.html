@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theory: Oscilloscope</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to Theory of operation</a></p>
+
+  <h1>Oscilloscope</h1>
+
+  <h2 id="purpose">What it is for</h2>
+  <p>The oscilloscope is the time-domain view — and the one you should look
+     at <em>first</em>.  Before any spectral number is worth trusting, the
+     waveform has to look sane: present at all, not clipping, free of gross
+     DC offset or mains hum, at the level and frequency you expect.  The
+     scope answers those questions directly, and puts a live readout table
+     beside the trace: peak-to-peak and RMS voltage, DC offset, frequency
+     and period, duty cycle, rise and fall times.</p>
+
+  <h2 id="path">From ring buffer to screen</h2>
+  <p>The scope reads the newest window from the
+     <a href="ring-buffer.html">ring buffer</a> on every repaint, conditions
+     it, finds a stable trigger point, and draws it.  A separate background
+     pass measures the numbers at a steady 10 Hz so the readout is calm even
+     when the trace updates fast.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 250" width="100%" height="250" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="oa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+    <rect x="10"  y="100" width="120" height="50" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="70"  y="120" text-anchor="middle" font-weight="bold">ring buffer</text>
+    <text x="70"  y="138" text-anchor="middle" fill="#557">latest window</text>
+
+    <rect x="170" y="100" width="130" height="50" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="235" y="120" text-anchor="middle" font-weight="bold">conditioning</text>
+    <text x="235" y="138" text-anchor="middle" fill="#557">low-pass · mains comb</text>
+
+    <rect x="340" y="100" width="120" height="50" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="400" y="120" text-anchor="middle" font-weight="bold">trigger</text>
+    <text x="400" y="138" text-anchor="middle" fill="#557">edge + level</text>
+
+    <rect x="500" y="100" width="130" height="50" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="565" y="120" text-anchor="middle" font-weight="bold">resampling</text>
+    <text x="565" y="138" text-anchor="middle" fill="#557">Lanczos to pixels</text>
+
+    <rect x="670" y="100" width="140" height="50" rx="6" fill="#fdf2f2" stroke="#a88"/>
+    <text x="740" y="120" text-anchor="middle" font-weight="bold">trace</text>
+    <text x="740" y="138" text-anchor="middle" fill="#755">on screen</text>
+
+    <line x1="130" y1="125" x2="168" y2="125" stroke="#446" stroke-width="1.5" marker-end="url(#oa)"/>
+    <line x1="300" y1="125" x2="338" y2="125" stroke="#446" stroke-width="1.5" marker-end="url(#oa)"/>
+    <line x1="460" y1="125" x2="498" y2="125" stroke="#446" stroke-width="1.5" marker-end="url(#oa)"/>
+    <line x1="630" y1="125" x2="668" y2="125" stroke="#446" stroke-width="1.5" marker-end="url(#oa)"/>
+
+    <rect x="170" y="190" width="290" height="48" rx="6" fill="#fffbe8" stroke="#cc9"/>
+    <text x="315" y="210" text-anchor="middle" font-weight="bold">measurement pass (10 Hz)</text>
+    <text x="315" y="228" text-anchor="middle" fill="#775">Vpp · Vrms · Vmean · f · duty · rise/fall</text>
+    <line x1="235" y1="150" x2="250" y2="188" stroke="#446" stroke-width="1.2" marker-end="url(#oa)"/>
+  </svg>
+  </div>
+
+  <h2 id="conditioning">Conditioning</h2>
+  <p>Two optional filters run before display, and — crucially — the
+     <em>same</em> filters run before measurement, so the readout never
+     disagrees with the picture:</p>
+  <ul>
+    <li><b>Anti-alias / spike low-pass.</b>  A steep low-pass (8th-order
+        Butterworth) tames out-of-band spikes that would otherwise inflate
+        the peak-to-peak reading. The cutoff follows the display setting.</li>
+    <li><b>Mains-hum rejection.</b>  A frequency-tracked comb removes
+        50/60 Hz and its harmonics in one structure — see
+        <a href="#mains">below</a>.</li>
+  </ul>
+
+  <h2 id="trigger">Triggering</h2>
+  <p>A free-running scope would redraw the waveform at a random phase each
+     frame, so a periodic signal would appear to slide across the screen.
+     <b>Triggering</b> anchors every frame at the same feature — a chosen
+     <em>level</em> crossed in a chosen <em>direction</em> (rising or
+     falling edge).  The display is then drawn relative to that point, so a
+     stationary tone stands still.</p>
+  <p>Phonalyser triggers on absolute sample positions in the stream: each
+     captured trigger records the absolute index of the crossing, including
+     a sub-sample fraction from linear interpolation between the two
+     straddling samples. That fraction shifts the rendered trace by less
+     than one pixel so the waveform doesn't jitter by a sample even on a
+     fast time base.</p>
+
+  <h2 id="measure">How the numbers are measured</h2>
+  <p>The measurement pass works on the conditioned window in normalised
+     units, converting to volts only with the ADC full-scale calibration
+     (a sample of ±1 corresponds to <i>V</i><sub>fs</sub>·√2 peak).  Level
+     statistics are direct; frequency takes more care.</p>
+
+  <h3>Level</h3>
+  <p>Over the window of <i>N</i> samples <i>x</i><sub>i</sub>:</p>
+  <div class="eq"><i>V</i><sub>pp</sub> = (max − min) · <i>V</i><sub>peak</sub><span class="no">(1)</span></div>
+  <div class="eq"><i>V</i><sub>mean</sub> = <i>V</i><sub>peak</sub> · (1/<i>N</i>) Σ <i>x</i><sub>i</sub><span class="no">(2)</span></div>
+  <div class="eq"><i>V</i><sub>rms</sub> = <i>V</i><sub>peak</sub> · √( E[<i>x</i>²] − E[<i>x</i>]² )<span class="no">(3)</span></div>
+  <p>The RMS in (3) is the <em>AC</em> RMS — the DC bias is removed first
+     (the variance form subtracts the mean), because a total RMS that
+     collapsed to ≈ <i>V</i><sub>mean</sub> on a DC-biased input is far less
+     useful on a scope.</p>
+
+  <h3 id="freq">Frequency — crossings, then Goertzel refinement</h3>
+  <p>Reading frequency off a short buffer accurately is the hard part. A
+     three-stage strategy gets it to a few millihertz:</p>
+  <ol>
+    <li><b>Coarse from crossings.</b>  Count rising crossings of the
+        half-amplitude midpoint; the span of the outermost two over the
+        number of intervals gives a first period estimate. Crossings track
+        the true fundamental directly, so a narrow-duty rectangle yields the
+        right answer rather than locking onto a strong harmonic.</li>
+    <li><b>Refine with the Goertzel
+        algorithm<sup id="cite-1"><a href="#ref-goertzel">[1]</a></sup>.</b>
+        The Goertzel algorithm evaluates a single DFT bin at an
+        <em>arbitrary</em> frequency in one O(<i>N</i>) pass — a cheap way
+        to probe magnitude at any trial frequency without a full FFT. Three
+        successive scans, each ~20× finer than the last, home in on the
+        peak, and a parabolic fit across the final three probes gives
+        sub-step precision (typically ≤ 0.005 Hz on a one-second
+        buffer).</li>
+    <li><b>Leakage de-bias.</b>  The bare (rectangular-window) peak is
+        pulled off the true frequency by leakage from the
+        negative-frequency image — up to a few tenths of a hertz on short
+        buffers, which is what once made the scope read low next to the FFT.
+        Re-refining the peak on a Hann-windowed<sup id="cite-2"><a href="#ref-hann">[2]</a></sup>
+        copy suppresses that image and pins the frequency to &lt; 0.02 Hz
+        regardless of buffer length.</li>
+  </ol>
+  <p>A quality figure (the peak magnitude relative to the AC RMS) gates the
+     result: ≈ 0.707 for a clean sine, far lower for noise. Below the
+     threshold the frequency, period and duty read as undefined rather than
+     latching onto noise. For a genuine dual-tone signal these single-value
+     fields have no meaningful answer and are blanked entirely; the level
+     figures stay valid.</p>
+
+  <h2 id="sinc">Drawing between the samples: sin x/x reconstruction</h2>
+  <p>At fast time bases only a handful of samples cross the screen.
+     Connecting the sample dots with straight lines draws corners that do
+     not exist in the signal — the ADC's anti-alias filter guarantees the
+     captured signal contains no energy above Nyquist, and the sampling
+     theorem<sup id="cite-4"><a href="#ref-shannon">[4]</a></sup> states
+     that such a band-limited signal is <em>completely determined</em>
+     between its samples:</p>
+  <div class="eq"><i>x</i>(<i>t</i>) = Σ<sub><i>n</i></sub> <i>x</i>[<i>n</i>] · sinc(<i>t</i> − <i>n</i>),&nbsp;&nbsp;
+      sinc <i>u</i> = sin(π<i>u</i>) / (π<i>u</i>)<span class="no">(4)</span></div>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 270" width="100%" height="270" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <!-- axis -->
+    <line x1="40" y1="130" x2="800" y2="130" stroke="#ccc" stroke-width="1"/>
+    <!-- straight-line join (wrong) -->
+    <polyline points="60,130 120,66 180,130 240,194 300,130 360,66 420,130 480,194 540,130 600,66 660,130 720,194 780,130"
+              fill="none" stroke="#c33" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <!-- band-limited truth: smooth sine through the same samples -->
+    <path d="M 60,130 C 90,45 150,45 180,130 C 210,215 270,215 300,130
+             C 330,45 390,45 420,130 C 450,215 510,215 540,130
+             C 570,45 630,45 660,130 C 690,215 750,215 780,130"
+          fill="none" stroke="#33a" stroke-width="2"/>
+    <!-- samples -->
+    <circle cx="60"  cy="130" r="4" fill="#222"/>
+    <circle cx="120" cy="66"  r="4" fill="#222"/>
+    <circle cx="180" cy="130" r="4" fill="#222"/>
+    <circle cx="240" cy="194" r="4" fill="#222"/>
+    <circle cx="300" cy="130" r="4" fill="#222"/>
+    <circle cx="360" cy="66"  r="4" fill="#222"/>
+    <circle cx="420" cy="130" r="4" fill="#222"/>
+    <circle cx="480" cy="194" r="4" fill="#222"/>
+    <circle cx="540" cy="130" r="4" fill="#222"/>
+    <circle cx="600" cy="66"  r="4" fill="#222"/>
+    <circle cx="660" cy="130" r="4" fill="#222"/>
+    <circle cx="720" cy="194" r="4" fill="#222"/>
+    <circle cx="780" cy="130" r="4" fill="#222"/>
+    <!-- legend -->
+    <circle cx="70" cy="240" r="4" fill="#222"/>
+    <text x="82" y="244" fill="#335">ADC samples (4 per period)</text>
+    <line x1="300" y1="240" x2="340" y2="240" stroke="#c33" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <text x="348" y="244" fill="#a33">straight-line join — corners that don't exist</text>
+    <line x1="640" y1="240" x2="680" y2="240" stroke="#33a" stroke-width="2"/>
+    <text x="688" y="244" fill="#338">sin x/x reconstruction</text>
+  </svg>
+  </div>
+
+  <p>The scope evaluates (4) in its practical, windowed form — a
+     Lanczos<sup id="cite-5"><a href="#ref-lanczos">[5]</a></sup> kernel
+     with 16 sinc lobes each side, precomputed into a phase table —
+     producing one true reconstructed value per pixel column when zoomed
+     in.  The same reconstruction refines the trigger instant between two
+     samples (a bisection on the reconstructed curve, to about 1/1000 of a
+     sample), which is why the trace stands still instead of jittering by
+     a sample.  Reconstruction is switchable per channel (the
+     <code>sin x/x</code> option); with it off, the scope falls back to
+     straight-line interpolation.</p>
+  <p>Zoomed <em>out</em>, the problem inverts: many samples land on one
+     pixel.  The kernel is then widened so it doubles as an anti-alias
+     low-pass at the screen's own sample rate — without it, energy between
+     the "pixel Nyquist" and the capture Nyquist folds into spurious beat
+     patterns on the trace.  Beyond ~5 samples per pixel the scope switches
+     to per-column min/max envelope bars instead.</p>
+
+  <h2 id="mains">Mains-hum rejection: the tracked comb</h2>
+  <p>Mains interference sits at the line frequency and every integer
+     harmonic of it. A single <b>feedback comb
+     filter</b><sup id="cite-3"><a href="#ref-comb">[3]</a></sup> places a
+     notch at DC and at every multiple of <i>f</i>₀ at once:</p>
+  <div class="eq"><i>H</i>(<i>z</i>) = (1 − <i>z</i><sup>−<i>N</i></sup>) / (1 − α·<i>z</i><sup>−<i>N</i></sup>),&nbsp;&nbsp;
+      <i>N</i> = <i>f</i><sub>s</sub> / <i>f</i>₀<span class="no">(5)</span></div>
+  <p>where α (just below 1) sets how sharp each notch is. The trick is that
+     the comb is <b>frequency-tracked</b>: real mains drifts by a few tenths
+     of a hertz, and the <i>k</i>-th harmonic drifts <i>k</i>× as far, so a
+     fixed comb loses depth up high. By measuring the true line fundamental
+     from a reference block — auto-detecting 50 vs 60 Hz — and re-tuning the
+     single value <i>N</i>, every notch repositions to its exact
+     <i>k</i>·<i>f</i>₀ together. <i>N</i> is generally fractional, so the
+     delays interpolate linearly between the two straddling taps.</p>
+
+  <div class="note"><b>Why frequency is read off the raw signal.</b>  The
+     comb's notches bias any frequency measured through it. So the scope uses
+     the comb only to decide <em>which</em> peak is the tone (it suppresses
+     an often-dominant hum so the tone becomes the spectral peak), then
+     re-measures that tone's true frequency on the <em>raw</em>, un-notched
+     signal in a narrow band around the located peak — narrow enough that no
+     mains harmonic (tens of hertz away) competes.</div>
+
+  <h2 id="who">Where it sits</h2>
+  <p>The oscilloscope shares its capture device and ring buffer with the
+     <a href="fft.html">FFT analyser</a> through the common
+     <a href="ring-buffer.html#sharedcapture">capture session</a>, so both
+     can record together off one open device. It also borrows the
+     <a href="generator.html">generator</a>'s commanded waveform as a hint:
+     when a dual-tone signal is playing it knows to blank the single-tone
+     fields rather than guess.</p>
+
+  <h2 id="refs">References</h2>
+  <ol class="refs">
+    <li id="ref-goertzel"><a href="#cite-1">1.</a>
+        Goertzel algorithm (single-bin DFT) —
+        <a href="https://en.wikipedia.org/wiki/Goertzel_algorithm">Wikipedia: Goertzel algorithm</a>.</li>
+    <li id="ref-hann"><a href="#cite-2">2.</a>
+        Hann window and spectral leakage —
+        <a href="https://en.wikipedia.org/wiki/Window_function#Hann_window">Wikipedia: Hann window</a>.</li>
+    <li id="ref-comb"><a href="#cite-3">3.</a>
+        Comb filter (the feedback form of (5)) —
+        <a href="https://en.wikipedia.org/wiki/Comb_filter">Wikipedia: Comb filter</a>.</li>
+    <li id="ref-shannon"><a href="#cite-4">4.</a>
+        The sampling theorem and formula (4) —
+        <a href="https://en.wikipedia.org/wiki/Whittaker%E2%80%93Shannon_interpolation_formula">Wikipedia: Whittaker–Shannon interpolation formula</a>.</li>
+    <li id="ref-lanczos"><a href="#cite-5">5.</a>
+        The windowed-sinc kernel used in practice —
+        <a href="https://en.wikipedia.org/wiki/Lanczos_resampling">Wikipedia: Lanczos resampling</a>.</li>
+  </ol>
+
+  <p class="back"><a href="index.html">◀ Theory of operation</a> ·
+     next: <a href="fft.html">FFT analyser ▶</a></p>
+
+</body>
+</html>

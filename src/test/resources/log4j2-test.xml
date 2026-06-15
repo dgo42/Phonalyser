@@ -7,14 +7,13 @@
         <Console name="Console" target="SYSTEM_OUT">
             <PatternLayout pattern="%d{HH:mm:ss.SSS} [%-5level] %msg%n"/>
         </Console>
-        <RollingFile name="File"
-                     fileName="logs/phonalyser.log"
-                     filePattern="logs/phonalyser-%d{yyyy-MM-dd}.log">
+        <!-- Test runs log here, NOT into the app's logs/phonalyser.log, so a
+             `mvn test` never pollutes the running app's runtime log.  Under
+             target/ so it is gitignored and wiped by `mvn clean`. -->
+        <File name="File"
+              fileName="target/test-logs/phonalyser-test.log" append="false">
             <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} [%-5level] %logger{36} - %msg%n"/>
-            <Policies>
-                <TimeBasedTriggeringPolicy/>
-            </Policies>
-        </RollingFile>
+        </File>
         <!-- Independent log for the harmonic-stability test, overwritten each run. -->
         <File name="FftHarmonicStabilityFile"
               fileName="target/fft-harmonic-stability.log" append="false">

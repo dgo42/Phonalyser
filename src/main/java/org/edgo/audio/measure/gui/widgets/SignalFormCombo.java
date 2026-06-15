@@ -64,9 +64,10 @@ public final class SignalFormCombo extends Composite {
     /** Display labels in dropdown order. */
     private static final Map<GenSignalForm, String> LABELS = new LinkedHashMap<>();
     static {
-        LABELS.put(GenSignalForm.SINE,              "Sine");
-        LABELS.put(GenSignalForm.SINE_COMPENSATED,  "Sine (compensated)");
-        LABELS.put(GenSignalForm.DUAL_TONE,         "Dual tone");
+        LABELS.put(GenSignalForm.SINE,                  "Sine");
+        LABELS.put(GenSignalForm.SINE_COMPENSATED,      "Sine (compensated)");
+        LABELS.put(GenSignalForm.DUAL_TONE,             "Dual tone");
+        LABELS.put(GenSignalForm.DUAL_TONE_COMPENSATED, "Dual tone (compensated)");
         LABELS.put(GenSignalForm.TRIANGLE,          "Triangle");
         LABELS.put(GenSignalForm.RECTANGLE,         "Rectangle / pulse");
         LABELS.put(GenSignalForm.WHITE_NOISE,       "White noise");
@@ -276,12 +277,30 @@ public final class SignalFormCombo extends Composite {
         };
         d.addFilter(SWT.KeyDown, escapeFilter);
 
+        // Close when the whole application loses focus to ANOTHER program
+        // (Alt-Tab / clicking a different app): the MouseDown filter above
+        // only ever sees clicks inside OUR windows, so without this the
+        // ON_TOP popup keeps floating over the other app (the reported bug).
+        // Deferred so focus can settle, then closed only when no shell of
+        // ours is active — moving to our own main shell or to the popup
+        // itself leaves getActiveShell() non-null and must not close here
+        // (that pingpong at open time is exactly why Shell.Deactivate alone
+        // was avoided).  Registered on both the popup and the owning shell so
+        // it fires whichever one currently holds activation.
+        final Shell owner = getShell();
+        final Listener appDeactivated = e -> d.asyncExec(() -> {
+            if (!popupRef.isDisposed() && d.getActiveShell() == null) popupRef.close();
+        });
+        popupRef.addListener(SWT.Deactivate, appDeactivated);
+        owner.addListener(SWT.Deactivate, appDeactivated);
+
         // Tear down: remove the display filters and clear the tracked
         // reference so a subsequent click on the combo body opens a
         // fresh popup instead of trying to .close() a disposed shell.
         popupRef.addDisposeListener(e -> {
             d.removeFilter(SWT.MouseDown, outsideClick);
             d.removeFilter(SWT.KeyDown,   escapeFilter);
+            owner.removeListener(SWT.Deactivate, appDeactivated);
             if (popup == popupRef) popup = null;
         });
 

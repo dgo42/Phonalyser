@@ -20,6 +20,9 @@ package org.edgo.audio.measure.gui.helpviewer;
 
 import lombok.experimental.UtilityClass;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
 import java.util.regex.Pattern;
 
 /**
@@ -49,6 +52,9 @@ public class Versions {
 
     private static final Pattern NUM = Pattern.compile("^\\d+$");
 
+    /** Resolved once and cached — see {@link #appVersion()}. */
+    private String resolvedVersion;
+
     /**
      * @return negative if {@code a} is older than {@code b}, positive if
      *         newer, zero if equivalent.
@@ -72,10 +78,34 @@ public class Versions {
         return s.split("[.\\-_]");
     }
 
-    /** Reads the running app's version from its manifest, falling back to
-     *  {@code "dev"} when invoked outside a packaged JAR.  Single source of
-     *  truth for the About dialog and the update checker. */
+    /** The running app's version.  Single source of truth for the splash,
+     *  the About dialog and the update checker.  Resolved in order:
+     *  <ol>
+     *    <li>{@code /version.properties} — filled with {@code project.version}
+     *        by Maven resource filtering at build time, so it is correct for
+     *        both dev runs and packaged builds;</li>
+     *    <li>the JAR manifest's {@code Implementation-Version};</li>
+     *    <li>{@code "dev"} when neither is present (e.g. an IDE run that did
+     *        not filter resources).</li>
+     *  </ol>
+     *  Resolved once and cached. */
     public String appVersion() {
+        if (resolvedVersion == null) resolvedVersion = resolveVersion();
+        return resolvedVersion;
+    }
+
+    private String resolveVersion() {
+        try (InputStream in = Versions.class.getResourceAsStream("/version.properties")) {
+            if (in != null) {
+                Properties p = new Properties();
+                p.load(in);
+                String v = p.getProperty("app.version", "").trim();
+                // Unfiltered (IDE) copies still hold the literal ${...} token.
+                if (!v.isEmpty() && !v.startsWith("${")) return v;
+            }
+        } catch (IOException ignored) {
+            // Fall through to the manifest / "dev".
+        }
         String v = Versions.class.getPackage().getImplementationVersion();
         return (v != null && !v.isEmpty()) ? v : "dev";
     }

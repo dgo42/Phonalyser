@@ -136,6 +136,15 @@ public final class FftView extends AbstractFreqDomainView {
      *  analysis rejects blank-final reads in initializers. */
     private FftController controller;
 
+    /** Snapshot overrides for the averages count and fill %.  An offscreen
+     *  screenshot clone has its OWN idle controller, so without these it would
+     *  always read 0 — the screenshot of a live measurement would lose its
+     *  "N average(s)" / "NN%" readout.  {@link #copySnapshotFrom} copies the
+     *  live pane's current values here; {@code <0} means "not a snapshot, use
+     *  the live controller". */
+    private int    snapshotCompleted = -1;
+    private double snapshotFill      = -1.0;
+
     /** Loaded {@code .frc} corrections divided out of the spectrum and drawn
      *  as the overlay; constructor-injected by {@link FftPane} (IoC) and shared
      *  with the calibration tab so both see the same entries. */
@@ -174,7 +183,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  generator form so the chosen table appears immediately on first
      *  paint, before the first analysis result arrives. */
     private boolean tableModeIsImd =
-            Preferences.instance().getGenSignalForm() == GenSignalForm.DUAL_TONE;
+            Preferences.instance().getGenSignalForm().isDualTone();
 
     /** Subscriber for {@link Events#GENERATOR_SIGNAL_CHANGED} — held as
      *  a field so dispose can unsubscribe by reference.  On USER_INPUT
@@ -251,7 +260,7 @@ public final class FftView extends AbstractFreqDomainView {
             // mode was last selected the previous time recording ran.
             boolean prevTableModeIsImd = tableModeIsImd;
             Preferences prefs = Preferences.instance();
-            tableModeIsImd = prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE;
+            tableModeIsImd = prefs.getGenSignalForm().isDualTone();
             lastImd = tableModeIsImd ? this.controller.analyzeImd(slot) : null;
             // Mode just flipped (THD ↔ IMD): refresh the extracted window's
             // title + size.  It's set at create time and on form-change, but
@@ -686,11 +695,16 @@ public final class FftView extends AbstractFreqDomainView {
         this.lastResult     = source.lastResult;
         this.lastImd        = source.lastImd;
         this.tableModeIsImd = source.tableModeIsImd;
+        // Carry the live readouts across so the screenshot shows the real
+        // "N average(s)" / "NN%" instead of this idle clone's controller 0.
+        this.snapshotCompleted = source.getCompletedAnalyses();
+        this.snapshotFill      = source.getNextFrameProgress();
     }
 
-    /** Number of analyses completed since the last reset. */
+    /** Number of analyses completed since the last reset (or the snapshot
+     *  override on an offscreen screenshot clone). */
     public int getCompletedAnalyses() {
-        return controller.completedAnalyses();
+        return snapshotCompleted >= 0 ? snapshotCompleted : controller.completedAnalyses();
     }
 
     /** True if the analyser worker is currently running. */
@@ -718,7 +732,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  that has already been captured.  Drives the "NN%" indicator next
      *  to the magnitude-unit combo. */
     public double getNextFrameProgress() {
-        return controller.nextFrameProgress();
+        return snapshotFill >= 0 ? snapshotFill : controller.nextFrameProgress();
     }
 
     /** Clears the completed-analyses counter, drops the retained
@@ -2721,6 +2735,10 @@ public final class FftView extends AbstractFreqDomainView {
         double f = xToFreq(crossX, plot, freqMin, freqMax, logFreq);
         StringBuilder sb = new StringBuilder();
         sb.append("f = ").append(formatFrequencyFine(f));
+        // Magnitude at the cursor's height on the vertical axis (where the
+        // pointer is), distinct from the bin level |m| below.
+        sb.append('\n').append("y = ").append(formatMagnitudeWithUnit(
+                yToMag(crossY, plot, magTop, magBot, unit), unit));
         if (r != null && r.amplitudeDbFs != null && r.freqResolution > 0) {
             int bin = (int) Math.round(f / r.freqResolution);
             if (bin >= 0 && bin < r.amplitudeDbFs.length) {

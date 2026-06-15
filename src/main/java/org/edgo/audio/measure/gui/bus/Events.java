@@ -244,6 +244,13 @@ public final class Events {
      *  the calibrated spectrum / harmonic dot positions on next paint. */
     public static final String FFT_CALIBRATION_CHANGED = "fft.calibration.changed";
 
+    /** A {@code .frc} calibration file was just (over)written to disk.  Payload
+     *  is the saved {@code String} path.  The FFT and Frequency-Response
+     *  calibration tabs each reload any loaded row that references the same
+     *  file, so a freshly-saved calibration takes effect immediately without
+     *  the user re-browsing for it. */
+    public static final String CALIBRATION_FILE_SAVED = "calibration.file.saved";
+
     private Events() {}
 
     /** Event name for a click on the title bar with {@code id}.  Use

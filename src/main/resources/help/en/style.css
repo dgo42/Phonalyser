@@ -10,6 +10,12 @@ h2 { font-size: 17px; margin: 26px 0 6px; color: #335;
 h3 { font-size: 14px; margin: 18px 0 4px; color: #335; }
 h4 { font-size: 13px; margin: 14px 0 4px; color: #335; }
 p, ul, ol { margin: 6px 0; }
+/* Every help screenshot scales to the available width (like the SVG diagrams
+   and the landing-page layout image) instead of overflowing at native pixel
+   size — so a PNG reflows and stays fully visible when the help window is
+   resized.  Width-capped (never upscaled past native) to keep raster crisp;
+   .shot / .diagram keep their own rules below. */
+img { max-width: 100%; height: auto; }
 code, kbd { font-family: Consolas, Menlo, monospace; font-size: 13px;
             background: #eef; padding: 1px 5px; border-radius: 3px; }
 .pane { border-left: 3px solid #88a; padding-left: 12px; margin: 12px 0; }
@@ -37,3 +43,53 @@ table.controls th, table.controls td {
 table.controls th { background: #eef; }
 .note { background: #fff8d8; border-left: 3px solid #cc9;
         padding: 6px 10px; margin: 8px 0; font-size: 13px; }
+.diagram { margin: 14px 0; }
+.diagram svg { background: #ffffff; border: 1px solid #dde; border-radius: 4px; }
+.eq { margin: 10px 0 10px 48px; max-width: 640px;
+      font-family: Georgia, "Times New Roman", serif; font-size: 15px; }
+.eq .no { float: right; color: #888; font-size: 13px;
+          font-family: Consolas, Menlo, monospace; }
+ol.refs { font-size: 12px; color: #555; padding-left: 24px; list-style: none; }
+ol.refs li { margin: 4px 0; text-indent: -16px; }
+ol.refs li > a:first-child { text-decoration: none; color: #2222CC;
+                             font-weight: bold; margin-right: 4px; }
+sup a { text-decoration: none; color: #2222CC; }
+/* Annotated screenshot: a clean PNG with a transparent SVG callout overlay.
+   The img stays a normal PNG (no image-in-SVG href quirks across engines);
+   the overlay SVG shares the image's pixel viewBox and scales with it. */
+.shot { position: relative; display: inline-block; max-width: 100%;
+        margin: 14px 0; border: 1px solid #dde; }
+.shot img { display: block; max-width: 100%; height: auto; }
+.shot .callouts { position: absolute; top: 0; left: 0;
+                  width: 100%; height: 100%; }
+/* Numbered feature list paired with an annotated screenshot — the red
+   number badges match the callout circles drawn on the overlay. */
+ol.features { margin: 8px 0; padding-left: 0; list-style: none;
+              counter-reset: feat; }
+ol.features li { counter-increment: feat; margin: 5px 0; padding-left: 30px;
+                 position: relative; font-size: 13px; }
+ol.features li::before {
+    content: counter(feat); position: absolute; left: 0; top: 1px;
+    width: 18px; height: 18px; line-height: 18px; text-align: center;
+    background: #c33; color: #fff; border-radius: 50%;
+    font-family: Consolas, Menlo, monospace; font-size: 12px; font-weight: bold; }
+
+/* Index & search page */
+.search { margin: 12px 0 20px; }
+.search input { width: 100%; box-sizing: border-box; font-size: 15px;
+    padding: 8px 10px; border: 1px solid #aab; border-radius: 5px;
+    font-family: inherit; }
+.search input:focus { outline: none; border-color: #5577cc;
+    box-shadow: 0 0 0 2px #cdf; }
+.results { margin-top: 10px; }
+.results .hit { padding: 7px 0; border-bottom: 1px solid #eef; }
+.results .hit > a { font-weight: bold; color: #2222CC;
+    text-decoration: none; }
+.results .hit > a:hover { text-decoration: underline; }
+.results .snip { color: #555; font-size: 12px; margin-top: 2px; }
+mark { background: #ffe9a8; color: inherit; padding: 0 1px; }
+.azindex { column-width: 320px; column-gap: 28px; }
+.azindex h3 { color: #c33; margin: 10px 0 2px; break-after: avoid; }
+.azindex ul { margin: 0 0 8px; padding-left: 16px; }
+.azindex li { font-size: 13px; margin: 2px 0;
+    break-inside: avoid; }

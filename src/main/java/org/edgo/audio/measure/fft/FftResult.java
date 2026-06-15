@@ -112,6 +112,19 @@ public class FftResult {
     public double[] harmonicDbFs;
     public double[] harmonicPct;
 
+    // Dual-tone intermod-product grid — for every intermodulation product
+    // a·f1 + b·f2 (b ≠ 0) the analyzer de-rotated by a·Φ(F1) + b·Φ(F2) over
+    // its lobe, the integer coefficients and the product's bin index, aligned
+    // across the three arrays.  This lets the predistortion engine read a
+    // phase-stable, coherently-averaged correction phasor straight from
+    // {@code re}/{@code im} at each product bin (the same trustworthy phase
+    // the per-tone harmonics enjoy via the single-reference de-rotation).
+    // Empty when the signal isn't dual-tone or the per-product de-rotation
+    // wasn't engaged this tick (F1's own harmonics live in {@code harmonic*}).
+    public int[] imdProductA;
+    public int[] imdProductB;
+    public int[] imdProductBin;
+
     // Metrics — non-final so post-processing (e.g. ADC/frequency response correction) can mutate.
     public double thdPct;
     public double thdDb;
@@ -263,6 +276,9 @@ public class FftResult {
         c.harmonicHz                 = harmonicHz    != null ? harmonicHz.clone()    : null;
         c.harmonicDbFs               = harmonicDbFs  != null ? harmonicDbFs.clone()  : null;
         c.harmonicPct                = harmonicPct   != null ? harmonicPct.clone()   : null;
+        c.imdProductA                = imdProductA   != null ? imdProductA.clone()   : null;
+        c.imdProductB                = imdProductB   != null ? imdProductB.clone()   : null;
+        c.imdProductBin              = imdProductBin != null ? imdProductBin.clone() : null;
         c.thdPct                     = thdPct;
         c.thdDb                      = thdDb;
         c.thdNDb                     = thdNDb;

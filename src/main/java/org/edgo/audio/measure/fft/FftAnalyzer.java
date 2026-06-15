@@ -52,6 +52,10 @@ public class FftAnalyzer {
      *  overhead would dominate. */
     private static final int PASS_PARALLEL_THRESHOLD = 1 << 16;   // 64k bins
 
+    /** Shared empty grid published on {@link FftResult} for non-dual-tone (or
+     *  non-de-rotated) ticks — avoids a per-tick allocation on the hot path. */
+    private static final int[] NO_IMD_PRODUCTS = new int[0];
+
     /** Cached window-function table — sized to {@link #cachedWindowSize}
      *  for {@link #cachedWindowType}.  analyze() is called repeatedly on
      *  the FFT worker thread with the same (fftSize, windowType) pair, so
@@ -951,6 +955,12 @@ public class FftAnalyzer {
         final double f2Kappa = kappa2;
         int   nProd = 0;
         int[] prodA = null, prodB = null, imdIdx = null;
+        // Default to "no products published"; the de-rotation branch below
+        // overwrites these with the grid it builds (recycled result slots
+        // must not leak a previous dual-tone tick's grid into a single tone).
+        outResult.imdProductA   = NO_IMD_PRODUCTS;
+        outResult.imdProductB   = NO_IMD_PRODUCTS;
+        outResult.imdProductBin = NO_IMD_PRODUCTS;
         if (f2Individual) {
             final int ORDER = Math.max(5, harmonicCount + 1);
             int[] ta = new int[(2 * ORDER + 1) * (2 * ORDER + 1)];
@@ -971,6 +981,11 @@ public class FftAnalyzer {
             prodA = Arrays.copyOf(ta, cap);
             prodB = Arrays.copyOf(tb, cap);
             nProd = cap;
+            // Publish the de-rotated product grid so the predistortion engine
+            // can read each product's phase-stable phasor from re/im[bin].
+            outResult.imdProductA   = prodA;
+            outResult.imdProductB   = prodB;
+            outResult.imdProductBin = Arrays.copyOf(tk, cap);
             if (scratchImdIdx == null || scratchImdIdx.length < fftSize) scratchImdIdx = new int[fftSize];
             imdIdx = scratchImdIdx;
             Arrays.fill(imdIdx, 0, fftSize, -1);

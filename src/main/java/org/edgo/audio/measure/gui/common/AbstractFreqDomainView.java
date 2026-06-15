@@ -302,6 +302,21 @@ public abstract class AbstractFreqDomainView extends AbstractMeasurementView {
         return plot.y + (int) Math.round(t * plot.height);
     }
 
+    /** Inverse of {@link #magToY}: the magnitude value (in the active unit) at
+     *  on-screen pixel {@code y}, clamped to the plot.  Used by the crosshair
+     *  readout to report the level under the cursor's vertical position. */
+    protected final double yToMag(int y, Rectangle plot, double top, double bot, MagnitudeUnit unit) {
+        double t = (plot.height <= 0) ? 0 : (y - plot.y) / (double) plot.height;
+        if (t < 0) t = 0;
+        if (t > 1) t = 1;
+        if (unit.isLog()) {
+            double topL = (top <= 0) ? LOG_MAG_FLOOR_DECADES : Math.log10(top);
+            double botL = (bot <= 0) ? LOG_MAG_FLOOR_DECADES : Math.log10(bot);
+            return Math.pow(10, topL - t * (topL - botL));
+        }
+        return top - t * (top - bot);
+    }
+
     /**
      * Paints a multi-line readout box anchored at {@code (x, y)} inside
      * {@code plot}.  The box auto-flips to the opposite side of the

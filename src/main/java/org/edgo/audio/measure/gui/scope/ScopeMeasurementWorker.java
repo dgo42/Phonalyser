@@ -29,7 +29,6 @@ import org.edgo.audio.measure.dsp.LowPassFilter;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.MedianFilter;
 import org.edgo.audio.measure.enums.Channel;
-import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -456,7 +455,7 @@ public final class ScopeMeasurementWorker {
         // happened to win the Goertzel search on this tick.  Vpp /
         // Vrms / Vmean stay intact since they're well-defined for
         // any signal mode.
-        if (prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE) {
+        if (prefs.getGenSignalForm().isDualTone()) {
             result = result.withoutTimes();
         }
         long now = System.nanoTime();

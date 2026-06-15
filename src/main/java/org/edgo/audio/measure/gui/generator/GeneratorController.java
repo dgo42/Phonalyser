@@ -38,6 +38,7 @@ import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -277,10 +278,10 @@ public final class GeneratorController {
         // DUAL_TONE this is tone 1.  Snapped to the nearest FFT bin
         // when the user enabled snap-to-bin; the snap helper itself
         // gates on the waveform.
-        final double rawFrequency  = (form == GenSignalForm.DUAL_TONE)
+        final double rawFrequency  = (form.isDualTone())
                 ? prefs.getGenDualToneFreq1Hz()
                 : prefs.getGenFrequencyHz();
-        final double frequency = FftBinSnap.snapIfEnabled(prefs, form, sampleRate, rawFrequency);
+        final double frequency = emitFrequency(prefs, form, sampleRate, rawFrequency);
 
         // The WASAPI exclusive-mode driver sometimes refuses to start the
         // render stream on the first attempt when a sibling capture stream
@@ -329,11 +330,20 @@ public final class GeneratorController {
         double dacFs = prefs.getDacFsVoltageRms();
         try {
             if (form == GenSignalForm.SINE_COMPENSATED) {
-                String csv = prefs.getGenCorrectionsCsv();
+                String csv = prefs.getGenCorrectionsFile();
                 if (csv == null || csv.isEmpty()) {
-                    return "Sine (compensated) needs a harmonics-correction CSV.  Pick one with the … button.";
+                    return "Sine (compensated) needs a predistortion file.  Pick one with the … button.";
                 }
                 gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms, dacFs, csv);
+            } else if (form == GenSignalForm.DUAL_TONE_COMPENSATED) {
+                // Plain two-tone generator, then load the dual-tone intermod
+                // corrections (freq-independent (a,b) products) onto it.  The
+                // second tone + amplitude split are pushed by start() afterwards.
+                gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, dacFs);
+                String csv = prefs.getGenCorrectionsFile();
+                if (csv != null && !csv.isEmpty()) {
+                    gen.loadCorrectionsFromFile(csv, frequency, sampleRate);
+                }
             } else if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
                 double f0 = prefs.getGenSweepFreqStartHz();
                 double f1 = prefs.getGenSweepFreqEndHz();
@@ -361,7 +371,7 @@ public final class GeneratorController {
             int fadeOut = Math.max(0, (int) Math.round(prefs.getGenSweepFadeOutSec() * sampleRate));
             gen.setSweepParams(prefs.isGenSweepLoop(), fadeIn, fadeOut);
         }
-        if (form == GenSignalForm.DUAL_TONE) {
+        if (form.isDualTone()) {
             // Dual-tone: tone 1 uses the frequency the generator was
             // constructed with (already snapped above); tone 2's
             // frequency and the per-tone amplitude split are pushed
@@ -490,6 +500,47 @@ public final class GeneratorController {
     public void setFrequency(double hz) {
         SignalGenerator g = generator;
         if (g != null) g.setFrequency(hz);
+    }
+
+    /** Hot-applies harmonic predistortion to the running generator and
+     *  switches it to compensated sine (no restart) — the predistortion
+     *  wizard's per-round apply.  No-op when nothing is playing. */
+    public void applyCompensation(double[] ampRatios, int[] hNums, double[] phiInits) {
+        SignalGenerator g = generator;
+        if (g != null) g.applyCompensation(ampRatios, hNums, phiInits);
+    }
+
+    /** Hot-applies dual-tone intermod predistortion to the running generator
+     *  and switches it to compensated dual tone (no restart) — the dual-tone
+     *  counterpart of {@link #applyCompensation}.  No-op when nothing is
+     *  playing. */
+    public void applyDualToneCompensation(double[] ampRatios, int[] coefA, int[] coefB, double[] phiInits) {
+        SignalGenerator g = generator;
+        if (g != null) g.applyDualToneCompensation(ampRatios, coefA, coefB, phiInits);
+    }
+
+    /** Clears wizard predistortion and returns the running generator to
+     *  plain sine. */
+    public void clearCompensation() {
+        SignalGenerator g = generator;
+        if (g != null) g.clearCompensation();
+    }
+
+    /** Loads a saved predistortion file (.dpd) onto the running generator — the
+     *  wizard's Apply path.  The file is self-describing (single-tone harmonic
+     *  vs dual-tone intermod), so the generator switches to the matching
+     *  compensated form.  No-op when nothing is playing — the persisted prefs
+     *  make the next start load it. */
+    public void loadCorrectionsFromFile(String path) {
+        SignalGenerator g = generator;
+        if (g == null || path == null) return;
+        Preferences prefs = Preferences.instance();
+        try {
+            g.loadCorrectionsFromFile(path, effectiveFrequency(),
+                    prefs.current().getOutputSampleRate());
+        } catch (IOException ex) {
+            log.warn("Failed to load predistortion corrections from {}", path, ex);
+        }
     }
 
     /** Live-applies the second tone's frequency (Hz) for the
@@ -643,11 +694,35 @@ public final class GeneratorController {
     public double effectiveFrequency() {
         Preferences prefs = Preferences.instance();
         GenSignalForm form = prefs.getGenSignalForm();
-        double raw = (form == GenSignalForm.DUAL_TONE)
+        double raw = (form.isDualTone())
                 ? prefs.getGenDualToneFreq1Hz()
                 : prefs.getGenFrequencyHz();
-        return FftBinSnap.snapIfEnabled(prefs, form,
+        return emitFrequency(prefs, form,
                 prefs.current().getOutputSampleRate(), raw);
+    }
+
+    /** The exact frequency the DDS must be driven at for {@code form}.
+     *  A RECTANGLE can only place its hard +1/−1 edge ON a sample, so it
+     *  has to run at an integer-sample-period frequency {@code fs/N} —
+     *  otherwise the edge jitters ±1 sample between cycles and the tone
+     *  smears (the scope reads the raw, off-grid value).  Every other form
+     *  is exact at any frequency: SINE / DUAL_TONE take the optional
+     *  FFT-bin snap, and TRIANGLE rides the continuous ramp sub-sample, so
+     *  both stay on their raw entered frequency. */
+    private double emitFrequency(Preferences prefs, GenSignalForm form,
+                                 int sampleRate, double raw) {
+        if (form == GenSignalForm.RECTANGLE) {
+            return samplePeriodAlignedHz(raw, sampleRate);
+        }
+        return FftBinSnap.snapIfEnabled(prefs, form, sampleRate, raw);
+    }
+
+    /** Nearest frequency with a whole number of samples per period —
+     *  {@code fs / round(fs/f)}, the period floored at 2 (Nyquist). */
+    private double samplePeriodAlignedHz(double f, int sampleRate) {
+        if (f <= 0.0 || sampleRate <= 0) return f;
+        int n = Math.max(2, (int) Math.round(sampleRate / f));
+        return (double) sampleRate / n;
     }
 
     /** Samples in one waveform period at the current rate + entered
@@ -662,10 +737,13 @@ public final class GeneratorController {
     }
 
     /** Closest frequency the DDS rectangle can produce with an
-     *  integer-sample period — the pane's Frequency bracket label. */
+     *  integer-sample period — the pane's Frequency bracket label.  This
+     *  is the SAME value {@link #emitFrequency} drives the rectangle at,
+     *  so the displayed bracket and the emitted tone can never diverge. */
     public double correctedRectangleHz() {
-        int sr = Preferences.instance().current().getOutputSampleRate();
-        return (double) sr / periodSamples();
+        Preferences prefs = Preferences.instance();
+        return samplePeriodAlignedHz(prefs.getGenFrequencyHz(),
+                prefs.current().getOutputSampleRate());
     }
 
     private double snapDualTone(double rawHz) {
@@ -679,7 +757,7 @@ public final class GeneratorController {
     private void reapplySnap() {
         setFrequency(effectiveFrequency());
         Preferences prefs = Preferences.instance();
-        if (prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE) {
+        if (prefs.getGenSignalForm().isDualTone()) {
             setDualToneFrequency2(snapDualTone(prefs.getGenDualToneFreq2Hz()));
         }
     }
@@ -721,13 +799,20 @@ public final class GeneratorController {
         int    sampleRate    = prefs.current().getOutputSampleRate();
         int    bitDepth      = prefs.current().getOutputBitDepth();
         int    ditherBits    = prefs.getGenDitherBits();
-        double frequency     = prefs.getGenFrequencyHz();
+        // RECTANGLE exports at the SAME integer-sample-period frequency the
+        // live generator emits (fs/N) — so the file matches what is heard,
+        // a looped WAV has no off-grid edge seam, and the integer-period
+        // truncation below lands exactly on N samples.  Every other form is
+        // exact at any frequency and is exported as entered.
+        double frequency     = (form == GenSignalForm.RECTANGLE)
+                ? samplePeriodAlignedHz(prefs.getGenFrequencyHz(), sampleRate)
+                : prefs.getGenFrequencyHz();
         double amplitudeVRms = prefs.getGenAmplitudeVrms();
         double duration      = prefs.getGenWavDurationSeconds();
         try {
             SignalGenerator gen;
             if (form == GenSignalForm.SINE_COMPENSATED) {
-                String csv = prefs.getGenCorrectionsCsv();
+                String csv = prefs.getGenCorrectionsFile();
                 if (csv == null || csv.isEmpty()) {
                     return "Sine (compensated) needs a harmonics-correction CSV.  Pick one with the … button.";
                 }

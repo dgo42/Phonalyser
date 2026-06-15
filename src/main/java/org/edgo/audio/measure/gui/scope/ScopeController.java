@@ -82,6 +82,13 @@ public final class ScopeController {
         return frozen;
     }
 
+    /** The live capture buffer held while {@link #isCapturing()} —
+     *  {@code null} otherwise.  Lets a rebuilt pane re-attach its views to
+     *  a capture that survived an in-place content rebuild. */
+    public synchronized SignalBufferReader liveBuffer() {
+        return currentBuffer;
+    }
+
     /** Human-readable description of the last {@link #acquireCapture()}
      *  failure (or {@code null} if it succeeded / wasn't attempted).
      *  Forwarded from {@code SharedCapture}. */
@@ -89,8 +96,8 @@ public final class ScopeController {
         return SharedCapture.instance().getLastStartError();
     }
 
-    /** Releases a still-held capture — called from the pane's dispose
-     *  listener. */
+    /** Releases a still-held capture — called by {@code UIEngines} at
+     *  application exit. */
     public void shutdown() {
         releaseCapture();
     }

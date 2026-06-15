@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Further reading: FFT analysis essentials</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="../theory/index.html">◀ Back to Theory of operation</a></p>
+
+  <h1>FFT analysis essentials</h1>
+
+  <div class="note"><b>About this page.</b>  This is a short summary, in our
+     own words, of the topics covered by an excellent external guide:
+     <a href="https://dewesoft.com/blog/guide-to-fft-analysis">"FFT Analysis
+     (Fast Fourier Transform): The Ultimate Guide to Frequency Analysis"</a>
+     by Søren Linnet Gjelstrup (Dewesoft).  All credit belongs to the
+     original — read it there for the full treatment with figures and
+     examples.  This summary exists so the key ideas are at hand offline.</div>
+
+  <h2>The core trade-off: resolution vs. time</h2>
+  <p>An FFT of block length <i>N</i> at sample rate <i>f</i><sub>s</sub>
+     produces spectral lines spaced</p>
+  <div class="eq">Δ<i>f</i> = <i>f</i><sub>s</sub> / <i>N</i><span class="no">(1)</span></div>
+  <p>and needs a time block of duration</p>
+  <div class="eq"><i>T</i> = 1 / Δ<i>f</i><span class="no">(2)</span></div>
+  <p>Finer frequency resolution therefore always costs proportionally more
+     measurement time — there is no way around (2), only ways to spend the
+     time well (averaging, overlap).  Frequencies are only observable up to
+     the Nyquist limit <i>f</i><sub>s</sub>/2.</p>
+
+  <h2>Leakage and windows</h2>
+  <p>The FFT silently assumes the analysed block repeats forever.  A tone
+     whose frequency falls <em>between</em> two spectral lines violates that
+     assumption at the block edges, and its energy smears
+     ("leaks")<sup><a href="#ref-leak">[3]</a></sup> across
+     neighbouring lines — the level reads low and the skirt reads high.
+     Multiplying the block by a <b>window</b><sup><a href="#ref-win">[2]</a></sup>
+     that tapers to zero at the edges suppresses the discontinuity.  Every
+     window trades main-lobe width (frequency selectivity) against side-lobe
+     height (dynamic range); the guide's practical
+     rules<sup><a href="#ref-guide">[1]</a></sup>:</p>
+  <table class="controls">
+    <tr><th>Signal</th><th>Window</th></tr>
+    <tr><td>Periodic tones, harmonics</td><td>Hann or Blackman-family</td></tr>
+    <tr><td>Broadband random noise</td><td>Hann, with density scaling</td></tr>
+    <tr><td>Transients fully inside the block</td><td>Rectangular (no window)</td></tr>
+  </table>
+  <p>(Phonalyser's FFT pane offers these and several flat-top / HFT windows;
+     coherent averaging changes the trade-offs — that will be covered in the
+     FFT chapter of this help.)</p>
+
+  <h2>Amplitude scaling</h2>
+  <p>The same spectrum can be displayed against different references:
+     linear amplitude (same unit as the input — right for discrete tones),
+     power (amplitude squared), or spectral <em>density</em> (power or
+     amplitude normalised per Hz of bandwidth — right for noise, because a
+     noise floor in density units does not move when the FFT length
+     changes).  Phonalyser's V/√Hz unit is exactly this density scaling.</p>
+
+  <h2>Averaging and overlap</h2>
+  <p>Averaging <i>n</i> spectra reduces the variance of the noise estimate —
+     the fluctuation of an RMS-averaged spectrum falls as 1/√<i>n</i>.
+     Overlapping successive blocks (typically by 2/3 or 3/4 with a Hann
+     window) re-uses samples the window's taper would otherwise waste and
+     raises the update rate without extra capture time.</p>
+
+  <h2>Two-channel functions</h2>
+  <p>With a reference channel, cross-spectra give the frequency-response
+     function of a system and the <b>coherence</b> — a 0…1 figure telling
+     how much of the output is linearly caused by the input.  These are the
+     foundations of the frequency-response measurement described in the
+     <a href="../theory/generator.html#sweeps">generator chapter</a>.</p>
+
+  <h2 id="refs">References</h2>
+  <ol class="refs">
+    <li id="ref-guide">S. L. Gjelstrup,
+        <a href="https://dewesoft.com/blog/guide-to-fft-analysis">"FFT Analysis (Fast Fourier Transform): The Ultimate Guide to Frequency Analysis"</a>,
+        Dewesoft Data Acquisition Knowledge Base — the original article this
+        page summarises.</li>
+    <li id="ref-win"><a href="https://en.wikipedia.org/wiki/Window_function">Wikipedia: Window function</a> —
+        catalogue of windows with their main-lobe / side-lobe figures.</li>
+    <li id="ref-leak"><a href="https://en.wikipedia.org/wiki/Spectral_leakage">Wikipedia: Spectral leakage</a>.</li>
+  </ol>
+
+  <p class="back"><a href="../theory/index.html">◀ Back to Theory of operation</a></p>
+
+</body>
+</html>

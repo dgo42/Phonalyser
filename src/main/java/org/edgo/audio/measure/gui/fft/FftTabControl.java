@@ -64,6 +64,7 @@ import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FftPreset;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -198,6 +199,7 @@ public final class FftTabControl extends Composite {
      *  user toggles snap-to-FFT-bin on the generator pane (snap-to-bin
      *  is the missing prerequisite the user needs to satisfy here). */
     private Consumer<GenChangeCause> genChangeListener;
+    private Consumer<String>         calFileSavedListener;
 
     private Composite             fftCalRowsContainer;
     private ScrolledComposite     fftCalRowsScroll;
@@ -270,9 +272,14 @@ public final class FftTabControl extends Composite {
             distMaxField.setMax(nyquist);
         };
         MessageBus.instance().subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
+        // A .frc just saved to disk: if any loaded FFT calibration row points at
+        // it, re-read it so the new curve applies without re-browsing.
+        calFileSavedListener = path -> onCalibrationFileSaved(path);
+        MessageBus.instance().subscribe(Events.CALIBRATION_FILE_SAVED, calFileSavedListener);
         addDisposeListener(e -> {
             MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener);
             MessageBus.instance().unsubscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
+            MessageBus.instance().unsubscribe(Events.CALIBRATION_FILE_SAVED, calFileSavedListener);
         });
 
         wireHelpAnchors();
@@ -298,6 +305,31 @@ public final class FftTabControl extends Composite {
      *  {@link TileTabFolder}. */
     public void setTabsCollapsed(boolean collapsed) {
         if (toolbarTabs != null) toolbarTabs.setCollapsed(collapsed);
+    }
+
+    /** Registers each settings tab in the component registry under
+     *  {@code prefix} (e.g. {@code "multifunctional/fft/tabs"}) so automation
+     *  can select a tab by path — {@code activate} expands the tab body and
+     *  selects that tab — then screenshot this tab control showing it.  Slugs
+     *  are language-independent; tabs not built (Save / Load without live
+     *  capture) are skipped. */
+    public void registerTabs(String prefix) {
+        registerTab(prefix, "settings",    0);
+        registerTab(prefix, "thd",         1);
+        registerTab(prefix, "presets",     2);
+        registerTab(prefix, "utility",     3);
+        registerTab(prefix, "calibration", 4);
+        registerTab(prefix, "save",        5);
+        registerTab(prefix, "load",        6);
+    }
+
+    private void registerTab(String prefix, String slug, int index) {
+        if (toolbarTabs == null || index >= toolbarTabs.getItemCount()) return;
+        UiRegistry.instance().register(prefix + "/" + slug, this)
+                .onActivate(() -> {
+                    setTabsCollapsed(false);
+                    toolbarTabs.setSelection(index);
+                });
     }
 
     /** Overlays the tab tile rows into {@code gc} for the screenshot path —
@@ -1041,6 +1073,14 @@ public final class FftTabControl extends Composite {
     /** Loads a spectrum {@code .fft} file via the controller, stops live
      *  recording, and shows it as a static trace in the matching THD / IMD
      *  table mode. */
+    /** Loads a {@code .fft} spectrum file and displays it (same as the
+     *  Load-from tab's button).  Public so a programmatic caller — the
+     *  help/video automation — can show a real spectrum without a live
+     *  capture. */
+    public void loadSpectrum(String path) {
+        loadSpectrumFft(path);
+    }
+
     private void loadSpectrumFft(String path) {
         FftController.LoadedSpectrum loaded;
         try {
@@ -1108,11 +1148,11 @@ public final class FftTabControl extends Composite {
             // syncFftStoreFromRows), mirroring the FreqResp pane's tile.
             int n = correctionStore.getEntries().size();
             if (n == 1) {
-                String s = I18n.t("calibration.tile.loaded");
-                tiles.add(TileTabFolder.Tile.text(s, s));
+                tiles.add(TileTabFolder.Tile.text(I18n.t("calibration.tile.loaded"),
+                        I18n.t("calibration.tile.loaded.tooltip")));
             } else if (n > 1) {
-                String s = I18n.t("calibration.tile.loadedN", n);
-                tiles.add(TileTabFolder.Tile.text(s, s));
+                tiles.add(TileTabFolder.Tile.text(I18n.t("calibration.tile.loadedN", n),
+                        I18n.t("calibration.tile.loadedN.tooltip", n)));
             }
         }
         return tiles;
@@ -1406,6 +1446,20 @@ public final class FftTabControl extends Composite {
             }
             return false;
         }
+    }
+
+    /** Re-reads any loaded calibration row that references the just-saved
+     *  {@code .frc} ({@link Events#CALIBRATION_FILE_SAVED}) and re-pushes the
+     *  store, so the new curve takes effect immediately. */
+    private void onCalibrationFileSaved(String path) {
+        if (isDisposed() || path == null) return;
+        boolean reloaded = false;
+        for (FftCalRow r : fftCalRows) {
+            if (r.entry.matchesPath(path) && loadFileIntoFftCalRow(r, r.entry.getPath(), false)) {
+                reloaded = true;
+            }
+        }
+        if (reloaded) syncFftStoreFromRows();
     }
 
     private void syncFftStoreFromRows() {

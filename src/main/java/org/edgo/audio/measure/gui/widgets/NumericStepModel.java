@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui.widgets;
 
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -353,9 +354,13 @@ public final class NumericStepModel {
         if (isNamedValue(value)) return namedValueLabel;
         Unit u = currentUnit();
         double x = u.fromCanonical(value);
+        // Locale.ROOT so the decimal separator is always '.', matching the
+        // dot-based parser in commit() and the canonical value contract.
+        // Without it a comma-decimal UI locale (uk, de, fr, …) renders "0,5",
+        // which downstream dot-only parsers reject.
         String num = (decimals >= 0)
-                ? String.format("%." + decimals + "f", x)
-                : trimTrailingZeros(String.format("%." + maxDecimals + "f", x));
+                ? String.format(Locale.ROOT, "%." + decimals + "f", x)
+                : trimTrailingZeros(String.format(Locale.ROOT, "%." + maxDecimals + "f", x));
         String suffix = u.suffix();
         return suffix.isEmpty() ? num : num + " " + suffix;
     }

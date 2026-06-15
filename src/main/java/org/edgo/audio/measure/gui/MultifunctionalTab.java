@@ -37,6 +37,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.fft.FftPane;
 import org.edgo.audio.measure.gui.generator.GeneratorPane;
+import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.ScopePane;
 
@@ -68,7 +69,7 @@ public final class MultifunctionalTab {
     private SashForm vSplit;
     @Getter private GeneratorPane          genPane;
     @Getter private FftPane                fftPane;
-    private ScopePane                oscPane;
+    @Getter private ScopePane              oscPane;
 
     /** SashForm weights snapshot at collapse time so toggle helpers can
      *  restore them on expand. */
@@ -82,10 +83,10 @@ public final class MultifunctionalTab {
     private Consumer<Boolean> onScopeToggle;
     private Consumer<Boolean> onFftToggle;
 
-    public MultifunctionalTab(Composite parent, Shell shell) {
+    public MultifunctionalTab(Composite parent, Shell shell, UIEngines engines) {
         this.shell   = shell;
         this.display = shell.getDisplay();
-        buildPanes(parent);
+        buildPanes(parent, engines);
     }
 
     /** Two-phase setup: applied after the host has clamped the shell's
@@ -123,57 +124,25 @@ public final class MultifunctionalTab {
         };
     }
 
-    /** Stops running playback / capture in preparation for a shell
-     *  recreate (language switch, tab orientation change).  Discards any
-     *  resume hook — the next instance restores state from
-     *  {@link Preferences}. */
-    public void stopForRecreate() {
-        if (oscPane != null && oscPane.isCapturing()) oscPane.stopCapture();
-        if (genPane != null) genPane.pauseAroundDialog();
-    }
-
-    /** Which engines are live right now — snapshotted by
-     *  {@code MainWindow.rebuildContent()} before the teardown so the
-     *  REBUILT panes can pick the same engines back up. */
-    public record RunningState(boolean generator, boolean scope, boolean fft) {}
-
-    public RunningState runningState() {
-        return new RunningState(
-                genPane != null && genPane.isToneRunning(),
-                oscPane != null && oscPane.isCapturing(),
-                fftPane != null && fftPane.isRecording());
-    }
-
-    /** Restores the engines captured by {@link #runningState()} on THIS
-     *  (freshly rebuilt) instance's panes. */
-    public void restoreRunningState(RunningState state) {
-        if (state == null) return;
-        if (state.generator() && genPane != null) genPane.resumeTone();
-        if (state.scope() && oscPane != null && !oscPane.isCapturing()) {
-            oscPane.startCapture();
-            oscPane.setRecordingState(oscPane.isCapturing());
-        }
-        if (state.fft() && fftPane != null) fftPane.engageRecord();
-    }
-
     // -------------------------------------------------------------------------
     // Pane construction
     // -------------------------------------------------------------------------
 
-    private void buildPanes(Composite parent) {
+    private void buildPanes(Composite parent, UIEngines engines) {
         // SWT.SMOOTH on a SashForm makes the contained Sash widgets update
         // the content live while the user drags — without it you get the
         // rubber-band ghost outline and the panes only reflow on release.
         hSplit = new SashForm(parent, SWT.HORIZONTAL | SWT.SMOOTH);
         hSplit.setSashWidth(4);
 
-        genPane = new GeneratorPane(hSplit);
+        genPane = new GeneratorPane(hSplit, engines.getGeneratorController());
 
         vSplit = new SashForm(hSplit, SWT.VERTICAL | SWT.SMOOTH);
         vSplit.setSashWidth(4);
-        this.oscPane = new ScopePane(vSplit, true);
+        this.oscPane = new ScopePane(vSplit, engines.getScopeController());
 
-        fftPane = new FftPane(vSplit, true);
+        fftPane = new FftPane(vSplit, engines.getGeneratorController(),
+                engines.getFftController(), engines.getFftCorrectionStore());
 
         // Title-bar collapse clicks are broadcast through the MessageBus
         // by each pane.  Store the handlers as fields so the matching
@@ -194,6 +163,35 @@ public final class MultifunctionalTab {
 
         vSplit.setWeights(new int[]{1, 1});
         hSplit.setWeights(new int[]{1, 3});
+
+        // Register the three panes in the component registry so automation can
+        // address them by path — screenshot them, or maximize one for a clean
+        // shot.  Maximize uses the SashForm's built-in single-child maximize
+        // (scope / fft live in the inner vSplit, so both splits are set).
+        Runnable restoreSplits = () -> {
+            hSplit.setMaximizedControl(null);
+            vSplit.setMaximizedControl(null);
+        };
+        UiRegistry reg = UiRegistry.instance();
+        reg.register("multifunctional/generator", genPane.getGroup())
+           .onMaximize(() -> hSplit.setMaximizedControl(genPane.getGroup()))
+           .onRestore(restoreSplits);
+        reg.register("multifunctional/scope", oscPane.getGroup())
+           .onMaximize(() -> {
+               hSplit.setMaximizedControl(vSplit);
+               vSplit.setMaximizedControl(oscPane.getGroup());
+           })
+           .onRestore(restoreSplits);
+        reg.register("multifunctional/fft", fftPane.getGroup())
+           .onMaximize(() -> {
+               hSplit.setMaximizedControl(vSplit);
+               vSplit.setMaximizedControl(fftPane.getGroup());
+           })
+           .onRestore(restoreSplits);
+        // Each pane registers its own settings tabs under .../tabs/<slug> so a
+        // script can select a tab by path before screenshotting it.
+        oscPane.registerTabs("multifunctional/scope/tabs");
+        fftPane.registerTabs("multifunctional/fft/tabs");
 
         // Tint just the splitter bars #808080 with a #C8C8C8 hover state.
         // We do NOT call setBackground on the SashForm itself — that would

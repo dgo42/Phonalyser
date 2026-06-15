@@ -38,4 +38,10 @@ public class FileVersions {
     /** {@code .frc} filter-calibration files ({@code # format_version=} header).
      *  Reset to 1 for the first release — development-era files carried up to 6. */
     public final int FRC_CALIBRATION = 1;
+
+    /** {@code applied_compensation_*.csv} DAC harmonic-predistortion files
+     *  written by the predistortion wizard ({@code # format_version=} header).
+     *  The data rows stay byte-compatible with the CLI iterative-compensate
+     *  output; only the GUI adds the version + gen/FFT/THD provenance header. */
+    public final int PREDISTORTION = 1;
 }

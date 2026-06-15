@@ -34,7 +34,6 @@ import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenChangeCause;
-import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
@@ -60,9 +59,10 @@ import lombok.extern.log4j.Log4j2;
  * {@link FftView}) keep the snapshot and paint from it without
  * touching anything the worker owns.
  *
- * <p>Lifecycle is parent-owned: {@link FftView} constructs one worker
- * and calls {@link #start} / {@link #stop} alongside its own visibility
- * and dispose lifecycle.
+ * <p>Lifecycle is owner-driven: {@code UIEngines} constructs one worker
+ * for the application lifetime (it survives content rebuilds, keeping the
+ * averaging accumulator); {@link FftController} drives {@link #start} /
+ * {@link #stop}.
  */
 @Log4j2
 public final class FftAnalyzerWorker {
@@ -1658,7 +1658,7 @@ public final class FftAnalyzerWorker {
         // pegs the reference to a noise bin that jitters tick-to-tick, which
         // smears BOTH tones and makes the measured frequencies (and Δf
         // readout) swing wildly even though the generator never moves.
-        boolean dualTone = prefs.getGenSignalForm() == GenSignalForm.DUAL_TONE;
+        boolean dualTone = prefs.getGenSignalForm().isDualTone();
         double expectedFundHz = (genActive && prefs.isFftFundFromGenerator())
                 ? (dualTone
                     ? Math.min(prefs.getGenDualToneFreq1Hz(), prefs.getGenDualToneFreq2Hz())

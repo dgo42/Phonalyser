@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Tips</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>Tips</h1>
+  <p>Small things that make a big difference — shown one at a time at startup
+     (turn that off with the checkbox on the tip dialog, or in
+     <a href="preferences.html#prefs-lookfeel">Preferences ▸ Look&nbsp;&amp;&nbsp;Feel</a>),
+     and all collected here.</p>
+
+  <div class="tip"><b>Coherent averaging digs far below the noise floor.</b>
+     Leave coherent (complex) averaging on and let the FFT run: each block is
+     de-rotated to a common phase before summing, so the tone adds coherently
+     while the noise partly cancels — the floor keeps dropping the longer you
+     wait.  See <a href="theory/fft.html#coherent">Theory ▸ Coherent
+     averaging</a>.</div>
+
+  <div class="tip"><b>Snap the generator to an FFT bin for a clean spectrum.</b>
+     With <em>Snap frequency to nearest</em> on, the tone lands exactly on a
+     bin, so window leakage doesn't smear the fundamental across its neighbours
+     and the harmonic estimates stay honest.
+     See <a href="generator.html#generator-snap-fft-bin">Generator ▸ Snap</a>.</div>
+
+  <div class="tip"><b>Pin the fundamental by hand on a twin-T notch.</b>
+     A passive twin-T null is so steep that a few tenths of a hertz of thermal
+     drift swing the de-embedded fundamental by tenths of a dB and wobble your
+     THD.  Enter the level you actually know with <em>Manual fundamental</em>;
+     the harmonics, on the gentle flank, de-embed fine.
+     See <a href="theory/fft.html#manual-fund">Theory ▸ pinning the
+     fundamental</a>.</div>
+
+  <div class="tip"><b>WASAPI exclusive mode keeps the measurement bit-exact.</b>
+     Exclusive mode hands the device straight to Phonalyser, bypassing the
+     Windows mixer and its sample-rate converter — no hidden resampling to
+     colour the result.  See
+     <a href="theory/audio-backend.html">Theory ▸ Audio backend</a>.</div>
+
+  <div class="tip"><b>WDM-KS gives the oscilloscope the most frames per second.</b>
+     For the fastest live scope refresh, pick the WDM-KS backend in
+     Preferences — it sits lower than WASAPI and pushes more capture blocks
+     per second.  See <a href="preferences.html#prefs-audio">Preferences ▸
+     Audio</a>.</div>
+
+  <div class="tip"><b>The mouse wheel zooms around the cursor.</b>
+     In any trace view: <b>wheel</b> moves vertically, <b>Shift+wheel</b>
+     horizontally, <b>Ctrl+wheel</b> zooms the vertical axis and
+     <b>Ctrl+Shift+wheel</b> the horizontal — and both zooms keep the value
+     under the pointer fixed, so you zoom into exactly what you're looking at.</div>
+
+  <div class="tip"><b>Every numeric field takes units, the wheel, and the keyboard.</b>
+     Type a value with its unit (<code>µV</code>, <code>1.5 V</code>,
+     <code>-3 dBV</code>, <code>2 kHz</code>), or scroll the wheel, click the
+     ▲/▼ arrows, or press the keyboard <kbd>↑</kbd>/<kbd>↓</kbd> keys to step.</div>
+
+  <div class="tip"><b>Sinc interpolation only matters when you're zoomed in.</b>
+     The Sin/Lin switch changes the trace only when sample points are at least
+     a couple of pixels apart on screen; otherwise straight lines look
+     identical and cost less CPU.  Turn it on once individual samples are
+     visible.  See <a href="oscilloscope.html#scope-sinc-interp">Oscilloscope ▸
+     Sin/Lin</a>.</div>
+
+  <div class="tip"><b>Hysteresis stabilises the trigger on a weak, noisy signal.</b>
+     Without it, noise around the trigger level fires a flurry of false
+     triggers and the trace jitters.  Enable trigger hysteresis and the trace
+     locks.  See <a href="oscilloscope.html#scope-trigger-hysteresis">Oscilloscope
+     ▸ Hysteresis</a>.</div>
+
+  <div class="tip"><b>A saved generator signal is a perfect reference.</b>
+     <em>Save to…</em> writes the ideal, mathematically exact waveform —
+     synthesised digitally, with no DAC, amplifier or cabling distortion.  Feed
+     it to another instrument and any imperfection you measure belongs to that
+     device, not the source.  See
+     <a href="theory/generator.html#savefile">Theory ▸ saving a signal</a>.</div>
+
+  <div class="tip"><b>De-embed a fixture with a calibration file.</b>
+     Measure a notch, attenuator or soundcard's response once in the
+     Frequency-response module, then load that <code>.frc</code> into the FFT
+     analyser: its response is divided out at display time, so the table shows
+     the device under test, not the chain.  See
+     <a href="theory/fft.html#cal">Theory ▸ the red and blue dots</a>.</div>
+
+  <div class="tip"><b>The reconstructed-beat overlay tames a close two-tone pair.</b>
+     In dual-tone mode the scope's <em>Reconstructed beat</em> overlay draws
+     the slow |f₁−f₂| envelope, so you can trigger on the beat instead of
+     chasing the fast carrier crossings.  See
+     <a href="oscilloscope.html#scope-trigger-beat">Oscilloscope ▸ Reconstructed
+     beat</a>.</div>
+
+  <div class="tip"><b>The frequency-response sweep is its own reference.</b>
+     The swept measurement is deconvolved against the <em>exact</em> sweep that
+     was played — not a re-measured copy — so the recovered magnitude and phase
+     are the device's true transfer function.  See
+     <a href="theory/freq-resp.html">Theory ▸ Frequency response</a>.</div>
+
+  <div class="tip"><b>Ctrl+F1 jumps straight to the right help.</b>
+     Press <kbd>F1</kbd> anywhere for the manual, or <kbd>Ctrl</kbd>+<kbd>F1</kbd>
+     to open the help at the exact section for the control that currently has
+     focus.  And the new <a href="help-index.html">Index &amp; search</a> page
+     searches the whole manual.</div>
+
+  <hr/>
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+</body>
+</html>

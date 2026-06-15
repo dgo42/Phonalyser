@@ -61,6 +61,10 @@ public class WdmksGenerator implements AudioPlayback {
     /** PortAudio paOutputUnderflow / Underflow counters since the last supervisor drain. */
     private final    AtomicLong      paOutputUnderflowCount = new AtomicLong();
     private final    AtomicLong      paOutputOverflowCount  = new AtomicLong();
+    /** Set once the audio callback has logged a fault, so a failure that
+     *  repeats every callback (e.g. the generator throwing on every block)
+     *  logs one stack trace instead of flooding the log at the callback rate. */
+    private final    AtomicBoolean   callbackFaultLogged    = new AtomicBoolean();
 
     /**
      * Anonymous inner class (not a lambda) so JNA's Callback SAM detection is
@@ -85,7 +89,19 @@ public class WdmksGenerator implements AudioPlayback {
                 output.write(0, scratch, 0, bytes);
                 return PortAudio.paComplete;
             }
-            fillBuffer(gen, scratch, frames);
+            try {
+                fillBuffer(gen, scratch, frames);
+            } catch (Throwable th) {
+                // A throw here would otherwise be swallowed by JNA (stderr +
+                // return 0), muting output while the stream still reports
+                // active — the "generator looks on but nothing comes out"
+                // wedge.  Log the cause once, emit silence, keep the stream
+                // alive so the supervisor can stop it cleanly.
+                if (callbackFaultLogged.compareAndSet(false, true)) {
+                    log.error("WDM-KS generator callback failed — muting output: {}", th.toString(), th);
+                }
+                Arrays.fill(scratch, 0, bytes, (byte) 0);
+            }
             output.write(0, scratch, 0, bytes);
             long produced = framesProduced.addAndGet(frames);
             if (totalFrames > 0 && produced >= totalFrames) return PortAudio.paComplete;

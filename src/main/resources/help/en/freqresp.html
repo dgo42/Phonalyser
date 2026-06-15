@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Frequency response</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>Frequency response</h1>
+  <p>This page covers the frequency-response analyser's controls.  For how it
+     measures — a pre-rendered logarithmic sweep, deconvolved against the
+     played reference to recover magnitude and phase across the whole band in
+     one pass — see
+     <a href="theory/freq-resp.html">Theory of operation ▸ Frequency
+     response</a> and the
+     <a href="external/sine-sweep.html">log-sweep (Farina) summary</a>.</p>
+  <p>Frequency response is a <b>separate top-level tab</b> (next to the
+     combined Generator / Oscilloscope / FFT tab).  It plays one swept sine
+     from the output device, captures the return at the input, and plots the
+     measured <b>magnitude</b> (and optional <b>phase</b>) of the device under
+     test versus frequency — with an optional RIAA / IEC reference overlay and
+     a measured-minus-reference compare curve for phono and filter work.</p>
+
+  <p><img src="img/freqresp-pane.png" alt="Frequency response pane"/></p>
+
+  <h2 id="freqresp-overview">At a glance</h2>
+  <ol class="features">
+    <li><b>Magnitude plot.</b>  Log-frequency horizontal axis, linear-dB
+        vertical axis.  Shows the Left <em>or</em> Right channel (the L / R
+        header buttons are mutually exclusive).  See
+        <a href="#freqresp-buttons">Header buttons</a>.</li>
+    <li><b>Phase trace.</b>  Optional ±180° curve on a second right-hand axis,
+        toggled by the phase header button.</li>
+    <li><b>RIAA / IEC reference.</b>  Overlay the RIAA replay/record curve,
+        optionally with the IEC subsonic amendment, to check a phono stage —
+        <a href="#freqresp-tab-riaa">RIAA &amp; IEC tab</a>.</li>
+    <li><b>Compare (measured − reference).</b>  Subtract the reference from the
+        measurement and auto-zoom to a tight ±2&nbsp;dB window — the deviation
+        from ideal RIAA, read directly.  <a href="#freqresp-tab-riaa">RIAA &amp;
+        IEC tab</a>.</li>
+    <li><b>Crosshair readout.</b>  A dashed cross follows the pointer with a
+        floating box showing frequency, magnitude and (when shown) phase and
+        the compare Δ.  <a href="#freqresp-crosshair">Crosshair</a>.</li>
+    <li><b>Pan &amp; zoom (mouse wheel).</b>  The same wheel convention as
+        every Phonalyser view — <a href="#freqresp-panzoom">Pan &amp;
+        zoom</a>.</li>
+    <li><b>Calibration de-embedding.</b>  Load one or more <code>.frc</code> /
+        CSV correction files to subtract a known interface response from the
+        measurement.  <a href="#freqresp-tab-calibration">Load calibration
+        tab</a>.</li>
+  </ol>
+
+  <h2 id="freqresp-buttons">Header buttons</h2>
+  <p>The button row sits above the plot.</p>
+  <table class="controls">
+    <tr><th>Button</th><th>Action</th></tr>
+    <tr><td><b>L</b> (cyan)</td>
+        <td>Show the left channel's magnitude.  Mutually exclusive with
+            <b>R</b> — picking one hides the other.</td></tr>
+    <tr><td><b>R</b> (yellow)</td>
+        <td>Show the right channel's magnitude.</td></tr>
+    <tr><td><b>Phase</b></td>
+        <td>Show / hide the phase trace and its right-hand ±180° axis.</td></tr>
+    <tr><td><b>Auto-setup</b></td>
+        <td>Fit the vertical (magnitude) window to the visible trace, leaving a
+            little headroom above the highest point.  Frequency span is left
+            as-is.</td></tr>
+    <tr><td><b>Maximize</b></td>
+        <td>Reset to the default view — full frequency span (1&nbsp;Hz to the
+            Nyquist fraction) and +20 … −150&nbsp;dB vertically.</td></tr>
+    <tr><td><b>Play</b> (green)</td>
+        <td>Start a measurement sweep; while one runs the tooltip changes to
+            "stop" and a progress dialog appears (see
+            <a href="#freqresp-measure">Running a measurement</a>).</td></tr>
+  </table>
+
+  <h2 id="freqresp-panzoom">Pan &amp; zoom (mouse wheel)</h2>
+  <p>Over the plot —
+     <b>wheel</b>: pan the magnitude (vertical) axis;
+     <b>Shift+wheel</b>: pan the frequency (horizontal) axis;
+     <b>Ctrl+wheel</b>: zoom the magnitude axis (wheel up = zoom in);
+     <b>Ctrl+Shift+wheel</b>: zoom the frequency axis (wheel up = zoom in).
+     Both zooms are <em>anchored at the cursor</em> — the value (dB, or
+     frequency) under the pointer stays fixed while the scale changes around
+     it.  This is the same convention used in the scope and FFT views.  Each
+     scrollbar pans one axis only — never zooms — and its thumb is sized by the
+     view, so it tracks the zoom (it grows / shrinks as you scale).  Click the
+     empty track to page toward the pointer, or hold the button down to keep
+     paging until the thumb reaches the cursor.</p>
+
+  <h2 id="freqresp-crosshair">Crosshair readout</h2>
+  <p>Moving the pointer inside the plot draws a dashed cross and a floating
+     box reading the <b>frequency</b> at the cursor (clipped at the Nyquist
+     fraction), the <b>magnitude (dB) at the cursor's height</b> on the left
+     axis (<code>y = …</code>), the <b>L</b> / <b>R</b> trace magnitude in dB,
+     the <b>phase</b> in
+     degrees when the phase trace is shown, and the <b>compare Δ</b> when
+     compare mode is on.  It clears when the pointer leaves the plot.</p>
+
+  <h2 id="freqresp-tabs">Settings tabs</h2>
+  <p>The settings strip holds seven tabs.  As elsewhere, the strip shows an
+     overflow <code>»</code> when more tabs exist than fit.  The Settings, RIAA,
+     Calibration and Presets tabs carry tiles summarising their key values while
+     collapsed (Utility, Save and Load have none); hover a tile for a tooltip
+     describing the value.</p>
+
+  <h3 id="freqresp-tab-settings">Settings</h3>
+  <p><img src="img/FreqResp - Settings.png" alt="Settings tab"/></p>
+  <table class="controls">
+    <tr><th>Control</th><th>Notes</th></tr>
+    <tr><td>Start frequency, Hz</td>
+        <td>Low end of the sweep.  ≥ 1 Hz.</td></tr>
+    <tr><td>Stop frequency, Hz</td>
+        <td>High end of the sweep, up to the Nyquist fraction.</td></tr>
+    <tr><td>Amplitude (RMS)</td>
+        <td>Drive level sent to the DAC, in volts RMS against the DAC
+            calibration; the tooltip toggles a dBV display.  Accepts
+            µV / mV / V / dBV.</td></tr>
+    <tr><td>FFT size (Ds)</td>
+        <td>Analysis length of the deconvolution, a power of two from 64k to
+            16M.  Longer gives finer frequency resolution and more noise
+            rejection at the cost of a longer sweep; the label shows the
+            resulting sweep duration.</td></tr>
+    <tr><td>Sweep points</td>
+        <td>Number of frequency points generated for the sweep (8192 …
+            10M).  The wheel jumps power-of-two presets plus a sample-rate
+            derived "Nyquist/2" entry.</td></tr>
+    <tr><td>Lead-in, s</td>
+        <td>Silent / settle time before the sweep proper, so the chain is in
+            steady state when measurement starts.</td></tr>
+    <tr><td>Dither</td>
+        <td>Dither depth applied to the generated sweep, Off or 1–31 bits —
+            decorrelates quantisation error in the played signal.</td></tr>
+  </table>
+  <div class="note">The <b>maximal analysed frequency</b> (as a % of Nyquist)
+     is set on the <a href="preferences.html#prefs-freqresp">Preferences ▸
+     Frequency response</a> tab, not here; it caps the band where the sweep
+     deconvolution is trustworthy.</div>
+
+  <h3 id="freqresp-tab-riaa">RIAA &amp; IEC</h3>
+  <p><img src="img/FreqResp - RIAA IEC.png" alt="RIAA &amp; IEC tab"/></p>
+  <table class="controls">
+    <tr><th>Control</th><th>Notes</th></tr>
+    <tr><td>Show RIAA curve</td>
+        <td>Overlay the RIAA reference, aligned at 1 kHz.  This gate enables
+            the three controls below.</td></tr>
+    <tr><td>Reverse RIAA</td>
+        <td>Switch the reference between the record (encode) and playback
+            (decode) curve — pick the one matching what your device does.</td></tr>
+    <tr><td>IEC amendment</td>
+        <td>Add the IEC subsonic high-pass (~20 Hz) to the reference.</td></tr>
+    <tr><td>Compare (measured − reference)</td>
+        <td>Plot the smoothed difference between the measurement and the RIAA
+            reference around a 0 dB centreline, and auto-zoom to roughly
+            2 Hz – 25 kHz at ±2 dB.  Needs an existing measurement.  A blinking
+            banner names the active reference.</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-presets">Presets</h3>
+  <p><img src="img/FreqResp - Presets.png" alt="Presets tab"/></p>
+  <p>Save and recall complete Settings + RIAA configurations.</p>
+  <table class="controls">
+    <tr><th>Control</th><th>Notes</th></tr>
+    <tr><td>Name combo</td>
+        <td>Type a new preset name or pick an existing one.</td></tr>
+    <tr><td>Save</td>
+        <td>Store the current sweep + RIAA settings under that name; greyed out
+            when the live settings already match the selected preset.</td></tr>
+    <tr><td>Load</td>
+        <td>Apply the selected preset to the live pane.</td></tr>
+    <tr><td>Delete</td>
+        <td>Remove the selected preset (with confirmation).</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-utility">Utility</h3>
+  <p><img src="img/FreqResp - Utility.png" alt="Utility tab"/></p>
+  <table class="controls">
+    <tr><th>Button</th><th>Action</th></tr>
+    <tr><td>Screenshot</td>
+        <td>Save or copy a picture of the frequency-response plot.</td></tr>
+    <tr><td>Calibrate DAC full-scale</td>
+        <td>Reference-level DAC calibration helper (1 kHz / 1 V RMS).</td></tr>
+    <tr><td>Calibrate ADC full-scale</td>
+        <td>Reference-level ADC calibration helper (measures a 1 kHz
+            reference at the input).</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-calibration">Load calibration…</h3>
+  <p><img src="img/FreqResp - Load calibration.png" alt="Load calibration tab"/></p>
+  <p>A list of calibration rows.  Each loaded, <b>Active</b>-checked
+     <code>.frc</code> / CSV file is de-embedded (subtracted) from the
+     measurement, so the plot shows the device under test with a known
+     interface response removed.</p>
+  <table class="controls">
+    <tr><th>Per-row control</th><th>Notes</th></tr>
+    <tr><td>Path</td>
+        <td>The loaded file, or "No calibration loaded".</td></tr>
+    <tr><td>Active</td>
+        <td>Engage / park this file's correction without unloading it —
+            unchecked rows stay in the list for one-click re-use.</td></tr>
+    <tr><td>Load</td>
+        <td>Open-file button — pick a <code>.frc</code> or CSV correction file
+            for this row.</td></tr>
+    <tr><td>Clear (×)</td>
+        <td>Unload this row's file (keeps the Active flag).</td></tr>
+    <tr><td>Add (+)</td>
+        <td>Append another row to cascade a second correction.</td></tr>
+    <tr><td>Remove (−)</td>
+        <td>Delete this row.</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-saveto">Save to…</h3>
+  <p><img src="img/FreqResp - Save to.png" alt="Save to tab"/></p>
+  <p>Save the current measurement as a stereo CSV (frequency, L/R magnitude in
+     dB, L/R phase in degrees).  The Save button always prompts for a path,
+     pre-filled with a timestamped <code>freqresp_…&period;frc</code> name.
+     Saving with no measurement reports "run a sweep first".</p>
+  <p class="note"><b>Auto-reload:</b> if the file you save is already loaded as a
+     calibration row in the <a href="fft.html">FFT</a> pane or in this
+     Frequency&nbsp;Response pane (see <a href="#freqresp-tab-calibration">Load
+     calibration…</a>), that row is re-read from disk automatically the moment
+     you save — so re-measuring and overwriting a calibration takes effect
+     immediately, with no need to browse for it again.</p>
+
+  <h3 id="freqresp-tab-loadfrom">Load from…</h3>
+  <p><img src="img/FreqResp - Load from.png" alt="Load from tab"/></p>
+  <p>Load a previously saved stereo CSV back into the plot.  A loaded file is
+     treated as already corrected (it isn't re-calibrated), and a non-blinking
+     banner shows its path at the top-right of the plot.</p>
+
+  <h2 id="freqresp-measure">Running a measurement</h2>
+  <p>Press <b>Play</b> to sweep.  Capture and generator playback are taken over
+     for the run, a modal progress dialog shows a live RMS-versus-time meter,
+     and the magnitude (and phase) plot refreshes when the deconvolution
+     completes.  The total time is the lead-in plus the sweep duration implied
+     by the FFT size and sample rate.  Because the reference is the exact
+     pre-rendered sweep that was played, the result is the device's true
+     transfer function, not an estimate — see
+     <a href="theory/freq-resp.html">Theory ▸ Frequency response</a>.</p>
+
+</body>
+</html>

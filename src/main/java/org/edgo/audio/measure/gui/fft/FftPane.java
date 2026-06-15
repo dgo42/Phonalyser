@@ -32,21 +32,23 @@ import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.fft.FftResult;
-import org.edgo.audio.measure.gui.MainTab;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.IconUtils;
+import org.edgo.audio.measure.gui.common.SvgPaths;
+import org.edgo.audio.measure.gui.fft.predistortion.PredistortionWizardDialog;
+import org.edgo.audio.measure.gui.generator.GeneratorController;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
+import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.Getter;
 
@@ -56,25 +58,20 @@ import lombok.Getter;
  * — a self-contained tile-tab folder with the Settings, THD, Presets,
  * Utility, Calibration and Save / Load tabs — plus the record-LED toggle.
  */
-public final class FftPane {
+public final class FftPane extends AbstractPane {
 
     /** Resolution of the FlatScrollbars (any large integer — slider values
      *  are mapped to fractional positions). */
     private static final int SCROLL_RANGE = 1_000_000;
 
-    /** Pixel height of the big record-LED button at the right of the top
-     *  toolbar — matches the scope's record LED so the two panes look
-     *  visually aligned. */
-    private static final int RECORD_LED_SIZE = 33;
-
-    @Getter
-    private final Composite group;
-    private PaneTitle title;
     @Getter
     private FftView         view;
     /** Controller owning the analyser worker, the frequency-lock loops and
-     *  the .fft file round-trip; built here (with the pane's worker) and
-     *  injected into the view + tab control. */
+     *  the .fft file round-trip; injected into the view + tab control.
+     *  The live pane receives the app-lifetime instance (built in
+     *  {@code UIEngines}, survives content rebuilds — the averaging
+     *  accumulator keeps counting through a language / font change); the
+     *  offscreen screenshot clone builds its own idle instance. */
     private final FftController controller;
     private FlatScrollbar   freqScrollbar;
     private FlatScrollbar   magScrollbar;
@@ -116,25 +113,40 @@ public final class FftPane {
      *  Record button once the sweep finishes (or aborts). */
     private Consumer<Void> freqRespStoppedListener;
 
-    /** Collapse state + per-child snapshot.  See {@link #setCollapsed(boolean)}. */
-    @Getter
-    private boolean    collapsed;
-    private boolean[]  preCollapseChildVisible;
-    private boolean[]  preCollapseChildExclude;
+    /**
+     * Constructs the live pane around the injected app-lifetime engine —
+     * the Record toggle drives {@code controller}; when it is already
+     * recording (this is a rebuilt pane after a language / font change)
+     * the Record LED lights up and the view simply picks up the worker's
+     * next published result.
+     */
+    public FftPane(Composite parent, GeneratorController genController, FftController controller,
+                   FreqRespCorrectionStore correctionStore) {
+        this(parent, true, genController, controller, correctionStore);
+    }
 
-    public FftPane(Composite parent,
-                   boolean liveCapture) {
+    /**
+     * Offscreen screenshot variant: builds its own silent correction store
+     * and an idle controller (worker never started), so constructing it
+     * fires no bus events and opens no audio device.
+     */
+    public FftPane(Composite parent) {
+        this(parent, false, null, null, null);
+    }
+
+    private FftPane(Composite parent, boolean liveCapture, GeneratorController genController,
+                    FftController controller, FreqRespCorrectionStore correctionStore) {
+        super(parent);
         // FFT-length changes, capture acquire / release, and the
         // generator-running query all flow through the MessageBus — no
         // callback parameters needed for those concerns.  The analyser
-        // worker (inside FftView) acquires and releases its own shared
-        // capture on start / stop; the pane just drives the Record button.
+        // worker acquires and releases its own shared capture on start /
+        // stop; the pane just drives the Record button.
         IconUtils icons = IconUtils.instance();
         Display d = parent.getDisplay();
-        this.recordDim     = icons.createRecordLed(d, 200,  40,  40, false, RECORD_LED_SIZE);
-        this.recordLit     = icons.createRecordLed(d, 255,   0,   0, true,  RECORD_LED_SIZE);
+        this.recordDim     = icons.createRecordLed(d, 200,  40,  40, false, ACTION_ICON_SIZE);
+        this.recordLit     = icons.createRecordLed(d, 255,   0,   0, true,  ACTION_ICON_SIZE);
 
-        group = new Composite(parent, SWT.BORDER);
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth  = 0; gl.marginHeight = 0; gl.verticalSpacing = 2;
         group.setLayout(gl);
@@ -151,20 +163,18 @@ public final class FftPane {
         plotRow.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         plotRow.setLayout(new FormLayout());
 
-        // The pane owns the calibration-correction store and injects the same
-        // instance into the view and tab control (IoC).  A live pane bridges
-        // store changes onto the bus event the worker + tab subscribe to; the
-        // offscreen screenshot clone (liveCapture=false) gets a silent store so
-        // building its calibration tab fires no events — corrections are still
-        // applied because the tab repopulates the store from prefs.
-        FreqRespCorrectionStore correctionStore = new FreqRespCorrectionStore("FFT",
-                liveCapture ? () -> MessageBus.instance().publish(Events.FFT_CALIBRATION_CHANGED)
-                            : null);
-        // The pane builds the analyser worker (its result hand-off marshals
-        // through the SWT Display) and injects it into the controller, which
-        // owns its lifecycle plus the FLL / IMD / .fft-file concerns; the
-        // view and tab control receive the controller for commands/queries.
-        controller = new FftController(new FftAnalyzerWorker(d), correctionStore);
+        // The live pane receives the app-lifetime correction store +
+        // controller (built in UIEngines; the store bridges its changes
+        // onto the bus event the worker + tab subscribe to).  The offscreen
+        // screenshot clone (liveCapture=false) builds its own SILENT store —
+        // so building its calibration tab fires no events; corrections are
+        // still applied because the tab repopulates the store from prefs —
+        // and an idle controller whose worker is never started.
+        if (!liveCapture) {
+            correctionStore = new FreqRespCorrectionStore("FFT", null);
+            controller      = new FftController(new FftAnalyzerWorker(d), correctionStore);
+        }
+        this.controller = controller;
         view = new FftView(plotRow, correctionStore, controller);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);
         magScrollbar.setMinimum(0);
@@ -219,7 +229,7 @@ public final class FftPane {
         // the record button always stays accessible.
         Composite toolbarRow = new Composite(group, SWT.NONE);
         toolbarRow.setLayoutData(new GridData(SWT.FILL, SWT.BEGINNING, true, false));
-        GridLayout trGl = new GridLayout(2, false);
+        GridLayout trGl = new GridLayout(liveCapture ? 3 : 2, false);
         trGl.marginWidth = 0; trGl.marginHeight = 0; trGl.horizontalSpacing = 4;
         toolbarRow.setLayout(trGl);
 
@@ -238,13 +248,22 @@ public final class FftPane {
             if (!group.isDisposed()) group.layout(true, true);
         });
 
-        recordButton = new Button(toolbarRow, SWT.TOGGLE);
+        // Predistortion-wizard button (live pane only) — left of Record,
+        // mirroring the Frequency-Response pane's wizard button.  Drives the
+        // running generator + FFT through the closed-loop predistortion run.
+        if (liveCapture && genController != null) {
+            FftController wizardController = controller;   // effectively final for the lambda
+            Button wizardButton = createActionButton(toolbarRow, SWT.PUSH);
+            wizardButton.setImage(icons.renderAtHeightColored(d, SvgPaths.WAND, ACTION_ICON_SIZE));
+            wizardButton.setToolTipText(I18n.t("predistortion.button.wizard.tooltip"));
+            wizardButton.addListener(SWT.Selection, e ->
+                    new PredistortionWizardDialog(group.getShell(), genController, wizardController, view).open());
+            wizardButton.setData("helpAnchor", "fft.html#fft-predistortion");
+        }
+
+        recordButton = createActionButton(toolbarRow, SWT.TOGGLE);
         recordButton.setImage(recordDim);
         recordButton.setToolTipText(I18n.t("fft.record.tooltip"));
-        GridData rbGd = new GridData(SWT.END, SWT.BEGINNING, false, false);
-        rbGd.widthHint  = 48;
-        rbGd.heightHint = 48;
-        recordButton.setLayoutData(rbGd);
 
         // ---- View wiring.  The analyser lives inside FftView itself
         // (was previously a separate FftController); the pane just
@@ -280,6 +299,19 @@ public final class FftPane {
             else                              recordOff();
         });
 
+        // The injected controller survives content rebuilds — when this is
+        // a rebuilt pane the analyser may already be recording: light the
+        // Record LED; the averaging accumulator keeps counting and the view
+        // picks up the worker's next published result.
+        if (this.controller.isRecording()) {
+            recordButton.setSelection(true);
+            recordButton.setImage(recordLit);
+        }
+
+        // The controller deliberately keeps running across a pane teardown
+        // (a content rebuild must not stop the analyser or wipe its
+        // accumulator); UIEngines shuts it down at application exit.  The
+        // offscreen clone's own controller was never started.
         group.addDisposeListener(e -> {
             MessageBus bus2 = MessageBus.instance();
             bus2.unsubscribe(Events.FFT_RANGE_CHANGED,             rangeChangedListener);
@@ -288,7 +320,6 @@ public final class FftPane {
             bus2.unsubscribe(Events.FFT_SCREENSHOT_REQUESTED,      screenshotRequestedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
-            controller.shutdown();   // the worker releases its shared-capture reference
         });
 
         // Re-layout once the event loop spins up.  At constructor exit
@@ -356,6 +387,15 @@ public final class FftPane {
         }
     }
 
+    /** Registers this pane's settings tabs in the component registry under
+     *  {@code prefix} so automation can select each by path.  See
+     *  {@link FftTabControl#registerTabs}. */
+    public void registerTabs(String prefix) {
+        if (toolbarTabs != null && !toolbarTabs.isDisposed()) {
+            toolbarTabs.registerTabs(prefix);
+        }
+    }
+
     /** Invoked by the FFT controller on the UI thread when the
      *  stop-after-N counter fires.  Disengages record mode so the
      *  user sees the Record button switch off and the shared capture
@@ -398,8 +438,10 @@ public final class FftPane {
         recordButton.setImage(recordLit);
     }
 
-    /** Programmatically engages Record — used when a content rebuild
-     *  (language / font change) restores the pre-rebuild running state. */
+    /** Programmatically engages Record and lights the LED — the
+     *  {@code gui.automation} scripts' Record.  On an acquire failure the
+     *  button silently un-toggles (no modal dialog in an unattended run);
+     *  callers can check {@link #isRecording()}. */
     public void engageRecord() {
         recordOn();
     }
@@ -468,18 +510,27 @@ public final class FftPane {
         ).open();
     }
 
+    /** Loads and displays a {@code .fft} spectrum file (same as the Load-from
+     *  tab) — lets a programmatic caller (help/video automation) show a real
+     *  spectrum without a live capture.  Delegates to the tab control, which
+     *  owns the {@code .fft} round-trip. */
+    public void loadSpectrum(String path) {
+        if (toolbarTabs != null) toolbarTabs.loadSpectrum(path);
+    }
+
     /** Renders this FFT pane offscreen at the requested dimensions with
      *  its toolbar tab body collapsed.  Builds a fresh {@link FftPane} in
      *  a hidden Shell (no live capture, no controller worker) and copies
      *  the live view's render snapshot into it, so the spectrum and the
      *  THD / IMD table render the same data the user is currently
-     *  seeing. */
-    private Image renderOffscreen(Display d, int targetW, int targetH) {
+     *  seeing.  Public for the screenshot dialog's renderer hook and the
+     *  {@code gui.automation} snapshot helpers; UI thread only. */
+    public Image renderOffscreen(Display d, int targetW, int targetH) {
         targetW = Math.max(1, targetW);
         targetH = Math.max(1, targetH);
         Shell offscreen = new Shell(d, SWT.NO_TRIM);
         offscreen.setLayout(new FillLayout());
-        FftPane fftPane = new FftPane(offscreen, false);
+        FftPane fftPane = new FftPane(offscreen);
         Image output = new Image(d, targetW, targetH);
         try {
             fftPane.copySnapshotFrom(this);
@@ -515,45 +566,6 @@ public final class FftPane {
     public void copySnapshotFrom(FftPane source) {
         if (source == null || source == this) return;
         view.copySnapshotFrom(source.view);
-    }
-
-    /** Hides / shows every child except the title Label so the pane can
-     *  collapse to its title bar (or restore).  Pure pane-internal — the
-     *  parent {@code SashForm}'s weights are owned by {@link MainTab}. */
-    public void setCollapsed(boolean wantCollapsed) {
-        if (collapsed == wantCollapsed) return;
-        if (group == null || group.isDisposed()) return;
-        collapsed = wantCollapsed;
-        Control[] children = group.getChildren();
-        if (collapsed) {
-            preCollapseChildVisible = new boolean[children.length];
-            preCollapseChildExclude = new boolean[children.length];
-            for (int i = 0; i < children.length; i++) {
-                if (children[i] == title) continue;
-                preCollapseChildVisible[i] = children[i].getVisible();
-                if (children[i].getLayoutData() instanceof GridData gd) {
-                    preCollapseChildExclude[i] = gd.exclude;
-                    gd.exclude = true;
-                }
-                children[i].setVisible(false);
-            }
-            title.setCollapsed(true);
-        } else {
-            if (preCollapseChildVisible != null
-                    && preCollapseChildVisible.length == children.length) {
-                for (int i = 0; i < children.length; i++) {
-                    if (children[i] == title) continue;
-                    children[i].setVisible(preCollapseChildVisible[i]);
-                    if (children[i].getLayoutData() instanceof GridData gd) {
-                        gd.exclude = preCollapseChildExclude[i];
-                    }
-                }
-                preCollapseChildVisible = null;
-                preCollapseChildExclude = null;
-            }
-            title.setCollapsed(false);
-        }
-        group.layout(true);
     }
 
     // =========================================================================

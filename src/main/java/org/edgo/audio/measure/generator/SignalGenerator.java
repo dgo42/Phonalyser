@@ -208,18 +208,83 @@ public class SignalGenerator {
     // Harmonic compensation state (SINE_COMPENSATED only)
     // -------------------------------------------------------------------------
 
-    /** Per-harmonic (H2..Hn) amplitude ratio relative to fundamental (amplitude_pct / 100). */
-    private double[] hAmpRatio;
-    /** Harmonic number (2, 3, 4, …) — used to lock harmonic phase to DDS fundamental. */
-    private int[]    hNum;
-    /** Per-harmonic initial phase offset (radians). */
-    private double[] hPhiInit;
-    /** {@link #hPhiInit} converted to 64-bit DDS phase offsets — derived
-     *  lazily on first use (audio-thread-only) so the compensated kernel
-     *  runs on the sine/cos table instead of one {@code Math.cos} per
-     *  harmonic per sample (~1.9 M calls/s at 5 harmonics / 384 kHz).
-     *  Quantization ≤ 2π/2⁶² rad — far below the harmonics' own error. */
-    private long[] hPhaseOff64;
+    /** Immutable, atomically-published harmonic-correction set for
+     *  {@link GenSignalForm#SINE_COMPENSATED}.  {@link #ddsSineCompensated}
+     *  reads the {@code volatile} {@link #comp} reference once per sample,
+     *  so the predistortion wizard can hot-swap corrections on the running
+     *  generator (via {@link #applyCompensation}) with no audio restart —
+     *  the audio thread never observes a half-built correction set. */
+    private static final class Compensation {
+        /** Per-harmonic amplitude ratio relative to the fundamental (amplitude_pct / 100). */
+        private final double[] amp;
+        /** Harmonic number (2, 3, 4, …) — integer multiple of the master accumulator. */
+        private final int[]    hNum;
+        /** Each harmonic's initial phase as a 64-bit DDS phase offset —
+         *  precomputed here (not lazily on the audio thread) so the
+         *  compensated kernel runs purely on the sine/cos table instead of
+         *  one {@code Math.cos} per harmonic per sample.  Quantization
+         *  ≤ 2π/2⁶² rad — far below the harmonics' own error. */
+        private final long[]   phaseOff64;
+
+        private Compensation(double[] ampRatios, int[] hNums, double[] phiInits) {
+            int n = ampRatios.length;
+            this.amp        = ampRatios.clone();
+            this.hNum       = hNums.clone();
+            this.phaseOff64 = new long[n];
+            for (int i = 0; i < n; i++) {
+                double turns     = phiInits[i] / (2.0 * Math.PI);
+                double fracTurns = turns - Math.floor(turns);          // [0, 1)
+                // ·2^63 stays in the signed-long range; <<1 doubles to 2^64
+                // with the natural wrap (quantisation 2^-62 turns — irrelevant).
+                this.phaseOff64[i] = ((long) (fracTurns * 0x1.0p63)) << 1;
+            }
+        }
+    }
+
+    /** Active harmonic compensation, or {@code null} for an uncorrected
+     *  sine.  Published atomically — see {@link Compensation}. */
+    private volatile Compensation comp;
+
+    /**
+     * Immutable, atomically-published intermodulation-correction set for
+     * {@link GenSignalForm#DUAL_TONE_COMPENSATED}.  The two-tone analogue of
+     * {@link Compensation}: every distortion product of a two-tone signal —
+     * per-tone harmonic <em>and</em> intermodulation product alike — lives at
+     * {@code a·f₁ + b·f₂} for integer {@code (a, b)} and has instantaneous
+     * phase {@code a·θ₁ + b·θ₂}, so a single {@code (a, b)}-indexed table
+     * cancels them all.  {@link #ddsDualToneCompensated} reads the
+     * {@code volatile} {@link #dtComp} reference once per sample for the same
+     * lock-free hot-swap the predistortion wizard relies on.
+     */
+    private static final class DualToneComp {
+        /** Per-product amplitude ratio relative to the |F1|+|F2| reference. */
+        private final double[] amp;
+        /** Integer multiple of the first accumulator {@code θ₁} (may be negative). */
+        private final int[]    a;
+        /** Integer multiple of the second accumulator {@code θ₂} (may be negative). */
+        private final int[]    b;
+        /** Each product's initial phase as a 64-bit DDS offset — precomputed
+         *  here (not on the audio thread) so the kernel stays table-only. */
+        private final long[]   phaseOff64;
+
+        private DualToneComp(double[] ampRatios, int[] aCoef, int[] bCoef, double[] phiInits) {
+            int n = ampRatios.length;
+            this.amp        = ampRatios.clone();
+            this.a          = aCoef.clone();
+            this.b          = bCoef.clone();
+            this.phaseOff64 = new long[n];
+            for (int i = 0; i < n; i++) {
+                double turns     = phiInits[i] / (2.0 * Math.PI);
+                double fracTurns = turns - Math.floor(turns);          // [0, 1)
+                this.phaseOff64[i] = ((long) (fracTurns * 0x1.0p63)) << 1;
+            }
+        }
+    }
+
+    /** Active dual-tone intermod compensation, or {@code null} for an
+     *  uncorrected two-tone signal.  Published atomically — see
+     *  {@link DualToneComp}. */
+    private volatile DualToneComp dtComp;
 
     // -------------------------------------------------------------------------
     // Constructor
@@ -309,19 +374,16 @@ public class SignalGenerator {
                            double dacFsVoltageRms, double[] ampRatios, double[] phiInits, double[] freqsHz) {
         this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms, dacFsVoltageRms);
         int n = ampRatios.length;
-        hAmpRatio = new double[n];
-        hNum      = new int[n];
-        hPhiInit  = new double[n];
+        int[] hNums = new int[n];
         for (int i = 0; i < n; i++) {
-            hAmpRatio[i] = ampRatios[i];
-            hNum[i]      = (int) Math.round(freqsHz[i] / frequency);
-            hPhiInit[i]  = phiInits[i];
+            hNums[i] = (int) Math.round(freqsHz[i] / frequency);
             log.info("Accumulated H{}: {} Hz  {} dBFS  phi_init {} deg",
-                    hNum[i],
+                    hNums[i],
                     String.format(Locale.US, "%.3f", freqsHz[i]),
                     String.format(Locale.US, "%.4f", 20.0 * Math.log10(ampRatios[i])),
                     String.format(Locale.US, "%.2f", Math.toDegrees(phiInits[i])));
         }
+        this.comp = new Compensation(ampRatios, hNums, phiInits);
         log.info("Harmonic compensation: {} harmonic(s) from accumulated corrections", n);
     }
 
@@ -454,6 +516,7 @@ public class SignalGenerator {
             case PINK_NOISE               -> 1.0 / Math.sqrt(PINK_OCTAVES + 1.0);        // Gaussian source, 17 summed terms / 17
             case PINK_NOISE_LINEAR        -> 1.0 / Math.sqrt(3.0 * (PINK_OCTAVES + 1.0));// uniform source, std = 1/√3 per term
             case DUAL_TONE                -> rawRmsDualTone();                            // depends on per-tone weights — see rawRmsDualTone
+            case DUAL_TONE_COMPENSATED    -> rawRmsDualTone();                            // same two tones, plus tiny anti-products — weights set the RMS
         };
     }
 
@@ -512,6 +575,45 @@ public class SignalGenerator {
      */
     public void setFrequency(double frequencyHz) {
         this.phaseInc = toPhaseInc(frequencyHz);
+    }
+
+    /**
+     * Hot-swaps the harmonic compensation on the RUNNING generator and
+     * switches it to {@link GenSignalForm#SINE_COMPENSATED} — the
+     * predistortion wizard applies each round's corrections this way, with
+     * no audio restart.  The phasors {@code (ampRatio, harmonic number,
+     * initial phase)} are published as one immutable {@link Compensation}
+     * before the form flips, so the audio thread never sees a
+     * partially-updated set.  Empty arrays leave an uncorrected sine.
+     */
+    public void applyCompensation(double[] ampRatios, int[] hNums, double[] phiInits) {
+        this.comp = new Compensation(ampRatios, hNums, phiInits);
+        this.form = GenSignalForm.SINE_COMPENSATED;
+    }
+
+    /**
+     * Hot-swaps the intermodulation compensation on the RUNNING generator and
+     * switches it to {@link GenSignalForm#DUAL_TONE_COMPENSATED} — the
+     * dual-tone counterpart of {@link #applyCompensation}.  Each product is the
+     * triple {@code (ampRatio, aCoef, bCoef, initial phase)} at
+     * {@code a·f₁ + b·f₂}, published as one immutable {@link DualToneComp}
+     * before the form flips so the audio thread never sees a partial set.
+     * Empty arrays leave an uncorrected two-tone signal.
+     */
+    public void applyDualToneCompensation(double[] ampRatios, int[] aCoef, int[] bCoef, double[] phiInits) {
+        this.dtComp = new DualToneComp(ampRatios, aCoef, bCoef, phiInits);
+        this.form   = GenSignalForm.DUAL_TONE_COMPENSATED;
+    }
+
+    /** Drops any compensation and returns a compensated generator to its plain
+     *  tone — {@link GenSignalForm#SINE_COMPENSATED} → {@link GenSignalForm#SINE},
+     *  {@link GenSignalForm#DUAL_TONE_COMPENSATED} → {@link GenSignalForm#DUAL_TONE}.
+     *  The wizard's cancel path. */
+    public void clearCompensation() {
+        this.comp   = null;
+        this.dtComp = null;
+        if (form == GenSignalForm.SINE_COMPENSATED)      this.form = GenSignalForm.SINE;
+        if (form == GenSignalForm.DUAL_TONE_COMPENSATED) this.form = GenSignalForm.DUAL_TONE;
     }
 
     /** Live-updates the second tone's frequency for the
@@ -607,12 +709,13 @@ public class SignalGenerator {
             case LINEAR_SWEEP      -> linearSweepNext();
             case LOG_SWEEP         -> logSweepNext();
             case DUAL_TONE         -> ddsSine() * dualW1 + ddsSine2() * dualW2;
+            case DUAL_TONE_COMPENSATED -> ddsDualToneCompensated();
         };
         phaseAcc  += phaseInc;    // long overflow IS the 2^64 phase wrap
-        // Second accumulator only advances for DUAL_TONE.  Cheap branch
-        // — the audio loop already executed the per-form switch and
-        // form is volatile-cached locally by the JIT.
-        if (form == GenSignalForm.DUAL_TONE) {
+        // The second accumulator only advances for the two-tone forms.
+        // Cheap branch — the audio loop already executed the per-form
+        // switch and form is volatile-cached locally by the JIT.
+        if (form == GenSignalForm.DUAL_TONE || form == GenSignalForm.DUAL_TONE_COMPENSATED) {
             phaseAcc2 += phaseInc2;
         }
         return raw * amplitude;
@@ -938,9 +1041,9 @@ public class SignalGenerator {
             if (r.harmonicBins[h] > 0) validCount++;
         }
 
-        hAmpRatio = new double[validCount];
-        hNum      = new int[validCount];
-        hPhiInit  = new double[validCount];
+        double[] amp   = new double[validCount];
+        int[]    hNums = new int[validCount];
+        double[] phis  = new double[validCount];
 
         int i = 0;
         for (int h = 0; h < r.harmonicCount; h++) {
@@ -953,9 +1056,9 @@ public class SignalGenerator {
             int    hNumber  = h + 2;
 
             double phiInit = phiH + freqHz * delayRadPerHz;
-            hAmpRatio[i]   = ampRatio;
-            hNum[i]        = hNumber;
-            hPhiInit[i]    = phiInit;
+            amp[i]   = ampRatio;
+            hNums[i] = hNumber;
+            phis[i]  = phiInit;
             log.info("Harmonic compensation H{}: {} Hz  {} dBFS  phi_meas {} deg  phi_init {} deg",
                     hNumber,
                     String.format(Locale.US, "%.3f", freqHz),
@@ -964,6 +1067,7 @@ public class SignalGenerator {
                     String.format(Locale.US, "%.2f", Math.toDegrees(phiInit)));
             i++;
         }
+        this.comp = new Compensation(amp, hNums, phis);
         log.info("Harmonic compensation: {} harmonic(s) loaded from FFT result", validCount);
     }
 
@@ -1034,19 +1138,19 @@ public class SignalGenerator {
                 (double) sampleRate);
 
         int n     = list.size();
-        hAmpRatio = new double[n];
-        hNum      = new int[n];
-        hPhiInit  = new double[n];
+        double[] amp   = new double[n];
+        int[]    hNums = new int[n];
+        double[] phis  = new double[n];
         for (int i = 0; i < n; i++) {
             double[] h    = list.get(i);
-            hAmpRatio[i]  = h[0];
+            amp[i]        = h[0];
             double phiH   = h[1];
             double freqHz = h[2];
             int    hNumber = (int) h[3];   // harmonic number: 2, 3, 4, …
 
             double phiInit = phiH + freqHz * delayRadPerHz;
-            hNum[i]        = hNumber;
-            hPhiInit[i]    = phiInit;
+            hNums[i]      = hNumber;
+            phis[i]       = phiInit;
             log.info("Harmonic compensation H{}: {} Hz  {} dBFS  phi_meas {} deg  phi_init {} deg",
                     hNumber,
                     String.format(Locale.US, "%.3f", freqHz),
@@ -1054,7 +1158,87 @@ public class SignalGenerator {
                     String.format(Locale.US, "%.2f", Math.toDegrees(phiH)),
                     String.format(Locale.US, "%.2f", Math.toDegrees(phiInit)));
         }
+        this.comp = new Compensation(amp, hNums, phis);
         log.info("Harmonic compensation: {} harmonic(s) loaded from {}", n, csvPath);
+    }
+
+    /**
+     * Loads a predistortion-correction file onto this running generator and
+     * switches to the matching compensated form — the wizard's "Apply" and the
+     * relaunch path both route through here.  The file format is
+     * self-describing: a single-tone (harmonic) file's column header begins
+     * {@code harmonic;…}; a dual-tone (intermod) file's begins {@code a;b;…}.
+     *
+     * @param frequency  fundamental (single-tone) frequency in Hz; ignored for
+     *                   dual-tone files (the {@code a·f₁+b·f₂} products follow
+     *                   the generator's live tone frequencies)
+     */
+    public void loadCorrectionsFromFile(String path, double frequency, int sampleRate) throws IOException {
+        if (isDualToneCorrectionFile(path)) {
+            loadIntermod(path);
+        } else {
+            loadHarmonics(frequency, sampleRate, path);
+            this.form = GenSignalForm.SINE_COMPENSATED;
+        }
+    }
+
+    /** True when {@code path}'s first non-comment line (the column header) marks
+     *  a dual-tone intermod file ({@code a;b;…}) rather than a single-tone
+     *  harmonic file ({@code harmonic;…}). */
+    private boolean isDualToneCorrectionFile(String path) throws IOException {
+        try (BufferedReader br = new BufferedReader(new FileReader(path))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty() || line.startsWith("#")) continue;
+                return line.toLowerCase(Locale.ROOT).startsWith("a;b");
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Parses a dual-tone intermod-correction file ({@code a;b;frequency_hz;…;re;im},
+     * German-locale decimals) and hot-applies it via
+     * {@link #applyDualToneCompensation}.  The stored {@code re}/{@code im} are
+     * the final correction phasor (delay already baked in during accumulation),
+     * so amplitude {@code = hypot(re,im)} and phase {@code = atan2(im,re)} apply
+     * directly — no delay re-derivation, mirroring the single-tone H1 sentinel.
+     */
+    private void loadIntermod(String path) throws IOException {
+        List<int[]>    coef = new ArrayList<>();   // [a, b]
+        List<double[]> phas = new ArrayList<>();   // [re, im]
+        try (BufferedReader br = new BufferedReader(new FileReader(path))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty() || line.startsWith("#")) continue;
+                String[] cols = line.split(";");
+                if (cols.length < 8) continue;                       // skip the header / short rows
+                char c0 = cols[0].trim().charAt(0);
+                if (!Character.isDigit(c0) && c0 != '-') continue;   // header row "a;b;…"
+                int a     = Integer.parseInt(cols[0].trim());
+                int b     = Integer.parseInt(cols[1].trim());
+                double re = Double.parseDouble(cols[6].trim().replace(',', '.'));
+                double im = Double.parseDouble(cols[7].trim().replace(',', '.'));
+                coef.add(new int[]{ a, b });
+                phas.add(new double[]{ re, im });
+            }
+        }
+        int n = coef.size();
+        double[] amp = new double[n];
+        int[]    aC  = new int[n];
+        int[]    bC  = new int[n];
+        double[] phi = new double[n];
+        for (int i = 0; i < n; i++) {
+            double re = phas.get(i)[0], im = phas.get(i)[1];
+            amp[i] = Math.hypot(re, im);
+            phi[i] = Math.atan2(im, re);
+            aC[i]  = coef.get(i)[0];
+            bC[i]  = coef.get(i)[1];
+        }
+        applyDualToneCompensation(amp, aC, bC, phi);
+        log.info("Intermod compensation: {} product(s) loaded from {}", n, path);
     }
 
     /**
@@ -1067,22 +1251,34 @@ public class SignalGenerator {
      */
     private double ddsSineCompensated() {
         double s = ddsSine();
-        if (hAmpRatio != null) {
-            if (hPhaseOff64 == null) {
-                long[] off = new long[hPhiInit.length];
-                for (int i = 0; i < off.length; i++) {
-                    double turns = hPhiInit[i] / (2.0 * Math.PI);
-                    double fracTurns = turns - Math.floor(turns);          // [0, 1)
-                    // Scale into the full 64-bit turn: ·2^63 stays inside the
-                    // signed-long range, the final <<1 doubles it to 2^64 with
-                    // the natural wrap (quantisation 2^-62 turns — irrelevant).
-                    off[i] = ((long) (fracTurns * 0x1.0p63)) << 1;
-                }
-                hPhaseOff64 = off;
+        Compensation c = comp;                 // single volatile read — atomic hot-swap
+        if (c != null) {
+            for (int i = 0; i < c.amp.length; i++) {
+                long hPhase = phaseAcc * c.hNum[i] + c.phaseOff64[i];   // wraps mod 2^64
+                s -= c.amp[i] * ddsCos(hPhase);
             }
-            for (int i = 0; i < hAmpRatio.length; i++) {
-                long hPhase = phaseAcc * hNum[i] + hPhaseOff64[i];   // wraps mod 2^64
-                s -= hAmpRatio[i] * ddsCos(hPhase);
+        }
+        return s;
+    }
+
+    /**
+     * DDS two-tone with intermodulation + harmonic compensation.
+     *
+     * <p>Emits the uncorrected dual-tone sum, then subtracts an anti-phase
+     * correction tone for every accumulated distortion product.  Each product
+     * sits at {@code a·f₁ + b·f₂}, so its phase is the same integer combination
+     * of the two accumulators — {@code a·phaseAcc + b·phaseAcc2} — formed in
+     * {@code long} arithmetic where overflow IS the 2⁶⁴ phase wrap.  This locks
+     * every correction exactly to its product frequency with no drift or
+     * beating, no matter how many samples have been generated.
+     */
+    private double ddsDualToneCompensated() {
+        double s = ddsSine() * dualW1 + ddsSine2() * dualW2;
+        DualToneComp c = dtComp;               // single volatile read — atomic hot-swap
+        if (c != null) {
+            for (int i = 0; i < c.amp.length; i++) {
+                long pPhase = phaseAcc * c.a[i] + phaseAcc2 * c.b[i] + c.phaseOff64[i];
+                s -= c.amp[i] * ddsCos(pPhase);
             }
         }
         return s;

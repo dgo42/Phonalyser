@@ -31,7 +31,8 @@ public enum GenSignalForm {
     SINE_COMPENSATED(true),
     LINEAR_SWEEP(true),
     LOG_SWEEP(true),
-    DUAL_TONE(true);
+    DUAL_TONE(true),
+    DUAL_TONE_COMPENSATED(true);
 
     /** True for waveforms with a repeating period — the noise forms are the
      *  exception.  Periodic forms truncate file exports to a whole number of
@@ -41,6 +42,15 @@ public enum GenSignalForm {
 
     private GenSignalForm(boolean periodic) {
         this.periodic = periodic;
+    }
+
+    /** True for the two-tone waveforms — plain {@link #DUAL_TONE} and its
+     *  intermod-compensated sibling {@link #DUAL_TONE_COMPENSATED}.  Drives
+     *  every "is this a two-tone signal?" branch (IMD analysis, the scope's
+     *  beat reconstruction, the generator's two-frequency block) so the
+     *  compensated form is treated exactly like the uncorrected one. */
+    public boolean isDualTone() {
+        return this == DUAL_TONE || this == DUAL_TONE_COMPENSATED;
     }
 
     public static GenSignalForm fromString(String s) {
@@ -55,8 +65,9 @@ public enum GenSignalForm {
             case "linear_sweep", "sweep", "chirp"                       -> LINEAR_SWEEP;
             case "log_sweep", "farina"                                  -> LOG_SWEEP;
             case "dual_tone", "dualtone", "twotone", "two_tone"         -> DUAL_TONE;
+            case "dual_tone_compensated", "dualtone_hmc", "twotone_hmc" -> DUAL_TONE_COMPENSATED;
             default -> throw new IllegalArgumentException("Unknown signal form: " + s +
-                    ". Valid: sine, triangle, rectangle, white_noise, pink_noise, pink_noise_linear, sine_compensated, linear_sweep, log_sweep, dual_tone");
+                    ". Valid: sine, triangle, rectangle, white_noise, pink_noise, pink_noise_linear, sine_compensated, linear_sweep, log_sweep, dual_tone, dual_tone_compensated");
         };
     }
 }
