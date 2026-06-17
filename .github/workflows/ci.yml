@@ -59,7 +59,7 @@ jobs:
         run: mvn -B -ntp -Djpackage.type=APP_IMAGE package
 
       - name: Upload app image
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: phonalyser-${{ matrix.os }}-app-image
           path: target/installer/
@@ -70,7 +70,7 @@ jobs:
       # the green-build artifact list empty.
       - name: Upload Surefire reports on failure
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: surefire-reports-${{ matrix.os }}
           path: target/surefire-reports/
