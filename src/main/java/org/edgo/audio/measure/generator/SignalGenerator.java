@@ -27,6 +27,7 @@ import java.util.Locale;
 import java.util.SplittableRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.fft.HarmonicsCsv;
@@ -75,15 +76,8 @@ public class SignalGenerator {
         }
     }
 
-    // 2^64 as a double — the phase-increment scale.  The double mantissa caps
-    // the useful increment resolution at 53 bits; the low ~11 bits of an
-    // increment are zero, which still leaves fs/2^53 ≈ 43 pHz granularity.
-    private static final double TWO_POW_64 = 1.8446744073709552E19;
-    // 2π / 2^64 — converts fractional accumulator bits to radians
-    private static final double TWO_PI_OVER_2_64 = 2.0 * Math.PI / TWO_POW_64;
-    // 2^-53 — converts the top 53 accumulator bits to a [0, 1) phase fraction
-    // (53 bits = everything a double can hold; see rectangle/triangle kernels)
-    private static final double ONE_OVER_2_53 = 0x1.0p-53;
+    // DDS phase-accumulator scale constants (TWO_POW_64 / TWO_PI_OVER_2_64 /
+    // ONE_OVER_2_53) and SQRT2 are centralised in common.Constants.
 
     // -------------------------------------------------------------------------
     // DDS state
@@ -125,12 +119,15 @@ public class SignalGenerator {
     private volatile GenSignalForm form;
     /** Linear peak amplitude [0..1].  Live-swappable via {@link #setAmplitudeVrms}. */
     private volatile double     amplitude;
-    /** DAC full-scale RMS voltage the amplitude scale divides by — injected via the
-     *  constructors and pushed by the owner on recalibration
-     *  ({@link #setDacFsVoltageRms}); the generator never reaches into Preferences
-     *  itself.  {@code volatile}: written from the UI thread, read on the audio
-     *  render thread. */
-    private volatile double     dacFsVoltageRms;
+    /** DAC full-scale PEAK amplitude voltage (= full-scale-sine RMS × √2) — the
+     *  value the amplitude scale divides by: {@code amplitude = Vrms / (this ·
+     *  rawRms)}.  Preferences persists the RMS form but hands the generator this
+     *  peak/amplitude value directly (suited for the calculation).  Injected via
+     *  the constructors and pushed by the owner on recalibration
+     *  ({@link #setDacFsVoltageAmpl}); the generator never reaches into
+     *  Preferences itself.  {@code volatile}: written from the UI thread, read on
+     *  the audio render thread. */
+    private volatile double     dacFsVoltageAmpl;
     /** Sample rate cached for live frequency / amplitude updates from the GUI. */
     private final    int        sampleRate;
     /** Duty cycle for {@link GenSignalForm#RECTANGLE} as a fraction [0.01, 0.99].  Default 50 %. */
@@ -192,7 +189,7 @@ public class SignalGenerator {
      *  Volatile: the UI thread swaps in a freshly rendered buffer on live
      *  parameter changes while the audio thread replays it. */
     @Getter
-    private volatile float[] logSweepBuffer;
+    private volatile double[] logSweepBuffer;
     /** Lead-in silent samples emitted before the sweep begins. */
     private int     logSweepLeadIn;
     /** Total samples emitted since construction (lead-in + sweep + trailing silence).
@@ -295,14 +292,14 @@ public class SignalGenerator {
      * @param frequency       output frequency in Hz (ignored for noise types)
      * @param sampleRate      sample rate in Hz
      * @param amplitudeVRms   desired output amplitude in V RMS
-     * @param dacFsVoltageRms DAC full-scale RMS voltage (the owner's calibration value)
+     * @param dacFsVoltageAmpl DAC full-scale PEAK amplitude voltage (= full-scale-sine RMS × √2)
      */
     public SignalGenerator(GenSignalForm form, double frequency, int sampleRate, double amplitudeVRms,
-                           double dacFsVoltageRms) {
+                           double dacFsVoltageAmpl) {
         this.form            = form;
         this.currentVrms     = amplitudeVRms;
-        this.dacFsVoltageRms = dacFsVoltageRms;
-        this.amplitude       = amplitudeVRms / (dacFsVoltageRms * rawRms(form));
+        this.dacFsVoltageAmpl = dacFsVoltageAmpl;
+        this.amplitude       = amplitudeVRms / (dacFsVoltageAmpl * rawRms(form));
         this.sampleRate  = sampleRate;
         this.phaseInc    = toPhaseInc(frequency);
         log.debug("DDS: form={} freq={}Hz rate={}Hz phaseInc={} amplitude={}V RMS",
@@ -314,7 +311,7 @@ public class SignalGenerator {
      *  audio frequencies sit far below Nyquist, so the product never
      *  approaches the signed-long range. */
     private long toPhaseInc(double frequencyHz) {
-        return Math.round(frequencyHz / sampleRate * TWO_POW_64);
+        return Math.round(frequencyHz / sampleRate * Constants.TWO_POW_64);
     }
 
     /**
@@ -335,8 +332,8 @@ public class SignalGenerator {
      * @param harmonicsCsvPath path to the harmonics CSV file
      */
     public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
-                           double dacFsVoltageRms, String harmonicsCsvPath) throws IOException {
-        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms, dacFsVoltageRms);
+                           double dacFsVoltageAmpl, String harmonicsCsvPath) throws IOException {
+        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms, dacFsVoltageAmpl);
         loadHarmonics(frequency, sampleRate, harmonicsCsvPath);
     }
 
@@ -352,8 +349,8 @@ public class SignalGenerator {
      * @param result        FFT analysis result containing harmonic amplitudes and phases
      */
     public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
-                           double dacFsVoltageRms, FftResult result) {
-        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms, dacFsVoltageRms);
+                           double dacFsVoltageAmpl, FftResult result) {
+        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms, dacFsVoltageAmpl);
         loadHarmonicsFromResult(frequency, sampleRate, result);
     }
 
@@ -371,8 +368,8 @@ public class SignalGenerator {
      * @param freqsHz       per-harmonic frequencies in Hz
      */
     public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
-                           double dacFsVoltageRms, double[] ampRatios, double[] phiInits, double[] freqsHz) {
-        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms, dacFsVoltageRms);
+                           double dacFsVoltageAmpl, double[] ampRatios, double[] phiInits, double[] freqsHz) {
+        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms, dacFsVoltageAmpl);
         int n = ampRatios.length;
         int[] hNums = new int[n];
         for (int i = 0; i < n; i++) {
@@ -400,11 +397,11 @@ public class SignalGenerator {
      * @param amplitudeVRms  desired output amplitude in V RMS
      */
     public SignalGenerator(double freqStart, double freqEnd, int sampleRate,
-                           int periodSamples, double amplitudeVRms, double dacFsVoltageRms) {
+                           int periodSamples, double amplitudeVRms, double dacFsVoltageAmpl) {
         this.form               = GenSignalForm.LINEAR_SWEEP;
         this.currentVrms        = amplitudeVRms;
-        this.dacFsVoltageRms    = dacFsVoltageRms;
-        this.amplitude          = amplitudeVRms / (dacFsVoltageRms * rawRms(GenSignalForm.LINEAR_SWEEP));
+        this.dacFsVoltageAmpl    = dacFsVoltageAmpl;
+        this.amplitude          = amplitudeVRms / (dacFsVoltageAmpl * rawRms(GenSignalForm.LINEAR_SWEEP));
         this.phaseInc           = 0;            // unused for sweep
         this.sampleRate         = sampleRate;
         this.sweepFreqStart     = freqStart;
@@ -438,11 +435,11 @@ public class SignalGenerator {
      * @param amplitudeVRms  sweep amplitude in V RMS
      */
     public SignalGenerator(double f0, double f1, int sweepSamples, int leadInSamples,
-                           int sampleRate, double amplitudeVRms, double dacFsVoltageRms) {
+                           int sampleRate, double amplitudeVRms, double dacFsVoltageAmpl) {
         this.form           = GenSignalForm.LOG_SWEEP;
         this.currentVrms    = amplitudeVRms;
-        this.dacFsVoltageRms = dacFsVoltageRms;
-        this.amplitude      = amplitudeVRms / (dacFsVoltageRms * rawRms(GenSignalForm.LOG_SWEEP));
+        this.dacFsVoltageAmpl = dacFsVoltageAmpl;
+        this.amplitude      = amplitudeVRms / (dacFsVoltageAmpl * rawRms(GenSignalForm.LOG_SWEEP));
         this.phaseInc       = 0;            // unused for sweep
         this.sampleRate     = sampleRate;
         this.logSweepBuffer = renderLogSweep(f0, f1, sweepSamples, sampleRate);
@@ -469,14 +466,14 @@ public class SignalGenerator {
      * <p>Both the player and the deconvolution analyzer call this so the reference
      * X(t) is byte-identical to what was sent to the DAC.
      */
-    public float[] renderLogSweep(double f0, double f1, int sweepSamples, int sampleRate) {
+    public double[] renderLogSweep(double f0, double f1, int sweepSamples, int sampleRate) {
         double T = sweepSamples / (double) sampleRate;
         double L = T / Math.log(f1 / f0);
         double K = 2.0 * Math.PI * f0 * L;
-        float[] buf = new float[sweepSamples];
+        double[] buf = new double[sweepSamples];
         for (int n = 0; n < sweepSamples; n++) {
             double t = n / (double) sampleRate;
-            buf[n] = (float) Math.sin(K * (Math.exp(t / L) - 1.0));
+            buf[n] = Math.sin(K * (Math.exp(t / L) - 1.0));
         }
         return buf;
     }
@@ -564,7 +561,7 @@ public class SignalGenerator {
         // {@link #currentVrms} is the cached "what the user dialled" and
         // gets re-divided against the new form's rawRms.
         this.form      = newForm;
-        this.amplitude = currentVrms / (dacFsVoltageRms * rawRms(newForm));
+        this.amplitude = currentVrms / (dacFsVoltageAmpl * rawRms(newForm));
     }
 
     /**
@@ -645,7 +642,7 @@ public class SignalGenerator {
         // Re-derive the amplitude scale from the cached Vrms so the
         // combined RMS stays equal to the Amplitude field's value
         // regardless of how the user splits the two tones.
-        this.amplitude = currentVrms / (dacFsVoltageRms * rawRmsForCurrentState());
+        this.amplitude = currentVrms / (dacFsVoltageAmpl * rawRmsForCurrentState());
     }
 
     /**
@@ -654,7 +651,7 @@ public class SignalGenerator {
      */
     public void setAmplitudeVrms(double amplitudeVRms) {
         this.currentVrms = amplitudeVRms;
-        this.amplitude   = amplitudeVRms / (dacFsVoltageRms * rawRms(form));
+        this.amplitude   = amplitudeVRms / (dacFsVoltageAmpl * rawRms(form));
     }
 
     /**
@@ -663,8 +660,8 @@ public class SignalGenerator {
      * generator tracks the new full-scale immediately without a restart.  The
      * owner observes the calibration preference and forwards the value here.
      */
-    public void setDacFsVoltageRms(double v) {
-        this.dacFsVoltageRms = v;
+    public void setDacFsVoltageAmpl(double v) {
+        this.dacFsVoltageAmpl = v;
         this.amplitude = currentVrms / (v * rawRms(form));
     }
 
@@ -760,7 +757,7 @@ public class SignalGenerator {
         // on live parameter changes, and indexing the field directly after
         // validating against an earlier read can index past a shorter
         // replacement (AIOOBE on the audio thread).
-        float[] buf = logSweepBuffer;
+        double[] buf = logSweepBuffer;
         if (logSweepRestart.get() && logSweepRestart.getAndSet(false)) {
             logSweepIdx = logSweepLeadIn;
         }
@@ -853,7 +850,7 @@ public class SignalGenerator {
             // makes the audio thread rewind to the start of the buffer
             // (skip lead-in) so the user doesn't get stuck halfway through
             // an outdated cycle.
-            float[] fresh = renderLogSweep(sweepFreqStart, sweepFreqEnd, samples, sampleRate);
+            double[] fresh = renderLogSweep(sweepFreqStart, sweepFreqEnd, samples, sampleRate);
             this.logSweepBuffer = fresh;
             logSweepRestart.set(true);
             reclampFadeToCycle();
@@ -912,28 +909,52 @@ public class SignalGenerator {
     // DDS waveform kernels
     // -------------------------------------------------------------------------
 
+    // Taylor correction for the fractional phase Δθ (≤ 2π/4096 ≈ 1.5e-3 rad),
+    // combined with the table-read coarse angle via the angle-addition
+    // identities.  Shared by all three DDS sine/cos kernels so the order is a
+    // single switch here instead of three copies.
+    //
+    // ORDER SWITCH — uncomment exactly ONE order in EACH helper, keeping the
+    // two helpers at the same order.  At the current TABLE_BITS the 5th order
+    // already truncates at ~2e-20 (≈ −390 dBc); 7th and 9th are headroom (and
+    // for shrinking the lookup table).
+
+    /** cos(Δθ) Taylor series; {@code dx2 = Δθ²}. */
+    private double taylorCos(double dx2) {
+        // 5th order — cos to Δθ⁴:
+        return 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0));
+        // 7th order — cos to Δθ⁶:
+        // return 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0 + dx2 * (-1.0 / 720.0)));
+        // 9th order — cos to Δθ⁸:
+        //return 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0 + dx2 * (-1.0 / 720.0 + dx2 * (1.0 / 40320.0))));
+    }
+
+    /** sin(Δθ) Taylor series; {@code dx = Δθ}, {@code dx2 = Δθ²}. */
+    private double taylorSin(double dx, double dx2) {
+        // 5th order — sin to Δθ⁵:
+        return dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0)));
+        // 7th order — sin to Δθ⁷:
+        // return dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0 + dx2 * (-1.0 / 5040.0))));
+        // 9th order — sin to Δθ⁹:
+        // return dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0 + dx2 * (-1.0 / 5040.0 + dx2 * (1.0 / 362880.0)))));
+    }
+
     /**
-     * DDS sine with 5th-order Taylor series correction (Horner-evaluated).
+     * DDS sine with switchable Taylor-series correction (Horner-evaluated;
+     * 9th order active — see {@link #taylorCos}/{@link #taylorSin}).
      *
      * Phase accumulator → top {@link #TABLE_BITS} bits select the lookup table
      * entry (coarse angle θ₀), the remaining bits carry the fractional phase
      * error Δθ (in radians, ≤ 2π/4096 ≈ 1.5e-3).
      *   sin(θ₀ + Δθ) = sin(θ₀)·cos(Δθ) + cos(θ₀)·sin(Δθ)
-     * with
-     *   cos(Δθ) ≈ 1 − Δθ²/2 + Δθ⁴/24
-     *   sin(Δθ) ≈ Δθ − Δθ³/6 + Δθ⁵/120
-     *
-     * <p>At Δθ ≤ 1.5e-3 rad the order-5 truncation error is ~2e-20 of full
-     * scale (≈ −390 dBc) — orders below double-precision ε, let alone any
-     * physical DAC.  Higher orders are pure waste on the per-sample path.
      */
     private double ddsSine() {
         int    idx  = (int) (phaseAcc >>> (64 - TABLE_BITS));   // 0 .. 4095
         long   frac = phaseAcc & ((1L << (64 - TABLE_BITS)) - 1);
-        double dx   = frac * TWO_PI_OVER_2_64;                  // fractional radians
+        double dx   = frac * Constants.TWO_PI_OVER_2_64;                  // fractional radians
         double dx2  = dx * dx;
-        double cosDx = 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0));
-        double sinDx = dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0)));
+        double cosDx = taylorCos(dx2);
+        double sinDx = taylorSin(dx, dx2);
         double sinT = SINE_TABLE[idx];
         double cosT = COS_TABLE[idx];
         return sinT * cosDx + cosT * sinDx;
@@ -948,10 +969,10 @@ public class SignalGenerator {
     private double ddsSine2() {
         int    idx  = (int) (phaseAcc2 >>> (64 - TABLE_BITS));
         long   frac = phaseAcc2 & ((1L << (64 - TABLE_BITS)) - 1);
-        double dx   = frac * TWO_PI_OVER_2_64;
+        double dx   = frac * Constants.TWO_PI_OVER_2_64;
         double dx2  = dx * dx;
-        double cosDx = 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0));
-        double sinDx = dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0)));
+        double cosDx = taylorCos(dx2);
+        double sinDx = taylorSin(dx, dx2);
         double sinT = SINE_TABLE[idx];
         double cosT = COS_TABLE[idx];
         return sinT * cosDx + cosT * sinDx;
@@ -965,7 +986,7 @@ public class SignalGenerator {
      * style test signals.
      */
     private double ddsRectangle() {
-        double frac = (phaseAcc >>> 11) * ONE_OVER_2_53;   // [0, 1) — top 53 bits (all a double holds)
+        double frac = (phaseAcc >>> 11) * Constants.ONE_OVER_2_53;   // [0, 1) — top 53 bits (all a double holds)
         return frac < rectDuty ? +1.0 : -1.0;
     }
 
@@ -978,7 +999,7 @@ public class SignalGenerator {
      * the phase domain — exact by construction.
      */
     private double ddsTriangle() {
-        double frac = (phaseAcc >>> 11) * ONE_OVER_2_53;   // [0, 1) — top 53 bits (all a double holds)
+        double frac = (phaseAcc >>> 11) * Constants.ONE_OVER_2_53;   // [0, 1) — top 53 bits (all a double holds)
         double d = triDuty;
         if (frac < d) {
             return frac / d * 2.0 - 1.0;
@@ -1291,10 +1312,10 @@ public class SignalGenerator {
     private double ddsCos(long acc) {
         int    idx  = (int) (acc >>> (64 - TABLE_BITS));
         long   frac = acc & ((1L << (64 - TABLE_BITS)) - 1);
-        double dx   = frac * TWO_PI_OVER_2_64;
+        double dx   = frac * Constants.TWO_PI_OVER_2_64;
         double dx2  = dx * dx;
-        double cosDx = 1.0 + dx2 * (-0.5 + dx2 * (1.0 / 24.0));
-        double sinDx = dx * (1.0 + dx2 * (-1.0 / 6.0 + dx2 * (1.0 / 120.0)));
+        double cosDx = taylorCos(dx2);
+        double sinDx = taylorSin(dx, dx2);
         return COS_TABLE[idx] * cosDx - SINE_TABLE[idx] * sinDx;
     }
 

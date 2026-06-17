@@ -178,7 +178,7 @@ public class FreqRespMode {
         log.info("Amplitude   : {} V RMS", amp);
         log.info("Chart       : {}x{} px", chartWidth, chartHeight);
 
-        SignalGenerator gen = new SignalGenerator(fStart, fEnd, sweepSamples, leadInSamples, sampleRate, amp, prefs.getDacFsVoltageRms());
+        SignalGenerator gen = new SignalGenerator(fStart, fEnd, sweepSamples, leadInSamples, sampleRate, amp, prefs.getDacFsVoltageAmpl());
         // One-shot sweep for the measurement: emit silence after the buffer
         // ends instead of looping a second cycle into the capture window,
         // which would alias into the deconvolution.  Hann fade-in/fade-out
@@ -196,7 +196,7 @@ public class FreqRespMode {
                 String.format(Locale.US, "%.4f", rec.left().length / (double) sampleRate));
 
         if (wavOutArg != null) {
-            byte[] pcm = PcmUtils.floatStereoToBytes(rec.left(), rec.right(), bitDepth);
+            byte[] pcm = PcmUtils.stereoToBytes(rec.left(), rec.right(), bitDepth);
             try (WavWriter w = new WavWriter(new File(wavOutArg), sampleRate, 2, bitDepth, false)) {
                 w.writeRaw(pcm, pcm.length);
             }
@@ -206,7 +206,7 @@ public class FreqRespMode {
         // Parallel deconvolution: L and R share the same reference sweep
         // but compute independently, so they run on separate futures off
         // the common ForkJoin pool.
-        float[] sweepRef = gen.getLogSweepBuffer();
+        double[] sweepRef = gen.getLogSweepBuffer();
         double adcFs = prefs.getAdcFsVoltageRms();
         CompletableFuture<FreqRespCalibration> calLFut = CompletableFuture.supplyAsync(
                 () -> FreqRespCalHelper.computeFromLogSweep(

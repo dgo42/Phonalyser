@@ -67,11 +67,10 @@ import lombok.extern.log4j.Log4j2;
  *       compensation builds up across iterations.
  * </ul>
  *
- * <p>Harmonics within {@code --compensation-snr-margin} dB of the noise floor
- * (default 10 dB) are skipped — they would random-walk the accumulator and
- * eventually diverge.  Stopping conditions: {@code --target-thd} reached, THD
- * grew for {@code --stop-after} consecutive iterations (default 4), or user
- * pressed Enter (manual stop offers a per-iteration pick menu).
+ * <p>Every detected harmonic is corrected — there is no noise-floor gate.
+ * Stopping conditions: {@code --target-thd} reached, THD grew for
+ * {@code --stop-after} consecutive iterations (default 4), or user pressed
+ * Enter (manual stop offers a per-iteration pick menu).
  *
  * <p>Best iteration's residual harmonics are written to {@code fft_harmonics_*.csv}
  * (input for {@code --signal sine_compensated} and {@code --deembed}); in
@@ -126,9 +125,7 @@ public class IterativeCompensateMode {
         String heightArg     = ArgParser.getArgValue(args, "--height");
         String freqRespCalArg  = ArgParser.getArgValue(args, "--cal");
         boolean calNoise     = ArgParser.hasArg(args, "--cal-noise");
-        String snrMarginArg  = ArgParser.getArgValue(args, "--compensation-snr-margin");
         String compStepArg   = ArgParser.getArgValue(args, "--compensation-step");
-        double compSnrMargin = snrMarginArg != null ? Double.parseDouble(snrMarginArg) : 10.0;
         double compStep      = compStepArg  != null ? Double.parseDouble(compStepArg)  : 1.0;
         String adcFsArg      = ArgParser.getArgValue(args, "--adc-fs-vrms");
         if (adcFsArg != null) {
@@ -220,8 +217,6 @@ public class IterativeCompensateMode {
         log.info("Accumulate : {}",        accumulate);
         log.info("Stop after : {} consecutive THD increases", stopAfter);
         if (targetThd > 0) log.info("Target THD : {} %", String.format(Locale.US, "%.8f", targetThd));
-        log.info("Comp. gate : harmonics quieter than noise floor + {} dB are skipped",
-                String.format(Locale.US, "%.1f", compSnrMargin));
         log.info("Comp. step : {} (LMS μ; 1.0 = full residual per iteration, <1 damps oscillations)",
                 String.format(Locale.US, "%.3f", compStep));
         if (freqRespCalArg != null) log.info("Frequency response cal : {}", freqRespCalArg);
@@ -259,8 +254,8 @@ public class IterativeCompensateMode {
         double[] preCorrFreqs0 = null;
         double[] preCorrDbFs0  = null;
         for (int retry = 0; ; retry++) {
-            float[] s0 = CaptureWithGenerator.run(
-                    new SignalGenerator(GenSignalForm.SINE, frequency, sampleRate, amplitude, prefs.getDacFsVoltageRms()),
+            double[] s0 = CaptureWithGenerator.run(
+                    new SignalGenerator(GenSignalForm.SINE, frequency, sampleRate, amplitude, prefs.getDacFsVoltageAmpl()),
                     outDevice, inDevice, sampleRate, bitDepth, ditherBits, duration);
             try {
                 result0 = fftAnalyzer.analyze(
@@ -313,7 +308,7 @@ public class IterativeCompensateMode {
                 String.format(Locale.US, "%.4f", amplitude));
 
         if (accumulate) {
-            comp.accumulate(result0, compSnrMargin, compStep);
+            comp.accumulate(result0, compStep);
         }
 
         FftChartExporter exporter = new FftChartExporter();
@@ -374,9 +369,9 @@ public class IterativeCompensateMode {
             for (int retry = 0; ; retry++) {
                 SignalGenerator gen = accumulate
                         ? buildAccumulatedGenerator(frequency, sampleRate, amplitude,
-                                prefs.getDacFsVoltageRms(), comp)
-                        : new SignalGenerator(frequency, sampleRate, amplitude, prefs.getDacFsVoltageRms(), lastResult);
-                float[] s = CaptureWithGenerator.run(gen,
+                                prefs.getDacFsVoltageAmpl(), comp)
+                        : new SignalGenerator(frequency, sampleRate, amplitude, prefs.getDacFsVoltageAmpl(), lastResult);
+                double[] s = CaptureWithGenerator.run(gen,
                         outDevice, inDevice, sampleRate, bitDepth, ditherBits, duration);
                 try {
                     result = fftAnalyzer.analyze(
@@ -424,7 +419,7 @@ public class IterativeCompensateMode {
             // accumulator state before this round's update.
             HarmonicCompensation applied = accumulate ? comp.copy() : null;
             if (accumulate) {
-                comp.accumulate(result, compSnrMargin, compStep);
+                comp.accumulate(result, compStep);
             }
 
             // Reuses the exporter configured for iteration 0 — same ADC full-scale.

@@ -428,11 +428,15 @@ public final class FftView extends AbstractFreqDomainView {
         Bindings.onChange(this, viewPrefs.fftLengthProperty(),           v -> resetStatistics());
         // Coherent ↔ incoherent changes the accumulator semantics — restart.
         Bindings.onChange(this, viewPrefs.fftCoherentAveragingProperty(), v -> resetStatistics());
+        // Multi-tone detect threshold reshapes which peaks count as tones, i.e.
+        // how the coherent average is de-rotated — the accumulated frames used the
+        // old grid, so restart averaging when it changes.
+        Bindings.onChange(this, viewPrefs.fftStrongToneRelDbProperty(),   v -> resetStatistics());
         // ADC re-calibration rescales every measured voltage; DAC re-calibration
         // changes the generated (loopback) signal level — either invalidates the
         // accumulated spectrum, so restart averaging on a calibration change.
         Bindings.onChange(this, viewPrefs.adcFsVoltageRmsProperty(),      v -> resetStatistics());
-        Bindings.onChange(this, viewPrefs.dacFsVoltageRmsProperty(),      v -> resetStatistics());
+        Bindings.onChange(this, viewPrefs.dacFsVoltageAmplProperty(),      v -> resetStatistics());
         // Selecting an active alignment mode (PID / FLL) resets its loop so each
         // session converges fresh; NONE deliberately resets nothing (the
         // generator stays at the stabilized frequency, the converged correction
@@ -1158,8 +1162,11 @@ public final class FftView extends AbstractFreqDomainView {
             drawDistortionBands(bgc, plot, fFreqMin, freqMax, logFreq);
             if (lastResult != null) {
                 drawSpectrum(bgc, plot, lastResult, unit, fFreqMin, freqMax, magTop, magBot, logFreq);
-                drawCalOverlay(bgc, plot, lastResult, unit, fFreqMin, freqMax,
-                        magTop, magBot, logFreq);
+                // DEBUG overlay: de-embedded calibration filter response (green line).
+                if (DebugSwitches.SHOW_CAL_OVERLAY) {
+                    drawCalOverlay(bgc, plot, lastResult, unit, fFreqMin, freqMax,
+                            magTop, magBot, logFreq);
+                }
                 // Harmonic dots are THD-mode markers — hide them when
                 // an IMD result is present (DUAL_TONE generator) so the
                 // F1/F2/dnL/dnH annotations don't compete with the

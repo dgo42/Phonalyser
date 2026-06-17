@@ -30,4 +30,20 @@ public class Constants {
      *  noise floor; zoom-in can still tighten well inside it.  The FFT range is stored
      *  and panned/zoomed/clamped in this dBFS domain; units convert only at draw time. */
     public final double MAG_FLOOR_DBFS = -300.0;
+
+    /** √2 — a sine's peak/RMS ratio.  The DAC's PEAK full-scale voltage is
+     *  {@code √2 ×} the full-scale-sine RMS the generator calibrates against. */
+    public final double SQRT2 = Math.sqrt(2.0);
+
+    /** 2⁶⁴ as a double — the DDS phase-increment scale.  The double mantissa caps
+     *  the useful increment resolution at 53 bits (low ~11 bits zero), which still
+     *  leaves fs/2⁵³ ≈ 43 pHz frequency granularity. */
+    public final double TWO_POW_64 = 1.8446744073709552E19;
+
+    /** 2π / 2⁶⁴ — converts fractional 64-bit phase-accumulator bits to radians. */
+    public final double TWO_PI_OVER_2_64 = 2.0 * Math.PI / TWO_POW_64;
+
+    /** 2⁻⁵³ — converts the top 53 phase-accumulator bits to a [0, 1) phase
+     *  fraction (53 bits = everything a double can hold). */
+    public final double ONE_OVER_2_53 = 0x1.0p-53;
 }

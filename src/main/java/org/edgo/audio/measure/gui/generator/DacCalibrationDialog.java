@@ -40,7 +40,7 @@ import java.util.function.DoubleConsumer;
  * {@link DoubleConsumer} as volts-RMS.  The owner (the generator pane's
  * Calibrate DAC button) takes the returned measurement, divides by the
  * currently-configured amplitude RMS to obtain the FS scaling error, and
- * persists the correction to {@code Preferences#getDacFsVoltageRms()}.
+ * persists the correction to {@code Preferences#getDacFsVoltageAmpl()}.
  *
  * <p>The dialog also shows the currently-configured amplitude RMS so the
  * user has both numbers (configured + measured) in front of them.  All three

@@ -103,7 +103,7 @@ public final class GeneratorPane extends AbstractPane {
     /** Upper bound for every duration-type field (s). */
     private static final double TIME_MAX_SEC = 1_000_000;
     /** Amplitude floor (Vrms) — keeps log-unit (dBV) entry finite. */
-    private static final double AMP_MIN_VRMS = 1e-6;
+    private static final double AMP_MIN_VRMS = 1e-9;
 
     /** Current dither values shown in the combo (rebuilt when output bit depth changes). */
     private int[] ditherBits;
@@ -531,7 +531,7 @@ public final class GeneratorPane extends AbstractPane {
         // --------------------------------------------------------- Amplitude
         addRowLabel(group, I18n.t("generator.amplitudeRms"));
         ampField = new NumericStepField(group, UnitFamily.AMPLITUDE,
-                AMP_MIN_VRMS, prefs.getDacFsVoltageRms(), AMP_MAX_DECIMALS, 160);
+                AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl(), AMP_MAX_DECIMALS, 160);
         ampField.setLayoutData(fillH());
         ampField.setToolTipText(I18n.t("generator.amplitudeRms.tooltip"));
         // The field holds canonical Vrms (unit parsing / display switching is
@@ -547,7 +547,7 @@ public final class GeneratorPane extends AbstractPane {
         // recompute the running generator's amplitude against it so the commanded
         // Vrms still holds (no restart, controller subscription) — the pane
         // only moves the field's ceiling with the new full-scale.
-        Bindings.onChange(group, prefs.dacFsVoltageRmsProperty(), ampField::setMax);
+        Bindings.onChange(group, prefs.dacFsVoltageAmplProperty(), ampField::setMax);
 
         // ----- Duty cycle (RECTANGLE or TRIANGLE) -----------------------
         // 1 to 99 percent with 3 decimal places.  Applies to RECTANGLE
@@ -998,21 +998,21 @@ public final class GeneratorPane extends AbstractPane {
      * currently-commanded full-scale Vrms and lets the user enter the
      * voltage actually measured at the DAC output.  On accept, the new
      * full-scale is persisted to {@link Preferences} — the generator reads
-     * {@link Preferences#getDacFsVoltageRms()} directly.
+     * {@link Preferences#getDacFsVoltageAmpl()} directly.
      */
     private void openDacCalibrationDialog() {
         Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
         if (parent == null) return;
         Preferences prefs = Preferences.instance();
         final double configuredVrms = prefs.getGenAmplitudeVrms();
-        final double oldFs          = prefs.getDacFsVoltageRms();
+        final double oldFs          = prefs.getDacFsVoltageAmpl();
         new DacCalibrationDialog(parent, configuredVrms, measuredVrms -> {
             // The DAC was commanded to output `configuredVrms` (computed
             // against the OLD DAC full-scale) and the user measured `measuredVrms`
             // at the output.  Output RMS scales linearly with FS, so the
             // true FS satisfies measured/configured = FS_true/FS_old.
             double newFs = oldFs * (measuredVrms / configuredVrms);
-            prefs.setDacFsVoltageRms(newFs);
+            prefs.setDacFsVoltageAmpl(newFs);
             // Writing the pref fires the dacFsVoltageRms binding, which recomputes
             // the running generator's amplitude against the new full-scale — so the
             // calibration takes effect immediately, without a restart.

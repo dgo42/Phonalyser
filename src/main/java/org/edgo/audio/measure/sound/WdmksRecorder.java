@@ -116,7 +116,7 @@ public class WdmksRecorder implements AudioCapture {
         int bytes  = frames * frameSize;
         byte[] buf = callbackSpare;
         callbackSpare = null;
-        if (buf == null) buf = bufferPool.poll();
+        if (buf == null) buf = bufferPool.aquire();
         if (buf == null || buf.length != bytes) {
             buf = new byte[bytes];
             poolMissAllocSinceLog.incrementAndGet();
@@ -133,7 +133,7 @@ public class WdmksRecorder implements AudioCapture {
             callbackSpare = buf;
             return PortAudio.paContinue;
         }
-        if (!queue.offer(buf)) {
+        if (!queue.release(buf)) {
             overflowCount.incrementAndGet();
             droppedFramesSinceLog.addAndGet(frames);
             callbackSpare = buf;
@@ -248,7 +248,7 @@ public class WdmksRecorder implements AudioCapture {
                 }
                 lastOverflowLogNanos = now;
             }
-            byte[] buffer = queue.poll();
+            byte[] buffer = queue.aquire();
             if (buffer == null) {
                 // Ring empty.  Park briefly so we don't busy-spin a core
                 // while waiting for the next chunk (audio period is 10–20 ms;
@@ -289,7 +289,7 @@ public class WdmksRecorder implements AudioCapture {
                     log.error("WDM-KS capture consumer listener failed (continuing): {}", th.toString(), th);
                 }
             } finally {
-                bufferPool.offer(buffer);
+                bufferPool.release(buffer);
             }
         }
     }

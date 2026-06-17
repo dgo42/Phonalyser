@@ -219,14 +219,14 @@ public class GenFftMode {
                 log.error("--harmonics-csv <file> is required for --signal sine_compensated");
                 System.exit(1);
             }
-            gen = new SignalGenerator(frequency, sampleRate, amplitude, prefs.getDacFsVoltageRms(), harmonicsCsv);
+            gen = new SignalGenerator(frequency, sampleRate, amplitude, prefs.getDacFsVoltageAmpl(), harmonicsCsv);
         } else {
             if (harmonicsCsv != null) {
                 log.warn("--harmonics-csv is only used with --signal sine_compensated; ignoring");
             }
-            gen = new SignalGenerator(form, frequency, sampleRate, amplitude, prefs.getDacFsVoltageRms());
+            gen = new SignalGenerator(form, frequency, sampleRate, amplitude, prefs.getDacFsVoltageAmpl());
         }
-        float[] samples = CaptureWithGenerator.run(gen, outDevice, inDevice,
+        double[] samples = CaptureWithGenerator.run(gen, outDevice, inDevice,
                 sampleRate, bitDepth, ditherBits, duration, weights, syncPauseSec);
 
         FftAnalyzer fftAnalyzer = new FftAnalyzer();

@@ -24,23 +24,22 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
 import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.custom.ScrolledComposite;
-import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.layout.GridData;
+import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.layout.RowLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Control;
-import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
@@ -64,11 +63,12 @@ import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.registry.UiRegistry;
+import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FftPreset;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.scope.AdcCalibrationDialog;
+import org.edgo.audio.measure.gui.widgets.PresetBar;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 
 import lombok.extern.log4j.Log4j2;
@@ -94,7 +94,7 @@ import lombok.extern.log4j.Log4j2;
  * The {@link FftView} is shared with the pane and passed in at construction.
  */
 @Log4j2
-public final class FftTabControl extends Composite {
+public final class FftTabControl extends AbstractTabControl {
 
     /** Powers-of-2 from 2^13 (8192) to 2^22 (4,194,304) with their labels. */
     private static final int[]    FFT_LENGTH_VALUES = {
@@ -114,10 +114,6 @@ public final class FftTabControl extends Composite {
     private static final int TAB_THD_SETTINGS = 1;
     private static final int TAB_CALIBRATION  = 4;
     private static final int NUM_CUSTOM_TABS  = 5;
-
-    /** Pixel height of the utility-row icons (camera screenshot, crosshair
-     *  calibrate). */
-    private static final int UTILITY_ICON_HEIGHT = 26;
 
     /** Averages presets the field's wheel / arrows jump along; ∞ = forever. */
     private static final double[] AVERAGES_SERIES =
@@ -152,16 +148,10 @@ public final class FftTabControl extends Composite {
      *  analyser lifecycle); constructor-injected by {@link FftPane}. */
     private final FftController controller;
 
-    // Image references retained so build methods past the constructor can
-    // re-use them; all instances come from the shared IconUtils cache so
-    // disposal is handled centrally.
-    private final Image cameraIcon;
-    private final Image crosshairIcon;
-
-    // ---- Tab-header tile rendering: the shared {@link TileTabFolder} owns
-    //      the renderer, spacer images, collapse, hover tooltips and tile
-    //      painting; this control only feeds it tile content (see fftTabTiles).
-    private TileTabFolder toolbarTabs;
+    // Tab-header tile rendering: the shared TileTabFolder (held by
+    // AbstractTabControl as toolbarTabs) owns the renderer, spacer images,
+    // collapse, hover tooltips and tile painting; this control only feeds it
+    // tile content (see fftTabTiles).
 
     // Widget references for preset apply/refresh — captured at build time.
     private Combo              fftLengthCombo;
@@ -189,10 +179,6 @@ public final class FftTabControl extends Composite {
     private NumericStepField   calcMaxHarmField;
     private Button             manualFundEnable;
     private NumericStepField   manualFundField;
-    private Combo              presetCombo;
-    private Button             presetSaveBtn;
-    private Button             presetLoadBtn;
-    private Button             presetDeleteBtn;
 
     /** Subscriber for {@link Events#GENERATOR_SIGNAL_CHANGED} — used
      *  only to refresh {@link #alignGenCombo}'s enabled state when the
@@ -212,13 +198,6 @@ public final class FftTabControl extends Composite {
         this.view = view;
         this.correctionStore = correctionStore;
         this.controller = controller;
-
-        IconUtils icons = IconUtils.instance();
-        Display d = parent.getDisplay();
-        this.cameraIcon    = icons.render(d, SvgPaths.CAMERA,
-                (int) Math.round(UTILITY_ICON_HEIGHT * 1.27), UTILITY_ICON_HEIGHT);
-        this.crosshairIcon = icons.render(d, SvgPaths.CROSSHAIR,
-                UTILITY_ICON_HEIGHT, UTILITY_ICON_HEIGHT);
 
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 0; gl.marginHeight = 0;
@@ -294,19 +273,6 @@ public final class FftTabControl extends Composite {
     // Pane delegation
     // -------------------------------------------------------------------------
 
-    /** Runs {@code r} after each tab-body collapse / expand so the host pane
-     *  can re-flow its own layout (the chart above reclaims the freed space). */
-    public void setCollapseRelayout(Runnable r) {
-        if (toolbarTabs != null) toolbarTabs.setCollapseRelayout(r);
-    }
-
-    /** Collapses or expands the toolbar tab body so the screenshot path can
-     *  hide the settings tabs before printing.  Delegates to the shared
-     *  {@link TileTabFolder}. */
-    public void setTabsCollapsed(boolean collapsed) {
-        if (toolbarTabs != null) toolbarTabs.setCollapsed(collapsed);
-    }
-
     /** Registers each settings tab in the component registry under
      *  {@code prefix} (e.g. {@code "multifunctional/fft/tabs"}) so automation
      *  can select a tab by path — {@code activate} expands the tab body and
@@ -321,23 +287,6 @@ public final class FftTabControl extends Composite {
         registerTab(prefix, "calibration", 4);
         registerTab(prefix, "save",        5);
         registerTab(prefix, "load",        6);
-    }
-
-    private void registerTab(String prefix, String slug, int index) {
-        if (toolbarTabs == null || index >= toolbarTabs.getItemCount()) return;
-        UiRegistry.instance().register(prefix + "/" + slug, this)
-                .onActivate(() -> {
-                    setTabsCollapsed(false);
-                    toolbarTabs.setSelection(index);
-                });
-    }
-
-    /** Overlays the tab tile rows into {@code gc} for the screenshot path —
-     *  SWT's {@code Control.print()} captures the folder's native chrome but
-     *  not the paint listener that draws the tiles, so the snapshot overlays
-     *  them by hand.  Delegates to the shared {@link TileTabFolder}. */
-    public void paintTilesInto(GC gc, Control origin) {
-        if (toolbarTabs != null) toolbarTabs.paintTilesInto(gc, origin);
     }
 
     /** Tags every interactive tab widget with a {@code "helpAnchor"} so
@@ -362,10 +311,7 @@ public final class FftTabControl extends Composite {
         if (manualFundField     != null) manualFundField    .setData("helpAnchor", "fft.html#fft-manual-fund");
         if (thdMaxHarmField     != null) thdMaxHarmField    .setData("helpAnchor", "fft.html#fft-max-harmonic-thd");
         if (calcMaxHarmField    != null) calcMaxHarmField   .setData("helpAnchor", "fft.html#fft-max-harmonic-calc");
-        if (presetCombo         != null) presetCombo        .setData("helpAnchor", "fft.html#fft-tab-presets");
-        if (presetSaveBtn       != null) presetSaveBtn      .setData("helpAnchor", "fft.html#fft-tab-presets");
-        if (presetLoadBtn       != null) presetLoadBtn      .setData("helpAnchor", "fft.html#fft-tab-presets");
-        if (presetDeleteBtn     != null) presetDeleteBtn    .setData("helpAnchor", "fft.html#fft-tab-presets");
+        // Preset bar widgets carry their own help anchor (set by PresetBar).
     }
 
     /** Enables / disables the "Stop after N" checkbox + numeric field
@@ -739,105 +685,15 @@ public final class FftTabControl extends Composite {
 
     private void buildPresetsTab(CTabFolder folder) {
         Composite g = groupCell(folder, I18n.t("fft.tab.presets"));
-        GridLayout gl = new GridLayout(4, false);
-        gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
-        g.setLayout(gl);
-        Preferences prefs = Preferences.instance();
-
-        presetCombo = new Combo(g, SWT.DROP_DOWN);
-        presetCombo.setToolTipText(I18n.t("fft.presets.combo.tooltip"));
-        GridData comboGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        comboGd.widthHint = 180;
-        presetCombo.setLayoutData(comboGd);
-        for (String name : prefs.getFftPresets().keySet()) presetCombo.add(name);
-        presetCombo.addListener(SWT.Modify,    e -> refreshPresetButtonState());
-        presetCombo.addListener(SWT.Selection, e -> refreshPresetButtonState());
-
-        presetSaveBtn = new Button(g, SWT.PUSH);
-        presetSaveBtn.setText(I18n.t("fft.presets.save"));
-        presetSaveBtn.setToolTipText(I18n.t("fft.presets.save.tooltip"));
-        presetSaveBtn.addListener(SWT.Selection, e -> {
-            String name = presetCombo.getText().trim();
-            if (name.isEmpty()) return;
-            if (prefs.getFftPresets().containsKey(name) && !confirmOverwritePreset(name)) return;
-            prefs.putFftPreset(name, captureCurrentFftPreset());
-            if (presetCombo.indexOf(name) < 0) presetCombo.add(name);
-            presetCombo.setText(name);
-            refreshPresetButtonState();
-        });
-
-        presetLoadBtn = new Button(g, SWT.PUSH);
-        presetLoadBtn.setText(I18n.t("fft.presets.load"));
-        presetLoadBtn.setToolTipText(I18n.t("fft.presets.load.tooltip"));
-        presetLoadBtn.addListener(SWT.Selection, e -> {
-            String name = presetCombo.getText().trim();
-            if (name.isEmpty()) return;
-            FftPreset p = prefs.getFftPresets().get(name);
-            if (p != null) {
-                applyFftPreset(p);
-                refreshPresetButtonState();
-            }
-        });
-
-        presetDeleteBtn = new Button(g, SWT.PUSH);
-        presetDeleteBtn.setText(I18n.t("fft.presets.delete"));
-        presetDeleteBtn.setToolTipText(I18n.t("fft.presets.delete.tooltip"));
-        presetDeleteBtn.addListener(SWT.Selection, e -> {
-            String name = presetCombo.getText().trim();
-            if (name.isEmpty() || !prefs.getFftPresets().containsKey(name)) return;
-            if (!confirmDeletePreset(name)) return;
-            prefs.removeFftPreset(name);
-            int idx = presetCombo.indexOf(name);
-            if (idx >= 0) presetCombo.remove(idx);
-            presetCombo.setText("");
-            refreshPresetButtonState();
-        });
-
-        refreshPresetButtonState();
-        Display display = g.getDisplay();
-        Runnable[] tick = { null };
-        tick[0] = () -> {
-            if (presetCombo == null || presetCombo.isDisposed()) return;
-            refreshPresetButtonState();
-            display.timerExec(500, tick[0]);
-        };
-        display.timerExec(500, tick[0]);
-    }
-
-    private void refreshPresetButtonState() {
-        if (presetCombo == null || presetCombo.isDisposed()) return;
-        if (presetSaveBtn == null || presetSaveBtn.isDisposed()) return;
-        if (presetLoadBtn == null || presetLoadBtn.isDisposed()) return;
-        if (presetDeleteBtn == null || presetDeleteBtn.isDisposed()) return;
-        String name = presetCombo.getText().trim();
-        if (name.isEmpty()) {
-            presetSaveBtn.setEnabled(false);
-            presetLoadBtn.setEnabled(false);
-            presetDeleteBtn.setEnabled(false);
-            return;
-        }
-        FftPreset existing = Preferences.instance().getFftPresets().get(name);
-        if (existing == null) {
-            presetSaveBtn.setEnabled(true);
-            presetLoadBtn.setEnabled(false);
-            presetDeleteBtn.setEnabled(false);
-        } else {
-            presetSaveBtn.setEnabled(!existing.equals(captureCurrentFftPreset()));
-            presetLoadBtn.setEnabled(true);
-            presetDeleteBtn.setEnabled(true);
-        }
-    }
-
-    private boolean confirmOverwritePreset(String name) {
-        return Dialogs.confirm(getShell(),
-                I18n.t("fft.presets.overwrite.title"),
-                I18n.t("fft.presets.overwrite.message", name)) == SWT.YES;
-    }
-
-    private boolean confirmDeletePreset(String name) {
-        return Dialogs.confirm(getShell(),
-                I18n.t("fft.presets.delete.title"),
-                I18n.t("fft.presets.delete.message", name)) == SWT.YES;
+        g.setLayout(new FillLayout());
+        new PresetBar<FftPreset>(g, "fft.presets", "fft.html#fft-tab-presets",
+                new PresetBar.Store<>() {
+                    @Override public Map<String, FftPreset> presets() { return Preferences.instance().getFftPresets(); }
+                    @Override public void put(String name, FftPreset p) { Preferences.instance().putFftPreset(name, p); }
+                    @Override public void remove(String name) { Preferences.instance().removeFftPreset(name); }
+                    @Override public FftPreset captureCurrent() { return captureCurrentFftPreset(); }
+                    @Override public void apply(FftPreset p) { applyFftPreset(p); }
+                });
     }
 
     private FftPreset captureCurrentFftPreset() {
@@ -1479,14 +1335,6 @@ public final class FftTabControl extends Composite {
     // =========================================================================
     // Helpers
     // =========================================================================
-
-    private Composite groupCell(CTabFolder folder, String title) {
-        Composite c = new Composite(folder, SWT.NONE);
-        CTabItem item = new CTabItem(folder, SWT.NONE);
-        item.setText(title);
-        item.setControl(c);
-        return c;
-    }
 
     private void addLabel(Composite parent, String text) {
         Label l = new Label(parent, SWT.NONE);

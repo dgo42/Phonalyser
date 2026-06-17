@@ -47,7 +47,7 @@ class FftAnalyzerThdTest {
         int fftSize    = 8_192;
         double freqHz  = (double) sampleRate / fftSize * 100;   // bin 100
 
-        float[] signal = pureSine(sampleRate, freqHz, 0.5, fftSize * 2);
+        double[] signal = pureSine(sampleRate, freqHz, 0.5, fftSize * 2);
 
         FftResult r = new FftAnalyzer().analyze(
                 signal, sampleRate, fftSize, 8,
@@ -70,9 +70,9 @@ class FftAnalyzerThdTest {
         double h1Amp   = 0.5;
         double h2Amp   = h1Amp * 0.01;                          // -40 dBc
 
-        float[] signal = new float[fftSize * 2];
+        double[] signal = new double[fftSize * 2];
         for (int n = 0; n < signal.length; n++) {
-            signal[n] = (float) (
+            signal[n] = (double) (
                     h1Amp * Math.sin(2.0 * Math.PI * freqHz * n / sampleRate)
                   + h2Amp * Math.sin(2.0 * Math.PI * 2 * freqHz * n / sampleRate));
         }
@@ -102,13 +102,13 @@ class FftAnalyzerThdTest {
         double[] amps = { 0.5, 0.05, 0.025, 0.0, 0.01 };
         int[]    mult = { 1,   2,    3,     4,   5    };
 
-        float[] signal = new float[fftSize * 2];
+        double[] signal = new double[fftSize * 2];
         for (int n = 0; n < signal.length; n++) {
             double s = 0;
             for (int i = 0; i < amps.length; i++) {
                 s += amps[i] * Math.sin(2.0 * Math.PI * mult[i] * freqHz * n / sampleRate);
             }
-            signal[n] = (float) s;
+            signal[n] = (double) s;
         }
 
         FftResult r = new FftAnalyzer().analyze(
@@ -130,7 +130,7 @@ class FftAnalyzerThdTest {
         // a refactor accidentally reorders constructor args.
         int sampleRate = 96_000;
         int fftSize    = 16_384;
-        float[] signal = pureSine(sampleRate, 2_000.0, 0.4, fftSize * 2);
+        double[] signal = pureSine(sampleRate, 2_000.0, 0.4, fftSize * 2);
 
         FftResult r = new FftAnalyzer().analyze(
                 signal, sampleRate, fftSize, 6,
@@ -146,10 +146,10 @@ class FftAnalyzerThdTest {
         assertEquals(false,   r.coherentAveraging);
     }
 
-    private static float[] pureSine(int sampleRate, double freqHz, double amplitude, int n) {
-        float[] sig = new float[n];
+    private static double[] pureSine(int sampleRate, double freqHz, double amplitude, int n) {
+        double[] sig = new double[n];
         for (int i = 0; i < n; i++) {
-            sig[i] = (float) (amplitude * Math.sin(2.0 * Math.PI * freqHz * i / sampleRate));
+            sig[i] = (double) (amplitude * Math.sin(2.0 * Math.PI * freqHz * i / sampleRate));
         }
         return sig;
     }

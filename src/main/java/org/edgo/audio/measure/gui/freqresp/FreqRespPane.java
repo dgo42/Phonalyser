@@ -39,14 +39,16 @@ import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.AbstractPane;
+import org.edgo.audio.measure.gui.common.AbstractTabControl;
+import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
+import org.edgo.audio.measure.gui.common.ScreenshotDialog;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
+import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.Getter;
 
@@ -249,6 +251,7 @@ public final class FreqRespPane extends AbstractPane {
         toolbarRow.setLayout(trGl);
 
         tabControl = new FreqRespTabControl(toolbarRow, view, correctionStore);
+        tabControl.setScreenshotPane(this);
         tabControl.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         // Strip double-click / Enter collapses the tab body.  The toolbar row
         // is pinned to a fixed height while expanded, so the collapse re-flow
@@ -473,5 +476,45 @@ public final class FreqRespPane extends AbstractPane {
         double frac = prefs.getFreqRespNyquistFraction();
         if (!Double.isFinite(frac) || frac <= 0.0) frac = 1.0;
         return base * frac;
+    }
+
+    @Override
+    protected AbstractTabControl tabStrip() {
+        return tabControl;
+    }
+
+    /** Builds the offscreen FreqResp clone for {@link #renderOffscreen}: fresh
+     *  pane with the live view's displayed snapshot copied in.  The tab body is
+     *  collapsed by {@link #renderOffscreen} after the clone's first expanded
+     *  layout, not here. */
+    @Override
+    protected AbstractPane createSnapshotClone(Composite parent) {
+        FreqRespPane clone = new FreqRespPane(parent);
+        clone.getView().copySnapshotFrom(view);
+        return clone;
+    }
+
+    // FreqResp shares the common screenshot-size preference (persisted like the
+    // other panes) but keeps its own save folder.
+
+    /** FreqResp's "Loaded: …" banner occupies the top-right, so the comment
+     *  caption sits a line lower than the default to clear it. */
+    @Override
+    protected int screenshotCommentTopPx() {
+        return 55;
+    }
+
+    @Override
+    protected String screenshotFolder() {
+        return Preferences.instance().getFreqRespSaveFolder();
+    }
+
+    @Override
+    protected ScreenshotDialog.FolderCommit screenshotFolderCommit() {
+        return folder -> {
+            Preferences p = Preferences.instance();
+            p.setFreqRespSaveFolder(folder);
+            p.save();
+        };
     }
 }

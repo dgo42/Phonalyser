@@ -260,9 +260,6 @@ public final class UsagePrinter {
         log.info("                              (default: each iteration uses only the latest residual)");
         log.info("    [--stop-after <n>]        stop after N consecutive THD-pct increases (default 4)");
         log.info("    [--target-thd <pct>]      stop once THD drops to or below this percent");
-        log.info("    [--compensation-snr-margin <db>]");
-        log.info("                              skip harmonics within this many dB of the noise floor");
-        log.info("                              (default 10) — prevents random-walk divergence");
         log.info("    [--compensation-step <mu>]  LMS step size, 0 < mu <= 1 (default 1.0); use 0.5");
         log.info("                              to damp oscillations (helpful with --cal)");
         log.info("    [--cal <csv>]             frequency response calibration (see --freq-response)");

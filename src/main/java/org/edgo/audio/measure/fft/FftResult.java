@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.fft;
 
+import java.util.Arrays;
+
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
@@ -311,5 +313,62 @@ public class FftResult {
             c.preCorrectionPeaks = dst;
         }
         return c;
+    }
+
+    /**
+     * Noise floor as the spectrum actually SHOWS it (dBFS): the high-percentile
+     * "top of the grass" with the fundamental, the harmonics and their skirts
+     * removed — the practical level a harmonic must clear to be measurable,
+     * well above the RMS {@link #avgNoiseFloorDbFs}.  Decays as the coherent
+     * average deepens.  {@link Double#NaN} when no spectrum is present.
+     */
+    public double noisePeakFloorDbFs() {
+        if (amplitudeDbFs == null || !(freqResolution > 0)) return Double.NaN;
+        int n = amplitudeDbFs.length;
+        boolean[] excl = new boolean[n];
+        int fundHalf = (int) Math.max(1, Math.ceil(fundamentalDynExclusionHz / freqResolution));
+        markSignalBins(excl, fundamentalBin, fundHalf);            // fundamental + its skirt
+        int harmHalf = Math.max(3, fundHalf / 8);
+        if (harmonicBins != null) {
+            for (int i = 0; i < harmonicCount && i < harmonicBins.length; i++) {
+                markSignalBins(excl, harmonicBins[i], harmHalf);   // each harmonic + its skirt
+            }
+        }
+        double[] noise = new double[n];
+        int cnt = 0;
+        for (int b = 1; b < n; b++) {
+            if (!excl[b] && Double.isFinite(amplitudeDbFs[b])) noise[cnt++] = amplitudeDbFs[b];
+        }
+        if (cnt == 0) return Double.NaN;
+        Arrays.sort(noise, 0, cnt);
+        int idx = (int) Math.min(cnt - 1, Math.round(0.999 * (cnt - 1)));   // grass peaks
+        return noise[idx];
+    }
+
+    /**
+     * Harmonic {@code i}'s level (dBFS) as ORIGINALLY measured — before any
+     * {@code .frc} de-embedding.  When a cal is loaded the displayed
+     * {@link #harmonicDbFs} is lifted by the cal, but {@link #preCorrectionPeaks}
+     * retains the raw pre-correction levels; with no cal, {@link #harmonicDbFs}
+     * is already raw.  Index 0 = H2.  {@link Double#NaN} when unavailable.
+     *
+     * <p>This is the honest measurability reference: the cal can boost a buried
+     * harmonic above the displayed floor, but its raw level is what the ADC
+     * actually captured relative to the (raw) noise grass.
+     */
+    public double rawHarmonicDbFs(int i) {
+        if (preCorrectionPeaks != null && preCorrectionPeaks.length > 1
+                && preCorrectionPeaks[1] != null && 1 + i < preCorrectionPeaks[1].length) {
+            return preCorrectionPeaks[1][1 + i];   // [1][0] = fundamental, [1][1+i] = harmonic i
+        }
+        return (harmonicDbFs != null && i < harmonicDbFs.length) ? harmonicDbFs[i] : Double.NaN;
+    }
+
+    /** Marks {@code center ± half} bins as signal (excluded from the noise set). */
+    private void markSignalBins(boolean[] excl, int center, int half) {
+        if (center <= 0) return;
+        int lo = Math.max(0, center - half);
+        int hi = Math.min(excl.length - 1, center + half);
+        for (int b = lo; b <= hi; b++) excl[b] = true;
     }
 }

@@ -161,7 +161,7 @@ public class FftAnalyzeMode {
         }
 
         long totalFrames = reader.getFrameCount();
-        float[] samples  = new float[(int) Math.min(totalFrames, Integer.MAX_VALUE)];
+        double[] samples  = new double[(int) Math.min(totalFrames, Integer.MAX_VALUE)];
         long   halfRange = 1L << (bitDepth - 1);
         AtomicInteger pos = new AtomicInteger(0);
 
@@ -172,13 +172,13 @@ public class FftAnalyzeMode {
                 double code = w != null
                         ? w.correctedCode(block[i]).ch1
                         : (double) block[i].ch1;
-                samples[n + i] = (float) ((code - halfRange) / (double) halfRange);
+                samples[n + i] = (code - halfRange) / (double) halfRange;
             }
             pos.addAndGet(block.length);
         });
 
         int actualSamples = pos.get();
-        float[] trimmed   = actualSamples < samples.length
+        double[] trimmed   = actualSamples < samples.length
                 ? Arrays.copyOf(samples, actualSamples)
                 : samples;
 

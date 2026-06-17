@@ -88,12 +88,23 @@ public final class SignalBufferReader {
     public int  getCapacity()   { return buffer.getCapacity(); }
     public long getWritePos()   { return buffer.getWritePos(); }
 
-    /** @see SignalBuffer#readLatest(int, float[], float[]) */
+    /** @see SignalBuffer#readLatest(int, double[], double[]) */
+    public int readLatest(int count, double[] outLeft, double[] outRight) {
+        return buffer.readLatest(count, outLeft, outRight);
+    }
+
+    /** @see SignalBuffer#readEndingAt(long, int, double[], double[]) */
+    public int readEndingAt(long absoluteEnd, int count, double[] outLeft, double[] outRight) {
+        return buffer.readEndingAt(absoluteEnd, count, outLeft, outRight);
+    }
+
+    /** Single-precision view of {@link #readLatest(int, double[], double[])}
+     *  for the display / WAV paths (which keep their DSP in {@code float}). */
     public int readLatest(int count, float[] outLeft, float[] outRight) {
         return buffer.readLatest(count, outLeft, outRight);
     }
 
-    /** @see SignalBuffer#readEndingAt(long, int, float[], float[]) */
+    /** Single-precision view of {@link #readEndingAt(long, int, double[], double[])}. */
     public int readEndingAt(long absoluteEnd, int count, float[] outLeft, float[] outRight) {
         return buffer.readEndingAt(absoluteEnd, count, outLeft, outRight);
     }
@@ -108,8 +119,8 @@ public final class SignalBufferReader {
         int sr  = buffer.getSampleRate();
         int cap = buffer.getCapacity();
         SignalBuffer frozen = new SignalBuffer(sr, (double) cap / sr);
-        float[] l = new float[cap];
-        float[] r = new float[cap];
+        double[] l = new double[cap];
+        double[] r = new double[cap];
         int n = buffer.readLatest(cap, l, r);
         frozen.appendBatch(l, r, n);
         return new SignalBufferReader(frozen);
@@ -153,7 +164,7 @@ public final class SignalBufferReader {
      *         has been written — or {@link #OVERRUN} if the cursor was lapped
      *         (nothing copied; re-anchor and restart any accumulation).
      */
-    public int read(int maxCount, float[] outLeft, float[] outRight) {
+    public int read(int maxCount, double[] outLeft, double[] outRight) {
         long write = buffer.getWritePos();
         if (readPos < 0) readPos = write;                       // anchor on first use
         if (readPos < write - buffer.getCapacity()) return OVERRUN;
@@ -167,6 +178,21 @@ public final class SignalBufferReader {
         // Re-check against the post-copy write position.
         if (readPos < buffer.getWritePos() - buffer.getCapacity()) return OVERRUN;
         readPos += n;                                           // consume
+        return n;
+    }
+
+    /** Single-precision view of {@link #read(int, double[], double[])} — same
+     *  consuming-cursor + overrun semantics, narrowed into {@code float} for the
+     *  WAV save path. */
+    public int read(int maxCount, float[] outLeft, float[] outRight) {
+        long write = buffer.getWritePos();
+        if (readPos < 0) readPos = write;
+        if (readPos < write - buffer.getCapacity()) return OVERRUN;
+        int n = (int) Math.min((long) maxCount, write - readPos);
+        if (n <= 0) return 0;
+        buffer.readStartingAt(readPos, n, outLeft, outRight);
+        if (readPos < buffer.getWritePos() - buffer.getCapacity()) return OVERRUN;
+        readPos += n;
         return n;
     }
 
@@ -192,6 +218,11 @@ public final class SignalBufferReader {
 
         /** Appends {@code count} decoded samples (same contract as
          *  {@link SignalBuffer#appendBatch}). */
+        public void append(double[] left, double[] right, int count) {
+            buffer.appendBatch(left, right, count);
+        }
+
+        /** Single-precision append for {@code float} file decoders. */
         public void append(float[] left, float[] right, int count) {
             buffer.appendBatch(left, right, count);
         }

@@ -188,7 +188,7 @@ public final class FreqRespAnalyzerWorker {
                     .durationSec(prefs.getFreqRespDurationSec())
                     .leadInSec(prefs.getFreqRespLeadInSec())
                     .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
-                    .dacFsVoltageRms(prefs.getDacFsVoltageRms())
+                    .dacFsVoltageRms(prefs.getDacFsVoltageAmpl())
                     .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
                     .applyCalibration(prefs.isFreqRespApplyCalibration())
                     .captureProgress(activeProgress)

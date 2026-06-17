@@ -43,10 +43,11 @@ public enum UnitFamily {
             new Unit("unit.hz",  1.0,   false, List.of("hz")),
             new Unit("unit.khz", 1e3,   false, List.of("khz"))),
 
-    /** µV / mV / V / dBV; display switches µV below 1 mV, mV below 0.5 V, V
-     *  above.  dBV sticks for display once typed — the only unit the range
-     *  switching can never choose.  Suffix-less input is V. */
-    AMPLITUDE(2,
+    /** nV / µV / mV / V / dBV; display switches nV below 1 µV, µV below 1 mV,
+     *  mV below 0.5 V, V above.  dBV sticks for display once typed — the only
+     *  unit the range switching can never choose.  Suffix-less input is V. */
+    AMPLITUDE(3,
+            new Unit("unit.nv",  1e-9,  false, List.of("nv", "n")),
             new Unit("unit.uv",  1e-6,  false, List.of("uv", "u", "µ", "μ")),
             new Unit("unit.mv",  1e-3,  false, List.of("mv", "m")),
             new Unit("unit.v",   1.0,   false, List.of("v")),
@@ -67,6 +68,7 @@ public enum UnitFamily {
     /** µV/div … V/div for the scope's vertical resolution; suffix-less input
      *  uses the unit currently displayed. */
     VOLTS_PER_DIV(-1,
+            new Unit("unit.nvdiv", 1e-9, false, List.of("nv/div", "nv", "n")),
             new Unit("unit.uvdiv", 1e-6, false, List.of("uv/div", "uv", "µv", "u", "µ", "μ")),
             new Unit("unit.mvdiv", 1e-3, false, List.of("mv/div", "mv", "m")),
             new Unit("unit.vdiv",  1.0,  false, List.of("v/div", "v"))),
@@ -119,6 +121,8 @@ public enum UnitFamily {
     private static final double KILO_SWITCH_HZ = 1e3;
     /** AMPLITUDE display switches mV → V and TIME switches ms → s here. */
     private static final double HALF_UNIT_SWITCH = 0.5;
+    /** VOLTS_PER_DIV switches nV → µV here… */
+    private static final double MICRO_SWITCH = 1e-6;
     /** Per-div families switch µx → mx here… */
     private static final double MILLI_SWITCH = 1e-3;
     /** …and mx → x here. */
@@ -140,12 +144,15 @@ public enum UnitFamily {
     public Unit displayUnit(double canonical) {
         switch (this) {
             case FREQUENCY:     return canonical < KILO_SWITCH_HZ   ? units[0] : units[1];
-            case AMPLITUDE:     return canonical < MILLI_SWITCH ? units[0]
-                                     : (canonical < HALF_UNIT_SWITCH ? units[1] : units[2]);
+            case AMPLITUDE:     return canonical < MICRO_SWITCH ? units[0]
+                                     : canonical < MILLI_SWITCH ? units[1]
+                                     : (canonical < HALF_UNIT_SWITCH ? units[2] : units[3]);
             case TIME:          return canonical < HALF_UNIT_SWITCH ? units[0] : units[1];
-            case TIME_PER_DIV:
-            case VOLTS_PER_DIV: return canonical < MILLI_SWITCH ? units[0]
+            case TIME_PER_DIV:  return canonical < MILLI_SWITCH ? units[0]
                                      : canonical < UNIT_SWITCH  ? units[1] : units[2];
+            case VOLTS_PER_DIV: return canonical < MICRO_SWITCH ? units[0]
+                                     : canonical < MILLI_SWITCH ? units[1]
+                                     : canonical < UNIT_SWITCH  ? units[2] : units[3];
             default:            return units[0];
         }
     }

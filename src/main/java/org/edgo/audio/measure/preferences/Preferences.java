@@ -36,6 +36,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.AudioBackendType;
@@ -48,6 +49,7 @@ import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
 import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.enums.TabOrientation;
 import org.yaml.snakeyaml.DumperOptions;
@@ -213,6 +215,8 @@ public final class Preferences {
     private final Property<Integer> screenshotWidth  = bound(0);
     private final Property<Integer> screenshotHeight = bound(0);
     private final Property<String>  screenshotFolder = bound(null);
+    /** Font for the screenshot comment caption as an SWT FontData string; null = system default. */
+    private final Property<String>  screenshotCommentFont = bound(null);
     /** Channel whose live samples drive the measurement table (auto-flipped to the other when this one is disabled). */
     private final Property<Channel> oscMeasurementChannel = bound(Channel.L);
     /** Toggles the measurement table's stats columns (avg/min/max/σ); the worker keeps computing them in the background regardless. */
@@ -246,11 +250,14 @@ public final class Preferences {
     @Getter
     @Setter
     private volatile boolean transientMode;
-    /** DAC full-scale RMS voltage — the voltage the DAC outputs at digital
-     *  full-scale.  Calibrated by the user via the "Calibrate DAC" button in
-     *  the generator pane and read directly by {@code SignalGenerator}.
-     *  Persisted across launches. */
-    private final Property<Double> dacFsVoltageRms = bound(2.79351);
+    /** DAC full-scale PEAK amplitude voltage (= full-scale-sine RMS × √2) — the
+     *  value the generator's amplitude scale divides by, so it is kept in this
+     *  amplitude form in memory (suited for the calculation).  It is PERSISTED
+     *  as RMS ({@code dacFsVoltageRms} in the yaml): converted ampl→RMS on save
+     *  and RMS→ampl on load, at the {@link #toMap}/{@link #fromMap} boundary.
+     *  Calibrated by the user via the "Calibrate DAC" button in the generator
+     *  pane and read directly by {@code SignalGenerator}. */
+    private final Property<Double> dacFsVoltageAmpl = bound(2.79351);
 
     /** Path to the most recently chosen scope "Save to…" file (last N seconds of capture). */
     private final Property<String> oscSavePath   = bound(null);
@@ -293,9 +300,9 @@ public final class Preferences {
     private final Property<String> genCorrectionsFile    = bound(null);
     /** Folder remembered for the generator's "browse for corrections" dialog. */
     private final Property<String> genCorrectionsFolder = bound(null);
-    /** DAC predistortion wizard: averaging duration per round (s).  Persisted so
-     *  the user's choice survives reopening the wizard and restarting the app. */
-    private final Property<Double>  predistortionDurationSec = bound(60.0);
+    /** DAC predistortion wizard: FFT averages per round.  Persisted so the
+     *  user's choice survives reopening the wizard and restarting the app. */
+    private final Property<Integer> predistortionAverages    = bound(100);
     /** DAC predistortion wizard: target distortion to stop at (%); 0 = run to stall. */
     private final Property<Double>  predistortionTargetPct   = bound(0.0);
     /** Rectangle / pulse duty cycle as a fraction in [0.001, 0.999].  Default 50 %. */
@@ -1275,6 +1282,10 @@ public final class Preferences {
     public void setScreenshotFolder(String v)  { screenshotFolder.set(v); }
     public Property<String> screenshotFolderProperty() { return screenshotFolder; }
 
+    public String getScreenshotCommentFont()       { return screenshotCommentFont.get(); }
+    public void setScreenshotCommentFont(String v) { screenshotCommentFont.set(v); }
+    public Property<String> screenshotCommentFontProperty() { return screenshotCommentFont; }
+
     public Channel getOscMeasurementChannel()  { return oscMeasurementChannel.get(); }
     public void setOscMeasurementChannel(Channel v) { oscMeasurementChannel.set(v); }
     public Property<Channel> oscMeasurementChannelProperty() { return oscMeasurementChannel; }
@@ -1355,17 +1366,17 @@ public final class Preferences {
         }
     }
 
-    public double getDacFsVoltageRms()         { return dacFsVoltageRms.get(); }
-    public void setDacFsVoltageRms(double v)   {
+    public double getDacFsVoltageAmpl()         { return dacFsVoltageAmpl.get(); }
+    public void setDacFsVoltageAmpl(double v)   {
         if (!(v > 0.0)) {
             if (log.isWarnEnabled()) {
-                log.warn("Rejecting invalid DAC full-scale {} Vrms — keeping {} Vrms", v, dacFsVoltageRms.get());
+                log.warn("Rejecting invalid DAC full-scale {} V (ampl) — keeping {} V", v, dacFsVoltageAmpl.get());
             }
             return;
         }
-        dacFsVoltageRms.set(v);
+        dacFsVoltageAmpl.set(v);
     }
-    public Property<Double> dacFsVoltageRmsProperty() { return dacFsVoltageRms; }
+    public Property<Double> dacFsVoltageAmplProperty() { return dacFsVoltageAmpl; }
 
     public String getOscSavePath()             { return oscSavePath.get(); }
     public void setOscSavePath(String v)       { oscSavePath.set(v); }
@@ -1474,8 +1485,8 @@ public final class Preferences {
     public void setGenCorrectionsFolder(String v) { genCorrectionsFolder.set(v); }
     public Property<String> genCorrectionsFolderProperty() { return genCorrectionsFolder; }
 
-    public double getPredistortionDurationSec()        { return predistortionDurationSec.get(); }
-    public void   setPredistortionDurationSec(double v) { predistortionDurationSec.set(v); }
+    public int    getPredistortionAverages()           { return predistortionAverages.get(); }
+    public void   setPredistortionAverages(int v)       { predistortionAverages.set(v); }
     public double getPredistortionTargetPct()          { return predistortionTargetPct.get(); }
     public void   setPredistortionTargetPct(double v)   { predistortionTargetPct.set(v); }
 
@@ -1702,7 +1713,8 @@ public final class Preferences {
         root.put("oscShowStats",                 oscShowStats.get());
         root.put("oscShowMeasurementTable",      oscShowMeasurementTable.get());
         root.put("adcFsVoltageRms",              adcFsVoltageRms.get());
-        root.put("dacFsVoltageRms",              dacFsVoltageRms.get());
+        // Persist as RMS (ampl ÷ √2); the in-memory value is the peak amplitude.
+        root.put("dacFsVoltageRms",              dacFsVoltageAmpl.get() / Constants.SQRT2);
         root.put("genSignalForm",                genSignalForm.get().name());
         root.put("genFrequencyHz",               genFrequencyHz.get());
         root.put("genDualToneFreq1Hz",           genDualToneFreq1Hz.get());
@@ -1713,7 +1725,7 @@ public final class Preferences {
         root.put("genDitherBits",                genDitherBits.get());
         if (genCorrectionsFile.get()    != null) root.put("genCorrectionsFile",    genCorrectionsFile.get());
         if (genCorrectionsFolder.get() != null) root.put("genCorrectionsFolder", genCorrectionsFolder.get());
-        root.put("predistortionDurationSec", predistortionDurationSec.get());
+        root.put("predistortionAverages",    predistortionAverages.get());
         root.put("predistortionTargetPct",   predistortionTargetPct.get());
         root.put("genRectangleDuty",      genRectangleDuty.get());
         root.put("genTriangleDuty",       genTriangleDuty.get());
@@ -1743,6 +1755,7 @@ public final class Preferences {
         if (screenshotWidth.get()  > 0)   root.put("screenshotWidth",  screenshotWidth.get());
         if (screenshotHeight.get() > 0)   root.put("screenshotHeight", screenshotHeight.get());
         if (screenshotFolder.get() != null) root.put("screenshotFolder", screenshotFolder.get());
+        if (screenshotCommentFont.get() != null) root.put("screenshotCommentFont", screenshotCommentFont.get());
 
         if (!oscPresets.isEmpty()) {
             Map<String, Object> presetsMap = new LinkedHashMap<>();
@@ -2000,7 +2013,8 @@ public final class Preferences {
         if (root.get("oscShowMeasurementTable")      instanceof Boolean b) oscShowMeasurementTable.set(b);
         if (root.get("adcFsVoltageRms")              instanceof Number n && n.doubleValue() > 0.0) adcFsVoltageRms.set(n.doubleValue());
         recomputeDbvOffset(adcFsVoltageRms.get());
-        if (root.get("dacFsVoltageRms")              instanceof Number n && n.doubleValue() > 0.0) dacFsVoltageRms.set(n.doubleValue());
+        // Stored as RMS; convert to the in-memory peak amplitude (× √2).
+        if (root.get("dacFsVoltageRms")              instanceof Number n && n.doubleValue() > 0.0) dacFsVoltageAmpl.set(n.doubleValue() * Constants.SQRT2);
         if (root.get("genSignalForm")                instanceof String s) genSignalForm.set(enumOr(GenSignalForm.class, s, genSignalForm.get()));
         if (root.get("genFrequencyHz")               instanceof Number n) genFrequencyHz.set(n.doubleValue());
         if (root.get("genDualToneFreq1Hz")           instanceof Number n) genDualToneFreq1Hz.set(n.doubleValue());
@@ -2011,7 +2025,7 @@ public final class Preferences {
         if (root.get("genDitherBits")                instanceof Number n) genDitherBits.set(n.intValue());
         if (root.get("genCorrectionsFile")            instanceof String s) genCorrectionsFile.set(s);
         if (root.get("genCorrectionsFolder")         instanceof String s) genCorrectionsFolder.set(s);
-        if (root.get("predistortionDurationSec")     instanceof Number n) predistortionDurationSec.set(n.doubleValue());
+        if (root.get("predistortionAverages")        instanceof Number n) predistortionAverages.set(n.intValue());
         if (root.get("predistortionTargetPct")       instanceof Number n) predistortionTargetPct.set(n.doubleValue());
         if (root.get("genRectangleDuty")             instanceof Number n) genRectangleDuty.set(n.doubleValue());
         if (root.get("genTriangleDuty")              instanceof Number n) genTriangleDuty.set(n.doubleValue());
@@ -2045,6 +2059,7 @@ public final class Preferences {
         if (root.get("screenshotWidth")              instanceof Number n) screenshotWidth.set(n.intValue());
         if (root.get("screenshotHeight")             instanceof Number n) screenshotHeight.set(n.intValue());
         if (root.get("screenshotFolder")             instanceof String s) screenshotFolder.set(s);
+        if (root.get("screenshotCommentFont")        instanceof String s) screenshotCommentFont.set(s);
 
         if (root.get("oscPresets") instanceof Map<?, ?> presetsMap) {
             oscPresets.clear();

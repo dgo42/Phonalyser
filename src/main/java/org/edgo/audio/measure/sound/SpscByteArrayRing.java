@@ -58,7 +58,7 @@ final class SpscByteArrayRing {
     }
 
     /** Producer call: returns {@code true} if accepted, {@code false} if full. */
-    boolean offer(byte[] item) {
+    boolean release(byte[] item) {
         long w = writePos;
         if (w - readPos >= slots.length) return false;
         slots[(int) (w & mask)] = item;
@@ -67,7 +67,7 @@ final class SpscByteArrayRing {
     }
 
     /** Consumer call: returns the next item or {@code null} if empty. */
-    byte[] poll() {
+    byte[] aquire() {
         long r = readPos;
         if (r >= writePos) return null;
         int idx = (int) (r & mask);

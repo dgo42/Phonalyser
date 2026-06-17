@@ -19,7 +19,7 @@
 package org.edgo.audio.measure.adc;
 
 import org.edgo.audio.measure.common.StereoSample;
-import org.edgo.audio.measure.common.StereoSampleFloat;
+import org.edgo.audio.measure.common.StereoSampleDouble;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -90,9 +90,9 @@ class WeightedBufferTest {
         b.compute(h, 8);
         b.buildCodeMap();
 
-        float prev = -1f;
+        double prev = -1.0;
         for (int code = 0; code < 256; code++) {
-            float mapped = b.correctedCode(sample(code)).ch1;
+            double mapped = b.correctedCode(sample(code)).ch1;
             assertTrue(mapped >= prev,
                     "code map must be non-decreasing: code " + code
                             + " → " + mapped + " < prev " + prev);
@@ -117,7 +117,7 @@ class WeightedBufferTest {
 
         int maxCode = (1 << bits) - 1;
         for (int code = 0; code < 256; code++) {
-            float mapped = b.correctedCode(sample(code)).ch1;
+            double mapped = b.correctedCode(sample(code)).ch1;
             assertTrue(mapped >= 0f && mapped <= maxCode + 1f,
                     "mapped code " + mapped + " out of [0, " + maxCode + "] for raw " + code);
         }
@@ -143,12 +143,12 @@ class WeightedBufferTest {
 
         // A code in the dense bottom half should map far above the diagonal
         // (its share of the CDF is huge).
-        StereoSampleFloat midLow = b.correctedCode(sample(64));
+        StereoSampleDouble midLow = b.correctedCode(sample(64));
         assertTrue(midLow.ch1 > 64,
                 "popular low code should map toward the top, got " + midLow.ch1);
         // A code in the sparse upper half should map close to where it
         // already is — the diagonal is already past the dense region.
-        StereoSampleFloat upper = b.correctedCode(sample(200));
+        StereoSampleDouble upper = b.correctedCode(sample(200));
         assertTrue(upper.ch1 > 200,
                 "sparse upper codes stay above the diagonal too, got " + upper.ch1);
     }

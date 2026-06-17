@@ -218,7 +218,7 @@ public class FftAnalyzer {
      *  local sample offset {@code localStart}.  On miss, windows +
      *  FFTs from {@code samples} and stores the result.  Always leaves
      *  {@code re} / {@code im} populated with the result. */
-    private void cachedFrameFft(float[] samples, int localStart, int fftSize,
+    private void cachedFrameFft(double[] samples, int localStart, int fftSize,
                                 double[] window, double[] re, double[] im) {
         long absStart = samplesAbsStart + localStart;
         if (frameCache != null && frameCache.tryFill(absStart, fftSize, re, im)) {
@@ -253,7 +253,7 @@ public class FftAnalyzer {
      * on their circular mean before the fit so an arbitrary fundamental phase landing
      * near ±π cannot wrap mid-segment and corrupt the slope.
      */
-    private double refineKappaOverSegment(float[] samples, double[] window, int fftSize,
+    private double refineKappaOverSegment(double[] samples, double[] window, int fftSize,
                                           int step, int bestStart, int bestLen,
                                           int refIntBin, double kCoarse) {
         final double w     = 2.0 * Math.PI * refIntBin / fftSize;
@@ -304,20 +304,20 @@ public class FftAnalyzer {
     // Analysis — backward-compatible overload (Hann, 0 % overlap)
     // =========================================================================
 
-    public FftResult analyze(float[] samples, int sampleRate,
+    public FftResult analyze(double[] samples, int sampleRate,
                                  int fftSize, int harmonicCount) {
         return analyze(samples, sampleRate, fftSize, harmonicCount,
                 WindowType.HANN, FftOverlap.PCT_0, 0.0, 0.0, true, Double.NaN);
     }
 
-    public FftResult analyze(float[] samples, int sampleRate,
+    public FftResult analyze(double[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
                                  WindowType windowType, FftOverlap overlap) {
         return analyze(samples, sampleRate, fftSize, harmonicCount,
                 windowType, overlap, 0.0, 0.0, true, Double.NaN);
     }
 
-    public FftResult analyze(float[] samples, int sampleRate,
+    public FftResult analyze(double[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
                                  WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
@@ -346,7 +346,7 @@ public class FftAnalyzer {
      * @param fundRefDbFs   known real level of the fundamental in dBFS (callers convert dBV inputs at the boundary); {@link Double#NaN} = unknown
      * @return fully populated {@link FftResult}
      */
-    public FftResult analyze(float[] samples, int sampleRate,
+    public FftResult analyze(double[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
                                  WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
@@ -362,7 +362,7 @@ public class FftAnalyzer {
      * can mutate the result (e.g. apply ADC correction) and log the final
      * numbers itself without producing a misleading uncorrected line first.
      */
-    public FftResult analyze(float[] samples, int sampleRate,
+    public FftResult analyze(double[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
                                  WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
@@ -385,11 +385,11 @@ public class FftAnalyzer {
      *
      * <p>Allocates a fresh {@link FftResult} per call — preferred for one-shot
      * CLI / test callers.  The live FFT view goes through
-     * {@link #analyze(float[], int, int, int, WindowType, FftOverlap,
-     * double, double, boolean, double, boolean, double, Result)} to write
+     * {@link #analyze(double[], int, int, int, WindowType, FftOverlap,
+     * double, double, boolean, double, boolean, double, FftResult)} to write
      * into a pre-allocated pool slot and avoid per-tick array churn.
      */
-    public FftResult analyze(float[] samples, int sampleRate,
+    public FftResult analyze(double[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
                                  WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
@@ -429,7 +429,7 @@ public class FftAnalyzer {
      * convenience.
      */
     @SuppressWarnings("unused")
-    public FftResult analyze(float[] samples, int sampleRate,
+    public FftResult analyze(double[] samples, int sampleRate,
                                  int fftSize, int harmonicCount,
                                  WindowType windowType, FftOverlap overlap,
                                  double snrFreqMin, double snrFreqMax,
@@ -1843,18 +1843,18 @@ public class FftAnalyzer {
      *  estimate the DC bias before computing the R-invariant peak amplitude
      *  — without subtracting the bias the RMS-derived peakAmp inflates by
      *  √2·DC for any signal where DC is comparable to the AC swing. */
-    private static double sampleMean(float[] samples) {
+    private double sampleMean(double[] samples) {
         double sum = 0.0;
-        for (float s : samples) sum += s;
+        for (double s : samples) sum += s;
         return sum / samples.length;
     }
 
     /** RMS of {@code samples} with the supplied {@code dcMean} subtracted
      *  beforehand.  Two-pass: caller computes {@link #sampleMean} first,
      *  then passes the result here. */
-    private static double dcRemovedRms(float[] samples, double dcMean) {
+    private double dcRemovedRms(double[] samples, double dcMean) {
         double sumSq = 0.0;
-        for (float s : samples) {
+        for (double s : samples) {
             double d = s - dcMean;
             sumSq += d * d;
         }
@@ -2126,7 +2126,7 @@ public class FftAnalyzer {
      *  detector and every frame gets rejected — so the analyser bails
      *  out of rejection entirely instead.  See the inline rationale in
      *  {@code analyze}. */
-    private static double derivativeNoiseRatio(float[] samples, double peakAmp, double omegaPerSample) {
+    private double derivativeNoiseRatio(double[] samples, double peakAmp, double omegaPerSample) {
         double sumD2Sq = 0.0;
         for (int n = 1; n < samples.length - 1; n++) {
             double d2 = (double) samples[n + 1] - 2.0 * samples[n] + samples[n - 1];

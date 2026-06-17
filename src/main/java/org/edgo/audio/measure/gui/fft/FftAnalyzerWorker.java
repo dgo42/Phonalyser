@@ -34,6 +34,8 @@ import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenChangeCause;
+import org.edgo.audio.measure.dsp.MainsFilters;
+import org.edgo.audio.measure.dsp.MainsTimeFilter;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
@@ -164,7 +166,7 @@ public final class FftAnalyzerWorker {
      *  holding a full {@code needed}-sample contiguous block; a window-size /
      *  channel change or a capture overrun invalidates it and it is rebuilt
      *  from fresh samples.  Worker-thread only (except the volatile flags). */
-    private float[] winBuf = new float[0];
+    private double[] winBuf = new double[0];
     private long    winAbsStart;
     private int     winLen;
     private int     winNeeded     = -1;     // `needed` the window was built for
@@ -178,15 +180,22 @@ public final class FftAnalyzerWorker {
     /** Reusable per-tick scratch: {@code analyzeBuf} is the analysis copy (the
      *  comb / FFT window mutate it in place, so it must not be {@link #winBuf}),
      *  {@code hopBuf} stages the fresh hop pulled from the reader each tick. */
-    private float[] analyzeBuf = new float[0];
-    private float[] hopBuf     = new float[0];
+    private double[] analyzeBuf = new double[0];
+    private double[] hopBuf     = new double[0];
 
-    /** Mains-hum comb, lazily built for the current sample rate.  Used
-     *  only when {@code fftMainsSuppression == IIR_COMB}; re-tracks the
-     *  mains frequency each tick and filters the captured window in place
-     *  before the spectrum is computed. */
+    /** Mains-hum comb, lazily built for the current sample rate.  Used only
+     *  when {@code fftMainsSuppression == IIR_COMB}: it only TRACKS the mains
+     *  frequency here (the rejection is a plot-time spectral correction in
+     *  FftView, leaving the accumulator raw — the samples are not filtered). */
     private MainsCombFilter mainsComb;
     private int             mainsCombSampleRate;
+    /** Time-domain mains filter (synchronous subtraction / LMS) applied to the
+     *  captured window IN PLACE before the FFT, for the SYNC_SUBTRACT / LMS
+     *  modes.  The IIR comb stays a plot-time spectral correction instead — see
+     *  {@code mainsF0Hz} / FftView. */
+    private MainsTimeFilter  mainsTimeFilter;
+    private MainsSuppression mainsTimeFilterMode = MainsSuppression.NONE;
+    private int              mainsTimeFilterSampleRate;
     private Thread worker;
 
     // Perf instrumentation for DebugSwitches.SHOW_FFT_ANALYZE_TIME — two
@@ -520,6 +529,19 @@ public final class FftAnalyzerWorker {
             mainsCombSampleRate = sampleRate;
         }
         return mainsComb;
+    }
+
+    /** Returns the pre-FFT time-domain mains filter for {@code mode}
+     *  (SYNC_SUBTRACT / LMS), (re)building it when the mode or sample rate
+     *  changes.  Worker-thread only. */
+    private MainsTimeFilter mainsTimeFilter(MainsSuppression mode, int sampleRate) {
+        if (mainsTimeFilter == null || mainsTimeFilterMode != mode
+                || mainsTimeFilterSampleRate != sampleRate) {
+            mainsTimeFilter = MainsFilters.of(mode, sampleRate, MainsCombFilter.DEFAULT_NOTCH_BANDWIDTH_HZ);
+            mainsTimeFilterMode = mode;
+            mainsTimeFilterSampleRate = sampleRate;
+        }
+        return mainsTimeFilter;
     }
 
     /** Drops the cross-tick accumulator.  Safe to call from any thread —
@@ -1543,7 +1565,7 @@ public final class FftAnalyzerWorker {
         if (drainSkipRemaining > 0) {
             long skipAvail = rdr.available();
             if (skipAvail > 0) {
-                int got = rdr.read((int) Math.min(skipAvail, drainSkipRemaining), null, null);
+                int got = rdr.read((int) Math.min(skipAvail, drainSkipRemaining), (double[]) null, (double[]) null);
                 if (got > 0) drainSkipRemaining -= got;
             }
             if (drainSkipRemaining > 0) {
@@ -1556,7 +1578,7 @@ public final class FftAnalyzerWorker {
             winValid       = false;
             winNeeded      = needed;
             winChannelLeft = wantLeft;
-            if (winBuf.length != needed) winBuf = new float[needed];
+            if (winBuf.length != needed) winBuf = new double[needed];
         }
 
         long avail = rdr.available();
@@ -1590,7 +1612,7 @@ public final class FftAnalyzerWorker {
             if (avail < hopSamples) {
                 return Math.max(20, msForSamples(hopSamples - (int) avail, sampleRate));
             }
-            if (hopBuf.length != hopSamples) hopBuf = new float[hopSamples];
+            if (hopBuf.length != hopSamples) hopBuf = new double[hopSamples];
             int got = rdr.read(hopSamples, wantLeft ? hopBuf : null, wantLeft ? null : hopBuf);
             if (got == SignalBufferReader.OVERRUN) { onCaptureOverrun(rdr); return IDLE_TICK_MS; }
             if (got < hopSamples) return IDLE_TICK_MS;    // gated by avail≥hop; defensive
@@ -1602,22 +1624,26 @@ public final class FftAnalyzerWorker {
 
         // Per-tick analysis copy: the comb / FFT window mutate the samples in
         // place, so the retained sliding window must NOT be handed to analyze.
-        if (analyzeBuf.length != winLen) analyzeBuf = new float[winLen];
+        if (analyzeBuf.length != winLen) analyzeBuf = new double[winLen];
         System.arraycopy(winBuf, 0, analyzeBuf, 0, winLen);
 
         // Cache invalidation: any change to fftLength / window / channel /
         // sampleRate makes previously cached raw FFTs stale.  Drop both
         // the cache AND the pool (pooled arrays would also be the wrong
         // size after an fftLength change).
-        // Mains-suppression is NOT in the fingerprint: it no longer touches the
-        // time-domain samples (it's a plot-time frequency-response correction —
-        // see applyMainsCorrection), so the cached raw frames stay valid and
-        // toggling it is a pure re-render, not an accumulator reset.
-        boolean mainsSuppress = prefs.getFftMainsSuppression() == MainsSuppression.IIR_COMB;
+        // The IIR comb is a plot-time correction (doesn't touch samples), so it
+        // stays OUT of the fingerprint.  The SYNC_SUBTRACT / LMS modes filter the
+        // samples in place before the FFT, so THEIR mode IS in the fingerprint:
+        // toggling one invalidates the raw-frame cache and resets the accumulator.
+        MainsSuppression mainsMode = prefs.getFftMainsSuppression();
+        boolean mainsSuppress   = mainsMode == MainsSuppression.IIR_COMB;          // plot-time comb
+        boolean mainsTimeDomain = mainsMode == MainsSuppression.SYNC_SUBTRACT
+                               || mainsMode == MainsSuppression.LMS;                // pre-FFT filter
         long cfgFingerprint = fftLength;
         cfgFingerprint = 31 * cfgFingerprint + sampleRate;
         cfgFingerprint = 31 * cfgFingerprint + window.ordinal();
         cfgFingerprint = 31 * cfgFingerprint + (wantLeft ? 1 : 0);
+        cfgFingerprint = 31 * cfgFingerprint + (mainsTimeDomain ? mainsMode.ordinal() : 0);
         if (cfgFingerprint != frameCacheFingerprint) {
             discardCacheAndPool();
             // Same config change invalidates the cross-tick accumulator
@@ -1640,7 +1666,7 @@ public final class FftAnalyzerWorker {
 
         // The pristine sliding window was copied into analyzeBuf above; the
         // comb / FFT window mutate this copy in place, never winBuf.
-        float[] samples = analyzeBuf;
+        double[] samples = analyzeBuf;
 
         int    calcMaxH = Math.max(9, prefs.getFftCalcMaxHarmonic()) - 1;
         double distMin  = prefs.isFftDistMinEnabled() ? prefs.getFftDistMinHz() : 0;
@@ -1680,8 +1706,21 @@ public final class FftAnalyzerWorker {
             if (mainsTrackTick++ % MAINS_TRACK_TICK_INTERVAL == 0) {
                 mainsComb(sampleRate).track(samples, Math.min(samples.length, sampleRate));
             }
+        } else if (mainsTimeDomain) {
+            // Synchronous-subtraction / LMS: remove the hum from the captured
+            // window IN PLACE before the FFT.  Both leave the test tone's
+            // amplitude and phase intact (they subtract only the additive hum),
+            // so the coherent de-rotation / average is undisturbed.  The window
+            // is filtered in double precision to preserve the measurement floor.
+            MainsTimeFilter mf = mainsTimeFilter(mainsMode, sampleRate);
+            if (mainsTrackTick++ % MAINS_TRACK_TICK_INTERVAL == 0) {
+                mf.track(samples, Math.min(samples.length, sampleRate));
+            }
+            mf.processPreservingDc(samples, samples.length, samplesAbsStart);
         }
-        analyzer.setFrameCache(frameFftCacheImpl);
+        // A pre-FFT mains filter makes each frame non-deterministic (its state
+        // adapts tick to tick), so the raw-frame cache is bypassed in that mode.
+        analyzer.setFrameCache(mainsTimeDomain ? null : frameFftCacheImpl);
 
         analyzer.setSamplesAbsStart(samplesAbsStart);
         // Dual-tone: hint the upper tone too, so the analyzer produces an

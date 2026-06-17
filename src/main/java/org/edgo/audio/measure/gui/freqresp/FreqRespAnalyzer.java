@@ -123,7 +123,7 @@ public final class FreqRespAnalyzer {
         // Parallel deconv: both channels share inputs (sweepRef, leadIn,
         // sampleRate, freqs) but compute independently, so they run on
         // separate CompletableFutures.
-        float[] sweepRef = gen.getLogSweepBuffer();
+        double[] sweepRef = gen.getLogSweepBuffer();
         CompletableFuture<FreqRespCalibration> calLFut = CompletableFuture.supplyAsync(
                 () -> FreqRespCalHelper.computeFromLogSweep(
                         rec.left(), sweepRef, leadInSamples,

@@ -96,7 +96,7 @@ class MainsCombFilterTest {
         float[] clean = hummySignal(n, 50.0, 1037.0);
         f.track(clean, FS);                            // track on first second
         float[] filtered = clean.clone();
-        f.process(filtered, n);
+        f.process(filtered, n, 0L);
 
         // Measure on the 2nd second (transient settled).
         int off = FS, len = FS;
@@ -124,7 +124,7 @@ class MainsCombFilterTest {
         f.track(clean, FS);
         float[] filtered = clean.clone();
         f.reset();
-        f.processPreservingDc(filtered, n);
+        f.processPreservingDc(filtered, n, 0L);
 
         int off = FS, len = FS;
         // Hum removed...
@@ -160,7 +160,7 @@ class MainsCombFilterTest {
         assertEquals(50.0, f0, 0.2);
         float[] filtered = clean.clone();
         f.reset();
-        f.process(filtered, n);
+        f.process(filtered, n, 0L);
         int off = FS, len = FS;
         assertTrue(dbDrop(clean, filtered, off, len, 50.0)  > 20.0, "50 Hz not rejected");
         assertTrue(dbDrop(clean, filtered, off, len, 100.0) > 25.0, "100 Hz not rejected");
@@ -173,7 +173,7 @@ class MainsCombFilterTest {
         assertFalse(f.isTuned());
         float[] sig = hummySignal(FS, 50.0, 1037.0);
         float[] copy = sig.clone();
-        f.process(copy, copy.length);                  // no track() first
+        f.process(copy, copy.length, 0L);              // no track() first
         for (int i = 0; i < sig.length; i++) {
             assertEquals(sig[i], copy[i], 0.0f);
         }

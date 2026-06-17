@@ -51,9 +51,9 @@ class FftAnalyzerSmokeTest {
         double exactFreq   = expectedBin * binWidth;
 
         int    samples    = fftSize * 2;
-        float[] signal    = new float[samples];
+        double[] signal    = new double[samples];
         for (int n = 0; n < samples; n++) {
-            signal[n] = (float) (0.5 * Math.sin(2.0 * Math.PI * exactFreq * n / sampleRate));
+            signal[n] = (double) (0.5 * Math.sin(2.0 * Math.PI * exactFreq * n / sampleRate));
         }
 
         FftAnalyzer analyzer = new FftAnalyzer();
@@ -87,9 +87,9 @@ class FftAnalyzerSmokeTest {
         double freqHz     = 1_000.0 + 0.3 * binWidth;   // 30 % into a bin
 
         int    samples    = fftSize * 3;
-        float[] signal    = new float[samples];
+        double[] signal    = new double[samples];
         for (int n = 0; n < samples; n++) {
-            signal[n] = (float) (0.5 * Math.sin(2.0 * Math.PI * freqHz * n / sampleRate));
+            signal[n] = (double) (0.5 * Math.sin(2.0 * Math.PI * freqHz * n / sampleRate));
         }
 
         FftAnalyzer analyzer = new FftAnalyzer();

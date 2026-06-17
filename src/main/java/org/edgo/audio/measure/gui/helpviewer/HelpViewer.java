@@ -183,6 +183,8 @@ public final class HelpViewer {
             "theory/generator.html",
             "theory/oscilloscope.html",
             "theory/fft.html",
+            "theory/derotation-accuracy.html",
+            "theory/dac-predistortion.html",
             "theory/freq-resp.html",
             "theory/algorithms.html",
             "external/fft-analysis.html",
@@ -229,6 +231,7 @@ public final class HelpViewer {
             "img/generator-pane.png",
             "img/oscilloscope-pane.png",
             "img/fft-pane.png",
+            "img/dac-predistortion-live.png",
     };
 
     private static volatile HelpViewer instance;

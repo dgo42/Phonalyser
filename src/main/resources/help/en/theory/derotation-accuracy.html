@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theory: De-rotation accuracy</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to Theory of operation</a></p>
+
+  <h1>De-rotation accuracy &amp; long-average stability</h1>
+
+  <h2 id="purpose">The question this page answers</h2>
+  <p>Coherent averaging only works because every captured block is rotated
+     back onto a common phase before it is summed — the
+     <a href="fft.html#kappa">per-block de-rotation</a> the
+     <a href="fft.html">FFT analyser</a> chapter describes. That rotation
+     angle is itself <em>measured</em>, so it carries a small error. The
+     natural worry: if the de-rotation angle is slightly wrong on every
+     block, does that error quietly eat into the averaged harmonic levels —
+     planting a false floor, or making the harmonics read low on a long run?</p>
+  <p>This page works the numbers. The short answer is reassuring:
+     <b>the magnitude accuracy of a coherent average is set by the bin
+     signal-to-noise ratio and the number of averages — the ordinary
+     1/√<i>n</i> law — not by the de-rotation.</b> The de-rotation's own
+     footprint on the measured levels is microscopic (micro-decibels) and,
+     crucially, it does <em>not</em> grow with averaging time, provided the
+     rotation angle is measured afresh on every block rather than integrated
+     from block to block. The rest of this page shows why, and what it costs
+     to get it wrong.</p>
+
+  <div class="note"><b>Why work this out at all.</b>  The FFT analyser aims to
+     state THD with confidence down to 10⁻⁸&nbsp;%, which means digging
+     harmonics out tens of decibels below the single-shot noise floor over
+     averages that run for hours. At that level a systematic error of a few
+     micro-dB from the de-rotation would be harmless — but a slow,
+     accumulating one would not. The distinction between "harmless and
+     constant" and "small but accumulating" is the whole point.</div>
+
+  <h2 id="setup">The worked example</h2>
+  <p>All the numbers below are for one concrete, demanding case: a faint tone
+     averaged very deeply.</p>
+  <table class="controls">
+    <tr><th>Quantity</th><th>Symbol</th><th>Value</th></tr>
+    <tr><td>Sample rate</td><td><i>f</i><sub>s</sub></td><td>384&nbsp;000 Hz</td></tr>
+    <tr><td>FFT length</td><td><i>N</i></td><td>2²¹ = 2&nbsp;097&nbsp;152</td></tr>
+    <tr><td>Block duration</td><td><i>T</i> = <i>N</i>/<i>f</i><sub>s</sub></td><td>5.46 s</td></tr>
+    <tr><td>Bin spacing</td><td>Δ<i>f</i> = <i>f</i><sub>s</sub>/<i>N</i></td><td>0.183 Hz</td></tr>
+    <tr><td>Tone</td><td><i>f</i><sub>0</sub></td><td>1000 Hz, bin-snapped</td></tr>
+    <tr><td>Residual drift</td><td>δ<i>f</i></td><td>±0.06 ppm ≈ ±60 µHz</td></tr>
+    <tr><td>Tone level</td><td>—</td><td>−80 dBV</td></tr>
+    <tr><td>Per-bin noise floor</td><td>—</td><td>−145 dBV (per bin)</td></tr>
+  </table>
+  <p>The quantity that decides everything is each line's <b>per-bin
+     signal-to-noise ratio</b> ρ — the tone or harmonic energy in its bin
+     against the noise energy in that same bin. For this example the
+     fundamental and the first two measurable harmonics sit at:</p>
+  <table class="controls">
+    <tr><th>Line</th><th>Level</th><th>Per-bin SNR ρ</th></tr>
+    <tr><td>Fundamental</td><td>−80 dBV</td><td>3.2×10⁶ (65 dB)</td></tr>
+    <tr><td>2nd harmonic</td><td>−130 dBV</td><td>31.6 (15 dB)</td></tr>
+    <tr><td>3rd harmonic</td><td>−135 dBV</td><td>10 (10 dB)</td></tr>
+  </table>
+  <p>Higher harmonics here sit below the per-bin floor and only emerge once
+     averaging has lowered it; the de-rotation reference is built from the
+     lines that <em>are</em> above it.</p>
+
+  <h2 id="drift">Why the angle has to be re-measured every block</h2>
+  <p>With the tone snapped exactly onto a bin and blocks read contiguously,
+     the block-to-block phase step would be zero. The few-ppm difference
+     between the DAC and ADC clocks leaves a tiny residual: the tone creeps
+     by a fraction of a bin, which shows up as a slow phase walk from one
+     block to the next of</p>
+  <div class="eq">Δφ = 2π · δ<i>f</i> · <i>T</i> ≈ 2.1×10⁻³ rad ≈ 0.12°<span class="no">(1)</span></div>
+  <p>per block within a contiguous run. The within-block frequency offset is
+     a few ten-thousandths of a bin, so the level lost to scalloping is
+     parts in 10⁷ — negligible. The drift is therefore not a magnitude
+     problem; it is a <em>walking phase</em> that the de-rotation strips block
+     by block. The regime is <b>noise-limited, not drift-limited</b> — as long
+     as the rotation angle for each block is measured on that block, not
+     predicted from the last one (the reason becomes concrete in the
+     <a href="#noncontig">non-contiguous-frames</a> section).</p>
+
+  <h2 id="angle">How accurately the de-rotation angle is known</h2>
+  <p>In one block the fundamental bin holds the tone phasor plus a noise
+     phasor. The angle read off it is the true phase plus an error whose
+     size, at high SNR, is the perpendicular noise component divided by the
+     signal amplitude:</p>
+  <div class="eq">σ<sub>θ</sub> = 1 / √(2·ρ<sub>F</sub>)
+     = 1 / √(6.3×10⁶) ≈ 4.0×10⁻⁴ rad ≈ 0.023°<span class="no">(2)</span></div>
+  <p>So a single block fixes the de-rotation angle to about <b>two-hundredths
+     of a degree</b><sup id="cite-1"><a href="#ref-crlb">[1]</a></sup>. That
+     is the precision of the whole method — and it comes almost entirely from
+     the 65 dB fundamental.</p>
+  <p>One could instead pool the fundamental <em>and</em> the harmonics: each
+     harmonic <i>h</i> rotates <i>h</i>× as fast under a timing slip, so each
+     gives an independent reading of the common drift. Combined as a
+     weighted least-squares fit, the angle variance becomes</p>
+  <div class="eq">Var(φ̂<sub>0</sub>) = 1 / (2 · Σ<sub><i>h</i></sub> <i>h</i>²·ρ<sub>h</sub>)<span class="no">(3)</span></div>
+  <p>but with a 65 dB fundamental, Σ <i>h</i>²ρ<sub>h</sub> = 3.2×10⁶ + 216 —
+     the harmonics add 0.007&nbsp;%. Pooling buys essentially nothing here;
+     <b>both methods give σ<sub>θ</sub> ≈ 0.023°</b>, fundamental-dominated.</p>
+  <div class="note"><b>The weighting is not optional.</b>  Pooling only helps
+     if each line is weighted by its own strength (∝ <i>h</i>²·ρ<sub>h</sub>).
+     The 3rd harmonic's <em>own</em> per-block phase noise is 1/√(2ρ₃) ≈ 12.8°.
+     Averaged in <em>unweighted</em>, it would inject ≈ 4° into the reference
+     and destroy the 0.023° fundamental estimate. The "harmonic must stand
+     above the noise floor" admission rule is a crude proxy for this; the
+     correct rule is to weight each line by <i>h</i>²·ρ<sub>h</sub>. Pooling
+     genuinely pays only when the fundamental is <b>deliberately
+     suppressed</b> — behind a twin-T notch — so the harmonics on the gentle
+     flank carry comparable weight (the
+     <a href="fft.html#phaseref">pooled-reference</a> case).</p></div>
+
+  <h2 id="accumulate">Does the error build up over a long average?</h2>
+  <p>This is the heart of the matter. The per-block angle error is
+     independent and zero-mean from block to block. Two very different things
+     can happen with such an error, depending entirely on <em>how the
+     reference is carried</em>:</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 290" width="100%" height="290" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="da" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+    <!-- axes -->
+    <line x1="70" y1="40"  x2="70" y2="250" stroke="#446" stroke-width="1.2"/>
+    <line x1="70" y1="145" x2="780" y2="145" stroke="#446" stroke-width="1.2" marker-end="url(#da)"/>
+    <text x="60" y="44"  text-anchor="end" fill="#557">phase</text>
+    <text x="60" y="60"  text-anchor="end" fill="#557">error</text>
+    <text x="785" y="160" text-anchor="end" fill="#557">block number →</text>
+    <text x="74" y="138" fill="#557">0</text>
+
+    <!-- bounded (absolute / closed-loop): jitter around zero -->
+    <path d="M 70 145 L 110 132 L 150 156 L 190 138 L 230 150 L 270 134 L 310 152 L 350 140 L 390 148 L 430 136 L 470 150 L 510 142 L 550 147 L 590 138 L 630 149 L 670 143 L 710 146 L 750 142"
+          fill="none" stroke="#33a" stroke-width="1.8"/>
+    <text x="120" y="120" fill="#338" font-weight="bold">measured every block (absolute / locked)</text>
+    <text x="120" y="200" fill="#338">stays bounded — errors average out,</text>
+    <text x="120" y="216" fill="#338">the deep average only stiffens</text>
+
+    <!-- random-walk (open-loop integrator): wanders away -->
+    <path d="M 70 145 L 110 150 L 150 142 L 190 154 L 230 150 L 270 162 L 310 158 L 350 172 L 390 168 L 430 184 L 470 178 L 510 196 L 550 205 L 590 200 L 630 218 L 670 226 L 710 222 L 750 238"
+          fill="none" stroke="#c33" stroke-width="1.8"/>
+    <text x="470" y="262" fill="#a33" font-weight="bold">integrated from the previous block (open loop)</text>
+    <text x="560" y="120" fill="#a33">random-walks away —</text>
+    <text x="560" y="136" fill="#a33">the tone slowly de-coheres</text>
+  </svg>
+  </div>
+
+  <ul>
+    <li><b>Measured absolutely each block</b> (or held by a closed tracking
+        loop): the errors are independent and zero-mean, so they
+        <em>average</em>. The applied per-block correction keeps its 0.023°
+        spread, but the phase of the <em>accumulated</em> tone tightens as</li>
+  </ul>
+  <div class="eq">σ<sub>θ,acc</sub>(<i>n</i>) = σ<sub>θ</sub> / √<i>n</i><span class="no">(4)</span></div>
+  <ul>
+    <li><b>Integrated from block to block</b> by a free-running counter: the
+        same small errors now <em>accumulate</em> — their variance grows in
+        proportion to the number of blocks, the reference wanders off, and
+        the tone slowly de-coheres (its level sags, worse the longer you
+        average). This is the one mechanism that <em>would</em> plant a
+        magnitude error that grows with time.</li>
+  </ul>
+  <p>The rule that follows is absolute: <b>keep the de-rotation reference
+     measured-per-block or held by a bounded loop; never let it free-run.</b>
+     Phonalyser does exactly this, which is what makes the 8–12-hour averages
+     in the <a href="fft.html#longrun">FFT chapter</a> possible.</p>
+
+  <h2 id="magnitude">What it does to the measured levels</h2>
+  <p>After de-rotation, harmonic <i>h</i> carries a residual rotation of
+     −<i>h</i>·(block error). Accumulating and expanding that small rotation
+     splits its effect into two cleanly separable parts.</p>
+
+  <h3>A constant magnitude bias — micro-decibels</h3>
+  <p>The averaged amplitude of a randomly-jittered phasor sits a hair below
+     the true amplitude:</p>
+  <div class="eq">Δ|<i>A</i><sub>h</sub>| / <i>A</i><sub>h</sub>
+     = −½ · <i>h</i>² · σ<sub>θ</sub>²<span class="no">(5)</span></div>
+  <p>For this example that is −0.69&nbsp;µdB at the fundamental, −2.7&nbsp;µdB
+     at the 2nd harmonic, −6.2&nbsp;µdB at the 3rd. It is the <em>only</em>
+     genuinely de-rotation-induced level term, it is constant (averaging
+     cannot remove it) — and at a few micro-decibels it is irrelevant.</p>
+
+  <h3>A random level error — the ordinary 1/√<i>n</i></h3>
+  <p>The additive noise in each bin also moves the measured amplitude, and
+     this is what actually limits magnitude accuracy:</p>
+  <div class="eq">σ<sub>|<i>A</i>h|</sub> / <i>A</i><sub>h</sub>
+     = 1 / √(2 · ρ<sub>h</sub> · <i>n</i>)<span class="no">(6)</span></div>
+  <p>Putting the two side by side over a range of averaging depths shows the
+     gap (1σ, in dB):</p>
+  <table class="controls">
+    <tr><th>averages <i>n</i></th><th>F — de-rot bias / random</th><th>H2 random</th><th>H3 random</th></tr>
+    <tr><td>1</td><td>−0.7 µdB / 3.5×10⁻³</td><td>1.09</td><td>1.92</td></tr>
+    <tr><td>100</td><td>−0.7 µdB / 3.5×10⁻⁴</td><td>0.109</td><td>0.194</td></tr>
+    <tr><td>1000</td><td>−0.7 µdB / 1.1×10⁻⁴</td><td>0.034</td><td>0.061</td></tr>
+    <tr><td>10000</td><td>−0.7 µdB / 3.5×10⁻⁵</td><td>0.011</td><td>0.019</td></tr>
+  </table>
+  <p>For <em>every</em> line the de-rotation bias is four to six orders of
+     magnitude below the additive-noise random error. Meanwhile the noise
+     floor itself falls by 10·log₁₀<i>n</i> — to −165/−175/−185 dBV at
+     <i>n</i> = 10²/10³/10⁴ — which is what lifts the buried harmonics into
+     view. <b>The de-rotation bias plants no floor that would block that.</b>
+     Magnitude accuracy is set by bin SNR and <i>n</i>, full stop.</p>
+
+  <h2 id="noncontig">Non-contiguous blocks after glitch rejection</h2>
+  <p>The <a href="fft.html#rejection">discontinuity detector</a> throws out
+     corrupted blocks — that filtering is precisely what lets a long average
+     converge at all, because the accumulator only ever sees clean blocks.
+     But the survivors are <em>not contiguous</em>: arbitrary gaps sit where
+     rejected blocks were dropped.</p>
+  <p>Across such a gap the tone's absolute phase has advanced by an unknown
+     whole-plus-fraction number of cycles, so the angle the next clean block
+     needs is effectively <b>uniform over the full ±180°</b> — not the
+     0.12°-per-block creep of a contiguous run. The de-rotation must cover the
+     whole circle. <b>This is harmless on one condition:</b> the angle is
+     measured afresh on each block (read directly from that block's
+     fundamental), never predicted from the previous block or carried by a
+     free-running counter — which cannot know how long the gap was. This is
+     the same caveat as before, here promoted from advisable to mandatory:
+     non-contiguous blocks <em>force</em> absolute de-rotation.</p>
+  <p>It costs nothing in coherence. The bin model is identical for any
+     absolute phase; de-rotation removes that phase exactly; only the
+     <em>estimation error</em> propagates, and its size — equation (2) — does
+     not depend on the value of the absolute angle. However wild the angles
+     are, the analysis above holds verbatim: the arbitrary absolute phase
+     washes out, the residual is pure noise. There is no harmonic
+     wrap-ambiguity either, because rotating bin <i>h</i> by <i>h</i>×(the
+     measured fundamental angle) gives the correct rotation for any amount of
+     phase wrap.</p>
+
+  <h2 id="reference">Locking to the running average — without self-poisoning</h2>
+  <p>How the fundamental de-rotation is actually formed:</p>
+  <ul>
+    <li><b>An absolute model, anchored to the first block.</b>  Each block is
+        rotated by an angle proportional to its absolute sample distance from
+        the first contributing block, using a sub-bin frequency κ pinned at
+        that first block (harmonics ride <i>h</i>× that angle). This is the
+        absolute, never-integrated rotation the sections above require.</li>
+    <li><b>The frequency refined once, over the first 24 clean blocks.</b>  The
+        de-rotated fundamental's slow phase slope is fitted across those
+        blocks — a baseline far longer than one block hop — and folded into κ
+        a single time. That fit is about a hundred times tighter than a
+        single-block peak estimate, and it kills the slow ramp that a residual
+        κ error would otherwise cause on a long average (the
+        <a href="fft.html#kappa">"why κ is fitted over the whole segment"</a>
+        point).</li>
+    <li><b>Then a gentle phase lock to the <em>deep</em> average.</b>  Each new
+        block's freshly-read fundamental phase is compared with the phase of
+        the <em>accumulated</em> tone (the √<i>m</i>-stabilised reference, not
+        the first block), and a small fraction — a tracking gain of 0.10 — of
+        the difference is folded back into the running time origin. Full
+        correction is applied only as a one-shot realignment after a genuine
+        re-sync jump.</li>
+  </ul>
+
+  <h3>Does locking to a <em>noisy</em> average poison it?</h3>
+  <p>The accumulated reference is itself an estimate — its phase variance is
+     σ<sub>θ</sub>²/<i>m</i> after <i>m</i> blocks. Could the loop fold that
+     noise into a magnitude error? No, and the bound is small and
+     <em>shrinking</em>:</p>
+  <ul>
+    <li><b>The reference stiffens, it does not drift.</b>  A new block moves
+        the accumulated angle by only ~1/<i>m</i>, so the reference locks to
+        an ever-more-stable consensus.</li>
+    <li><b>The level footprint vanishes with depth.</b>  Averaged over a run
+        of depth <i>M</i>, the reference-noise contribution to a harmonic's
+        level works out to</li>
+  </ul>
+  <div class="eq">Δ|<i>A</i><sub>h</sub>| / <i>A</i><sub>h</sub>
+     ≈ ½ · <i>h</i>² · σ<sub>θ</sub>² · (ln <i>M</i>) / <i>M</i><span class="no">(7)</span></div>
+  <ul>
+    <li>— nano-decibels at the fundamental (3×10⁻⁸ / 5×10⁻⁹ / 6×10⁻¹⁰ dB at
+        <i>M</i> = 10²/10³/10⁴), and getting smaller with depth, six orders
+        below the additive-noise random error.</li>
+    <li><b>No walk-away.</b>  The loop is driven to zero in the
+        <em>difference</em> between the fresh block and the average, but free
+        in the common mode — the whole accumulated phasor may rotate slowly as
+        one. A common rotation leaves every level and every <em>relative</em>
+        harmonic phase intact; only the reported <em>absolute</em> phase
+        wanders, which does not matter for levels or THD.</li>
+    <li><b>The low gain is the guard.</b>  At full gain the loop would fold
+        each block's whole noise into the time origin, which <em>would</em>
+        random-walk and de-cohere early-versus-late blocks. The 0.10 gain
+        low-passes it to a steady-state jitter well below σ<sub>θ</sub>; full
+        gain fires only on a real re-sync jump, where the difference is signal,
+        not noise.</li>
+  </ul>
+  <p>So the running-average reference carries noise, but its level effect
+     vanishes as (ln <i>M</i>)/<i>M</i> rather than accumulating — the total
+     bias stays the constant few-micro-dB of equation (5).</p>
+
+  <h2 id="overlap">Overlap: the effective number of averages</h2>
+  <p>The 1/√<i>n</i> law assumes <em>independent</em> blocks. Overlapping
+     blocks share samples, so their bin noise is correlated and the variance
+     does not fall as fast. The correct substitution is an <b>effective
+     independent count</b>:</p>
+  <div class="eq"><i>n</i><sub>eff</sub> = <i>n</i> / <i>F</i><sub>corr</sub>,
+     &nbsp;&nbsp; <i>F</i><sub>corr</sub> = 1 + 2·Σ<sub><i>j</i>≥1</sub> ρ<sub><i>j</i></sub><span class="no">(8)</span></div>
+  <p>where ρ<sub><i>j</i></sub> is the window's self-overlap at hop <i>j</i>,
+     non-zero only while blocks still overlap (4 neighbours at 75&nbsp;%
+     overlap, 8 at 87.5&nbsp;%, 16 at 93.75&nbsp;%). Every random-error term
+     above takes <i>n</i> → <i>n</i><sub>eff</sub>.</p>
+  <p>The striking result concerns the floor reached in a given amount of
+     <em>wall-clock time</em>. The number of blocks in time <i>T</i> is
+     <i>n</i> = <i>T</i>/((1−ov)·<i>N</i>), so the achievable noise-power
+     floor scales as NENBW·(1−ov)·<i>F</i><sub>corr</sub> — and in the
+     high-overlap limit this product collapses to a window-independent
+     identity:</p>
+  <div class="eq"><i>M</i> = NENBW · (1−ov) · <i>F</i><sub>corr</sub> → 1
+     &nbsp;&nbsp;(any window)<span class="no">(9)</span></div>
+  <p>Computed for four very different windows, the floor-per-unit-time relative
+     to the best:</p>
+  <table class="controls">
+    <tr><th>window</th><th>NENBW (bins)</th><th>75 %</th><th>87.5 %</th><th>93.75 %</th></tr>
+    <tr><td>Blackman-Harris (−92 dB)</td><td>2.00</td><td>1.00</td><td>1.00</td><td>1.00</td></tr>
+    <tr><td>Flat-top (5-term)</td><td>3.77</td><td>1.00</td><td>1.00</td><td>1.00</td></tr>
+    <tr><td>Dolph-Chebyshev (−220 dB)</td><td>2.86</td><td>1.00</td><td>1.00</td><td>1.00</td></tr>
+    <tr><td>HFT248D (−248 dB)</td><td>5.65</td><td>1.22</td><td>1.00</td><td>1.00</td></tr>
+  </table>
+  <p>Two consequences fall straight out, and they match Heinzel's recommended
+     overlaps independently<sup id="cite-2"><a href="#ref-heinzel">[2]</a></sup>:</p>
+  <ul>
+    <li><b>Above each window's recommended overlap, all four windows reach the
+        same floor in the same time.</b>  A wider main lobe (more noise per
+        block) is repaid exactly by finer decorrelated hopping. The wide
+        HFT248D only catches up by 87.5&nbsp;%; below that it pays a penalty.</li>
+    <li><b>93.75&nbsp;% buys no noise benefit over 87.5&nbsp;%</b> — the floor
+        is identical — it merely doubles the transform rate. Above the
+        recommended overlap, raising it further is pure compute waste.</li>
+  </ul>
+  <p>Reaching <i>n</i><sub>eff</sub> = 100 / 1000 / 10000 independent-equivalent
+     averages therefore takes roughly 4.5 min / 45 min / 7.6 h of capture at
+     this block length — the deep-average rows are genuinely long runs.</p>
+
+  <h2 id="window">Which window — and why it is <em>not</em> chosen for noise</h2>
+  <p>Because the floor-per-time is equal above the recommended overlap, the
+     window is chosen on the <em>other</em> two axes:</p>
+  <table class="controls">
+    <tr><th>window</th><th>NENBW</th><th>side-lobe floor</th><th>amplitude flatness</th><th>role</th></tr>
+    <tr><td>Blackman-Harris (−92 dB)</td><td>2.00</td><td>−92 dB</td><td>0.83 dB</td><td>narrowest, cheapest noise</td></tr>
+    <tr><td>Flat-top (5-term)</td><td>3.77</td><td>≈ −88 dB</td><td>±0.01 dB</td><td>amplitude accuracy off-bin</td></tr>
+    <tr><td>Dolph-Chebyshev (−220 dB)</td><td>2.86</td><td>−220 dB</td><td>—</td><td>deep uniform side-lobes</td></tr>
+    <tr><td>HFT248D (−248 dB)</td><td>5.65</td><td>−248 dB</td><td>0.0007 dB</td><td>deepest side-lobes + flat</td></tr>
+  </table>
+  <ol>
+    <li><b>Amplitude flatness is not needed here.</b>  The tone is bin-snapped
+        and drifts only a few ten-thousandths of a bin, so even
+        Blackman-Harris's 0.83 dB half-bin scallop costs parts in 10⁷ of a dB.
+        Flat-top's signature advantage is wasted on a bin-locked tone — which
+        makes the plain flat-top, with its wide main lobe and only −88 dB
+        side-lobes, the <em>worst</em> pick for this task.</li>
+    <li><b>Leakage from the −80 dBV fundamental is the real differentiator.</b>
+        For a bin-exact tone a cosine-sum window nulls at every integer
+        offset, so inter-harmonic leakage is near zero. But drift and re-sync
+        glitches push the tone a fraction of a bin off centre, and the floor
+        it then plants at distant bins is set by the side-lobe level:
+        Blackman-Harris's −92 dB puts a −172 dBV pedestal under the spectrum —
+        <em>above</em> the −185 dBV harmonics dug out at <i>n</i> = 10⁴, so it
+        could masquerade as signal. The deep-side-lobe windows put that
+        pedestal at −300 dBV and below — 130 dB of margin that guarantees a
+        dug-out harmonic is the device, not fundamental leakage.</li>
+  </ol>
+  <div class="note"><b>Recommendation: HFT248D at 87.5&nbsp;% overlap.</b>  At
+     that overlap its noise efficiency equals Blackman-Harris's, while its
+     −248 dB side-lobes immunise the faint harmonic bins against the strong
+     fundamental under real drift and glitch conditions. Dolph-Chebyshev
+     (−220 dB) at 87.5&nbsp;% is a lighter runner-up. Blackman-Harris at
+     75&nbsp;% is right <em>only</em> when compute-limited and the chain is
+     verified glitch-free and bin-locked. Plain flat-top: skip.</div>
+
+  <h2 id="bottom">Bottom line</h2>
+  <ul>
+    <li><b>The de-rotation angle</b> is known to σ<sub>θ</sub> ≈ 0.023° per
+        block (fundamental-dominated). It does not accumulate, and its level
+        footprint is a constant −<i>h</i>²·0.69&nbsp;µdB.</li>
+    <li><b>Magnitude accuracy</b> is the ordinary coherent 1/√<i>n</i> set by
+        bin SNR — the de-rotation bias is four to six orders below it and
+        plants no floor.</li>
+    <li><b>The reference must be measured-per-block or bounded by a loop</b>,
+        never free-integrated; locking to the deep average is safe because its
+        own noise costs only ½<i>h</i>²σ<sub>θ</sub>²·(ln <i>M</i>)/<i>M</i> —
+        vanishing, not accumulating.</li>
+    <li><b>Overlap</b> enters only through <i>n</i><sub>eff</sub> =
+        <i>n</i>/<i>F</i><sub>corr</sub>; above each window's recommended
+        overlap the floor reached per unit time is window- and
+        overlap-independent, so <b>HFT248D at 87.5&nbsp;%</b> is chosen for
+        side-lobe margin, not noise.</li>
+  </ul>
+
+  <h2 id="refs">References</h2>
+  <ol class="refs">
+    <li id="ref-crlb"><a href="#cite-1">1.</a>
+        The 1/√(2ρ) phase-estimation error of a tone in noise is the
+        high-SNR Cramér–Rao bound —
+        <a href="https://en.wikipedia.org/wiki/Cram%C3%A9r%E2%80%93Rao_bound">Wikipedia: Cramér–Rao bound</a>.</li>
+    <li id="ref-heinzel"><a href="#cite-2">2.</a>
+        Equivalent noise bandwidth, window self-overlap correlation and the
+        recommended-overlap values — G. Heinzel, A. Rüdiger, R. Schilling,
+        <a href="https://holometer.fnal.gov/GH_FFT.pdf">"Spectrum and spectral density estimation by the discrete Fourier transform (DFT), including a comprehensive list of window functions"</a>, 2002.</li>
+  </ol>
+
+  <p class="back"><a href="fft.html">◀ FFT analyser</a> ·
+     <a href="index.html">Theory of operation</a> ·
+     next: <a href="freq-resp.html">Frequency response ▶</a></p>
+
+</body>
+</html>

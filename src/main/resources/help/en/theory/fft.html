@@ -199,7 +199,10 @@
      gradually de-cohere and read low (the "harmonics decline on long
      captures" effect). Phonalyser refits κ by regressing the tone's phase
      across <em>every</em> block in the clean segment, a baseline hundreds of
-     times longer than one hop, so even very long averages stay coherent.</div>
+     times longer than one hop, so even very long averages stay coherent.
+     <a href="derotation-accuracy.html#reference">How precise that fit is, and
+     why its residual error does not accumulate</a>, is worked out
+     quantitatively in the de-rotation-accuracy chapter.</div>
 
   <h2 id="ongrid">Keeping the tone on the grid: snap and the FLL</h2>
   <p>De-rotation is most accurate when there is least to de-rotate. Two
@@ -512,6 +515,12 @@
      that endurance is the requirement behind the headline figure: a noise
      floor driven low enough to state THD at the 10⁻⁸ % level with
      confidence, not as a one-off lucky readout.</p>
+  <p>That the de-rotation can hold a complex average together for that long
+     without quietly corrupting the harmonic levels is not assumed — it is
+     worked out in the <a href="derotation-accuracy.html">de-rotation accuracy
+     chapter</a>, which shows the rotation-angle error stays at about 0.023°,
+     contributes only micro-decibels to the levels, and — the key point — does
+     <em>not</em> accumulate over hours of averaging.</p>
 
   <h2 id="who">Where it sits</h2>
   <p>The analyser shares one <a href="ring-buffer.html#sharedcapture">capture
@@ -554,7 +563,7 @@
 
   <p class="back"><a href="oscilloscope.html">◀ Oscilloscope</a> ·
      <a href="index.html">Theory of operation</a> ·
-     next: <a href="freq-resp.html">Frequency response ▶</a></p>
+     next: <a href="derotation-accuracy.html">De-rotation accuracy ▶</a></p>
 
 </body>
 </html>

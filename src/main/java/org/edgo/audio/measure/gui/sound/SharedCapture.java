@@ -152,26 +152,29 @@ public final class SharedCapture {
             final int frameSize   = sampleBytes * 2;   // stereo
             // Per sample we call cap.readSample (offset-binary unsigned),
             // then go through the (uL − midpoint) / midpoint conversion
-            // in double precision.  Reusable per-chunk float[] staging
-            // buffers — fed by the capture thread, then pushed in one
+            // in double precision and KEEP it double end-to-end — the whole
+            // time-domain path (this staging, the ring buffer, the FFT read
+            // buffers) is double, so no single-precision narrowing happens
+            // between the ADC word and the transform.  Reusable per-chunk
+            // staging buffers — fed by the capture thread, then pushed in one
             // synchronised appendBatch() call so the UI thread isn't
             // fighting the per-sample monitor entries.
             final long unsignedMask = (bitDepth >= 32) ? 0xFFFFFFFFL : ((1L << bitDepth) - 1);
             final double midpoint   = 1L << (bitDepth - 1);
-            final float[][] convBuf = { new float[1], new float[1] };
+            final double[][] convBuf = { new double[1], new double[1] };
             cap.setPcmBatchListener((pcm, validBytes) -> {
                 int frames = validBytes / frameSize;
                 if (convBuf[0].length < frames) {
-                    convBuf[0] = new float[frames];
-                    convBuf[1] = new float[frames];
+                    convBuf[0] = new double[frames];
+                    convBuf[1] = new double[frames];
                 }
-                float[] l = convBuf[0];
-                float[] r = convBuf[1];
+                double[] l = convBuf[0];
+                double[] r = convBuf[1];
                 for (int f = 0, o = 0; f < frames; f++, o += frameSize) {
                     long uL = ((long) cap.readSample(pcm, o)) & unsignedMask;
                     long uR = ((long) cap.readSample(pcm, o + sampleBytes)) & unsignedMask;
-                    l[f] = (float) ((uL - midpoint) / midpoint);
-                    r[f] = (float) ((uR - midpoint) / midpoint);
+                    l[f] = (uL - midpoint) / midpoint;
+                    r[f] = (uR - midpoint) / midpoint;
                 }
                 buf.appendBatch(l, r, frames);
                 MessageBus.instance().publish(Events.CAPTURE_BATCH_AVAILABLE);

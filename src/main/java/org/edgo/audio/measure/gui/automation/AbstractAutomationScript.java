@@ -404,7 +404,7 @@ public abstract class AbstractAutomationScript {
      *  settings panel. */
     protected final void collapseScopeAndFftTabs() {
         ui(() -> {
-            oscPane().setToolbarTabsCollapsed(true);
+            oscPane().setTabsCollapsed(true);
             fftPane().setTabsCollapsed(true);
         });
     }

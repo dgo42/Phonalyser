@@ -18,11 +18,10 @@
 
 package org.edgo.audio.measure.gui.fft.predistortion;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-
 import org.eclipse.swt.widgets.Display;
+import org.edgo.audio.measure.enums.AlignGenerator;
+import org.edgo.audio.measure.enums.MainsSuppression;
+import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.dsp.HarmonicCompensation;
 import org.edgo.audio.measure.dsp.HarmonicCompensation.GeneratorCorrections;
 import org.edgo.audio.measure.dsp.IntermodCompensation;
@@ -82,18 +81,25 @@ public final class PredistortionEngine {
     public interface Listener {
         /** Waiting for the FLL to settle the tone onto its bin. */
         void onAligning();
-        /** One averaging round finished — {@code result} is a private copy. */
-        void onRound(int round, double thdPct, FftResult result);
+        /** One averaging round finished — {@code result} is a private copy,
+         *  {@code averages} the number of frames it actually averaged. */
+        void onRound(int round, double thdPct, int averages, FftResult result);
         /** The loop ended.  {@code hasResult} is true when at least one
          *  non-empty correction was computed (enables Save). */
         void onFinished(StopReason reason, double bestThdPct, boolean hasResult);
     }
 
-    /** Harmonics within this many dB of the noise floor are skipped (they
-     *  would random-walk the accumulator) — matches the CLI default. */
-    private static final double SNR_MARGIN_DB     = 10.0;
     /** LMS step μ — full residual per round (CLI default). */
     private static final double COMP_STEP         = 1.0;
+    /** Ceiling on the THD0/THD averaging-count growth, so a deep convergence
+     *  can't make a single round run essentially forever (64x base = a 64x THD
+     *  improvement; the user can still Stop). */
+    private static final double MAX_AVG_GROW = 64.0;
+    /** Averaging-margin factor in the round-sizing formula (see {@link
+     *  #sizeAverages}): the target is {@code baseAverages × THD0/THD ×
+     *  EXTEND_DROP_FACTOR}, so each round averages this much beyond the bare
+     *  THD0/THD ratio to measure the shrinking residual with headroom. */
+    private static final double EXTEND_DROP_FACTOR = 0.75;
     /** Tone counts as aligned when the measured fundamental STOPS moving —
      *  consecutive frames agree to within this fraction of an FFT bin.  The
      *  test is frame-to-frame stability, NOT a match against a computed target
@@ -107,16 +113,6 @@ public final class PredistortionEngine {
     /** Settle after a live correction change before resetting statistics so
      *  the first window doesn't straddle the old signal. */
     private static final long   APPLY_SETTLE_MS   = 200;
-    /** Stall gate: stop when the best THD improved by less than this
-     *  (relative) across {@link #STALL_WINDOW} rounds. */
-    private static final double STALL_REL_FRACTION = 0.05;
-    private static final int    STALL_WINDOW       = 3;
-    /** Factor the averaging window grows by when a round more than halves the
-     *  distortion (a 2× drop earns a 2× longer next round). */
-    private static final double ROUND_GROW_FACTOR     = 2.0;
-    /** Ceiling on the adaptive growth — at most this many times the base
-     *  Duration, so a long convergence can't make a single round unbounded. */
-    private static final double MAX_ROUND_GROW_FACTOR = 8.0;
 
     private final Display             display;
     private final GeneratorController gen;
@@ -125,15 +121,17 @@ public final class PredistortionEngine {
     private final Listener            listener;
 
     private volatile boolean stopRequested;
+    /** Ends only the CURRENT averaging round early (the loop continues). */
+    private volatile boolean roundStopRequested;
     private Thread thread;
 
     /** Live phase, polled by the wizard timer. */
     @Getter private volatile Phase phase = Phase.IDLE;
     /** Current round number (0-based), polled live. */
     @Getter private volatile int   currentRound;
-    /** Wall-clock bounds of the active COLLECTING window, for the progress bar. */
-    private volatile long collectStartMs;
-    private volatile long collectEndMs;
+    /** Target FFT-average count for the active COLLECTING round — drives the
+     *  remaining-averages readout. */
+    private volatile int collectTargetAvg;
 
     /** The single-tone correction set that produced {@link #bestResult} (the
      *  lowest-distortion round), retained for saving.  {@code null} in dual-tone
@@ -158,10 +156,12 @@ public final class PredistortionEngine {
         this.listener = listener;
     }
 
-    /** Spawns the loop on a daemon thread. */
-    public void start(double durationSec, double targetThdPct) {
+    /** Spawns the loop on a daemon thread.  Each round averages {@code baseAverages}
+     *  FFT frames (more as the distortion drops), corrects the measurable
+     *  harmonics and repeats; the loop runs until the user stops it. */
+    public void start(int baseAverages, double targetThdPct) {
         stopRequested = false;
-        thread = new Thread(() -> runLoop(durationSec, targetThdPct), "predistortion-engine");
+        thread = new Thread(() -> runLoop(baseAverages, targetThdPct), "predistortion-engine");
         thread.setDaemon(true);
         thread.start();
     }
@@ -171,11 +171,18 @@ public final class PredistortionEngine {
         stopRequested = true;
     }
 
+    /** Ends the CURRENT averaging round early — the loop takes the frames
+     *  collected so far, applies the correction and continues with the next
+     *  round (unlike {@link #stop()}, which ends the whole loop). */
+    public void stopRound() {
+        roundStopRequested = true;
+    }
+
     // -------------------------------------------------------------------------
     // Loop
     // -------------------------------------------------------------------------
 
-    private void runLoop(double durationSec, double targetThdPct) {
+    private void runLoop(int baseAverages, double targetThdPct) {
         StopReason reason = StopReason.USER_STOP;
         try {
             int maxH = Math.max(1, Preferences.instance().getFftCalcMaxHarmonic());
@@ -188,7 +195,31 @@ public final class PredistortionEngine {
             HarmonicCompensation harmAppl  = dualTone ? null : harm.copy();   // empty = round 0
             IntermodCompensation imdAppl   = dualTone ? imd.copy() : null;
             double target = gen.effectiveFrequency();          // F1 emit freq — the align target
-            List<Double> distHistory = new ArrayList<>();
+
+            // Predistortion needs a deep, phase-coherent, generator-locked
+            // measurement: switch the FFT to INFINITE coherent averaging (the
+            // engine itself bounds the per-round depth via reset +
+            // completedAnalyses), take the fundamental from the generator and
+            // lock the tone with the FLL.  Window + mains suppression are only
+            // RECOMMENDED — the user's choice is left intact, with a hint logged
+            // when it isn't ideal.
+            ui(() -> {
+                Preferences p = Preferences.instance();
+                p.setFftCoherentAveraging(true);
+                p.setFftAverages(Double.POSITIVE_INFINITY);
+                p.setFftFundFromGenerator(true);
+                p.setFftAlignGenerator(AlignGenerator.FLL);
+                if (log.isInfoEnabled()) {
+                    if (p.getFftWindow() != WindowType.HFT248D) {
+                        log.info("Predistortion: FFT window is {} — HFT248D is recommended for the deepest harmonic separation.",
+                                p.getFftWindow());
+                    }
+                    if (p.getFftMainsSuppression() != MainsSuppression.NONE) {
+                        log.info("Predistortion: mains suppression is {} — recommend turning it OFF (it can notch a measured harmonic).",
+                                p.getFftMainsSuppression());
+                    }
+                }
+            });
 
             ui(() -> { if (!fft.isRecording()) fft.startRecording(); });
 
@@ -209,50 +240,49 @@ public final class PredistortionEngine {
             ui(fft::resetStatistics);                          // fresh baseline for round 0
 
             int round = 0;
-            // Adaptive averaging window: starts at the user's Duration and
-            // doubles whenever a round more than halves the distortion (the
-            // smaller residual is nearer the floor and needs deeper averaging
-            // to resolve) — capped at MAX_ROUND_GROW_FACTOR× the base.
-            double roundDuration = durationSec;
-            double prevDistPct   = Double.NaN;
+            double baselineDist = Double.NaN;   // round 0's distortion — the fixed reference
+            double prevDist     = Double.NaN;   // last completed round's distortion
             while (!stopRequested) {
                 currentRound = round;
+                // The round is seeded from how far the LAST residual fell below
+                // round 0, then keeps growing live as THIS round's residual drops
+                // further — one formula, see collectUntilAverages / sizeAverages.
                 phase = Phase.COLLECTING;
-                FftResult r = collectFor(roundDuration);
+                int maxAverages = (int) Math.round(baseAverages * MAX_AVG_GROW);
+                FftResult r = collectUntilAverages(baseAverages, baselineDist, prevDist, maxAverages);
                 if (r == null) {
                     reason = stopRequested ? StopReason.USER_STOP : StopReason.ERROR;
                     break;
                 }
+                int roundAvgDone = fft.completedAnalyses();
                 double distPct = dualTone ? imdPct(r) : r.thdPct;
-                distHistory.add(distPct);
+                if (!Double.isFinite(baselineDist) && distPct > 0.0) baselineDist = distPct;
+                prevDist = distPct;
                 if (distPct < bestThdPct) {
                     bestThdPct = distPct;
                     bestResult = r;
                     if (dualTone) bestIntermod = imdAppl.copy();
                     else          bestApplied  = harmAppl.copy();
                 }
-                if (Double.isFinite(prevDistPct) && distPct > 0.0 && distPct <= prevDistPct / 2.0) {
-                    roundDuration = Math.min(roundDuration * ROUND_GROW_FACTOR,
-                                             durationSec * MAX_ROUND_GROW_FACTOR);
-                }
-                prevDistPct = distPct;
                 final int       roundIdx = round;
                 final FftResult roundRes = r;
                 final double    roundDist = distPct;
-                on(() -> listener.onRound(roundIdx, roundDist, roundRes));
+                final int       roundAvg = roundAvgDone;
+                on(() -> listener.onRound(roundIdx, roundDist, roundAvg, roundRes));
 
+                // No auto-stop yet — the loop runs until the user clicks Stop
+                // (an optional Target THD still ends it early when set).
                 if (targetThdPct > 0 && distPct <= targetThdPct) { reason = StopReason.TARGET_REACHED; break; }
-                if (stalled(distHistory))                        { reason = StopReason.STALLED;        break; }
 
                 // Accumulate this round's residual and hot-apply for the next.
                 phase = Phase.APPLYING;
                 if (dualTone) {
-                    imd.accumulate(r, r.fundamentalHzRefined, r.fundamental2HzRefined, SNR_MARGIN_DB, COMP_STEP);
+                    imd.accumulate(r, r.fundamentalHzRefined, r.fundamental2HzRefined, COMP_STEP);
                     imdAppl = imd.copy();
                     IntermodCompensation.GeneratorCorrections gc = imd.toGeneratorCorrections();
                     ui(() -> gen.applyDualToneCompensation(gc.ampRatios(), gc.coefA(), gc.coefB(), gc.phiInits()));
                 } else {
-                    harm.accumulate(r, SNR_MARGIN_DB, COMP_STEP);
+                    harm.accumulate(r, COMP_STEP);
                     harmAppl = harm.copy();
                     GeneratorCorrections gc = harm.toGeneratorCorrections(target);
                     ui(() -> gen.applyCompensation(gc.ampRatios(), gc.harmonicNumbers(), gc.phiInits()));
@@ -276,23 +306,11 @@ public final class PredistortionEngine {
         }
     }
 
-    /** Seconds remaining in the current averaging window — drives the wizard's
+    /** FFT averages still to collect in the current round — drives the wizard's
      *  countdown.  0 outside the COLLECTING phase. */
-    public double getCollectRemainingSec() {
-        if (phase != Phase.COLLECTING) return 0.0;
-        return Math.max(0.0, (collectEndMs - System.currentTimeMillis()) / 1000.0);
-    }
-
-    /** Fraction [0, 1] of the current averaging window elapsed — drives the
-     *  wizard's per-round progress bar.  Returns 1 once the window is done
-     *  (applying / settling / finished) and 0 before the first window. */
-    public double getCollectProgress() {
-        if (phase != Phase.COLLECTING) {
-            return phase.ordinal() > Phase.COLLECTING.ordinal() ? 1.0 : 0.0;
-        }
-        long s = collectStartMs, e = collectEndMs, now = System.currentTimeMillis();
-        if (e <= s) return 0.0;
-        return Math.max(0.0, Math.min(1.0, (now - s) / (double) (e - s)));
+    public int getCollectRemainingAverages() {
+        if (phase != Phase.COLLECTING) return 0;
+        return Math.max(0, collectTargetAvg - fft.completedAnalyses());
     }
 
     /** Dual-tone distortion figure being minimised: the combined intermod-product
@@ -303,9 +321,9 @@ public final class PredistortionEngine {
         return (imd != null && Double.isFinite(imd.imdPwrPct)) ? imd.imdPwrPct : r.thdPct;
     }
 
-    /** Blocks until the tone is within {@link #ALIGN_PPM} of {@code target}
-     *  for {@link #ALIGN_FRAMES} consecutive polls, the timeout elapses, or a
-     *  stop is requested.  Returns whether alignment was confirmed. */
+    /** Blocks until the measured fundamental is stable — consecutive frames
+     *  agree within {@link #ALIGN_BIN_FRACTION} of a bin for {@link #ALIGN_FRAMES}
+     *  polls — the timeout elapses, or a stop is requested. */
     private boolean waitForAlign() {
         long deadline = System.currentTimeMillis() + ALIGN_TIMEOUT_MS;
         int settled = 0;
@@ -327,18 +345,48 @@ public final class PredistortionEngine {
         return false;
     }
 
-    /** Averages for {@code durationSec} (polling for a stop), then returns a
-     *  private copy of the finalized displayed result, or {@code null} on
-     *  stop / when no result is available. */
-    private FftResult collectFor(double durationSec) {
-        collectStartMs = System.currentTimeMillis();
-        long end = collectStartMs + Math.round(durationSec * 1000.0);
-        collectEndMs = end;
-        while (System.currentTimeMillis() < end) {
+    /** Averages until the FFT has accumulated the round's target frames (polling
+     *  for a stop), then returns a private copy of the finalized displayed
+     *  result, or {@code null} on stop.  The target is {@link #sizeAverages}
+     *  seeded from {@code prevDistPct} (the last round's residual) and then
+     *  re-evaluated against the LIVE residual on every collected average, so a
+     *  round that keeps improving keeps averaging.  {@link FftController#completedAnalyses()}
+     *  was re-zeroed by the reset that precedes every round. */
+    private FftResult collectUntilAverages(int baseAverages, double baselineDistPct,
+                                           double prevDistPct, int maxAverages) {
+        collectTargetAvg   = sizeAverages(baseAverages, baselineDistPct, prevDistPct, maxAverages);
+        roundStopRequested = false;
+        while (fft.completedAnalyses() < collectTargetAvg) {
             if (stopRequested) return null;
+            // Manual "Stop round": take the frames averaged so far (at least
+            // one) and proceed to apply, instead of waiting out the target.
+            if (roundStopRequested && fft.completedAnalyses() >= 1) break;
+            int target = sizeAverages(baseAverages, baselineDistPct, liveDistPct(), maxAverages);
+            if (target > collectTargetAvg) collectTargetAvg = target;
             sleep(POLL_MS);
         }
         return readResult();
+    }
+
+    /** The round-sizing formula, shared by the seed and the live update:
+     *  {@code baseAverages × (THD0 / THD) × EXTEND_DROP_FACTOR}, clamped to
+     *  {@code [baseAverages, maxAverages]}.  A residual N× below round 0 averages
+     *  N× longer (linear), with {@link #EXTEND_DROP_FACTOR} of extra margin.
+     *  Returns {@code baseAverages} until a reference and a measurement exist
+     *  (round 0, or before the first live frame). */
+    private int sizeAverages(int baseAverages, double baselineDistPct, double distPct, int maxAverages) {
+        if (!(baselineDistPct > 0) || !(distPct > 0)) return baseAverages;
+        int target = (int) Math.round(baseAverages * (baselineDistPct / distPct) * EXTEND_DROP_FACTOR);
+        return Math.max(baseAverages, Math.min(target, maxAverages));
+    }
+
+    /** Current cumulative distortion off the live FFT result — THD for a single
+     *  tone, the combined intermod % for a dual tone — matching the round
+     *  metric.  {@code NaN} when no result is available yet. */
+    private double liveDistPct() {
+        FftResult r = readResult();
+        if (r == null) return Double.NaN;
+        return dualTone ? imdPct(r) : r.thdPct;
     }
 
     /** Reads {@link FftView#getLastResult()} on the UI thread and returns a
@@ -350,16 +398,6 @@ public final class PredistortionEngine {
             box[0] = (r != null) ? r.deepCopy() : null;
         });
         return box[0];
-    }
-
-    /** True when the best THD improved by less than {@link #STALL_REL_FRACTION}
-     *  (relative) across the last {@link #STALL_WINDOW} rounds. */
-    private boolean stalled(List<Double> thd) {
-        int n = thd.size();
-        if (n < STALL_WINDOW + 1) return false;
-        double bestNow    = Collections.min(thd);
-        double bestBefore = Collections.min(thd.subList(0, n - STALL_WINDOW));
-        return (bestBefore - bestNow) <= STALL_REL_FRACTION * bestBefore;
     }
 
     // -------------------------------------------------------------------------

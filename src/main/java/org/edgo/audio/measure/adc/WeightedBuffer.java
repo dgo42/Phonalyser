@@ -31,7 +31,7 @@ import java.util.Locale;
 import java.util.function.BiConsumer;
 
 import org.edgo.audio.measure.common.StereoSample;
-import org.edgo.audio.measure.common.StereoSampleFloat;
+import org.edgo.audio.measure.common.StereoSampleDouble;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
@@ -104,8 +104,8 @@ public class WeightedBuffer {
     @Getter private final float[][] chunks;
 
     // Code map built by buildCodeMap(): raw code → corrected code
-    private float[]   codeMapBins;    // ≤ 24-bit
-    private float[][] codeMapChunks;  // 32-bit
+    private double[]   codeMapBins;    // ≤ 24-bit
+    private double[][] codeMapChunks;  // 32-bit
 
     public WeightedBuffer(int bitDepth) {
         this.bitDepth = bitDepth;
@@ -480,7 +480,7 @@ public class WeightedBuffer {
         if (bitDepth < 32) {
             int    n       = (int) binCount;
             int    maxCode = n - 1;
-            codeMapBins    = new float[n];
+            codeMapBins    = new double[n];
             double total   = 0;
             for (int i = 0; i < n; i++) {
                 total += bins[i];
@@ -492,12 +492,12 @@ public class WeightedBuffer {
             double cdf = 0;
             for (int i = 0; i < n; i++) {
                 cdf += bins[i];
-                codeMapBins[i] = (float) /*Math.round*/((cdf * maxCode / total));
+                codeMapBins[i] = cdf * maxCode / total;
             }
         } else {
-            codeMapChunks = new float[8][];
+            codeMapChunks = new double[8][];
             for (int c = 0; c < 8; c++) {
-                codeMapChunks[c] = new float[CHUNK_SIZE];
+                codeMapChunks[c] = new double[CHUNK_SIZE];
             }
             double total = 0;
             for (int c = 0; c < 8; c++) {
@@ -513,10 +513,10 @@ public class WeightedBuffer {
             long   maxCode = binCount - 1;
             for (int c = 0; c < 8; c++) {
                 float[] chunk = chunks[c];
-                float[] map   = codeMapChunks[c];
+                double[] map  = codeMapChunks[c];
                 for (int i = 0; i < CHUNK_SIZE; i++) {
                     cdf    += chunk[i];
-                    map[i]  = (float) (cdf * maxCode / total) + 1;
+                    map[i]  = cdf * maxCode / total + 1;
                 }
             }
         }
@@ -524,8 +524,8 @@ public class WeightedBuffer {
     }
 
     /** Maps a raw ADC code to a linearized output code using the built code map. */
-    public StereoSampleFloat correctedCode(StereoSample rawCode) {
-        StereoSampleFloat res = new StereoSampleFloat();
+    public StereoSampleDouble correctedCode(StereoSample rawCode) {
+        StereoSampleDouble res = new StereoSampleDouble();
         /*res.ch0 = rawCode.ch0;
         res.ch1 = rawCode.ch1;*/
         if (bitDepth < 32) {

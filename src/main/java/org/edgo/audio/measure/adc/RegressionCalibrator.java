@@ -117,7 +117,7 @@ public class RegressionCalibrator {
      * @param bitDepth   ADC resolution in bits
      * @return populated {@link Result}
      */
-    public Result calibrate(float[] samples, int sampleRate, int bitDepth) {
+    public Result calibrate(double[] samples, int sampleRate, int bitDepth) {
         int    codeCount = 1 << bitDepth;
         double halfRange = (double) (1 << (bitDepth - 1));
 
@@ -131,7 +131,7 @@ public class RegressionCalibrator {
         // Use at most 2^16 samples for the search to keep it fast; the final
         // LS fit uses all samples.
         int searchLen = Math.min(samples.length, 1 << 16);
-        float[] searchBuf = searchLen < samples.length
+        double[] searchBuf = searchLen < samples.length
                 ? Arrays.copyOf(samples, searchLen)
                 : samples;
         double binWidth = (double) sampleRate / fftSize;
@@ -238,7 +238,7 @@ public class RegressionCalibrator {
     // =========================================================================
 
     /** Golden-section minimisation of the LS residual over frequency. */
-    private double goldenSectionSearch(float[] samples, int sampleRate,
+    private double goldenSectionSearch(double[] samples, int sampleRate,
                                        double lo, double hi, int iters) {
         final double phi = (Math.sqrt(5.0) - 1.0) / 2.0;
         double c = hi - phi * (hi - lo);
@@ -260,7 +260,7 @@ public class RegressionCalibrator {
     }
 
     /** Residual sum of squares after fitting a sine at the given frequency. */
-    private double rss(float[] samples, int sampleRate, double freqHz) {
+    private double rss(double[] samples, int sampleRate, double freqHz) {
         double[] fit = fitSine(samples, sampleRate, freqHz);
         double a = fit[0], b = fit[1], cv = fit[2];
         double omega    = 2.0 * Math.PI * freqHz / sampleRate;
@@ -286,7 +286,7 @@ public class RegressionCalibrator {
      *
      * @return [a, b, c]
      */
-    double[] fitSine(float[] samples, int sampleRate, double freqHz) {
+    double[] fitSine(double[] samples, int sampleRate, double freqHz) {
         double omega    = 2.0 * Math.PI * freqHz / sampleRate;
         double cosOmega = Math.cos(omega), sinOmega = Math.sin(omega);
         double curSin = 0.0, curCos = 1.0;

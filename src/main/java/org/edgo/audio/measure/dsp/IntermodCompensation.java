@@ -117,10 +117,10 @@ public final class IntermodCompensation {
      * each grid product's phase-stable phasor is read from {@code re}/{@code im}
      * at its bin (F1 harmonics from {@link FftResult#harmonicBins}, every b≠0
      * product from the de-rotated {@link FftResult#imdProductBin} grid), and the
-     * de-delayed phasor is added in scaled by {@code step}.  Products quieter
-     * than {@code noiseFloor + snrMarginDb} are left untouched.
+     * de-delayed phasor is added in scaled by {@code step}.  Every detected
+     * product is corrected — there is no noise-floor gate.
      */
-    public void accumulate(FftResult r, double f1Hz, double f2Hz, double snrMarginDb, double step) {
+    public void accumulate(FftResult r, double f1Hz, double f2Hz, double step) {
         if (r.re == null || r.im == null || r.amplitudeDbFs == null) return;
         int fundBin = r.fundamentalBin;
         if (fundBin <= 0 || fundBin >= r.re.length) return;
@@ -130,13 +130,11 @@ public final class IntermodCompensation {
         double phi1          = Math.atan2(r.im[fundBin], r.re[fundBin]);
         double omegaD        = -(phi1 + Math.PI / 2.0);
         double delayRadPerHz = omegaD / f1Hz;
-        double skipBelowDbFs = r.avgNoiseFloorDbFs + snrMarginDb;
 
         for (int g = 0; g < coefA.length; g++) {
             int a = coefA[g], b = coefB[g];
             int bin = findBin(r, a, b);
             if (bin <= 0 || bin >= r.re.length) continue;
-            if (r.amplitudeDbFs[bin] < skipBelowDbFs) continue;   // near noise — would random-walk
 
             double fp = a * f1Hz + b * f2Hz;
             if (!(fp > 0.0)) continue;

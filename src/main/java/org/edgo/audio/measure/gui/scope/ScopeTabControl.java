@@ -29,12 +29,12 @@ import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabFolder;
-import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
+import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.layout.RowData;
@@ -58,18 +58,19 @@ import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
-import org.edgo.audio.measure.gui.widgets.NumericStepField;
-import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.registry.UiRegistry;
-import org.edgo.audio.measure.preferences.OscPreset;
-import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
+import org.edgo.audio.measure.gui.widgets.NumericStepField;
+import org.edgo.audio.measure.gui.widgets.PresetBar;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
+import org.edgo.audio.measure.gui.widgets.UnitFamily;
+import org.edgo.audio.measure.preferences.OscPreset;
+import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -92,7 +93,7 @@ import lombok.extern.log4j.Log4j2;
  * this control's small public command API.
  */
 @Log4j2
-public final class ScopeTabControl extends Composite {
+public final class ScopeTabControl extends AbstractTabControl {
 
     /** The {@link ScopePane} operations this control invokes.  Implemented by
      *  the pane and passed in at construction so the tabs can request a chart
@@ -117,15 +118,15 @@ public final class ScopeTabControl extends Composite {
         void onSignalFileLoaded();
 
         /** Open the pane's screenshot dialog (the pane clones itself offscreen
-         *  to render the snapshot). */
-        void openScreenshot();
+         *  to render the snapshot).  Implemented by {@code AbstractPane}. */
+        void openScreenshotDialog();
     }
 
     /** Side length of every small in-group toggle button (px). */
     public  static final int SQUARE_BUTTON = 32;
 
     /** Vertical / horizontal resolution bounds (canonical V and s per div). */
-    private static final double V_PER_DIV_MIN = 1e-6;
+    private static final double V_PER_DIV_MIN = 1e-9;
     private static final double V_PER_DIV_MAX = 500;
     private static final double T_PER_DIV_MIN = 1e-6;
     private static final double T_PER_DIV_MAX = 1.0;
@@ -138,8 +139,6 @@ public final class ScopeTabControl extends Composite {
     // Display precision caps per the numeric-field spec.
     private static final int PER_DIV_MAX_DECIMALS = 3;
     private static final int TIME_MAX_DECIMALS    = 3;
-    /** Pixel height of the toolbar utility icons (camera / crosshair). */
-    private static final int UTILITY_ICON_HEIGHT = 26;
     /** Pixel height of the file-row glyphs (floppy disk / folder open). */
     private static final int FILE_ICON_HEIGHT = 16;
 
@@ -164,17 +163,15 @@ public final class ScopeTabControl extends Composite {
     private final Host              host;
 
     // Cached references from IconUtils — owned by the shared cache and
-    // disposed centrally when the main shell tears down.
-    private final Image cameraIcon;
-    private final Image crosshairIcon;
+    // disposed centrally when the main shell tears down.  (camera / crosshair
+    // live on AbstractTabControl.)
     private final Image floppyDiskIcon;
     private final Image folderOpenIcon;
 
-    /** Toolbar tab folder.  The shared {@link TileTabFolder} owns the custom
-     *  renderer, spacer images, tab-body collapse, hover tooltips and tile
-     *  painting; this control only supplies each custom tab's tile content (see
-     *  {@link #scopeTabTiles}), fallback tooltip and extra padding. */
-    private TileTabFolder                toolbarTabs;
+    // Toolbar tab folder: the shared TileTabFolder (held by AbstractTabControl
+    // as toolbarTabs) owns the custom renderer, spacer images, tab-body
+    // collapse, hover tooltips and tile painting; this control only supplies
+    // each custom tab's tile content (see scopeTabTiles), tooltip and padding.
 
     /** Step selectors for V/div (left + right) and t/div — fields so the
      *  mouse-wheel zoom on the main scope (driven by the pane) can step them. */
@@ -211,11 +208,6 @@ public final class ScopeTabControl extends Composite {
     private Button                       calibrateButton;
     /** Read-only text field showing the currently loaded openSignal file path. */
     private Text                         openSignalPathField;
-    /** Preset name combo box — editable so the user can type a new name. */
-    private Combo presetCombo;
-    private Button presetSaveBtn;
-    private Button presetLoadBtn;
-    private Button presetDeleteBtn;
 
     /** Subscriber for {@link Events#GENERATOR_SIGNAL_CHANGED} — keeps the
      *  "Reconstructed beat" checkbox enabled only in DUAL_TONE mode.  Bound
@@ -231,10 +223,6 @@ public final class ScopeTabControl extends Composite {
 
         IconUtils icons = IconUtils.instance();
         Display d = parent.getDisplay();
-        this.cameraIcon     = icons.render(d, SvgPaths.CAMERA,
-                (int) Math.round(UTILITY_ICON_HEIGHT * 1.27), UTILITY_ICON_HEIGHT);
-        this.crosshairIcon  = icons.render(d, SvgPaths.CROSSHAIR,
-                UTILITY_ICON_HEIGHT, UTILITY_ICON_HEIGHT);
         this.floppyDiskIcon = icons.renderAtHeight(d, SvgPaths.FLOPPY_DISK, FILE_ICON_HEIGHT, null);
         this.folderOpenIcon = icons.renderAtHeight(d, SvgPaths.FOLDER_OPEN, FILE_ICON_HEIGHT, null);
 
@@ -312,27 +300,6 @@ public final class ScopeTabControl extends Composite {
     // Pane command API + delegation
     // -------------------------------------------------------------------------
 
-    /** Runs {@code r} after each tab-body collapse / expand so the host pane
-     *  can re-anchor its Record button and re-flow the chart into the freed
-     *  space. */
-    public void setCollapseRelayout(Runnable r) {
-        if (toolbarTabs != null) toolbarTabs.setCollapseRelayout(r);
-    }
-
-    /** True when the tab body is collapsed to just the strip. */
-    public boolean isTabsCollapsed() {
-        return toolbarTabs != null && toolbarTabs.isCollapsed();
-    }
-
-    /** Forces the toolbar tab body collapsed (only headers visible) or
-     *  expanded.  Used by the screenshot renderer; no-op when already in
-     *  the requested state. */
-    public void setTabsCollapsed(boolean want) {
-        if (toolbarTabs != null && toolbarTabs.isCollapsed() != want) {
-            toolbarTabs.setCollapsed(want);
-        }
-    }
-
     /** Registers each settings tab in the component registry under
      *  {@code prefix} (e.g. {@code "multifunctional/scope/tabs"}) so automation
      *  can select a tab by path — {@code activate} expands the tab body and
@@ -349,14 +316,6 @@ public final class ScopeTabControl extends Composite {
         registerTab(prefix, "load",       TAB_LOAD);
     }
 
-    private void registerTab(String prefix, String slug, int index) {
-        if (toolbarTabs == null || index >= toolbarTabs.getItemCount()) return;
-        UiRegistry.instance().register(prefix + "/" + slug, this)
-                .onActivate(() -> {
-                    setTabsCollapsed(false);
-                    toolbarTabs.setSelection(index);
-                });
-    }
 
     /** Sets the t/div selector (fires its listener → pref write + view-state
      *  recompute).  Used by the pane's auto-setup. */
@@ -432,10 +391,7 @@ public final class ScopeTabControl extends Composite {
         if (hysteresisEnable!= null) hysteresisEnable.setData("helpAnchor", "oscilloscope.html#scope-trigger-hysteresis");
         if (hysteresisSel   != null) hysteresisSel  .setData("helpAnchor", "oscilloscope.html#scope-trigger-hysteresis");
         if (triggerGroup    != null) triggerGroup   .setData("helpAnchor", "oscilloscope.html#scope-tab-trigger");
-        if (presetCombo     != null) presetCombo    .setData("helpAnchor", "oscilloscope.html#scope-tab-presets");
-        if (presetSaveBtn   != null) presetSaveBtn  .setData("helpAnchor", "oscilloscope.html#scope-tab-presets");
-        if (presetLoadBtn   != null) presetLoadBtn  .setData("helpAnchor", "oscilloscope.html#scope-tab-presets");
-        if (presetDeleteBtn != null) presetDeleteBtn.setData("helpAnchor", "oscilloscope.html#scope-tab-presets");
+        // Preset bar widgets carry their own help anchor (set by PresetBar).
     }
 
     // -------------------------------------------------------------------------
@@ -869,119 +825,15 @@ public final class ScopeTabControl extends Composite {
      */
     private void buildPresetsGroup(CTabFolder folder) {
         Composite g = groupCell(folder, I18n.t("scope.tab.presets"));
-        GridLayout gl = new GridLayout(4, false);
-        gl.marginWidth = 6; gl.marginHeight = 4;
-        gl.horizontalSpacing = 6;
-        g.setLayout(gl);
-
-        Preferences prefs = Preferences.instance();
-        presetCombo = new Combo(g, SWT.DROP_DOWN);  // editable so user can type a new name
-        presetCombo.setToolTipText(I18n.t("scope.presets.combo.tooltip"));
-        GridData comboGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        comboGd.widthHint = 180;
-        presetCombo.setLayoutData(comboGd);
-        for (String name : prefs.getOscPresets().keySet()) presetCombo.add(name);
-        presetCombo.addListener(SWT.Modify,    e -> refreshPresetButtonState());
-        presetCombo.addListener(SWT.Selection, e -> refreshPresetButtonState());
-
-        presetSaveBtn = new Button(g, SWT.PUSH);
-        presetSaveBtn.setText(I18n.t("scope.presets.save"));
-        presetSaveBtn.setToolTipText(I18n.t("scope.presets.save.tooltip"));
-        presetSaveBtn.addListener(SWT.Selection, e -> {
-            String name = presetCombo.getText().trim();
-            if (name.isEmpty()) return;
-            // Existing preset → ask before overwriting.
-            if (prefs.getOscPresets().containsKey(name) && !confirmOverwritePreset(name)) return;
-            prefs.putOscPreset(name, captureCurrentOscPreset());
-            if (presetCombo.indexOf(name) < 0) presetCombo.add(name);
-            presetCombo.setText(name);
-            refreshPresetButtonState();
-        });
-
-        presetLoadBtn = new Button(g, SWT.PUSH);
-        presetLoadBtn.setText(I18n.t("scope.presets.load"));
-        presetLoadBtn.setToolTipText(I18n.t("scope.presets.load.tooltip"));
-        presetLoadBtn.addListener(SWT.Selection, e -> {
-            String name = presetCombo.getText().trim();
-            if (name.isEmpty()) return;
-            OscPreset p = prefs.getOscPresets().get(name);
-            if (p != null) {
-                applyOscPreset(p);
-                refreshPresetButtonState();
-            }
-        });
-
-        presetDeleteBtn = new Button(g, SWT.PUSH);
-        presetDeleteBtn.setText(I18n.t("scope.presets.delete"));
-        presetDeleteBtn.setToolTipText(I18n.t("scope.presets.delete.tooltip"));
-        presetDeleteBtn.addListener(SWT.Selection, e -> {
-            String name = presetCombo.getText().trim();
-            if (name.isEmpty() || !prefs.getOscPresets().containsKey(name)) return;
-            if (!confirmDeletePreset(name)) return;
-            prefs.removeOscPreset(name);
-            int idx = presetCombo.indexOf(name);
-            if (idx >= 0) presetCombo.remove(idx);
-            presetCombo.setText("");
-            refreshPresetButtonState();
-        });
-
-        // Initial state + low-frequency poll so the Save button reacts to
-        // setting changes made via the canvas / other tabs while this tab
-        // is visible.  Polling stops automatically when the combo is
-        // disposed (timerExec is a no-op on disposed widgets).
-        refreshPresetButtonState();
-        Display display = g.getDisplay();
-        Runnable[] tick = { null };
-        tick[0] = () -> {
-            if (presetCombo == null || presetCombo.isDisposed()) return;
-            refreshPresetButtonState();
-            display.timerExec(500, tick[0]);
-        };
-        display.timerExec(500, tick[0]);
-    }
-
-    /** Recomputes the enable state of Save / Delete from the current combo
-     *  text + matching preset (if any) + current control values.  Safe to
-     *  call before {@link #presetCombo} is built (no-op). */
-    private void refreshPresetButtonState() {
-        if (presetCombo == null || presetCombo.isDisposed()) return;
-        if (presetSaveBtn   == null || presetSaveBtn  .isDisposed()) return;
-        if (presetLoadBtn   == null || presetLoadBtn  .isDisposed()) return;
-        if (presetDeleteBtn == null || presetDeleteBtn.isDisposed()) return;
-        String name = presetCombo.getText().trim();
-        if (name.isEmpty()) {
-            presetSaveBtn  .setEnabled(false);
-            presetLoadBtn  .setEnabled(false);
-            presetDeleteBtn.setEnabled(false);
-            return;
-        }
-        OscPreset existing = Preferences.instance().getOscPresets().get(name);
-        if (existing == null) {
-            // New name — Save is the way to create it; nothing to load/delete.
-            presetSaveBtn  .setEnabled(true);
-            presetLoadBtn  .setEnabled(false);
-            presetDeleteBtn.setEnabled(false);
-        } else {
-            // Existing — Save only if current settings differ; Load + Delete always.
-            presetSaveBtn  .setEnabled(!existing.equals(captureCurrentOscPreset()));
-            presetLoadBtn  .setEnabled(true);
-            presetDeleteBtn.setEnabled(true);
-        }
-    }
-
-    /** Yes/No confirmation prompt for overwriting an existing preset.
-     *  Returns true when the user picks Yes. */
-    private boolean confirmOverwritePreset(String name) {
-        return Dialogs.confirm(getShell(),
-                I18n.t("scope.presets.overwrite.title"),
-                I18n.t("scope.presets.overwrite.message", name)) == SWT.YES;
-    }
-
-    /** Yes/No confirmation prompt for deleting a preset. */
-    private boolean confirmDeletePreset(String name) {
-        return Dialogs.confirm(getShell(),
-                I18n.t("scope.presets.delete.title"),
-                I18n.t("scope.presets.delete.message", name)) == SWT.YES;
+        g.setLayout(new FillLayout());
+        new PresetBar<OscPreset>(g, "scope.presets", "oscilloscope.html#scope-tab-presets",
+                new PresetBar.Store<>() {
+                    @Override public Map<String, OscPreset> presets() { return Preferences.instance().getOscPresets(); }
+                    @Override public void put(String name, OscPreset p) { Preferences.instance().putOscPreset(name, p); }
+                    @Override public void remove(String name) { Preferences.instance().removeOscPreset(name); }
+                    @Override public OscPreset captureCurrent() { return captureCurrentOscPreset(); }
+                    @Override public void apply(OscPreset p) { applyOscPreset(p); }
+                });
     }
 
     /** Reads every preset-tracked value from the live {@link Preferences}
@@ -1084,7 +936,7 @@ public final class ScopeTabControl extends Composite {
         shotBtn.setLayoutData(new RowData(shotW, SQUARE_BUTTON));
         // The screenshot dialog clones the whole pane offscreen, so the pane
         // owns it; ask the host to open it.
-        shotBtn.addListener(SWT.Selection, e -> host.openScreenshot());
+        shotBtn.addListener(SWT.Selection, e -> host.openScreenshotDialog());
 
         calibrateButton = new Button(g, SWT.PUSH);
         calibrateButton.setImage(crosshairIcon);
@@ -1557,20 +1409,6 @@ public final class ScopeTabControl extends Composite {
         rl.marginTop    = 0;
         rl.marginBottom = 0;
         return rl;
-    }
-
-    /** Builds a tab in {@code folder} with the given title and returns the
-     *  content Composite (used as the {@link CTabItem#setControl} target).
-     *  The content composite has no explicit layoutData — a CTabFolder
-     *  always sizes its tab content to fill the available area, so the
-     *  build*Group methods just call {@code setLayout(rowLayoutHorizontal(…))}
-     *  on the returned composite and parent their children there. */
-    private Composite groupCell(CTabFolder folder, String title) {
-        Composite c = new Composite(folder, SWT.NONE);
-        CTabItem item = new CTabItem(folder, SWT.NONE);
-        item.setText(title);
-        item.setControl(c);
-        return c;
     }
 
     private Button squareToggle(Composite parent, String label) {
