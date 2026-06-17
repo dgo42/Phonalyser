@@ -89,15 +89,20 @@ found automatically.
 
 ## 4. CI/CD
 
-[.github/workflows/release.yml](.github/workflows/release.yml) builds all
-three OS installers on every tag push (`v*`).  The job matrix uses
-`windows-latest`, `ubuntu-latest`, and `macos-latest` runners.  The Linux
-and macOS jobs install PortAudio via the package manager; the Windows job
-expects the binaries to be present in `lib/windows/` (commit them or
-restore them from a private release / artifact store).
+[.github/workflows/release.yml](.github/workflows/release.yml) builds the
+installers on every tag push (`v*` or `[0-9]*`).  The runners are
+`windows-latest` (x64), `ubuntu-latest` (x64), and — because jpackage bundles
+a JRE matching the build machine's CPU — **two** macOS runners:
+`macos-13` (Intel x86_64) and `macos-14` (Apple Silicon arm64).  An
+arm64-only DMG is rejected by Intel Macs (*"…is not supported on this Mac."*),
+so both are built natively and shipped; each macOS DMG is tagged with its arch
+(`Phonalyser-<ver>-x64.dmg` / `Phonalyser-<ver>-arm64.dmg`).  The Windows job
+expects the binaries to be present in `lib/windows/` (commit them or restore
+them from a private release / artifact store).
 
 A draft GitHub release is created when the matrix finishes, with the MSI,
-DEB, DMG and the platform fat JAR attached.
+DEB, both DMGs and the platform fat JARs attached.  See
+[HOWTO-RELEASE.md](HOWTO-RELEASE.md) for the full release procedure.
 
 ## 5. Audio backends per OS
 

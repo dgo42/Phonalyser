@@ -139,6 +139,9 @@ public final class MainTab {
         // so the help-screenshot automation can select + capture them by path
         // (the multifunctional panes register themselves in MultifunctionalTab).
         UiRegistry.instance()
+                .register("multifunctional", multiContent)
+                .onActivate(() -> selectTopTab(0));
+        UiRegistry.instance()
                 .register("frequencyResponse", frequencyResponse.getPane().getGroup())
                 .onActivate(() -> selectTopTab(1));
         frequencyResponse.getPane().registerTabs("frequencyResponse/tabs");

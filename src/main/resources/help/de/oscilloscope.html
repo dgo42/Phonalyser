@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Oszilloskop</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zum Inhalt</a></p>
+
+  <h1>Oszilloskop</h1>
+  <p>Diese Seite beschreibt die Bedienelemente des Oszilloskops.  Für die
+     interne Funktionsweise — Trigger, Sin&nbsp;x/x-Rekonstruktion zwischen
+     Abtastwerten, Netzbrummen-Unterdrückung — siehe
+     <a href="theory/oscilloscope.html">Funktionsprinzip ▸
+     Oszilloskop</a>.</p>
+  <p>Zeitbereichsansicht des erfassten Signals in Echtzeit.  Zwei unabhängige
+     Kanäle (L / R) teilen sich den Trigger; jeder Kanal besitzt eigene V/div-,
+     Kopplung-, Interpolations- und Vertikal-Offset-Einstellungen.  Die
+     Erfassungsrate oben rechts (<code>cap/s</code>) zeigt, wie viele Frames
+     pro Sekunde die Ansicht rendert.</p>
+
+  <div class="shot">
+    <img src="img/oscilloscope-pane.png" alt="Oszilloskop-Ansicht"/>
+    <svg class="callouts" viewBox="0 0 1040 660" preserveAspectRatio="none"
+         xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace">
+      <defs>
+        <marker id="ca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/>
+        </marker>
+      </defs>
+      <!-- 1: channel buttons -->
+      <line x1="118" y1="47" x2="60" y2="47" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="132" cy="47" r="13" fill="#c33"/>
+      <text x="132" y="52" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
+      <!-- 2: trigger level — yellow horizontal marker at the edges -->
+      <line x1="919" y1="281" x2="1020" y2="281" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="905" cy="281" r="13" fill="#c33"/>
+      <text x="905" y="286" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
+      <!-- 3: trigger offset — position handle at the foot of the centre line (0 s) -->
+      <line x1="603" y1="503" x2="516" y2="514" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="617" cy="495" r="13" fill="#c33"/>
+      <text x="617" y="500" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
+      <!-- 4: channel vertical-offset marker — triangle handle on the LEFT edge -->
+      <line x1="128" y1="244" x2="48" y2="278" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="142" cy="237" r="13" fill="#c33"/>
+      <text x="142" y="242" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
+      <!-- 5: settings tabs (sits on the strip) -->
+      <circle cx="250" cy="622" r="13" fill="#c33"/>
+      <text x="250" y="627" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
+      <!-- 6: record button -->
+      <line x1="930" y1="630" x2="996" y2="630" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="916" cy="630" r="13" fill="#c33"/>
+      <text x="916" y="635" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
+      <!-- 7: graticule pan/zoom -->
+      <circle cx="770" cy="150" r="13" fill="#c33"/>
+      <text x="770" y="155" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">7</text>
+    </svg>
+  </div>
+  <ol class="features">
+    <li><b>Kanal-Schaltflächen.</b>  <code>L</code> / <code>R</code>
+        <a href="#scope-channel-pick">wählen, welcher Kanal</a> die
+        Messtabelle und den verschiebbaren Kanal-Offset-Marker ansteuert —
+        sie wechseln <em>nicht</em> die Einstellungs-Tabs.  Eine Schaltfläche
+        ist <em>deaktiviert</em>, wenn der zugehörige Kanal im
+        <a href="#scope-tab-left">Linken</a> / <a href="#scope-tab-right">Rechten</a>
+        Tab abgeschaltet ist.  <b>L / R und <a href="#scope-autosetup">Auto-Setup</a>
+        werden immer angezeigt</b>; die übrigen erscheinen, sobald Messwerte
+        vorliegen (<a href="#scope-buttons">Kopfzeilen-Schaltflächen</a>).</li>
+    <li><b>Trigger-Pegel.</b>  Ein horizontaler Marker, dessen Dreieck-<b>Griff
+        am rechten Rand</b> die Spannung setzt, bei der der Trigger auslöst.
+        Verschieben durch Ziehen des Griffs; <b>Doppelklick auf den Griff
+        zentriert ihn</b>; der Pegel in Volt wird neben dem Griff angezeigt.
+        Siehe <a href="#scope-trigger-handle">Trigger-Pegel-Marker</a>.</li>
+    <li><b>Trigger-Offset.</b>  Ein vertikaler Marker, dessen Dreieck-<b>Griff
+        am unteren Rand</b> bestimmt, wo im Fenster das Trigger-Ereignis liegt.
+        Griff ziehen; <b>Doppelklick zentriert ihn auf <code>0&nbsp;s</code></b>;
+        der zeitliche Offset in Sekunden wird über dem Griff angezeigt.  Siehe
+        <a href="#scope-position-handle">Trigger-Offset-Marker</a>.</li>
+    <li><b>Kanal-Vertikal-Offset-Marker.</b>  Jeder Kanal besitzt einen eigenen
+        Vertikal-Offset-Marker, dessen Dreieck-<b>Griff am linken Rand</b>
+        liegt, mit der Offset-Spannung daneben.  Nur der
+        <a href="#scope-channel-pick">ausgewählte</a> Kanal-Griff ist
+        verschiebbar (ziehen; Doppelklick zentriert); der Griff des anderen
+        Kanals ist ausgegraut.  Siehe
+        <a href="#scope-offset-sliders">Kanal-Offset-Marker</a>.</li>
+    <li><b>Einstellungs-Tabs.</b>  Die Leiste am unteren Rand enthält je einen
+        Tab pro Bereich — <a href="#scope-tab-left">Links</a> /
+        <a href="#scope-tab-right">Rechts</a> Kanal,
+        <a href="#scope-tab-horizontal">Horizontal</a>,
+        <a href="#scope-tab-trigger">Trigger</a>,
+        <a href="#scope-tab-presets">Voreinstellungen</a>,
+        <a href="#scope-tab-utility">Dienstprogramme</a>,
+        <a href="#scope-tab-save">Speichern</a> und
+        <a href="#scope-tab-play">Laden</a>.  Die wichtigsten Werte jedes Tabs
+        werden als <a href="#scope-tiles">kleine Kacheln</a> auch dann angezeigt,
+        wenn der Tab-Inhalt eingeklappt ist; Doppelklick auf die Leiste klappt
+        ihn aus oder ein.</li>
+    <li><b>Aufnahme.</b>  Startet und stoppt die Live-Erfassung.  Während der
+        Aufnahme teilen sich Oszilloskop und FFT-Analysator eine gemeinsame
+        Erfassungssitzung (siehe
+        <a href="theory/ring-buffer.html#sharedcapture">Erfassungssitzung</a>).</li>
+    <li><b>Schwenken &amp; Zoomen (Mausrad).</b>  Über dem Signal —
+        <b>Rad</b>: Signal vertikal verschieben (oben = nach oben, unten = nach
+        unten);
+        <b><kbd>Shift</kbd>+Rad</b>: horizontal verschieben (oben = nach rechts,
+        unten = nach links);
+        <b><kbd>Ctrl</kbd>+Rad</b>: Vertikalzoom — V/div (oben = hineinzoomen,
+        d.&nbsp;h. kleinere V/div);
+        <b><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+Rad</b>: Horizontalzoom — s/div
+        (oben = hineinzoomen, d.&nbsp;h. kleinere s/div).  Beide Zooms sind
+        <em>am Cursor verankert</em>: die Spannung (bzw. die Zeit) unter dem
+        Zeiger bleibt fest, während sich die Skala darum ändert.  Dieselbe
+        Rad-Konvention gilt in jeder Phonalyser-Ansicht (Oszilloskop, FFT,
+        Frequenzgang).</li>
+  </ol>
+
+  <h2 id="scope-buttons">Kopfzeilen-Schaltflächen</h2>
+  <p>Reihe quadratischer Schaltflächen oben links im Signalbereich des
+     Oszilloskops.  <b>L / R und Auto-Setup werden immer angezeigt</b>; die
+     übrigen (Messanzeige, externes Fenster, Statistik-Umschalter, Zurücksetzen)
+     erscheinen, sobald Messwerte berechnet wurden.  Eine Maximieren-Schaltfläche
+     ist hier nicht vorhanden.</p>
+
+  <h3 id="scope-channel-pick">L / R Kanalauswahl</h3>
+  <p>Wählt, welcher Kanal die
+     <a href="#scope-meas-table">Messtabelle</a> und den
+     <a href="#scope-offset-sliders">Kanal-Offset</a>-Griff ansteuert —
+     sie wechseln <em>nicht</em> die Einstellungs-Tabs.  Der Schaltflächenhintergrund
+     nimmt die Signalfarbe des Kanals an, wenn dieser ausgewählt ist; L und R
+     sind unabhängig.</p>
+  <p>Die Verbindung zu den Tabs verläuft in die andere Richtung: eine
+     Kopfzeilen-Schaltfläche ist <b>deaktiviert</b>, wenn der zugehörige Kanal
+     im <a href="#scope-tab-left">Linken</a> / <a href="#scope-tab-right">Rechten</a>
+     Tab (Kanal-Aktivierung) abgeschaltet ist, und wird wieder aktiviert, sobald
+     der Kanal dort eingeschaltet wird.</p>
+
+  <h3 id="scope-autosetup">Auto-Setup</h3>
+  <p>Einmalige Anpassung: stellt die Zeitbasis so ein, dass ca. 1,5 Perioden auf
+     dem Bildschirm sichtbar sind, und V/div so, dass das Signal ~75&nbsp;% des
+     vertikalen Bereichs ausfüllt.  Verwendet die gemessene Periode und Vpp des
+     aktuell ausgewählten Kanals.</p>
+
+  <h3 id="scope-gauge">Messanzeige (Messtabellen-Umschalter)</h3>
+  <p>Blendet die gesamte Messtabellen-Überlagerung ein und aus.  Wenn
+     ausgeblendet, sind nur noch das Signal und die L / R-Schaltflächen
+     sichtbar.</p>
+
+  <h3 id="scope-external">Externes-Fenster-Umschalter</h3>
+  <p>Löst die Messtabelle in ein separates Werkzeugfenster aus, das neben
+     der Hauptanwendung platziert werden kann.  Nur sichtbar, wenn die Tabelle
+     selbst sichtbar ist.  Beim Schließen des Werkzeugfensters kehrt die Tabelle
+     in die Hauptansicht zurück.</p>
+
+  <h3 id="scope-stats-toggle">Statistikspalten-Umschalter</h3>
+  <p>Blendet die <code>avg / min / max / σ</code>-Spalten der Messtabelle ein
+     bzw. aus.  Der Worker berechnet sie unabhängig davon weiterhin; der
+     Umschalter betrifft nur die Darstellung.</p>
+
+  <h3 id="scope-reset">Statistik zurücksetzen</h3>
+  <p>Roter <b>Gegenuhrzeigersinn-Pfeil</b>-Knopf (das „Zum Anfang
+     zurückspulen"-Symbol).  Löscht den gleitenden Statistikverlauf, der die
+     <code>avg / min / max / σ</code>-Spalten speist, sodass der nächste Frame
+     ein neues Mittelungsfenster beginnt.  Nützlich nach einer Änderung der
+     Messbedingungen.</p>
+
+  <h2 id="scope-meas-table">Messtabelle</h2>
+  <p>Kompaktes Raster oben links im Signalbereich.  Acht Zeilen, bis zu fünf
+     Wertspalten (<code>cur</code> + die vier Statistikspalten).</p>
+
+  <table class="controls">
+    <tr><th>Zeile</th><th>Bedeutung</th></tr>
+    <tr><td id="scope-meas-vpp">Vpp</td><td>Spitze-Spitze-Spannung (max − min über den sichtbaren Frame).</td></tr>
+    <tr><td id="scope-meas-vrms">Vrms</td><td>Effektivspannung (Quadratischer Mittelwert) des Frames.</td></tr>
+    <tr><td id="scope-meas-vmean">Vmean</td><td>DC-Mittelwert — nützlich zum Erkennen von Offsets.</td></tr>
+    <tr><td id="scope-meas-tp">Tp</td><td>Periodendauer (Sekunden), präzise berechnet als <code>1 / f</code> aus der unten gemessenen Frequenz.</td></tr>
+    <tr><td id="scope-meas-tr">Tr</td><td>Anstiegszeit (10&nbsp;% → 90&nbsp;% von Vpp).</td></tr>
+    <tr><td id="scope-meas-tf">Tf</td><td>Abfallzeit (90&nbsp;% → 10&nbsp;%).</td></tr>
+    <tr><td id="scope-meas-f">f</td><td>Frequenz des Trigger-Kanalsignals, mit Sub-Sample-Präzision gemessen; die Periodendauer <code>Tp = 1 / f</code> wird daraus abgeleitet.</td></tr>
+    <tr><td id="scope-meas-duty">Duty</td><td>Tastverhältnis in % der Periode — Einschaltdauer / Periode.</td></tr>
+  </table>
+
+  <h3 id="scope-meas-stats">Statistikspalten (avg / min / max / σ)</h3>
+  <p>Gleitende Statistik über ein konfigurierbares Mittelungsfenster
+     (siehe <a href="#scope-tab-presets">Einstellungen → Oszilloskop →
+     Messungsmittelung</a>).  σ ist die Grundgesamtheits-Standardabweichung.
+     Das Fenster beträgt standardmäßig ~33&nbsp;s bei 30&nbsp;fps; der
+     <a href="#scope-reset">Zurücksetzen</a>-Knopf löscht die Statistik.</p>
+
+  <h2>Bildschirmüberlagerungen</h2>
+
+  <h3 id="scope-trigger-handle">Trigger-Pegel-Marker</h3>
+  <p>Eine horizontale Markerlinie, deren <b>Dreieck-Griff am rechten Rand</b>
+     liegt.  Der Marker kann <b>nur durch Ziehen dieses Griffs</b> nach oben
+     oder unten verschoben werden; <b>Doppelklick auf den Griff bringt ihn in
+     die vertikale Mitte zurück</b>.  Der aktuelle Trigger-Pegel (in Volt, für
+     den aktiven Trigger-Kanal) wird neben dem Griff angezeigt.  Ausgeblendet,
+     wenn eine Datei geladen ist (ein statisches Signal hat keinen Trigger).</p>
+
+  <h3 id="scope-position-handle">Trigger-Offset-Marker</h3>
+  <p>Eine vertikale Markerlinie, deren <b>Dreieck-Griff am unteren Rand</b>
+     liegt.  Er bestimmt, wo im Fenster das Trigger-Ereignis sitzt.  Nur durch
+     <b>Ziehen des Griffs</b> nach links / rechts verschiebbar;
+     <b>Doppelklick bringt ihn in die Mitte (<code>0&nbsp;s</code>)</b>.  Der
+     zeitliche Offset in Sekunden wird über dem Griff angezeigt.  Im
+     Datei-Modus ausgeblendet.</p>
+
+  <h3 id="scope-offset-sliders">Kanal-Offset-Marker</h3>
+  <p>Jeder aktivierte Kanal besitzt einen eigenen Vertikal-Offset-Marker
+     (gestrichelte Nulllinie + Dreieck-Griff), und <b>beide Griffe befinden
+     sich am LINKEN Rand</b>.  Die Offset-Spannung wird neben jedem Griff
+     angezeigt.  Nur der Marker des
+     <a href="#scope-channel-pick">aktuell ausgewählten Kanals</a> ist
+     verschiebbar — der Griff des anderen Kanals ist <b>ausgegraut</b> und
+     dient nur als Referenz.  Den aktiven Marker durch Ziehen des Griffs
+     verschieben; <b>Doppelklick zentriert ihn</b>.</p>
+
+  <h3 id="scope-scrollbars">Scrollleisten</h3>
+  <p>Eine <b>vertikale Scrollleiste</b> rechts verschiebt das Signal nach oben
+     oder unten (Spannungs-Offset, beide Kanäle gemeinsam).  Eine <b>horizontale
+     Scrollleiste</b> unten verschiebt die Ansicht links / rechts in der Zeit.
+     Jede Scrollleiste verschiebt <em>nur</em> eine Achse — sie zoomt nicht —
+     aber ihr Schieber wird von der Ansicht entsprechend der sichtbaren
+     Fraktion skaliert, sodass er den Zoom <em>nachverfolgt</em>: Änderung von
+     V/div oder t/div vergrößert oder verkleinert den Schieber entsprechend.
+     Klick auf den leeren Bereich blättert in Richtung des Zeigers, oder den
+     Knopf gedrückt halten, um weiter zu blättern, bis der Schieber den Cursor
+     erreicht.  Zoom mit dem Mausrad über dem Signalbereich.</p>
+  <p>Die horizontale Scrollleiste erscheint <b>nur, wenn eine Audiodatei
+     geladen ist</b> — sie dient dazu, eine längere Aufnahme nach links / rechts
+     zu verschieben.  Während der Live-Erfassung gibt es nichts Früheres zum
+     Zurückscrollen, daher bleibt sie ausgeblendet.</p>
+
+  <h2 id="scope-tabs">Toolbar-Tabs</h2>
+  <p>Die Einstellungs-Tab-Leiste am unteren Rand des Bereichs enthält
+     kanalspezifische, Trigger- und Dienstprogramm-Einstellungen.  Die Tabs
+     <b>Links</b>, <b>Rechts</b>, <b>Horizontal</b> und <b>Trigger</b> zeigen
+     eine Reihe von <a href="#scope-tiles">Kacheln</a> unter dem Tab-Label mit
+     den wichtigsten Werten, auch wenn der Tab-Inhalt eingeklappt ist; die Tabs
+     Voreinstellungen / Dienstprogramme / Speichern / Laden haben keine
+     Kacheln.</p>
+
+  <h3 id="scope-tab-left">Tab „Links"</h3>
+  <p><img src="img/Oscilloscope - Left.png" alt="Tab für den linken Kanal"/></p>
+  <p>Bedienelemente für den linken Kanal.  Enthält den Kanal-Umschalter,
+     V/div-Selektor, AC/DC-Schaltfläche und Sin/Lin-Kontrollkästchen.  Gleicher
+     Aufbau wie der Tab <a href="#scope-tab-right">Rechts</a>.</p>
+
+  <h4 id="scope-channel-toggle">L (Kanal aktivieren)</h4>
+  <p>Quadratischer Umschalter zum Aktivieren / Deaktivieren des Kanals.  Wenn
+     deaktiviert, wird das Signal nicht gezeichnet und der Kanal kann nicht als
+     Trigger-Quelle gewählt werden.</p>
+
+  <h4 id="scope-vdiv">V/div</h4>
+  <p>Vertikale Auflösung als 1-2-5-10-Liste von <b>1&nbsp;µV/div bis
+     500&nbsp;V/div</b>.  Rad / Pfeiltasten / ↑↓-Tasten schrittweise durch die
+     Liste; alternativ <b>beliebigen Wert eingeben</b> (mit Suffix
+     <code>µV</code> / <code>mV</code> / <code>V</code>) für eine Einstellung
+     außerhalb der Liste.  Unabhängig pro Kanal.</p>
+
+  <h4 id="scope-acdc">AC / DC</h4>
+  <p>Im AC-Modus wird der laufende DC-Mittelwert vom dargestellten Signal
+     subtrahiert, sodass eine kleine AC-Komponente auf einem großen DC-Offset
+     sichtbar wird.  Die zugrunde liegenden Messungen werden weiterhin an den
+     Rohabtastwerten berechnet — nur das dargestellte Signal wird verschoben.</p>
+
+  <h4 id="scope-sinc-interp">Sin / Lin (Sinc-Interpolation)</h4>
+  <p>Kanalspezifisches Kontrollkästchen mit einem kleinen Sinc-Formbild.
+     Wenn aktiviert, wird das Signal mit Lanczos-Sinc-Interpolation gerendert
+     (korrekte bandbegrenzte Rekonstruktion); wenn deaktiviert, geradlinige
+     Interpolation zwischen Abtastwerten.  Einen sichtbaren Unterschied gibt
+     es nur, wenn benachbarte Abtastpunkte auf dem Bildschirm mindestens
+     ~2&nbsp;px auseinander liegen (d.&nbsp;h. auf der Zeitachse hineingezoomt);
+     bei geringerem Abstand sehen beide identisch aus, und Sinc kostet nur
+     mehr CPU.</p>
+
+  <h3 id="scope-tab-right">Tab „Rechts"</h3>
+  <p><img src="img/Oscilloscope - Right.png" alt="Tab für den rechten Kanal"/></p>
+  <p>Identischer Aufbau wie der Tab „Links" — Kanal-Umschalter, V/div,
+     AC/DC und Sin/Lin, jedoch für den rechten Kanal.</p>
+
+  <h3 id="scope-tab-horizontal">Tab „Horizontal"</h3>
+  <p><img src="img/Oscilloscope - Horizontal.png" alt="Tab Horizontal"/></p>
+
+  <h4 id="scope-tdiv">Zeit / div</h4>
+  <p>Horizontale Auflösung als 1-2-5-10-Liste von <b>1&nbsp;µs/div bis
+     1&nbsp;s/div</b> (kein ns/div).  Rad / Pfeiltasten / ↑↓-Tasten schrittweise
+     durch die Liste; alternativ <b>beliebigen Wert eingeben</b>
+     (<code>µs</code> / <code>ms</code> / <code>s</code>) für eine Einstellung
+     außerhalb der Liste.  Der Signalmittelpunkt bleibt bei einer t/div-Änderung
+     fest — nur die Breite des sichtbaren Fensters ändert sich.</p>
+
+  <h3 id="scope-tab-trigger">Tab „Trigger"</h3>
+  <p><img src="img/Oscilloscope - Trigger.png" alt="Tab Trigger"/></p>
+
+  <h4 id="scope-trigger-channel">Kanal</h4>
+  <p>Paar von L / R-Umschaltern zur Auswahl, welcher Kanal den
+     Trigger-Komparator ansteuert.</p>
+
+  <h4 id="scope-trigger-edge">Flanke</h4>
+  <p>↑ / ↓-Paar.  Steigende Flanke löst aus, wenn das Signal den
+     Trigger-Pegel nach oben überschreitet; fallende Flanke für die
+     Abwärtsrichtung.</p>
+
+  <h4 id="scope-trigger-mode">Modus</h4>
+  <p>A / N / S — Auto, Normal, Single.</p>
+  <ul>
+    <li><b>Auto</b> — läuft frei, zeigt das Signal unabhängig davon an, ob
+        die Trigger-Bedingung erfüllt ist.</li>
+    <li><b>Normal</b> — aktualisiert nur bei einem Trigger-Ereignis; friert
+        den zuletzt getriggerten Frame ein, wenn kein neues Ereignis eintrifft.</li>
+    <li><b>Single</b> — Einzelschuss.  Mit der Play-Schaltfläche rechts
+        daneben scharf schalten; erfasst das nächste Trigger-Ereignis und
+        hält an.</li>
+  </ul>
+
+  <h4 id="scope-trigger-start">Start (Single erneut scharf schalten)</h4>
+  <p>Nur aktiv, wenn der Modus <b>Single</b> ist.  Betätigung schaltet die
+     nächste Einzelschuss-Erfassung scharf.</p>
+
+  <h4 id="scope-trigger-hysteresis">Hysterese</h4>
+  <p>Kontrollkästchen + Schrittselektor in Divisions-Einheiten (0,0 .. 5,0 in
+     0,1-Schritten).  Schmitt-Trigger-Hysterese: ein steigender Trigger löst
+     nur aus, wenn das Signal zuerst unter <code>(Pegel − Hyst)</code> gefallen
+     ist und dann <code>(Pegel + Hyst)</code> nach oben überschritten hat.
+     Dies <b>stabilisiert den Trigger bei schwachen oder verrauschten Signalen</b>
+     — ohne Hysterese verursacht Rauschen um den Pegel eine Vielzahl von
+     Fehlauslösungen und ein zitterndes Signal.  Der Selektor ist ausgegraut,
+     wenn das Kontrollkästchen deaktiviert ist; der Wert bleibt beim
+     Umschalten erhalten.</p>
+
+  <h4 id="scope-trigger-beat">Rekonstruierte Schwebung</h4>
+  <p>Kontrollkästchen, <b>nur aktiv, wenn der Generator auf
+     <a href="generator.html#generator-dualtone">Zwei&nbsp;Töne</a> eingestellt
+     ist</b> (für jede andere Wellenform ausgegraut).  Wenn aktiviert, überlagert
+     das Oszilloskop die <b>abgedimmte |f₁−f₂|-Schwebungshüllkurve</b> der
+     beiden Töne über das Live-Signal, in der Farbe des Trigger-Kanals —
+     so kann die langsame Schwebung, die die beiden nah beieinander liegenden
+     Töne erzeugen, sichtbar gemacht und der Trigger darauf stabilisiert
+     werden.</p>
+
+  <h3 id="scope-tab-presets">Tab „Voreinstellungen"</h3>
+  <p><img src="img/Oscilloscope - Presets.png" alt="Tab Voreinstellungen"/></p>
+  <p>Vollständige Oszilloskop-Konfigurationen speichern und abrufen.  Im
+     <b>Namensfeld</b> einen Namen für die aktuelle Konfiguration eingeben und
+     <b>Speichern</b> drücken — alle kanal- und trigger-spezifischen
+     Einstellungen werden gespeichert (V/div, AC/DC, Sin/Lin, t/div,
+     Trigger-Kanal / Flanke / Modus, Hysterese-Aktivierung + Wert).  Zum
+     Wiederherstellen einen zuvor gespeicherten Namen mit dem <b>Pfeil rechts
+     neben dem Feld</b> auswählen und <b>Laden</b> drücken.  <b>Löschen</b>
+     entfernt die ausgewählte Voreinstellung (nach einer Bestätigung).</p>
+
+  <h3 id="scope-tab-utility">Tab „Dienstprogramme"</h3>
+  <p><img src="img/Oscilloscope - Utility.png" alt="Tab Dienstprogramme"/></p>
+
+  <h4 id="scope-utility-screenshot">Screenshot</h4>
+  <p>Rendert den Oszilloskop-Bereich als PNG in einer wählbaren Auflösung und
+     ermöglicht das <b>Speichern auf Disk</b> (oder Kopieren).  Das Rendering
+     verwendet eine Offscreen-Kopie des Bereichs mit <b>eingeklappten
+     Einstellungs-Tabs</b> (sodass das Signal dominiert) und in der gewählten
+     Größe — unabhängig vom sichtbaren Fenster.</p>
+
+  <h4 id="scope-utility-calibrate">ADC-Kalibrierung</h4>
+  <p>Öffnet den Kalibrierungsdialog, der die Vollaussteuerungsspannung des ADC
+     aus einem bekannten Referenzsignal (einem Kalibrator oder einem
+     Präzisionsgenerator) ableitet und in den Einstellungen speichert.
+     Deaktiviert, bis eine Erfassung läuft.</p>
+
+  <h3 id="scope-tab-save">Tab „Speichern unter…"</h3>
+  <p><img src="img/Oscilloscope - Save to.png" alt="Tab Speichern unter"/></p>
+  <p>Schreibt die zuletzt erfassten Daten in eine Audiodatei.  Das
+     <b>Dauerfeld</b> (eine einzelne Eingabe in Sekunden) legt fest, wie viel
+     gespeichert wird; die <b>Dateiöffnen-Schaltfläche</b> wählt das Ziel; die
+     <b>Speichern-Schaltfläche</b> schreibt die Datei.</p>
+
+  <h3 id="scope-tab-play">Tab „Audio laden"</h3>
+  <p><img src="img/Oscilloscope - Load signal.png" alt="Tab Audio laden"/></p>
+  <p>Spielt eine Audiodatei als Datenquelle des Oszilloskops ab, anstelle des
+     Live-ADC.  Die <b>Audio-öffnen-Schaltfläche</b> wählt die Datei — <b>jede</b>
+     <code>WAV</code> / <code>AIFF</code> / <code>FLAC</code>-Datei, nicht nur
+     von diesem Oszilloskop gespeicherte.  Dies ist ein einfacher Wellenformbe-
+     trachter für die Datei: <b>kein Triggern oder Messen</b> ist für ein
+     geladenes Signal verfügbar, und der FFT-Analysator läuft <b>nicht</b> über
+     das oszilloskopseitig geladene Audio.</p>
+
+  <h2 id="scope-tiles">Tab-Kacheln</h2>
+  <p>Die Tabs <b>Links</b>, <b>Rechts</b>, <b>Horizontal</b> und <b>Trigger</b>
+     zeigen eine Reihe kleiner Kacheln unter dem Tab-Label mit den
+     Schlüsselwerten des jeweiligen Tabs (die übrigen Tabs haben keine).  Kacheln
+     sind <b>passiv und besitzen Tooltips, die den angezeigten Wert erläutern</b>;
+     sie bleiben sichtbar, auch wenn der Tab-Inhalt eingeklappt ist.</p>
+
+  <h3 id="scope-tile-led">Kanal-aktiviert-LED</h3>
+  <p>Eine LED-Kachel auf dem Tab <b>Links</b> / <b>Rechts</b>, die <b>nur
+     angezeigt wird, wenn der Kanal aktiviert ist</b> (fehlt, wenn der Kanal
+     deaktiviert ist).</p>
+
+  <h3 id="scope-tile-vdiv">V/div-Kachel</h3>
+  <p>Die vertikale Auflösung des Kanals in Kurzform (z.&nbsp;B. <code>1m</code>,
+     <code>500m</code>, <code>1</code>).</p>
+
+  <h3 id="scope-tile-acdc">AC/DC-Kachel</h3>
+  <p><code>ac</code> oder <code>dc</code> — die Kopplung des Kanals.</p>
+
+  <h3 id="scope-tile-interp">Interpolations-Kachel</h3>
+  <p><code>sin</code> wenn Sinc-Interpolation aktiv ist, <code>lin</code>
+     wenn nicht.</p>
+
+  <h3 id="scope-tile-tdiv">Zeit/div-Kachel</h3>
+  <p>Die horizontale Auflösung in Kurzform — z.&nbsp;B. <code>200u</code>,
+     <code>1m</code>, <code>20m</code>.</p>
+
+  <h3 id="scope-tile-trigger-channel">Trigger-Kanal-Kachel</h3>
+  <p><code>L</code> oder <code>R</code> — welcher Kanal aktuell zum Scharf
+     schalten des Triggers verwendet wird.</p>
+
+  <h3 id="scope-tile-trigger-edge">Trigger-Flanken-Kachel</h3>
+  <p>↑ für steigende, ↓ für fallende Flanke.</p>
+
+  <h3 id="scope-tile-trigger-mode">Trigger-Modus-Kachel</h3>
+  <p><code>A</code>, <code>N</code> oder <code>S</code> — Auto, Normal, Single.</p>
+
+  <h3 id="scope-tile-trigger-hysteresis">Hysterese-Kachel</h3>
+  <p>Wird nur angezeigt, wenn Hysterese aktiviert ist; die Zahl gibt das
+     Hysterese-Fenster in Divisions an (z.&nbsp;B. <code>H&nbsp;2.0</code>).
+     Das Fehlen dieser Kachel bedeutet, dass die Hysterese deaktiviert ist.</p>
+
+  <hr/>
+  <p class="back"><a href="index.html">◀ Zurück zum Inhalt</a></p>
+
+</body>
+</html>

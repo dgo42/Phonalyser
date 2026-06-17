@@ -114,6 +114,22 @@ public class FftResult {
     public double[] harmonicDbFs;
     public double[] harmonicPct;
 
+    // Raw (pre-.frc-de-embed) complex phasors of the fundamental and of each
+    // distortion peak, stamped by the analyser ({@link #captureRawPeaks}) off
+    // the raw spectrum BEFORE any in-place .frc de-embed.  The DAC-predistortion
+    // correction divides these by the calibration response H(f) itself — de-
+    // embedding both MAGNITUDE and PHASE explicitly, independent of the display
+    // pipeline.  NaN / null when no peaks were captured (then the correction
+    // falls back to the live re/im).
+    public double   rawFundRe = Double.NaN;
+    public double   rawFundIm = Double.NaN;
+    /** Raw phasors at each distortion peak the correction touches: the HARMONIC
+     *  bins for a single tone, the de-rotated INTERMOD-PRODUCT bins
+     *  ({@link #imdProductBin}) for a dual tone.  The two paths never run
+     *  together, so one array serves both. */
+    public double[] rawPeakRe;
+    public double[] rawPeakIm;
+
     // Dual-tone intermod-product grid — for every intermodulation product
     // a·f1 + b·f2 (b ≠ 0) the analyzer de-rotated by a·Φ(F1) + b·Φ(F2) over
     // its lobe, the integer coefficients and the product's bin index, aligned
@@ -278,6 +294,10 @@ public class FftResult {
         c.harmonicHz                 = harmonicHz    != null ? harmonicHz.clone()    : null;
         c.harmonicDbFs               = harmonicDbFs  != null ? harmonicDbFs.clone()  : null;
         c.harmonicPct                = harmonicPct   != null ? harmonicPct.clone()   : null;
+        c.rawFundRe                  = rawFundRe;
+        c.rawFundIm                  = rawFundIm;
+        c.rawPeakRe                  = rawPeakRe     != null ? rawPeakRe.clone()     : null;
+        c.rawPeakIm                  = rawPeakIm     != null ? rawPeakIm.clone()     : null;
         c.imdProductA                = imdProductA   != null ? imdProductA.clone()   : null;
         c.imdProductB                = imdProductB   != null ? imdProductB.clone()   : null;
         c.imdProductBin              = imdProductBin != null ? imdProductBin.clone() : null;
@@ -362,6 +382,59 @@ public class FftResult {
             return preCorrectionPeaks[1][1 + i];   // [1][0] = fundamental, [1][1+i] = harmonic i
         }
         return (harmonicDbFs != null && i < harmonicDbFs.length) ? harmonicDbFs[i] : Double.NaN;
+    }
+
+    /**
+     * Stamps the RAW (pre-.frc-de-embed) fundamental + distortion-peak phasors
+     * off the current {@code re}/{@code im} into {@link #rawFundRe} /
+     * {@link #rawPeakRe} for the DAC-predistortion correction — call while
+     * {@code re}/{@code im} still hold the raw averaged spectrum, i.e. BEFORE
+     * any in-place {@code .frc} de-embed.  The peak array carries the HARMONIC
+     * bins for a single tone (derived from the refined fundamental, index
+     * 0 = 2nd harmonic) and the de-rotated INTERMOD-PRODUCT bins
+     * ({@link #imdProductBin}) for a dual tone — the two correction paths never
+     * run together.  Shared by the GUI analyser worker and the CLI iterative
+     * compensator so both feed the correction identical raw phase.
+     */
+    public void captureRawPeaks() {
+        if (re == null || im == null || freqResolution <= 0 || !(fundamentalHzRefined > 0)) {
+            return;
+        }
+        int fundBin = (int) Math.round(fundamentalHzRefined / freqResolution);
+        if (fundBin <= 0 || fundBin >= re.length) return;
+
+        // Scale the captured phasors by the FFT amplitude factor so |phasor|
+        // equals the ABSOLUTE level (dBFS-linear) at that bin, not raw re/im —
+        // the dual-tone correction reads the magnitude straight off them.  The
+        // factor (= |amplitude_linear| / |re,im|) is constant across the spectrum
+        // and cancels the notch, so deriving it from the fundamental bin is
+        // exact; phases are untouched (the single-tone path reads only arg).
+        double fundMag = Math.hypot(re[fundBin], im[fundBin]);
+        double conv = (amplitudeDbFs != null && fundMag > 0.0)
+                ? Math.pow(10.0, amplitudeDbFs[fundBin] / 20.0) / fundMag : 1.0;
+        rawFundRe = re[fundBin] * conv;
+        rawFundIm = im[fundBin] * conv;
+
+        boolean dualTone = imdProductBin != null && imdProductBin.length > 0;
+        int[] peakBins;
+        if (dualTone) {
+            peakBins = imdProductBin;
+        } else {
+            int n = Math.max(0, harmonicCount);   // harmonic table size set by analyze()
+            peakBins = new int[n];
+            for (int i = 0; i < n; i++) {
+                peakBins[i] = (int) Math.round((i + 2) * fundamentalHzRefined / freqResolution);
+            }
+        }
+        rawPeakRe = new double[peakBins.length];
+        rawPeakIm = new double[peakBins.length];
+        for (int i = 0; i < peakBins.length; i++) {
+            int b = peakBins[i];
+            if (b > 0 && b < re.length) {
+                rawPeakRe[i] = re[b] * conv;
+                rawPeakIm[i] = im[b] * conv;
+            }
+        }
     }
 
     /** Marks {@code center ± half} bins as signal (excluded from the noise set). */

@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theorie: Frequenzgang</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zur Funktionsübersicht</a></p>
+
+  <h1>Frequenzgang</h1>
+
+  <h2 id="purpose">Wozu dient das Modul</h2>
+  <p>Das Frequenzgang-Modul misst die Übertragungsfunktion eines Geräts —
+     Verstärkung und Phasenverschiebung bei jeder Frequenz über das gesamte
+     Band — in einem einzigen Sweep von wenigen Sekunden. Es kann auf ein
+     Filter, einen Verstärker, eine Phonostufe oder einen Lautsprecher
+     gerichtet werden und liefert die Amplituden- und Phasenkurve. Das
+     Ergebnis lässt sich mit einer Referenzkurve (RIAA, IEC) vergleichen oder
+     als Kalibrierungsdatei speichern, die der
+     <a href="fft.html">FFT-Analyser</a> anschließend aus seinen eigenen
+     Messungen herausrechnet.</p>
+
+  <h2 id="how">Funktionsprinzip: Sweep abspielen, Eingang herausrechnen</h2>
+  <p>Die Übertragungsfunktion <i>H</i>(<i>f</i>) eines linearen Systems ist
+     per Definition das Ausgangsspektrum dividiert durch das Eingangsspektrum.
+     Die Messung ist daher konzeptionell einfach: ein bekanntes Signal
+     <i>X</i> durch das Gerät abspielen, den Ausgang <i>Y</i> aufnehmen und
+     dividieren.</p>
+  <div class="eq"><i>H</i>(<i>f</i>) = <i>Y</i>(<i>f</i>) / <i>X</i>(<i>f</i>)<span class="no">(1)</span></div>
+  <p>Das bekannte Signal ist ein <b>logarithmischer (Farina-)
+     Sinus-Sweep</b><sup id="cite-1"><a href="#ref-farina">[1]</a></sup> —
+     derselbe exponentielle Chirp, der im
+     <a href="generator.html#sweeps">Generator-Kapitel</a>, Gleichung (9),
+     beschrieben wird. Er wird gewählt, weil er in jeder Oktave gleich viel
+     Energie enthält (gutes Signal-Rausch-Verhältnis über das gesamte Band)
+     und weil seine harmonischen Verzerrungen sich im Zeitbereich sauber vom
+     linearen Anteil trennen, sodass die Nichtlinearität des Geräts die Kurve
+     nicht verfälscht. Die konzeptionellen Grundlagen sind in
+     <a href="../external/sine-sweep.html">The exponential sine sweep in
+     practice</a> zusammengefasst.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 250" width="100%" height="250" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="fa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+    <rect x="10"  y="40" width="130" height="50" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="75"  y="60" text-anchor="middle" font-weight="bold">sweep X(t)</text>
+    <text x="75"  y="78" text-anchor="middle" fill="#557">pre-rendered</text>
+
+    <rect x="180" y="40" width="90" height="50" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="225" y="62" text-anchor="middle" font-weight="bold">DAC</text>
+
+    <rect x="310" y="40" width="120" height="50" rx="6" fill="#ffe9d6" stroke="#c96"/>
+    <text x="370" y="62" text-anchor="middle" font-weight="bold">DUT</text>
+    <text x="370" y="80" text-anchor="middle" fill="#965">device under test</text>
+
+    <rect x="470" y="40" width="90" height="50" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="515" y="62" text-anchor="middle" font-weight="bold">ADC</text>
+
+    <rect x="600" y="40" width="130" height="50" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="665" y="60" text-anchor="middle" font-weight="bold">record Y(t)</text>
+    <text x="665" y="78" text-anchor="middle" fill="#557">both channels</text>
+
+    <line x1="140" y1="65" x2="178" y2="65" stroke="#446" stroke-width="1.5" marker-end="url(#fa)"/>
+    <line x1="270" y1="65" x2="308" y2="65" stroke="#446" stroke-width="1.5" marker-end="url(#fa)"/>
+    <line x1="430" y1="65" x2="468" y2="65" stroke="#446" stroke-width="1.5" marker-end="url(#fa)"/>
+    <line x1="560" y1="65" x2="598" y2="65" stroke="#446" stroke-width="1.5" marker-end="url(#fa)"/>
+
+    <rect x="250" y="150" width="320" height="76" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="410" y="172" text-anchor="middle" font-weight="bold">deconvolution  H = Y / X</text>
+    <text x="410" y="192" text-anchor="middle" fill="#557">remove transport delay · time-gate</text>
+    <text x="410" y="208" text-anchor="middle" fill="#557">resample to log grid · smooth</text>
+
+    <path d="M 75 90 L 75 188 L 248 188" fill="none" stroke="#446" stroke-width="1.2" marker-end="url(#fa)"/>
+    <text x="90" y="120" fill="#557">same X(t) as reference</text>
+    <path d="M 665 90 L 665 165 L 572 165" fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#fa)"/>
+
+    <rect x="600" y="165" width="140" height="46" rx="6" fill="#fdf2f2" stroke="#a88"/>
+    <text x="670" y="185" text-anchor="middle" font-weight="bold">H(f) curve</text>
+    <text x="670" y="203" text-anchor="middle" fill="#755">magnitude · phase</text>
+    <line x1="570" y1="188" x2="598" y2="188" stroke="#446" stroke-width="1.5" marker-end="url(#fa)"/>
+  </svg>
+  </div>
+
+  <h2 id="reference">Die Referenz muss exakt dem abgespielten Signal entsprechen</h2>
+  <p>Gleichung (1) ist nur dann korrekt, wenn <i>X</i> <em>genau</em> dem
+     Signal entspricht, das den DAC angesteuert hat. Deshalb wird der Sweep
+     <b>vorab in einen Puffer gerendert</b> und nicht erst zur Laufzeit
+     erzeugt: genau derselbe Puffer wird der Entfaltung als Referenz
+     <i>X</i> übergeben, sodass Referenz und Stimulus samplegenau identisch
+     sind. Dasselbe gilt für die Raised-Cosine-Ausblendung am Anfang und Ende
+     des Sweeps (zur Unterdrückung von Start/Stop-Leck-Ripple): die identische
+     Ausblendung wird auf die Referenz angewendet, damit die Randformen nicht
+     voneinander abweichen und der Ripple nach der Division erhalten bleibt.</p>
+
+  <h2 id="deconv">Aufbereitung der Rohdivision</h2>
+  <p>Einige Korrekturen wandeln das rohe <i>Y</i>/<i>X</i> in eine brauchbare
+     Kurve um:</p>
+  <ul>
+    <li><b>Laufzeitkompensation.</b>  Die Signalstrecke DAC→DUT→ADC verzögert
+        die Aufnahme um einige Millisekunden. Im Frequenzbereich ist eine reine
+        Laufzeit eine Phasendrehung, die mit der Frequenz unbegrenzt anwächst
+        und die Eigenphase des Geräts überdeckt. Die Laufzeit wird als
+        Spitzenwert der entfalteten Impulsantwort<sup id="cite-2"><a href="#ref-ir">[2]</a></sup>
+        bestimmt und entfernt, sodass nur die geräteeigene Phase verbleibt.</li>
+    <li><b>Amplitudennormierung.</b>  Die Kurve wird auf den DAC-Ausgangspegel
+        skaliert, sodass ein flacher, verstärkungsfreier Signalpfad bei 0 dB
+        liegt — der Durchlassbereich bei ≈ 1,0.</li>
+    <li><b>Glättung.</b>  Die frequenzaufgelöste Kurve enthält noch
+        Messripple. Ein Savitzky-Golay-Filter<sup id="cite-3"><a href="#ref-sg">[3]</a></sup>
+        — eine gleitende Polynomanpassung — glättet ihn, während ausgeprägte
+        reale Merkmale (Kerben, Resonanzen) wesentlich besser erhalten bleiben
+        als bei einem gleitenden Mittelwert. Die Phase wird im
+        Sinus/Kosinus-Raum geglättet und anschließend rekombiniert, sodass
+        ein ±π-Sprung an einer tiefen Kerbe kein Artefakt erzeugt.</li>
+  </ul>
+  <p>Die Ausgabe erfolgt auf einem logarithmischen Frequenzraster —
+     geometrisch gleichmäßig verteilte Punkte von Start bis Stop — sodass die
+     Ableseauflösung über alle Dekaden gleichmäßig ist. Beide ADC-Kanäle
+     werden parallel entfaltet, sodass ein Stereogerät in einem einzigen
+     Durchlauf charakterisiert wird.</p>
+
+  <h2 id="cal">Kalibrierung: Messung des Messsystems</h2>
+  <p>Ein Frequenzgang-Sweep misst die <em>gesamte</em> Signalkette: DAC,
+     Verkabelung und ADC — zusammen mit dem eigentlichen Messobjekt. Um das
+     Gerät zu isolieren, wird zunächst ein bekannt-flacher Pfad gemessen (ein
+     direkter DAC→ADC-Loopback oder ein Referenzkabel) und als
+     <b>Kalibrierung</b> gespeichert. Die Division einer späteren Messung
+     durch die Kalibrierung hebt die Eigenantwort der Kette auf und lässt
+     nur das Gerät übrig — genau die Kreuzspektrum-/Referenzkanal-Idee aus
+     dem Abschnitt
+     <a href="../external/fft-analysis.html">FFT essentials</a>,
+     auf einen vollständigen Sweep angewendet.</p>
+  <div class="note"><b>Die Kalibrierung wird erst bei der Darstellung angewendet.</b>
+     Die gespeicherte Messung ist die rohe Entfaltung; die geladene
+     Kalibrierung wird erst beim Zeichnen der Kurve (und beim Speichern)
+     herausgerechnet. Damit lässt sich die Kalibrierung austauschen oder ein
+     Vergleich mit RIAA/IEC-Referenzkurven durchführen und die vorhandene
+     Messung sofort neu darstellen — ohne erneuten Sweep. Dieselben
+     Kalibrierungsdateien versorgen den FFT-Analyser mit seinem
+     <a href="fft.html#plot">De-Embedding</a>.</div>
+
+  <h2 id="who">Einbindung in das System</h2>
+  <p>Anders als Oszilloskop und FFT, die sich ein Eingangsgerät teilen,
+     benötigt der Frequenzgang-Sweep <b>DAC und ADC gleichzeitig und
+     exklusiv</b>. Er fordert daher alle anderen Module auf anzuhalten und
+     wartet, bis die Geräte tatsächlich frei sind, bevor er beide Richtungen
+     selbst öffnet — siehe
+     <a href="audio-backend.html#who">Audio-Backend</a>. Er steuert den
+     <a href="generator.html#sweeps">Generator</a> für den Sweep und erzeugt
+     die Kalibrierungsdateien, die der
+     <a href="fft.html">FFT-Analyser</a> verwendet.</p>
+
+  <h2 id="refs">Literatur</h2>
+  <ol class="refs">
+    <li id="ref-farina"><a href="#cite-1">1.</a>
+        A. Farina,
+        <a href="http://pcfarina.eng.unipr.it/Public/Papers/226-AES00.PDF">"Simultaneous measurement of impulse response and distortion with a swept-sine technique"</a>,
+        108th AES Convention, 2000; hands-on walkthrough:
+        <a href="../external/sine-sweep.html">local summary</a>.</li>
+    <li id="ref-ir"><a href="#cite-2">2.</a>
+        Impulse response and deconvolution —
+        <a href="https://en.wikipedia.org/wiki/Impulse_response">Wikipedia: Impulse response</a>,
+        <a href="https://en.wikipedia.org/wiki/Deconvolution">Wikipedia: Deconvolution</a>.</li>
+    <li id="ref-sg"><a href="#cite-3">3.</a>
+        Savitzky-Golay smoothing filter —
+        <a href="https://en.wikipedia.org/wiki/Savitzky%E2%80%93Golay_filter">Wikipedia: Savitzky–Golay filter</a>.</li>
+  </ol>
+
+  <p class="back"><a href="derotation-accuracy.html">◀ De-rotation accuracy</a> ·
+     <a href="index.html">Theory of operation</a></p>
+
+</body>
+</html>

@@ -998,11 +998,8 @@ public final class FftView extends AbstractFreqDomainView {
             double peakDbFs = displayedFundDbFs();
             if (!Double.isFinite(peakDbFs)) peakDbFs = lastResult.fundamentalDbFs;
             if (lastImd != null) {
-                double dbvOffsetDb = prefs.getDbvOffsetDb();
-                double f1DbFs = lastImd.f1DbV - dbvOffsetDb;
-                double f2DbFs = lastImd.f2DbV - dbvOffsetDb;
-                if (Double.isFinite(f1DbFs)) peakDbFs = Math.max(peakDbFs, f1DbFs);
-                if (Double.isFinite(f2DbFs)) peakDbFs = Math.max(peakDbFs, f2DbFs);
+                if (Double.isFinite(lastImd.f1DbFs)) peakDbFs = Math.max(peakDbFs, lastImd.f1DbFs);
+                if (Double.isFinite(lastImd.f2DbFs)) peakDbFs = Math.max(peakDbFs, lastImd.f2DbFs);
             }
             // Range is stored canonically in dBFS; the unit conversion happens only at
             // draw / readout time, so every unit pans + zooms identically.
@@ -1802,8 +1799,8 @@ public final class FftView extends AbstractFreqDomainView {
         int count = 2 + 2 * (ImdResult.MAX_ORDER - 1);
         double[] hz   = new double[count];
         double[] dbFs = new double[count];
-        hz[0]   = imd.f1Hz;  dbFs[0] = imd.f1DbV - refDbV;
-        hz[1]   = imd.f2Hz;  dbFs[1] = imd.f2DbV - refDbV;
+        hz[0]   = imd.f1Hz;  dbFs[0] = imd.f1DbFs;
+        hz[1]   = imd.f2Hz;  dbFs[1] = imd.f2DbFs;
         int idx = 2;
         for (int k = 2; k <= ImdResult.MAX_ORDER; k++) {
             hz[idx]   = imd.dnLHz[k];
@@ -1850,9 +1847,9 @@ public final class FftView extends AbstractFreqDomainView {
         // strictly above their own dots so the dot itself is never
         // obscured.
         gc.setForeground(color(ColorRole.HARMONIC_DOT));
-        Point p1 = dotScreenPos(plot, imd.f1Hz, imd.f1DbV - refDbV, unit, freqMin, freqMax,
+        Point p1 = dotScreenPos(plot, imd.f1Hz, imd.f1DbFs, unit, freqMin, freqMax,
                 magTop, magBot, logFreq);
-        Point p2 = dotScreenPos(plot, imd.f2Hz, imd.f2DbV - refDbV, unit, freqMin, freqMax,
+        Point p2 = dotScreenPos(plot, imd.f2Hz, imd.f2DbFs, unit, freqMin, freqMax,
                 magTop, magBot, logFreq);
         if (p1 != null || p2 != null) {
             String t1 = "F1 " + formatFrequency(imd.f1Hz);
@@ -2431,12 +2428,11 @@ public final class FftView extends AbstractFreqDomainView {
 
         // ── Centred F1 / F2 headers (bold). ────────────────────────────
         gc.setFont(monoBoldFont);
-        double dbvOffsetDb = prefs.getDbvOffsetDb();   // dBFs = dBV − global ADC offset
         drawCentred(gc, String.format("F1: %.4f Hz   %.2f dBFS   %.2f dBV",
-                imd.f1Hz, imd.f1DbV - dbvOffsetDb, imd.f1DbV), centreX, y);
+                imd.f1Hz, imd.f1DbFs, imd.f1DbV), centreX, y);
         y += lineH;
         drawCentred(gc, String.format("F2: %.4f Hz   %.2f dBFS   %.2f dBV",
-                imd.f2Hz, imd.f2DbV - dbvOffsetDb, imd.f2DbV), centreX, y);
+                imd.f2Hz, imd.f2DbFs, imd.f2DbV), centreX, y);
         y += lineH;
 
         // ── Span line (re-uses the THD format from a Result if any). ──

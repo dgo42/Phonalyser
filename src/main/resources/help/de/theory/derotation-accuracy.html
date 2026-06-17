@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theorie: De-Rotations-Genauigkeit</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zur Theorie der Funktionsweise</a></p>
+
+  <h1>De-Rotations-Genauigkeit &amp; Langzeit-Mittelungsstabilität</h1>
+
+  <h2 id="purpose">Die Frage, die diese Seite beantwortet</h2>
+  <p>Kohärente Mittelung funktioniert nur, weil jeder aufgenommene Block vor
+     dem Aufsummieren auf eine gemeinsame Phase zurückgedreht wird — die
+     <a href="fft.html#kappa">blockweise De-Rotation</a>, die das Kapitel zum
+     <a href="fft.html">FFT-Analysator</a> beschreibt. Dieser Drehwinkel wird
+     selbst <em>gemessen</em> und trägt daher einen kleinen Fehler. Die
+     naheliegende Sorge: Wenn der De-Rotations-Winkel auf jedem Block
+     geringfügig falsch ist, frisst dieser Fehler dann stillschweigend in die
+     gemittelten Harmonischen-Pegel hinein — pflanzt er ein falsches
+     Grundrauschen oder lässt die Harmonischen auf einem langen Lauf zu niedrig
+     erscheinen?</p>
+  <p>Diese Seite rechnet es durch. Die kurze Antwort ist beruhigend:
+     <b>die Betragsgenauigkeit einer kohärenten Mittelung wird vom
+     Bin-Signal-Rausch-Verhältnis und der Anzahl der Mittelungen bestimmt — dem
+     gewöhnlichen 1/√<i>n</i>-Gesetz — nicht von der De-Rotation.</b> Der eigene
+     Fußabdruck der De-Rotation auf den gemessenen Pegeln ist mikroskopisch
+     (Mikro-Dezibel) und — entscheidend — er wächst <em>nicht</em> mit der
+     Mittelungszeit, sofern der Drehwinkel auf jedem Block neu gemessen statt von
+     Block zu Block aufintegriert wird. Der Rest dieser Seite zeigt, warum, und
+     was es kostet, es falsch zu machen.</p>
+
+  <div class="note"><b>Warum das überhaupt durchrechnen.</b>  Der FFT-Analysator
+     zielt darauf ab, THD mit Vertrauen bis hinunter zu 10⁻⁸&nbsp;% anzugeben,
+     was bedeutet, Harmonische über Mittelungen, die stundenlang laufen, zig
+     Dezibel unterhalb des Einzelschuss-Grundrauschens herauszugraben. Auf
+     diesem Niveau wäre ein systematischer Fehler von einigen Mikro-dB aus der
+     De-Rotation harmlos — ein langsamer, sich aufakkumulierender jedoch nicht.
+     Die Unterscheidung zwischen „harmlos und konstant“ und „klein, aber
+     akkumulierend“ ist der ganze Punkt.</div>
+
+  <h2 id="setup">Das durchgerechnete Beispiel</h2>
+  <p>Alle Zahlen unten gelten für einen konkreten, anspruchsvollen Fall: ein
+     schwacher Ton, sehr tief gemittelt.</p>
+  <table class="controls">
+    <tr><th>Größe</th><th>Symbol</th><th>Wert</th></tr>
+    <tr><td>Abtastrate</td><td><i>f</i><sub>s</sub></td><td>384&nbsp;000 Hz</td></tr>
+    <tr><td>FFT-Länge</td><td><i>N</i></td><td>2²¹ = 2&nbsp;097&nbsp;152</td></tr>
+    <tr><td>Blockdauer</td><td><i>T</i> = <i>N</i>/<i>f</i><sub>s</sub></td><td>5.46 s</td></tr>
+    <tr><td>Bin-Abstand</td><td>Δ<i>f</i> = <i>f</i><sub>s</sub>/<i>N</i></td><td>0.183 Hz</td></tr>
+    <tr><td>Ton</td><td><i>f</i><sub>0</sub></td><td>1000 Hz, Bin-gerastet</td></tr>
+    <tr><td>Rest-Drift</td><td>δ<i>f</i></td><td>±0.06 ppm ≈ ±60 µHz</td></tr>
+    <tr><td>Tonpegel</td><td>—</td><td>−80 dBV</td></tr>
+    <tr><td>Grundrauschen pro Bin</td><td>—</td><td>−145 dBV (pro Bin)</td></tr>
+  </table>
+  <p>Die Größe, die alles entscheidet, ist das <b>Bin-Signal-Rausch-Verhältnis</b>
+     ρ jeder Linie — die Ton- oder Harmonischen-Energie in ihrem Bin gegen die
+     Rauschenergie in demselben Bin. Für dieses Beispiel liegen der Grundton und
+     die ersten beiden messbaren Harmonischen bei:</p>
+  <table class="controls">
+    <tr><th>Linie</th><th>Pegel</th><th>SNR pro Bin ρ</th></tr>
+    <tr><td>Grundton</td><td>−80 dBV</td><td>3.2×10⁶ (65 dB)</td></tr>
+    <tr><td>2. Harmonische</td><td>−130 dBV</td><td>31.6 (15 dB)</td></tr>
+    <tr><td>3. Harmonische</td><td>−135 dBV</td><td>10 (10 dB)</td></tr>
+  </table>
+  <p>Höhere Harmonische liegen hier unterhalb des Grundrauschens pro Bin und
+     treten erst hervor, sobald die Mittelung es abgesenkt hat; die
+     De-Rotations-Referenz wird aus den Linien gebildet, die <em>oberhalb</em>
+     liegen.</p>
+
+  <h2 id="drift">Warum der Winkel auf jedem Block neu gemessen werden muss</h2>
+  <p>Wenn der Ton exakt auf ein Bin gerastet ist und die Blöcke
+     zusammenhängend ausgelesen werden, wäre der Phasenschritt von Block zu
+     Block null. Die Differenz von wenigen ppm zwischen DAC- und ADC-Takt lässt
+     einen winzigen Rest: Der Ton kriecht um einen Bruchteil eines Bins, was
+     sich als langsamer Phasen-Walk von einem Block zum nächsten zeigt von</p>
+  <div class="eq">Δφ = 2π · δ<i>f</i> · <i>T</i> ≈ 2.1×10⁻³ rad ≈ 0.12°<span class="no">(1)</span></div>
+  <p>pro Block innerhalb eines zusammenhängenden Laufs. Der Frequenzversatz
+     innerhalb eines Blocks beträgt einige Zehntausendstel eines Bins, sodass
+     der durch Scalloping verlorene Pegel Teile in 10⁷ ausmacht —
+     vernachlässigbar. Die Drift ist daher kein Betragsproblem; sie ist eine
+     <em>wandernde Phase</em>, die die De-Rotation Block für Block abstreift. Das
+     Regime ist <b>rauschbegrenzt, nicht driftbegrenzt</b> — solange der
+     Drehwinkel für jeden Block auf diesem Block gemessen und nicht aus dem
+     vorigen vorhergesagt wird (der Grund wird im Abschnitt
+     <a href="#noncontig">nicht-zusammenhängende Frames</a> konkret).</p>
+
+  <h2 id="angle">Wie genau der De-Rotations-Winkel bekannt ist</h2>
+  <p>In einem Block enthält das Grundton-Bin den Ton-Phasor plus einen
+     Rausch-Phasor. Der daraus abgelesene Winkel ist die wahre Phase plus ein
+     Fehler, dessen Größe bei hohem SNR die senkrechte Rauschkomponente geteilt
+     durch die Signalamplitude ist:</p>
+  <div class="eq">σ<sub>θ</sub> = 1 / √(2·ρ<sub>F</sub>)
+     = 1 / √(6.3×10⁶) ≈ 4.0×10⁻⁴ rad ≈ 0.023°<span class="no">(2)</span></div>
+  <p>Ein einzelner Block legt den De-Rotations-Winkel also auf etwa
+     <b>zwei Hundertstel eines Grades</b><sup id="cite-1"><a href="#ref-crlb">[1]</a></sup>
+     fest. Das ist die Präzision der gesamten Methode — und sie stammt fast
+     vollständig vom 65-dB-Grundton.</p>
+  <p>Man könnte stattdessen den Grundton <em>und</em> die Harmonischen
+     zusammenfassen: Jede Harmonische <i>h</i> dreht sich unter einem
+     Timing-Schlupf <i>h</i>× so schnell, sodass jede eine unabhängige Ablesung
+     der gemeinsamen Drift liefert. Als gewichtete Kleinste-Quadrate-Anpassung
+     kombiniert wird die Winkelvarianz zu</p>
+  <div class="eq">Var(φ̂<sub>0</sub>) = 1 / (2 · Σ<sub><i>h</i></sub> <i>h</i>²·ρ<sub>h</sub>)<span class="no">(3)</span></div>
+  <p>doch mit einem 65-dB-Grundton ist Σ <i>h</i>²ρ<sub>h</sub> = 3.2×10⁶ + 216 —
+     die Harmonischen fügen 0.007&nbsp;% hinzu. Das Zusammenfassen bringt hier im
+     Wesentlichen nichts; <b>beide Methoden ergeben σ<sub>θ</sub> ≈ 0.023°</b>,
+     grundton-dominiert.</p>
+  <div class="note"><b>Die Gewichtung ist nicht optional.</b>  Das Zusammenfassen
+     hilft nur, wenn jede Linie nach ihrer eigenen Stärke gewichtet wird
+     (∝ <i>h</i>²·ρ<sub>h</sub>). Das <em>eigene</em> blockweise Phasenrauschen
+     der 3. Harmonischen beträgt 1/√(2ρ₃) ≈ 12.8°. <em>Ungewichtet</em>
+     hineingemittelt würde es ≈ 4° in die Referenz einbringen und die
+     0.023°-Grundton-Schätzung zerstören. Die Zulassungsregel „die Harmonische
+     muss über dem Grundrauschen stehen“ ist ein grober Ersatz dafür; die
+     korrekte Regel ist, jede Linie nach <i>h</i>²·ρ<sub>h</sub> zu gewichten.
+     Das Zusammenfassen zahlt sich wirklich nur aus, wenn der Grundton
+     <b>absichtlich unterdrückt</b> wird — hinter einem Twin-T-Notch — sodass die
+     Harmonischen auf der sanften Flanke vergleichbares Gewicht tragen (der Fall
+     der <a href="fft.html#phaseref">zusammengefassten Referenz</a>).</p></div>
+
+  <h2 id="accumulate">Baut sich der Fehler über eine lange Mittelung auf?</h2>
+  <p>Das ist der Kern der Sache. Der blockweise Winkelfehler ist von Block zu
+     Block unabhängig und mittelwertfrei. Zwei sehr unterschiedliche Dinge
+     können mit einem solchen Fehler geschehen, abhängig ganz davon, <em>wie die
+     Referenz mitgeführt wird</em>:</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 290" width="100%" height="290" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="da" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+    <!-- axes -->
+    <line x1="70" y1="40"  x2="70" y2="250" stroke="#446" stroke-width="1.2"/>
+    <line x1="70" y1="145" x2="780" y2="145" stroke="#446" stroke-width="1.2" marker-end="url(#da)"/>
+    <text x="60" y="44"  text-anchor="end" fill="#557">phase</text>
+    <text x="60" y="60"  text-anchor="end" fill="#557">error</text>
+    <text x="785" y="160" text-anchor="end" fill="#557">block number →</text>
+    <text x="74" y="138" fill="#557">0</text>
+
+    <!-- bounded (absolute / closed-loop): jitter around zero -->
+    <path d="M 70 145 L 110 132 L 150 156 L 190 138 L 230 150 L 270 134 L 310 152 L 350 140 L 390 148 L 430 136 L 470 150 L 510 142 L 550 147 L 590 138 L 630 149 L 670 143 L 710 146 L 750 142"
+          fill="none" stroke="#33a" stroke-width="1.8"/>
+    <text x="120" y="120" fill="#338" font-weight="bold">measured every block (absolute / locked)</text>
+    <text x="120" y="200" fill="#338">stays bounded — errors average out,</text>
+    <text x="120" y="216" fill="#338">the deep average only stiffens</text>
+
+    <!-- random-walk (open-loop integrator): wanders away -->
+    <path d="M 70 145 L 110 150 L 150 142 L 190 154 L 230 150 L 270 162 L 310 158 L 350 172 L 390 168 L 430 184 L 470 178 L 510 196 L 550 205 L 590 200 L 630 218 L 670 226 L 710 222 L 750 238"
+          fill="none" stroke="#c33" stroke-width="1.8"/>
+    <text x="470" y="262" fill="#a33" font-weight="bold">integrated from the previous block (open loop)</text>
+    <text x="560" y="120" fill="#a33">random-walks away —</text>
+    <text x="560" y="136" fill="#a33">the tone slowly de-coheres</text>
+  </svg>
+  </div>
+
+  <ul>
+    <li><b>Auf jedem Block absolut gemessen</b> (oder von einer geschlossenen
+        Nachführschleife gehalten): Die Fehler sind unabhängig und
+        mittelwertfrei, also <em>mitteln</em> sie sich heraus. Die angewandte
+        blockweise Korrektur behält ihre 0.023°-Streuung, doch die Phase des
+        <em>akkumulierten</em> Tons zieht sich zusammen wie</li>
+  </ul>
+  <div class="eq">σ<sub>θ,acc</sub>(<i>n</i>) = σ<sub>θ</sub> / √<i>n</i><span class="no">(4)</span></div>
+  <ul>
+    <li><b>Von Block zu Block aufintegriert</b> durch einen frei laufenden
+        Zähler: Dieselben kleinen Fehler <em>akkumulieren</em> nun — ihre
+        Varianz wächst proportional zur Anzahl der Blöcke, die Referenz wandert
+        davon, und der Ton dekohäriert langsam (sein Pegel sackt ab, umso
+        schlimmer je länger man mittelt). Dies ist der eine Mechanismus, der
+        <em>tatsächlich</em> einen mit der Zeit wachsenden Betragsfehler pflanzen
+        würde.</li>
+  </ul>
+  <p>Die daraus folgende Regel ist absolut: <b>halte die De-Rotations-Referenz
+     blockweise gemessen oder von einer begrenzten Schleife gehalten; lass sie
+     niemals frei laufen.</b> Phonalyser tut genau das, und das ist es, was die
+     8–12-stündigen Mittelungen im <a href="fft.html#longrun">FFT-Kapitel</a>
+     möglich macht.</p>
+
+  <h2 id="magnitude">Was es mit den gemessenen Pegeln macht</h2>
+  <p>Nach der De-Rotation trägt die Harmonische <i>h</i> eine Restdrehung von
+     −<i>h</i>·(Blockfehler). Das Akkumulieren und Entwickeln dieser kleinen
+     Drehung teilt ihre Wirkung in zwei sauber trennbare Teile.</p>
+
+  <h3>Ein konstanter Betrags-Bias — Mikro-Dezibel</h3>
+  <p>Die gemittelte Amplitude eines zufällig zitternden Phasors liegt ein
+     Haar unter der wahren Amplitude:</p>
+  <div class="eq">Δ|<i>A</i><sub>h</sub>| / <i>A</i><sub>h</sub>
+     = −½ · <i>h</i>² · σ<sub>θ</sub>²<span class="no">(5)</span></div>
+  <p>Für dieses Beispiel sind das −0.69&nbsp;µdB am Grundton, −2.7&nbsp;µdB an
+     der 2. Harmonischen, −6.2&nbsp;µdB an der 3. Es ist der <em>einzige</em>
+     wirklich von der De-Rotation verursachte Pegelterm, er ist konstant (die
+     Mittelung kann ihn nicht entfernen) — und bei wenigen Mikro-Dezibel ist er
+     irrelevant.</p>
+
+  <h3>Ein zufälliger Pegelfehler — das gewöhnliche 1/√<i>n</i></h3>
+  <p>Das additive Rauschen in jedem Bin bewegt ebenfalls die gemessene
+     Amplitude, und das ist es, was die Betragsgenauigkeit tatsächlich
+     begrenzt:</p>
+  <div class="eq">σ<sub>|<i>A</i>h|</sub> / <i>A</i><sub>h</sub>
+     = 1 / √(2 · ρ<sub>h</sub> · <i>n</i>)<span class="no">(6)</span></div>
+  <p>Stellt man die beiden über einen Bereich von Mittelungstiefen nebeneinander,
+     zeigt sich der Abstand (1σ, in dB):</p>
+  <table class="controls">
+    <tr><th>Mittelungen <i>n</i></th><th>F — De-Rot-Bias / zufällig</th><th>H2 zufällig</th><th>H3 zufällig</th></tr>
+    <tr><td>1</td><td>−0.7 µdB / 3.5×10⁻³</td><td>1.09</td><td>1.92</td></tr>
+    <tr><td>100</td><td>−0.7 µdB / 3.5×10⁻⁴</td><td>0.109</td><td>0.194</td></tr>
+    <tr><td>1000</td><td>−0.7 µdB / 1.1×10⁻⁴</td><td>0.034</td><td>0.061</td></tr>
+    <tr><td>10000</td><td>−0.7 µdB / 3.5×10⁻⁵</td><td>0.011</td><td>0.019</td></tr>
+  </table>
+  <p>Für <em>jede</em> Linie liegt der De-Rotations-Bias vier bis sechs
+     Größenordnungen unter dem zufälligen Fehler des additiven Rauschens.
+     Unterdessen fällt das Grundrauschen selbst um 10·log₁₀<i>n</i> — auf
+     −165/−175/−185 dBV bei <i>n</i> = 10²/10³/10⁴ —, was die vergrabenen
+     Harmonischen in Sicht hebt. <b>Der De-Rotations-Bias pflanzt kein
+     Grundrauschen, das dies blockieren würde.</b> Die Betragsgenauigkeit wird
+     vom Bin-SNR und <i>n</i> bestimmt, Punkt.</p>
+
+  <h2 id="noncontig">Nicht-zusammenhängende Blöcke nach Glitch-Verwerfung</h2>
+  <p>Der <a href="fft.html#rejection">Diskontinuitäts-Detektor</a> wirft
+     korrupte Blöcke hinaus — genau diese Filterung lässt eine lange Mittelung
+     überhaupt konvergieren, weil der Akkumulator nur jemals saubere Blöcke
+     sieht. Doch die Überlebenden sind <em>nicht zusammenhängend</em>:
+     beliebige Lücken sitzen dort, wo verworfene Blöcke fallen gelassen
+     wurden.</p>
+  <p>Über eine solche Lücke hinweg ist die absolute Phase des Tons um eine
+     unbekannte ganze-plus-Bruchteil-Anzahl von Zyklen vorangeschritten, sodass
+     der Winkel, den der nächste saubere Block benötigt, effektiv <b>gleichförmig
+     über die vollen ±180°</b> ist — nicht der Kriech von 0.12° pro Block eines
+     zusammenhängenden Laufs. Die De-Rotation muss den ganzen Kreis abdecken.
+     <b>Dies ist unter einer Bedingung harmlos:</b> Der Winkel wird auf jedem
+     Block neu gemessen (direkt aus dem Grundton dieses Blocks ausgelesen),
+     niemals aus dem vorigen Block vorhergesagt oder von einem frei laufenden
+     Zähler mitgeführt — der nicht wissen kann, wie lang die Lücke war. Dies ist
+     derselbe Vorbehalt wie zuvor, hier von ratsam zu zwingend erhoben:
+     nicht-zusammenhängende Blöcke <em>erzwingen</em> absolute De-Rotation.</p>
+  <p>Es kostet nichts an Kohärenz. Das Bin-Modell ist für jede absolute Phase
+     identisch; die De-Rotation entfernt diese Phase exakt; nur der
+     <em>Schätzfehler</em> pflanzt sich fort, und seine Größe — Gleichung (2) —
+     hängt nicht vom Wert des absoluten Winkels ab. Wie wild die Winkel auch
+     sind, die obige Analyse gilt wortwörtlich: Die beliebige absolute Phase
+     wäscht sich heraus, der Rest ist reines Rauschen. Es gibt auch keine
+     Harmonischen-Wrap-Mehrdeutigkeit, denn das Drehen von Bin <i>h</i> um
+     <i>h</i>×(den gemessenen Grundton-Winkel) ergibt die korrekte Drehung für
+     jeden Betrag von Phasen-Wrap.</p>
+
+  <h2 id="reference">Einrasten auf die laufende Mittelung — ohne Selbstvergiftung</h2>
+  <p>Wie die Grundton-De-Rotation tatsächlich gebildet wird:</p>
+  <ul>
+    <li><b>Ein absolutes Modell, am ersten Block verankert.</b>  Jeder Block
+        wird um einen Winkel gedreht, der proportional zu seinem absoluten
+        Sample-Abstand vom ersten beitragenden Block ist, unter Verwendung einer
+        Sub-Bin-Frequenz κ, die an diesem ersten Block fixiert ist (Harmonische
+        reiten <i>h</i>× auf diesem Winkel). Dies ist die absolute,
+        nie-integrierte Drehung, die die obigen Abschnitte verlangen.</li>
+    <li><b>Die Frequenz einmal verfeinert, über die ersten 24 sauberen
+        Blöcke.</b>  Die langsame Phasensteigung des de-rotierten Grundtons wird
+        über diese Blöcke gefittet — eine Basislinie weit länger als ein
+        Block-Hop — und ein einziges Mal in κ eingefaltet. Dieser Fit ist etwa
+        hundertmal enger als eine Einzelblock-Spitzenschätzung, und er tötet die
+        langsame Rampe, die ein Rest-κ-Fehler andernfalls auf einer langen
+        Mittelung verursachen würde (der Punkt
+        <a href="fft.html#kappa">„warum κ über das ganze Segment gefittet wird“</a>).</li>
+    <li><b>Dann ein sanftes Phasen-Einrasten auf die <em>tiefe</em>
+        Mittelung.</b>  Die frisch ausgelesene Grundton-Phase jedes neuen Blocks
+        wird mit der Phase des <em>akkumulierten</em> Tons verglichen (die
+        √<i>m</i>-stabilisierte Referenz, nicht der erste Block), und ein kleiner
+        Bruchteil — eine Nachführverstärkung von 0.10 — der Differenz wird in den
+        laufenden Zeitursprung zurückgefaltet. Die volle Korrektur wird nur als
+        einmalige Neuausrichtung nach einem echten Re-Sync-Sprung angewandt.</li>
+  </ul>
+
+  <h3>Vergiftet das Einrasten auf eine <em>verrauschte</em> Mittelung sie?</h3>
+  <p>Die akkumulierte Referenz ist selbst eine Schätzung — ihre Phasenvarianz
+     ist σ<sub>θ</sub>²/<i>m</i> nach <i>m</i> Blöcken. Könnte die Schleife
+     dieses Rauschen in einen Betragsfehler einfalten? Nein, und die Schranke ist
+     klein und <em>schrumpfend</em>:</p>
+  <ul>
+    <li><b>Die Referenz versteift sich, sie driftet nicht.</b>  Ein neuer Block
+        bewegt den akkumulierten Winkel nur um ~1/<i>m</i>, sodass die Referenz
+        auf einen immer stabileren Konsens einrastet.</li>
+    <li><b>Der Pegel-Fußabdruck verschwindet mit der Tiefe.</b>  Über einen Lauf
+        der Tiefe <i>M</i> gemittelt, ergibt sich der Beitrag des Referenz-
+        Rauschens zum Pegel einer Harmonischen zu</li>
+  </ul>
+  <div class="eq">Δ|<i>A</i><sub>h</sub>| / <i>A</i><sub>h</sub>
+     ≈ ½ · <i>h</i>² · σ<sub>θ</sub>² · (ln <i>M</i>) / <i>M</i><span class="no">(7)</span></div>
+  <ul>
+    <li>— Nano-Dezibel am Grundton (3×10⁻⁸ / 5×10⁻⁹ / 6×10⁻¹⁰ dB bei
+        <i>M</i> = 10²/10³/10⁴), und mit der Tiefe immer kleiner werdend, sechs
+        Größenordnungen unter dem zufälligen Fehler des additiven Rauschens.</li>
+    <li><b>Kein Wegdriften.</b>  Die Schleife wird in der <em>Differenz</em>
+        zwischen dem frischen Block und der Mittelung auf null getrieben, aber im
+        Gleichtakt ist sie frei — der ganze akkumulierte Phasor darf langsam als
+        ein Ganzes rotieren. Eine gemeinsame Drehung lässt jeden Pegel und jede
+        <em>relative</em> Harmonischen-Phase unangetastet; nur die gemeldete
+        <em>absolute</em> Phase wandert, was für Pegel oder THD keine Rolle
+        spielt.</li>
+    <li><b>Die niedrige Verstärkung ist die Absicherung.</b>  Bei voller
+        Verstärkung würde die Schleife das gesamte Rauschen jedes Blocks in den
+        Zeitursprung falten, was frühe-gegen-späte Blöcke einem Random Walk
+        unterwerfen und dekohärieren <em>würde</em>. Die 0.10-Verstärkung
+        tiefpassfiltert es zu einem stationären Jitter weit unter σ<sub>θ</sub>;
+        die volle Verstärkung feuert nur bei einem echten Re-Sync-Sprung, wo die
+        Differenz Signal ist, nicht Rauschen.</li>
+  </ul>
+  <p>Die Referenz der laufenden Mittelung trägt also Rauschen, doch ihre
+     Pegelwirkung verschwindet wie (ln <i>M</i>)/<i>M</i>, statt zu akkumulieren —
+     der Gesamt-Bias bleibt die konstanten wenigen Mikro-dB von Gleichung (5).</p>
+
+  <h2 id="overlap">Überlappung: die effektive Anzahl der Mittelungen</h2>
+  <p>Das 1/√<i>n</i>-Gesetz setzt <em>unabhängige</em> Blöcke voraus.
+     Überlappende Blöcke teilen sich Samples, sodass ihr Bin-Rauschen korreliert
+     ist und die Varianz nicht so schnell fällt. Die korrekte Ersetzung ist eine
+     <b>effektive unabhängige Anzahl</b>:</p>
+  <div class="eq"><i>n</i><sub>eff</sub> = <i>n</i> / <i>F</i><sub>corr</sub>,
+     &nbsp;&nbsp; <i>F</i><sub>corr</sub> = 1 + 2·Σ<sub><i>j</i>≥1</sub> ρ<sub><i>j</i></sub><span class="no">(8)</span></div>
+  <p>wobei ρ<sub><i>j</i></sub> die Selbst-Überlappung der Fensterfunktion beim
+     Hop <i>j</i> ist, ungleich null nur, solange sich Blöcke noch überlappen
+     (4 Nachbarn bei 75&nbsp;% Überlappung, 8 bei 87.5&nbsp;%, 16 bei
+     93.75&nbsp;%). Jeder Zufallsfehler-Term oben nimmt <i>n</i> →
+     <i>n</i><sub>eff</sub>.</p>
+  <p>Das bemerkenswerte Ergebnis betrifft das in einer gegebenen Menge an
+     <em>Wanduhr-Zeit</em> erreichte Grundrauschen. Die Anzahl der Blöcke in der
+     Zeit <i>T</i> ist <i>n</i> = <i>T</i>/((1−ov)·<i>N</i>), sodass das
+     erreichbare Rauschleistungs-Grundrauschen wie NENBW·(1−ov)·<i>F</i><sub>corr</sub>
+     skaliert — und im Grenzfall hoher Überlappung kollabiert dieses Produkt zu
+     einer fenster-unabhängigen Identität:</p>
+  <div class="eq"><i>M</i> = NENBW · (1−ov) · <i>F</i><sub>corr</sub> → 1
+     &nbsp;&nbsp;(jede Fensterfunktion)<span class="no">(9)</span></div>
+  <p>Berechnet für vier sehr unterschiedliche Fensterfunktionen, das
+     Grundrauschen pro Zeiteinheit relativ zum besten:</p>
+  <table class="controls">
+    <tr><th>Fensterfunktion</th><th>NENBW (Bins)</th><th>75 %</th><th>87.5 %</th><th>93.75 %</th></tr>
+    <tr><td>Blackman-Harris (−92 dB)</td><td>2.00</td><td>1.00</td><td>1.00</td><td>1.00</td></tr>
+    <tr><td>Flat-top (5-Term)</td><td>3.77</td><td>1.00</td><td>1.00</td><td>1.00</td></tr>
+    <tr><td>Dolph-Chebyshev (−220 dB)</td><td>2.86</td><td>1.00</td><td>1.00</td><td>1.00</td></tr>
+    <tr><td>HFT248D (−248 dB)</td><td>5.65</td><td>1.22</td><td>1.00</td><td>1.00</td></tr>
+  </table>
+  <p>Zwei Konsequenzen fallen direkt heraus, und sie stimmen unabhängig mit
+     Heinzels empfohlenen Überlappungen
+     überein<sup id="cite-2"><a href="#ref-heinzel">[2]</a></sup>:</p>
+  <ul>
+    <li><b>Oberhalb der empfohlenen Überlappung jeder Fensterfunktion erreichen
+        alle vier Fensterfunktionen dasselbe Grundrauschen in derselben Zeit.</b>
+        Eine breitere Hauptkeule (mehr Rauschen pro Block) wird genau durch
+        feineres dekorreliertes Hopping zurückgezahlt. Das breite HFT248D holt
+        erst bei 87.5&nbsp;% auf; darunter zahlt es einen Aufschlag.</li>
+    <li><b>93.75&nbsp;% bringt keinen Rauschvorteil gegenüber 87.5&nbsp;%</b> —
+        das Grundrauschen ist identisch — es verdoppelt lediglich die
+        Transformationsrate. Oberhalb der empfohlenen Überlappung ist eine weitere
+        Erhöhung reine Rechenverschwendung.</li>
+  </ul>
+  <p>Das Erreichen von <i>n</i><sub>eff</sub> = 100 / 1000 / 10000
+     unabhängig-äquivalenten Mittelungen dauert daher bei dieser Blocklänge
+     grob 4.5 min / 45 min / 7.6 h an Aufnahme — die Tiefmittelungs-Zeilen sind
+     echt lange Läufe.</p>
+
+  <h2 id="window">Welche Fensterfunktion — und warum sie <em>nicht</em> nach dem Rauschen gewählt wird</h2>
+  <p>Da das Grundrauschen pro Zeit oberhalb der empfohlenen Überlappung gleich
+     ist, wird die Fensterfunktion auf den <em>anderen</em> beiden Achsen
+     gewählt:</p>
+  <table class="controls">
+    <tr><th>Fensterfunktion</th><th>NENBW</th><th>Nebenkeulen-Grundrauschen</th><th>Amplituden-Ebenheit</th><th>Rolle</th></tr>
+    <tr><td>Blackman-Harris (−92 dB)</td><td>2.00</td><td>−92 dB</td><td>0.83 dB</td><td>schmalste, günstigstes Rauschen</td></tr>
+    <tr><td>Flat-top (5-Term)</td><td>3.77</td><td>≈ −88 dB</td><td>±0.01 dB</td><td>Amplitudengenauigkeit außerhalb des Bins</td></tr>
+    <tr><td>Dolph-Chebyshev (−220 dB)</td><td>2.86</td><td>−220 dB</td><td>—</td><td>tiefe gleichförmige Nebenkeulen</td></tr>
+    <tr><td>HFT248D (−248 dB)</td><td>5.65</td><td>−248 dB</td><td>0.0007 dB</td><td>tiefste Nebenkeulen + eben</td></tr>
+  </table>
+  <ol>
+    <li><b>Amplituden-Ebenheit wird hier nicht benötigt.</b>  Der Ton ist
+        Bin-gerastet und driftet nur einige Zehntausendstel eines Bins, sodass
+        selbst Blackman-Harris' 0.83-dB-Halbbin-Scallop Teile in 10⁷ eines dB
+        kostet. Flat-tops kennzeichnender Vorteil ist bei einem Bin-verriegelten
+        Ton verschwendet — was den schlichten Flat-top mit seiner breiten
+        Hauptkeule und nur −88 dB Nebenkeulen zur <em>schlechtesten</em> Wahl für
+        diese Aufgabe macht.</li>
+    <li><b>Leck aus dem −80-dBV-Grundton ist der eigentliche Unterscheider.</b>
+        Für einen Bin-exakten Ton hat eine Kosinus-Summen-Fensterfunktion an
+        jedem ganzzahligen Versatz eine Nullstelle, sodass das
+        Inter-Harmonischen-Leck nahezu null ist. Doch Drift und Re-Sync-Glitches
+        schieben den Ton einen Bruchteil eines Bins aus der Mitte, und das
+        Grundrauschen, das er dann an entfernten Bins pflanzt, wird vom
+        Nebenkeulen-Pegel bestimmt: Blackman-Harris' −92 dB setzt einen
+        −172-dBV-Sockel unter das Spektrum — <em>oberhalb</em> der bei
+        <i>n</i> = 10⁴ herausgegrabenen −185-dBV-Harmonischen, sodass er als
+        Signal getarnt erscheinen könnte. Die Fensterfunktionen mit tiefen
+        Nebenkeulen setzen diesen Sockel auf −300 dBV und darunter — 130 dB
+        Reserve, die garantiert, dass eine herausgegrabene Harmonische das Gerät
+        ist, nicht Grundton-Leck.</li>
+  </ol>
+  <div class="note"><b>Empfehlung: HFT248D bei 87.5&nbsp;% Überlappung.</b>  Bei
+     dieser Überlappung entspricht seine Rauscheffizienz der von Blackman-Harris,
+     während seine −248-dB-Nebenkeulen die schwachen Harmonischen-Bins gegen den
+     starken Grundton unter realen Drift- und Glitch-Bedingungen immunisieren.
+     Dolph-Chebyshev (−220 dB) bei 87.5&nbsp;% ist ein leichterer Zweitplatzierter.
+     Blackman-Harris bei 75&nbsp;% ist <em>nur</em> dann richtig, wenn
+     rechenbegrenzt und die Kette nachweislich glitch-frei und Bin-verriegelt ist.
+     Schlichter Flat-top: überspringen.</div>
+
+  <h2 id="bottom">Fazit</h2>
+  <ul>
+    <li><b>Der De-Rotations-Winkel</b> ist auf σ<sub>θ</sub> ≈ 0.023° pro Block
+        bekannt (grundton-dominiert). Er akkumuliert nicht, und sein
+        Pegel-Fußabdruck ist ein konstantes −<i>h</i>²·0.69&nbsp;µdB.</li>
+    <li><b>Die Betragsgenauigkeit</b> ist das gewöhnliche kohärente 1/√<i>n</i>,
+        bestimmt vom Bin-SNR — der De-Rotations-Bias liegt vier bis sechs
+        Größenordnungen darunter und pflanzt kein Grundrauschen.</li>
+    <li><b>Die Referenz muss blockweise gemessen oder von einer Schleife begrenzt
+        werden</b>, niemals frei integriert; das Einrasten auf die tiefe
+        Mittelung ist sicher, weil ihr eigenes Rauschen nur
+        ½<i>h</i>²σ<sub>θ</sub>²·(ln <i>M</i>)/<i>M</i> kostet — verschwindend,
+        nicht akkumulierend.</li>
+    <li><b>Die Überlappung</b> geht nur über <i>n</i><sub>eff</sub> =
+        <i>n</i>/<i>F</i><sub>corr</sub> ein; oberhalb der empfohlenen
+        Überlappung jeder Fensterfunktion ist das pro Zeiteinheit erreichte
+        Grundrauschen fenster- und überlappungs-unabhängig, sodass
+        <b>HFT248D bei 87.5&nbsp;%</b> wegen der Nebenkeulen-Reserve gewählt wird,
+        nicht wegen des Rauschens.</li>
+  </ul>
+
+  <h2 id="refs">Literatur</h2>
+  <ol class="refs">
+    <li id="ref-crlb"><a href="#cite-1">1.</a>
+        Der 1/√(2ρ) Phasen-Schätzfehler eines Tons in Rauschen ist die
+        Cramér–Rao-Schranke bei hohem SNR —
+        <a href="https://en.wikipedia.org/wiki/Cram%C3%A9r%E2%80%93Rao_bound">Wikipedia: Cramér–Rao bound</a>.</li>
+    <li id="ref-heinzel"><a href="#cite-2">2.</a>
+        Äquivalente Rauschbandbreite, Fenster-Selbst-Überlappungs-Korrelation und
+        die empfohlenen Überlappungswerte — G. Heinzel, A. Rüdiger, R. Schilling,
+        <a href="https://holometer.fnal.gov/GH_FFT.pdf">"Spectrum and spectral density estimation by the discrete Fourier transform (DFT), including a comprehensive list of window functions"</a>, 2002.</li>
+  </ol>
+
+  <p class="back"><a href="fft.html">◀ FFT-Analysator</a> ·
+     <a href="index.html">Theorie der Funktionsweise</a> ·
+     weiter: <a href="freq-resp.html">Frequenzgang ▶</a></p>
+
+</body>
+</html>

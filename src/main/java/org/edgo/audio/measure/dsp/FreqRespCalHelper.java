@@ -748,6 +748,24 @@ public class FreqRespCalHelper {
     }
 
     /**
+     * Divides a single complex phasor {@code (re, im)} by the calibration
+     * response {@code H = magLin·e^{j·phaseRad}} — i.e. takes the {@code .frc}
+     * out of one measured bin, de-embedding BOTH magnitude and phase
+     * ({@code X/H = X·e^{−j·phaseRad}/magLin}).  Same divide
+     * {@link #applyCompensationInPlace} does per bin, exposed for the
+     * DAC-predistortion correction which de-embeds the raw fundamental /
+     * harmonic / intermod-product phasors one at a time.  A non-positive
+     * {@code magLin} (no cal at this frequency) returns the phasor unchanged.
+     *
+     * @return {@code [re, im]} of {@code X/H}
+     */
+    public double[] deEmbed(double re, double im, double magLin, double phaseRad) {
+        if (!(magLin > 0.0)) return new double[]{ re, im };
+        double c = Math.cos(phaseRad), s = Math.sin(phaseRad);
+        return new double[]{ (re * c + im * s) / magLin, (im * c - re * s) / magLin };
+    }
+
+    /**
      * Interpolates the calibration's H(f) at an arbitrary frequency.  Uses
      * log-frequency as the interpolation variable.  Magnitude in dB; phase via
      * complex unit-phasor interpolation to handle ±180° wraps at notches.

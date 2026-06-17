@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Frequenzgang</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zum Inhaltsverzeichnis</a></p>
+
+  <h1>Frequenzgang</h1>
+  <p>Diese Seite beschreibt die Bedienelemente des Frequenzgang-Analysators.  Informationen zur
+     Messmethode — ein vorgerenderter logarithmischer Sweep, der gegen die abgespielte Referenz
+     entfaltet wird, um Betrag und Phase über das gesamte Band in einem Durchlauf zu ermitteln —
+     finden Sie unter
+     <a href="theory/freq-resp.html">Funktionsprinzip ▸ Frequenzgang</a> sowie in der
+     <a href="external/sine-sweep.html">Zusammenfassung zum logarithmischen Sweep (Farina)</a>.</p>
+  <p>Der Frequenzgang befindet sich auf einem <b>eigenen Hauptreiter</b> (neben dem kombinierten
+     Generator-/Oszilloskop-/FFT-Reiter).  Er gibt einen Sweep-Sinus über das Ausgabegerät aus,
+     nimmt das Rücksignal am Eingang auf und stellt den gemessenen <b>Betrag</b> (und wahlweise die
+     <b>Phase</b>) des Prüflings als Funktion der Frequenz dar — mit optionaler RIAA-/IEC-Referenzkurve
+     sowie einer Differenzkurve (Messung minus Referenz) für Phono- und Filterarbeiten.</p>
+
+  <p><img src="img/freqresp-pane.png" alt="Frequenzgang-Bereich"/></p>
+
+  <h2 id="freqresp-overview">Auf einen Blick</h2>
+  <ol class="features">
+    <li><b>Betragsdarstellung.</b>  Logarithmische Frequenzachse (horizontal), lineare dB-Achse
+        (vertikal).  Zeigt den linken <em>oder</em> rechten Kanal (die Schaltflächen L / R im
+        Kopfbereich sind gegenseitig ausschließend).  Siehe
+        <a href="#freqresp-buttons">Kopfbereich-Schaltflächen</a>.</li>
+    <li><b>Phasenkurve.</b>  Optionale ±180°-Kurve auf einer zweiten rechten Achse,
+        umgeschaltet über die Phase-Schaltfläche im Kopfbereich.</li>
+    <li><b>RIAA-/IEC-Referenz.</b>  Überblendung der RIAA-Wiedergabe-/Aufnahme-Kurve,
+        wahlweise mit der IEC-Tieftonkorrektur, zur Überprüfung einer Phono-Stufe —
+        <a href="#freqresp-tab-riaa">Reiter RIAA &amp; IEC</a>.</li>
+    <li><b>Vergleich (Messung − Referenz).</b>  Subtraktion der Referenz von der Messung
+        und automatische Einpassung in ein enges ±2&nbsp;dB-Fenster — die Abweichung
+        vom RIAA-Ideal, direkt ablesbar.  <a href="#freqresp-tab-riaa">Reiter RIAA &amp;
+        IEC</a>.</li>
+    <li><b>Fadenkreuz-Anzeige.</b>  Ein gestricheltes Kreuz folgt dem Mauszeiger mit einem
+        schwebenden Kasten, der Frequenz, Betrag und (bei eingeblendeter Phase) Phase sowie
+        das Vergleichs-Δ anzeigt.  <a href="#freqresp-crosshair">Fadenkreuz</a>.</li>
+    <li><b>Schwenken &amp; Zoomen (Mausrad).</b>  Dieselbe Rad-Konvention wie in allen
+        Phonalyser-Ansichten — <a href="#freqresp-panzoom">Schwenken &amp;
+        Zoomen</a>.</li>
+    <li><b>Kalibrierung de-embedding.</b>  Laden Sie eine oder mehrere <code>.frc</code>-/
+        CSV-Korrekturdateien, um eine bekannte Schnittstellenantwort von der Messung
+        abzuziehen.  <a href="#freqresp-tab-calibration">Reiter Kalibrierung laden</a>.</li>
+  </ol>
+
+  <h2 id="freqresp-buttons">Kopfbereich-Schaltflächen</h2>
+  <p>Die Schaltflächenleiste befindet sich oberhalb der Darstellung.</p>
+  <table class="controls">
+    <tr><th>Schaltfläche</th><th>Funktion</th></tr>
+    <tr><td><b>L</b> (cyan)</td>
+        <td>Zeigt den Betrag des linken Kanals.  Schließt <b>R</b> aus —
+            die Auswahl einer Option blendet die andere aus.</td></tr>
+    <tr><td><b>R</b> (gelb)</td>
+        <td>Zeigt den Betrag des rechten Kanals.</td></tr>
+    <tr><td><b>Phase</b></td>
+        <td>Phasenkurve und die rechte ±180°-Achse ein-/ausblenden.</td></tr>
+    <tr><td><b>Auto-Setup</b></td>
+        <td>Passt das vertikale (Betrags-)Fenster an die sichtbare Kurve an und lässt
+            etwas Abstand oberhalb des höchsten Punktes.  Die Frequenzspanne wird
+            nicht verändert.</td></tr>
+    <tr><td><b>Maximieren</b></td>
+        <td>Setzt auf die Standardansicht zurück — volle Frequenzspanne (1&nbsp;Hz bis
+            zur Nyquist-Grenze) und +20 … −150&nbsp;dB vertikal.</td></tr>
+    <tr><td><b>Play</b> (grün)</td>
+        <td>Startet einen Mess-Sweep; während eines laufenden Sweeps ändert sich der
+            Tooltip zu „Stopp" und ein Fortschrittsdialog erscheint (siehe
+            <a href="#freqresp-measure">Messung durchführen</a>).</td></tr>
+  </table>
+
+  <h2 id="freqresp-panzoom">Schwenken &amp; Zoomen (Mausrad)</h2>
+  <p>Im Darstellungsbereich gilt:
+     <b>Rad</b>: Betrag-(Vertikal-)Achse schwenken;
+     <b>Shift+Rad</b>: Frequenz-(Horizontal-)Achse schwenken;
+     <b>Ctrl+Rad</b>: Betragsachse zoomen (Rad nach oben = heranzoomen);
+     <b>Ctrl+Shift+Rad</b>: Frequenzachse zoomen (Rad nach oben = heranzoomen).
+     Beide Zoomfunktionen sind <em>am Cursor verankert</em> — der Wert (dB oder
+     Frequenz) unter dem Zeiger bleibt beim Skalieren fixiert.  Dies entspricht der
+     Konvention in den Oszilloskop- und FFT-Ansichten.  Jede Bildlaufleiste schwenkt
+     nur eine Achse — kein Zoomen — und ihr Schieberegler wird durch die Ansicht
+     dimensioniert, sodass er den Zoom widerspiegelt (er wächst/schrumpft beim
+     Skalieren).  Klicken Sie auf die leere Leistenbahn, um seitenweise zum Zeiger
+     zu scrollen, oder halten Sie die Taste gedrückt, bis der Regler den Cursor
+     erreicht.</p>
+
+  <h2 id="freqresp-crosshair">Fadenkreuz-Anzeige</h2>
+  <p>Wenn der Mauszeiger in den Darstellungsbereich bewegt wird, erscheinen ein
+     gestricheltes Kreuz und ein schwebender Kasten mit der <b>Frequenz</b> am Cursor
+     (begrenzt auf die Nyquist-Grenze), dem <b>Betrag (dB) in Zeilerhöhe</b> auf der
+     linken Achse (<code>y = …</code>), dem Betrag der <b>L</b>-/<b>R</b>-Kurve in dB,
+     der <b>Phase</b> in
+     Grad bei eingeblendeter Phasenkurve sowie dem <b>Vergleichs-Δ</b> im
+     Vergleichsmodus.  Die Anzeige erlischt, wenn der Zeiger den Bereich verlässt.</p>
+
+  <h2 id="freqresp-tabs">Einstellungsreiter</h2>
+  <p>Die Einstellungsleiste enthält sieben Reiter.  Wie andernorts zeigt die Leiste ein
+     Überlauf-Symbol <code>»</code>, wenn mehr Reiter vorhanden sind als angezeigt werden können.
+     Die Reiter Einstellungen, RIAA, Kalibrierung und Voreinstellungen zeigen im
+     eingeklappten Zustand Kacheln mit den wichtigsten Werten (Dienstprogramm, Speichern
+     und Laden haben keine); bewegen Sie den Mauszeiger über eine Kachel für einen
+     erläuternden Tooltip.</p>
+
+  <h3 id="freqresp-tab-settings">Einstellungen</h3>
+  <p><img src="img/FreqResp - Settings.png" alt="Reiter Einstellungen"/></p>
+  <table class="controls">
+    <tr><th>Steuerelement</th><th>Hinweise</th></tr>
+    <tr><td>Startfrequenz, Hz</td>
+        <td>Untere Grenze des Sweeps.  ≥ 1 Hz.</td></tr>
+    <tr><td>Stoppfrequenz, Hz</td>
+        <td>Obere Grenze des Sweeps, bis zur Nyquist-Grenze.</td></tr>
+    <tr><td>Amplitude (RMS)</td>
+        <td>Ausgangspegel zum DAC in Volt RMS bezogen auf die DAC-Kalibrierung;
+            der Tooltip schaltet eine dBV-Anzeige um.  Akzeptiert
+            µV / mV / V / dBV.</td></tr>
+    <tr><td>FFT-Größe (Ds)</td>
+        <td>Analyselänge der Entfaltung als Zweierpotenz von 64k bis 16M.  Längere
+            Werte liefern feinere Frequenzauflösung und bessere Rauschunterdrückung
+            auf Kosten einer längeren Sweep-Dauer; die Beschriftung zeigt die
+            resultierende Sweep-Dauer.</td></tr>
+    <tr><td>Sweep-Punkte</td>
+        <td>Anzahl der Frequenzpunkte des Sweeps (8192 … 10M).  Das Rad wechselt
+            zwischen Zweierpotenzen und einem vom Abtastrate abgeleiteten
+            „Nyquist/2"-Eintrag.</td></tr>
+    <tr><td>Vorlauf, s</td>
+        <td>Stille-/Einregelzeit vor dem eigentlichen Sweep, damit der Signalweg
+            im eingeschwungenen Zustand ist, wenn die Messung beginnt.</td></tr>
+    <tr><td>Dither</td>
+        <td>Dither-Tiefe für den generierten Sweep, Aus oder 1–31 Bit —
+            dekorreliert den Quantisierungsfehler im abgespielten Signal.</td></tr>
+  </table>
+  <div class="note">Die <b>maximal analysierte Frequenz</b> (als % der Nyquist-Frequenz)
+     wird im Reiter <a href="preferences.html#prefs-freqresp">Einstellungen ▸
+     Frequenzgang</a> festgelegt, nicht hier; sie begrenzt den Bereich, in dem die
+     Sweep-Entfaltung zuverlässig ist.</div>
+
+  <h3 id="freqresp-tab-riaa">RIAA &amp; IEC</h3>
+  <p><img src="img/FreqResp - RIAA IEC.png" alt="Reiter RIAA &amp; IEC"/></p>
+  <table class="controls">
+    <tr><th>Steuerelement</th><th>Hinweise</th></tr>
+    <tr><td>RIAA-Kurve anzeigen</td>
+        <td>Überblendung der RIAA-Referenz, ausgerichtet bei 1 kHz.  Diese Option
+            aktiviert die drei nachfolgenden Steuerelemente.</td></tr>
+    <tr><td>RIAA umkehren</td>
+        <td>Umschalten der Referenz zwischen Aufnahme- (Kodierung) und Wiedergabe-
+            (Dekodierung) Kurve — wählen Sie die zum Prüfling passende.</td></tr>
+    <tr><td>IEC-Korrektur</td>
+        <td>Fügt den IEC-Tiefton-Hochpassfilter (~20 Hz) zur Referenz hinzu.</td></tr>
+    <tr><td>Vergleich (Messung − Referenz)</td>
+        <td>Stellt die geglättete Differenz zwischen Messung und RIAA-Referenz
+            um eine 0-dB-Mittellinie dar und passt die Ansicht automatisch auf
+            ca. 2 Hz – 25 kHz bei ±2 dB ein.  Erfordert eine vorhandene Messung.
+            Ein blinkendes Banner zeigt die aktive Referenz an.</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-presets">Voreinstellungen</h3>
+  <p><img src="img/FreqResp - Presets.png" alt="Reiter Voreinstellungen"/></p>
+  <p>Speichern und Abrufen vollständiger Einstellungen- und RIAA-Konfigurationen.</p>
+  <table class="controls">
+    <tr><th>Steuerelement</th><th>Hinweise</th></tr>
+    <tr><td>Namensfeld (Kombinationsfeld)</td>
+        <td>Neuen Voreinstellungsnamen eingeben oder vorhandenen auswählen.</td></tr>
+    <tr><td>Speichern</td>
+        <td>Speichert die aktuellen Sweep- und RIAA-Einstellungen unter diesem Namen;
+            ausgegraut, wenn die aktuellen Einstellungen bereits der gewählten
+            Voreinstellung entsprechen.</td></tr>
+    <tr><td>Laden</td>
+        <td>Wendet die gewählte Voreinstellung auf den aktiven Bereich an.</td></tr>
+    <tr><td>Löschen</td>
+        <td>Entfernt die gewählte Voreinstellung (mit Bestätigung).</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-utility">Dienstprogramm</h3>
+  <p><img src="img/FreqResp - Utility.png" alt="Reiter Dienstprogramm"/></p>
+  <table class="controls">
+    <tr><th>Schaltfläche</th><th>Funktion</th></tr>
+    <tr><td>Screenshot</td>
+        <td>Frequenzgang-Darstellung speichern oder kopieren.</td></tr>
+    <tr><td>DAC-Vollaussteuerung kalibrieren</td>
+        <td>Kalibrierungsassistent für den DAC-Referenzpegel (1 kHz / 1 V RMS).</td></tr>
+    <tr><td>ADC-Vollaussteuerung kalibrieren</td>
+        <td>Kalibrierungsassistent für den ADC-Referenzpegel (misst eine 1-kHz-
+            Referenz am Eingang).</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-calibration">Kalibrierung laden…</h3>
+  <p><img src="img/FreqResp - Load calibration.png" alt="Reiter Kalibrierung laden"/></p>
+  <p>Eine Liste von Kalibrierungszeilen.  Jede geladene, mit <b>Aktiv</b> versehene
+     <code>.frc</code>-/CSV-Datei wird de-embedded (subtrahiert) von der Messung,
+     sodass die Darstellung den Prüfling mit entfernter bekannter Schnittstellenantwort
+     zeigt.</p>
+  <table class="controls">
+    <tr><th>Steuerelement (pro Zeile)</th><th>Hinweise</th></tr>
+    <tr><td>Pfad</td>
+        <td>Die geladene Datei oder „Keine Kalibrierung geladen".</td></tr>
+    <tr><td>Aktiv</td>
+        <td>Korrektur dieser Datei aktivieren/deaktivieren ohne sie zu entladen —
+            deaktivierte Zeilen verbleiben in der Liste für eine schnelle
+            Wiederverwendung.</td></tr>
+    <tr><td>Laden</td>
+        <td>Datei-Öffnen-Schaltfläche — wählt eine <code>.frc</code>- oder
+            CSV-Korrekturdatei für diese Zeile.</td></tr>
+    <tr><td>Löschen (×)</td>
+        <td>Entlädt die Datei dieser Zeile (behält den Aktiv-Status).</td></tr>
+    <tr><td>Hinzufügen (+)</td>
+        <td>Fügt eine weitere Zeile hinzu, um eine zweite Korrektur in Reihe
+            zu schalten.</td></tr>
+    <tr><td>Entfernen (−)</td>
+        <td>Löscht diese Zeile.</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-saveto">Speichern unter…</h3>
+  <p><img src="img/FreqResp - Save to.png" alt="Reiter Speichern unter"/></p>
+  <p>Speichert die aktuelle Messung als stereo CSV (Frequenz, L/R-Betrag in
+     dB, L/R-Phase in Grad).  Die Schaltfläche „Speichern" fragt stets nach einem
+     Pfad, vorausgefüllt mit einem zeitgestempelten <code>freqresp_…&period;frc</code>-Namen.
+     Speichern ohne vorhandene Messung meldet „Zuerst einen Sweep durchführen".</p>
+  <p class="note"><b>Auto-Reload:</b> Wenn die gespeicherte Datei bereits als
+     Kalibrierungszeile im <a href="fft.html">FFT</a>-Bereich oder in diesem
+     Frequenzgang-Bereich geladen ist (siehe <a href="#freqresp-tab-calibration">Kalibrierung
+     laden…</a>), wird diese Zeile unmittelbar nach dem Speichern automatisch neu
+     eingelesen — ein erneutes Messen und Überschreiben einer Kalibrierung wird sofort
+     wirksam, ohne erneutes Durchsuchen.</p>
+
+  <h3 id="freqresp-tab-loadfrom">Laden von…</h3>
+  <p><img src="img/FreqResp - Load from.png" alt="Reiter Laden von"/></p>
+  <p>Lädt eine zuvor gespeicherte Stereo-CSV zurück in die Darstellung.  Eine geladene
+     Datei wird als bereits korrigiert behandelt (sie wird nicht neu kalibriert), und
+     ein nicht blinkendes Banner zeigt ihren Pfad oben rechts in der Darstellung an.</p>
+
+  <h2 id="freqresp-measure">Messung durchführen</h2>
+  <p>Drücken Sie <b>Play</b>, um den Sweep zu starten.  Aufnahme und Generator-Wiedergabe
+     werden für den Lauf übernommen, ein modaler Fortschrittsdialog zeigt einen
+     Live-RMS-gegen-Zeit-Pegel, und die Betrags- (und Phasen-)Darstellung aktualisiert
+     sich nach Abschluss der Entfaltung.  Die Gesamtdauer entspricht dem Vorlauf zuzüglich
+     der durch FFT-Größe und Abtastrate bestimmten Sweep-Dauer.  Da die Referenz der exakt
+     vorgerenderte Sweep ist, der abgespielt wurde, ergibt sich die wahre Übertragungsfunktion
+     des Prüflings, keine Schätzung — siehe
+     <a href="theory/freq-resp.html">Funktionsprinzip ▸ Frequenzgang</a>.</p>
+
+</body>
+</html>

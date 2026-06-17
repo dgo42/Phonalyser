@@ -1865,6 +1865,7 @@ public final class FftAnalyzerWorker {
 
         if (accumulated) {
             overlayAccumulatorOnto(r);          // r.amplitudeDbFs ← RAW cumulative average
+            r.captureRawPeaks();                // refresh raw F + peak phasors off the averaged re/im
         }
         // The whole post-average pipeline — mains rejection → recomputeStats →
         // .frc calibration → dBV lift — now runs in the UI (FftView), ONCE per

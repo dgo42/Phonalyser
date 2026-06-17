@@ -18,10 +18,15 @@
 
 package org.edgo.audio.measure.gui.fft.predistortion;
 
+import java.util.function.DoubleFunction;
+
 import org.eclipse.swt.widgets.Display;
+import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.HarmonicCompensation;
 import org.edgo.audio.measure.dsp.HarmonicCompensation.GeneratorCorrections;
 import org.edgo.audio.measure.dsp.IntermodCompensation;
@@ -119,6 +124,10 @@ public final class PredistortionEngine {
     private final FftController       fft;
     private final FftView             view;
     private final Listener            listener;
+    /** Loaded {@code .frc} corrections — the engine de-embeds their phase off
+     *  the raw measured phasors itself when computing the DAC correction (the
+     *  store only holds the loaded files). */
+    private final FreqRespCorrectionStore correctionStore;
 
     private volatile boolean stopRequested;
     /** Ends only the CURRENT averaging round early (the loop continues). */
@@ -148,12 +157,14 @@ public final class PredistortionEngine {
     @Getter private double               bestThdPct = Double.MAX_VALUE;
 
     public PredistortionEngine(Display display, GeneratorController gen,
-                               FftController fft, FftView view, Listener listener) {
-        this.display  = display;
-        this.gen      = gen;
-        this.fft      = fft;
-        this.view     = view;
-        this.listener = listener;
+                               FftController fft, FftView view,
+                               FreqRespCorrectionStore correctionStore, Listener listener) {
+        this.display         = display;
+        this.gen             = gen;
+        this.fft             = fft;
+        this.view            = view;
+        this.correctionStore = correctionStore;
+        this.listener        = listener;
     }
 
     /** Spawns the loop on a daemon thread.  Each round averages {@code baseAverages}
@@ -276,15 +287,23 @@ public final class PredistortionEngine {
 
                 // Accumulate this round's residual and hot-apply for the next.
                 phase = Phase.APPLYING;
+                final boolean chanLeft = r.channelLeft;
                 if (dualTone) {
-                    imd.accumulate(r, r.fundamentalHzRefined, r.fundamental2HzRefined, COMP_STEP);
+                    imd.accumulate(r, r.fundamentalHzRefined, r.fundamental2HzRefined, COMP_STEP,
+                            calResponseAt(r.fundamentalHzRefined,  chanLeft)[1],
+                            calResponseAt(r.fundamental2HzRefined, chanLeft)[1]);
                     imdAppl = imd.copy();
-                    IntermodCompensation.GeneratorCorrections gc = imd.toGeneratorCorrections();
+                    Preferences pd = Preferences.instance();
+                    IntermodCompensation.GeneratorCorrections gc = imd.toGeneratorCorrections(
+                            f -> calResponseAt(f, chanLeft), pd.getAdcFsVoltageRms(), dualToneFundamentalVrms());
                     ui(() -> gen.applyDualToneCompensation(gc.ampRatios(), gc.coefA(), gc.coefB(), gc.phiInits()));
                 } else {
-                    harm.accumulate(r, COMP_STEP);
+                    harm.accumulate(r, COMP_STEP, calResponseAt(r.fundamentalHzRefined, chanLeft)[1]);
                     harmAppl = harm.copy();
-                    GeneratorCorrections gc = harm.toGeneratorCorrections(target);
+                    Preferences p = Preferences.instance();
+                    GeneratorCorrections gc = harm.toGeneratorCorrections(
+                            target, f -> calResponseAt(f, chanLeft),
+                            p.getAdcFsVoltageRms(), p.getGenAmplitudeVrms());
                     ui(() -> gen.applyCompensation(gc.ampRatios(), gc.harmonicNumbers(), gc.phiInits()));
                 }
                 phase = Phase.SETTLING;
@@ -311,6 +330,49 @@ public final class PredistortionEngine {
     public int getCollectRemainingAverages() {
         if (phase != Phase.COLLECTING) return 0;
         return Math.max(0, collectTargetAvg - fft.completedAnalyses());
+    }
+
+    /** Combined calibration response {@code [magLin, phaseRad]} the loaded
+     *  {@code .frc} corrections impose at {@code freqHz} for the analysed channel
+     *  — the product of {@code H(f)} over every loaded entry (its left or right
+     *  calibration per {@code left}): magnitudes multiply, phases add.  Entries
+     *  whose calibration does not span {@code freqHz} contribute unit response,
+     *  matching the display de-embed which only corrects in-range bins.  The
+     *  correction divides each raw fundamental / harmonic / intermod-product
+     *  phasor by this (de-embedding both magnitude and phase). */
+    private double[] calResponseAt(double freqHz, boolean left) {
+        double mag = 1.0, phase = 0.0;
+        if (correctionStore != null && freqHz > 0.0) {
+            for (FreqRespCorrectionStore.Entry e : correctionStore.getEntries()) {
+                FreqRespCalibration cal = left ? e.getCalibration().left()
+                                               : e.getCalibration().right();
+                if (cal == null || cal.freqs.length == 0) continue;
+                if (freqHz < cal.freqs[0] || freqHz > cal.freqs[cal.freqs.length - 1]) continue;
+                double[] h = FreqRespCalHelper.interpolate(cal, freqHz);
+                mag   *= h[0];
+                phase += h[1];
+            }
+        }
+        return new double[]{ mag, phase };
+    }
+
+    /** The loaded {@code .frc} response as a frequency function for the given
+     *  channel — so the save path applies the same de-embed as the live apply. */
+    public DoubleFunction<double[]> calResponseFor(boolean left) {
+        return f -> calResponseAt(f, left);
+    }
+
+    /** The F1 tone's DAC output level (Vrms) — the dual-tone correction's ratio
+     *  reference (the products are injected relative to F1).  Derived from the
+     *  total generator amplitude and the dual-tone split: with weights
+     *  {@code w₁ = split%, w₂ = 100−split%}, tone-1 carries
+     *  {@code total · w₁/√(w₁²+w₂²)} of the combined RMS. */
+    public double dualToneFundamentalVrms() {
+        Preferences p = Preferences.instance();
+        double w1 = p.getGenDualToneSplitPct() / 100.0;
+        double w2 = 1.0 - w1;
+        double norm = Math.hypot(w1, w2);
+        return norm > 0.0 ? p.getGenAmplitudeVrms() * w1 / norm : p.getGenAmplitudeVrms();
     }
 
     /** Dual-tone distortion figure being minimised: the combined intermod-product

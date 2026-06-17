@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.DoubleFunction;
 
 import org.edgo.audio.measure.chart.FftChartExporter;
 import org.edgo.audio.measure.cli.util.ArgParser;
@@ -225,6 +226,17 @@ public class IterativeCompensateMode {
                 ? FreqRespCalHelper.loadCsv(freqRespCalArg).left()
                 : null;
 
+        // Same de-embed the GUI wizard does: the correction reads the RAW
+        // measured phasors (captured by analyze before applyCompensationInPlace
+        // de-embeds re/im) and divides each by the .frc response H(f), taking out
+        // both magnitude and phase.  Outside the cal's span → unit response,
+        // mirroring the bin-range guard in applyCompensationInPlace.  No .frc
+        // loaded → unit response everywhere.
+        final FreqRespCalibration calForResp = freqRespCal;
+        DoubleFunction<double[]> calResponseAt = (calForResp == null) ? f -> new double[]{ 1.0, 0.0 }
+                : f -> (f >= calForResp.freqs[0] && f <= calForResp.freqs[calForResp.freqs.length - 1])
+                        ? FreqRespCalHelper.interpolate(calForResp, f) : new double[]{ 1.0, 0.0 };
+
         String wfTs = LocalDateTime.now()
                 .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
         log.info("Workflow timestamp: {}", wfTs);
@@ -308,7 +320,7 @@ public class IterativeCompensateMode {
                 String.format(Locale.US, "%.4f", amplitude));
 
         if (accumulate) {
-            comp.accumulate(result0, compStep);
+            comp.accumulate(result0, compStep, calResponseAt.apply(result0.fundamentalHzRefined)[1]);
         }
 
         FftChartExporter exporter = new FftChartExporter();
@@ -369,7 +381,7 @@ public class IterativeCompensateMode {
             for (int retry = 0; ; retry++) {
                 SignalGenerator gen = accumulate
                         ? buildAccumulatedGenerator(frequency, sampleRate, amplitude,
-                                prefs.getDacFsVoltageAmpl(), comp)
+                                prefs.getDacFsVoltageAmpl(), comp, calResponseAt, prefs.getAdcFsVoltageRms())
                         : new SignalGenerator(frequency, sampleRate, amplitude, prefs.getDacFsVoltageAmpl(), lastResult);
                 double[] s = CaptureWithGenerator.run(gen,
                         outDevice, inDevice, sampleRate, bitDepth, ditherBits, duration);
@@ -419,7 +431,7 @@ public class IterativeCompensateMode {
             // accumulator state before this round's update.
             HarmonicCompensation applied = accumulate ? comp.copy() : null;
             if (accumulate) {
-                comp.accumulate(result, compStep);
+                comp.accumulate(result, compStep, calResponseAt.apply(result.fundamentalHzRefined)[1]);
             }
 
             // Reuses the exporter configured for iteration 0 — same ADC full-scale.
@@ -517,9 +529,10 @@ public class IterativeCompensateMode {
 
         if (accumulate) {
             File appliedDpd = new File("results", "applied_compensation_" + wfTs + ".dpd");
-            bestApplied.writeCsv(appliedDpd.toPath(), null,
+            bestApplied.writeDpd(appliedDpd.toPath(), null,
                     bestResult.fundamentalHzRefined, bestResult.fundamentalDbFs,
-                    sampleRate, bitDepth, amplitude);
+                    sampleRate, bitDepth, amplitude,
+                    calResponseAt, prefs.getAdcFsVoltageRms());
             log.info("Applied compensation for best iter {}: {}", bestIter, appliedDpd.getAbsolutePath());
         }
 
@@ -537,8 +550,9 @@ public class IterativeCompensateMode {
      *  integer multiples {@code hNum·f} the compensation locks each harmonic
      *  to (the generator derives the same {@code hNum} internally). */
     private SignalGenerator buildAccumulatedGenerator(double frequency, int sampleRate,
-            double amplitude, double dacFsVoltageRms, HarmonicCompensation comp) {
-        GeneratorCorrections gc = comp.toGeneratorCorrections(frequency);
+            double amplitude, double dacFsVoltageRms, HarmonicCompensation comp,
+            DoubleFunction<double[]> calResponseAt, double adcFsVoltageRms) {
+        GeneratorCorrections gc = comp.toGeneratorCorrections(frequency, calResponseAt, adcFsVoltageRms, amplitude);
         double[] freqs = new double[gc.harmonicNumbers().length];
         for (int i = 0; i < freqs.length; i++) {
             freqs[i] = gc.harmonicNumbers()[i] * frequency;

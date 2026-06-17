@@ -133,7 +133,7 @@ public final class FftPane extends AbstractPane {
     }
 
     private FftPane(Composite parent, boolean liveCapture, GeneratorController genController,
-                    FftController controller, FreqRespCorrectionStore correctionStore) {
+                    FftController controller, FreqRespCorrectionStore correctionStoreIn) {
         super(parent);
         // FFT-length changes, capture acquire / release, and the
         // generator-running query all flow through the MessageBus — no
@@ -168,9 +168,10 @@ public final class FftPane extends AbstractPane {
         // so building its calibration tab fires no events; corrections are
         // still applied because the tab repopulates the store from prefs —
         // and an idle controller whose worker is never started.
+        FreqRespCorrectionStore correctionStore =
+                liveCapture ? correctionStoreIn : new FreqRespCorrectionStore("FFT", null);
         if (!liveCapture) {
-            correctionStore = new FreqRespCorrectionStore("FFT", null);
-            controller      = new FftController(new FftAnalyzerWorker(d), correctionStore);
+            controller = new FftController(new FftAnalyzerWorker(d), correctionStore);
         }
         this.controller = controller;
         view = new FftView(plotRow, correctionStore, controller);
@@ -255,7 +256,7 @@ public final class FftPane extends AbstractPane {
             wizardButton.setImage(icons.renderAtHeightColored(d, SvgPaths.WAND, ACTION_ICON_SIZE));
             wizardButton.setToolTipText(I18n.t("predistortion.button.wizard.tooltip"));
             wizardButton.addListener(SWT.Selection, e ->
-                    new PredistortionWizardDialog(group.getShell(), genController, wizardController, view).open());
+                    new PredistortionWizardDialog(group.getShell(), genController, wizardController, view, correctionStore).open());
             wizardButton.setData("helpAnchor", "fft.html#fft-predistortion");
         }
 

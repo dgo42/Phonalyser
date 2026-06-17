@@ -172,6 +172,7 @@ public final class HelpViewer {
      *  across packaging modes. */
     private static final String[] HTML_FILES = {
             "index.html",
+            "howto.html",
             "generator.html",
             "oscilloscope.html",
             "fft.html",

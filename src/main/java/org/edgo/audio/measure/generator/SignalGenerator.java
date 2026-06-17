@@ -1194,7 +1194,7 @@ public class SignalGenerator {
      *                   dual-tone files (the {@code a·f₁+b·f₂} products follow
      *                   the generator's live tone frequencies)
      */
-    public void loadCorrectionsFromFile(String path, double frequency, int sampleRate) throws IOException {
+    public void readDpd(String path, double frequency, int sampleRate) throws IOException {
         if (isDualToneCorrectionFile(path)) {
             loadIntermod(path);
         } else {

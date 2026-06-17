@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theorie: Algorithmen-Referenz</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zur Theorie des Betriebs</a></p>
+
+  <h1>Algorithmen-Referenz</h1>
+
+  <p>Ein Katalog der benannten DSP-, mathematischen und Schätzungsalgorithmen,
+     die in den Modulen von Phonalyser verwendet werden — was jeder einzelne
+     bewirkt, wo er in dieser Hilfe erläutert wird und wo die zugrunde liegende
+     Theorie nachzulesen ist.  Diese Seite ist die komprimierte Ansicht des
+     vollständigen Engineering-Dokuments
+     <i>ALGORITHMS.md</i><sup id="cite-1"><a href="#ref-doc">[1]</a></sup>,
+     das die algorithmische Mathematik und Quellenangaben je Algorithmus enthält.</p>
+
+  <h2 id="synth">Signalsynthese &amp; Quantisierung</h2>
+  <table class="controls">
+    <tr><th>Algorithmus</th><th>Funktion hier</th><th>In dieser Hilfe</th></tr>
+    <tr><td>Direct digital synthesis (DDS)</td>
+        <td>64-Bit-Phasenakkumulator-Oszillator; exaktes Mod-2⁶⁴-Phase,
+            klickfreie Frequenzänderungen, Picohertz-genaue
+            Trimmgranularität.</td>
+        <td><a href="generator.html#dds">Generator — Phasenakkumulator</a></td></tr>
+    <tr><td>Winkeladdition + Taylor-Sinus</td>
+        <td>4096-Einträge-Tabelle für den groben Winkel plus eine
+            Taylor-Reihe 5. Ordnung für den Rest — ein exakter Sinus
+            ohne trigonometrische Bibliotheksaufrufe je Sample.</td>
+        <td><a href="generator.html#sine">Generator — Sinuskern</a></td></tr>
+    <tr><td>Farina exponentieller Sinussweep</td>
+        <td>Log-Chirp-Probe mit gleicher Energie pro Oktave; vorgerendert,
+            sodass die Entfaltungsreferenz dem abgespielten Signal
+            entspricht.</td>
+        <td><a href="generator.html#sweeps">Generator — Sweeps</a>,
+            <a href="freq-resp.html#how">Frequenzgang</a></td></tr>
+    <tr><td>Voss–McCartney Rosa-Rauschen</td>
+        <td>Summierter-Oktaven-1/f-Generator, konstanter Rechenaufwand
+            pro Sample.</td>
+        <td><a href="generator.html#kernels">Generator — Rauschen</a></td></tr>
+    <tr><td>TPDF Dither</td>
+        <td>Dreieck-PDF-Dither vor der Quantisierung; entkoppelt den
+            Rundungsfehler vom Signal.</td>
+        <td><a href="generator.html#quantizer">Generator — Quantisierung</a></td></tr>
+    <tr><td>Raised-Cosine (Hann) Ausblendung</td>
+        <td>Sweep-Ein-/Ausblendung; unterdrückt spektrale Leckverluste
+            beim Start/Stopp.</td>
+        <td><a href="generator.html#sweeps">Generator — Sweeps</a></td></tr>
+  </table>
+
+  <h2 id="spectral">Spektralanalyse</h2>
+  <table class="controls">
+    <tr><th>Algorithmus</th><th>Funktion hier</th><th>In dieser Hilfe</th></tr>
+    <tr><td>Radix-2 Cooley-Tukey FFT</td>
+        <td>Die Transformation selbst — in-place, parallelisiert bei
+            großen Größen (bis 4M Punkte).</td>
+        <td><a href="fft.html#resolution">FFT — Auflösung</a></td></tr>
+    <tr><td>Goertzel Einzelbin-DFT</td>
+        <td>Betrag/Phase bei einer beliebigen Frequenz in einem einzigen
+            O(N)-Durchlauf — der Motor hinter der Millihertz-Frequenzanzeige
+            des Oszilloskops, dem Netzfrequenz-Tracker und dem
+            κ-Refit der FFT.</td>
+        <td><a href="oscilloscope.html#freq">Oszilloskop — Frequenz</a></td></tr>
+    <tr><td>Fensterfunktionen (Hann, Blackman-Harris, Flachtop, HFT,
+            Kaiser, Dolph-Chebyshev)</td>
+        <td>Leckageunterdrückung von alltäglich (Hann) bis zu
+            Nebenkeulenböden unterhalb jeder physikalischen Wandlerauflösung
+            (DC300, KB38).</td>
+        <td><a href="fft.html#resolution">FFT — Fenster</a></td></tr>
+    <tr><td>Phasendifferenz-Subbin-Schätzer</td>
+        <td>Der gebrochene Bin-Anteil κ des Tons aus dem Phasenvorschub
+            zwischen Blöcken — weit feiner als jede Betragspeaksuche.</td>
+        <td><a href="fft.html#kappa">FFT — Subbin-Frequenz</a></td></tr>
+    <tr><td>Parabolische Peakinterpolation</td>
+        <td>Quadratische Drei-Punkte-Anpassung für Subbin-Peaks; der
+            Fallback-κ-Schätzer und der IMD-Tonpegelverfeiner.</td>
+        <td><a href="fft.html#kappa">FFT — Subbin-Frequenz</a></td></tr>
+    <tr><td>Kohärente (Vektor-)Mittelung mit Lobe-De-Rotation</td>
+        <td>Phasenausgerichtete komplexe Mittelung — der Rauschpegel
+            sinkt um 10·log₁₀M dB, während Töne stabil bleiben.</td>
+        <td><a href="fft.html#coherent">FFT — kohärente Mittelung</a>;
+            <a href="derotation-accuracy.html">De-Rotation Genauigkeit</a>
+            (Fehlerbudget)</td></tr>
+    <tr><td>Intermodulationsprodukt-Gitter</td>
+        <td>Zweiton-Produkte a·f₁+b·f₂ mit De-Rotation bei ihren wahren
+            Frequenzen; CCIF/DIN-Differenzfrequenzverhältnisse.</td>
+        <td><a href="fft.html#dualtone">FFT — Zweikanalton</a></td></tr>
+    <tr><td>Median + MAD robuste Statistik</td>
+        <td>Selbstkalibrierte Schwellwerte für den Rauschpegel und die
+            spektralen Störungsgatter — aus den Daten gelernt, unempfindlich
+            gegenüber Ausreißern.</td>
+        <td><a href="fft.html#rejection">FFT — Störungsunterdrückung</a></td></tr>
+  </table>
+
+  <h2 id="filtering">Filterung &amp; Schätzung</h2>
+  <table class="controls">
+    <tr><th>Algorithmus</th><th>Funktion hier</th><th>In dieser Hilfe</th></tr>
+    <tr><td>Lanczos (gefensterter Sinc) Interpolation</td>
+        <td>Bandbegrenzte Rekonstruktion der Kurve zwischen Samples —
+            die gezoomte Darstellung des Oszilloskops und die
+            Subsample-Trigger-Verfeinerung.</td>
+        <td><a href="oscilloscope.html#path">Oszilloskop — Pipeline</a></td></tr>
+    <tr><td>Schmitt-Trigger (Hysterese)</td>
+        <td>Doppelschwellen-Flankenqualifikation, damit Rauschen auf dem
+            Signal den Trigger nicht doppelt auslöst.</td>
+        <td><a href="oscilloscope.html#trigger">Oszilloskop — Trigger</a></td></tr>
+    <tr><td>Chebyshev IIR-Tiefpass + Median-Entstörer</td>
+        <td>Hochfrequente Impulsunterdrückung vor Anzeige und
+            Messung.</td>
+        <td><a href="oscilloscope.html#conditioning">Oszilloskop —
+            Konditionierung</a></td></tr>
+    <tr><td>Frequenzgesteuerter IIR-Netz-Kammfilter</td>
+        <td>Ein Filter, der die Netzgrundfrequenz und alle Oberwellen kerbt,
+            nachgeführt wenn die Netzfrequenz driftet; im Zeitbereich
+            auf dem Oszilloskop angewendet, als Plotzeit-Spektralkorrektur
+            in der FFT.</td>
+        <td><a href="oscilloscope.html#mains">Oszilloskop — Netz-Kammfilter</a></td></tr>
+    <tr><td>Synchrone I/Q (Lock-in) Detektion</td>
+        <td>Ermittelt die Phase der Zweikanalton-Schwebungseinhüllenden,
+            damit der Trigger einmal pro Schwebung einrastet.</td>
+        <td><a href="oscilloscope.html#trigger">Oszilloskop — Trigger</a></td></tr>
+    <tr><td>Frequenzbereich-Entfaltung H = Y/X</td>
+        <td>Die vollständige Übertragungsfunktion — Betrag und Phase —
+            aus einem einzigen Sweep.</td>
+        <td><a href="freq-resp.html#how">Frequenzgang</a></td></tr>
+    <tr><td>Lineare Phasenverzögerungs-Rotation</td>
+        <td>Entfernt die DAC↔ADC-Rundlaufverzögerung, sodass nur die
+            geräteeigene Phase verbleibt.</td>
+        <td><a href="freq-resp.html#deconv">Frequenzgang —
+            Korrekturen</a></td></tr>
+    <tr><td>Savitzky-Golay Glättung</td>
+        <td>Gleitendes Polynomfitting — glättet Messripple, während
+            Kerbfilter und Resonanzen erhalten bleiben.</td>
+        <td><a href="freq-resp.html#deconv">Frequenzgang —
+            Korrekturen</a></td></tr>
+    <tr><td>RIAA / IEC Entzerrungskurven</td>
+        <td>Analytische 3180/318/75 µs (+7950 µs IEC) Phono-Kurve für
+            Überlagerung und Vergleichsmodus-Subtraktion.</td>
+        <td><a href="freq-resp.html#cal">Frequenzgang —
+            Kalibrierung</a></td></tr>
+    <tr><td>Frequency-lock loop (FLL)</td>
+        <td>Führt den Generator auf das FFT-Bin-Raster mit Deadbeat-Korrekturen,
+            exaktem Transportbuchführung und Drift-Feedforward — Sub-ppb
+            Steady-State-Ausrichtung.</td>
+        <td><a href="generator.html#dds">Generator — Phasenakkumulator</a>,
+            <a href="fft.html#who">FFT — Integration</a></td></tr>
+  </table>
+
+  <h2 id="stats">Statistik &amp; Grafik</h2>
+  <table class="controls">
+    <tr><th>Algorithmus</th><th>Funktion hier</th><th>In dieser Hilfe</th></tr>
+    <tr><td>Welfords Online-Varianz</td>
+        <td>Einpass-Mittelwert und σ für die Live-Messstatistiktabelle.</td>
+        <td><a href="oscilloscope.html#measure">Oszilloskop —
+            Messungen</a></td></tr>
+    <tr><td>Exponentieller gleitender Mittelwert</td>
+        <td>Glättet den Live-Sweep-Messwert und die Netzsperr-Erkennungen.</td>
+        <td><a href="oscilloscope.html#mains">Oszilloskop — Netz-Kammfilter</a></td></tr>
+    <tr><td>Liang-Barsky Linienbeschneidung, 1-2-5 „schöne" Achsenteilung,
+            Min/Max-Spalten-Dezimierung</td>
+        <td>Die gemeinsame Diagramm-Engine: beschnittene Polylinien
+            (Millionen-Bin-Spektren in begrenzter Zeit), lesbare
+            Achsenbeschriftung, Pixelgenaue Hüllkurvenstäbe für
+            dichte Daten.</td>
+        <td>— (Rendering-Interna; siehe das vollständige
+            Dokument<sup id="cite-1b"><a href="#ref-doc">[1]</a></sup>)</td></tr>
+  </table>
+
+  <div class="note"><b>Vertiefung.</b>  Jeder obige Eintrag wird vollständig
+     behandelt — mit den Gleichungen, den Parameterwerten und
+     <code>Datei:Zeile</code>-Zitaten in den Quellcode — im
+     Repository-Dokument
+     <i>docs/ALGORITHMS.md</i><sup id="cite-1c"><a href="#ref-doc">[1]</a></sup>.
+     Der Build kann es auch als PDF rendern (siehe <i>BUILD.md</i> im
+     Repository).</div>
+
+  <h2 id="refs">Referenzen</h2>
+  <ol class="refs">
+    <li id="ref-doc"><a href="#cite-1">1.</a>
+        <a href="https://github.com/dgo42/Phonalyser/blob/main/docs/ALGORITHMS.md">Phonalyser
+        <i>ALGORITHMS.md</i></a> — der vollständige Engineering-Katalog, den
+        diese Seite zusammenfasst (algorithmische Mathematik, Parameter,
+        Quellenangaben).</li>
+  </ol>
+
+  <p class="back"><a href="freq-resp.html">◀ Frequenzgang</a> ·
+     <a href="index.html">Theorie des Betriebs</a></p>
+
+</body>
+</html>

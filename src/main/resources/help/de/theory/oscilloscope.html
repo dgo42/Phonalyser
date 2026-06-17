@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theorie: Oszilloskop</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zur Funktionsweise</a></p>
+
+  <h1>Oszilloskop</h1>
+
+  <h2 id="purpose">Zweck</h2>
+  <p>Das Oszilloskop ist die Zeitbereichs-Ansicht — und die, die man
+     <em>zuerst</em> betrachten sollte.  Bevor einem Spektralwert vertraut
+     werden kann, muss das Signal sinnvoll aussehen: vorhanden, ohne
+     Übersteuerung, frei von grober DC-Verschiebung oder Netzbrummen, auf dem
+     erwarteten Pegel und bei der erwarteten Frequenz.  Das Oszilloskop
+     beantwortet diese Fragen direkt und zeigt neben der Kurve eine
+     Live-Messtabelle: Spitze-Spitze- und Effektivspannung, DC-Versatz,
+     Frequenz und Periode, Tastverhältnis, Anstiegs- und Abfallzeiten.</p>
+
+  <h2 id="path">Vom Ringpuffer zum Bildschirm</h2>
+  <p>Das Oszilloskop liest bei jeder Neuzeichnung das aktuellste Fenster aus
+     dem <a href="ring-buffer.html">Ringpuffer</a>, bereitet es auf, sucht
+     einen stabilen Triggerpunkt und zeichnet es.  Ein separater
+     Hintergrundlauf misst die Zahlenwerte mit konstant 10 Hz, damit die
+     Anzeige ruhig bleibt, auch wenn die Kurve schnell aktualisiert wird.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 250" width="100%" height="250" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="oa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+    <rect x="10"  y="100" width="120" height="50" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="70"  y="120" text-anchor="middle" font-weight="bold">ring buffer</text>
+    <text x="70"  y="138" text-anchor="middle" fill="#557">latest window</text>
+
+    <rect x="170" y="100" width="130" height="50" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="235" y="120" text-anchor="middle" font-weight="bold">conditioning</text>
+    <text x="235" y="138" text-anchor="middle" fill="#557">low-pass · mains comb</text>
+
+    <rect x="340" y="100" width="120" height="50" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="400" y="120" text-anchor="middle" font-weight="bold">trigger</text>
+    <text x="400" y="138" text-anchor="middle" fill="#557">edge + level</text>
+
+    <rect x="500" y="100" width="130" height="50" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="565" y="120" text-anchor="middle" font-weight="bold">resampling</text>
+    <text x="565" y="138" text-anchor="middle" fill="#557">Lanczos to pixels</text>
+
+    <rect x="670" y="100" width="140" height="50" rx="6" fill="#fdf2f2" stroke="#a88"/>
+    <text x="740" y="120" text-anchor="middle" font-weight="bold">trace</text>
+    <text x="740" y="138" text-anchor="middle" fill="#755">on screen</text>
+
+    <line x1="130" y1="125" x2="168" y2="125" stroke="#446" stroke-width="1.5" marker-end="url(#oa)"/>
+    <line x1="300" y1="125" x2="338" y2="125" stroke="#446" stroke-width="1.5" marker-end="url(#oa)"/>
+    <line x1="460" y1="125" x2="498" y2="125" stroke="#446" stroke-width="1.5" marker-end="url(#oa)"/>
+    <line x1="630" y1="125" x2="668" y2="125" stroke="#446" stroke-width="1.5" marker-end="url(#oa)"/>
+
+    <rect x="170" y="190" width="290" height="48" rx="6" fill="#fffbe8" stroke="#cc9"/>
+    <text x="315" y="210" text-anchor="middle" font-weight="bold">measurement pass (10 Hz)</text>
+    <text x="315" y="228" text-anchor="middle" fill="#775">Vpp · Vrms · Vmean · f · duty · rise/fall</text>
+    <line x1="235" y1="150" x2="250" y2="188" stroke="#446" stroke-width="1.2" marker-end="url(#oa)"/>
+  </svg>
+  </div>
+
+  <h2 id="conditioning">Aufbereitung</h2>
+  <p>Vor der Darstellung laufen zwei optionale Filter — und entscheidend —
+     <em>dieselben</em> Filter laufen auch vor der Messung, sodass die Anzeige
+     nie vom Bild abweicht:</p>
+  <ul>
+    <li><b>Anti-Alias- / Spike-Tiefpass.</b>  Ein steiler Tiefpass (Butterworth
+        8. Ordnung) dämpft außerbanddige Spitzen, die sonst die
+        Spitze-Spitze-Messung aufblähen würden. Die Grenzfrequenz richtet sich
+        nach der Anzeigeeinstellung.</li>
+    <li><b>Netzbrummen-Unterdrückung.</b>  Ein frequenznachgeführter
+        Netz-Kammfilter entfernt 50/60 Hz und seine Oberwellen in einer
+        Struktur — siehe <a href="#mains">unten</a>.</li>
+  </ul>
+
+  <h2 id="trigger">Triggern</h2>
+  <p>Ein freilaufendes Oszilloskop würde die Kurve bei jedem Bild mit einer
+     zufälligen Phase neu zeichnen, sodass ein periodisches Signal quer über
+     den Bildschirm zu wandern scheint.  <b>Triggern</b> verankert jedes Bild
+     an demselben Merkmal — einem gewählten <em>Pegel</em>, der in einer
+     gewählten <em>Richtung</em> überschritten wird (steigende oder fallende
+     Flanke).  Die Darstellung erfolgt dann relativ zu diesem Punkt, sodass ein
+     stationärer Ton stillsteht.</p>
+  <p>Phonalyser triggert auf absolute Abtastpositionen im Datenstrom: Jeder
+     erfasste Triggerpunkt speichert den absoluten Index des Nulldurchgangs,
+     einschließlich eines Sub-Sample-Bruchteils aus linearer Interpolation
+     zwischen den beiden benachbarten Abtastwerten. Dieser Bruchteil
+     verschiebt die gerenderte Kurve um weniger als einen Pixel, sodass das
+     Signal selbst auf einer schnellen Zeitbasis um keinen Abtastwert jittert.</p>
+
+  <h2 id="measure">Wie die Messwerte berechnet werden</h2>
+  <p>Der Messpass arbeitet im aufbereiteten Fenster in normierten Einheiten
+     und rechnet erst mit der ADC-Vollaussteuerungs-Kalibrierung in Volt um
+     (ein Abtastwert von ±1 entspricht <i>V</i><sub>fs</sub>·√2 Spitze).
+     Pegelstatistiken sind direkt; die Frequenzbestimmung erfordert mehr
+     Sorgfalt.</p>
+
+  <h3>Pegel</h3>
+  <p>Über das Fenster von <i>N</i> Abtastwerten <i>x</i><sub>i</sub>:</p>
+  <div class="eq"><i>V</i><sub>pp</sub> = (max − min) · <i>V</i><sub>peak</sub><span class="no">(1)</span></div>
+  <div class="eq"><i>V</i><sub>mean</sub> = <i>V</i><sub>peak</sub> · (1/<i>N</i>) Σ <i>x</i><sub>i</sub><span class="no">(2)</span></div>
+  <div class="eq"><i>V</i><sub>rms</sub> = <i>V</i><sub>peak</sub> · √( E[<i>x</i>²] − E[<i>x</i>]² )<span class="no">(3)</span></div>
+  <p>Der Effektivwert in (3) ist der <em>AC</em>-Effektivwert — der DC-Anteil
+     wird zuerst entfernt (die Varianzform subtrahiert den Mittelwert), da ein
+     Gesamt-Effektivwert, der bei DC-belastetem Eingang auf ≈ <i>V</i><sub>mean</sub>
+     zusammenbricht, auf einem Oszilloskop weit weniger aussagekräftig ist.</p>
+
+  <h3 id="freq">Frequenz — Nulldurchgänge, dann Goertzel-Verfeinerung</h3>
+  <p>Aus einem kurzen Puffer eine genaue Frequenz abzulesen ist der
+     schwierige Teil. Eine dreistufige Strategie erreicht eine Genauigkeit von
+     wenigen Millihertz:</p>
+  <ol>
+    <li><b>Grobwert aus Nulldurchgängen.</b>  Steigende Überschreitungen des
+        Halbamplituden-Mittelpunkts werden gezählt; der Abstand zwischen den
+        äußersten zwei über die Anzahl der Intervalle ergibt eine erste
+        Periodenschätzung. Nulldurchgänge folgen direkt dem tatsächlichen
+        Grundton, sodass ein Rechteck mit engem Tastverhältnis das richtige
+        Ergebnis liefert, anstatt sich auf eine starke Oberwelle zu sperren.</li>
+    <li><b>Verfeinerung mit dem Goertzel-Algorithmus<sup id="cite-1"><a href="#ref-goertzel">[1]</a></sup>.</b>
+        Der Goertzel-Algorithmus berechnet einen einzelnen DFT-Bin bei einer
+        <em>beliebigen</em> Frequenz in einem O(<i>N</i>)-Durchlauf — ein
+        günstiger Weg, den Betrag bei einer beliebigen Prüffrequenz ohne
+        vollständige FFT zu ermitteln. Drei aufeinanderfolgende Scans, jeder
+        ~20× feiner als der vorherige, konvergieren auf das Maximum, und eine
+        parabolische Anpassung über die letzten drei Messpunkte liefert
+        Sub-Schritt-Präzision (typischerweise ≤ 0,005 Hz bei einem Ein-Sekunden-Puffer).</li>
+    <li><b>Leckage-Entzerrung.</b>  Der bloße (Rechteckfenster-) Peak wird
+        durch Leckage vom negativfrequenten Spiegelbild von der wahren Frequenz
+        abgezogen — bis zu einige Zehntel Hertz bei kurzen Puffern, was früher
+        dazu führte, dass das Oszilloskop neben der FFT zu niedrig anzeigte.
+        Erneutes Verfeinern des Peaks an einer Hann-gefensterten<sup id="cite-2"><a href="#ref-hann">[2]</a></sup>
+        Kopie unterdrückt dieses Spiegelbild und fixiert die Frequenz auf
+        &lt; 0,02 Hz unabhängig von der Pufferlänge.</li>
+  </ol>
+  <p>Ein Qualitätskennwert (die Spitzenmagnitude relativ zum AC-Effektivwert)
+     begrenzt das Ergebnis: ≈ 0,707 für einen sauberen Sinus, deutlich
+     geringer bei Rauschen. Unterhalb des Schwellenwerts werden Frequenz,
+     Periode und Tastverhältnis als undefiniert angezeigt, anstatt auf Rauschen
+     zu sperren. Bei einem echten Zweiton-Signal haben diese Einzelwert-Felder
+     keine sinnvolle Antwort und werden vollständig ausgeblendet; die
+     Pegelwerte bleiben gültig.</p>
+
+  <h2 id="sinc">Zeichnen zwischen den Abtastwerten: sin x/x-Rekonstruktion</h2>
+  <p>Bei schnellen Zeitbasen liegen nur wenige Abtastwerte auf dem Bildschirm.
+     Die Abtastpunkte mit geraden Linien zu verbinden erzeugt Ecken, die im
+     Signal nicht existieren — das Anti-Alias-Filter des ADC garantiert, dass
+     das erfasste Signal keine Energie oberhalb von Nyquist enthält, und das
+     Abtasttheorem<sup id="cite-4"><a href="#ref-shannon">[4]</a></sup> besagt,
+     dass ein solches bandbegrenztes Signal zwischen seinen Abtastwerten
+     <em>vollständig bestimmt</em> ist:</p>
+  <div class="eq"><i>x</i>(<i>t</i>) = Σ<sub><i>n</i></sub> <i>x</i>[<i>n</i>] · sinc(<i>t</i> − <i>n</i>),&nbsp;&nbsp;
+      sinc <i>u</i> = sin(π<i>u</i>) / (π<i>u</i>)<span class="no">(4)</span></div>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 270" width="100%" height="270" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <!-- axis -->
+    <line x1="40" y1="130" x2="800" y2="130" stroke="#ccc" stroke-width="1"/>
+    <!-- straight-line join (wrong) -->
+    <polyline points="60,130 120,66 180,130 240,194 300,130 360,66 420,130 480,194 540,130 600,66 660,130 720,194 780,130"
+              fill="none" stroke="#c33" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <!-- band-limited truth: smooth sine through the same samples -->
+    <path d="M 60,130 C 90,45 150,45 180,130 C 210,215 270,215 300,130
+             C 330,45 390,45 420,130 C 450,215 510,215 540,130
+             C 570,45 630,45 660,130 C 690,215 750,215 780,130"
+          fill="none" stroke="#33a" stroke-width="2"/>
+    <!-- samples -->
+    <circle cx="60"  cy="130" r="4" fill="#222"/>
+    <circle cx="120" cy="66"  r="4" fill="#222"/>
+    <circle cx="180" cy="130" r="4" fill="#222"/>
+    <circle cx="240" cy="194" r="4" fill="#222"/>
+    <circle cx="300" cy="130" r="4" fill="#222"/>
+    <circle cx="360" cy="66"  r="4" fill="#222"/>
+    <circle cx="420" cy="130" r="4" fill="#222"/>
+    <circle cx="480" cy="194" r="4" fill="#222"/>
+    <circle cx="540" cy="130" r="4" fill="#222"/>
+    <circle cx="600" cy="66"  r="4" fill="#222"/>
+    <circle cx="660" cy="130" r="4" fill="#222"/>
+    <circle cx="720" cy="194" r="4" fill="#222"/>
+    <circle cx="780" cy="130" r="4" fill="#222"/>
+    <!-- legend -->
+    <circle cx="70" cy="240" r="4" fill="#222"/>
+    <text x="82" y="244" fill="#335">ADC-Abtastwerte (4 pro Periode)</text>
+    <line x1="300" y1="240" x2="340" y2="240" stroke="#c33" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <text x="348" y="244" fill="#a33">Geradlinige Verbindung — nicht existierende Ecken</text>
+    <line x1="640" y1="240" x2="680" y2="240" stroke="#33a" stroke-width="2"/>
+    <text x="688" y="244" fill="#338">sin x/x-Rekonstruktion</text>
+  </svg>
+  </div>
+
+  <p>Das Oszilloskop berechnet (4) in seiner praktischen, gefensterten Form —
+     einen Lanczos<sup id="cite-5"><a href="#ref-lanczos">[5]</a></sup>-Kern
+     mit 16 sinc-Keulen auf jeder Seite, vorberechnet in einer Phasentabelle —
+     und erzeugt beim Hineinzoomen einen echten rekonstruierten Wert pro
+     Pixelspalte.  Dieselbe Rekonstruktion verfeinert den Triggeraugenblick
+     zwischen zwei Abtastwerten (eine Bisektion auf der rekonstruierten Kurve,
+     auf etwa 1/1000 eines Abtastwerts), weshalb die Kurve stillsteht, anstatt
+     um einen Abtastwert zu jittern.  Die Rekonstruktion ist pro Kanal
+     umschaltbar (Option <code>sin x/x</code>); ohne sie fällt das Oszilloskop
+     auf geradlinige Interpolation zurück.</p>
+  <p>Beim Herauszoomen kehrt sich das Problem um: Viele Abtastwerte fallen
+     auf einen Pixel.  Der Kern wird dann verbreitert, sodass er gleichzeitig
+     als Anti-Alias-Tiefpass bei der eigenen Abtastrate des Bildschirms wirkt —
+     ohne ihn würde Energie zwischen dem „Pixel-Nyquist" und dem
+     Aufnahme-Nyquist in störende Schwebungsmuster auf der Kurve falten.
+     Ab etwa 5 Abtastwerten pro Pixel wechselt das Oszilloskop auf
+     spaltenweise Min/Max-Hüllkurvendarstellung.</p>
+
+  <h2 id="mains">Netzbrummen-Unterdrückung: der nachgeführte Kammfilter</h2>
+  <p>Netzstörungen liegen bei der Netzfrequenz und bei jeder ganzzahligen
+     Oberwelle davon. Ein einzelner <b>Rückkopplungs-Kammfilter</b><sup id="cite-3"><a href="#ref-comb">[3]</a></sup>
+     setzt gleichzeitig eine Kerbe bei DC und bei jedem Vielfachen von
+     <i>f</i>₀:</p>
+  <div class="eq"><i>H</i>(<i>z</i>) = (1 − <i>z</i><sup>−<i>N</i></sup>) / (1 − α·<i>z</i><sup>−<i>N</i></sup>),&nbsp;&nbsp;
+      <i>N</i> = <i>f</i><sub>s</sub> / <i>f</i>₀<span class="no">(5)</span></div>
+  <p>wobei α (knapp unter 1) die Schärfe jeder Kerbe bestimmt. Der Trick
+     besteht darin, dass der Kammfilter <b>frequenznachgeführt</b> ist: Echte
+     Netzfrequenz driftet um einige Zehntel Hertz, und die <i>k</i>-te
+     Oberwelle driftet <i>k</i>× so weit, sodass ein fester Kammfilter in der
+     Tiefe nach oben verliert. Durch Messung des wahren Netz-Grundtons aus
+     einem Referenzblock — mit automatischer Erkennung von 50 vs. 60 Hz — und
+     Nachstimmung des einzelnen Werts <i>N</i> verschiebt sich jede Kerbe
+     gemeinsam auf ihr genaues <i>k</i>·<i>f</i>₀. <i>N</i> ist im Allgemeinen
+     nicht ganzzahlig, daher werden die Verzögerungen linear zwischen den beiden
+     benachbarten Anzapfungen interpoliert.</p>
+
+  <div class="note"><b>Warum die Frequenz vom Rohsignal abgelesen wird.</b>
+     Die Kerben des Kammfilters verzerren jede durch ihn gemessene Frequenz.
+     Daher verwendet das Oszilloskop den Kammfilter nur, um zu bestimmen,
+     <em>welcher</em> Peak der Ton ist (er unterdrückt ein oft dominantes
+     Netzbrummen, sodass der Ton zum spektralen Peak wird), und misst dann die
+     wahre Frequenz dieses Tons erneut am <em>rohen</em>, ungekerbten Signal in
+     einem engen Band um den gefundenen Peak — schmal genug, dass keine
+     Netzoberwelle (Zehntel Hertz entfernt) konkurriert.</div>
+
+  <h2 id="who">Einordnung</h2>
+  <p>Das Oszilloskop teilt sein Aufnahmegerät und seinen Ringpuffer mit dem
+     <a href="fft.html">FFT-Analysator</a> über die gemeinsame
+     <a href="ring-buffer.html#sharedcapture">Aufnahmesitzung</a>, sodass
+     beide zusammen auf einem geöffneten Gerät aufzeichnen können. Es nutzt
+     auch das vom <a href="generator.html">Generator</a> vorgegebene Signal
+     als Hinweis: Wenn ein Zweiton-Signal abgespielt wird, weiß es, dass die
+     Einzelton-Felder ausgeblendet werden sollen, anstatt zu raten.</p>
+
+  <h2 id="refs">Literatur</h2>
+  <ol class="refs">
+    <li id="ref-goertzel"><a href="#cite-1">1.</a>
+        Goertzel algorithm (single-bin DFT) —
+        <a href="https://en.wikipedia.org/wiki/Goertzel_algorithm">Wikipedia: Goertzel algorithm</a>.</li>
+    <li id="ref-hann"><a href="#cite-2">2.</a>
+        Hann window and spectral leakage —
+        <a href="https://en.wikipedia.org/wiki/Window_function#Hann_window">Wikipedia: Hann window</a>.</li>
+    <li id="ref-comb"><a href="#cite-3">3.</a>
+        Comb filter (the feedback form of (5)) —
+        <a href="https://en.wikipedia.org/wiki/Comb_filter">Wikipedia: Comb filter</a>.</li>
+    <li id="ref-shannon"><a href="#cite-4">4.</a>
+        The sampling theorem and formula (4) —
+        <a href="https://en.wikipedia.org/wiki/Whittaker%E2%80%93Shannon_interpolation_formula">Wikipedia: Whittaker–Shannon interpolation formula</a>.</li>
+    <li id="ref-lanczos"><a href="#cite-5">5.</a>
+        The windowed-sinc kernel used in practice —
+        <a href="https://en.wikipedia.org/wiki/Lanczos_resampling">Wikipedia: Lanczos resampling</a>.</li>
+  </ol>
+
+  <p class="back"><a href="index.html">◀ Funktionsweise</a> ·
+     weiter: <a href="fft.html">FFT-Analysator ▶</a></p>
+
+</body>
+</html>
