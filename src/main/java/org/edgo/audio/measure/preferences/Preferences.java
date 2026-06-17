@@ -296,10 +296,15 @@ public final class Preferences {
     /** Unit the amplitude field renders in: one of {@code mV}, {@code V}, {@code dBV}, {@code dBFS}. */
     /** Dither bits 0..N; 0 means "Off". */
     private final Property<Integer> genDitherBits  = bound(0);
-    /** Path to the predistortion-correction file (.dpd), or {@code null} if none. */
-    private final Property<String> genCorrectionsFile    = bound(null);
-    /** Folder remembered for the generator's "browse for corrections" dialog. */
-    private final Property<String> genCorrectionsFolder = bound(null);
+    /** Path to the SINGLE-tone predistortion {@code .dpd} used by
+     *  {@code SINE_COMPENSATED}, or {@code null} if none. */
+    private final Property<String> genDpd     = bound(null);
+    /** Path to the DUAL-tone predistortion {@code .dpd} used by
+     *  {@code DUAL_TONE_COMPENSATED}, kept separate so the two compensated forms
+     *  each remember their own file, or {@code null} if none. */
+    private final Property<String> genDpdDual = bound(null);
+    /** Folder remembered for the generator's "browse for .dpd" dialog. */
+    private final Property<String> genDpdFolder = bound(null);
     /** DAC predistortion wizard: FFT averages per round.  Persisted so the
      *  user's choice survives reopening the wizard and restarting the app. */
     private final Property<Integer> predistortionAverages    = bound(100);
@@ -333,7 +338,7 @@ public final class Preferences {
     private final Property<Double>  genWavDurationSeconds = bound(5.0);
     /** Path to the most recently chosen WAV-export target file. */
     private final Property<String>  genWavPath   = bound(null);
-    /** Folder remembered for the generator's "Save WAV" dialog, separate from {@link #genCorrectionsFolder}. */
+    /** Folder remembered for the generator's "Save WAV" dialog, separate from {@link #genDpdFolder}. */
     private final Property<String>  genWavFolder = bound(null);
 
     /** Path to the most recently chosen "Play from…" source file (WAV/FLAC/AIFF). */
@@ -1477,13 +1482,28 @@ public final class Preferences {
     public void setGenPlayFromLoop(boolean v)  { genPlayFromLoop.set(v); }
     public Property<Boolean> genPlayFromLoopProperty() { return genPlayFromLoop; }
 
-    public String getGenCorrectionsFile()       { return genCorrectionsFile.get(); }
-    public void setGenCorrectionsFile(String v) { genCorrectionsFile.set(v); }
-    public Property<String> genCorrectionsFileProperty() { return genCorrectionsFile; }
+    public String getGenDpd()       { return genDpd.get(); }
+    public void setGenDpd(String v) { genDpd.set(v); }
+    public Property<String> genDpdProperty() { return genDpd; }
 
-    public String getGenCorrectionsFolder()    { return genCorrectionsFolder.get(); }
-    public void setGenCorrectionsFolder(String v) { genCorrectionsFolder.set(v); }
-    public Property<String> genCorrectionsFolderProperty() { return genCorrectionsFolder; }
+    public String getGenDpdDual()       { return genDpdDual.get(); }
+    public void setGenDpdDual(String v) { genDpdDual.set(v); }
+    public Property<String> genDpdDualProperty() { return genDpdDual; }
+
+    /** The {@code .dpd} for the given form: the dual-tone file for a dual-tone
+     *  form, the single-tone file otherwise. */
+    public String getGenDpd(GenSignalForm form) {
+        return form.isDualTone() ? genDpdDual.get() : genDpd.get();
+    }
+    /** Stores {@code path} under the {@code .dpd} slot matching {@code form}. */
+    public void setGenDpd(GenSignalForm form, String path) {
+        if (form.isDualTone()) genDpdDual.set(path);
+        else                   genDpd.set(path);
+    }
+
+    public String getGenDpdFolder()    { return genDpdFolder.get(); }
+    public void setGenDpdFolder(String v) { genDpdFolder.set(v); }
+    public Property<String> genDpdFolderProperty() { return genDpdFolder; }
 
     public int    getPredistortionAverages()           { return predistortionAverages.get(); }
     public void   setPredistortionAverages(int v)       { predistortionAverages.set(v); }
@@ -1723,8 +1743,9 @@ public final class Preferences {
         root.put("genAmplitudeVrms",             genAmplitudeVrms.get());
         root.put("genAmplitudeDbvDisplay",       genAmplitudeDbvDisplay.get());
         root.put("genDitherBits",                genDitherBits.get());
-        if (genCorrectionsFile.get()    != null) root.put("genCorrectionsFile",    genCorrectionsFile.get());
-        if (genCorrectionsFolder.get() != null) root.put("genCorrectionsFolder", genCorrectionsFolder.get());
+        if (genDpd.get()     != null) root.put("genDpd",     genDpd.get());
+        if (genDpdDual.get() != null) root.put("genDpdDual", genDpdDual.get());
+        if (genDpdFolder.get() != null) root.put("genDpdFolder", genDpdFolder.get());
         root.put("predistortionAverages",    predistortionAverages.get());
         root.put("predistortionTargetPct",   predistortionTargetPct.get());
         root.put("genRectangleDuty",      genRectangleDuty.get());
@@ -2023,8 +2044,9 @@ public final class Preferences {
         if (root.get("genAmplitudeVrms")             instanceof Number n) genAmplitudeVrms.set(n.doubleValue());
         if (root.get("genAmplitudeDbvDisplay")       instanceof Boolean b) genAmplitudeDbvDisplay.set(b);
         if (root.get("genDitherBits")                instanceof Number n) genDitherBits.set(n.intValue());
-        if (root.get("genCorrectionsFile")            instanceof String s) genCorrectionsFile.set(s);
-        if (root.get("genCorrectionsFolder")         instanceof String s) genCorrectionsFolder.set(s);
+        if (root.get("genDpd")                        instanceof String s) genDpd.set(s);
+        if (root.get("genDpdDual")                    instanceof String s) genDpdDual.set(s);
+        if (root.get("genDpdFolder")                 instanceof String s) genDpdFolder.set(s);
         if (root.get("predistortionAverages")        instanceof Number n) predistortionAverages.set(n.intValue());
         if (root.get("predistortionTargetPct")       instanceof Number n) predistortionTargetPct.set(n.doubleValue());
         if (root.get("genRectangleDuty")             instanceof Number n) genRectangleDuty.set(n.doubleValue());
@@ -2154,8 +2176,7 @@ public final class Preferences {
         if (root.get("freqRespMagTopDb")          instanceof Number  n) freqRespMagTopDb.set(n.doubleValue());
         if (root.get("freqRespMagBotDb")          instanceof Number  n) freqRespMagBotDb.set(n.doubleValue());
         if (root.get("freqRespNyquistFraction")   instanceof Number  n) {
-            // Clamp into the [0.83, 1.0] band the UI exposes — older
-            // YAML files may still carry the legacy 0.40-0.50 range.
+            // Clamp into the [0.83, 1.0] band the UI exposes.
             double v = n.doubleValue();
             freqRespNyquistFraction.set(Math.max(0.83, Math.min(1.0, v < 0.83 ? 1.0 : v)));
         }

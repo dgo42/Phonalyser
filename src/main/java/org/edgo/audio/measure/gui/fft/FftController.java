@@ -28,7 +28,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.AlignGenerator;
@@ -41,6 +40,8 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
 import org.edgo.audio.measure.preferences.Preferences;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Controller of the FFT pane: owns the {@link FftAnalyzerWorker}'s

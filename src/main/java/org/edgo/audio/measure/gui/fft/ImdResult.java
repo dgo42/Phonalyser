@@ -66,13 +66,17 @@ public final class ImdResult {
      *  (0..1).  Convert to dBV via the same anchor the THD path uses. */
     public double f1Mag;
     public double f2Mag;
-    /** F1 / F2 dBV values — the canonical level readout for both
-     *  tones.  ImdAnalyzer is voltage-domain only, so it never
-     *  produces dBFs values; the FFT view derives those at display
-     *  time from {@code f1DbV − 20·log10(adcFsVoltageRms)} when it
-     *  needs a dBFs column. */
+    /** F1 / F2 dBV values — the canonical absolute (voltage) readout for both
+     *  tones.  When a manual fundamental is supplied these carry the TRUE
+     *  combined level split across the two tones (the notch-suppressed
+     *  measurement can't); otherwise they are the measured level + ADC offset. */
     public double f1DbV;
     public double f2DbV;
+    /** F1 / F2 MEASURED level in dBFS (straight off the spectrum peak) — used for
+     *  the dBFS column, the spectrum markers and autoscale, so they stay on the
+     *  real peak even when {@link #f1DbV} is anchored to a manual fundamental. */
+    public double f1DbFs;
+    public double f2DbFs;
 
     /** {@code f2 − f1} (Hz) — the difference frequency tracked by the
      *  DFD2 measurement. */

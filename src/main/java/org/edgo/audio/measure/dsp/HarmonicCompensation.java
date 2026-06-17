@@ -25,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.DoubleFunction;
 
 import org.edgo.audio.measure.fft.FftResult;
 
@@ -64,27 +65,47 @@ public final class HarmonicCompensation {
     public record GeneratorCorrections(double[] ampRatios, int[] harmonicNumbers, double[] phiInits) {}
 
     /**
-     * LMS-style accumulate of the harmonics measured in {@code r}.  Mirrors
-     * the CLI's per-iteration update: the fundamental phase gives the
-     * transport delay {@code ωD = −(φ₁+π/2)}, each harmonic is de-delayed to
-     * its DAC-emit phase, and the phasor is added in scaled by {@code step}.
-     * Every detected harmonic is corrected — there is no noise-floor gate.
+     * LMS-style accumulate of the harmonics measured in {@code r}.  The
+     * accumulator holds, per harmonic, a COMPLEX phasor whose magnitude is the
+     * harmonic's ABSOLUTE measured level (linear, from its de-embedded-chain dBFS
+     * — the actual ADC reading, NOT a ratio that bakes in the notched-|F0|
+     * division) and whose phase is the RAW measured phase, window-derotated.  The
+     * {@code .frc} de-embed and the division by the fundamental are NOT done here;
+     * they are applied on the way out, in {@link #toGeneratorCorrections} /
+     * {@link #writeCsv}, to the values that actually reach the DDS.
+     *
+     * <p><b>The fundamental phase is the per-round frame reference.</b>  Each
+     * round's FFT window starts at an arbitrary point in the tone, so the
+     * fundamental comes out at a RANDOM absolute phase that also carries whatever
+     * the round's non-deterministic DAC→ADC delay was; the whole spectrum is
+     * de-rotated by it (each harmonic by n·φ₁) so F0 → 0° and every round lands in
+     * the same frame.  φ₁ is the measured {@code arg(X₁)} MINUS the {@code .frc}
+     * phase at f₁ ({@code calFundPhaseRad}): the twin-T notch sitting on f₁
+     * phase-inverts the measured fundamental (its phase there ≈ π), and that π
+     * would otherwise enter every harmonic as n·π — flipping the ODD harmonics
+     * (n·π ≡ π) while leaving the even ones (n·π ≡ 0), i.e. driving the loop to
+     * build a triangle.  Subtracting the cal phase removes it.  This is a pure
+     * PHASE subtraction (no division by the singular |H(f₁)|), so the notch null
+     * doesn't blow it up; any residual is only the cal-vs-live notch drift.
      */
-    public void accumulate(FftResult r, double step) {
-        double phi1          = Math.atan2(r.im[r.fundamentalBin], r.re[r.fundamentalBin]);
-        double omegaD        = -(phi1 + Math.PI / 2.0);
-        double delayRadPerHz = omegaD / r.fundamentalHzRefined;
+    public void accumulate(FftResult r, double step, double calFundPhaseRad) {
+        double re1 = !Double.isNaN(r.rawFundRe) ? r.rawFundRe : r.re[r.fundamentalBin];
+        double im1 = !Double.isNaN(r.rawFundIm) ? r.rawFundIm : r.im[r.fundamentalBin];
+        double phi1          = Math.atan2(im1, re1) - calFundPhaseRad;      // window phase, F0 notch phase removed
+        double delayRadPerHz = -(phi1 + Math.PI / 2.0) / r.fundamentalHzRefined;
 
         int    count         = Math.min(r.harmonicCount, maxHarmonics);
         for (int h = 0; h < count; h++) {
             int bin = r.harmonicBins[h];
             if (bin <= 0) continue;
 
-            double ampRatio = r.harmonicPct[h] / 100.0;
-            double phiH     = Math.atan2(r.im[bin], r.re[bin]);
-            double phiInit  = phiH + r.harmonicHz[h] * delayRadPerHz;
-            accRe[h] += step * ampRatio * Math.cos(phiInit);
-            accIm[h] += step * ampRatio * Math.sin(phiInit);
+            double magLin = Math.pow(10.0, r.rawHarmonicDbFs(h) / 20.0);    // absolute ADC level, pre-.frc
+            double rawRe  = (r.rawPeakRe != null && h < r.rawPeakRe.length) ? r.rawPeakRe[h] : r.re[bin];
+            double rawIm  = (r.rawPeakIm != null && h < r.rawPeakIm.length) ? r.rawPeakIm[h] : r.im[bin];
+            double phiH   = Math.atan2(rawIm, rawRe);                       // RAW phase; .frc de-embed is downstream
+            double phiInit = phiH + r.harmonicHz[h] * delayRadPerHz;
+            accRe[h] += step * magLin * Math.cos(phiInit);
+            accIm[h] += step * magLin * Math.sin(phiInit);
             hFreqs[h] = r.harmonicHz[h];
         }
     }
@@ -97,9 +118,18 @@ public final class HarmonicCompensation {
         return false;
     }
 
-    /** Converts the accumulated phasors to the generator's compensation
-     *  triple, dropping harmonics that never rose above the noise gate. */
-    public GeneratorCorrections toGeneratorCorrections(double fundamentalHz) {
+    /** Converts the accumulated ABSOLUTE (ADC-dBFS) phasors to the generator's
+     *  compensation triple — applying, HERE on the values that reach the DDS
+     *  (not in the accumulator): the {@code .frc} de-embed (magnitude AND phase),
+     *  the ADC-dBFS → absolute-volts conversion, and the division by the DAC
+     *  fundamental.  {@code calResponseAt} returns the loaded {@code .frc}
+     *  response {@code [magLin, phaseRad]} at a frequency; {@code adcFsVoltageRms}
+     *  is the ADC full-scale (so {@code dBFS → Vrms}); {@code dacFundamentalVrms}
+     *  is the DAC's fundamental output (= {@code genAmplitudeVrms}) the ratio is
+     *  taken against — the DAC's own volts↔dBFS then turns the ratio into its
+     *  injected harmonic.  Harmonics that never rose above the gate are dropped. */
+    public GeneratorCorrections toGeneratorCorrections(double fundamentalHz,
+            DoubleFunction<double[]> calResponseAt, double adcFsVoltageRms, double dacFundamentalVrms) {
         int valid = 0;
         for (int h = 0; h < maxHarmonics; h++) {
             if (accRe[h] != 0.0 || accIm[h] != 0.0) valid++;
@@ -111,8 +141,11 @@ public final class HarmonicCompensation {
         for (int h = 0; h < maxHarmonics; h++) {
             double re = accRe[h], im = accIm[h];
             if (re == 0.0 && im == 0.0) continue;
-            amp[i] = Math.hypot(re, im);
-            phi[i] = Math.atan2(im, re);
+            double[] cal = calResponseAt.apply(hFreqs[h]);                 // [magLin, phaseRad] of H(f_h)
+            double magDe = Math.hypot(re, im) / (cal[0] > 0.0 ? cal[0] : 1.0);   // ÷ chain magnitude (de-embed)
+            double vH    = magDe * adcFsVoltageRms;                        // ADC dBFS → absolute Vrms at DAC out
+            amp[i] = dacFundamentalVrms > 0.0 ? vH / dacFundamentalVrms : 0.0;   // ratio to the DAC fundamental
+            phi[i] = Math.atan2(im, re) - cal[1];                          // − chain phase (de-embed)
             num[i] = (int) Math.round(hFreqs[h] / fundamentalHz);
             i++;
         }
@@ -138,9 +171,15 @@ public final class HarmonicCompensation {
      * FFT / THD provenance) are written first; they are {@code #}-comments
      * the loader skips.
      */
-    public void writeCsv(Path file, List<String> extraHeaderLines,
+    public void writeDpd(Path file, List<String> extraHeaderLines,
                          double fundamentalHz, double fundamentalDbFs,
-                         int sampleRate, int bitDepth, double amplitudeVrms) throws IOException {
+                         int sampleRate, int bitDepth, double amplitudeVrms,
+                         DoubleFunction<double[]> calResponseAt, double adcFsVoltageRms) throws IOException {
+        // amplitudeVrms IS the DAC fundamental (genAmplitudeVrms); the ratio columns
+        // (amplitude_pct + re/im, consumed by the SINE_COMPENSATED loader) are taken
+        // against it.  The amplitude_dbfs column instead carries the de-embedded
+        // ABSOLUTE dBV (V_h via the ADC full-scale) — the honest measured level.
+        double fundDbV = amplitudeVrms > 0.0 ? 20.0 * Math.log10(amplitudeVrms) : 0.0;
         try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8))) {
             if (extraHeaderLines != null) {
                 for (String line : extraHeaderLines) pw.println(line);
@@ -149,18 +188,24 @@ public final class HarmonicCompensation {
             pw.printf(Locale.US, "# bit_depth=%d%n",        bitDepth);
             pw.printf(Locale.US, "# amplitude_vrms=%.10f%n", amplitudeVrms);
             pw.printf(Locale.US, "# frequency_hz=%.10f%n",   fundamentalHz);
-            pw.println("harmonic;frequency_hz;amplitude_dbfs;amplitude_pct;phase_deg;re;im");
+            pw.println("harmonic;frequency_hz;amplitude_dbv;amplitude_pct;phase_deg;re;im");
             pw.printf(Locale.GERMAN, "1;%.6f;%.4f;100.000000;-90.0000;%.10e;%.10e%n",
-                    fundamentalHz, fundamentalDbFs, 0.0, -1.0);
+                    fundamentalHz, fundDbV, 0.0, -1.0);
             for (int h = 0; h < maxHarmonics; h++) {
-                double re = accRe[h], im = accIm[h];
-                double amp = Math.hypot(re, im);
-                if (amp == 0.0) continue;
-                double phaseDeg = Math.toDegrees(Math.atan2(im, re));
+                if (accRe[h] == 0.0 && accIm[h] == 0.0) continue;
+                // Same de-embed as toGeneratorCorrections: ÷ chain H(f_h), ADC dBFS
+                // → Vrms, ratio to the DAC fundamental.
+                double[] cal = calResponseAt.apply(hFreqs[h]);
+                double magDe = Math.hypot(accRe[h], accIm[h]) / (cal[0] > 0.0 ? cal[0] : 1.0);
+                double vH    = magDe * adcFsVoltageRms;                    // de-embedded harmonic, abs Vrms
+                double amp   = amplitudeVrms > 0.0 ? vH / amplitudeVrms : 0.0;
+                double phase = Math.atan2(accIm[h], accRe[h]) - cal[1];
+                double re = amp * Math.cos(phase), im = amp * Math.sin(phase);
+                double phaseDeg = Math.toDegrees(phase);
                 double ampPct   = amp * 100.0;
-                double ampDbFs  = fundamentalDbFs + 20.0 * Math.log10(amp);
+                double ampDbV   = vH > 0.0 ? 20.0 * Math.log10(vH) : -300.0;
                 pw.printf(Locale.GERMAN, "%d;%.6f;%.4f;%.9f;%.4f;%.10e;%.10e%n",
-                        h + 2, hFreqs[h], ampDbFs, ampPct, phaseDeg, re, im);
+                        h + 2, hFreqs[h], ampDbV, ampPct, phaseDeg, re, im);
             }
         }
     }

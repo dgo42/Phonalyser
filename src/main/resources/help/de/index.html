@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Hilfe</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <h1>Phonalyser</h1>
+  <p class="small">Präzisions-Audiomessplatz: Signalgenerator, Oszilloskop, FFT-Analysator.</p>
+
+  <p>Drücken Sie <kbd>F1</kbd> an beliebiger Stelle in der Anwendung, um diese Hilfe zu öffnen.
+     Drücken Sie <kbd>Ctrl</kbd>+<kbd>F1</kbd>, um direkt zum Abschnitt
+     zu springen, der das aktuell fokussierte Steuerelement beschreibt.</p>
+
+  <p>🚀 <a href="howto.html"><b>Das kürzeste HOW-TO der Welt</b></a> — die gesamte
+     THD-Messung in Teilen pro Milliarde, von der Kalibrierung bis zum Ergebnis, auf einem Bildschirm.
+     <b>Hier starten.</b></p>
+
+  <p>🔍 <a href="help-index.html"><b>Index &amp; Suche</b></a> — das gesamte
+     Handbuch durchsuchen oder die A–Z-Liste der Themen und Begriffe durchblättern.</p>
+
+  <p>💡 <a href="tips.html"><b>Tipps</b></a> — kleine Dinge, die einen großen
+     Unterschied machen; werden beim Start auch einzeln angezeigt.</p>
+
+  <p>🙏 <a href="credits.html"><b>Danksagungen</b></a> —
+     Inspiration und Dank.</p>
+
+  <h2>Module</h2>
+  <div class="toc">
+    <a href="generator.html"><b>Generator</b> — Tonerzeugung, Sweep, Rauschen, WAV-Datei-Wiedergabe</a>
+    <a href="oscilloscope.html"><b>Oszilloskop</b> — Live-Zeitbereichsansicht, Trigger, Messtabelle</a>
+    <a href="fft.html"><b>FFT-Analysator</b> — Spektrum, Oberschwingungen, THD / SNR / ENOB</a>
+    <a href="freqresp.html"><b>Frequenzgang</b> — Betrag &amp; Phase im Sweep, RIAA / IEC-Referenz, Vergleichsmodus</a>
+    <a href="preferences.html"><b>Einstellungen</b> — Audio-Backend &amp; Geräte, Aussehen von Oszilloskop und FFT</a>
+  </div>
+
+  <h2>Funktionsprinzip</h2>
+  <div class="toc">
+    <a href="theory/index.html"><b>Funktionsprinzip</b> — wie das Instrument intern arbeitet: Audio-Backend, Ringpuffer &amp; Verbraucher, DDS-Signalgenerator</a>
+  </div>
+
+  <h2>Aufbau</h2>
+  <p><img src="img/multifunctional.png" alt="Hauptfenster — multifunktionaler Tab" style="max-width:100%;height:auto;border:1px solid #dde;"/></p>
+  <div class="pane">
+    <p>Das Hauptfenster ist in einen <b>Generator</b>-Bereich auf der linken Seite
+       aufgeteilt (dessen Breite anpassbar ist — Trennleiste ziehen oder in den Einstellungen festlegen)
+       und eine vertikale Trennleiste zwischen <b>Oszilloskop</b> (oben) und
+       <b>FFT-Analysator</b> (unten) auf der rechten Seite.  Jeder Bereich lässt sich
+       durch Doppelklick auf die Titelleiste auf seinen Titelstreifen einklappen;
+       ein erneuter Doppelklick stellt ihn wieder her.</p>
+    <p>Jedes Modul hat seine eigene Werkzeugleiste — einen Einstellungs-Tab-Streifen unterhalb der
+       Hauptansicht mit Tabs für die modulspezifischen Einstellungen.  Der Tab-Streifen lässt sich
+       seinerseits einklappen (Doppelklick auf den Streifen), um vertikalen
+       Platz für das sichtbare Diagramm zurückzugewinnen.</p>
+  </div>
+
+  <h2>Konventionen</h2>
+  <div class="pane">
+    <ul>
+      <li><b>Schrittwähler</b> — Felder wie <code>V/div</code>,
+          <code>t/div</code>, <code>FFT length</code> haben kleine Auf-/Ab-Pfeile.
+          Das Mausrad scrollt durch Standardwerte
+          (1-2-5-10); ein manuell eingetippter Wert wird akzeptiert, wenn er
+          für das Feld sinnvoll ist.</li>
+      <li><b>Numerische Felder</b> — akzeptieren eingetippte Werte sowie
+          Mausrad-Schritte.  Der Radschritt ist feldspezifisch (5 % für die Frequenz,
+          ±1 Einheit für Oberschwingungsnummern usw.).</li>
+      <li><b>Tab-Kacheln</b> — die kleinen Symbole unter jedem Tab-Label
+          zeigen auf einen Blick den aktiven Wert der wichtigsten Steuerelemente dieses Tabs,
+          auch wenn der Tab-Inhalt eingeklappt ist.</li>
+      <li><b>Fadenkreuz</b> — beim Bewegen der Maus über ein Diagramm wird ein gestricheltes
+          Kreuz mit einem schwebenden Anzeigefeld in Cursornähe eingeblendet.</li>
+    </ul>
+  </div>
+
+  <hr/>
+  <p class="small">Hilfe → Über Phonalyser zeigt die Version und Links zum
+     Projekt-Repository.  Verwenden Sie Hilfe → Problem melden, um ein Issue
+     auf GitHub einzureichen.</p>
+
+</body>
+</html>

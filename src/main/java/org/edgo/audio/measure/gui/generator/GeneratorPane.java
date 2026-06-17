@@ -147,6 +147,8 @@ public final class GeneratorPane extends AbstractPane {
     private Label                 dualToneFreq2Label;
     private final Combo           ditherCombo;
     private final Text            correctionsField;
+    private Button                corrBrowseBtn;
+    private Button                corrClearBtn;
     private final NumericStepField durationField;
     private final Text            wavPathField;
     private final Text            playFromPathField;
@@ -514,6 +516,9 @@ public final class GeneratorPane extends AbstractPane {
             // Parameter panels: each visible only for its own form.
             setSweepPanelVisible(newIsSweep);
             setDualTonePanelVisible(newIsDualTone);
+            // Corrections row tracks the form: show its .dpd slot (or empty +
+            // disabled for non-compensated forms).
+            refreshCorrectionsRow();
             // Different forms get different bracket annotations (or none).
             updateFreqLabel();
             updateDutyLabel();
@@ -605,35 +610,30 @@ public final class GeneratorPane extends AbstractPane {
         corrRow.setLayoutData(fillH());
 
         correctionsField = new Text(corrRow, SWT.BORDER | SWT.READ_ONLY);
-        String savedCorr = nullToEmpty(prefs.getGenCorrectionsFile());
-        correctionsField.setText(savedCorr);
-        if (!savedCorr.isEmpty()) correctionsField.setToolTipText(savedCorr);
         GridData corrGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         corrGd.widthHint = 220;
         correctionsField.setLayoutData(corrGd);
-        // Follow external changes to the corrections path — the predistortion
-        // wizard's Apply writes the saved .dpd path here, so the field shows
-        // the currently-loaded file without the user re-browsing.
-        Bindings.onChange(group, prefs.genCorrectionsFileProperty(), v -> {
-            if (correctionsField.isDisposed()) return;
-            String s = nullToEmpty(v);
-            correctionsField.setText(s);
-            correctionsField.setToolTipText(s.isEmpty() ? null : s);
-        });
+        // Follow external changes to either .dpd slot — the predistortion
+        // wizard's Apply writes the saved path here, and the field always shows
+        // whichever slot matches the current form, without the user re-browsing.
+        Bindings.onChange(group, prefs.genDpdProperty(),     v -> refreshCorrectionsRow());
+        Bindings.onChange(group, prefs.genDpdDualProperty(), v -> refreshCorrectionsRow());
 
-        Button browseBtn = new Button(corrRow, SWT.PUSH);
-        browseBtn.setImage(folderOpenIcon);
-        browseBtn.setToolTipText(I18n.t("generator.corrections.browse"));
-        browseBtn.addListener(SWT.Selection, e -> openCorrectionsBrowse());
+        corrBrowseBtn = new Button(corrRow, SWT.PUSH);
+        corrBrowseBtn.setImage(folderOpenIcon);
+        corrBrowseBtn.setToolTipText(I18n.t("generator.corrections.browse"));
+        corrBrowseBtn.addListener(SWT.Selection, e -> openCorrectionsBrowse());
 
         // Clear (×) — unloads the correction file so the field empties and the
-        // compensated-sine form stops pre-distorting.
-        Button corrClearBtn = new Button(corrRow, SWT.PUSH);
+        // compensated form stops pre-distorting.
+        corrClearBtn = new Button(corrRow, SWT.PUSH);
         Image corrXmark = icons.renderAtHeight(d, SvgPaths.RECTANGLE_XMARK,
                 FILE_ICON_HEIGHT, new RGB(0xC8, 0x28, 0x28));
         if (corrXmark != null) corrClearBtn.setImage(corrXmark);
         corrClearBtn.setToolTipText(I18n.t("generator.corrections.clear"));
         corrClearBtn.addListener(SWT.Selection, e -> clearCorrections());
+        // Initial state for the current form (path + enablement).
+        refreshCorrectionsRow();
 
         // ----- Duration (seconds, used by Save WAV) ---------------------
         addRowLabel(group, I18n.t("generator.duration"));
@@ -1162,24 +1162,45 @@ public final class GeneratorPane extends AbstractPane {
         fd.setText(I18n.t("generator.corrections.dialog"));
         fd.setFilterExtensions(new String[] { "*.dpd", "*.*" });
         fd.setFilterNames     (new String[] { "Predistortion (*.dpd)", "All files" });
-        if (prefs.getGenCorrectionsFolder() != null) {
-            fd.setFilterPath(prefs.getGenCorrectionsFolder());
+        if (prefs.getGenDpdFolder() != null) {
+            fd.setFilterPath(prefs.getGenDpdFolder());
         }
         String picked = fd.open();
         if (picked == null) return;
+        // Store under the slot matching the current form (sine vs dual-tone .dpd).
+        prefs.setGenDpd(prefs.getGenSignalForm(), picked);
         correctionsField.setText(picked);
         correctionsField.setToolTipText(picked);
-        prefs.setGenCorrectionsFile(picked);
         File parent = new File(picked).getParentFile();
-        if (parent != null) prefs.setGenCorrectionsFolder(parent.getAbsolutePath());
+        if (parent != null) prefs.setGenDpdFolder(parent.getAbsolutePath());
     }
 
-    /** Unloads the harmonic-correction file: empties the path field and clears
-     *  the preference so the compensated-sine form no longer pre-distorts. */
+    /** Unloads the {@code .dpd} for the current form: empties the path field and
+     *  clears that form's preference so it no longer pre-distorts. */
     private void clearCorrections() {
+        Preferences prefs = Preferences.instance();
+        prefs.setGenDpd(prefs.getGenSignalForm(), null);
         correctionsField.setText("");
         correctionsField.setToolTipText(null);
-        Preferences.instance().setGenCorrectionsFile(null);
+    }
+
+    /** Syncs the corrections row to the current form: shows that form's
+     *  {@code .dpd} (the single-tone slot for {@code SINE_COMPENSATED}, the
+     *  dual-tone slot for {@code DUAL_TONE_COMPENSATED}) and enables the
+     *  field + browse/clear only for those two compensated forms — every other
+     *  waveform has no predistortion file, so the row is emptied and disabled. */
+    private void refreshCorrectionsRow() {
+        if (correctionsField == null || correctionsField.isDisposed()) return;
+        Preferences prefs = Preferences.instance();
+        GenSignalForm f = prefs.getGenSignalForm();
+        boolean compensated = f == GenSignalForm.SINE_COMPENSATED
+                           || f == GenSignalForm.DUAL_TONE_COMPENSATED;
+        String path = compensated ? nullToEmpty(prefs.getGenDpd(f)) : "";
+        correctionsField.setText(path);
+        correctionsField.setToolTipText(path.isEmpty() ? null : path);
+        correctionsField.setEnabled(compensated);
+        if (corrBrowseBtn != null && !corrBrowseBtn.isDisposed()) corrBrowseBtn.setEnabled(compensated);
+        if (corrClearBtn  != null && !corrClearBtn.isDisposed())  corrClearBtn.setEnabled(compensated);
     }
 
     /** Enables / disables the duty field+label depending on whether {@code form}
