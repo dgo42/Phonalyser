@@ -53,7 +53,7 @@ jobs:
       - name: Build fat JAR + MSI installer
         run: mvn -B -DskipTests package
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: phonalyser-windows
           path: |
@@ -87,7 +87,7 @@ jobs:
       - name: Build fat JAR + .deb installer
         run: mvn -B -DskipTests package
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: phonalyser-linux
           path: |
@@ -95,29 +95,37 @@ jobs:
             target/phonalyser-*-linux.jar
 
   # ===================================================== macOS x64 + Apple Silicon
-  # Two runners so we ship a DMG per architecture: macos-13 is the last
-  # Intel (x86_64) GitHub runner, macos-14 is Apple Silicon (arm64).  An
-  # arm64-only build is rejected by Intel Macs ("not supported on this Mac"),
-  # so both are required.  The pom auto-selects the matching macos-x64 /
-  # macos-aarch64 profile from the runner's CPU arch.
+  # Ship a DMG per architecture.  Both legs run on the Apple-Silicon macos-14
+  # runner — the Intel macos-13 image is being retired.  The arm64 DMG uses the
+  # native aarch64 JDK; the Intel DMG uses an x86_64 JDK running under Rosetta 2,
+  # which makes jpackage emit an x86_64 app + JRE that runs natively on Intel
+  # Macs (an arm64-only build is rejected with "not supported on this Mac").
+  # The pom auto-selects the matching macos-x64 / macos-aarch64 profile from
+  # os.arch, which reflects the JDK's architecture (x86_64 under Rosetta).
   build-macos:
+    runs-on: macos-14
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-13
-            arch: x64
-          - runner: macos-14
-            arch: arm64
-    runs-on: ${{ matrix.runner }}
+          - arch: x64
+            jdk: x64
+          - arch: arm64
+            jdk: aarch64
     steps:
       - uses: actions/checkout@v5
 
-      - name: Set up JDK 17
+      # The x86_64 JDK only runs on the arm64 runner through Rosetta 2.
+      - name: Install Rosetta 2
+        if: matrix.arch == 'x64'
+        run: sudo softwareupdate --install-rosetta --agree-to-license
+
+      - name: Set up JDK 17 (${{ matrix.jdk }})
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+          architecture: ${{ matrix.jdk }}
           cache: maven
 
       # Project Nayuki's flac-library isn't on Maven Central — it's
@@ -141,7 +149,7 @@ jobs:
             mv "$f" "${f%.dmg}-${{ matrix.arch }}.dmg"
           done
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: phonalyser-macos-${{ matrix.arch }}
           path: |
@@ -156,7 +164,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
