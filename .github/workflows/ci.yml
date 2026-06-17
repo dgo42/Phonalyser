@@ -29,10 +29,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -59,7 +59,7 @@ jobs:
         run: mvn -B -ntp -Djpackage.type=APP_IMAGE package
 
       - name: Upload app image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: phonalyser-${{ matrix.os }}-app-image
           path: target/installer/
@@ -70,7 +70,7 @@ jobs:
       # the green-build artifact list empty.
       - name: Upload Surefire reports on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: surefire-reports-${{ matrix.os }}
           path: target/surefire-reports/
