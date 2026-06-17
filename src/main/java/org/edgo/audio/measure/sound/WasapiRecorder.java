@@ -384,7 +384,7 @@ public class WasapiRecorder implements AudioCapture {
                 // packets, so steady state is allocation-free).
                 byte[] buf = captureSpare;
                 captureSpare = null;
-                if (buf == null) buf = bufferPool.poll();
+                if (buf == null) buf = bufferPool.aquire();
                 if (buf == null || buf.length != bytes) buf = new byte[bytes];
 
                 if ((flagValue & AUDCLNT_BUFFERFLAGS_SILENT) != 0) {
@@ -400,7 +400,7 @@ public class WasapiRecorder implements AudioCapture {
                 }
                 callHR(captureClient, VT_CC_RELEASE_BUFFER, frames);
 
-                if (!queue.offer(buf)) {
+                if (!queue.release(buf)) {
                     droppedFramesSinceLog.addAndGet(frames);
                     captureSpare = buf;   // keep thread-local — never offer to the pool from here
                 }
@@ -429,7 +429,7 @@ public class WasapiRecorder implements AudioCapture {
                 }
                 lastLogNanos = now;
             }
-            byte[] buffer = queue.poll();
+            byte[] buffer = queue.aquire();
             if (buffer == null) {
                 // Ring empty — park briefly instead of busy-spinning; the
                 // packet period is ms-scale, 500 µs is plenty of resolution.
@@ -439,7 +439,7 @@ public class WasapiRecorder implements AudioCapture {
             try {
                 dispatch(buffer, buffer.length);
             } finally {
-                bufferPool.offer(buffer);
+                bufferPool.release(buffer);
             }
         }
     }

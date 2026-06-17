@@ -37,11 +37,9 @@ import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 
 import lombok.Setter;
-
 /**
  * A {@link CTabFolder} whose leading tabs carry a row of live "status
  * tiles" painted under the tab label.  Each tile is a small rounded
@@ -63,8 +61,6 @@ import lombok.Setter;
  *       tooltips (state-aware, resolved at paint time).</li>
  *   <li>Tab-body collapse on tab-strip double-click / Enter, exposed via
  *       {@link #setCollapsed(boolean)} for the screenshot path.</li>
- *   <li>The off-screen tile overlay for screenshots
- *       ({@link #paintTilesInto(GC, Control)}).</li>
  *   <li>The colour / font resources the tiles need, disposed with the
  *       folder.</li>
  * </ul>
@@ -286,33 +282,6 @@ public class TileTabFolder extends CTabFolder {
             collapseRelayout.run();
         } else if (getParent() != null && !getParent().isDisposed()) {
             getParent().layout(true, true);
-        }
-    }
-
-    /** Overlays the tile rows into {@code gc}, translated from this folder
-     *  up to {@code origin}'s coordinate space.  Needed by the screenshot
-     *  path: SWT's {@code Control.print()} captures the folder's native
-     *  chrome but not the user-registered paint listener that draws the
-     *  tiles, so the snapshot has to overlay them by hand. */
-    public void paintTilesInto(GC gc, Control origin) {
-        if (isDisposed()) {
-            return;
-        }
-        int dx = 0;
-        int dy = 0;
-        Control c = this;
-        while (c != null && c != origin) {
-            dx += c.getLocation().x;
-            dy += c.getLocation().y;
-            c = c.getParent();
-        }
-        for (int i = 0; i < customTabs && i < getItemCount(); i++) {
-            CTabItem item = getItem(i);
-            if (item.isDisposed()) {
-                continue;
-            }
-            Rectangle b = item.getBounds();
-            drawTiles(gc, new Rectangle(b.x + dx, b.y + dy, b.width, b.height), i);
         }
     }
 

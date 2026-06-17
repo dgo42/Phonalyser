@@ -20,9 +20,10 @@ package org.edgo.audio.measure.common;
 
 import lombok.Getter;
 
-public class StereoSampleFloat {
+/** A normalised stereo sample pair in double precision. */
+public class StereoSampleDouble {
     @Getter
-    public float ch0;
+    public double ch0;
     @Getter
-    public float ch1;
+    public double ch1;
 }

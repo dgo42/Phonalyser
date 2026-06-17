@@ -24,7 +24,7 @@ import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.adc.WeightedBuffer;
 import org.edgo.audio.measure.chart.WaveformExporter;
-import org.edgo.audio.measure.common.StereoSampleFloat;
+import org.edgo.audio.measure.common.StereoSampleDouble;
 import org.edgo.audio.measure.wav.WavReader;
 import org.edgo.audio.measure.wav.WavWriter;
 
@@ -106,7 +106,7 @@ public class ProcessWavMode {
 
         try (WavWriter wav = new WavWriter(outFile, reader.getSampleRate(), reader.getChannels(), bitDepth + 8, false)) {
             reader.process(samples -> {
-                StereoSampleFloat[] mapped = new StereoSampleFloat[samples.length];
+                StereoSampleDouble[] mapped = new StereoSampleDouble[samples.length];
                 for (int i = 0; i < samples.length; i++) {
                     mapped[i] = weights.correctedCode(samples[i]);
                 }

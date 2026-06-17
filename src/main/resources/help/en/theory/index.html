@@ -160,6 +160,14 @@
     <a href="fft.html"><b>FFT analyser</b> — coherent averaging and sub-bin
        de-rotation, glitch rejection, THD / SNR / SINAD / ENOB, two-tone
        intermodulation</a>
+    <a href="derotation-accuracy.html"><b>De-rotation accuracy</b> — how
+       precisely the per-block rotation angle is known, why its error does
+       not accumulate over hours-long averages, and how overlap and window
+       choice set the floor reached per unit time</a>
+    <a href="dac-predistortion.html"><b>DAC pre-distortion</b> — cancelling the
+       converter's own harmonics: why the twin-T notch is mandatory, why its
+       temperature drift forces a manual fundamental, and how deep coherent
+       averaging makes the correction trustworthy</a>
     <a href="freq-resp.html"><b>Frequency response</b> — Farina log-sweep
        deconvolution, transport-delay removal, smoothing, and calibration
        de-embedding</a>
@@ -181,22 +189,35 @@
   <h2>Design themes you will meet everywhere</h2>
   <div class="pane">
     <ul>
-      <li><b>One producer, many independent consumers.</b>  The capture
-          device writes one shared stream; every view reads it with its own
-          cursor and can fall behind, catch up, or freeze without affecting
-          the others.</li>
-      <li><b>The audio path never waits.</b>  Anything expensive — painting,
-          FFTs, file I/O — happens elsewhere, against copies.  The capture
-          and playback threads are never blocked for more than microseconds,
-          which is what keeps exclusive-mode devices free of dropouts.</li>
-      <li><b>Calibration lives in one place.</b>  ADC and DAC full-scale
-          voltages are set once (calibration dialogs) and applied at the
-          edges — display and output scaling.  The signal data itself stays
-          in normalised units throughout.</li>
-      <li><b>Synthesis stays ideal.</b>  Dither and quantization happen at
-          the last moment before the DAC; everything before that point is
-          computed in full precision, so exports and measurement references
-          are the mathematically exact waveform.</li>
+      <li><b>Coherent averaging digs below the single-shot floor — and noise
+          sets the limit.</b>  Every deep measurement (the harmonics, the
+          two-tone products, the pre-distortion correction) sums phase-aligned
+          blocks so the tone holds while the noise falls as 1/√<i>n</i>.  The
+          floor you reach is set by the bin signal-to-noise ratio and the
+          effective number of averages — not by any trick.</li>
+      <li><b>Measure the reference afresh, never integrate it.</b>  Phase
+          references and frequency locks — the per-block de-rotation angle, the
+          frequency-lock loop, the manual fundamental — are read on each block,
+          never carried by a free-running counter.  A measured reference averages
+          out; an integrated one random-walks and slowly de-coheres the tone.</li>
+      <li><b>Drift is a walking phase, not a lost level.</b>  Converter clock
+          mismatch and notch-component temperature drift show up as a slow phase
+          walk, which the analysis strips block by block.  Tracked as phase, they
+          cost coherence, not magnitude — which is why the wide-band level numbers
+          stay solid while the fundamental sits in a drifting null.</li>
+      <li><b>Exact frequencies by integer phase.</b>  The DDS accumulator, every
+          harmonic correction tone and the sweep reference are formed by integer
+          multiplication of one master phase, so a tone lands <em>exactly</em> at
+          <i>h·f</i> and never beats against the distortion it measures or
+          cancels, however long it runs.</li>
+      <li><b>Windows are chosen for side-lobe margin, not noise.</b>  Above each
+          window's recommended overlap every window reaches the same floor in the
+          same wall-clock time, so the choice (HFT248D at 87.5&nbsp;%) is about
+          keeping a strong tone's leakage off the faint bins, not about noise.</li>
+      <li><b>Calibration at the edges, normalised in the middle.</b>  ADC and DAC
+          full-scale voltages are applied only at display and output; the signal
+          data stays in normalised units and full precision throughout, so
+          references and exports are the mathematically exact waveform.</li>
     </ul>
   </div>
 

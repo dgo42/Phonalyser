@@ -216,7 +216,7 @@ public class AdcCorrectionHelper {
      * a frame-local correction sinusoid.
      */
     public void subtractDistortionPerFrameInPlace(
-            float[] samples, int sampleRate, int fftSize,
+            double[] samples, int sampleRate, int fftSize,
             FftResult r, AdcCorrection adc) {
         if (samples.length < fftSize) return;
 
@@ -277,7 +277,7 @@ public class AdcCorrectionHelper {
                     int n = h + 2;
                     corr += amp[h] * Math.cos(n * w * j + phase[h]);
                 }
-                samples[start + j] = (float) (samples[start + j] - corr);
+                samples[start + j] = samples[start + j] - corr;
             }
         }
 
@@ -305,7 +305,7 @@ public class AdcCorrectionHelper {
                     int n = h + 2;
                     corr += amp[h] * Math.cos(n * w * j + phase[h]);
                 }
-                samples[i] = (float) (samples[i] - corr);
+                samples[i] = samples[i] - corr;
             }
         }
     }

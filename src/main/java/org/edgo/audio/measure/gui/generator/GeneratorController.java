@@ -123,7 +123,7 @@ public final class GeneratorController {
             setAmplitudeVrms(v);
             publishSignalChanged();
         });
-        onPref(prefs.dacFsVoltageRmsProperty(), this::setDacFsVoltageRms);
+        onPref(prefs.dacFsVoltageAmplProperty(), this::setDacFsVoltageAmpl);
         onPref(prefs.genRectangleDutyProperty(), v -> {
             setRectangleDuty(v);
             publishSignalChanged();
@@ -327,7 +327,7 @@ public final class GeneratorController {
             return "The previous playback is still shutting down — try again in a moment.";
         }
         SignalGenerator gen;
-        double dacFs = prefs.getDacFsVoltageRms();
+        double dacFs = prefs.getDacFsVoltageAmpl();
         try {
             if (form == GenSignalForm.SINE_COMPENSATED) {
                 String csv = prefs.getGenCorrectionsFile();
@@ -581,9 +581,9 @@ public final class GeneratorController {
     /** Recomputes the running generator's amplitude scale against the current DAC
      *  full-scale (the cached requested Vrms is unchanged).  No-op if not running.
      *  Driven by the DAC-calibration binding so a full-scale change takes effect live. */
-    public void setDacFsVoltageRms(double v) {
+    public void setDacFsVoltageAmpl(double v) {
         SignalGenerator g = generator;
-        if (g != null) g.setDacFsVoltageRms(v);
+        if (g != null) g.setDacFsVoltageAmpl(v);
     }
 
     /** Live-applies sweep start frequency (Hz). */
@@ -817,10 +817,10 @@ public final class GeneratorController {
                     return "Sine (compensated) needs a harmonics-correction CSV.  Pick one with the … button.";
                 }
                 gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms,
-                        prefs.getDacFsVoltageRms(), csv);
+                        prefs.getDacFsVoltageAmpl(), csv);
             } else {
                 gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms,
-                        prefs.getDacFsVoltageRms());
+                        prefs.getDacFsVoltageAmpl());
             }
             gen.setRectangleDuty(prefs.getGenRectangleDuty());
             // Periodic forms truncate to an integer-period count; noise has

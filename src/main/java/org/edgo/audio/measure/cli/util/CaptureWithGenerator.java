@@ -43,7 +43,7 @@ public class CaptureWithGenerator {
      * for {@code duration} seconds.  Returns the captured mono samples normalised to −1…+1.
      * Channel 0 (left / primary) of the input device is used.
      */
-    public float[] run(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
+    public double[] run(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
                        int sampleRate, int bitDepth, int ditherBits,
                        int duration) throws Exception {
         return run(gen, outDevice, inDevice, sampleRate, bitDepth, ditherBits,
@@ -59,12 +59,12 @@ public class CaptureWithGenerator {
      * starting (HW buffer pre-filled, DAC actively driving the line) and the
      * recorder starting capture.
      */
-    public float[] run(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
+    public double[] run(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
                        int sampleRate, int bitDepth, int ditherBits,
                        int duration, WeightedBuffer weights,
                        int syncPauseSec) throws Exception {
         int   maxSamples = (int) Math.min((long) duration * sampleRate + sampleRate, Integer.MAX_VALUE);
-        float[] samples  = new float[maxSamples];
+        double[] samples  = new double[maxSamples];
         long    halfRange = 1L << (bitDepth - 1);
         final AtomicInteger writePos = new AtomicInteger(0);
         final AtomicInteger skipped  = new AtomicInteger(0);
@@ -99,7 +99,7 @@ public class CaptureWithGenerator {
                     double code = w != null
                             ? w.correctedCode(stereo[i]).ch1
                             : (double) (stereo[i].ch1 & 0xFFFFFFFFL);
-                    samples[n + i] = (float) ((code - halfRange) / (double) halfRange);
+                    samples[n + i] = (code - halfRange) / (double) halfRange;
                 }
                 writePos.addAndGet(stereo.length);
             });
@@ -146,8 +146,8 @@ public class CaptureWithGenerator {
                                    BooleanSupplier cancelToken,
                                    StereoCaptureProgress progress) throws Exception {
         int   maxSamples = (int) Math.min((long) duration * sampleRate + sampleRate, Integer.MAX_VALUE);
-        final float[] leftBuf  = new float[maxSamples];
-        final float[] rightBuf = new float[maxSamples];
+        final double[] leftBuf  = new double[maxSamples];
+        final double[] rightBuf = new double[maxSamples];
         final long    halfRange = 1L << (bitDepth - 1);
         final AtomicInteger writePos = new AtomicInteger(0);
         final AtomicInteger skipped  = new AtomicInteger(0);
@@ -191,12 +191,12 @@ public class CaptureWithGenerator {
                         code0 = (double) (stereo[i].ch0 & 0xFFFFFFFFL);
                         code1 = (double) (stereo[i].ch1 & 0xFFFFFFFFL);
                     }
-                    float l = (float) ((code0 - halfRange) / (double) halfRange);
-                    float r = (float) ((code1 - halfRange) / (double) halfRange);
+                    double l = (code0 - halfRange) / (double) halfRange;
+                    double r = (code1 - halfRange) / (double) halfRange;
                     leftBuf [n + i] = l;
                     rightBuf[n + i] = r;
-                    sumSqL += l * (double) l;
-                    sumSqR += r * (double) r;
+                    sumSqL += l * l;
+                    sumSqR += r * r;
                     cnt++;
                 }
                 writePos.addAndGet(stereo.length);
@@ -230,8 +230,8 @@ public class CaptureWithGenerator {
         }
 
         int actual = Math.min(writePos.get(), maxSamples);
-        float[] outLeft  = actual < maxSamples ? Arrays.copyOf(leftBuf,  actual) : leftBuf;
-        float[] outRight = actual < maxSamples ? Arrays.copyOf(rightBuf, actual) : rightBuf;
+        double[] outLeft  = actual < maxSamples ? Arrays.copyOf(leftBuf,  actual) : leftBuf;
+        double[] outRight = actual < maxSamples ? Arrays.copyOf(rightBuf, actual) : rightBuf;
         return new StereoSamples(outLeft, outRight);
     }
 

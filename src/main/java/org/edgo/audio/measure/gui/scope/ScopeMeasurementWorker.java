@@ -26,7 +26,8 @@ import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 import org.edgo.audio.measure.dsp.LowPassFilter;
-import org.edgo.audio.measure.dsp.MainsCombFilter;
+import org.edgo.audio.measure.dsp.MainsFilters;
+import org.edgo.audio.measure.dsp.MainsTimeFilter;
 import org.edgo.audio.measure.dsp.MedianFilter;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.LpfMode;
@@ -95,7 +96,9 @@ public final class ScopeMeasurementWorker {
     /** Per-channel mains-hum combs for the measured values; lazily built
      *  for the capture rate, used when a channel's mains-suppression mode
      *  is IIR_COMB.  DC-preserving, so Vmean still reflects the true bias. */
-    private MainsCombFilter measCombLeft, measCombRight;
+    private MainsTimeFilter measLeft, measRight;
+    private MainsSuppression measLeftMode  = MainsSuppression.NONE;
+    private MainsSuppression measRightMode = MainsSuppression.NONE;
     private int             measCombSampleRate;
     /** Per-channel HF low-pass for the measured values (matches the
      *  display-side filter so Vpp/Vrms aren't inflated by >80 kHz spikes). */
@@ -346,13 +349,24 @@ public final class ScopeMeasurementWorker {
 
     /** Lazily (re)builds the per-channel measurement combs for the given
      *  sample rate.  Worker-thread only. */
-    private MainsCombFilter measComb(boolean left, int sampleRate) {
-        if (measCombSampleRate != sampleRate || measCombLeft == null) {
-            measCombLeft  = new MainsCombFilter(sampleRate, MAINS_NOTCH_BW_HZ);
-            measCombRight = new MainsCombFilter(sampleRate, MAINS_NOTCH_BW_HZ);
+    private MainsTimeFilter measFilter(boolean left, MainsSuppression mode, int sampleRate) {
+        if (measCombSampleRate != sampleRate) {
+            measLeft = measRight = null;
+            measLeftMode = measRightMode = MainsSuppression.NONE;
             measCombSampleRate = sampleRate;
         }
-        return left ? measCombLeft : measCombRight;
+        if (left) {
+            if (measLeft == null || measLeftMode != mode) {
+                measLeft = MainsFilters.of(mode, sampleRate, MAINS_NOTCH_BW_HZ);
+                measLeftMode = mode;
+            }
+            return measLeft;
+        }
+        if (measRight == null || measRightMode != mode) {
+            measRight = MainsFilters.of(mode, sampleRate, MAINS_NOTCH_BW_HZ);
+            measRightMode = mode;
+        }
+        return measRight;
     }
 
     /** Runs one measurement pass on the worker thread and updates the cache. */
@@ -404,24 +418,26 @@ public final class ScopeMeasurementWorker {
         // stronger there but its harmonics are tens of Hz away, outside the
         // band) — un-biased and free of the mains.  Copied before the comb
         // rewrites the selected channel's buffer in place.
+        long absStart = b.getWritePos() - avail;
         float[] rawSel = null;
-        if (selMode == MainsSuppression.IIR_COMB) {
+        if (selMode != MainsSuppression.NONE) {
             float[] src = (selected == Channel.L) ? measLeftBuf : measRightBuf;
             if (rawSelBuf == null || rawSelBuf.length < avail) rawSelBuf = new float[avail];
             System.arraycopy(src, 0, rawSelBuf, 0, avail);
             rawSel = rawSelBuf;
         }
-        if (leftMode == MainsSuppression.IIR_COMB) {
-            MainsCombFilter c = measComb(true, sampleRate);
+        if (leftMode != MainsSuppression.NONE) {
+            MainsTimeFilter c = measFilter(true, leftMode, sampleRate);
             c.track(measLeftBuf, avail);
-            c.reset();
-            c.processPreservingDc(measLeftBuf, avail);
+            // Comb: zeroed delay lines each pass → reset; adaptive filters keep state.
+            if (leftMode == MainsSuppression.IIR_COMB) c.reset();
+            c.processPreservingDc(measLeftBuf, avail, absStart);
         }
-        if (rightMode == MainsSuppression.IIR_COMB) {
-            MainsCombFilter c = measComb(false, sampleRate);
+        if (rightMode != MainsSuppression.NONE) {
+            MainsTimeFilter c = measFilter(false, rightMode, sampleRate);
             c.track(measRightBuf, avail);
-            c.reset();
-            c.processPreservingDc(measRightBuf, avail);
+            if (rightMode == MainsSuppression.IIR_COMB) c.reset();
+            c.processPreservingDc(measRightBuf, avail, absStart);
         }
         float[] data = (selected == Channel.L) ? measLeftBuf : measRightBuf;
         int measLen  = avail;

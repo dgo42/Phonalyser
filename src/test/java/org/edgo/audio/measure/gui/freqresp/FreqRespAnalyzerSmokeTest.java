@@ -115,7 +115,7 @@ class FreqRespAnalyzerSmokeTest {
         FreqRespAnalyzerConfig cfg = baseConfig()
                 .stereoCaptureProvider((g, o, i, sr, bd, d, dur, c) -> {
                     captureCalls.incrementAndGet();
-                    return new StereoSamples(new float[sr * dur], new float[sr * dur]);
+                    return new StereoSamples(new double[sr * dur], new double[sr * dur]);
                 })
                 .build();
         Cancellable alwaysCancelled = () -> true;
@@ -186,11 +186,11 @@ class FreqRespAnalyzerSmokeTest {
      *  flat unity magnitude across the band. */
     private StereoCaptureProvider delayLineProvider(int delaySamples) {
         return (gen, outDev, inDev, sr, bd, dither, durationSec, cancel) -> {
-            float[] sweep = gen.getLogSweepBuffer();
+            double[] sweep = gen.getLogSweepBuffer();
             assertNotNull(sweep, "generator must expose log-sweep buffer");
             int leadIn = (int) Math.round(LEAD_IN_SEC * sr);
             int total  = leadIn + delaySamples + sweep.length + sr / 2;
-            float[] y  = new float[total];
+            double[] y  = new double[total];
             int offset = leadIn + delaySamples;
             // Capture-side scaling: the real DAC turns a unit-amplitude
             // sweep into a signal whose peak is amplitudeVRms·√2 / FS, which
@@ -200,7 +200,7 @@ class FreqRespAnalyzerSmokeTest {
             double dacDrivePeak = AMP_VRMS * Math.sqrt(2.0) / DAC_FS_VRMS;
             for (int i = 0; i < sweep.length; i++) {
                 if (offset + i < y.length) {
-                    y[offset + i] = (float) (sweep[i] * dacDrivePeak);
+                    y[offset + i] = sweep[i] * dacDrivePeak;
                 }
             }
             // Same data on both channels for the test — the analyzer should

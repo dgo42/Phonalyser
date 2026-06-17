@@ -114,7 +114,7 @@ public class FreqRespCalHelper {
      * drive level so the passband sits at ≈ 1.0.
      */
     public FreqRespCalibration computeFromLogSweep(
-            float[] yRec, float[] sweepRef, int leadInSamples,
+            double[] yRec, double[] sweepRef, int leadInSamples,
             int sampleRate, double[] freqs, double amplitudeVRms, double adcFsVoltageRms) {
         return computeFromLogSweep(yRec, sweepRef, leadInSamples,
                 sampleRate, freqs, amplitudeVRms, adcFsVoltageRms, 0, null);
@@ -133,7 +133,7 @@ public class FreqRespCalHelper {
      *  to compute one value for both sites).  Zero disables the fade and
      *  the reference is used raw. */
     public FreqRespCalibration computeFromLogSweep(
-            float[] yRec, float[] sweepRef, int leadInSamples,
+            double[] yRec, double[] sweepRef, int leadInSamples,
             int sampleRate, double[] freqs, double amplitudeVRms, double adcFsVoltageRms,
             int fadeSamples, String channelLabel) {
         final String tag = (channelLabel == null || channelLabel.isEmpty())

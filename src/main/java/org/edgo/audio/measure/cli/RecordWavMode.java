@@ -33,7 +33,7 @@ import org.edgo.audio.measure.cli.util.ArgParser;
 import org.edgo.audio.measure.cli.util.DeviceSelector;
 import org.edgo.audio.measure.cli.util.PcmUtils;
 import org.edgo.audio.measure.cli.util.SampleRates;
-import org.edgo.audio.measure.common.StereoSampleFloat;
+import org.edgo.audio.measure.common.StereoSampleDouble;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftAnalyzer;
@@ -181,7 +181,7 @@ public class RecordWavMode {
         final int     totalFramesAlloc = adcCompPath != null
                 ? (int) Math.min((long) sampleRate * (durationSeconds + 1), Integer.MAX_VALUE)
                 : 0;
-        final float[] capturedCh1 = totalFramesAlloc > 0 ? new float[totalFramesAlloc] : null;
+        final double[] capturedCh1 = totalFramesAlloc > 0 ? new double[totalFramesAlloc] : null;
         final AtomicInteger capPos = new AtomicInteger(0);
         final long halfRange = 1L << (bitDepth - 1);
 
@@ -214,7 +214,7 @@ public class RecordWavMode {
                     int toCopy = Math.min(frames, capturedCh1.length - n);
                     for (int f = 0; f < toCopy; f++) {
                         long code = recorder.readSample(bytes, f * frameSize + sampleBytes) & 0xFFFFFFFFL;
-                        capturedCh1[n + f] = (float) ((code - halfRange) / (double) halfRange);
+                        capturedCh1[n + f] = (code - halfRange) / (double) halfRange;
                     }
                     capPos.addAndGet(toCopy);
                 }
@@ -236,7 +236,7 @@ public class RecordWavMode {
                         actual, fftSize);
                 return;
             }
-            float[] samples = actual < capturedCh1.length
+            double[] samples = actual < capturedCh1.length
                     ? Arrays.copyOf(capturedCh1, actual)
                     : capturedCh1;
 
@@ -253,7 +253,7 @@ public class RecordWavMode {
 
             String   baseName = outFile.getName().replaceFirst("\\.wav$", "");
             File corrFile = new File(outFile.getParentFile(), baseName + "_adc_corrected.wav");
-            byte[] pcm = PcmUtils.floatMonoToStereoBytes(samples, bitDepth);
+            byte[] pcm = PcmUtils.monoToStereoBytes(samples, bitDepth);
             try (WavWriter cw = new WavWriter(corrFile, sampleRate, 2, bitDepth, false)) {
                 cw.writeRaw(pcm, pcm.length);
             }
@@ -282,7 +282,7 @@ public class RecordWavMode {
                     skipped.addAndGet(samples.length);
                     return;
                 }
-                StereoSampleFloat[] mapped = new StereoSampleFloat[samples.length];
+                StereoSampleDouble[] mapped = new StereoSampleDouble[samples.length];
                 for (int i = 0; i < samples.length; i++) {
                     mapped[i] = weights.correctedCode(samples[i]);
                 }

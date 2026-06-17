@@ -71,7 +71,7 @@ public class RegressCalibrateMode {
         log.info("Scale     : {} V", scaleVolts);
         log.info("Chart     : {}x{} px", chartWidth, chartHeight);
 
-        float[] samples   = new float[(int) Math.min(totalFrames, Integer.MAX_VALUE)];
+        double[] samples   = new double[(int) Math.min(totalFrames, Integer.MAX_VALUE)];
         long    halfRange = 1L << (bitDepth - 1);
         AtomicInteger pos = new AtomicInteger(0);
 
@@ -79,13 +79,13 @@ public class RegressCalibrateMode {
             int n = pos.get();
             for (int i = 0; i < block.length && n + i < samples.length; i++) {
                 int signed = block[i].ch1 - (int) halfRange;
-                samples[n + i] = (float) (signed / (double) halfRange);
+                samples[n + i] = signed / (double) halfRange;
             }
             pos.addAndGet(block.length);
         });
 
         int actualSamples = pos.get();
-        float[] trimmed = actualSamples < samples.length
+        double[] trimmed = actualSamples < samples.length
                 ? Arrays.copyOf(samples, actualSamples)
                 : samples;
 

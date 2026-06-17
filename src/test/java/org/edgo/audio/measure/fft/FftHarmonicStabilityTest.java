@@ -111,7 +111,7 @@ class FftHarmonicStabilityTest {
                 FUND_DBFS, FUND_HZ, Arrays.toString(HARMONIC_DBFS), NOISE_STD, DITHER_BITS);
 
         for (int c = 0; c < COLLECTIONS; c++) {
-            float[] sig = synthesize(SEED + c, FRAMES, OVERLAP);
+            double[] sig = synthesize(SEED + c, FRAMES, OVERLAP);
             FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
                     WINDOW, OVERLAP, 0.0, 0.0, COHERENT, Double.NaN, false);
 
@@ -190,7 +190,7 @@ class FftHarmonicStabilityTest {
             for (FftOverlap ov : OVERLAP_SWEEP) {
                 double[][] h = new double[HARMONIC_COUNT][SWEEP_COLLECTIONS];
                 for (int c = 0; c < SWEEP_COLLECTIONS; c++) {
-                    float[] sig = synthesize(SEED + c, frames, ov);
+                    double[] sig = synthesize(SEED + c, frames, ov);
                     FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
                             WINDOW, ov, 0.0, 0.0, COHERENT, Double.NaN, false);
                     for (int i = 0; i < HARMONIC_COUNT; i++) {
@@ -224,7 +224,7 @@ class FftHarmonicStabilityTest {
         for (int frames : PLATEAU_FRAMES) {
             double[][] h = new double[HARMONIC_COUNT][PLATEAU_SEEDS];
             for (int c = 0; c < PLATEAU_SEEDS; c++) {
-                float[] sig = synthesize(SEED + c, frames, PLATEAU_OVERLAP);
+                double[] sig = synthesize(SEED + c, frames, PLATEAU_OVERLAP);
                 FftResult r = analyzer.analyze(sig, SAMPLE_RATE, FFT_SIZE, HARMONIC_COUNT,
                         WINDOW, PLATEAU_OVERLAP, 0.0, 0.0, COHERENT, Double.NaN, false);
                 for (int i = 0; i < HARMONIC_COUNT; i++) {
@@ -282,7 +282,7 @@ class FftHarmonicStabilityTest {
             double[]   eCom = new double[KAPPA_SEEDS];
 
             for (int c = 0; c < KAPPA_SEEDS; c++) {
-                float[] sig = synthesize(SEED + c, frames, KAPPA_OVERLAP);
+                double[] sig = synthesize(SEED + c, frames, KAPPA_OVERLAP);
                 double[][] xr = new double[frames][hi + 1];          // per-frame Re at fund+harmonic bins
                 double[][] xi = new double[frames][hi + 1];
                 double[] re = new double[FFT_SIZE], im = new double[FFT_SIZE];
@@ -385,10 +385,10 @@ class FftHarmonicStabilityTest {
     /** One collection's buffer: tone + H2..H9 + Gaussian floor, TPDF-dithered to
      *  {@link #DITHER_BITS}.  Length = exactly {@link #FRAMES} frames at the chosen
      *  overlap, so {@code analyze()} averages that many. */
-    private static float[] synthesize(long seed, int frames, FftOverlap overlap) {
+    private static double[] synthesize(long seed, int frames, FftOverlap overlap) {
         int     hop = Math.max(1, (int) Math.round(FFT_SIZE * (1.0 - overlap.fraction)));
         int     n   = FFT_SIZE + (frames - 1) * hop;
-        float[] s   = new float[n];
+        double[] s   = new double[n];
         Random  rng = new Random(seed);
         double  w0  = 2.0 * Math.PI * FUND_HZ / SAMPLE_RATE;
         double  a0  = Math.pow(10.0, FUND_DBFS / 20.0);
@@ -424,7 +424,7 @@ class FftHarmonicStabilityTest {
             }
             v += NOISE_STD * rng.nextGaussian();                                       // broadband floor
             double dither = (rng.nextDouble() - 0.5 + rng.nextDouble() - 0.5) * lsb;   // TPDF, ±1 LSB
-            s[i] = (float) (Math.rint((v + dither) / lsb) * lsb);                      // quantize to N bits
+            s[i] = (double) (Math.rint((v + dither) / lsb) * lsb);                      // quantize to N bits
         }
         return s;
     }

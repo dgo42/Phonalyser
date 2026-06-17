@@ -84,14 +84,14 @@ class FftCrossTickDriftTest {
 
         for (double driftPpmMin : DRIFT_PPM_PER_MIN) {
             double driftPerSample = driftPpmMin * 1e-6 / 60.0 / SAMPLE_RATE;   // relative Δf per sample
-            float[] sig = synthesizeContinuous(SEED, total, driftPerSample);
+            double[] sig = synthesizeContinuous(SEED, total, driftPerSample);
             double ppbOverRun = driftPpmMin * 1000.0 * (total / (double) SAMPLE_RATE) / 60.0;
 
             for (boolean fork : new boolean[]{false, true}) {
                 FftAnalyzerWorker.FORK_NONTONE_DRIFT = fork;   // A/B the joint-δ fork
                 FftAnalyzer       analyzer = new FftAnalyzer();
                 FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);      // headless
-                float[] win = new float[winLen];
+                double[] win = new double[winLen];
 
                 LOG.info(String.format("--- drift = %.3f ppm/min  (%.1f ppb over %.1f s)  fork=%s ---",
                         driftPpmMin, ppbOverRun, total / (double) SAMPLE_RATE, fork ? "ON " : "OFF"));
@@ -155,13 +155,13 @@ class FftCrossTickDriftTest {
 
         for (double driftPpmMin : new double[]{0.0, 10.0}) {
             double driftPerSample = driftPpmMin * 1e-6 / 60.0 / SAMPLE_RATE;
-            float[] sig = synthesizeTones(SEED, total, driftPerSample, freqs, dbfs);
+            double[] sig = synthesizeTones(SEED, total, driftPerSample, freqs, dbfs);
 
             for (boolean fork : new boolean[]{false, true}) {
                 FftAnalyzerWorker.FORK_NONTONE_DRIFT = fork;
                 FftAnalyzer       analyzer = new FftAnalyzer();
                 FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
-                float[] win = new float[winLen];
+                double[] win = new double[winLen];
                 LOG.info(String.format("--- drift = %.3f ppm/min  fork=%s ---", driftPpmMin, fork ? "ON " : "OFF"));
 
                 long base = 0;
@@ -214,12 +214,12 @@ class FftCrossTickDriftTest {
 
         for (double driftPpmMin : new double[]{0.0, 1.0}) {
             double driftPerSample = driftPpmMin * 1e-6 / 60.0 / SAMPLE_RATE;
-            float[] sig = synthesizeTones(SEED, total, driftPerSample, freqs, dbfs);
+            double[] sig = synthesizeTones(SEED, total, driftPerSample, freqs, dbfs);
             for (boolean fork : new boolean[]{false, true}) {
                 FftAnalyzerWorker.FORK_NONTONE_DRIFT = fork;
                 FftAnalyzer       analyzer = new FftAnalyzer();
                 FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
-                float[] win = new float[winLen];
+                double[] win = new double[winLen];
                 LOG.info(String.format("--- drift = %.3f ppm/min  fork=%s ---", driftPpmMin, fork ? "ON " : "OFF"));
                 long base = 0;
                 FftResult r;
@@ -271,7 +271,7 @@ class FftCrossTickDriftTest {
             int f2Bin = f1Bin + dF;
             double[] freqs = { f1Bin * binHz, f2Bin * binHz };
             double[] dbfs  = { -10.0, -10.0 };
-            float[] sig = synthesizeTones(SEED, winLen, 0.0, freqs, dbfs);
+            double[] sig = synthesizeTones(SEED, winLen, 0.0, freqs, dbfs);
             analyzer.setSamplesAbsStart(0);
             analyzer.setSpectrumOnly(true);
             analyzer.setMultiTone(true);
@@ -302,7 +302,7 @@ class FftCrossTickDriftTest {
         double[] freqs = new double[bins.length];
         for (int i = 0; i < bins.length; i++) freqs[i] = bins[i] * binHz;
 
-        float[] sig = synthesizeTones(SEED, winLen, 0.0, freqs, dbfs);
+        double[] sig = synthesizeTones(SEED, winLen, 0.0, freqs, dbfs);
         FftAnalyzer analyzer = new FftAnalyzer();
         analyzer.setSamplesAbsStart(0);
         analyzer.setSpectrumOnly(true);
@@ -350,12 +350,12 @@ class FftCrossTickDriftTest {
                 String.format("%.0f", tau / hop), ticks);
 
         for (double wobblePpm : new double[]{0.0, 0.05, 0.5}) {
-            float[] sig = synthesizeWobble(SEED, total, wobblePpm * 1e-6, tau, freqs, dbfs);
+            double[] sig = synthesizeWobble(SEED, total, wobblePpm * 1e-6, tau, freqs, dbfs);
             for (boolean refine : new boolean[]{false, true}) {
                 FftAnalyzerWorker.MULTI_KAPPA_REFINE = refine;
                 FftAnalyzer       analyzer = new FftAnalyzer();
                 FftAnalyzerWorker worker   = new FftAnalyzerWorker(null);
-                float[] win = new float[winLen];
+                double[] win = new double[winLen];
                 double[] early = new double[freqs.length], late = new double[freqs.length];
                 long base = 0;
                 for (int t = 0; t < ticks; t++) {
@@ -391,9 +391,9 @@ class FftCrossTickDriftTest {
     /** Continuous sum of arbitrary tones {@code freqHz[i]} at {@code dbfs[i]}, all
      *  chirping at the SAME {@code driftPerSample} (one shared clock), plus noise +
      *  TPDF dither.  Re-seeded every 2^16 samples to the exact chirp phase. */
-    private static float[] synthesizeTones(long seed, int n, double driftPerSample,
+    private static double[] synthesizeTones(long seed, int n, double driftPerSample,
                                            double[] freqHz, double[] dbfs) {
-        float[]  s   = new float[n];
+        double[]  s   = new double[n];
         Random   rng = new Random(seed);
         int      nt  = freqHz.length;
         double   lsb = 2.0 / (double) (1L << DITHER_BITS);
@@ -428,7 +428,7 @@ class FftCrossTickDriftTest {
             }
             v += NOISE_STD * rng.nextGaussian();
             double dither = (rng.nextDouble() - 0.5 + rng.nextDouble() - 0.5) * lsb;
-            s[k] = (float) (Math.rint((v + dither) / lsb) * lsb);
+            s[k] = (double) (Math.rint((v + dither) / lsb) * lsb);
         }
         return s;
     }
@@ -441,9 +441,9 @@ class FftCrossTickDriftTest {
      *  so it actually de-coheres the cross-tick sum when the loop can't follow it.
      *  Phase integrated per sample: φ_i(k)=w_i·(k+Σδ) — every tone (and the product
      *  tones) wobbles by the SAME relative amount, as a shared DAC↔ADC clock would. */
-    private static float[] synthesizeWobble(long seed, int n, double wobbleAmp, double tauSamples,
+    private static double[] synthesizeWobble(long seed, int n, double wobbleAmp, double tauSamples,
                                             double[] freqHz, double[] dbfs) {
-        float[]  s    = new float[n];
+        double[]  s    = new double[n];
         Random   rng  = new Random(seed);
         int      nt   = freqHz.length;
         double   lsb  = 2.0 / (double) (1L << DITHER_BITS);
@@ -465,7 +465,7 @@ class FftCrossTickDriftTest {
             }
             v += NOISE_STD * rng.nextGaussian();
             double dither = (rng.nextDouble() - 0.5 + rng.nextDouble() - 0.5) * lsb;
-            s[k] = (float) (Math.rint((v + dither) / lsb) * lsb);
+            s[k] = (double) (Math.rint((v + dither) / lsb) * lsb);
         }
         return s;
     }
@@ -474,8 +474,8 @@ class FftCrossTickDriftTest {
      *  plus broadband Gaussian noise, TPDF-dithered to {@link #DITHER_BITS}.  Generated
      *  with a 3-term sine recurrence re-seeded every 2^16 samples to the EXACT chirp
      *  phase (and local frequency), bounding recurrence drift over the long buffer. */
-    private static float[] synthesizeContinuous(long seed, int n, double driftPerSample) {
-        float[]  s   = new float[n];
+    private static double[] synthesizeContinuous(long seed, int n, double driftPerSample) {
+        double[]  s   = new double[n];
         Random   rng = new Random(seed);
         double   w0  = 2.0 * Math.PI * FUND_HZ / SAMPLE_RATE;          // fundamental rad/sample @ t=0
         double   a0  = Math.pow(10.0, FUND_DBFS / 20.0);
@@ -510,7 +510,7 @@ class FftCrossTickDriftTest {
             }
             v += NOISE_STD * rng.nextGaussian();
             double dither = (rng.nextDouble() - 0.5 + rng.nextDouble() - 0.5) * lsb;
-            s[i] = (float) (Math.rint((v + dither) / lsb) * lsb);
+            s[i] = (double) (Math.rint((v + dither) / lsb) * lsb);
         }
         return s;
     }
