@@ -94,9 +94,22 @@ jobs:
             target/installer/*.deb
             target/phonalyser-*-linux.jar
 
-  # ============================================================== macOS (Apple Silicon)
+  # ===================================================== macOS x64 + Apple Silicon
+  # Two runners so we ship a DMG per architecture: macos-13 is the last
+  # Intel (x86_64) GitHub runner, macos-14 is Apple Silicon (arm64).  An
+  # arm64-only build is rejected by Intel Macs ("not supported on this Mac"),
+  # so both are required.  The pom auto-selects the matching macos-x64 /
+  # macos-aarch64 profile from the runner's CPU arch.
   build-macos:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13
+            arch: x64
+          - runner: macos-14
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -113,17 +126,27 @@ jobs:
       - name: Install vendored flac-library
         run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
 
-      # The macos-aarch64 profile already appends -XstartOnFirstThread to
+      # Both macos profiles already append -XstartOnFirstThread to
       # jpackage's javaOptions; no extra args needed here.
       - name: Build fat JAR + .dmg installer
         run: mvn -B -DskipTests package
 
+      # jpackage names the DMG Phonalyser-<version>.dmg regardless of arch,
+      # so tag it with the arch to keep the two builds from colliding on the
+      # release page.
+      - name: Tag the DMG with its architecture
+        run: |
+          cd target/installer
+          for f in *.dmg; do
+            mv "$f" "${f%.dmg}-${{ matrix.arch }}.dmg"
+          done
+
       - uses: actions/upload-artifact@v4
         with:
-          name: phonalyser-macos
+          name: phonalyser-macos-${{ matrix.arch }}
           path: |
             target/installer/*.dmg
-            target/phonalyser-*-macos.jar
+            target/phonalyser-*-macos*.jar
 
   # ============================================================== Release
   release:
@@ -147,5 +170,6 @@ jobs:
           files: |
             artifacts/phonalyser-windows/**
             artifacts/phonalyser-linux/**
-            artifacts/phonalyser-macos/**
+            artifacts/phonalyser-macos-x64/**
+            artifacts/phonalyser-macos-arm64/**
           draft: true
