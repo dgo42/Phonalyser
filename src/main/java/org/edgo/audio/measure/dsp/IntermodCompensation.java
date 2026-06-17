@@ -26,6 +26,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.DoubleFunction;
 
 import org.edgo.audio.measure.fft.FftResult;
 
@@ -113,57 +114,83 @@ public final class IntermodCompensation {
 
     /**
      * LMS-style accumulate of the two-tone distortion products measured in
-     * {@code r}.  The transport delay is taken from F1 ({@code fundamentalBin}),
-     * each grid product's phase-stable phasor is read from {@code re}/{@code im}
-     * at its bin (F1 harmonics from {@link FftResult#harmonicBins}, every b≠0
-     * product from the de-rotated {@link FftResult#imdProductBin} grid), and the
-     * de-delayed phasor is added in scaled by {@code step}.  Every detected
-     * product is corrected — there is no noise-floor gate.
+     * {@code r} — the dual-tone twin of {@link HarmonicCompensation#accumulate},
+     * sharing its design: the accumulator holds each product's ABSOLUTE measured
+     * level (dBFS-linear, off the conv-scaled phasors — the actual ADC reading,
+     * not a notched-fundamental ratio) as a complex phasor, window-derotated; the
+     * {@code .frc} de-embed, the dBV conversion and the division by the DAC
+     * fundamental are applied on the way OUT ({@link #toGeneratorCorrections} /
+     * {@link #writeDpd}).  Every detected product is corrected — no noise gate.
+     *
+     * <p><b>Two fundamentals frame the products.</b>  Each product {@code a·f₁+b·f₂}
+     * is de-rotated by {@code a·(φ₁+π/2) + b·(φ₂+π/2)} so it lands in the same
+     * per-round frame, where {@code φ₁ = arg(X_F1) − argH(f₁)} and
+     * {@code φ₂ = arg(X_F2) − argH(f₂)} are the measured fundamental phases with
+     * the twin-T notch phase removed (a pure phase subtraction; without it the
+     * notch's ≈π at each tone would flip products and build the dual-tone
+     * triangle — see HarmonicCompensation).  F2 is the {@code (0,1)} grid product.
+     * The b=0 F1 harmonics read the display-de-embedded {@code re}/{@code im}
+     * phase + {@link FftResult#rawHarmonicDbFs} magnitude (and take unit response
+     * downstream); every b≠0 product reads the raw conv-scaled phasor and is
+     * de-embedded downstream.
+     *
+     * @param calF1PhaseRad {@code argH(f₁)} — the {@code .frc} phase at F1
+     * @param calF2PhaseRad {@code argH(f₂)} — the {@code .frc} phase at F2
      */
-    public void accumulate(FftResult r, double f1Hz, double f2Hz, double step) {
-        if (r.re == null || r.im == null || r.amplitudeDbFs == null) return;
+    public void accumulate(FftResult r, double f1Hz, double f2Hz, double step,
+                           double calF1PhaseRad, double calF2PhaseRad) {
+        if (r.re == null || r.im == null) return;
         int fundBin = r.fundamentalBin;
-        if (fundBin <= 0 || fundBin >= r.re.length) return;
-        double refMag = Math.hypot(r.re[fundBin], r.im[fundBin]);
-        if (refMag <= 0.0 || !(f1Hz > 0.0)) return;
+        if (fundBin <= 0 || fundBin >= r.re.length || !(f1Hz > 0.0) || !(f2Hz > 0.0)) return;
 
-        double phi1          = Math.atan2(r.im[fundBin], r.re[fundBin]);
-        double omegaD        = -(phi1 + Math.PI / 2.0);
-        double delayRadPerHz = omegaD / f1Hz;
+        double f1Re = !Double.isNaN(r.rawFundRe) ? r.rawFundRe : r.re[fundBin];
+        double f1Im = !Double.isNaN(r.rawFundIm) ? r.rawFundIm : r.im[fundBin];
+        double phi1 = Math.atan2(f1Im, f1Re) - calF1PhaseRad;        // F1 frame, notch phase removed
+        // F2 is the (0,1) product in the analyzer's de-rotated grid.
+        int f2Idx = productIndex(r, 0, 1);
+        double phi2 = (f2Idx >= 0 && r.rawPeakRe != null && f2Idx < r.rawPeakRe.length)
+                ? Math.atan2(r.rawPeakIm[f2Idx], r.rawPeakRe[f2Idx]) - calF2PhaseRad
+                : phi1;
 
         for (int g = 0; g < coefA.length; g++) {
             int a = coefA[g], b = coefB[g];
-            int bin = findBin(r, a, b);
-            if (bin <= 0 || bin >= r.re.length) continue;
-
             double fp = a * f1Hz + b * f2Hz;
             if (!(fp > 0.0)) continue;
-            double mag      = Math.hypot(r.re[bin], r.im[bin]);
-            double ampRatio = mag / refMag;
-            double phiP     = Math.atan2(r.im[bin], r.re[bin]);
-            double phiInit  = phiP + fp * delayRadPerHz;
-            accRe[g]  += step * ampRatio * Math.cos(phiInit);
-            accIm[g]  += step * ampRatio * Math.sin(phiInit);
-            freqHz[g]  = fp;
+
+            double magLin, phiRaw;
+            if (b == 0) {
+                int idx = a - 2;                          // harmonicBins[0] = 2nd harmonic
+                if (r.harmonicBins == null || idx < 0 || idx >= r.harmonicCount) continue;
+                int bin = r.harmonicBins[idx];
+                if (bin <= 0 || bin >= r.re.length) continue;
+                magLin = Math.pow(10.0, r.rawHarmonicDbFs(idx) / 20.0);   // absolute (lobe dBFS)
+                phiRaw = Math.atan2(r.im[bin], r.re[bin]);               // display-de-embedded phase
+            } else {
+                int i = productIndex(r, a, b);
+                if (i < 0 || r.rawPeakRe == null || i >= r.rawPeakRe.length) continue;
+                magLin = Math.hypot(r.rawPeakRe[i], r.rawPeakIm[i]);     // absolute (conv-scaled dBFS-linear)
+                phiRaw = Math.atan2(r.rawPeakIm[i], r.rawPeakRe[i]);     // raw phase (de-embed downstream)
+            }
+            double refPhase = a * (phi1 + Math.PI / 2.0) + b * (phi2 + Math.PI / 2.0);
+            double phiInit  = phiRaw - refPhase;
+            accRe[g] += step * magLin * Math.cos(phiInit);
+            accIm[g] += step * magLin * Math.sin(phiInit);
+            freqHz[g] = fp;
         }
     }
 
-    /** Resolves a grid product to its FFT bin: F1 harmonics {@code (h,0)} from
-     *  the single-reference harmonic table, every b≠0 product from the
-     *  per-product de-rotated grid.  Returns {@code -1} when the analyzer
-     *  didn't de-rotate this product this tick (so its phase isn't trustworthy). */
-    private int findBin(FftResult r, int a, int b) {
-        if (b == 0) {
-            int idx = a - 2;                          // harmonicBins[0] = 2nd harmonic
-            if (r.harmonicBins != null && idx >= 0 && idx < r.harmonicCount) {
-                return r.harmonicBins[idx];
-            }
-            return -1;
-        }
-        int[] pa = r.imdProductA, pb = r.imdProductB, pbin = r.imdProductBin;
+    /** Unit calibration response {@code [magLin=1, phaseRad=0]} — a no-op divide
+     *  for the b=0 harmonics the display already de-embedded. */
+    private static final double[] UNIT_RESPONSE = { 1.0, 0.0 };
+
+    /** Index of a b≠0 product in the analyzer's de-rotated grid (so the raw
+     *  phasor at {@code rawPeak[i]} / bin at {@code imdProductBin[i]} can be
+     *  read), or {@code -1} when the analyzer didn't de-rotate it this tick. */
+    private int productIndex(FftResult r, int a, int b) {
+        int[] pa = r.imdProductA, pb = r.imdProductB;
         if (pa == null) return -1;
         for (int i = 0; i < pa.length; i++) {
-            if (pa[i] == a && pb[i] == b) return pbin[i];
+            if (pa[i] == a && pb[i] == b) return i;
         }
         return -1;
     }
@@ -176,9 +203,14 @@ public final class IntermodCompensation {
         return false;
     }
 
-    /** Converts the accumulated phasors to the generator's dual-tone
-     *  compensation quad, dropping products that never rose above the noise gate. */
-    public GeneratorCorrections toGeneratorCorrections() {
+    /** Converts the accumulated ABSOLUTE (ADC-dBFS) phasors to the generator's
+     *  dual-tone compensation quad — applying HERE (on the values reaching the
+     *  DDS): the {@code .frc} de-embed (÷H, −argH) for every b≠0 product (b=0
+     *  harmonics took the display de-embed already → unit response), the
+     *  ADC-dBFS → Vrms conversion, and the division by the DAC F1 fundamental.
+     *  Products below the gate are dropped. */
+    public GeneratorCorrections toGeneratorCorrections(DoubleFunction<double[]> calResponseAt,
+            double adcFsVoltageRms, double dacFundamentalVrms) {
         int valid = 0;
         for (int g = 0; g < accRe.length; g++) {
             if (accRe[g] != 0.0 || accIm[g] != 0.0) valid++;
@@ -189,10 +221,12 @@ public final class IntermodCompensation {
         double[] phi = new double[valid];
         int i = 0;
         for (int g = 0; g < accRe.length; g++) {
-            double re = accRe[g], im = accIm[g];
-            if (re == 0.0 && im == 0.0) continue;
-            amp[i] = Math.hypot(re, im);
-            phi[i] = Math.atan2(im, re);
+            if (accRe[g] == 0.0 && accIm[g] == 0.0) continue;
+            double[] cal = coefB[g] == 0 ? UNIT_RESPONSE : calResponseAt.apply(freqHz[g]);
+            double magDe = Math.hypot(accRe[g], accIm[g]) / (cal[0] > 0.0 ? cal[0] : 1.0);
+            double vP    = magDe * adcFsVoltageRms;                       // ADC dBFS → absolute Vrms
+            amp[i] = dacFundamentalVrms > 0.0 ? vP / dacFundamentalVrms : 0.0;   // ratio to DAC F1
+            phi[i] = Math.atan2(accIm[g], accRe[g]) - cal[1];
             a[i]   = coefA[g];
             b[i]   = coefB[g];
             i++;
@@ -224,9 +258,11 @@ public final class IntermodCompensation {
      * fields).  Any {@code extraHeaderLines} are written first as
      * {@code #}-comments.
      */
-    public void writeCsv(Path file, List<String> extraHeaderLines,
+    public void writeDpd(Path file, List<String> extraHeaderLines,
                          double f1Hz, double f2Hz, double fundamentalDbFs,
-                         int sampleRate, int bitDepth, double amplitudeVrms) throws IOException {
+                         int sampleRate, int bitDepth, double amplitudeVrms,
+                         DoubleFunction<double[]> calResponseAt, double adcFsVoltageRms,
+                         double dacFundamentalVrms) throws IOException {
         try (PrintWriter pw = new PrintWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8))) {
             if (extraHeaderLines != null) {
                 for (String line : extraHeaderLines) pw.println(line);
@@ -236,16 +272,23 @@ public final class IntermodCompensation {
             pw.printf(Locale.US, "# amplitude_vrms=%.10f%n",  amplitudeVrms);
             pw.printf(Locale.US, "# frequency1_hz=%.10f%n",   f1Hz);
             pw.printf(Locale.US, "# frequency2_hz=%.10f%n",   f2Hz);
-            pw.println("a;b;frequency_hz;amplitude_dbfs;amplitude_pct;phase_deg;re;im");
+            // re/im carry the ratio phasor the dual-tone loader consumes; the
+            // amplitude_dbv column carries the de-embedded ABSOLUTE dBV.  Same
+            // de-embed as toGeneratorCorrections.
+            pw.println("a;b;frequency_hz;amplitude_dbv;amplitude_pct;phase_deg;re;im");
             for (int g = 0; g < accRe.length; g++) {
-                double re = accRe[g], im = accIm[g];
-                double amp = Math.hypot(re, im);
-                if (amp == 0.0) continue;
-                double phaseDeg = Math.toDegrees(Math.atan2(im, re));
+                if (accRe[g] == 0.0 && accIm[g] == 0.0) continue;
+                double[] cal = coefB[g] == 0 ? UNIT_RESPONSE : calResponseAt.apply(freqHz[g]);
+                double magDe = Math.hypot(accRe[g], accIm[g]) / (cal[0] > 0.0 ? cal[0] : 1.0);
+                double vP    = magDe * adcFsVoltageRms;
+                double amp   = dacFundamentalVrms > 0.0 ? vP / dacFundamentalVrms : 0.0;
+                double phase = Math.atan2(accIm[g], accRe[g]) - cal[1];
+                double re = amp * Math.cos(phase), im = amp * Math.sin(phase);
+                double phaseDeg = Math.toDegrees(phase);
                 double ampPct   = amp * 100.0;
-                double ampDbFs  = fundamentalDbFs + 20.0 * Math.log10(amp);
+                double ampDbV   = vP > 0.0 ? 20.0 * Math.log10(vP) : -300.0;
                 pw.printf(Locale.GERMAN, "%d;%d;%.6f;%.4f;%.9f;%.4f;%.10e;%.10e%n",
-                        coefA[g], coefB[g], freqHz[g], ampDbFs, ampPct, phaseDeg, re, im);
+                        coefA[g], coefB[g], freqHz[g], ampDbV, ampPct, phaseDeg, re, im);
             }
         }
     }

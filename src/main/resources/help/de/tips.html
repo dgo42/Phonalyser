@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Tipps</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zum Inhaltsverzeichnis</a></p>
+
+  <h1>Tipps</h1>
+  <p>Kleine Dinge, die viel ausmachen — beim Start einzeln angezeigt
+     (abschaltbar über die Checkbox im Tipp-Dialog oder unter
+     <a href="preferences.html#prefs-lookfeel">Einstellungen ▸ Look&nbsp;&amp;&nbsp;Feel</a>)
+     und hier vollständig gesammelt.</p>
+
+  <div class="tip"><b>Kohärente Mittelung reicht weit unter das Grundrauschen.</b>
+     Lassen Sie die kohärente (komplexe) Mittelung aktiviert und den FFT laufen: Jeder
+     Block wird vor der Summierung auf eine gemeinsame Phase de-rotiert, sodass der Ton
+     kohärent addiert wird, während sich das Rauschen teilweise aufhebt — das Grundrauschen
+     sinkt mit zunehmender Messzeit weiter.  Siehe <a href="theory/fft.html#coherent">Theorie ▸ Kohärente
+     Mittelung</a>.</div>
+
+  <div class="tip"><b>Generator auf einen FFT-Bin einrasten lassen für ein sauberes Spektrum.</b>
+     Mit aktiviertem <em>Frequenz auf nächsten Bin einrasten</em> landet der Ton exakt auf
+     einem Bin, sodass Fensterleckage die Grundfrequenz nicht auf Nachbarbins verschmiert
+     und die Harmonischen-Schätzungen zuverlässig bleiben.
+     Siehe <a href="generator.html#generator-snap-fft-bin">Generator ▸ Einrasten</a>.</div>
+
+  <div class="tip"><b>Grundfrequenz bei einem Twin-T-Notch manuell fixieren.</b>
+     Eine passive Twin-T-Null ist so steil, dass bereits wenige Zehntel Hertz thermischer
+     Drift die de-eingebettete Grundfrequenz um Zehntel dB verschieben und den THD-Wert
+     schwanken lassen.  Tragen Sie den tatsächlich bekannten Pegel über <em>Manuelle
+     Grundfrequenz</em> ein; die Harmonischen auf der sanften Flanke werden korrekt
+     de-eingebettet.
+     Siehe <a href="theory/fft.html#manual-fund">Theorie ▸ Grundfrequenz fixieren</a>.</div>
+
+  <div class="tip"><b>WASAPI-Exklusivmodus hält die Messung bittransparent.</b>
+     Der Exklusivmodus übergibt das Gerät direkt an Phonalyser und umgeht den
+     Windows-Mixer sowie dessen Abtastratenkonverter — kein verdecktes Resampling
+     verfälscht das Ergebnis.  Siehe
+     <a href="theory/audio-backend.html">Theorie ▸ Audio-Backend</a>.</div>
+
+  <div class="tip"><b>WDM-KS liefert dem Oszilloskop die meisten Frames pro Sekunde.</b>
+     Für die schnellste Live-Aktualisierung des Oszilloskops wählen Sie das WDM-KS-Backend
+     in den Einstellungen — es liegt tiefer im Treiberstapel als WASAPI und liefert mehr
+     Capture-Blöcke pro Sekunde.  Siehe <a href="preferences.html#prefs-audio">Einstellungen ▸
+     Audio</a>.</div>
+
+  <div class="tip"><b>Das Mausrad zoomt um den Cursor herum.</b>
+     In jeder Kurvenansicht: <b>Rad</b> verschiebt vertikal, <b>Shift+Rad</b>
+     horizontal, <b>Ctrl+Rad</b> skaliert die vertikale Achse und
+     <b>Ctrl+Shift+Rad</b> die horizontale — wobei beide Zoom-Varianten den Wert
+     unter dem Zeiger fixieren, sodass genau die betrachtete Stelle hereingezoomt wird.</div>
+
+  <div class="tip"><b>Jedes Zahlenfeld akzeptiert Einheiten, das Rad und die Tastatur.</b>
+     Tippen Sie einen Wert mit Einheit (<code>µV</code>, <code>1.5 V</code>,
+     <code>-3 dBV</code>, <code>2 kHz</code>), oder drehen Sie das Mausrad, klicken Sie
+     auf die ▲/▼-Pfeile oder drücken Sie die <kbd>↑</kbd>/<kbd>↓</kbd>-Tasten der
+     Tastatur, um schrittweise zu ändern.</div>
+
+  <div class="tip"><b>Sinc-Interpolation ist nur beim Hineinzoomen relevant.</b>
+     Der Sin/Lin-Schalter ändert die Kurve nur dann, wenn Abtastpunkte mindestens einige
+     Pixel voneinander entfernt sind; andernfalls sehen gerade Verbindungslinien identisch
+     aus und sind weniger CPU-aufwändig.  Aktivieren Sie die Interpolation, sobald einzelne
+     Abtastwerte sichtbar sind.  Siehe <a href="oscilloscope.html#scope-sinc-interp">Oszilloskop ▸
+     Sin/Lin</a>.</div>
+
+  <div class="tip"><b>Hysterese stabilisiert den Trigger bei einem schwachen, verrauschten Signal.</b>
+     Ohne Hysterese löst das Rauschen um den Triggerpegel eine Folge von Fehlauslösungen
+     aus und die Kurve zittert.  Mit aktivierter Trigger-Hysterese arretiert die Kurve.
+     Siehe <a href="oscilloscope.html#scope-trigger-hysteresis">Oszilloskop
+     ▸ Hysterese</a>.</div>
+
+  <div class="tip"><b>Ein gespeichertes Generatorsignal ist eine perfekte Referenz.</b>
+     <em>Speichern unter…</em> schreibt die ideale, mathematisch exakte Wellenform —
+     digital synthetisiert, ohne DAC-, Verstärker- oder Kabelverzerrung.  Verwenden Sie
+     sie als Eingangsquelle für ein anderes Messgerät: Jede messbare Abweichung gehört
+     dann zu diesem Gerät, nicht zur Quelle.  Siehe
+     <a href="theory/generator.html#savefile">Theorie ▸ Signal speichern</a>.</div>
+
+  <div class="tip"><b>Fixture mit einer Kalibrierungsdatei de-einbetten.</b>
+     Messen Sie die Übertragungsfunktion eines Notch-Filters, Dämpfungsglieds oder einer
+     Soundkarte einmalig im Frequenzgang-Modul, und laden Sie die erzeugte <code>.frc</code>
+     in den FFT-Analyser: Die Übertragungsfunktion wird zur Anzeigzeit herausdividiert,
+     sodass die Tabelle den Prüfling zeigt, nicht die Messkette.  Siehe
+     <a href="theory/fft.html#cal">Theorie ▸ rote und blaue Punkte</a>.</div>
+
+  <div class="tip"><b>Das Rekonstruierter-Beat-Overlay bändigt ein enges Zweiton-Paar.</b>
+     Im Zweiton-Modus zeichnet das <em>Rekonstruierter Beat</em>-Overlay des Oszilloskops
+     die langsame |f₁−f₂|-Einhüllende, sodass Sie auf den Beat triggern können, anstatt
+     die schnellen Trägernulldurchgänge zu verfolgen.  Siehe
+     <a href="oscilloscope.html#scope-trigger-beat">Oszilloskop ▸ Rekonstruierter
+     Beat</a>.</div>
+
+  <div class="tip"><b>Der Frequenzgang-Sweep ist seine eigene Referenz.</b>
+     Die Sweep-Messung wird gegen den <em>exakten</em> abgespielten Sweep dekonvolviert —
+     nicht gegen eine neu gemessene Kopie — sodass der zurückgewonnene Betrag und die Phase
+     die wahre Übertragungsfunktion des Prüflings darstellen.  Siehe
+     <a href="theory/freq-resp.html">Theorie ▸ Frequenzgang</a>.</div>
+
+  <div class="tip"><b>Ctrl+F1 springt direkt zur passenden Hilfe.</b>
+     Drücken Sie <kbd>F1</kbd> an beliebiger Stelle für das Handbuch, oder
+     <kbd>Ctrl</kbd>+<kbd>F1</kbd>, um die Hilfe genau bei dem Abschnitt zu öffnen,
+     der zum aktuell fokussierten Steuerelement gehört.  Und die neue
+     <a href="help-index.html">Index &amp; Suche</a>-Seite durchsucht das gesamte Handbuch.</div>
+
+  <hr/>
+  <p class="back"><a href="index.html">◀ Zurück zum Inhaltsverzeichnis</a></p>
+
+</body>
+</html>

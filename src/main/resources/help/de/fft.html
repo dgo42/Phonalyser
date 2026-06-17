@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — FFT-Analyser</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zum Inhalt</a></p>
+
+  <h1>FFT-Analyser</h1>
+  <p>Diese Seite beschreibt die Bedienelemente des FFT-Analysers.  Informationen
+     zur Funktionsweise — kohärente Mittelung weit unterhalb des Grundrauschens,
+     Sub-Bin-Frequenzausrichtung, THD / SNR / ENOB — finden sich unter
+     <a href="theory/fft.html">Funktionsprinzip ▸ FFT-Analyser</a>.</p>
+  <p>Echtzeit-Spektrum mit Harmonischen-Verzerrung / Grundrauschen-Messungen.
+     Der Analyser liest Samples aus demselben gemeinsamen Capture-Puffer, den
+     auch das Oszilloskop verwendet; das Drücken der roten Aufnahmetaste des FFT
+     ändert den Aufnahmezustand des Oszilloskops nicht.  Der Analysetakt skaliert
+     mit der Überlappung — bei 87,5 % Überlappung wird das Spektrum ~8× pro FFT-
+     Fensterfunktion aktualisiert.</p>
+
+  <div class="shot">
+    <img src="img/fft-pane.png" alt="FFT-Analyser-Bereich"/>
+    <svg class="callouts" viewBox="0 0 1040 660" preserveAspectRatio="none"
+         xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace">
+      <defs>
+        <marker id="ca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/>
+        </marker>
+      </defs>
+      <line x1="196" y1="47" x2="178" y2="47" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="215" cy="47" r="13" fill="#c33"/>
+      <text x="215" y="52" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
+      <line x1="716" y1="86" x2="800" y2="58" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="700" cy="100" r="13" fill="#c33"/>
+      <text x="700" y="105" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
+      <line x1="920" y1="86" x2="952" y2="58" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="905" cy="100" r="13" fill="#c33"/>
+      <text x="905" y="105" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
+      <circle cx="550" cy="300" r="13" fill="#c33"/>
+      <text x="550" y="305" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
+      <circle cx="250" cy="622" r="13" fill="#c33"/>
+      <text x="250" y="627" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
+      <line x1="930" y1="632" x2="998" y2="633" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="915" cy="632" r="13" fill="#c33"/>
+      <text x="915" y="637" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
+    </svg>
+  </div>
+  <ol class="features">
+    <li><b>Kopfzeilen-Schaltflächen.</b>  <a href="#fft-channel-pick">Kanalauswahl
+        <code>L</code> / <code>R</code></a>, <a href="#fft-autosetup">Auto-Setup</a>,
+        <a href="#fft-maximize">Maximieren</a>, die
+        <a href="#fft-distortion-toggle">Verzerrungstabellen-Umschaltung</a>,
+        <a href="#fft-reset">Mittelung zurücksetzen</a> und die
+        <a href="#fft-external">Externes-Fenster</a>-Umschaltung.</li>
+    <li><b>Füllstand &amp; Mitteilungen.</b>  Der
+        <a href="#fft-fill-percent">Füllprozentsatz</a> zeigt, wie voll das
+        Analysefenster ist, und der
+        <a href="#fft-averages-count">Mittelungszähler</a> gibt an, wie viele Spektren
+        kohärent kombiniert wurden — er steigt im Dauermodus unbegrenzt an, was
+        die tiefe Grundrauschreduktion ermöglicht, die unter
+        <a href="theory/fft.html#coherent">Funktionsprinzip ▸ kohärente Mittelung</a>
+        beschrieben ist.</li>
+    <li><b>Amplitudeneinheit.</b>  Schaltet die vertikale Skala um —
+        <a href="#fft-mag-unit">dBFS / dBV / V / V/√Hz</a>.  dBFS ist die Basis;
+        die übrigen werden zur Anzeigezeit aus der ADC-Kalibrierung abgeleitet.</li>
+    <li><b>Spektrum-Darstellung.</b>  Standardmäßig logarithmische Frequenzachse;
+        <a href="#fft-harmonic-dots">Harmonischen-Punkte</a> und (bei geladener
+        Kalibrierung) die <a href="theory/fft.html#cal">roten / blauen
+        Kalibrierungspunkte</a> markieren Grundton und Harmonische.
+        Mausrad: <b>Rad</b> verschiebt die Kurve vertikal,
+        <b>Shift+Rad</b> horizontal, <b>Strg+Rad</b> zoomt die Amplitudenachse und
+        <b>Strg+Shift+Rad</b> die Frequenzachse — beide Zooms sind am Cursor
+        verankert (die Amplitude / Frequenz unter dem Zeiger bleibt fest).
+        Dieselbe Konvention wie in jeder Phonalyser-Ansicht.</li>
+    <li><b>Einstellungs-Tabs.</b>  Ein Tab je Aspekt; den aktuellen Satz in der
+        Leiste ablesen (sie zeigt ein Überlauf-Symbol <code>»</code>, wenn mehr
+        vorhanden sind, als hineinpassen).  Zum Zeitpunkt der Erstellung:
+        <a href="#fft-tab-settings">FFT-Einstellungen</a>,
+        <a href="#fft-tab-thd">THD-Einstellungen</a>,
+        <a href="#fft-tab-presets">Voreinstellungen</a>,
+        <a href="#fft-tab-utility">Dienstprogramme</a>,
+        <a href="#fft-tab-calibration">Kalibrierung laden…</a>,
+        <a href="#fft-tab-save">Speichern unter…</a> und
+        <a href="#fft-tab-load">Laden aus…</a>.  Wichtige Werte werden als
+        <a href="#fft-tiles">Kacheln</a> angezeigt, wenn ein Tab-Inhalt
+        eingeklappt ist; Doppelklick auf die Leiste klappt sie aus oder ein.</li>
+    <li><b>Aufnahme.</b>  Startet / stoppt die FFT-Aufnahme, unabhängig vom
+        Aufnahmezustand des Oszilloskops, obwohl beide dieselbe
+        <a href="theory/ring-buffer.html#sharedcapture">Capture-Sitzung</a> teilen.</li>
+  </ol>
+
+  <h2 id="fft-buttons">Kopfzeilen-Schaltflächen</h2>
+  <p>Reihe quadratischer Schaltflächen oben links auf der Spektrumsfläche.</p>
+
+  <h3 id="fft-channel-pick">Kanalauswahl L / R</h3>
+  <p>Umschalttasten zur Auswahl des Kanals, der den Analyser speist.  Die
+     Schaltfläche des ausgewählten Kanals erhält einen farbigen Hintergrund.
+     Ein Kanalwechsel setzt den Mittelungspuffer zurück (siehe
+     <a href="#fft-reset">Zurücksetzen</a>), damit das Spektrum des neuen
+     Kanals sauber beginnt.</p>
+
+  <h3 id="fft-autosetup">Auto-Setup</h3>
+  <p>Rahmt das Spektrum um den erkannten Grundton: Frequenzbereich
+     ±1 Dekade, Amplitude oben = Grundton + 10 dB, unten = Grundrauschen
+     − 20 dB.  Erfordert mindestens eine veröffentlichte Analyse.</p>
+
+  <h3 id="fft-maximize">Maximieren</h3>
+  <p>Das Gegenteil von Auto-Setup: setzt die weitestmögliche Ansicht —
+     Frequenz 0 .. Nyquist.  Der Amplitudenbereich ist nur dann
+     signalunabhängig, <em>wenn noch keine aktuelle Analyse vorliegt</em>
+     (oben +20 dB, fester Standard unten).  Sobald ein Spektrum gemessen
+     wurde, folgt der Bereich dem Signal: oben = Grundton + 20 dB
+     (mindestens +20 dB) und unten = Grundrauschen − 30 dB.</p>
+
+  <h3 id="fft-distortion-toggle">Verzerrungstabelle</h3>
+  <p>Blendet die <a href="#fft-thd-table">THD-Infotabelle</a> oben links auf
+     der Zeichenfläche ein / aus.  Die Schaltfläche erscheint erst nach der
+     ersten veröffentlichten Analyse — vorher gibt es nichts anzuzeigen.
+     Wenn die Tabelle ins externe Fenster ausgelagert ist (siehe unten),
+     steuert diese Umschaltung weiterhin, ob die Tabelle überhaupt sichtbar
+     ist.</p>
+
+  <h3 id="fft-reset">Mittelungspuffer zurücksetzen</h3>
+  <p>Rote <b>Gegenuhrzeigersinn-Pfeil</b>-Schaltfläche (ein „Zurück zum
+     Anfang"-Reset).  Löscht den Mittelungspuffer + das gespeicherte Spektrum
+     und setzt den Zähler zurück.  Die nächste Analyse beginnt bei null —
+     und klemmt ausschließlich auf neue Samples, damit altes Audio vor dem
+     Reset nicht in den neuen Mittelwert einfließt.</p>
+
+  <h3 id="fft-external">Externes-Fenster-Umschaltung</h3>
+  <p>Öffnet die THD-Infotabelle in einem separaten Werkzeugfenster, damit
+     sie neben dem Spektrum platziert werden kann, ohne Zeichenfläche zu
+     belegen.  Schließen des Werkzeugfensters bringt die Tabelle in die
+     Hauptansicht zurück.</p>
+
+  <h2 id="fft-plot">Plotbereich</h2>
+
+  <h3 id="fft-spectrum-trace">Spektrumskurve</h3>
+  <p>Polylinie der FFT-Amplitude über den sichtbaren Frequenzbereich.
+     Kurvenfarbe, Linienbreite und Diagrammhintergrund sind in den
+     Einstellungen → FFT konfigurierbar.  Bei starker Vergrößerung bleibt
+     die Kurve zusammenhängend: Hüllkurven pro Pixel fassen mehrere Bins
+     in eine vertikale Linie zusammen, wobei benachbarte bekannte Spalten
+     durch ein Polyliniensegment verbunden werden.</p>
+
+  <h3 id="fft-harmonic-dots">Harmonischen-Punkte</h3>
+  <p>Rote Punkte an den erkannten Grundton- und Harmonischen-Frequenzen.
+     Ihr Durchmesser ist konfigurierbar.  Wenn die
+     <a href="#fft-manual-fund">manuelle Grundton-Überschreibung</a>
+     aktiviert ist, wird nur der Grundton-Punkt auf den Überschreibungswert
+     angehoben; die übrigen verbleiben auf dem de-eingebetteten /
+     kalibrierten dBV-Maßstab.</p>
+
+  <h3 id="fft-distortion-band-dim">Verzerrungsband-Abdunkelung</h3>
+  <p>Hellgrauer Overlay, der Frequenzen außerhalb des aktiven
+     <a href="#fft-dist-min">Verzerrung-HP</a>- /
+     <a href="#fft-dist-max">Verzerrung-LP</a>-Fensters abdeckt.  Zeigt auf
+     einen Blick, welche Bänder von der SNR- / THD+N-Integration ausgeschlossen
+     sind.</p>
+
+  <h3 id="fft-crosshair">Fadenkreuz</h3>
+  <p>Beim Überfahren mit der Maus erscheint ein gestricheltes graues Kreuz
+     am Zeiger.  Die schwebende Anzeige neben dem Cursor listet die Frequenz
+     (<code>f = …</code>), die Amplitude auf der Höhe des Cursors auf der
+     vertikalen Achse (<code>y = …</code>) und die Amplitude des nächstgelegenen
+     Spektrum-Bins in der aktiven Einheit (<code>|m| = …</code>) auf.
+     Die Anzeige wird ausgeblendet, wenn sich der Zeiger über einer
+     Kopfzeilen-Schaltfläche oder über den Feldern für Füllprozentsatz /
+     Mittelungen / Amplitudeneinheit befindet.</p>
+
+  <h3 id="fft-scrollbar-freq">Horizontale Bildlaufleiste (Frequenz)</h3>
+  <p>Verschiebt den sichtbaren Frequenzbereich — nur links / rechts.  Eine
+     Bildlaufleiste zoomt nie; der Schieberegler wird durch die Ansicht
+     skaliert (seine Breite spiegelt den sichtbaren Anteil des Gesamtbereichs
+     wider) und verfolgt den Zoom automatisch, aber das Ziehen des Schiebereglers
+     verschiebt nur.  Klick auf die leere Leiste springt seitenweise zum
+     Zeiger; Schaltfläche gedrückt halten wiederholt die Seitensprünge, bis
+     der Schieberegler den Cursor erreicht.  Zum Zoomen das Mausrad über der
+     Zeichenfläche verwenden (Rad / Shift+Rad zum Verschieben,
+     Strg+Rad / Strg+Shift+Rad zum Zoomen).</p>
+
+  <h3 id="fft-scrollbar-mag">Vertikale Bildlaufleiste (Amplitude)</h3>
+  <p>Entsprechend für die Amplitudenachse: verschiebt nur auf / ab, und der
+     Schieberegler verfolgt den Amplitudenzoom.  Strg+Rad in der Zeichenfläche
+     zoomt die Amplitudenachse um den Cursor, und der Schieberegler wird
+     entsprechend aktualisiert.</p>
+
+  <h2 id="fft-thd-table">THD-Infotabelle</h2>
+  <p>Kompakter Overlay oben links auf der Zeichenfläche (oder im externen
+     Werkzeugfenster bei Auslagerung).  Alle Werte verwenden die aktuelle
+     Amplitudeneinheit.  Ausgeblendet durch die
+     <a href="#fft-distortion-toggle">Verzerrungstabellen-Umschaltung</a>.</p>
+
+  <h3 id="fft-thd-header">Kopfzeile</h3>
+  <p>Fette erste Zeile: Grundtonfrequenz (4 Dezimalstellen Hz), dBFS, dBV.
+     Die dBV-Spalte zeigt in Rangfolge: die
+     <a href="#fft-manual-fund">manuelle Überschreibung</a>, falls gesetzt;
+     andernfalls den de-eingebetteten (kalibrierungskorrigierten) Wert, wenn
+     eine <a href="#fft-tab-calibration">Kalibrierung</a> geladen ist;
+     andernfalls den einfachen ADC-kalibrierten Wert.  Im Zweiston-Modus
+     besteht die Kopfzeile aus zwei Zeilen — <code>F1:</code> und
+     <code>F2:</code> — eine je Ton.</p>
+
+  <h3 id="fft-thd-span">Span-Zeile</h3>
+  <p><code>Span: 900 .. 9500 Hz</code> — das Band, über das SNR /
+     THD+N integrieren.  <code>Span: full</code> wenn beide
+     Verzerrungsgrenzen deaktiviert sind.</p>
+
+  <h3 id="fft-thd-clock">Taktdifferenz-Zeile (ΔF / Δosc)</h3>
+  <p><code>ΔF: +0.001 Hz (+0.97 ppm)  Δosc: +23.79 Hz @ 24.576 MHz</code>.
+     Zeigt die Abweichung des gemessenen Grundtons vom Sollwert des Generators —
+     sowohl in absolutem Hz als auch in ppm, und zurückgerechnet auf den
+     Master-Oszillator, wenn die Abtastrate einer bekannten 44,1- / 48-kHz-Familie
+     angehört.  Nur der Grundton trägt einen ppm-Wert (Harmonische nie); im
+     Zweiston-Modus gibt es zwei Zeilen, <code>Δf1</code> und <code>Δf2</code>,
+     eine je Ton.  Nur sichtbar, wenn
+     <a href="#fft-fund-from-gen">„Grundton vom Generator beziehen"</a>
+     eingeschaltet ist UND der Generator tatsächlich läuft.</p>
+
+  <h3 id="fft-thd-nplusd">N+D (Rauschen + Verzerrung)</h3>
+  <p>Gesamte Nicht-Grundton-Leistung, A-bewertet.  Das Suffix „A" kennzeichnet
+     die A-Bewertung.</p>
+
+  <h3 id="fft-thd-n">N (nur Rauschen)</h3>
+  <p>Rauschleistung mit den erkannten Harmonischen aus dem Band entfernt.</p>
+
+  <h3 id="fft-thd-snr">SNR</h3>
+  <p>Signal-Rausch-Verhältnis in dB.  Definiert gegenüber dem reinen
+     Rauschband (oben).</p>
+
+  <h3 id="fft-thd-thd">THD H2..N</h3>
+  <p>Gesamtoberwellenverzerrung als Prozentsatz des Grundtons, summiert
+     über Harmonische 2 bis N (wobei N =
+     <a href="#fft-max-harmonic-thd">Maximale Harmonische für THD</a>).</p>
+
+  <h3 id="fft-thd-thdpn">THD+N</h3>
+  <p>Gesamtoberwellenverzerrung + Rauschen.  Gleicher Zähler wie N+D,
+     normiert auf den Grundton.</p>
+
+  <h3 id="fft-thd-enob">ENOB</h3>
+  <p>Effektive Bit-Anzahl = (SINAD − 1,76) / 6,02.  Spiegelt den
+     kombinierten Dynamikbereich von ADC + Messkette wider.</p>
+
+  <h3 id="fft-thd-harmonics">Harmonischen-Zeilen (H2 .. HN)</h3>
+  <p>Zwei Harmonische pro Zeile.  Jeder Eintrag zeigt den dBV-Pegel der
+     Harmonischen und ihren Prozentsatz des Grundtons.  Die Anzahl der Zeilen
+     wird durch
+     <a href="#fft-max-harmonic-calc">Maximale Harmonische berechnen</a>
+     bestimmt.</p>
+
+  <h2 id="fft-toolbar">Obere Werkzeugleiste (oberhalb der Tab-Leiste)</h2>
+
+  <h3 id="fft-fill-percent">Füllprozentsatz</h3>
+  <p>Kleines Prozentlabel (z. B. <code>100%</code>), das anzeigt, wie viel
+     des nächsten FFT-Fensters seit der vorherigen Analyse angesammelt wurde.
+     Erreicht 100 % in dem Moment, in dem der Analyser auslöst.</p>
+
+  <h3 id="fft-averages-count">Mittelungszähler</h3>
+  <p>z. B. <code>32 average(s)</code>.  Anzahl der Frames, die derzeit zum
+     angezeigten Mittelwert beitragen.  Begrenzt auf die konfigurierte
+     <a href="#fft-averages">Anzahl der Mittelungen</a> im Festfenstermodus;
+     steigt im „Dauermodus" unbegrenzt.</p>
+
+  <h3 id="fft-mag-unit">Amplitudeneinheit</h3>
+  <p>Auswahlfeld oben rechts mit vier Optionen:
+     <code>V</code>, <code>V/√Hz</code>, <code>dBV</code>, <code>dBFS</code>.
+     Ein Einheitenwechsel konvertiert die Achsenbeschriftungen und
+     Bildlaufleistengrenzen direkt — das sichtbare Signal bleibt auf derselben
+     Bildschirm-Y-Position.</p>
+
+  <h3 id="fft-record-button">Aufnahme-Schaltfläche</h3>
+  <p>Runder roter Umschalter, rechts an der Werkzeugleiste verankert.
+     Beim Drücken wird eine Referenz auf das gemeinsame Aufnahmegerät
+     erworben und der FFT-Worker gestartet.  Der Aufnahmezustand des
+     Oszilloskops ist unabhängig — beide Bereiche können gleichzeitig
+     aufnehmen.  Die Schaltfläche bleibt auch bei eingeklappten
+     Werkzeugleisten-Tabs sichtbar.</p>
+
+  <h2 id="fft-tabs">Werkzeugleisten-Tabs</h2>
+
+  <h3 id="fft-tab-settings">Tab „FFT-Einstellungen"</h3>
+  <p><img src="img/FFT - FFT settings.png" alt="Tab FFT-Einstellungen"/></p>
+
+  <h4 id="fft-length">FFT-Länge</h4>
+  <p>Zweierpotenz-Auswahlfeld von 8 k bis 4 M.  Größere Fenster liefern feinere
+     Bin-Auflösung, aber langsamere Aktualisierungsrate und mehr Speicherbedarf.
+     1 M bei 384 kHz ergibt ~0,37 Hz/Bin.</p>
+
+  <h4 id="fft-window">Fensterfunktion</h4>
+  <p>Auswahlfeld der Analysefensterfunktionen, bei denen Hauptkeulenbreite gegen
+     Nebenkeulenpegel abgewogen wird: Rechteck, Hann, Blackman-Harris 4-Term und
+     7-Term, Flat-top, die Heinzel-Flat-top-Familie HFT144D / HFT248D, die
+     Kaiser-Bessel KB24 / KB38 und das Dolph-Chebyshev DC150 / DC200 / DC250 /
+     DC300 (die Zahl ist die Nebenkeulendämpfung in dB).  Hann oder
+     Blackman-Harris für allgemeine Messungen verwenden; Flat-top / HFT für
+     genaue Amplitudenmessung eines isolierten Tons; hohes Dolph-Chebyshev
+     (DC250 / DC300) für sehr tiefe Nebenkeulensuppression.</p>
+
+  <h4 id="fft-overlap">Überlappung</h4>
+  <p>0 %, 50 %, 75 %, 87,5 %, 93,75 %.  Aufeinanderfolgende Analysefenster
+     teilen diesen Bruchteil ihrer Samples.  Überlappung bewirkt zweierlei:
+     Sie erhöht die Aktualisierungsrate (mehr Spektren pro Sekunde) und —
+     mit einer abklingenden Fensterfunktion — nutzt <em>alle</em> erfasste
+     Eingangsleistung effektiv, da die Samples, die eine Fensterfunktion an
+     ihren Rändern dämpft, vom nächsten, überlappenden Fenster voll gewichtet
+     werden.  Höhere Überlappung kostet mehr CPU; 87,5 % ist ein üblicher
+     guter Kompromiss.  Siehe <a href="theory/fft.html">Funktionsprinzip ▸
+     FFT-Analyser</a>.</p>
+
+  <h4 id="fft-averages">Mittelungen</h4>
+  <p>Schritt-Wahlschalter — 2, 4, 8, 16, 32, 64, 128, ∞ (dauerhaft).  Anzahl
+     der überlappten Frames, die pro veröffentlichtem Spektrum gemittelt werden.
+     Höhere Werte reduzieren die Rauschvarianz, verlangsamen aber die Reaktion.
+     „Dauerhaft" akkumuliert unbegrenzt — mit
+     <a href="#fft-stop-after">Stopp nach</a> kombinieren, um zu begrenzen.</p>
+
+  <h4 id="fft-stop-after">Stopp nach N</h4>
+  <p>Kontrollkästchen + numerisches Feld.  Wenn das Kontrollkästchen aktiviert
+     ist, pausiert der Analyser nach N Analysen (nur im Dauermittelungsmodus).
+     Zurücksetzen aktiviert ihn erneut.</p>
+
+  <h4 id="fft-fund-from-gen">Grundton vom Generator beziehen</h4>
+  <p>Wenn aktiviert, rastet der Analyser auf die aktuelle Frequenz des Generators
+     ein, anstatt den lautesten Peak automatisch zu erkennen.  Ermöglicht die
+     Messung tief gekerbter Grundtöne, wo sonst ein lauterer Netzstör-Spur die
+     Erkennung gewinnen würde, und ist Voraussetzung für die
+     <a href="#fft-thd-clock">Taktdifferenz-Zeile (ppm)</a>.  Wird automatisch
+     ignoriert, wenn der Generator nicht läuft.  Siehe
+     <a href="theory/fft.html">Funktionsprinzip ▸ FFT-Analyser</a>.</p>
+
+  <h4 id="fft-mains-suppression">Netzunterdrückung</h4>
+  <p>Auswahlfeld — <b>Keine</b> oder <b>IIR-Kammfilter</b>.  Der Kammfilter
+     filtert das erfasste Signal <em>vor</em> der Mittelung mit einem
+     frequenzgeregelten IIR-Kammfilter, der auf die aktuelle Netzfrequenz
+     eingerastet ist, und dämpft die Netzleitung sowie <em>alle</em> ihre
+     Harmonischen (50 / 100 / 150 … Hz oder 60 / 120 / 180 … Hz).</p>
+  <p><b>Mit Vorsicht verwenden.</b>  Da der Kammfilter jede Netzharmonische
+     kerbt, wird ein Messtons, der auf eine davon trifft — ein rundes
+     1000&nbsp;Hz ist die 20. Harmonische von 50&nbsp;Hz — zusammen mit dem
+     Brummen gedämpft.  Wenn ein Ton eingespeist wird, diesen von der Rasterung
+     wegbewegen (z. B. 1005&nbsp;Hz statt 1000&nbsp;Hz), damit der Kammfilter
+     das Netz bereinigen kann, ohne das Signal oder seine Harmonischen zu
+     beeinflussen.</p>
+
+  <h4 id="fft-log-freq-axis">Logarithmische Frequenzachse</h4>
+  <p>Schaltet die Frequenzachse zwischen logarithmisch und linear.
+     Logarithmisch ist für Audio üblich (konstante Pixel pro Oktave);
+     linear ist nützlich, um gleichmäßig beabstandete Störsignale zu
+     erkennen.</p>
+
+  <h3 id="fft-tab-thd">Tab „THD-Einstellungen"</h3>
+  <p><img src="img/FFT - THD settings.png" alt="Tab THD-Einstellungen"/></p>
+
+  <h4 id="fft-dist-min">Verzerrung-HP aktivieren + Frequenz</h4>
+  <p>Legt die untere Grenze des Bands für die SNR- / N+D-Integration fest.
+     Unterhalb dieser Frequenz werden Rauschen und Störsignale ausgeschlossen —
+     nützlich, um Netzbrummen und DC-nahe Artefakte zu ignorieren.</p>
+
+  <h4 id="fft-dist-max">Verzerrung-LP aktivieren + Frequenz</h4>
+  <p>Entsprechend für die obere Grenze.  Schließt Hochfrequenzrauschen
+     oberhalb des Interessen-Bands aus (z. B. oberhalb 20 kHz für Audio).</p>
+
+  <h4 id="fft-manual-fund">Manueller Grundton</h4>
+  <p>Wenn aktiviert, behandelt der Analyser diesen Wert als dBV des Grundtons,
+     anstatt den de-eingebetteten Wert oder den des kalibrierten ADC zu
+     verwenden.  Der Grundton-Punkt des Diagramms und die
+     <a href="#fft-thd-header">dBV-Spalte der THD-Tabellen-Kopfzeile</a>
+     wechseln auf diesen Wert; andere Bins und die dBV-Werte der
+     Harmonischen-Zeilen verbleiben auf dem de-eingebetteten Wert oder dem
+     kalibrierten Maßstab.  Nützlich, wenn eine externe Twin-T-Kerbfilter den
+     Grundton dämpft, man seinen wahren Pegel aber kennt — warum dies THD bei
+     einem driftenden Kerbfilter stabilisiert, ist unter
+     <a href="theory/fft.html#manual-fund">Funktionsprinzip ▸ Grundton manuell
+     fixieren</a> beschrieben.</p>
+
+  <h4 id="fft-max-harmonic-thd">Maximale Harmonische für THD</h4>
+  <p>Numerisch (2 .. 9).  Obere Grenze der in das THD-Verhältnis summierten
+     Harmonischen.  THD H2..N verwendet Harmonische 2 bis zu dieser Zahl.</p>
+
+  <h4 id="fft-max-harmonic-calc">Maximale Harmonische berechnen</h4>
+  <p>Numerisch (≥ <a href="#fft-max-harmonic-thd">Maximale Harmonische für
+     THD</a>).  Wie viele Harmonische erkannt und in den
+     <a href="#fft-thd-harmonics">Harmonischen-Zeilen</a> aufgelistet werden —
+     unabhängig davon, wie viele in das THD-Verhältnis eingehen.</p>
+
+  <h4 id="fft-coherent-avg">Kohärente Mittelung</h4>
+  <p>Kontrollkästchen.  Wenn aktiviert, werden komplexe Spektren gemittelt
+     (so heben sich zufälligphasiges Rauschen über Frames auf, was das
+     Grundrauschen um ~3 dB pro Verdopplung der Frame-Anzahl senkt).  Wenn
+     deaktiviert, werden Leistungsspektren gemittelt (Rauschvarianz reduziert
+     sich, aber der Pegel sinkt nicht).  Kohärente Mittelung erfordert
+     phasenstabile Signale — Sweeps und Impulsantworten werden besser mit
+     Leistungsmittelung gemessen.</p>
+
+  <h3 id="fft-tab-presets">Tab „Voreinstellungen"</h3>
+  <p><img src="img/FFT - Presets.png" alt="Tab Voreinstellungen"/></p>
+  <p>Benannte Schnappschüsse der Analyser-Konfiguration.  Einen Namen im
+     Auswahlfeld eingeben und <b>Speichern</b> drücken, um die aktuellen
+     FFT- und THD-Einstellungen zusammen mit Kanal, Amplitudeneinheit, den
+     Frequenz- / Amplitudenachsenbereichen und dem Log/Linear-Flag zu
+     speichern; einen gespeicherten Namen auswählen und <b>Laden</b> drücken,
+     um sie wiederherzustellen, oder <b>Löschen</b>, um sie zu entfernen
+     (mit Bestätigung).</p>
+
+  <h3 id="fft-tab-utility">Tab „Dienstprogramme"</h3>
+  <p><img src="img/FFT - Utility.png" alt="Tab Dienstprogramme"/></p>
+
+  <h4 id="fft-utility-screenshot">Screenshot</h4>
+  <p>Rendert den FFT-Bereich als PNG in einer wählbaren Auflösung.  Der Bereich
+     wird außerhalb des Bildschirms in Zielgröße angeordnet, sodass das Bild
+     ein echtes Layout ist und kein hochskaliertes Bitmap.</p>
+
+  <h4 id="fft-utility-calibrate">ADC-Kalibrierung</h4>
+  <p>Öffnet den ADC-Kalibrierungsdialog (derselbe, der auch vom Oszilloskop aus
+     erreichbar ist), um die dBV- / V-Skala gegen einen bekannten Eingangspegel
+     zu verankern.</p>
+
+  <h3 id="fft-tab-calibration">Tab „Kalibrierung laden…"</h3>
+  <p><img src="img/FFT - Load calibration.png" alt="Tab Kalibrierung laden"/></p>
+  <p>Lädt eine oder mehrere Frequenzgang-Kalibrierungsdateien
+     (<code>.frc</code>, erzeugt vom Frequenzgang-Modul —
+     siehe <a href="theory/freq-resp.html">Funktionsprinzip ▸ Frequenzgang</a>)
+     und de-embettet sie zur Anzeigezeit aus dem Spektrum — so spiegelt die
+     Anzeige das Gerät unter Test wider, nicht die Messkette (ein 1&nbsp;kHz
+     Twin-T-Kerbfilter, ein Abschwächer, der eigene Rollabfall der Soundkarte).</p>
+  <p>Jede Kalibrierung ist eine Zeile; die Schaltfläche <b>+</b> fügt eine
+     weitere Zeile hinzu, und sie werden der Reihe nach kombiniert.  Ab der
+     zweiten Zeile enthält jede Zeile auch eine <b>Zeile-löschen</b>-Schaltfläche,
+     um nur diese Zeile zu entfernen.</p>
+  <ul>
+    <li><b>Pfad</b> — nur lesen; die Ordner-Schaltfläche öffnet eine Dateiauswahl,
+        um die <code>.frc</code>-Datei dieser Zeile auszuwählen.  Die Löschen-
+        (×)-Schaltfläche entlädt die Datei der Zeile, ohne die Zeile zu entfernen.</li>
+    <li><b>Aktiv</b> — schaltet diese Kalibrierung ein / aus, ohne sie zu
+        entladen.</li>
+    <li><b>Mit Rauschen</b> — de-embettet auch das Grundrauschen, nicht nur
+        Grundton und Harmonische.</li>
+  </ul>
+  <p>Die Korrektur wird nur auf die angezeigte Kurve angewendet; der
+     Mittelungs-Akkumulator bleibt roh.  Jeder Peak wird doppelt gezeichnet —
+     ein <a href="theory/fft.html#cal">roter Punkt auf dem korrigierten Pegel
+     und ein blauer Punkt, wo der ADC ihn vor der Korrektur sah</a> — und die
+     THD-Tabelle folgt den korrigierten (roten) Werten.</p>
+
+  <h3 id="fft-tab-save">Tab „Speichern unter…"</h3>
+  <p><img src="img/FFT - Save to.png" alt="Tab Speichern unter"/></p>
+  <p>Schreibt das aktuelle Spektrum in eine <code>.fft</code>-Datei.  Das Pfadfeld
+     ist schreibgeschützt; eine einzelne <b>Speichern</b>-Schaltfläche öffnet den
+     Dateidialog (es gibt keine separate Durchsuchen-Funktion).  Das Spektrum wird
+     mit seinen <b>de-eingebetteten</b> Harmonischen gespeichert, und der
+     Datei-Header enthält die vollständige Konfiguration, mit der die Analyse
+     durchgeführt wurde — FFT-Länge, Abtastrate, Fensterfunktion, Mittelungsmodus
+     und -anzahl, Kanal, das Verzerrungsband, manueller Grundton, Kalibrierung
+     und (im Zweiston-Modus) die zwei Tonfrequenzen — sodass eine gespeicherte
+     Messung selbstbeschreibend ist.</p>
+
+  <h3 id="fft-tab-load">Tab „Laden aus…"</h3>
+  <p><img src="img/FFT - Load from.png" alt="Tab Laden aus"/></p>
+  <p>Liest eine zuvor gespeicherte <code>.fft</code>-Datei und rendert sie als
+     statischen Spektrum-Overlay — nützlich zum Vergleich von Messungen, die zu
+     verschiedenen Zeiten oder unter verschiedenen Bedingungen aufgenommen wurden.
+     Ein geladenes Spektrum wird genau so angezeigt, wie es gespeichert wurde:
+     die aktuellen De-Embedding- und Manueller-Grundton-Einstellungen werden
+     <em>nicht</em> erneut darauf angewendet (die gespeicherte Kurve enthält
+     bereits die eigenen).</p>
+
+  <h2 id="fft-tiles">Tab-Kacheln</h2>
+  <p>Nur drei Tabs tragen Kacheln — <b>FFT-Einstellungen</b>,
+     <b>THD-Einstellungen</b> und <b>Kalibrierung laden</b>; sie zeigen die
+     kleinen pillenförmigen Abzeichen unter dem Tab-Label, die die
+     Hauptbedienelemente des Tabs zusammenfassen.  Voreinstellungen, Dienstprogramme,
+     Speichern und Laden haben keine.  Kacheln sind passiv; mit der Maus über
+     eine fahren, um einen Tooltip mit Beschreibung des Werts zu erhalten.</p>
+
+  <h3 id="fft-tile-length">FFT-Länge-Kachel</h3>
+  <p>Kurzform auf dem Tab <b>FFT-Einstellungen</b> — z. B. <code>1M</code>,
+     <code>64k</code>.</p>
+
+  <h3 id="fft-tile-window">Fensterfunktion-Kachel</h3>
+  <p>Kurzcode der Fensterfunktion — keine feste Länge.  Eines von
+     <code>RECT</code>, <code>HANN</code>, <code>BH4</code>, <code>BH7</code>,
+     <code>FT</code>, <code>HFT144D</code>, <code>HFT248D</code>,
+     <code>KB24</code>, <code>KB38</code>, <code>DC150</code>,
+     <code>DC200</code>, <code>DC250</code>, <code>DC300</code>.</p>
+
+  <h3 id="fft-tile-overlap">Überlappung-Kachel</h3>
+  <p>Prozentsatz (<code>87.5%</code>).</p>
+
+  <h3 id="fft-tile-averages">Mittelungen-Kachel</h3>
+  <p>Zahl mit ×-Suffix (<code>32×</code>) oder <code>∞</code> im
+     Dauermodus.</p>
+
+  <h3 id="fft-tile-coherent">Kohärente-Mittelung-Kachel</h3>
+  <p><code>coh</code> wenn kohärente Mittelung aktiv ist,
+     <code>inc</code> wenn inkohärent.</p>
+
+  <h3 id="fft-tile-distrange">Verzerrungsbereich-Kachel</h3>
+  <p>Auf dem Tab <b>THD-Einstellungen</b>.  Zeigt das SNR- / N+D-Integrationsband:
+     beide Grenzen aktiv → <code>50-20k</code>; nur HP (kein LP) →
+     <code>50-∞</code>; nur LP (kein HP) → <code>0-20k</code>; keine gesetzt →
+     <code>all</code>.</p>
+
+  <h3 id="fft-tile-maxharmonic">Maximale-Harmonische-Kachel</h3>
+  <p><code>H9</code> — die maximale Harmonische für das THD-Verhältnis.</p>
+
+  <h3 id="fft-tile-manfund">Manueller-Grundton-Kachel</h3>
+  <p><code>manF</code>.  Nur sichtbar, wenn die manuelle Grundton-Überschreibung
+     aktiviert ist.</p>
+
+  <hr/>
+  <p class="back"><a href="index.html">◀ Zurück zum Inhalt</a></p>
+
+</body>
+</html>

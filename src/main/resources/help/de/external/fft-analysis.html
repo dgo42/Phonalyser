@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Weiterführende Literatur: FFT-Analyse Grundlagen</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="../theory/index.html">◀ Zurück zur Funktionsweise</a></p>
+
+  <h1>FFT-Analyse Grundlagen</h1>
+
+  <div class="note"><b>Zu dieser Seite.</b>  Dies ist eine kurze Zusammenfassung,
+     in eigenen Worten, der Themen aus einem ausgezeichneten externen Leitfaden:
+     <a href="https://dewesoft.com/blog/guide-to-fft-analysis">"FFT Analysis
+     (Fast Fourier Transform): The Ultimate Guide to Frequency Analysis"</a>
+     von Søren Linnet Gjelstrup (Dewesoft).  Das gesamte Verdienst gebührt dem
+     Original — dort ist die vollständige Darstellung mit Abbildungen und
+     Beispielen zu finden.  Diese Zusammenfassung dient dazu, die wesentlichen
+     Ideen auch offline griffbereit zu haben.</div>
+
+  <h2>Der grundlegende Kompromiss: Auflösung vs. Zeit</h2>
+  <p>Eine FFT der Blocklänge <i>N</i> bei der Abtastrate <i>f</i><sub>s</sub>
+     liefert Spektrallinien mit dem Abstand</p>
+  <div class="eq">Δ<i>f</i> = <i>f</i><sub>s</sub> / <i>N</i><span class="no">(1)</span></div>
+  <p>und benötigt einen Zeitblock der Dauer</p>
+  <div class="eq"><i>T</i> = 1 / Δ<i>f</i><span class="no">(2)</span></div>
+  <p>Eine feinere Frequenzauflösung kostet daher immer proportional mehr
+     Messzeit — es gibt keinen Weg um (2) herum, nur Möglichkeiten, die Zeit
+     sinnvoll zu nutzen (Mittelung, Überlappung).  Frequenzen sind nur bis zur
+     Nyquist-Grenze <i>f</i><sub>s</sub>/2 beobachtbar.</p>
+
+  <h2>Leck-Effekt und Fensterfunktionen</h2>
+  <p>Die FFT setzt stillschweigend voraus, dass sich der analysierte Block
+     unendlich wiederholt.  Ein Ton, dessen Frequenz <em>zwischen</em> zwei
+     Spektrallinien fällt, verletzt diese Annahme an den Blockrändern, und
+     seine Energie verschmiert
+     („leckt")<sup><a href="#ref-leak">[3]</a></sup> in
+     benachbarte Linien — der Pegel wird zu niedrig angezeigt und die Flanken
+     werden zu hoch.  Die Multiplikation des Blocks mit einer
+     <b>Fensterfunktion</b><sup><a href="#ref-win">[2]</a></sup>,
+     die an den Rändern auf null abklingt, unterdrückt die Unstetigkeit.  Jede
+     Fensterfunktion tauscht Hauptkeulbreite (Frequenzselektivität) gegen
+     Nebenkeulen-Höhe (Dynamikbereich); die praktischen
+     Empfehlungen des Leitfadens<sup><a href="#ref-guide">[1]</a></sup>:</p>
+  <table class="controls">
+    <tr><th>Signal</th><th>Fensterfunktion</th></tr>
+    <tr><td>Periodische Töne, Oberwellen</td><td>Hann oder Blackman-Familie</td></tr>
+    <tr><td>Breitbandiges Rauschen</td><td>Hann, mit Dichtenormierung</td></tr>
+    <tr><td>Transienten vollständig im Block</td><td>Rechteck (keine Fensterfunktion)</td></tr>
+  </table>
+  <p>(Das FFT-Fenster von Phonalyser bietet diese und mehrere Flat-Top- / HFT-Fensterfunktionen;
+     kohärente Mittelung verändert die Kompromisse — dies wird im
+     FFT-Kapitel dieser Hilfe behandelt.)</p>
+
+  <h2>Amplitudenskalierung</h2>
+  <p>Dasselbe Spektrum kann gegen verschiedene Referenzen dargestellt werden:
+     lineare Amplitude (gleiche Einheit wie das Eingangssignal — richtig für diskrete Töne),
+     Leistung (Amplitude zum Quadrat) oder spektrale <em>Dichte</em> (Leistung oder
+     Amplitude normiert pro Hz Bandbreite — richtig für Rauschen, da ein
+     Rauschpegel in Dichteeinheiten nicht wandert, wenn sich die FFT-Länge
+     ändert).  Phonalysers Einheit V/√Hz ist genau diese Dichtenormierung.</p>
+
+  <h2>Mittelung und Überlappung</h2>
+  <p>Die Mittelung von <i>n</i> Spektren reduziert die Varianz der Rauschschätzung —
+     die Schwankung eines RMS-gemittelten Spektrums fällt um 1/√<i>n</i>.
+     Das Überlappen aufeinanderfolgender Blöcke (typischerweise um 2/3 oder 3/4
+     bei einer Hann-Fensterfunktion) verwendet Samples wieder, die der Abfall der
+     Fensterfunktion sonst verschwenden würde, und erhöht die Aktualisierungsrate
+     ohne zusätzliche Aufnahmezeit.</p>
+
+  <h2>Zweikanalfunktionen</h2>
+  <p>Mit einem Referenzkanal liefern Kreuzspektren die Frequenzgangfunktion
+     eines Systems sowie die <b>Kohärenz</b> — ein Wert zwischen 0 und 1, der
+     angibt, wie viel des Ausgangssignals linear durch das Eingangssignal
+     verursacht wird.  Dies sind die Grundlagen der Frequenzgangmessung, die im
+     <a href="../theory/generator.html#sweeps">Generatorkapitel</a> beschrieben wird.</p>
+
+  <h2 id="refs">Referenzen</h2>
+  <ol class="refs">
+    <li id="ref-guide">S. L. Gjelstrup,
+        <a href="https://dewesoft.com/blog/guide-to-fft-analysis">"FFT Analysis (Fast Fourier Transform): The Ultimate Guide to Frequency Analysis"</a>,
+        Dewesoft Data Acquisition Knowledge Base — der Originalartikel, den
+        diese Seite zusammenfasst.</li>
+    <li id="ref-win"><a href="https://en.wikipedia.org/wiki/Window_function">Wikipedia: Window function</a> —
+        Übersicht der Fensterfunktionen mit ihren Haupt- und Nebenkeulenwerten.</li>
+    <li id="ref-leak"><a href="https://en.wikipedia.org/wiki/Spectral_leakage">Wikipedia: Spectral leakage</a>.</li>
+  </ol>
+
+  <p class="back"><a href="../theory/index.html">◀ Zurück zur Funktionsweise</a></p>
+
+</body>
+</html>

@@ -40,11 +40,13 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 
 import org.edgo.audio.measure.common.FileVersions;
+import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.fft.FftController;
 import org.edgo.audio.measure.gui.fft.FftView;
+import org.edgo.audio.measure.gui.fft.ImdResult;
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionEngine.Phase;
 import org.edgo.audio.measure.gui.generator.GeneratorController;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -87,6 +89,9 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     private final GeneratorController gen;
     private final FftController       fft;
     private final FftView             view;
+    /** Loaded {@code .frc} corrections, handed to the engine so it de-embeds
+     *  their phase when computing the DAC correction. */
+    private final FreqRespCorrectionStore correctionStore;
 
     private Shell            dialog;
     private NumericStepField averagesField;
@@ -119,11 +124,13 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     private double   latestDistPct = Double.NaN;
 
     public PredistortionWizardDialog(Shell parent, GeneratorController gen,
-                                     FftController fft, FftView view) {
-        this.parentShell = parent;
-        this.gen         = gen;
-        this.fft         = fft;
-        this.view        = view;
+                                     FftController fft, FftView view,
+                                     FreqRespCorrectionStore correctionStore) {
+        this.parentShell     = parent;
+        this.gen             = gen;
+        this.fft             = fft;
+        this.view            = view;
+        this.correctionStore = correctionStore;
     }
 
     /** Opens the wizard and blocks until it is dismissed. */
@@ -309,20 +316,30 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // "Stop round" is meaningful only while a round is averaging.
         stopRoundBtn.setEnabled(running && engine != null && engine.getPhase() == Phase.COLLECTING);
 
+        // Dual-tone signal → the loop minimises INTERMOD, not THD; show IMD /
+        // D+N in place of THD / THD+N (the figures already are IMD-based for the
+        // last/best readouts — the engine's per-round metric is the IMD %).
+        boolean dual = prefs.getGenSignalForm().isDualTone();
+        ImdResult imd = (dual && live != null) ? fft.analyzeImd(live) : null;
+
         roundLbl.setText(metric("round",    running ? Integer.toString(engine.getCurrentRound() + 1) : "—"));
         // Live distortion straight off the running FFT (updates within a round),
-        // distinct from "THD" below which is the last completed round's figure.
-        curThdLbl.setText(metric("currentThd", live != null ? fmtPct(live.thdPct) : "—"));
+        // distinct from the last completed round's figure below.
+        curThdLbl.setText(dual
+                ? metric("currentImd", imd != null ? fmtPct(imd.imdPwrPct) : "—")
+                : metric("currentThd", live != null ? fmtPct(live.thdPct) : "—"));
         // The cross-tick averaging depth — the SAME counter the FFT view shows
         // (climbs over a round, reset each round), NOT the per-call frameCount
         // (only the 2–3 frames of one analyze() segment).
         avgLbl  .setText(metric("averages", Integer.toString(fft.completedAnalyses())));
-        distLbl .setText(metric("thd",      fmtPct(latestDistPct)));
-        bestLbl .setText(metric("best_thd", bestText()));
+        distLbl .setText(metric(dual ? "imd"      : "thd",      fmtPct(latestDistPct)));
+        bestLbl .setText(metric(dual ? "best_imd" : "best_thd", bestText()));
         // Match the FFT pane: every dB readout carries the dBV suffix.  Absolute
         // levels (fundamental, noise floor) get the dBFS→dBV offset; the ratio
-        // figures (THD+N / SNR / SINAD) are relabelled only, never offset.
-        thdNLbl .setText(metric("thd_n",    live != null ? fmtDbv(-live.sinadDb) : "—"));
+        // figures (THD+N / D+N / SNR / SINAD) are relabelled only, never offset.
+        thdNLbl .setText(dual
+                ? metric("d_n",   imd != null ? fmtDbv(20.0 * Math.log10(imd.tdnPct / 100.0)) : "—")
+                : metric("thd_n", live != null ? fmtDbv(-live.sinadDb) : "—"));
         snrLbl  .setText(metric("snr",      live != null ? fmtDbv(live.snrDb) : "—"));
         sinadLbl.setText(metric("sinad",    live != null ? fmtDbv(live.sinadDb) : "—"));
         fundLbl .setText(metric("fund",     live != null ? fmtDbv(live.fundamentalDbFs + prefs.getDbvOffsetDb()) : "—"));
@@ -486,7 +503,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         targetField.setEnabled(false);
         startStopBtn.setText(I18n.t("predistortion.button.stop"));
 
-        engine = new PredistortionEngine(dialog.getDisplay(), gen, fft, view, this);
+        engine = new PredistortionEngine(dialog.getDisplay(), gen, fft, view, correctionStore, this);
         engine.start(baseAverages, targetThdPct);
     }
 
@@ -555,7 +572,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         fd.setFilterNames(new String[]{ I18n.t("predistortion.save.filter") });
         fd.setOverwrite(true);
         Preferences prefs = Preferences.instance();
-        String folder = prefs.getGenCorrectionsFolder();
+        String folder = prefs.getGenDpdFolder();
         if (folder != null) fd.setFilterPath(folder);
         fd.setFileName(defaultDpdFileName(r));
         String picked = fd.open();
@@ -563,16 +580,19 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         try {
             int bitDepth = prefs.current().getOutputBitDepth();
             if (dual) {
-                engine.getBestIntermod().writeCsv(Path.of(picked), buildHeader(r),
+                engine.getBestIntermod().writeDpd(Path.of(picked), buildHeader(r),
                         r.fundamentalHzRefined, r.fundamental2HzRefined, r.fundamentalDbFs,
-                        r.sampleRate, bitDepth, prefs.getGenAmplitudeVrms());
+                        r.sampleRate, bitDepth, prefs.getGenAmplitudeVrms(),
+                        engine.calResponseFor(r.channelLeft), prefs.getAdcFsVoltageRms(),
+                        engine.dualToneFundamentalVrms());
             } else {
-                engine.getBestApplied().writeCsv(Path.of(picked), buildHeader(r),
+                engine.getBestApplied().writeDpd(Path.of(picked), buildHeader(r),
                         r.fundamentalHzRefined, r.fundamentalDbFs,
-                        r.sampleRate, bitDepth, prefs.getGenAmplitudeVrms());
+                        r.sampleRate, bitDepth, prefs.getGenAmplitudeVrms(),
+                        engine.calResponseFor(r.channelLeft), prefs.getAdcFsVoltageRms());
             }
             savedPath = picked;
-            prefs.setGenCorrectionsFolder(new File(picked).getParent());
+            prefs.setGenDpdFolder(new File(picked).getParent());
             prefs.save();
             saveBtn.setText(I18n.t("predistortion.button.apply"));
             terminalStatusKey = "predistortion.status.saved";
@@ -586,17 +606,26 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     }
 
     /** Suggested {@code .dpd} name encoding the measurement conditions:
-     *  {@code predistortion-<freq>-<fftSize>-<overlap>-<window>-<thdPpm>.dpd}, e.g.
-     *  {@code predistortion-1003_0518-2M-87_5-BH7-0_83.dpd} (THD in ppm: 0.83).
-     *  Decimal points become underscores so the name stays path-friendly. */
+     *  {@code predistortion-<THD|IMD>-<freq>[-<freq2>]-<fftSize>-<overlap>-<window>-<distPpm>.dpd}.
+     *  Single tone, e.g. {@code predistortion-THD-1003_0518-2M-87_5-BH7-0_83.dpd}
+     *  (THD in ppm: 0.83); dual tone carries both tone frequencies, e.g.
+     *  {@code predistortion-IMD-19005_0661-20000_0611-2M-87_5-HFT248D-5_05.dpd}
+     *  (IMD in ppm: 5.05).  Decimal points become underscores so the name stays
+     *  path-friendly. */
     private String defaultDpdFileName(FftResult r) {
+        boolean dual   = engine.isDualTone();
+        String kind    = dual ? "IMD" : "THD";
         String freq    = String.format(Locale.US, "%.4f", r.fundamentalHzRefined).replace('.', '_');
+        String freq2   = dual
+                ? "-" + String.format(Locale.US, "%.4f", r.fundamental2HzRefined).replace('.', '_')
+                : "";
         String size    = humanFftSize(r.fftSize);
         String overlap = r.overlap.label.replace("%", "").replace('.', '_');
         String window  = r.windowType.name();
-        double thdPpm  = engine.getBestThdPct() * 10_000.0;   // % → ppm
-        String thd     = String.format(Locale.US, "%.2f", thdPpm).replace('.', '_');
-        return "predistortion-" + freq + "-" + size + "-" + overlap + "-" + window + "-" + thd + ".dpd";
+        double distPpm = engine.getBestThdPct() * 1_000_000.0;   // % → ppm % (THD single-tone / IMD dual-tone)
+        String dist    = String.format(Locale.US, "%.2f", distPpm).replace('.', '_');
+        return "predistortion-" + kind + "-" + freq + freq2 + "-" + size + "-" + overlap
+                + "-" + window + "-" + dist + ".dpd";
     }
 
     /** Compact power-of-two FFT length: 2097152 → "2M", 524288 → "512k". */
@@ -614,9 +643,10 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // and a later relaunch agree.  Persist the form + corrections path so
         // it survives a restart AND so the generator pane's Corrections field
         // shows the loaded file.
-        prefs.setGenSignalForm(engine.isDualTone()
-                ? GenSignalForm.DUAL_TONE_COMPENSATED : GenSignalForm.SINE_COMPENSATED);
-        prefs.setGenCorrectionsFile(savedPath);
+        GenSignalForm form = engine.isDualTone()
+                ? GenSignalForm.DUAL_TONE_COMPENSATED : GenSignalForm.SINE_COMPENSATED;
+        prefs.setGenSignalForm(form);
+        prefs.setGenDpd(form, savedPath);
         gen.loadCorrectionsFromFile(savedPath);
         prefs.save();
         applied = true;
@@ -663,6 +693,11 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // Revert the running generator to the plain tone unless the user
         // committed via Apply.
         if (!applied) gen.clearCompensation();
+        // The run left the FFT in infinite coherent averaging with a deep
+        // accumulator full of predistortion-run frames (and, when reverting,
+        // the signal just changed); clear the statistics + accumulator so the
+        // live view restarts clean instead of averaging across the change.
+        fft.resetStatistics();
         return true;
     }
 

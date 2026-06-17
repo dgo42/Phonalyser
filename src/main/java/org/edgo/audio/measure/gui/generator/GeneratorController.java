@@ -119,6 +119,11 @@ public final class GeneratorController {
             publishSignalChanged();
         });
         onPref(prefs.genSignalFormProperty(), this::onFormChanged);
+        // Loading / clearing a .dpd must take effect now: restart the running
+        // generator when the file for the ACTIVE compensated form changes (the
+        // build reads the new path).  Each slot only restarts its own form.
+        onPref(prefs.genDpdProperty(),     v -> onDpdChanged(GenSignalForm.SINE_COMPENSATED));
+        onPref(prefs.genDpdDualProperty(), v -> onDpdChanged(GenSignalForm.DUAL_TONE_COMPENSATED));
         onPref(prefs.genAmplitudeVrmsProperty(), v -> {
             setAmplitudeVrms(v);
             publishSignalChanged();
@@ -330,19 +335,19 @@ public final class GeneratorController {
         double dacFs = prefs.getDacFsVoltageAmpl();
         try {
             if (form == GenSignalForm.SINE_COMPENSATED) {
-                String csv = prefs.getGenCorrectionsFile();
-                if (csv == null || csv.isEmpty()) {
+                String dpd = prefs.getGenDpd(form);
+                if (dpd == null || dpd.isEmpty()) {
                     return "Sine (compensated) needs a predistortion file.  Pick one with the … button.";
                 }
-                gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms, dacFs, csv);
+                gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms, dacFs, dpd);
             } else if (form == GenSignalForm.DUAL_TONE_COMPENSATED) {
                 // Plain two-tone generator, then load the dual-tone intermod
                 // corrections (freq-independent (a,b) products) onto it.  The
                 // second tone + amplitude split are pushed by start() afterwards.
                 gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, dacFs);
-                String csv = prefs.getGenCorrectionsFile();
-                if (csv != null && !csv.isEmpty()) {
-                    gen.loadCorrectionsFromFile(csv, frequency, sampleRate);
+                String dpd = prefs.getGenDpd(form);
+                if (dpd != null && !dpd.isEmpty()) {
+                    gen.readDpd(dpd, frequency, sampleRate);
                 }
             } else if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
                 double f0 = prefs.getGenSweepFreqStartHz();
@@ -536,7 +541,7 @@ public final class GeneratorController {
         if (g == null || path == null) return;
         Preferences prefs = Preferences.instance();
         try {
-            g.loadCorrectionsFromFile(path, effectiveFrequency(),
+            g.readDpd(path, effectiveFrequency(),
                     prefs.current().getOutputSampleRate());
         } catch (IOException ex) {
             log.warn("Failed to load predistortion corrections from {}", path, ex);
@@ -777,9 +782,21 @@ public final class GeneratorController {
         publishSignalChanged();
     }
 
+    /** Restarts the generator when the {@code .dpd} for {@code slotForm} changes
+     *  and that form is the one currently playing — so a load / clear of the
+     *  correction file takes effect immediately. */
+    private void onDpdChanged(GenSignalForm slotForm) {
+        if (running && Preferences.instance().getGenSignalForm() == slotForm) {
+            restart();
+        }
+    }
+
     private boolean requiresRestart(GenSignalForm f) {
+        // Both dual-tone forms stand up a dedicated second DDS accumulator, so
+        // entering OR leaving either one needs a full rebuild — a live form-swap
+        // would leave the second tone (and its frequency) running.
         return f == GenSignalForm.LINEAR_SWEEP || f == GenSignalForm.LOG_SWEEP
-                || f == GenSignalForm.DUAL_TONE;
+                || f.isDualTone();
     }
 
     // -------------------------------------------------------------------------
@@ -812,12 +829,12 @@ public final class GeneratorController {
         try {
             SignalGenerator gen;
             if (form == GenSignalForm.SINE_COMPENSATED) {
-                String csv = prefs.getGenCorrectionsFile();
-                if (csv == null || csv.isEmpty()) {
-                    return "Sine (compensated) needs a harmonics-correction CSV.  Pick one with the … button.";
+                String dpd = prefs.getGenDpd(form);
+                if (dpd == null || dpd.isEmpty()) {
+                    return "Sine (compensated) needs a predistortion .dpd.  Pick one with the … button.";
                 }
                 gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms,
-                        prefs.getDacFsVoltageAmpl(), csv);
+                        prefs.getDacFsVoltageAmpl(), dpd);
             } else {
                 gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms,
                         prefs.getDacFsVoltageAmpl());

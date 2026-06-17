@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theorie: Signalgenerator</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zur Theorie des Betriebs</a></p>
+
+  <h1>Signalgenerator</h1>
+  <p>Der Generator ist eine <b>DDS</b>-Engine (direkte digitale Synthese): Er
+     berechnet das Signal sample-weise in voller numerischer Präzision im
+     normierten Bereich [−1, +1].  Die Synthese bleibt mathematisch ideal —
+     Dither und Quantisierung erfolgen erst im letzten Schritt vor dem
+     DAC — sodass dieselbe Wellenform auch als biteindeutiges Referenzsignal für
+     Entfaltungsmessungen und den Dateiexport dient.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 150" width="100%" height="150" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="garr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+    <rect x="10"  y="40" width="140" height="60" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="80"  y="64" text-anchor="middle" font-weight="bold">phase accumulator</text>
+    <text x="80"  y="82" text-anchor="middle" fill="#557">φₐ, 64 bit</text>
+
+    <rect x="200" y="40" width="150" height="60" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="275" y="64" text-anchor="middle" font-weight="bold">waveform kernel</text>
+    <text x="275" y="82" text-anchor="middle" fill="#557">table + Taylor / exact</text>
+
+    <rect x="400" y="40" width="120" height="60" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="460" y="64" text-anchor="middle" font-weight="bold">× A</text>
+    <text x="460" y="82" text-anchor="middle" fill="#557">amplitude scale</text>
+
+    <rect x="570" y="40" width="130" height="60" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="635" y="64" text-anchor="middle" font-weight="bold">quantizer</text>
+    <text x="635" y="82" text-anchor="middle" fill="#557">TPDF dither → PCM</text>
+
+    <rect x="750" y="40" width="60" height="60" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="780" y="74" text-anchor="middle" font-weight="bold">DAC</text>
+
+    <line x1="150" y1="70" x2="198" y2="70" stroke="#446" stroke-width="1.5" marker-end="url(#garr)"/>
+    <line x1="350" y1="70" x2="398" y2="70" stroke="#446" stroke-width="1.5" marker-end="url(#garr)"/>
+    <line x1="520" y1="70" x2="568" y2="70" stroke="#446" stroke-width="1.5" marker-end="url(#garr)"/>
+    <line x1="700" y1="70" x2="748" y2="70" stroke="#446" stroke-width="1.5" marker-end="url(#garr)"/>
+    <text x="275" y="126" text-anchor="middle" fill="#557">full precision, normalised [−1, +1]</text>
+    <text x="635" y="126" text-anchor="middle" fill="#557">integer PCM (8/16/24/32 bit)</text>
+  </svg>
+  </div>
+
+  <h2 id="dds">Der Phasenakkumulator</h2>
+  <p>Alle periodischen Wellenformen werden von einem 64-Bit-<b>Phasenakkumulator</b>
+     φₐ angetrieben: einer vorzeichenlosen ganzen Zahl, die die Phase als Bruchteil
+     einer Periode darstellt, 0 … 2⁶⁴−1 ≙ 0 … 2π.  Für eine Ausgangsfrequenz <i>f</i>
+     bei der Abtastrate <i>f</i><sub>s</sub> wird die Phase je Sample um einen festen
+     Inkrement vorgeschaltet<sup><a href="#ref-dds">[1]</a></sup>:</p>
+
+  <div class="eq">Δφ = ⌊<i>f</i> / <i>f</i><sub>s</sub> · 2⁶⁴⌉<span class="no">(1)</span></div>
+  <div class="eq">φₐ ← (φₐ + Δφ) mod 2⁶⁴<span class="no">(2)</span></div>
+
+  <p>Diese Ganzzahlarithmetik besitzt drei Eigenschaften, die eine Gleitkomma-Phase
+     nicht erreichen kann:</p>
+  <ul>
+    <li><b>Reserve für den Frequenzregelkreis.</b>  Der kleinste Frequenzschritt
+        des Akkumulators beträgt
+        <div class="eq">Δ<i>f</i><sub>min</sub> = <i>f</i><sub>s</sub> / 2⁶⁴<span class="no">(3)</span></div>
+        und die Inkrementberechnung (1), in Gleitkomma ausgeführt,
+        löst noch <i>f</i><sub>s</sub>/2⁵³ ≈ 43 pHz bei 384 kHz auf.  Der Zweck
+        dieser enormen Reserve liegt nicht in der Auflösung selbst — sondern darin,
+        dass der Frequenzregelkreis Korrekturen im Sub-ppb-Bereich anwenden kann,
+        ohne dass der Trim wegquantisiert wird, sodass der Regelkreis einrastet
+        statt um die nächstliegende darstellbare Frequenz zu pendeln.</li>
+    <li><b>Kein Phasendrift.</b>  Die Addition modulo 2⁶⁴ ist auf Dauer exakt;
+        eine Gleitkomma-Phase würde über Stunden Rundungsfehler akkumulieren.</li>
+    <li><b>Klickfreie Änderungen.</b>  Ein Frequenzwechsel ersetzt nur Δφ; die
+        akkumulierte Phase bleibt erhalten, sodass die Wellenform ohne Sprung
+        weiterläuft.  Gleiches gilt beim Wechsel zwischen den phasendomänbasierten
+        Wellenformen.</li>
+  </ul>
+
+  <h2 id="sine">Sinus: Nachschlagetabelle + Taylor-Korrektur</h2>
+  <p>Der Sinus der Akkumulatorphase wird berechnet, indem φₐ in einen groben
+     Tabellenindex und einen feinen Rest aufgeteilt wird:</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 170" width="100%" height="170" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="garr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+    <!-- 64-bit word -->
+    <rect x="60"  y="30" width="270" height="40" fill="#cdf" stroke="#88a"/>
+    <rect x="330" y="30" width="430" height="40" fill="#ffe9d6" stroke="#c96"/>
+    <text x="195" y="55" text-anchor="middle" font-weight="bold">top 12 bits — coarse angle θ₀</text>
+    <text x="545" y="55" text-anchor="middle" font-weight="bold">bottom 52 bits — remainder Δθ</text>
+    <text x="60"  y="20" fill="#557">bit 63</text>
+    <text x="760" y="20" text-anchor="end" fill="#557">bit 0</text>
+
+    <line x1="195" y1="70" x2="195" y2="100" stroke="#446" stroke-width="1.5" marker-end="url(#garr2)"/>
+    <rect x="80" y="104" width="230" height="44" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="195" y="124" text-anchor="middle">sine/cosine table</text>
+    <text x="195" y="140" text-anchor="middle" fill="#557">4096 entries, full wave</text>
+
+    <line x1="545" y1="70" x2="545" y2="100" stroke="#446" stroke-width="1.5" marker-end="url(#garr2)"/>
+    <rect x="400" y="104" width="290" height="44" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="545" y="124" text-anchor="middle">Taylor series for sin Δθ, cos Δθ</text>
+    <text x="545" y="140" text-anchor="middle" fill="#557">Δθ &lt; 2π/4096 ≈ 1.53 mrad</text>
+  </svg>
+  </div>
+
+  <p>Beide Teile werden mit der Additionsformel für Winkel zusammengeführt:</p>
+  <div class="eq">sin(θ₀ + Δθ) = sin θ₀ · cos Δθ + cos θ₀ · sin Δθ<span class="no">(4)</span></div>
+  <p>wobei sin Δθ und cos Δθ kurze Taylor-Reihen des kleinen Rests sind,
+     abgebrochen nach der 5. Ordnung:</p>
+  <div class="eq">sin Δθ ≈ Δθ − Δθ³/3! + Δθ⁵/5!,&nbsp;&nbsp;&nbsp;
+      cos Δθ ≈ 1 − Δθ²/2! + Δθ⁴/4!<span class="no">(5)</span></div>
+  <p>Da Δθ auf einen Tabellenschritt begrenzt ist (≈ 1,53·10⁻³ rad), liegt der
+     Abbruchfehler von (5) in der Größenordnung Δθ⁷/7! ≈ 10⁻²⁴ — weit unterhalb
+     der Präzision der Arithmetik selbst.  Der Kern liefert für jeden Messzweck
+     einen <em>exakten</em> Sinus bei einem Bruchteil des Rechenaufwands; die
+     Oberwellen-Reinheit des erzeugten Tons wird daher durch den DAC begrenzt,
+     niemals durch die Synthese.</p>
+
+  <h2 id="amplitude">Amplitudenkalibrierung</h2>
+  <p>Der Ausgangspegel wird in V<sub>rms</sub> eingestellt.  Intern wird die
+     Einheitsamplituden-Wellenform durch einen linearen Faktor in den normierten
+     DAC-Bereich abgebildet:</p>
+  <div class="eq"><i>A</i> = <i>V</i><sub>rms</sub> / (<i>V</i><sub>fs</sub> · ρ)<span class="no">(6)</span></div>
+  <p>wobei <i>V</i><sub>fs</sub> die kalibrierte Vollaussteuerungs-RMS-Spannung
+     des DAC ist (einmalig im Dialog <em>DAC kalibrieren</em> festgelegt; eine
+     Neukalibrierung skaliert den laufenden Generator sofort um) und ρ der
+     RMS-Wert der Einheitsamplituden-Wellenform — für jede Form analytisch
+     bestimmbar, sodass der gewünschte V<sub>rms</sub>-Wert unabhängig von der
+     Wellenform eingehalten wird:</p>
+  <table class="controls">
+    <tr><th>Form</th><th>ρ (RMS bei Einheitsamplitude)</th></tr>
+    <tr><td>Sinus, Sweeps</td><td>1/√2</td></tr>
+    <tr><td>Dreieck (beliebiges Tastverhältnis)</td><td>1/√3</td></tr>
+    <tr><td>Rechteck (beliebiges Tastverhältnis)</td><td>1</td></tr>
+    <tr><td>Weißes Rauschen (Gauß, σ = 1)</td><td>1</td></tr>
+    <tr><td>Rosa Rauschen</td><td>1/√17</td></tr>
+    <tr><td>Rosa Rauschen linear</td><td>1/√51</td></tr>
+    <tr><td>Dualtton, Gewichte w₁ / w₂</td><td>√((w₁² + w₂²)/2)</td></tr>
+  </table>
+
+  <h2 id="kernels">Die Wellenformen</h2>
+
+  <h3>Dreieck und Rechteck — exakt in der Phasendomäne</h3>
+  <p>Beide bilden den Phasenbruchtteil φₐ/2³² ∈ [0, 1) stückweise linear ab,
+     sodass der Ausgang konstruktionsbedingt exakt ist:</p>
+  <ul>
+    <li><b>Rechteck:</b> +1 im ersten Anteil <i>duty</i> der Periode, −1 für
+        den Rest.  Ein Tastverhältnis ≠ 50 % erzeugt absichtlich eine
+        Gleichspannungskomponente — das ist der Zweck eines Impulszug-Testsignals.</li>
+    <li><b>Dreieck:</b> steigt von −1 auf +1 im Anteil <i>duty</i>, fällt
+        dann zurück über den Rest.  Tastverhältnis → 1 nähert sich einem
+        Sägezahn, Tastverhältnis → 0 einem invertierten Sägezahn.</li>
+  </ul>
+  <p>(Beide verwenden den Phasenbruchtteil φₐ/2⁶⁴ ∈ [0, 1).)</p>
+
+  <h4 id="duty">Das Rechteck-Tastverhältnis ist auf das Sampleraster quantisiert</h4>
+  <p>Die Tastverhältnis-Schwelle liegt im kontinuierlichen Phasenraum, doch der
+     Ausgang eines Rechtecks ist ein harter +1 → −1-<em>Sprung</em>, der nur
+     <em>auf</em> einem Sample fallen kann.
+     Das tatsächlich ausgegebene Tastverhältnis entspricht daher einer ganzen
+     Anzahl von Samples pro Periode; der kleinste Tastverhältnis-Schritt beträgt
+     ein Sample:</p>
+  <div class="eq">Δ<i>D</i> = <i>f</i> / <i>f</i><sub>s</sub></div>
+  <p>wobei <i>f</i> die Ausgangsfrequenz und <i>f</i><sub>s</sub> die Abtastrate
+     ist. Ein 10&nbsp;kHz-Impuls bei 384&nbsp;kHz hat 38,4 Samples pro Periode,
+     der kleinste Tastverhältnis-Schritt beträgt also ≈ 1/38,4 ≈ 2,6&nbsp;%, und
+     ein eingegebener Wert rastet auf das nächstliegende erreichbare Vielfache ein.
+     Das Generatorfenster zeigt das tatsächlich ausgegebene (eingerastete)
+     Tastverhältnis in eckigen Klammern an. Je niedriger die Frequenz relativ zur
+     Abtastrate, desto feiner die Auflösung des Tastverhältnisses.</p>
+  <p>Das <b>Dreieck</b> verhält sich anders: Es hat keinen Sprung, sondern nur
+     eine Steigungsänderung am Scheitelpunkt, und die Samples beiderseits liegen
+     exakt auf den Rampen — daher wird die Position des Scheitelpunkts (und damit
+     das Tastverhältnis) sub-sample-genau repräsentiert, ohne Quantisierung.
+     Das Tastverhältnis eines Dreiecks ist bei jeder Frequenz exakt.</p>
+
+  <h3 id="dualtone">Dualton</h3>
+  <p>Zwei unabhängige Phasenakkumulatoren laufen synchron; der Ausgang ist</p>
+  <div class="eq"><i>x</i> = w₁ · sin φ₁ + w₂ · sin φ₂<span class="no">(7)</span></div>
+  <p>mit tonspezifischen Gewichten w₁, w₂ (die Amplitudenanteile in Prozent / 100).
+     Die Töne sind unkorreliert, daher beträgt der kombinierte RMS-Wert
+     √((w₁² + w₂²)/2) — und der Amplitudenfaktor (6) wird bei jeder Änderung der
+     Aufteilung neu berechnet, sodass der <em>kombinierte</em> Pegel dem
+     eingestellten V<sub>rms</sub> entspricht.  Beide Frequenzen sind im laufenden
+     Betrieb einzeln abstimmbar — die beiden Frequenzregelkreise des FFT-Fensters
+     nutzen genau das während Intermodulationsmessungen.</p>
+
+  <h3>Rauschen</h3>
+  <ul>
+    <li><b>Weiß:</b> ein Gauß-Sample pro Takt (σ = 1).</li>
+    <li><b>Rosa:</b> Voss–McCartney<sup><a href="#ref-pink">[2]</a></sup> —
+        16 Oktav-Generatoren plus ein stets neu gewürfelter weißer Term, gemittelt.
+        Generator <i>k</i> liefert alle 2<sup><i>k</i></sup> Samples einen neuen
+        Wert, sodass jede Oktave des Spektrums gleiche Leistung erhält — das ist die
+        Definition von rosa Rauschen.  Eine laufende Summe hält den Rechenaufwand
+        pro Sample konstant.  Die <em>lineare</em> Variante zieht aus einer
+        gleichmäßigen (flachen, streng begrenzten) Verteilung statt aus einer
+        Gauß-Verteilung.</li>
+  </ul>
+
+  <h3 id="sweeps">Sweeps</h3>
+  <p>Die Momentanfrequenz eines Sweeps ist eine Funktion der Zeit, daher wird die
+     Phase explizit integriert statt das feste Inkrement (1) zu verwenden:</p>
+  <ul>
+    <li><b>Linearer Sweep:</b> pro Sample
+        <div class="eq">φ ← φ + 2π · <i>f</i>(<i>n</i>) / <i>f</i><sub>s</sub>,&nbsp;&nbsp;
+        <i>f</i>(<i>n</i>) steigt linear <i>f</i>₀ → <i>f</i>₁<span class="no">(8)</span></div>
+        Schleife phasenkontinuierlich; optionales Ein-/Ausblenden (angehobene
+        Kosinusflanke) pro Zyklus beseitigt das spektrale Streulicht harter
+        Flanken.</li>
+    <li><b>Logarithmischer Sweep (Farina<sup><a href="#ref-farina">[3]</a><a href="#ref-sweep">[4]</a></sup>):</b> der exponentielle Chirp
+        <div class="eq"><i>x</i>(<i>t</i>) = sin( <i>K</i> · (e<sup><i>t</i>/<i>L</i></sup> − 1) ),&nbsp;&nbsp;
+        <i>L</i> = <i>T</i> / ln(<i>f</i>₁/<i>f</i>₀),&nbsp;&nbsp;
+        <i>K</i> = 2π <i>f</i>₀ <i>L</i><span class="no">(9)</span></div>
+        — gleiche Energie pro Oktave.  Er wird <b>vorab in einen Puffer gerendert</b>
+        statt live synthetisiert, aus einem entscheidenden Grund: Die
+        Frequenzgangmessung benötigt das exakte Referenzsignal
+        <i>X</i>(<i>t</i>) für die Entfaltung
+        <i>H</i>(<i>f</i>) = <i>Y</i>(<i>f</i>)/<i>X</i>(<i>f</i>), und das
+        Abspielen eines gerenderten Puffers garantiert, dass die Referenz sample-genau
+        identisch mit dem ist, was der DAC ausgespielt hat.  Die Wiedergabe sendet
+        zunächst die konfigurierte Vorlaufstille, dann den Puffer.</li>
+  </ul>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 120" width="100%" height="120" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <rect x="60" y="40" width="80" height="36" fill="#f4f4ff" stroke="#88a"/>
+    <text x="100" y="62" text-anchor="middle" fill="#557">lead-in</text>
+    <rect x="140" y="40" width="520" height="36" fill="#cdf" stroke="#88a"/>
+    <text x="400" y="62" text-anchor="middle">pre-rendered log sweep f₀ → f₁</text>
+    <rect x="660" y="40" width="100" height="36" fill="#f4f4ff" stroke="#88a" stroke-dasharray="4 3"/>
+    <text x="710" y="62" text-anchor="middle" fill="#557">loop / silence</text>
+    <path d="M 150 36 Q 200 30 240 33 T 660 12" fill="none" stroke="#c33" stroke-width="1.2"/>
+    <text x="690" y="16" fill="#c33">instantaneous f (log scale)</text>
+    <text x="100" y="100" text-anchor="middle" fill="#557">silence</text>
+    <text x="400" y="100" text-anchor="middle" fill="#557">also handed to the analyser as deconvolution reference X(t)</text>
+  </svg>
+  </div>
+
+  <h3 id="compensated">Kompensierter Sinus — aktive Klirrfaktorunterdrückung</h3>
+  <p>Diese Form subtrahiert den <em>gemessenen</em> Klirrfaktor der
+     Wiedergabekette vom erzeugten Signal, sodass das Prüfobjekt ein reineres
+     Stimulus-Signal erhält, als der DAC allein liefern könnte.  Die
+     Korrekturdaten — relative Amplitude und Phase jeder Harmonischen — stammen
+     aus einer kohärent gemittelten FFT-Messung der Schleife.</p>
+  <ul>
+    <li><b>Exakte Frequenzverriegelung.</b>  Die Phase der Harmonischen <i>h</i>
+        wird durch ganzzahlige Multiplikation des Hauptakkumulators abgeleitet:
+        <div class="eq">φ<sub>h</sub> = (φₐ · <i>h</i> + φ<sub>0,h</sub>) mod 2⁶⁴<span class="no">(10)</span></div>
+        Jeder Korrekturton liegt damit <em>exakt</em> bei <i>h·f</i> — kein
+        Drift, kein Schwebungseffekt mit den echten Klirrharmonischen, egal wie
+        lange der Generator läuft.</li>
+    <li><b>Schleifenlaufzeit-Kompensation.</b>  Der DAC→ADC-Roundtrip verzögert
+        jede Harmonische phasenmäßig proportional zu ihrer Frequenz.  Die
+        gemessene Phase φ₁ des Grundtons offenbart diese Verzögerung (ein
+        DDS-Sinus startet mit gemessener Phase −π/2, daher gilt
+        ω<i>D</i> = −(φ₁ + π/2)); die Startphase φ<sub>0,h</sub> jeder
+        Harmonischen wird entsprechend vorgedreht, sodass die Korrektur am ADC
+        exakt gegenphasig zur zu kompensierenden Verzerrung eintrifft.</li>
+    <li><b>Phase erfordert kohärente Mittelung.</b>  Ein inkohärent
+        (leistungsgemitteltes) FFT-Ergebnis enthält keine Phase; der Generator
+        wendet dann nur eine amplitudenbasierte Korrektur an und vermerkt dies
+        im Protokoll.</li>
+  </ul>
+
+  <h2 id="quantizer">Quantisierung und Dither</h2>
+  <p>Die Synthesekette bleibt in voller Präzision, bis die Wiedergabe-Engine
+     in das ganzzahlige PCM-Format des Geräts konvertiert.  Unmittelbar vor dem
+     Runden — dem einzigen sinnvollen Ort — wird optionaler <b>TPDF-Dither</b><sup><a href="#ref-dither">[5]</a></sup>
+     (dreieckige Wahrscheinlichkeitsdichte, ±1 LSB bei der <em>Ziel</em>-Bittiefe)
+     addiert.  Dither entkoppelt den Quantisierungsfehler vom Signal: statt
+     harmonisch verwandter Verzerrungsprodukte erzeugt die Quantisierung nur
+     einen flachen, gutartigen Rauschpegel.  Exporte und die Entfaltungsreferenz
+     werden vor dieser Stufe abgegriffen und bleiben daher die ideale Wellenform.</p>
+
+  <h2 id="savefile">Signal speichern — eine perfekte Referenz</h2>
+  <p>Beim Speichern des Generatorausgangs in eine Datei (<b>Speichern unter…</b>
+     im Generatorfenster) werden die Samples <em>direkt aus der Syntheserechnung</em>
+     geschrieben — dieselbe exakte Wellenform, die die oben beschriebenen Kerne
+     erzeugen, ohne jede analoge Stufe im Pfad.  Es gibt keinen DAC, kein
+     analoges Rekonstruktionsfilter, keinen Verstärker und kein Kabel, daher
+     enthält die Datei <b>keine der Verzerrungen, kein Rauschen und keinen
+     Frequenzgangfehler</b>, die eine echte Wiedergabekette hinzufügen würde:
+     Es handelt sich um ein mathematisch ideales Signal, begrenzt nur durch das
+     gewählte Sampleformat.  (Dither, falls aktiv, ist die einzige bewusste
+     Ergänzung — und selbst das ist ein flacher, gutartiger Rauschpegel, keine
+     Verzerrung.)</p>
+  <p>Das macht eine gespeicherte Datei zu einer <b>bekannt perfekten Referenz</b>:
+     Wird sie einem anderen Messgerät oder Prüfobjekt zugespielt, gehören alle
+     dann gemessenen Abweichungen zu diesem Gerät, nicht zur Quelle.  Außerdem
+     stellt dies sicher, dass der Frequenzgang-Sweep bei der Entfaltung ehrlich
+     bleibt — die Referenz, durch die dividiert wird, ist der exakt ausgespielte
+     Sweep, keine neu aufgenommene Kopie.</p>
+
+  <h2 id="lifecycle">Verhalten im laufenden Betrieb</h2>
+  <p>Jeder Parameter ist einstellbar, während der Generator läuft: Frequenz und
+     Amplitude (phasenkontinuierlich, siehe oben), Tastverhältnisse, Sweep-Grenzen
+     und -Blenden, Dualton-Aufteilung, Dither-Tiefe, DAC-Neukalibrierung.  Der
+     Wiedergabestart folgt der im
+     <a href="audio-backend.html#how">Kapitel Audio-Backend</a> beschriebenen
+     Sequenz: Aufwärmen (mit Sweep-Rückspulen), Vorbelegen des Hardware-Puffers,
+     dann das „Bereit"-Signal, auf das Messworker warten.</p>
+
+  <div class="note"><b>Frequenzregelkreis-Integration.</b>  Bei aktivem
+     <em>Einrasten auf FFT-Bin</em> rundet der Generator seine Frequenz auf den
+     genauen FFT-Bin-Mittelpunkt — DAC und ADC laufen jedoch auf unterschiedlichen
+     Quarzoszillatoren, sodass die <em>erfasste</em> Frequenz nie exakt der
+     kommandierten entspricht.  Bei aktivem Ausrichtungsmodus misst das FFT-Fenster
+     die tatsächlich erfasste Frequenz je Takt und sendet einen Trim zurück, den
+     der Generator über (1) anwendet; der geschlossene Regelkreis hält den
+     erfassten Ton auf seinem Bin auf besser als <b>±0,05 ppm</b> (siehe
+     <a href="fft.html#ongrid">FFT-Kapitel</a>).  Die Pikohertz-Granularität
+     hinter (3) ermöglicht es, dass diese Korrekturen ankommen, ohne
+     wegquantisiert zu werden.</div>
+
+  <h2 id="refs">Literatur</h2>
+  <ol class="refs">
+    <li id="ref-dds">Direct digital synthesis —
+        <a href="https://en.wikipedia.org/wiki/Direct_digital_synthesis">Wikipedia: Direct digital synthesis</a>;
+        vertiefend: Analog Devices Tutorial MT-085,
+        <a href="https://www.analog.com/media/en/training-seminars/tutorials/MT-085.pdf">"Fundamentals of Direct Digital Synthesis (DDS)"</a>.</li>
+    <li id="ref-pink">Voss–McCartney pink-noise algorithm —
+        <a href="https://www.firstpr.com.au/dsp/pink-noise/">"DSP generation of pink noise"</a>
+        (gesammelte Analysen und die ursprünglichen McCartney-Beiträge).</li>
+    <li id="ref-farina">A. Farina,
+        <a href="http://pcfarina.eng.unipr.it/Public/Papers/226-AES00.PDF">"Simultaneous measurement of impulse response and distortion with a swept-sine technique"</a>,
+        108th AES Convention, 2000 — die logarithmische Sweep-Entfaltungsmethode aus (9).</li>
+    <li id="ref-sweep">M. Baranov, "How I was listening to a sine sweep all
+        day long" — ein praxisnaher Durchgang durch die Exponential-Sweep-Messung;
+        <a href="../external/sine-sweep.html">lokale Zusammenfassung</a>,
+        <a href="https://medium.com/@baranov.mv/how-i-was-listening-to-a-sine-sweep-all-day-long-294c374995f6">Originalartikel</a>.</li>
+    <li id="ref-dither">TPDF dither —
+        <a href="https://en.wikipedia.org/wiki/Dither">Wikipedia: Dither</a>;
+        die Theorie geht zurück auf Lipshitz, Wannamaker &amp; Vanderkooy,
+        "Quantization and Dither: A Theoretical Survey", J. AES, 1992.</li>
+  </ol>
+
+  <p class="back"><a href="ring-buffer.html">◀ Ringpuffer &amp; Konsumenten</a> ·
+     <a href="index.html">Theorie des Betriebs</a></p>
+
+</body>
+</html>

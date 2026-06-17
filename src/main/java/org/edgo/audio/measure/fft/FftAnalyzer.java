@@ -1311,6 +1311,7 @@ public class FftAnalyzer {
             outResult.avgNoiseFloorDbFs          = fundDbFs - 300.0;
             outResult.fundamentalDynExclusionHz  = 0.0;
             outResult.preCorrectionPeaks         = null;
+            outResult.captureRawPeaks();   // raw F + peak phasors for the DAC-predistortion de-embed
             return outResult;
         }
 
@@ -1439,6 +1440,7 @@ public class FftAnalyzer {
         // returns when calibration is loaded); reset here so a previous
         // tick's value doesn't leak across pool slot recycle.
         outResult.preCorrectionPeaks = null;
+        outResult.captureRawPeaks();   // raw F + peak phasors for the DAC-predistortion de-embed
         return outResult;
     }
 

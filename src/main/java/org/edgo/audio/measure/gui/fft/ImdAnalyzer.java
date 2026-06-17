@@ -100,8 +100,27 @@ public final class ImdAnalyzer {
                 ? r.fundamentalHzRefined  : p1.freqHz;
         out.f2Hz   = (!Double.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0)
                 ? r.fundamental2HzRefined : p2.freqHz;
-        out.f1DbV  = p1.levelDbFs + dbvOffsetDb;
-        out.f2DbV  = p2.levelDbFs + dbvOffsetDb;
+        // Manual fundamental override: the mandatory twin-T notch suppresses the
+        // measured tones, so when the user supplies the true level it is the
+        // TRUE COMBINED level — split across the two tones by their measured
+        // ratio (equal tones at 1 V together → each √(½) = −3.01 dBV).  Only the
+        // absolute dBV / V_rms outputs are anchored; the spectrum dBFS is left
+        // untouched, and the ratio = product/(|F1|+|F2|) stays honest.
+        out.f1DbFs = p1.levelDbFs;   // measured — drives the dBFS column + markers
+        out.f2DbFs = p2.levelDbFs;
+        double f1Lvl = p1.levelDbFs;
+        double f2Lvl = p2.levelDbFs;
+        if (Double.isFinite(r.fundamentalTrueDbFs)) {
+            double m1 = Math.pow(10.0, p1.levelDbFs / 20.0);
+            double m2 = Math.pow(10.0, p2.levelDbFs / 20.0);
+            double mTot = Math.hypot(m1, m2);
+            if (mTot > 0.0) {
+                f1Lvl = r.fundamentalTrueDbFs + 20.0 * Math.log10(m1 / mTot);
+                f2Lvl = r.fundamentalTrueDbFs + 20.0 * Math.log10(m2 / mTot);
+            }
+        }
+        out.f1DbV  = f1Lvl + dbvOffsetDb;
+        out.f2DbV  = f2Lvl + dbvOffsetDb;
         // f1Mag / f2Mag are V_rms in volts (= 10^(dBV/20), since
         // dBV is referenced to 1 V_rms).
         out.f1Mag  = Math.pow(10.0, out.f1DbV / 20.0);

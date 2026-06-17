@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — World's shortest HOW-TO</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>🚀 The world's shortest HOW-TO — a parts-per-billion THD measurement</h1>
+  <p>The whole chain, from "open the app" to "harmonics at −180 dBV", on one
+     screen. Each step links to the full chapter if you want the detail.
+     The green-play
+     <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+     glyph marks a <b>start</b> button (generator, sweeps); the red-LED
+     <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><circle cx="10" cy="7.5" r="4.3" fill="#e22" stroke="#900"/><circle cx="8.4" cy="6" r="1.2" fill="#f99"/></svg>
+     marks a <b>record</b> button (scope, FFT).</p>
+
+  <h2>1 · Calibrate the chain (once)</h2>
+  <ol>
+    <li><b>Start a sine</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        and <a href="generator.html">calibrate the DAC output voltage</a> against a
+        known level.</li>
+    <li><b>Loop the DAC straight back into the ADC</b> and
+        <a href="fft.html#fft-utility-calibrate">calibrate the ADC full-scale</a>.</li>
+    <li><b>Measure the loopback frequency response</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        and <a href="freqresp.html">save it to a <code>.frc</code> file</a>.</li>
+    <li><b>Load that <code>.frc</code></b> in the Frequency-response view as a
+        calibration and <b>activate</b> it — now the chain's own response is
+        de-embedded from every measurement.</li>
+  </ol>
+
+  <h2>2 · Add the notch</h2>
+  <ol start="5">
+    <li><b>Plug the passive 1 kHz twin-T notch</b> between DAC and ADC
+        (<a href="theory/dac-predistortion.html#notch">why a notch</a>).</li>
+    <li><b>Measure the notch's frequency response</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        and save it to a <em>separate</em> file (you'll de-embed it too).</li>
+  </ol>
+
+  <h2>3 · Lock the tone</h2>
+  <ol start="7">
+    <li><b>Run a 1003 Hz sine</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        — a few hertz off 1 kHz, to step clear of mains harmonics — with
+        <b>snap-to-FFT-bin</b> on.</li>
+    <li><b>Start recording</b> the oscilloscope
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><circle cx="10" cy="7.5" r="4.3" fill="#e22" stroke="#900"/><circle cx="8.4" cy="6" r="1.2" fill="#f99"/></svg>
+        and the FFT analyser
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><circle cx="10" cy="7.5" r="4.3" fill="#e22" stroke="#900"/><circle cx="8.4" cy="6" r="1.2" fill="#f99"/></svg>.</li>
+    <li><b>Check the scope</b> — the tone clearly above the noise, the trigger
+        locked (use a little <b>hysteresis</b> so noise doesn't false-trigger).</li>
+    <li><b>Set the FFT</b> for your card's <em>maximum</em> sample rate —
+        <b>2 M @ 384 kHz</b>, <b>1 M @ 192 kHz</b>, <b>512 k @ 96 kHz</b> — with
+        <a href="fft.html#fft-fund-from-gen">Get fundamental from generator</a> on
+        and <b>Align generator = FLL</b>.</li>
+    <li><b>Watch ΔF settle</b> to a tiny value (typically <b>±0.05 ppm</b>) — that
+        is the tone phase-locked and ready for deep coherent averaging.</li>
+  </ol>
+
+  <h2>4 · Pre-distort, then measure</h2>
+  <ol start="12">
+    <li><b>Open the DAC pre-distortion wizard</b> — the
+        <a href="theory/dac-predistortion.html">wizard</a> button
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><line x1="5" y1="12.5" x2="11.5" y2="5.5" stroke="#444" stroke-width="2" stroke-linecap="round"/><polygon points="13,1.8 13.7,3.6 15.5,4.2 13.7,4.8 13,6.6 12.3,4.8 10.5,4.2 12.3,3.6" fill="#f0a800"/><circle cx="16.5" cy="9.5" r="0.9" fill="#f0a800"/></svg>.</li>
+    <li><b>Enter the initial averages per round and a target THD</b>, then
+        <b>Start</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        — the loop drives the DAC's own harmonics into the noise.</li>
+    <li><b>Save the result to a <code>.dpd</code> file</b> and <b>apply it</b> to
+        the generator.</li>
+    <li><b>Switch the generator to "Sine compensated"</b> — it now emits a tone
+        cleaner than the DAC alone can make.</li>
+    <li><b>Insert your DUT</b> between the DAC and the notch.</li>
+    <li><b>Reset the FFT statistics and start collecting</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><circle cx="10" cy="7.5" r="4.3" fill="#e22" stroke="#900"/><circle cx="8.4" cy="6" r="1.2" fill="#f99"/></svg>.</li>
+    <li><b>Wait</b> for H₂…Hₙ to stabilise as the average deepens — and what you
+        are reading is the <em>device</em>, not the source. 🎯</li>
+  </ol>
+
+  <p><img src="img/dac-predistortion-live.png" alt="Live FFT: pre-distorted 1003 Hz tone behind the notch — THD H2..9 = 0.00000093 %" style="max-width:100%;height:auto;border:1px solid #dde;"/></p>
+  <p class="small"><b>The payoff.</b> A 1003 Hz tone behind the notch, pre-distorted,
+     at ~730 coherent averages: THD H2…H9 reads <b>0.00000093 %</b> — under one part
+     per billion, the individual harmonics down at −160 to −185 dBV.</p>
+
+  <p class="small">New here? The <a href="theory/dac-predistortion.html">DAC
+     pre-distortion</a> chapter explains <em>why</em> every step above is the way
+     it is — the notch, the manual fundamental, the deep averaging.</p>
+
+</body>
+</html>
