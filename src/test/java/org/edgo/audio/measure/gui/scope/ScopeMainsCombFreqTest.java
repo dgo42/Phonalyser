@@ -96,7 +96,7 @@ class ScopeMainsCombFreqTest {
         MainsCombFilter c = new MainsCombFilter((int) fs, 2.0);
         c.track(combed, n);
         c.reset();
-        c.processPreservingDc(combed, n);
+        c.processPreservingDc(combed, n, 0L);
         int settle = (int) (3.0 * fs / (Math.PI * 2.0));
         int from = Math.min(settle, n / 2);
         int measLen = n - from;

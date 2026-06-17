@@ -21,10 +21,7 @@ package org.edgo.audio.measure.gui.fft;
 import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
-import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
-import org.eclipse.swt.graphics.Rectangle;
-import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.FormAttachment;
 import org.eclipse.swt.layout.FormData;
 import org.eclipse.swt.layout.FormLayout;
@@ -33,19 +30,18 @@ import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
+import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionWizardDialog;
 import org.edgo.audio.measure.gui.generator.GeneratorController;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -63,6 +59,8 @@ public final class FftPane extends AbstractPane {
     /** Resolution of the FlatScrollbars (any large integer — slider values
      *  are mapped to fractional positions). */
     private static final int SCROLL_RANGE = 1_000_000;
+    /** Screenshot comment caption top (px) — under the FFT averages/percent/unit overlay. */
+    private static final int SCREENSHOT_COMMENT_TOP_PX = 70;
 
     @Getter
     private FftView         view;
@@ -368,23 +366,9 @@ public final class FftPane extends AbstractPane {
         }
     }
 
-    /** Overlays the tab tile rows into {@code gc} for the screenshot path —
-     *  SWT's {@code Control.print()} captures the folder's native chrome but
-     *  not the paint listener that draws the tiles, so the snapshot overlays
-     *  them by hand.  Delegates to the {@link FftTabControl}. */
-    public void paintTabTilesInto(GC gc) {
-        if (toolbarTabs != null && !toolbarTabs.isDisposed()) {
-            toolbarTabs.paintTilesInto(gc, group);
-        }
-    }
-
-    /** Collapses or expands the toolbar tab body so the screenshot path can
-     *  hide the settings tabs before printing.  Delegates to the
-     *  {@link FftTabControl}. */
-    public void setTabsCollapsed(boolean collapsed) {
-        if (toolbarTabs != null && !toolbarTabs.isDisposed()) {
-            toolbarTabs.setTabsCollapsed(collapsed);
-        }
+    @Override
+    protected AbstractTabControl tabStrip() {
+        return toolbarTabs;
     }
 
     /** Registers this pane's settings tabs in the component registry under
@@ -484,30 +468,10 @@ public final class FftPane extends AbstractPane {
     // Pane-owned dialogs
     // -------------------------------------------------------------------------
 
-    /** Opens the screenshot dialog for this pane.  Initial width/height
-     *  come from preferences (last-used) and fall back to the pane's
-     *  current pixel size; the chosen size + folder are persisted back
-     *  on Copy or Save. */
-    private void openScreenshotDialog() {
-        if (group == null || group.isDisposed()) return;
-        Rectangle b = group.getBounds();
-        Preferences prefs = Preferences.instance();
-        new ScreenshotDialog(
-                group.getShell(),
-                prefs.getScreenshotWidth(),  prefs.getScreenshotHeight(),
-                b.width, b.height,
-                prefs.getScreenshotFolder(),
-                this::renderOffscreen,
-                (w, h) -> {
-                    prefs.setScreenshotWidth(w);
-                    prefs.setScreenshotHeight(h);
-                    prefs.save();
-                },
-                folder -> {
-                    prefs.setScreenshotFolder(folder);
-                    prefs.save();
-                }
-        ).open();
+    /** The FFT comment caption sits under the averages / percent / unit overlay. */
+    @Override
+    protected int screenshotCommentTopPx() {
+        return SCREENSHOT_COMMENT_TOP_PX;
     }
 
     /** Loads and displays a {@code .fft} spectrum file (same as the Load-from
@@ -518,46 +482,16 @@ public final class FftPane extends AbstractPane {
         if (toolbarTabs != null) toolbarTabs.loadSpectrum(path);
     }
 
-    /** Renders this FFT pane offscreen at the requested dimensions with
-     *  its toolbar tab body collapsed.  Builds a fresh {@link FftPane} in
-     *  a hidden Shell (no live capture, no controller worker) and copies
-     *  the live view's render snapshot into it, so the spectrum and the
-     *  THD / IMD table render the same data the user is currently
-     *  seeing.  Public for the screenshot dialog's renderer hook and the
-     *  {@code gui.automation} snapshot helpers; UI thread only. */
-    public Image renderOffscreen(Display d, int targetW, int targetH) {
-        targetW = Math.max(1, targetW);
-        targetH = Math.max(1, targetH);
-        Shell offscreen = new Shell(d, SWT.NO_TRIM);
-        offscreen.setLayout(new FillLayout());
-        FftPane fftPane = new FftPane(offscreen);
-        Image output = new Image(d, targetW, targetH);
-        try {
-            fftPane.copySnapshotFrom(this);
-            fftPane.setTabsCollapsed(true);
-            fftPane.refreshFromPrefs();
-
-            offscreen.setSize(targetW, targetH);
-            offscreen.setLocation(-10000, -10000);
-            offscreen.open();
-            while (d.readAndDispatch()) { /* drain */ }
-            fftPane.getGroup().redraw();
-            while (d.readAndDispatch()) { /* drain */ }
-            fftPane.getGroup().update();
-
-            GC outGc = new GC(output);
-            try {
-                fftPane.getGroup().print(outGc);
-                fftPane.paintTabTilesInto(outGc);
-            } finally {
-                outGc.dispose();
-            }
-            offscreen.setVisible(false);
-        } finally {
-            offscreen.dispose();
-        }
-        return output;
+    /** Builds the offscreen FFT clone for {@link #renderOffscreen}: fresh pane,
+     *  live render snapshot copied in, tab body collapsed, pan re-synced. */
+    @Override
+    protected AbstractPane createSnapshotClone(Composite parent) {
+        FftPane clone = new FftPane(parent);
+        clone.copySnapshotFrom(this);
+        clone.refreshFromPrefs();
+        return clone;
     }
+
 
     /** Copies the live pane's render snapshot (spectrum result, IMD
      *  slot and table mode) into this pane's view — used by the

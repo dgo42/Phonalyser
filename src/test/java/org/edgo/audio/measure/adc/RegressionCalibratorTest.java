@@ -43,9 +43,9 @@ class RegressionCalibratorTest {
         // Coherent integer-bin sine so the fit has zero windowing
         // error.  Slight phase offset so the regression's golden-section
         // search has something to find (vs sin(0) starting at the origin).
-        float[] sig = new float[samples];
+        double[] sig = new double[samples];
         for (int n = 0; n < samples; n++) {
-            sig[n] = (float) (amplitude * Math.sin(2.0 * Math.PI * freqHz * n / sampleRate
+            sig[n] = (double) (amplitude * Math.sin(2.0 * Math.PI * freqHz * n / sampleRate
                                                     + 0.7));
         }
 
@@ -72,9 +72,9 @@ class RegressionCalibratorTest {
         double dcOffset   = 0.05;
         int    samples    = 1 << 14;
 
-        float[] sig = new float[samples];
+        double[] sig = new double[samples];
         for (int n = 0; n < samples; n++) {
-            sig[n] = (float) (amplitude * Math.sin(2.0 * Math.PI * freqHz * n / sampleRate)
+            sig[n] = (double) (amplitude * Math.sin(2.0 * Math.PI * freqHz * n / sampleRate)
                               + dcOffset);
         }
 
@@ -90,9 +90,9 @@ class RegressionCalibratorTest {
         // sampleCount, interpolated) must match codeCount exactly.
         int    sampleRate = 48_000;
         int    samples    = 4 * sampleRate;  // 4 s → covers many cycles
-        float[] sig = new float[samples];
+        double[] sig = new double[samples];
         for (int n = 0; n < samples; n++) {
-            sig[n] = (float) (0.4 * Math.sin(2.0 * Math.PI * 1000.0 * n / sampleRate));
+            sig[n] = (double) (0.4 * Math.sin(2.0 * Math.PI * 1000.0 * n / sampleRate));
         }
 
         for (int bits : new int[] { 8, 16 }) {

@@ -34,7 +34,8 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.common.Lanczos;
 import org.edgo.audio.measure.dsp.LowPassFilter;
-import org.edgo.audio.measure.dsp.MainsCombFilter;
+import org.edgo.audio.measure.dsp.MainsFilters;
+import org.edgo.audio.measure.dsp.MainsTimeFilter;
 import org.edgo.audio.measure.dsp.MedianFilter;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.LpfMode;
@@ -138,7 +139,9 @@ public final class ScopeView extends AbstractMeasurementView {
      *  occasionally (mains drift is slow) and reset+applied each paint over
      *  the contiguous read window; the displayed span sits well inside the
      *  read's pre-roll so the comb's start transient stays off-screen left. */
-    private MainsCombFilter mainsCombLeft, mainsCombRight;
+    private MainsTimeFilter mainsLeft, mainsRight;
+    private MainsSuppression mainsLeftMode = MainsSuppression.NONE;
+    private MainsSuppression mainsRightMode = MainsSuppression.NONE;
     private int  mainsCombSampleRate;
     private long mainsTrackNanos;
 
@@ -495,7 +498,7 @@ public final class ScopeView extends AbstractMeasurementView {
         // changes the generated (loopback) level — either makes the accumulated
         // running statistics inconsistent, so clear them on a calibration change.
         Bindings.onChange(this, prefs.adcFsVoltageRmsProperty(), v -> { measWorker.clearHistory(); redraw(); });
-        Bindings.onChange(this, prefs.dacFsVoltageRmsProperty(), v -> { measWorker.clearHistory(); redraw(); });
+        Bindings.onChange(this, prefs.dacFsVoltageAmplProperty(), v -> { measWorker.clearHistory(); redraw(); });
         syncScopeButtons();       // apply the initial signal-gated visibility
 
         setBackground(color(ColorRole.BACKGROUND));
@@ -1295,39 +1298,46 @@ public final class ScopeView extends AbstractMeasurementView {
     }
 
     private void applyMainsSuppression(int sampleRate, int available,
-                                       boolean needL, boolean needR) {
+                                       boolean needL, boolean needR, long absStart) {
         Preferences prefs = Preferences.instance();
-        boolean mainsL = needL && prefs.getOscLeftMainsSuppression()  == MainsSuppression.IIR_COMB;
-        boolean mainsR = needR && prefs.getOscRightMainsSuppression() == MainsSuppression.IIR_COMB;
+        MainsSuppression modeL = prefs.getOscLeftMainsSuppression();
+        MainsSuppression modeR = prefs.getOscRightMainsSuppression();
+        boolean mainsL = needL && modeL != MainsSuppression.NONE;
+        boolean mainsR = needR && modeR != MainsSuppression.NONE;
         if (!mainsL && !mainsR) return;
-        if (mainsCombSampleRate != sampleRate || mainsCombLeft == null) {
-            mainsCombLeft  = new MainsCombFilter(sampleRate, MAINS_NOTCH_BW_HZ);
-            mainsCombRight = new MainsCombFilter(sampleRate, MAINS_NOTCH_BW_HZ);
+        if (mainsCombSampleRate != sampleRate) {
+            mainsLeft = mainsRight = null;          // rebuild both at the new rate
+            mainsLeftMode = mainsRightMode = MainsSuppression.NONE;
             mainsCombSampleRate = sampleRate;
             mainsTrackNanos = 0;
         }
         long now = System.nanoTime();
         boolean retrack = (now - mainsTrackNanos) >= MAINS_TRACK_PERIOD_NANOS;
         if (retrack) mainsTrackNanos = now;
-        // An untuned comb (just enabled, or no mains line found yet) is
+        // An untuned filter (just enabled, or no mains line found yet) is
         // re-tracked every paint until it locks — independent of the throttle
         // and of System.nanoTime()'s arbitrary origin — so enabling a channel
         // mid-run takes effect immediately rather than after one throttle gap.
         if (mainsL) {
-            if (retrack || !mainsCombLeft.isTuned()) {
-                double f = mainsCombLeft.track(leftBuf, available);
-                logMainsLock("L", f);
+            if (mainsLeft == null || mainsLeftMode != modeL) {
+                mainsLeft = MainsFilters.of(modeL, sampleRate, MAINS_NOTCH_BW_HZ);
+                mainsLeftMode = modeL;
             }
-            mainsCombLeft.reset();
-            mainsCombLeft.processPreservingDc(leftBuf, available);
+            if (retrack || !mainsLeft.isTuned()) logMainsLock("L", mainsLeft.track(leftBuf, available));
+            // The comb keeps no cross-paint state worth holding — reset it so
+            // each paint filters the contiguous window fresh; the adaptive
+            // filters KEEP their converged template / weights across paints.
+            if (modeL == MainsSuppression.IIR_COMB) mainsLeft.reset();
+            mainsLeft.processPreservingDc(leftBuf, available, absStart);
         }
         if (mainsR) {
-            if (retrack || !mainsCombRight.isTuned()) {
-                double f = mainsCombRight.track(rightBuf, available);
-                logMainsLock("R", f);
+            if (mainsRight == null || mainsRightMode != modeR) {
+                mainsRight = MainsFilters.of(modeR, sampleRate, MAINS_NOTCH_BW_HZ);
+                mainsRightMode = modeR;
             }
-            mainsCombRight.reset();
-            mainsCombRight.processPreservingDc(rightBuf, available);
+            if (retrack || !mainsRight.isTuned()) logMainsLock("R", mainsRight.track(rightBuf, available));
+            if (modeR == MainsSuppression.IIR_COMB) mainsRight.reset();
+            mainsRight.processPreservingDc(rightBuf, available, absStart);
         }
     }
 
@@ -1928,9 +1938,8 @@ public final class ScopeView extends AbstractMeasurementView {
         // displayed span sits inside this window's pre-roll, so the combs'
         // start transients stay off-screen left.
         applyHfLowPass(b.getSampleRate(), available, needL, needR);
-        applyMainsSuppression(b.getSampleRate(), available, needL, needR);
-
         long bufStartAbs = viewEndAbs - available;
+        applyMainsSuppression(b.getSampleRate(), available, needL, needR, bufStartAbs);
 
         // Navigation mode: bypass trigger/hold when either
         //   (a) the user has scrolled back from the live tip via the

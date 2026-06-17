@@ -24,7 +24,7 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-import org.edgo.audio.measure.common.StereoSampleFloat;
+import org.edgo.audio.measure.common.StereoSampleDouble;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -67,11 +67,11 @@ public class WavWriter implements AutoCloseable {
     }
 
     /** Writes integer PCM samples packed to the given bit depth (little-endian). */
-    public void writeSamples(StereoSampleFloat[] samples, int bitsPerSample) throws IOException {
+    public void writeSamples(StereoSampleDouble[] samples, int bitsPerSample) throws IOException {
         int bytesPerSample = bitsPerSample / 8;
         int ch0, ch1;
         ByteBuffer bb = ByteBuffer.allocate(samples.length * (bytesPerSample + 1) * 2).order(ByteOrder.LITTLE_ENDIAN);
-        for (StereoSampleFloat s : samples) {
+        for (StereoSampleDouble s : samples) {
             switch (bytesPerSample) {
                 case 1:
                     ch0 = (((int) Math.round(s.ch0 * 256.) + 0x8000) & 0xFF);

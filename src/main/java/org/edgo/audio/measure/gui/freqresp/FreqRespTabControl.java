@@ -24,20 +24,20 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.custom.ScrolledComposite;
-import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.RGB;
+import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Text;
@@ -50,19 +50,20 @@ import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.scope.ScreenshotDialog;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
-import org.edgo.audio.measure.gui.registry.UiRegistry;
+import org.edgo.audio.measure.gui.widgets.PresetBar;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FreqRespPreset;
 import org.edgo.audio.measure.preferences.Preferences;
 
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -82,7 +83,7 @@ import lombok.extern.log4j.Log4j2;
  * shared view, {@link Preferences}, and the {@link MessageBus}.
  */
 @Log4j2
-public final class FreqRespTabControl extends Composite {
+public final class FreqRespTabControl extends AbstractTabControl {
 
     /** Tab indices, kept as constants so the tile builder / refresh callers
      *  don't have to repeat magic numbers. */
@@ -134,20 +135,19 @@ public final class FreqRespTabControl extends Composite {
      *  {@link FreqRespPane} (IoC) and shared with the {@link FreqRespView}. */
     private final FreqRespCorrectionStore correctionStore;
 
-    // ---- Tab-header tiles: the shared TileTabFolder owns the renderer,
-    //      spacer images, tab-body collapse, hover tooltips and tile
-    //      painting; this control only supplies tile content (freqRespTabTiles).
-    private TileTabFolder toolbarTabs;
+    // Tab-header tiles: the shared TileTabFolder (held by AbstractTabControl as
+    // toolbarTabs) owns the renderer, spacer images, tab-body collapse, hover
+    // tooltips and tile painting; this control only supplies tile content
+    // (freqRespTabTiles).
+    /** Host pane, injected so the screenshot renderer can clone the whole pane
+     *  (title + plot + collapsed strip) offscreen — matching the FFT pane. */
+    @Setter
+    private FreqRespPane screenshotPane;
 
     /** Updated whenever the FFT-size combo or the lead-in field changes
      *  — caption is {@code "FFT size (D.Ds)"} where D.D is the derived
      *  sweep duration in seconds. */
     private Label fftSizeLabel;
-
-    private Combo  freqRespPresetCombo;
-    private Button freqRespPresetSaveBtn;
-    private Button freqRespPresetLoadBtn;
-    private Button freqRespPresetDeleteBtn;
 
     private Button riaaShowBtn;
     private Button riaaReverseBtn;
@@ -236,18 +236,6 @@ public final class FreqRespTabControl extends Composite {
     // Pane delegation
     // -------------------------------------------------------------------------
 
-    /** Runs {@code r} after each tab-body collapse / expand so the host pane
-     *  can release / restore the toolbar row's height pin and re-flow the
-     *  chart into the freed space. */
-    public void setCollapseRelayout(Runnable r) {
-        if (toolbarTabs != null) toolbarTabs.setCollapseRelayout(r);
-    }
-
-    /** True when the tab body is collapsed to just the strip. */
-    public boolean isTabsCollapsed() {
-        return toolbarTabs != null && toolbarTabs.isCollapsed();
-    }
-
     /** Registers every settings tab under {@code prefix} so an automation
      *  script can select a tab by path (e.g. {@code prefix + "/riaa"}) — it
      *  expands the strip and selects that tab — then screenshot this control
@@ -261,15 +249,6 @@ public final class FreqRespTabControl extends Composite {
         registerTab(prefix, "calibration", TAB_FREQRESP_CALIBRATION);
         registerTab(prefix, "save",        TAB_FREQRESP_SAVE);
         registerTab(prefix, "load",        TAB_FREQRESP_LOAD);
-    }
-
-    private void registerTab(String prefix, String slug, int index) {
-        if (toolbarTabs == null || index >= toolbarTabs.getItemCount()) return;
-        UiRegistry.instance().register(prefix + "/" + slug, this)
-                .onActivate(() -> {
-                    toolbarTabs.setCollapsed(false);
-                    toolbarTabs.setSelection(index);
-                });
     }
 
     /** Re-runs the RIAA enable cascade.  Public because the pane calls it when
@@ -381,10 +360,7 @@ public final class FreqRespTabControl extends Composite {
     // -------------------------------------------------------------------------
 
     private void buildSettingsTab() {
-        CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
-        item.setText(I18n.t("freqResp.tab.settings"));
-        Composite g = new Composite(toolbarTabs, SWT.NONE);
-        item.setControl(g);
+        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.settings"));
         GridLayout gl = new GridLayout(4, false);
         gl.marginWidth = 6; gl.marginHeight = 4;
         gl.horizontalSpacing = 6; gl.verticalSpacing = 4;
@@ -420,7 +396,7 @@ public final class FreqRespTabControl extends Composite {
         // ---- Row 2: amplitude (Vrms) + duration ----------------------------
         addLabel(g, I18n.t("freqResp.settings.amplitude"));
         NumericStepField ampField = new NumericStepField(g, UnitFamily.AMPLITUDE,
-                AMP_MIN_VRMS, prefs.getDacFsVoltageRms(), AMP_MAX_DECIMALS, 110);
+                AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl(), AMP_MAX_DECIMALS, 110);
         ampField.setLayoutData(comboGd());
         ampField.setToolTipText(I18n.t("freqResp.settings.amplitude.tooltip"));
         // Two-way bind; the floor clamp (≥ 0.0001 V) and the tab-tile refresh
@@ -616,10 +592,7 @@ public final class FreqRespTabControl extends Composite {
     // -------------------------------------------------------------------------
 
     private void buildRiaaTab() {
-        CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
-        item.setText(I18n.t("freqResp.tab.riaa"));
-        Composite g = new Composite(toolbarTabs, SWT.NONE);
-        item.setControl(g);
+        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.riaa"));
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 8; gl.marginHeight = 6;
         gl.verticalSpacing = 4;
@@ -694,79 +667,18 @@ public final class FreqRespTabControl extends Composite {
     // -------------------------------------------------------------------------
 
     private void buildPresetsTab() {
-        CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
-        item.setText(I18n.t("freqResp.tab.presets"));
-        Composite g = new Composite(toolbarTabs, SWT.NONE);
-        item.setControl(g);
-        GridLayout gl = new GridLayout(4, false);
-        gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
-        g.setLayout(gl);
-        Preferences prefs = Preferences.instance();
-
-        freqRespPresetCombo = new Combo(g, SWT.DROP_DOWN);
-        freqRespPresetCombo.setToolTipText(I18n.t("freqResp.presets.combo.tooltip"));
-        GridData comboGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        comboGd.widthHint = 180;
-        freqRespPresetCombo.setLayoutData(comboGd);
-        for (String name : prefs.getFreqRespPresets().keySet()) freqRespPresetCombo.add(name);
-        freqRespPresetCombo.addListener(SWT.Modify,    e -> refreshFreqRespPresetButtonState());
-        freqRespPresetCombo.addListener(SWT.Selection, e -> refreshFreqRespPresetButtonState());
-
-        freqRespPresetSaveBtn = new Button(g, SWT.PUSH);
-        freqRespPresetSaveBtn.setText(I18n.t("freqResp.presets.save"));
-        freqRespPresetSaveBtn.setToolTipText(I18n.t("freqResp.presets.save.tooltip"));
-        freqRespPresetSaveBtn.addListener(SWT.Selection, e -> {
-            String name = freqRespPresetCombo.getText().trim();
-            if (name.isEmpty()) return;
-            if (prefs.getFreqRespPresets().containsKey(name)
-                    && !confirmFreqRespPresetOverwrite(name)) return;
-            prefs.putFreqRespPreset(name, captureCurrentFreqRespPreset());
-            if (freqRespPresetCombo.indexOf(name) < 0) freqRespPresetCombo.add(name);
-            freqRespPresetCombo.setText(name);
-            refreshFreqRespPresetButtonState();
-            toolbarTabs.refreshTab(TAB_FREQRESP_PRESETS);
-        });
-
-        freqRespPresetLoadBtn = new Button(g, SWT.PUSH);
-        freqRespPresetLoadBtn.setText(I18n.t("freqResp.presets.load"));
-        freqRespPresetLoadBtn.setToolTipText(I18n.t("freqResp.presets.load.tooltip"));
-        freqRespPresetLoadBtn.addListener(SWT.Selection, e -> {
-            String name = freqRespPresetCombo.getText().trim();
-            if (name.isEmpty()) return;
-            FreqRespPreset p = prefs.getFreqRespPresets().get(name);
-            if (p != null) {
-                applyFreqRespPreset(p);
-                refreshFreqRespPresetButtonState();
-            }
-        });
-
-        freqRespPresetDeleteBtn = new Button(g, SWT.PUSH);
-        freqRespPresetDeleteBtn.setText(I18n.t("freqResp.presets.delete"));
-        freqRespPresetDeleteBtn.setToolTipText(I18n.t("freqResp.presets.delete.tooltip"));
-        freqRespPresetDeleteBtn.addListener(SWT.Selection, e -> {
-            String name = freqRespPresetCombo.getText().trim();
-            if (name.isEmpty() || !prefs.getFreqRespPresets().containsKey(name)) return;
-            if (!confirmFreqRespPresetDelete(name)) return;
-            prefs.removeFreqRespPreset(name);
-            int idx = freqRespPresetCombo.indexOf(name);
-            if (idx >= 0) freqRespPresetCombo.remove(idx);
-            freqRespPresetCombo.setText("");
-            refreshFreqRespPresetButtonState();
-            toolbarTabs.refreshTab(TAB_FREQRESP_PRESETS);
-        });
-
-        refreshFreqRespPresetButtonState();
-        // Re-tick the Save-button enable state periodically so it grays
-        // out as soon as the user makes the live settings match the
-        // named preset's snapshot.  Matches FftPane's same idiom.
-        Display display = g.getDisplay();
-        Runnable[] tick = { null };
-        tick[0] = () -> {
-            if (freqRespPresetCombo == null || freqRespPresetCombo.isDisposed()) return;
-            refreshFreqRespPresetButtonState();
-            display.timerExec(500, tick[0]);
-        };
-        display.timerExec(500, tick[0]);
+        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.presets"));
+        g.setLayout(new FillLayout());
+        new PresetBar<FreqRespPreset>(g, "freqResp.presets", null,
+                new PresetBar.Store<>() {
+                    @Override public Map<String, FreqRespPreset> presets() { return Preferences.instance().getFreqRespPresets(); }
+                    @Override public void put(String name, FreqRespPreset p) { Preferences.instance().putFreqRespPreset(name, p); }
+                    @Override public void remove(String name) { Preferences.instance().removeFreqRespPreset(name); }
+                    @Override public FreqRespPreset captureCurrent() { return captureCurrentFreqRespPreset(); }
+                    @Override public void apply(FreqRespPreset p) { applyFreqRespPreset(p); }
+                    // Refresh the Presets tab tile so its "N saved" count updates.
+                    @Override public void onChanged() { toolbarTabs.refreshTab(TAB_FREQRESP_PRESETS); }
+                });
     }
 
     private FreqRespPreset captureCurrentFreqRespPreset() {
@@ -813,123 +725,42 @@ public final class FreqRespTabControl extends Composite {
         view.redraw();
     }
 
-    private void refreshFreqRespPresetButtonState() {
-        if (freqRespPresetCombo == null || freqRespPresetCombo.isDisposed()) return;
-        if (freqRespPresetSaveBtn == null || freqRespPresetSaveBtn.isDisposed()) return;
-        if (freqRespPresetLoadBtn == null || freqRespPresetLoadBtn.isDisposed()) return;
-        if (freqRespPresetDeleteBtn == null || freqRespPresetDeleteBtn.isDisposed()) return;
-        String name = freqRespPresetCombo.getText().trim();
-        if (name.isEmpty()) {
-            freqRespPresetSaveBtn.setEnabled(false);
-            freqRespPresetLoadBtn.setEnabled(false);
-            freqRespPresetDeleteBtn.setEnabled(false);
-            return;
-        }
-        FreqRespPreset existing = Preferences.instance().getFreqRespPresets().get(name);
-        if (existing == null) {
-            freqRespPresetSaveBtn.setEnabled(true);
-            freqRespPresetLoadBtn.setEnabled(false);
-            freqRespPresetDeleteBtn.setEnabled(false);
-        } else {
-            freqRespPresetSaveBtn.setEnabled(!existing.equals(captureCurrentFreqRespPreset()));
-            freqRespPresetLoadBtn.setEnabled(true);
-            freqRespPresetDeleteBtn.setEnabled(true);
-        }
-    }
-
-    private boolean confirmFreqRespPresetOverwrite(String name) {
-        return Dialogs.confirm(getShell(),
-                I18n.t("freqResp.presets.overwrite.title"),
-                I18n.t("freqResp.presets.overwrite.message").replace("{0}", name)) == SWT.YES;
-    }
-
-    private boolean confirmFreqRespPresetDelete(String name) {
-        return Dialogs.confirm(getShell(),
-                I18n.t("freqResp.presets.delete.title"),
-                I18n.t("freqResp.presets.delete.message").replace("{0}", name)) == SWT.YES;
-    }
-
     // -------------------------------------------------------------------------
     // Utility tab — Screenshot + DAC + ADC calibration buttons (stubbed)
     // -------------------------------------------------------------------------
 
     private void buildUtilityTab() {
-        CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
-        item.setText(I18n.t("freqResp.tab.utility"));
-        Composite g = new Composite(toolbarTabs, SWT.NONE);
-        item.setControl(g);
+        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.utility"));
         GridLayout gl = new GridLayout(3, false);
         gl.marginWidth = 8; gl.marginHeight = 6;
         gl.horizontalSpacing = 6;
         g.setLayout(gl);
 
-        IconUtils icons = IconUtils.instance();
-        Image cameraIcon    = icons.renderAtHeight(g.getDisplay(), SvgPaths.CAMERA,    16, null);
-        Image crosshairIcon = icons.renderAtHeight(g.getDisplay(), SvgPaths.CROSSHAIR, 16, null);
-
         // Icon-only buttons; the action label lives in the tooltip so the
         // toolbar stays compact, matching the scope's utility row.  All
         // three buttons are pinned at 30 px tall per UI spec so the row
         // reads as a uniform tool tray instead of three differently-sized
-        // chips.
-        Button screenshotBtn = new Button(g, SWT.PUSH);
-        if (cameraIcon != null) screenshotBtn.setImage(cameraIcon);
-        screenshotBtn.setToolTipText(I18n.t("freqResp.utility.screenshot.tooltip"));
-        screenshotBtn.setLayoutData(utilityButtonGd());
-        screenshotBtn.addListener(SWT.Selection, e -> openScreenshotDialog());
+        // chips.  Camera / crosshair come from AbstractTabControl so every
+        // pane's utility icons share one size.
+        Button shotBtn = new Button(g, SWT.PUSH);
+        shotBtn.setImage(cameraIcon);
+        shotBtn.setToolTipText(I18n.t("freqResp.utility.screenshot.tooltip"));
+        shotBtn.addListener(SWT.Selection, e -> screenshotPane.openScreenshotDialog());
 
         // ADC / DAC calibration both use the crosshair icon — the
         // tooltips disambiguate which one.  Matches the scope / FFT
         // "crosshair = calibrate" convention.
         Button dacCalBtn = new Button(g, SWT.PUSH);
-        if (crosshairIcon != null) dacCalBtn.setImage(crosshairIcon);
+        dacCalBtn.setImage(crosshairIcon);
         dacCalBtn.setToolTipText(I18n.t("freqResp.utility.calibrateDac.tooltip"));
-        dacCalBtn.setLayoutData(utilityButtonGd());
         dacCalBtn.addListener(SWT.Selection, e ->
                 log.info("FreqResp DAC-cal clicked (dialog wired in Phase 6 follow-up)"));
 
         Button adcCalBtn = new Button(g, SWT.PUSH);
-        if (crosshairIcon != null) adcCalBtn.setImage(crosshairIcon);
+        adcCalBtn.setImage(crosshairIcon);
         adcCalBtn.setToolTipText(I18n.t("freqResp.utility.calibrateAdc.tooltip"));
-        adcCalBtn.setLayoutData(utilityButtonGd());
         adcCalBtn.addListener(SWT.Selection, e ->
                 log.info("FreqResp ADC-cal clicked (dialog wired in Phase 6 follow-up)"));
-    }
-
-    /** Layout data for the Utility-tab buttons: 30 px tall so the row
-     *  reads as a uniform tool tray regardless of the icon's intrinsic
-     *  size. */
-    private GridData utilityButtonGd() {
-        GridData gd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
-        gd.heightHint = 30;
-        gd.widthHint  = 30;
-        return gd;
-    }
-
-    /** Opens the shared {@link ScreenshotDialog} with a renderer that
-     *  captures the current view at the requested size via
-     *  {@code Control.print(GC)}.  Saves / clipboard-copies the
-     *  freq-response chart as the user sees it. */
-    private void openScreenshotDialog() {
-        ScreenshotDialog dlg = new ScreenshotDialog(
-                getShell(),
-                view.getSize().x, view.getSize().y,
-                view.getSize().x, view.getSize().y,
-                Preferences.instance().getFreqRespSaveFolder(),
-                (display, w, h) -> {
-                    Image img = new Image(display, w, h);
-                    GC gc = new GC(img);
-                    try { view.print(gc); }
-                    finally { gc.dispose(); }
-                    return img;
-                },
-                null,
-                folder -> {
-                    Preferences prefs = Preferences.instance();
-                    prefs.setFreqRespSaveFolder(folder);
-                    prefs.save();
-                });
-        dlg.open();
     }
 
     // -------------------------------------------------------------------------
@@ -955,15 +786,16 @@ public final class FreqRespTabControl extends Composite {
     }
 
     private void buildCalibrationTab() {
-        CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
-        item.setText(I18n.t("freqResp.tab.calibration"));
-
         // ScrolledComposite wraps the rows so the tab can grow vertically
         // beyond the available height — a long list of calibrations
-        // scrolls instead of overflowing.
+        // scrolls instead of overflowing.  Created (and set as the item's
+        // control) before the item itself, same ordering rule as groupCell —
+        // a stray folder child corrupts the collapsed strip height.
         calRowsScroll = new ScrolledComposite(toolbarTabs, SWT.V_SCROLL);
         calRowsScroll.setExpandHorizontal(true);
         calRowsScroll.setExpandVertical(true);
+        CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
+        item.setText(I18n.t("freqResp.tab.calibration"));
         item.setControl(calRowsScroll);
 
         calRowsContainer = new Composite(calRowsScroll, SWT.NONE);
@@ -1262,10 +1094,7 @@ public final class FreqRespTabControl extends Composite {
     // -------------------------------------------------------------------------
 
     private void buildSaveToTab() {
-        CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
-        item.setText(I18n.t("freqResp.tab.saveTo"));
-        Composite g = new Composite(toolbarTabs, SWT.NONE);
-        item.setControl(g);
+        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.saveTo"));
         GridLayout gl = new GridLayout(2, false);
         gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);
@@ -1367,10 +1196,7 @@ public final class FreqRespTabControl extends Composite {
     // -------------------------------------------------------------------------
 
     private void buildLoadFromTab() {
-        CTabItem item = new CTabItem(toolbarTabs, SWT.NONE);
-        item.setText(I18n.t("freqResp.tab.loadFrom"));
-        Composite g = new Composite(toolbarTabs, SWT.NONE);
-        item.setControl(g);
+        Composite g = groupCell(toolbarTabs, I18n.t("freqResp.tab.loadFrom"));
         GridLayout gl = new GridLayout(2, false);
         gl.marginWidth = 6; gl.marginHeight = 4; gl.horizontalSpacing = 6;
         g.setLayout(gl);

@@ -36,6 +36,9 @@ public final class OscParse {
 
     /** Same content as {@code MainWindow.VOLT_PER_DIV}.  Kept in sync manually. */
     private static final String[] VOLT_PER_DIV = {
+            "1 nV/div", "2 nV/div", "5 nV/div",
+            "10 nV/div", "20 nV/div", "50 nV/div",
+            "100 nV/div", "200 nV/div", "500 nV/div",
             "1 μV/div", "2 μV/div", "5 μV/div",
             "10 μV/div", "20 μV/div", "50 μV/div",
             "100 μV/div", "200 μV/div", "500 μV/div",
@@ -141,7 +144,8 @@ public final class OscParse {
         double value = Double.parseDouble(stripped.substring(0, spaceIdx));
         String unit  = stripped.substring(spaceIdx + 1);
         double mult = 1.0;
-        if (unit.startsWith("μ") || unit.startsWith("u")) mult = 1e-6;
+        if (unit.startsWith("n"))                         mult = 1e-9;
+        else if (unit.startsWith("μ") || unit.startsWith("u")) mult = 1e-6;
         else if (unit.startsWith("m"))                    mult = 1e-3;
         // bare "V" / "s" → mult = 1.0
         return value * mult;

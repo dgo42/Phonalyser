@@ -28,14 +28,14 @@ public class PcmUtils {
      * signed-PCM bytes at {@code bitDepth}, duplicating the value into both
      * channels of a stereo frame.
      */
-    public byte[] floatMonoToStereoBytes(float[] samples, int bitDepth) {
+    public byte[] monoToStereoBytes(double[] samples, int bitDepth) {
         int sampleBytes = bitDepth / 8;
         int frameSize   = sampleBytes * 2;
         byte[] out      = new byte[samples.length * frameSize];
         long maxPos     = (1L << (bitDepth - 1)) - 1;
         long minNeg     = -(1L << (bitDepth - 1));
         for (int i = 0; i < samples.length; i++) {
-            long v = Math.round((double) samples[i] * (1L << (bitDepth - 1)));
+            long v = Math.round(samples[i] * (1L << (bitDepth - 1)));
             if (v >  maxPos) v = maxPos;
             if (v <  minNeg) v = minNeg;
             int off = i * frameSize;
@@ -55,7 +55,7 @@ public class PcmUtils {
      * caller already has separate L and R buffers (e.g. a stereo capture)
      * and just needs the interleaved byte layout a WAV writer expects.
      */
-    public byte[] floatStereoToBytes(float[] left, float[] right, int bitDepth) {
+    public byte[] stereoToBytes(double[] left, double[] right, int bitDepth) {
         int n = Math.min(left.length, right.length);
         int sampleBytes = bitDepth / 8;
         int frameSize   = sampleBytes * 2;
@@ -63,8 +63,8 @@ public class PcmUtils {
         long maxPos     = (1L << (bitDepth - 1)) - 1;
         long minNeg     = -(1L << (bitDepth - 1));
         for (int i = 0; i < n; i++) {
-            long vL = Math.round((double) left[i]  * (1L << (bitDepth - 1)));
-            long vR = Math.round((double) right[i] * (1L << (bitDepth - 1)));
+            long vL = Math.round(left[i]  * (1L << (bitDepth - 1)));
+            long vR = Math.round(right[i] * (1L << (bitDepth - 1)));
             if (vL > maxPos) vL = maxPos; else if (vL < minNeg) vL = minNeg;
             if (vR > maxPos) vR = maxPos; else if (vR < minNeg) vR = minNeg;
             int off = i * frameSize;

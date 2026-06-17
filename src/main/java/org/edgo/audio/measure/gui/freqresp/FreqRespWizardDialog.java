@@ -302,7 +302,7 @@ public final class FreqRespWizardDialog {
                         .durationSec(prefs.getFreqRespDurationSec())
                         .leadInSec(prefs.getFreqRespLeadInSec())
                         .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
-                        .dacFsVoltageRms(prefs.getDacFsVoltageRms())
+                        .dacFsVoltageRms(prefs.getDacFsVoltageAmpl())
                         .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
                         .applyCalibration(!directLeg)  // page 2 divides out the page-1 transfer
                         .captureProgress(progress)

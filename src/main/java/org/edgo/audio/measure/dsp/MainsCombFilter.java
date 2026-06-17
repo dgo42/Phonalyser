@@ -62,32 +62,18 @@ import java.util.Arrays;
  * processes every block; the comb's delay-line state persists across
  * {@code process} calls.  Not thread-safe — drive it from one thread.
  */
-public final class MainsCombFilter {
+public final class MainsCombFilter implements MainsTimeFilter {
 
     /** Default −3 dB notch bandwidth (Hz) for the mains comb — the value used
      *  by the FFT / scope combs throughout the app.  Callers pass it to the
      *  constructor (a different width can still be chosen per instance). */
     public static final double DEFAULT_NOTCH_BANDWIDTH_HZ = 2.5;
 
-    /** Lowest fundamental the comb will tune to (Hz) — also sizes the
-     *  delay line.  Below the 50 Hz detection band with margin. */
-    private static final double MIN_MAINS_HZ = 45.0;
+    /** Lowest fundamental the comb will tune to (Hz) — also sizes the delay
+     *  line.  Shared with the other mains filters via the tracker. */
+    private static final double MIN_MAINS_HZ = MainsFrequencyTracker.MIN_MAINS_HZ;
     /** Highest fundamental the comb will tune to (Hz). */
-    private static final double MAX_MAINS_HZ = 65.0;
-    /** Half-width (Hz) of each detection band scanned around 50 / 60. */
-    private static final double DETECT_SPAN_HZ = 2.0;
-    /** Coarse scan step (Hz) inside each detection band. */
-    private static final double DETECT_STEP_HZ = 0.2;
-    /** A mains line is accepted only when its Goertzel power beats the
-     *  scanned-baseline median by this factor (≈ 6 dB). */
-    private static final double LOCK_RATIO = 4.0;
-    /** EWMA weight on the existing lock (vs. a fresh detection).  High, because
-     *  mains is very stable (50/60 Hz ± a few mHz over seconds): heavy averaging
-     *  (≈ 1/(1−w) ≈ 33 detections) keeps the locked f0 — and hence every notch
-     *  position k·f0 — from jittering, while still tracking the slow real drift. */
-    private static final double LOCK_SMOOTH = 0.97;
-    /** A detection farther than this from the current lock is an outlier. */
-    private static final double MAX_LOCK_DRIFT_HZ = 0.5;
+    private static final double MAX_MAINS_HZ = MainsFrequencyTracker.MAX_MAINS_HZ;
     /** Plot floor (dB): a notch reads as a clean gap to this depth, not −∞. */
     private static final double CORR_FLOOR_DB     = -120.0;
     /** Only harmonics below this are notched (real hum band; protects tones). */
@@ -111,18 +97,9 @@ public final class MainsCombFilter {
     private double nFrac;                // N − floor(N)
     private double alpha;                // ρ^N
 
-    /** Exponentially-smoothed lock frequency.  Each detection is blended
-     *  in (mains drifts only ±0.1–0.5 Hz, so a stable average resists the
-     *  per-window jitter / occasional mis-lock that was dropping the lock);
-     *  detections that jump more than {@link #MAX_LOCK_DRIFT_HZ} from the
-     *  current lock are rejected as outliers, and a window with no detected
-     *  line holds the existing lock rather than dropping it.  Survives
-     *  {@link #reset} (only the delay lines are cleared there). */
-    private double lockHz = Double.NaN;
-
-    /** Scratch for the windowed reference inside {@link #track}; grown
-     *  on demand to the largest reference length seen. */
-    private double[] windowScratch = new double[0];
+    /** Shared mains-frequency detector — survives {@link #reset} (only the
+     *  delay lines are cleared there). */
+    private final MainsFrequencyTracker tracker;
 
     private double[] corrDb;          // cached per-bin dB delta (0 above the band)
     private double   corrF0 = Double.NaN;
@@ -139,6 +116,7 @@ public final class MainsCombFilter {
         if (sampleRate <= 0) throw new IllegalArgumentException("sampleRate must be > 0");
         if (!(notchBandwidthHz > 0)) throw new IllegalArgumentException("bandwidth must be > 0");
         this.sampleRate  = sampleRate;
+        this.tracker     = new MainsFrequencyTracker(sampleRate);
         this.rho = Math.exp(-Math.PI * notchBandwidthHz / sampleRate);
         // Largest N is at the lowest tunable mains frequency.
         int nMax = (int) Math.ceil(sampleRate / MIN_MAINS_HZ);
@@ -269,80 +247,34 @@ public final class MainsCombFilter {
      *  Unlike {@link #reset} (which keeps the lock), use this when the analysis
      *  context is reset and the mains estimate should start fresh. */
     public void resetTracking() {
-        lockHz  = Double.NaN;
+        tracker.resetTracking();
         mainsHz = Double.NaN;
         corrDb  = null;
         corrF0  = Double.NaN;
     }
 
-    /**
-     * Estimates the mains fundamental from {@code ref} — scanning the
-     * 50 Hz and 60 Hz bands and locking to whichever carries more energy
-     * — then re-tunes the comb.  Returns the detected frequency (Hz), or
-     * {@code NaN} when no confident mains line is found (the comb keeps
-     * its previous tuning in that case).
-     *
-     * @param ref reference samples (use the signal being filtered, or a
-     *            dedicated mains pickup if available)
-     * @param len number of valid samples in {@code ref}
-     */
+    /** Re-estimates the mains fundamental from {@code ref} via the shared
+     *  {@link MainsFrequencyTracker} and retunes the comb; returns the locked
+     *  frequency (Hz), or the held lock when nothing confident is found. */
+    public double track(double[] ref, int len) {
+        double f0 = tracker.track(ref, len);
+        if (!Double.isNaN(f0)) retune(f0);
+        return f0;
+    }
+
     public double track(float[] ref, int len) {
-        if (ref == null) return Double.NaN;
-        len = Math.min(len, ref.length);
-        // Need a few mains cycles for a meaningful estimate.
-        if (len < (int) (4 * sampleRate / MIN_MAINS_HZ)) return Double.NaN;
-
-        if (windowScratch.length < len) windowScratch = new double[len];
-        double[] w = windowScratch;
-        // Hann window to suppress spectral leakage from the (usually
-        // dominant) test signal into the mains bands.
-        double norm = 2.0 * Math.PI / (len - 1);
-        for (int i = 0; i < len; i++) {
-            w[i] = ref[i] * 0.5 * (1.0 - Math.cos(norm * i));
-        }
-
-        // Score each mains candidate by its fundamental (H1) AND its second
-        // harmonic (H2): a 50 Hz source has energy at 50 and 100, a 60 Hz one
-        // at 60 and 120.  This both discriminates 50 vs 60 robustly and — key
-        // for rectifier / diode-bridge loads, whose hum sits mostly in the
-        // 2nd harmonic — lets us lock even when the 50/60 fundamental is
-        // buried but 100/120 stands tall.  H2 bands use twice the span since
-        // the harmonic drifts 2× as far in Hz as the fundamental.
-        BandScan h1a = scanBand(w, len, 50.0,  DETECT_SPAN_HZ);
-        BandScan h2a = scanBand(w, len, 100.0, 2 * DETECT_SPAN_HZ);
-        BandScan h1b = scanBand(w, len, 60.0,  DETECT_SPAN_HZ);
-        BandScan h2b = scanBand(w, len, 120.0, 2 * DETECT_SPAN_HZ);
-
-        boolean is50 = (h1a.peakPower + h2a.peakPower) >= (h1b.peakPower + h2b.peakPower);
-        BandScan h1 = is50 ? h1a : h1b;
-        BandScan h2 = is50 ? h2a : h2b;
-
-        // Lock when EITHER harmonic is a genuine line (≥ LOCK_RATIO over the
-        // noise floor) — so a strong-H2 / weak-H1 rectifier hum still locks.
-        // On a miss, HOLD the existing smoothed lock rather than dropping it.
-        double baseline = scannedBaseline(h1a, h1b, h2a, h2b);
-        if (baseline <= 0 || Math.max(h1.peakPower, h2.peakPower) < LOCK_RATIO * baseline) return lockHz;
-
-        // Derive f0 from the cleaner (stronger) harmonic: H2 refined / 2 when
-        // the 2nd harmonic dominates (also halves the Hz error), else H1.
-        double f0 = (h2.peakPower > h1.peakPower) ? h2.refinedHz / 2.0 : h1.refinedHz;
-        // Smooth the lock: snap on first detection, EWMA-blend thereafter,
-        // reject outliers (keep the current lock).
-        if (Double.isNaN(lockHz)) {
-            lockHz = f0;
-        } else if (Math.abs(f0 - lockHz) <= MAX_LOCK_DRIFT_HZ) {
-            lockHz = LOCK_SMOOTH * lockHz + (1.0 - LOCK_SMOOTH) * f0;
-        }
-        retune(lockHz);
-        return lockHz;
+        double f0 = tracker.track(ref, len);
+        if (!Double.isNaN(f0)) retune(f0);
+        return f0;
     }
 
     /**
      * Filters {@code data} in place (length {@code len}).  No-op until
      * the comb has been tuned (call {@link #track} or {@link #retune}
      * first) — an untuned filter passes the signal through unchanged.
+     * {@code absStart} is ignored: the comb carries phase in its delay line.
      */
-    public void process(float[] data, int len) {
+    public void process(float[] data, int len, long absStart) {
         if (!isTuned()) return;
         len = Math.min(len, data.length);
         final double a = alpha;
@@ -375,7 +307,7 @@ public final class MainsCombFilter {
      * displayed amplitude and {@code Vmean} should reflect "hum removed",
      * not "hum and DC removed".  No-op until tuned.
      */
-    public void processPreservingDc(float[] data, int len) {
+    public void processPreservingDc(float[] data, int len, long absStart) {
         if (!isTuned()) return;
         len = Math.min(len, data.length);
         if (len <= 0) return;
@@ -383,91 +315,44 @@ public final class MainsCombFilter {
         for (int i = 0; i < len; i++) sum += data[i];
         float mean = (float) (sum / len);
         for (int i = 0; i < len; i++) data[i] -= mean;
-        process(data, len);
+        process(data, len, absStart);
         for (int i = 0; i < len; i++) data[i] += mean;
     }
 
-    // ─── Detection helpers ───────────────────────────────────────────────────
-
-    /** One band scan's result: the sub-step-refined peak plus the raw power
-     *  grid, so {@link #scannedBaseline} can reuse the Goertzels instead of
-     *  recomputing them. */
-    private record BandScan(double refinedHz, double peakPower,
-                            double loHz, double[] mags) {}
-
-    /** Scans {@code ±spanHz} around {@code centerHz}; the peak is refined
-     *  to sub-step by parabolic interpolation on log-power. */
-    private BandScan scanBand(double[] w, int len, double centerHz, double spanHz) {
-        double lo = centerHz - spanHz;
-        int m = (int) Math.round(2 * spanHz / DETECT_STEP_HZ) + 1;
-        double[] mag = new double[m];
-        int bestK = 0;
-        for (int k = 0; k < m; k++) {
-            mag[k] = goertzelPower(w, len, lo + k * DETECT_STEP_HZ);
-            if (mag[k] > mag[bestK]) bestK = k;
-        }
-        double refinedHz = lo + bestK * DETECT_STEP_HZ;
-        if (bestK > 0 && bestK < m - 1) {
-            double a = Math.log(mag[bestK - 1] + 1e-30);
-            double b = Math.log(mag[bestK]     + 1e-30);
-            double c = Math.log(mag[bestK + 1] + 1e-30);
-            double denom = a - 2 * b + c;
-            double delta = (Math.abs(denom) < 1e-15) ? 0.0 : 0.5 * (a - c) / denom;
-            if (delta < -0.5) delta = -0.5;
-            if (delta >  0.5) delta =  0.5;
-            refinedHz = lo + (bestK + delta) * DETECT_STEP_HZ;
-        }
-        return new BandScan(refinedHz, mag[bestK], lo, mag);
-    }
-
-    /** Median Goertzel power across the four detection bands (±{@code
-     *  DETECT_SPAN_HZ} around 50/60/100/120 Hz) — a robust floor estimate
-     *  the strongest line must clear to count as real mains.  Reads the
-     *  powers straight out of the four {@link BandScan} grids: the H1 scans
-     *  cover their band exactly, the H2 scans (2× span) contain it as their
-     *  middle half — half of {@code track()}'s Goertzel work used to be
-     *  recomputing these same frequencies. */
-    private double scannedBaseline(BandScan h1a, BandScan h1b,
-                                   BandScan h2a, BandScan h2b) {
-        int m = (int) Math.round(2 * DETECT_SPAN_HZ / DETECT_STEP_HZ) + 1;
-        double[] all = new double[4 * m];
-        int idx = 0;
-        idx = copyBandPowers(all, idx, h1a, 50.0,  m);
-        idx = copyBandPowers(all, idx, h1b, 60.0,  m);
-        idx = copyBandPowers(all, idx, h2a, 100.0, m);
-        idx = copyBandPowers(all, idx, h2b, 120.0, m);
-        if (idx == 0) return 0.0;
-        Arrays.sort(all, 0, idx);
-        return all[idx / 2];
-    }
-
-    /** Copies the {@code m} powers spanning ±{@link #DETECT_SPAN_HZ} around
-     *  {@code centerHz} from a scan's grid into {@code out}; returns the
-     *  advanced fill index.  Tolerates a grid that doesn't fully cover the
-     *  range (skips out-of-grid steps). */
-    private int copyBandPowers(double[] out, int idx, BandScan scan,
-                               double centerHz, int m) {
-        double lo = centerHz - DETECT_SPAN_HZ;
-        int start = (int) Math.round((lo - scan.loHz()) / DETECT_STEP_HZ);
-        for (int k = 0; k < m; k++) {
-            int src = start + k;
-            if (src >= 0 && src < scan.mags().length) {
-                out[idx++] = scan.mags()[src];
-            }
-        }
-        return idx;
-    }
-
-    /** Goertzel single-frequency power |X(f)|² over a windowed block. */
-    private double goertzelPower(double[] w, int len, double freqHz) {
-        double omega = 2.0 * Math.PI * freqHz / sampleRate;
-        double coeff = 2.0 * Math.cos(omega);
-        double s1 = 0.0, s2 = 0.0;
+    @Override
+    public void process(double[] data, int len, long absStart) {
+        if (!isTuned()) return;
+        len = Math.min(len, data.length);
+        final double a = alpha;
+        final double g = nFrac;
+        final double g1 = 1.0 - g;
         for (int i = 0; i < len; i++) {
-            double s = w[i] + coeff * s1 - s2;
-            s2 = s1;
-            s1 = s;
+            double in = data[i];
+            int iA = pos - nInt;
+            int iB = iA - 1;
+            if (iA < 0) iA += bufLen;
+            if (iB < 0) iB += bufLen;
+            double xN = g1 * xBuf[iA] + g * xBuf[iB];
+            double yN = g1 * yBuf[iA] + g * yBuf[iB];
+            double y  = in - xN + a * yN;
+            xBuf[pos] = in;
+            yBuf[pos] = y;
+            pos++;
+            if (pos >= bufLen) pos = 0;
+            data[i] = y;
         }
-        return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+    }
+
+    @Override
+    public void processPreservingDc(double[] data, int len, long absStart) {
+        if (!isTuned()) return;
+        len = Math.min(len, data.length);
+        if (len <= 0) return;
+        double sum = 0.0;
+        for (int i = 0; i < len; i++) sum += data[i];
+        double mean = sum / len;
+        for (int i = 0; i < len; i++) data[i] -= mean;
+        process(data, len, absStart);
+        for (int i = 0; i < len; i++) data[i] += mean;
     }
 }

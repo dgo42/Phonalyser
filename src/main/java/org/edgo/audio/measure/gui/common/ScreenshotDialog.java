@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.gui.scope;
+package org.edgo.audio.measure.gui.common;
 
 import java.io.File;
 
@@ -26,6 +26,7 @@ import org.eclipse.swt.dnd.ImageTransfer;
 import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.events.VerifyEvent;
 import org.eclipse.swt.events.VerifyListener;
+import org.eclipse.swt.graphics.FontData;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.ImageLoader;
@@ -37,10 +38,10 @@ import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
+import org.eclipse.swt.widgets.FontDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
-import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.i18n.I18n;
 
 import lombok.extern.log4j.Log4j2;
@@ -68,9 +69,11 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class ScreenshotDialog {
 
-    /** Source-of-image strategy: produces a fresh {@link Image} at the requested size. Dialog disposes it. */
+    /** Source-of-image strategy: produces a fresh {@link Image} at the requested
+     *  size, already stamped with the brand watermark and (when non-blank) the
+     *  comment caption in this pane's own header position. Dialog disposes it. */
     public interface SnapshotRenderer {
-        Image render(Display display, int width, int height);
+        Image render(Display display, int width, int height, String comment, FontData commentFont);
     }
 
     /** Called after a successful copy or save so the caller can persist the chosen pixel size. */
@@ -81,6 +84,11 @@ public final class ScreenshotDialog {
     /** Called after a successful save so the caller can persist the chosen folder. */
     public interface FolderCommit {
         void accept(String folder);
+    }
+
+    /** Called when the user picks a comment font, with its {@code FontData} string, so the caller can persist it. */
+    public interface FontCommit {
+        void accept(String fontData);
     }
 
     /** Common preset resolutions presented in the dropdown beneath the W/H fields. */
@@ -95,32 +103,41 @@ public final class ScreenshotDialog {
             {1920, 1280},
     };
 
+    /** Comment caption defaults to the channel-button font family at this size (pt). */
+    private static final int    DEFAULT_COMMENT_PT = 12;
+
     private final Shell parent;
     private final int initialW;
     private final int initialH;
     private final int nativeW;
     private final int nativeH;
     private final String initialFolder;
+    private final String initialCommentFont;
     private final SnapshotRenderer renderer;
     private final SizeCommit   onSize;
     private final FolderCommit onFolder;
+    private final FontCommit   onCommentFont;
 
     public ScreenshotDialog(Shell parent,
                             int initialWidth, int initialHeight,
                             int nativeWidth,  int nativeHeight,
                             String initialFolder,
+                            String initialCommentFont,
                             SnapshotRenderer renderer,
                             SizeCommit onSize,
-                            FolderCommit onFolder) {
+                            FolderCommit onFolder,
+                            FontCommit onCommentFont) {
         this.parent = parent;
         this.initialW = initialWidth  > 0 ? initialWidth  : nativeWidth;
         this.initialH = initialHeight > 0 ? initialHeight : nativeHeight;
         this.nativeW = nativeWidth;
         this.nativeH = nativeHeight;
         this.initialFolder = initialFolder;
+        this.initialCommentFont = initialCommentFont;
         this.renderer = renderer;
         this.onSize = onSize;
         this.onFolder = onFolder;
+        this.onCommentFont = onCommentFont;
     }
 
     public void open() {
@@ -193,6 +210,30 @@ public final class ScreenshotDialog {
             suppressUpdate[0] = false;
         });
 
+        new Label(dialog, SWT.NONE).setText(I18n.t("screenshot.comment"));
+        Text commentText = new Text(dialog, SWT.BORDER);
+        commentText.setLayoutData(textData());
+        commentText.setToolTipText(I18n.t("screenshot.comment.tooltip"));
+
+        new Label(dialog, SWT.NONE).setText(I18n.t("screenshot.font"));
+        Button fontBtn = new Button(dialog, SWT.PUSH);
+        fontBtn.setLayoutData(textData());
+        fontBtn.setToolTipText(I18n.t("screenshot.font.tooltip"));
+        FontData parsed = parseFontData(initialCommentFont);
+        FontData[] commentFont = { parsed != null ? parsed : defaultCommentFont(dialog.getDisplay()) };
+        fontBtn.setText(fontButtonLabel(commentFont[0]));
+        fontBtn.addListener(SWT.Selection, e -> {
+            FontDialog fontDlg = new FontDialog(dialog);
+            fontDlg.setText(I18n.t("screenshot.font"));
+            if (commentFont[0] != null) fontDlg.setFontList(new FontData[]{ commentFont[0] });
+            FontData picked = fontDlg.open();
+            if (picked != null) {
+                commentFont[0] = picked;
+                fontBtn.setText(fontButtonLabel(picked));
+                if (onCommentFont != null) onCommentFont.accept(picked.toString());
+            }
+        });
+
         // --- Buttons --------------------------------------------------------
         Composite buttonBar = new Composite(dialog, SWT.NONE);
         GridData bbData = new GridData(SWT.END, SWT.CENTER, true, false);
@@ -221,7 +262,7 @@ public final class ScreenshotDialog {
                 int[] wh = readSize(widthText, heightText);
                 if (wh == null) return;
                 Display d = dialog.getDisplay();
-                Image img = renderer.render(d, wh[0], wh[1]);
+                Image img = renderer.render(d, wh[0], wh[1], commentText.getText(), commentFont[0]);
                 Clipboard cb = new Clipboard(d);
                 try {
                     cb.setContents(new Object[]{ img.getImageData() },
@@ -255,7 +296,7 @@ public final class ScreenshotDialog {
                 int[] wh = readSize(widthText, heightText);
                 if (wh == null) return;
                 Display d = dialog.getDisplay();
-                Image img = renderer.render(d, wh[0], wh[1]);
+                Image img = renderer.render(d, wh[0], wh[1], commentText.getText(), commentFont[0]);
                 try {
                     ImageLoader loader = new ImageLoader();
                     loader.data = new ImageData[]{ img.getImageData() };
@@ -320,5 +361,24 @@ public final class ScreenshotDialog {
         GridData gd = new GridData(SWT.FILL, SWT.CENTER, true, false);
         gd.widthHint = 200;
         return gd;
+    }
+
+    /** Default comment font: the channel-button font family at {@link #DEFAULT_COMMENT_PT}. */
+    private FontData defaultCommentFont(Display display) {
+        String family = Fonts.instance().channel(display).getFontData()[0].getName();
+        return new FontData(family, DEFAULT_COMMENT_PT, SWT.NORMAL);
+    }
+
+    /** Parses a persisted {@code FontData} string; null/blank/invalid → null (use default). */
+    private FontData parseFontData(String s) {
+        if (s == null || s.isBlank()) return null;
+        try { return new FontData(s); }
+        catch (IllegalArgumentException ex) { return null; }
+    }
+
+    /** Button caption for the chosen comment font, e.g. "Segoe UI 12". */
+    private String fontButtonLabel(FontData fd) {
+        if (fd == null) return I18n.t("screenshot.font.default");
+        return fd.getName() + " " + fd.getHeight();
     }
 }

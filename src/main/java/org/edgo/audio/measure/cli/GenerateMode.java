@@ -169,9 +169,9 @@ public class GenerateMode {
                 System.exit(1);
             }
             log.info("Harmonics : {}", harmonicsCsv);
-            generator = new SignalGenerator(frequency, sampleRate, amplitudeVRms, prefs.getDacFsVoltageRms(), harmonicsCsv);
+            generator = new SignalGenerator(frequency, sampleRate, amplitudeVRms, prefs.getDacFsVoltageAmpl(), harmonicsCsv);
         } else {
-            generator = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, prefs.getDacFsVoltageRms());
+            generator = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, prefs.getDacFsVoltageAmpl());
         }
         try (AudioPlayback ag = AudioBackend.instance().openPlayback(mixer, sampleRate, bitDepth, ditherBits)) {
             ag.open();

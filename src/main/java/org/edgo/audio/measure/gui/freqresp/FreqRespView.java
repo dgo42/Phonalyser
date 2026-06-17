@@ -137,6 +137,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  calibration. */
     private FreqRespResult leftResult;
     private FreqRespResult rightResult;
+    /** Source file path of the loaded measurement, or null for a live sweep. */
+    @Getter
     private String         sourceFilePath;
     /** Self-blinking overlay banner widgets (compare-mode + loaded-file path). */
     private BlinkBanner    compareBanner;
@@ -651,6 +653,18 @@ public final class FreqRespView extends AbstractFreqDomainView {
     /** Read-only accessor used by the host pane's Save-to handler. */
     public FreqRespResult getRightResultOrNull() {
         return rightResult;
+    }
+
+    /** Copies {@code src}'s displayed state into this view — for the offscreen
+     *  screenshot clone.  The already-calibrated results are fed in: this view's
+     *  correction store is empty, so {@link #applyCurrentCalibration} is identity
+     *  and the clone paints exactly what {@code src} shows (compare / RIAA still
+     *  apply at paint time from the shared preferences). */
+    public void copySnapshotFrom(FreqRespView src) {
+        if (src == null || src == this) return;
+        setSourceFilePath(src.getSourceFilePath());
+        setLeftResult(src.getLeftResultOrNull());
+        setRightResult(src.getRightResultOrNull());
     }
 
     /** Snaps the view to the default frequency / magnitude window

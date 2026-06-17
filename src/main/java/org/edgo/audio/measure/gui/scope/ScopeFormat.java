@@ -118,7 +118,8 @@ public class ScopeFormat {
         if (v <= 0)       return "0";
         if (v >= 1.0)     return shortNum(v);
         if (v >= 1e-3)    return shortNum(v * 1e3) + "m";
-        return shortNum(v * 1e6) + "u";
+        if (v >= 1e-6)    return shortNum(v * 1e6) + "u";
+        return shortNum(v * 1e9) + "n";
     }
 
     private String shortNum(double v) {

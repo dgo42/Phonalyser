@@ -22,23 +22,21 @@ import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.ControlListener;
-import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Rectangle;
-import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
-import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.MainWindow;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.AbstractPane;
+import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
@@ -512,11 +510,9 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         tabControl.setCalibrateEnabled(recording);
     }
 
-    /** Forces the toolbar tab body collapsed (only headers visible) or
-     *  expanded.  Used by the screenshot renderer to show just the tab
-     *  headers; delegates to {@link ScopeTabControl}. */
-    public void setToolbarTabsCollapsed(boolean wantCollapsed) {
-        if (tabControl != null) tabControl.setTabsCollapsed(wantCollapsed);
+    @Override
+    protected AbstractTabControl tabStrip() {
+        return tabControl;
     }
 
     /** Registers this pane's settings tabs in the component registry under
@@ -548,33 +544,6 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
     // Pane-owned dialogs + ScopeTabControl.Host
     // -------------------------------------------------------------------------
 
-    /** {@link ScopeTabControl.Host}: opens the screenshot dialog for this
-     *  pane (the Utility-tab camera button asks for it).  Initial
-     *  width/height come from preferences (last-used) and fall back to the
-     *  pane's current pixel size; the chosen size + folder are persisted
-     *  back on Copy or Save. */
-    @Override
-    public void openScreenshot() {
-        if (group == null || group.isDisposed()) return;
-        Rectangle b = group.getBounds();
-        Preferences prefs = Preferences.instance();
-        new ScreenshotDialog(
-                group.getShell(),
-                prefs.getScreenshotWidth(),  prefs.getScreenshotHeight(),
-                b.width, b.height,
-                prefs.getScreenshotFolder(),
-                this::renderOffscreen,
-                (w, h) -> {
-                    prefs.setScreenshotWidth(w);
-                    prefs.setScreenshotHeight(h);
-                    prefs.save();
-                },
-                folder -> {
-                    prefs.setScreenshotFolder(folder);
-                    prefs.save();
-                }
-        ).open();
-    }
 
     /** {@link ScopeTabControl.Host}: stop live capture before an open-signal
      *  load swaps the buffer out from under it.  No-op when not recording. */
@@ -606,63 +575,25 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         applyViewState();
     }
 
-    /** Renders this pane into a fresh image at {@code (targetW, targetH)}
-     *  by constructing a brand-new {@link ScopePane} inside a
-     *  hidden offscreen Shell, copying the live buffer and measurement
-     *  state into it, and printing the result.  Because the chrome is
-     *  laid out by SWT (rather than bitmap-scaled), toolbar buttons stay
-     *  at their native pixel size with extra space distributed by the
-     *  layout.  Public for the screenshot dialog's renderer hook and the
-     *  {@code gui.automation} snapshot helpers; UI thread only. */
-    public Image renderOffscreen(Display d, int targetW, int targetH) {
-        targetW = Math.max(1, targetW);
-        targetH = Math.max(1, targetH);
-        // Hidden Shell sized to the target.  On GTK: setSize BEFORE
-        // setLocation — calling setLocation before the shell has a real
-        // size causes some WMs to ignore the negative offset and place
-        // it at (0,0) anyway.
-        Shell offscreen = new Shell(d, SWT.NO_TRIM);
-        offscreen.setLayout(new FillLayout());
-        ScopePane shotPane = new ScopePane(offscreen);
-        Image output = new Image(d, targetW, targetH);
-        try {
-            if (view != null && !view.isDisposed()) {
-                // Carbon-copy the exact frame on screen (works while stopped /
-                // frozen).  The frozen frame drives the trace; the buffer is
-                // still attached so "has signal" is true and the measurement
-                // table renders (its values come from copyMeasurementsFrom).
-                ScopeView.RenderedFrame snap = view.getRenderedFrameSnapshot();
-                if (snap != null) shotPane.getView().setFrozenFrame(snap);
-                SignalBufferReader reader = view.getReader();
-                if (reader != null) {
-                    shotPane.getView().setBuffer(reader);
-                    shotPane.getCondensed().setBuffer(reader);
-                }
-                // copyMeasurementsFrom AFTER setBuffer (which clears latest).
-                shotPane.getView().copyMeasurementsFrom(view);
+    /** Builds the offscreen scope clone for {@link #renderOffscreen}: fresh pane,
+     *  the exact frozen frame + buffer + measurements carbon-copied in (so it
+     *  works while stopped), tab body collapsed, Record LED matching live. */
+    @Override
+    protected AbstractPane createSnapshotClone(Composite parent) {
+        ScopePane clone = new ScopePane(parent);
+        if (view != null && !view.isDisposed()) {
+            ScopeView.RenderedFrame snap = view.getRenderedFrameSnapshot();
+            if (snap != null) clone.getView().setFrozenFrame(snap);
+            SignalBufferReader reader = view.getReader();
+            if (reader != null) {
+                clone.getView().setBuffer(reader);
+                clone.getCondensed().setBuffer(reader);
             }
-            // Show only the tab headers in the screenshot (collapse the
-            // settings body), matching the FFT pane's screenshot behaviour.
-            shotPane.setToolbarTabsCollapsed(true);
-            shotPane.setRecordingState(isCapturing());
-
-            offscreen.setSize(targetW, targetH);
-            offscreen.setLocation(-10000, -10000);
-            offscreen.open();
-            while (d.readAndDispatch()) { /* drain */ }
-            shotPane.getGroup().update();
-
-            GC outGc = new GC(output);
-            try {
-                shotPane.getGroup().print(outGc);
-            } finally {
-                outGc.dispose();
-            }
-            offscreen.setVisible(false);
-        } finally {
-            offscreen.dispose();
+            // copyMeasurementsFrom AFTER setBuffer (which clears latest).
+            clone.getView().copyMeasurementsFrom(view);
         }
-        return output;
+        clone.setRecordingState(isCapturing());
+        return clone;
     }
 
     /**

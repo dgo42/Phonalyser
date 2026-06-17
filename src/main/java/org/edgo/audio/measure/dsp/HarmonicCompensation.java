@@ -68,20 +68,17 @@ public final class HarmonicCompensation {
      * the CLI's per-iteration update: the fundamental phase gives the
      * transport delay {@code ωD = −(φ₁+π/2)}, each harmonic is de-delayed to
      * its DAC-emit phase, and the phasor is added in scaled by {@code step}.
-     * Harmonics quieter than {@code noiseFloor + snrMarginDb} are left
-     * untouched.
+     * Every detected harmonic is corrected — there is no noise-floor gate.
      */
-    public void accumulate(FftResult r, double snrMarginDb, double step) {
+    public void accumulate(FftResult r, double step) {
         double phi1          = Math.atan2(r.im[r.fundamentalBin], r.re[r.fundamentalBin]);
         double omegaD        = -(phi1 + Math.PI / 2.0);
         double delayRadPerHz = omegaD / r.fundamentalHzRefined;
 
         int    count         = Math.min(r.harmonicCount, maxHarmonics);
-        double skipBelowDbFs = r.avgNoiseFloorDbFs + snrMarginDb;
         for (int h = 0; h < count; h++) {
             int bin = r.harmonicBins[h];
             if (bin <= 0) continue;
-            if (r.harmonicDbFs[h] < skipBelowDbFs) continue;   // near noise — would random-walk
 
             double ampRatio = r.harmonicPct[h] / 100.0;
             double phiH     = Math.atan2(r.im[bin], r.re[bin]);

@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
+import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -50,9 +51,8 @@ import lombok.extern.log4j.Log4j2;
  * spectral analysis and the on-disk format lives in one place.
  */
 @Log4j2
-public final class HarmonicsCsv {
-
-    private HarmonicsCsv() {}
+@UtilityClass
+public class HarmonicsCsv {
 
     /**
      * Writes {@code r}'s harmonics + summary metrics to a CSV file.
@@ -61,7 +61,7 @@ public final class HarmonicsCsv {
      *
      * @return absolute path of the saved file
      */
-    public static String export(FftResult r, String directory,
+    public String export(FftResult r, String directory,
                                 String filePrefix) throws IOException {
         File outFile = (filePrefix != null && !filePrefix.isEmpty())
                 ? new File(directory, filePrefix + ".csv")
@@ -91,7 +91,7 @@ public final class HarmonicsCsv {
     }
 
     /** Convenience overload — saves under the timestamped default name. */
-    public static String export(FftResult r, String directory) throws IOException {
+    public String export(FftResult r, String directory) throws IOException {
         return export(r, directory, null);
     }
 
@@ -108,7 +108,7 @@ public final class HarmonicsCsv {
      *       phase derived via {@code atan2(im, re)} — full double precision.</li>
      * </ul>
      */
-    public static void subtract(float[] samples, int sampleRate,
+    public void subtract(double[] samples, int sampleRate,
                                 String csvFile, boolean useReIm) throws IOException {
         // Parse rows: skip header, skip H1 (fundamental), skip footers
         // Stored as [freqHz, ampLinear, cos(phase), sin(phase)]
@@ -167,7 +167,7 @@ public final class HarmonicsCsv {
 
             for (int n = 0; n < samples.length; n++) {
                 // A·cos(ω·n + φ) = A · Re(exp(j·(ω·n+φ))) = A · curRe
-                samples[n] -= (float) (ampLinear * curRe);
+                samples[n] -= ampLinear * curRe;
                 double nextRe = curRe * cosOmega - curIm * sinOmega;
                 curIm         = curRe * sinOmega + curIm * cosOmega;
                 curRe         = nextRe;
@@ -177,7 +177,7 @@ public final class HarmonicsCsv {
         }
     }
 
-    private static String timestamp() {
+    private String timestamp() {
         return LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
     }
 }
