@@ -29,6 +29,7 @@ import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.PaletteData;
 import org.eclipse.swt.graphics.Path;
 import org.eclipse.swt.graphics.RGB;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.graphics.Transform;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
@@ -487,7 +488,7 @@ public final class IconUtils {
         gc.fillGradientRectangle(inset, inset, diam, diam, true);
         top.dispose();
         bot.dispose();
-        gc.setClipping((Path) null);
+        gc.setClipping((Rectangle) null);
         clip.dispose();
 
         if (lit) {
@@ -537,7 +538,7 @@ public final class IconUtils {
         gc.setBackground(hi);
         gc.fillPolygon(body);
         hi.dispose();
-        gc.setClipping((Path) null);
+        gc.setClipping((Rectangle) null);
         clip.dispose();
 
         gc.setLineWidth(2);
