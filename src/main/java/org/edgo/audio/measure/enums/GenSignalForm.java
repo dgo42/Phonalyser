@@ -23,16 +23,16 @@ import lombok.Getter;
 /** Waveform produced by the audio signal generator. */
 public enum GenSignalForm {
     SINE(true),
+    SINE_COMP(true),
     TRIANGLE(true),
     RECTANGLE(true),
     WHITE_NOISE(false),
     PINK_NOISE(false),
     PINK_NOISE_LINEAR(false),
-    SINE_COMPENSATED(true),
     LINEAR_SWEEP(true),
     LOG_SWEEP(true),
     DUAL_TONE(true),
-    DUAL_TONE_COMPENSATED(true);
+    DUAL_TONE_COMP(true);
 
     /** True for waveforms with a repeating period — the noise forms are the
      *  exception.  Periodic forms truncate file exports to a whole number of
@@ -45,29 +45,29 @@ public enum GenSignalForm {
     }
 
     /** True for the two-tone waveforms — plain {@link #DUAL_TONE} and its
-     *  intermod-compensated sibling {@link #DUAL_TONE_COMPENSATED}.  Drives
+     *  intermod-compensated sibling {@link #DUAL_TONE_COMP}.  Drives
      *  every "is this a two-tone signal?" branch (IMD analysis, the scope's
      *  beat reconstruction, the generator's two-frequency block) so the
      *  compensated form is treated exactly like the uncorrected one. */
     public boolean isDualTone() {
-        return this == DUAL_TONE || this == DUAL_TONE_COMPENSATED;
+        return this == DUAL_TONE || this == DUAL_TONE_COMP;
     }
 
     public static GenSignalForm fromString(String s) {
         return switch (s.toLowerCase()) {
             case "sine"                                                 -> SINE;
+            case "sine_compensated", "sine_hmc"                         -> SINE_COMP;
             case "triangle", "tri"                                      -> TRIANGLE;
             case "rectangle", "rect", "square", "pulse"                 -> RECTANGLE;
             case "white", "white_noise"                                 -> WHITE_NOISE;
             case "pink", "pink_noise"                                   -> PINK_NOISE;
             case "pink_linear", "pink_noise_linear"                     -> PINK_NOISE_LINEAR;
-            case "sine_compensated", "sine_hmc"                         -> SINE_COMPENSATED;
             case "linear_sweep", "sweep", "chirp"                       -> LINEAR_SWEEP;
             case "log_sweep", "farina"                                  -> LOG_SWEEP;
             case "dual_tone", "dualtone", "twotone", "two_tone"         -> DUAL_TONE;
-            case "dual_tone_compensated", "dualtone_hmc", "twotone_hmc" -> DUAL_TONE_COMPENSATED;
+            case "dual_tone_compensated", "dualtone_hmc", "twotone_hmc" -> DUAL_TONE_COMP;
             default -> throw new IllegalArgumentException("Unknown signal form: " + s +
-                    ". Valid: sine, triangle, rectangle, white_noise, pink_noise, pink_noise_linear, sine_compensated, linear_sweep, log_sweep, dual_tone, dual_tone_compensated");
+                    ". Valid: sine, sine_compensated, triangle, rectangle, white_noise, pink_noise, pink_noise_linear, linear_sweep, log_sweep, dual_tone, dual_tone_compensated");
         };
     }
 }

@@ -202,11 +202,11 @@ public class SignalGenerator {
     private final AtomicBoolean logSweepRestart = new AtomicBoolean(false);
 
     // -------------------------------------------------------------------------
-    // Harmonic compensation state (SINE_COMPENSATED only)
+    // Harmonic compensation state (SINE_COMP only)
     // -------------------------------------------------------------------------
 
     /** Immutable, atomically-published harmonic-correction set for
-     *  {@link GenSignalForm#SINE_COMPENSATED}.  {@link #ddsSineCompensated}
+     *  {@link GenSignalForm#SINE_COMP}.  {@link #ddsSineCompensated}
      *  reads the {@code volatile} {@link #comp} reference once per sample,
      *  so the predistortion wizard can hot-swap corrections on the running
      *  generator (via {@link #applyCompensation}) with no audio restart —
@@ -244,7 +244,7 @@ public class SignalGenerator {
 
     /**
      * Immutable, atomically-published intermodulation-correction set for
-     * {@link GenSignalForm#DUAL_TONE_COMPENSATED}.  The two-tone analogue of
+     * {@link GenSignalForm#DUAL_TONE_COMP}.  The two-tone analogue of
      * {@link Compensation}: every distortion product of a two-tone signal —
      * per-tone harmonic <em>and</em> intermodulation product alike — lives at
      * {@code a·f₁ + b·f₂} for integer {@code (a, b)} and has instantaneous
@@ -315,7 +315,7 @@ public class SignalGenerator {
     }
 
     /**
-     * Constructs a {@link GenSignalForm#SINE_COMPENSATED} generator.
+     * Constructs a {@link GenSignalForm#SINE_COMP} generator.
      * Loads H2..Hn harmonic corrections from an {@code fft_harmonics_*.csv} file
      * produced by {@link HarmonicsCsv#export}, or an
      * {@code applied_compensation_*.csv} file from the iterative workflow.
@@ -333,12 +333,12 @@ public class SignalGenerator {
      */
     public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
                            double dacFsVoltageAmpl, String harmonicsCsvPath) throws IOException {
-        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms, dacFsVoltageAmpl);
+        this(GenSignalForm.SINE_COMP, frequency, sampleRate, amplitudeVRms, dacFsVoltageAmpl);
         loadHarmonics(frequency, sampleRate, harmonicsCsvPath);
     }
 
     /**
-     * Constructs a {@link GenSignalForm#SINE_COMPENSATED} generator directly from a
+     * Constructs a {@link GenSignalForm#SINE_COMP} generator directly from a
      * {@link FftResult} — no intermediate CSV file is written.
      * Requires coherent averaging ({@code result.coherentAveraging == true}); otherwise
      * phases are unknown and amplitude-only correction is applied with a warning.
@@ -350,12 +350,12 @@ public class SignalGenerator {
      */
     public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
                            double dacFsVoltageAmpl, FftResult result) {
-        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms, dacFsVoltageAmpl);
+        this(GenSignalForm.SINE_COMP, frequency, sampleRate, amplitudeVRms, dacFsVoltageAmpl);
         loadHarmonicsFromResult(frequency, sampleRate, result);
     }
 
     /**
-     * Constructs a {@link GenSignalForm#SINE_COMPENSATED} generator from pre-computed
+     * Constructs a {@link GenSignalForm#SINE_COMP} generator from pre-computed
      * accumulated harmonic corrections (amplitude + phase arrays).
      * Used by the iterative compensation workflow where corrections are aggregated
      * across multiple iterations as complex numbers.
@@ -369,7 +369,7 @@ public class SignalGenerator {
      */
     public SignalGenerator(double frequency, int sampleRate, double amplitudeVRms,
                            double dacFsVoltageAmpl, double[] ampRatios, double[] phiInits, double[] freqsHz) {
-        this(GenSignalForm.SINE_COMPENSATED, frequency, sampleRate, amplitudeVRms, dacFsVoltageAmpl);
+        this(GenSignalForm.SINE_COMP, frequency, sampleRate, amplitudeVRms, dacFsVoltageAmpl);
         int n = ampRatios.length;
         int[] hNums = new int[n];
         for (int i = 0; i < n; i++) {
@@ -504,7 +504,7 @@ public class SignalGenerator {
      */
     private double rawRms(GenSignalForm form) {
         return switch (form) {
-            case SINE, SINE_COMPENSATED   -> 1.0 / Math.sqrt(2.0);                       // sine RMS = peak / √2
+            case SINE, SINE_COMP   -> 1.0 / Math.sqrt(2.0);                       // sine RMS = peak / √2
             case LINEAR_SWEEP             -> 1.0 / Math.sqrt(2.0);                       // sweep is sin(φ(n)); RMS = peak / √2
             case LOG_SWEEP                -> 1.0 / Math.sqrt(2.0);                       // sweep is sin(φ(n)); RMS = peak / √2
             case TRIANGLE                 -> 1.0 / Math.sqrt(3.0);                       // triangle RMS = peak / √3 (independent of duty)
@@ -513,7 +513,7 @@ public class SignalGenerator {
             case PINK_NOISE               -> 1.0 / Math.sqrt(PINK_OCTAVES + 1.0);        // Gaussian source, 17 summed terms / 17
             case PINK_NOISE_LINEAR        -> 1.0 / Math.sqrt(3.0 * (PINK_OCTAVES + 1.0));// uniform source, std = 1/√3 per term
             case DUAL_TONE                -> rawRmsDualTone();                            // depends on per-tone weights — see rawRmsDualTone
-            case DUAL_TONE_COMPENSATED    -> rawRmsDualTone();                            // same two tones, plus tiny anti-products — weights set the RMS
+            case DUAL_TONE_COMP    -> rawRmsDualTone();                            // same two tones, plus tiny anti-products — weights set the RMS
         };
     }
 
@@ -548,7 +548,7 @@ public class SignalGenerator {
     /**
      * Live-swaps the waveform.  Phase accumulator is preserved so the
      * transition between phase-continuous forms (sine/saw/triangle) is
-     * smooth.  Switching <em>to</em> {@link GenSignalForm#SINE_COMPENSATED}
+     * smooth.  Switching <em>to</em> {@link GenSignalForm#SINE_COMP}
      * without previously loading harmonics simply produces an uncorrected
      * sine — the per-harmonic correction arrays remain {@code null}.
      * Sweep forms expect their own constructor and shouldn't be reached
@@ -576,7 +576,7 @@ public class SignalGenerator {
 
     /**
      * Hot-swaps the harmonic compensation on the RUNNING generator and
-     * switches it to {@link GenSignalForm#SINE_COMPENSATED} — the
+     * switches it to {@link GenSignalForm#SINE_COMP} — the
      * predistortion wizard applies each round's corrections this way, with
      * no audio restart.  The phasors {@code (ampRatio, harmonic number,
      * initial phase)} are published as one immutable {@link Compensation}
@@ -585,12 +585,12 @@ public class SignalGenerator {
      */
     public void applyCompensation(double[] ampRatios, int[] hNums, double[] phiInits) {
         this.comp = new Compensation(ampRatios, hNums, phiInits);
-        this.form = GenSignalForm.SINE_COMPENSATED;
+        this.form = GenSignalForm.SINE_COMP;
     }
 
     /**
      * Hot-swaps the intermodulation compensation on the RUNNING generator and
-     * switches it to {@link GenSignalForm#DUAL_TONE_COMPENSATED} — the
+     * switches it to {@link GenSignalForm#DUAL_TONE_COMP} — the
      * dual-tone counterpart of {@link #applyCompensation}.  Each product is the
      * triple {@code (ampRatio, aCoef, bCoef, initial phase)} at
      * {@code a·f₁ + b·f₂}, published as one immutable {@link DualToneComp}
@@ -599,18 +599,18 @@ public class SignalGenerator {
      */
     public void applyDualToneCompensation(double[] ampRatios, int[] aCoef, int[] bCoef, double[] phiInits) {
         this.dtComp = new DualToneComp(ampRatios, aCoef, bCoef, phiInits);
-        this.form   = GenSignalForm.DUAL_TONE_COMPENSATED;
+        this.form   = GenSignalForm.DUAL_TONE_COMP;
     }
 
     /** Drops any compensation and returns a compensated generator to its plain
-     *  tone — {@link GenSignalForm#SINE_COMPENSATED} → {@link GenSignalForm#SINE},
-     *  {@link GenSignalForm#DUAL_TONE_COMPENSATED} → {@link GenSignalForm#DUAL_TONE}.
+     *  tone — {@link GenSignalForm#SINE_COMP} → {@link GenSignalForm#SINE},
+     *  {@link GenSignalForm#DUAL_TONE_COMP} → {@link GenSignalForm#DUAL_TONE}.
      *  The wizard's cancel path. */
     public void clearCompensation() {
         this.comp   = null;
         this.dtComp = null;
-        if (form == GenSignalForm.SINE_COMPENSATED)      this.form = GenSignalForm.SINE;
-        if (form == GenSignalForm.DUAL_TONE_COMPENSATED) this.form = GenSignalForm.DUAL_TONE;
+        if (form == GenSignalForm.SINE_COMP)      this.form = GenSignalForm.SINE;
+        if (form == GenSignalForm.DUAL_TONE_COMP) this.form = GenSignalForm.DUAL_TONE;
     }
 
     /** Live-updates the second tone's frequency for the
@@ -702,17 +702,17 @@ public class SignalGenerator {
             case WHITE_NOISE       -> rng.nextGaussian();
             case PINK_NOISE        -> pinkNoise(false);
             case PINK_NOISE_LINEAR -> pinkNoise(true);
-            case SINE_COMPENSATED  -> ddsSineCompensated();
+            case SINE_COMP  -> ddsSineCompensated();
             case LINEAR_SWEEP      -> linearSweepNext();
             case LOG_SWEEP         -> logSweepNext();
             case DUAL_TONE         -> ddsSine() * dualW1 + ddsSine2() * dualW2;
-            case DUAL_TONE_COMPENSATED -> ddsDualToneCompensated();
+            case DUAL_TONE_COMP -> ddsDualToneCompensated();
         };
         phaseAcc  += phaseInc;    // long overflow IS the 2^64 phase wrap
         // The second accumulator only advances for the two-tone forms.
         // Cheap branch — the audio loop already executed the per-form
         // switch and form is volatile-cached locally by the JIT.
-        if (form == GenSignalForm.DUAL_TONE || form == GenSignalForm.DUAL_TONE_COMPENSATED) {
+        if (form == GenSignalForm.DUAL_TONE || form == GenSignalForm.DUAL_TONE_COMP) {
             phaseAcc2 += phaseInc2;
         }
         return raw * amplitude;
@@ -1094,7 +1094,7 @@ public class SignalGenerator {
 
     /**
      * Parses an {@code fft_harmonics_*.csv} file and initialises the per-harmonic
-     * rotating phasors for {@link GenSignalForm#SINE_COMPENSATED}.
+     * rotating phasors for {@link GenSignalForm#SINE_COMP}.
      * Skips H1 (fundamental). For each H2..Hn entry the phasor is initialised from
      * the {@code re}/{@code im} columns when present (full double precision), otherwise
      * from {@code phase_deg}.  The correction amplitude is taken from
@@ -1199,7 +1199,7 @@ public class SignalGenerator {
             loadIntermod(path);
         } else {
             loadHarmonics(frequency, sampleRate, path);
-            this.form = GenSignalForm.SINE_COMPENSATED;
+            this.form = GenSignalForm.SINE_COMP;
         }
     }
 

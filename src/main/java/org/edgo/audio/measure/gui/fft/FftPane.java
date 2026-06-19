@@ -22,6 +22,7 @@ import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.layout.FormAttachment;
 import org.eclipse.swt.layout.FormData;
 import org.eclipse.swt.layout.FormLayout;
@@ -37,8 +38,8 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
-import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionWizardDialog;
 import org.edgo.audio.measure.gui.generator.GeneratorController;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -140,10 +141,9 @@ public final class FftPane extends AbstractPane {
         // callback parameters needed for those concerns.  The analyser
         // worker acquires and releases its own shared capture on start /
         // stop; the pane just drives the Record button.
-        IconUtils icons = IconUtils.instance();
         Display d = parent.getDisplay();
-        this.recordDim     = icons.createRecordLed(d, 200,  40,  40, false, ACTION_ICON_SIZE);
-        this.recordLit     = icons.createRecordLed(d, 255,   0,   0, true,  ACTION_ICON_SIZE);
+        this.recordDim     = IconUtils.icon(d, Icon.RECORD_DARK);
+        this.recordLit     = IconUtils.icon(d, Icon.RECORD_LIT);
 
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth  = 0; gl.marginHeight = 0; gl.verticalSpacing = 2;
@@ -253,7 +253,7 @@ public final class FftPane extends AbstractPane {
         if (liveCapture && genController != null) {
             FftController wizardController = controller;   // effectively final for the lambda
             Button wizardButton = createActionButton(toolbarRow, SWT.PUSH);
-            wizardButton.setImage(icons.renderAtHeightColored(d, SvgPaths.WAND, ACTION_ICON_SIZE));
+            wizardButton.setImage(IconUtils.icon(d, Icon.WAND));
             wizardButton.setToolTipText(I18n.t("predistortion.button.wizard.tooltip"));
             wizardButton.addListener(SWT.Selection, e ->
                     new PredistortionWizardDialog(group.getShell(), genController, wizardController, view, correctionStore).open());
@@ -261,6 +261,7 @@ public final class FftPane extends AbstractPane {
         }
 
         recordButton = createActionButton(toolbarRow, SWT.TOGGLE);
+        recordButton.setSize(new Point(ACTION_BOX_SIZE, ACTION_BOX_SIZE));
         recordButton.setImage(recordDim);
         recordButton.setToolTipText(I18n.t("fft.record.tooltip"));
 

@@ -80,7 +80,7 @@ public class GenerateMode {
         //     CSV (sample rate, bit depth, amplitude, exact frequency).  These
         //     take priority as defaults but CLI flags override them.
         SignalGenerator.Metadata csvMeta = null;
-        if (form == GenSignalForm.SINE_COMPENSATED && harmonicsCsv != null) {
+        if (form == GenSignalForm.SINE_COMP && harmonicsCsv != null) {
             csvMeta = SignalGenerator.readAppliedCompensationMetadata(harmonicsCsv);
             if (csvMeta != null) {
                 log.info("CSV metadata loaded from {}: sr={} Hz, bits={}, amp={} V RMS, freq={} Hz",
@@ -163,7 +163,7 @@ public class GenerateMode {
         }
 
         SignalGenerator generator;
-        if (form == GenSignalForm.SINE_COMPENSATED) {
+        if (form == GenSignalForm.SINE_COMP) {
             if (harmonicsCsv == null) {
                 log.error("--harmonics-csv <file> is required for --signal sine_compensated");
                 System.exit(1);

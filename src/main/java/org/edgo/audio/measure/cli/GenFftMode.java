@@ -214,7 +214,7 @@ public class GenFftMode {
         }
 
         SignalGenerator gen;
-        if (form == GenSignalForm.SINE_COMPENSATED) {
+        if (form == GenSignalForm.SINE_COMP) {
             if (harmonicsCsv == null) {
                 log.error("--harmonics-csv <file> is required for --signal sine_compensated");
                 System.exit(1);

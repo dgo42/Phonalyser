@@ -20,12 +20,12 @@ package org.edgo.audio.measure.gui.widgets;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Image;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Listener;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 
 /**
@@ -64,20 +64,17 @@ public final class IconStepLabel extends Canvas {
     private       boolean isPressed;
 
     /**
-     * Builds the arrow.  {@code normalPx} / {@code pressedPx} are
-     * <em>widths</em> — height is derived from the icon's bounding-box
-     * aspect ratio (these spinner / caret icons are wider than tall).
-     * Pass the same value for both to disable press animation.
+     * Builds the arrow from two pre-rendered PNGs — {@code pressedIcon} shown
+     * while pressed.  Pass the same {@link Icon} for both to disable the
+     * press-state swap.
      */
-    public IconStepLabel(Composite parent, String svgResource,
-                         int normalPx, int pressedPx, RGB tint) {
+    public IconStepLabel(Composite parent, Icon normalIcon, Icon pressedIcon) {
         super(parent, SWT.NO_BACKGROUND);
         Display d = parent.getDisplay();
-        IconUtils icons = IconUtils.instance();
-        this.normal  = icons.renderAtWidth(d, svgResource, normalPx, tint);
-        this.pressed = (normalPx == pressedPx)
+        this.normal  = IconUtils.icon(d, normalIcon);
+        this.pressed = (normalIcon == pressedIcon)
                 ? this.normal
-                : icons.renderAtWidth(d, svgResource, pressedPx, tint);
+                : IconUtils.icon(d, pressedIcon);
         setBackground(parent.getBackground());
 
         addPaintListener(e -> {

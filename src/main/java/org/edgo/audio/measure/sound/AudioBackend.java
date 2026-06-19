@@ -40,20 +40,13 @@ public final class AudioBackend {
 
     private static volatile AudioBackend instance;
 
-    private volatile AudioBackendType active = defaultBackend();
+    private volatile AudioBackendType active = AudioBackendType.fromOs();
     private volatile WdmksDeviceManager     wdmks;
     private volatile WasapiDeviceManager    wasapi;
     private volatile JavaSoundDeviceManager javaSound;
+    private volatile CoreAudioDeviceManager coreAudio;
 
     private AudioBackend() {}
-
-    /** WASAPI on Windows, JAVASOUND elsewhere — the only backend that exists
-     *  on Linux / macOS until a native one is added. */
-    private static AudioBackendType defaultBackend() {
-        return AudioBackendType.WASAPI.isAvailable()
-                ? AudioBackendType.WASAPI
-                : AudioBackendType.JAVASOUND;
-    }
 
     /** Lazily constructs the WDM-KS manager on first WDMKS-path access. */
     private WdmksDeviceManager wdmks() {
@@ -100,6 +93,21 @@ public final class AudioBackend {
         return local;
     }
 
+    /** Mirror of {@link #wdmks()} for the macOS CoreAudio (PortAudio) backend. */
+    private CoreAudioDeviceManager coreAudio() {
+        CoreAudioDeviceManager local = coreAudio;
+        if (local == null) {
+            synchronized (this) {
+                local = coreAudio;
+                if (local == null) {
+                    local = new CoreAudioDeviceManager();
+                    coreAudio = local;
+                }
+            }
+        }
+        return local;
+    }
+
     /**
      * Returns the singleton instance, lazily creating it inside a synchronized
      * block on first access so concurrent callers cannot construct duplicates.
@@ -130,6 +138,7 @@ public final class AudioBackend {
     public List<DeviceRef> listInputDevices() {
         switch (active) {
             case WDMKS:     return wdmks().listInputDevices();
+            case COREAUDIO: return coreAudio().listInputDevices();
             case JAVASOUND: return javaSound().listInputDevices();
             case WASAPI:
             default:        return wasapi().listInputDevices();
@@ -139,6 +148,7 @@ public final class AudioBackend {
     public List<DeviceRef> listOutputDevices() {
         switch (active) {
             case WDMKS:     return wdmks().listOutputDevices();
+            case COREAUDIO: return coreAudio().listOutputDevices();
             case JAVASOUND: return javaSound().listOutputDevices();
             case WASAPI:
             default:        return wasapi().listOutputDevices();
@@ -148,6 +158,7 @@ public final class AudioBackend {
     public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
         switch (active) {
             case WDMKS:     return wdmks().getDeviceByIndex(index, isOutput);
+            case COREAUDIO: return coreAudio().getDeviceByIndex(index, isOutput);
             case JAVASOUND: return javaSound().getDeviceByIndex(index, isOutput);
             case WASAPI:
             default:        return wasapi().getDeviceByIndex(index, isOutput);
@@ -157,6 +168,7 @@ public final class AudioBackend {
     public List<AudioFormat> listSupportedInputFormats(DeviceRef device) {
         switch (device.backend()) {
             case WDMKS:     return wdmks().listSupportedFormats(device, false);
+            case COREAUDIO: return coreAudio().listSupportedFormats(device, false);
             case JAVASOUND: return javaSound().listSupportedFormats(device, false);
             case WASAPI:
             default:        return wasapi().listSupportedFormats(device, false);
@@ -166,6 +178,7 @@ public final class AudioBackend {
     public List<AudioFormat> listSupportedOutputFormats(DeviceRef device) {
         switch (device.backend()) {
             case WDMKS:     return wdmks().listSupportedFormats(device, true);
+            case COREAUDIO: return coreAudio().listSupportedFormats(device, true);
             case JAVASOUND: return javaSound().listSupportedFormats(device, true);
             case WASAPI:
             default:        return wasapi().listSupportedFormats(device, true);
@@ -184,6 +197,7 @@ public final class AudioBackend {
     public List<DeviceRef> listInputDevices(AudioBackendType type) {
         switch (type) {
             case WDMKS:     return wdmks().listInputDevices();
+            case COREAUDIO: return coreAudio().listInputDevices();
             case JAVASOUND: return javaSound().listInputDevices();
             case WASAPI:
             default:        return wasapi().listInputDevices();
@@ -193,6 +207,7 @@ public final class AudioBackend {
     public List<DeviceRef> listOutputDevices(AudioBackendType type) {
         switch (type) {
             case WDMKS:     return wdmks().listOutputDevices();
+            case COREAUDIO: return coreAudio().listOutputDevices();
             case JAVASOUND: return javaSound().listOutputDevices();
             case WASAPI:
             default:        return wasapi().listOutputDevices();
@@ -202,6 +217,7 @@ public final class AudioBackend {
     public List<AudioFormat> listSupportedInputFormats(AudioBackendType type, DeviceRef device) {
         switch (type) {
             case WDMKS:     return wdmks().listSupportedFormats(device, false);
+            case COREAUDIO: return coreAudio().listSupportedFormats(device, false);
             case JAVASOUND: return javaSound().listSupportedFormats(device, false);
             case WASAPI:
             default:        return wasapi().listSupportedFormats(device, false);
@@ -211,6 +227,7 @@ public final class AudioBackend {
     public List<AudioFormat> listSupportedOutputFormats(AudioBackendType type, DeviceRef device) {
         switch (type) {
             case WDMKS:     return wdmks().listSupportedFormats(device, true);
+            case COREAUDIO: return coreAudio().listSupportedFormats(device, true);
             case JAVASOUND: return javaSound().listSupportedFormats(device, true);
             case WASAPI:
             default:        return wasapi().listSupportedFormats(device, true);
@@ -221,6 +238,9 @@ public final class AudioBackend {
         switch (device.backend()) {
             case WDMKS:
                 return new WdmksRecorder((WdmksDeviceManager.WdmksDeviceRef) device,
+                        sampleRate, bitDepth);
+            case COREAUDIO:
+                return new CoreAudioRecorder((CoreAudioDeviceManager.CoreAudioDeviceRef) device,
                         sampleRate, bitDepth);
             case JAVASOUND:
                 return new JavaSoundRecorder(
@@ -238,6 +258,9 @@ public final class AudioBackend {
         switch (device.backend()) {
             case WDMKS:
                 return new WdmksGenerator((WdmksDeviceManager.WdmksDeviceRef) device,
+                        sampleRate, bitDepth, ditherBits);
+            case COREAUDIO:
+                return new CoreAudioGenerator((CoreAudioDeviceManager.CoreAudioDeviceRef) device,
                         sampleRate, bitDepth, ditherBits);
             case JAVASOUND:
             case WASAPI:

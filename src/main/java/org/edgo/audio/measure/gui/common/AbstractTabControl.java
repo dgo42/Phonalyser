@@ -57,12 +57,9 @@ public abstract class AbstractTabControl extends Composite {
 
     protected AbstractTabControl(Composite parent, int style) {
         super(parent, style);
-        IconUtils icons = IconUtils.instance();
         Display d = getDisplay();
-        this.cameraIcon    = icons.render(d, SvgPaths.CAMERA,
-                (int) Math.round(UTILITY_ICON_HEIGHT * 1.27), UTILITY_ICON_HEIGHT);
-        this.crosshairIcon = icons.render(d, SvgPaths.CROSSHAIR,
-                UTILITY_ICON_HEIGHT, UTILITY_ICON_HEIGHT);
+        this.cameraIcon    = IconUtils.icon(d, Icon.CAMERA);
+        this.crosshairIcon = IconUtils.icon(d, Icon.CROSSHAIR_BIG);
     }
 
     /** Runs {@code r} after each tab-body collapse / expand so the host pane

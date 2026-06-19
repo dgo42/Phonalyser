@@ -40,6 +40,9 @@ import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Composite;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
+import org.edgo.audio.measure.gui.bind.Bindings;
+import org.edgo.audio.measure.gui.widgets.ToolButton;
+import org.edgo.audio.measure.preferences.Preferences;
 
 /**
  * Shared base for the project's measurement canvases — oscilloscope, FFT,
@@ -306,6 +309,29 @@ public abstract class AbstractMeasurementView extends Canvas {
             if (c != null) c.dispose();
         }
         palette.clear();
+    }
+
+    /**
+     * Keeps the two channel header buttons' fill in sync with the oscilloscope
+     * channel-colour preferences, so changing a colour recolours the buttons
+     * immediately instead of only on the next paint.  For views whose L/R
+     * buttons are a {@link ColorRole#BUTTON_FRAME} frame over a
+     * {@link ColorRole#LEFT_BTN_CHAN} / {@link ColorRole#RIGHT_BTN_CHAN} fill
+     * (FFT and frequency response).  The scope tints its buttons from the trace
+     * colour and rebinds those itself.
+     */
+    protected final void bindChannelButtonFills(ToolButton leftBtn, ToolButton rightBtn) {
+        Preferences prefs = Preferences.instance();
+        Bindings.onChange(this, prefs.oscLeftChannelColorProperty(), rgb -> {
+            setColor(ColorRole.LEFT_BTN_CHAN, rgb);
+            leftBtn.setColors(color(ColorRole.BUTTON_FRAME), color(ColorRole.LEFT_BTN_CHAN));
+            redraw();
+        });
+        Bindings.onChange(this, prefs.oscRightChannelColorProperty(), rgb -> {
+            setColor(ColorRole.RIGHT_BTN_CHAN, rgb);
+            rightBtn.setColors(color(ColorRole.BUTTON_FRAME), color(ColorRole.RIGHT_BTN_CHAN));
+            redraw();
+        });
     }
 
 

@@ -238,7 +238,7 @@ public final class PreferencesDialog {
         for (AudioBackendType type : AudioBackendType.values()) {
             if (type.isAvailable()) {
                 availableBackends.add(type);
-                backendCombo.add(type.name());
+                backendCombo.add(type.getDisplayName());
             }
         }
         int selectedIdx = availableBackends.indexOf(edit.getBackend());

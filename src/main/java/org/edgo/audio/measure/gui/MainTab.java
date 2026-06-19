@@ -26,6 +26,7 @@ import org.eclipse.swt.events.ControlListener;
 import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
+import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
@@ -42,8 +43,8 @@ import org.eclipse.swt.widgets.TabItem;
 import org.edgo.audio.measure.enums.TabOrientation;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.common.Fonts;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
-import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.fft.FftPane;
 import org.edgo.audio.measure.gui.freqresp.FreqRespPane;
 import org.edgo.audio.measure.gui.generator.GeneratorPane;
@@ -80,16 +81,6 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class MainTab {
 
-    /** Sidebar tab icon size in pixels — 2 normally, 24 when the user
-     *  ticks "Small icons in main tab" in Look &amp; Feel preferences. */
-    private static final int ICON_BIG_PX   = 42;
-    private static final int ICON_SMALL_PX = 24;
-    /** Top-tab icon sizes are smaller — the SWT TabFolder enforces a
-     *  height around the system font metric, and asking for a 48 px icon
-     *  would force the runtime to stretch it (visibly distorting the
-     *  aspect since the tab is taller-than-wide on most platforms). */
-    private static final int TOP_ICON_BIG_PX   = 24;
-    private static final int TOP_ICON_SMALL_PX = 16;
     /** Width of the left sidebar — sized for an icon centred on top with
      *  a vertically-rotated label underneath (label width = its line
      *  height once rotated, not its run length). */
@@ -236,21 +227,19 @@ public final class MainTab {
 
     private void buildTopTabs() {
         Preferences prefs = Preferences.instance();
-        int iconPx = prefs.isSmallIconsInMainTab()
-                ? TOP_ICON_SMALL_PX
-                : TOP_ICON_BIG_PX;
+        boolean small = prefs.isSmallIconsInMainTab();
         TabFolder tabFolder = new TabFolder(shell, SWT.NONE);
         hostChrome = tabFolder;
 
         TabItem multiItem = new TabItem(tabFolder, SWT.NONE);
         multiItem.setText(I18n.t("tab.multifunctional"));
-        multiItem.setImage(renderTabIcon(SvgPaths.SWISS_ARMY_KNIFE, iconPx));
+        multiItem.setImage(renderTabIcon(small ? Icon.SWISS_SMALL : Icon.SWISS_MID));
         multiContent.setParent(tabFolder);
         multiItem.setControl(multiContent);
 
         TabItem frItem = new TabItem(tabFolder, SWT.NONE);
         frItem.setText(I18n.t("tab.frequencyResponse"));
-        frItem.setImage(renderTabIcon(SvgPaths.RIAA_IEC_CURVE, iconPx));
+        frItem.setImage(renderTabIcon(small ? Icon.RIAA_SMALL : Icon.RIAA_MID));
         frContent.setParent(tabFolder);
         frItem.setControl(frContent);
 
@@ -262,7 +251,7 @@ public final class MainTab {
 
     private void buildLeftSidebar() {
         Preferences prefs = Preferences.instance();
-        int iconPx = iconSizePx();
+        boolean small = prefs.isSmallIconsInMainTab();
         int barWidth = prefs.isSmallIconsInMainTab()
                 ? LEFT_BAR_WIDTH_SMALL_PX
                 : LEFT_BAR_WIDTH_BIG_PX;
@@ -304,11 +293,11 @@ public final class MainTab {
 
         SidebarButton[] buttons = new SidebarButton[2];
         buttons[0] = new SidebarButton(sidebar,
-                renderTabIcon(SvgPaths.SWISS_ARMY_KNIFE, iconPx),
+                renderTabIcon(small ? Icon.SWISS_MID : Icon.SWISS_BIG),
                 I18n.t("tab.multifunctional"),
                 multiContent, hoverBg, selectedBg);
         buttons[1] = new SidebarButton(sidebar,
-                renderTabIcon(SvgPaths.RIAA_IEC_CURVE, iconPx),
+                renderTabIcon(small ? Icon.RIAA_MID : Icon.RIAA_BIG),
                 I18n.t("tab.frequencyResponse"),
                 frContent, hoverBg, selectedBg);
 
@@ -329,21 +318,11 @@ public final class MainTab {
         return v;
     }
 
-    /** Left-sidebar icon size driven by the "Small icons in main tab" preference. */
-    private static int iconSizePx() {
-        return Preferences.instance().isSmallIconsInMainTab() ? ICON_SMALL_PX : ICON_BIG_PX;
-    }
-
     /** Lazily renders an SVG icon to an {@link Image} at the requested
      *  pixel height through {@link IconUtils}.  Returns {@code null} if the
      *  icon is missing so the caller can fall back to a label-only tab. */
-    private Image renderTabIcon(String svgPath, int heightPx) {
-        try {
-            return IconUtils.instance().renderAtHeightColored(display, svgPath, heightPx);
-        } catch (RuntimeException ex) {
-            log.warn("Tab icon {} failed to render: {}", svgPath, ex.getMessage());
-            return null;
-        }
+    private Image renderTabIcon(Icon icon) {
+        return IconUtils.icon(display, icon);
     }
 
     private void registerWindowSizePersistence() {
@@ -445,11 +424,19 @@ public final class MainTab {
 
         private int computePreferredHeight() {
             int iconH = (icon != null) ? icon.getBounds().height : 0;
-            // Rotated label occupies its full text run vertically; estimate
-            // generously so the longest expected tab name (e.g.
-            // "Frequency response") fits without clipping.
-            int labelLen = 4 + label.length() * 7;
-            return PAD_Y + iconH + GAP_Y + labelLen + PAD_Y;
+            // The label is rotated 90°, so its text WIDTH is the vertical run —
+            // measure it with the actual font (not an estimate) so long names
+            // (e.g. "Frequency response") get the exact height they need and are
+            // neither clipped at the bottom nor overlapped by the icon.
+            int labelRun;
+            GC gc = new GC(this);
+            try {
+                gc.setFont(labelFont);
+                labelRun = gc.textExtent(label).x;
+            } finally {
+                gc.dispose();
+            }
+            return PAD_Y + iconH + GAP_Y + labelRun + PAD_Y;
         }
 
         private void onPaint(PaintEvent e) {

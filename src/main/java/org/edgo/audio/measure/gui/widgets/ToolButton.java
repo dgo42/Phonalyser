@@ -24,13 +24,12 @@ import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Event;
-
 import org.edgo.audio.measure.gui.common.ColorUtil;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 
 import lombok.Getter;
@@ -145,20 +144,9 @@ public final class ToolButton extends TransparentComposite {
      *  The images come from {@link IconUtils}' shared cache — borrowed, NEVER disposed here
      *  (IconUtils owns them and disposes the whole cache at shell teardown).  Disposing them
      *  per-button would blank the same icon on every other button sharing it. */
-    public void setIcon(String svgPath, int iconHeight, RGB normal, RGB active) {
-        IconUtils icons = IconUtils.instance();
-        lightIcon = icons.renderAtHeight(getDisplay(), svgPath, iconHeight, normal);
-        darkIcon  = icons.renderAtHeight(getDisplay(), svgPath, iconHeight, active);
-        label = null;
-        redraw();
-    }
-
-    /** Renders ONE colour-preserving icon (the SVG's own colours), shown unchanged in
-     *  both states — for toggles whose glyph must not invert (e.g. the phase button).
-     *  Borrowed from {@link IconUtils}' shared cache, never disposed here. */
-    public void setColoredIcon(String svgPath, int iconHeight) {
-        lightIcon = IconUtils.instance().renderAtHeightColored(getDisplay(), svgPath, iconHeight);
-        darkIcon  = lightIcon;   // same image in both states
+    public void setIcon(Icon normal, Icon active) {
+        lightIcon = IconUtils.icon(getDisplay(), normal);
+        darkIcon  = IconUtils.icon(getDisplay(), active);
         label = null;
         redraw();
     }

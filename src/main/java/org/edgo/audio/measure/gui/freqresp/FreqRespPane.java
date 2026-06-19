@@ -23,7 +23,6 @@ import java.util.function.Consumer;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FormAttachment;
 import org.eclipse.swt.layout.FormData;
@@ -42,9 +41,9 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ScreenshotDialog;
-import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.FlatScrollbar;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
@@ -110,12 +109,10 @@ public final class FreqRespPane extends AbstractPane {
     public FreqRespPane(Composite parent) {
         super(parent);
         Display d = parent.getDisplay();
-        IconUtils icons = IconUtils.instance();
-        Image wandIcon = icons.renderAtHeightColored(d, SvgPaths.WAND, ACTION_ICON_SIZE);
+        Image wandIcon = IconUtils.icon(d, Icon.WAND);
         // Play button uses the same green LED that the generator pane shows
         // so the visual language is consistent across measurement features.
-        Image playIcon = icons.renderAtHeight(d, SvgPaths.PLAY, ACTION_ICON_SIZE,
-                new RGB(0x00, 0xAA, 0x00));
+        Image playIcon = IconUtils.icon(d, Icon.PLAY_DARK_BIG);
 
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth  = 0; gl.marginHeight = 0; gl.verticalSpacing = 2;

@@ -159,8 +159,15 @@ public final class JavaSoundDeviceManager {
         for (int rate : rates) {
             for (int bits : depths) {
                 AudioFormat fmt = buildFormat(rate, bits);
-                if (canOpen(m, cls, fmt)) {
-                    result.add(fmt);
+                boolean ok = canOpen(m, cls, fmt);
+                if (!ok && !output) {
+                    // A mono-only capture device (1-channel mic) won't open
+                    // stereo; JavaSoundRecorder captures it mono and upmixes,
+                    // so still offer this rate/bit-depth.
+                    ok = canOpen(m, cls, buildMonoFormat(rate, bits));
+                }
+                if (ok) {
+                    result.add(fmt);   // report stereo; recorder upmixes if the device is mono
                 }
             }
         }
@@ -220,12 +227,21 @@ public final class JavaSoundDeviceManager {
      *  given rate and bit depth.  Rounds non-byte-aligned bit widths
      *  (e.g. 20-bit packed in 24-bit containers) up to the next byte
      *  so the frame size is correct: 20-bit stereo → 6 bytes/frame. */
-    private static AudioFormat buildFormat(int rate, int bits) {
+    private AudioFormat buildFormat(int rate, int bits) {
         int bytesPerSample = (bits + 7) / 8;
         int frameSize      = bytesPerSample * 2;
         return new AudioFormat(
                 AudioFormat.Encoding.PCM_SIGNED,
                 rate, bits, 2, frameSize, rate, false);
+    }
+
+    /** Mono (1-channel) variant of {@link #buildFormat}, used only to detect
+     *  whether a mono-only capture device supports a given rate/bit depth. */
+    private AudioFormat buildMonoFormat(int rate, int bits) {
+        int bytesPerSample = (bits + 7) / 8;
+        return new AudioFormat(
+                AudioFormat.Encoding.PCM_SIGNED,
+                rate, bits, 1, bytesPerSample, rate, false);
     }
 
     private static boolean canOpen(Mixer m, Class<? extends DataLine> cls, AudioFormat fmt) {

@@ -119,9 +119,9 @@ public final class MainWindow {
         shell.setLayout(new FillLayout());
         ShellIcons.apply(shell);
 
-        // Hook the icon cache to this shell so every Image rendered via
-        // IconUtils.instance() is disposed automatically on shell teardown.
-        IconUtils.instance().registerShell(shell);
+        // Hook the icon cache to this shell so every Image loaded via
+        // IconUtils is disposed automatically on shell teardown.
+        IconUtils.registerShell(shell);
 
         this.engines = new UIEngines(display);
         shell.addDisposeListener(e -> engines.shutdown());

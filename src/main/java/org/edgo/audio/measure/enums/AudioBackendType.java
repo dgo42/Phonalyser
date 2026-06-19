@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.enums;
 
+import lombok.Getter;
+
 /**
  * Selects which native audio path the application uses for capture and playback.
  *
@@ -35,17 +37,22 @@ package org.edgo.audio.measure.enums;
  * playback.
  */
 public enum AudioBackendType {
-    WASAPI,
-    WDMKS,
-    JAVASOUND;
+    WASAPI("WASAPI"),
+    WDMKS("WDM-KS"),
+    COREAUDIO("CoreAudio"),
+    JAVASOUND("JavaSound");
 
-    private AudioBackendType() {}
+    /** Human-readable name shown in the Preferences dialog. */
+    @Getter
+    private final String displayName;
+
+    private AudioBackendType(String displayName) {
+        this.displayName = displayName;
+    }
 
     public static AudioBackendType fromString(String s) {
         if (s == null) {
-            // No --backend supplied: prefer WASAPI on Windows, JAVASOUND
-            // everywhere else (since WASAPI/WDM-KS won't open on non-Windows).
-            return WASAPI.isAvailable() ? WASAPI : JAVASOUND;
+            return fromOs();   // no --backend supplied: OS-native default
         }
         AudioBackendType parsed;
         switch (s.toLowerCase()) {
@@ -55,32 +62,44 @@ public enum AudioBackendType {
                 parsed = WDMKS; break;
             case "wasapi":
                 parsed = WASAPI; break;
+            case "coreaudio":
+            case "ca":
+                parsed = COREAUDIO; break;
             case "javasound":
             case "java":
             case "js":
                 parsed = JAVASOUND; break;
             default:
                 throw new IllegalArgumentException(
-                        "Unknown --backend: " + s + " (wasapi|wdmks|javasound)");
+                        "Unknown --backend: " + s + " (wasapi|wdmks|coreaudio|javasound)");
         }
         if (!parsed.isAvailable()) {
             throw new IllegalArgumentException(
-                    "--backend " + s + " is Windows-only and cannot be used on "
-                            + System.getProperty("os.name")
-                            + " (try --backend javasound)");
+                    "--backend " + s + " is not available on "
+                            + System.getProperty("os.name"));
         }
         return parsed;
+    }
+
+    /** The OS-native default backend: WASAPI on Windows, CoreAudio on macOS,
+     *  JavaSound on Linux (and as a fallback elsewhere). */
+    public static AudioBackendType fromOs() {
+        if (WASAPI.isAvailable())    return WASAPI;
+        if (COREAUDIO.isAvailable()) return COREAUDIO;
+        return JAVASOUND;
     }
 
     /** True when this backend can be opened on the running OS. */
     public boolean isAvailable() {
         String os = System.getProperty("os.name", "").toLowerCase();
         boolean windows = os.contains("win");
+        boolean mac     = os.contains("mac");
         switch (this) {
             case WASAPI:
-            case WDMKS:    return windows;
-            case JAVASOUND: return true;
-            default:       return false;
+            case WDMKS:     return windows;
+            case COREAUDIO: return mac;
+            case JAVASOUND: return !mac;   // hidden on macOS — CoreAudio replaces it
+            default:        return false;
         }
     }
 }

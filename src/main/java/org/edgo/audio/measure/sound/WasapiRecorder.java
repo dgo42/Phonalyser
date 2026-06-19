@@ -25,18 +25,11 @@ import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.ptr.LongByReference;
 import com.sun.jna.ptr.PointerByReference;
 
-import lombok.Getter;
-import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
-import javax.sound.sampled.AudioFormat;
 import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
-import java.util.function.Consumer;
-
-import org.edgo.audio.measure.common.StereoSample;
 
 import static org.edgo.audio.measure.sound.WasapiNative.*;
 
@@ -60,18 +53,10 @@ import static org.edgo.audio.measure.sound.WasapiNative.*;
  * {@link AudioBackend}.
  */
 @Log4j2
-public class WasapiRecorder implements AudioCapture {
-
-    private static final int CHANNELS = 2;
+public class WasapiRecorder extends AbstractPcmCapture {
 
     private final WasapiDeviceManager       devices;
     private final WasapiDeviceManager.WasapiDeviceRef device;
-    private final int sampleRate;
-    private final int bitDepth;
-    private final int sampleBytes;
-    private final int frameSize;
-    @Getter
-    private final AudioFormat format;
 
     private Pointer immDevice;
     private Pointer audioClient;
@@ -79,11 +64,8 @@ public class WasapiRecorder implements AudioCapture {
     private Pointer eventHandle;
     private int     bufferFrames;
 
-    private final AtomicBoolean recording = new AtomicBoolean(false);
     private Thread captureThread;
     private Thread consumerThread;
-    /** Consume-thread-only decode staging for {@link #sampleListener}. */
-    private StereoSample[] sampleBuf = new StereoSample[0];
 
     /** SPSC ring of filled packets — capture-event thread → consume thread. */
     private final SpscByteArrayRing queue      = new SpscByteArrayRing(64);
@@ -101,26 +83,12 @@ public class WasapiRecorder implements AudioCapture {
     private final AtomicLong silentFramesSinceLog   = new AtomicLong();
     private final AtomicLong discontinuitiesSinceLog = new AtomicLong();
 
-    @Setter
-    private Consumer<StereoSample[]> sampleListener;
-    @Setter
-    private PcmBatchListener         pcmBatchListener;
-    @Setter
-    private Consumer<byte[]>         rawBytesListener;
-
     public WasapiRecorder(WasapiDeviceManager devices,
                           WasapiDeviceManager.WasapiDeviceRef device,
                           int sampleRate, int bitDepth) {
-        this.devices     = devices;
-        this.device      = device;
-        this.sampleRate  = sampleRate;
-        this.bitDepth    = bitDepth;
-        this.sampleBytes = bitDepth / 8;
-        this.frameSize   = sampleBytes * CHANNELS;
-        this.format = new AudioFormat(
-                AudioFormat.Encoding.PCM_SIGNED,
-                sampleRate, bitDepth, CHANNELS,
-                frameSize, sampleRate, false);
+        super(sampleRate, bitDepth);
+        this.devices = devices;
+        this.device  = device;
     }
 
     @Override
@@ -191,7 +159,7 @@ public class WasapiRecorder implements AudioCapture {
             captureClient = ppCap.getValue();
 
             log.info("WASAPI recorder opened : {}", device.name());
-            log.info("Capture format         : {}", format);
+            log.info("Capture format         : {}", getFormat());
             log.info("HW buffer              : {} frames ({} ms)",
                     bufferFrames,
                     bufferFrames * 1000 / sampleRate);
@@ -227,7 +195,30 @@ public class WasapiRecorder implements AudioCapture {
      * device, etc.) rather than a sharing conflict.
      */
     private boolean initializeExclusive(long initialBufDuration) {
-        Memory wfx = buildWaveFormatExtensible(sampleRate, bitDepth);
+        // Try stereo first; a mono-only input (1-channel mic) reports the
+        // stereo format unsupported, so fall back to mono and let
+        // AbstractPcmCapture#dispatch upmix to stereo downstream.
+        Boolean stereo = tryInitializeExclusive(2, initialBufDuration);
+        if (stereo != null) return stereo;          // S_OK, or a sharing refusal
+        Boolean mono = tryInitializeExclusive(1, initialBufDuration);
+        if (Boolean.TRUE.equals(mono)) {
+            captureChannels = 1;
+            return true;
+        }
+        // Neither stereo nor mono opened exclusive — drop to shared mode.
+        return false;
+    }
+
+    /**
+     * One exclusive-mode Initialize attempt at the given channel count, with
+     * the canonical {@code AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED} retry.  Returns
+     * {@code TRUE} on success, {@code FALSE} on a sharing refusal (caller drops
+     * to shared mode), or {@code null} when the format itself is unsupported
+     * (caller may retry with a different channel count).  A failed Initialize
+     * leaves the client unusable, so it is re-activated before returning.
+     */
+    private Boolean tryInitializeExclusive(int channels, long initialBufDuration) {
+        Memory wfx = buildWaveFormatExtensible(sampleRate, bitDepth, channels);
         long bufDuration = initialBufDuration;
         for (int attempt = 0; attempt < 2; attempt++) {
             int hr = callHR(audioClient, VT_AC_INITIALIZE,
@@ -236,7 +227,7 @@ public class WasapiRecorder implements AudioCapture {
                     bufDuration, bufDuration, wfx, null);
             if (hr == S_OK) {
                 attachEvent();
-                return true;
+                return Boolean.TRUE;
             }
             if (hr == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED && attempt == 0) {
                 IntByReference framesRef = new IntByReference();
@@ -252,17 +243,25 @@ public class WasapiRecorder implements AudioCapture {
             }
             if (hr == AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED
                     || hr == AUDCLNT_E_DEVICE_IN_USE) {
-                return false;
+                return Boolean.FALSE;
+            }
+            if (hr == AUDCLNT_E_UNSUPPORTED_FORMAT) {
+                // Re-activate so the caller can retry with another channel count.
+                release(audioClient);
+                audioClient = activateAudioClient(immDevice);
+                return null;
             }
             throw new IllegalStateException(
                     "IAudioClient.Initialize(EXCLUSIVE) failed: 0x"
                             + Integer.toHexString(hr));
         }
-        return false;
+        return null;
     }
 
     private void initializeShared() {
-        Memory wfx = buildWaveFormatExtensible(sampleRate, bitDepth);
+        // Shared mode always requests stereo; the Windows audio engine remixes
+        // a mono device up to it, so no mono fallback is needed here.
+        Memory wfx = buildWaveFormatExtensible(sampleRate, bitDepth, 2);
         // Shared mode: hnsPeriodicity must be 0; pick ~200 ms buffer
         // for plenty of jitter headroom.
         long bufDuration = 200 * REF_TIME_PER_MILLISEC;
@@ -377,7 +376,9 @@ public class WasapiRecorder implements AudioCapture {
                     break;
                 }
                 int frames    = framesAvail.getValue();
-                int bytes     = frames * frameSize;
+                // Mono (captureChannels == 1) or stereo raw packet bytes;
+                // dispatch() upmixes a mono packet to stereo downstream.
+                int bytes     = frames * sampleBytes * captureChannels;
                 int flagValue = flags.getValue();
                 // Pooled buffer; allocation only on cold start or a packet-size
                 // change (exclusive event mode delivers fixed period-size
@@ -444,53 +445,6 @@ public class WasapiRecorder implements AudioCapture {
         }
     }
 
-    /** Listener dispatch — consume thread only.  Buffers are recycled after
-     *  this returns, so listeners must consume synchronously (the same
-     *  contract {@link WdmksRecorder}'s consume loop has always had). */
-    private void dispatch(byte[] buffer, int bytes) {
-        if (rawBytesListener != null) {
-            rawBytesListener.accept(buffer);
-        }
-        if (pcmBatchListener != null) {
-            pcmBatchListener.accept(buffer, bytes);
-        } else if (sampleListener != null) {
-            int nFrames = bytes / frameSize;
-            if (sampleBuf.length != nFrames) {
-                sampleBuf = new StereoSample[nFrames];
-                for (int i = 0; i < nFrames; i++) sampleBuf[i] = new StereoSample();
-            }
-            for (int f = 0; f < nFrames; f++) {
-                int offset = f * frameSize;
-                sampleBuf[f].ch0 = readSample(buffer, offset);
-                sampleBuf[f].ch1 = readSample(buffer, offset + sampleBytes);
-            }
-            sampleListener.accept(sampleBuf);
-        }
-    }
-
-    /** Offset-binary decoder — unsigned 0..2^bitsPerSample-1 minus midpoint. */
-    @Override
-    public int readSample(byte[] pcm, int offset) {
-        switch (sampleBytes) {
-            case 1:
-                return (pcm[offset] + (byte) 0x80) & 0xFF;
-            case 2:
-                return ((short) ((pcm[offset + 1] & 0xFF) << 8 | (pcm[offset] & 0xFF)) + (short) 0x8000) & 0xFFFF;
-            case 3:
-                return ((((pcm[offset + 2]) << 16)
-                     | ((pcm[offset + 1] & 0xFF) << 8)
-                     |  (pcm[offset]     & 0xFF)) + 0x800000) & 0xFFFFFF;
-            case 4:
-                return (((pcm[offset + 3] << 24)
-                     | ((pcm[offset + 2] & 0xFF) << 16)
-                     | ((pcm[offset + 1] & 0xFF) << 8)
-                     |  (pcm[offset]     & 0xFF)) + 0x80000000) & 0xFFFFFFFF;
-            default:
-                throw new IllegalStateException("Unsupported sampleBytes: " + sampleBytes);
-        }
-    }
-
-    @Override public boolean     isRecording() { return recording.get(); }
 
     @Override
     public void close() {

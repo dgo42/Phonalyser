@@ -26,10 +26,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.MessageFormat;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.MissingResourceException;
 import java.util.ResourceBundle;
 
+import org.edgo.audio.measure.common.AppPaths;
+
+import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -54,7 +59,8 @@ import lombok.extern.log4j.Log4j2;
  * the GUI.
  */
 @Log4j2
-public final class I18n {
+@UtilityClass
+public class I18n {
 
     private static final String BUNDLE_NAME = "i18n.messages";
 
@@ -71,8 +77,6 @@ public final class I18n {
     private static volatile ResourceBundle bundle =
             ResourceBundle.getBundle(BUNDLE_NAME, Locale.getDefault(), BUNDLE_CL);
     private static volatile Locale currentLocale = Locale.getDefault();
-
-    private I18n() {}
 
     /** Switches the active locale.  Re-resolves the bundle so subsequent
      *  {@link #t} calls return strings from the new language.  Widgets
@@ -112,8 +116,23 @@ public final class I18n {
         return EXTERNAL_DIR;
     }
 
-    /** Resolution order documented on the class-level Javadoc. */
+    /** Resolution order documented on the class-level Javadoc.  For the
+     *  packaged app (jpackage sets {@code -Di18n.dir}) the bundled bundles are
+     *  seeded into a writable per-user dir which becomes the primary source so
+     *  translations can be edited; the bundled root stays in the classloader
+     *  as a fallback.  In dev the classpath/target dir is left untouched. */
     private static Path resolveExternalDir() {
+        Path bundled = resolveBundledDir();
+        boolean packaged = System.getProperty("i18n.dir") != null;
+        if (!packaged || bundled == null) return bundled;
+        Path user = AppPaths.instance().i18nDir();
+        AppPaths.instance().seedDirIfEmpty(user, bundled);
+        return user;
+    }
+
+    /** The read-only bundled i18n dir: {@code -Di18n.dir} (jpackage sets it to
+     *  {@code $APPDIR/i18n}), else an {@code i18n/} folder next to the JAR. */
+    private static Path resolveBundledDir() {
         String prop = System.getProperty("i18n.dir");
         if (prop != null && !prop.isEmpty()) {
             Path p = Paths.get(prop);
@@ -136,16 +155,26 @@ public final class I18n {
 
     private static ClassLoader buildBundleClassLoader(Path externalDir) {
         ClassLoader parent = I18n.class.getClassLoader();
-        if (externalDir == null) return parent;
-        Path bundleRoot = externalDir.getParent();
-        if (bundleRoot == null) return parent;
+        List<URL> urls = new ArrayList<>();
+        addBundleRoot(urls, externalDir);          // user dir (overrides) when packaged
+        addBundleRoot(urls, resolveBundledDir());  // bundled root (always a fallback)
+        if (urls.isEmpty()) return parent;
+        log.info("i18n external dir: {}", externalDir != null ? externalDir.toAbsolutePath() : "(classpath)");
+        return new URLClassLoader(urls.toArray(new URL[0]), parent);
+    }
+
+    /** Adds the parent ("bundle root") of {@code bundleDir} to {@code urls} so
+     *  {@link ResourceBundle} resolves {@code i18n/messages*.properties} under
+     *  it.  Dedupes, so dev (external == bundled) yields a single entry. */
+    private static void addBundleRoot(List<URL> urls, Path bundleDir) {
+        if (bundleDir == null) return;
+        Path root = bundleDir.getParent();
+        if (root == null) return;
         try {
-            URL[] urls = { bundleRoot.toUri().toURL() };
-            log.info("i18n external dir: {}", externalDir.toAbsolutePath());
-            return new URLClassLoader(urls, parent);
+            URL u = root.toUri().toURL();
+            if (!urls.contains(u)) urls.add(u);
         } catch (MalformedURLException ex) {
-            log.warn("Could not build i18n classloader for {}: {}", bundleRoot, ex.getMessage());
-            return parent;
+            log.warn("Could not build i18n classloader for {}: {}", root, ex.getMessage());
         }
     }
 }

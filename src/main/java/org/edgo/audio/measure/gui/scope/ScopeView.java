@@ -38,9 +38,9 @@ import org.edgo.audio.measure.dsp.MainsFilters;
 import org.edgo.audio.measure.dsp.MainsTimeFilter;
 import org.edgo.audio.measure.dsp.MedianFilter;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
-import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OscSliderId;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
@@ -48,17 +48,17 @@ import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
-import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
 import org.edgo.audio.measure.gui.common.Fonts;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.BlinkBanner;
 import org.edgo.audio.measure.gui.widgets.ToolButton;
-import org.edgo.audio.measure.gui.widgets.Toolbar;
 import org.edgo.audio.measure.gui.widgets.ToolWindow;
+import org.edgo.audio.measure.gui.widgets.Toolbar;
 import org.edgo.audio.measure.gui.widgets.TransparentComposite;
+import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -433,24 +433,26 @@ public final class ScopeView extends AbstractMeasurementView {
                 color(ColorRole.LEFT_TRACE),  chanButtonFont, I18n.t("scope.stats.left.tooltip"),  mc == Channel.L, "channel");
         rightBtn = headerBar.chanButton("R", color(ColorRole.RIGHT_CHANNEL_MID), color(ColorRole.RIGHT_CHANNEL_MID),
                 color(ColorRole.RIGHT_TRACE), chanButtonFont, I18n.t("scope.stats.right.tooltip"), mc == Channel.R, "channel");
+        // Channel-colour prefs are observable: rebind so a colour change recolours
+        // the traces + L/R buttons immediately, not on the next paint.
+        Bindings.onChange(this, prefs.oscLeftChannelColorProperty(),  rgb -> { syncChannelColors(); redraw(); });
+        Bindings.onChange(this, prefs.oscRightChannelColorProperty(), rgb -> { syncChannelColors(); redraw(); });
         // Auto-setup (always), then the signal-gated gauge / external / stats / reset.
         headerBar.spacer(2);
-        autoSetupBtn = headerBar.pushButton(SvgPaths.ARROWS_TO_CIRCLE, 16,
-                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
-                I18n.t("scope.autosetup.tooltip"));
+        autoSetupBtn = headerBar.pushButton(Icon.ARROWS_TO_CIRCLE_LIT, Icon.ARROWS_TO_CIRCLE_DARK,
+                color(ColorRole.TEXT), I18n.t("scope.autosetup.tooltip"));
         dataSpacer = headerBar.spacer(2);
-        tableToggleBtn = headerBar.toggleButton(SvgPaths.GAUGE_HIGH, 16,
-                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
+        tableToggleBtn = headerBar.toggleButton(Icon.GAUGE_HIGH_LIT, Icon.GAUGE_HIGH_DARK,
+                color(ColorRole.TEXT),
                 I18n.t("scope.stats.table.tooltip"), prefs.isOscShowMeasurementTable());
-        externalBtn = headerBar.toggleButton(SvgPaths.WINDOW_RESTORE, 16,
-                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
+        externalBtn = headerBar.toggleButton(Icon.WINDOW_RESTORE_LIT, Icon.WINDOW_RESTORE_DARK,
+                color(ColorRole.TEXT),
                 I18n.t("scope.external.window.tooltip"), tableExtracted);
-        statsToggleBtn = headerBar.toggleButton(SvgPaths.CHART_COLUMN, 16,
-                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
+        statsToggleBtn = headerBar.toggleButton(Icon.CHART_LIT, Icon.CHART_DARK,
+                color(ColorRole.TEXT),
                 I18n.t("scope.stats.toggle.tooltip"), prefs.isOscShowStats());
-        resetBtn = headerBar.pushButton(SvgPaths.ROTATE_LEFT, 18,
-                rgb(ColorRole.RESET), rgb(ColorRole.BACKGROUND), color(ColorRole.RESET),
-                I18n.t("scope.stats.reset.tooltip"));
+        resetBtn = headerBar.pushButton(Icon.ROTATE_LEFT_RED, Icon.ROTATE_LEFT_DARK,
+                color(ColorRole.RESET), I18n.t("scope.stats.reset.tooltip"));
         Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
         headerBar.setBounds(COL_NAME_X, 5, hbSize.x, hbSize.y);
         headerBar.layout();
@@ -710,13 +712,28 @@ public final class ScopeView extends AbstractMeasurementView {
             setColor(ColorRole.LEFT_CHANNEL_MID,  attenuate(newL, 0.65));
             setColor(ColorRole.LEFT_BEAT,         attenuate(newL, 0.45));
             currentLeftRgb = newL;
+            recolorChannelButton(leftBtn, "L", ColorRole.LEFT_CHANNEL_MID, ColorRole.LEFT_TRACE);
         }
         if (newR != currentRightRgb) {
             setColor(ColorRole.RIGHT_TRACE,       newR);
             setColor(ColorRole.RIGHT_CHANNEL_MID, attenuate(newR, 0.65));
             setColor(ColorRole.RIGHT_BEAT,        attenuate(newR, 0.45));
             currentRightRgb = newR;
+            recolorChannelButton(rightBtn, "R", ColorRole.RIGHT_CHANNEL_MID, ColorRole.RIGHT_TRACE);
         }
+    }
+
+    /**
+     * Re-points a channel header button at the freshly-allocated palette
+     * colours after {@link #syncChannelColors} disposed the previous ones.
+     * Without this the button keeps a reference to a now-disposed
+     * {@link Color} and its next paint throws "Graphic is disposed".
+     */
+    private void recolorChannelButton(ToolButton btn, String label, ColorRole midRole, ColorRole traceRole) {
+        if (btn == null) return;
+        Color mid = color(midRole);
+        btn.setLabel(label, mid);                 // content (label) colour
+        btn.setColors(mid, color(traceRole));     // frame (idle) + fill (active)
     }
 
     /**
@@ -1068,7 +1085,7 @@ public final class ScopeView extends AbstractMeasurementView {
         w.setTitle(I18n.t("scope.external.window.title"));
         // Stats-toggle re-enables the σ columns from inside the window; reset clears the
         // running statistics.  Both flow back through redraw().
-        w.addButton(SvgPaths.CHART_COLUMN, 16, true, Preferences.instance().isOscShowStats(),
+        w.addButton(Icon.CHART_LIT, Icon.CHART_DARK, true, Preferences.instance().isOscShowStats(),
                 color(ColorRole.TEXT), I18n.t("scope.stats.toggle.tooltip"), e -> {
                     Preferences p = Preferences.instance();
                     p.setOscShowStats(!p.isOscShowStats());   // auto-saved; the main
@@ -1076,7 +1093,7 @@ public final class ScopeView extends AbstractMeasurementView {
                     sizeMeasurementWindow();
                     redraw();
                 });
-        w.addButton(SvgPaths.ROTATE_LEFT, 18, false, false,
+        w.addButton(Icon.ROTATE_LEFT_RED, Icon.ROTATE_LEFT_DARK, false, false,
                 color(ColorRole.RESET), I18n.t("scope.stats.reset.tooltip"), e -> {
                     measWorker.clearHistory();
                     redraw();
@@ -1458,7 +1475,9 @@ public final class ScopeView extends AbstractMeasurementView {
         // overlap, but the result reads as a clean broken track.
         double levelFrac = ScopeFormat.clamp01(prefs.getOscTriggerLevelFrac());
         int levelY = (int) Math.round(levelFrac * h);
-        Color levelColor = (trigCh == Channel.L) ? color(ColorRole.LEFT_TRACE) : color(ColorRole.RIGHT_TRACE);
+        // Trigger-level marker is ALWAYS yellow — a fixed scope-trigger colour,
+        // independent of which channel is the trigger source or its trace colour.
+        Color levelColor = getDisplay().getSystemColor(SWT.COLOR_YELLOW);
         // Trigger-channel offset is intentionally NOT clamped to [0, 1] —
         // the trigger-level voltage label needs to track the channel offset
         // out to the extended ±FS-at-centre range the vertical scrollbar

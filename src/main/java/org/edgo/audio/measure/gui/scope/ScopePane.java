@@ -37,6 +37,7 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
@@ -212,10 +213,9 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
     private ScopePane(Composite parent, ScopeController controller, boolean liveCapture) {
         super(parent);
         this.controller = controller;
-        IconUtils icons = IconUtils.instance();
         Display d = parent.getDisplay();
-        this.recordDim      = icons.createRecordLed(d, 200,  40,  40, false, ACTION_ICON_SIZE);
-        this.recordLit      = icons.createRecordLed(d, 255,   0,   0, true,  ACTION_ICON_SIZE);
+        this.recordDim      = IconUtils.icon(d, Icon.RECORD_DARK);
+        this.recordLit      = IconUtils.icon(d, Icon.RECORD_LIT);
         group.setLayout(paneLayout());
         // Clickable Label inside the content area replaces the Group's
         // native chrome title — GTK's GtkFrame label widget consumes

@@ -44,7 +44,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
 import org.edgo.audio.measure.gui.common.Fonts;
-import org.edgo.audio.measure.gui.common.SvgPaths;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.BlinkBanner;
 import org.edgo.audio.measure.gui.widgets.ToolButton;
@@ -284,15 +284,13 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 color(ColorRole.LEFT_BTN_CHAN),  chanButtonFont, I18n.t("freqresp.button.left.tooltip"),  prefs.isFreqRespLeftVisible(),  "channel");
         rightBtn = headerBar.chanButton("R", color(ColorRole.TEXT), color(ColorRole.BUTTON_FRAME),
                 color(ColorRole.RIGHT_BTN_CHAN), chanButtonFont, I18n.t("freqresp.button.right.tooltip"), prefs.isFreqRespRightVisible(), "channel");
-        phaseBtn = headerBar.coloredToggle(SvgPaths.PHASE_SINE, 18,
-                color(ColorRole.BUTTON_FRAME), phaseFillGray,
+        phaseBtn = headerBar.toggleButton(Icon.PHASE_SINE, Icon.PHASE_SINE,
+                phaseFillGray,
                 I18n.t("freqresp.button.phase.tooltip"), prefs.isFreqRespPhaseVisible());
-        autoSetupBtn = headerBar.pushButton(SvgPaths.ARROWS_TO_CIRCLE, 16,
-                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
-                I18n.t("freqresp.button.autosetup.tooltip"));
-        maxBtn = headerBar.pushButton(SvgPaths.ARROWS_FROM_CIRCLE, 16,
-                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
-                I18n.t("freqresp.button.maximize.tooltip"));
+        autoSetupBtn = headerBar.pushButton(Icon.ARROWS_TO_CIRCLE_DARK, Icon.ARROWS_TO_CIRCLE_LIT,
+                color(ColorRole.TEXT), I18n.t("freqresp.button.autosetup.tooltip"));
+        maxBtn = headerBar.pushButton(Icon.ARROWS_FROM_CIRCLE_DARK, Icon.ARROWS_FROM_CIRCLE_LIT,
+                color(ColorRole.TEXT), I18n.t("freqresp.button.maximize.tooltip"));
         Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
         headerBar.setBounds(MARGIN_LEFT + HEADER_BTN_INSET, BTN_TOP, hbSize.x, hbSize.y);
         headerBar.layout();
@@ -308,6 +306,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 p.setFreqRespRightVisible(true); p.setFreqRespLeftVisible(false); p.save(); redraw();
             }
         });
+        // Recolour the L/R buttons immediately when the channel colours change.
+        bindChannelButtonFills(leftBtn, rightBtn);
         phaseBtn.addListener(SWT.Selection, e -> {
             Preferences p = Preferences.instance();
             p.setFreqRespPhaseVisible(phaseBtn.isToggled()); p.save();

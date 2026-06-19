@@ -18,13 +18,15 @@
 
 package org.edgo.audio.measure.gui.generator;
 
-import lombok.Getter;
-import lombok.extern.log4j.Log4j2;
+import java.io.File;
+import java.util.Locale;
+import java.util.function.Consumer;
+
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
-import org.eclipse.swt.graphics.RGB;
+import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
@@ -32,7 +34,7 @@ import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
-import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
@@ -41,23 +43,20 @@ import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
-import org.edgo.audio.measure.gui.common.AbstractPane;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
-import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.gui.widgets.SignalFormCombo;
-import org.edgo.audio.measure.gui.widgets.SignalFormIcon;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.preferences.Preferences;
-import org.eclipse.swt.widgets.Display;
 
-import java.io.File;
-import java.util.Locale;
-import java.util.function.Consumer;
+import lombok.Getter;
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Generator pane — UI mirror of the CLI generator.  Hosts:
@@ -81,11 +80,6 @@ public final class GeneratorPane extends AbstractPane {
 
     /** Minimum width (px) the pane will accept in the horizontal split. */
     public static final int MIN_WIDTH_PX = 200;
-    /** Pixel height of the small play button in the Load-from row. */
-    private static final int TINY_LED_SIZE       = 16;
-    /** Pixel height of the floppy / folder glyphs that sit next to the
-     *  file-path text fields. */
-    private static final int FILE_ICON_HEIGHT    = 16;
 
     /** Minimum generator / dual-tone frequency — a real floor so a field can
      *  never hold a degenerate (sub-0.01 Hz) value. */
@@ -221,17 +215,14 @@ public final class GeneratorPane extends AbstractPane {
         int savedWidth = Preferences.instance().getGenPaneWidth();
         if (savedWidth >= MIN_WIDTH_PX) this.paneWidthPx = savedWidth;
 
-        IconUtils icons = IconUtils.instance();
         Display d = parent.getDisplay();
-        RGB greenDim = new RGB(0x00, 0xAA, 0x00);
-        RGB greenLit = new RGB(0x00, 0xFF, 0x00);
-        this.playDimImg     = icons.renderAtHeight(d, SvgPaths.PLAY, ACTION_ICON_SIZE,  greenDim);
-        this.playLitImg     = icons.renderAtHeight(d, SvgPaths.PLAY, ACTION_ICON_SIZE,  greenLit);
-        this.tinyPlayDimImg = icons.renderAtHeight(d, SvgPaths.PLAY, TINY_LED_SIZE,  greenDim);
-        this.tinyPlayLitImg = icons.renderAtHeight(d, SvgPaths.PLAY, TINY_LED_SIZE,  greenLit);
-        this.floppyDiskIcon = icons.renderAtHeight(d, SvgPaths.FLOPPY_DISK, FILE_ICON_HEIGHT, null);
-        this.folderOpenIcon = icons.renderAtHeight(d, SvgPaths.FOLDER_OPEN, FILE_ICON_HEIGHT, null);
-        this.calibrateDacIcon = icons.renderAtHeight(d, SvgPaths.CROSSHAIR, ACTION_ICON_SIZE, null);
+        this.playDimImg     = IconUtils.icon(d, Icon.PLAY_DARK_BIG);
+        this.playLitImg     = IconUtils.icon(d, Icon.PLAY_LIT_BIG);
+        this.tinyPlayDimImg = IconUtils.icon(d, Icon.PLAY_DARK_SMALL);
+        this.tinyPlayLitImg = IconUtils.icon(d, Icon.PLAY_LIT_SMALL);
+        this.floppyDiskIcon = IconUtils.icon(d, Icon.FLOPPY_DISK);
+        this.folderOpenIcon = IconUtils.icon(d, Icon.FOLDER_OPEN);
+        this.calibrateDacIcon = IconUtils.icon(d, Icon.CROSSHAIR_BIG);
 
         GridLayout gl = new GridLayout(1, false);
         // 2 px padding on all four sides so the content doesn't touch the
@@ -621,15 +612,20 @@ public final class GeneratorPane extends AbstractPane {
 
         corrBrowseBtn = new Button(corrRow, SWT.PUSH);
         corrBrowseBtn.setImage(folderOpenIcon);
+        GridData corrBrowseGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        corrBrowseGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        corrBrowseBtn.setLayoutData(corrBrowseGd);
         corrBrowseBtn.setToolTipText(I18n.t("generator.corrections.browse"));
         corrBrowseBtn.addListener(SWT.Selection, e -> openCorrectionsBrowse());
 
         // Clear (×) — unloads the correction file so the field empties and the
         // compensated form stops pre-distorting.
         corrClearBtn = new Button(corrRow, SWT.PUSH);
-        Image corrXmark = icons.renderAtHeight(d, SvgPaths.RECTANGLE_XMARK,
-                FILE_ICON_HEIGHT, new RGB(0xC8, 0x28, 0x28));
+        Image corrXmark = IconUtils.icon(corrRow.getDisplay(), Icon.RECTANGLE_XMARK);
         if (corrXmark != null) corrClearBtn.setImage(corrXmark);
+        GridData corrClearGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        corrClearGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        corrClearBtn.setLayoutData(corrClearGd);
         corrClearBtn.setToolTipText(I18n.t("generator.corrections.clear"));
         corrClearBtn.addListener(SWT.Selection, e -> clearCorrections());
         // Initial state for the current form (path + enablement).
@@ -667,6 +663,9 @@ public final class GeneratorPane extends AbstractPane {
 
         Button saveTo = new Button(wavRow, SWT.PUSH);
         saveTo.setImage(floppyDiskIcon);
+        GridData saveToGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        saveToGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        saveTo.setLayoutData(saveToGd);
         saveTo.setToolTipText(I18n.t("generator.saveTo.tooltip"));
         saveTo.addListener(SWT.Selection, e -> doSaveToBrowseAndWrite());
 
@@ -711,11 +710,17 @@ public final class GeneratorPane extends AbstractPane {
 
         Button loadFrom = new Button(playFromRow, SWT.PUSH);
         loadFrom.setImage(folderOpenIcon);
+        GridData loadFromGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        loadFromGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        loadFrom.setLayoutData(loadFromGd);
         loadFrom.setToolTipText(I18n.t("generator.loadFrom.browse"));
         loadFrom.addListener(SWT.Selection, e -> openPlayFromBrowse());
 
         playFromBtn = new Button(playFromRow, SWT.PUSH);
         playFromBtn.setImage(tinyPlayDimImg);
+        GridData playFromGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        playFromGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        playFromBtn.setLayoutData(playFromGd);
         playFromBtn.setToolTipText(I18n.t("generator.loadFrom.play"));
         playFromBtn.addListener(SWT.Selection, e -> togglePlayFrom());
         // Auto-reset the LED when playback ends naturally (EOF without
@@ -753,11 +758,17 @@ public final class GeneratorPane extends AbstractPane {
         Button calibrateDacBtn = new Button(playRow, SWT.PUSH);
         calibrateDacBtn.setImage(calibrateDacIcon);
         calibrateDacBtn.setToolTipText(I18n.t("generator.calibrateDac.tooltip"));
-        calibrateDacBtn.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, true, false));
+        GridData calBtnGd = new GridData(SWT.LEFT, SWT.CENTER, true, false);
+        calBtnGd.widthHint = IconUtils.ACTION_BUTTON_PX;
+        calBtnGd.heightHint = IconUtils.ACTION_BUTTON_PX;
+        calibrateDacBtn.setLayoutData(calBtnGd);
         calibrateDacBtn.addListener(SWT.Selection, e -> openDacCalibrationDialog());
 
         playBtn = new Button(playRow, SWT.PUSH);
-        playBtn.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false));
+        GridData playBtnGd = new GridData(SWT.RIGHT, SWT.CENTER, false, false);
+        playBtnGd.widthHint = IconUtils.ACTION_BUTTON_PX;
+        playBtnGd.heightHint = IconUtils.ACTION_BUTTON_PX;
+        playBtn.setLayoutData(playBtnGd);
         playBtn.setImage(playDimImg);                                  // start dim
         playBtn.setToolTipText(I18n.t("generator.play.start"));
         playBtn.addListener(SWT.Selection, e -> {
@@ -821,7 +832,6 @@ public final class GeneratorPane extends AbstractPane {
             bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
             bus.unsubscribe(Events.AUDIO_FORMAT_CHANGED,          audioFormatListener);
-            SignalFormIcon.instance().disposeAll(group.getDisplay());
             if (onAirRedColor    != null && !onAirRedColor.isDisposed())    onAirRedColor.dispose();
             if (onAirRedDimColor != null && !onAirRedDimColor.isDisposed()) onAirRedDimColor.dispose();
             if (onAirGreyColor   != null && !onAirGreyColor.isDisposed())   onAirGreyColor.dispose();
@@ -1185,16 +1195,16 @@ public final class GeneratorPane extends AbstractPane {
     }
 
     /** Syncs the corrections row to the current form: shows that form's
-     *  {@code .dpd} (the single-tone slot for {@code SINE_COMPENSATED}, the
-     *  dual-tone slot for {@code DUAL_TONE_COMPENSATED}) and enables the
+     *  {@code .dpd} (the single-tone slot for {@code SINE_COMP}, the
+     *  dual-tone slot for {@code DUAL_TONE_COMP}) and enables the
      *  field + browse/clear only for those two compensated forms — every other
      *  waveform has no predistortion file, so the row is emptied and disabled. */
     private void refreshCorrectionsRow() {
         if (correctionsField == null || correctionsField.isDisposed()) return;
         Preferences prefs = Preferences.instance();
         GenSignalForm f = prefs.getGenSignalForm();
-        boolean compensated = f == GenSignalForm.SINE_COMPENSATED
-                           || f == GenSignalForm.DUAL_TONE_COMPENSATED;
+        boolean compensated = f == GenSignalForm.SINE_COMP
+                           || f == GenSignalForm.DUAL_TONE_COMP;
         String path = compensated ? nullToEmpty(prefs.getGenDpd(f)) : "";
         correctionsField.setText(path);
         correctionsField.setToolTipText(path.isEmpty() ? null : path);

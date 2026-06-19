@@ -45,7 +45,8 @@ public class WdmksDeviceManager {
     /** {@link DeviceRef} backed by a PortAudio WDM-KS device index. */
     public record WdmksDeviceRef(int index, String name, String description, String vendor,
                                  boolean isInput, boolean isOutput,
-                                 int paDeviceIndex, double defaultSampleRate)
+                                 int paDeviceIndex, double defaultSampleRate,
+                                 int maxInputChannels)
             implements DeviceRef {
         @Override
         public AudioBackendType backend() {
@@ -100,12 +101,15 @@ public class WdmksDeviceManager {
             if (paDev < 0) continue;
             PortAudio.PaDeviceInfo info = lib.Pa_GetDeviceInfo(paDev);
             if (info == null) continue;
-            boolean canIn  = info.maxInputChannels  >= 2;
+            // Inputs: accept mono (>=1) too — the recorder upmixes a single
+            // channel to stereo.  Outputs still require >=2.
+            boolean canIn  = info.maxInputChannels  >= 1;
             boolean canOut = info.maxOutputChannels >= 2;
             if (input ? !canIn : !canOut) continue;
             out.add(new WdmksDeviceRef(slot++, info.name,
                     "WDM-KS", apiInfo.name,
-                    canIn, canOut, paDev, info.defaultSampleRate));
+                    canIn, canOut, paDev, info.defaultSampleRate,
+                    info.maxInputChannels));
             seenNames.add(info.name);
         }
         // Drop cached format lists for devices that vanished since the last
@@ -143,9 +147,13 @@ public class WdmksDeviceManager {
                         352800, 384000, 705600, 768000};
         int[] depths = {16, 24, 32};
 
+        // Probe inputs at the device's real channel count (a mono input can't
+        // open as 2 channels); the recorder upmixes mono to the stereo
+        // AudioFormat reported below.  Outputs are always stereo (filtered >=2).
+        int channels = output ? 2 : Math.min(2, Math.max(1, d.maxInputChannels()));
         PortAudio.PaStreamParameters params = new PortAudio.PaStreamParameters();
         params.device                    = d.paDeviceIndex();
-        params.channelCount              = 2;
+        params.channelCount              = channels;
         params.suggestedLatency          = 0.0;
         params.hostApiSpecificStreamInfo = null;
 

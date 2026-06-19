@@ -31,7 +31,6 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.graphics.Image;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -52,8 +51,8 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
-import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.PresetBar;
@@ -744,6 +743,10 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // pane's utility icons share one size.
         Button shotBtn = new Button(g, SWT.PUSH);
         shotBtn.setImage(cameraIcon);
+        GridData shotGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        shotGd.widthHint = 43;
+        shotGd.heightHint = 43;
+        shotBtn.setLayoutData(shotGd);
         shotBtn.setToolTipText(I18n.t("freqResp.utility.screenshot.tooltip"));
         shotBtn.addListener(SWT.Selection, e -> screenshotPane.openScreenshotDialog());
 
@@ -752,12 +755,20 @@ public final class FreqRespTabControl extends AbstractTabControl {
         // "crosshair = calibrate" convention.
         Button dacCalBtn = new Button(g, SWT.PUSH);
         dacCalBtn.setImage(crosshairIcon);
+        GridData dacCalGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        dacCalGd.widthHint = 43;
+        dacCalGd.heightHint = 43;
+        dacCalBtn.setLayoutData(dacCalGd);
         dacCalBtn.setToolTipText(I18n.t("freqResp.utility.calibrateDac.tooltip"));
         dacCalBtn.addListener(SWT.Selection, e ->
                 log.info("FreqResp DAC-cal clicked (dialog wired in Phase 6 follow-up)"));
 
         Button adcCalBtn = new Button(g, SWT.PUSH);
         adcCalBtn.setImage(crosshairIcon);
+        GridData adcCalGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        adcCalGd.widthHint = 43;
+        adcCalGd.heightHint = 43;
+        adcCalBtn.setLayoutData(adcCalGd);
         adcCalBtn.setToolTipText(I18n.t("freqResp.utility.calibrateAdc.tooltip"));
         adcCalBtn.addListener(SWT.Selection, e ->
                 log.info("FreqResp ADC-cal clicked (dialog wired in Phase 6 follow-up)"));
@@ -849,36 +860,36 @@ public final class FreqRespTabControl extends AbstractTabControl {
         activeCheck.setText(I18n.t("fft.calibration.active"));
         activeCheck.setToolTipText(I18n.t("fft.calibration.active.tooltip"));
 
-        Image folderIcon = IconUtils.instance().renderAtHeight(
-                row.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
+        Image folderIcon = IconUtils.icon(row.getDisplay(), Icon.FOLDER_OPEN);
         Button loadBtn = new Button(row, SWT.PUSH);
         if (folderIcon != null) loadBtn.setImage(folderIcon);
+        GridData loadGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        loadGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        loadBtn.setLayoutData(loadGd);
         loadBtn.setToolTipText(I18n.t("freqResp.calibration.load.tooltip"));
 
-        Image xmark = IconUtils.instance().renderAtHeight(
-                row.getDisplay(), SvgPaths.RECTANGLE_XMARK, 16,
-                new RGB(0xC8, 0x28, 0x28));
+        Image xmark = IconUtils.icon(row.getDisplay(), Icon.RECTANGLE_XMARK);
         Button clearBtn = new Button(row, SWT.PUSH);
         if (xmark != null) clearBtn.setImage(xmark);
+        GridData clearGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        clearGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        clearBtn.setLayoutData(clearGd);
         clearBtn.setToolTipText(I18n.t("freqResp.calibration.clear.tooltip"));
 
-        Image plus = IconUtils.instance().renderAtHeight(
-                row.getDisplay(), SvgPaths.PLUS, 16,
-                new RGB(0x28, 0x90, 0x28));
+        Image plus = IconUtils.icon(row.getDisplay(), Icon.PLUS);
         Button addBtn = new Button(row, SWT.PUSH);
         if (plus != null) addBtn.setImage(plus);
+        GridData addGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        addGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        addBtn.setLayoutData(addGd);
         addBtn.setToolTipText(I18n.t("freqResp.calibration.add.tooltip"));
 
-        // Minus icon: render to a square 16×16 canvas so the SVG's thin
-        // horizontal bar sits centered with transparent padding above
-        // and below — otherwise renderAtHeight derives width from the
-        // path bounding box (which is wide-and-thin) and we'd get a
-        // stretched red rectangle.
-        Image minus = IconUtils.instance().render(
-                row.getDisplay(), SvgPaths.MINUS, 16, 16,
-                new RGB(0xC8, 0x28, 0x28));
+        Image minus = IconUtils.icon(row.getDisplay(), Icon.MINUS);
         Button removeBtn = new Button(row, SWT.PUSH);
         if (minus != null) removeBtn.setImage(minus);
+        GridData removeGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        removeGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        removeBtn.setLayoutData(removeGd);
         removeBtn.setToolTipText(I18n.t("freqResp.calibration.remove.tooltip"));
         if (isRow0) {
             // Invisible-but-present placeholder so the column widths of
@@ -1110,10 +1121,12 @@ public final class FreqRespTabControl extends AbstractTabControl {
         saveToPathField.setToolTipText(savedPath != null && !savedPath.isEmpty() ? savedPath : I18n.t("freqResp.saveTo.path.tooltip"));
         saveToPathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
-        Image floppyIcon = IconUtils.instance().renderAtHeight(
-                g.getDisplay(), SvgPaths.FLOPPY_DISK, 16, null);
+        Image floppyIcon = IconUtils.icon(g.getDisplay(), Icon.FLOPPY_DISK);
         Button saveBtn = new Button(g, SWT.PUSH);
         if (floppyIcon != null) saveBtn.setImage(floppyIcon);
+        GridData saveGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        saveGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        saveBtn.setLayoutData(saveGd);
         saveBtn.setToolTipText(I18n.t("freqResp.saveTo.tooltip"));
         saveBtn.addListener(SWT.Selection, e -> openSaveDialog());
     }
@@ -1213,10 +1226,12 @@ public final class FreqRespTabControl extends AbstractTabControl {
         loadFromPathField.setToolTipText(savedPath != null && !savedPath.isEmpty() ? savedPath : I18n.t("freqResp.loadFrom.path.tooltip"));
         loadFromPathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
-        Image folderIcon = IconUtils.instance().renderAtHeight(
-                g.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
+        Image folderIcon = IconUtils.icon(g.getDisplay(), Icon.FOLDER_OPEN);
         Button loadBtn = new Button(g, SWT.PUSH);
         if (folderIcon != null) loadBtn.setImage(folderIcon);
+        GridData loadGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        loadGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        loadBtn.setLayoutData(loadGd);
         loadBtn.setToolTipText(I18n.t("freqResp.loadFrom.tooltip"));
         loadBtn.addListener(SWT.Selection, e -> openLoadDialog());
     }
