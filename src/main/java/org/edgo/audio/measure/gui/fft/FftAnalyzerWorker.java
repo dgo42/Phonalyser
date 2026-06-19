@@ -453,10 +453,6 @@ public final class FftAnalyzerWorker {
      *  the κ-residual ramp.  Raise it if the fundamental still drifts; lower it if
      *  the harmonics get noisy. */
     private static final double PHASE_TRACK_GAIN = 0.10;
-    /** Dropout threshold: when the per-tick fundamental falls below this fraction
-     *  of the accumulated average, the signal is treated as dropped (silence /
-     *  disconnect) and the tick is held out of the average instead of diluting it. */
-    private static final double DROPOUT_FRACTION = 0.75;
     /** A per-tone cross-tick phase residual larger than this is treated as a
      *  phase DISCONTINUITY (a DDS phase jump / reconnect that the window
      *  glitch-gate didn't catch) rather than tracking noise: the tone is
@@ -730,20 +726,14 @@ public final class FftAnalyzerWorker {
         double delta = (samplesAbsStart - accumRefSampleStart) + accumDroppedSamples;
 
         int weight = Math.max(1, r.frameCount);
-        // Dropout guard: if the fundamental has collapsed (DAC/ADC disconnected,
-        // signal muted), DON'T fold the silence into the average — it would just
-        // dilute everything coherently built.  A dropout is smooth, so the Δ³s
-        // glitch gate never fires; catch it here by amplitude and HOLD the
-        // accumulator (return without adding) until the tone returns.
-        if (coherent && accumRe != null && accumFrames > 0 && accumIntFundBinRounded > 0) {
-            int    k0d      = Math.min(accumIntFundBinRounded, halfSize);
-            double tickFund = Math.hypot(r.re[k0d], r.im[k0d]);
-            double avgFund  = Math.hypot(accumRe[k0d], accumIm[k0d]) / accumFrames;
-            if (avgFund > 0.0 && tickFund < DROPOUT_FRACTION * avgFund) {
-                gapRecoverPending = true;   // tone returns at a new phase → one-shot realign then
-                return true;                // hold the accumulator; don't dilute with a dropout
-            }
-        }
+        // A coherent "dropout hold" used to sit here: when the pinned fundamental's
+        // amplitude collapsed it returned WITHOUT accumulating, to avoid diluting
+        // the coherent average with silence.  But that froze the averages count and
+        // the live view whenever the signal no longer had a fundamental (coherent
+        // only — incoherent has no such guard).  A missing fundamental must NEVER
+        // stall averaging or the view (it only hides the THD/IMD table), so every
+        // tick is now accumulated and published; the phase-track loop below
+        // re-aligns when a tone returns.
         // Bounded (ring) window: before adding this tick, scale the running sum
         // down so the effective depth holds at targetN frames.  This makes the
         // running sum an exponential window (α = weight/targetN); forever mode

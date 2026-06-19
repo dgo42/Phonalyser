@@ -56,6 +56,13 @@ public class FftAnalyzer {
      *  non-de-rotated) ticks — avoids a per-tick allocation on the hot path. */
     private static final int[] NO_IMD_PRODUCTS = new int[0];
 
+    /** Lower edge (Hz) of the no-hint fundamental search: DC … this is ignored so
+     *  window leakage from a residual DC offset can't win the global max. */
+    private static final double FUND_SEARCH_MIN_HZ = 5.0;
+    /** Upper edge of the no-hint fundamental search as a fraction of Nyquist:
+     *  bins above this can't be a fundamental of interest and are ignored. */
+    private static final double FUND_SEARCH_MAX_NYQUIST_FRACTION = 0.7;
+
     /** Cached window-function table — sized to {@link #cachedWindowSize}
      *  for {@link #cachedWindowType}.  analyze() is called repeatedly on
      *  the FFT worker thread with the same (fftSize, windowType) pair, so
@@ -486,12 +493,14 @@ public class FftAnalyzer {
         double[] f0Re = scratchF0Re;
         double[] f0Im = scratchF0Im;
         cachedFrameFft(samples, 0, fftSize, window, f0Re, f0Im);
-        // Skip the DC + ULF zone below 10 Hz when searching for the fundamental:
-        // window leakage from a residual DC offset can populate bin 1 at roughly
-        // -32 dB (Hann) below DC level, easily beating a deeply notched
-        // fundamental at e.g. -100 dBFS.  10 Hz is well below any audio-band
-        // fundamental and gives a comfortable margin past the window's main lobe.
-        int fundSearchMinBin = Math.max(2, (int) Math.ceil(10.0 / freqRes));
+        // Restrict the fundamental search to FUND_SEARCH_MIN_HZ … 0.7·Nyquist:
+        // window leakage from a residual DC offset can populate the lowest bins at
+        // roughly -32 dB (Hann) below DC level, easily beating a deeply notched
+        // fundamental, while a bin above 0.7·Nyquist is never a fundamental of
+        // interest — either end would otherwise steal the global max.
+        int fundSearchMinBin = Math.max(2, (int) Math.ceil(FUND_SEARCH_MIN_HZ / freqRes));
+        int fundSearchMaxBin = Math.min(halfSize,
+                (int) Math.floor(FUND_SEARCH_MAX_NYQUIST_FRACTION * halfSize));
         int intFundBin;
         if (!Double.isNaN(expectedFundHz) && expectedFundHz > 0.0) {
             // Hint provided — search ±10 bins around the expected bin instead of
@@ -504,10 +513,11 @@ public class FftAnalyzer {
             log.info("Fundamental seeded from expected freq {} Hz: bin {} (±10-bin window)",
                     String.format(Locale.US, "%.6f", expectedFundHz), intFundBin);
         } else {
-            intFundBin = peakBin(f0Re, f0Im, fundSearchMinBin, halfSize);
-            log.info("Fundamental search (no hint): scanned bins {}..{} (~{} Hz upward); picked bin {} (~{} Hz)",
-                    fundSearchMinBin, halfSize,
+            intFundBin = peakBin(f0Re, f0Im, fundSearchMinBin, fundSearchMaxBin);
+            log.info("Fundamental search (no hint): scanned bins {}..{} (~{}..{} Hz); picked bin {} (~{} Hz)",
+                    fundSearchMinBin, fundSearchMaxBin,
                     String.format(Locale.US, "%.2f", fundSearchMinBin * freqRes),
+                    String.format(Locale.US, "%.2f", fundSearchMaxBin * freqRes),
                     intFundBin,
                     String.format(Locale.US, "%.4f", intFundBin * freqRes));
         }
@@ -1196,7 +1206,8 @@ public class FftAnalyzer {
         // When the caller provided expectedFundHz, restrict the search to a
         // ±10-bin window around the expected bin — same reason as the pre-pass:
         // a deeply notched fundamental must not be lost to a louder spur.
-        // Without a hint, scan above 10 Hz so DC leakage doesn't win.
+        // Without a hint, scan FUND_SEARCH_MIN_HZ … 0.7·Nyquist so neither DC
+        // leakage nor a high-frequency spur wins.
         int fundBin;
         if (!Double.isNaN(expectedFundHz) && expectedFundHz > 0.0) {
             int expectedBin = (int) Math.round(expectedFundHz * fftSize / (double) sampleRate);
@@ -1208,7 +1219,7 @@ public class FftAnalyzer {
             }
         } else {
             fundBin = fundSearchMinBin;
-            for (int k = fundSearchMinBin + 1; k <= halfSize; k++) {
+            for (int k = fundSearchMinBin + 1; k <= fundSearchMaxBin; k++) {
                 if (amplLinear[k] > amplLinear[fundBin]) fundBin = k;
             }
         }
