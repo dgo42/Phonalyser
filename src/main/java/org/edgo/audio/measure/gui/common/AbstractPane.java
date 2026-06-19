@@ -32,6 +32,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
+import org.edgo.audio.measure.gui.widgets.IconButton;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.preferences.Preferences;
 
@@ -86,7 +87,7 @@ public abstract class AbstractPane {
     /** Primary action buttons (Record / Play / wizard) created via
      *  {@link #createActionButton} — hidden in the screenshot clone so the
      *  snapshot shows only the measurement, not the interactive controls. */
-    private final List<Button> actionButtons = new ArrayList<>();
+    private final List<Control> actionButtons = new ArrayList<>();
 
     protected AbstractPane(Composite parent) {
         this.group = new Composite(parent, SWT.BORDER);
@@ -167,6 +168,23 @@ public abstract class AbstractPane {
         return b;
     }
 
+    /**
+     * Like {@link #createActionButton} but owner-drawn (an {@link IconButton}
+     * Canvas) so macOS can't clip the icon: native macOS buttons cap their
+     * content height below our icon size and cut the icon on top, whereas a
+     * Canvas has no bezel.  Use this for icon-only buttons (Record / Play /
+     * wizard).
+     */
+    protected IconButton createActionIconButton(Composite parent, int style) {
+        IconButton b = new IconButton(parent, style);
+        GridData gd = new GridData(SWT.END, SWT.BEGINNING, false, false);
+        gd.widthHint  = ACTION_BOX_SIZE;
+        gd.heightHint = ACTION_BOX_SIZE;
+        b.setLayoutData(gd);
+        actionButtons.add(b);
+        return b;
+    }
+
     /** Hides every action button (Record / Play / wizard) in the screenshot
      *  clone so the snapshot shows only the measurement, not the interactive
      *  controls.  The button's layout cell is KEPT (not excluded): it pads the
@@ -174,7 +192,7 @@ public abstract class AbstractPane {
      *  strip gets its full height and isn't clipped.  Called by
      *  {@link #renderOffscreen} on the clone. */
     private void hideActionButtons() {
-        for (Button b : actionButtons) {
+        for (Control b : actionButtons) {
             if (b != null && !b.isDisposed()) b.setVisible(false);
         }
     }

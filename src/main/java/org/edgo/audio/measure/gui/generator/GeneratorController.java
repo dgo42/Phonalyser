@@ -122,8 +122,8 @@ public final class GeneratorController {
         // Loading / clearing a .dpd must take effect now: restart the running
         // generator when the file for the ACTIVE compensated form changes (the
         // build reads the new path).  Each slot only restarts its own form.
-        onPref(prefs.genDpdProperty(),     v -> onDpdChanged(GenSignalForm.SINE_COMPENSATED));
-        onPref(prefs.genDpdDualProperty(), v -> onDpdChanged(GenSignalForm.DUAL_TONE_COMPENSATED));
+        onPref(prefs.genDpdProperty(),     v -> onDpdChanged(GenSignalForm.SINE_COMP));
+        onPref(prefs.genDpdDualProperty(), v -> onDpdChanged(GenSignalForm.DUAL_TONE_COMP));
         onPref(prefs.genAmplitudeVrmsProperty(), v -> {
             setAmplitudeVrms(v);
             publishSignalChanged();
@@ -334,13 +334,13 @@ public final class GeneratorController {
         SignalGenerator gen;
         double dacFs = prefs.getDacFsVoltageAmpl();
         try {
-            if (form == GenSignalForm.SINE_COMPENSATED) {
+            if (form == GenSignalForm.SINE_COMP) {
                 String dpd = prefs.getGenDpd(form);
                 if (dpd == null || dpd.isEmpty()) {
                     return "Sine (compensated) needs a predistortion file.  Pick one with the … button.";
                 }
                 gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms, dacFs, dpd);
-            } else if (form == GenSignalForm.DUAL_TONE_COMPENSATED) {
+            } else if (form == GenSignalForm.DUAL_TONE_COMP) {
                 // Plain two-tone generator, then load the dual-tone intermod
                 // corrections (freq-independent (a,b) products) onto it.  The
                 // second tone + amplitude split are pushed by start() afterwards.
@@ -489,7 +489,7 @@ public final class GeneratorController {
 
     /**
      * Live-applies a new waveform to the running generator.  No-op if the
-     * generator isn't running.  Switching to / from {@link GenSignalForm#SINE_COMPENSATED}
+     * generator isn't running.  Switching to / from {@link GenSignalForm#SINE_COMP}
      * or any sweep form requires a stop+start because their state machines
      * aren't safely live-mutable; this method skips them.
      */
@@ -497,7 +497,7 @@ public final class GeneratorController {
         SignalGenerator g = generator;
         if (g == null || form == null) return;
         if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) return;
-        if (form == GenSignalForm.SINE_COMPENSATED) return;
+        if (form == GenSignalForm.SINE_COMP) return;
         g.setForm(form);
     }
 
@@ -639,7 +639,7 @@ public final class GeneratorController {
     public boolean canLiveSwitchForm(GenSignalForm target) {
         if (target == null || generator == null) return false;
         if (target == GenSignalForm.LINEAR_SWEEP || target == GenSignalForm.LOG_SWEEP) return false;
-        if (target == GenSignalForm.SINE_COMPENSATED) return false;
+        if (target == GenSignalForm.SINE_COMP) return false;
         return true;
     }
 
@@ -828,7 +828,7 @@ public final class GeneratorController {
         double duration      = prefs.getGenWavDurationSeconds();
         try {
             SignalGenerator gen;
-            if (form == GenSignalForm.SINE_COMPENSATED) {
+            if (form == GenSignalForm.SINE_COMP) {
                 String dpd = prefs.getGenDpd(form);
                 if (dpd == null || dpd.isEmpty()) {
                     return "Sine (compensated) needs a predistortion .dpd.  Pick one with the … button.";

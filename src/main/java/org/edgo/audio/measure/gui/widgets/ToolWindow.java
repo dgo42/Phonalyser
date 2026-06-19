@@ -23,13 +23,13 @@ import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.widgets.Canvas;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Shell;
+import org.edgo.audio.measure.gui.common.Icon;
 
 /**
  * A reusable extracted-table tool window — a {@code DIALOG_TRIM} {@link Shell} hosting a
@@ -62,16 +62,12 @@ public final class ToolWindow {
 
     private final Shell  shell;
     private final Canvas canvas;
-    private final RGB    iconColor;       // toolbar button icon colour
-    private final RGB    iconInvertColor; // ...its colour on a filled button
     private final int    buttonWidth;
     private final int    buttonHeight;
     private Toolbar        toolbar;
     private ContentPainter painter;
 
     public ToolWindow(Control owner, Color background, Color text, int buttonWidth, int buttonHeight) {
-        this.iconColor       = text.getRGB();
-        this.iconInvertColor = background.getRGB();
         this.buttonWidth     = buttonWidth;
         this.buttonHeight    = buttonHeight;
         // DIALOG_TRIM = TITLE | CLOSE | BORDER, no resize — the owner sizes it explicitly.
@@ -122,15 +118,15 @@ public final class ToolWindow {
     /** Adds a top-row button (e.g. the scope's stats-toggle / reset).  A toggle uses the
      *  window's text colour for its icon; a push uses {@code accent} (e.g. red reset).
      *  {@code onClick} ({@link SWT#Selection}) signals the owner to act. */
-    public void addButton(String svgPath, int iconHeight, boolean toggle, boolean on,
+    public void addButton(Icon normal, Icon active, boolean toggle, boolean on,
                           Color accent, String tooltip, Listener onClick) {
         if (toolbar == null) {
             toolbar = new Toolbar(canvas, buttonWidth, buttonHeight);
             toolbar.setLocation(0, 0);
         }
         ToolButton b = toggle
-                ? toolbar.toggleButton(svgPath, iconHeight, iconColor, iconInvertColor, accent, tooltip, on)
-                : toolbar.pushButton(svgPath, iconHeight, accent.getRGB(), iconInvertColor, accent, tooltip);
+                ? toolbar.toggleButton(normal, active, accent, tooltip, on)
+                : toolbar.pushButton(normal, active, accent, tooltip);
         b.addListener(SWT.Selection, onClick);
         toolbar.setSize(toolbar.computeSize(SWT.DEFAULT, SWT.DEFAULT));
     }

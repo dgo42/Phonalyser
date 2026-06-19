@@ -18,19 +18,20 @@
 
 package org.edgo.audio.measure.gui;
 
+import java.nio.file.Paths;
 import java.util.Locale;
 
 import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.core.LoggerContext;
-import org.apache.logging.log4j.core.config.LoggerConfig;
 import org.eclipse.swt.widgets.Display;
+import org.edgo.audio.measure.common.AppPaths;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.gui.automation.AutomationRunner;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 
-import lombok.extern.log4j.Log4j2;
 
 /**
  * SWT entry point for the interactive measurement GUI.  Construction of the
@@ -38,7 +39,6 @@ import lombok.extern.log4j.Log4j2;
  * {@link MainWindow}; this class only owns the {@link Display} lifecycle and
  * the SWT event loop.
  */
-@Log4j2
 public final class GuiMain {
 
     /** CLI switch selecting a {@code gui.automation} script to run
@@ -51,14 +51,22 @@ public final class GuiMain {
     private GuiMain() {}
 
     public static void main(String[] args) {
-        // GUI runs without a terminal: detach the Console appender from the
-        // root logger so log4j2 writes only to logs/phonalyser.log.
-        // The CLI Main still gets console output because it loads log4j2.xml
-        // unmodified.
+        // Relocate the log file to the per-user writable data dir — a packaged
+        // macOS .app (or a Windows Program Files install) is read-only, so the
+        // default 'logs/' next to the executable can't be written and the
+        // failure is itself unloggable.  This MUST run before the first logger
+        // boots log4j (which resolves the RollingFile path): GuiMain has no
+        // class-load @Log4j2 logger and AppPaths uses a lazy logger, so neither
+        // boots log4j before this line sets the property.
+        System.setProperty("app.log.dir", AppPaths.instance().getLogsDir().toString());
+
+        // First log4j touch — boots the config with app.log.dir already set.
+        // GUI has no terminal, so detach the Console appender (the File
+        // appender stays); the CLI Main loads log4j2.xml unmodified.
         LoggerContext logCtx = (LoggerContext) LogManager.getContext(false);
-        LoggerConfig rootLogger = logCtx.getConfiguration().getRootLogger();
-        rootLogger.removeAppender("Console");
+        logCtx.getConfiguration().getRootLogger().removeAppender("Console");
         logCtx.updateLoggers();
+        Logger log = LogManager.getLogger(GuiMain.class);
 
         // Route any worker-thread death through log4j.  Without this, an
         // uncaught exception on a background thread (FFT analyser, scope
@@ -77,6 +85,16 @@ public final class GuiMain {
             I18n.setLocale(Locale.forLanguageTag(langTag));
         }
 
+        // Seed the editable help copy now (i18n already seeds on first use) so
+        // translators find <dataDir>/help populated without having to open the
+        // Help viewer first.  Only the packaged app sets help.dir (=$APPDIR/help);
+        // dev runs use the classpath, so there's nothing to seed.
+        String helpBundle = System.getProperty("help.dir");
+        if (helpBundle != null) {
+            AppPaths paths = AppPaths.instance();
+            paths.seedDirIfEmpty(paths.helpDir(), Paths.get(helpBundle));
+        }
+
         // Synchronise the AudioBackend singleton with the YAML-persisted
         // backend choice before any device-list / capture-open path runs.
         // Without this, the first capture attempt after launch uses the
@@ -85,14 +103,17 @@ public final class GuiMain {
         // "sample rate not supported" error.  Opening the Preferences dialog
         // happened to fix it as a side effect because the dialog calls
         // setActive() during init/cancel-restore.
-        // Sanitise the saved choice: if the user is launching a Windows-built
-        // preferences file on Linux/macOS, WASAPI/WDM-KS won't work — fall
-        // back to JAVASOUND (the only cross-platform backend) and rewrite
-        // the prefs so the next launch starts clean.
+        // Sanitise the saved choice: a backend saved on another OS (e.g. a
+        // Windows-built preferences file opened on macOS) won't be available
+        // here — fall back to the OS-native default (WASAPI on Windows,
+        // CoreAudio on macOS, JavaSound on Linux) and rewrite the prefs so the
+        // next launch starts clean.  NB: a hardcoded JAVASOUND fallback is
+        // wrong on macOS, where JavaSound is unavailable (CoreAudio replaces it).
         AudioBackendType saved = prefs.getBackend();
         if (!saved.isAvailable()) {
-            log.warn("Saved backend {} is not available on this OS; falling back to JAVASOUND", saved);
-            saved = AudioBackendType.JAVASOUND;
+            AudioBackendType fallback = AudioBackendType.fromOs();
+            log.warn("Saved backend {} is not available on this OS; falling back to {}", saved, fallback);
+            saved = fallback;
             prefs.setBackend(saved);
             prefs.save();
         }

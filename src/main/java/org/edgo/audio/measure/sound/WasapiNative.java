@@ -25,6 +25,11 @@ import com.sun.jna.Native;
 import com.sun.jna.Pointer;
 import com.sun.jna.ptr.PointerByReference;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.UUID;
+
+import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -41,7 +46,8 @@ import lombok.extern.log4j.Log4j2;
  * headers ({@code mmdeviceapi.h}, {@code audioclient.h}).
  */
 @Log4j2
-public final class WasapiNative {
+@UtilityClass
+public class WasapiNative {
 
     public static final int S_OK                     = 0x00000000;
     public static final int S_FALSE                  = 0x00000001;
@@ -74,6 +80,7 @@ public final class WasapiNative {
     public static final int WAVE_FORMAT_PCM         = 0x0001;
     public static final int WAVE_FORMAT_EXTENSIBLE  = 0xFFFE;
     public static final int SPEAKER_STEREO_MASK     = 0x00000003;
+    public static final int SPEAKER_FRONT_CENTER    = 0x00000004;
 
     public static final int WAIT_OBJECT_0           = 0x00000000;
     public static final int WAIT_TIMEOUT            = 0x00000102;
@@ -176,8 +183,6 @@ public final class WasapiNative {
      */
     private static final ThreadLocal<Boolean> COM_READY = ThreadLocal.withInitial(() -> false);
 
-    private WasapiNative() {}
-
     public static void ensureComInit() {
         if (COM_READY.get()) return;
         int hr = Ole32.INSTANCE.CoInitializeEx(null, COINIT_MULTITHREADED);
@@ -212,14 +217,14 @@ public final class WasapiNative {
     }
 
     /**
-     * Builds a {@code WAVEFORMATEXTENSIBLE} (40 bytes) describing a
-     * stereo PCM stream at the given rate/bit depth.  Allocated as
-     * native {@link Memory} so it can be passed straight to
+     * Builds a {@code WAVEFORMATEXTENSIBLE} (40 bytes) describing a PCM stream
+     * at the given rate / bit depth / channel count (1 = mono, 2 = stereo).
+     * Allocated as native {@link Memory} so it can be passed straight to
      * {@code IAudioClient::Initialize} / {@code IsFormatSupported}.
      */
-    public static Memory buildWaveFormatExtensible(int sampleRate, int bitDepth) {
-        int channels   = 2;
-        int blockAlign = (bitDepth / 8) * channels;
+    public static Memory buildWaveFormatExtensible(int sampleRate, int bitDepth, int channels) {
+        int blockAlign  = (bitDepth / 8) * channels;
+        int channelMask = channels == 1 ? SPEAKER_FRONT_CENTER : SPEAKER_STEREO_MASK;
         Memory wfx = new Memory(40);
         wfx.clear();
         wfx.setShort(0,  (short) WAVE_FORMAT_EXTENSIBLE);
@@ -230,7 +235,7 @@ public final class WasapiNative {
         wfx.setShort(14, (short) bitDepth);
         wfx.setShort(16, (short) 22);              // cbSize = sizeof(extension)
         wfx.setShort(18, (short) bitDepth);        // wValidBitsPerSample
-        wfx.setInt  (20, SPEAKER_STEREO_MASK);
+        wfx.setInt  (20, channelMask);
         wfx.write   (24, KSDATAFORMAT_SUBTYPE_PCM, 0, 16);
         return wfx;
     }
@@ -242,24 +247,18 @@ public final class WasapiNative {
      * raw 8-byte tail).
      */
     public static byte[] guid(String s) {
-        String hex = s.replace("-", "").replace("{", "").replace("}", "");
-        if (hex.length() != 32) {
-            throw new IllegalArgumentException("Bad GUID: " + s);
-        }
-        byte[] raw = new byte[16];
-        for (int i = 0; i < 16; i++) {
-            raw[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
-        }
-        byte[] g = new byte[16];
-        // Data1: 4 bytes, little-endian
-        g[0] = raw[3]; g[1] = raw[2]; g[2] = raw[1]; g[3] = raw[0];
-        // Data2: 2 bytes, little-endian
-        g[4] = raw[5]; g[5] = raw[4];
-        // Data3: 2 bytes, little-endian
-        g[6] = raw[7]; g[7] = raw[6];
-        // Data4: 8 bytes, big-endian
-        System.arraycopy(raw, 8, g, 8, 8);
-        return g;
+        UUID u = UUID.fromString(s.replace("{", "").replace("}", ""));
+        // COM on-wire layout: Data1/2/3 little-endian, Data4 (the low 8 bytes)
+        // raw big-endian — exactly the split the UUID class already exposes as
+        // most/least-significant bits.
+        return ByteBuffer.allocate(16)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .putInt  ((int)   (u.getMostSignificantBits() >>> 32))  // Data1
+                .putShort((short) (u.getMostSignificantBits() >>> 16))  // Data2
+                .putShort((short)  u.getMostSignificantBits())          // Data3
+                .order(ByteOrder.BIG_ENDIAN)
+                .putLong (u.getLeastSignificantBits())                  // Data4
+                .array();
     }
 
     /**

@@ -23,7 +23,6 @@ import java.util.List;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Canvas;
@@ -33,6 +32,7 @@ import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Text;
+import org.edgo.audio.measure.gui.common.Icon;
 
 /**
  * Editable numeric field with unit handling, stepping and clamping — the one
@@ -119,8 +119,7 @@ public final class NumericStepField extends Composite {
         // press grows 6 → 10 px via IconStepLabel (Canvas under the hood
         // so the icon centres horizontally — plain Label ignores SWT.CENTER
         // for images on GTK).
-        upBtn = new IconStepLabel(this, "/icons/sort-up.svg",
-                10, 8, new RGB(0x80, 0x80, 0x80));
+        upBtn = new IconStepLabel(this, Icon.UP_BIG, Icon.UP_SMALL);
         GridData ud = new GridData(SWT.FILL, SWT.FILL, false, true);
         ud.widthHint  = 16;
         // GTK won't grow the cell to fit the larger pressed icon —
@@ -129,8 +128,7 @@ public final class NumericStepField extends Composite {
         ud.heightHint = 12;
         upBtn.setLayoutData(ud);
 
-        downBtn = new IconStepLabel(this, "/icons/sort-down.svg",
-                10, 8, new RGB(0x80, 0x80, 0x80));
+        downBtn = new IconStepLabel(this, Icon.DOWN_BIG, Icon.DOWN_SMALL);
         GridData dd = new GridData(SWT.FILL, SWT.FILL, false, true);
         dd.widthHint  = 16;
         dd.heightHint = 12;
