@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theory: Algorithm reference</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to Theory of operation</a></p>
+
+  <h1>Algorithm reference</h1>
+
+  <p>A catalogue of the named DSP, mathematical and estimation algorithms
+     used across Phonalyser's modules — what each one is, where this help
+     explains it, and where to read the theory.  This page is the condensed
+     view of the project's full engineering document
+     <i>ALGORITHMS.md</i><sup id="cite-1"><a href="#ref-doc">[1]</a></sup>,
+     which carries the per-algorithm mathematics and source citations.</p>
+
+  <h2 id="synth">Signal synthesis &amp; quantization</h2>
+  <table class="controls">
+    <tr><th>Algorithm</th><th>What it does here</th><th>In this help</th></tr>
+    <tr><td>Direct digital synthesis (DDS)</td>
+        <td>64-bit phase-accumulator oscillator; exact mod-2⁶⁴ phase,
+            click-free frequency changes, picohertz-class trim
+            granularity.</td>
+        <td><a href="generator.html#dds">Generator — phase accumulator</a></td></tr>
+    <tr><td>Angle-sum + Taylor sine</td>
+        <td>4096-entry table for the coarse angle plus a 5th-order Taylor
+            series for the remainder — an exact sine without per-sample
+            trigonometric library calls.</td>
+        <td><a href="generator.html#sine">Generator — sine kernel</a></td></tr>
+    <tr><td>Farina exponential sine sweep</td>
+        <td>Log-chirp probe with equal energy per octave; pre-rendered so
+            the deconvolution reference equals the played signal.</td>
+        <td><a href="generator.html#sweeps">Generator — sweeps</a>,
+            <a href="freq-resp.html#how">Frequency response</a></td></tr>
+    <tr><td>Voss–McCartney pink noise</td>
+        <td>Summed-octave 1/f generator, constant cost per sample.</td>
+        <td><a href="generator.html#kernels">Generator — noise</a></td></tr>
+    <tr><td>TPDF dither</td>
+        <td>Triangular-PDF dither before quantization; decorrelates the
+            rounding error from the signal.</td>
+        <td><a href="generator.html#quantizer">Generator — quantization</a></td></tr>
+    <tr><td>Raised-cosine (Hann) taper</td>
+        <td>Sweep fade-in/out; suppresses start/stop spectral leakage.</td>
+        <td><a href="generator.html#sweeps">Generator — sweeps</a></td></tr>
+  </table>
+
+  <h2 id="spectral">Spectral analysis</h2>
+  <table class="controls">
+    <tr><th>Algorithm</th><th>What it does here</th><th>In this help</th></tr>
+    <tr><td>Radix-2 Cooley-Tukey FFT</td>
+        <td>The transform itself — in-place, parallelised at large sizes
+            (up to 4M points).</td>
+        <td><a href="fft.html#resolution">FFT — resolution</a></td></tr>
+    <tr><td>Goertzel single-bin DFT</td>
+        <td>Magnitude/phase at one arbitrary frequency in a single O(N)
+            pass — the engine behind the scope's millihertz frequency
+            readout, the mains tracker and the FFT's κ refit.</td>
+        <td><a href="oscilloscope.html#freq">Oscilloscope — frequency</a></td></tr>
+    <tr><td>Window functions (Hann, Blackman-Harris, flat-top, HFT,
+            Kaiser, Dolph-Chebyshev)</td>
+        <td>Leakage control from everyday (Hann) to side-lobe floors below
+            anything a physical converter produces (DC300, KB38).</td>
+        <td><a href="fft.html#resolution">FFT — windows</a></td></tr>
+    <tr><td>Phase-difference sub-bin estimator</td>
+        <td>The tone's fractional bin κ from the phase advance between
+            blocks — far finer than any magnitude peak-pick.</td>
+        <td><a href="fft.html#kappa">FFT — sub-bin frequency</a></td></tr>
+    <tr><td>Parabolic peak interpolation</td>
+        <td>Three-point quadratic fit for sub-bin peaks; the fallback κ
+            estimator and the IMD tone-level refiner.</td>
+        <td><a href="fft.html#kappa">FFT — sub-bin frequency</a></td></tr>
+    <tr><td>Coherent (vector) averaging with per-lobe de-rotation</td>
+        <td>Phase-aligned complex averaging — the noise floor falls
+            10·log₁₀M dB while tones stand still.</td>
+        <td><a href="fft.html#coherent">FFT — coherent averaging</a>;
+            <a href="derotation-accuracy.html">De-rotation accuracy</a>
+            (error budget)</td></tr>
+    <tr><td>Intermodulation product grid</td>
+        <td>Two-tone products a·f₁+b·f₂ de-rotated at their true
+            frequencies; CCIF/DIN difference-frequency ratios.</td>
+        <td><a href="fft.html#dualtone">FFT — two-tone</a></td></tr>
+    <tr><td>Median + MAD robust statistics</td>
+        <td>Self-calibrating thresholds for the noise floor and the
+            spectral glitch gates — learned from the data, immune to
+            outliers.</td>
+        <td><a href="fft.html#rejection">FFT — glitch rejection</a></td></tr>
+  </table>
+
+  <h2 id="filtering">Filtering &amp; estimation</h2>
+  <table class="controls">
+    <tr><th>Algorithm</th><th>What it does here</th><th>In this help</th></tr>
+    <tr><td>Lanczos (windowed-sinc) interpolation</td>
+        <td>Band-limited reconstruction of the trace between samples —
+            the scope's zoomed-in rendering and sub-sample trigger
+            refinement.</td>
+        <td><a href="oscilloscope.html#path">Oscilloscope — pipeline</a></td></tr>
+    <tr><td>Schmitt trigger (hysteresis)</td>
+        <td>Dual-threshold edge qualification so noise riding on the
+            signal can't double-fire the trigger.</td>
+        <td><a href="oscilloscope.html#trigger">Oscilloscope — trigger</a></td></tr>
+    <tr><td>Chebyshev IIR low-pass + median de-spike</td>
+        <td>High-frequency spike removal before display and
+            measurement.</td>
+        <td><a href="oscilloscope.html#conditioning">Oscilloscope —
+            conditioning</a></td></tr>
+    <tr><td>Frequency-tracked IIR comb</td>
+        <td>One filter notching the mains fundamental and every harmonic,
+            re-tuned as the line drifts; applied in the time domain on the
+            scope, as a plot-time spectral correction in the FFT.</td>
+        <td><a href="oscilloscope.html#mains">Oscilloscope — mains comb</a></td></tr>
+    <tr><td>Synchronous I/Q (lock-in) detection</td>
+        <td>Recovers the dual-tone beat envelope's phase so the trigger
+            locks once per beat.</td>
+        <td><a href="oscilloscope.html#trigger">Oscilloscope — trigger</a></td></tr>
+    <tr><td>Frequency-domain deconvolution H = Y/X</td>
+        <td>The whole transfer function — magnitude and phase — from one
+            sweep.</td>
+        <td><a href="freq-resp.html#how">Frequency response</a></td></tr>
+    <tr><td>Linear-phase delay rotation</td>
+        <td>Removes the DAC↔ADC round-trip delay so only the device's own
+            phase remains.</td>
+        <td><a href="freq-resp.html#deconv">Frequency response —
+            corrections</a></td></tr>
+    <tr><td>Savitzky-Golay smoothing</td>
+        <td>Sliding polynomial fit — smooths measurement ripple while
+            preserving notches and resonances.</td>
+        <td><a href="freq-resp.html#deconv">Frequency response —
+            corrections</a></td></tr>
+    <tr><td>RIAA / IEC equalisation curves</td>
+        <td>Analytic 3180/318/75 µs (+7950 µs IEC) phono curve for overlay
+            and compare-mode subtraction.</td>
+        <td><a href="freq-resp.html#cal">Frequency response —
+            calibration</a></td></tr>
+    <tr><td>Frequency-lock loop (FLL)</td>
+        <td>Steers the generator onto the FFT bin grid with deadbeat
+            corrections, exact transport bookkeeping and drift
+            feedforward — sub-ppb steady-state alignment.</td>
+        <td><a href="generator.html#dds">Generator — phase accumulator</a>,
+            <a href="fft.html#who">FFT — integration</a></td></tr>
+  </table>
+
+  <h2 id="stats">Statistics &amp; graphics</h2>
+  <table class="controls">
+    <tr><th>Algorithm</th><th>What it does here</th><th>In this help</th></tr>
+    <tr><td>Welford's online variance</td>
+        <td>One-pass mean and σ for the live measurement statistics
+            table.</td>
+        <td><a href="oscilloscope.html#measure">Oscilloscope —
+            measurements</a></td></tr>
+    <tr><td>Exponential moving average</td>
+        <td>Smooths the live sweep meter and the mains-lock detections.</td>
+        <td><a href="oscilloscope.html#mains">Oscilloscope — mains comb</a></td></tr>
+    <tr><td>Liang-Barsky line clipping, 1-2-5 "nice" axis ticks,
+            min/max column decimation</td>
+        <td>The shared chart engine: clipped polylines (million-bin spectra
+            in bounded time), readable axis labelling, per-pixel envelope
+            bars for dense data.</td>
+        <td>— (rendering internals; see the full
+            document<sup id="cite-1b"><a href="#ref-doc">[1]</a></sup>)</td></tr>
+  </table>
+
+  <div class="note"><b>Going deeper.</b>  Every entry above is treated in
+     full — with the equations, the parameter values and `file:line`
+     citations into the source — in the repository document
+     <i>docs/ALGORITHMS.md</i><sup id="cite-1c"><a href="#ref-doc">[1]</a></sup>.
+     The build can also render it to PDF (see <i>BUILD.md</i> in the
+     repository).</div>
+
+  <h2 id="refs">References</h2>
+  <ol class="refs">
+    <li id="ref-doc"><a href="#cite-1">1.</a>
+        <a href="https://github.com/dgo42/Phonalyser/blob/main/docs/ALGORITHMS.md">Phonalyser
+        <i>ALGORITHMS.md</i></a> — the full engineering catalogue this page
+        condenses (per-algorithm math, parameters, source citations).</li>
+  </ol>
+
+  <p class="back"><a href="freq-resp.html">◀ Frequency response</a> ·
+     <a href="index.html">Theory of operation</a></p>
+
+</body>
+</html>

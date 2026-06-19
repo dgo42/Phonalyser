@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theory of operation</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="../index.html">◀ Back to contents</a></p>
+
+  <h1>Theory of operation</h1>
+  <p>This chapter explains how Phonalyser works <em>inside</em> — what
+     actually happens to your signal between the moment it is synthesized and
+     the moment a THD number appears on screen.  It is written for the
+     measurement user: you don't need to know anything about software
+     development to follow it.  The user-facing controls are documented in
+     the module chapters
+     (<a href="../generator.html">Generator</a>,
+     <a href="../oscilloscope.html">Oscilloscope</a>,
+     <a href="../fft.html">FFT analyser</a>).</p>
+
+  <div class="note"><b>A tip of the hat.</b>  Phonalyser owes its existence
+     to <a href="https://www.roomeqwizard.com/">REW (Room EQ Wizard)</a> —
+     working with that excellent tool inspired the author to build a
+     measurement application of his own, aiming at even more comprehensive
+     and more precise distortion and frequency-response measurement (see
+     <a href="fft.html#purpose">the FFT chapter</a> for what "precise" means
+     here).</div>
+
+  <h2>The signal path</h2>
+  <p>Everything in Phonalyser hangs off one loop: synthesized samples leave
+     through the DAC, pass through the device under test, return through the
+     ADC, and are distributed to the analysis views through a shared ring
+     buffer.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 330" width="100%" height="330" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+
+    <!-- Output (top) row -->
+    <rect x="10"  y="20" width="150" height="56" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="85"  y="42" text-anchor="middle" font-weight="bold">Signal generator</text>
+    <text x="85"  y="60" text-anchor="middle" fill="#557">DDS synthesis</text>
+
+    <rect x="210" y="20" width="130" height="56" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="275" y="42" text-anchor="middle" font-weight="bold">Quantizer</text>
+    <text x="275" y="60" text-anchor="middle" fill="#557">TPDF dither + PCM</text>
+
+    <rect x="390" y="20" width="130" height="56" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="455" y="42" text-anchor="middle" font-weight="bold">Playback engine</text>
+    <text x="455" y="60" text-anchor="middle" fill="#557">audio backend</text>
+
+    <rect x="570" y="20" width="100" height="56" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="620" y="42" text-anchor="middle" font-weight="bold">DAC</text>
+    <text x="620" y="60" text-anchor="middle" fill="#575">output device</text>
+
+    <rect x="715" y="48" width="95" height="56" rx="6" fill="#ffe9d6" stroke="#c96"/>
+    <text x="762" y="70" text-anchor="middle" font-weight="bold">DUT</text>
+    <text x="762" y="88" text-anchor="middle" fill="#965">device under test</text>
+
+    <line x1="160" y1="48" x2="208" y2="48" stroke="#446" stroke-width="1.5" marker-end="url(#arr)"/>
+    <line x1="340" y1="48" x2="388" y2="48" stroke="#446" stroke-width="1.5" marker-end="url(#arr)"/>
+    <line x1="520" y1="48" x2="568" y2="48" stroke="#446" stroke-width="1.5" marker-end="url(#arr)"/>
+    <path d="M 670 48 L 700 48 L 700 62 L 713 62" fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Input (middle) row, right to left -->
+    <rect x="570" y="120" width="100" height="56" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="620" y="142" text-anchor="middle" font-weight="bold">ADC</text>
+    <text x="620" y="160" text-anchor="middle" fill="#575">input device</text>
+
+    <rect x="390" y="120" width="130" height="56" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="455" y="142" text-anchor="middle" font-weight="bold">Capture engine</text>
+    <text x="455" y="160" text-anchor="middle" fill="#557">audio backend</text>
+
+    <rect x="210" y="120" width="130" height="56" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="275" y="142" text-anchor="middle" font-weight="bold">Capture session</text>
+    <text x="275" y="160" text-anchor="middle" fill="#557">PCM → [-1,+1]</text>
+
+    <rect x="10"  y="120" width="150" height="56" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="85"  y="142" text-anchor="middle" font-weight="bold">Ring buffer</text>
+    <text x="85"  y="160" text-anchor="middle" fill="#557">last 22 s, stereo</text>
+
+    <path d="M 762 106 L 762 148 L 672 148" fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#arr)"/>
+    <line x1="568" y1="148" x2="522" y2="148" stroke="#446" stroke-width="1.5" marker-end="url(#arr)"/>
+    <line x1="388" y1="148" x2="342" y2="148" stroke="#446" stroke-width="1.5" marker-end="url(#arr)"/>
+    <line x1="208" y1="148" x2="162" y2="148" stroke="#446" stroke-width="1.5" marker-end="url(#arr)"/>
+
+    <!-- Consumers (bottom) row -->
+    <rect x="10"  y="240" width="150" height="56" rx="6" fill="#fdf2f2" stroke="#a88"/>
+    <text x="85"  y="262" text-anchor="middle" font-weight="bold">Oscilloscope</text>
+    <text x="85"  y="280" text-anchor="middle" fill="#755">reads "now"</text>
+
+    <rect x="210" y="240" width="150" height="56" rx="6" fill="#fdf2f2" stroke="#a88"/>
+    <text x="285" y="262" text-anchor="middle" font-weight="bold">FFT analyser</text>
+    <text x="285" y="280" text-anchor="middle" fill="#755">reads a gap-free stream</text>
+
+    <rect x="410" y="240" width="170" height="56" rx="6" fill="#fdf2f2" stroke="#a88"/>
+    <text x="495" y="262" text-anchor="middle" font-weight="bold">Frequency response</text>
+    <text x="495" y="280" text-anchor="middle" fill="#755">exclusive sweep capture</text>
+
+    <path d="M 60 176 L 60 238"  fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#arr)"/>
+    <path d="M 110 176 L 110 210 L 250 210 L 250 238" fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#arr)"/>
+    <text x="130" y="205" fill="#557">one independent read cursor per consumer</text>
+  </svg>
+  </div>
+
+  <h2>The modules and what they are for</h2>
+  <div class="pane">
+    <p><b>Signal generator</b> — the stimulus source.  Produces calibrated
+       test signals: a spectrally pure sine for distortion measurements, two
+       tones for intermodulation, white/pink noise, linear and logarithmic
+       sweeps, and a <em>compensated</em> sine that actively cancels the
+       playback chain's own distortion so the DUT receives a cleaner signal
+       than the DAC alone can produce.  Output level is set in volts, against
+       the DAC calibration.</p>
+    <p><b>Oscilloscope</b> — the time-domain view.  This is where you look
+       <em>first</em>: is the signal there at all, is it clipping, does it
+       carry DC or mains hum, what are V<sub>pp</sub> / V<sub>rms</sub> /
+       frequency?  Triggering, per-channel scaling and a running measurement
+       table work like on a bench scope.  A spectral number is only worth
+       trusting after the time-domain picture looks sane.</p>
+    <p><b>FFT analyser</b> — the frequency-domain workhorse.  Shows the
+       spectrum and measures THD, THD+N, SNR, SINAD/ENOB and the individual
+       harmonics; in two-tone mode the intermodulation products.  Coherent
+       averaging digs signals out far below the single-shot noise floor;
+       mains rejection, calibration de-embedding and a manual fundamental
+       reference handle real-world measurement setups (notch filters,
+       attenuators, known source levels).</p>
+    <p><b>Frequency response</b> — the swept measurement.  Plays a
+       logarithmic sweep through the DUT and computes its transfer function —
+       magnitude and phase across the whole band in seconds.  Results can be
+       compared against RIAA / IEC curves or saved as calibration files that
+       the FFT analyser later de-embeds from its own measurements.</p>
+    <p><b>Underneath all of them</b> sit the two infrastructure layers this
+       chapter describes: the <a href="audio-backend.html">audio backend</a>
+       (the bit-exact bridge to the sound hardware) and the
+       <a href="ring-buffer.html">ring buffer</a> (the shared memory that
+       lets every view read the same capture independently).</p>
+  </div>
+
+  <h2>Chapters</h2>
+  <div class="toc">
+    <a href="audio-backend.html"><b>Audio backend</b> — the bit-exact bridge
+       between Phonalyser and the sound hardware: what it guarantees, how a
+       capture and a playback session work, who shares the devices</a>
+    <a href="ring-buffer.html"><b>Ring buffer &amp; consumers</b> — the shared
+       22-second capture memory, independent read cursors, and what happens
+       when a reader falls behind</a>
+    <a href="generator.html"><b>Signal generator</b> — direct digital
+       synthesis: the phase accumulator, every waveform, sweeps, distortion
+       compensation, amplitude calibration and dither</a>
+    <a href="oscilloscope.html"><b>Oscilloscope</b> — conditioning,
+       triggering, and how the level / frequency numbers are measured;
+       the frequency-tracked mains comb</a>
+    <a href="fft.html"><b>FFT analyser</b> — coherent averaging and sub-bin
+       de-rotation, glitch rejection, THD / SNR / SINAD / ENOB, two-tone
+       intermodulation</a>
+    <a href="derotation-accuracy.html"><b>De-rotation accuracy</b> — how
+       precisely the per-block rotation angle is known, why its error does
+       not accumulate over hours-long averages, and how overlap and window
+       choice set the floor reached per unit time</a>
+    <a href="dac-predistortion.html"><b>DAC pre-distortion</b> — cancelling the
+       converter's own harmonics: why the twin-T notch is mandatory, why its
+       temperature drift forces a manual fundamental, how deep coherent
+       averaging makes the correction trustworthy, and the dual twin-T notch for
+       two-tone IMD measurement</a>
+    <a href="freq-resp.html"><b>Frequency response</b> — Farina log-sweep
+       deconvolution, transport-delay removal, smoothing, and calibration
+       de-embedding</a>
+    <a href="algorithms.html"><b>Algorithm reference</b> — catalogue of every
+       named algorithm in the instrument, linking each to the chapter that
+       explains it and to the full engineering document</a>
+  </div>
+
+  <h2>Further reading</h2>
+  <div class="toc">
+    <a href="../external/fft-analysis.html"><b>FFT analysis essentials</b> —
+       summary of an excellent external guide (windows, leakage, resolution,
+       averaging), with a link to the original</a>
+    <a href="../external/sine-sweep.html"><b>The exponential sine sweep in
+       practice</b> — summary of a hands-on article about the Farina
+       measurement method, with links to the original and the paper</a>
+  </div>
+
+  <h2>Design themes you will meet everywhere</h2>
+  <div class="pane">
+    <ul>
+      <li><b>Coherent averaging digs below the single-shot floor — and noise
+          sets the limit.</b>  Every deep measurement (the harmonics, the
+          two-tone products, the pre-distortion correction) sums phase-aligned
+          blocks so the tone holds while the noise falls as 1/√<i>n</i>.  The
+          floor you reach is set by the bin signal-to-noise ratio and the
+          effective number of averages — not by any trick.</li>
+      <li><b>Measure the reference afresh, never integrate it.</b>  Phase
+          references and frequency locks — the per-block de-rotation angle, the
+          frequency-lock loop, the manual fundamental — are read on each block,
+          never carried by a free-running counter.  A measured reference averages
+          out; an integrated one random-walks and slowly de-coheres the tone.</li>
+      <li><b>Drift is a walking phase, not a lost level.</b>  Converter clock
+          mismatch and notch-component temperature drift show up as a slow phase
+          walk, which the analysis strips block by block.  Tracked as phase, they
+          cost coherence, not magnitude — which is why the wide-band level numbers
+          stay solid while the fundamental sits in a drifting null.</li>
+      <li><b>Exact frequencies by integer phase.</b>  The DDS accumulator, every
+          harmonic correction tone and the sweep reference are formed by integer
+          multiplication of one master phase, so a tone lands <em>exactly</em> at
+          <i>h·f</i> and never beats against the distortion it measures or
+          cancels, however long it runs.</li>
+      <li><b>Windows are chosen for side-lobe margin, not noise.</b>  Above each
+          window's recommended overlap every window reaches the same floor in the
+          same wall-clock time, so the choice (HFT248D at 87.5&nbsp;%) is about
+          keeping a strong tone's leakage off the faint bins, not about noise.</li>
+      <li><b>Calibration at the edges, normalised in the middle.</b>  ADC and DAC
+          full-scale voltages are applied only at display and output; the signal
+          data stays in normalised units and full precision throughout, so
+          references and exports are the mathematically exact waveform.</li>
+    </ul>
+  </div>
+
+</body>
+</html>

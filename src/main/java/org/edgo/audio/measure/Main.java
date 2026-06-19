@@ -1,0 +1,123 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.edgo.audio.measure;
+
+import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.cli.AnalyzeHistogramMode;
+import org.edgo.audio.measure.cli.util.ArgParser;
+import org.edgo.audio.measure.cli.DeembedMode;
+import org.edgo.audio.measure.cli.util.DeviceSelector;
+import org.edgo.audio.measure.cli.FftAnalyzeMode;
+import org.edgo.audio.measure.cli.FreqRespMode;
+import org.edgo.audio.measure.cli.GenFftMode;
+import org.edgo.audio.measure.cli.GenerateMode;
+import org.edgo.audio.measure.cli.HistogramMode;
+import org.edgo.audio.measure.cli.IterativeCompensateMode;
+import org.edgo.audio.measure.cli.ProcessWavMode;
+import org.edgo.audio.measure.cli.RecordWavMode;
+import org.edgo.audio.measure.cli.RegressCalibrateMode;
+import org.edgo.audio.measure.cli.UsagePrinter;
+import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
+
+@Log4j2
+public class Main {
+
+    public static void main(String[] args) throws Exception {
+        new Main().run(args);
+    }
+
+    public void run(String[] args) throws Exception {
+        if (ArgParser.hasArg(args, "--help") || args.length == 0) {
+            UsagePrinter.printUsage();
+            return;
+        }
+        AudioBackend.instance().setActive(AudioBackendType.fromString(ArgParser.getArgValue(args, "--backend")));
+        // CLI is headless and single-shot: mark Preferences transient so any value
+        // injected for this run (e.g. --adc-fs-vrms) never overwrites the GUI's YAML.
+        // Main owns the instance and injects it into the modes that need it — the
+        // modes never reach into the singleton themselves.
+        Preferences prefs = Preferences.instance();
+        prefs.setTransientMode(true);
+        if (ArgParser.hasArg(args, "--iterative-compensate")) {
+            IterativeCompensateMode mode = new IterativeCompensateMode();
+            mode.setPrefs(prefs);
+            mode.run(args);
+            return;
+        }
+        if (ArgParser.hasArg(args, "--gen-fft")) {
+            GenFftMode mode = new GenFftMode();
+            mode.setPrefs(prefs);
+            mode.run(args);
+            return;
+        }
+        if (ArgParser.hasArg(args, "--freq-response")) {
+            FreqRespMode mode = new FreqRespMode();
+            mode.setPrefs(prefs);
+            mode.run(args);
+            return;
+        }
+        if (ArgParser.getArgValue(args, "--analyze-histogram") != null) {
+            AnalyzeHistogramMode.run(args);
+            return;
+        }
+        if (ArgParser.getArgValue(args, "--fft-analyze") != null) {
+            FftAnalyzeMode mode = new FftAnalyzeMode();
+            mode.setPrefs(prefs);
+            mode.run(args);
+            return;
+        }
+        if (ArgParser.hasArg(args, "--deembed")) {
+            DeembedMode.run(args);
+            return;
+        }
+        if (ArgParser.getArgValue(args, "--regress-calibrate") != null) {
+            RegressCalibrateMode.run(args);
+            return;
+        }
+        if (ArgParser.getArgValue(args, "--process-wav") != null) {
+            ProcessWavMode.run(args);
+            return;
+        }
+        DeviceSelector.logProviders();
+        if (ArgParser.hasArg(args, "--list")) {
+            DeviceSelector.listDevices();
+            return;
+        }
+        if (ArgParser.hasArg(args, "--generate")) {
+            GenerateMode mode = new GenerateMode();
+            mode.setPrefs(prefs);
+            mode.run(args);
+            return;
+        }
+        if (ArgParser.hasArg(args, "--record-wav") || ArgParser.getArgValue(args, "--record-mapped-wav") != null) {
+            RecordWavMode.run(args);
+            return;
+        }
+        if (ArgParser.hasArg(args, "--histogram")) {
+            HistogramMode mode = new HistogramMode();
+            mode.setPrefs(prefs);
+            mode.run(args);
+            return;
+        }
+        log.error("No mode flag given. Use --help for the list of modes.");
+        System.exit(1);
+    }
+}

@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theory: FFT analyser</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to Theory of operation</a></p>
+
+  <h1>FFT analyser</h1>
+
+  <h2 id="purpose">What it is for</h2>
+  <p>The FFT analyser is the frequency-domain workhorse: it shows the
+     spectrum and measures harmonic distortion (THD, THD+N), signal-to-noise
+     ratio, SINAD and ENOB, the individual harmonics, and — in two-tone mode
+     — the intermodulation products. Its defining capability is <b>coherent
+     averaging</b>, which digs a signal far below the single-shot noise floor
+     so distortion products tens of dB under the noise become measurable.
+     The design target is extreme: THD measured with confidence down to
+     <b>10⁻⁸ %</b> — eight digits after the decimal point — and most of the
+     machinery in this chapter exists to make a complex average stable enough,
+     for long enough, to reach that.
+     For the general foundations — windowing, leakage, resolution,
+     averaging — we <b>strongly recommend reading S. L. Gjelstrup's FFT
+     guide</b><sup id="cite-6"><a href="#ref-fftguide">[6]</a></sup>
+     (summarised locally in <a href="../external/fft-analysis.html">FFT
+     analysis essentials</a>): it explains many aspects of precise FFT
+     measurement excellently, though not all of the techniques this
+     analyser uses appear there — and, for the record, Phonalyser's
+     analyser was developed before that guide's publication in May 2026.
+     This chapter covers what Phonalyser does specifically.</p>
+
+  <h2 id="resolution">Resolution, windows, overlap</h2>
+  <p>An FFT of length <i>N</i> at sample rate <i>f</i><sub>s</sub> produces
+     bins spaced <i>f</i><sub>s</sub>/<i>N</i> apart; longer transforms (up
+     to 4M points here) buy finer resolution at the cost of capture time. A
+     tone seldom lands exactly on a bin, so its energy would leak across
+     neighbours; a <b>window</b><sup id="cite-1"><a href="#ref-window">[1]</a></sup>
+     tapers each block to suppress that. Phonalyser offers a range from
+     Rectangular and Hann through Blackman-Harris, flat-top, the very
+     low-leakage HFT (Heinzel) family and Kaiser-Bessel, to
+     Dolph-Chebyshev<sup id="cite-2"><a href="#ref-cheby">[2]</a></sup>
+     windows with side-lobe floors down to −300 dB — the dynamic range a
+     distortion measurement needs.</p>
+  <p>A tapered window has a price: it multiplies the samples near the block
+     edges by almost zero, so the signal power those samples carry is simply
+     <b>thrown away</b> — for a Hann-class taper, roughly half the captured
+     energy never reaches the transform. <b>Overlapping</b> successive
+     blocks (up to 93.75 % here) recovers it: a sample sitting in one
+     block's discarded edge sits near the <em>peak</em> of a neighbouring
+     block's window, so across the overlapped set virtually every captured
+     sample contributes at full weight. The noise floor of the average then
+     falls at the rate the <em>data</em> arrives — the same floor is reached
+     in less wall-clock time than un-overlapped analysis would need.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 250" width="100%" height="250" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <!-- left: single tapered block -->
+    <line x1="50" y1="150" x2="370" y2="150" stroke="#446" stroke-width="1"/>
+    <!-- wasted edge zones -->
+    <rect x="60"  y="60" width="55" height="90" fill="#ffe9d6" stroke="none"/>
+    <rect x="305" y="60" width="55" height="90" fill="#ffe9d6" stroke="none"/>
+    <!-- window bell -->
+    <path d="M 60,150 C 120,150 150,40 210,40 C 270,40 300,150 360,150"
+          fill="none" stroke="#33a" stroke-width="2"/>
+    <text x="210" y="30" text-anchor="middle" fill="#338">window weight</text>
+    <text x="87"  y="170" text-anchor="middle" fill="#965">≈ zero weight</text>
+    <text x="332" y="170" text-anchor="middle" fill="#965">≈ zero weight</text>
+    <text x="210" y="196" text-anchor="middle" fill="#335">one tapered block: the edge samples'</text>
+    <text x="210" y="212" text-anchor="middle" fill="#335">power is captured — then thrown away</text>
+
+    <!-- right: overlapped blocks -->
+    <line x1="450" y1="150" x2="800" y2="150" stroke="#446" stroke-width="1"/>
+    <path d="M 450,150 C 490,150 510,40 550,40 C 590,40 610,150 650,150"
+          fill="none" stroke="#33a" stroke-width="1.6"/>
+    <path d="M 550,150 C 590,150 610,40 650,40 C 690,40 710,150 750,150"
+          fill="none" stroke="#c33" stroke-width="1.6"/>
+    <path d="M 650,150 C 690,150 710,40 750,40 C 776,40 788,86 796,116"
+          fill="none" stroke="#7a7" stroke-width="1.6"/>
+    <!-- one sample, weighted twice -->
+    <line x1="650" y1="150" x2="650" y2="36" stroke="#888" stroke-width="1" stroke-dasharray="4 3"/>
+    <circle cx="650" cy="150" r="3.5" fill="#222"/>
+    <text x="658" y="52" fill="#557">edge of one block =</text>
+    <text x="658" y="68" fill="#557">peak of the next</text>
+    <text x="625" y="196" text-anchor="middle" fill="#335">overlapped blocks: every sample gets full</text>
+    <text x="625" y="212" text-anchor="middle" fill="#335">weight in some block — no power wasted,</text>
+    <text x="625" y="228" text-anchor="middle" fill="#335">the same noise floor in less time</text>
+  </svg>
+  </div>
+
+  <h2 id="coherent">Coherent averaging</h2>
+  <p>There are two ways to average spectra, and the difference is the whole
+     point of this analyser:</p>
+  <ul>
+    <li><b>Incoherent (power) averaging</b> adds the <em>magnitudes</em> of
+        successive blocks. Noise averages to its mean — it does not fall.
+        The noise floor stays where it is; you only get a smoother estimate
+        of it.</li>
+    <li><b>Coherent (complex) averaging</b> adds the blocks as complex
+        numbers, with phase. A stationary tone has the same phase every
+        block and adds up; random noise has random phase and partially
+        cancels. Over <i>M</i> blocks the noise floor drops by roughly</li>
+  </ul>
+  <div class="eq">10·log₁₀ <i>M</i>&nbsp;&nbsp;dB<span class="no">(1)</span></div>
+  <p>— so 100 averages buy about 20 dB, 10000 about 40 dB. This is what
+     exposes harmonics buried far beneath the single-shot floor.</p>
+
+  <p>The crux: <b>every captured block arrives with a different fundamental
+     phase</b>, because the tone is not synchronous with the block rate.
+     Summed naively, the blocks would point in random directions on the
+     complex plane and cancel <em>the signal</em> along with the noise.
+     Coherent averaging therefore stands on two legs:</p>
+  <ul>
+    <li><b>A gap-free contiguous stream.</b>  The analyser reads through a
+        forward <a href="ring-buffer.html#reader">read cursor</a>, so
+        successive blocks are spaced by an exact, uniform sample hop — never
+        "the latest block whenever the worker woke up", which would jitter
+        the phase reference and smear the result.</li>
+    <li><b>Exact per-block de-rotation.</b>  Knowing each block's absolute
+        position in the stream and the tone's exact frequency, the analyser
+        computes each block's phase difference against the common time
+        origin <em>exactly</em> and rotates the block back by it before
+        summing. The precision of that phase difference is the precision of
+        the whole method — which is why the tone's fractional bin position κ
+        is measured so carefully (next section), and why the tone is
+        actively steered onto the bin grid (the section after).</li>
+  </ul>
+
+  <h2 id="kappa">Sub-bin frequency and de-rotation</h2>
+  <p>Write the tone's exact position as a fractional bin number κ. Between
+     two blocks spaced <i>s</i> samples apart, bin <i>k</i>'s phase advances
+     by a known amount; comparing the measured phases of the tone in two
+     clean blocks recovers κ from that phase difference (a far more precise
+     estimate than a magnitude peak-pick). Each block <i>m</i> is then
+     de-rotated before summing:</p>
+  <div class="eq">Φ<sub>m</sub> = −2π · κ · <i>m·s</i> / <i>N</i><span class="no">(2)</span></div>
+  <p>Harmonic <i>h</i> of the tone sits near bin <i>h</i>·κ and advances
+     <i>h</i>× as fast, so its lobe is de-rotated by <i>h</i>·Φ. Applying a
+     <em>constant</em> phase per harmonic lobe — rather than a per-bin
+     frequency ramp — is what keeps the leakage skirt of each harmonic
+     aligned too; a ramp would over-rotate the skirt and grow a spurious
+     comb on it.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 250" width="100%" height="250" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="db" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#33a"/>
+      </marker>
+      <marker id="dg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#999"/>
+      </marker>
+      <marker id="dk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+    <!-- left: phasors fanned by m·Φ -->
+    <circle cx="140" cy="110" r="78" fill="none" stroke="#dde"/>
+    <line x1="140" y1="110" x2="140" y2="40"  stroke="#33a" stroke-width="2"   marker-end="url(#db)"/>
+    <line x1="140" y1="110" x2="185" y2="56"  stroke="#33a" stroke-width="1.7" marker-end="url(#db)"/>
+    <line x1="140" y1="110" x2="209" y2="98"  stroke="#33a" stroke-width="1.4" marker-end="url(#db)"/>
+    <line x1="140" y1="110" x2="201" y2="145" stroke="#33a" stroke-width="1.1" marker-end="url(#db)"/>
+    <text x="130" y="32"  fill="#338">m=0</text>
+    <text x="192" y="50"  fill="#338">m=1</text>
+    <text x="216" y="100" fill="#338">m=2</text>
+    <text x="206" y="160" fill="#338">m=3</text>
+    <text x="140" y="215" text-anchor="middle" fill="#335">each block's tone arrives</text>
+    <text x="140" y="231" text-anchor="middle" fill="#335">rotated by m·Φ — summed naively,</text>
+    <text x="140" y="247" text-anchor="middle" fill="#335">they cancel each other</text>
+
+    <!-- middle -->
+    <line x1="300" y1="110" x2="480" y2="110" stroke="#446" stroke-width="1.5" marker-end="url(#dk)"/>
+    <text x="390" y="92"  text-anchor="middle" fill="#335">rotate block m</text>
+    <text x="390" y="130" text-anchor="middle" fill="#335">back by −m·Φ</text>
+
+    <!-- right: aligned -->
+    <circle cx="620" cy="110" r="78" fill="none" stroke="#dde"/>
+    <line x1="616" y1="110" x2="630" y2="73"  stroke="#33a" stroke-width="1.1" marker-end="url(#db)"/>
+    <line x1="618" y1="110" x2="636" y2="63"  stroke="#33a" stroke-width="1.4" marker-end="url(#db)"/>
+    <line x1="620" y1="110" x2="642" y2="53"  stroke="#33a" stroke-width="1.7" marker-end="url(#db)"/>
+    <line x1="622" y1="110" x2="648" y2="43"  stroke="#33a" stroke-width="2"   marker-end="url(#db)"/>
+    <!-- noise: short random arrows -->
+    <line x1="620" y1="110" x2="600" y2="125" stroke="#999" stroke-width="1" marker-end="url(#dg)"/>
+    <line x1="620" y1="110" x2="638" y2="122" stroke="#999" stroke-width="1" marker-end="url(#dg)"/>
+    <line x1="620" y1="110" x2="606" y2="96"  stroke="#999" stroke-width="1" marker-end="url(#dg)"/>
+    <text x="660" y="40"  fill="#338">signal: adds up</text>
+    <text x="648" y="130" fill="#888">noise: random</text>
+    <text x="648" y="146" fill="#888">directions, cancels</text>
+    <text x="620" y="215" text-anchor="middle" fill="#335">de-rotated: every block points</text>
+    <text x="620" y="231" text-anchor="middle" fill="#335">the same way — the average grows</text>
+    <text x="620" y="247" text-anchor="middle" fill="#335">while the noise floor falls</text>
+  </svg>
+  </div>
+  <div class="note"><b>Why κ is fitted over the whole segment.</b>  A κ taken
+     from just one pair of blocks carries a small residual error, which acts
+     as a slow de-rotation drift across a long average — the harmonics
+     gradually de-cohere and read low (the "harmonics decline on long
+     captures" effect). Phonalyser refits κ by regressing the tone's phase
+     across <em>every</em> block in the clean segment, a baseline hundreds of
+     times longer than one hop, so even very long averages stay coherent.
+     <a href="derotation-accuracy.html#reference">How precise that fit is, and
+     why its residual error does not accumulate</a>, is worked out
+     quantitatively in the de-rotation-accuracy chapter.</div>
+
+  <h2 id="ongrid">Keeping the tone on the grid: snap and the FLL</h2>
+  <p>De-rotation is most accurate when there is least to de-rotate. Two
+     mechanisms keep the tone essentially <em>on</em> a bin:</p>
+  <ul>
+    <li><b>Bin snapping.</b>  The <a href="generator.html#dds">generator</a>
+        can round its commanded frequency to the exact FFT bin centre, so
+        the emitted tone is nominally coherent with the transform.</li>
+    <li><b>The frequency-lock loop (FLL).</b>  Snapping alone is not enough:
+        the DAC and the ADC run on <em>different crystal oscillators</em>,
+        whose frequencies never agree exactly — a tone emitted precisely on
+        a DAC-clock bin arrives a few ppm off on the ADC's clock. The FLL
+        closes that loop: each tick the analyser measures the tone's true
+        captured frequency, and fine-trims the DDS until the captured tone
+        sits on the bin to better than <b>±0.05 ppm</b>. (The trim commands
+        are issued with exact transport bookkeeping — a correction is never
+        re-issued until a measurement provably postdates the previous one's
+        arrival through the DAC buffer and analysis window — so the loop
+        settles instead of hunting.)</li>
+  </ul>
+  <p>That alignment almost eliminates spectral leakage from the fundamental
+     and harmonic bins. The small residual that remains — even at 1/5000 of
+     a bin or less — is <em>still</em> measured as κ and accounted for
+     exactly by the de-rotation. Alignment reduces what de-rotation must
+     correct; de-rotation guarantees correctness either way.</p>
+
+  <h2 id="leakage">The neighbour bin: where the leaked power goes</h2>
+  <p>However good the alignment, the tone's true position κ is never
+     <em>perfectly</em> on the bin — and any offset splits the tone's power
+     between the two straddling bins. The split is brutally asymmetric: on a
+     well-aligned tone the main bin holds, say, 99.9999 % of the power and
+     the neighbour the remaining 0.0001 %. Tempting to ignore — but the
+     design target is 10⁻⁸ %, and dropping a 10⁻⁶ share of the fundamental
+     or of a harmonic is an error orders of magnitude above it. So the
+     level of every tone and harmonic is always computed from <b>both</b>
+     bins, weighted by the sub-bin offset <i>w</i> = |κ − <i>k</i>|:</p>
+  <div class="eq"><i>A</i>² = (1 − <i>w</i>) · <i>P</i><sub><i>k</i></sub> + <i>w</i> · <i>P</i><sub><i>k</i>±1</sub><span class="no">(3)</span></div>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 250" width="100%" height="250" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <!-- baseline + bin ticks -->
+    <line x1="100" y1="200" x2="720" y2="200" stroke="#446" stroke-width="1.2"/>
+    <line x1="250" y1="196" x2="250" y2="204" stroke="#446"/>
+    <line x1="400" y1="196" x2="400" y2="204" stroke="#446"/>
+    <line x1="550" y1="196" x2="550" y2="204" stroke="#446"/>
+    <text x="250" y="220" text-anchor="middle" fill="#557">bin k−1</text>
+    <text x="400" y="220" text-anchor="middle" fill="#557">bin k</text>
+    <text x="550" y="220" text-anchor="middle" fill="#557">bin k+1</text>
+    <!-- main bar -->
+    <rect x="385" y="40" width="30" height="160" fill="#cdf" stroke="#88a"/>
+    <text x="400" y="32" text-anchor="middle" font-weight="bold">99.9999 %</text>
+    <!-- neighbour bar -->
+    <rect x="535" y="188" width="30" height="12" fill="#ffe9d6" stroke="#c96"/>
+    <text x="550" y="178" text-anchor="middle" font-weight="bold" fill="#965">0.0001 %</text>
+    <!-- true position κ -->
+    <line x1="408" y1="56" x2="408" y2="200" stroke="#c33" stroke-width="1.4" stroke-dasharray="5 4"/>
+    <text x="416" y="66" fill="#a33">true position κ</text>
+    <text x="416" y="82" fill="#a33">(slightly off the bin)</text>
+    <!-- combination -->
+    <path d="M 400 36 L 400 14 L 550 14 L 550 170" fill="none" stroke="#446" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="475" y="10" text-anchor="middle" fill="#335">both enter A² — equation (3)</text>
+    <text x="700" y="242" text-anchor="end" fill="#888">(symbolic — not to scale)</text>
+  </svg>
+  </div>
+
+  <h2 id="phaseref">Choosing the phase reference</h2>
+  <p>The phase difference that drives the de-rotation has to be measured on
+     something — and what it is measured on decides how much phase noise
+     enters every block's correction:</p>
+  <ul>
+    <li><b>Strong fundamental:</b> its own phase is the cleanest reference.
+        Each block's Φ is measured on the fundamental alone, and every
+        harmonic lobe is de-rotated by <i>h</i>·Φ — the harmonics inherit a
+        reference far stronger than themselves.</li>
+    <li><b>Weak fundamental, or two strong tones:</b> a single weak line
+        would inject its own phase noise into the entire de-rotation. The
+        rotation is then determined from <em>all strong tones together</em> —
+        each detected tone carries its own phase tracking, and their pooled
+        information sets the common clock-drift correction — so the
+        reference noise falls with the combined tone power.</li>
+  </ul>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 260" width="100%" height="260" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="fb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#33a"/>
+      </marker>
+      <marker id="fr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/>
+      </marker>
+    </defs>
+    <!-- left: strong fundamental -->
+    <circle cx="170" cy="110" r="80" fill="none" stroke="#dde"/>
+    <line x1="170" y1="110" x2="208" y2="44" stroke="#33a" stroke-width="2.5" marker-end="url(#fb)"/>
+    <text x="214" y="40" fill="#338">fundamental — sets Φ</text>
+    <line x1="170" y1="110" x2="140" y2="82" stroke="#33a" stroke-width="1" marker-end="url(#fb)"/>
+    <line x1="170" y1="110" x2="150" y2="138" stroke="#33a" stroke-width="1" marker-end="url(#fb)"/>
+    <line x1="170" y1="110" x2="196" y2="134" stroke="#33a" stroke-width="1" marker-end="url(#fb)"/>
+    <text x="56" y="78"  fill="#557">harmonics follow</text>
+    <text x="56" y="94"  fill="#557">with h·Φ</text>
+    <text x="170" y="225" text-anchor="middle" fill="#335">strong fundamental:</text>
+    <text x="170" y="241" text-anchor="middle" fill="#335">one clean phase reference</text>
+
+    <!-- right: the fork -->
+    <circle cx="600" cy="110" r="80" fill="none" stroke="#dde"/>
+    <line x1="600" y1="110" x2="616" y2="38"  stroke="#33a" stroke-width="1.6" marker-end="url(#fb)"/>
+    <line x1="600" y1="110" x2="654" y2="58"  stroke="#33a" stroke-width="1.6" marker-end="url(#fb)"/>
+    <line x1="600" y1="110" x2="674" y2="94"  stroke="#33a" stroke-width="1.6" marker-end="url(#fb)"/>
+    <path d="M 614 40 Q 648 48 672 92" fill="none" stroke="#33a" stroke-width="1" stroke-dasharray="4 3"/>
+    <!-- common rotation arc -->
+    <path d="M 600 18 A 92 92 0 0 1 686 76" fill="none" stroke="#c33" stroke-width="1.4" marker-end="url(#fr)"/>
+    <text x="700" y="50" fill="#a33">common rotation</text>
+    <text x="700" y="66" fill="#a33">(clock drift)</text>
+    <text x="488" y="34" fill="#557">tones = tines of</text>
+    <text x="488" y="50" fill="#557">one rigid fork</text>
+    <text x="600" y="225" text-anchor="middle" fill="#335">weak fundamental / two tones: "rotate the fork" —</text>
+    <text x="600" y="241" text-anchor="middle" fill="#335">the common angle is measured from all tines pooled</text>
+  </svg>
+  </div>
+  <p>The picture to keep: the strong tones form one rigid <b>fork</b> — the
+     signal fixes their phases <em>relative to each other</em>, and only the
+     fork's <em>common</em> rotation (the converters' clock drift) changes
+     from block to block. Measuring that one rotation angle from all tines
+     at once, weighted by their strength, is far quieter than reading it off
+     any single tine — and the whole fork is then rotated back as one.</p>
+  <p>This pooling is not a corner case; it is what a serious THD measurement
+     looks like. To measure THD at 1 kHz near the 10⁻⁸ % level, the
+     fundamental is removed by a <b>1 kHz twin-T notch</b> in front of the
+     ADC — making it up to 80 dB weaker (of order 0.1 mV RMS) so the
+     converter no longer generates its own distortion from a full-scale tone
+     and its dynamic range is spent on the harmonics. The de-rotation then
+     locks onto the pooled tone set and stays locked, which is what makes
+     hours-long complex averaging of the weakest harmonics possible.</p>
+
+  <h2 id="rejection">Keeping bad blocks out of the average</h2>
+  <p>One corrupted block — a stretch of swallowed samples, a paused
+     generator, a click — poured into a coherent average can undo thousands
+     of good blocks: it splatters power across the spectrum and steps the
+     phase, de-cohering everything collected so far. Two failure classes are
+     detected and their blocks <em>excluded</em>:</p>
+
+  <h3>Buffer overrun</h3>
+  <p>If the analyser falls behind the capture far enough that unread samples
+     are overwritten (see <a href="ring-buffer.html#overrun">ring buffer —
+     overrun</a>), the stream has a hole of unknown length. The read
+     interface reports this explicitly — torn data is never silently
+     delivered — and the analyser re-synchronises: the incomplete window is
+     discarded and the cursor re-anchors at the newest sample.</p>
+
+  <h3>Signal discontinuity — detected in the spectrum</h3>
+  <p>Subtler breaks — the generator pausing (the signal goes stale), a
+     capture hiccup swallowing a span, a phase jump — are hard to police in
+     the time domain when the signal is weak. Detection therefore happens in
+     the frequency domain, where each new block is compared with the running
+     statistics of the blocks already accepted. Per block:</p>
+  <ol>
+    <li>The spectrum is reduced to a set of <b>log-spaced band levels</b>
+        (average power per band, in dB), and bands holding genuine spectral
+        lines are identified and set aside — a real line references itself
+        and must not count as "lift".</li>
+    <li><b>Gate 1 — near-carrier pedestal.</b>  The noise level in the skirt
+        just outside each tone's <em>actual</em> main lobe (the lobe extent
+        is found from the data, so ordinary window leakage is excluded),
+        measured as its excess over the local floor. A discontinuity
+        splatters energy here first, long before the broadband floor
+        moves.</li>
+    <li><b>Gate 2 — broadband floor lift.</b>  The mean rise of the
+        non-line bands over their per-band running median — catches a
+        uniform floor lift the pedestal gate can't see.</li>
+    <li><b>Gate 3 — total power.</b>  A jump <em>or collapse</em> of the
+        block's total power against its history — a stalled generator or a
+        long dropout, where lines vanish instead of the floor rising.</li>
+  </ol>
+  <p>Every threshold is <b>self-calibrated</b>: a running median of the
+     collected history plus a multiple of its robust spread
+     (MAD<sup id="cite-3"><a href="#ref-mad">[3]</a></sup>), with the
+     pedestal gate given a wider margin because window leakage in a tone's
+     skirt naturally breathes block to block. The detector thus learns the
+     clean baseline of <em>this</em> signal at <em>this</em> level instead
+     of using fixed numbers; the first block seeds the reference, and from
+     the second block on every gate is live. The band reference is updated
+     only from accepted blocks, while the gate baselines track all blocks —
+     so one early glitch can neither poison the reference nor cause false
+     rejections later.</p>
+
+  <div class="note"><b>What a re-sync does — and does not — cost.</b>  In
+     both cases the offending window is discarded and the stream re-anchors,
+     but the <em>accumulated average survives</em>: the de-rotation absorbs
+     the coverage gap, and the running phase lock applies a one-shot full
+     realignment on the next clean block (a re-synchronised stream generally
+     resumes at a new phase) before returning to normal tracking. The
+     blinking <em>capture re-sync</em> indicator reports the event. This
+     exclusion — rather than letting one stale or torn block in — is what
+     almost completely eliminates power-leakage bursts and the slow
+     decoherence of the collected statistics.</div>
+
+  <h2 id="metrics">The distortion and noise metrics</h2>
+  <p>From the averaged spectrum, with the fundamental level
+     <i>A</i><sub>1</sub> and harmonic levels <i>A</i><sub>h</sub>:</p>
+  <div class="eq">THD = √( Σ<sub><i>h</i>≥2</sub> <i>A</i><sub>h</sub>² ) / <i>A</i><sub>1</sub><span class="no">(4)</span></div>
+  <p>SNR compares the fundamental against the integrated noise power in the
+     measurement band, with every signal bin (fundamental, harmonics, and
+     their leakage zones) excluded from the noise sum:</p>
+  <div class="eq">SNR = 10·log₁₀ ( <i>A</i><sub>1</sub>² / Σ<sub>noise</sub> <i>A</i><sub>k</sub>² )<span class="no">(5)</span></div>
+  <p><b>SINAD</b> puts <em>both</em> noise and distortion in the
+     denominator, and <b>ENOB</b> — the effective number of bits — follows
+     from it by the converter's ideal-quantization
+     law<sup id="cite-4"><a href="#ref-enob">[4]</a></sup>:</p>
+  <div class="eq">SINAD = 10·log₁₀ ( <i>A</i><sub>1</sub>² / (Σ<sub>noise</sub> + Σ<sub>dist</sub>) )<span class="no">(6)</span></div>
+  <div class="eq">ENOB = (SINAD − 1.76) / 6.02<span class="no">(7)</span></div>
+  <p>THD+N is simply the reciprocal ratio to SINAD (the same band, the same
+     numerator). The THD+N noise term is A-weighted to the IEC
+     standard<sup id="cite-5"><a href="#ref-aw">[5]</a></sup> so the figure
+     reflects audibility rather than raw wideband noise.</p>
+
+  <h2 id="dualtone">Two-tone (intermodulation)</h2>
+  <p>With two tones present, the products of interest are not harmonics of
+     one tone but combinations <i>a</i>·<i>f</i>₁ + <i>b</i>·<i>f</i>₂. The
+     analyser locates the second tone's own sub-bin position κ₂ from a clean
+     block (where it is still at full level — coherent cancellation only
+     bites in the average), then de-rotates the whole intermodulation grid
+     at each product's <em>true</em> frequency <i>a</i>·Φ₁ + <i>b</i>·Φ₂.
+     Snapping every product to the nearest harmonic of one tone instead
+     would rotate some products ~180° apart between blocks and cancel
+     them — the cause of an earlier "IMD products vanish" bug. The right
+     de-rotation self-selects: the one that leaves a product strongest is
+     the correct one.</p>
+
+  <h2 id="plot">Calibration and plot-time corrections</h2>
+  <p>The averaging accumulator holds the <em>raw</em> spectrum. Everything
+     corrective is applied when the curve is drawn, so toggling a correction
+     re-plots instantly without discarding the average:</p>
+  <ul>
+    <li><b>Frequency-response de-embedding</b> (next section).</li>
+    <li><b>Mains rejection</b> is applied here as a frequency-domain comb
+        correction on the plotted curve — not a time-domain filter on the
+        accumulator — so it never distorts the averaged data itself.</li>
+    <li><b>Unit conversion.</b>  The base scale is dBFS; dBV and V/√Hz
+        density are derived at plot time from the ADC full-scale
+        calibration.</li>
+  </ul>
+
+  <h2 id="cal">Frequency-response compensation: the red and blue dots</h2>
+  <p>A measurement through any real chain — a notch filter, an attenuator,
+     the soundcard's own roll-off — reads each harmonic through that chain's
+     frequency response. Loaded <b>calibration files</b> (measured by the
+     <a href="freq-resp.html">frequency-response</a> module, e.g. the
+     twin-T notch's own curve) undo this: at display time the chain's
+     response is divided out of the spectrum, and when several calibrations
+     are loaded they compose in order.</p>
+  <p>The view shows both worlds at once:</p>
+  <ul>
+    <li><b>Red dots</b> mark the fundamental and each harmonic on the
+        <em>corrected</em> spectrum — the levels as they are at the device
+        under test, after the chain's response has been removed.</li>
+    <li><b>Blue dots</b> mark where each of those peaks sat <em>before</em>
+        the correction — the levels as the ADC actually saw them. The
+        vertical gap between a blue and red dot IS the loaded calibration's
+        value at that frequency; with a 1 kHz notch loaded, the fundamental's
+        blue dot sits tens of dB below its red dot while the harmonics'
+        dots nearly coincide.</li>
+  </ul>
+  <p><b>The measurement table follows the red dots.</b>  After the
+     compensation is applied, every derived figure — fundamental level,
+     harmonic levels and percentages, THD, THD+N, SNR — is recomputed from
+     the <em>corrected</em> spectrum, so the table states the device's
+     numbers, not the chain's. One subtlety: on a deep average the blue
+     dots are re-derived from the <em>pinned</em> coherent frequency rather
+     than each tick's jittering single-tick estimate — otherwise the
+     calibration would be looked up at a slightly different frequency every
+     tick and the blue dots would visibly dance on a steep notch flank.</p>
+
+  <h3 id="manual-fund">Pinning the fundamental by hand on a steep notch</h3>
+  <p>The fundamental is the one level the notch calibration recovers least
+     reliably. A passive <b>twin-T notch</b>'s flank around its null is
+     extraordinarily steep — in one measured filter the response is
+     <b>−82.46 dB at 1001.9 Hz</b> but <b>−81.73 dB at 1002.23 Hz</b>: about
+     0.7 dB of correction across a third of a hertz. So the slightest error in
+     the looked-up frequency — or the slightest drift of the notch itself —
+     turns into a large error in the de-embedded fundamental level. And the
+     twin-T's null <em>does</em> drift, by tenths of a hertz as its components
+     warm and cool, so over a long run the recovered fundamental wanders even
+     though the source is rock-steady.</p>
+  <p>Because every THD / THD+N / SNR figure is referenced to the fundamental
+     level, that wander shows up as instability in the distortion readings even
+     when the device under test has not changed. The cure is to stop
+     de-embedding the fundamental and <b>state it by hand</b>: its amplitude is
+     the part you actually know — you dialled it on the generator, or measured
+     it without the notch in circuit — whereas the filter's null is the
+     uncertain part. With the
+     <a href="../fft.html#fft-manual-fund">manual fundamental</a> enabled, the
+     distortion metrics are referenced against that fixed, known value, and only
+     the harmonics are de-embedded — and they are robust to the very same drift:
+     at the 2nd harmonic (≈2004 Hz) a 2/3 Hz shift of the notch moves the
+     correction by under <b>0.01 dB</b>, and at the 3rd (≈3006 Hz) even a 1 Hz
+     shift stays under 0.01 dB, because those frequencies sit far up the notch's
+     gentle flank rather than in its steep null. Only the fundamental, down in
+     the null, is fragile. The THD reading then holds steady no matter how the
+     notch drifts.</p>
+
+  <h2 id="longrun">What all of this buys</h2>
+  <p>Each mechanism in this chapter removes one way a long complex average
+     can rot: bin alignment to ±0.05 ppm removes the leakage, exact
+     per-block de-rotation removes the phase drift the residual would cause,
+     pooled phase references keep the lock when the fundamental is notched
+     away, and strict block exclusion keeps overruns and discontinuities out
+     of the statistics. Together they make the average stable over <b>very
+     long runs — 8 to 12 hours of continuous coherent averaging</b> — and
+     that endurance is the requirement behind the headline figure: a noise
+     floor driven low enough to state THD at the 10⁻⁸ % level with
+     confidence, not as a one-off lucky readout.</p>
+  <p>That the de-rotation can hold a complex average together for that long
+     without quietly corrupting the harmonic levels is not assumed — it is
+     worked out in the <a href="derotation-accuracy.html">de-rotation accuracy
+     chapter</a>, which shows the rotation-angle error stays at about 0.023°,
+     contributes only micro-decibels to the levels, and — the key point — does
+     <em>not</em> accumulate over hours of averaging.</p>
+
+  <h2 id="who">Where it sits</h2>
+  <p>The analyser shares one <a href="ring-buffer.html#sharedcapture">capture
+     session</a> and ring buffer with the <a href="oscilloscope.html">
+     oscilloscope</a>. When the generator runs an internal tone it can take
+     the commanded frequency as a starting hint and, with snap-to-bin active,
+     feeds a frequency trim back to the <a href="generator.html#dds">
+     generator</a> so the emitted tone lands exactly on a bin — the tightest
+     possible coherence. Its harmonic measurements also feed the generator's
+     <a href="generator.html#compensated">compensated-sine</a> distortion
+     cancellation.</p>
+
+  <h2 id="refs">References</h2>
+  <ol class="refs">
+    <li id="ref-window"><a href="#cite-1">1.</a>
+        Window functions and leakage —
+        <a href="https://en.wikipedia.org/wiki/Window_function">Wikipedia: Window function</a>;
+        the HFT (flat-top) family: G. Heinzel et al.,
+        <a href="https://holometer.fnal.gov/GH_FFT.pdf">"Spectrum and spectral density estimation by the DFT, including a comprehensive list of window functions"</a>, 2002.</li>
+    <li id="ref-cheby"><a href="#cite-2">2.</a>
+        Dolph-Chebyshev window (uniform side-lobe floor) —
+        <a href="https://en.wikipedia.org/wiki/Window_function#Dolph%E2%80%93Chebyshev_window">Wikipedia: Dolph–Chebyshev window</a>.</li>
+    <li id="ref-mad"><a href="#cite-3">3.</a>
+        Median and median-absolute-deviation as a robust threshold —
+        <a href="https://en.wikipedia.org/wiki/Median_absolute_deviation">Wikipedia: Median absolute deviation</a>.</li>
+    <li id="ref-enob"><a href="#cite-4">4.</a>
+        SINAD, ENOB and the 6.02 N + 1.76 dB law —
+        <a href="https://en.wikipedia.org/wiki/Effective_number_of_bits">Wikipedia: Effective number of bits</a>;
+        Analog Devices tutorial MT-003,
+        <a href="https://www.analog.com/media/en/training-seminars/tutorials/MT-003.pdf">"Understand SINAD, ENOB, SNR, THD, THD + N, and SFDR"</a>.</li>
+    <li id="ref-aw"><a href="#cite-5">5.</a>
+        A-weighting —
+        <a href="https://en.wikipedia.org/wiki/A-weighting">Wikipedia: A-weighting</a> (IEC 61672).</li>
+    <li id="ref-fftguide"><a href="#cite-6">6.</a>
+        S. L. Gjelstrup,
+        <a href="https://dewesoft.com/blog/guide-to-fft-analysis">"FFT Analysis (Fast Fourier Transform): The Ultimate Guide to Frequency Analysis"</a>,
+        Dewesoft, 2026 — recommended reading on the foundations (windows,
+        leakage, averaging, scaling); <a href="../external/fft-analysis.html">local summary</a>.</li>
+  </ol>
+
+  <p class="back"><a href="oscilloscope.html">◀ Oscilloscope</a> ·
+     <a href="index.html">Theory of operation</a> ·
+     next: <a href="derotation-accuracy.html">De-rotation accuracy ▶</a></p>
+
+</body>
+</html>

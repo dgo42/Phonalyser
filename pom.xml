@@ -1,0 +1,792 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>org.edgo.phonalyser</groupId>
+    <artifactId>phonalyser</artifactId>
+    <version>1.0-RC1</version>
+    <packaging>jar</packaging>
+
+    <name>Phonalyser</name>
+    <description>Precision audio measurement workbench: signal generator, oscilloscope, FFT and ADC calibration</description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <swt.version>3.126.0</swt.version>
+
+        <!-- Application metadata consumed by jpackage. -->
+        <app.name>Phonalyser</app.name>
+        <app.vendor>edgo.org</app.vendor>
+        <app.version>1.0.0</app.version>
+        <app.mainClass>org.edgo.audio.measure.gui.GuiMain</app.mainClass>
+        <app.mainJar>${project.artifactId}-${project.version}-${platform.id}.jar</app.mainJar>
+
+        <!-- Short platform tag baked into the fat JAR filename so multiple
+             OS builds can sit side-by-side in the same release folder.
+             Overridden by each OS profile below; the default keeps the
+             build sane if no profile activates. -->
+        <platform.id>local</platform.id>
+
+        <!-- JUnit tags excluded from the normal test run.  Slow/diagnostic
+             harnesses are @Tag("exploratory"); override to "" to run them, e.g.
+             mvn -o test -Dsurefire.excludedGroups= -Dtest=FftHarmonicStabilityTest#kappaRefitAB -->
+        <surefire.excludedGroups>exploratory</surefire.excludedGroups>
+    </properties>
+
+    <dependencies>
+        <!-- Log4j 2 API -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>2.23.1</version>
+        </dependency>
+        <!-- Log4j 2 core implementation -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>2.23.1</version>
+        </dependency>
+
+        <!-- JFreeChart for PNG chart generation -->
+        <dependency>
+            <groupId>org.jfree</groupId>
+            <artifactId>jfreechart</artifactId>
+            <version>1.5.4</version>
+        </dependency>
+
+        <!-- Route SLF4J calls into Log4j 2 -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-slf4j2-impl</artifactId>
+            <version>2.26.0</version>
+        </dependency>
+
+        <!-- Lombok -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>1.18.32</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- JNA — used by the WDM-KS (Windows) backend; on Linux/macOS it
+             still ships in the fat JAR because PortAudio is loaded the same
+             way (libportaudio.so / libportaudio.dylib) when present. -->
+        <dependency>
+            <groupId>net.java.dev.jna</groupId>
+            <artifactId>jna</artifactId>
+            <version>5.14.0</version>
+        </dependency>
+
+        <!-- JTransforms — FFT for Farina log-sweep deconvolution in freq-response mode -->
+        <dependency>
+            <groupId>com.github.wendykierp</groupId>
+            <artifactId>JTransforms</artifactId>
+            <version>3.1</version>
+        </dependency>
+
+        <!-- javaFlacEncoder — pure-Java PCM → FLAC encoder for Save-to.
+             Faster than Nayuki's encoder at large sample counts; kept
+             as the writer side.  Polarity workaround lives in
+             org.edgo.audio.measure.wav.FlacWriter (negate samples
+             before addSamples — verified bit-equivalent round-trip
+             against the WAV writer). -->
+        <dependency>
+            <groupId>com.github.axet</groupId>
+            <artifactId>java-flac-encoder</artifactId>
+            <version>0.3.8</version>
+        </dependency>
+
+        <!-- Project Nayuki's FLAC library — used for the decode side
+             only (Play-from), since its decoder is solid and
+             javaFlacEncoder doesn't ship one.  Not on Maven Central;
+             vendored under deps/flac-library-java and installed to the
+             local repo via `mvn install` in that directory. -->
+        <dependency>
+            <groupId>io.nayuki</groupId>
+            <artifactId>flac-library</artifactId>
+            <version>1.1.0</version>
+        </dependency>
+
+        <!-- SnakeYAML — YAML loader/dumper for persisting GUI preferences to disk. -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>2.2</version>
+        </dependency>
+
+        <!-- Apache Commons Lang — ArrayUtils.indexOf (linear search on unsorted
+             arrays) and other small utilities that would otherwise be reinvented
+             per-class. -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <version>3.14.0</version>
+        </dependency>
+
+        <!-- Eclipse batch compiler (ECJ) — runtime compilation of GUI
+             automation scripts handed over as .java source files (the
+             "automation" CLI switch with a path instead of a class name).
+             Bundled so the jpackaged app (JRE-only runtime image) can
+             compile scripts too; on a dev JDK the javax.tools system
+             compiler would also work. -->
+        <dependency>
+            <groupId>org.eclipse.jdt</groupId>
+            <artifactId>ecj</artifactId>
+            <version>3.38.0</version>
+        </dependency>
+
+        <!-- JUnit 5 for testing -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.1</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <profiles>
+        <!-- =============================== Windows x86_64 =============================== -->
+        <profile>
+            <id>windows-x64</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                    <arch>amd64</arch>
+                </os>
+            </activation>
+            <properties>
+                <jpackage.type>MSI</jpackage.type>
+                <jpackage.nativesDir>${project.basedir}/lib/windows</jpackage.nativesDir>
+                <platform.id>windows</platform.id>
+            </properties>
+            <dependencies>
+                <!-- SWT — Windows x64 binding.  The platform-specific artifact pulls
+                     a broken org.eclipse.swt parent reference; exclude it. -->
+                <dependency>
+                    <groupId>org.eclipse.platform</groupId>
+                    <artifactId>org.eclipse.swt.win32.win32.x86_64</artifactId>
+                    <version>${swt.version}</version>
+                    <exclusions>
+                        <exclusion>
+                            <groupId>*</groupId>
+                            <artifactId>*</artifactId>
+                        </exclusion>
+                    </exclusions>
+                </dependency>
+
+                <!-- csjsound-provider — JavaSound MixerProvider that exposes WASAPI
+                     exclusive mode to javax.sound.sampled, enabling JavaSoundGenerator
+                     to open 384 kHz / 32-bit SourceDataLines that the vanilla Windows
+                     DirectSound MixerProvider can't.  Windows-only — built from source
+                     at https://github.com/pavhofman/csjsound-provider; place the
+                     resulting jar at lib/windows/csjsound-provider.jar and the matching
+                     csjsound_amd64.dll next to it (on java.library.path). -->
+                <dependency>
+                    <groupId>cz.pavhofman</groupId>
+                    <artifactId>csjsound-provider</artifactId>
+                    <version>1.0</version>
+                    <scope>system</scope>
+                    <systemPath>${project.basedir}/lib/windows/csjsound-provider.jar</systemPath>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <!-- Copy the Windows native DLLs + csjsound jar into the
+                         jpackage staging directory so the installer payload
+                         picks them up at $APPDIR (where -Djava.library.path
+                         points at runtime). -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>stage-windows-natives</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <copy todir="${project.build.directory}/jpackage-input">
+                                            <fileset dir="${project.basedir}/lib/windows">
+                                                <include name="*.dll"/>
+                                                <include name="csjsound-provider.jar"/>
+                                            </fileset>
+                                        </copy>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <icon>${project.basedir}/src/main/resources/icons/phonalyser.ico</icon>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- =============================== Linux x86_64 ================================ -->
+        <profile>
+            <id>linux-x64</id>
+            <activation>
+                <os>
+                    <family>unix</family>
+                    <name>linux</name>
+                    <arch>amd64</arch>
+                </os>
+            </activation>
+            <properties>
+                <jpackage.type>DEB</jpackage.type>
+                <platform.id>linux</platform.id>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>org.eclipse.platform</groupId>
+                    <artifactId>org.eclipse.swt.gtk.linux.x86_64</artifactId>
+                    <version>${swt.version}</version>
+                    <exclusions>
+                        <exclusion>
+                            <groupId>*</groupId>
+                            <artifactId>*</artifactId>
+                        </exclusion>
+                    </exclusions>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <icon>${project.basedir}/src/main/resources/icons/phonalyser.png</icon>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- =============================== Linux aarch64 =============================== -->
+        <profile>
+            <id>linux-aarch64</id>
+            <activation>
+                <os>
+                    <family>unix</family>
+                    <name>linux</name>
+                    <arch>aarch64</arch>
+                </os>
+            </activation>
+            <properties>
+                <jpackage.type>DEB</jpackage.type>
+                <platform.id>linux-aarch64</platform.id>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>org.eclipse.platform</groupId>
+                    <artifactId>org.eclipse.swt.gtk.linux.aarch64</artifactId>
+                    <version>${swt.version}</version>
+                    <exclusions>
+                        <exclusion>
+                            <groupId>*</groupId>
+                            <artifactId>*</artifactId>
+                        </exclusion>
+                    </exclusions>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <icon>${project.basedir}/src/main/resources/icons/phonalyser.png</icon>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- =============================== macOS x86_64 ================================ -->
+        <profile>
+            <id>macos-x64</id>
+            <activation>
+                <os>
+                    <family>mac</family>
+                    <arch>x86_64</arch>
+                </os>
+            </activation>
+            <properties>
+                <jpackage.type>DMG</jpackage.type>
+                <platform.id>macos-x64</platform.id>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>org.eclipse.platform</groupId>
+                    <artifactId>org.eclipse.swt.cocoa.macosx.x86_64</artifactId>
+                    <version>${swt.version}</version>
+                    <exclusions>
+                        <exclusion>
+                            <groupId>*</groupId>
+                            <artifactId>*</artifactId>
+                        </exclusion>
+                    </exclusions>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <!-- Stage the macOS PortAudio dylib (CoreAudio backend) into
+                         the jpackage payload at $APPDIR, where -Djava.library.path
+                         points at runtime.  failonerror=false so the build still
+                         succeeds while the dylib is being added; CoreAudio just
+                         won't open until libportaudio.dylib is present. -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>stage-macos-natives</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <copy todir="${project.build.directory}/jpackage-input" failonerror="false">
+                                            <fileset dir="${project.basedir}/lib/macos-x64">
+                                                <include name="*.dylib"/>
+                                            </fileset>
+                                        </copy>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <icon>${project.basedir}/src/main/resources/icons/phonalyser.icns</icon>
+                            <!-- Custom Info.plist template adding NSMicrophoneUsageDescription
+                                 so macOS prompts for mic access on first CoreAudio capture. -->
+                            <resourceDir>${project.basedir}/src/main/jpackage/macos</resourceDir>
+                            <!-- SWT on macOS must run on the main thread. -->
+                            <javaOptions combine.children="append">
+                                <option>-XstartOnFirstThread</option>
+                            </javaOptions>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- =============================== macOS aarch64 (Apple Silicon) =============== -->
+        <profile>
+            <id>macos-aarch64</id>
+            <activation>
+                <os>
+                    <family>mac</family>
+                    <arch>aarch64</arch>
+                </os>
+            </activation>
+            <properties>
+                <jpackage.type>DMG</jpackage.type>
+                <platform.id>macos</platform.id>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>org.eclipse.platform</groupId>
+                    <artifactId>org.eclipse.swt.cocoa.macosx.aarch64</artifactId>
+                    <version>${swt.version}</version>
+                    <exclusions>
+                        <exclusion>
+                            <groupId>*</groupId>
+                            <artifactId>*</artifactId>
+                        </exclusion>
+                    </exclusions>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <!-- Stage the arm64 macOS PortAudio dylib into the jpackage
+                         payload at $APPDIR (see the macos-x64 profile note). -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>stage-macos-natives</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <copy todir="${project.build.directory}/jpackage-input" failonerror="false">
+                                            <fileset dir="${project.basedir}/lib/macos-arm64">
+                                                <include name="*.dylib"/>
+                                            </fileset>
+                                        </copy>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <icon>${project.basedir}/src/main/resources/icons/phonalyser.icns</icon>
+                            <!-- Custom Info.plist template adding NSMicrophoneUsageDescription
+                                 so macOS prompts for mic access on first CoreAudio capture. -->
+                            <resourceDir>${project.basedir}/src/main/jpackage/macos</resourceDir>
+                            <!-- SWT on macOS must run on the main thread. -->
+                            <javaOptions combine.children="append">
+                                <option>-XstartOnFirstThread</option>
+                            </javaOptions>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- =============================== Docs → PDF ================================== -->
+        <!-- Opt-in Markdown→PDF for the designated docs listed in the exec
+             <arguments> below — NOT a glob of every *.md.  Run with:
+                 mvn -Ppdf process-classes
+             Bound to process-classes (after compile, before package) so it does
+             NOT trigger the assembly / jpackage installer build.  Everything —
+             flexmark, the converter source root, the embedded fonts — is scoped
+             to this profile, so a normal build and the shipped JAR are untouched.
+             To convert another file, add one more <argument> line. -->
+        <profile>
+            <id>pdf</id>
+            <dependencies>
+                <!-- flexmark (MD→HTML) pulls Open HTML to PDF (HTML→PDF)
+                     transitively.  Resolved only under -Ppdf (which builds to
+                     process-classes, never package), so it never reaches a normal
+                     app build or the assembly fat JAR. -->
+                <dependency>
+                    <groupId>com.vladsch.flexmark</groupId>
+                    <artifactId>flexmark-all</artifactId>
+                    <version>0.64.8</version>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <!-- Add the converter's own source root (only under this
+                         profile, so the app build never sees it or needs flexmark). -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.0</version>
+                        <executions>
+                            <execution>
+                                <id>add-pdf-tool-source</id>
+                                <phase>generate-sources</phase>
+                                <goals>
+                                    <goal>add-source</goal>
+                                </goals>
+                                <configuration>
+                                    <sources>
+                                        <source>${project.basedir}/pdf-tool/java</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <!-- Compile ONLY the converter, never src/main/java, so doc PDF
+                         generation is independent of the app's compile state (a
+                         work-in-progress app needn't compile to regenerate a PDF). -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <configuration>
+                            <includes>
+                                <include>org/edgo/build/pdf/**</include>
+                            </includes>
+                        </configuration>
+                    </plugin>
+                    <!-- Run the converter after compile.  Args: fonts dir, output
+                         dir, then one designated Markdown file per <argument>. -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.2.0</version>
+                        <executions>
+                            <execution>
+                                <id>md-to-pdf</id>
+                                <phase>process-classes</phase>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <mainClass>org.edgo.build.pdf.MarkdownToPdf</mainClass>
+                                    <arguments>
+                                        <argument>${project.basedir}/pdf-tool/fonts</argument>
+                                        <argument>${project.basedir}/docs</argument>
+                                        <argument>${project.basedir}/docs/ALGORITHMS.md</argument>
+                                        <argument>${project.basedir}/docs/ALGORITHMS.uk.md</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
+    <build>
+        <finalName>${project.artifactId}-${project.version}</finalName>
+        <!-- Filter ONLY version.properties so it carries the pom version at
+             build time (single source of truth for the splash + About).  All
+             other resources — notably the 32 i18n bundles — stay unfiltered to
+             keep their ${}/$ content untouched. -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>version.properties</exclude>
+                </excludes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>version.properties</include>
+                </includes>
+            </resource>
+        </resources>
+        <plugins>
+            <!-- Force UTF-8 across the whole build.  project.build.sourceEncoding
+                 is already set in <properties> so most plugins read it from
+                 there, but javac in particular only reads its own <encoding>
+                 element — pin it explicitly to be safe across plugin upgrades. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <source>${maven.compiler.source}</source>
+                    <target>${maven.compiler.target}</target>
+                    <encoding>${project.build.sourceEncoding}</encoding>
+                </configuration>
+            </plugin>
+            <!-- Surefire 3.x picks up JUnit 5 (junit-jupiter) natively via the
+                 JUnit Platform — without this, Maven falls back to a default
+                 surefire-junit3 provider that doesn't know how to discover
+                 @Test methods on JUnit Jupiter classes. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <!-- Exploratory DSP harnesses (e.g. FftHarmonicStabilityTest)
+                         are slow (minutes) and diagnostic, not regression tests.
+                         They are @Tag("exploratory") and excluded from the normal
+                         build.  Property-driven so it can be overridden on demand:
+                           mvn -o test -Dsurefire.excludedGroups= -Dtest=FftHarmonicStabilityTest#kappaRefitAB -->
+                    <excludedGroups>${surefire.excludedGroups}</excludedGroups>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.3.0</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>${app.mainClass}</mainClass>
+                        </manifest>
+                    </archive>
+                    <!-- Translation locale variants ship as an external
+                         i18n/ folder next to the JAR so users can drop in new
+                         languages without rebuilding.  The English default
+                         (messages.properties) stays inside the JAR as a
+                         safety net so the app still runs if the folder is
+                         missing.  See PACKAGING.md.
+
+                         The help/ directory is excluded entirely: the
+                         HTML pages + screenshots ship in an external
+                         help/ folder next to the JAR (see
+                         stage-help-external below) so users can edit /
+                         translate them without rebuilding.  In dev mode
+                         the files remain available at target/classes/help
+                         on the classpath, so HelpViewer's classpath
+                         fallback path still works there. -->
+                    <excludes>
+                        <exclude>i18n/messages_*.properties</exclude>
+                        <exclude>help/**</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+
+            <!-- Copy the translation bundles from src/main/resources/i18n/
+                 into target/i18n/ during prepare-package so jpackage's input
+                 directory contains an i18n/ subdir that ends up at
+                 $APPDIR/i18n in the installer payload. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
+                <executions>
+                    <execution>
+                        <id>stage-i18n-external</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/i18n</outputDirectory>
+                            <!-- Force UTF-8 for the .properties copy.  The
+                                 resources plugin treats *.properties specially
+                                 and may re-encode them via the platform default
+                                 unless propertiesEncoding is pinned. -->
+                            <encoding>UTF-8</encoding>
+                            <propertiesEncoding>UTF-8</propertiesEncoding>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}/src/main/resources/i18n</directory>
+                                    <includes>
+                                        <include>messages_*.properties</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                    <!-- Stage the help bundle to target/help/ during
+                         prepare-package so jpackage's input directory
+                         picks it up and the user-editable HTML / image
+                         files end up at $APPDIR/help in the installer
+                         payload.  Mirrors the i18n staging above. -->
+                    <execution>
+                        <id>stage-help-external</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/help</outputDirectory>
+                            <encoding>UTF-8</encoding>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}/src/main/resources/help</directory>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.6.0</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>${app.mainClass}</mainClass>
+                        </manifest>
+                    </archive>
+                    <descriptorRefs>
+                        <descriptorRef>jar-with-dependencies</descriptorRef>
+                    </descriptorRefs>
+                    <!-- Use a custom finalName so the fat JAR is suffixed with
+                         the short platform tag (windows / linux / macos) and
+                         drops the noisy '-jar-with-dependencies' assembly id. -->
+                    <finalName>${project.artifactId}-${project.version}-${platform.id}</finalName>
+                    <appendAssemblyId>false</appendAssemblyId>
+                    <includeSystemScope>true</includeSystemScope>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>make-assembly</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Stage just the files jpackage actually needs into a clean
+                 directory.  Pointing jpackage at the whole target/ folder is
+                 a foot-gun: jpackage copies its entire <input> into $APPDIR,
+                 which on a second run also includes target/installer/ — the
+                 plugin's own previous output — and the build slows
+                 catastrophically. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>stage-jpackage-input</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <mkdir dir="${project.build.directory}/jpackage-input"/>
+                                <copy file="${project.build.directory}/${app.mainJar}"
+                                      todir="${project.build.directory}/jpackage-input"/>
+                                <copy todir="${project.build.directory}/jpackage-input/i18n">
+                                    <fileset dir="${project.build.directory}/i18n"/>
+                                </copy>
+                                <copy todir="${project.build.directory}/jpackage-input/help">
+                                    <fileset dir="${project.build.directory}/help"/>
+                                </copy>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- jpackage plugin — produces a native installer (or an
+                 app-image folder when -Djpackage.type=APP_IMAGE is passed)
+                 for the host OS.  Bound to the `package` phase so a single
+                 `mvn package` builds the fat JAR and then wraps it.  All
+                 type values are UPPERCASE enum constants (MSI, DEB, DMG,
+                 APP_IMAGE) — the plugin rejects lowercase. -->
+            <plugin>
+                <groupId>org.panteleyev</groupId>
+                <artifactId>jpackage-maven-plugin</artifactId>
+                <version>1.6.5</version>
+                <configuration>
+                    <name>${app.name}</name>
+                    <appVersion>${app.version}</appVersion>
+                    <vendor>${app.vendor}</vendor>
+                    <destination>${project.build.directory}/installer</destination>
+                    <input>${project.build.directory}/jpackage-input</input>
+                    <mainJar>${app.mainJar}</mainJar>
+                    <mainClass>${app.mainClass}</mainClass>
+                    <type>${jpackage.type}</type>
+                    <javaOptions>
+                        <option>-Djava.library.path=$APPDIR</option>
+                        <option>-Di18n.dir=$APPDIR/i18n</option>
+                        <option>-Dhelp.dir=$APPDIR/help</option>
+                    </javaOptions>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>jpackage</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jpackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

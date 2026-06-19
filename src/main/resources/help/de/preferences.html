@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Einstellungen</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zum Inhaltsverzeichnis</a></p>
+
+  <h1>Einstellungen</h1>
+  <p>Diese Seite beschreibt die Einstellungsoptionen.  Warum die Audio-Einstellungen
+     darüber entscheiden, ob eine Messung vertrauenswürdig ist — bit-exakte, exklusive
+     Aufnahme und Wiedergabe — wird erklärt unter
+     <a href="theory/audio-backend.html">Funktionsprinzip ▸ Audio-Backend</a>.</p>
+  <p>Geöffnet über <b>Werkzeuge ▸ Einstellungen</b>.  Laufende Aufnahme und
+     Generator-Wiedergabe werden pausiert, während der Dialog geöffnet ist, damit
+     Geräte- oder Formatänderungen keinen laufenden Stream unterbrechen;
+     <b>OK</b> übernimmt und speichert, <b>Abbrechen</b> verwirft die Änderungen.
+     Der Dialog ist in fünf Reiter unterteilt:
+     <a href="#prefs-lookfeel">Erscheinungsbild</a>,
+     <a href="#prefs-audio">Audio</a>,
+     <a href="#prefs-oscilloscope">Oszilloskop</a>,
+     <a href="#prefs-fft">FFT</a> und
+     <a href="#prefs-freqresp">Frequenzgang</a>.</p>
+
+  <h2 id="prefs-lookfeel">Erscheinungsbild</h2>
+  <p><img src="img/Preferences Look and Feel.png" alt="Einstellungen — Reiter Erscheinungsbild"/></p>
+  <table class="controls">
+    <tr><th>Einstellung</th><th>Hinweise</th></tr>
+    <tr><td>Reiterausrichtung</td>
+        <td><code>Top</code> (konventionelle Reiterleiste) oder <code>Left</code>
+            (vertikale Seitenleiste mit großen Symbol-Schaltflächen).  Wird sofort
+            übernommen — kein Neustart erforderlich.</td></tr>
+    <tr><td>Kleine Symbole im Hauptreiter</td>
+        <td>Verkleinert die Symbole im Hauptreiter.  Wird sofort übernommen.</td></tr>
+    <tr><td>UI-Schriftart / UI-Schriftart (fett)</td>
+        <td>Schriftarten für Achsenbeschriftungen, Messwertanzeigen und Messtabellen
+            (fett für hervorgehobenen Tabellentext).  Wird nach OK übernommen.</td></tr>
+  </table>
+
+  <h2 id="prefs-audio">Audio</h2>
+  <p><img src="img/Preferences Audio.png" alt="Einstellungen — Reiter Audio"/></p>
+  <p>Legt das Audio-Backend sowie die Ein-/Ausgabegeräte und -formate fest —
+     die Einstellungen, die darüber entscheiden, ob eine Messung bit-exakt ist
+     (siehe <a href="theory/audio-backend.html">Funktionsprinzip ▸ Audio-Backend</a>).</p>
+  <table class="controls">
+    <tr><th>Einstellung</th><th>Hinweise</th></tr>
+    <tr><td>Backend</td>
+        <td>WASAPI (Standard, exklusiv bit-exakt), WDM-KS (niedrigste Ebene,
+            höchster Aufnahmedurchsatz) oder JavaSound (plattformübergreifend /
+            einzige Option außerhalb von Windows).  Bei Änderung wird die
+            Geräteliste neu eingelesen.</td></tr>
+    <tr><td>Eingang — Gerät / Abtastrate / Bittiefe</td>
+        <td>Das Aufnahmegerät (ADC) und die genaue Abtastrate und Bittiefe, mit
+            der es geöffnet wird.  16/24 Bit bei 48/96/192/384 kHz werden nahezu
+            universell unterstützt; eine nicht unterstützte Kombination wird beim
+            Start der Aufnahme gemeldet.</td></tr>
+    <tr><td>Ausgang — Gerät / Abtastrate / Bittiefe</td>
+        <td>Das Wiedergabegerät (DAC) und -format, verwendet vom Generator und
+            dem Frequenzgang-Sweep.</td></tr>
+  </table>
+  <div class="note">Im Exklusivmodus lässt ein Gerät jeweils nur eine Anwendung zu.
+     Wenn eine Liste leer ist oder ein Gerät nicht geöffnet werden kann, schließen Sie
+     andere Audio-Anwendungen und öffnen Sie den Dialog erneut, um die Geräte neu
+     einzulesen.</div>
+
+  <h2 id="prefs-oscilloscope">Oszilloskop</h2>
+  <p><img src="img/Preferences Oscilloscope.png" alt="Einstellungen — Reiter Oszilloskop"/></p>
+  <table class="controls">
+    <tr><th>Einstellung</th><th>Hinweise</th></tr>
+    <tr><td>Messungsmittelung, s</td>
+        <td>Fensterlänge, über die die Statistiken Mittelwert / Min / Max / σ
+            des Oszilloskops akkumuliert werden.</td></tr>
+    <tr><td>Spurlinienbreite, px</td><td>Strichstärke der Wellenform.</td></tr>
+    <tr><td>Abtastpunkt-Durchmesser, px</td>
+        <td>Größe der pro Abtastwert gezeichneten Punkte bei starker
+            Vergrößerung.</td></tr>
+    <tr><td>Linker / Rechter Kanal Farbe</td>
+        <td>Spurfarbe pro Kanal (Standardwerte: Cyan <code>#28DCF0</code> /
+            Gelb <code>#F0DC28</code>).</td></tr>
+  </table>
+
+  <h2 id="prefs-fft">FFT</h2>
+  <p><img src="img/Preferences FFT.png" alt="Einstellungen — Reiter FFT"/></p>
+  <table class="controls">
+    <tr><th>Einstellung</th><th>Hinweise</th></tr>
+    <tr><td>Spurlinienbreite, px</td><td>Strichstärke des Spektrums.</td></tr>
+    <tr><td>Oberwellen-Punkt-Durchmesser, px</td>
+        <td>Größe der Grundwellen-/Oberwellen-Markierungspunkte.</td></tr>
+    <tr><td>Starktonschwelle, dB</td>
+        <td>Wie weit ein zweiter Peak unter dem stärksten Peak liegen darf und
+            dabei noch als eigener Ton verfolgt wird (anstatt als Oberwelle
+            behandelt zu werden) — die Einzel- vs. Mehrton-Weiche in
+            <a href="theory/fft.html#phaseref">Funktionsprinzip ▸ Wahl der
+            Phasenreferenz</a>.</td></tr>
+    <tr><td>Linienfarbe</td><td>Spektrumspur (Standard: Blau <code>#0064C8</code>).</td></tr>
+    <tr><td>Diagramm-Hintergrundfarbe</td><td>Plot-Hintergrund (Standard: Weiß).</td></tr>
+    <tr><td>Oberwellen-Punkt-Farbe</td>
+        <td>Die Oberwellen-/Grundwellen-Punkte — bei geladener Kalibrierung ist
+            dies der <em>korrigierte</em> (rote) Marker.  Standard: Rot
+            <code>#FF0000</code>.</td></tr>
+    <tr><td>Farbe vor Kalibrierung</td>
+        <td>Der zweite Marker, der anzeigt, wo jeder Peak <em>vor</em> dem
+            Entfernen der geladenen Kalibrierung lag — siehe
+            <a href="theory/fft.html#cal">rote / blaue Kalibrierungspunkte</a>.</td></tr>
+    <tr><td>Kalibrierungs-Overlay-Farbe</td>
+        <td>Farbe der gezeichneten Kalibrierungs-/Korrekturkurve.</td></tr>
+    <tr><td>Filterantwort-Linienfarbe</td>
+        <td>Die überlagerte Netzbrumm-Kammfilter-/Filterantwort (Standard: Grün
+            <code>#009600</code>).</td></tr>
+  </table>
+
+  <h2 id="prefs-freqresp">Frequenzgang</h2>
+  <p><img src="img/Preferences Frequency response.png" alt="Einstellungen — Reiter Frequenzgang"/></p>
+  <table class="controls">
+    <tr><th>Einstellung</th><th>Hinweise</th></tr>
+    <tr><td>Spurlinienbreite, px</td>
+        <td>Strichstärke der Betrags-, Phasen-, RIAA-Referenz- und
+            Vergleichskurven.</td></tr>
+    <tr><td>Maximale Analysefrequenz, % Nyquist</td>
+        <td>Begrenzt die obere Grenze der Ansicht auf diesen Bruchteil von Nyquist
+            (96–100 %); unter 100 % wird der Bereich abgeschnitten, in dem die
+            Sweep-Dekonvolution abfällt.</td></tr>
+    <tr><td>Vergleichsglättungsfenster, 1/N Oktave</td>
+        <td>Breite des gleitenden Mittelwerts auf der Vergleichskurve (Messung −
+            Referenz).  N = 0 deaktiviert die Glättung; kleineres N = breiter =
+            stärkere Glättung (N ≈ 3 breit, N ≈ 24 leicht).</td></tr>
+    <tr><td>Kerbfilter für Netzbrumm zulassen</td>
+        <td>Wenn aktiviert, wird bei jeder Oberwelle der gewählten
+            Netzfrequenz interpoliert, um Brummspitzen aus der angezeigten
+            Kurve zu entfernen — ohne erneute Messung.</td></tr>
+    <tr><td>Netzfrequenz</td>
+        <td>Die Netzgrundfrequenz (50 / 60 Hz), deren Oberwellen ausgekerbtt
+            werden, wenn die obige Option aktiviert ist.</td></tr>
+    <tr><td>Signal / Phase / Referenz (RIAA) / Diagramm-Hintergrundfarbe</td>
+        <td>Farben pro Kurve und Hintergrundfarbe für die
+            Frequenzgang-Ansicht.</td></tr>
+  </table>
+
+</body>
+</html>

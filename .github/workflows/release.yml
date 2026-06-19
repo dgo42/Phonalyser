@@ -1,0 +1,183 @@
+name: Build installers
+
+# Triggers:
+#   * push a tag that looks like a version (v1.0.0, 1.0-RC1, 2025.05.20…)
+#     -> build all OSes and attach to a GitHub release.
+#   * workflow_dispatch -> manual run from the Actions tab, useful for testing the matrix.
+on:
+  push:
+    tags:
+      - 'v*'
+      - '[0-9]*'
+  workflow_dispatch:
+
+jobs:
+  # ============================================================== Windows x64
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # Project Nayuki's flac-library isn't on Maven Central — it's
+      # vendored under deps/flac-library-java and must be installed to
+      # the runner's local ~/.m2 before the main project resolves it.
+      - name: Install vendored flac-library
+        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+
+      # csjsound-provider.jar and the native DLLs are not on Maven Central -
+      # they must already live under lib/windows/.  Fail loudly if a checkout
+      # is missing them instead of producing a half-built installer.
+      - name: Verify Windows natives present
+        shell: pwsh
+        run: |
+          $required = @(
+            "lib/windows/csjsound-provider.jar",
+            "lib/windows/csjsound_amd64.dll",
+            "lib/windows/portaudio_x64.dll"
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) {
+            Write-Error "Missing required Windows natives: $($missing -join ', '). See lib/windows/README.md."
+            exit 1
+          }
+
+      # `mvn package` builds the fat JAR, stages it into target/jpackage-input/,
+      # and runs jpackage — all in one go (see <executions> in pom.xml).
+      - name: Build fat JAR + MSI installer
+        run: mvn -B -DskipTests package
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: phonalyser-windows
+          path: |
+            target/installer/*.msi
+            target/phonalyser-*-windows.jar
+
+  # ============================================================== Linux x64
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # Project Nayuki's flac-library isn't on Maven Central — it's
+      # vendored under deps/flac-library-java and must be installed to
+      # the runner's local ~/.m2 before the main project resolves it.
+      - name: Install vendored flac-library
+        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+
+      - name: Install fakeroot (needed by jpackage for .deb)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fakeroot
+
+      - name: Build fat JAR + .deb installer
+        run: mvn -B -DskipTests package
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: phonalyser-linux
+          path: |
+            target/installer/*.deb
+            target/phonalyser-*-linux.jar
+
+  # ===================================================== macOS x64 + Apple Silicon
+  # Ship a DMG per architecture.  Both legs run on the Apple-Silicon macos-14
+  # runner — the Intel macos-13 image is being retired.  The arm64 DMG uses the
+  # native aarch64 JDK; the Intel DMG uses an x86_64 JDK running under Rosetta 2,
+  # which makes jpackage emit an x86_64 app + JRE that runs natively on Intel
+  # Macs (an arm64-only build is rejected with "not supported on this Mac").
+  # The pom auto-selects the matching macos-x64 / macos-aarch64 profile from
+  # os.arch, which reflects the JDK's architecture (x86_64 under Rosetta).
+  build-macos:
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            jdk: x64
+          - arch: arm64
+            jdk: aarch64
+    steps:
+      - uses: actions/checkout@v5
+
+      # The x86_64 JDK only runs on the arm64 runner through Rosetta 2.
+      - name: Install Rosetta 2
+        if: matrix.arch == 'x64'
+        run: sudo softwareupdate --install-rosetta --agree-to-license
+
+      - name: Set up JDK 17 (${{ matrix.jdk }})
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          architecture: ${{ matrix.jdk }}
+          cache: maven
+
+      # Project Nayuki's flac-library isn't on Maven Central — it's
+      # vendored under deps/flac-library-java and must be installed to
+      # the runner's local ~/.m2 before the main project resolves it.
+      - name: Install vendored flac-library
+        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+
+      # Both macos profiles already append -XstartOnFirstThread to
+      # jpackage's javaOptions; no extra args needed here.
+      - name: Build fat JAR + .dmg installer
+        run: mvn -B -DskipTests package
+
+      # jpackage names the DMG Phonalyser-<version>.dmg regardless of arch,
+      # so tag it with the arch to keep the two builds from colliding on the
+      # release page.
+      - name: Tag the DMG with its architecture
+        run: |
+          cd target/installer
+          for f in *.dmg; do
+            mv "$f" "${f%.dmg}-${{ matrix.arch }}.dmg"
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: phonalyser-macos-${{ matrix.arch }}
+          path: |
+            target/installer/*.dmg
+            target/phonalyser-*-macos*.jar
+
+  # ============================================================== Release
+  release:
+    needs: [build-windows, build-linux, build-macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          # ** recurses into the installer/ subdirectory that
+          # upload-artifact@v4 creates when multiple paths share a parent
+          # (target/) — without ** the .msi/.deb/.dmg get skipped and
+          # only the top-level fat JAR makes it onto the release.
+          files: |
+            artifacts/phonalyser-windows/**
+            artifacts/phonalyser-linux/**
+            artifacts/phonalyser-macos-x64/**
+            artifacts/phonalyser-macos-arm64/**
+          draft: true

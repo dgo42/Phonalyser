@@ -1,0 +1,61 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.edgo.audio.measure.cli.util;
+
+import lombok.Value;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/** Order descriptor: literal integer power or {@code h+offset}/{@code h-offset}. */
+@Value
+public class OrderToken {
+    boolean hRelative;   // true → h + offset
+    int     value;       // literal power (hRelative=false) OR offset added to h
+    String  label;       // original textual form
+
+    public int resolve(int h) { return hRelative ? h + value : value; }
+
+    /** Parses a comma-separated list of order tokens (integer literal or "h±k"). */
+    public static List<OrderToken> parseList(String spec) {
+        List<OrderToken> out = new ArrayList<>();
+        for (String tok : spec.split(",")) {
+            String t = tok.trim();
+            if (t.isEmpty()) continue;
+            if (t.equalsIgnoreCase("h")) {
+                out.add(new OrderToken(true, 0, "h"));
+            } else if (t.toLowerCase().startsWith("h+") || t.toLowerCase().startsWith("h-")) {
+                int off = Integer.parseInt(t.substring(1));   // "+1", "-2"
+                out.add(new OrderToken(true, off, t));
+            } else {
+                out.add(new OrderToken(false, Integer.parseInt(t), t));
+            }
+        }
+        return out;
+    }
+
+    public static String renderList(List<OrderToken> orders) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < orders.size(); i++) {
+            if (i > 0) sb.append(',');
+            sb.append(orders.get(i).getLabel());
+        }
+        return sb.toString();
+    }
+}

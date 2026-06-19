@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Generator</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>Generator</h1>
+  <p>This page covers the generator's controls.  For how it synthesizes
+     signals inside — direct digital synthesis, the waveform kernels, sweeps
+     and active distortion compensation — see
+     <a href="theory/generator.html">Theory of operation ▸ Signal
+     generator</a>.</p>
+  <p>Produces test signals routed to the configured output device.
+     Two engines coexist in this pane and are mutually exclusive:
+     the <b>tone generator</b> (sine / sweep / noise / etc.) and the
+     <b>audio-file player</b>.  Starting one stops the other.</p>
+  <p class="note">Every numeric field here accepts the value four ways: type
+     it in, scroll the <b>mouse wheel</b>, click the <b>▲/▼ arrows</b>, or — with
+     the field focused — press the keyboard <b>↑/↓</b> cursor keys (same step as
+     the arrows).</p>
+
+  <div class="shot">
+    <img src="img/generator-pane.png" alt="Generator pane"/>
+    <svg class="callouts" viewBox="0 0 330 587" preserveAspectRatio="none"
+         xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace">
+      <defs>
+        <marker id="ca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/>
+        </marker>
+      </defs>
+      <line x1="191" y1="37" x2="243" y2="17" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
+      <circle cx="205" cy="40" r="11" fill="#c33"/>
+      <text x="205" y="44" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">1</text>
+      <line x1="150" y1="18" x2="150" y2="46" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
+      <circle cx="150" cy="31" r="11" fill="#c33"/>
+      <text x="150" y="35" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">2</text>
+      <line x1="277" y1="143" x2="256" y2="143" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
+      <circle cx="291" cy="143" r="11" fill="#c33"/>
+      <text x="291" y="147" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">3</text>
+      <line x1="165" y1="179" x2="165" y2="191" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
+      <circle cx="165" cy="166" r="11" fill="#c33"/>
+      <text x="165" y="170" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">4</text>
+      <line x1="216" y1="333" x2="285" y2="347" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
+      <circle cx="205" cy="322" r="11" fill="#c33"/>
+      <text x="205" y="326" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">5</text>
+      <circle cx="165" cy="482" r="11" fill="#c33"/>
+      <text x="165" y="486" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">6</text>
+      <line x1="154" y1="555" x2="46" y2="560" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
+      <line x1="176" y1="555" x2="287" y2="558" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
+      <circle cx="165" cy="555" r="11" fill="#c33"/>
+      <text x="165" y="559" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">7</text>
+    </svg>
+  </div>
+  <ol class="features">
+    <li><b>ON&nbsp;AIR indicator.</b>  Grey when idle; the LED lights and the
+        text blinks while the generator is emitting —
+        <a href="#generator-onair">ON&nbsp;AIR indicator</a>.</li>
+    <li><b>Signal form.</b>  The waveform selector (sine, dual-tone,
+        triangle, rectangle, white / pink noise, linear &amp; log sweep,
+        compensated sine) — <a href="#generator-form">Signal form</a>.  The
+        surrounding fields reconfigure per form (duty cycle for
+        triangle/rectangle, the <a href="#generator-sweep">sweep controls</a>
+        for sweeps).</li>
+    <li><b>Snap to FFT bin.</b>  Rounds the output frequency to the exact FFT
+        bin so the tone is coherent with the analyser — the basis of the
+        frequency-lock loop (<a href="theory/generator.html#dds">Theory ▸
+        phase accumulator</a>).  See
+        <a href="#generator-snap-fft-bin">Snap frequency to nearest</a>.</li>
+    <li><b>Amplitude (RMS).</b>  Output level in volts RMS against the DAC
+        calibration; the unit selector accepts µV/mV/V and dBV —
+        <a href="#generator-amplitude">Amplitude (RMS)</a>.</li>
+    <li><b>Corrections.</b>  Loads a harmonic-compensation file so the
+        <em>compensated sine</em> form actively cancels the chain's measured
+        distortion — <a href="#generator-corrections">Corrections</a>.</li>
+    <li><b>WAV file.</b>  <a href="#generator-save-to">Save to…</a> exports
+        the current signal to WAV/AIFF/FLAC;
+        <a href="#generator-load-from">Load from… + In loop</a> plays a file
+        back (the In-loop box repeats it).</li>
+    <li><b>Calibrate DAC &amp; Play.</b>  The crosshair button opens the
+        <a href="#generator-corrections">DAC calibration</a> dialog; the green
+        triangle is <a href="#generator-play">Play / Stop</a>.  Starting the
+        tone stops file playback and vice-versa.</li>
+  </ol>
+
+  <h2>Header</h2>
+
+  <h3 id="generator-form">Signal form</h3>
+  <p>Drop-down combo with eleven waveforms.  Each entry has a small
+     pictogram showing the waveform shape.  Changing the form
+     reconfigures the surrounding controls — the duty-cycle field
+     enables for <code>Rectangle</code> and <code>Triangle</code>,
+     the sweep controls appear for <code>Linear sweep</code> and
+     <code>Log sweep</code>, the frequency field disables for the
+     noise variants.</p>
+  <table class="controls">
+    <tr><th>Form</th><th>Notes</th></tr>
+    <tr><td>Sine</td><td>Pure tone, DDS-driven.</td></tr>
+    <tr><td>Sine compensated</td><td>DDS-corrected so the actual emitted frequency exactly matches the requested value.</td></tr>
+    <tr><td>Triangle</td><td>Adjustable duty cycle (asymmetric ramp).</td></tr>
+    <tr><td>Rectangle</td><td>Adjustable duty cycle (high-time fraction).</td></tr>
+    <tr><td>White noise</td><td>Uniform-random samples.</td></tr>
+    <tr><td>Pink noise</td><td>Gaussian source via Voss–McCartney.</td></tr>
+    <tr><td>Pink noise linear</td><td>Flat-amplitude white source via Voss–McCartney.</td></tr>
+    <tr><td>Linear sweep</td><td>Chirp with linear-in-time frequency ramp.</td></tr>
+    <tr><td>Log sweep</td><td>Farina logarithmic chirp — equal energy per octave.</td></tr>
+  </table>
+
+  <h3 id="generator-onair">ON&nbsp;AIR indicator</h3>
+  <p>An LED and the text <b>ON&nbsp;AIR</b> at the top-right of the pane.
+     Whenever either the tone generator OR the audio-file player is driving
+     the output, the LED lights solid red and the <b>ON&nbsp;AIR</b> text
+     <b>blinks</b>.  Both go grey when nothing is playing — so the indicator
+     tells you, at a glance, whether the program is currently emitting
+     sound.</p>
+
+  <h2>Frequency</h2>
+
+  <h3 id="generator-frequency">Frequency</h3>
+  <p>The output frequency, for periodic waveforms (disabled for the noise
+     forms).  Accepts <code>Hz</code> and <code>kHz</code>; a number with no
+     suffix is read as Hz, and the display switches to kHz above 1&nbsp;kHz.</p>
+  <p>The label may show a bracketed annotation — e.g.
+     <code>Frequency (1000.122 Hz)</code> — when the snap-to-FFT-bin
+     correction or the integer-sample period (for <code>Rectangle</code>)
+     produces an emitted frequency slightly different from what you typed.
+     The bracketed value is the <em>actual</em> emitted frequency.</p>
+
+  <h3 id="generator-snap-fft-bin">Snap frequency to nearest</h3>
+  <p>Checkbox.  When on, the emitted frequency snaps to the nearest
+     FFT bin for the current FFT-analyser length.  Useful for clean
+     spectrum measurements: with snap on, the fundamental sits
+     exactly on a bin and window-leakage doesn't pollute the
+     harmonic estimates.</p>
+
+  <h3 id="generator-duty">Duty cycle</h3>
+  <p>Active only for <code>Rectangle</code> (high-time fraction) and
+     <code>Triangle</code> (rise-time fraction), as a percentage.  Each
+     waveform remembers its own value, so switching between Rectangle and
+     Triangle restores each one's last duty.</p>
+  <p>For <code>Rectangle</code> only, the duty is <b>adapted to what the DDS
+     can actually output</b>: its +1/−1 step can land only <em>on</em> a whole
+     sample, so the finest duty step is one sample per period —
+     <code>f / f<sub>s</sub></code> (output frequency ÷ sample rate).  Example:
+     10&nbsp;kHz at 384&nbsp;kHz gives 38.4 samples per period, so the smallest
+     step is ≈ 1/38.4 ≈ <code>2.63&nbsp;%</code>, and a finer typed value snaps
+     to the nearest achievable step.  The label then shows the <em>adapted</em>
+     duty in brackets — e.g. <code>Duty cycle (2.632 %)</code>.</p>
+  <p><code>Triangle</code> uses real continuous-phase DDS (its samples ride the
+     exact ramps, so the corner is sub-sample), so its duty is <b>exact</b> —
+     no quantisation and no bracket.  See
+     <a href="theory/generator.html#duty">Theory ▸ duty quantisation</a>.</p>
+
+  <h2 id="generator-dualtone">Dual tone (IMD)</h2>
+  <p><img src="img/Generator - dual tone.png" alt="Generator in dual-tone mode"/></p>
+  <p>Visible only when <code>Dual tone</code> is selected.  The single
+     frequency field is joined by a <b>second frequency</b> and an
+     <b>amplitude balance</b> between the two tones (each as a percentage;
+     a 19&nbsp;kHz + 20&nbsp;kHz or 60&nbsp;Hz + 7&nbsp;kHz pair are the usual
+     intermodulation tests).  The combined output is re-normalised to the
+     dialled V&nbsp;RMS whatever the split, so a 50/50 pair is not quieter
+     than a single tone at the same setting.  Both tones can be
+     <a href="#generator-snap-fft-bin">snapped to FFT bins</a>
+     independently, and the FFT analyser measures their intermodulation
+     products — see <a href="theory/generator.html#dualtone">Theory ▸ dual
+     tone</a> and <a href="theory/fft.html#dualtone">Theory ▸ two-tone</a>.</p>
+
+  <h3 id="generator-dualtone-compensated">Dual tone (compensated)</h3>
+  <p>The intermodulation-corrected counterpart of <code>Dual tone</code>,
+     the two-tone analogue of <code>Sine compensated</code>.  Every
+     distortion product of a two-tone signal — each tone's harmonics
+     <em>and</em> their intermodulation products — sits at
+     <code>a·f<sub>1</sub> + b·f<sub>2</sub></code> for integer
+     <code>a</code>, <code>b</code>, so the generator pre-distorts the
+     output with an anti-phase correction tone at every such product to
+     cancel it at the analyser side.  The corrections are measured for you
+     by the closed-loop <b>predistortion wizard</b> — the ★ wand button
+     beside the FFT analyser's record control — and then applied live.
+     Selecting this form from the combo without measured corrections loaded
+     simply emits the plain two tones, exactly as
+     <code>Sine compensated</code> falls back to a pure sine.</p>
+
+  <h2 id="generator-sweep">Sweep / chirp</h2>
+
+  <p>Visible only when <code>Linear sweep</code> or <code>Log sweep</code>
+     is selected.  Replaces the single frequency field with a block of
+     sweep parameters.</p>
+
+  <p><img src="img/Generator - sweep mode.png" alt="Generator in sweep mode"/></p>
+
+  <h3 id="generator-sweep-start">Start frequency</h3>
+  <p>The frequency the chirp begins at (Hz / kHz).</p>
+
+  <h3 id="generator-sweep-stop">Stop frequency</h3>
+  <p>The frequency the chirp ends at (Hz / kHz).</p>
+
+  <h3 id="generator-sweep-duration">Duration</h3>
+  <p>Total chirp length, in seconds.</p>
+
+  <h3 id="generator-sweep-fadein">Fade in</h3>
+  <p>Seconds.  Amplitude ramp at the start of the chirp, suppressing
+     the click an abrupt amplitude step would cause.</p>
+
+  <h3 id="generator-sweep-fadeout">Fade out</h3>
+  <p>Seconds.  Same as fade-in but at the chirp's end.</p>
+
+  <h3 id="generator-sweep-loop">Loop</h3>
+  <p>Checkbox.  When on, the sweep restarts as soon as it ends, in a
+     continuous loop.</p>
+
+  <h2>Amplitude</h2>
+
+  <h3 id="generator-amplitude">Amplitude (RMS)</h3>
+  <p>The output level, held internally as volts RMS.  Units:
+     <code>µV</code>, <code>mV</code>, <code>V</code> and <code>dBV</code>
+     (case-insensitive); a number with no suffix is read as volts.  The metric
+     display auto-rescales (µV / mV / V) so the number stays readable; typing a
+     <code>dBV</code> value keeps the field in dBV (the auto-rescaling never
+     switches to dBV on its own).</p>
+  <p class="note"><b>Note:</b> dBV is referenced to 1 V RMS regardless of
+     device — <code>x dBV = 10<sup>x/20</sup> V<sub>RMS</sub></code>.</p>
+
+  <h3 id="generator-dither">Dither</h3>
+  <p>Read-only drop-down (rebuilt to match the output bit-depth on
+     open).  Selects how many LSBs of triangular dither are added
+     before quantisation.  <code>Off</code> disables dither;
+     1 .. <i>N</i> add 1 .. <i>N</i> LSBs (<i>N</i> = output bit-depth).
+     Dither breaks up periodic quantisation patterns at very low
+     output levels.</p>
+
+  <h2 id="generator-corrections">Corrections</h2>
+  <h3>Predistortion file (.dpd)</h3>
+  <p>Optional predistortion file describing the DAC compensation.  A
+     single-tone file lists each harmonic's complex correction; a dual-tone
+     file lists the intermodulation products as <code>(a, b)</code>
+     coefficients.  The generator pre-distorts the output so the listed
+     distortion cancels at the analyser side.  Use the <b>open-file button</b>
+     to pick a <code>.dpd</code>; the read-only field then shows the loaded
+     path, and the <b>clear button</b> unloads it.  These files are produced by
+     the <a href="fft.html">FFT pane's</a> predistortion wizard (the ★ wand
+     button beside the record control) — see
+     <a href="#generator-dualtone-compensated">Dual tone (compensated)</a> and
+     <code>Sine compensated</code>.</p>
+
+  <h2 id="generator-export">WAV export</h2>
+
+  <h3 id="generator-duration">Duration</h3>
+  <p>Seconds.  Length of audio to write when using <i>Save to</i>.
+     Independent of the live emission — the file is rendered in one
+     pass using current generator settings.</p>
+
+  <h3 id="generator-save-to">Save to…</h3>
+  <p>Read-only path + <b>Save button</b>.  Clicking it opens
+     a save dialog; the chosen file's extension picks the format
+     (<code>.wav</code> / <code>.flac</code> / <code>.aiff</code> /
+     <code>.aif</code>).  Confirming writes the file immediately, using the
+     current generator settings and the duration above.</p>
+  <p class="note">The written file is the <b>ideal, mathematically exact</b>
+     signal — synthesised digitally and free of any DAC, amplifier or cabling
+     distortion.  Use it as a reference, or to drive another instrument with a
+     known-clean source.  See
+     <a href="theory/generator.html#savefile">Theory ▸ saving a signal</a>.</p>
+
+  <h2 id="generator-playback">WAV playback</h2>
+
+  <h3 id="generator-load-from">Load from… + In loop</h3>
+  <p>Plays back an existing audio file to the output device.  The
+     <b>open-audio button</b> picks the file — any
+     <code>WAV</code> / <code>AIFF</code> / <code>FLAC</code>, not only files
+     this program saved.  The <b>In&nbsp;loop</b> checkbox repeats the file on
+     end-of-file; the toggle is live — flipping it during playback takes effect
+     at the next loop point.</p>
+
+  <h3 id="generator-play-file">Play / Stop file</h3>
+  <p>Small play LED next to the path field.  Lit while the file is
+     playing, dim otherwise.  Starting file playback stops the tone
+     generator if it was running (and vice versa for the main play
+     button).</p>
+
+  <h2>Main play button</h2>
+
+  <h3 id="generator-play">Play / Stop</h3>
+  <p>Large play button anchored to the bottom-right of the pane.
+     Starts the tone generator with the current form / frequency /
+     amplitude.  While running, the icon shows the lit play state and
+     the <span id="generator-onair-ref"><a href="#generator-onair">ON&nbsp;AIR</a></span>
+     indicator blinks.  Pressing it again stops emission.
+     Starting the main player stops the WAV-file player if it was
+     running.</p>
+
+  <hr/>
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+</body>
+</html>

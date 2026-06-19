@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Das kürzeste HOW-TO der Welt</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zum Inhalt</a></p>
+
+  <h1>🚀 Das kürzeste HOW-TO der Welt — eine THD-Messung im Bereich von Teilen pro Milliarde</h1>
+  <p>Die gesamte Kette, von „App öffnen“ bis „Harmonische bei −180 dBV“, auf einem
+     Bildschirm. Jeder Schritt verweist auf das vollständige Kapitel, falls Sie die Details möchten.
+     Das grüne Play-Symbol
+     <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+     kennzeichnet eine <b>Start</b>-Schaltfläche (Generator, Sweeps); die rote LED
+     <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><circle cx="10" cy="7.5" r="4.3" fill="#e22" stroke="#900"/><circle cx="8.4" cy="6" r="1.2" fill="#f99"/></svg>
+     kennzeichnet eine <b>Aufnahme</b>-Schaltfläche (Oszilloskop, FFT).</p>
+
+  <h2>1 · Kette kalibrieren (einmalig)</h2>
+  <ol>
+    <li><b>Sinus starten</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        und die <a href="generator.html">DAC-Ausgangsspannung kalibrieren</a> gegen einen
+        bekannten Pegel.</li>
+    <li><b>Den DAC direkt zurück in den ADC schleifen</b> und
+        <a href="fft.html#fft-utility-calibrate">den ADC-Vollausschlag kalibrieren</a>.</li>
+    <li><b>Den Loopback-Frequenzgang messen</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        und ihn <a href="freqresp.html">in einer <code>.frc</code>-Datei speichern</a>.</li>
+    <li><b>Diese <code>.frc</code> laden</b> in der Frequenzgang-Ansicht als
+        Kalibrierung und sie <b>aktivieren</b> — nun wird der Eigenfrequenzgang der Kette
+        aus jeder Messung herausgerechnet.</li>
+  </ol>
+
+  <h2>2 · Notch hinzufügen</h2>
+  <ol start="5">
+    <li><b>Das passive 1-kHz-twin-T-Notch einschleifen</b> zwischen DAC und ADC
+        (<a href="theory/dac-predistortion.html#notch">warum ein Notch</a>).</li>
+    <li><b>Den Frequenzgang des Notch messen</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        und ihn in einer <em>separaten</em> Datei speichern (auch dieses wird herausgerechnet).</li>
+  </ol>
+
+  <h2>3 · Den Ton einrasten</h2>
+  <ol start="7">
+    <li><b>Einen Sinus mit 1003 Hz laufen lassen</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        — ein paar Hertz neben 1 kHz, um den Mains-Harmonischen auszuweichen — mit
+        <b>Snap-to-FFT-Bin</b> ein.</li>
+    <li><b>Die Aufnahme starten</b> des Oszilloskops
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><circle cx="10" cy="7.5" r="4.3" fill="#e22" stroke="#900"/><circle cx="8.4" cy="6" r="1.2" fill="#f99"/></svg>
+        und des FFT-Analysators
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><circle cx="10" cy="7.5" r="4.3" fill="#e22" stroke="#900"/><circle cx="8.4" cy="6" r="1.2" fill="#f99"/></svg>.</li>
+    <li><b>Das Oszilloskop prüfen</b> — der Ton deutlich über dem Grundrauschen, der Trigger
+        eingerastet (etwas <b>Hysterese</b> verwenden, damit Rauschen keinen Fehltrigger auslöst).</li>
+    <li><b>Die FFT einstellen</b> auf die <em>maximale</em> Abtastrate Ihrer Karte —
+        <b>2 M @ 384 kHz</b>, <b>1 M @ 192 kHz</b>, <b>512 k @ 96 kHz</b> — mit
+        <a href="fft.html#fft-fund-from-gen">Grundton vom Generator beziehen</a> ein
+        und <b>Generator ausrichten = FLL</b>.</li>
+    <li><b>Beobachten, wie ΔF</b> auf einen winzigen Wert einschwingt (typischerweise <b>±0,05 ppm</b>) — das
+        ist der phasengekoppelte Ton, bereit für tiefe kohärente Mittelung.</li>
+  </ol>
+
+  <h2>4 · Vorverzerren, dann messen</h2>
+  <ol start="12">
+    <li><b>Den DAC-Vorverzerrungs-Assistenten öffnen</b> — die
+        <a href="theory/dac-predistortion.html">Assistent</a>-Schaltfläche
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><line x1="5" y1="12.5" x2="11.5" y2="5.5" stroke="#444" stroke-width="2" stroke-linecap="round"/><polygon points="13,1.8 13.7,3.6 15.5,4.2 13.7,4.8 13,6.6 12.3,4.8 10.5,4.2 12.3,3.6" fill="#f0a800"/><circle cx="16.5" cy="9.5" r="0.9" fill="#f0a800"/></svg>.</li>
+    <li><b>Die anfänglichen Mittelungen pro Durchgang und eine Ziel-THD eingeben</b>, dann
+        <b>Start</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        — die Schleife treibt die Eigen-Harmonischen des DAC ins Grundrauschen.</li>
+    <li><b>Das Ergebnis in einer <code>.dpd</code>-Datei speichern</b> und es auf
+        den Generator <b>anwenden</b>.</li>
+    <li><b>Den Generator auf „Sinus kompensiert“ umschalten</b> — er gibt nun einen Ton aus,
+        der sauberer ist, als der DAC allein ihn erzeugen kann.</li>
+    <li><b>Ihren DUT einfügen</b> zwischen DAC und Notch.</li>
+    <li><b>Die FFT-Statistik zurücksetzen und mit dem Sammeln beginnen</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><circle cx="10" cy="7.5" r="4.3" fill="#e22" stroke="#900"/><circle cx="8.4" cy="6" r="1.2" fill="#f99"/></svg>.</li>
+    <li><b>Warten</b>, bis sich H₂…Hₙ stabilisieren, während die Mittelung tiefer wird — und was Sie
+        ablesen, ist das <em>Gerät</em>, nicht die Quelle. 🎯</li>
+  </ol>
+
+  <p><img src="img/dac-predistortion-live.png" alt="Live-FFT: vorverzerrter 1003-Hz-Ton hinter dem Notch — THD H2..9 = 0,00000093 %" style="max-width:100%;height:auto;border:1px solid #dde;"/></p>
+  <p class="small"><b>Der Lohn.</b> Ein 1003-Hz-Ton hinter dem Notch, vorverzerrt,
+     bei ~730 kohärenten Mittelungen: THD H2…H9 zeigt <b>0,00000093 %</b> — unter einem Teil
+     pro Milliarde, die einzelnen Harmonischen bei −160 bis −185 dBV.</p>
+
+  <p class="small">Neu hier? Das Kapitel <a href="theory/dac-predistortion.html">DAC-Vorverzerrung</a>
+     erklärt, <em>warum</em> jeder Schritt oben so ist, wie er ist — das Notch, der manuelle
+     Grundton, die tiefe Mittelung.</p>
+
+</body>
+</html>

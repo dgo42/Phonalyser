@@ -1,0 +1,294 @@
+/*
+ * Phonalyser — precision audio measurement workbench.
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package org.edgo.audio.measure.cli;
+
+import lombok.extern.log4j.Log4j2;
+
+/**
+ * Prints the {@code Main} CLI's usage text — one mode per section,
+ * each listing the required and optional flags with brief explanations.
+ *
+ * <p>Extracted from {@code Main} so the dispatcher / argument parser
+ * keeps its focus and the usage text can be edited / translated / tested
+ * independently of the rest of the CLI plumbing.
+ */
+@Log4j2
+public final class UsagePrinter {
+
+    private UsagePrinter() {}
+
+    /** Emits the full usage banner via {@code log.info}.  Caller invokes
+     *  this from the no-args / {@code --help} branch of the CLI
+     *  dispatcher. */
+    public static void printUsage() {
+        log.info("Usage:");
+        log.info("");
+        log.info("  Type conventions in flag arguments:");
+        log.info("    <hz>=Hz  <vrms>=V_rms  <s>=seconds  <ms>=milliseconds  <n>=count");
+        log.info("    <i>=audio device index  <px>=pixels  <bits>=8/16/24/32");
+        log.info("    <db>=relative dB  <dbv>=dB referenced to 1 V_rms  <dbfs>=dB full-scale");
+        log.info("    <pct>=percent  <file>/<csv>/<wav>=file path  <dir>=directory");
+        log.info("");
+        log.info("  Audio backend (applies to every mode):");
+        log.info("    [--backend wasapi|wdmks|javasound]  default: wasapi on Windows, javasound elsewhere.");
+        log.info("                              wasapi:    direct WASAPI COM access via JNA (exclusive mode");
+        log.info("                                         with shared fallback); Windows only.");
+        log.info("                              wdmks:     PortAudio WDM-KS host API; Windows only,");
+        log.info("                                         needs portaudio_x64.dll on java.library.path.");
+        log.info("                              javasound: cross-platform javax.sound.sampled mixer; works");
+        log.info("                                         on Windows / Linux / macOS.");
+        log.info("");
+        log.info("  List devices:");
+        log.info("    --list                    print all input/output mixers + supported PCM formats");
+        log.info("");
+        log.info("  Histogram capture:");
+        log.info("    --histogram               toggles histogram-capture mode");
+        log.info("    --samplerate <hz>         ADC sample rate (must be in the supported set)");
+        log.info("    --duration <s>            capture length in seconds");
+        log.info("    --window <n>              sliding-window size (samples) for the waveform plot");
+        log.info("    --width <px> --height <px>  chart size in pixels");
+        log.info("    [--bits 8|16|24]          ADC resolution (default 24)");
+        log.info("    [--scale <V>]             full-scale ADC peak-to-peak voltage (e.g. 5.0 for");
+        log.info("                              +/-2.5 V_p).  Default: 2*sqrt(2)*adcFsVoltageRms");
+        log.info("    [--adc-fs-vrms <vrms>]    ADC full-scale RMS voltage (sets the --scale default)");
+        log.info("    [--device <i>]            input device index (auto-selected if only one)");
+        log.info("    [--sine-reference]        weight bins against theoretical arcsine PDF (sine input)");
+        log.info("                              instead of the local moving average");
+        log.info("    [--sine-amplitude <r>]    sine peak relative to FS (1.0=FS, 1.05=5 % over);");
+        log.info("                              auto-estimated by inverting the sine CDF at");
+        log.info("                              multiple interior quantiles when absent");
+        log.info("    [--sine-fit-points <n>]   quantile points used for auto amplitude estimate");
+        log.info("                              (default 30; F in [0.10, 0.40] U [0.60, 0.90] —");
+        log.info("                              skips the poisoned rails and the median singularity)");
+        log.info("    [--sine-edge-bins <n>]    edge bins per side replaced with extrapolated weight");
+        log.info("                              (default 2) — fixes the noise-smeared arcsine");
+        log.info("                              singularity + clipping overflow at the rails");
+        log.info("    [--histogram-chart]       additionally render the raw histogram (counts vs");
+        log.info("                              voltage, before DNL weighting) as a PNG");
+        log.info("    Outputs: histogram CSV + DNL/INL/waveform charts under results/");
+        log.info("");
+        log.info("  Load histogram from CSV (offline replay):");
+        log.info("    --histogram               toggles histogram mode");
+        log.info("    --load <file>             histogram CSV from histogram capture");
+        log.info("    --bits 8|16|24            must match the bit depth that produced the CSV");
+        log.info("    --window <n>              waveform-plot window size");
+        log.info("    --width <px> --height <px>");
+        log.info("    [--scale <V>]             full-scale ADC peak-to-peak voltage (default:");
+        log.info("                              2*sqrt(2)*adcFsVoltageRms)");
+        log.info("    [--adc-fs-vrms <vrms>]    ADC full-scale RMS voltage");
+        log.info("");
+        log.info("  Analyze histogram (DNL + INL):");
+        log.info("    --analyze-histogram <file>   histogram CSV");
+        log.info("    --bits 8|16|24            ADC resolution");
+        log.info("    --window <n>              moving-average window for the default reference");
+        log.info("    --scale <V>               full-scale voltage range");
+        log.info("    --width <px> --height <px>");
+        log.info("    [--sine-reference]        weight bins against theoretical arcsine PDF (sine input)");
+        log.info("                              instead of the moving average");
+        log.info("    [--sine-amplitude <r>]    sine peak relative to FS (1.0=FS, 1.05=5 % over);");
+        log.info("                              auto-estimated when absent");
+        log.info("    [--sine-fit-points <n>]   quantile points used for auto amplitude estimate");
+        log.info("                              (default 30)");
+        log.info("    [--sine-edge-bins <n>]    edge bins per side replaced with extrapolated weight");
+        log.info("                              (default 2)");
+        log.info("    [--histogram-chart]       additionally render the raw histogram (counts vs");
+        log.info("                              voltage) as a PNG before weighting");
+        log.info("    Outputs: DNL chart, INL chart, weighted-code-map CSV");
+        log.info("");
+        log.info("  FFT analysis of a captured WAV (THD, THD+N A-weighted, SNR, ENOB, harmonics):");
+        log.info("    --fft-analyze <wav_file>  WAV recorded at the rate to be analysed");
+        log.info("    --fft-size <n>            FFT length, power of 2 (e.g. 65536 .. 2097152)");
+        log.info("    --width <px> --height <px>  chart size");
+        log.info("    [--harmonics <n>]         harmonics (H2..) to measure (default 10)");
+        log.info("    [--window-fn <type>]      RECT | HANN | BH4 | BH7 | FLAT_TOP |");
+        log.info("                              DC150 | DC200 (default HANN)");
+        log.info("    [--overlap <pct>]         0 | 50 | 75 | 87.5 | 93.75 (default 0)");
+        log.info("    [--dist-min <hz>]         lower bound for SNR/noise integration (default 0)");
+        log.info("    [--dist-max <hz>]         upper bound for SNR/noise integration (default Fs/2)");
+        log.info("    [--fund-v <vrms>]         true RMS voltage of the fundamental — anchors dBV scale");
+        log.info("    [--fund-dbv <dbv>]        true fundamental level in dBV (alternative to --fund-v)");
+        log.info("    [--adc-fs-vrms <vrms>]    ADC full-scale V_rms (sets dBV scale when --fund-v/-dbv");
+        log.info("                              absent; defaults to the configured ADC full-scale)");
+        log.info("    [--sub-harmonics <csv>]   subtract H2+ sinusoids loaded from this CSV before FFT");
+        log.info("    [--sub-harmonics-reim]    use re/im columns of that CSV (default: phase_deg)");
+        log.info("    [--no-coherent]           incoherent power averaging across frames");
+        log.info("    [--freq <hz>]             generator freq — enables clock-mismatch report and");
+        log.info("                              seeds fund-bin search (+/-10 bin window)");
+        log.info("    [--comment <str>]         free-form chart comment");
+        log.info("    [--adc-comp <csv>]        adc_correction CSV (from --deembed); logs raw vs.");
+        log.info("                              ADC-corrected harmonics + THD");
+        log.info("    [--cal <csv>]             frequency response calibration CSV (from --freq-response); subtracts");
+        log.info("                              magnitude_db_rel from each FFT bin");
+        log.info("    [--cal-noise]             also apply cal correction to noise/non-signal bins");
+        log.info("                              (default: only fundamental + harmonic bins +/-4)");
+        log.info("    [--load-weighted <csv>]   weighted-code-map CSV from --analyze-histogram;");
+        log.info("                              linearises each raw ADC code through the INL map");
+        log.info("                              before the FFT (same mapping as --record-mapped-wav)");
+        log.info("");
+        log.info("  Record raw WAV:");
+        log.info("    --record-wav              toggles record mode");
+        log.info("    --samplerate <hz>         ADC sample rate");
+        log.info("    --duration <s>            capture length in seconds");
+        log.info("    [--bits 8|16|24]          ADC resolution (default 24)");
+        log.info("    [--device <i>]            input device index");
+        log.info("    [--output <file>]         WAV output path (default results/recorded_<ts>.wav)");
+        log.info("    [--waveform-duration <ms>]  waveform-plot length");
+        log.info("    [--scale <V>]             full-scale voltage for the waveform y-axis");
+        log.info("    [--width <px>] [--height <px>]");
+        log.info("    [--adc-comp <csv>]        also writes <basename>_adc_corrected.wav with ADC");
+        log.info("                              distortion subtracted (requires --fft-size)");
+        log.info("    [--fft-size <n>]          FFT size for the ADC-correction pass");
+        log.info("    [--harmonics <n>]         harmonics to subtract (default 10)");
+        log.info("");
+        log.info("  Record mapped WAV (apply a code-weight INL map during capture):");
+        log.info("    --record-mapped-wav <csv>   weighted-code-map CSV from --analyze-histogram");
+        log.info("    --samplerate, --duration, [--bits, --device, --output, --waveform-duration,");
+        log.info("       --scale, --width, --height]   same as --record-wav");
+        log.info("");
+        log.info("  Process an existing WAV through a code map:");
+        log.info("    --process-wav <file>      input WAV");
+        log.info("    --load-weighted <csv>     code-weight map (from --analyze-histogram)");
+        log.info("    [--output <file>]         output WAV path (default <input>_mapped.wav)");
+        log.info("    [--waveform-duration <ms>]");
+        log.info("    [--scale <V>]");
+        log.info("    [--width <px>] [--height <px>]");
+        log.info("");
+        log.info("  Regression calibration (sine-wave least-squares INL fit):");
+        log.info("    --regress-calibrate <wav>  WAV containing a clean sine");
+        log.info("    --scale <V>               full-scale voltage range (e.g. 2.0 for +/-1 V_p)");
+        log.info("    [--width <px>] [--height <px>]");
+        log.info("    Output: regression_calibration_<ts>.csv + regression_chart_<ts>.png");
+        log.info("");
+        log.info("  Deembed DAC <-> ADC distortion (least-squares fit):");
+        log.info("    --deembed                 toggles deembed mode");
+        log.info("    --comp <csv>              applied_compensation CSV — pass once per ADC level");
+        log.info("                              (need >= 1 + |orders| CSVs)");
+        log.info("    --gen-out <csv>           output: DAC-side compensation (level-independent c_0)");
+        log.info("    --adc-out <csv>           output: ADC-side correction (level-dependent c_k)");
+        log.info("    [--level <dbfs> ...]      override the H1 dBFS read from each --comp header,");
+        log.info("                              one value per --comp in the same order");
+        log.info("    [--orders <list>]         ADC orders (default \"h-1\"). Tokens: integer literal");
+        log.info("                              (\"1\",\"3\") or h-relative (\"h\",\"h-1\",\"h+1\")");
+        log.info("    Legacy aliases: --comp1/--comp2, --level1/--level2");
+        log.info("    Fits r_h(L) = c_0 + sum_k c_k * L^p_k(h):  c_0 -> --gen-out, c_1..c_K -> --adc-out");
+        log.info("");
+        log.info("  Generate signal (DAC playback only, no capture):");
+        log.info("    --generate                toggles generate mode");
+        log.info("    --samplerate <hz>         DAC sample rate");
+        log.info("    --signal <form>           sine | triangle | rectangle | white_noise |");
+        log.info("                              pink_noise | pink_noise_linear | sine_compensated");
+        log.info("    --duration <s>            playback length");
+        log.info("    [--bits 8|16|24|32]       DAC resolution (default 32)");
+        log.info("    [--freq <hz>]             fundamental frequency (default 1000)");
+        log.info("    [--amplitude <vrms>]      output amplitude in V_rms (default 1.0)");
+        log.info("    [--dither <bits>]         TPDF dither at this bit depth (default 0 = off)");
+        log.info("    [--device <i>]            output device index");
+        log.info("    [--harmonics-csv <file>]  fft_harmonics CSV — required for sine_compensated;");
+        log.info("                              injects H2..Hn at inverted phase to pre-cancel");
+        log.info("                              DAC distortion");
+        log.info("");
+        log.info("  Gen + FFT (single shot: generate -> capture -> analyze; no WAV saved):");
+        log.info("    --gen-fft                 toggles single-shot gen+fft mode");
+        log.info("    --samplerate <hz>         DAC and ADC sample rate (must match)");
+        log.info("    --freq <hz>               generator fundamental — snapped to the nearest exact");
+        log.info("                              FFT bin");
+        log.info("    --amplitude <vrms>        DAC output amplitude in V_rms");
+        log.info("    --fft-size <n>            FFT size, power of 2");
+        log.info("    --width <px> --height <px>  chart size");
+        log.info("    --out-device <i>          output device index (DAC)");
+        log.info("    --in-device <i>           input device index  (ADC)");
+        log.info("    [--bits 8|16|24|32]       (default 32)");
+        log.info("    [--signal <form>]         sine | triangle | rectangle | *_noise |");
+        log.info("                              sine_compensated (default sine)");
+        log.info("    [--harmonics-csv <file>]  fft_harmonics CSV (required for sine_compensated)");
+        log.info("    [--duration <s>]          capture length (default: one FFT frame worth).");
+        log.info("                              Applies only to data collection; the generator");
+        log.info("                              runs throughout, including any --sync-pause window");
+        log.info("    [--sync-pause <s>]        hold the recorder for N seconds (0..60) after the");
+        log.info("                              generator starts driving, so an external phase-locked");
+        log.info("                              analog source can settle before capture (default 0)");
+        log.info("    [--dither <bits>]         TPDF dither bit depth (default 0)");
+        log.info("    [--harmonics <n>]         harmonics to measure (default 10)");
+        log.info("    [--window-fn <type>]      FFT window (default HANN)");
+        log.info("    [--overlap <pct>]         frame overlap (default 0)");
+        log.info("    [--dist-min <hz>] [--dist-max <hz>]   SNR/noise integration band");
+        log.info("    [--fund-v <vrms>] [--fund-dbv <dbv>]  dBV anchor (alternative to --adc-fs-vrms)");
+        log.info("    [--adc-fs-vrms <vrms>]    ADC full-scale V_rms (sets dBV scale when --fund-v/-dbv");
+        log.info("                              absent)");
+        log.info("    [--no-coherent]           incoherent power averaging");
+        log.info("    [--cal <csv>]             frequency response calibration (see --freq-response)");
+        log.info("    [--cal-noise]             apply cal to noise bins too (default: signal bins only)");
+        log.info("    [--load-weighted <csv>]   weighted-code-map CSV from --analyze-histogram;");
+        log.info("                              linearises each captured ADC code through the INL map");
+        log.info("                              before the FFT");
+        log.info("    [--comment <str>]         free-form chart comment");
+        log.info("    [--output <dir>]          output directory (default results)");
+        log.info("");
+        log.info("  Iterative harmonic compensation (DAC pre-distortion loop):");
+        log.info("    --iterative-compensate    toggles iterative-compensate mode");
+        log.info("    --samplerate, --freq, --amplitude, --fft-size, --width, --height,");
+        log.info("       --out-device, --in-device   same semantics as --gen-fft");
+        log.info("    [--bits 8|16|24|32]       (default 32)");
+        log.info("    [--dither <bits>]         generator TPDF dither (default 0)");
+        log.info("    [--duration <s>]          seconds per iteration (default 60)");
+        log.info("    [--harmonics <n>]         harmonics measured + compensated (default 10)");
+        log.info("    [--window-fn <type>]      FFT window (default HANN)");
+        log.info("    [--overlap <pct>]         frame overlap (default 0)");
+        log.info("    [--dist-min <hz>]         lower SNR/noise integration bound");
+        log.info("    [--dist-max <hz>]         upper SNR/noise integration bound");
+        log.info("    [--fund-v <vrms>]         true fundamental V_rms (overrides --amplitude for dBV)");
+        log.info("    [--fund-dbv <dbv>]        true fundamental level in dBV");
+        log.info("    [--adc-fs-vrms <vrms>]    ADC full-scale V_rms (dBV fallback)");
+        log.info("    [--no-coherent]           incoherent averaging (disables phase compensation)");
+        log.info("    [--accumulate]            aggregate harmonic corrections across iterations");
+        log.info("                              (default: each iteration uses only the latest residual)");
+        log.info("    [--stop-after <n>]        stop after N consecutive THD-pct increases (default 4)");
+        log.info("    [--target-thd <pct>]      stop once THD drops to or below this percent");
+        log.info("    [--compensation-step <mu>]  LMS step size, 0 < mu <= 1 (default 1.0); use 0.5");
+        log.info("                              to damp oscillations (helpful with --cal)");
+        log.info("    [--cal <csv>]             frequency response calibration (see --freq-response)");
+        log.info("    [--cal-noise]             apply cal to noise bins too (default: signal bins only)");
+        log.info("    Outputs: fft_chart_iter<i>_<ts>.png per iteration; fft_harmonics_<ts>.csv");
+        log.info("             on stop (input for --signal sine_compensated and --deembed)");
+        log.info("");
+        log.info("  Frequency response measurement (Farina log-sweep -> per-point H(f)):");
+        log.info("    --freq-response           toggles freq-response mode");
+        log.info("    --samplerate <hz>         DAC and ADC sample rate");
+        log.info("    --amplitude <vrms>        DAC drive amplitude — recorded in the cal CSV header");
+        log.info("                              so the apply path knows the reference");
+        log.info("    --out-device <i>          output device index (DAC)");
+        log.info("    --in-device <i>           input device index  (ADC)");
+        log.info("    [--bits 8|16|24|32]       (default 24)");
+        log.info("    [--sweep-start <hz>]      sweep start frequency (default 2)");
+        log.info("    [--sweep-end <hz>]        sweep end frequency (default Fs/2)");
+        log.info("    [--sweep-duration <s>]    Farina sweep length in seconds (default 5.5, min 0.5)");
+        log.info("    [--sweep-points <n>]      log-spaced rows in the output CSV/chart (default 200)");
+        log.info("    [--lead-in <s>]           silence before the sweep (default 0.2, min 0.05)");
+        log.info("    [--adc-fs-vrms <vrms>]    ADC full-scale V_rms; written to the cal CSV header");
+        log.info("                              for downstream dBV scaling (default 1.7931)");
+        log.info("    [--dither <bits>]         generator TPDF dither (default 0)");
+        log.info("    [--output <file>]         cal CSV path (default results/freq_resp_cal_<ts>.csv)");
+        log.info("    [--sweep-wav <file>]      also dump the raw capture as WAV");
+        log.info("    [--width <px>] [--height <px>]   chart size (default 1920x600)");
+        log.info("    Outputs: freq_resp_cal_<ts>.csv (+ matching .png chart). The CSV columns are");
+        log.info("    frequency_hz; magnitude_dbfs; magnitude_dbv; magnitude_db_rel; phase_deg.");
+        log.info("    magnitude_db_rel is what apply paths subtract from each FFT bin");
+        log.info("    (corrected_dBFS = raw_dBFS - magnitude_db_rel).");
+    }
+}

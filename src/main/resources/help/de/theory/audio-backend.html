@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theorie: Audio-Backend</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zur Theorie des Betriebs</a></p>
+
+  <h1>Audio-Backend</h1>
+
+  <h2 id="purpose">Wofür es da ist</h2>
+  <p>Das Audio-Backend ist die Brücke zwischen Phonalyser und der
+     Soundhardware.  Seine einzige Aufgabe ist es, Samples <b>bitgenau</b>
+     zwischen der Anwendung und den Wandlern zu bewegen: Was der Generator
+     berechnet, wandelt der DAC, und was der ADC wandelt, sehen die Analysatoren —
+     ohne jegliche Zwischenverarbeitung.</p>
+  <p>Das ist nicht die Art, wie ein PC Audio standardmäßig wiedergibt.  Der
+     normale Windows-Audiopfad leitet jeden Stream durch einen Mixer, eine
+     Lautstärkeregelung, einen Abtastratenkonverter und möglicherweise
+     „Verbesserungs"-Filter — jeder davon harmlos für Musik, jeder davon fatal
+     für eine Messung.  Ein Resampler allein erzeugt Verzerrungsprodukte weit
+     oberhalb dessen, was ein guter ADC auflösen kann.  Das Backend öffnet die
+     Geräte daher im <b>Exklusivmodus</b><sup><a href="#ref-excl">[1]</a></sup>:
+     Phonalyser spricht direkt mit dem Wandler, bei der exakten Abtastrate und
+     Bittiefe, die Sie gewählt haben, und die Verarbeitungskette des
+     Betriebssystems wird vollständig umgangen.</p>
+
+  <div class="note"><b>Konsequenz der Exklusivität:</b> Während Phonalyser
+     aufnimmt oder wiedergibt, kann keine andere Anwendung dieses Gerät
+     verwenden — und umgekehrt.  Eine Meldung „Gerät wird verwendet" beim
+     Starten einer Aufnahme bedeutet meist, dass ein Browser oder
+     Media-Player noch den Eingang belegt.</div>
+
+  <h2 id="paths">Die drei Treiberpfade</h2>
+  <p>Soundhardware ist über verschiedene Treiberinterfaces erreichbar.
+     Phonalyser implementiert drei davon und lässt Sie in den Einstellungen
+     einen auswählen; alle Module arbeiten identisch, unabhängig davon,
+     welcher aktiv ist.</p>
+  <table class="controls">
+    <tr><th>Pfad</th><th>Was es ist</th><th>Wann verwenden</th></tr>
+    <tr><td><b>WASAPI</b></td>
+        <td>Das moderne Windows-Audio-Interface, im Exklusivmodus.</td>
+        <td>Der Standard unter Windows.  Bitgenau, zuverlässig, funktioniert
+            mit praktisch jedem Interface.</td></tr>
+    <tr><td><b>WDM-KS</b></td>
+        <td>Windows-Kernel-Streaming<sup><a href="#ref-ks">[2]</a></sup> —
+            die unterste Ebene, die der Treiber bietet.</td>
+        <td>Höchster Aufnahmedurchsatz in der Praxis; es lohnt sich, diesen
+            auszuprobieren, wenn das Oszilloskop seine volle Aktualisierungsrate
+            bei sehr hohen Abtastraten (384 kHz und höher) halten soll.</td></tr>
+    <tr><td><b>JavaSound</b></td>
+        <td>Das portable Laufzeit-Audio-Interface.</td>
+        <td>Der einzige Pfad unter Linux und macOS; ein Fallback unter
+            Windows.</td></tr>
+  </table>
+
+  <h2 id="how">Wie es funktioniert, grob umrissen</h2>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 300" width="100%" height="300" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+
+    <!-- preferences -->
+    <rect x="10" y="20" width="190" height="64" rx="6" fill="#fffbe8" stroke="#cc9"/>
+    <text x="105" y="44" text-anchor="middle" font-weight="bold">Preferences</text>
+    <text x="105" y="62" text-anchor="middle" fill="#775">driver path · device</text>
+    <text x="105" y="76" text-anchor="middle" fill="#775">sample rate · bit depth</text>
+
+    <!-- backend box -->
+    <rect x="260" y="20" width="300" height="250" rx="8" fill="#f4f4ff" stroke="#88a" stroke-width="1.5"/>
+    <text x="410" y="44" text-anchor="middle" font-weight="bold">Audio backend</text>
+
+    <line x1="200" y1="52" x2="258" y2="52" stroke="#446" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+    <!-- playback lane -->
+    <rect x="280" y="64" width="260" height="80" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="410" y="86" text-anchor="middle" font-weight="bold">Playback lane</text>
+    <text x="410" y="106" text-anchor="middle" fill="#557">keeps the DAC's hardware buffer</text>
+    <text x="410" y="122" text-anchor="middle" fill="#557">filled a few ms ahead, continuously</text>
+
+    <!-- capture lane -->
+    <rect x="280" y="166" width="260" height="80" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="410" y="188" text-anchor="middle" font-weight="bold">Capture lane</text>
+    <text x="410" y="208" text-anchor="middle" fill="#557">receives blocks of raw samples</text>
+    <text x="410" y="224" text-anchor="middle" fill="#557">at the hardware's own rhythm</text>
+
+    <!-- devices -->
+    <rect x="640" y="64" width="120" height="56" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="700" y="88" text-anchor="middle" font-weight="bold">DAC</text>
+    <text x="700" y="106" text-anchor="middle" fill="#575">exclusive</text>
+    <rect x="640" y="180" width="120" height="56" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="700" y="204" text-anchor="middle" font-weight="bold">ADC</text>
+    <text x="700" y="222" text-anchor="middle" fill="#575">exclusive</text>
+
+    <line x1="540" y1="100" x2="638" y2="92"  stroke="#446" stroke-width="1.5" marker-end="url(#arr2)"/>
+    <line x1="638" y1="208" x2="542" y2="206" stroke="#446" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+    <!-- module connections -->
+    <rect x="10" y="120" width="190" height="48" rx="6" fill="#fdf2f2" stroke="#a88"/>
+    <text x="105" y="140" text-anchor="middle" font-weight="bold">Generator</text>
+    <text x="105" y="156" text-anchor="middle" fill="#755">ideal samples in</text>
+    <rect x="10" y="200" width="190" height="48" rx="6" fill="#fdf2f2" stroke="#a88"/>
+    <text x="105" y="220" text-anchor="middle" font-weight="bold">Ring buffer</text>
+    <text x="105" y="236" text-anchor="middle" fill="#755">normalised samples out</text>
+
+    <line x1="200" y1="140" x2="278" y2="116" stroke="#446" stroke-width="1.5" marker-end="url(#arr2)"/>
+    <line x1="278" y1="216" x2="202" y2="220" stroke="#446" stroke-width="1.5" marker-end="url(#arr2)"/>
+  </svg>
+  </div>
+
+  <p><b>Aufnahme.</b>  Wenn eine Ansicht die Aufnahme startet, öffnet das
+     Backend das Eingangsgerät mit genau der Abtastrate und Bittiefe aus den
+     Einstellungen.  Von da an liefert die Hardware Blöcke von rohen
+     Ganzzahl-Samples in ihrem eigenen Takt.  Jedes Sample <i>u</i> (eine
+     vorzeichenlose Ganzzahl mit <i>b</i> Bit) wird einmalig in einen
+     dimensionslosen Bruchteil des Vollausschlags umgewandelt:</p>
+  <div class="eq"><i>x</i> = (<i>u</i> − 2<sup><i>b</i>−1</sup>) / 2<sup><i>b</i>−1</sup>&nbsp;&nbsp;∈ [−1, +1)<span class="no">(1)</span></div>
+  <p>und im <a href="ring-buffer.html">Ringpuffer</a> gespeichert.  Die gesamte
+     Analysepipeline arbeitet in diesen normierten Einheiten; die Umrechnung in
+     Volt erfolgt erst zur Anzeigezeit, unter Verwendung der ADC-Vollausschlag-
+     Kalibrierung.  Dadurch berührt eine Neukalibrierung niemals aufgezeichnete
+     Daten — sie ändert nur den Maßstab.</p>
+
+  <p><b>Wiedergabe.</b>  Der Wiedergabepfad ist ein einfacher, robuster
+     Erzeuger: Er fordert vom <a href="generator.html">Generator</a> den
+     nächsten Satz idealer Samples an, leitet sie durch den
+     <a href="generator.html#quantizer">Quantisierer mit Dither</a> und schreibt
+     sie auf das Gerät — das Daten genau so schnell entgegennimmt, wie es sie
+     wandelt, sodass der eigene Takt des Geräts die Schleife taktet.  Drei
+     Details sind für Messungen wichtig:</p>
+  <ul>
+    <li><b>Aufwärmphase.</b>  Bevor der Pfad startet, wird etwa eine halbe
+        Sekunde Signal erzeugt und verworfen, damit die Laufzeitumgebung volle
+        Geschwindigkeit erreicht, bevor das erste hörbare Sample ausgegeben wird —
+        bei 384 kHz könnte ein Kaltstart andernfalls stocken.  Die Sweep-Wiedergabe
+        wird danach auf null zurückgespult, sodass eine Frequenzgangmessung den
+        Sweep immer ab seinem allerersten Sample sieht.</li>
+    <li><b>Vorausfüllen.</b>  Der Hardware-Puffer wird vollständig gefüllt,
+        bevor die Wiedergabe als „bereit" gemeldet wird — Mess-Worker starten
+        ihre Aufnahme erst danach, sodass sie niemals die Stille vor dem echten
+        Start des Streams aufzeichnen.</li>
+    <li><b>Pufferreserve.</b>  Im eingeschwungenen Zustand liegt der Puffer
+        einige Millisekunden vor dem Wandler, was die Ausgabe auch dann
+        aussetzerlos hält, wenn das restliche System ausgelastet ist.</li>
+  </ul>
+
+  <div class="note"><b>Ein praktischer Hinweis zur WASAPI-Wiedergabe.</b>
+     Phonalyser steuerte die exklusive WASAPI-Wiedergabe ursprünglich direkt;
+     bei manchen Interfaces erzeugte der Treiber dabei einen kurzen periodischen
+     Aussetzer — eine Signalperiode Stille in regelmäßigen Abständen, sichtbar
+     als spektrales Rauschen.  Der Wiedergabepfad des Datei-Players auf
+     denselben Geräten war aussetzerlos, daher verwendet die Ton-Wiedergabe
+     nun ebenfalls diesen Pfad (das gewählte WASAPI-Gerät wird weiterhin
+     berücksichtigt).  Die WDM-KS-Wiedergabe behält ihren eigenen nativen
+     Pfad.</div>
+
+  <h2 id="who">Wer das Backend nutzt</h2>
+  <table class="controls">
+    <tr><th>Modul</th><th>Richtung</th><th>Art der Nutzung</th></tr>
+    <tr><td>Oszilloskop, FFT-Analysator</td><td>Aufnahme</td>
+        <td>Teilen sich <em>eine</em> Aufnahmesitzung und einen Ringpuffer —
+            siehe <a href="ring-buffer.html#sharedcapture">Aufnahmesitzung</a>.
+            Das Gerät wird geöffnet, wenn das erste von beiden aufzeichnet,
+            und geschlossen, wenn das letzte stoppt.</td></tr>
+    <tr><td>Generator</td><td>Wiedergabe</td>
+        <td>Besitzt die Wiedergabesitzung, solange die Play-Taste leuchtet;
+            Tonparameter werden live in den laufenden Stream übernommen.</td></tr>
+    <tr><td>Frequenzgang</td><td>beides, exklusiv</td>
+        <td>Benötigt DAC und ADC gleichzeitig und allein: Es fordert zunächst
+            alle anderen Module zum Stoppen auf (und wartet, bis die Geräte
+            wirklich frei sind), dann führt es den Sweep durch beide
+            Wandler.</td></tr>
+    <tr><td>Kommandozeilenwerkzeuge</td><td>beides</td>
+        <td>Dasselbe Backend treibt die kopflosen Messmodi an, sodass
+            CLI- und GUI-Ergebnisse konstruktionsbedingt vergleichbar
+            sind.</td></tr>
+  </table>
+
+  <h2 id="errors">Wenn ein Gerät sich nicht öffnen lässt</h2>
+  <p>Exklusivmodus bedeutet, dass Öffnungsversuche aus alltäglichen Gründen
+     scheitern können.  Das Backend übersetzt den Fehler des Treibers in eine
+     klare Aussage darüber, um welchen Fall es sich handelt:</p>
+  <ul>
+    <li><b>Format nicht unterstützt</b> — das Gerät akzeptiert die gewählte
+        Kombination aus Abtastrate und Bittiefe nicht; wählen Sie eine andere
+        in den Einstellungen (16/24 bit bei 48/96/192/384 kHz werden fast
+        universell akzeptiert).</li>
+    <li><b>Gerät belegt</b> — eine andere Anwendung (oder ein anderer
+        exklusiver Stream) hält es belegt.</li>
+    <li><b>Gerät nicht vorhanden</b> — abgesteckt oder der Treiber ist nicht
+        geladen; der gespeicherte Gerätename stimmt mit nichts mehr
+        überein.</td></li>
+  </ul>
+
+  <h2 id="refs">Referenzen</h2>
+  <ol class="refs">
+    <li id="ref-excl">What exclusive-mode streams bypass and guarantee —
+        <a href="https://learn.microsoft.com/en-us/windows/win32/coreaudio/exclusive-mode-streams">Microsoft Learn: Exclusive-Mode Streams</a>.</li>
+    <li id="ref-ks">The kernel-streaming layer beneath WDM-KS —
+        <a href="https://learn.microsoft.com/en-us/windows-hardware/drivers/stream/kernel-streaming">Microsoft Learn: Kernel Streaming</a>.</li>
+  </ol>
+
+  <p class="back"><a href="index.html">◀ Theorie des Betriebs</a> ·
+     weiter: <a href="ring-buffer.html">Ringpuffer &amp; Konsumenten ▶</a></p>
+
+</body>
+</html>

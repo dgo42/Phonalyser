@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Найкоротший у світі HOW-TO</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Назад до змісту</a></p>
+
+  <h1>🚀 Найкоротший у світі HOW-TO — вимірювання THD на рівні частин на мільярд</h1>
+  <p>Увесь тракт, від «відкрити застосунок» до «гармоніки на −180 dBV», на одному
+     екрані. Кожен крок має посилання на повний розділ, якщо потрібні деталі.
+     Зелений значок відтворення
+     <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+     позначає кнопку <b>пуску</b> (генератор, свіпи); червоний світлодіод
+     <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><circle cx="10" cy="7.5" r="4.3" fill="#e22" stroke="#900"/><circle cx="8.4" cy="6" r="1.2" fill="#f99"/></svg>
+     позначає кнопку <b>запису</b> (осцилограф, FFT).</p>
+
+  <h2>1 · Калібрування тракту (одноразово)</h2>
+  <ol>
+    <li><b>Запустіть синусоїду</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        та <a href="generator.html">відкалібруйте вихідну напругу DAC</a> за
+        відомим рівнем.</li>
+    <li><b>Замкніть DAC напряму назад у ADC</b> і
+        <a href="fft.html#fft-utility-calibrate">відкалібруйте повну шкалу ADC</a>.</li>
+    <li><b>Виміряйте частотну характеристику петлі (loopback)</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        та <a href="freqresp.html">збережіть її у файл <code>.frc</code></a>.</li>
+    <li><b>Завантажте цей <code>.frc</code></b> у поданні частотної характеристики як
+        калібрування та <b>активуйте</b> його — тепер власна характеристика тракту
+        де-вбудовується з кожного вимірювання.</li>
+  </ol>
+
+  <h2>2 · Додавання режекторного фільтра (notch)</h2>
+  <ol start="5">
+    <li><b>Увімкніть пасивний twin-T режекторний фільтр (notch) на 1 kHz</b> між DAC та ADC
+        (<a href="theory/dac-predistortion.html#notch">навіщо потрібен notch</a>).</li>
+    <li><b>Виміряйте частотну характеристику notch-фільтра</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        та збережіть її в <em>окремий</em> файл (її ви теж де-вбудуєте).</li>
+  </ol>
+
+  <h2>3 · Захоплення тону</h2>
+  <ol start="7">
+    <li><b>Запустіть синусоїду 1003 Hz</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        — на кілька герців осторонь від 1 kHz, щоб відійти від гармонік мережі — з
+        увімкненим <b>прив'язуванням до FFT-біна</b>.</li>
+    <li><b>Почніть запис</b> осцилографа
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><circle cx="10" cy="7.5" r="4.3" fill="#e22" stroke="#900"/><circle cx="8.4" cy="6" r="1.2" fill="#f99"/></svg>
+        та FFT-аналізатора
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><circle cx="10" cy="7.5" r="4.3" fill="#e22" stroke="#900"/><circle cx="8.4" cy="6" r="1.2" fill="#f99"/></svg>.</li>
+    <li><b>Перевірте осцилограф</b> — тон чітко над рівнем шуму, тригер
+        захоплено (увімкніть невеликий <b>гістерезис</b>, щоб шум не давав хибних спрацювань).</li>
+    <li><b>Налаштуйте FFT</b> на <em>максимальну</em> частоту дискретизації вашої карти —
+        <b>2 M @ 384 kHz</b>, <b>1 M @ 192 kHz</b>, <b>512 k @ 96 kHz</b> — з
+        увімкненим <a href="fft.html#fft-fund-from-gen">отриманням основного тону від генератора</a>
+        та <b>Align generator = FLL</b>.</li>
+    <li><b>Дочекайтеся, поки ΔF осяде</b> до крихітного значення (зазвичай <b>±0.05 ppm</b>) — це
+        означає, що тон фазово синхронізовано та готовий до глибокого когерентного усереднення.</li>
+  </ol>
+
+  <h2>4 · Передспотворення, а потім вимірювання</h2>
+  <ol start="12">
+    <li><b>Відкрийте майстер передспотворення DAC</b> — кнопка
+        <a href="theory/dac-predistortion.html">майстра</a>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><line x1="5" y1="12.5" x2="11.5" y2="5.5" stroke="#444" stroke-width="2" stroke-linecap="round"/><polygon points="13,1.8 13.7,3.6 15.5,4.2 13.7,4.8 13,6.6 12.3,4.8 10.5,4.2 12.3,3.6" fill="#f0a800"/><circle cx="16.5" cy="9.5" r="0.9" fill="#f0a800"/></svg>.</li>
+    <li><b>Введіть початкову кількість усереднень на раунд і цільовий THD</b>, потім
+        натисніть <b>Пуск</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
+        — цикл заганяє власні гармоніки DAC у шум.</li>
+    <li><b>Збережіть результат у файл <code>.dpd</code></b> та <b>застосуйте його</b> до
+        генератора.</li>
+    <li><b>Перемкніть генератор у режим «Sine compensated»</b> — тепер він видає тон,
+        чистіший, ніж може створити сам DAC.</li>
+    <li><b>Вставте свій DUT</b> між DAC та notch-фільтром.</li>
+    <li><b>Скиньте статистику FFT та почніть накопичення</b>
+        <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><circle cx="10" cy="7.5" r="4.3" fill="#e22" stroke="#900"/><circle cx="8.4" cy="6" r="1.2" fill="#f99"/></svg>.</li>
+    <li><b>Зачекайте</b>, поки H₂…Hₙ стабілізуються в міру поглиблення усереднення — і те, що ви
+        зчитуєте, є <em>пристроєм</em>, а не джерелом. 🎯</li>
+  </ol>
+
+  <p><img src="img/dac-predistortion-live.png" alt="Живий FFT: передспотворений тон 1003 Hz за notch-фільтром — THD H2..9 = 0.00000093 %" style="max-width:100%;height:auto;border:1px solid #dde;"/></p>
+  <p class="small"><b>Винагорода.</b> Тон 1003 Hz за notch-фільтром, передспотворений,
+     при ~730 когерентних усередненнях: THD H2…H9 показує <b>0.00000093 %</b> — менше за одну частину
+     на мільярд, окремі гармоніки на рівні від −160 до −185 dBV.</p>
+
+  <p class="small">Уперше тут? Розділ <a href="theory/dac-predistortion.html">передспотворення
+     DAC</a> пояснює, <em>чому</em> кожен крок вище зроблено саме так — notch, ручний основний тон,
+     глибоке усереднення.</p>
+
+</body>
+</html>

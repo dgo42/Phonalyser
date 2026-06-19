@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theory: Audio backend</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to Theory of operation</a></p>
+
+  <h1>Audio backend</h1>
+
+  <h2 id="purpose">What it is for</h2>
+  <p>The audio backend is the bridge between Phonalyser and the sound
+     hardware.  Its one job is to move samples between the application and
+     the converters <b>bit-exactly</b>: what the generator computes is what
+     the DAC converts, and what the ADC converts is what the analysers see —
+     with nothing in between.</p>
+  <p>That is not how a PC plays audio by default.  The normal Windows audio
+     path runs every stream through a mixer, a volume control, a sample-rate
+     converter and possibly "enhancement" filters — each one harmless for
+     music, each one fatal for a measurement.  A resampler alone adds
+     distortion products far above what a good ADC can resolve.  The backend
+     therefore opens the devices in <b>exclusive
+     mode</b><sup><a href="#ref-excl">[1]</a></sup>: Phonalyser talks to
+     the converter directly, at the exact sample rate and bit depth you chose,
+     and the operating system's processing chain is bypassed completely.</p>
+
+  <div class="note"><b>Consequence of exclusivity:</b> while Phonalyser is
+     recording or playing, no other application can use that device — and the
+     other way around.  A "device is in use" message when starting a capture
+     usually means a browser or media player still holds the input.</div>
+
+  <h2 id="paths">The three driver paths</h2>
+  <p>Sound hardware can be reached through several driver interfaces.
+     Phonalyser implements three and lets you pick one in Preferences; all
+     modules work identically on top of whichever is active.</p>
+  <table class="controls">
+    <tr><th>Path</th><th>What it is</th><th>When to use it</th></tr>
+    <tr><td><b>WASAPI</b></td>
+        <td>The modern Windows audio interface, in exclusive mode.</td>
+        <td>The default on Windows.  Bit-exact, reliable, works with
+            practically every interface.</td></tr>
+    <tr><td><b>WDM-KS</b></td>
+        <td>Windows kernel streaming<sup><a href="#ref-ks">[2]</a></sup> —
+            the lowest level the driver offers.</td>
+        <td>Highest capture throughput in practice; worth trying when the
+            oscilloscope should keep its full update rate at very high sample
+            rates (384 kHz and up).</td></tr>
+    <tr><td><b>JavaSound</b></td>
+        <td>The portable runtime audio interface.</td>
+        <td>The only path on Linux and macOS; a fallback on Windows.</td></tr>
+  </table>
+
+  <h2 id="how">How it works, roughly</h2>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 300" width="100%" height="300" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+
+    <!-- preferences -->
+    <rect x="10" y="20" width="190" height="64" rx="6" fill="#fffbe8" stroke="#cc9"/>
+    <text x="105" y="44" text-anchor="middle" font-weight="bold">Preferences</text>
+    <text x="105" y="62" text-anchor="middle" fill="#775">driver path · device</text>
+    <text x="105" y="76" text-anchor="middle" fill="#775">sample rate · bit depth</text>
+
+    <!-- backend box -->
+    <rect x="260" y="20" width="300" height="250" rx="8" fill="#f4f4ff" stroke="#88a" stroke-width="1.5"/>
+    <text x="410" y="44" text-anchor="middle" font-weight="bold">Audio backend</text>
+
+    <line x1="200" y1="52" x2="258" y2="52" stroke="#446" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+    <!-- playback lane -->
+    <rect x="280" y="64" width="260" height="80" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="410" y="86" text-anchor="middle" font-weight="bold">Playback lane</text>
+    <text x="410" y="106" text-anchor="middle" fill="#557">keeps the DAC's hardware buffer</text>
+    <text x="410" y="122" text-anchor="middle" fill="#557">filled a few ms ahead, continuously</text>
+
+    <!-- capture lane -->
+    <rect x="280" y="166" width="260" height="80" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="410" y="188" text-anchor="middle" font-weight="bold">Capture lane</text>
+    <text x="410" y="208" text-anchor="middle" fill="#557">receives blocks of raw samples</text>
+    <text x="410" y="224" text-anchor="middle" fill="#557">at the hardware's own rhythm</text>
+
+    <!-- devices -->
+    <rect x="640" y="64" width="120" height="56" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="700" y="88" text-anchor="middle" font-weight="bold">DAC</text>
+    <text x="700" y="106" text-anchor="middle" fill="#575">exclusive</text>
+    <rect x="640" y="180" width="120" height="56" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="700" y="204" text-anchor="middle" font-weight="bold">ADC</text>
+    <text x="700" y="222" text-anchor="middle" fill="#575">exclusive</text>
+
+    <line x1="540" y1="100" x2="638" y2="92"  stroke="#446" stroke-width="1.5" marker-end="url(#arr2)"/>
+    <line x1="638" y1="208" x2="542" y2="206" stroke="#446" stroke-width="1.5" marker-end="url(#arr2)"/>
+
+    <!-- module connections -->
+    <rect x="10" y="120" width="190" height="48" rx="6" fill="#fdf2f2" stroke="#a88"/>
+    <text x="105" y="140" text-anchor="middle" font-weight="bold">Generator</text>
+    <text x="105" y="156" text-anchor="middle" fill="#755">ideal samples in</text>
+    <rect x="10" y="200" width="190" height="48" rx="6" fill="#fdf2f2" stroke="#a88"/>
+    <text x="105" y="220" text-anchor="middle" font-weight="bold">Ring buffer</text>
+    <text x="105" y="236" text-anchor="middle" fill="#755">normalised samples out</text>
+
+    <line x1="200" y1="140" x2="278" y2="116" stroke="#446" stroke-width="1.5" marker-end="url(#arr2)"/>
+    <line x1="278" y1="216" x2="202" y2="220" stroke="#446" stroke-width="1.5" marker-end="url(#arr2)"/>
+  </svg>
+  </div>
+
+  <p><b>Capture.</b>  When a view starts recording, the backend opens the
+     input device with exactly the sample rate and bit depth from
+     Preferences.  From then on the hardware delivers blocks of raw integer
+     samples on its own clock.  Each sample <i>u</i> (an unsigned integer of
+     <i>b</i> bits) is converted once to a dimensionless fraction of
+     full-scale:</p>
+  <div class="eq"><i>x</i> = (<i>u</i> − 2<sup><i>b</i>−1</sup>) / 2<sup><i>b</i>−1</sup>&nbsp;&nbsp;∈ [−1, +1)<span class="no">(1)</span></div>
+  <p>and stored in the <a href="ring-buffer.html">ring buffer</a>.  The whole
+     analysis pipeline works in these normalised units; conversion to volts
+     happens only at display time, using the ADC full-scale calibration.
+     This way a recalibration never touches recorded data — it just changes
+     the ruler.</p>
+
+  <p><b>Playback.</b>  The playback lane is a simple, robust producer: it
+     asks the <a href="generator.html">generator</a> for the next batch of
+     ideal samples, passes them through the
+     <a href="generator.html#quantizer">quantizer with dither</a>, and writes
+     them to the device — which accepts data exactly as fast as it converts
+     it, so the device's own clock paces the loop.  Three details matter for
+     measurements:</p>
+  <ul>
+    <li><b>Warm-up.</b>  Before the line starts, about half a second of
+        signal is generated and thrown away so the runtime reaches full speed
+        before the first audible sample — at 384 kHz a cold start could
+        otherwise stutter.  Sweep playback is rewound to zero afterwards, so
+        a frequency-response capture always sees the sweep from its very
+        first sample.</li>
+    <li><b>Pre-fill.</b>  The hardware buffer is filled completely before
+        playback is reported "ready" — measurement workers start their
+        capture only after this point, so they never record the silence
+        before the stream truly runs.</li>
+    <li><b>Headroom.</b>  In steady state the buffer stays a few
+        milliseconds ahead of the converter, which is what makes the output
+        gap-free even when the rest of the machine is busy.</li>
+  </ul>
+
+  <div class="note"><b>A practical note on WASAPI playback.</b>  Phonalyser
+     originally drove WASAPI exclusive playback directly, and on some
+     interfaces the driver produced a short periodic gap — one signal period
+     of silence, at regular intervals, visible as spectral garbage.  The
+     file-player's playback route on the very same devices was gap-free, so
+     tone playback now uses that route as well (the WASAPI device you select
+     is still honoured).  WDM-KS playback keeps its own native path.</div>
+
+  <h2 id="who">Who uses the backend</h2>
+  <table class="controls">
+    <tr><th>Module</th><th>Direction</th><th>How</th></tr>
+    <tr><td>Oscilloscope, FFT analyser</td><td>capture</td>
+        <td>Share <em>one</em> capture session and one ring buffer — see
+            <a href="ring-buffer.html#sharedcapture">capture session</a>.
+            The device opens when the first of them records and closes when
+            the last one stops.</td></tr>
+    <tr><td>Generator</td><td>playback</td>
+        <td>Owns the playback session while the Play button is lit; tone
+            parameters are applied live into the running stream.</td></tr>
+    <tr><td>Frequency response</td><td>both, exclusively</td>
+        <td>Needs the DAC and ADC simultaneously and alone: it first asks
+            every other module to stop (and waits until the devices are
+            really free), then runs the sweep through both converters.</td></tr>
+    <tr><td>Command-line tools</td><td>both</td>
+        <td>The same backend drives the headless measurement modes, so CLI
+            and GUI results are comparable by construction.</td></tr>
+  </table>
+
+  <h2 id="errors">When a device won't open</h2>
+  <p>Exclusive mode means open attempts can fail for everyday reasons.  The
+     backend translates the driver's error into a plain statement of which it
+     was:</p>
+  <ul>
+    <li><b>Format not supported</b> — the device doesn't accept the chosen
+        sample-rate / bit-depth combination; pick another in Preferences
+        (16/24 bit at 48/96/192/384 kHz are almost universally accepted).</li>
+    <li><b>Device busy</b> — another application (or another exclusive
+        stream) holds it.</li>
+    <li><b>Device gone</b> — unplugged, or its driver isn't loaded; the
+        saved device name no longer matches anything.</li>
+  </ul>
+
+  <h2 id="refs">References</h2>
+  <ol class="refs">
+    <li id="ref-excl">What exclusive-mode streams bypass and guarantee —
+        <a href="https://learn.microsoft.com/en-us/windows/win32/coreaudio/exclusive-mode-streams">Microsoft Learn: Exclusive-Mode Streams</a>.</li>
+    <li id="ref-ks">The kernel-streaming layer beneath WDM-KS —
+        <a href="https://learn.microsoft.com/en-us/windows-hardware/drivers/stream/kernel-streaming">Microsoft Learn: Kernel Streaming</a>.</li>
+  </ol>
+
+  <p class="back"><a href="index.html">◀ Theory of operation</a> ·
+     next: <a href="ring-buffer.html">Ring buffer &amp; consumers ▶</a></p>
+
+</body>
+</html>

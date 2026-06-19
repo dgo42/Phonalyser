@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theorie: DAC-Vorverzerrung</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zur Theorie der Funktionsweise</a></p>
+
+  <h1>DAC-Vorverzerrung — die eigenen Harmonischen des Wandlers auslöschen</h1>
+
+  <h2 id="purpose">Die Frage, die diese Seite beantwortet</h2>
+  <p>Jeder DAC fügt selbst harmonische Verzerrung hinzu. Wenn man ein Prüfobjekt
+     misst, soll das Stimulussignal sauberer sein, als der DAC es von Natur aus
+     erzeugen kann, damit das, was die FFT zeigt, die Verzerrung des
+     <em>Geräts</em> ist und nicht die der Quelle. Die <b>Vorverzerrung</b> misst
+     die Harmonischen des DAC und injiziert vorab einen gleich großen und
+     entgegengesetzten Satz von Korrekturtönen, sodass die Harmonischen des
+     Wandlers am ADC in Gegenphase zur Korrektur ankommen und sich auslöschen. Der
+     <b>DAC-Vorverzerrungs-Assistent</b> (geöffnet aus dem
+     <a href="../fft.html">FFT-Analysator</a>) führt dies als geschlossene Schleife
+     aus: messen → invertieren → auf den laufenden Generator anwenden → erneut
+     messen, in jeder Runde tiefer.</p>
+  <p>Es gut zu machen, stößt auf zwei harte Messprobleme, und der gesamte Entwurf
+     des Assistenten ist die Antwort darauf:</p>
+  <ol>
+    <li>Um Harmonische zu <em>sehen</em>, die zig Dezibel unter dem Grundton
+        liegen, muss man den Grundton zuerst unterdrücken — mit einem passiven
+        <a href="#notch">Twin-T-Kerbfilter</a> — und dieses Kerbfilter
+        <a href="#drift">driftet mit der Temperatur</a>, weshalb Frequenz und Phase
+        des Grundtons vom Generator genommen werden müssen und nicht aus dem
+        Spektrum abgelesen werden dürfen.</li>
+    <li>Die Korrektur ist nur so gut wie die Amplituden und Phasen der
+        Harmonischen, die man gemessen hat, und diese sind im Rauschen vergraben —
+        sie werden also erst nach
+        <a href="#averaging">tiefer kohärenter Mittelung</a> vertrauenswürdig.</li>
+  </ol>
+
+  <h2 id="notch">Warum ein passives Twin-T-Kerbfilter davor — und warum es zwingend ist</h2>
+  <p>Die Korrekturtöne, die der Generator erzeugen muss, sind die Harmonischen des
+     DAC, invertiert. Eine 2. Harmonische bei −110 dBc muss in Amplitude
+     <em>und Phase</em> gemessen werden, um ausgelöscht zu werden, und die
+     Harmonischen eines Wandlers liegen routinemäßig 100–140 dB unter dem Grundton.
+     Der Grundton selbst, bei Vollaussteuerung, streut Energie über das Spektrum
+     (Nebenkeulen des Fensters, Intermodulation im Eingangsteil des ADC selbst,
+     Clock-Spurs), die jene schwachen Linien überdecken kann.</p>
+  <p>Ein passives <b>Twin-T-Kerbfilter</b><sup id="cite-tt"><a href="#ref-twint">[1]</a></sup>,
+     abgestimmt auf den Grundton, entfernt 40–80 dB Grundtonenergie
+     <em>vor</em> dem ADC, während es die Harmonischen — die auf die sanften
+     Flanken der Kerbe fallen — im Wesentlichen unangetastet lässt. Der ADC
+     digitalisiert dann ein Signal, das von seinen Harmonischen dominiert wird,
+     nicht von seinem Grundton, und nutzt viel mehr seines Aussteuerbereichs für
+     die Linien, die man tatsächlich messen will. Dies ist das Regime mit
+     <a href="fft.html#phaseref">unterdrücktem Grundton und gepoolter Referenz</a>,
+     das das FFT-Kapitel beschreibt. Die Einführung des Assistenten macht das
+     Kerbfilter <b>zwingend</b>: ohne es kommen die Harmonischen nie aus der Flanke
+     des Grundtons heraus und es kann sich keine stabile Korrektur bilden.</p>
+
+  <p>Das Netzwerk ist das klassische symmetrische Twin-T: ein Tiefpass-T (R1–R2 mit
+     C3 nach Masse) parallel zu einem Hochpass-T (C1–C2 mit R3 nach Masse), die
+     sich die Verhältnisse R3 = R/2 und C3 = 2C teilen, sodass sich die beiden Pfade
+     an der Kerbe exakt aufheben.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 680 300" width="100%" height="300" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <text x="340" y="22" text-anchor="middle" fill="#557">Passive twin-T notch — null at f₀ = 1/(2π·R·C) ≈ 1 kHz</text>
+
+    <!-- terminals -->
+    <text x="38" y="154" text-anchor="end" fill="#335">IN</text>
+    <line x1="45" y1="150" x2="100" y2="150" stroke="#446" stroke-width="1.5"/>
+    <text x="642" y="154" text-anchor="start" fill="#335">OUT</text>
+    <line x1="500" y1="150" x2="635" y2="150" stroke="#446" stroke-width="1.5"/>
+
+    <!-- input / output vertical buses -->
+    <line x1="100" y1="90" x2="100" y2="210" stroke="#446" stroke-width="1.5"/>
+    <line x1="500" y1="90" x2="500" y2="210" stroke="#446" stroke-width="1.5"/>
+    <circle cx="100" cy="150" r="3" fill="#446"/>
+    <circle cx="500" cy="150" r="3" fill="#446"/>
+
+    <!-- top branch: R1 — node — R2 -->
+    <line x1="100" y1="90" x2="150" y2="90" stroke="#446" stroke-width="1.5"/>
+    <rect x="150" y="82" width="60" height="16" fill="#eef" stroke="#88a"/>
+    <text x="180" y="74" text-anchor="middle" fill="#335">R1 3.12k</text>
+    <line x1="210" y1="90" x2="390" y2="90" stroke="#446" stroke-width="1.5"/>
+    <rect x="390" y="82" width="60" height="16" fill="#eef" stroke="#88a"/>
+    <text x="420" y="74" text-anchor="middle" fill="#335">R2 3.12k</text>
+    <line x1="450" y1="90" x2="500" y2="90" stroke="#446" stroke-width="1.5"/>
+    <circle cx="300" cy="90" r="3" fill="#446"/>
+
+    <!-- C3 from top node down to ground (above the bottom branch) -->
+    <line x1="300" y1="90" x2="300" y2="116" stroke="#446" stroke-width="1.5"/>
+    <line x1="284" y1="116" x2="316" y2="116" stroke="#446" stroke-width="2"/>
+    <line x1="284" y1="124" x2="316" y2="124" stroke="#446" stroke-width="2"/>
+    <text x="322" y="124" text-anchor="start" fill="#335">C3 102n</text>
+    <line x1="300" y1="124" x2="300" y2="150" stroke="#446" stroke-width="1.5"/>
+    <line x1="286" y1="150" x2="314" y2="150" stroke="#446" stroke-width="1.5"/>
+    <line x1="291" y1="155" x2="309" y2="155" stroke="#446" stroke-width="1.5"/>
+    <line x1="296" y1="160" x2="304" y2="160" stroke="#446" stroke-width="1.5"/>
+
+    <!-- bottom branch: C1 — node — C2 -->
+    <line x1="100" y1="210" x2="152" y2="210" stroke="#446" stroke-width="1.5"/>
+    <line x1="152" y1="200" x2="152" y2="220" stroke="#446" stroke-width="2"/>
+    <line x1="160" y1="200" x2="160" y2="220" stroke="#446" stroke-width="2"/>
+    <text x="156" y="238" text-anchor="middle" fill="#335">C1 51n</text>
+    <line x1="160" y1="210" x2="432" y2="210" stroke="#446" stroke-width="1.5"/>
+    <line x1="432" y1="200" x2="432" y2="220" stroke="#446" stroke-width="2"/>
+    <line x1="440" y1="200" x2="440" y2="220" stroke="#446" stroke-width="2"/>
+    <text x="436" y="238" text-anchor="middle" fill="#335">C2 51n</text>
+    <line x1="440" y1="210" x2="500" y2="210" stroke="#446" stroke-width="1.5"/>
+    <circle cx="300" cy="210" r="3" fill="#446"/>
+
+    <!-- R3 from bottom node down to ground -->
+    <line x1="300" y1="210" x2="300" y2="236" stroke="#446" stroke-width="1.5"/>
+    <rect x="288" y="236" width="24" height="44" fill="#eef" stroke="#88a"/>
+    <text x="322" y="262" text-anchor="start" fill="#335">R3 1.56k</text>
+    <line x1="300" y1="280" x2="300" y2="288" stroke="#446" stroke-width="1.5"/>
+    <line x1="286" y1="288" x2="314" y2="288" stroke="#446" stroke-width="1.5"/>
+    <line x1="291" y1="293" x2="309" y2="293" stroke="#446" stroke-width="1.5"/>
+    <line x1="296" y1="298" x2="304" y2="298" stroke="#446" stroke-width="1.5"/>
+  </svg>
+  </div>
+
+  <div class="note"><b>Passiv, nicht aktiv.</b>  Das Kerbfilter muss passiv sein
+     (nur Widerstände und Kondensatoren). Ein aktives Kerbfilter würde seine eigene
+     Operationsverstärker-Verzerrung genau dort hinzufügen, wo man Harmonische im
+     Bereich von Teilen pro Milliarde messen will — es würde genau die Linien
+     kontaminieren, die es freilegen soll.</div>
+
+  <h2 id="drift">Das Kerbfilter driftet — der Grundton muss daher manuell definiert werden</h2>
+  <p>Ein Twin-T-Kerbfilter erzeugt seine Kerbe bei</p>
+  <div class="eq"><i>f</i><sub>0</sub> = 1 / (2π<i>RC</i>)<span class="no">(1)</span></div>
+  <p>seine Kerbfrequenz folgt also dem Produkt <i>RC</i>. Widerstände und
+     Kondensatoren ändern ihren Wert mit der Temperatur, und die Kerbe ist
+     <em>außerordentlich</em> empfindlich gegenüber dieser Änderung, weil das
+     Kerbfilter ganz unten eine echte Übertragungsnullstelle ist: der Betrag stürzt
+     ab und die Phase schwingt über einen verschwindend kleinen Frequenzbereich um
+     180° durch.</p>
+
+  <p>Der Plot unten ist eine MC12-Simulation, stark auf den Boden eines einzelnen
+     Twin-T herangezoomt — die gesamte vertikale Achse umspannt nur 5 dB,
+     hier gezeichnet auf der realistischen <b>−75…−80&nbsp;dBV</b>-Skala, die ein
+     echtes Kerbfilter tatsächlich erreicht (nicht die −125 dB eines idealen
+     Bauteils). Ein einzelner Abstimmwiderstand wird in <b>3&nbsp;ppm</b>-Schritten
+     durchgestimmt (R1 = 3120.49 → 3120.50&nbsp;Ω), eine Änderung weit kleiner als
+     jede Temperaturdrift. Schon diese 3 ppm verschieben die Mulde so weit
+     seitlich, dass sich bei einer festen Testfrequenz auf der Flanke der Pegel des
+     Grundtons um <b>≈ 0.9&nbsp;dB</b> verschiebt.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 280" width="100%" height="280" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <text x="435" y="30" text-anchor="middle" fill="#557">Twin-T null, R1 stepped 3 ppm  (3120.49 → 3120.50 Ω)</text>
+    <!-- frame -->
+    <rect x="90" y="40" width="690" height="210" fill="none" stroke="#bbc"/>
+    <!-- −79.5 dBV reference gridline (dashed) -->
+    <line x1="90" y1="229" x2="780" y2="229" stroke="#bbc" stroke-width="1" stroke-dasharray="5 3"/>
+    <text x="84" y="46"  text-anchor="end" fill="#557">−75 dBV</text>
+    <text x="84" y="225" text-anchor="end" fill="#557">−79.5</text>
+    <text x="84" y="252" text-anchor="end" fill="#557">−80 dBV</text>
+    <text x="435" y="272" text-anchor="middle" fill="#557">f₀ ≈ 1 kHz   (full width ≈ a few Hz)</text>
+
+    <!-- the 3-ppm family: deep bowls marching down-right, both branches reaching the top edge -->
+    <path d="M 90,52 Q 395,418 700,40" fill="none" stroke="#9aa6e6" stroke-width="1.6"/>
+    <path d="M 90,49 Q 428,428 735,40" fill="none" stroke="#7d8ce0" stroke-width="1.6"/>
+    <path d="M 90,46 Q 465,437 760,40" fill="none" stroke="#5566cc" stroke-width="1.6"/>
+    <path d="M 90,44 Q 506,446 778,40" fill="none" stroke="#3344aa" stroke-width="2.0"/>
+
+    <!-- fixed test tone on the flank + the level it reads across the family -->
+    <line x1="520" y1="40" x2="520" y2="250" stroke="#999" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="510" y="54" text-anchor="end" fill="#666">test tone — on the flank, not at the bottom</text>
+    <line x1="520" y1="198" x2="520" y2="239" stroke="#c33" stroke-width="1.6" stroke-dasharray="2 2"/>
+    <circle cx="520" cy="198" r="4" fill="#c33"/>
+    <circle cx="520" cy="239" r="4" fill="#c33"/>
+    <text x="510" y="184" text-anchor="end" fill="#a33">3 ppm → ≈ 0.9 dB</text>
+  </svg>
+  </div>
+  <p class="note"><b>Nun kommen die zwei Dinge hinzu, die ein echtes Kerbfilter
+     nicht kann.</b>  Ein passives Twin-T ist sehr schwer (a) auf eine
+     <em>sehr</em> tiefe Kerbe und (b) gleichzeitig auf die exakte Testfrequenz zu
+     trimmen — die beiden Einstellungen arbeiten gegeneinander. In der Praxis liegt
+     die erreichbare Tiefe bei etwa <b>−80&nbsp;dB</b>, nicht bei den
+     −125&nbsp;dB der idealen Simulation, und der Ton sitzt fast nie auf dem
+     tiefsten Punkt — er sitzt ein Stück weiter oben auf der Flanke. Das ist der
+     <em>schlechteste</em> Ort: auf der Flanke verschiebt schon eine Bauteildrift
+     von wenigen ppm — ein Bruchteil eines Grades Erwärmung (die
+     <a href="#tempco">Tabelle unten</a>) — den Pegel des Grundtons um ~1 dB und
+     seine Phase um zig Grad. Tiefe und Phase des unterdrückten Grundtons sind
+     daher niemals etwas, das man zuverlässig ablesen kann, was genau der Grund ist,
+     warum sie stattdessen vom Generator genommen werden.</p>
+
+  <p>Nun lese man den <em>gleichen</em> 3-ppm-Schritt bei der 2. Harmonischen.
+     H₂ sitzt auf der sanften äußeren Flanke der Kerbe, nicht in der Kerbe selbst,
+     und dort ist die identische Bauteiländerung so gut wie unsichtbar. Dieser Plot
+     zoomt auf ein Fenster von wenigen Milli-Dezibel um den H₂-Pegel: wo 3 ppm den
+     Grundton um ≈ 0.9 dB warfen, bewegen sie bei H₂ den Pegel nur um
+     <b>etwa ein Milli-Dezibel</b> — etwa tausendmal weniger.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 280" width="100%" height="280" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <text x="435" y="30" text-anchor="middle" fill="#557">H₂ flank, same R1 3 ppm step  (H₂ ≈ 2 kHz, ≈ −19.45 dBV)</text>
+    <!-- frame -->
+    <rect x="90" y="40" width="690" height="200" fill="none" stroke="#bbc"/>
+    <!-- milli-dB grid (relative to the H₂ level) -->
+    <line x1="90" y1="90"  x2="780" y2="90"  stroke="#eef"/>
+    <line x1="90" y1="140" x2="780" y2="140" stroke="#eef"/>
+    <line x1="90" y1="190" x2="780" y2="190" stroke="#eef"/>
+    <text x="84" y="46"  text-anchor="end" fill="#557">0</text>
+    <text x="84" y="94"  text-anchor="end" fill="#557">−2</text>
+    <text x="84" y="144" text-anchor="end" fill="#557">−4</text>
+    <text x="84" y="194" text-anchor="end" fill="#557">−6</text>
+    <text x="84" y="246" text-anchor="end" fill="#557">−8 mdB</text>
+    <text x="435" y="266" text-anchor="middle" fill="#557">frequency around H₂ ≈ 2 kHz</text>
+
+    <!-- the same 3 ppm family — gentle flanks within ~1 mdB of each other -->
+    <polyline points="90,176 780,72" fill="none" stroke="#9aa6e6" stroke-width="1.5"/>
+    <polyline points="90,184 780,80" fill="none" stroke="#7d8ce0" stroke-width="1.5"/>
+    <polyline points="90,192 780,88" fill="none" stroke="#5566cc" stroke-width="1.5"/>
+    <polyline points="90,200 780,96" fill="none" stroke="#3344aa" stroke-width="1.8"/>
+
+    <!-- H₂ frequency + the level it reads across the 3 ppm family -->
+    <line x1="435" y1="40" x2="435" y2="240" stroke="#999" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="441" y="58" fill="#666">H₂ (fixed)</text>
+    <line x1="435" y1="124" x2="435" y2="148" stroke="#c33" stroke-width="1.6" stroke-dasharray="2 2"/>
+    <circle cx="435" cy="124" r="4" fill="#c33"/>
+    <circle cx="435" cy="148" r="4" fill="#c33"/>
+    <text x="435" y="180" text-anchor="middle" fill="#a33">3 ppm → ≈ 1 mdB</text>
+
+    <text x="120" y="70" fill="#446">flank slope only a few dB/octave —</text>
+    <text x="120" y="86" fill="#446">the 3 ppm just slides along it</text>
+  </svg>
+  </div>
+
+  <h3 id="bigpicture">Gesamtbild: Drift bewegt den Grundton, berührt die Harmonischen kaum</h3>
+  <p>Nun zoome man auf das gesamte Band heraus. Das Kerbfilter sitzt am Grundton;
+     die Harmonischen steigen die sanfte Flanke darüber hinauf. Die blauen Punkte
+     markieren, wo der Grundton F des Generators und seine Harmonischen H₂…Hₙ
+     landen, und die beiden Beschriftungen tragen das Ergebnis der Nahaufnahmen ins
+     Gesamtbild: dieselbe 3-ppm-Drift bewegt F um ≈ 0.9 dB tief in der Kerbe, aber
+     H₂ — und jede Harmonische darüber hinaus — nur um ≈ 1 mdB draußen auf der
+     sanften Flanke.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 330" width="100%" height="330" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+   <g id="Layer_x0020_1">
+   <metadata id="CorelCorpID_0Corel-Layer"/>
+   <rect fill="none" width="828" height="336"/>
+   <rect fill="none" stroke="#BBBBCC" stroke-width="1.02047" x="66" y="45" width="725" height="235"/>
+   <line fill="none" stroke="#EEEEFF" stroke-width="1.02047" x1="66" y1="100" x2="790" y2="100"/>
+   <line fill="none" stroke="#EEEEFF" stroke-width="1.02047" x1="66" y1="156" x2="790" y2="156"/>
+   <line fill="none" stroke="#EEEEFF" stroke-width="1.02047" x1="66" y1="211" x2="790" y2="211"/>
+   <line fill="none" stroke="#EEEEFF" stroke-width="1.02047" x1="66" y1="267" x2="790" y2="267"/>
+   <g transform="matrix(1 0 0 1 -347.353 -399.079)">
+      <text x="400" y="449" fill="#555577" font-weight="normal" font-size="12.2456px" font-family="Consolas">0</text>
+   </g>
+   <g transform="matrix(1 0 0 1 -347.353 -343.974)">
+      <text x="387" y="449" fill="#555577" font-weight="normal" font-size="12.2456px" font-family="Consolas">−20</text>
+   </g>
+   <g transform="matrix(1 0 0 1 -347.353 -288.869)">
+      <text x="387" y="449" fill="#555577" font-weight="normal" font-size="12.2456px" font-family="Consolas">−40</text>
+   </g>
+   <g transform="matrix(1 0 0 1 -347.353 -233.764)">
+      <text x="387" y="449" fill="#555577" font-weight="normal" font-size="12.2456px" font-family="Consolas">−60</text>
+   </g>
+   <g transform="matrix(1 0 0 1 -347.353 -177.639)">
+      <text x="360" y="449" fill="#555577" font-weight="normal" font-size="12.2456px" font-family="Consolas">−80 dBV</text>
+   </g>
+   <g transform="matrix(1 0 0 1 -178.977 -152.127)">
+      <text x="400" y="449" fill="#555577" font-weight="normal" font-size="12.2456px" font-family="Consolas">1k</text>
+   </g>
+   <g transform="matrix(1 0 0 1 -16.7236 -152.127)">
+      <text x="400" y="449" fill="#555577" font-weight="normal" font-size="12.2456px" font-family="Consolas">2k</text>
+   </g>
+   <g transform="matrix(1 0 0 1 146.55 -152.127)">
+      <text x="400" y="449" fill="#555577" font-weight="normal" font-size="12.2456px" font-family="Consolas">4k</text>
+   </g>
+   <g transform="matrix(1 0 0 1 308.803 -152.127)">
+      <text x="400" y="449" fill="#555577" font-weight="normal" font-size="12.2456px" font-family="Consolas">8k</text>
+   </g>
+   <g transform="matrix(1 0 0 1 -341.23 -152.127)">
+      <text x="407" y="449" fill="#555577" font-weight="normal" font-size="12.2456px" font-family="Consolas">500</text>
+   </g>
+   <g transform="matrix(1 0 0 1 21.033 -131.718)">
+      <text x="343" y="449" fill="#555577" font-weight="normal" font-size="12.2456px" font-family="Consolas">frequency (Hz, log)</text>
+   </g>
+   <path fill="none" stroke="#3344AA" stroke-width="2.04094" d="M66 113c63,5 112,10 140,38 25,25 20,69 22,116m0 0c3,-47 0,-87 17,-112 22,-31 90,-47 146,-56 55,-9 63,-10 96,-14 32,-4 50,-6 66,-7 21,-3 38,-5 52,-7 18,-1 32,-3 43,-4 15,-1 26,-2 36,-3 12,-1 23,-2 32,-2 10,-1 19,-1 27,-2 18,-1 33,-3 47,-4" text-anchor="end"/>
+   <circle fill="#CC3333" cx="390" cy="99" r="4"/>
+   <g transform="matrix(1 0 0 1 -16.7236 -357.24)">
+      <text x="400" y="449" fill="#333388" font-weight="normal" font-size="12.2456px" font-family="Consolas">H2</text>
+   </g>
+   <circle fill="#CC3333" cx="228" cy="267" r="5" text-anchor="middle"/>
+   <g transform="matrix(1 0 0 1 79.1994 -371.526)">
+      <text x="400" y="449" fill="#333388" font-weight="normal" font-size="12.2456px" font-family="Consolas">H3</text>
+   </g>
+   <g transform="matrix(1 0 0 1 146.55 -379.69)">
+      <text x="400" y="449" fill="#333388" font-weight="normal" font-size="12.2456px" font-family="Consolas">H4</text>
+   </g>
+   <g transform="matrix(1 0 0 1 198.593 -385.813)">
+      <text x="400" y="449" fill="#333388" font-weight="normal" font-size="12.2456px" font-family="Consolas">H5</text>
+   </g>
+   <g transform="matrix(1 0 0 1 241.453 -389.895)">
+      <text x="400" y="449" fill="#333388" font-weight="normal" font-size="12.2456px" font-family="Consolas">H6</text>
+   </g>
+   <g transform="matrix(1 0 0 1 277.169 -392.956)">
+      <text x="400" y="449" fill="#333388" font-weight="normal" font-size="12.2456px" font-family="Consolas">H7</text>
+   </g>
+   <g transform="matrix(1 0 0 1 308.803 -394.997)">
+      <text x="400" y="449" fill="#333388" font-weight="normal" font-size="12.2456px" font-family="Consolas">H8</text>
+   </g>
+   <g transform="matrix(1 0 0 1 336.356 -397.038)">
+      <text x="400" y="449" fill="#333388" font-weight="normal" font-size="12.2456px" font-family="Consolas">H9</text>
+   </g>
+   <g transform="matrix(1 0 0 1 -187.141 -177.639)">
+      <text x="400" y="449" fill="#333388" font-weight="normal" font-size="12.2456px" font-family="Consolas">F</text>
+   </g>
+   <g transform="matrix(1 0 0 1 -163.67 -177.639)">
+      <text x="407" y="449" fill="#AA3333" font-weight="normal" font-size="12.2456px" font-family="Consolas">3 ppm → 0.9 dB</text>
+   </g>
+   <g transform="matrix(1 0 0 1 -45.2964 -321.524)">
+      <text x="407" y="449" fill="#AA3333" font-weight="normal" font-size="12.2456px" font-family="Consolas">3 ppm → 1 mdB</text>
+   </g>
+   <g transform="matrix(1 0 0 1 383.296 -152.127)">
+      <text x="387" y="449" fill="#555577" font-weight="normal" font-size="12.2456px" font-family="Consolas">11k</text>
+   </g>
+   <circle fill="#CC3333" cx="486" cy="85" r="4" text-anchor="middle"/>
+   <circle fill="#CC3333" cx="554" cy="77" r="4" text-anchor="middle"/>
+   <circle fill="#CC3333" cx="606" cy="71" r="4" text-anchor="middle"/>
+   <circle fill="#CC3333" cx="648" cy="67" r="4" text-anchor="middle"/>
+   <circle fill="#CC3333" cx="684" cy="64" r="4" text-anchor="middle"/>
+   <circle fill="#CC3333" cx="716" cy="62" r="4" text-anchor="middle"/>
+   <circle fill="#CC3333" cx="743" cy="60" r="4" text-anchor="middle"/>
+   </g>
+   </svg>
+  </div>
+  <p>Die Asymmetrie ist der ganze Grund, warum der Assistent einen
+     <a href="../fft.html#fft-manual-fund">manuellen Grundton</a> erzwingt, der vom
+     Generator genommen wird. Die Frequenz des Grundtons ist <em>exakt bekannt</em>
+     — der DDS hat sie erzeugt — und seine Startphase ist ebenfalls bekannt, sodass
+     es keinen Grund gibt, beides am Kerbfilter-Ausgang abzulesen, wo die Drift sie
+     bedeutungslos macht. Die Harmonischen, auf der flachen Flanke gemessen,
+     behalten ihre Amplitude und Phase, und das ist es, woraus die Korrektur
+     gebildet wird. Der Assistent setzt daher <b>Grundton-vom-Generator</b> auf
+     ein, wobei die <a href="fft.html#kappa">FLL</a> die Analyse an den Takt des
+     Generators bindet.</p>
+
+  <h3 id="tempco">Wie stark driftet jede Widerstandsklasse?</h3>
+  <p>Für einen festen Ton an der nominalen Kerbe verschiebt eine
+     Temperaturänderung Δ<i>T</i> die Kerbe um die anteilige Änderung von
+     <i>RC</i>:</p>
+  <div class="eq">Δ<i>f</i><sub>0</sub> / <i>f</i><sub>0</sub>
+     = (α<sub>R</sub> + α<sub>C</sub>) · Δ<i>T</i><span class="no">(2)</span></div>
+  <p>wobei α<sub>R</sub>, α<sub>C</sub> die Temperaturkoeffizienten von Widerstand
+     und Kondensator in ppm/°C sind. Nimmt man den Widerstand als treibend
+     (ein C0G/NP0-Keramikkondensator fügt nur ≈ ±30 ppm/°C hinzu; ein
+     Folienkondensator mehr), so bewegt sich die Kerbe für Δ<i>T</i> = 10 °C um die
+     ppm in der dritten Spalte, und die letzten drei geben die resultierende Drift
+     des <em>Sperrpegels</em> bei F, H₂ und H₃ — die Flankensteilheit des
+     simulierten Kerbfilters an jeder Linie mal jene Verschiebung:</p>
+  <table class="controls">
+    <tr><th>Widerstandstyp</th><th>α<sub>R</sub> (ppm/°C)</th><th>Δf₀/f₀ über 10 °C</th><th>F-Drift †</th><th>H2-Drift</th><th>H3-Drift</th></tr>
+    <tr><td>Dünnschicht</td><td>5 – 25</td><td>50 – 250 ppm</td><td>15 – 75 dB</td><td>17 – 83 mdB</td><td>13 – 64 mdB</td></tr>
+    <tr><td>Metallfolie (hier bestückt)</td><td>50 – 100</td><td>500 – 1000 ppm</td><td>Unterdrückung verloren</td><td>0.17 – 0.33 dB</td><td>0.13 – 0.26 dB</td></tr>
+    <tr><td>Cermet-Trimmer</td><td>100 – 500+</td><td>1000 – 5000+ ppm</td><td>Unterdrückung verloren</td><td>0.33 – 1.7 dB</td><td>0.26 – 1.3 dB</td></tr>
+  </table>
+  <p class="note">† Drift der Sperrdämpfung über 10 °C, auf der Flanke des
+     simulierten Kerbfilters abgelesen. Bei F reitet der Ton auf der steilen Flanke
+     bei ≈ 0.3 dB/ppm; nach einigen zig ppm ist er von der Kerbe heruntergeklettert
+     und die Unterdrückung des Grundtons ist weg — genau deshalb wird F vom
+     Generator gelesen, nie vom Kerbfilter. H₂/H₃ sitzen auf der sanften Flanke
+     (≈ 0.3 mdB/ppm), tausendfach ruhiger; nur ein grober Cermet-Trimmer driftet sie
+     um bis zu einem Dezibel.</p>
+  <p>Andersherum gelesen sind die 3 ppm des Nahaufnahme-Plots kaum
+     0.03–0.06 °C Erwärmung für einen Metallfolienwiderstand — und sie haben den
+     Grundton bereits ≈ 0.9 dB gekostet. Das sehen aus wie winzige
+     Frequenzverschiebungen — und bei den Harmonischen sind sie es <em>auch</em>:
+     bei H₂ = 2 kHz ist der Twin-T-Betrag glatt, seine Steigung wenige
+     dB pro Oktave, sodass eine Verschiebung von 1–5 Hz (≤ 0.25 ‰ von 2 kHz) |H| um
+     Milli-Dezibel und die Phase um einen Bruchteil eines Grades ändert. Aber an der
+     Kerbe ist die lokale Steigung praktisch unendlich. Die −3 dB-Breite des
+     Kerbfilters ist <i>f</i><sub>0</sub>/<i>Q</i>; eine Sub-Hertz-Verschiebung
+     gegen eine Kerbe, die innerhalb eines Bruchteils eines Hertz zig dB tief ist,
+     wirft die gemessene Tiefe und Phase des <em>Grundtons</em> völlig durcheinander.
+     Der Phasensprung der Übertragungsnullstelle ist der eigentliche Schaden: der
+     Schleifenverzögerungs-Term, den der Generator braucht,</p>
+  <div class="eq">ω<i>D</i> = −(φ<sub>1</sub> + π/2)<span class="no">(3)</span></div>
+  <p>(dieselbe Beziehung, die der Abschnitt
+     <a href="generator.html#compensated">kompensierter Sinus</a> herleitet)
+     hängt von der Grundtonphase φ<sub>1</sub> ab. Liest man φ<sub>1</sub> an einer
+     driftenden Kerbe ab, ist die gesamte Korrektur falsch getimt. Nimmt man sie vom
+     Generator, verschwindet das Problem. <b>Fazit: vertraue niemals der Frequenz
+     oder Phase eines kerbfilterunterdrückten Grundtons — definiere den Grundton
+     manuell.</b></p>
+
+  <h2 id="averaging">Kohärente Mittelung: wie die schwachen Harmonischen vertrauenswürdig werden</h2>
+  <p>Die Korrektur kann nur so genau sein wie die Amplituden und Phasen der
+     Harmonischen, die sie speisen, und nach dem Kerbfilter liegen diese
+     Harmonischen immer noch weit unter dem Grundrauschen eines Einzelschusses. Die
+     <a href="fft.html#coherent">kohärente Mittelung</a> ist es, die sie
+     herausgräbt: der Ton und seine Harmonischen sind phasenstabil und addieren sich
+     im Gleichtakt, während das Rauschen zufällig ist und sich teilweise auslöscht,
+     sodass das Grundrauschen pro Bin fällt, während die Mittelung tiefer wird, und
+     die harmonischen Linien ihren Pegel halten. Erst wenn eine Harmonische deutlich
+     über dem gemittelten Grundrauschen steht — und lange genug gemittelt wurde, um
+     ihren <em>Wert</em> festzunageln, nicht bloß ihre Anwesenheit — ist es sicher,
+     sie in eine Korrektur zu invertieren.</p>
+
+  <p>Die Aufnahme unten ist die konvergierte Schleife: ein 1-kHz-Ton hinter dem
+     Kerbfilter, vorverzerrt, bei etwa 500 kohärenten Mittelungen. Die
+     Gesamtklirrverzerrung H₂…H₉ liest sich als <b>0.00000088 %</b> — unter einem
+     Teil in 10⁸ — mit den einzelnen Harmonischen unten bei −160 bis −180 dBV,
+     herausgegraben aus einem Grundrauschen pro Einzelschuss, das mehr als fünfzig
+     Dezibel darüber lag.</p>
+
+  <div class="shot">
+    <img src="../img/dac-predistortion-live.png" alt="Live-FFT-Aufnahme: DAC vorverzerrt hinter einem Twin-T-Kerbfilter, ~500 kohärente Mittelungen, THD H2..9 = 0.00000088 %"/>
+  </div>
+  <p class="note"><b>Lies die Statusleiste.</b>  Unten links läuft die FFT mit
+     <code>HFT248D</code> bei <code>87.5 %</code> Überlappung mit <code>∞×</code>
+     (unbegrenzter) kohärenter Mittelung; unten in der Mitte markiert
+     <code>manF</code> den manuellen Grundton. Das sind genau die Einstellungen, die
+     der Assistent erzwingt — Fenster und Überlappung für
+     <a href="#window">Nebenkeulen-Reserve ohne Rauschkosten</a>, der manuelle
+     Grundton aus dem Driftgrund oben, unbegrenzte kohärente Mittelung, damit jede
+     Runde so tief mitteln kann, wie sie es braucht.</p>
+
+  <h3 id="depth">Wie viele Mittelungen braucht ein gegebener THD-Pegel?</h3>
+  <p>Eine nützliche Abschätzung. Kohärente Mittelung senkt das Grundrauschen pro Bin
+     (in Leistung) um die effektive Anzahl unabhängiger Mittelungen
+     <i>n</i><sub>eff</sub>:</p>
+  <div class="eq"><i>N</i>(<i>n</i>) = <i>N</i><sub>1</sub>
+     − 10·log₁₀ <i>n</i><sub>eff</sub><span class="no">(4)</span></div>
+  <p>mit <i>N</i><sub>1</sub> ≈ −130 dB als Grundrauschen pro Bin im Einzelschuss.
+     Ein THD von 0.00001 % ist ein Verhältnis von Harmonischer zu Grundton von 10⁻⁷,
+     d. h. eine Linie bei <i>L</i><sub>h</sub> = −140 dBc. Um sie mit einer
+     Vertrauensreserve <i>M</i> über dem gemittelten Grundrauschen aufzulösen, setze
+     man <i>N</i>(<i>n</i>) ≤ <i>L</i><sub>h</sub> − <i>M</i>:</p>
+  <div class="eq"><i>n</i><sub>eff</sub> ≥
+     10<sup>(<i>N</i><sub>1</sub> − <i>L</i><sub>h</sub> + <i>M</i>)/10</sup>
+     = 10<sup>(10 + <i>M</i>)/10</sup><span class="no">(5)</span></div>
+  <table class="controls">
+    <tr><th>Reserve M</th><th>n<sub>eff</sub> nötig</th><th>gemitteltes Grundrauschen</th></tr>
+    <tr><td>10 dB</td><td>100</td><td>−150 dB</td></tr>
+    <tr><td>20 dB</td><td>1000</td><td>−160 dB</td></tr>
+    <tr><td>30 dB</td><td>10000</td><td>−170 dB</td></tr>
+  </table>
+  <p>Also bringen grob <b>100 Mittelungen das Grundrauschen 10 dB unter eine
+     −140-dBc-Harmonische; 1000 ergeben 20 dB</b> — und die ~730 der obigen Aufnahme
+     liegen dazwischen, weshalb sich ihre Harmonischen bei −160 dBV und darunter
+     sauber auflösen. Die Detektion ist nur die halbe Miete: das Festnageln des
+     <em>Werts</em> der Harmonischen (die Amplitude und Phase, die die Korrektur
+     invertiert) folgt obendrauf dem gewöhnlichen kohärenten
+     <a href="derotation-accuracy.html#magnitude">1/√<i>n</i>-Gesetz</a> — ein
+     weiterer Grund, warum der Assistent weiter tiefer mittelt, während der
+     Restfehler schrumpft. Die Überlappung geht nur über
+     <i>n</i><sub>eff</sub> = <i>n</i>/<i>F</i><sub>corr</sub> ein
+     (<a href="derotation-accuracy.html#overlap">dort Gl. 8</a>); die Umrechnung von
+     <i>n</i><sub>eff</sub> in Echtzeit bei dieser Blocklänge ist die
+     Minuten-zu-Stunden-Skalierung, die jenes Kapitel ausarbeitet.</p>
+
+  <h2 id="loop">Wie die Korrektur gebildet und angewendet wird</h2>
+  <p>Mit festgenageltem Grundton und sauber gemittelten Harmonischen ist die
+     Schleife unkompliziert. Jede Runde:</p>
+  <ol>
+    <li><b>Mitteln</b>, bis die Harmonischen vertrauenswürdig sind. Die Mittelungstiefe
+        der Runde wird danach bemessen, wie weit der Restfehler bereits unter Runde 0
+        gefallen ist — ein um Faktor <i>k</i> kleinerer Restfehler wird bei
+        gleichem Vertrauen gelesen, indem man etwa <i>k</i>× länger mittelt — und die
+        Runde verlängert sich live weiter, solange sie sich weiter verbessert, sodass
+        späte Runden weit tiefer laufen als frühe.</li>
+    <li><b>Invertieren und akkumulieren.</b>  Jede gemessene Harmonische (nicht nur
+        die starken) wird in einen Korrektur-Zeiger verwandelt: ihre Amplitude
+        relativ zum Grundton und ihre um die Schleifenverzögerung aus Gl. (3)
+        de-rotierte Phase, sodass die Korrektur am ADC exakt in Gegenphase zu der
+        Harmonischen ankommt, die sie auslöscht. Diese werden über die Runden hinweg
+        zu einer laufenden Korrektur aufsummiert.</li>
+    <li><b>Heißanwenden</b> der akkumulierten Korrektur auf den <em>laufenden</em>
+        Generator — kein Neustart, kein Glitch. Der Generator baut jeden Korrekturton
+        durch ganzzahlige Multiplikation seines Haupt-Phasenakkumulators
+        (<a href="generator.html#compensated">dort Gl. 10</a>), sodass jede Korrektur
+        exakt bei <i>h·f</i> sitzt und nie gegen die reale Harmonische schwebt, der
+        sie entgegensteht, egal wie lange sie läuft.</li>
+    <li><b>Einschwingen, zurücksetzen, wiederholen.</b>  Die nächste Runde misst den
+        kleineren Restfehler und korrigiert erneut, konvergiert Runde um Runde, bis
+        man stoppt oder ein Ziel-THD erreicht ist.</li>
+  </ol>
+  <p>Die linke Spalte des Assistenten zeigt das live aktualisierte THD
+     <em>innerhalb</em> einer Runde, die steigende Mittelungstiefe und die Zahl der
+     letzten Runde; das Konvergenzdiagramm zeichnet den Restfehler jeder Runde auf
+     einer logarithmischen Achse auf und ordnet die Marker entlang <i>x</i>
+     proportional dazu an, wie tief jene Runde gemittelt hat — sodass eine lange,
+     tiefe späte Runde sichtbar mehr von der Kurve einnimmt als eine schnelle frühe.</p>
+  <div class="note"><b>Warum der Grundton vor Runde 0 fallengelassen wird.</b>  Jede
+     bereits auf dem Generator geladene Korrektur wird zu Beginn gelöscht, sodass
+     Runde 0 die wahre Roh-DAC-Verzerrung misst und der Akkumulator die volle
+     Korrektur von Grund auf aufbaut — andernfalls würde die erste Anwendung eine
+     geladene Korrektur durch nur das Restfehler-Delta dieses Durchlaufs
+     überschreiben.</div>
+
+  <h2 id="window">Fenster und Überlappung — HFT248D bei 87.5 %</h2>
+  <p>Die Messung läuft mit dem <b>HFT248D</b>-Fenster bei <b>87.5 % Überlappung</b>,
+     der Kombination, die das Kapitel
+     <a href="derotation-accuracy.html#window">De-Rotations-Genauigkeit</a> aus
+     ersten Prinzipien herleitet. Zwei Ergebnisse von dort übertragen sich direkt
+     auf die Vorverzerrung:</p>
+  <ul>
+    <li><b>87.5 % ist die optimale Überlappung.</b>  Oberhalb der empfohlenen
+        Überlappung jedes Fensters erreicht jedes Fenster dasselbe Grundrauschen in
+        derselben Echtzeit; für HFT248D liegt dieser Break-even bei 87.5 %, und
+        höher zu gehen (93.75 %) bringt keinen weiteren Rauschvorteil, nur
+        Rechenaufwand. Darunter zahlt das breite Fenster einen Aufschlag.</li>
+    <li><b>Das Fenster wird wegen der Nebenkeulen-Reserve gewählt, nicht wegen des
+        Rauschens.</b>  Die −248-dB-Nebenkeulen von HFT248D halten die Leckage des
+        starken Grundtons — die Drift und Re-Sync-Glitches einen Bruchteil eines Bin
+        außerhalb der Mitte verschmieren — davon ab, einen Sockel unter die schwachen
+        Harmonischen zu setzen. Da Harmonische unter −180 dBV herausgegraben werden,
+        ist diese Reserve es, die garantiert, dass eine herausgegrabene Linie eine
+        echte DAC-Harmonische ist und keine Grundtonleckage.</li>
+  </ul>
+
+  <h2 id="imd">Intermodulation messen — das Zweiton-Kerbfilter</h2>
+  <p>Der Zweiton-Pfad des Assistenten verzerrt <em>Intermodulation</em> vor, und
+     diese Messung stößt auf dieselbe Wand wie THD, verdoppelt. Ein
+     CCIF-Zweiton-Test treibt zwei starke Töne — typischerweise
+     <b>19 kHz und 20 kHz</b> bei gleicher Amplitude — und die Zahlen, die man will,
+     sind die Intermodulationsprodukte, die sie erzeugen: das <b>1 kHz</b>
+     Differenzprodukt (20−19), das <b>39 kHz</b> Summenprodukt (19+20), die
+     Produkte dritter Ordnung <b>18 kHz</b> und <b>21 kHz</b> (2·19−20, 2·20−19) und
+     so weiter — zig bis über hundert dB unter den Tönen. Beide Töne müssen vor dem
+     ADC heruntergebracht werden, sonst schlucken sie seinen Aussteuerbereich und
+     ihre eigenen Rekonstruktionsartefakte begraben die Produkte.</p>
+  <p>Ein einzelnes Twin-T zentriert auf <b>19.5 kHz</b> — mittig zwischen den Tönen
+     — zieht 19 und 20 kHz gemeinsam um ~30 dB herunter. Zwei davon in Kaskade — ein
+     duales Twin-T — vertieft das auf <b>~70 dB</b>, genug Reserve, damit der ADC die
+     Produkte auflösen kann. Es muss <b>passiv</b> bleiben: ein
+     Operationsverstärker-Puffer würde seine eigene Intermodulation genau dort
+     injizieren, wo man sie ablesen will.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 320" width="100%" height="320" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="11">
+    <text x="410" y="22" text-anchor="middle" fill="#557">Dual twin-T notch @ 19.5 kHz — two identical 1.6 kΩ sections in cascade, into 640 Ω</text>
+
+    <!-- ============ SECTION 1 (1.6 kΩ) ============ -->
+    <text x="150" y="44" text-anchor="middle" fill="#777">section 1 · 1.6 kΩ</text>
+    <line x1="40" y1="150" x2="60" y2="150" stroke="#446" stroke-width="1.4"/>
+    <text x="36" y="154" text-anchor="end" fill="#335">IN</text>
+    <line x1="60" y1="90" x2="60" y2="210" stroke="#446" stroke-width="1.4"/>
+    <!-- top: R - R -->
+    <line x1="60" y1="90" x2="78" y2="90" stroke="#446" stroke-width="1.4"/>
+    <rect x="78" y="83" width="34" height="14" fill="#eef" stroke="#88a"/><text x="95" y="79" text-anchor="middle" fill="#335">1.6k</text>
+    <line x1="112" y1="90" x2="150" y2="90" stroke="#446" stroke-width="1.4"/>
+    <circle cx="150" cy="90" r="2.5" fill="#446"/>
+    <line x1="150" y1="90" x2="188" y2="90" stroke="#446" stroke-width="1.4"/>
+    <rect x="188" y="83" width="34" height="14" fill="#eef" stroke="#88a"/><text x="205" y="79" text-anchor="middle" fill="#335">1.6k</text>
+    <line x1="222" y1="90" x2="240" y2="90" stroke="#446" stroke-width="1.4"/>
+    <!-- C3 from top mid -->
+    <line x1="150" y1="90" x2="150" y2="124" stroke="#446" stroke-width="1.4"/>
+    <line x1="138" y1="124" x2="162" y2="124" stroke="#446" stroke-width="2"/>
+    <line x1="138" y1="131" x2="162" y2="131" stroke="#446" stroke-width="2"/>
+    <text x="167" y="131" fill="#335">C3 10.2n</text>
+    <line x1="150" y1="131" x2="150" y2="152" stroke="#446" stroke-width="1.4"/>
+    <line x1="139" y1="152" x2="161" y2="152" stroke="#446" stroke-width="1.3"/>
+    <line x1="143" y1="156" x2="157" y2="156" stroke="#446" stroke-width="1.3"/>
+    <line x1="147" y1="160" x2="153" y2="160" stroke="#446" stroke-width="1.3"/>
+    <!-- bottom: C - C -->
+    <line x1="60" y1="210" x2="80" y2="210" stroke="#446" stroke-width="1.4"/>
+    <line x1="80" y1="202" x2="80" y2="218" stroke="#446" stroke-width="2"/>
+    <line x1="88" y1="202" x2="88" y2="218" stroke="#446" stroke-width="2"/>
+    <text x="84" y="232" text-anchor="middle" fill="#335">5.1n</text>
+    <line x1="88" y1="210" x2="150" y2="210" stroke="#446" stroke-width="1.4"/>
+    <circle cx="150" cy="210" r="2.5" fill="#446"/>
+    <line x1="150" y1="210" x2="204" y2="210" stroke="#446" stroke-width="1.4"/>
+    <line x1="204" y1="202" x2="204" y2="218" stroke="#446" stroke-width="2"/>
+    <line x1="212" y1="202" x2="212" y2="218" stroke="#446" stroke-width="2"/>
+    <text x="208" y="232" text-anchor="middle" fill="#335">5.1n</text>
+    <line x1="212" y1="210" x2="240" y2="210" stroke="#446" stroke-width="1.4"/>
+    <!-- R3 from bottom mid -->
+    <line x1="150" y1="210" x2="150" y2="222" stroke="#446" stroke-width="1.4"/>
+    <rect x="134" y="222" width="32" height="34" fill="#eef" stroke="#88a"/><text x="170" y="242" fill="#335">R3 800</text>
+    <line x1="150" y1="256" x2="150" y2="266" stroke="#446" stroke-width="1.4"/>
+    <line x1="139" y1="266" x2="161" y2="266" stroke="#446" stroke-width="1.3"/>
+    <line x1="143" y1="270" x2="157" y2="270" stroke="#446" stroke-width="1.3"/>
+    <line x1="147" y1="274" x2="153" y2="274" stroke="#446" stroke-width="1.3"/>
+    <!-- OUT1 bus + cascade wire -->
+    <line x1="240" y1="90" x2="240" y2="210" stroke="#446" stroke-width="1.4"/>
+    <circle cx="240" cy="150" r="2.5" fill="#446"/>
+    <line x1="240" y1="150" x2="300" y2="150" stroke="#446" stroke-width="1.4"/>
+
+    <!-- ============ SECTION 2 (1.6 kΩ) ============ -->
+    <text x="390" y="44" text-anchor="middle" fill="#777">section 2 · 1.6 kΩ</text>
+    <line x1="300" y1="90" x2="300" y2="210" stroke="#446" stroke-width="1.4"/>
+    <line x1="300" y1="90" x2="318" y2="90" stroke="#446" stroke-width="1.4"/>
+    <rect x="318" y="83" width="34" height="14" fill="#eef" stroke="#88a"/><text x="335" y="79" text-anchor="middle" fill="#335">1.6k</text>
+    <line x1="352" y1="90" x2="390" y2="90" stroke="#446" stroke-width="1.4"/>
+    <circle cx="390" cy="90" r="2.5" fill="#446"/>
+    <line x1="390" y1="90" x2="428" y2="90" stroke="#446" stroke-width="1.4"/>
+    <rect x="428" y="83" width="34" height="14" fill="#eef" stroke="#88a"/><text x="445" y="79" text-anchor="middle" fill="#335">1.6k</text>
+    <line x1="462" y1="90" x2="480" y2="90" stroke="#446" stroke-width="1.4"/>
+    <line x1="390" y1="90" x2="390" y2="124" stroke="#446" stroke-width="1.4"/>
+    <line x1="378" y1="124" x2="402" y2="124" stroke="#446" stroke-width="2"/>
+    <line x1="378" y1="131" x2="402" y2="131" stroke="#446" stroke-width="2"/>
+    <text x="407" y="131" fill="#335">C3 10.2n</text>
+    <line x1="390" y1="131" x2="390" y2="152" stroke="#446" stroke-width="1.4"/>
+    <line x1="379" y1="152" x2="401" y2="152" stroke="#446" stroke-width="1.3"/>
+    <line x1="383" y1="156" x2="397" y2="156" stroke="#446" stroke-width="1.3"/>
+    <line x1="387" y1="160" x2="393" y2="160" stroke="#446" stroke-width="1.3"/>
+    <line x1="300" y1="210" x2="320" y2="210" stroke="#446" stroke-width="1.4"/>
+    <line x1="320" y1="202" x2="320" y2="218" stroke="#446" stroke-width="2"/>
+    <line x1="328" y1="202" x2="328" y2="218" stroke="#446" stroke-width="2"/>
+    <text x="324" y="232" text-anchor="middle" fill="#335">5.1n</text>
+    <line x1="328" y1="210" x2="390" y2="210" stroke="#446" stroke-width="1.4"/>
+    <circle cx="390" cy="210" r="2.5" fill="#446"/>
+    <line x1="390" y1="210" x2="444" y2="210" stroke="#446" stroke-width="1.4"/>
+    <line x1="444" y1="202" x2="444" y2="218" stroke="#446" stroke-width="2"/>
+    <line x1="452" y1="202" x2="452" y2="218" stroke="#446" stroke-width="2"/>
+    <text x="448" y="232" text-anchor="middle" fill="#335">5.1n</text>
+    <line x1="452" y1="210" x2="480" y2="210" stroke="#446" stroke-width="1.4"/>
+    <line x1="390" y1="210" x2="390" y2="222" stroke="#446" stroke-width="1.4"/>
+    <rect x="374" y="222" width="32" height="34" fill="#eef" stroke="#88a"/><text x="410" y="242" fill="#335">R3 800</text>
+    <line x1="390" y1="256" x2="390" y2="266" stroke="#446" stroke-width="1.4"/>
+    <line x1="379" y1="266" x2="401" y2="266" stroke="#446" stroke-width="1.3"/>
+    <line x1="383" y1="270" x2="397" y2="270" stroke="#446" stroke-width="1.3"/>
+    <line x1="387" y1="274" x2="393" y2="274" stroke="#446" stroke-width="1.3"/>
+    <!-- OUT2 bus + output terminal -->
+    <line x1="480" y1="90" x2="480" y2="210" stroke="#446" stroke-width="1.4"/>
+    <circle cx="480" cy="150" r="2.5" fill="#446"/>
+    <line x1="480" y1="150" x2="540" y2="150" stroke="#446" stroke-width="1.4"/>
+    <text x="546" y="154" text-anchor="start" fill="#335">OUT</text>
+  </svg>
+  </div>
+
+  <p>Beide Sektionen sind dasselbe 1.6 kΩ Twin-T — sie identisch zu halten ergibt
+     die geringste Durchlassband-Einfügungsdämpfung für eine gegebene
+     Tonunterdrückung (ein gestaffeltes Paar verliert mehrere dB mehr ohne
+     zusätzliche Unterdrückung). Die Eingangsimpedanz beträgt ~5.5 kΩ im
+     Produktband (1 kHz) und fällt zu ~1 kΩ an den Tönen selbst — was genau dort
+     ist, wo das Signal weggeworfen wird, also spielt es keine Rolle. Jedes ist ein
+     symmetrisches Twin-T (R3 = R/2, C3 = 2C), abgestimmt auf 19.5 kHz — die
+     Verhältnisse durch Parallelschalten identischer Bauteile aufbauen und auf Tiefe
+     trimmen, genau wie beim <a href="#notch">Grundton-Kerbfilter</a>, und
+     C0G/NP0- (oder Folien-)Kondensatoren verwenden, damit das Kerbfilter selbst
+     keine Intermodulation hinzufügt.</p>
+  <table class="controls">
+    <tr><th>Frequenz</th><th>was dort sitzt</th><th>Verstärkung</th><th>vs 1 kHz</th><th>Zin</th></tr>
+    <tr><td>1 kHz</td><td>Differenzprodukt</td><td>−21 dB</td><td>0 (Ref)</td><td>5.5 kΩ</td></tr>
+    <tr><td>19 kHz</td><td>unterer Ton</td><td>−90 dB</td><td>−69 dB</td><td>1.1 kΩ</td></tr>
+    <tr><td>19.5 kHz</td><td>Kerbenmitte</td><td>Kerbe</td><td>—</td><td>1.1 kΩ</td></tr>
+    <tr><td>20 kHz</td><td>oberer Ton</td><td>−90 dB</td><td>−69 dB</td><td>1.1 kΩ</td></tr>
+    <tr><td>39 kHz</td><td>Summenprodukt</td><td>−31 dB</td><td>−10 dB</td><td>0.8 kΩ</td></tr>
+  </table>
+  <p>Wie die Messung von Anfang bis Ende abläuft:</p>
+  <ul>
+    <li><b>Die beiden Töne erzeugen</b> aus den beiden DDS-Akkumulatoren des
+        Generators — exakte, phasenkohärente 19 und 20 kHz.</li>
+    <li><b>Die Töne kerben, nicht die Produkte.</b>  Das duale Twin-T senkt 19 und
+        20 kHz um ~70 dB, während das 1-kHz-Differenzprodukt und das
+        39-kHz-Summenprodukt durchlaufen; der ADC verbringt seinen Aussteuerbereich
+        nun auf den Produkten statt auf den Tönen, sodass man die gesamte Aufnahme
+        um ~70 dB anheben kann, um die Produkte herauszugraben.</li>
+    <li><b>Die flache Einfügungsdämpfung hebt sich auf.</b>  IMD ist
+        Produkte ÷ Töne, und die Durchlassband-Dämpfung des Kerbfilters skaliert die
+        Produkte und die (bekannten) Tonpegel gleichermaßen — das berichtete
+        Verhältnis bleibt unberührt.</li>
+    <li><b>Töne kommen vom Generator, Produkte aus dem Spektrum.</b>  Wie beim
+        <a href="../fft.html#fft-manual-fund">manuellen Grundton</a> des THD-Falls
+        werden die unterdrückten Töne vom Generator gelesen (ihre gemessene
+        Amplitude hinter dem Kerbfilter ist bedeutungslos), während jedes Produkt
+        bei seiner Rasterfrequenz <i>a·f₁ + b·f₂</i> gelesen und um
+        <i>a·Φ₁ + b·Φ₂</i> aus den beiden Akkumulatoren de-rotiert wird — sodass
+        jedes Produkt eine vertrauenswürdige Phase behält, selbst wenn die Töne weg
+        sind.</li>
+    <li><b>Produkte nahe der Kerbe werden de-embedded.</b>  Die Produkte dritter
+        Ordnung bei 18 kHz und 21 kHz sitzen auf den Schultern der Kerbe und sind
+        selbst gedämpft; die gemessene Übertragungsfunktion des Kerbfilters wird
+        wieder herausgerechnet (dasselbe
+        <a href="fft.html#phaseref">Kalibrierungs-De-Embedding</a>, das der
+        Analysator für die .frc verwendet), um ihren wahren Pegel
+        wiederherzustellen.</li>
+  </ul>
+
+  <h2 id="bottom">Fazit</h2>
+  <ul>
+    <li><b>Ein passives Twin-T-Kerbfilter ist zwingend</b> — es streift 40–80 dB
+        Grundton ab, sodass der ADC die Harmonischen digitalisiert, nicht den
+        Ton.</li>
+    <li><b>Die Kerbe des Kerbfilters driftet mit der Bauteiltemperatur</b>, und an
+        einer Übertragungsnullstelle zerstört eine Sub-Hertz-Verschiebung die
+        gemessene Tiefe und Phase des Grundtons, während sie die Harmonischen auf
+        der Flanke kaum berührt — der Grundton wird daher vom Generator genommen
+        (exakte Frequenz, bekannte Phase), nie aus dem Spektrum.</li>
+    <li><b>Die Harmonischen werden erst nach tiefer kohärenter Mittelung
+        vertrauenswürdig</b>: ~100 Mittelungen bringen das Grundrauschen 10 dB unter
+        eine −140-dBc-Harmonische (10⁻⁵ %), ~1000 ergeben 20 dB, und das Festnageln
+        des Werts fügt obendrauf das übliche 1/√<i>n</i> hinzu.</li>
+    <li><b>Die Schleife invertiert jede gemessene Harmonische</b>, de-rotiert sie um
+        die Schleifenverzögerung und wendet sie heiß auf den laufenden Generator
+        exakt bei <i>h·f</i> an, konvergiert Runde um Runde — unter
+        <b>HFT248D bei 87.5 %</b> für Nebenkeulen-Reserve ohne Rauschkosten.</li>
+    <li><b>Intermodulation ist derselbe Trick, verdoppelt</b>: ein passives
+        <a href="#imd">duales Twin-T bei 19.5 kHz</a> senkt das 19/20-kHz-Zweitonpaar
+        um ~70 dB, sodass der ADC die Produkte auflösen kann, die Töne werden vom
+        Generator gelesen, und die flache Dämpfung des Kerbfilters hebt sich im
+        Verhältnis auf.</li>
+  </ul>
+
+  <h2 id="refs">Quellen</h2>
+  <ol class="refs">
+    <li id="ref-twint"><a href="#cite-tt">1.</a>
+        Twin-T notch network and its transmission zero —
+        <a href="https://en.wikipedia.org/wiki/Twin-T_filter">Wikipedia: Twin-T filter</a>.</li>
+    <li id="ref-tcr"><a href="#tempco">2.</a>
+        Resistor temperature coefficient (TCR) ranges by construction —
+        <a href="https://en.wikipedia.org/wiki/Temperature_coefficient#Electrical_resistance">Wikipedia: Temperature coefficient — electrical resistance</a>.</li>
+    <li id="ref-heinzel-dpd"><a href="#depth">3.</a>
+        Effective number of averages under overlap, window NENBW and recommended
+        overlaps — G. Heinzel, A. Rüdiger, R. Schilling,
+        <a href="https://holometer.fnal.gov/GH_FFT.pdf">"Spectrum and spectral density estimation by the discrete Fourier transform (DFT), including a comprehensive list of window functions"</a>, 2002.</li>
+  </ol>
+
+  <p class="back"><a href="derotation-accuracy.html">◀ De-Rotations-Genauigkeit</a> ·
+     <a href="index.html">Theorie der Funktionsweise</a> ·
+     weiter: <a href="freq-resp.html">Frequenzgang ▶</a></p>
+
+</body>
+</html>

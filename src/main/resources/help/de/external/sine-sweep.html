@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Weiterführende Literatur: Der exponentielle Sinus-Sweep in der Praxis</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="../theory/index.html">◀ Zurück zur Funktionsweise</a></p>
+
+  <h1>Der exponentielle Sinus-Sweep in der Praxis</h1>
+
+  <div class="note"><b>Über diese Seite.</b>  Dies ist eine kurze Zusammenfassung, in eigenen
+     Worten, eines praxisorientierten Artikels:
+     <a href="https://medium.com/@baranov.mv/how-i-was-listening-to-a-sine-sweep-all-day-long-294c374995f6">"How
+     I was listening to a sine sweep all day long"</a> von Mikhail Baranov
+     (Medium, 2016), der die Implementierung von Angelo Farina's
+     exponentieller Sweep-Messung von Anfang bis Ende beschreibt.  Alle Anerkennung gebührt dem
+     Original — die vollständige Geschichte, den Code und die Diagramme gibt es dort.  Die
+     zugrunde liegende Methode ist Farina's AES-Veröffentlichung, die unten referenziert wird.</div>
+
+  <h2>Die Problemstellung</h2>
+  <p>Ein lineares, zeitinvariantes System — ein Raum, ein Verstärker, ein Filter — wird
+     vollständig durch seine <b>Impulsantwort</b><sup><a href="#ref-bg">[3]</a></sup> beschrieben:
+     was herauskommt, wenn ein unendlich kurzer Klick hineingeht.  Eine direkte Messung mit einem
+     realen Klick ist aussichtslos (viel zu wenig Energie), daher spielen alle praktischen
+     Methoden ein langes, energiereiches Messsignal und komprimieren die Aufnahme mathematisch
+     wieder zu einem Impuls.</p>
+
+  <h2>Warum der exponentielle Sweep überlegen ist</h2>
+  <p>Farina's Messsignal<sup><a href="#ref-paper">[2]</a></sup> ist ein Sinus, dessen
+     Frequenz <em>exponentiell</em> mit der Zeit ansteigt — dasselbe Signal wie
+     Gleichung (9) im
+     <a href="../theory/generator.html#sweeps">Generator-Kapitel</a>.
+     Im Vergleich zu rauschartigen Messsignalen (MLS und Verwandtes) liefert er bei gleicher
+     Messdauer ein deutlich besseres Signal-Rausch-Verhältnis
+     (der Artikel<sup><a href="#ref-article">[1]</a></sup> zeigt
+     einen Vorteil von ~20 dB in seinem Testaufbau),
+     und er hat eine fast magische Eigenschaft: <b>harmonische Verzerrung
+     trennt sich von der linearen Impulsantwort</b>.  Da jede Frequenz zu einem bekannten
+     Zeitpunkt auftritt, kommt eine Verzerrungsharmonische des momentanen Tons so an,
+     als ob sie zu einer Frequenz gehören würde, die der Sweep erst
+     <em>später</em> erreicht — nach der Entfaltung landen alle Verzerrungsprodukte bei
+     negativen Verzögerungen, sauber vor der linearen Impulsantwort, wo
+     sie einfach weggefenstert (oder gezielt analysiert) werden können.</p>
+
+  <h2>Das Verfahren</h2>
+  <ol>
+    <li>Den exponentiellen Sweep durch das System abspielen und das
+        Ergebnis aufnehmen.</li>
+    <li>Den <b>Inversfilter</b> erstellen: den Sweep zeitlich umgekehrt, mit einer
+        Verstärkungsneigung von −6 dB pro Oktave, um zu kompensieren, dass der Sweep
+        exponentiell länger in den tiefen Oktaven verbringt.</li>
+    <li>Die Aufnahme mit dem Inversfilter falten.  Das Ergebnis ist die
+        Impulsantwort; eine Fourier-Transformation davon ergibt den komplexen Frequenzgang
+        — Betrag und Phase.</li>
+  </ol>
+  <p>Dies ist genau die Verarbeitungskette hinter Phonalyser's Frequenzgang-Modul,
+     mit einer technischen Verfeinerung, die im
+     <a href="../theory/generator.html#sweeps">Generator-Kapitel</a> beschrieben wird: Der
+     Sweep wird vorab gerendert, sodass die Entfaltungsreferenz sample-genau identisch mit dem
+     ist, was der DAC tatsächlich ausgespielt hat.</p>
+
+  <h2 id="refs">Literatur</h2>
+  <ol class="refs">
+    <li id="ref-article">M. Baranov,
+        <a href="https://medium.com/@baranov.mv/how-i-was-listening-to-a-sine-sweep-all-day-long-294c374995f6">"How I was listening to a sine sweep all day long"</a>,
+        Medium, 2016 — der Originalartikel, den diese Seite zusammenfasst.</li>
+    <li id="ref-paper">A. Farina,
+        <a href="http://pcfarina.eng.unipr.it/Public/Papers/226-AES00.PDF">"Simultaneous measurement of impulse response and distortion with a swept-sine technique"</a>,
+        108th AES Convention, 2000 — die Methode selbst.</li>
+    <li id="ref-bg"><a href="https://en.wikipedia.org/wiki/Impulse_response">Wikipedia: Impulse response</a> und
+        <a href="https://en.wikipedia.org/wiki/Deconvolution">Wikipedia: Deconvolution</a> —
+        Hintergrundinformationen zu den Konzepten.</li>
+  </ol>
+
+  <p class="back"><a href="../theory/index.html">◀ Zurück zur Funktionsweise</a></p>
+
+</body>
+</html>
