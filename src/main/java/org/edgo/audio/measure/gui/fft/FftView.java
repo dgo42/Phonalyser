@@ -114,6 +114,18 @@ public final class FftView extends AbstractFreqDomainView {
     /** Left padding (px) for the THD table inside the external window. */
     private static final int EXT_LEFT_PAD = 4;
 
+    /** A spectrum has a "real" signal only when its measured fundamental sits at
+     *  least this far (dB) above the LOCAL noise floor (the grass in its near
+     *  range).  Below it, F and the harmonics are just grass (indistinguishable,
+     *  F sometimes below H2), so the THD/IMD table and the F/Hn dots are hidden. */
+    private static final double SIGNAL_FLOOR_MARGIN_DB = 10.0;
+
+    /** A measured THD above this (%) means the "fundamental" is not a clean tone
+     *  but the top of a broadband hump (speech) or noise — the harmonics are as
+     *  strong as the fundamental.  The THD/IMD table + F/Hn dots are then hidden
+     *  even if the fundamental clears the local floor. */
+    private static final double MAX_THD_PCT = 20.0;
+
     // ─── Fonts ────────────────────────────────────────────────────────────
     private Font monoFont;
     private Font monoBoldFont;
@@ -446,17 +458,23 @@ public final class FftView extends AbstractFreqDomainView {
         // Log-axis remap, distortion-range corners (THD tile) — pure repaints,
         // no statistics reset.
         Bindings.onChange(this, viewPrefs.fftLogFreqAxisProperty(),      v -> redraw());
-        Bindings.onChange(this, viewPrefs.fftDistMinEnabledProperty(),   v -> redraw());
-        Bindings.onChange(this, viewPrefs.fftDistMinHzProperty(),        v -> redraw());
-        Bindings.onChange(this, viewPrefs.fftDistMaxEnabledProperty(),   v -> redraw());
-        Bindings.onChange(this, viewPrefs.fftDistMaxHzProperty(),        v -> redraw());
+        // THD settings (HP/LP distortion band, manual fundamental, max harmonics):
+        // repaint, and for a displayed STATIC spectrum re-apply them + recompute
+        // (the live worker already re-reads them every tick).
+        Bindings.onChange(this, viewPrefs.fftDistMinEnabledProperty(),    v -> onThdSettingChanged());
+        Bindings.onChange(this, viewPrefs.fftDistMinHzProperty(),         v -> onThdSettingChanged());
+        Bindings.onChange(this, viewPrefs.fftDistMaxEnabledProperty(),    v -> onThdSettingChanged());
+        Bindings.onChange(this, viewPrefs.fftDistMaxHzProperty(),         v -> onThdSettingChanged());
+        Bindings.onChange(this, viewPrefs.fftManualFundEnabledProperty(), v -> onThdSettingChanged());
+        Bindings.onChange(this, viewPrefs.fftManualFundVrmsProperty(),    v -> onThdSettingChanged());
+        Bindings.onChange(this, viewPrefs.fftThdMaxHarmonicProperty(),    v -> onThdSettingChanged());
         Bindings.onChange(this, viewPrefs.fftMagUnitProperty(), v -> {
             if (magUnitCombo == null || magUnitCombo.isDisposed()) return;
             magUnitCombo.select(v.ordinal());
         });
 
         // Calc-up-to-harmonic drives the external THD window's row count.
-        Bindings.onChange(this, viewPrefs.fftCalcMaxHarmonicProperty(),  v -> resizeExternalShellToContent());
+        Bindings.onChange(this, viewPrefs.fftCalcMaxHarmonicProperty(),  v -> { resizeExternalShellToContent(); onThdSettingChanged(); });
         // Pick up FFT-only prefs (harmonic dot, freq-resp response,
         // before-cal dot, cal overlay) that aren't part of the base
         // palette — kept as view-local fields below.
@@ -857,6 +875,33 @@ public final class FftView extends AbstractFreqDomainView {
         if (!isDisposed()) { redraw(); update(); }
     }
 
+    /** A THD setting (HP/LP band, manual fundamental, max harmonics) changed.
+     *  For a displayed STATIC spectrum (not a live capture) re-apply the settings
+     *  and recompute its THD / harmonics, then repaint.  During live capture the
+     *  worker re-reads these every tick, so this only repaints. */
+    private void onThdSettingChanged() {
+        if (isDisposed()) return;
+        if (lastResult != null && !controller.isRecording()) {
+            controller.recomputeStaticResult(lastResult);
+        }
+        redraw();
+    }
+
+    /** True when {@code r}'s measured fundamental rises clearly above the LOCAL
+     *  noise floor (the grass in its near range) — i.e. it is a genuine tonal
+     *  peak, not the top of a broadband hump (speech) or the max bin of pure
+     *  noise.  When false, F and the harmonics are indistinguishable from the
+     *  surrounding grass, so the THD/IMD table and the F/Hn dots are hidden. */
+    private boolean hasDistinguishableSignal(FftResult r) {
+        if (r == null || !Double.isFinite(r.fundamentalDbFs)) return false;
+        // Absurd THD ⇒ the harmonics are as strong as the "fundamental": a
+        // broadband hump (speech) or noise, not a tone.
+        if (Double.isFinite(r.thdPct) && r.thdPct > MAX_THD_PCT) return false;
+        double floor = r.localNoiseFloorDbFs();
+        if (!Double.isFinite(floor)) return true;   // no floor estimate — don't suppress
+        return r.fundamentalDbFs > floor + SIGNAL_FLOOR_MARGIN_DB;
+    }
+
     /** True when the table is currently in IMD (dual-tone) mode. */
     public boolean isTableModeImd() {
         return tableModeIsImd;
@@ -1168,12 +1213,12 @@ public final class FftView extends AbstractFreqDomainView {
                 // F1/F2/dnL/dnH annotations don't compete with the
                 // single-fundamental-anchored H2..Hn series for the
                 // same screen space.
-                if (lastImd == null) {
+                if (lastImd == null && hasDistinguishableSignal(lastResult)) {
                     drawHarmonicDots(bgc, plot, lastResult, unit, fFreqMin, freqMax,
                             magTop, magBot, logFreq);
                 }
             }
-            if (lastImd != null) {
+            if (lastImd != null && hasDistinguishableSignal(lastResult)) {
                 drawImdDots(bgc, plot, lastImd, lastResult, unit, fFreqMin, freqMax,
                         magTop, magBot, logFreq);
             }
@@ -1181,7 +1226,7 @@ public final class FftView extends AbstractFreqDomainView {
             // into the cached layer: its ~35 outlined labels (≈315 GDI text
             // calls) used to re-draw on every crosshair mouse-move.
             if (lastResult != null && Preferences.instance().isFftDistortionTableVisible()
-                    && !tableExtracted) {
+                    && !tableExtracted && hasDistinguishableSignal(lastResult)) {
                 if (tableModeIsImd && lastImd != null) {
                     drawImdTable(bgc, lastImd, MARGIN_LEFT + 6, TABLE_TOP_Y);
                 } else {
@@ -2014,6 +2059,15 @@ public final class FftView extends AbstractFreqDomainView {
         private final boolean tableVisible;
         private final boolean tableImd;
         private final boolean tableIsExtracted;
+        // Manual-fundamental + max-harmonic THD inputs.  Changing them recomputes
+        // the displayed STATIC result's THD / harmonics IN PLACE (same result
+        // reference), so without them in the key the cached image would not
+        // refresh — and they also flip whether the signal clears the noise floor,
+        // i.e. whether the table + F/Hn dots are drawn at all.
+        private final boolean manualFundEnabled;
+        private final double manualFundVrms;
+        private final int calcMaxHarmonic;
+        private final int thdMaxHarmonic;
     }
 
     private long computeTraceFingerprint(FftResult r, Rectangle area,
@@ -2033,7 +2087,9 @@ public final class FftView extends AbstractFreqDomainView {
                 prefs.getFftHarmonicDotColor(), prefs.getFftBeforeCalDotColor(),
                 prefs.getFftFreqRespColor(), prefs.getFftCalOverlayColor(),
                 correctionStore.getEntries(),
-                prefs.isFftDistortionTableVisible(), tableModeIsImd, tableExtracted).hashCode();
+                prefs.isFftDistortionTableVisible(), tableModeIsImd, tableExtracted,
+                prefs.isFftManualFundEnabled(), prefs.getFftManualFundVrms(),
+                prefs.getFftCalcMaxHarmonic(), prefs.getFftThdMaxHarmonic()).hashCode();
     }
 
     // =========================================================================
