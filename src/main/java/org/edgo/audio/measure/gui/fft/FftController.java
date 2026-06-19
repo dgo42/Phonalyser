@@ -416,7 +416,6 @@ public final class FftController {
             throw new IllegalArgumentException("not a spectrum file");
         }
 
-        FftAnalyzer analyzer = new FftAnalyzer();
         FftResult r = new FftResult();
         Preferences prefs = Preferences.instance();
         int harmCount = Math.max(9, prefs.getFftCalcMaxHarmonic());
@@ -428,8 +427,6 @@ public final class FftController {
         r.fftSize          = 2 * (n - 1);
         r.sampleRate       = (int) Math.round(freqRes * r.fftSize);
         r.harmonicCount    = harmCount;
-        r.fundamentalTrueDbFs = Double.NaN;
-        r.snrFreqMin = 0; r.snrFreqMax = 0;
         // The file stores dBV; dBFS is the result's base scale, so subtract the
         // global ADC offset once on load (the writer adds it back on save, so a
         // round-trip is exact).
@@ -453,14 +450,10 @@ public final class FftController {
         r.fundamentalBin       = fb;
         r.fundamentalHz        = fb * freqRes;
         r.fundamentalHzRefined = MathUtil.parabolicBinInterp(r.re, r.im, fb, r.fftSize) * freqRes;
-        // Theoretical harmonic positions for recomputeStats to measure at.
-        for (int h = 0; h < harmCount; h++) {
-            double hz = (h + 2) * r.fundamentalHzRefined;
-            int hb = (int) Math.round(hz / freqRes);
-            r.harmonicHz[h]   = hz;
-            r.harmonicBins[h] = (hb >= 1 && hb <= halfSize) ? hb : -1;
-        }
-        analyzer.recomputeStats(r);
+        // Derive harmonic positions, apply the current THD settings and recompute
+        // — shared with the dynamic recompute that runs when a THD setting changes
+        // while this static spectrum is displayed.
+        recomputeStaticResult(r);
 
         // Recompute the IMD products when the file was captured in IMD mode and
         // carries its two tone frequencies: pin the refined tone positions
@@ -475,6 +468,38 @@ public final class FftController {
             imd = imdAnalyzer.analyze(r, tone1Hz, tone2Hz, dbvOffsetDb);
         }
         return new LoadedSpectrum(r, imd);
+    }
+
+    /**
+     * Re-applies the current THD settings to an already-built static spectrum
+     * and recomputes its harmonics / THD / SNR: derives harmonic positions for
+     * the max-harmonics count (resizing the harmonic arrays if it changed — the
+     * stored spectrum is preserved), sets the manual-fundamental amplitude anchor
+     * (Vrms &rarr; dBFS) and the high-pass / low-pass distortion band, then runs
+     * {@link FftAnalyzer#recomputeStats}.  Called at load and whenever a THD
+     * setting changes while a static (non-live) spectrum is displayed — the live
+     * worker re-reads these settings every tick, so only the static case needs it.
+     */
+    public void recomputeStaticResult(FftResult r) {
+        Preferences prefs = Preferences.instance();
+        int n = r.amplitudeDbFs.length;
+        int halfSize = n - 1;
+        int harmCount = Math.max(9, prefs.getFftCalcMaxHarmonic());
+        r.ensureArrays(n, harmCount);   // keeps the spectrum; resizes harmonic arrays only if changed
+        r.harmonicCount = harmCount;
+        for (int h = 0; h < harmCount; h++) {
+            double hz = (h + 2) * r.fundamentalHzRefined;
+            int hb = (int) Math.round(hz / r.freqResolution);
+            r.harmonicHz[h]   = hz;
+            r.harmonicBins[h] = (hb >= 1 && hb <= halfSize) ? hb : -1;
+        }
+        double manualVrms = prefs.getFftManualFundVrms();
+        r.fundamentalTrueDbFs = (prefs.isFftManualFundEnabled() && manualVrms > 0)
+                ? 20.0 * Math.log10(manualVrms) - prefs.getDbvOffsetDb()
+                : Double.NaN;
+        r.snrFreqMin = prefs.isFftDistMinEnabled() ? prefs.getFftDistMinHz() : 0;
+        r.snrFreqMax = prefs.isFftDistMaxEnabled() ? prefs.getFftDistMaxHz() : 0;
+        new FftAnalyzer().recomputeStats(r);
     }
 
     /** Parses the value of a {@code # key=value} spectrum-header comment as a

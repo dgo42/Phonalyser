@@ -170,6 +170,15 @@ public final class MainWindow {
         shell.open();
         closeRebuildSplash();
         log.info("GUI started.");
+        // The SashForms allocate their first pane heights from weights applied
+        // during construction — before the shell is realised at its on-screen
+        // size — so on macOS a pane can open with its title bar clipped until the
+        // first manual resize.  Defer one more deep layout (runs after the shell
+        // has its real size) to settle them at startup, the same re-layout a
+        // resize triggers.
+        display.asyncExec(() -> {
+            if (!shell.isDisposed()) shell.layout(true, true);
+        });
         // Fire the silent update check once the shell is up.  The
         // checker spawns its own daemon thread; doing the check from
         // open() (rather than during shell construction) means a network
@@ -274,14 +283,22 @@ public final class MainWindow {
         Preferences prefs = Preferences.instance();
         Menu menuBar = new Menu(shell, SWT.BAR);
         shell.setMenuBar(menuBar);
+        // macOS carries About + Settings in the application ("apple") menu, so
+        // those entries move out of Tools / Help there (see wireMacSystemMenu).
+        boolean mac = "cocoa".equals(SWT.getPlatform());
 
-        MenuItem fileCascade = new MenuItem(menuBar, SWT.CASCADE);
-        fileCascade.setText(I18n.t("menu.file"));
-        Menu fileMenu = new Menu(shell, SWT.DROP_DOWN);
-        fileCascade.setMenu(fileMenu);
-        MenuItem exitItem = new MenuItem(fileMenu, SWT.PUSH);
-        exitItem.setText(I18n.t("menu.file.exit"));
-        exitItem.addListener(SWT.Selection, e -> shell.close());
+        // File → Exit.  On macOS quitting is the application-menu "Quit
+        // Phonalyser" item; since Exit is the only File entry, the whole File
+        // menu is omitted there.
+        if (!mac) {
+            MenuItem fileCascade = new MenuItem(menuBar, SWT.CASCADE);
+            fileCascade.setText(I18n.t("menu.file"));
+            Menu fileMenu = new Menu(shell, SWT.DROP_DOWN);
+            fileCascade.setMenu(fileMenu);
+            MenuItem exitItem = new MenuItem(fileMenu, SWT.PUSH);
+            exitItem.setText(I18n.t("menu.file.exit"));
+            exitItem.addListener(SWT.Selection, e -> shell.close());
+        }
 
         // Top-level Language menu, sitting right after File.  Its label is
         // deliberately NOT translated — it stays "Language" in every
@@ -296,40 +313,18 @@ public final class MainWindow {
             addLanguageMenuItem(languageMenu, tag, displayLabel(tag));
         }
 
-        MenuItem toolsCascade = new MenuItem(menuBar, SWT.CASCADE);
-        toolsCascade.setText(I18n.t("menu.tools"));
-        Menu toolsMenu = new Menu(shell, SWT.DROP_DOWN);
-        toolsCascade.setMenu(toolsMenu);
-        MenuItem preferencesItem = new MenuItem(toolsMenu, SWT.PUSH);
-        preferencesItem.setText(I18n.t("menu.tools.preferences"));
-        preferencesItem.addListener(SWT.Selection, e -> {
-            // Streams keep running while the dialog is up.  Only when OK
-            // committed a change to the AUDIO configuration are the running
-            // playback / capture bounced (stop + restart picks the new
-            // backend / device / format up); Cancel leaves the prefs — and
-            // therefore the streams — untouched.  Caveat: device enumeration
-            // inside the dialog may still disturb a running WDM-KS stream.
-            Preferences mwPrefs = Preferences.instance();
-            String audioBefore = audioConfigFingerprint(mwPrefs);
-            String fontsBefore = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
-            new PreferencesDialog(shell).open(() -> {
-                String fontsAfter = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
-                // A committed AUDIO change bounces the running playback /
-                // capture (stop + restart picks the new backend / device /
-                // format up).  Bounce BEFORE a font rebuild: the resume
-                // hook belongs to the CURRENT panes — running it after
-                // rebuildContent would drive disposed widgets.
-                if (!audioConfigFingerprint(mwPrefs).equals(audioBefore)) {
-                    mainTab.pauseForDialog().run();
-                }
-                if (!fontsAfter.equals(fontsBefore)) {
-                    // Fonts are woven into every painter — rebuild the
-                    // content in place; the engines keep running and the
-                    // rebuilt panes re-attach to them.
-                    rebuildContent();
-                }
-            });
-        });
+        // Tools → Preferences.  On macOS this is the application-menu "Settings…"
+        // item (wired in wireMacSystemMenu); since it is the only Tools entry,
+        // the whole Tools menu is omitted there.
+        if (!mac) {
+            MenuItem toolsCascade = new MenuItem(menuBar, SWT.CASCADE);
+            toolsCascade.setText(I18n.t("menu.tools"));
+            Menu toolsMenu = new Menu(shell, SWT.DROP_DOWN);
+            toolsCascade.setMenu(toolsMenu);
+            MenuItem preferencesItem = new MenuItem(toolsMenu, SWT.PUSH);
+            preferencesItem.setText(I18n.t("menu.tools.preferences"));
+            preferencesItem.addListener(SWT.Selection, e -> openPreferencesDialog());
+        }
 
         MenuItem helpCascade = new MenuItem(menuBar, SWT.CASCADE);
         helpCascade.setText(I18n.t("menu.help"));
@@ -382,11 +377,62 @@ public final class MainWindow {
         helpRebuildIndex.setText(I18n.t("menu.help.rebuildIndex"));
         helpRebuildIndex.addListener(SWT.Selection, e -> rebuildHelpIndex());
 
-        new MenuItem(helpMenu, SWT.SEPARATOR);
+        // Help → About.  On macOS this is the application-menu "About Phonalyser"
+        // item (wired in wireMacSystemMenu), so it is omitted from Help there.
+        if (!mac) {
+            new MenuItem(helpMenu, SWT.SEPARATOR);
+            MenuItem helpAbout = new MenuItem(helpMenu, SWT.PUSH);
+            helpAbout.setText(I18n.t("menu.help.about"));
+            helpAbout.addListener(SWT.Selection, e -> showAboutDialog());
+        }
 
-        MenuItem helpAbout = new MenuItem(helpMenu, SWT.PUSH);
-        helpAbout.setText(I18n.t("menu.help.about"));
-        helpAbout.addListener(SWT.Selection, e -> new StartupSplash(shell.getDisplay()).showAsAbout(shell));
+        if (mac) {
+            wireMacSystemMenu();
+        }
+    }
+
+    /** Opens the Preferences ("Settings") dialog.  Streams keep running while it
+     *  is up; only a committed AUDIO-config change bounces live playback /
+     *  capture, and a font change rebuilds the content in place.  Shared by the
+     *  Tools menu (non-macOS) and the macOS application-menu Settings item. */
+    private void openPreferencesDialog() {
+        Preferences mwPrefs = Preferences.instance();
+        String audioBefore = audioConfigFingerprint(mwPrefs);
+        String fontsBefore = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
+        new PreferencesDialog(shell).open(() -> {
+            String fontsAfter = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
+            // Bounce BEFORE a font rebuild: the resume hook belongs to the
+            // CURRENT panes — running it after rebuildContent would drive
+            // disposed widgets.
+            if (!audioConfigFingerprint(mwPrefs).equals(audioBefore)) {
+                mainTab.pauseForDialog().run();
+            }
+            if (!fontsAfter.equals(fontsBefore)) {
+                rebuildContent();
+            }
+        });
+    }
+
+    /** Shows the splash in its "About" mode.  Shared by the Help menu
+     *  (non-macOS) and the macOS application-menu About item. */
+    private void showAboutDialog() {
+        new StartupSplash(shell.getDisplay()).showAsAbout(shell);
+    }
+
+    /** macOS only: routes the application ("apple") menu's standard About and
+     *  Settings items to the same handlers as the (suppressed) Help → About and
+     *  Tools → Preferences entries.  Quit / Services / Hide are left as macOS
+     *  provides them. */
+    private void wireMacSystemMenu() {
+        Menu systemMenu = display.getSystemMenu();
+        if (systemMenu == null) return;
+        for (MenuItem item : systemMenu.getItems()) {
+            switch (item.getID()) {
+                case SWT.ID_ABOUT       -> item.addListener(SWT.Selection, e -> showAboutDialog());
+                case SWT.ID_PREFERENCES -> item.addListener(SWT.Selection, e -> openPreferencesDialog());
+                default                 -> { /* leave Quit / Services / Hide untouched */ }
+            }
+        }
     }
 
     /** Lets a translator regenerate a help bundle's search index in place:

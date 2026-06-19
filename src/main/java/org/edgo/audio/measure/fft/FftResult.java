@@ -35,6 +35,12 @@ public class FftResult {
 
     static final long serialVersionUID = 42L;
 
+    /** Width (bins) of each flank {@link #localNoiseFloorDbFs()} samples just
+     *  beyond the fundamental's skirt — the "near range".  Wide enough to clear a
+     *  broad skirt (which can run ±32–50 bins) and give a stable median: a true
+     *  tone has dropped to the floor here, a broadband hump has not. */
+    private static final int LOCAL_FLOOR_FLANK_BINS = 64;
+
     /** FFT frame length (power of 2). */
     public int fftSize;
     /** Sample rate of the analyzed signal in Hz. */
@@ -363,6 +369,32 @@ public class FftResult {
         Arrays.sort(noise, 0, cnt);
         int idx = (int) Math.min(cnt - 1, Math.round(0.999 * (cnt - 1)));   // grass peaks
         return noise[idx];
+    }
+
+    /**
+     * Robust noise floor (dBFS) in the NEAR RANGE of the fundamental — the median
+     * of two {@link #LOCAL_FLOOR_FLANK_BINS}-wide flanks placed immediately beyond
+     * the fundamental's dynamic skirt.  This is a SHARPNESS probe, not a wide-band
+     * floor: a genuine tone has dropped to the noise floor a few lobes out (so it
+     * towers over this), whereas the "peak" of a broadband hump (speech) or a
+     * noise bin is still surrounded by near-equal grass here.  {@link Double#NaN}
+     * when the flanks hold no usable bins.
+     */
+    public double localNoiseFloorDbFs() {
+        if (amplitudeDbFs == null || !(freqResolution > 0) || fundamentalBin <= 0) return Double.NaN;
+        int n = amplitudeDbFs.length;
+        int skirt = (int) Math.max(1, Math.ceil(fundamentalDynExclusionHz / freqResolution));
+        double[] band = new double[2 * LOCAL_FLOOR_FLANK_BINS];
+        int cnt = 0;
+        for (int b = fundamentalBin - skirt - LOCAL_FLOOR_FLANK_BINS; b < fundamentalBin - skirt; b++) {
+            if (b >= 1 && b < n && Double.isFinite(amplitudeDbFs[b])) band[cnt++] = amplitudeDbFs[b];
+        }
+        for (int b = fundamentalBin + skirt + 1; b <= fundamentalBin + skirt + LOCAL_FLOOR_FLANK_BINS; b++) {
+            if (b >= 1 && b < n && Double.isFinite(amplitudeDbFs[b])) band[cnt++] = amplitudeDbFs[b];
+        }
+        if (cnt == 0) return Double.NaN;
+        Arrays.sort(band, 0, cnt);
+        return band[cnt / 2];                                          // median = local grass level
     }
 
     /**
