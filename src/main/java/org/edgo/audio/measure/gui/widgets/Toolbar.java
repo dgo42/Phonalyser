@@ -21,11 +21,11 @@ package org.edgo.audio.measure.gui.widgets;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.layout.RowData;
 import org.eclipse.swt.layout.RowLayout;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
+import org.edgo.audio.measure.gui.common.Icon;
 
 /**
  * A transparent button-row container + factory — holds {@link ToolButton}s (and bare
@@ -92,10 +92,9 @@ public final class Toolbar extends TransparentComposite {
 
     /** Adds a push button (no frame) — pressing fills it with {@code fill} and shows the
      *  {@code iconInverted} icon; otherwise the {@code icon} icon, transparent. */
-    public ToolButton pushButton(String svgPath, int iconHeight, RGB icon, RGB iconInverted,
-                                 Color fill, String tooltip) {
+    public ToolButton pushButton(Icon normal, Icon active, Color fill, String tooltip) {
         ToolButton b = new ToolButton(this);
-        b.setIcon(svgPath, iconHeight, icon, iconInverted);
+        b.setIcon(normal, active);
         b.setColors(null, fill);
         b.setDrawFrame(false);
         b.setToolTipText(tooltip);
@@ -106,10 +105,10 @@ public final class Toolbar extends TransparentComposite {
     /** Adds a toggle button — framed in {@code accent} normally; when on, filled with
      *  {@code accent} and showing the {@code iconInverted} icon.  Latches on mouse-down
      *  and fires {@link SWT#Selection}; the {@code on} initial state is set here. */
-    public ToolButton toggleButton(String svgPath, int iconHeight, RGB icon, RGB iconInverted,
+    public ToolButton toggleButton(Icon normal, Icon active,
                                    Color accent, String tooltip, boolean on) {
         ToolButton b = new ToolButton(this);
-        b.setIcon(svgPath, iconHeight, icon, iconInverted);
+        b.setIcon(normal, active);
         b.setColors(accent, accent);
         b.setToggle(true);
         b.setToolTipText(tooltip);
@@ -118,17 +117,4 @@ public final class Toolbar extends TransparentComposite {
         return b;
     }
 
-    /** Adds a toggle whose icon keeps its own colours in both states (no light/dark
-     *  invert) — framed in {@code frame} off, {@code fill}-filled on. */
-    public ToolButton coloredToggle(String svgPath, int iconHeight, Color frame, Color fill,
-                                    String tooltip, boolean on) {
-        ToolButton b = new ToolButton(this);
-        b.setColoredIcon(svgPath, iconHeight);
-        b.setColors(frame, fill);
-        b.setToggle(true);
-        b.setToolTipText(tooltip);
-        b.setToggled(on);
-        b.setLayoutData(new RowData(buttonWidth, buttonHeight));
-        return b;
-    }
 }

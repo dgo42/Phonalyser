@@ -149,7 +149,7 @@ public class WasapiGenerator implements AudioPlayback {
     }
 
     private boolean initializeExclusive(long initialBufDuration) {
-        Memory wfx = buildWaveFormatExtensible(sampleRate, bitDepth);
+        Memory wfx = buildWaveFormatExtensible(sampleRate, bitDepth, 2);
         long bufDuration = initialBufDuration;
         for (int attempt = 0; attempt < 2; attempt++) {
             int hr = callHR(audioClient, VT_AC_INITIALIZE,
@@ -182,7 +182,7 @@ public class WasapiGenerator implements AudioPlayback {
     }
 
     private void initializeShared() {
-        Memory wfx = buildWaveFormatExtensible(sampleRate, bitDepth);
+        Memory wfx = buildWaveFormatExtensible(sampleRate, bitDepth, 2);
         long bufDuration = 200 * REF_TIME_PER_MILLISEC;
         int hr = callHR(audioClient, VT_AC_INITIALIZE,
                 AUDCLNT_SHAREMODE_SHARED,

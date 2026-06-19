@@ -343,11 +343,41 @@
             </dependencies>
             <build>
                 <plugins>
+                    <!-- Stage the macOS PortAudio dylib (CoreAudio backend) into
+                         the jpackage payload at $APPDIR, where -Djava.library.path
+                         points at runtime.  failonerror=false so the build still
+                         succeeds while the dylib is being added; CoreAudio just
+                         won't open until libportaudio.dylib is present. -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>stage-macos-natives</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <copy todir="${project.build.directory}/jpackage-input" failonerror="false">
+                                            <fileset dir="${project.basedir}/lib/macos-x64">
+                                                <include name="*.dylib"/>
+                                            </fileset>
+                                        </copy>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
                     <plugin>
                         <groupId>org.panteleyev</groupId>
                         <artifactId>jpackage-maven-plugin</artifactId>
                         <configuration>
                             <icon>${project.basedir}/src/main/resources/icons/phonalyser.icns</icon>
+                            <!-- Custom Info.plist template adding NSMicrophoneUsageDescription
+                                 so macOS prompts for mic access on first CoreAudio capture. -->
+                            <resourceDir>${project.basedir}/src/main/jpackage/macos</resourceDir>
                             <!-- SWT on macOS must run on the main thread. -->
                             <javaOptions combine.children="append">
                                 <option>-XstartOnFirstThread</option>
@@ -386,11 +416,38 @@
             </dependencies>
             <build>
                 <plugins>
+                    <!-- Stage the arm64 macOS PortAudio dylib into the jpackage
+                         payload at $APPDIR (see the macos-x64 profile note). -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>stage-macos-natives</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <copy todir="${project.build.directory}/jpackage-input" failonerror="false">
+                                            <fileset dir="${project.basedir}/lib/macos-arm64">
+                                                <include name="*.dylib"/>
+                                            </fileset>
+                                        </copy>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
                     <plugin>
                         <groupId>org.panteleyev</groupId>
                         <artifactId>jpackage-maven-plugin</artifactId>
                         <configuration>
                             <icon>${project.basedir}/src/main/resources/icons/phonalyser.icns</icon>
+                            <!-- Custom Info.plist template adding NSMicrophoneUsageDescription
+                                 so macOS prompts for mic access on first CoreAudio capture. -->
+                            <resourceDir>${project.basedir}/src/main/jpackage/macos</resourceDir>
                             <!-- SWT on macOS must run on the main thread. -->
                             <javaOptions combine.children="append">
                                 <option>-XstartOnFirstThread</option>

@@ -210,7 +210,10 @@ public class WasapiDeviceManager {
         try {
             for (int rate : rates) {
                 for (int bits : depths) {
-                    if (isExclusiveFormatSupported(dev, rate, bits)) {
+                    // A mono-only capture device won't pass the stereo probe;
+                    // WasapiRecorder captures it mono and upmixes, so accept it.
+                    if (isExclusiveFormatSupported(dev, rate, bits, 2)
+                            || isExclusiveFormatSupported(dev, rate, bits, 1)) {
                         result.add(new AudioFormat(
                                 AudioFormat.Encoding.PCM_SIGNED,
                                 rate, bits, 2, (bits / 8) * 2, rate, false));
@@ -223,14 +226,14 @@ public class WasapiDeviceManager {
         return result;
     }
 
-    private boolean isExclusiveFormatSupported(Pointer dev, int rate, int bits) {
+    private boolean isExclusiveFormatSupported(Pointer dev, int rate, int bits, int channels) {
         PointerByReference ppClient = new PointerByReference();
         int hr = callHR(dev, VT_DEVICE_ACTIVATE,
                 IID_IAudioClient, CLSCTX_ALL, null, ppClient);
         if (hr != S_OK || ppClient.getValue() == null) return false;
         Pointer client = ppClient.getValue();
         try {
-            Memory wfx = buildWaveFormatExtensible(rate, bits);
+            Memory wfx = buildWaveFormatExtensible(rate, bits, channels);
             PointerByReference closest = new PointerByReference();
             int rc = callHR(client, VT_AC_IS_FORMAT_SUPPORTED,
                     AUDCLNT_SHAREMODE_EXCLUSIVE, wfx, closest);

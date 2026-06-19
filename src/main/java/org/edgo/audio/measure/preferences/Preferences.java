@@ -24,7 +24,6 @@ import java.io.Writer;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -36,6 +35,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
+import org.edgo.audio.measure.common.AppPaths;
 import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.enums.AlignGenerator;
@@ -207,8 +207,8 @@ public final class Preferences {
     private final Property<Double>         oscLineWidth         = bound(2.0);
     /** Sample-dot diameter (pixels) when the inter-sample spacing exceeds 10 px. */
     private final Property<Integer>        oscDotDiameter       = bound(5);
-    /** Packed RGB (0xRRGGBB) of the left and right channel traces. */
-    private final Property<Integer>        oscLeftChannelColor  = bound(0x0057B7);
+    /** Packed RGB (0xRRGGBB) of the left and right channel traces. Default left #00D7FF and right channels #FFD700 */
+    private final Property<Integer>        oscLeftChannelColor  = bound(0x00D7FF);
     private final Property<Integer>        oscRightChannelColor = bound(0xFFD700);
 
     /** Last screenshot resolution / folder, 0 / null = use the pane's current size / system default. */
@@ -1681,7 +1681,7 @@ public final class Preferences {
     }
 
     private Path prefsPath() {
-        return Paths.get(System.getProperty("user.dir"), PREFS_FILE);
+        return AppPaths.instance().file(PREFS_FILE);
     }
 
     private Map<String, Object> toMap() {

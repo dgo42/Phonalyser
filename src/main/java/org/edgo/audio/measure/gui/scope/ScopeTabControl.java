@@ -60,8 +60,8 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
-import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
@@ -139,8 +139,6 @@ public final class ScopeTabControl extends AbstractTabControl {
     // Display precision caps per the numeric-field spec.
     private static final int PER_DIV_MAX_DECIMALS = 3;
     private static final int TIME_MAX_DECIMALS    = 3;
-    /** Pixel height of the file-row glyphs (floppy disk / folder open). */
-    private static final int FILE_ICON_HEIGHT = 16;
 
     /** Tab indices we paint a custom header + tile row for. */
     private static final int TAB_LEFT       = 0;
@@ -221,10 +219,9 @@ public final class ScopeTabControl extends AbstractTabControl {
         this.loader = loader;
         this.host   = host;
 
-        IconUtils icons = IconUtils.instance();
         Display d = parent.getDisplay();
-        this.floppyDiskIcon = icons.renderAtHeight(d, SvgPaths.FLOPPY_DISK, FILE_ICON_HEIGHT, null);
-        this.folderOpenIcon = icons.renderAtHeight(d, SvgPaths.FOLDER_OPEN, FILE_ICON_HEIGHT, null);
+        this.floppyDiskIcon = IconUtils.icon(d, Icon.FLOPPY_DISK);
+        this.folderOpenIcon = IconUtils.icon(d, Icon.FOLDER_OPEN);
 
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 0; gl.marginHeight = 0;
@@ -740,8 +737,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         Bindings.onChange(toolbarTabs, prefs.oscTriggerModeProperty(), v -> toolbarTabs.refreshTab(TAB_TRIGGER));
 
         triggerStartBtn = new Button(g, SWT.PUSH);
-        Image triggerPlayIcon = IconUtils.instance().renderAtHeight(g.getDisplay(),
-                SvgPaths.PLAY, SQUARE_BUTTON - 12, null);
+        Image triggerPlayIcon = IconUtils.icon(g.getDisplay(), Icon.PLAY_DARK_SMALL);
         triggerStartBtn.setImage(triggerPlayIcon);
         // Image is cached and owned by IconUtils — disposed when the
         // main shell tears down, not on button dispose.
@@ -932,8 +928,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         Button shotBtn = new Button(g, SWT.PUSH);
         shotBtn.setImage(cameraIcon);
         shotBtn.setToolTipText(I18n.t("scope.screenshot.tooltip"));
-        int shotW = (int) Math.round(SQUARE_BUTTON * 1.27);
-        shotBtn.setLayoutData(new RowData(shotW, SQUARE_BUTTON));
+        shotBtn.setLayoutData(new RowData(IconUtils.ACTION_BUTTON_PX, IconUtils.ACTION_BUTTON_PX));
         // The screenshot dialog clones the whole pane offscreen, so the pane
         // owns it; ask the host to open it.
         shotBtn.addListener(SWT.Selection, e -> host.openScreenshotDialog());
@@ -941,7 +936,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         calibrateButton = new Button(g, SWT.PUSH);
         calibrateButton.setImage(crosshairIcon);
         calibrateButton.setToolTipText(I18n.t("scope.calibrate.tooltip"));
-        calibrateButton.setLayoutData(new RowData(SQUARE_BUTTON, SQUARE_BUTTON));
+        calibrateButton.setLayoutData(new RowData(IconUtils.ACTION_BUTTON_PX, IconUtils.ACTION_BUTTON_PX));
         calibrateButton.setEnabled(false);
         calibrateButton.addListener(SWT.Selection, e -> openCalibrationDialog());
     }
@@ -993,6 +988,9 @@ public final class ScopeTabControl extends AbstractTabControl {
 
         Button browse = new Button(g, SWT.PUSH);
         browse.setImage(folderOpenIcon);
+        GridData browseGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        browseGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        browse.setLayoutData(browseGd);
         browse.setToolTipText(I18n.t("scope.save.browse.tooltip"));
         browse.addListener(SWT.Selection, e -> openScopeSaveBrowse(pathField));
 
@@ -1005,6 +1003,9 @@ public final class ScopeTabControl extends AbstractTabControl {
 
         Button save = new Button(g, SWT.PUSH);
         save.setImage(floppyDiskIcon);
+        GridData saveGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        saveGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        save.setLayoutData(saveGd);
         save.setToolTipText(I18n.t("scope.save.tooltip"));
         save.addListener(SWT.Selection, e -> doScopeSave(pathField.getText(), durField.getValue()));
     }
@@ -1034,6 +1035,9 @@ public final class ScopeTabControl extends AbstractTabControl {
 
         Button browse = new Button(g, SWT.PUSH);
         browse.setImage(folderOpenIcon);
+        GridData browseGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        browseGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        browse.setLayoutData(browseGd);
         browse.setToolTipText(I18n.t("scope.openSignal.browse.tooltip"));
         browse.addListener(SWT.Selection, e -> doOpenSignalBrowse());
     }

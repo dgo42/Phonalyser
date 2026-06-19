@@ -5,8 +5,8 @@
             <PatternLayout pattern="%d{HH:mm:ss.SSS} [%-5level] %msg%n"/>
         </Console>
         <RollingFile name="File"
-                     fileName="logs/phonalyser.log"
-                     filePattern="logs/phonalyser-%d{yyyy-MM-dd}.log">
+                     fileName="${sys:app.log.dir:-logs}/phonalyser.log"
+                     filePattern="${sys:app.log.dir:-logs}/phonalyser-%d{yyyy-MM-dd}.log">
             <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} [%-5level] %logger{36} - %msg%n"/>
             <Policies>
                 <TimeBasedTriggeringPolicy/>

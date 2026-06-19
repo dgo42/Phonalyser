@@ -18,46 +18,40 @@
 
 package org.edgo.audio.measure.gui.widgets;
 
-import org.eclipse.swt.SWT;
-import org.eclipse.swt.graphics.GC;
-import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.RGB;
-import org.eclipse.swt.layout.GridData;
-import org.eclipse.swt.layout.GridLayout;
-import org.eclipse.swt.widgets.Button;
-import org.eclipse.swt.widgets.Canvas;
-import org.eclipse.swt.widgets.Composite;
-import org.eclipse.swt.widgets.Control;
-import org.eclipse.swt.widgets.Display;
-import org.eclipse.swt.widgets.Event;
-import org.eclipse.swt.widgets.Label;
-import org.eclipse.swt.widgets.Listener;
-import org.eclipse.swt.widgets.Shell;
-import org.eclipse.swt.widgets.Table;
-import org.eclipse.swt.widgets.TableColumn;
-import org.eclipse.swt.widgets.TableItem;
-import org.edgo.audio.measure.enums.GenSignalForm;
-
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.layout.GridData;
+import org.eclipse.swt.layout.GridLayout;
+import org.eclipse.swt.widgets.Canvas;
+import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Listener;
+import org.eclipse.swt.widgets.Menu;
+import org.eclipse.swt.widgets.MenuItem;
+import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.gui.common.Icon;
+import org.edgo.audio.measure.gui.common.IconUtils;
+
 /**
  * Combo-style selector for {@link GenSignalForm} with per-entry 24×24
- * pictograms.  Built from native SWT widgets so it inherits the platform
- * look-and-feel:
- * <ul>
- *   <li>Closed display: an icon {@link Label} + a text {@link Label} +
- *       a native {@code SWT.ARROW | SWT.DOWN} {@link Button} on the right
- *       (same arrow style as {@code NumericStepField}).</li>
- *   <li>Dropdown: a borderless {@link Shell} containing a {@link Table}
- *       with one column; each {@link TableItem} carries the form's
- *       pictogram + label.  Table provides native scrollbars when the
- *       list overflows.</li>
- * </ul>
- * SWT's stock {@link org.eclipse.swt.widgets.Combo Combo} can't carry
- * per-item images on Windows, hence the custom assembly.
+ * pictograms.  The closed display is an icon {@link Label} + a text
+ * {@link Label} + an SVG caret; the dropdown is a native {@code SWT.POP_UP}
+ * {@link Menu} whose {@link MenuItem}s carry each form's pictogram + label.
+ *
+ * <p>A popup menu (rather than the stock SWT {@code Combo}) is used because
+ * menu items show per-item images on <em>every</em> platform — which
+ * {@code Combo} cannot — and the menu renders with the native selection
+ * colours, hover highlight and keyboard navigation for free, with no
+ * owner-drawing.
  */
 public final class SignalFormCombo extends Composite {
 
@@ -65,9 +59,9 @@ public final class SignalFormCombo extends Composite {
     private static final Map<GenSignalForm, String> LABELS = new LinkedHashMap<>();
     static {
         LABELS.put(GenSignalForm.SINE,                  "Sine");
-        LABELS.put(GenSignalForm.SINE_COMPENSATED,      "Sine (compensated)");
+        LABELS.put(GenSignalForm.SINE_COMP,             "Sine (compensated)");
         LABELS.put(GenSignalForm.DUAL_TONE,             "Dual tone");
-        LABELS.put(GenSignalForm.DUAL_TONE_COMPENSATED, "Dual tone (compensated)");
+        LABELS.put(GenSignalForm.DUAL_TONE_COMP, "Dual tone (compensated)");
         LABELS.put(GenSignalForm.TRIANGLE,          "Triangle");
         LABELS.put(GenSignalForm.RECTANGLE,         "Rectangle / pulse");
         LABELS.put(GenSignalForm.WHITE_NOISE,       "White noise");
@@ -81,12 +75,7 @@ public final class SignalFormCombo extends Composite {
     private final Label          iconLabel;
     private final Label          textLabel;
     private final Canvas         dropArrow;
-    private GenSignalForm           current;
-    /** Currently-open dropdown popup (null when closed).  Tracked so a
-     *  second click on the closed display closes the popup instead of
-     *  losing focus to the previously-focused app while a stale popup
-     *  lingers. */
-    private Shell                popup;
+    private GenSignalForm        current;
 
     public SignalFormCombo(Composite parent, GenSignalForm initial) {
         super(parent, SWT.BORDER);
@@ -98,48 +87,39 @@ public final class SignalFormCombo extends Composite {
         gl.horizontalSpacing = 4;
         gl.verticalSpacing = 0;
         setLayout(gl);
+        // Match the native combo's control-grey background instead of the
+        // default white (most visible on macOS); INHERIT_DEFAULT lets the
+        // icon/text/caret children pick up the same colour.
+        setBackground(getDisplay().getSystemColor(SWT.COLOR_WIDGET_BACKGROUND));
+        setBackgroundMode(SWT.INHERIT_DEFAULT);
 
         iconLabel = new Label(this, SWT.NONE);
-        GridData iconGd = new GridData(SWT.LEFT, SWT.CENTER, false, true);
-        iconGd.widthHint  = SignalFormIcon.SIZE;
-        iconGd.heightHint = SignalFormIcon.SIZE;
-        iconLabel.setLayoutData(iconGd);
-        iconLabel.setImage(SignalFormIcon.instance().get(getDisplay(), current));
+        // No size hint — the Label sizes to its PNG (each pictogram its own size).
+        iconLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, true));
+        iconLabel.setImage(IconUtils.icon(getDisplay(), Icon.valueOf("SIGNAL_" + current.name())));
 
         textLabel = new Label(this, SWT.NONE);
         textLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, true));
-        textLabel.setText(labelOf(current));
+        textLabel.setText(LABELS.getOrDefault(current, current.name()));
 
         // Drop-arrow drawn as an SVG label — the native SWT.ARROW|DOWN
         // Button renders inconsistently across GTK / win32 (a tiny pixel
         // glyph on some Linux themes), so we paint the caret ourselves.
         // No press-state animation in the combo (the popup itself is the
         // visual feedback) — pass equal sizes to disable the swap. #808080
-        dropArrow = new IconStepLabel(this, "/icons/caret-down.svg",
-                13, 13, new RGB(0x80, 0x80, 0x80));
+        dropArrow = new IconStepLabel(this, Icon.DROPDOWN, Icon.DROPDOWN);
         GridData arrowGd = new GridData(SWT.FILL, SWT.FILL, false, true);
         arrowGd.widthHint = 18;
         dropArrow.setLayoutData(arrowGd);
 
-        // Make the whole closed display behave like a click target — any
-        // of (icon / text / background / caret) toggles the popup.  A
-        // second click on the combo body now closes the popup cleanly
-        // instead of triggering the popup's Deactivate handler with
-        // focus already lost to the previously-focused application.
-        Listener togglePopup = e -> togglePopup();
-        addListener     (SWT.MouseDown, togglePopup);
-        iconLabel.addListener(SWT.MouseDown, togglePopup);
-        textLabel.addListener(SWT.MouseDown, togglePopup);
-        dropArrow.addListener(SWT.MouseDown, togglePopup);
-    }
-
-    private void togglePopup() {
-        if (popup != null && !popup.isDisposed()) {
-            popup.close();
-            popup = null;
-            return;
-        }
-        openPopup();
+        // Any click on the closed display (icon / text / background / caret)
+        // opens the dropdown menu; the menu dismisses itself on selection,
+        // outside-click or Escape.
+        Listener open = e -> openPopup();
+        addListener     (SWT.MouseDown, open);
+        iconLabel.addListener(SWT.MouseDown, open);
+        textLabel.addListener(SWT.MouseDown, open);
+        dropArrow.addListener(SWT.MouseDown, open);
     }
 
     @Override
@@ -155,8 +135,11 @@ public final class SignalFormCombo extends Composite {
         } finally {
             probe.dispose();
         }
-        int w = SignalFormIcon.SIZE + 4 + maxText + 4 + 18 + 6;
-        int h = Math.max(SignalFormIcon.SIZE + 4, 24);
+        Image icon = iconLabel.getImage();
+        int iconW = icon != null ? icon.getBounds().width  : 0;
+        int iconH = icon != null ? icon.getBounds().height : 0;
+        int w = iconW + 4 + maxText + 4 + 18 + 6;
+        int h = Math.max(iconH + 4, 24);
         return new Point(wHint != SWT.DEFAULT ? wHint : w,
                          hHint != SWT.DEFAULT ? hHint : h);
     }
@@ -166,8 +149,8 @@ public final class SignalFormCombo extends Composite {
     public void setSelectedForm(GenSignalForm f) {
         if (f == null || f == current) return;
         current = f;
-        iconLabel.setImage(SignalFormIcon.instance().get(getDisplay(), current));
-        textLabel.setText(labelOf(current));
+        iconLabel.setImage(IconUtils.icon(getDisplay(), Icon.valueOf("SIGNAL_" + current.name())));
+        textLabel.setText(LABELS.getOrDefault(current, current.name()));
         layout();
         fire();
     }
@@ -183,133 +166,29 @@ public final class SignalFormCombo extends Composite {
         for (Listener l : selectionListeners) l.handleEvent(e);
     }
 
+    /**
+     * Opens the native pop-up menu just below the closed display.  Each item
+     * carries the form's pictogram + label; macOS / Windows / GTK render the
+     * selection, hover and keyboard navigation natively.  The menu is disposed
+     * once it closes.
+     */
     private void openPopup() {
-        final Display d = getDisplay();
-        // SWT.BORDER draws a 1 px frame around the popup so the
-        // dropdown reads as a distinct surface from whatever is
-        // underneath; without it the table edges blur into the host
-        // application on Windows.
-        popup = new Shell(getShell(), SWT.NO_TRIM | SWT.ON_TOP | SWT.BORDER);
-        final Shell popupRef = popup;
-        popup.setLayout(new GridLayout(1, false));
-        ((GridLayout) popup.getLayout()).marginWidth = 0;
-        ((GridLayout) popup.getLayout()).marginHeight = 0;
-
-        Table table = new Table(popup, SWT.SINGLE | SWT.FULL_SELECTION | SWT.V_SCROLL);
-        table.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
-        TableColumn col = new TableColumn(table, SWT.NONE);
-        GenSignalForm[] forms = LABELS.keySet().toArray(new GenSignalForm[0]);
-        int selectedIdx = 0;
-        for (int i = 0; i < forms.length; i++) {
-            TableItem ti = new TableItem(table, SWT.NONE);
-            ti.setImage(SignalFormIcon.instance().getForDropdown(d, forms[i]));
-            ti.setText(labelOf(forms[i]));
-            if (forms[i] == current) selectedIdx = i;
+        Display d = getDisplay();
+        Menu menu = new Menu(this);
+        for (GenSignalForm form : LABELS.keySet()) {
+            MenuItem item = new MenuItem(menu, SWT.PUSH);
+            item.setText(LABELS.getOrDefault(form, form.name()));
+            item.setImage(IconUtils.icon(d, Icon.valueOf("SIGNAL_" + form.name())));
+            item.addListener(SWT.Selection, e -> setSelectedForm(form));
         }
-        table.select(selectedIdx);
-
-        // Size the popup to the closed display's width, height to fit all
-        // rows up to a sensible cap (above which the Table's native vertical
-        // scrollbar takes over).
-        int rowH = table.getItemHeight();
-        int rows = Math.min(forms.length, 12);
-        int popupW = getSize().x;
-        int popupH = rowH * rows + 6;
-        Point screen = toDisplay(0, getSize().y);
-        popup.setBounds(screen.x, screen.y, popupW, popupH);
-        // Stretch the single column to fill the table (minus scrollbar +
-        // border) so each row's selection background and image extend
-        // across the full popup width.
-        int colW = popupW - 2 - table.getVerticalBar().getSize().x;
-        if (colW < 1) colW = popupW;
-        col.setWidth(colW);
-
-        table.addListener(SWT.MouseUp, e -> {
-            int sel = table.getSelectionIndex();
-            if (sel >= 0 && sel < forms.length) {
-                setSelectedForm(forms[sel]);
-                popupRef.close();
-            }
-        });
-        table.addListener(SWT.DefaultSelection, e -> {
-            int sel = table.getSelectionIndex();
-            if (sel >= 0 && sel < forms.length) {
-                setSelectedForm(forms[sel]);
-                popupRef.close();
-            }
-        });
-
-        // Outside-click detection.  We avoid the obvious choice of
-        // closing on Shell.Deactivate because on Windows a SWT.ON_TOP
-        // shell may never receive stable activation when opened from a
-        // click — focus can pingpong back to the previously-active
-        // application — and the resulting immediate Deactivate would
-        // close the popup before the user ever sees it.  A display
-        // filter on SWT.MouseDown works regardless of activation state:
-        // we just check whether the click landed inside the popup, the
-        // combo body, or somewhere else, and close in the last case.
-        final Listener outsideClick = e -> {
-            if (popupRef.isDisposed()) return;
-            if (!(e.widget instanceof Control)) return;
-            Control c = (Control) e.widget;
-            // Inside the popup → keep open (Table own MouseUp closes it
-            // after a selection).
-            Composite p = c instanceof Composite ? (Composite) c : c.getParent();
-            while (p != null) {
-                if (p == popupRef) return;
-                p = p.getParent();
-            }
-            // Inside the combo body → togglePopup() handles it; ignore
-            // here so we don't close-then-reopen on a single click.
-            Composite owner = c instanceof Composite ? (Composite) c : c.getParent();
-            while (owner != null) {
-                if (owner == SignalFormCombo.this) return;
-                owner = owner.getParent();
-            }
-            popupRef.close();
-        };
-        d.addFilter(SWT.MouseDown, outsideClick);
-
-        // Escape closes the popup without changing the selection.
-        Listener escapeFilter = e -> {
-            if (popupRef.isDisposed()) return;
-            if (e.keyCode == SWT.ESC) popupRef.close();
-        };
-        d.addFilter(SWT.KeyDown, escapeFilter);
-
-        // Close when the whole application loses focus to ANOTHER program
-        // (Alt-Tab / clicking a different app): the MouseDown filter above
-        // only ever sees clicks inside OUR windows, so without this the
-        // ON_TOP popup keeps floating over the other app (the reported bug).
-        // Deferred so focus can settle, then closed only when no shell of
-        // ours is active — moving to our own main shell or to the popup
-        // itself leaves getActiveShell() non-null and must not close here
-        // (that pingpong at open time is exactly why Shell.Deactivate alone
-        // was avoided).  Registered on both the popup and the owning shell so
-        // it fires whichever one currently holds activation.
-        final Shell owner = getShell();
-        final Listener appDeactivated = e -> d.asyncExec(() -> {
-            if (!popupRef.isDisposed() && d.getActiveShell() == null) popupRef.close();
-        });
-        popupRef.addListener(SWT.Deactivate, appDeactivated);
-        owner.addListener(SWT.Deactivate, appDeactivated);
-
-        // Tear down: remove the display filters and clear the tracked
-        // reference so a subsequent click on the combo body opens a
-        // fresh popup instead of trying to .close() a disposed shell.
-        popupRef.addDisposeListener(e -> {
-            d.removeFilter(SWT.MouseDown, outsideClick);
-            d.removeFilter(SWT.KeyDown,   escapeFilter);
-            owner.removeListener(SWT.Deactivate, appDeactivated);
-            if (popup == popupRef) popup = null;
-        });
-
-        popup.setVisible(true);
-        table.setFocus();
-    }
-
-    public static String labelOf(GenSignalForm f) {
-        return LABELS.getOrDefault(f, f.name());
+        // Dispose after it closes (selection / outside-click / Escape) — async
+        // so the item's Selection event is delivered first.
+        menu.addListener(SWT.Hide, e -> d.asyncExec(() -> {
+            if (!menu.isDisposed()) menu.dispose();
+        }));
+        Point at = toDisplay(0, getSize().y);
+        menu.setLocation(at.x, at.y);
+        menu.setVisible(true);
     }
 
     /** Propagate tooltip to inner children — the Labels and caret Canvas

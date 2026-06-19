@@ -27,7 +27,6 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.StackLayout;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
-import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -46,8 +45,8 @@ import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
-import org.edgo.audio.measure.gui.common.SvgPaths;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -70,10 +69,6 @@ import lombok.extern.log4j.Log4j2;
  */
 @Log4j2
 public final class FreqRespWizardDialog {
-
-    /** Pixel height of the wizard's green play LED.  Matches the generator
-     *  pane's main Play button so the visual language is consistent. */
-    private static final int WIZARD_PLAY_SIZE = 40;
 
     private final Shell        parentShell;
     private final FreqRespView hostView;
@@ -171,9 +166,7 @@ public final class FreqRespWizardDialog {
         Button play = new Button(c, SWT.PUSH);
         // Match the generator pane's main Play button: solid green play LED
         // (no text), with the tooltip carrying the action label.
-        Image playIcon = IconUtils.instance().renderAtHeight(
-                c.getDisplay(), SvgPaths.PLAY, WIZARD_PLAY_SIZE,
-                new RGB(0x00, 0xAA, 0x00));
+        Image playIcon = IconUtils.icon(c.getDisplay(), Icon.PLAY_DARK_BIG);
         if (playIcon != null) play.setImage(playIcon);
         play.setToolTipText(I18n.t("freqResp.button.play.start"));
         play.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));

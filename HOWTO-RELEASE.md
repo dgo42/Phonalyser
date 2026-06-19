@@ -17,7 +17,7 @@ matrix and a draft release with these assets:
 | --------------------- | ------------ | ------------------------------- | -------------------------------- |
 | Windows x64           | windows-latest | `Phonalyser-<ver>.msi`        | `phonalyser-<ver>-windows.jar`   |
 | Linux x64             | ubuntu-latest  | `Phonalyser-<ver>.deb`        | `phonalyser-<ver>-linux.jar`     |
-| macOS Intel (x86_64)  | macos-13       | `Phonalyser-<ver>-x64.dmg`    | `phonalyser-<ver>-macos-x64.jar` |
+| macOS Intel (x86_64)  | macos-14       | `Phonalyser-<ver>-x64.dmg`    | `phonalyser-<ver>-macos-x64.jar` |
 | macOS Apple Silicon   | macos-14       | `Phonalyser-<ver>-arm64.dmg`  | `phonalyser-<ver>-macos.jar`     |
 
 > **macOS ships two DMGs on purpose.** jpackage bundles a JRE that matches the
@@ -32,7 +32,7 @@ matrix and a draft release with these assets:
    at a commit that already contains the release workflow — verify the macOS
    matrix job is present:
    ```bash
-   git grep -l "macos-13" .github/workflows/release.yml   # must print the file
+   git grep -l "macos-14" .github/workflows/release.yml   # must print the file
    ```
 
 2. **Decide the version.** Tags follow the existing `v<major>.<minor>[-RCn]`

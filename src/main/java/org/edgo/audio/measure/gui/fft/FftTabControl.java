@@ -32,9 +32,8 @@ import org.eclipse.swt.custom.CTabFolder;
 import org.eclipse.swt.custom.CTabItem;
 import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.graphics.Image;
-import org.eclipse.swt.graphics.RGB;
-import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.FillLayout;
+import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.layout.RowLayout;
 import org.eclipse.swt.widgets.Button;
@@ -44,9 +43,10 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
+import org.edgo.audio.measure.bind.Property;
+import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenChangeCause;
@@ -54,22 +54,21 @@ import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bind.Bindings;
-import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
-import org.edgo.audio.measure.gui.common.Dialogs;
-import org.edgo.audio.measure.gui.common.IconUtils;
-import org.edgo.audio.measure.gui.common.SvgPaths;
-import org.edgo.audio.measure.gui.widgets.NumericStepField;
-import org.edgo.audio.measure.gui.widgets.UnitFamily;
-import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
+import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.Icon;
+import org.edgo.audio.measure.gui.common.IconUtils;
+import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.scope.AdcCalibrationDialog;
+import org.edgo.audio.measure.gui.widgets.NumericStepField;
+import org.edgo.audio.measure.gui.widgets.PresetBar;
+import org.edgo.audio.measure.gui.widgets.TileTabFolder;
+import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FftPreset;
 import org.edgo.audio.measure.preferences.Preferences;
-import org.edgo.audio.measure.gui.scope.AdcCalibrationDialog;
-import org.edgo.audio.measure.gui.widgets.PresetBar;
-import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -774,6 +773,10 @@ public final class FftTabControl extends AbstractTabControl {
 
         Button shotBtn = new Button(g, SWT.PUSH);
         shotBtn.setImage(cameraIcon);
+        GridData shotGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        shotGd.widthHint = IconUtils.ACTION_BUTTON_PX;
+        shotGd.heightHint = IconUtils.ACTION_BUTTON_PX;
+        shotBtn.setLayoutData(shotGd);
         shotBtn.setToolTipText(I18n.t("fft.utility.screenshot.tooltip"));
         // The screenshot dialog clones the whole pane offscreen, so the pane
         // owns it; ask it to open via the bus.
@@ -781,6 +784,10 @@ public final class FftTabControl extends AbstractTabControl {
 
         Button calBtn = new Button(g, SWT.PUSH);
         calBtn.setImage(crosshairIcon);
+        GridData calGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        calGd.widthHint = IconUtils.ACTION_BUTTON_PX;
+        calGd.heightHint = IconUtils.ACTION_BUTTON_PX;
+        calBtn.setLayoutData(calGd);
         calBtn.setToolTipText(I18n.t("fft.utility.calibrate.tooltip"));
         calBtn.addListener(SWT.Selection, e -> openCalibrationDialog());
     }
@@ -829,10 +836,12 @@ public final class FftTabControl extends AbstractTabControl {
         // CSV.  Clicking again with a populated path re-uses it without
         // re-prompting (the file dialog still appears so the user can
         // confirm or change the target).
-        Image floppyIcon = IconUtils.instance().renderAtHeight(
-                g.getDisplay(), SvgPaths.FLOPPY_DISK, 16, null);
+        Image floppyIcon = IconUtils.icon(g.getDisplay(), Icon.FLOPPY_DISK);
         Button save = new Button(g, SWT.PUSH);
         if (floppyIcon != null) save.setImage(floppyIcon);
+        GridData saveGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        saveGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        save.setLayoutData(saveGd);
         save.setToolTipText(I18n.t("fft.save.write.tooltip"));
         save.addListener(SWT.Selection, e -> {
             FftResult r = view.getLastResult();
@@ -902,10 +911,12 @@ public final class FftTabControl extends AbstractTabControl {
         pathField.setToolTipText(saved != null && !saved.isEmpty() ? saved : I18n.t("fft.load.path.tooltip"));
         pathField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
-        Image folderIcon = IconUtils.instance().renderAtHeight(
-                g.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
+        Image folderIcon = IconUtils.icon(g.getDisplay(), Icon.FOLDER_OPEN);
         Button browse = new Button(g, SWT.PUSH);
         if (folderIcon != null) browse.setImage(folderIcon);
+        GridData browseGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        browseGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        browse.setLayoutData(browseGd);
         browse.setToolTipText(I18n.t("fft.load.browse.tooltip"));
         browse.addListener(SWT.Selection, e -> {
             FileDialog d = new FileDialog(getShell(), SWT.OPEN);
@@ -1154,31 +1165,36 @@ public final class FftTabControl extends AbstractTabControl {
         noiseCheck.setText(I18n.t("fft.calibration.withNoise"));
         noiseCheck.setToolTipText(I18n.t("fft.calibration.withNoise.tooltip"));
 
-        Image folderIcon = IconUtils.instance().renderAtHeight(
-                row.getDisplay(), SvgPaths.FOLDER_OPEN, 16, null);
+        Image folderIcon = IconUtils.icon(row.getDisplay(), Icon.FOLDER_OPEN);
         Button loadBtn = new Button(row, SWT.PUSH);
         if (folderIcon != null) loadBtn.setImage(folderIcon);
+        GridData loadGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        loadGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        loadBtn.setLayoutData(loadGd);
         loadBtn.setToolTipText(I18n.t("freqResp.calibration.load.tooltip"));
 
-        Image xmark = IconUtils.instance().renderAtHeight(
-                row.getDisplay(), SvgPaths.RECTANGLE_XMARK, 16,
-                new RGB(0xC8, 0x28, 0x28));
+        Image xmark = IconUtils.icon(row.getDisplay(), Icon.RECTANGLE_XMARK);
         Button clearBtn = new Button(row, SWT.PUSH);
         if (xmark != null) clearBtn.setImage(xmark);
+        GridData clearGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        clearGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        clearBtn.setLayoutData(clearGd);
         clearBtn.setToolTipText(I18n.t("freqResp.calibration.clear.tooltip"));
 
-        Image plus = IconUtils.instance().renderAtHeight(
-                row.getDisplay(), SvgPaths.PLUS, 16,
-                new RGB(0x28, 0x90, 0x28));
+        Image plus = IconUtils.icon(row.getDisplay(), Icon.PLUS);
         Button addBtn = new Button(row, SWT.PUSH);
         if (plus != null) addBtn.setImage(plus);
+        GridData addGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        addGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        addBtn.setLayoutData(addGd);
         addBtn.setToolTipText(I18n.t("freqResp.calibration.add.tooltip"));
 
-        Image minus = IconUtils.instance().render(
-                row.getDisplay(), SvgPaths.MINUS, 16, 16,
-                new RGB(0xC8, 0x28, 0x28));
+        Image minus = IconUtils.icon(row.getDisplay(), Icon.MINUS);
         Button removeBtn = new Button(row, SWT.PUSH);
         if (minus != null) removeBtn.setImage(minus);
+        GridData removeGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        removeGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+        removeBtn.setLayoutData(removeGd);
         removeBtn.setToolTipText(I18n.t("freqResp.calibration.remove.tooltip"));
         if (isRow0) removeBtn.setVisible(false);
 

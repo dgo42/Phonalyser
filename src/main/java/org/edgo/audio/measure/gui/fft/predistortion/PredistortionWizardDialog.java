@@ -476,7 +476,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         }
         GenSignalForm form = Preferences.instance().getGenSignalForm();
         boolean supported = form == GenSignalForm.SINE
-                || form == GenSignalForm.SINE_COMPENSATED
+                || form == GenSignalForm.SINE_COMP
                 || form.isDualTone();
         if (!supported) {
             // Single tone → harmonic compensation; dual tone → intermod
@@ -644,7 +644,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // it survives a restart AND so the generator pane's Corrections field
         // shows the loaded file.
         GenSignalForm form = engine.isDualTone()
-                ? GenSignalForm.DUAL_TONE_COMPENSATED : GenSignalForm.SINE_COMPENSATED;
+                ? GenSignalForm.DUAL_TONE_COMP : GenSignalForm.SINE_COMP;
         prefs.setGenSignalForm(form);
         prefs.setGenDpd(form, savedPath);
         gen.loadCorrectionsFromFile(savedPath);

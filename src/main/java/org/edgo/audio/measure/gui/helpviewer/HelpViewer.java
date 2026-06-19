@@ -30,6 +30,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Shell;
 
+import org.edgo.audio.measure.common.AppPaths;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -42,6 +43,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -411,10 +414,9 @@ public final class HelpViewer {
     private synchronized Path resolveLangRoot() {
         if (langRoot != null && Files.isDirectory(langRoot)) return langRoot;
         String[] langs = resolveLanguageChain();
-        Path externalBase = resolveExternalHelpDir();
-        if (externalBase != null) {
+        for (Path base : externalHelpBases()) {
             for (String lang : langs) {
-                Path candidate = externalBase.resolve(lang);
+                Path candidate = base.resolve(lang);
                 if (Files.isDirectory(candidate)
                         && Files.isRegularFile(candidate.resolve(INDEX_FILE))) {
                     log.info("Help: using external bundle at {}", candidate);
@@ -422,13 +424,26 @@ public final class HelpViewer {
                     return langRoot;
                 }
             }
-            log.warn("Help: external dir {} contains no usable language bundle for {}",
-                    externalBase, String.join(", ", langs));
         }
         // Classpath fallback (dev mode) — extract to temp dir.
         Path tmpLang = extractFromClasspath(langs);
         if (tmpLang != null) langRoot = tmpLang;
         return langRoot;
+    }
+
+    /** Help source dirs in priority order: the writable per-user copy (seeded
+     *  from the bundle for the packaged app, so pages can be translated in
+     *  place), then the read-only bundled dir as a fallback. */
+    private List<Path> externalHelpBases() {
+        Path bundled = resolveExternalHelpDir();
+        List<Path> bases = new ArrayList<>();
+        if (System.getProperty("help.dir") != null && bundled != null) {
+            Path user = AppPaths.instance().helpDir();
+            AppPaths.instance().seedDirIfEmpty(user, bundled);
+            bases.add(user);
+        }
+        if (bundled != null) bases.add(bundled);
+        return bases;
     }
 
     /** Mirror of {@link I18n#resolveExternalDir}: tries the

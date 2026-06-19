@@ -21,18 +21,12 @@ package org.edgo.audio.measure.sound;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
-import java.util.function.Consumer;
-
-import javax.sound.sampled.AudioFormat;
 
 import org.edgo.audio.measure.common.Closeables;
-import org.edgo.audio.measure.common.StereoSample;
 
 import com.sun.jna.Pointer;
 import com.sun.jna.ptr.PointerByReference;
 
-import lombok.Getter;
-import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -44,26 +38,12 @@ import lombok.extern.log4j.Log4j2;
  * listener work never blocks the audio thread.
  */
 @Log4j2
-public class WdmksRecorder implements AudioCapture {
+public class WdmksRecorder extends AbstractPcmCapture {
 
     private final WdmksDeviceManager.WdmksDeviceRef device;
-    private final int sampleRate;
-    private final int bitDepth;
-    private final int sampleBytes;
-    private int frameSize;
-    @Getter
-    private final AudioFormat format;
 
     private Pointer stream;                 // PaStream*
-    private final AtomicBoolean recording = new AtomicBoolean(false);
     private Thread consumerThread;
-    private StereoSample[] sampleBuf;
-    @Setter
-    private Consumer<StereoSample[]> sampleListener;
-    @Setter
-    private PcmBatchListener pcmBatchListener;
-    @Setter
-    private Consumer<byte[]> rawBytesListener;
 
     /**
      * Hand-off from the PA audio thread to the consume thread.  Lock-free
@@ -94,10 +74,9 @@ public class WdmksRecorder implements AudioCapture {
      *  pool ring is SPSC with the consume thread as its sole producer, and
      *  a second producer can silently lose a slot. */
     private byte[] callbackSpare;
-    /** Logged once when the audio callback or a consumer listener faults, so a
-     *  per-block failure logs a single stack trace, not a flood. */
+    /** Logged once when the audio callback faults, so a per-block failure logs
+     *  a single stack trace instead of flooding the log. */
     private final AtomicBoolean callbackFaultLogged = new AtomicBoolean();
-    private final AtomicBoolean consumerFaultLogged = new AtomicBoolean();
 
     /**
      * Audio-thread callback. Pulls a same-sized scratch buffer from
@@ -113,7 +92,9 @@ public class WdmksRecorder implements AudioCapture {
         if ((flags & PortAudio.paInputOverflow)  != 0) paInputOverflowCount.incrementAndGet();
         if ((flags & PortAudio.paInputUnderflow) != 0) paInputUnderflowCount.incrementAndGet();
         int frames = frameCount.intValue();
-        int bytes  = frames * frameSize;
+        // Raw captured bytes — mono (captureChannels == 1) or stereo; dispatch()
+        // upmixes a mono channel to stereo off the audio thread.
+        int bytes  = frames * sampleBytes * captureChannels;
         byte[] buf = callbackSpare;
         callbackSpare = null;
         if (buf == null) buf = bufferPool.aquire();
@@ -142,15 +123,8 @@ public class WdmksRecorder implements AudioCapture {
     };
 
     public WdmksRecorder(WdmksDeviceManager.WdmksDeviceRef device, int sampleRate, int bitDepth) {
-        this.device      = device;
-        this.sampleRate  = sampleRate;
-        this.bitDepth    = bitDepth;
-        this.sampleBytes = bitDepth / 8;
-        this.frameSize   = sampleBytes * 2;
-        this.format = new AudioFormat(
-                AudioFormat.Encoding.PCM_SIGNED,
-                sampleRate, bitDepth, 2,
-                frameSize, sampleRate, false);
+        super(sampleRate, bitDepth, Math.min(2, Math.max(1, device.maxInputChannels())));
+        this.device = device;
     }
 
     @Override
@@ -172,7 +146,7 @@ public class WdmksRecorder implements AudioCapture {
 
         PortAudio.PaStreamParameters in = new PortAudio.PaStreamParameters();
         in.device                    = device.paDeviceIndex();
-        in.channelCount              = 2;
+        in.channelCount              = captureChannels;
         in.sampleFormat              = PortAudio.paSampleFormatFor(bitDepth);
         in.suggestedLatency          = suggestedLatency;
         in.hostApiSpecificStreamInfo = null;
@@ -191,10 +165,8 @@ public class WdmksRecorder implements AudioCapture {
         PortAudio.check(rc, "Pa_OpenStream(input)");
         stream = handle.getValue();
 
-        sampleBuf = new StereoSample[0];
-
         log.info("WDM-KS recorder opened : {}", device.name());
-        log.info("Capture format         : {}", format);
+        log.info("Capture format         : {}", getFormat());
         log.info("Suggested latency      : {} ms (host-picked buffer size)",
                 Math.round(suggestedLatency * 1000));
     }
@@ -260,64 +232,12 @@ public class WdmksRecorder implements AudioCapture {
                 continue;
             }
             try {
-                if (rawBytesListener != null) rawBytesListener.accept(buffer);
-                // Prefer the PCM-bytes listener — it skips the StereoSample[]
-                // alloc/decode entirely (the consumer does its own decode
-                // into reusable float buffers).  Only one of the two is set
-                // in any real configuration; if both are, the PCM listener
-                // wins (used by the GUI scope view).
-                if (pcmBatchListener != null) {
-                    pcmBatchListener.accept(buffer, buffer.length);
-                } else if (sampleListener != null) {
-                    int nFrames = buffer.length / frameSize;
-                    if (sampleBuf.length != nFrames) {
-                        sampleBuf = new StereoSample[nFrames];
-                        for (int i = 0; i < nFrames; i++) sampleBuf[i] = new StereoSample();
-                    }
-                    for (int f = 0; f < nFrames; f++) {
-                        int offset = f * frameSize;
-                        sampleBuf[f].ch0 = readSample(buffer, offset);
-                        sampleBuf[f].ch1 = readSample(buffer, offset + sampleBytes);
-                    }
-                    sampleListener.accept(sampleBuf);
-                }
-            } catch (Throwable th) {
-                // A listener throwing must not kill the consumer thread (which
-                // would freeze every capture-driven view while capture keeps
-                // running).  Log the cause once and keep draining.
-                if (consumerFaultLogged.compareAndSet(false, true)) {
-                    log.error("WDM-KS capture consumer listener failed (continuing): {}", th.toString(), th);
-                }
+                dispatch(buffer, buffer.length);
             } finally {
                 bufferPool.release(buffer);
             }
         }
     }
-
-    /** Same offset-binary decoder as {@link WasapiRecorder#readSample}. */
-    @Override
-    public int readSample(byte[] pcm, int offset) {
-        switch (sampleBytes) {
-            case 1:
-                return (pcm[offset] + (byte) 0x80) & 0xFF;
-            case 2:
-                return ((short) ((pcm[offset + 1] & 0xFF) << 8 | (pcm[offset] & 0xFF)) + (short) 0x8000) & 0xFFFF;
-            case 3:
-                return ((((pcm[offset + 2]) << 16)
-                     | ((pcm[offset + 1] & 0xFF) << 8)
-                     |  (pcm[offset]     & 0xFF)) + 0x800000) & 0xFFFFFF;
-            case 4:
-                return (((pcm[offset + 3] << 24)
-                     | ((pcm[offset + 2] & 0xFF) << 16)
-                     | ((pcm[offset + 1] & 0xFF) << 8)
-                     |  (pcm[offset]     & 0xFF)) + 0x80000000) & 0xFFFFFFFF;
-            default:
-                throw new IllegalStateException("Unsupported sampleBytes: " + sampleBytes);
-        }
-    }
-
-    @Override
-    public boolean isRecording() { return recording.get(); }
 
     @Override
     public void close() {

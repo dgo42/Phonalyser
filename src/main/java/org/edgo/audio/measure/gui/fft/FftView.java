@@ -58,7 +58,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractFreqDomainView;
 import org.edgo.audio.measure.gui.common.DebugSwitches;
-import org.edgo.audio.measure.gui.common.SvgPaths;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
 import org.edgo.audio.measure.gui.common.Fonts;
 import org.edgo.audio.measure.gui.i18n.I18n;
@@ -486,20 +486,20 @@ public final class FftView extends AbstractFreqDomainView {
         rightBtn.addListener(SWT.Selection, e -> {
             if (rightBtn.isToggled()) viewPrefs.setFftChannel(Channel.R);
         });
+        // Recolour the L/R buttons immediately when the channel colours change.
+        bindChannelButtonFills(leftBtn, rightBtn);
         headerBar.spacer(2);
-        autoSetupBtn = headerBar.pushButton(SvgPaths.ARROWS_TO_CIRCLE, 16,
-                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
-                I18n.t("fft.autosetup.tooltip"));
+        autoSetupBtn = headerBar.pushButton(Icon.ARROWS_TO_CIRCLE_DARK, Icon.ARROWS_TO_CIRCLE_LIT,
+                color(ColorRole.TEXT), I18n.t("fft.autosetup.tooltip"));
         autoSetupBtn.addListener(SWT.Selection, e -> autoSetup());
-        maximizeBtn = headerBar.pushButton(SvgPaths.ARROWS_FROM_CIRCLE, 16,
-                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.TEXT),
-                I18n.t("fft.maximize.tooltip"));
+        maximizeBtn = headerBar.pushButton(Icon.ARROWS_FROM_CIRCLE_DARK, Icon.ARROWS_FROM_CIRCLE_LIT,
+                color(ColorRole.TEXT), I18n.t("fft.maximize.tooltip"));
         maximizeBtn.addListener(SWT.Selection, e -> maximize());
         // Distortion / Reset / External — widgets past a wide spacer, shown only while
         // there's a result (hidden by syncDataButtons() when lastResult is null).
         dataSpacer = headerBar.spacer(2);
-        distortionBtn = headerBar.toggleButton(SvgPaths.CHART_COLUMN, 16,
-                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.BUTTON_FRAME),
+        distortionBtn = headerBar.toggleButton(Icon.CHART_DARK, Icon.CHART_LIT,
+                color(ColorRole.BUTTON_FRAME),
                 I18n.t("fft.distortion.tooltip"), viewPrefs.isFftDistortionTableVisible());
         // ToolButton toggle (no Bindings helper covers a ToolButton) — writes
         // the pref (auto-saved); the visibility side-effects live in the
@@ -507,12 +507,11 @@ public final class FftView extends AbstractFreqDomainView {
         // change (a preset load too).
         distortionBtn.addListener(SWT.Selection, e ->
                 viewPrefs.setFftDistortionTableVisible(distortionBtn.isToggled()));
-        resetBtn = headerBar.pushButton(SvgPaths.ROTATE_LEFT, 18,
-                rgb(ColorRole.RESET), rgb(ColorRole.BACKGROUND), color(ColorRole.RESET),
-                I18n.t("fft.reset.tooltip"));
+        resetBtn = headerBar.pushButton(Icon.ROTATE_LEFT_RED, Icon.ROTATE_LEFT_RED,
+                color(ColorRole.RESET), I18n.t("fft.reset.tooltip"));
         resetBtn.addListener(SWT.Selection, e -> { resetStatistics(); redraw(); });
-        externalBtn = headerBar.toggleButton(SvgPaths.WINDOW_RESTORE, 16,
-                rgb(ColorRole.TEXT), rgb(ColorRole.BACKGROUND), color(ColorRole.BUTTON_FRAME),
+        externalBtn = headerBar.toggleButton(Icon.WINDOW_RESTORE_DARK, Icon.WINDOW_RESTORE_LIT,
+                color(ColorRole.BUTTON_FRAME),
                 I18n.t("fft.external.tooltip"), tableExtracted);
         externalBtn.addListener(SWT.Selection, e -> {
             if (externalBtn.isToggled() != tableExtracted) {
