@@ -1,0 +1,88 @@
+<svg viewBox="0 0 940 470" width="100%" xmlns="http://www.w3.org/2000/svg"
+     font-family="Consolas, Menlo, monospace" font-size="12">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+    </marker>
+  </defs>
+
+  <text x="20" y="26" font-weight="bold" fill="#334">Verteilter Faradayscher Käfig — die Gerätegehäuse + die Kabelschirme, kein separater Raumkäfig</text>
+
+  <!-- ===== DAC (oben links) ===== -->
+  <rect x="40" y="92" width="150" height="64" rx="6" fill="#eef" stroke="#777" stroke-width="3"/>
+  <text x="115" y="118" text-anchor="middle" font-weight="bold">DAC</text>
+  <text x="115" y="136" text-anchor="middle" fill="#557">Generatorausgang</text>
+  <text x="115" y="150" text-anchor="middle" fill="#889" font-size="10">Gehäuse = Schirm</text>
+
+  <!-- ===== ADC (unten links) ===== -->
+  <rect x="40" y="300" width="150" height="64" rx="6" fill="#eef" stroke="#777" stroke-width="3"/>
+  <text x="115" y="326" text-anchor="middle" font-weight="bold">ADC</text>
+  <text x="115" y="344" text-anchor="middle" fill="#557">Aufnahmeeingang</text>
+  <text x="115" y="358" text-anchor="middle" fill="#889" font-size="10">Gehäuse = Schirm</text>
+
+  <!-- ===== DUT (rechts von DAC/ADC) ===== -->
+  <rect x="360" y="96" width="170" height="264" rx="6" fill="#ffe9d6" stroke="#c96" stroke-width="3"/>
+  <text x="445" y="200" text-anchor="middle" font-weight="bold">DUT</text>
+  <text x="445" y="220" text-anchor="middle" fill="#965">Prüfling</text>
+  <text x="445" y="240" text-anchor="middle" fill="#a86" font-size="10">Gehäuse = Schirm</text>
+
+  <!-- ===== Kabel A : DAC-Ausgang -> DUT-Eingang (oben) ===== -->
+  <rect x="190" y="110" width="170" height="28" rx="14" fill="#ededf0" stroke="#aaa"/>
+  <line x1="192" y1="119" x2="358" y2="119" stroke="#6fa8dc" stroke-width="2.5" marker-end="url(#arr)"/>
+  <line x1="192" y1="129" x2="351" y2="129" stroke="#1f4e79" stroke-width="2.5"/>
+  <g stroke="#c4c4cc" stroke-width="1">
+    <line x1="230" y1="117" x2="230" y2="131"/><line x1="270" y1="117" x2="270" y2="131"/>
+    <line x1="310" y1="117" x2="310" y2="131"/>
+  </g>
+
+  <!-- ===== Kabel B : DUT-Ausgang -> ADC-Eingang (unten) ===== -->
+  <rect x="190" y="318" width="170" height="28" rx="14" fill="#ededf0" stroke="#aaa"/>
+  <line x1="358" y1="327" x2="192" y2="327" stroke="#6fa8dc" stroke-width="2.5" marker-end="url(#arr)"/>
+  <line x1="358" y1="337" x2="192" y2="337" stroke="#1f4e79" stroke-width="2.5"/>
+  <g stroke="#c4c4cc" stroke-width="1">
+    <line x1="230" y1="325" x2="230" y2="339"/><line x1="270" y1="325" x2="270" y2="339"/>
+    <line x1="310" y1="325" x2="310" y2="339"/>
+  </g>
+
+  <!-- Schirm an jedem Gehäuse (graue Punkte) -->
+  <circle cx="190" cy="124" r="4" fill="#888"/>
+  <circle cx="360" cy="124" r="4" fill="#888"/>
+  <circle cx="190" cy="332" r="4" fill="#888"/>
+  <circle cx="360" cy="332" r="4" fill="#888"/>
+
+  <!-- die EINE Verbindung Signalmasse -> Schirm/Käfig, nur am DUT-Eingang -->
+  <line x1="351" y1="129" x2="360" y2="124" stroke="#d33" stroke-width="2"/>
+  <circle cx="351" cy="129" r="5" fill="#d33"/>
+  <text x="366" y="152" fill="#c22" font-weight="bold" font-size="13">★</text>
+
+  <!-- Sternpunkterdung am ADC-Gehäuse -->
+  <line x1="115" y1="364" x2="115" y2="392" stroke="#445" stroke-width="2"/>
+  <line x1="99"  y1="392" x2="131" y2="392" stroke="#445" stroke-width="2"/>
+  <line x1="104" y1="398" x2="126" y2="398" stroke="#445" stroke-width="2"/>
+  <line x1="109" y1="404" x2="121" y2="404" stroke="#445" stroke-width="2"/>
+  <text x="140" y="397" fill="#556" font-size="11">Schirm/Gehäuse → Erde (ein Punkt, am ADC)</text>
+
+  <!-- ===== Legende (rechts) ===== -->
+  <text x="572" y="104" font-weight="bold" fill="#334">Leiter (CAT.8 → XLR)</text>
+  <line x1="572" y1="124" x2="606" y2="124" stroke="#6fa8dc" stroke-width="3"/>
+  <text x="614" y="128" fill="#333">blau-weiß → Signal (heiß) → Pin 2</text>
+  <line x1="572" y1="146" x2="606" y2="146" stroke="#1f4e79" stroke-width="3"/>
+  <text x="614" y="150" fill="#333">blau → Signalmasse (kalt) → Pin 3</text>
+  <line x1="572" y1="168" x2="606" y2="168" stroke="#aaa" stroke-width="7"/>
+  <text x="614" y="172" fill="#333">grün + Beidraht → Schirm / Gehäuse → Pin 1</text>
+
+  <text x="572" y="204" fill="#c22"><tspan font-weight="bold">★</tspan> Signalmasse ↔ Schirm/Käfig an</text>
+  <text x="572" y="220" fill="#c22">EINEM Punkt — am DUT-Eingang (oder</text>
+  <text x="572" y="236" fill="#c22">-Ausgang; beides testen, Bestwert).</text>
+  <text x="572" y="258" fill="#556">Jedes Gehäuse liegt am Schirm (Pin 1),</text>
+  <text x="572" y="274" fill="#556">nie an der Signalmasse (Pin 3).</text>
+
+  <text x="572" y="306" font-weight="bold" fill="#334">Verteilter Faradayscher Käfig</text>
+  <text x="572" y="328" fill="#445">Kein separater Raumkäfig. Die</text>
+  <text x="572" y="344" fill="#445">Gehäuse + die Kabelschirme bilden</text>
+  <text x="572" y="360" fill="#445">eine durchgehende leitende Hülle um</text>
+  <text x="572" y="376" fill="#445">das Signalpaar — das IST der Käfig.</text>
+  <text x="572" y="392" fill="#445">Sie schirmt elektrische Felder ab;</text>
+  <text x="572" y="408" fill="#445">die verdrillte Paarung und die</text>
+  <text x="572" y="424" fill="#445">Sternpunkterdung gegen Magnetfelder.</text>
+</svg>

@@ -19,9 +19,7 @@
 package org.edgo.audio.measure.gui.widgets;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.GC;
@@ -40,6 +38,7 @@ import org.eclipse.swt.widgets.MenuItem;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
+import org.edgo.audio.measure.gui.i18n.I18n;
 
 /**
  * Combo-style selector for {@link GenSignalForm} with per-entry 24×24
@@ -55,21 +54,16 @@ import org.edgo.audio.measure.gui.common.IconUtils;
  */
 public final class SignalFormCombo extends Composite {
 
-    /** Display labels in dropdown order. */
-    private static final Map<GenSignalForm, String> LABELS = new LinkedHashMap<>();
-    static {
-        LABELS.put(GenSignalForm.SINE,                  "Sine");
-        LABELS.put(GenSignalForm.SINE_COMP,             "Sine (compensated)");
-        LABELS.put(GenSignalForm.DUAL_TONE,             "Dual tone");
-        LABELS.put(GenSignalForm.DUAL_TONE_COMP, "Dual tone (compensated)");
-        LABELS.put(GenSignalForm.TRIANGLE,          "Triangle");
-        LABELS.put(GenSignalForm.RECTANGLE,         "Rectangle / pulse");
-        LABELS.put(GenSignalForm.WHITE_NOISE,       "White noise");
-        LABELS.put(GenSignalForm.PINK_NOISE,        "Pink noise");
-        LABELS.put(GenSignalForm.PINK_NOISE_LINEAR, "Pink noise (linear)");
-        LABELS.put(GenSignalForm.LINEAR_SWEEP,      "Linear sweep");
-        LABELS.put(GenSignalForm.LOG_SWEEP,         "Log sweep (Farina)");
-    }
+    /** Forms in dropdown order; each form's display label is resolved from
+     *  i18n ({@code generator.signalForm.<NAME>}) so it follows the UI
+     *  language. */
+    private static final List<GenSignalForm> FORMS = List.of(
+            GenSignalForm.SINE, GenSignalForm.SINE_COMP,
+            GenSignalForm.DUAL_TONE, GenSignalForm.DUAL_TONE_COMP,
+            GenSignalForm.TRIANGLE, GenSignalForm.RECTANGLE,
+            GenSignalForm.WHITE_NOISE, GenSignalForm.PINK_NOISE,
+            GenSignalForm.PINK_NOISE_LINEAR,
+            GenSignalForm.LINEAR_SWEEP, GenSignalForm.LOG_SWEEP);
 
     private final List<Listener> selectionListeners = new ArrayList<>();
     private final Label          iconLabel;
@@ -100,7 +94,7 @@ public final class SignalFormCombo extends Composite {
 
         textLabel = new Label(this, SWT.NONE);
         textLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, true));
-        textLabel.setText(LABELS.getOrDefault(current, current.name()));
+        textLabel.setText(labelFor(current));
 
         // Drop-arrow drawn as an SVG label — the native SWT.ARROW|DOWN
         // Button renders inconsistently across GTK / win32 (a tiny pixel
@@ -128,8 +122,8 @@ public final class SignalFormCombo extends Composite {
         int maxText = 0;
         GC probe = new GC(this);
         try {
-            for (String s : LABELS.values()) {
-                int w = probe.textExtent(s).x;
+            for (GenSignalForm f : FORMS) {
+                int w = probe.textExtent(labelFor(f)).x;
                 if (w > maxText) maxText = w;
             }
         } finally {
@@ -150,7 +144,7 @@ public final class SignalFormCombo extends Composite {
         if (f == null || f == current) return;
         current = f;
         iconLabel.setImage(IconUtils.icon(getDisplay(), Icon.valueOf("SIGNAL_" + current.name())));
-        textLabel.setText(LABELS.getOrDefault(current, current.name()));
+        textLabel.setText(labelFor(current));
         layout();
         fire();
     }
@@ -166,6 +160,11 @@ public final class SignalFormCombo extends Composite {
         for (Listener l : selectionListeners) l.handleEvent(e);
     }
 
+    /** The localized display label for {@code form}. */
+    private String labelFor(GenSignalForm form) {
+        return I18n.t("generator.signalForm." + form.name());
+    }
+
     /**
      * Opens the native pop-up menu just below the closed display.  Each item
      * carries the form's pictogram + label; macOS / Windows / GTK render the
@@ -175,9 +174,9 @@ public final class SignalFormCombo extends Composite {
     private void openPopup() {
         Display d = getDisplay();
         Menu menu = new Menu(this);
-        for (GenSignalForm form : LABELS.keySet()) {
+        for (GenSignalForm form : FORMS) {
             MenuItem item = new MenuItem(menu, SWT.PUSH);
-            item.setText(LABELS.getOrDefault(form, form.name()));
+            item.setText(labelFor(form));
             item.setImage(IconUtils.icon(d, Icon.valueOf("SIGNAL_" + form.name())));
             item.addListener(SWT.Selection, e -> setSelectedForm(form));
         }

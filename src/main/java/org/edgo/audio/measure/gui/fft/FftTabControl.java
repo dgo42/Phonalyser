@@ -111,6 +111,7 @@ public final class FftTabControl extends AbstractTabControl {
      *  CTabFolder look. */
     private static final int TAB_FFT_SETTINGS = 0;
     private static final int TAB_THD_SETTINGS = 1;
+    private static final int TAB_PRESETS      = 2;
     private static final int TAB_CALIBRATION  = 4;
     private static final int NUM_CUSTOM_TABS  = 5;
 
@@ -126,7 +127,7 @@ public final class FftTabControl extends AbstractTabControl {
      *  full-scale. */
     private static final double MANUAL_FUND_MAX_VRMS  = 200.0;
     /** Amplitude floor (Vrms) — keeps log-unit (dBV) entry finite. */
-    private static final double AMP_MIN_VRMS          = 1e-6;
+    private static final double AMP_MIN_VRMS          = 1e-9;
     /** Harmonic-count bounds: THD measures H2…H9; the calc ceiling feeds the
      *  compensation workflows. */
     private static final double THD_HARM_MIN  = 2;
@@ -476,11 +477,11 @@ public final class FftTabControl extends AbstractTabControl {
 
         // Row: Coherent averaging (span 2) | Log freq (span 2)
         coherentCheck = new Button(g, SWT.CHECK);
-        coherentCheck.setText(I18n.t("fft.thd.coherent"));
+        coherentCheck.setText(I18n.t("fft.settings.coherent"));
         GridData cohGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         cohGd.horizontalSpan = 2;
         coherentCheck.setLayoutData(cohGd);
-        coherentCheck.setToolTipText(I18n.t("fft.thd.coherent.tooltip"));
+        coherentCheck.setToolTipText(I18n.t("fft.settings.coherent.tooltip"));
         Bindings.check(coherentCheck, prefs.fftCoherentAveragingProperty());
         // Pane-local tab-tile refresh; the accumulator reset (coherent ↔
         // incoherent changes its semantics) lives in the view, which subscribes
@@ -1021,6 +1022,12 @@ public final class FftTabControl extends AbstractTabControl {
                 tiles.add(TileTabFolder.Tile.text(I18n.t("calibration.tile.loadedN", n),
                         I18n.t("calibration.tile.loadedN.tooltip", n)));
             }
+        } else if (tabIndex == TAB_PRESETS) {
+            // Show the number of saved presets when there are any — a hint
+            // that there's something to load.
+            int n = prefs.getFftPresets().size();
+            if (n > 0) tiles.add(TileTabFolder.Tile.text(n + " saved",
+                    I18n.t("fft.tile.presets", n)));
         }
         return tiles;
     }

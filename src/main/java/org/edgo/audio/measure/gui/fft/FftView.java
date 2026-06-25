@@ -171,6 +171,13 @@ public final class FftView extends AbstractFreqDomainView {
     private long startRender;
     private boolean gotFftResult = false;
 
+    /** Set by {@link #onResultReady} when a fresh result is ready to paint;
+     *  consumed by {@link #renderRealtimeFrame} on the main event loop's render
+     *  tick.  The FFT data hand-off stays async (worker → UI thread), but the
+     *  PAINT is loop-driven so the FFT view refreshes on the same cadence as the
+     *  scope and neither view can starve the other behind its events. */
+    private boolean fftDirty;
+
     /** Frequency-domain mains rejection for the DISPLAYED frame — the worker
      *  only tracks f0, this divides the comb's cached response out of the shown
      *  spectrum (see {@link MainsCombFilter#applySpectrumCorrection}).  Its OWN
@@ -279,8 +286,10 @@ public final class FftView extends AbstractFreqDomainView {
             // tableModeIsImd only updates here — one tick later — so without
             // this the title keeps the old mode (e.g. "IMD" while showing THD).
             if (tableModeIsImd != prevTableModeIsImd) syncExternalShell();
-            redraw();
-            update();
+            // Flag the new result; the main event loop's realtime render tick
+            // repaints it (see renderRealtimeFrame) instead of painting inline,
+            // so scope and FFT share one cadence and neither starves the other.
+            fftDirty = true;
             // this-qualified: lastImd is declared below this initializer
             // lambda (a simple-name read would be an illegal forward ref).
             controller.applyFrequencyLock(slot, this.lastImd);
@@ -580,7 +589,7 @@ public final class FftView extends AbstractFreqDomainView {
         });
 
         averagesCountLabel = new Label(this, SWT.NONE);
-        averagesCountLabel.setText("0 average(s)");
+        averagesCountLabel.setText(I18n.t("fft.avgCount.label", "0"));
         averagesCountLabel.setForeground(d.getSystemColor(SWT.COLOR_DARK_GRAY));
         averagesCountLabel.setToolTipText(I18n.t("fft.avgCount.tooltip"));
         averagesCountLabel.setData("helpAnchor", "fft.html#fft-averages-count");
@@ -659,12 +668,28 @@ public final class FftView extends AbstractFreqDomainView {
                     int N = Math.max(1, (int) avgRaw);
                     if (n > N) n = N;
                 }
-                String ns = n + " average(s)";
+                String ns = I18n.t("fft.avgCount.label", String.valueOf(n));
                 if (!ns.equals(averagesCountLabel.getText())) averagesCountLabel.setText(ns);
             }
             d.timerExec(100, tick[0]);
         };
         d.timerExec(100, tick[0]);
+    }
+
+    /** Loop-driven realtime repaint: paints a freshly-arrived FFT result (flagged
+     *  by {@link #onResultReady}) on the main event loop's render tick, so the FFT
+     *  view refreshes on the same cadence as the scope and neither view starves the
+     *  other.  No-op while hidden (a non-active top-level tab) or with no pending
+     *  result.  Returns {@code true} while recording so the loop keeps the realtime
+     *  cadence going even on ticks that produced no new result. */
+    public boolean renderRealtimeFrame() {
+        if (isDisposed() || !isVisible()) return false;
+        if (fftDirty) {
+            fftDirty = false;
+            redraw();
+            update();
+        }
+        return isRunning();
     }
 
     private void disposeResources() {

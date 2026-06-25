@@ -20,6 +20,50 @@ averaging and bit-exact playback/capture.
 
 ![Ultra-low-distortion FFT](docs/screenshots/fft-ultralow-thd.png)
 
+## Download & run
+
+Each release offers two ways to run Phonalyser:
+
+**Native installers** (recommended) — they bundle their own Java runtime, so
+nothing else is needed:
+
+| OS | Installer |
+|----|-----------|
+| Windows | `Phonalyser-<version>.exe` |
+| Linux | `Phonalyser-<version>.deb` |
+| macOS (Apple Silicon) | `Phonalyser-<version>-arm64.dmg` |
+| macOS (Intel) | `Phonalyser-<version>-x64.dmg` |
+
+**Platform JARs** — run on your own **Java 17+** runtime (no bundled JRE).
+Download the JAR for your OS plus the matching launcher script, keep them in the
+same folder, and run the script:
+
+| OS | JAR | Launcher | Run guide |
+|----|-----|----------|-----------|
+| Windows | `phonalyser-<version>-windows.jar` | `Phonalyser-windows.bat` | `README-windows.txt` |
+| Linux | `phonalyser-<version>-linux.jar` | `Phonalyser-linux.sh` | `README-linux.txt` |
+| macOS | `phonalyser-<version>-macos.jar` (Intel: `…-macos-x64.jar`) | `Phonalyser-macos.sh` | `README-macos.txt` |
+
+The JARs are platform‑specific because each bundles the SWT native for that
+OS/arch. macOS additionally needs `-XstartOnFirstThread` (the launcher adds it).
+To run without the script: `java -jar phonalyser-<version>-<os>.jar` — on macOS,
+`java -XstartOnFirstThread -jar …`.
+
+## Code signing
+
+The installers and JARs are currently distributed **unsigned**, so the OS may
+warn on first run — this is expected:
+
+- **Windows** — SmartScreen "unknown publisher": click **More info → Run anyway**.
+- **macOS** — Gatekeeper may block it: **right‑click → Open**, or clear the
+  quarantine flag: `xattr -dr com.apple.quarantine <file>`.
+
+Signed builds are planned via the **Microsoft Store (MSIX)**, which signs the
+package for free at publish time — no per‑developer certificate required. Signing
+direct (non‑Store) downloads would need a paid code‑signing certificate, which
+only becomes worthwhile once there's a steady download volume (a certificate's
+SmartScreen reputation builds with downloads regardless).
+
 ## Preferences & log place
 
 Phonalyser never writes inside its install directory (a packaged `.app`,
@@ -51,11 +95,18 @@ built-in text. After an app upgrade, delete the dir to re-seed the new version.
 `messages_<lang>.properties` (e.g. `messages_de.properties`); help pages live
 under `help/<lang>/`.
 
+## Measurement bench
+
+Wiring the bench so the cabling doesn't inject its own noise — a Faraday cage,
+CAT.8 twisted pair with XLR connectors, single-point grounding, and the
+resulting induced-noise budget — is described in
+[docs/Faradey-Cage-bench.md](docs/Faradey-Cage-bench.md).
+
 ## Build & run
 
 Requires JDK 17 and Maven. See [BUILD.md](BUILD.md) for build and run
-instructions, [PACKAGING.md](PACKAGING.md) for per-platform packaging (jpackage),
-and [HOWTO-RELEASE.md](HOWTO-RELEASE.md) for the release process.
+instructions and [PACKAGING.md](PACKAGING.md) for per-platform packaging
+(jpackage).
 
 ## License
 

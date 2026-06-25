@@ -7,7 +7,7 @@ Two output formats are supported on every OS:
 
 * **Fat JAR** (`target/phonalyser-<version>-jar-with-dependencies.jar`) —
   cross-platform-buildable, requires a Java 17+ runtime on the user's machine.
-* **Native installer** — `.msi` on Windows, `.deb` on Linux, `.dmg` on macOS.
+* **Native installer** — `.exe` on Windows, `.deb` on Linux, `.dmg` on macOS.
   Bundles a JRE so the end user doesn't need Java installed.  Must be built
   on the target OS (jpackage can't cross-compile).
 
@@ -100,9 +100,50 @@ so both are built natively and shipped; each macOS DMG is tagged with its arch
 expects the binaries to be present in `lib/windows/` (commit them or restore
 them from a private release / artifact store).
 
-A draft GitHub release is created when the matrix finishes, with the MSI,
-DEB, both DMGs and the platform fat JARs attached.  See
-[HOWTO-RELEASE.md](HOWTO-RELEASE.md) for the full release procedure.
+A draft GitHub release is created when the matrix finishes, with the EXE,
+DEB, both DMGs and the platform fat JARs attached.
+
+## 4b. Microsoft Store (MSIX)
+
+jpackage cannot emit MSIX, so the Store package is built by wrapping the
+jpackage **app-image** (a full-trust Win32 app) with `makeappx`. The big win:
+**the Microsoft Store signs the MSIX for free at publish time**, so no
+per-developer code-signing certificate is needed.
+
+The release workflow has a **guarded** `Build MSIX` step (Windows job) that is
+skipped unless configured, so it never affects the normal `.exe` / `.jar` build.
+To enable it:
+
+1. **Reserve the app** in **Partner Center** (Microsoft Store) → that gives you
+   the package **Identity Name** and **Publisher** (`CN=…`).
+2. Add the Store **logo PNGs** under
+   [packaging/msix/assets/](packaging/msix/assets/) (sizes listed in its
+   `README.txt`).
+3. Add repository **variables** (Settings → Secrets and variables → Actions →
+   *Variables*):
+
+   | Variable | Value |
+   |----------|-------|
+   | `MSIX_IDENTITY_NAME` | Partner Center *Package/Identity/Name* (e.g. `12345Edgo.Phonalyser`) |
+   | `MSIX_PUBLISHER` | Partner Center *Publisher* (`CN=…`) |
+   | `MSIX_PUBLISHER_NAME` | your Store publisher display name |
+
+On the next tag, the workflow renders [packaging/msix/AppxManifest.xml](packaging/msix/AppxManifest.xml)
+(version filled from `project.version` as `major.minor.build.0`), packs
+`Phonalyser-<ver>.msix`, and attaches it to the draft release. **Upload that
+`.msix` to Partner Center**; the Store signs and distributes it.
+
+Local build (for testing / sideloading) mirrors the CI step:
+
+```bash
+mvn -DskipTests package -Djpackage.type=APP_IMAGE          # -> target/installer/Phonalyser/
+# copy a filled AppxManifest.xml + Assets\*.png into that folder, then:
+makeappx pack /d target/installer/Phonalyser /p Phonalyser-1.0.0.0.msix /o
+```
+
+A locally-built MSIX is unsigned, so to *install* it outside the Store you must
+sign it with a (self-signed, for testing) certificate and trust that cert. For
+real distribution, submit the unsigned MSIX to the Store and let Microsoft sign.
 
 ## 5. Audio backends per OS
 

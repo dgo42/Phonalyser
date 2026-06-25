@@ -211,6 +211,9 @@ public final class ScopeTabControl extends AbstractTabControl {
      *  "Reconstructed beat" checkbox enabled only in DUAL_TONE mode.  Bound
      *  only on the live pane; {@code null} on the screenshot variant. */
     private Consumer<GenChangeCause>     genChangeListener;
+    /** {@link Events#SCOPE_SINGLE_DISARMED} subscriber — pops the trigger Start
+     *  toggle back out when a SINGLE shot fires.  Live pane only. */
+    private Consumer<Void>               singleDisarmedListener;
 
     public ScopeTabControl(Composite parent, ScopeView view, ScopeOpenSignal loader,
                            Host host, boolean liveCapture) {
@@ -256,7 +259,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         buildLeftGroup(tabs);
         buildRightGroup(tabs);
         buildHorizontalGroup(tabs);
-        buildTriggerGroup(tabs, view::armSingle);
+        buildTriggerGroup(tabs);
         buildPresetsGroup(tabs);
         buildScreenshotGroup(tabs, cameraIcon, crosshairIcon);
         if (liveCapture) {
@@ -283,10 +286,21 @@ public final class ScopeTabControl extends AbstractTabControl {
                 if (!isDisposed()) getDisplay().asyncExec(this::syncReconstructedBeatEnabled);
             };
             MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener);
+            singleDisarmedListener = ignored -> {
+                if (!isDisposed()) getDisplay().asyncExec(() -> {
+                    if (triggerStartBtn != null && !triggerStartBtn.isDisposed()) {
+                        triggerStartBtn.setSelection(false);
+                    }
+                });
+            };
+            MessageBus.instance().subscribe(Events.SCOPE_SINGLE_DISARMED, singleDisarmedListener);
         }
         addDisposeListener(e -> {
             if (genChangeListener != null) {
                 MessageBus.instance().unsubscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener);
+            }
+            if (singleDisarmedListener != null) {
+                MessageBus.instance().unsubscribe(Events.SCOPE_SINGLE_DISARMED, singleDisarmedListener);
             }
         });
 
@@ -450,6 +464,14 @@ public final class ScopeTabControl extends AbstractTabControl {
                     tiles.add(TileTabFolder.Tile.text(triggerHysteresisLabel(),
                             I18n.t("scope.trigger.hysteresis.tooltip")));
                 }
+                break;
+            }
+            case TAB_PRESETS: {
+                // Show the number of saved presets when there are any — a hint
+                // that there's something to load.
+                int n = prefs.getOscPresets().size();
+                if (n > 0) tiles.add(TileTabFolder.Tile.text(n + " saved",
+                        I18n.t("scope.tile.presets", n)));
                 break;
             }
         }
@@ -687,7 +709,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         rowSpacer.setLayoutData(new RowData(0, SQUARE_BUTTON));
     }
 
-    private void buildTriggerGroup(CTabFolder folder, Runnable onSingleStart) {
+    private void buildTriggerGroup(CTabFolder folder) {
         Composite g = groupCell(folder, "Trigger");
         triggerGroup = g;
         g.setLayout(rowLayoutHorizontal(10));
@@ -736,7 +758,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         Bindings.radio(modeMap, prefs.oscTriggerModeProperty());
         Bindings.onChange(toolbarTabs, prefs.oscTriggerModeProperty(), v -> toolbarTabs.refreshTab(TAB_TRIGGER));
 
-        triggerStartBtn = new Button(g, SWT.PUSH);
+        triggerStartBtn = new Button(g, SWT.TOGGLE);
         Image triggerPlayIcon = IconUtils.icon(g.getDisplay(), Icon.PLAY_DARK_SMALL);
         triggerStartBtn.setImage(triggerPlayIcon);
         // Image is cached and owned by IconUtils — disposed when the
@@ -744,7 +766,11 @@ public final class ScopeTabControl extends AbstractTabControl {
         triggerStartBtn.setToolTipText(I18n.t("scope.trigger.start.tooltip"));
         triggerStartBtn.setLayoutData(new RowData(SQUARE_BUTTON, SQUARE_BUTTON));
         triggerStartBtn.setEnabled(modeSingle.getSelection());
-        triggerStartBtn.addListener(SWT.Selection, e -> onSingleStart.run());
+        // Toggle: pressed = a single shot is armed (display frozen, waiting);
+        // the view pops it back out via SCOPE_SINGLE_DISARMED when the trigger
+        // fires.  Un-pressing it manually cancels the pending shot.
+        triggerStartBtn.addListener(SWT.Selection,
+                e -> view.setSingleArmed(triggerStartBtn.getSelection()));
 
         // Registered AFTER the mode radio binding so the button selections
         // are already updated when syncTriggerStart reads modeSingle's state.
@@ -912,7 +938,13 @@ public final class ScopeTabControl extends AbstractTabControl {
      *  bulk-enable of {@link #triggerGroup} restores Record mode. */
     private void syncTriggerStart() {
         if (triggerStartBtn == null || triggerStartBtn.isDisposed()) return;
-        triggerStartBtn.setEnabled(modeSingle != null && modeSingle.getSelection());
+        boolean single = modeSingle != null && modeSingle.getSelection();
+        triggerStartBtn.setEnabled(single);
+        // Leaving SINGLE mode cancels any pending shot and pops the toggle out.
+        if (!single && triggerStartBtn.getSelection()) {
+            triggerStartBtn.setSelection(false);
+            view.setSingleArmed(false);
+        }
     }
 
     /**
@@ -972,7 +1004,7 @@ public final class ScopeTabControl extends AbstractTabControl {
      */
     private void buildScopeSaveToGroup(CTabFolder folder) {
         Preferences prefs = Preferences.instance();
-        Composite g = groupCell(folder, "Save to…");
+        Composite g = groupCell(folder, I18n.t("scope.save.title"));
         GridLayout gl = new GridLayout(4, false);
         gl.marginWidth = 6; gl.marginHeight = 4;
         gl.horizontalSpacing = 4;
@@ -1019,7 +1051,7 @@ public final class ScopeTabControl extends AbstractTabControl {
      */
     private void buildScopeOpenSignalGroup(CTabFolder folder) {
         Preferences prefs = Preferences.instance();
-        Composite g = groupCell(folder, "Load signal…");
+        Composite g = groupCell(folder, I18n.t("scope.openSignal.title"));
         GridLayout gl = new GridLayout(2, false);
         gl.marginWidth = 6; gl.marginHeight = 4;
         gl.horizontalSpacing = 4;
@@ -1085,10 +1117,10 @@ public final class ScopeTabControl extends AbstractTabControl {
             host.onSignalFileLoaded();
             view.setFilePath(picked);
         } else {
-            String err = (loader != null) ? loader.getLastError() : "Loader not available.";
+            String err = (loader != null) ? loader.getLastError() : I18n.t("scope.openSignal.loaderUnavailable");
             Dialogs.error(getShell(),
                     I18n.t("scope.openSignal.error"),
-                    err != null ? err : "Unknown error opening the file.");
+                    err != null ? err : I18n.t("common.error.fileOpenUnknown"));
         }
     }
 
@@ -1337,6 +1369,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         if (posNew < 0.0) posNew = 0.0;
         if (posNew > 1.0) posNew = 1.0;
         prefs.setOscTriggerPositionFrac(posNew);
+        host.requestRedraw();   // repaint a frozen / file-mode view too (the live render loop is idle then)
     }
 
     // -------------------------------------------------------------------------

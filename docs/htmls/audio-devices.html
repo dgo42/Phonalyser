@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Browser audio device probe</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, Segoe UI, Roboto, sans-serif; margin: 1.5rem; max-width: 1100px; line-height: 1.4; }
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.1rem; margin-top: 1.6rem; }
+  button { font-size: 1rem; padding: .5rem 1rem; cursor: pointer; }
+  .note { background: #fffbe8; border: 1px solid #cc9; color: #553; padding: .6rem .8rem;
+          border-radius: 6px; margin: .8rem 0; }
+  @media (prefers-color-scheme: dark) { .note { background:#2a2810; color:#cda; border-color:#665; } }
+  table { border-collapse: collapse; margin: .6rem 0 1.2rem; width: 100%; font-size: .9rem; }
+  th, td { border: 1px solid #8888; padding: .25rem .5rem; text-align: left; white-space: nowrap; }
+  th { background: #8881; }
+  td.ok  { color: #1a8f1a; font-weight: 600; }
+  td.no  { color: #b00; }
+  td.mono, code { font-family: Consolas, Menlo, monospace; }
+  #status { font-style: italic; opacity: .8; }
+  small { opacity: .75; }
+</style>
+</head>
+<body>
+<h1>Browser audio device probe</h1>
+<p>Enumerates input / output audio devices and probes which <b>sample rates</b> the browser
+will actually grant. <b>Bit depth is not exposed</b> by the Web platform (Web Audio is 32-bit
+float after the OS mixer), and there is <b>no exclusive mode</b> — so this shows the ceiling a
+pure browser tab can reach, not what the hardware can do.</p>
+
+<div class="note">
+Click <b>Scan</b> and allow microphone access — without permission the OS hides device labels.
+The scan opens each input device once per candidate rate, so it takes a few seconds.
+</div>
+
+<p><button id="scan">Scan devices</button> &nbsp; <span id="status">idle</span></p>
+
+<h2>1. Devices (<code>navigator.mediaDevices.enumerateDevices</code>)</h2>
+<table id="devices"><thead><tr>
+  <th>#</th><th>kind</th><th>label</th><th>deviceId (truncated)</th><th>groupId</th>
+</tr></thead><tbody></tbody></table>
+
+<h2>2. Input sample-rate probe (<code>getUserMedia</code> + <code>track.getSettings()</code>)</h2>
+<p><small>For each input device we request <code>sampleRate: {exact: r}</code> and report the rate
+the browser actually granted. ✓ = granted at the requested rate, ≈ = opened but resampled to a
+different rate, ✗ = refused.</small></p>
+<table id="rates"><thead><tr><th>input device</th></tr></thead><tbody></tbody></table>
+<p id="inputMeta"><small></small></p>
+
+<h2>3. Output / AudioContext sample-rate support (<code>new AudioContext({sampleRate})</code>)</h2>
+<p><small>Probes the default output path — a browser tab cannot enumerate per-output-device
+capabilities, only attempt a context at a given rate.</small></p>
+<table id="ctx"><thead><tr>
+  <th>requested rate</th><th>created?</th><th>actual ctx.sampleRate</th>
+</tr></thead><tbody></tbody></table>
+
+<h2>4. What the platform does NOT expose</h2>
+<ul>
+  <li><b>Bit depth</b> — none. Capture is float32 post-mixer; no 16/24-bit raw PCM.</li>
+  <li><b>Exclusive mode</b> — none. Every stream goes through the shared OS mixer + its resampler.</li>
+  <li><b>Per-output-device formats</b> — not queryable; <code>setSinkId</code> only routes.</li>
+</ul>
+
+<script>
+const RATES = [8000,16000,32000,44100,48000,88200,96000,176400,192000,352800,384000,705600,768000];
+const $  = (s)=>document.querySelector(s);
+const status = (t)=>{ $("#status").textContent = t; };
+const trunc = (s)=> s ? (s.length>16 ? s.slice(0,16)+"…" : s) : "(none)";
+
+async function stopStream(stream){
+  if (stream) for (const t of stream.getTracks()) t.stop();
+}
+
+async function probeRate(deviceId, rate){
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: {
+      deviceId: deviceId ? { exact: deviceId } : undefined,
+      sampleRate: { exact: rate },
+      channelCount: { ideal: 2 },
+      echoCancellation: false, noiseSuppression: false, autoGainControl: false
+    }});
+    const tr = stream.getAudioTracks()[0];
+    const st = tr.getSettings ? tr.getSettings() : {};
+    return { ok: true, got: st.sampleRate ?? null, ch: st.channelCount ?? null,
+             aec: st.echoCancellation, ns: st.noiseSuppression, agc: st.autoGainControl };
+  } catch (e) {
+    return { ok: false, err: e.name };
+  } finally { await stopStream(stream); }
+}
+
+async function run(){
+  $("#scan").disabled = true;
+  status("requesting microphone permission…");
+  // Permission unlocks device labels.
+  try { await stopStream(await navigator.mediaDevices.getUserMedia({audio:true})); }
+  catch(e){ status("microphone permission denied — labels will be blank ("+e.name+")"); }
+
+  status("enumerating devices…");
+  const devs = await navigator.mediaDevices.enumerateDevices();
+  const audio = devs.filter(d => d.kind === "audioinput" || d.kind === "audiooutput");
+  const inputs = audio.filter(d => d.kind === "audioinput");
+
+  // --- table 1: devices
+  const dtb = $("#devices tbody"); dtb.innerHTML = "";
+  audio.forEach((d,i)=>{
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${i+1}</td><td>${d.kind}</td><td>${d.label||"<i>(blocked — no permission)</i>"}</td>`
+                 + `<td class="mono">${trunc(d.deviceId)}</td><td class="mono">${trunc(d.groupId)}</td>`;
+    dtb.appendChild(tr);
+  });
+
+  // --- table 2: per-input rate probe
+  const head = $("#rates thead tr");
+  head.innerHTML = "<th>input device</th>" + RATES.map(r=>`<th>${r/1000} k</th>`).join("");
+  const rtb = $("#rates tbody"); rtb.innerHTML = "";
+  let metaSeen = null;
+  for (const d of inputs){
+    status(`probing "${d.label||d.deviceId}" …`);
+    const tr = document.createElement("tr");
+    let cells = `<td>${d.label||trunc(d.deviceId)}</td>`;
+    for (const r of RATES){
+      const res = await probeRate(d.deviceId, r);
+      if (!metaSeen && res.ok) metaSeen = res;
+      if (!res.ok)            cells += `<td class="no" title="${res.err}">✗</td>`;
+      else if (res.got === r) cells += `<td class="ok">✓ ${res.got}</td>`;
+      else                    cells += `<td title="resampled">≈ ${res.got ?? "?"}</td>`;
+    }
+    tr.innerHTML = cells; rtb.appendChild(tr);
+  }
+  if (metaSeen){
+    $("#inputMeta").innerHTML = `<small>Example granted track: channels=${metaSeen.ch}, `
+      + `echoCancellation=${metaSeen.aec}, noiseSuppression=${metaSeen.ns}, autoGainControl=${metaSeen.agc}. `
+      + `getSettings().sampleRate is ${metaSeen.got==null?"<b>not exposed by this browser</b>":metaSeen.got+" Hz"}.</small>`;
+  }
+
+  // --- table 3: AudioContext rate probe
+  const ctb = $("#ctx tbody"); ctb.innerHTML = "";
+  for (const r of RATES){
+    let ctx, created=false, actual="—";
+    try { ctx = new AudioContext({ sampleRate: r }); created = true; actual = ctx.sampleRate; }
+    catch(e){ actual = e.name; }
+    finally { if (ctx) try { await ctx.close(); } catch(_){} }
+    const tr = document.createElement("tr");
+    const okCls = created && actual===r ? "ok" : (created ? "" : "no");
+    tr.innerHTML = `<td>${r} Hz</td><td class="${created?'ok':'no'}">${created?'yes':'no'}</td>`
+                 + `<td class="${okCls}">${actual}</td>`;
+    ctb.appendChild(tr);
+  }
+
+  status(`done — ${inputs.length} input(s), ${audio.length-inputs.length} output(s).`);
+  $("#scan").disabled = false;
+}
+
+$("#scan").addEventListener("click", () => run().catch(e => {
+  status("error: " + e.message); $("#scan").disabled = false; console.error(e);
+}));
+</script>
+</body>
+</html>
