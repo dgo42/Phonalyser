@@ -22,6 +22,7 @@ import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -128,14 +129,13 @@ public final class SharedCapture {
         BackendPrefs bp = prefs.current();
         String deviceName = bp.getInputDeviceName();
         if (deviceName == null) {
-            lastStartError = "No input device selected. Open Preferences and pick a capture device.";
+            lastStartError = I18n.t("capture.error.noInputDevice");
             log.warn("Capture: {}", lastStartError);
             return null;
         }
         DeviceRef device = findInputDevice(deviceName);
         if (device == null) {
-            lastStartError = "The saved input device \"" + deviceName + "\" is no longer available. "
-                           + "Reconnect the device or pick another one in Preferences.";
+            lastStartError = I18n.t("capture.error.inputDeviceGone", deviceName);
             log.warn("Capture: {}", lastStartError);
             return null;
         }
@@ -222,14 +222,13 @@ public final class SharedCapture {
                                         int sampleRate, int bitDepth) {
         String raw = ex.getMessage();
         String lower = (raw == null) ? "" : raw.toLowerCase();
-        String header = "Cannot start capture on \"" + device.displayName() + "\" at "
-                + sampleRate + " Hz / " + bitDepth + " bits.\n\n";
+        String header = I18n.t("capture.error.openHeader",
+                device.displayName(), String.valueOf(sampleRate), String.valueOf(bitDepth)) + "\n\n";
         if (lower.contains("does not support format")
                 || lower.contains("invalid sample rate")
                 || lower.contains("invalid sample format")
                 || lower.contains("paunanticipatedhosterror") && lower.contains("format")) {
-            return header + "The selected sample rate or bit depth is not supported by this device. "
-                  + "Try a different combination in Preferences (16 / 24 bits at 48 / 96 / 192 / 384 kHz are commonly accepted).";
+            return header + I18n.t("capture.error.formatUnsupported");
         }
         if (ex instanceof LineUnavailableException
                 || lower.contains("device unavailable")
@@ -239,13 +238,10 @@ public final class SharedCapture {
                 || lower.contains("exclusive")
                 || lower.contains("in use")
                 || lower.contains("busy")) {
-            return header + "The device is currently in use by another application "
-                  + "(exclusive-mode capture allows only one client at a time). "
-                  + "Close other audio apps using this input and try again.";
+            return header + I18n.t("capture.error.deviceInUse");
         }
         if (lower.contains("not found") || lower.contains("no such device")) {
-            return header + "The device could not be opened — it may have been unplugged "
-                  + "or its driver is not loaded.";
+            return header + I18n.t("capture.error.deviceNotFound");
         }
         if (raw != null && !raw.isBlank()) {
             return header + raw;

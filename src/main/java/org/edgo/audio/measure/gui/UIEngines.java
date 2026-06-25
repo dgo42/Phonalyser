@@ -19,9 +19,6 @@
 package org.edgo.audio.measure.gui;
 
 import org.eclipse.swt.widgets.Display;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
-import org.edgo.audio.measure.gui.bus.Events;
-import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.fft.FftAnalyzerWorker;
 import org.edgo.audio.measure.gui.fft.FftController;
 import org.edgo.audio.measure.gui.generator.GeneratorController;
@@ -48,10 +45,6 @@ public final class UIEngines {
     @Getter private final GeneratorController generatorController;
     @Getter private final ScopeController     scopeController;
     @Getter private final FftController       fftController;
-    /** Calibration-correction store shared by the FFT controller, view and
-     *  tab control.  App-lifetime like the controller that records its
-     *  entries into saved spectra — a content rebuild must not wipe it. */
-    @Getter private final FreqRespCorrectionStore fftCorrectionStore;
 
     public UIEngines(Display display) {
         // Eager init of the SharedCapture singleton so its MessageBus
@@ -61,9 +54,7 @@ public final class UIEngines {
         SharedCapture.instance();
         generatorController = new GeneratorController();
         scopeController     = new ScopeController();
-        fftCorrectionStore  = new FreqRespCorrectionStore("FFT",
-                () -> MessageBus.instance().publish(Events.FFT_CALIBRATION_CHANGED));
-        fftController       = new FftController(new FftAnalyzerWorker(display), fftCorrectionStore);
+        fftController       = new FftController(new FftAnalyzerWorker(display));
     }
 
     /** Stops every engine and releases their capture / playback resources. */

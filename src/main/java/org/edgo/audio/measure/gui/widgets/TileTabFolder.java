@@ -39,6 +39,8 @@ import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 
+import org.edgo.audio.measure.gui.common.AbstractTabControl;
+
 import lombok.Setter;
 /**
  * A {@link CTabFolder} whose leading tabs carry a row of live "status
@@ -189,10 +191,6 @@ public class TileTabFolder extends CTabFolder {
     @Setter private int tileHeight     = DEFAULT_TILE_HEIGHT;
     /** Forced height of the tab strip (label row + tile row). */
     @Setter private int tabStripHeight = DEFAULT_STRIP_HEIGHT;
-    /** Run after each collapse / expand so the host can re-flow its own
-     *  layout (and keep e.g. a record button anchored); {@code null} falls
-     *  back to laying out this folder's parent. */
-    @Setter private Runnable collapseRelayout;
 
     private int        customTabs;
     private TileSource tileSource;
@@ -278,10 +276,9 @@ public class TileTabFolder extends CTabFolder {
             gd.verticalAlignment       = SWT.FILL;
             gd.grabExcessVerticalSpace = true;
         }
-        if (collapseRelayout != null) {
-            collapseRelayout.run();
-        } else if (getParent() != null && !getParent().isDisposed()) {
-            getParent().layout(true, true);
+        AbstractTabControl parent = (AbstractTabControl) getParent();
+        if (parent != null && !parent.isDisposed()) {
+            parent.onTabCollapsed();
         }
     }
 

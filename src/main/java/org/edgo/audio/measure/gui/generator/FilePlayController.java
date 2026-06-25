@@ -33,6 +33,7 @@ import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.wav.PcmFileLoader;
 
 /**
@@ -78,11 +79,11 @@ public final class FilePlayController {
         lastStartError = null;
         Thread old = playThread;
         if (old != null && old.isAlive()) {
-            lastStartError = "The previous playback is still shutting down — try again in a moment.";
+            lastStartError = I18n.t("generator.error.shuttingDown");
             return;
         }
         if (file == null || !file.isFile()) {
-            lastStartError = "Pick a file first (the … button).";
+            lastStartError = I18n.t("generator.error.playFile.pickFirst");
             return;
         }
         this.loop = loop;

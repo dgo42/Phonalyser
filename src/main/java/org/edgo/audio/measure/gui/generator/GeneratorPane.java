@@ -786,7 +786,7 @@ public final class GeneratorPane extends AbstractPane {
                     String err = controller.getLastStartError();
                     Dialogs.error(group.getShell(),
                             I18n.t("generator.error.start"),
-                            err != null ? err : "Unknown error starting the generator.");
+                            err != null ? err : I18n.t("generator.error.startUnknown"));
                 }
             }
         });
@@ -886,6 +886,11 @@ public final class GeneratorPane extends AbstractPane {
         return controller.isRunning();
     }
 
+    @Override
+    protected void onTabCollapse() {
+        // No settings tab strip to collapse — nothing to re-flow.
+    }
+
     /** Programmatically starts the DDS tone and syncs the Play button +
      *  ON-AIR visuals — the {@code gui.automation} scripts' Play.  Unlike
      *  the Play-button click a failure is only logged: a modal error
@@ -925,7 +930,7 @@ public final class GeneratorPane extends AbstractPane {
                     String err = controller.getLastStartError();
                     Dialogs.error(group.getShell(),
                             I18n.t("generator.error.resume"),
-                            err != null ? err : "Generator could not be restarted after backend change.");
+                            err != null ? err : I18n.t("generator.error.restartFailed"));
                 }
             }
             // File player isn't reopened automatically — it doesn't go
@@ -1048,8 +1053,8 @@ public final class GeneratorPane extends AbstractPane {
         } else if (form == GenSignalForm.SINE && fftSnapBtn.getSelection()) {
             corrected = formatLabelHz(controller.effectiveFrequency());
         }
-        freqLabel.setText(corrected == null ? "Frequency"
-                                            : "Frequency (" + corrected + ")");
+        freqLabel.setText(corrected == null ? I18n.t("generator.frequency")
+                                            : I18n.t("generator.frequency.bracket", corrected));
         freqLabel.getParent().layout();
     }
 
@@ -1451,7 +1456,7 @@ public final class GeneratorPane extends AbstractPane {
             String err = controller.getFilePlayError();
             Dialogs.error(group.getShell(),
                     I18n.t("generator.error.playFile"),
-                    err != null ? err : "Unknown error opening the file.");
+                    err != null ? err : I18n.t("common.error.fileOpenUnknown"));
         }
     }
 

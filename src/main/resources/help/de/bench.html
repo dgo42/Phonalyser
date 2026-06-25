@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Messplatz &amp; Verkabelung</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zum Inhalt</a></p>
+
+  <h1>Messplatz &amp; Verkabelung</h1>
+  <p>THD im Sub-ppm-Bereich und Rauschgrenzen von &minus;150&nbsp;dBV sind nur
+     dann etwas wert, wenn die <em>Verkabelung</em> zwischen den Teilen des
+     Messplatzes weniger Rauschen einbringt, als der Prüfling erzeugt. Diese Seite
+     zeigt, wie Generator (DAC), Prüfling (DUT) und Aufnahme (ADC) verbunden
+     werden, damit äußere elektromagnetische Felder möglichst wenig Spannung auf
+     den <b>Signal-</b> und <b>Signalmasse-</b>Leitungen induzieren. Es gibt
+     <b>keinen separaten Raumkäfig</b>: Die Gerätegehäuse und die Kabelschirme
+     bilden zusammen eine durchgehende leitende Hülle um das Signalpaar — einen
+     <em>verteilten</em> Faradayschen Käfig, über XLR-Pin&nbsp;1 verbunden und an
+     einem Punkt geerdet.</p>
+
+  <p><img src="img/faraday-cage-bench.svg" alt="Verkabelungsdiagramm des Messplatzes"
+          style="max-width:100%;height:auto;"/></p>
+
+  <h2>Das Kabel: CAT.8-Patchkabel, kein „Audio"-Koax</h2>
+  <div class="pane">
+    <p>Verwenden Sie ein <b>Computer-Twisted-Pair-CAT.8-Patchkabel</b> mit
+       <b>XLR</b>-Steckern. CAT.8 hat einen <b>doppelten Schirm</b>: eine
+       Aluminium/PET-<b>Folie</b> um <em>jedes</em> Paar plus einen Gesamtschirm um
+       alle vier. Eine Folie ist ein <em>durchgehender, lochfreier</em> Schirm —
+       anders als der Geflechtschirm von Koax, ein Netz voller kleiner Öffnungen,
+       durch die Felder lecken. Die Verdrillung ist die zweite Waffe: Sie
+       verkleinert die Schleifenfläche zwischen Signal und Rückleiter, sodass ein
+       Magnetfeld in aufeinanderfolgenden Verdrillungen gleich große, entgegen­
+       gesetzte Spannungen induziert, die sich aufheben.<sup id="cite-1"><a href="#ref-ott">[1]</a></sup></p>
+  </div>
+  <div class="note"><b>„High-End"-Audio-Koax ist hier das falsche Werkzeug.</b>
+     Viel Boutique-Audiokabel hat überraschend schwache Schirmung (dünnes Geflecht
+     mit geringer Deckung) und wird mit Eigenschaften beworben, die für einen
+     Messplatz unbedeutend — oder nicht vorhanden — sind. Zahlen Sie für
+     Schirmdeckung und eine enge Verdrillung, nicht für die Geschichte.</div>
+
+  <h2>XLR-Verdrahtung — ein Paar führt das Signal</h2>
+  <div class="pane">
+    <p>Die Verbindung ist <b>unsymmetrisch</b>, geführt über <b>ein verdrilltes
+       Paar</b>, wobei die Folie als separater Gehäuseschirm dient:</p>
+    <table>
+      <tr><th>CAT.8-Ader</th><th>XLR-Pin</th><th>Funktion</th></tr>
+      <tr><td>blau-weiß</td><td>2 (heiß)</td><td><b>Signal</b></td></tr>
+      <tr><td>blau</td><td>3 (kalt)</td><td><b>Signalmasse</b> (unsymmetrischer Rückleiter)</td></tr>
+      <tr><td>grün + grün-weiß + Beidraht</td><td>1</td><td><b>Schirm</b> → Gerätegehäuse</td></tr>
+    </table>
+    <p>So sind Signal (Pin&nbsp;2) und Signalmasse (Pin&nbsp;3) das
+       <b>blau/blau-weiße verdrillte Paar</b>; das grüne Paar und der Beidraht
+       gehen alle auf <b>Pin&nbsp;1</b> als Schirm/Gehäuseschirm.</p>
+  </div>
+  <p><img src="img/XLR wiring.jpg" alt="XLR-Verdrahtung"
+          style="max-width:480px;width:100%;height:auto;border:1px solid #dde;"/></p>
+
+  <h2>Sternpunkterdung — der entscheidende Trick</h2>
+  <div class="pane">
+    <p><b>Signalmasse (Pin&nbsp;3) wird an genau einer Stelle mit dem Schirm
+       (Pin&nbsp;1) verbunden — normalerweise am DUT-Eingang oder -Ausgang; beides
+       testen und das leisere behalten.</b> Überall sonst ist die
+       Signalmasse-Leitung vom Schirm und vom Gehäuse isoliert.</p>
+    <p>Würde die Signalmasse zugleich als Schirm dienen (wie bei gewöhnlichem
+       unsymmetrischem Koax), flösse jeder Strom, den ein äußeres Feld im Schirm
+       induziert, <em>durch den Signalrückleiter</em> und addierte sich direkt am
+       DUT-Eingang zum Signal. Gibt man dem Schirm einen eigenen Leiter
+       (Pin&nbsp;1, an jedem Gehäuse verbunden) und verbindet die Signalmasse nur
+       an <b>einem</b> Punkt damit, erhalten diese Schirm-/Wirbelströme ihren
+       eigenen Rückweg, außerhalb der Signalstrecke.</p>
+    <p><b>Das Gehäuse jedes Geräts liegt am Schirm (Pin&nbsp;1), nie an der
+       Signalmasse (Pin&nbsp;3).</b> Die Gehäuseschirme bilden einen durchgehenden
+       Schirm auf Käfig-/Erdpotential; die Signalmasse schwimmt auf dem verdrillten
+       Paar und berührt diesen Schirm nur am einzigen Sternpunkt am DUT.</p>
+  </div>
+
+  <h2>Wie viel Rauschen bleibt?</h2>
+  <div class="pane">
+    <p><b>Elektrische Felder</b> — die übliche kapazitive Brummquelle — werden
+       durch die durchgehende Schirm-/Gehäusehülle vollständig ausgeschlossen (die
+       Folie um das Paar und die Metallgehäuse bilden einen geschlossenen Leiter).
+       <b>Magnetfelder</b> hält ein elektrostatischer Schirm nicht auf; man
+       überlistet sie durch Minimierung der Schleifenfläche. Die Hülle hilft ein
+       wenig (das äußere Wechselfeld treibt <b>Wirbelströme</b> in den
+       Schirm-/Gehäusewänden, die ein schwächeres Gegenfeld abstrahlen), doch die
+       Hauptverteidigung ist die <b>winzige Schleifenfläche</b> des verdrillten
+       Paars. Faradaysches Gesetz,
+       <code>V = &omega;&middot;B&middot;A<sub>eff</sub></code>:</p>
+    <table>
+      <tr><th>Größe</th><th>Schätzung (50&nbsp;Hz)</th></tr>
+      <tr><td>Umgebungs-Netzfeld in einem normalen Raum (B)<sup id="cite-2"><a href="#ref-who">[2]</a></sup></td><td>~0,1&nbsp;µT (0,05–1&nbsp;µT)</td></tr>
+      <tr><td>Rest innerhalb des Käfigs</td><td>~0,05&nbsp;µT</td></tr>
+      <tr><td>Schleifenfläche des verdrillten Paars (pessimistisch)</td><td>~10&nbsp;mm² = 1&times;10⁻⁵&nbsp;m²</td></tr>
+      <tr><td><b>Induzierte Spannung (EMK)</b></td><td><b>≈ 0,16&nbsp;nV ≈ &minus;196&nbsp;dBV</b></td></tr>
+    </table>
+    <p>Selbst ein bewusst pessimistischer Fall — keine Hüllen-Dämpfung und die
+       10-fache Schleifenfläche — ergibt ≈&nbsp;3&nbsp;nV ≈ &minus;170&nbsp;dBV,
+       immer noch mehrere zehn dB unter dem Eigenrauschen des Wandlers
+       (≈&nbsp;&minus;150…&minus;160&nbsp;dBV pro Bin). Lässt man die Disziplin
+       fallen — die Signalmasse zugleich als Schirm, sodass die ganze Schleife
+       Kabel-zu-Gehäuse exponiert ist — induziert dasselbe Feld <b>Mikrovolt</b>
+       (≈&nbsp;&minus;120&nbsp;dBV): hörbares Brummen. Verdrillung plus
+       Sternpunkterdung bringt rund <b>50–80&nbsp;dB</b>.</p>
+  </div>
+
+  <h2>Beispiel-Prüflinge</h2>
+  <div class="pane">
+    <p>Dieselbe Verkabelung speist, was auch immer im Käfig sitzt — hier ein
+       Twin-T-1&nbsp;kHz-Sperrfilter und ein Anti-RIAA-Filter:</p>
+    <p>
+      <img src="img/twin-T 1kHz filter.jpg" alt="Twin-T-1-kHz-Filter"
+           style="max-width:320px;width:48%;height:auto;border:1px solid #dde;"/>
+      <img src="img/anti RIAA filter 1.jpg" alt="Anti-RIAA-Filter"
+           style="max-width:320px;width:48%;height:auto;border:1px solid #dde;"/>
+    </p>
+  </div>
+
+  <h2 id="refs">Quellen</h2>
+  <ol class="refs">
+    <li id="ref-ott"><a href="#cite-1">1.</a>
+        <b>Schirmungs- und Erdungstechnik.</b> H.&nbsp;W.&nbsp;Ott,
+        <i>Electromagnetic Compatibility Engineering</i> (Wiley, 2009),
+        ISBN&nbsp;978-0-470-18930-6 — Kapitel&nbsp;2 „Cabling“, insb. §2.12 Coaxial
+        Cable Versus Twisted Pair, §2.13 Braided Shields und §2.15.2 Grounding of
+        Cable Shields.</li>
+    <li id="ref-who"><a href="#cite-2">2.</a>
+        <b>Umgebungs-Netzmagnetfeld.</b> Weltgesundheitsorganisation (WHO),
+        <i>Electromagnetic fields and public health: exposure to extremely low
+        frequency (ELF) fields</i> (Faktenblatt, 2007): der Netz-Hintergrund im
+        Wohnbereich liegt im Mittel bei ≈&nbsp;0,07&nbsp;µT (Europa) und
+        ≈&nbsp;0,11&nbsp;µT (Nordamerika) und steigt lokal nahe Geräten. Siehe
+        auch WHO <i>Environmental Health Criteria 238 — Extremely Low Frequency
+        Fields</i> (2007) und das US-NIEHS-Heft <i>EMF: Electric and Magnetic
+        Fields Associated with the Use of Electric Power</i>
+        (≈&nbsp;0,5–4&nbsp;mG = 0,05–0,4&nbsp;µT).
+        <a href="https://www.who.int/news-room/fact-sheets/detail/electromagnetic-fields-and-public-health-exposure-to-extremely-low-frequency-fields">who.int — ELF-Faktenblatt</a>.</li>
+  </ol>
+
+</body>
+</html>

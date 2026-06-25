@@ -128,8 +128,7 @@ public final class FreqRespPane extends AbstractPane {
         // store first; the tab control's constructor then pushes the prefs rows
         // into it, firing FREQRESP_CALIBRATION_CHANGED — which the view handles
         // by re-deriving from the store it already holds.
-        correctionStore = new FreqRespCorrectionStore("FreqResp",
-                () -> MessageBus.instance().publish(Events.FREQRESP_CALIBRATION_CHANGED));
+        correctionStore = new FreqRespCorrectionStore("FreqResp", Events.FREQRESP_CALIBRATION_CHANGED);
         controller = new FreqRespController(d::asyncExec);
         buildPlotRow();
         buildFreqScrollbarRow();
@@ -254,12 +253,7 @@ public final class FreqRespPane extends AbstractPane {
         // is pinned to a fixed height while expanded, so the collapse re-flow
         // releases that pin (restoring it on expand) and re-lays the pane so
         // the plot above reclaims the freed space.
-        tabControl.setCollapseRelayout(() -> {
-            if (toolbarRow.isDisposed() || group.isDisposed()) return;
-            GridData rowGd = (GridData) toolbarRow.getLayoutData();
-            rowGd.heightHint = tabControl.isTabsCollapsed() ? SWT.DEFAULT : TOOLBAR_ROW_HEIGHT;
-            group.layout(true, true);
-        });
+        tabControl.setOwner(this);
 
         // Wizard button (left of Play) — opens the 3-page calibration wizard.
         wizardButton = createActionButton(toolbarRow, SWT.PUSH);
@@ -478,6 +472,15 @@ public final class FreqRespPane extends AbstractPane {
     @Override
     protected AbstractTabControl tabStrip() {
         return tabControl;
+    }
+
+    @Override
+    protected void onTabCollapse() {
+        Composite toolbarRow = tabControl.getParent();
+        if (toolbarRow.isDisposed() || group.isDisposed()) return;
+        GridData rowGd = (GridData) toolbarRow.getLayoutData();
+        rowGd.heightHint = tabControl.isTabsCollapsed() ? SWT.DEFAULT : TOOLBAR_ROW_HEIGHT;
+        group.layout(true, true);
     }
 
     /** Builds the offscreen FreqResp clone for {@link #renderOffscreen}: fresh

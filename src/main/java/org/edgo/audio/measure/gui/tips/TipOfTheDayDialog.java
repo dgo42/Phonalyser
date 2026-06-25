@@ -22,6 +22,7 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
+import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
@@ -72,6 +73,7 @@ public final class TipOfTheDayDialog {
     private Label titleLabel;
     private Label bodyLabel;
     private Button closeButton;
+    private Composite footer;
     private Font boldFont;
 
     private int count = 1;
@@ -122,17 +124,17 @@ public final class TipOfTheDayDialog {
         heading.setFont(boldFont);
         heading.setText(I18n.t("tip.dialog.heading"));
 
-        titleLabel = new Label(body, SWT.WRAP);
+        titleLabel = new Label(body, SWT.NONE);
         style(titleLabel, bg, fg);
         titleLabel.setFont(boldFont);
         titleLabel.setLayoutData(textData());
 
-        bodyLabel = new Label(body, SWT.WRAP);
+        bodyLabel = new Label(body, SWT.NONE);
         style(bodyLabel, bg, fg);
         bodyLabel.setLayoutData(textData());
 
         // Footer: [Don't show again]  [Next tip]  [Close (Ns)]
-        Composite footer = new Composite(body, SWT.NONE);
+        footer = new Composite(body, SWT.NONE);
         footer.setBackground(bg);
         GridLayout fl = new GridLayout(3, false);
         fl.marginWidth = 0;
@@ -185,10 +187,47 @@ public final class TipOfTheDayDialog {
 
     private void showTip() {
         int n = index + 1;
-        titleLabel.setText(I18n.t("tip." + n + ".title"));
-        bodyLabel.setText(I18n.t("tip." + n + ".body"));
-        shell.pack();
+        int wrapWidth = contentWidth();
+        titleLabel.setText(wrapText(titleLabel, I18n.t("tip." + n + ".title"), wrapWidth));
+        bodyLabel.setText(wrapText(bodyLabel, I18n.t("tip." + n + ".body"), wrapWidth));
+        shell.pack(true);
         placeBottomLeft();
+    }
+
+    /** The pixel width the tip text wraps to: at least {@link #TEXT_WIDTH}, but
+     *  widened to the footer (checkbox + two buttons) when it needs more room,
+     *  so the text fills the popup's real width instead of wrapping early. */
+    private int contentWidth() {
+        return Math.max(TEXT_WIDTH, footer.computeSize(SWT.DEFAULT, SWT.DEFAULT).x);
+    }
+
+    /** Word-wraps {@code text} to {@code width} pixels, measured in
+     *  {@code owner}'s own font, by inserting line breaks at word boundaries.
+     *  The native {@code SWT.WRAP} on a {@link Label} broke words mid-line for
+     *  the tip text, so the wrapping is done here and the labels render the
+     *  explicit lines — which also keeps each label's height exact, so the popup
+     *  never carries a stale size (or blank space) over from the previous tip. */
+    private String wrapText(Control owner, String text, int width) {
+        GC gc = new GC(owner);
+        gc.setFont(owner.getFont());
+        try {
+            StringBuilder out  = new StringBuilder();
+            StringBuilder line = new StringBuilder();
+            for (String word : text.split(" ")) {
+                String candidate = line.length() == 0 ? word : line + " " + word;
+                if (line.length() > 0 && gc.textExtent(candidate).x > width) {
+                    out.append(line).append('\n');
+                    line.setLength(0);
+                    line.append(word);
+                } else {
+                    line.setLength(0);
+                    line.append(candidate);
+                }
+            }
+            return out.append(line).toString();
+        } finally {
+            gc.dispose();
+        }
     }
 
     // --- countdown -----------------------------------------------------------
@@ -234,9 +273,7 @@ public final class TipOfTheDayDialog {
     }
 
     private GridData textData() {
-        GridData gd = new GridData(SWT.FILL, SWT.TOP, true, false);
-        gd.widthHint = TEXT_WIDTH;
-        return gd;
+        return new GridData(SWT.FILL, SWT.TOP, true, false);
     }
 
     private Font boldOf(Font base) {

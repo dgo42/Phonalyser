@@ -12,3 +12,4 @@ test.*
 release.properties
 dependency-reduced-pom.xml
 buildNumber.properties
+HOWTO-RELEASE.md

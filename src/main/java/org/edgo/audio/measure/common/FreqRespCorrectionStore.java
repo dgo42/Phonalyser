@@ -22,6 +22,7 @@ import lombok.Getter;
 import lombok.Value;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
+import org.edgo.audio.measure.gui.bus.MessageBus;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -56,12 +57,11 @@ import java.util.List;
  * wizard).  Nothing needs global access, so this is a plain object, not a
  * singleton.
  *
- * <p>This class is GUI-agnostic so the CLI can reuse it: change notification
- * is delivered through the constructor-supplied {@code changeNotifier}
- * (no-op when {@code null}) rather than a hard-wired event bus.  The GUI
- * passes a notifier that publishes the matching {@code MessageBus} event so
- * the pane's calibration tab refreshes and the view re-derives its displayed
- * copy; headless / CLI callers pass {@code null}.
+ * <p>Change notification is config, not a callback: the constructor takes the
+ * name of the {@code MessageBus} event to publish after every mutation
+ * ({@code null} = silent), so the owning pane's calibration tab refreshes and
+ * the view re-derives its displayed copy.  The offscreen screenshot store
+ * passes {@code null}.
  *
  * <p>All access is on the owning view's single (UI) thread, so no internal
  * synchronisation is needed.  The wizard captures a {@link #snapshot()} on
@@ -105,9 +105,9 @@ public final class FreqRespCorrectionStore {
 
     /** Human label distinguishing the instances in log lines (e.g. "FFT"). */
     private final String label;
-    /** Run after every mutation so the owner can react (the GUI publishes its
-     *  {@code MessageBus} calibration-changed event).  Never {@code null}. */
-    private final Runnable changeNotifier;
+    /** Name of the {@code MessageBus} event published after every mutation, or
+     *  {@code null} for a silent store (e.g. the offscreen screenshot clone). */
+    private final String changedEvent;
 
     private final List<Entry> entries = new ArrayList<>();
 
@@ -117,13 +117,13 @@ public final class FreqRespCorrectionStore {
     private StereoFreqRespCalibration direct;
 
     /**
-     * @param label          short identifier for this store's log lines
-     * @param changeNotifier invoked after every mutation; {@code null} for a
-     *                       silent (e.g. CLI) store
+     * @param label        short identifier for this store's log lines
+     * @param changedEvent {@code MessageBus} event published after every
+     *                     mutation; {@code null} for a silent store
      */
-    public FreqRespCorrectionStore(String label, Runnable changeNotifier) {
-        this.label          = label;
-        this.changeNotifier = (changeNotifier == null) ? () -> { } : changeNotifier;
+    public FreqRespCorrectionStore(String label, String changedEvent) {
+        this.label        = label;
+        this.changedEvent = changedEvent;
     }
 
     // -------------------------------------------------------------------------
@@ -248,6 +248,6 @@ public final class FreqRespCorrectionStore {
     }
 
     private void fire() {
-        changeNotifier.run();
+        if (changedEvent != null) MessageBus.instance().publish(changedEvent);
     }
 }

@@ -28,6 +28,8 @@ import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 
+import lombok.Setter;
+
 /**
  * Shared base for a pane's toolbar tab control (FFT / oscilloscope / frequency
  * response).  Each pane builds a {@link TileTabFolder} of settings tabs and
@@ -55,6 +57,12 @@ public abstract class AbstractTabControl extends Composite {
      *  delegations below null-guard against the pre-assignment window. */
     protected TileTabFolder toolbarTabs;
 
+    /** The pane that owns this tab strip, set by it via {@code setOwner}.  Its
+     *  {@link AbstractPane#onTabCollapse()} re-flows the pane when the tab body
+     *  collapses / expands; {@code null} during the pre-wiring window. */
+    @Setter
+    private AbstractPane owner;
+
     protected AbstractTabControl(Composite parent, int style) {
         super(parent, style);
         Display d = getDisplay();
@@ -62,10 +70,11 @@ public abstract class AbstractTabControl extends Composite {
         this.crosshairIcon = IconUtils.icon(d, Icon.CROSSHAIR_BIG);
     }
 
-    /** Runs {@code r} after each tab-body collapse / expand so the host pane
-     *  can re-flow its own layout into (or out of) the freed space. */
-    public void setCollapseRelayout(Runnable r) {
-        if (toolbarTabs != null) toolbarTabs.setCollapseRelayout(r);
+    /** Called by {@link TileTabFolder} after each tab-body collapse / expand so
+     *  the owning pane can re-flow its own layout into (or out of) the freed
+     *  space.  Delegates to the pane — no callback indirection. */
+    public void onTabCollapsed() {
+        if (owner != null) owner.onTabCollapse();
     }
 
     /** True when the tab body is collapsed to just the strip. */

@@ -14,9 +14,16 @@
         </RollingFile>
     </Appenders>
     <Loggers>
-        <Root level="INFO">
-            <AppenderRef ref="Console"/>
+        <!-- PortAudio native-library loading logs at INFO (which DLL / folder was
+             resolved) for field diagnostics, without raising the rest of the app
+             above WARN. -->
+        <Logger name="org.edgo.audio.measure.sound.PortAudio" level="INFO" additivity="false">
+            <AppenderRef ref="Console" level="ERROR"/>
             <AppenderRef ref="File"/>
+        </Logger>
+        <Root level="WARN">
+            <AppenderRef ref="Console" level="ERROR" />
+            <AppenderRef ref="File" level="WARN" />
         </Root>
     </Loggers>
 </Configuration>
