@@ -54,7 +54,7 @@ public final class GuiMain {
         // Relocate the log file to the per-user writable data dir — a packaged
         // macOS .app (or a Windows Program Files install) is read-only, so the
         // default 'logs/' next to the executable can't be written and the
-        // failure is itself unloggable.  This MUST run before the first logger
+        // failure is itself un loggable.  This MUST run before the first logger
         // boots log4j (which resolves the RollingFile path): GuiMain has no
         // class-load @Log4j2 logger and AppPaths uses a lazy logger, so neither
         // boots log4j before this line sets the property.
@@ -143,10 +143,25 @@ public final class GuiMain {
                 break;
             }
         }
+        // Realtime render loop.  Drain every pending event each pass, then paint
+        // the active tab's live views (scope + FFT) in ONE frame — so neither
+        // view depends on its own timer / async cadence and the two can't starve
+        // each other (the FFT's single coalesced result hand-off otherwise sat a
+        // beat behind the scope's repaint, hiding the first average and further
+        // updates until Record was toggled).  While a live view is updating, a
+        // no-op one-shot timer paces the next frame; when nothing is live no
+        // timer is armed and the loop blocks in sleep() until a real event, so an
+        // idle app stays cool.
+        final int RENDER_FRAME_MS = 16;
         while (!window.isDisposed()) {
-            if (!display.readAndDispatch()) {
-                display.sleep();
+            while (display.readAndDispatch()) {
+                if (window.isDisposed()) break;
             }
+            if (window.isDisposed()) break;
+            boolean active = window.renderRealtimeFrame();
+            if (window.isDisposed()) break;
+            if (active) display.timerExec(RENDER_FRAME_MS, () -> { /* no-op: only wakes sleep() to drive the next frame */ });
+            display.sleep();
         }
         display.dispose();
     }

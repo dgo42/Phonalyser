@@ -26,6 +26,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
@@ -39,7 +40,6 @@ import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Control;
-import org.eclipse.swt.widgets.DirectoryDialog;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
@@ -194,6 +194,14 @@ public final class MainWindow {
 
     public boolean isDisposed() {
         return shell.isDisposed();
+    }
+
+    /** Loop-driven realtime repaint of the active tab's live views, called once
+     *  per frame by the main event loop's render tick (see {@code GuiMain}).
+     *  Returns {@code true} while a live view is updating so the loop maintains
+     *  the realtime cadence; {@code false} when idle so the loop can truly sleep. */
+    public boolean renderRealtimeFrame() {
+        return mainTab != null && mainTab.renderRealtimeFrame();
     }
 
     /** Closes the shell, ending the SWT event loop — how an automation
@@ -405,7 +413,7 @@ public final class MainWindow {
             // CURRENT panes — running it after rebuildContent would drive
             // disposed widgets.
             if (!audioConfigFingerprint(mwPrefs).equals(audioBefore)) {
-                mainTab.pauseForDialog().run();
+                mainTab.pauseForDialog();
             }
             if (!fontsAfter.equals(fontsBefore)) {
                 rebuildContent();
@@ -435,30 +443,83 @@ public final class MainWindow {
         }
     }
 
-    /** Lets a translator regenerate a help bundle's search index in place:
-     *  pick the {@code help/<lang>} folder, rebuild {@code search-index.js}
-     *  and {@code help-index.html} from its current pages. */
+    /** Regenerates the search index ({@code search-index.js} +
+     *  {@code help-index.html}) for EVERY help language bundle in one action.
+     *  The on-disk help source is located automatically (the app run from the
+     *  project root, or derived from the compiled-resources path), so no folder
+     *  has to be picked. */
     private void rebuildHelpIndex() {
-        DirectoryDialog dd = new DirectoryDialog(shell);
-        dd.setText(I18n.t("help.index.rebuild.title"));
-        dd.setMessage(I18n.t("help.index.rebuild.choose"));
-        String picked = dd.open();
-        if (picked == null) return;
-        Path dir = Paths.get(picked);
-        if (!Files.isRegularFile(dir.resolve("index.html"))) {
+        Path root = locateHelpSourceRoot();
+        List<Path> bundles = (root == null) ? List.of() : helpBundles(root);
+        if (bundles.isEmpty()) {
             Dialogs.error(shell, I18n.t("help.index.rebuild.title"),
                     I18n.t("help.index.rebuild.notHelpDir"));
             return;
         }
+        int pages = 0;
+        int topics = 0;
+        int terms = 0;
         try {
-            int[] s = new HelpIndexBuilder(dir).build();
-            Dialogs.info(shell, I18n.t("help.index.rebuild.title"),
-                    I18n.t("help.index.rebuild.done", s[0], s[1], s[2]));
+            for (Path bundle : bundles) {
+                int[] s = new HelpIndexBuilder(bundle).build();
+                log.info("Help index rebuilt for {}: pages={} topics={} terms={}",
+                        bundle.getFileName(), s[0], s[1], s[2]);
+                pages += s[0];
+                topics += s[1];
+                terms += s[2];
+            }
         } catch (IOException ex) {
-            log.error("Help index rebuild failed for {}: {}", dir, ex.getMessage(), ex);
+            log.error("Help index rebuild failed: {}", ex.getMessage(), ex);
             Dialogs.error(shell, I18n.t("help.index.rebuild.title"),
                     I18n.t("help.index.rebuild.failed", ex.getMessage()));
+            return;
         }
+        Dialogs.info(shell, I18n.t("help.index.rebuild.title"),
+                I18n.t("help.index.rebuild.done", pages, topics, terms));
+    }
+
+    /** Resolves the on-disk {@code help/} source root that holds the per-language
+     *  bundles, or {@code null} when it can't be found (e.g. the app isn't run
+     *  from a source checkout).  The index must be written into the SOURCE tree
+     *  (not the compiled {@code target/classes} copy), so this prefers
+     *  {@code <cwd>/src/main/resources/help} and otherwise derives the source
+     *  path from the compiled-resources location. */
+    private Path locateHelpSourceRoot() {
+        Path fromCwd = Paths.get(System.getProperty("user.dir", "."),
+                "src", "main", "resources", "help");
+        if (Files.isDirectory(fromCwd)) return fromCwd;
+        try {
+            URL u = getClass().getClassLoader().getResource("help");
+            if (u != null && "file".equals(u.getProtocol())) {
+                // <root>/target/classes/help -> <root>/src/main/resources/help
+                Path classesHelp = Paths.get(u.toURI());
+                Path projectRoot = classesHelp.getParent().getParent().getParent();
+                Path src = projectRoot.resolve(Paths.get("src", "main", "resources", "help"));
+                if (Files.isDirectory(src)) return src;
+            }
+        } catch (Exception ex) {
+            log.warn("Could not derive help source root from the classpath", ex);
+        }
+        return null;
+    }
+
+    /** Help language bundles under {@code root}: every immediate sub-folder that
+     *  holds an {@code index.html} (one per language), or {@code root} itself
+     *  when it is a single bundle. */
+    private List<Path> helpBundles(Path root) {
+        List<Path> bundles = new ArrayList<>();
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(root, Files::isDirectory)) {
+            for (Path sub : ds) {
+                if (Files.isRegularFile(sub.resolve("index.html"))) bundles.add(sub);
+            }
+        } catch (IOException ex) {
+            log.warn("Could not enumerate help bundles in {}", root, ex);
+        }
+        if (bundles.isEmpty() && Files.isRegularFile(root.resolve("index.html"))) {
+            bundles.add(root);
+        }
+        bundles.sort(Comparator.comparing(p -> p.getFileName().toString()));
+        return bundles;
     }
 
     /** Scans the active i18n source for {@code messages*.properties}

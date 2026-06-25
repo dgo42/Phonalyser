@@ -19,9 +19,12 @@
 package org.edgo.audio.measure.common;
 
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
+import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -34,18 +37,27 @@ import static org.junit.jupiter.api.Assertions.assertSame;
  * entries / direct slots' independence, the change-notifier semantics, and
  * the snapshot / restore pair used by the wizard's cancel path.
  *
- * <p>Each test gets a fresh store wired to a counting notifier, so the change
- * count is asserted directly without an event bus.
+ * <p>Each test subscribes a counter to the store's configured {@code MessageBus}
+ * event, so the change count is asserted directly.
  */
 class FreqRespCorrectionStoreTest {
 
-    private AtomicInteger changes;
+    private static final String TEST_EVENT = "test.calibration.changed";
+
+    private final AtomicInteger  changes = new AtomicInteger();
+    private final Consumer<Void> counter = ignored -> changes.incrementAndGet();
     private FreqRespCorrectionStore store;
 
     @BeforeEach
     void setup() {
-        changes = new AtomicInteger();
-        store = new FreqRespCorrectionStore("test", changes::incrementAndGet);
+        changes.set(0);
+        MessageBus.instance().subscribe(TEST_EVENT, counter);
+        store = new FreqRespCorrectionStore("test", TEST_EVENT);
+    }
+
+    @AfterEach
+    void teardown() {
+        MessageBus.instance().unsubscribe(TEST_EVENT, counter);
     }
 
     @Test

@@ -196,39 +196,44 @@ public final class Events {
      *  UI thread (the click handler runs there). */
     public static final String SCOPE_AUTO_SETUP = "scope.autoSetup";
 
+    /** Published by {@code ScopeView} on the UI thread when a SINGLE-mode shot
+     *  disarms itself because the awaited trigger fired, so the trigger Start
+     *  toggle can pop back out.  No payload. */
+    public static final String SCOPE_SINGLE_DISARMED = "scope.single.disarmed";
+
     /** Notification — the FreqResp view's visible freq / magnitude pan
      *  window changed.  No payload — subscribers read fresh values from
      *  {@code Preferences}.  Mirror of {@link #FFT_RANGE_CHANGED} for the
      *  Frequency Response pane. */
-    public static final String FREQRESP_RANGE_CHANGED = "freqresp.range.changed";
+    public static final String FREQRESP_RANGE_CHANGED = "freqResp.range.changed";
 
     /** Notification — the active Frequency Response calibration changed
      *  (loaded from file, cleared, or replaced by the wizard).  No
      *  payload — subscribers read from {@code FreqRespCorrectionStore}. */
-    public static final String FREQRESP_CALIBRATION_CHANGED = "freqresp.calibration.changed";
+    public static final String FREQRESP_CALIBRATION_CHANGED = "freqResp.calibration.changed";
 
     /** Notification — the FreqResp pane started a measurement.  No
      *  payload.  Other panes (FFT, scope) subscribe to disable their
      *  Record buttons for the duration so the shared capture device
      *  isn't contended. */
-    public static final String FREQRESP_MEASUREMENT_STARTED = "freqresp.measurement.started";
+    public static final String FREQRESP_MEASUREMENT_STARTED = "freqResp.measurement.started";
 
     /** Notification — the FreqResp pane finished (or aborted) a
      *  measurement.  No payload.  Counterpart to
      *  {@link #FREQRESP_MEASUREMENT_STARTED}. */
-    public static final String FREQRESP_MEASUREMENT_STOPPED = "freqresp.measurement.stopped";
+    public static final String FREQRESP_MEASUREMENT_STOPPED = "freqResp.measurement.stopped";
 
     /** Notification — a fresh sweep measurement is available for display.
      *  Payload: the {@code StereoFreqRespResult} (both channels).
      *  Published by the analyzer worker on its worker thread —
      *  widget-touching subscribers must marshal. */
-    public static final String FREQRESP_RESULT_AVAILABLE = "freqresp.result.available";
+    public static final String FREQRESP_RESULT_AVAILABLE = "freqResp.result.available";
 
     /** Notification — a sweep measurement aborted with an error.
      *  Payload: the human-readable failure reason ({@code String}).
      *  Published on the UI thread; always followed by
      *  {@link #FREQRESP_MEASUREMENT_STOPPED}. */
-    public static final String FREQRESP_MEASUREMENT_FAILED = "freqresp.measurement.failed";
+    public static final String FREQRESP_MEASUREMENT_FAILED = "freqResp.measurement.failed";
 
     /** Notification — a parameter that affects how the compare-mode
      *  curve is derived (e.g. the smoothing window size) changed.
@@ -236,7 +241,7 @@ public final class Events {
      *  smoothed diff, refresh the anchor / min-max table, and
      *  redraw.  Distinct from {@link #FREQRESP_RANGE_CHANGED}
      *  because the visible band itself does not change. */
-    public static final String FREQRESP_COMPARE_PARAMS_CHANGED = "freqresp.compare.params.changed";
+    public static final String FREQRESP_COMPARE_PARAMS_CHANGED = "freqResp.compare.params.changed";
 
     /** Notification — the FFT pane's loaded calibration list changed
      *  (file added / removed / replaced / cleared).  No payload —

@@ -107,7 +107,7 @@ public final class MultifunctionalTab {
     /** Pauses live capture + generator playback for the lifetime of a
      *  modal dialog (e.g. Preferences).  Returns a {@link Runnable} that
      *  resumes both when the dialog closes. */
-    public Runnable pauseForDialog() {
+    public void pauseForDialog() {
         boolean oscWasRunning = oscPane != null && oscPane.isCapturing();
         if (oscWasRunning) oscPane.stopCapture();
         // The FFT pane holds its own ref on SharedCapture when recording.
@@ -115,13 +115,19 @@ public final class MultifunctionalTab {
         // SharedCapture.acquire() short-circuits, and any sample-rate /
         // device / bit-depth change the user just made is silently
         // ignored (the existing buffer keeps running at the OLD rate).
-        Runnable resumeFft = (fftPane != null) ? fftPane.pauseForDialog() : () -> {};
-        Runnable resumeGen = (genPane != null) ? genPane.pauseAroundDialog() : () -> {};
-        return () -> {
-            if (oscWasRunning) oscPane.startCapture();
-            resumeFft.run();
-            resumeGen.run();
-        };
+        if (oscWasRunning) oscPane.startCapture();
+        if (fftPane != null) fftPane.pauseForDialog();
+        if (genPane != null) genPane.pauseAroundDialog();
+    }
+
+    /** Loop-driven realtime repaint of the live scope + FFT views, called once
+     *  per frame by the main event loop's render tick.  Returns {@code true}
+     *  while either view is live so the loop keeps the realtime cadence. */
+    public boolean renderRealtimeFrame() {
+        boolean active = false;
+        if (oscPane != null) active |= oscPane.renderRealtimeFrame();
+        if (fftPane != null) active |= fftPane.renderRealtimeFrame();
+        return active;
     }
 
     // -------------------------------------------------------------------------
@@ -142,7 +148,7 @@ public final class MultifunctionalTab {
         this.oscPane = new ScopePane(vSplit, engines.getScopeController());
 
         fftPane = new FftPane(vSplit, engines.getGeneratorController(),
-                engines.getFftController(), engines.getFftCorrectionStore());
+                engines.getFftController());
 
         // Title-bar collapse clicks are broadcast through the MessageBus
         // by each pane.  Store the handlers as fields so the matching

@@ -61,6 +61,8 @@ public final class NumericStepField extends Composite {
     private final Canvas     downBtn;
     private final int        preferredHeight;
     private final List<Listener> selectionListeners = new ArrayList<>();
+    /** Caller-set tooltip, WITHOUT the auto-appended step hint. */
+    private String baseToolTip = "";
 
     /** FIXED-policy field: wheel adds {@code wheelStep}, arrows add
      *  {@code arrowStep} (canonical units), exactly {@code decimals} decimal
@@ -209,10 +211,28 @@ public final class NumericStepField extends Composite {
      *  this widget's own background. */
     @Override
     public void setToolTipText(String text) {
-        super.setToolTipText(text);
-        field.setToolTipText(text);
-        upBtn.setToolTipText(text);
-        downBtn.setToolTipText(text);
+        baseToolTip = text != null ? text : "";
+        applyToolTip();
+    }
+
+    /** Composes the displayed tooltip = the caller's base text + the model's
+     *  live step hint (wheel / arrows) and pushes it to the inner children.
+     *  Re-applied on every {@link #refresh()} so the hint tracks the display
+     *  unit (e.g. arrows "±1 Hz" → "±1 kHz" once the field shows kHz). */
+    private void applyToolTip() {
+        String hint = model.stepHint();
+        String full;
+        if (hint == null || hint.isEmpty()) {
+            full = baseToolTip;
+        } else if (baseToolTip.isEmpty()) {
+            full = "(" + hint + ")";
+        } else {
+            full = baseToolTip + "  (" + hint + ")";
+        }
+        super.setToolTipText(full);
+        field.setToolTipText(full);
+        upBtn.setToolTipText(full);
+        downBtn.setToolTipText(full);
     }
 
     public void addSelectionListener(Listener l) {
@@ -293,6 +313,7 @@ public final class NumericStepField extends Composite {
     /** Force a reformat of the current value (e.g. after a locale change). */
     public void refresh() {
         field.setText(model.text());
+        applyToolTip();   // keep the unit-dependent step hint current
     }
 
     /**

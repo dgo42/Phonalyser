@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Measurement bench &amp; wiring</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>Measurement bench &amp; wiring</h1>
+  <p>Sub-ppm THD and &minus;150&nbsp;dBV noise floors only mean something if the
+     <em>wiring</em> between the parts of the bench injects less noise than the
+     DUT produces. This page shows how the generator (DAC), the device under test
+     (DUT) and the capture (ADC) are connected so external electromagnetic fields
+     induce as little voltage as possible on the <b>signal</b> and
+     <b>signal-ground</b> wires. There is <b>no separate room cage</b>: the device
+     enclosures and the cable shields together build one continuous conductive
+     envelope around the signal pair — a <em>distributed</em> Faraday cage, tied
+     through XLR pin&nbsp;1 and earthed at a single point.</p>
+
+  <p><img src="img/faraday-cage-bench.svg" alt="Bench wiring diagram"
+          style="max-width:100%;height:auto;"/></p>
+
+  <h2>The cable: CAT.8 patch cable, not "audio" coax</h2>
+  <div class="pane">
+    <p>Use a <b>computer twisted-pair CAT.8 patch cable</b> terminated in
+       <b>XLR</b> connectors. CAT.8 carries a <b>double shield</b>: an
+       aluminium/PET <b>foil</b> around <em>each</em> pair plus an overall screen
+       around all four. A foil is a <em>continuous, hole-free</em> screen — unlike
+       the braided shield of coax, a mesh full of small openings that leak fields.
+       The twist is the second weapon: it shrinks the loop area between signal and
+       return so a magnetic field induces equal-and-opposite EMFs in successive
+       twists that cancel.<sup id="cite-1"><a href="#ref-ott">[1]</a></sup></p>
+  </div>
+  <div class="note"><b>"High-end" audio coax is the wrong tool here.</b> Much
+     boutique audio cable has surprisingly weak shielding (thin or low-coverage
+     braid) and is marketed on properties that are insignificant — or
+     non-existent — for a measurement bench. Pay for shield coverage and a tight
+     twist, not for the story.</div>
+
+  <h2>XLR wiring — one pair carries the signal</h2>
+  <div class="pane">
+    <p>The connection is <b>unbalanced</b>, carried on <b>one twisted pair</b>,
+       with the foil used as a separate chassis screen:</p>
+    <table>
+      <tr><th>CAT.8 wire</th><th>XLR pin</th><th>Role</th></tr>
+      <tr><td>blue-white</td><td>2 (hot)</td><td><b>Signal</b></td></tr>
+      <tr><td>blue</td><td>3 (cold)</td><td><b>Signal ground</b> (unbalanced return)</td></tr>
+      <tr><td>green + green-white + drain</td><td>1</td><td><b>Shield</b> → device chassis</td></tr>
+    </table>
+    <p>So signal (pin&nbsp;2) and signal ground (pin&nbsp;3) are the
+       <b>blue/blue-white twisted pair</b>; the green pair and the drain wire all
+       go to <b>pin&nbsp;1</b> as the shield/chassis screen.</p>
+  </div>
+  <p><img src="img/XLR wiring.jpg" alt="XLR wiring"
+          style="max-width:480px;width:100%;height:auto;border:1px solid #dde;"/></p>
+
+  <h2>Single-point grounding — the key trick</h2>
+  <div class="pane">
+    <p><b>Signal ground (pin&nbsp;3) is bonded to the shield (pin&nbsp;1) at
+       exactly one place — normally the DUT input or output; test both and keep
+       whichever is quieter.</b> Everywhere else the signal-ground wire is
+       isolated from the shield and the chassis.</p>
+    <p>If the signal ground also acted as the shield (as in ordinary single-ended
+       coax), any current an external field induces in the shield would flow
+       <em>through the signal return</em> and add directly to the signal at the
+       DUT input. Giving the shield its own conductor (pin&nbsp;1, bonded to every
+       chassis) and tying the signal ground to it at <b>one</b> point only gives
+       those shield/eddy currents their own return path, out of series with the
+       signal.</p>
+    <p><b>Each device's chassis connects to the shield (pin&nbsp;1), never to
+       signal ground (pin&nbsp;3).</b> The chassis screens form one continuous
+       shield at cage/earth potential; the signal ground floats on the twisted
+       pair and touches that shield only at the single star point at the DUT.</p>
+  </div>
+
+  <h2>How much noise is left?</h2>
+  <div class="pane">
+    <p><b>Electric fields</b> — the usual capacitive hum source — are excluded
+       entirely by the continuous shield/chassis envelope (the foil around the
+       pair plus the metal enclosures form one closed conductor). <b>Magnetic
+       fields</b> aren't blocked by an electrostatic screen; they're out-run by
+       minimising loop area. The envelope helps a little (the external AC field
+       drives <b>eddy currents</b> in the shield/chassis walls, which radiate a
+       weaker opposing field), but the dominant defence is the <b>tiny loop
+       area</b> of the twisted pair. Faraday's law,
+       <code>V = &omega;&middot;B&middot;A<sub>eff</sub></code>:</p>
+    <table>
+      <tr><th>Quantity</th><th>Estimate (50&nbsp;Hz)</th></tr>
+      <tr><td>Ambient mains field in a normal room (B)<sup id="cite-2"><a href="#ref-who">[2]</a></sup></td><td>~0.1&nbsp;µT (0.05–1&nbsp;µT)</td></tr>
+      <tr><td>Residual inside the cage</td><td>~0.05&nbsp;µT</td></tr>
+      <tr><td>Twisted-pair loop area (pessimistic)</td><td>~10&nbsp;mm² = 1&times;10⁻⁵&nbsp;m²</td></tr>
+      <tr><td><b>Induced EMF</b></td><td><b>≈ 0.16&nbsp;nV ≈ &minus;196&nbsp;dBV</b></td></tr>
+    </table>
+    <p>Even a deliberately pessimistic case — no envelope attenuation and 10&times;
+       the loop area — gives ≈&nbsp;3&nbsp;nV ≈ &minus;170&nbsp;dBV, still tens of
+       dB below the converter's own noise floor (≈&nbsp;&minus;150…&minus;160&nbsp;dBV
+       per bin). Drop the discipline — let the signal ground double as the shield,
+       exposing the whole cable-to-chassis loop — and the same field induces
+       <b>micro-volts</b> (≈&nbsp;&minus;120&nbsp;dBV): audible hum. The twist plus
+       single-point ground buys roughly <b>50–80&nbsp;dB</b>.</p>
+  </div>
+
+  <h2>Example DUTs</h2>
+  <div class="pane">
+    <p>The same wiring feeds whatever sits in the cage — here a twin-T 1&nbsp;kHz
+       notch and an anti-RIAA filter:</p>
+    <p>
+      <img src="img/twin-T 1kHz filter.jpg" alt="twin-T 1 kHz filter"
+           style="max-width:320px;width:48%;height:auto;border:1px solid #dde;"/>
+      <img src="img/anti RIAA filter 1.jpg" alt="anti-RIAA filter"
+           style="max-width:320px;width:48%;height:auto;border:1px solid #dde;"/>
+    </p>
+  </div>
+
+  <h2 id="refs">References</h2>
+  <ol class="refs">
+    <li id="ref-ott"><a href="#cite-1">1.</a>
+        <b>Shielding &amp; grounding technique.</b> H.&nbsp;W.&nbsp;Ott,
+        <i>Electromagnetic Compatibility Engineering</i> (Wiley, 2009),
+        ISBN&nbsp;978-0-470-18930-6 — Chapter&nbsp;2 “Cabling”, esp. §2.12 Coaxial
+        Cable Versus Twisted Pair, §2.13 Braided Shields, and §2.15.2 Grounding of
+        Cable Shields.</li>
+    <li id="ref-who"><a href="#cite-2">2.</a>
+        <b>Ambient mains magnetic field.</b> World Health Organization,
+        <i>Electromagnetic fields and public health: exposure to extremely low
+        frequency (ELF) fields</i> (fact sheet, 2007): residential power-frequency
+        background averages ≈&nbsp;0.07&nbsp;µT (Europe) and
+        ≈&nbsp;0.11&nbsp;µT (North&nbsp;America), rising locally near appliances.
+        See also WHO <i>Environmental Health Criteria 238 — Extremely Low Frequency
+        Fields</i> (2007) and the U.S. NIEHS booklet <i>EMF: Electric and Magnetic
+        Fields Associated with the Use of Electric Power</i>
+        (≈&nbsp;0.5–4&nbsp;mG = 0.05–0.4&nbsp;µT).
+        <a href="https://www.who.int/news-room/fact-sheets/detail/electromagnetic-fields-and-public-health-exposure-to-extremely-low-frequency-fields">who.int — ELF fields fact sheet</a>.</li>
+  </ol>
+
+</body>
+</html>

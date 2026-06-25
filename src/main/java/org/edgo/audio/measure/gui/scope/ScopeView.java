@@ -207,6 +207,36 @@ public final class ScopeView extends AbstractMeasurementView {
     private int     capturedDispStart;
     private int     capturedDispCount;
     private double  capturedSubSampleOffset;
+    /** Per-channel DC (normalised) of the captured frame, cached at freeze so
+     *  AC-mode held renders subtract a STABLE bias instead of the live, still-
+     *  averaging worker mean (which would drift the frozen trace vertically). */
+    private double  capturedDcL;
+    private double  capturedDcR;
+    /** time/div in effect when the frame was frozen — lets {@link
+     *  #renderHeldCapturedFrame} re-derive the shown window for the current
+     *  time/div so Ctrl+Shift+wheel zoom works on a frozen frame. */
+    private double  capturedTimePerDiv;
+    /** Absolute start sample + sub-sample offset of the window the last live
+     *  (AUTO / hold) paint rendered, so a mode-switch freeze re-grabs the EXACT
+     *  frame that was on screen instead of newer samples that arrived since the
+     *  last live paint (a visible left/right shift on a sweep / fast time-base).
+     *  {@code lastLiveDispStartAbs} is -1 until a live frame has been drawn. */
+    private long    lastLiveDispStartAbs = -1;
+    private double  lastLiveSubSampleOffset;
+    /** Live cursor X within the canvas, tracked on mouse-move — the anchor for
+     *  frozen-frame magnify. */
+    private int     hoverX;
+    /** Frozen-frame magnify state.  {@code heldViewStart} is the captured-buffer
+     *  sample shown at the LEFT edge of the held view (may be negative or past the
+     *  data — where it is, {@code blankBeyondData} makes {@link #drawTrace} draw
+     *  nothing rather than clamp/shift).  When the horizontal scale changes
+     *  ({@code lastHeldTimePerDiv} differs), the start is recomputed so the sample
+     *  under {@code hoverX} stays put; {@code lastHeldDispCount} is the previous
+     *  span used for that. */
+    private double  heldViewStart;
+    private double  lastHeldTimePerDiv;
+    private int     lastHeldDispCount;
+    private boolean blankBeyondData;
 
     /**
      * Last trigger mode seen by {@link #drawWaveforms} — used to detect
@@ -471,7 +501,7 @@ public final class ScopeView extends AbstractMeasurementView {
         Bindings.onChange(this, prefs.oscMeasurementChannelProperty(), ch -> {
             leftBtn.setToggled(ch == Channel.L);
             rightBtn.setToggled(ch == Channel.R);
-            measWorker.clearHistory();
+            clearMeasurementHistory();
             redraw();
         });
         autoSetupBtn.addListener(SWT.Selection, e -> MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP));
@@ -495,12 +525,12 @@ public final class ScopeView extends AbstractMeasurementView {
             syncScopeButtons();   // reset follows the stats toggle
             redraw();
         });
-        resetBtn.addListener(SWT.Selection, e -> { measWorker.clearHistory(); redraw(); });
+        resetBtn.addListener(SWT.Selection, e -> { clearMeasurementHistory(); redraw(); });
         // ADC re-calibration rescales every measured voltage; DAC re-calibration
         // changes the generated (loopback) level — either makes the accumulated
         // running statistics inconsistent, so clear them on a calibration change.
-        Bindings.onChange(this, prefs.adcFsVoltageRmsProperty(), v -> { measWorker.clearHistory(); redraw(); });
-        Bindings.onChange(this, prefs.dacFsVoltageAmplProperty(), v -> { measWorker.clearHistory(); redraw(); });
+        Bindings.onChange(this, prefs.adcFsVoltageRmsProperty(), v -> { clearMeasurementHistory(); redraw(); });
+        Bindings.onChange(this, prefs.dacFsVoltageAmplProperty(), v -> { clearMeasurementHistory(); redraw(); });
         syncScopeButtons();       // apply the initial signal-gated visibility
 
         setBackground(color(ColorRole.BACKGROUND));
@@ -564,6 +594,7 @@ public final class ScopeView extends AbstractMeasurementView {
             }
         });
         addMouseMoveListener(ev -> {
+            hoverX = ev.x;
             if (draggingSlider != null) {
                 updateSliderFromMouse(ev.x, ev.y);
                 return;
@@ -737,16 +768,18 @@ public final class ScopeView extends AbstractMeasurementView {
     }
 
     /**
-     * Arms a single-shot capture in SINGLE trigger mode.  The next trigger
-     * event freezes the display on that frame until {@code armSingle} is
-     * called again.  No-op effect in AUTO / NORMAL modes (those modes never
-     * read {@code singleArmed}).
+     * Arms (or cancels) a single-shot capture in SINGLE trigger mode.  While
+     * armed the display stays frozen on the held frame; the next trigger captures
+     * a fresh frame, disarms, and publishes {@link Events#SCOPE_SINGLE_DISARMED}
+     * so the Start toggle pops back out.  No effect in AUTO / NORMAL modes (those
+     * never read {@code singleArmed}).
      */
-    public void armSingle() {
-        singleArmed = true;
-        singleHeld = false;            // forget the previous capture so the live trace
-                                       // keeps showing while we wait for the next trigger
-        lastTriggerAbsPos = -1;        // wait for a fresh trigger, don't keep holding the previous one
+    public void setSingleArmed(boolean armed) {
+        singleArmed = armed;
+        if (armed) {
+            // Wait for a FRESH trigger — don't anchor on the previous one.
+            lastTriggerAbsPos = -1;
+        }
     }
 
     private void onPaint(PaintEvent e) {
@@ -849,7 +882,10 @@ public final class ScopeView extends AbstractMeasurementView {
 
     /** Pale-grey "123.4 cap/s" readout in the top-right corner. */
     private void drawCaptureRate(GC gc, int w) {
-        if (reader == null || captureRate <= 0) return;
+        // Hidden whenever this paint rendered a frozen frame (held SINGLE/NORMAL
+        // shot, blank pane, file / scrolled-back view): cap/s is meaningless
+        // without a live, self-refreshing capture.
+        if (reader == null || captureRate <= 0 || !lastFrameWasNew) return;
         gc.setAntialias(SWT.OFF);
         gc.setTextAntialias(SWT.ON);
         gc.setForeground(color(ColorRole.TEXT));
@@ -994,8 +1030,8 @@ public final class ScopeView extends AbstractMeasurementView {
             long windowNanos = (long) (prefs.getOscMeasurementAverageSeconds() * 1e9);
             long cutoff = now - windowNanos;
             MeasurementStats vppS   = new MeasurementStats();
-            MeasurementStats vrmsS  = new MeasurementStats();
-            MeasurementStats vmeanS = new MeasurementStats();
+            MeasurementStats vRmsS  = new MeasurementStats();
+            MeasurementStats vMeanS = new MeasurementStats();
             MeasurementStats tpS    = new MeasurementStats();
             MeasurementStats trS    = new MeasurementStats();
             MeasurementStats tfS    = new MeasurementStats();
@@ -1003,8 +1039,8 @@ public final class ScopeView extends AbstractMeasurementView {
             MeasurementStats dutyS  = new MeasurementStats();
             measWorker.walkRecentHistory(cutoff, s -> {
                 vppS  .add(s.getVpp());
-                vrmsS .add(s.getVrms());
-                vmeanS.add(s.getVmean());
+                vRmsS .add(s.getVrms());
+                vMeanS.add(s.getVmean());
                 tpS   .add(s.getPeriod());
                 trS   .add(s.getRiseTime());
                 tfS   .add(s.getFallTime());
@@ -1013,8 +1049,8 @@ public final class ScopeView extends AbstractMeasurementView {
             });
             rows = new MeasurementRow[] {
                     MeasurementRow.forVolts("Vpp",   cur.getVpp(),       vppS),
-                    MeasurementRow.forVolts("Vrms",  cur.getVrms(),      vrmsS),
-                    MeasurementRow.forVolts("Vmean", cur.getVmean(),     vmeanS),
+                    MeasurementRow.forVolts("Vrms",  cur.getVrms(),      vRmsS),
+                    MeasurementRow.forVolts("Vmean", cur.getVmean(),     vMeanS),
                     MeasurementRow.forTime ("Tp",    cur.getPeriod(),    tpS),
                     MeasurementRow.forTime ("Tr",    cur.getRiseTime(),  trS),
                     MeasurementRow.forTime ("Tf",    cur.getFallTime(),  tfS),
@@ -1025,6 +1061,16 @@ public final class ScopeView extends AbstractMeasurementView {
             lastMeasurementBuildNanos = now;
         }
         return rows;
+    }
+
+    /** Clears the worker's measurement history AND the view's cached table so a
+     *  Reset (or a channel / calibration change) wipes the on-screen avg / min /
+     *  max immediately, instead of leaving the stale cached rows up until the
+     *  next throttled rebuild. */
+    private void clearMeasurementHistory() {
+        measWorker.clearHistory();
+        cachedMeasurementRows     = null;
+        lastMeasurementBuildNanos = 0;
     }
 
     /** Records the user's intent to keep the table extracted into the tool
@@ -1095,7 +1141,7 @@ public final class ScopeView extends AbstractMeasurementView {
                 });
         w.addButton(Icon.ROTATE_LEFT_RED, Icon.ROTATE_LEFT_DARK, false, false,
                 color(ColorRole.RESET), I18n.t("scope.stats.reset.tooltip"), e -> {
-                    measWorker.clearHistory();
+                    clearMeasurementHistory();
                     redraw();
                 });
         w.addCloseListener(e -> setTableExtracted(false));
@@ -1182,6 +1228,57 @@ public final class ScopeView extends AbstractMeasurementView {
         long windowNanos = Math.max(AC_DC_MIN_AVG_NANOS,
                 (long) (Preferences.instance().getOscMeasurementAverageSeconds() * 1e9));
         return measWorker.averagedChannelMean(leftChannel, windowNanos);
+    }
+
+    /**
+     * Auto-setup vertical offset fraction for the {@code left} (else right)
+     * channel at the given {@code vDiv}.  A DC-coupled channel (AC mode off) is
+     * centred on its measured DC mean so a DC-biased signal lands mid-screen
+     * instead of clipped off an edge; an AC-coupled channel — DC already removed
+     * from its trace — stays centred at 0&nbsp;V.  The screen-centre voltage is
+     * {@code (offsetFrac - 0.5) * DIVISIONS_Y * vDiv}, so centring on
+     * {@code meanV} gives {@code offsetFrac = 0.5 + meanV / (DIVISIONS_Y * vDiv)}.
+     * The result is intentionally <em>not</em> clamped to {@code [0, 1]}: a DC
+     * bias larger than half the screen height pushes the 0&nbsp;V line off-grid,
+     * which is exactly what centring such a signal requires (and the trace
+     * renderer already supports offsets outside the grid).
+     */
+    public double autoSetupOffsetFrac(boolean left, double vDiv) {
+        Preferences prefs = Preferences.instance();
+        boolean acMode = left ? prefs.isOscLeftAcMode() : prefs.isOscRightAcMode();
+        if (acMode || !(vDiv > 0)) return 0.5;
+        double peakVolts = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double meanV = acDcMean(left) * peakVolts;
+        if (!Double.isFinite(meanV)) return 0.5;
+        return 0.5 + meanV / (DIVISIONS_Y * vDiv);
+    }
+
+    /** V/div of the measurement channel, falling back to the only-visible
+     *  channel if the measurement channel is disabled. */
+    private double measurementChannelVPDiv() {
+        Preferences prefs = Preferences.instance();
+        Channel selected = prefs.getOscMeasurementChannel();
+        boolean showL = prefs.isOscLeftChannelEnabled();
+        boolean showR = prefs.isOscRightChannelEnabled();
+        if (selected == Channel.R && showR) return prefs.getOscRightVoltsPerDiv();
+        if (selected == Channel.L && showL) return prefs.getOscLeftVoltsPerDiv();
+        if (showR)                          return prefs.getOscRightVoltsPerDiv();
+        return prefs.getOscLeftVoltsPerDiv();
+    }
+
+    /** Returns the {@code [minOffsetFrac, maxOffsetFrac]} the vertical scrollbar
+     *  should cover.  Extended past the usual {@code [0, 1]} so the trace can
+     *  move all the way until either ±FS is at the grid centre.  At wide V/div
+     *  (the entire ±FS span fits on screen) the range collapses back to exactly
+     *  {@code [0, 1]} — there's nothing to scroll. */
+    public double[] offsetFracBounds() {
+        double vpdiv = measurementChannelVPDiv();
+        double fs    = Preferences.instance().getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double half  = (vpdiv <= 0 || fs <= 0)
+                ? 0.5
+                : fs / (DIVISIONS_Y * vpdiv);
+        if (half < 0.5) half = 0.5;
+        return new double[] { 0.5 - half, 0.5 + half };
     }
 
     /**
@@ -1872,14 +1969,17 @@ public final class ScopeView extends AbstractMeasurementView {
         TriggerEdge    triggerEdge = prefs.getOscTriggerEdge();
         TriggerMode    triggerMode = prefs.getOscTriggerMode();
 
-        // Drop any leftover SINGLE state on entry to SINGLE mode so the live
-        // trace inherited from AUTO / NORMAL keeps showing — a previously
-        // captured frame only re-appears after the user arms a new shot.
+        // On a trigger-mode switch: AUTO free-runs (drops any frozen frame).
+        // Entering NORMAL/SINGLE with nothing frozen yet (e.g. from AUTO) freezes
+        // the frame currently on screen (captureEntryFrame, applied after the
+        // read) so the trace persists instead of blanking until the new mode's
+        // first trigger.  Switching N<->S keeps the already-held frame as-is — NO
+        // re-capture, which would jump the trace to a freshly grabbed window.
+        boolean captureEntryFrame = false;
         if (lastTriggerMode != triggerMode) {
-            if (triggerMode == TriggerMode.SINGLE) {
-                singleHeld  = false;
-                singleArmed = false;
-            }
+            singleArmed = false;
+            if (triggerMode == TriggerMode.AUTO) singleHeld = false;
+            else if (!singleHeld)                captureEntryFrame = true;
             lastTriggerMode = triggerMode;
         }
 
@@ -1887,19 +1987,20 @@ public final class ScopeView extends AbstractMeasurementView {
         // flag when they render a genuinely new frame.
         lastFrameWasNew = false;
 
-        // SINGLE held + not currently waiting for a new trigger: render the
-        // dedicated captured-frame buffers and skip the live data flow
-        // entirely.  The captured frame is independent of the ring buffer,
-        // so it stays visible indefinitely (even after capture stops).
+        // SINGLE that isn't armed never runs live: it shows the held frozen
+        // frame if there is one (independent of the ring buffer, so it stays
+        // visible even after capture stops), otherwise it leaves the pane blank.
+        // The trace changes only when the user arms a shot and its trigger fires
+        // — it must NOT free-run like AUTO and must NOT auto-capture a fresh frame.
         boolean sincL = prefs.isOscLeftSincInterpEnabled();
         boolean sincR = prefs.isOscRightSincInterpEnabled();
         boolean acL = prefs.isOscLeftAcMode();
         boolean acR = prefs.isOscRightAcMode();
-        if (triggerMode == TriggerMode.SINGLE && singleHeld && !singleArmed) {
-            double[] dc = computeAcOffsetsForCaptured(reader, acL, acR);
-            renderTraces(gc, w, h, capturedLeft, capturedRight, capturedLen,
-                         capturedDispStart, capturedSubSampleOffset, capturedDispCount,
-                         showL, showR, leftVDiv, rightVDiv, sincL, sincR, dc[0], dc[1]);
+        if (triggerMode == TriggerMode.SINGLE && !singleArmed && !captureEntryFrame) {
+            if (singleHeld) {
+                renderHeldCapturedFrame(gc, w, h, showL, showR,
+                        leftVDiv, rightVDiv, sincL, sincR, acL, acR);
+            }
             return;
         }
 
@@ -1907,17 +2008,19 @@ public final class ScopeView extends AbstractMeasurementView {
         if (b == null) {
             // No live source, but a captured SINGLE frame may still be drawable.
             if (singleHeld) {
-                double[] dc = computeAcOffsetsForCaptured(null, acL, acR);
-                renderTraces(gc, w, h, capturedLeft, capturedRight, capturedLen,
-                             capturedDispStart, capturedSubSampleOffset, capturedDispCount,
-                             showL, showR, leftVDiv, rightVDiv, sincL, sincR, dc[0], dc[1]);
+                renderHeldCapturedFrame(gc, w, h, showL, showR,
+                        leftVDiv, rightVDiv, sincL, sincR, acL, acR);
             }
             return;
         }
 
         double windowSeconds = timePerDiv * DIVISIONS_X;
         int displaySamples = (int) Math.round(windowSeconds * b.getSampleRate());
-        if (displaySamples < 2) return;
+        if (displaySamples < 2) {
+            if (singleHeld) renderHeldCapturedFrame(gc, w, h, showL, showR,
+                    leftVDiv, rightVDiv, sincL, sincR, acL, acR);
+            return;
+        }
 
         // Trigger position slider: 0 = trigger at left edge of display,
         // 0.5 = centred, 1 = right edge.  Computed early because both the
@@ -1949,7 +2052,14 @@ public final class ScopeView extends AbstractMeasurementView {
         int available = b.readEndingAt(viewEndAbs, wanted,
                 needL ? leftBuf  : null,
                 needR ? rightBuf : null);
-        if (available < 2) return;
+        if (available < 2) {
+            // Buffer not ready yet (e.g. right after Record start): keep the
+            // held frozen frame on screen instead of blanking, so NORMAL/SINGLE
+            // don't wipe the last trace before the first new trigger.
+            if (singleHeld) renderHeldCapturedFrame(gc, w, h, showL, showR,
+                    leftVDiv, rightVDiv, sincL, sincR, acL, acR);
+            return;
+        }
 
         // HF spike removal (80 kHz LPF) then per-channel mains-hum
         // suppression, applied to the raw read window before trigger search,
@@ -1959,6 +2069,30 @@ public final class ScopeView extends AbstractMeasurementView {
         applyHfLowPass(b.getSampleRate(), available, needL, needR);
         long bufStartAbs = viewEndAbs - available;
         applyMainsSuppression(b.getSampleRate(), available, needL, needR, bufStartAbs);
+
+        // Trigger-mode switch into NORMAL/SINGLE: freeze the frame that was on
+        // screen so the trace persists across the switch instead of blanking until
+        // the new mode's first trigger.
+        if (captureEntryFrame) {
+            // Re-grab the EXACT window the last live paint showed (by absolute
+            // position), NOT the latest — which would be newer samples that
+            // arrived since (a visible shift on a sweep / fast time-base).
+            int entryStart;
+            if (lastLiveDispStartAbs >= 0) {
+                entryStart = (int) (lastLiveDispStartAbs - bufStartAbs);
+            } else {
+                int entryPad = Math.min(Lanczos.LANCZOS_PADDING, Math.max(0, available - displaySamples));
+                entryStart = available - entryPad - displaySamples;
+            }
+            entryStart = Math.max(0, Math.min(entryStart, available - displaySamples));
+            captureSingleFrame(entryStart, displaySamples, available,
+                    lastLiveDispStartAbs >= 0 ? lastLiveSubSampleOffset : 0.0);
+            if (singleHeld) {
+                renderHeldCapturedFrame(gc, w, h, showL, showR,
+                        leftVDiv, rightVDiv, sincL, sincR, acL, acR);
+            }
+            return;
+        }
 
         // Navigation mode: bypass trigger/hold when either
         //   (a) the user has scrolled back from the live tip via the
@@ -2128,8 +2262,29 @@ public final class ScopeView extends AbstractMeasurementView {
             if (triggerMode == TriggerMode.SINGLE && singleArmed) {
                 captureSingleFrame(dispStart, displaySamples, available, subSampleOffset);
                 singleArmed = false;
+                // Pop the trigger Start toggle back out — delivered on this UI
+                // thread; the subscriber marshals its own widget update.
+                MessageBus.instance().publish(Events.SCOPE_SINGLE_DISARMED);
+            } else if (triggerMode == TriggerMode.NORMAL) {
+                // Persist every NORMAL trigger so the trace can be held
+                // indefinitely once triggers stop — even after the frame scrolls
+                // out of the live ring (where the in-buffer hold below can no
+                // longer anchor it).
+                captureSingleFrame(dispStart, displaySamples, available, subSampleOffset);
             }
             haveFrame = true;
+        }
+
+        // SINGLE armed but no trigger fired this paint: keep waiting.  Show the
+        // previously held frame if there is one, otherwise stay blank — do NOT
+        // capture or free-run; the view updates only when the trigger actually
+        // fires (captured by step 1 above).
+        if (triggerMode == TriggerMode.SINGLE && singleArmed && !foundTrigger) {
+            if (singleHeld) {
+                renderHeldCapturedFrame(gc, w, h, showL, showR,
+                        leftVDiv, rightVDiv, sincL, sincR, acL, acR);
+            }
+            return;
         }
 
         // 2. Otherwise hold the previously triggered frame if it's still
@@ -2147,14 +2302,22 @@ public final class ScopeView extends AbstractMeasurementView {
             }
         }
 
-        // 3. Last resort — AUTO and SINGLE free-run on the latest samples
-        //    when no trigger has been seen (or the held one fell out of
-        //    buffer).  This is what keeps the live trace visible after the
-        //    user switches into SINGLE mode but before pressing Start, and
-        //    while SINGLE is armed but the trigger hasn't fired yet.
-        //    NORMAL deliberately leaves the pane blank in that case.
+        // NORMAL holds the last triggered frame indefinitely: once it has
+        // scrolled out of the live ring (the in-buffer hold above can no longer
+        // anchor it), fall back to the frozen captured copy instead of blanking.
+        if (!haveFrame && triggerMode == TriggerMode.NORMAL && singleHeld) {
+            renderHeldCapturedFrame(gc, w, h, showL, showR,
+                    leftVDiv, rightVDiv, sincL, sincR, acL, acR);
+            return;
+        }
+
+        // 3. Last resort — only AUTO free-runs on the latest samples when no
+        //    trigger has been seen.  SINGLE never reaches here: not-armed
+        //    returned at the top, armed-and-waiting returned just above, and an
+        //    armed trigger set haveFrame in step 1.  NORMAL with no captured
+        //    frame yet (never triggered) stays blank.
         if (!haveFrame) {
-            if (triggerMode == TriggerMode.AUTO || triggerMode == TriggerMode.SINGLE) {
+            if (triggerMode == TriggerMode.AUTO) {
                 int rightPad = Math.min(Lanczos.LANCZOS_PADDING, Math.max(0, available - displaySamples));
                 int dispEnd  = available - rightPad;
                 dispStart = Math.max(0, dispEnd - displaySamples);
@@ -2169,28 +2332,6 @@ public final class ScopeView extends AbstractMeasurementView {
         }
         if (dispCount < 2) return;
 
-        // SINGLE-not-armed = frozen.  The very first redraw after entering
-        // SINGLE (or after Record starts in SINGLE) reaches here; snapshot
-        // the live frame into the captured-frame arrays and render that.
-        // Subsequent redraws are intercepted by the top-of-method shortcut
-        // and render the same snapshot without re-reading the ring buffer.
-        // SINGLE-armed bypasses this and renders the live trace until the
-        // trigger fires (at which point step 1 above does the capture).
-        if (triggerMode == TriggerMode.SINGLE && !singleArmed) {
-            if (!singleHeld) {
-                captureSingleFrame(dispStart, displaySamples, available, subSampleOffset);
-            }
-            // SINGLE held: the captured frame is a frozen snapshot; subtract
-            // its own DC so the frozen trace stays centred regardless of any
-            // drift in the live data after the freeze.
-            double dcL = acL ? ScopeFormat.windowMean(capturedLeft,  0, capturedLen) : 0.0;
-            double dcR = acR ? ScopeFormat.windowMean(capturedRight, 0, capturedLen) : 0.0;
-            renderTraces(gc, w, h, capturedLeft, capturedRight, capturedLen,
-                         capturedDispStart, capturedSubSampleOffset, capturedDispCount,
-                         showL, showR, leftVDiv, rightVDiv, sincL, sincR, dcL, dcR);
-            return;
-        }
-
         // AC DC removal: worker-published, ≥500 ms-averaged channel means.
         // Returns 0 during the AC_WARMUP_NANOS window after capture start
         // (worker hasn't published yet), so the trace shows the raw signal
@@ -2199,6 +2340,10 @@ public final class ScopeView extends AbstractMeasurementView {
         // trace snaps to centred.
         double dcL = acL ? acDcMean(true)  : 0.0;
         double dcR = acR ? acDcMean(false) : 0.0;
+        // Remember this live window (absolute) so a later mode-switch freeze can
+        // re-grab the exact frame on screen now, not newer samples.
+        lastLiveDispStartAbs    = bufStartAbs + dispStart;
+        lastLiveSubSampleOffset = subSampleOffset;
         renderTraces(gc, w, h, leftBuf, rightBuf, available,
                      dispStart, subSampleOffset, dispCount,
                      showL, showR, leftVDiv, rightVDiv, sincL, sincR, dcL, dcR);
@@ -2409,13 +2554,52 @@ public final class ScopeView extends AbstractMeasurementView {
      * yet hold the full ideal range (start of capture, very slow time/div)
      * we save whatever's available and clamp the in-capture display offset.
      */
+    /** Renders the frozen captured frame (the held SINGLE shot or the last NORMAL
+     *  trigger).  AC channels subtract the DC cached at capture ({@link #capturedDcL}
+     *  / {@link #capturedDcR}) — NOT the live worker mean — so the frozen trace stays
+     *  put instead of drifting as the worker keeps averaging Vmean after the freeze. */
+    private void renderHeldCapturedFrame(GC gc, int w, int h,
+                                         boolean showL, boolean showR,
+                                         double leftVDiv, double rightVDiv,
+                                         boolean sincL, boolean sincR,
+                                         boolean acL, boolean acR) {
+        double dcL = acL ? capturedDcL : 0.0;
+        double dcR = acR ? capturedDcR : 0.0;
+        // Magnify the frozen snapshot around the cursor.  The span follows the
+        // live 1-2-5 time/div (the wheel steps the t/div selector as usual); when
+        // that scale changes, recompute the left edge so the captured sample under
+        // the cursor stays under it.  NOT clamped to the buffer — where the view
+        // runs past the captured data, drawTrace draws nothing (no shift).
+        double curTDiv = Preferences.instance().getOscTimePerDiv();
+        double scale   = (capturedTimePerDiv > 0 && curTDiv > 0) ? curTDiv / capturedTimePerDiv : 1.0;
+        int dispCount  = Math.max(2, (int) Math.round(capturedDispCount * scale));
+        if (lastHeldTimePerDiv <= 0) {                            // not yet anchored
+            heldViewStart = capturedDispStart + capturedSubSampleOffset;
+        } else if (curTDiv != lastHeldTimePerDiv && lastHeldDispCount > 0) {
+            double frac         = (w > 0) ? ScopeFormat.clamp01((double) hoverX / w) : 0.5;
+            double cursorSample = heldViewStart + frac * lastHeldDispCount;   // sample under cursor before zoom
+            heldViewStart       = cursorSample - frac * dispCount;            // keep it under the cursor
+        }
+        lastHeldTimePerDiv = curTDiv;
+        lastHeldDispCount  = dispCount;
+        int    dispStart       = (int) Math.floor(heldViewStart);
+        double subSampleOffset = heldViewStart - dispStart;
+        blankBeyondData = true;
+        renderTraces(gc, w, h, capturedLeft, capturedRight, capturedLen,
+                     dispStart, subSampleOffset, dispCount,
+                     showL, showR, leftVDiv, rightVDiv, sincL, sincR, dcL, dcR);
+        blankBeyondData = false;
+    }
+
     private void captureSingleFrame(int dispStart, int displaySamples,
                                     int available, double subSampleOffset) {
-        int extra = displaySamples / 2;     // half a screen extra on each side → 2 screens total
-        int idealStart = dispStart - Lanczos.LANCZOS_PADDING - extra;
-        int idealEnd   = dispStart + displaySamples + Lanczos.LANCZOS_PADDING + extra;
-        int srcStart = Math.max(0, idealStart);
-        int srcEnd   = Math.min(available, idealEnd);
+        // Capture the whole available read window (~2 screens plus the trigger-
+        // search lookback), not just the displayed slice, so Ctrl+Shift+wheel can
+        // zoom OUT on the frozen frame across the captured pre/post-roll instead
+        // of running out after a single step.  dispStart is already relative to
+        // the read buffer's start (so srcStart == 0).
+        int srcStart = 0;
+        int srcEnd   = available;
         int len = srcEnd - srcStart;
         int dispStartInCapture = dispStart - srcStart;
         if (len < 2 || dispStartInCapture < 0 || dispStartInCapture + displaySamples > len) return;
@@ -2429,6 +2613,15 @@ public final class ScopeView extends AbstractMeasurementView {
         capturedDispStart       = dispStartInCapture;
         capturedDispCount       = displaySamples;
         capturedSubSampleOffset = subSampleOffset;
+        // Cache each channel's own DC now so AC-mode held renders subtract a
+        // stable bias — the live worker mean keeps averaging after the freeze
+        // and would otherwise drift the frozen trace up/down.
+        capturedDcL             = ScopeFormat.windowMean(capturedLeft,  0, len);
+        capturedDcR             = ScopeFormat.windowMean(capturedRight, 0, len);
+        capturedTimePerDiv      = Preferences.instance().getOscTimePerDiv();
+        heldViewStart           = capturedDispStart + capturedSubSampleOffset;
+        lastHeldTimePerDiv      = capturedTimePerDiv;
+        lastHeldDispCount       = capturedDispCount;
         singleHeld              = true;
     }
 
@@ -2481,28 +2674,6 @@ public final class ScopeView extends AbstractMeasurementView {
         }
     }
 
-    /**
-     * Returns {@code {dcL, dcR}} to subtract when rendering the captured
-     * SINGLE frame in AC mode.  Prefers the worker-published, ≥ 500 ms-
-     * averaged per-channel mean (same source as the measurement-table
-     * Vmean) so the frozen trace and the table agree on the bias.  Falls
-     * back to the captured frame's own mean only when the worker has never
-     * run — i.e. {@link #lastMeasResult} is {@code null} (capture stopped
-     * before the worker fired once).
-     */
-    private double[] computeAcOffsetsForCaptured(SignalBufferReader b, boolean acL, boolean acR) {
-        if (measWorker.getLastMeasResult() != null) {
-            return new double[] {
-                    acL ? acDcMean(true)  : 0.0,
-                    acR ? acDcMean(false) : 0.0
-            };
-        }
-        // No measurement worker output yet — fall back to the captured frame.
-        double dcL = acL ? ScopeMeasurementWorker.sampleMean(capturedLeft,  capturedLen) : 0.0;
-        double dcR = acR ? ScopeMeasurementWorker.sampleMean(capturedRight, capturedLen) : 0.0;
-        return new double[] { dcL, dcR };
-    }
-
 
 
     /** X position for sinc-trace point {@code i} of {@code width + 2}: the first
@@ -2512,6 +2683,18 @@ public final class ScopeView extends AbstractMeasurementView {
         if (i == 0)         return -TRACE_EDGE_OVERHANG_PX;
         if (i == width + 1) return width - 1 + TRACE_EDGE_OVERHANG_PX;
         return i - 1;
+    }
+
+    /** Straight-line interpolation of {@code data} at fractional sample position
+     *  {@code pos}, clamped to [0, n-1] — the sin(x)/x-off counterpart to
+     *  {@link Lanczos#lanczos}, letting the non-sinc trace stroke one smooth point
+     *  per pixel column (see {@link #drawTrace}) instead of per-sample min/max bars. */
+    private double lerpAt(float[] data, int n, double pos) {
+        if (pos <= 0)       return data[0];
+        if (pos >= n - 1)   return data[n - 1];
+        int i0   = (int) pos;
+        double f = pos - i0;
+        return data[i0] * (1.0 - f) + data[i0 + 1] * f;
     }
 
     /**
@@ -2549,28 +2732,23 @@ public final class ScopeView extends AbstractMeasurementView {
                 // render beyond the clip (full edge intensity).
                 paintPolyline(gc, plot, color, SWT.LINE_SOLID, lineWidth, width + 2,
                         i -> sincTraceX(i, width),
-                        i -> centerY - (Lanczos.lanczos(data, n,
-                                dispStart + subSampleOffset + sincTraceX(i, width) * samplesPerPx,
-                                scale) - dcOffset) * vScale);
+                        i -> {
+                            double pos = dispStart + subSampleOffset + sincTraceX(i, width) * samplesPerPx;
+                            if (blankBeyondData && (pos < 0 || pos > n - 1)) return Double.NaN;
+                            return centerY - (Lanczos.lanczos(data, n, pos, scale) - dcOffset) * vScale;
+                        });
             } else {
-                // Linear: stroke the actual samples — the linear trace IS the polyline
-                // through the samples, exact at any zoom.  Unlike per-column interpolation
-                // it keeps peaks that fall between pixel columns when samplesPerPx > 1;
-                // paintPolyline column-buckets the surplus points.  The two end points
-                // are pushed TRACE_EDGE_OVERHANG_PX outside the canvas so the stroke
-                // caps render beyond the clip (full edge intensity).
-                double shiftPx = subSampleOffset * pxPerSample;
-                int last = dispCount + 1;
-                paintPolyline(gc, plot, color, SWT.LINE_SOLID, lineWidth, dispCount + 2,
+                // Linear (sin x/x off): one linearly-interpolated point per pixel column —
+                // the same per-column stroke as the sinc branch, so the trace is a smooth
+                // sub-pixel polyline at >1 sample/pixel instead of the per-column min/max
+                // bars (one point per SAMPLE, column-bucketed) that stair-step a shallow
+                // ramp.  Straight-line interpolation, no band-limiting.
+                paintPolyline(gc, plot, color, SWT.LINE_SOLID, lineWidth, width + 2,
+                        i -> sincTraceX(i, width),
                         i -> {
-                            int x = (int) Math.round(i * pxPerSample - shiftPx);
-                            if (i == 0)    x -= TRACE_EDGE_OVERHANG_PX;
-                            if (i == last) x += TRACE_EDGE_OVERHANG_PX;
-                            return x;
-                        },
-                        i -> {
-                            int idx = Math.max(0, Math.min(n - 1, dispStart + i));
-                            return centerY - (data[idx] - dcOffset) * vScale;
+                            double pos = dispStart + subSampleOffset + sincTraceX(i, width) * samplesPerPx;
+                            if (blankBeyondData && (pos < 0 || pos > n - 1)) return Double.NaN;
+                            return centerY - (lerpAt(data, n, pos) - dcOffset) * vScale;
                         });
             }
             if (pxPerSample > 10.0) {
@@ -2616,7 +2794,10 @@ public final class ScopeView extends AbstractMeasurementView {
                     // Sub-sample offset or float rounding can push startIdx past
                     // the end of the read; without this clamp we get an
                     // ArrayIndexOutOfBoundsException on the data load below.
-                    if (startIdx >= dispLimit) startIdx = dispLimit - 1;
+                    if (startIdx >= dispLimit) {
+                        if (blankBeyondData) continue;   // past captured data: draw nothing
+                        startIdx = dispLimit - 1;
+                    }
                     if (startIdx < 0) continue;
                     float min = data[startIdx];
                     float max = data[startIdx];

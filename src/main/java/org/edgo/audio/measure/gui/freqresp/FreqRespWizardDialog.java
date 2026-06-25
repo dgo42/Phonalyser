@@ -257,7 +257,7 @@ public final class FreqRespWizardDialog {
         DeviceRef in  = findDevice(false, prefs.current().getInputDeviceName());
         if (out == null || in == null) {
             Dialogs.error(dialog, I18n.t("freqResp.wizard.title"),
-                    "No output / input device selected.  Open Preferences first.");
+                    I18n.t("freqResp.error.noDevice"));
             return;
         }
         page1Play.setEnabled(false);

@@ -24,6 +24,7 @@ import java.util.Locale;
 
 import org.edgo.audio.measure.gui.common.DebugSwitches;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
+import org.edgo.audio.measure.gui.i18n.I18n;
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.bind.Property;
@@ -264,12 +265,12 @@ public final class GeneratorController {
         BackendPrefs bp = prefs.current();
         String deviceName = bp.getOutputDeviceName();
         if (deviceName == null || deviceName.isEmpty()) {
-            lastStartError = "No output device selected.  Pick one in Preferences first.";
+            lastStartError = I18n.t("generator.error.noDevice");
             return;
         }
         DeviceRef device = findOutputDevice(deviceName);
         if (device == null) {
-            lastStartError = "Output device \"" + deviceName + "\" is no longer available.";
+            lastStartError = I18n.t("generator.error.deviceUnavailable", deviceName);
             return;
         }
 
@@ -329,7 +330,7 @@ public final class GeneratorController {
                                 long readyTimeoutSeconds) {
         Thread old = playThread;
         if (old != null && old.isAlive()) {
-            return "The previous playback is still shutting down — try again in a moment.";
+            return I18n.t("generator.error.shuttingDown");
         }
         SignalGenerator gen;
         double dacFs = prefs.getDacFsVoltageAmpl();
@@ -337,7 +338,7 @@ public final class GeneratorController {
             if (form == GenSignalForm.SINE_COMP) {
                 String dpd = prefs.getGenDpd(form);
                 if (dpd == null || dpd.isEmpty()) {
-                    return "Sine (compensated) needs a predistortion file.  Pick one with the … button.";
+                    return I18n.t("generator.error.needPredistortion");
                 }
                 gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms, dacFs, dpd);
             } else if (form == GenSignalForm.DUAL_TONE_COMP) {
@@ -365,7 +366,7 @@ public final class GeneratorController {
                 gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms, dacFs);
             }
         } catch (Exception ex) {
-            return "Could not build the signal generator: " + ex.getMessage();
+            return I18n.t("generator.error.buildFailed", ex.getMessage());
         }
         // Apply any waveform-specific live-tunables before we hand the
         // generator off to the audio thread.
@@ -400,7 +401,7 @@ public final class GeneratorController {
         } catch (Exception ex) {
             log.warn("Playback open failed", ex);
             this.generator = null;
-            return "Could not open the output device: " + ex.getMessage();
+            return I18n.t("generator.error.openDeviceFailed", ex.getMessage());
         }
         this.playback = ag;
         final AtomicBoolean sessionStop = new AtomicBoolean(false);
@@ -431,13 +432,12 @@ public final class GeneratorController {
             if (!readyLatch.await(readyTimeoutSeconds, TimeUnit.SECONDS)) {
                 // Tear down so a retry starts from a clean slate.
                 stop();
-                return "Output device opened but did not start streaming within "
-                        + readyTimeoutSeconds + " s.";
+                return I18n.t("generator.error.noStreamStart", readyTimeoutSeconds);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             stop();
-            return "Interrupted while waiting for the output to start.";
+            return I18n.t("generator.error.startInterrupted");
         }
         return null;
     }
@@ -810,9 +810,9 @@ public final class GeneratorController {
     public String exportSignal(String path) {
         Preferences prefs = Preferences.instance();
         GenSignalForm form = prefs.getGenSignalForm();
-        if (form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP) {
-            return "Sweep waveforms cannot be exported to a file.";
-        }
+        boolean isSweep = form == GenSignalForm.LINEAR_SWEEP || form == GenSignalForm.LOG_SWEEP;
+        boolean sweepLoops = isSweep && prefs.isGenSweepLoop();
+        double  sweepDurSec = isSweep ? prefs.getGenSweepDurationSec() : 0.0;
         int    sampleRate    = prefs.current().getOutputSampleRate();
         int    bitDepth      = prefs.current().getOutputBitDepth();
         int    ditherBits    = prefs.getGenDitherBits();
@@ -825,24 +825,49 @@ public final class GeneratorController {
                 ? samplePeriodAlignedHz(prefs.getGenFrequencyHz(), sampleRate)
                 : prefs.getGenFrequencyHz();
         double amplitudeVRms = prefs.getGenAmplitudeVrms();
-        double duration      = prefs.getGenWavDurationSeconds();
+        // One-shot sweep: exactly one sweep (its frequency ends at the stop
+        // frequency).  A LOOPED sweep is periodic — period = the sweep duration —
+        // so it is exported like other periodic forms: the WAV-duration length,
+        // trimmed to a whole number of sweeps so the file loops cleanly.
+        double duration;
+        if (!isSweep) {
+            duration = prefs.getGenWavDurationSeconds();
+        } else if (sweepLoops) {
+            int sweeps = Math.max(1, (int) Math.floor(prefs.getGenWavDurationSeconds() / sweepDurSec));
+            duration = sweeps * sweepDurSec;
+        } else {
+            duration = sweepDurSec;
+        }
         try {
             SignalGenerator gen;
             if (form == GenSignalForm.SINE_COMP) {
                 String dpd = prefs.getGenDpd(form);
                 if (dpd == null || dpd.isEmpty()) {
-                    return "Sine (compensated) needs a predistortion .dpd.  Pick one with the … button.";
+                    return I18n.t("generator.error.needPredistortion");
                 }
                 gen = new SignalGenerator(frequency, sampleRate, amplitudeVRms,
                         prefs.getDacFsVoltageAmpl(), dpd);
+            } else if (isSweep) {
+                double f0 = prefs.getGenSweepFreqStartHz();
+                double f1 = prefs.getGenSweepFreqEndHz();
+                int durationSamples = Math.max(2, (int) Math.round(sweepDurSec * sampleRate));
+                gen = (form == GenSignalForm.LINEAR_SWEEP)
+                        ? new SignalGenerator(f0, f1, sampleRate, durationSamples,
+                                amplitudeVRms, prefs.getDacFsVoltageAmpl())
+                        : new SignalGenerator(f0, f1, durationSamples, 0, sampleRate,
+                                amplitudeVRms, prefs.getDacFsVoltageAmpl());
+                int fadeIn  = Math.max(0, (int) Math.round(prefs.getGenSweepFadeInSec()  * sampleRate));
+                int fadeOut = Math.max(0, (int) Math.round(prefs.getGenSweepFadeOutSec() * sampleRate));
+                gen.setSweepParams(sweepLoops, fadeIn, fadeOut);
             } else {
                 gen = new SignalGenerator(form, frequency, sampleRate, amplitudeVRms,
                         prefs.getDacFsVoltageAmpl());
             }
             gen.setRectangleDuty(prefs.getGenRectangleDuty());
-            // Periodic forms truncate to an integer-period count; noise has
-            // no period — 0 makes the exporter use the raw duration.
-            double freqForTruncation = form.isPeriodic() ? frequency : 0.0;
+            // Non-sweep periodic forms truncate to an integer-period count; noise
+            // and sweeps use 0 (raw) — a sweep's length is already fixed above
+            // (one sweep, or whole sweeps when looped).
+            double freqForTruncation = (form.isPeriodic() && !isSweep) ? frequency : 0.0;
             long bytes = SignalFileExporter.export(gen, new File(path),
                     sampleRate, bitDepth, duration, ditherBits, freqForTruncation);
             log.info("File saved: {} ({} bytes)", path, bytes);

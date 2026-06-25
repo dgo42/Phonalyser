@@ -28,7 +28,7 @@ machine and run with `java -jar ...`.
 - **Local development / quick distribution**: build all four fat JARs on
   your Windows box — that covers anyone with a JRE installed on
   Win / Linux / macOS.
-- **End-user installers (MSI/DEB/DMG)**: push a `v*` tag and let the GitHub
+- **End-user installers (EXE/DEB/DMG)**: push a `v*` tag and let the GitHub
   Actions matrix produce them.  You don't need a Mac or Linux box yourself.
 
 # App-image (portable executable folder)

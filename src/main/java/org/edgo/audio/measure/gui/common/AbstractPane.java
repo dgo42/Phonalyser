@@ -272,6 +272,12 @@ public abstract class AbstractPane {
         return null;
     }
 
+    /** Re-flows this pane's own layout after its settings tab strip collapses or
+     *  expands, reclaiming (or yielding) the freed vertical space.  The strip
+     *  calls this through {@link AbstractTabControl#onTabCollapsed()} — no
+     *  callback indirection.  A pane without a strip implements it empty. */
+    protected abstract void onTabCollapse();
+
     /** Collapses / expands the settings tab strip (the screenshot path shows
      *  only the headers).  {@link #renderOffscreen} collapses the clone only
      *  AFTER an expanded layout: the folder's collapsed {@code computeSize} is

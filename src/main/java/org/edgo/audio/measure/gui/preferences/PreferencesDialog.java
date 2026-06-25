@@ -84,7 +84,7 @@ public final class PreferencesDialog {
     };
     private static final int[] DEFAULT_BIT_DEPTHS = {16, 24, 32};
 
-    /** Lower bound (in % of Nyquist) of the FreqResp "Maximal analyzed
+    /** Lower bound (in % of Nyquist) of the FreqResp "Maximal analysed
      *  frequency" field.  The field clamps to this on every edit, both
      *  via wheel/arrow steppers and after manual text entry. */
     private static final double FREQRESP_MAX_FREQ_PCT_MIN  = 83.0;
@@ -120,6 +120,20 @@ public final class PreferencesDialog {
 
     private final Shell parent;
 
+    // Dialog-session state, populated in open().  Lifted to fields so the
+    // refresh / capture / apply helpers below open() can be plain private
+    // methods (the SWT listeners and OK handler invoke them).  The dialog is
+    // modal and short-lived, so a single live instance at a time is fine.
+    private Preferences edit;
+    private Combo inputCombo;
+    private Combo inputRateCombo;
+    private Combo inputDepthCombo;
+    private Combo outputCombo;
+    private Combo outputRateCombo;
+    private Combo outputDepthCombo;
+    private DeviceListState devices;
+    private Property<Double> nyqWork;
+
     public PreferencesDialog(Shell parent) {
         this.parent = parent;
     }
@@ -149,7 +163,7 @@ public final class PreferencesDialog {
         // OK commits it via applyFromDialog(); Cancel just drops it.  The
         // backend currently shown in the combos is edit.getBackend() — the
         // single source of truth, no separate active-backend tracking.
-        Preferences edit = Preferences.instance().copyForDialog();
+        edit = Preferences.instance().copyForDialog();
 
         // --- Tab folder: Look & Feel + Audio + Oscilloscope + FFT -----------
         TabFolder tabs = new TabFolder(dialog, SWT.TOP);
@@ -251,13 +265,13 @@ public final class PreferencesDialog {
         inputGroup.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         inputGroup.setLayout(new GridLayout(2, false));
         new Label(inputGroup, SWT.NONE).setText(I18n.t("preferences.device"));
-        Combo inputCombo = new Combo(inputGroup, SWT.READ_ONLY);
+        inputCombo = new Combo(inputGroup, SWT.READ_ONLY);
         inputCombo.setLayoutData(comboData());
         new Label(inputGroup, SWT.NONE).setText(I18n.t("preferences.sampleRate"));
-        Combo inputRateCombo = new Combo(inputGroup, SWT.READ_ONLY);
+        inputRateCombo = new Combo(inputGroup, SWT.READ_ONLY);
         inputRateCombo.setLayoutData(comboData());
         new Label(inputGroup, SWT.NONE).setText(I18n.t("preferences.bitDepth"));
-        Combo inputDepthCombo = new Combo(inputGroup, SWT.READ_ONLY);
+        inputDepthCombo = new Combo(inputGroup, SWT.READ_ONLY);
         inputDepthCombo.setLayoutData(comboData());
 
         // --- Output group --------------------------------------------------
@@ -266,13 +280,13 @@ public final class PreferencesDialog {
         outputGroup.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         outputGroup.setLayout(new GridLayout(2, false));
         new Label(outputGroup, SWT.NONE).setText(I18n.t("preferences.device"));
-        Combo outputCombo = new Combo(outputGroup, SWT.READ_ONLY);
+        outputCombo = new Combo(outputGroup, SWT.READ_ONLY);
         outputCombo.setLayoutData(comboData());
         new Label(outputGroup, SWT.NONE).setText(I18n.t("preferences.sampleRate"));
-        Combo outputRateCombo = new Combo(outputGroup, SWT.READ_ONLY);
+        outputRateCombo = new Combo(outputGroup, SWT.READ_ONLY);
         outputRateCombo.setLayoutData(comboData());
         new Label(outputGroup, SWT.NONE).setText(I18n.t("preferences.bitDepth"));
-        Combo outputDepthCombo = new Combo(outputGroup, SWT.READ_ONLY);
+        outputDepthCombo = new Combo(outputGroup, SWT.READ_ONLY);
         outputDepthCombo.setLayoutData(comboData());
 
         // --- Oscilloscope tab ----------------------------------------------
@@ -526,7 +540,7 @@ public final class PreferencesDialog {
         // working percent, never a live pref.  On OK the apply below writes the
         // fraction, clamps the freq window down if the new max moved below the
         // current right edge, and the OK handler fires FREQRESP_RANGE_CHANGED.
-        Property<Double> nyqWork = new Property<>(edit.getFreqRespNyquistFraction() * 100.0);
+        nyqWork = new Property<>(edit.getFreqRespNyquistFraction() * 100.0);
         Bindings.stepField(nyqField, nyqWork);
         nyqField.addSelectionListener(e -> {
             double pct  = Math.max(FREQRESP_MAX_FREQ_PCT_MIN,
@@ -537,23 +551,6 @@ public final class PreferencesDialog {
             nyqLabel.setText(formatMaxFreqLabel(pct / 100.0, sr));
             nyqLabel.requestLayout();
         });
-        // The percent → fraction conversion + freq-window clamp run on OK,
-        // straight into the working copy.  Held in a local so the OK handler
-        // can invoke it before applyFromDialog().
-        Runnable applyNyquistToEdit = () -> {
-            double pct  = Math.max(FREQRESP_MAX_FREQ_PCT_MIN,
-                    Math.min(FREQRESP_MAX_FREQ_PCT_MAX, nyqWork.get()));
-            double frac = pct / 100.0;
-            edit.setFreqRespNyquistFraction(frac);
-            int sr = edit.current().getInputSampleRate();
-            double maxBand = (sr > 0 ? sr * 0.5 : 24000.0) * frac;
-            if (edit.getFreqRespFreqMaxHz() > maxBand) {
-                edit.setFreqRespFreqMaxHz(maxBand);
-                if (edit.getFreqRespFreqMinHz() > maxBand) {
-                    edit.setFreqRespFreqMinHz(Math.max(1.0, maxBand * 0.5));
-                }
-            }
-        };
 
         // Compare-mode smoothing window (points).  Used by the FreqResp
         // view's getSmoothedDiffDb to draw the (measured − reference)
@@ -684,79 +681,20 @@ public final class PreferencesDialog {
         reg.register("preferences/tabs/freqresp")    .onActivate(() -> tabs.setSelection(freqRespTabItem));
 
         // --- Device list state + refresh logic -----------------------------
-        DeviceListState devices = new DeviceListState();
+        devices = new DeviceListState();
 
-        // Repopulate the input-side rate / depth combos from the picked input
-        // device's own capabilities.  Falls back to defaults when no device
-        // is picked or the driver reports nothing.
-        Runnable refreshInputRatesAndDepths = () -> {
-            DeviceRef dev = pickedDevice(inputCombo, devices.inputs);
-            BackendPrefs bp = edit.current();
-            TreeSet<Integer> rates  = (dev != null)
-                    ? ratesOf(AudioBackend.instance().listSupportedInputFormats(edit.getBackend(), dev))
-                    : null;
-            TreeSet<Integer> depths = (dev != null)
-                    ? depthsOf(AudioBackend.instance().listSupportedInputFormats(edit.getBackend(), dev))
-                    : null;
-            populateIntCombo(inputRateCombo,  fallback(rates,  DEFAULT_SAMPLE_RATES), " Hz",   bp.getInputSampleRate());
-            populateIntCombo(inputDepthCombo, fallback(depths, DEFAULT_BIT_DEPTHS),   " bits", bp.getInputBitDepth());
-        };
-
-        // Mirror of {@code refreshInputRatesAndDepths} for the output side.
-        Runnable refreshOutputRatesAndDepths = () -> {
-            DeviceRef dev = pickedDevice(outputCombo, devices.outputs);
-            BackendPrefs bp = edit.current();
-            TreeSet<Integer> rates  = (dev != null)
-                    ? ratesOf(AudioBackend.instance().listSupportedOutputFormats(edit.getBackend(), dev))
-                    : null;
-            TreeSet<Integer> depths = (dev != null)
-                    ? depthsOf(AudioBackend.instance().listSupportedOutputFormats(edit.getBackend(), dev))
-                    : null;
-            populateIntCombo(outputRateCombo,  fallback(rates,  DEFAULT_SAMPLE_RATES), " Hz",   bp.getOutputSampleRate());
-            populateIntCombo(outputDepthCombo, fallback(depths, DEFAULT_BIT_DEPTHS),   " bits", bp.getOutputBitDepth());
-        };
-
-        // Captures the current UI state into the prefs of {@code active[0]} so
-        // a backend switch (or OK) doesn't lose the user's edits.  Devices
-        // are stored by name (string) — the saved name is matched back to a
-        // live DeviceRef on dialog open via populateDeviceCombo.
-        Runnable captureUiToActive = () -> {
-            BackendPrefs bp = edit.current();
-            bp.setInputDeviceName (nameOf(pickedDevice(inputCombo,  devices.inputs)));
-            bp.setOutputDeviceName(nameOf(pickedDevice(outputCombo, devices.outputs)));
-            int idx;
-            if ((idx = inputRateCombo.getSelectionIndex())  >= 0) bp.setInputSampleRate (parseLeadingInt(inputRateCombo.getItem(idx)));
-            if ((idx = inputDepthCombo.getSelectionIndex()) >= 0) bp.setInputBitDepth   (parseLeadingInt(inputDepthCombo.getItem(idx)));
-            if ((idx = outputRateCombo.getSelectionIndex()) >= 0) bp.setOutputSampleRate(parseLeadingInt(outputRateCombo.getItem(idx)));
-            if ((idx = outputDepthCombo.getSelectionIndex())>= 0) bp.setOutputBitDepth  (parseLeadingInt(outputDepthCombo.getItem(idx)));
-        };
-
-        Runnable refreshDevices = () -> {
-            // Enumerate the chosen backend's hardware WITHOUT activating it —
-            // the type-parameterised overloads resolve the manager by
-            // edit.getBackend() and never touch the live `active` field.
-            AudioBackendType type = edit.getBackend();
-            devices.inputs  = AudioBackend.instance().listInputDevices(type);
-            devices.outputs = AudioBackend.instance().listOutputDevices(type);
-            BackendPrefs bp = edit.current();
-            populateDeviceCombo(inputCombo,  devices.inputs,  bp.getInputDeviceName());
-            populateDeviceCombo(outputCombo, devices.outputs, bp.getOutputDeviceName());
-            refreshInputRatesAndDepths.run();
-            refreshOutputRatesAndDepths.run();
-        };
-
-        refreshDevices.run();
+        refreshDevices();
         backendCombo.addListener(SWT.Selection, e -> {
             // Persist the outgoing backend's UI state into the working copy
             // before switching, so toggling back later restores what the user
             // just chose.  capture() targets edit.current() (the OLD backend),
             // then setBackend() makes current() the NEW backend.
-            captureUiToActive.run();
+            captureUiToActive();
             edit.setBackend(availableBackends.get(backendCombo.getSelectionIndex()));
-            refreshDevices.run();
+            refreshDevices();
         });
-        inputCombo.addListener (SWT.Selection, e -> refreshInputRatesAndDepths.run());
-        outputCombo.addListener(SWT.Selection, e -> refreshOutputRatesAndDepths.run());
+        inputCombo.addListener (SWT.Selection, e -> refreshInputRatesAndDepths());
+        outputCombo.addListener(SWT.Selection, e -> refreshOutputRatesAndDepths());
 
         // --- OK / Cancel ----------------------------------------------------
         Composite buttonBar = new Composite(dialog, SWT.NONE);
@@ -774,7 +712,7 @@ public final class PreferencesDialog {
         okButton.addListener(SWT.Selection, e -> {
             // Fold every control's value into the working copy `edit`.
             // --- Per-backend device / rate / depth for the shown backend.
-            captureUiToActive.run();
+            captureUiToActive();
             // --- Colour holders into edit.
             edit.setOscLeftChannelColor         (leftRgbHolder[0]);
             edit.setOscRightChannelColor        (rightRgbHolder[0]);
@@ -789,7 +727,7 @@ public final class PreferencesDialog {
             edit.setFreqRespReferenceColor      (freqRespReferenceColorHolder[0]);
             edit.setFreqRespBackgroundColor     (freqRespBackgroundColorHolder[0]);
             // --- Nyquist percent → fraction + freq-window clamp, into edit.
-            applyNyquistToEdit.run();
+            applyNyquistToEdit();
             // (orientation, small icons, strong-tone rel-dB, compare-smoothing
             //  window, notch enable + base Hz already live on `edit` via their
             //  two-way binds.)
@@ -829,6 +767,83 @@ public final class PreferencesDialog {
         Dialogs.centerOnParent(dialog);
         dialog.open();
         return dialog;
+    }
+
+    // The percent → fraction conversion + freq-window clamp run on OK,
+    // straight into the working copy.  Held in a local so the OK handler
+    // can invoke it before applyFromDialog().
+    private void applyNyquistToEdit() {
+        double pct  = Math.max(FREQRESP_MAX_FREQ_PCT_MIN,
+                Math.min(FREQRESP_MAX_FREQ_PCT_MAX, nyqWork.get()));
+        double frac = pct / 100.0;
+        edit.setFreqRespNyquistFraction(frac);
+        int sr = edit.current().getInputSampleRate();
+        double maxBand = (sr > 0 ? sr * 0.5 : 24000.0) * frac;
+        if (edit.getFreqRespFreqMaxHz() > maxBand) {
+            edit.setFreqRespFreqMaxHz(maxBand);
+            if (edit.getFreqRespFreqMinHz() > maxBand) {
+                edit.setFreqRespFreqMinHz(Math.max(1.0, maxBand * 0.5));
+            }
+        }
+    }
+
+    // Repopulate the input-side rate / depth combos from the picked input
+    // device's own capabilities.  Falls back to defaults when no device
+    // is picked or the driver reports nothing.
+    private void refreshInputRatesAndDepths() {
+        DeviceRef dev = pickedDevice(inputCombo, devices.inputs);
+        BackendPrefs bp = edit.current();
+        TreeSet<Integer> rates  = (dev != null)
+                ? ratesOf(AudioBackend.instance().listSupportedInputFormats(edit.getBackend(), dev))
+                : null;
+        TreeSet<Integer> depths = (dev != null)
+                ? depthsOf(AudioBackend.instance().listSupportedInputFormats(edit.getBackend(), dev))
+                : null;
+        populateIntCombo(inputRateCombo,  fallback(rates,  DEFAULT_SAMPLE_RATES), " Hz",   bp.getInputSampleRate());
+        populateIntCombo(inputDepthCombo, fallback(depths, DEFAULT_BIT_DEPTHS),   " bits", bp.getInputBitDepth());
+    }
+
+    // Mirror of {@code refreshInputRatesAndDepths} for the output side.
+    private void refreshOutputRatesAndDepths() {
+        DeviceRef dev = pickedDevice(outputCombo, devices.outputs);
+        BackendPrefs bp = edit.current();
+        TreeSet<Integer> rates  = (dev != null)
+                ? ratesOf(AudioBackend.instance().listSupportedOutputFormats(edit.getBackend(), dev))
+                : null;
+        TreeSet<Integer> depths = (dev != null)
+                ? depthsOf(AudioBackend.instance().listSupportedOutputFormats(edit.getBackend(), dev))
+                : null;
+        populateIntCombo(outputRateCombo,  fallback(rates,  DEFAULT_SAMPLE_RATES), " Hz",   bp.getOutputSampleRate());
+        populateIntCombo(outputDepthCombo, fallback(depths, DEFAULT_BIT_DEPTHS),   " bits", bp.getOutputBitDepth());
+    }
+
+    // Captures the current UI state into the prefs of {@code active[0]} so
+    // a backend switch (or OK) doesn't lose the user's edits.  Devices
+    // are stored by name (string) — the saved name is matched back to a
+    // live DeviceRef on dialog open via populateDeviceCombo.
+    private void captureUiToActive() {
+        BackendPrefs bp = edit.current();
+        bp.setInputDeviceName (nameOf(pickedDevice(inputCombo,  devices.inputs)));
+        bp.setOutputDeviceName(nameOf(pickedDevice(outputCombo, devices.outputs)));
+        int idx;
+        if ((idx = inputRateCombo.getSelectionIndex())  >= 0) bp.setInputSampleRate (parseLeadingInt(inputRateCombo.getItem(idx)));
+        if ((idx = inputDepthCombo.getSelectionIndex()) >= 0) bp.setInputBitDepth   (parseLeadingInt(inputDepthCombo.getItem(idx)));
+        if ((idx = outputRateCombo.getSelectionIndex()) >= 0) bp.setOutputSampleRate(parseLeadingInt(outputRateCombo.getItem(idx)));
+        if ((idx = outputDepthCombo.getSelectionIndex())>= 0) bp.setOutputBitDepth  (parseLeadingInt(outputDepthCombo.getItem(idx)));
+    }
+
+    private void refreshDevices() {
+        // Enumerate the chosen backend's hardware WITHOUT activating it —
+        // the type-parameterised overloads resolve the manager by
+        // edit.getBackend() and never touch the live `active` field.
+        AudioBackendType type = edit.getBackend();
+        devices.inputs  = AudioBackend.instance().listInputDevices(type);
+        devices.outputs = AudioBackend.instance().listOutputDevices(type);
+        BackendPrefs bp = edit.current();
+        populateDeviceCombo(inputCombo,  devices.inputs,  bp.getInputDeviceName());
+        populateDeviceCombo(outputCombo, devices.outputs, bp.getOutputDeviceName());
+        refreshInputRatesAndDepths();
+        refreshOutputRatesAndDepths();
     }
 
     private GridData comboData() {

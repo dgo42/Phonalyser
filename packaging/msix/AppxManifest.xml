@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSIX manifest for packaging Phonalyser as a Microsoft Store app.
+
+  This packages the jpackage *app-image* (a full-trust Win32 app) into an MSIX so
+  the Microsoft Store signs it for free at publish time — no per-developer
+  code-signing certificate needed.
+
+  Before this can build a Store-valid package you MUST fill in the identity from
+  Partner Center (reserve the app name first):
+    @IDENTITY_NAME@   -> Package/Identity/Name        (e.g. 12345Edgo.Phonalyser)
+    @PUBLISHER@       -> Package/Identity/Publisher    (e.g. CN=ABCD1234-....)
+    @PUBLISHER_NAME@  -> PublisherDisplayName          (your Store publisher name)
+    @VERSION@         -> 4-part version major.minor.build.0  (e.g. 1.0.0.0)
+  The release workflow substitutes @VERSION@ automatically; the others come from
+  the MSIX_* repo variables (see .github/workflows/release.yml).
+
+  Logos referenced below must exist under Assets\ in the package — supply them in
+  packaging/msix/assets/ (see that folder's note for the required sizes).
+-->
+<Package
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    IgnorableNamespaces="uap rescap">
+
+  <Identity
+      Name="@IDENTITY_NAME@"
+      Publisher="@PUBLISHER@"
+      Version="@VERSION@"
+      ProcessorArchitecture="x64"/>
+
+  <Properties>
+    <DisplayName>Phonalyser</DisplayName>
+    <PublisherDisplayName>@PUBLISHER_NAME@</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0"/>
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us"/>
+  </Resources>
+
+  <Applications>
+    <!-- Executable is the jpackage launcher at the app-image root. -->
+    <Application Id="Phonalyser" Executable="Phonalyser.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+          DisplayName="Phonalyser"
+          Description="Precision audio measurement workbench — generator, oscilloscope, FFT analyser"
+          BackgroundColor="transparent"
+          Square150x150Logo="Assets\Square150x150Logo.png"
+          Square44x44Logo="Assets\Square44x44Logo.png"/>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- Packaged full-trust Win32 (Desktop Bridge) app. -->
+    <rescap:Capability Name="runFullTrust"/>
+  </Capabilities>
+</Package>
