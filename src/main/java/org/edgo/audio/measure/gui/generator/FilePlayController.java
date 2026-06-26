@@ -23,8 +23,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioInputStream;
-import javax.sound.sampled.AudioSystem;
-import javax.sound.sampled.DataLine;
 import javax.sound.sampled.SourceDataLine;
 
 import lombok.Getter;
@@ -34,6 +32,7 @@ import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.sound.JavaSoundDeviceManager;
 import org.edgo.audio.measure.wav.PcmFileLoader;
 
 /**
@@ -68,13 +67,24 @@ public final class FilePlayController {
     @Getter
     private volatile String        lastStartError;
 
+    /** Opens the playback line on the user-selected output device's mixer —
+     *  the same {@link JavaSoundDeviceManager} the DDS tone uses — so file
+     *  playback honours the device setting and can open high formats (e.g.
+     *  384&nbsp;kHz / 24-bit) the JavaSound default mixer refuses. */
+    private final JavaSoundDeviceManager deviceManager;
+
+    public FilePlayController(JavaSoundDeviceManager deviceManager) {
+        this.deviceManager = deviceManager;
+    }
+
     /**
      * Spawns a daemon thread that decodes {@code file} and writes its
-     * samples to a fresh {@link SourceDataLine}.  No-op if already
-     * running.  On failure {@link #isRunning()} returns {@code false}
-     * and {@link #getLastStartError()} carries the reason.
+     * samples to a fresh {@link SourceDataLine} on the {@code deviceName}
+     * output device (or the default mixer when {@code deviceName} is blank).
+     * No-op if already running.  On failure {@link #isRunning()} returns
+     * {@code false} and {@link #getLastStartError()} carries the reason.
      */
-    public synchronized void start(File file, boolean loop) {
+    public synchronized void start(File file, boolean loop, String deviceName) {
         if (running) return;
         lastStartError = null;
         Thread old = playThread;
@@ -89,7 +99,7 @@ public final class FilePlayController {
         this.loop = loop;
         AtomicBoolean sessionStop = new AtomicBoolean(false);
         stopFlag = sessionStop;
-        Thread t = new Thread(() -> playLoop(file, sessionStop), "file-play");
+        Thread t = new Thread(() -> playLoop(file, sessionStop, deviceName), "file-play");
         t.setDaemon(true);
         t.setPriority(Thread.MAX_PRIORITY);
         playThread = t;
@@ -115,16 +125,14 @@ public final class FilePlayController {
         running = false;
     }
 
-    private void playLoop(File file, AtomicBoolean sessionStop) {
+    private void playLoop(File file, AtomicBoolean sessionStop, String deviceName) {
         SourceDataLine line = null;
         AudioInputStream in = null;
         try {
             PcmFileLoader loader = PcmFileLoader.instance();
             in = loader.openAsPcm(file);
             AudioFormat fmt = in.getFormat();
-            DataLine.Info info = new DataLine.Info(SourceDataLine.class, fmt);
-            line = (SourceDataLine) AudioSystem.getLine(info);
-            line.open(fmt);
+            line = deviceManager.openOutputLine(deviceName, fmt);
             line.start();
             log.info("File playback started: {} ({}{})",
                     file.getName(), fmt, loop ? ", looping" : "");

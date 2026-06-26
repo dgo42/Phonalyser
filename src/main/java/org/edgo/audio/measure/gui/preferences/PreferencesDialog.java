@@ -219,13 +219,6 @@ public final class PreferencesDialog {
                 I18n.t("preferences.lookAndFeel.fontBold.tooltip"));
         smallIconsBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
-        // Footer note so the user knows Layout changes trigger a refresh.
-        Label lfNote = new Label(lookFeelTab, SWT.WRAP);
-        lfNote.setText(I18n.t("preferences.lookAndFeel.recreateNote"));
-        GridData noteGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
-        noteGd.horizontalSpan = 2;
-        lfNote.setLayoutData(noteGd);
-
         TabItem audioTabItem = new TabItem(tabs, SWT.NONE);
         audioTabItem.setText(I18n.t("preferences.tab.audio"));
         Composite audioTab = new Composite(tabs, SWT.NONE);

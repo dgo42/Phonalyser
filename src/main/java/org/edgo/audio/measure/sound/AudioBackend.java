@@ -275,9 +275,16 @@ public final class AudioBackend {
                 //
                 // The same path serves the explicit JAVASOUND backend on
                 // Linux/macOS, with the mixer being matched by name inside
-                // {@link JavaSoundGenerator#findMixer}.
+                // {@link JavaSoundDeviceManager#openOutputLine}.
                 return new JavaSoundGenerator(sampleRate, bitDepth, ditherBits,
-                        device.name());
+                        device.name(), javaSound());
         }
+    }
+
+    /** The JavaSound mixer authority — exposed so file playback can open its
+     *  output line on the SAME selected device the DDS tone uses (and reach
+     *  high formats, e.g. 384&nbsp;kHz / 24-bit, the default mixer refuses). */
+    public JavaSoundDeviceManager javaSoundManager() {
+        return javaSound();
     }
 }
