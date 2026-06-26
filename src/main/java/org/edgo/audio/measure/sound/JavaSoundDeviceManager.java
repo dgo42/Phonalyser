@@ -115,6 +115,48 @@ public final class JavaSoundDeviceManager {
     }
 
     /**
+     * Opens a {@link SourceDataLine} for {@code fmt} on the first mixer whose
+     * name contains {@code deviceName} (and supports the format), falling back
+     * to the platform-default line when {@code deviceName} is blank or no mixer
+     * matches.  This is the device-name → mixer selection both the DDS tone
+     * ({@link JavaSoundGenerator}) and file playback share, so they reach the
+     * SAME selected output device — which on Windows is the csjsound
+     * exclusive-mode mixer that can open high formats (e.g. 384&nbsp;kHz /
+     * 24-bit) the default mixer refuses.
+     */
+    public SourceDataLine openOutputLine(String deviceName, AudioFormat fmt) throws LineUnavailableException {
+        DataLine.Info info = new DataLine.Info(SourceDataLine.class, fmt);
+        Mixer.Info chosen = findMixer(deviceName, info);
+        SourceDataLine line = (SourceDataLine) (chosen != null
+                ? AudioSystem.getMixer(chosen).getLine(info)
+                : AudioSystem.getLine(info));
+        line.open(fmt);
+        if (log.isInfoEnabled()) {
+            log.info("JavaSound output line opened: format={}, mixer={}",
+                    fmt, chosen != null ? chosen.getName() : "<JavaSound default>");
+        }
+        return line;
+    }
+
+    /**
+     * First mixer whose name contains {@code deviceName} and can supply a
+     * {@link SourceDataLine} matching {@code info}; {@code null} when no name
+     * is requested or none matches (the caller then uses
+     * {@link AudioSystem#getLine}).
+     */
+    private Mixer.Info findMixer(String deviceName, DataLine.Info info) {
+        if (deviceName == null || deviceName.isEmpty()) return null;
+        for (Mixer.Info mi : AudioSystem.getMixerInfo()) {
+            if (!mi.getName().contains(deviceName)) continue;
+            if (AudioSystem.getMixer(mi).isLineSupported(info)) return mi;
+        }
+        if (log.isWarnEnabled()) {
+            log.warn("JavaSound: no mixer matches '{}', falling back to default", deviceName);
+        }
+        return null;
+    }
+
+    /**
      * Probes a small set of rates × bit depths against the device's mixer
      * and returns the {@link AudioFormat}s the line will actually open at.
      * Cached per mixer name.

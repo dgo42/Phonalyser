@@ -83,7 +83,8 @@ public final class GeneratorController {
     private volatile String          lastStartError;
     /** WAV/FLAC file playback engine — shares the output device with the
      *  DDS tone, so starting either engine stops the other. */
-    private final FilePlayController filePlayer = new FilePlayController();
+    private final FilePlayController filePlayer =
+            new FilePlayController(AudioBackend.instance().javaSoundManager());
     /** Previous waveform — the restart-vs-live-swap decision needs both
      *  sides of a form change. */
     private GenSignalForm lastForm;
@@ -673,7 +674,11 @@ public final class GeneratorController {
      *  {@link #isFilePlaying()} and {@link #getFilePlayError()} after. */
     public synchronized void startFilePlayback(File file, boolean loop) {
         stop();
-        filePlayer.start(file, loop);
+        // File playback shares the output device with the DDS tone — open it
+        // on the user-selected device's mixer (which supports the file's
+        // format), not the JavaSound default mixer.
+        String deviceName = Preferences.instance().current().getOutputDeviceName();
+        filePlayer.start(file, loop, deviceName);
     }
 
     public void stopFilePlayback() {
