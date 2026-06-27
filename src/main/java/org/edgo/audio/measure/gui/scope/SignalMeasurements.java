@@ -68,8 +68,15 @@ final class SignalMeasurements {
      * Computes measurements over the first {@code n} samples of {@code data}.
      * {@code peakVolts} converts a normalised sample of ±1.0 into the full-scale
      * ADC voltage swing — i.e. {@code adcFsVoltageRms · √2}.
+     *
+     * <p>{@code broadScan} enables the costly broad-band fundamental fallback
+     * (a per-bin Goertzel sweep over the whole window), used only when the
+     * crossing-derived frequency is low-quality — i.e. weak / noisy signals.
+     * The scope worker passes {@code false} on its real-time path and runs the
+     * {@code true} variant off-thread so a weak signal can't throttle the table.
      */
-    static SignalMeasurements compute(float[] data, int n, double sampleRate, double peakVolts) {
+    static SignalMeasurements from(float[] data, int n, double sampleRate, double peakVolts,
+                                   boolean broadScan) {
         if (n < 4) {
             return new SignalMeasurements(0, 0, 0, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
         }
@@ -178,7 +185,7 @@ final class SignalMeasurements {
             // randomises the crossing count and the crossing-derived period
             // is wildly off; the broad-band scan still finds the spectral
             // peak in that regime.
-            if (qA < 0.1) {
+            if (qA < 0.1 && broadScan) {   // broad-band scan is costly — the worker runs it off-thread
                 double refinedB = scanForFundamental(data, n, sampleRate, mean);
                 if (refinedB > 0) {
                     double magB = goertzelMagnitude(data, n, sampleRate, refinedB, mean);

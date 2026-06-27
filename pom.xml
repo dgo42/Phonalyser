@@ -19,6 +19,13 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <swt.version>3.126.0</swt.version>
 
+        <!-- LWJGL + NanoVG — GPU (OpenGL) rendering experiment for the scope view.
+             lwjgl.natives is overridden per OS profile below; the default keeps a
+             plain `mvn compile` resolving on the dev (Windows) machine. -->
+        <lwjgl.version>3.3.3</lwjgl.version>
+        <lwjgl.natives>natives-windows</lwjgl.natives>
+        <jogl.natives>natives-windows-amd64</jogl.natives>
+
         <!-- Application metadata consumed by jpackage. -->
         <app.name>Phonalyser</app.name>
         <app.vendor>edgo.org</app.vendor>
@@ -50,6 +57,19 @@
              mvn -o test -Dsurefire.excludedGroups= -Dtest=FftHarmonicStabilityTest#kappaRefitAB -->
         <surefire.excludedGroups>exploratory</surefire.excludedGroups>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- LWJGL BOM pins every lwjgl-* module + native classifier to one version. -->
+            <dependency>
+                <groupId>org.lwjgl</groupId>
+                <artifactId>lwjgl-bom</artifactId>
+                <version>${lwjgl.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <!-- Log4j 2 API -->
@@ -154,6 +174,82 @@
             <version>3.38.0</version>
         </dependency>
 
+        <!-- LWJGL core + OpenGL bindings + NanoVG (GPU vector canvas WITH text).
+             Compile-time API jars are platform-independent; the matching natives
+             (lwjgl core + opengl + nanovg each ship a JNI shim) come in per OS
+             via the ${lwjgl.natives} classifier.  Experimental:
+             drives the GLCanvas scope renderer (see gui.scope.gl). -->
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-opengl</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-nanovg</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-glfw</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-opengl</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-nanovg</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-glfw</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- JOGL — alternative OpenGL binding whose own SWT GLCanvas
+             (com.jogamp.opengl.swt.GLCanvas) manages the GL context itself and is
+             robust on Cocoa, where SWT's built-in GLCanvas NPEs.  Per-OS native
+             via ${jogl.natives}.  Experimental: probing GL embedding on
+             macOS/Wayland. -->
+        <dependency>
+            <groupId>org.jogamp.gluegen</groupId>
+            <artifactId>gluegen-rt</artifactId>
+            <version>2.4.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jogamp.jogl</groupId>
+            <artifactId>jogl-all</artifactId>
+            <version>2.4.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jogamp.gluegen</groupId>
+            <artifactId>gluegen-rt</artifactId>
+            <version>2.4.0</version>
+            <classifier>${jogl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jogamp.jogl</groupId>
+            <artifactId>jogl-all</artifactId>
+            <version>2.4.0</version>
+            <classifier>${jogl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- JUnit 5 for testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -162,6 +258,19 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <!-- JogAmp (JOGL / GlueGen) is not on Maven Central; its artifacts live in
+         JogAmp's own Maven repository.  Build-wide (Maven repositories can't be
+         scoped per-dependency) and EXPERIMENTAL — only for the JOGL GL-embedding
+         probe.  Remove with the JOGL deps if that path is abandoned. -->
+    <repositories>
+        <repository>
+            <id>jogamp</id>
+            <url>https://jogamp.org/deployment/maven/</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+    </repositories>
 
     <profiles>
         <!-- =============================== Windows x86_64 =============================== -->
@@ -180,6 +289,8 @@
                      point the runtime library path there, mirroring the dev layout. -->
                 <jpackage.libDir>$APPDIR/lib/windows</jpackage.libDir>
                 <platform.id>windows</platform.id>
+                <lwjgl.natives>natives-windows</lwjgl.natives>
+                <jogl.natives>natives-windows-amd64</jogl.natives>
             </properties>
             <dependencies>
                 <!-- SWT — Windows x64 binding.  The platform-specific artifact pulls
@@ -329,6 +440,8 @@
             <properties>
                 <jpackage.type>DEB</jpackage.type>
                 <platform.id>linux</platform.id>
+                <lwjgl.natives>natives-linux</lwjgl.natives>
+                <jogl.natives>natives-linux-amd64</jogl.natives>
             </properties>
             <dependencies>
                 <dependency>
@@ -369,6 +482,8 @@
             <properties>
                 <jpackage.type>DEB</jpackage.type>
                 <platform.id>linux-aarch64</platform.id>
+                <lwjgl.natives>natives-linux-arm64</lwjgl.natives>
+                <jogl.natives>natives-linux-aarch64</jogl.natives>
             </properties>
             <dependencies>
                 <dependency>
@@ -408,6 +523,8 @@
             <properties>
                 <jpackage.type>DMG</jpackage.type>
                 <platform.id>macos-x64</platform.id>
+                <lwjgl.natives>natives-macos</lwjgl.natives>
+                <jogl.natives>natives-macosx-universal</jogl.natives>
             </properties>
             <dependencies>
                 <dependency>
@@ -481,6 +598,8 @@
             <properties>
                 <jpackage.type>DMG</jpackage.type>
                 <platform.id>macos</platform.id>
+                <lwjgl.natives>natives-macos-arm64</lwjgl.natives>
+                <jogl.natives>natives-macosx-universal</jogl.natives>
             </properties>
             <dependencies>
                 <dependency>

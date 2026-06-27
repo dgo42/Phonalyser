@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -127,9 +128,9 @@ public final class Preferences {
      *  buttons (central creation point only — no dialog UI).  Changing
      *  the first two in the Preferences dialog triggers a shell recreate
      *  so every painter picks the new fonts up. */
-    private final Property<String> uiFontNormal  = bound("Consolas|9|normal");
-    private final Property<String> uiFontBold    = bound("Consolas|9|bold");
-    private final Property<String> uiFontChannel = bound("Consolas|12|bold");
+    private final Property<String> uiFontNormal  = bound(defaultUiFont("normal", 0));
+    private final Property<String> uiFontBold    = bound(defaultUiFont("bold", 0));
+    private final Property<String> uiFontChannel = bound(defaultUiFont("bold", 3));
 
     /** When true, the GUI checks GitHub releases for a newer version on
      *  startup.  Stays off by default so the app never makes network
@@ -142,6 +143,10 @@ public final class Preferences {
     /** When true, a "Tip of the day" popup is shown at startup.  Cleared by
      *  the dialog's "Don't show again" checkbox or in Preferences. */
     private final Property<Boolean> showTipsAtStartup = bound(true);
+    /** When true, the oscilloscope renders on the GPU (NanoVG/OpenGL) where available
+     *  — gated by {@code GpuSupport}, so it has no effect on a machine without a
+     *  working GL context (the checkbox is disabled there). */
+    private final Property<Boolean> useGpuAcceleration = bound(true);
 
     private final Map<AudioBackendType, BackendPrefs> perBackend =
             new EnumMap<>(AudioBackendType.class);
@@ -669,6 +674,7 @@ public final class Preferences {
         c.tabOrientation.set(tabOrientation.get());
         c.smallIconsInMainTab.set(smallIconsInMainTab.get());
         c.showTipsAtStartup.set(showTipsAtStartup.get());
+        c.useGpuAcceleration.set(useGpuAcceleration.get());
         c.uiFontNormal.set(uiFontNormal.get());
         c.uiFontBold.set(uiFontBold.get());
         c.fftStrongToneRelDb.set(fftStrongToneRelDb.get());
@@ -728,6 +734,7 @@ public final class Preferences {
         setTabOrientation(edit.tabOrientation.get());
         setSmallIconsInMainTab(edit.smallIconsInMainTab.get());
         setShowTipsAtStartup(edit.showTipsAtStartup.get());
+        setUseGpuAcceleration(edit.useGpuAcceleration.get());
         setUiFontNormal(edit.uiFontNormal.get());
         setUiFontBold(edit.uiFontBold.get());
         setFftStrongToneRelDb(edit.fftStrongToneRelDb.get());
@@ -958,9 +965,31 @@ public final class Preferences {
     public void setShowTipsAtStartup(boolean v) { showTipsAtStartup.set(v); }
     public Property<Boolean> showTipsAtStartupProperty() { return showTipsAtStartup; }
 
+    public boolean isUseGpuAcceleration() { return useGpuAcceleration.get(); }
+    public void setUseGpuAcceleration(boolean v) { useGpuAcceleration.set(v); }
+    public Property<Boolean> useGpuAccelerationProperty() { return useGpuAcceleration; }
+
     public TabOrientation getTabOrientation()  { return tabOrientation.get(); }
     public void setTabOrientation(TabOrientation v) { tabOrientation.set(v); }
     public Property<TabOrientation> tabOrientationProperty() { return tabOrientation; }
+    /** Per-OS default UI font as a {@code "family|size|style"} string: Consolas 9 on
+     *  Windows, Menlo 11 on macOS, DejaVu Sans Mono 11 elsewhere (Linux) — each
+     *  platform's standard monospace face, present out of the box.  {@code sizeBump}
+     *  enlarges the channel-button font above the base size. */
+    private String defaultUiFont(String style, int sizeBump) {
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        String family;
+        int size;
+        if (os.contains("mac")) {
+            family = "Menlo";            size = 11;
+        } else if (os.contains("win")) {
+            family = "Consolas";         size = 9;
+        } else {
+            family = "DejaVu Sans Mono"; size = 11;
+        }
+        return family + '|' + (size + sizeBump) + '|' + style;
+    }
+
     public String getUiFontNormal()            { return uiFontNormal.get(); }
     public void setUiFontNormal(String v)      { uiFontNormal.set(v); }
     public Property<String> uiFontNormalProperty() { return uiFontNormal; }
@@ -1698,6 +1727,7 @@ public final class Preferences {
         root.put("checkForUpdatesOnStartup",  checkForUpdatesOnStartup.get());
         root.put("includeBetaInUpdateChecks", includeBetaInUpdateChecks.get());
         root.put("showTipsAtStartup",         showTipsAtStartup.get());
+        root.put("useGpuAcceleration",        useGpuAcceleration.get());
         root.put("windowWidth",            windowWidth.get());
         root.put("windowHeight",           windowHeight.get());
         if (genPaneWidth.get() > 0) root.put("genPaneWidth", genPaneWidth.get());
@@ -1993,6 +2023,7 @@ public final class Preferences {
         if (root.get("checkForUpdatesOnStartup")  instanceof Boolean b) checkForUpdatesOnStartup.set(b);
         if (root.get("includeBetaInUpdateChecks") instanceof Boolean b) includeBetaInUpdateChecks.set(b);
         if (root.get("showTipsAtStartup")         instanceof Boolean b) showTipsAtStartup.set(b);
+        if (root.get("useGpuAcceleration")        instanceof Boolean b) useGpuAcceleration.set(b);
         if (root.get("backend") instanceof String s) {
             backend.set(enumOr(AudioBackendType.class, s, backend.get()));
         }

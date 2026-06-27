@@ -56,7 +56,7 @@ class SignalMeasurementsFreqTest {
             for (double seconds : new double[]{0.02, 0.05, 0.1, 0.25, 0.5, 1.0}) {
                 int n = Math.min(96_000, (int) Math.round(fs * seconds));
                 for (double ph = 0; ph < 2 * Math.PI; ph += Math.PI / 4) {
-                    double f = SignalMeasurements.compute(tone(trueF, fs, n, 0.5, ph), n, fs, 1.0)
+                    double f = SignalMeasurements.from(tone(trueF, fs, n, 0.5, ph), n, fs, 1.0, true)
                                                  .getFrequency();
                     assertTrue(Math.abs(f - trueF) < TOL_HZ,
                             String.format("fs=%.0f n=%d phase=%.2f: f=%.5f err=%+.5f", fs, n, ph, f, f - trueF));
@@ -79,7 +79,7 @@ class SignalMeasurementsFreqTest {
                         + 3e-3 * Math.sin(2 * Math.PI * 3 * trueF * t)        // H3
                         + 1.6e-3 * rnd.nextGaussian());                       // ~-50 dB noise
             }
-            double f = SignalMeasurements.compute(d, n, fs, 1.0).getFrequency();
+            double f = SignalMeasurements.from(d, n, fs, 1.0, true).getFrequency();
             assertTrue(Math.abs(f - trueF) < TOL_HZ,
                     String.format("phase=%.2f: f=%.5f err=%+.5f", ph, f, f - trueF));
         }
