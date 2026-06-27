@@ -22,8 +22,11 @@ import java.util.Arrays;
 import java.util.Map;
 
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.events.MouseAdapter;
+import org.eclipse.swt.events.MouseEvent;
 import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.Cursor;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
@@ -31,7 +34,10 @@ import org.eclipse.swt.graphics.LineAttributes;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Scrollable;
 import org.edgo.audio.measure.common.Lanczos;
 import org.edgo.audio.measure.dsp.LowPassFilter;
 import org.edgo.audio.measure.dsp.MainsFilters;
@@ -50,6 +56,8 @@ import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractMeasurementView;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
 import org.edgo.audio.measure.gui.common.Fonts;
+import org.edgo.audio.measure.gui.common.GcMeasurementPainter;
+import org.edgo.audio.measure.gui.common.MeasurementPainter;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
@@ -114,9 +122,16 @@ public final class ScopeView extends AbstractMeasurementView {
      *  file buffer).  The scope reads relative to {@code writePos}, so it never
      *  uses the cursor's read position — it just delegates readLatest /
      *  readEndingAt. */
-    private SignalBufferReader reader;
+    @Getter private SignalBufferReader reader;
     private float[] leftBuf  = new float[0];
     private float[] rightBuf = new float[0];
+
+    /** The pan/zoom engine: every horizontal/vertical move/zoom transform + the
+     *  viewport mapping.  Stateless (grid divisions + the 1-2-5 ladder), so the
+     *  pane and tab control share this one instance for their wheel/drag/control
+     *  handlers — keeping all the logic in {@link ScopeNav}, not scattered here. */
+    @Getter private final ScopeNav nav =
+            new ScopeNav(DIVISIONS_X, DIVISIONS_Y, OscParse.voltsPerDivTargets());
 
     /** Carbon-copy of the last trace frame this view rendered (the exact
      *  windowed samples + render parameters passed to {@link #renderTraces}).
@@ -201,6 +216,11 @@ public final class ScopeView extends AbstractMeasurementView {
      * gates whether the contents are valid.
      */
     private boolean singleHeld = false;
+    /** Scope is stopped on a frozen buffer.  The render path is unchanged — it just
+     *  holds the last trigger (step 2) for every mode instead of re-searching /
+     *  free-running, so a stopped trace pans/zooms exactly like live, and auto-setup
+     *  can scale the vertical off the held measurements. */
+    @Getter private boolean frozen = false;
     private float[] capturedLeft;
     private float[] capturedRight;
     private int     capturedLen;
@@ -223,9 +243,25 @@ public final class ScopeView extends AbstractMeasurementView {
      *  {@code lastLiveDispStartAbs} is -1 until a live frame has been drawn. */
     private long    lastLiveDispStartAbs = -1;
     private double  lastLiveSubSampleOffset;
+    /** Absolute sample sitting at the trigger-position fraction of the last live
+     *  window — the anchor a STOPPED scope holds (step 2) when it never triggered
+     *  (free-running AUTO, {@link #lastTriggerAbsPos} = -1), so its zoom/pan still
+     *  pin to the trigger offset instead of free-running to the buffer's edge.
+     *  -1 until a live frame has been drawn. */
+    private long    lastLiveAnchorAbs = -1;
     /** Live cursor X within the canvas, tracked on mouse-move — the anchor for
      *  frozen-frame magnify. */
     private int     hoverX;
+    /** The visible widget that receives pointer events + cursor/tooltip and whose
+     *  client area sizes the pointer math — {@code this} on the CPU path, the GL
+     *  canvas on the GPU path (where this view is hidden). */
+    private Control  pointerHost = this;
+    /** GPU repaint hook: {@link #redraw()} runs it so every repaint reaches the GL
+     *  surface while the view is hidden.  Null on the CPU path. */
+    private Runnable glRepaint;
+    /** The GPU-drawn header button currently pressed (the mouse was forwarded to it),
+     *  so the release goes to the same button.  Null on the CPU path / no press. */
+    private ToolButton pressedHeaderButton;
     /** Frozen-frame magnify state.  {@code heldViewStart} is the captured-buffer
      *  sample shown at the LEFT edge of the held view (may be negative or past the
      *  data — where it is, {@code blankBeyondData} makes {@link #drawTrace} draw
@@ -273,7 +309,10 @@ public final class ScopeView extends AbstractMeasurementView {
      */
     private static final long READOUT_THROTTLE_NS = 200_000_000L;
     private MeasurementRow[]  cachedMeasurementRows;
-    private long   lastMeasurementBuildNanos;
+    /** The worker result the cached rows were built from; the rows rebuild when the
+     *  worker posts a NEW result (its own compute rhythm) rather than on a display
+     *  timer whose period beat against the capture block rate. */
+    private SignalMeasurements lastBuiltMeasResult;
     private String cachedCapsString = "";
     private long   lastCapsBuildNanos;
 
@@ -288,6 +327,17 @@ public final class ScopeView extends AbstractMeasurementView {
             SWT.CAP_ROUND, SWT.JOIN_ROUND);
     private final LineAttributes lineAttrsBars  = new LineAttributes(1.0f,
             SWT.CAP_FLAT,  SWT.JOIN_BEVEL);
+
+    /** Sub-sample step for the sin(x)/x peak refinement in {@link #drawEnvelope}
+     *  (curve reconstructed within ±1 sample of each column's extreme samples). */
+    private static final double RECON_REFINE_STEP = 0.1;
+
+    /** Per-pixel-column min/max + connector-attach scratch for {@link #drawEnvelope},
+     *  grown on demand and reused across both channels (paint is single-threaded). */
+    private float[] envMin;
+    private float[] envMax;
+    private float[] envEntry;
+    private float[] envExit;
     /**
      * Cached {@code textExtent} of the static {@link #HEADERS} strings.
      * Populated lazily on first paint with the GC already wearing {@code
@@ -308,6 +358,8 @@ public final class ScopeView extends AbstractMeasurementView {
     @Getter
     private volatile long viewBackOffsetFrames;
     public void setViewBackOffsetFrames(long v) { this.viewBackOffsetFrames = Math.max(0L, v); }
+    /** TEMP: paint-profiling frame counter (see {@link #paintCanvas}). */
+    private int paintProfileTick;
     /**
      * When true the view is showing a statically-loaded signal (no live
      * capture).  Trigger search makes no sense in this mode — the trace
@@ -402,6 +454,11 @@ public final class ScopeView extends AbstractMeasurementView {
 
     /** Slider currently being dragged ({@code null} ⇒ no drag in progress). */
     private OscSliderId draggingSlider;
+    /** Mouse X and real trigger offset captured when a TRIGGER_POSITION drag starts,
+     *  so the handle moves by the dragged DELTA — a handle pinned at the edge (virtual
+     *  offset) then tracks continuously back into view instead of jumping. */
+    private int    triggerPosDragStartX;
+    private double triggerPosDragStartFrac;
 
     /** Gap (px) between the cap/s readout and the file-path label drawn to its left. */
     private static final int FILE_PATH_GAP_TO_CAPS = 1;
@@ -430,7 +487,7 @@ public final class ScopeView extends AbstractMeasurementView {
         // pass.  The mid-channel colours (~65 % attenuation of the trace
         // RGBs) are derived after super() returns since attenuate() is
         // an instance method.
-        super(parent, SWT.DOUBLE_BUFFERED, Map.of(
+        super(parent, SWT.NONE /*SWT.DOUBLE_BUFFERED*/, Map.of(
                 ColorRole.BACKGROUND,        0x000000,
                 ColorRole.GRID,              0x3C3C3C,
                 // Frame and grid share a shade on scope (different roles
@@ -486,6 +543,15 @@ public final class ScopeView extends AbstractMeasurementView {
         Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
         headerBar.setBounds(COL_NAME_X, 5, hbSize.x, hbSize.y);
         headerBar.layout();
+        // GTK ignores SWT.NO_BACKGROUND|TRANSPARENT and paints the theme background,
+        // so on the CPU path the overlay toolbar shows an opaque (white/grey) strip
+        // over the black scope.  Force the strip and its buttons (INHERIT_FORCE) to
+        // the scope background so it blends.  Windows/macOS honour NO_BACKGROUND
+        // (transparent), and their GPU path hides the widget entirely — leave them.
+        if ("gtk".equals(SWT.getPlatform())) {
+            headerBar.setBackground(color(ColorRole.BACKGROUND));
+            headerBar.setBackgroundMode(SWT.INHERIT_FORCE);
+        }
         // L / R measurement-channel pick (radio pair) — the click writes the
         // now-bound pref (auto-saved); the history-clear + repaint side-effect
         // and the mirror-back onto the ToolButtons live in the pref subscriber
@@ -535,109 +601,12 @@ public final class ScopeView extends AbstractMeasurementView {
 
         setBackground(color(ColorRole.BACKGROUND));
         addPaintListener(this::onPaint);
-        addMouseListener(new org.eclipse.swt.events.MouseAdapter() {
-            @Override
-            public void mouseDown(org.eclipse.swt.events.MouseEvent ev) {
-                if (ev.button != 1) return;
-                // Slider hit detection — first match wins.  The handle is
-                // grabbed and the slider value is updated immediately so a
-                // click without a drag still moves the slider.
-                if (offsetSliderBounds.contains(ev.x, ev.y)) {
-                    draggingSlider = OscSliderId.OFFSET;
-                } else if (!fileMode && triggerLevelBounds.contains(ev.x, ev.y)) {
-                    // Trigger has no meaning on a static loaded signal.
-                    draggingSlider = OscSliderId.TRIGGER_LEVEL;
-                } else if (!fileMode && triggerPosBounds.contains(ev.x, ev.y)) {
-                    draggingSlider = OscSliderId.TRIGGER_POSITION;
-                }
-                if (draggingSlider != null) {
-                    updateSliderFromMouse(ev.x, ev.y);
-                }
-            }
-
-            @Override
-            public void mouseUp(org.eclipse.swt.events.MouseEvent ev) {
-                if (draggingSlider != null) {
-                    Preferences.instance().save();
-                    draggingSlider = null;
-                }
-            }
-
-            @Override
-            public void mouseDoubleClick(org.eclipse.swt.events.MouseEvent ev) {
-                if (ev.button != 1) return;
-                // Double-click on any slider handle resets it to centre.
-                // The preceding mouseDown will have started a drag and moved
-                // the slider to the cursor's exact position; the reset
-                // overwrites that so the user sees a clean snap to 0.5.
-                Preferences prefs = Preferences.instance();
-                boolean changed = false;
-                if (offsetSliderBounds.contains(ev.x, ev.y)) {
-                    if (prefs.getOscMeasurementChannel() == Channel.L) {
-                        prefs.setOscLeftOffsetFrac(0.5);
-                    } else {
-                        prefs.setOscRightOffsetFrac(0.5);
-                    }
-                    changed = true;
-                } else if (!fileMode && triggerLevelBounds.contains(ev.x, ev.y)) {
-                    prefs.setOscTriggerLevelFrac(0.5);
-                    changed = true;
-                } else if (!fileMode && triggerPosBounds.contains(ev.x, ev.y)) {
-                    prefs.setOscTriggerPositionFrac(0.5);
-                    changed = true;
-                }
-                if (changed) {
-                    draggingSlider = null;
-                    prefs.save();
-                    redraw();
-                }
-            }
+        addMouseListener(new MouseAdapter() {
+            @Override public void mouseDown(MouseEvent ev)        { pointerDown(ev.x, ev.y, ev.button); }
+            @Override public void mouseUp(MouseEvent ev)          { pointerUp(); }
+            @Override public void mouseDoubleClick(MouseEvent ev) { pointerDoubleClick(ev.x, ev.y, ev.button); }
         });
-        addMouseMoveListener(ev -> {
-            hoverX = ev.x;
-            if (draggingSlider != null) {
-                updateSliderFromMouse(ev.x, ev.y);
-                return;
-            }
-            // Hover: switch to a vertical-resize cursor over the up/down
-            // sliders (offset, trigger level) and a horizontal-resize cursor
-            // over the left/right slider (trigger position).
-            int cursorId;
-            String tip;
-            if (offsetSliderBounds.contains(ev.x, ev.y)) {
-                cursorId = SWT.CURSOR_SIZENS;
-                tip = I18n.t("scope.offset.slider.tooltip");
-            } else if (!fileMode && triggerLevelBounds.contains(ev.x, ev.y)) {
-                cursorId = SWT.CURSOR_SIZENS;
-                tip = I18n.t("scope.trigger.level.tooltip");
-            } else if (!fileMode && triggerPosBounds.contains(ev.x, ev.y)) {
-                cursorId = SWT.CURSOR_SIZEWE;
-                tip = I18n.t("scope.trigger.position.tooltip");
-            } else if (leftMaxLabelBounds.contains(ev.x, ev.y)
-                    || leftMinLabelBounds.contains(ev.x, ev.y)
-                    || rightMaxLabelBounds.contains(ev.x, ev.y)
-                    || rightMinLabelBounds.contains(ev.x, ev.y)) {
-                cursorId = SWT.CURSOR_ARROW;
-                tip = I18n.t("scope.voltage.label.tooltip");
-            } else if (timeLeftLabelBounds.contains(ev.x, ev.y)
-                    || timeRightLabelBounds.contains(ev.x, ev.y)) {
-                cursorId = SWT.CURSOR_ARROW;
-                tip = I18n.t("scope.time.label.tooltip");
-            } else {
-                cursorId = SWT.CURSOR_ARROW;
-                tip = null;
-            }
-            org.eclipse.swt.graphics.Cursor c = getDisplay().getSystemCursor(cursorId);
-            if (getCursor() != c) setCursor(c);
-            // Avoid resetting the same string each move — it can flicker
-            // the tooltip on some platforms.
-            String current = getToolTipText();
-            if (tip == null) {
-                if (current != null) setToolTipText(null);
-            } else if (!tip.equals(current)) {
-                setToolTipText(tip);
-            }
-        });
+        addMouseMoveListener(ev -> pointerMove(ev.x, ev.y));
         addDisposeListener(e -> {
             measWorker.stop();
             disposePalette();
@@ -652,30 +621,99 @@ public final class ScopeView extends AbstractMeasurementView {
     }
 
     /** Attaches the latest-window read cursor over the capture (or a wrapped
-     *  frozen / file buffer).  {@code null} clears the waveform overlay. */
+     *  frozen / file buffer).  {@code null} clears the waveform overlay.  Resets
+     *  per-capture state, so use this when a NEW capture / file is swapped in. */
     public void setBuffer(SignalBufferReader reader) {
+        setBuffer(reader, true);
+    }
+
+    /** Freeze-on-stop variant: swaps in the frozen buffer but KEEPS the last
+     *  measurement result, DC means and history, so a later repaint (e.g. a GTK
+     *  expose, which Windows/macOS don't issue on a stopped GL surface) still
+     *  renders the frozen frame WITH its DC compensation and measurement table,
+     *  instead of a wiped, un-compensated trace. */
+    public void freezeBuffer(SignalBufferReader reader) {
+        setBuffer(reader, false);
+    }
+
+    private void setBuffer(SignalBufferReader reader, boolean resetMeasurements) {
+        SignalBufferReader prevReader = this.reader;   // the live reader, captured before the swap
+        boolean wasFrozen = this.frozen;
         this.reader = reader;
         measWorker.setBuffer(reader);
         syncScopeButtons();   // signal presence changed → re-evaluate the gated buttons
-        // Reset per-capture state so a previous session's values aren't
-        // displayed on the first few paints of a new capture (notably the
-        // DC mean, which is read straight from the worker until it
-        // publishes a fresh tick ~100 ms in).
-        measWorker.clearLatest();
-        this.captureRate             = 0;
-        this.lastNewFrameNanos       = 0;
-        this.lastTriggerAbsPos       = -1;
-        this.cachedMeasurementRows   = null;
-        this.cachedCapsString        = "";
-        measWorker.clearHistory();
+        // Always reset the per-paint trigger / cap-rate state.  On a FREEZE this is
+        // what stops the last live trigger from being held and re-anchored as the
+        // user pans/zooms the stopped trace (which made it jump left/right); on a
+        // new capture it's the clean slate it always was.
+        this.captureRate       = 0;
+        this.lastNewFrameNanos = 0;
+        this.cachedCapsString  = "";
+        if (resetMeasurements) {
+            // New capture / file load: live again — clear the trigger anchor, the
+            // frozen hold, and the previous session's measurements (the DC mean is
+            // read from the worker until it publishes ~100 ms in).
+            this.frozen            = false;
+            this.singleHeld        = false;
+            this.lastTriggerAbsPos = -1;
+            measWorker.clearLatest();
+            measWorker.clearHistory();
+            this.cachedMeasurementRows = null;
+        } else {
+            // Freeze on stop: render the frozen buffer through the SAME live path so
+            // pan/zoom behave identically to live.  KEEP the trigger anchor (the
+            // hold, step 2, re-pins the window on it); clear singleHeld so a stopped
+            // scope uses that hold for EVERY mode, not the separate held-frame path.
+            // Measurements stay (table + DC-compensated trace).
+            this.frozen     = true;
+            this.singleHeld = false;
+            // The frozen snapshot is a FRESH buffer whose writePos is just its own
+            // sample count (≈ capacity), while the kept anchors are in the LIVE
+            // buffer's absolute coordinates.  Once the live ring has wrapped (live
+            // writePos > capacity) the two diverge by (liveWritePos − snapshotLen) —
+            // without this the anchor lands far off the snapshot and the whole trace
+            // blanks.  Shift the kept live anchors into the snapshot's coordinates.
+            if (!wasFrozen && prevReader != null) {
+                long rebase = prevReader.getWritePos() - reader.getWritePos();
+                if (rebase > 0) {
+                    if (lastTriggerAbsPos    >= 0) lastTriggerAbsPos    -= rebase;
+                    if (lastLiveAnchorAbs    >= 0) lastLiveAnchorAbs    -= rebase;
+                    if (lastLiveDispStartAbs >= 0) lastLiveDispStartAbs -= rebase;
+                }
+            }
+            // A free-running AUTO trace never set a trigger anchor; fall back to the
+            // last live window's trigger-offset point so the stopped scope still has
+            // a single fixed reference for hold / zoom / pan (panFrozenHorizontal).
+            if (this.lastTriggerAbsPos < 0 && this.lastLiveAnchorAbs >= 0) {
+                this.lastTriggerAbsPos        = this.lastLiveAnchorAbs;
+                this.lastTriggerSubSampleOffset = 0.0;
+            }
+        }
     }
 
-    /** Returns the latest-window read cursor (or {@code null} if none) — the
-     *  scope's single handle to the captured signal.  Buffer-level operations
-     *  (save, zoom extents, AC offsets) go through this reader, never a raw
-     *  {@code SignalBuffer}. */
-    public SignalBufferReader getReader() {
-        return reader;
+    /** Pans a STOPPED (frozen) trace horizontally by one wheel tick = ½ division,
+     *  by nudging the (virtual-capable) trigger-position fraction.  The held anchor
+     *  stays fixed in the buffer and the view-following read scrolls the whole
+     *  captured buffer; the offset is clamped only so a sliver of signal stays on
+     *  screen.  {@code dir} matches the live trigger-offset wheel sign.  Returns
+     *  whether it moved, so the caller only repaints on a real change. */
+    public boolean panFrozenOffset(int dir) {
+        if (!frozen || reader == null || lastTriggerAbsPos < 0) return false;
+        Preferences p = Preferences.instance();
+        int displaySamples = ScopeFormat.displaySamplesFor(p.getOscTimePerDiv(), reader.getSampleRate());
+        if (displaySamples < 2) return false;
+        double cur    = p.getOscTriggerPositionFrac();
+        double anchor = lastTriggerAbsPos + lastTriggerSubSampleOffset;
+        long   latest = reader.getWritePos();
+        long   oldest = Math.max(0L, latest - reader.getCapacity());
+        // Engine: ½-div move of the (virtual-capable) offset, clamped so a sliver of
+        // the captured buffer stays on screen.  ScopeView supplies the anchor + extent.
+        double next = nav.clampFrozenOffset(nav.moveTriggerOffset(cur, dir),
+                anchor, displaySamples, oldest, latest, 2.0);
+        if (next == cur) return false;
+        p.setOscTriggerPositionFrac(next);
+        p.save();
+        return true;
     }
 
     /**
@@ -801,31 +839,144 @@ public final class ScopeView extends AbstractMeasurementView {
      * from the on-screen pane.
      */
     public void paintCanvas(GC gc, int w, int h) {
+        paintCanvas(new GcMeasurementPainter(gc), w, h);
+    }
+
+    /** The real paint, against the {@link MeasurementPainter} seam so the same code
+     *  drives the GC backend (on-screen + screenshots) and a NanoVG backend (GPU). */
+    public void paintCanvas(MeasurementPainter gc, int w, int h) {
+        long _t0 = System.nanoTime();
         gc.setAdvanced(true);
         syncChannelColors();
         gc.setBackground(color(ColorRole.BACKGROUND));
         gc.fillRectangle(0, 0, w, h);
-        // Scope grid: linear 10×10, no axis labels, centred cross-hair
-        // with TICKS_PER_DIV sub-ticks along each arm.  The base method
-        // does all the geometry; we just feed it the scope's range and
-        // colour palette.
-        drawGrid(gc,
-                 new Rectangle(0, 0, w, h),
-                 AxisSpec.linear(0, DIVISIONS_X, DIVISIONS_X),
-                 AxisSpec.linear(0, DIVISIONS_Y, DIVISIONS_Y),
-                 null,
-                 color(ColorRole.GRID), color(ColorRole.AXIS),
-                 null, null,
-                 0, 0,
-                 new CrossHairSpec(0.5, 0.5, color(ColorRole.CROSSHAIR),
-                                   TICKS_PER_DIV, TICK_HALF_LEN,
-                                   DIVISIONS_X, DIVISIONS_Y));
+        // Default readout font each frame — the NanoVG painter keeps font state across
+        // frames (a GC resets per paint), so without this a readout that doesn't set its
+        // own font would inherit the last one used (e.g. the bold channel-button font).
+        if (monoFont == null) monoFont = Fonts.instance().normal(getDisplay());
+        gc.setFont(monoFont);
+        long _tSetup = System.nanoTime();
+        drawScopeGrid(gc, w, h);
+        long _tGrid = System.nanoTime();
         drawWaveforms(gc, w, h);
+        long _tWave = System.nanoTime();
         drawSliders(gc, w, h);
+        long _tSlid = System.nanoTime();
         drawEdgeLabels(gc, w, h);
+        long _tEdge = System.nanoTime();
         drawMeasurements(gc);
+        long _tMeas = System.nanoTime();
         drawCaptureRate(gc, w);
         drawFilePath(gc, w);
+        // TEMP paint profiling — once per ~30 paints, log the per-section ms so we
+        // can see where the frame time goes.  Remove once the hot section is fixed.
+        long _tEnd = System.nanoTime();
+        if (++paintProfileTick >= 30 && log.isWarnEnabled()) {
+            paintProfileTick = 0;
+            log.warn(String.format(
+                "PAINT-PROFILE ms: setup=%.1f grid=%.1f wave=%.1f sliders=%.1f edge=%.1f meas=%.1f caps+path=%.1f TOTAL=%.1f",
+                (_tSetup - _t0) / 1e6, (_tGrid - _tSetup) / 1e6, (_tWave - _tGrid) / 1e6,
+                (_tSlid - _tWave) / 1e6, (_tEdge - _tSlid) / 1e6, (_tMeas - _tEdge) / 1e6,
+                (_tEnd - _tMeas) / 1e6, (_tEnd - _t0) / 1e6));
+        }
+    }
+
+    /** Renders the scope through a {@link MeasurementPainter} for the GPU surface,
+     *  mirroring {@link #onPaint} (paint + capture-rate update) — used as the GL
+     *  surface's renderer when the GPU scope is enabled.  Without the
+     *  {@code updateCaptureRate()} here the cap/s readout never refreshes, because
+     *  the hidden view's {@code onPaint} no longer fires. */
+    public void renderGl(MeasurementPainter painter, int w, int h) {
+        paintCanvas(painter, w, h);
+        drawHeaderOverlay(painter);   // GPU only: the toolbar widgets are hidden, draw them via the painter
+        // The GPU loop renders through the surface, not redraw(), so the redraw() override
+        // that drives the extracted measurement window never fires — do it directly here.
+        if (measurementWindow != null) {
+            measurementWindow.redraw();
+        }
+        updateCaptureRate();
+    }
+
+    /** GPU path only: the header {@link Toolbar} is a hidden child of this view, so
+     *  render it into an off-screen image and draw it over the GL trace as a texture
+     *  — an SWT control can't overlay a GLCanvas (its buffer swap paints over it). */
+    private void drawHeaderOverlay(MeasurementPainter painter) {
+        for (Control c : headerBar.getChildren()) {
+            if (c instanceof ToolButton btn && btn.getVisible()) {   // honour signal-gated hiding
+                Rectangle b = btn.getBounds();
+                btn.paintWith(painter, COL_NAME_X + b.x, 5 + b.y);
+            }
+        }
+    }
+
+    /** The visible header {@link ToolButton} under ({@code x}, {@code y}) in the GPU
+     *  path (where the buttons are GL-drawn, not real widgets), or null. */
+    private ToolButton headerButtonAt(int x, int y) {
+        for (Control c : headerBar.getChildren()) {
+            if (c instanceof ToolButton btn && btn.getVisible()) {
+                Rectangle b = btn.getBounds();
+                if (x >= COL_NAME_X + b.x && x < COL_NAME_X + b.x + b.width
+                        && y >= 5 + b.y && y < 5 + b.y + b.height) {
+                    return btn;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Draws the scope's fixed graticule directly, rather than through the shared
+     * {@link #drawGrid} in the base view.  That base method is a general-purpose
+     * chart grid: it takes arbitrary {@link AxisSpec}s (linear / log / nice
+     * scales), optional axis labels, a second Y axis, and edge tick marks, and to
+     * serve all that it allocates major/minor tick arrays and maps every line
+     * through {@code valueToX} / {@code valueToY} (with per-call scale branching)
+     * on each paint.  The oscilloscope needs none of it — a fixed, evenly spaced
+     * {@code DIVISIONS_X × DIVISIONS_Y} grid with a centred cross-hair and uniform
+     * sub-ticks — so re-using the configurable method spends its setup cost every
+     * realtime frame for nothing.  This dedicated version computes the line
+     * positions arithmetically, with no allocation and no scale lookup, keeping
+     * the hot paint path lean.  It is pixel-for-pixel identical to the
+     * {@code drawGrid(...)} call it replaced (same rounding: {@code round(i·w/N)}).
+     */
+    private void drawScopeGrid(MeasurementPainter gc, int w, int h) {
+        // Major grid: DIVISIONS_X+1 vertical and DIVISIONS_Y+1 horizontal lines,
+        // evenly spaced edge to edge.
+        gc.setForeground(color(ColorRole.GRID));
+        for (int i = 0; i <= DIVISIONS_X; i++) {
+            int px = (int) Math.round((double) i * w / DIVISIONS_X);
+            gc.drawLine(px, 0, px, h);
+        }
+        for (int i = 0; i <= DIVISIONS_Y; i++) {
+            int py = (int) Math.round((double) i * h / DIVISIONS_Y);
+            gc.drawLine(0, py, w, py);
+        }
+        // Centred cross-hair with uniform sub-division ticks along each arm.
+        int cx = (int) Math.round(0.5 * w);
+        int cy = (int) Math.round(0.5 * h);
+        gc.setForeground(color(ColorRole.CROSSHAIR));
+        gc.drawLine(cx, 0, cx, h);
+        gc.drawLine(0, cy, w, cy);
+        if (TICKS_PER_DIV > 0) {
+            int totalX = DIVISIONS_X * TICKS_PER_DIV;
+            int totalY = DIVISIONS_Y * TICKS_PER_DIV;
+            double tickX = (double) w / totalX;
+            double tickY = (double) h / totalY;
+            int total = Math.max(totalX, totalY);
+            for (int i = 0; i <= total; i++) {
+                if (i <= totalY) {
+                    int py = (int) Math.round(i * tickY);
+                    gc.drawLine(cx - TICK_HALF_LEN, py, cx + TICK_HALF_LEN, py);
+                }
+                if (i <= totalX) {
+                    int px = (int) Math.round(i * tickX);
+                    gc.drawLine(px, cy - TICK_HALF_LEN, px, cy + TICK_HALF_LEN);
+                }
+            }
+        }
+        // Plot frame.
+        gc.setForeground(color(ColorRole.AXIS));
+        gc.drawRectangle(0, 0, w, h);
     }
 
     /**
@@ -881,7 +1032,7 @@ public final class ScopeView extends AbstractMeasurementView {
     }
 
     /** Pale-grey "123.4 cap/s" readout in the top-right corner. */
-    private void drawCaptureRate(GC gc, int w) {
+    private void drawCaptureRate(MeasurementPainter gc, int w) {
         // Hidden whenever this paint rendered a frozen frame (held SINGLE/NORMAL
         // shot, blank pane, file / scrolled-back view): cap/s is meaningless
         // without a live, self-refreshing capture.
@@ -911,7 +1062,7 @@ public final class ScopeView extends AbstractMeasurementView {
      * clock phase, with a 500 ms timer-driven redraw to keep the toggle
      * visible.
      */
-    private void drawFilePath(GC gc, int w) {
+    private void drawFilePath(MeasurementPainter gc, int w) {
         String path = filePath;
         if (path == null || !fileMode) { hideFileBanner(); return; }
 
@@ -972,7 +1123,7 @@ public final class ScopeView extends AbstractMeasurementView {
      * Avg / min / max / σ are aggregated across a sliding window of the
      * last {@code oscMeasurementAverageSeconds} of measurements.
      */
-    private void drawMeasurements(GC gc) {
+    private void drawMeasurements(MeasurementPainter gc) {
         // When extracted, the table is rendered into the measurementWindow instead —
         // skip the in-canvas table here.
         if (tableExtracted) return;
@@ -1024,9 +1175,12 @@ public final class ScopeView extends AbstractMeasurementView {
         }
         SignalMeasurements cur = measWorker.getLastMeasResult();
         if (cur == null) return null;
-        long now = System.nanoTime();
         MeasurementRow[] rows = cachedMeasurementRows;
-        if (rows == null || now - lastMeasurementBuildNanos >= READOUT_THROTTLE_NS) {
+        // Rebuild when the worker posts a NEW result (each of its compute passes),
+        // not on a display timer — the timer's period beat against the capture
+        // block arrivals, making the readout update irregularly.
+        if (rows == null || cur != lastBuiltMeasResult) {
+            long now = System.nanoTime();
             long windowNanos = (long) (prefs.getOscMeasurementAverageSeconds() * 1e9);
             long cutoff = now - windowNanos;
             MeasurementStats vppS   = new MeasurementStats();
@@ -1057,8 +1211,8 @@ public final class ScopeView extends AbstractMeasurementView {
                     MeasurementRow.forFreq ("f",     cur.getFrequency(), fS),
                     MeasurementRow.forPct  ("Duty",  cur.getDutyCycle(), dutyS),
             };
-            cachedMeasurementRows     = rows;
-            lastMeasurementBuildNanos = now;
+            cachedMeasurementRows = rows;
+            lastBuiltMeasResult   = cur;
         }
         return rows;
     }
@@ -1069,8 +1223,17 @@ public final class ScopeView extends AbstractMeasurementView {
      *  next throttled rebuild. */
     private void clearMeasurementHistory() {
         measWorker.clearHistory();
-        cachedMeasurementRows     = null;
-        lastMeasurementBuildNanos = 0;
+        cachedMeasurementRows = null;
+        lastBuiltMeasResult   = null;
+    }
+
+    /** Resets the running measurement statistics (avg / min / max / σ) and repaints
+     *  — called when the generator signal changes (USER_INPUT) so the table doesn't
+     *  average the old signal's readings into the new one. */
+    public void resetMeasurementHistory() {
+        if (isDisposed()) return;
+        clearMeasurementHistory();
+        redraw();
     }
 
     /** Records the user's intent to keep the table extracted into the tool
@@ -1161,7 +1324,7 @@ public final class ScopeView extends AbstractMeasurementView {
         if (reader == null || !prefs.isOscShowMeasurementTable()) return;
         MeasurementRow[] rows = prepareMeasurementRows(prefs);
         if (rows == null) return;
-        drawMeasurementTableAt(gc, rows, prefs.isOscLeftChannelEnabled(),
+        drawMeasurementTableAt(new GcMeasurementPainter(gc), rows, prefs.isOscLeftChannelEnabled(),
                 prefs.isOscRightChannelEnabled(), prefs.getOscMeasurementChannel(), top);
     }
 
@@ -1194,6 +1357,7 @@ public final class ScopeView extends AbstractMeasurementView {
     @Override
     public void redraw() {
         super.redraw();
+        if (glRepaint != null) glRepaint.run();   // GPU: render the surface (the view is hidden)
         // Mirror to the extracted tool window so it tracks the main view in lock-step — its
         // canvas repaints through the painter registered in createMeasurementWindow().
         if (measurementWindow != null) {
@@ -1274,10 +1438,7 @@ public final class ScopeView extends AbstractMeasurementView {
     public double[] offsetFracBounds() {
         double vpdiv = measurementChannelVPDiv();
         double fs    = Preferences.instance().getAdcFsVoltageRms() * Math.sqrt(2.0);
-        double half  = (vpdiv <= 0 || fs <= 0)
-                ? 0.5
-                : fs / (DIVISIONS_Y * vpdiv);
-        if (half < 0.5) half = 0.5;
+        double half  = ScopeFormat.offsetMoveHalfRange(vpdiv, fs, DIVISIONS_Y);
         return new double[] { 0.5 - half, 0.5 + half };
     }
 
@@ -1475,7 +1636,7 @@ public final class ScopeView extends AbstractMeasurementView {
     /** Renders the measurement table into {@code gc} from {@code startY} down.  Shared by the
      *  in-canvas table (main-view paint, below the header button row) and the extracted tool
      *  window's painter (below its stats/reset row). */
-    private void drawMeasurementTableAt(GC gc, MeasurementRow[] rows,
+    private void drawMeasurementTableAt(MeasurementPainter gc, MeasurementRow[] rows,
                                         boolean showL, boolean showR, Channel selected,
                                         int startY) {
         if (monoFont == null) {
@@ -1533,7 +1694,7 @@ public final class ScopeView extends AbstractMeasurementView {
      * Hit-boxes are refreshed each paint so the drag handler picks up the
      * latest geometry after a resize or a V/div change moves a handle.
      */
-    private void drawSliders(GC gc, int w, int h) {
+    private void drawSliders(MeasurementPainter gc, int w, int h) {
         Preferences prefs = Preferences.instance();
         boolean showL = prefs.isOscLeftChannelEnabled();
         boolean showR = prefs.isOscRightChannelEnabled();
@@ -1636,7 +1797,11 @@ public final class ScopeView extends AbstractMeasurementView {
         // ----- Trigger position: long-dashed vertical cross-hair + handle on bottom edge.
         // Same fileMode-hide treatment for the trigger-position slider.
         if (!fileMode) {
-            double posFrac = ScopeFormat.clamp01(prefs.getOscTriggerPositionFrac());
+            // The offset can be virtual (pan/zoom carried it off-screen): pin the
+            // line + handle to the clamped on-screen position so it stays grabbable,
+            // but the time-offset label shows the REAL offset, however far outside.
+            double posReal = prefs.getOscTriggerPositionFrac();
+            double posFrac = ScopeFormat.clamp01(posReal);
             int posX = (int) Math.round(posFrac * w);
             drawOutlinedDashedLine(gc, posX, 0, posX, h - 1, LONG_DASH, color(ColorRole.TEXT));
             drawUpPointingTriangle(gc, posX, h - 1, color(ColorRole.TEXT));
@@ -1645,7 +1810,7 @@ public final class ScopeView extends AbstractMeasurementView {
             triggerPosBounds.width  = 2 * SLIDER_GRAB_HALF;
             triggerPosBounds.height = SLIDER_TRI_LONG + 4;
             double windowTime = timePerDiv * DIVISIONS_X;
-            double posSeconds = (posFrac - 0.5) * windowTime;
+            double posSeconds = (posReal - 0.5) * windowTime;
             String posStr = ScopeFormat.formatSeconds(posSeconds);
             Point pps = gc.textExtent(posStr);
             int posLabelY = h - SLIDER_TRI_LONG - 4 - pps.y - pps.y;
@@ -1723,7 +1888,7 @@ public final class ScopeView extends AbstractMeasurementView {
      * enough to put ±FS inside the canvas; otherwise SWT's natural clip
      * culls the off-screen ends.
      */
-    private void drawFullScaleLines(GC gc, int h, int w, int[] dash,
+    private void drawFullScaleLines(MeasurementPainter gc, int h, int w, int[] dash,
                                     double offsetFrac, double vDiv,
                                     double peakVolts, double pixelsPerDivY,
                                     Color color) {
@@ -1748,7 +1913,7 @@ public final class ScopeView extends AbstractMeasurementView {
      * (typically rendered with {@code triangleColor} as the channel's mid
      * variant while {@code lineLabelColor} stays full-bright).
      */
-    private void drawOffsetTrack(GC gc, int h, int[] lineDash,
+    private void drawOffsetTrack(MeasurementPainter gc, int h, int[] lineDash,
                                   double offsetFrac, double vDiv,
                                   Color lineLabelColor, Color triangleColor,
                                   boolean isActive, int lineRightEnd) {
@@ -1778,7 +1943,7 @@ public final class ScopeView extends AbstractMeasurementView {
     }
 
     /** Filled triangle whose tip points into the grid from the left edge. */
-    private void drawRightPointingTriangle(GC gc, int xBase, int y, Color color) {
+    private void drawRightPointingTriangle(MeasurementPainter gc, int xBase, int y, Color color) {
         int[] poly = {
                 xBase,                      y - SLIDER_TRI_HALF,
                 xBase + SLIDER_TRI_LONG,    y,
@@ -1788,7 +1953,7 @@ public final class ScopeView extends AbstractMeasurementView {
     }
 
     /** Filled triangle whose tip points into the grid from the right edge. */
-    private void drawLeftPointingTriangle(GC gc, int xBase, int y, Color color) {
+    private void drawLeftPointingTriangle(MeasurementPainter gc, int xBase, int y, Color color) {
         int[] poly = {
                 xBase,                      y - SLIDER_TRI_HALF,
                 xBase - SLIDER_TRI_LONG,    y,
@@ -1798,7 +1963,7 @@ public final class ScopeView extends AbstractMeasurementView {
     }
 
     /** Filled triangle whose tip points up into the grid from the bottom edge. */
-    private void drawUpPointingTriangle(GC gc, int x, int yBase, Color color) {
+    private void drawUpPointingTriangle(MeasurementPainter gc, int x, int yBase, Color color) {
         int[] poly = {
                 x - SLIDER_TRI_HALF,        yBase,
                 x,                          yBase - SLIDER_TRI_LONG,
@@ -1819,7 +1984,7 @@ public final class ScopeView extends AbstractMeasurementView {
      * Keeps the absolute-value readouts on the centre cross-hair so they
      * don't fight the measurement table for corner space.
      */
-    private void drawEdgeLabels(GC gc, int w, int h) {
+    private void drawEdgeLabels(MeasurementPainter gc, int w, int h) {
         Preferences prefs = Preferences.instance();
         double timePerDiv = prefs.getOscTimePerDiv();
         double leftVDiv   = prefs.getOscLeftVoltsPerDiv();
@@ -1921,8 +2086,141 @@ public final class ScopeView extends AbstractMeasurementView {
      * back into preferences (without saving — the disk save happens on
      * mouseUp so we don't hammer the YAML file during a drag).
      */
+    /** Pointer pressed at ({@code x}, {@code y}) in the visible scope canvas —
+     *  grabs a slider handle under the cursor.  Public so the GPU path's GL canvas
+     *  can forward to it (this view is hidden then; coordinates are canvas-local
+     *  and the hit-test bounds were laid out at the canvas size). */
+    public void pointerDown(int x, int y, int button) {
+        if (button != 1) return;
+        ToolButton hb = headerButtonAt(x, y);   // GPU path: GL-drawn buttons forward here
+        if (hb != null) {
+            hb.notifyListeners(SWT.MouseDown, new Event());
+            pressedHeaderButton = hb;
+            redraw();
+            return;
+        }
+        if (offsetSliderBounds.contains(x, y)) {
+            draggingSlider = OscSliderId.OFFSET;
+        } else if (!fileMode && triggerLevelBounds.contains(x, y)) {
+            draggingSlider = OscSliderId.TRIGGER_LEVEL;
+        } else if (!fileMode && triggerPosBounds.contains(x, y)) {
+            draggingSlider = OscSliderId.TRIGGER_POSITION;
+            triggerPosDragStartX    = x;
+            triggerPosDragStartFrac = Preferences.instance().getOscTriggerPositionFrac();
+        }
+        if (draggingSlider != null) {
+            updateSliderFromMouse(x, y);
+        }
+    }
+
+    /** Pointer released — ends a slider drag and persists the new value. */
+    public void pointerUp() {
+        if (pressedHeaderButton != null) {
+            pressedHeaderButton.notifyListeners(SWT.MouseUp, new Event());
+            pressedHeaderButton = null;
+            redraw();
+            return;
+        }
+        if (draggingSlider != null) {
+            Preferences.instance().save();
+            draggingSlider = null;
+        }
+    }
+
+    /** Double-click — resets the slider handle under the cursor to centre (0.5). */
+    public void pointerDoubleClick(int x, int y, int button) {
+        if (button != 1) return;
+        Preferences prefs = Preferences.instance();
+        boolean changed = false;
+        if (offsetSliderBounds.contains(x, y)) {
+            if (prefs.getOscMeasurementChannel() == Channel.L) {
+                prefs.setOscLeftOffsetFrac(0.5);
+            } else {
+                prefs.setOscRightOffsetFrac(0.5);
+            }
+            changed = true;
+        } else if (!fileMode && triggerLevelBounds.contains(x, y)) {
+            prefs.setOscTriggerLevelFrac(0.5);
+            changed = true;
+        } else if (!fileMode && triggerPosBounds.contains(x, y)) {
+            prefs.setOscTriggerPositionFrac(0.5);
+            changed = true;
+        }
+        if (changed) {
+            draggingSlider = null;
+            prefs.save();
+            redraw();
+        }
+    }
+
+    /** Pointer moved — drives a slider drag, else updates the hover cursor /
+     *  tooltip on the {@link #pointerHost} (the visible widget). */
+    public void pointerMove(int x, int y) {
+        hoverX = x;
+        if (draggingSlider != null) {
+            updateSliderFromMouse(x, y);
+            return;
+        }
+        int cursorId;
+        String tip;
+        ToolButton headerBtn = headerButtonAt(x, y);
+        if (headerBtn != null) {
+            // GPU path: the view is hidden and the header buttons are painted into the
+            // GL canvas, so their pointer events (and tooltips) come through here rather
+            // than to the real widgets — surface the hovered button's own tooltip.
+            cursorId = SWT.CURSOR_HAND;
+            tip = headerBtn.getToolTipText();
+        } else if (offsetSliderBounds.contains(x, y)) {
+            cursorId = SWT.CURSOR_SIZENS;
+            tip = I18n.t("scope.offset.slider.tooltip");
+        } else if (!fileMode && triggerLevelBounds.contains(x, y)) {
+            cursorId = SWT.CURSOR_SIZENS;
+            tip = I18n.t("scope.trigger.level.tooltip");
+        } else if (!fileMode && triggerPosBounds.contains(x, y)) {
+            cursorId = SWT.CURSOR_SIZEWE;
+            tip = I18n.t("scope.trigger.position.tooltip");
+        } else if (leftMaxLabelBounds.contains(x, y)
+                || leftMinLabelBounds.contains(x, y)
+                || rightMaxLabelBounds.contains(x, y)
+                || rightMinLabelBounds.contains(x, y)) {
+            cursorId = SWT.CURSOR_ARROW;
+            tip = I18n.t("scope.voltage.label.tooltip");
+        } else if (timeLeftLabelBounds.contains(x, y)
+                || timeRightLabelBounds.contains(x, y)) {
+            cursorId = SWT.CURSOR_ARROW;
+            tip = I18n.t("scope.time.label.tooltip");
+        } else {
+            cursorId = SWT.CURSOR_ARROW;
+            tip = null;
+        }
+        Cursor c = getDisplay().getSystemCursor(cursorId);
+        if (pointerHost.getCursor() != c) pointerHost.setCursor(c);
+        String current = pointerHost.getToolTipText();
+        if (tip == null) {
+            if (current != null) pointerHost.setToolTipText(null);
+        } else if (!tip.equals(current)) {
+            pointerHost.setToolTipText(tip);
+        }
+    }
+
+    /** Routes pointer input + repaints to the GPU surface: the GL canvas forwards
+     *  pointer events here, cursor/tooltip + pointer geometry use {@code host}, and
+     *  {@link #redraw()} renders through {@code repaint}.  The CPU path keeps the
+     *  {@code this} / direct-redraw defaults. */
+    public void attachGlInput(Control host, Runnable repaint) {
+        this.pointerHost = host;
+        this.glRepaint   = repaint;
+        // GPU path: the header buttons are drawn into the GL canvas, so the real
+        // Toolbar widget must be hidden.  On GTK a SWT.NO_BACKGROUND composite still
+        // paints the theme (grey) background and a NO_BACKGROUND child's window isn't
+        // reliably unmapped when the parent view is hidden — leaving a grey strip
+        // behind the GL-drawn buttons.  Hiding it explicitly clears that; the
+        // per-button getVisible() flags (and bounds) the overlay reads stay intact.
+        if (headerBar != null && !headerBar.isDisposed()) headerBar.setVisible(false);
+    }
+
     private void updateSliderFromMouse(int mouseX, int mouseY) {
-        Rectangle area = getClientArea();
+        Rectangle area = ((Scrollable) pointerHost).getClientArea();
         int w = area.width;
         int h = area.height;
         if (w <= 0 || h <= 0 || draggingSlider == null) return;
@@ -1941,13 +2239,27 @@ public final class ScopeView extends AbstractMeasurementView {
                 prefs.setOscTriggerLevelFrac(ScopeFormat.clamp01((double) mouseY / h));
                 break;
             case TRIGGER_POSITION:
-                prefs.setOscTriggerPositionFrac(ScopeFormat.clamp01((double) mouseX / w));
+                // Delta-drag (unclamped): move the REAL offset by the dragged pixel
+                // distance, so a handle pinned at the edge (virtual offset) tracks back
+                // into view continuously instead of jumping to the absolute mouse X.
+                prefs.setOscTriggerPositionFrac(
+                        triggerPosDragStartFrac + (double) (mouseX - triggerPosDragStartX) / w);
                 break;
         }
         redraw();
     }
 
-    private void drawWaveforms(GC gc, int w, int h) {
+    /** Whether the window anchored at {@code anchorAbs}/{@code offsetFrac} sits fully
+     *  inside the current read buffer (with sinc padding) — a live NORMAL hold tracks
+     *  the ring while it does, then falls back to the captured copy. */
+    private boolean holdFitsInBuffer(double anchorAbs, double offsetFrac, int displaySamples,
+                                     long bufStartAbs, int available) {
+        double left = nav.viewLeftAbs(anchorAbs, offsetFrac, displaySamples) - bufStartAbs;
+        return left >= Lanczos.LANCZOS_PADDING
+            && left + displaySamples + Lanczos.LANCZOS_PADDING <= available;
+    }
+
+    private void drawWaveforms(MeasurementPainter gc, int w, int h) {
         // Screenshot view: render the captured frame verbatim (a carbon copy
         // of the live trace), never re-reading the buffer.
         if (frozenFrame != null) {
@@ -2024,8 +2336,13 @@ public final class ScopeView extends AbstractMeasurementView {
 
         // Trigger position slider: 0 = trigger at left edge of display,
         // 0.5 = centred, 1 = right edge.  Computed early because both the
-        // read size and the trigger search range depend on it.
-        double triggerPosFrac = ScopeFormat.clamp01(prefs.getOscTriggerPositionFrac());
+        // read size and the trigger search range depend on it.  The pref can be
+        // driven OUTSIDE [0,1] (a virtual offset) by pan/zoom on a STOPPED scope;
+        // the live trigger search + window keep using the clamped value, while
+        // the frozen read-follows-view path below uses the real one so the held
+        // frame can pan across the whole captured buffer.
+        double triggerPosFracReal = prefs.getOscTriggerPositionFrac();
+        double triggerPosFrac     = ScopeFormat.clamp01(triggerPosFracReal);
 
         // Read window must span at least one full display window before the
         // trigger AND one full display window after, so the trigger position
@@ -2048,7 +2365,20 @@ public final class ScopeView extends AbstractMeasurementView {
         // shift the read's right edge by that many frames.  Offset 0
         // keeps the historical "follow latest" behaviour.
         long latestAbs   = b.getWritePos();
-        long viewEndAbs  = latestAbs - viewBackOffsetFrames;
+        long viewEndAbs;
+        double frozenViewLeftAbs = Double.NaN;
+        if (frozen && lastTriggerAbsPos >= 0) {
+            // Stopped scope: the read FOLLOWS the held-anchor view so pan/zoom roam
+            // the whole captured buffer, not just the live tip.  The trigger sits at
+            // the (possibly virtual) triggerPosFracReal; the window's right edge plus
+            // sinc pad bounds the read end, clamped to the newest captured sample.
+            frozenViewLeftAbs = (lastTriggerAbsPos + lastTriggerSubSampleOffset)
+                              - (double) displaySamples * triggerPosFracReal;
+            long viewEnd = (long) Math.floor(frozenViewLeftAbs) + displaySamples + Lanczos.LANCZOS_PADDING;
+            viewEndAbs = Math.min(latestAbs, viewEnd);
+        } else {
+            viewEndAbs = latestAbs - viewBackOffsetFrames;
+        }
         int available = b.readEndingAt(viewEndAbs, wanted,
                 needL ? leftBuf  : null,
                 needR ? rightBuf : null);
@@ -2213,121 +2543,71 @@ public final class ScopeView extends AbstractMeasurementView {
                 : -1.0;
         boolean foundTrigger = (triggerFrac >= 0);
 
-        int dispStart = 0;
-        int dispCount = displaySamples;
-        double subSampleOffset = 0.0;
-        boolean haveFrame = false;
-
-        // 1. Anchor the display on the latest trigger in any mode — that's
-        //    what gives a stable triggered trace.  The window's left-edge
-        //    sample position is `triggerFrac − displaySamples/2.0`, so the
-        //    centre pixel maps exactly to triggerFrac.  Splitting that
-        //    fractional edge into floor (dispStart) + fractional
-        //    (subSampleOffset) keeps odd-length windows correctly centred —
-        //    without the floating-point split, odd `displaySamples` produces
-        //    a 0.5-sample bias.
-        //
-        //    Capture-to-frozen is a separate concern: only fires when SINGLE
-        //    is currently armed (set by the Start button).
-        if (foundTrigger) {
+        // ---------------------------------------------------------------
+        // Unified positioning (ScopeNav): pick the absolute anchor + screen
+        // offset for THIS mode, then map it to a render window.  drawTrace blanks
+        // any column the buffer can't fill, so a virtual offset or a window
+        // hanging off the buffer edge just shows empty space — it never stretches
+        // the trace or jumps to the right edge.
+        // ---------------------------------------------------------------
+        int dispStart;
+        int dispCount;
+        double subSampleOffset;
+        double anchorAbs;
+        double offsetFrac;
+        if (frozen) {
+            if (lastTriggerAbsPos < 0) return;          // nothing to anchor (shouldn't happen post-freeze)
+            anchorAbs  = lastTriggerAbsPos + lastTriggerSubSampleOffset;
+            offsetFrac = triggerPosFracReal;            // virtual-capable on a stopped scope
+        } else if (foundTrigger) {
+            // Live trigger: re-anchor on it and remember it for the hold / freeze paths.
             int triggerInt = (int) Math.floor(triggerFrac);
-            double triggerFracOffset = triggerFrac - triggerInt;
-            double windowLeftT = triggerFrac - displaySamples * triggerPosFrac;
-            dispStart = (int) Math.floor(windowLeftT);
-            subSampleOffset = windowLeftT - dispStart;
-            // Defensive clamp so the renderer never indexes past `available`
-            // — the search-range bounds should guarantee this, but rounding
-            // through subSampleOffset can shave a sample either way.
-            if (dispStart < 0) {
-                dispCount = Math.max(0, dispCount + dispStart);
-                dispStart = 0;
-            }
-            if (dispStart + dispCount > available) {
-                dispCount = available - dispStart;
-            }
-            lastTriggerAbsPos = bufStartAbs + triggerInt;
-            lastTriggerSubSampleOffset = triggerFracOffset;
-            // Every triggered paint counts as a new frame so cap/s tracks
-            // the scope's actual paint rate, independent of the audio
-            // backend's hardware dispatch rate.  Previously this was
-            // gated on whether the trigger position had moved since the
-            // last paint — but the trigger position only advances when a
-            // fresh capture chunk arrives, which made cap/s appear
-            // capped at the buffer-dispatch rate (~20 Hz on WASAPI's
-            // 50 ms buffer vs. ~50-100 Hz on WDM-KS) even though the
-            // SWT timer is already redrawing at the platform's native
-            // ~64 Hz.  The metric now matches user perception of how
-            // responsive the scope feels.
-            lastFrameWasNew = true;
-            if (triggerMode == TriggerMode.SINGLE && singleArmed) {
-                captureSingleFrame(dispStart, displaySamples, available, subSampleOffset);
-                singleArmed = false;
-                // Pop the trigger Start toggle back out — delivered on this UI
-                // thread; the subscriber marshals its own widget update.
-                MessageBus.instance().publish(Events.SCOPE_SINGLE_DISARMED);
-            } else if (triggerMode == TriggerMode.NORMAL) {
-                // Persist every NORMAL trigger so the trace can be held
-                // indefinitely once triggers stop — even after the frame scrolls
-                // out of the live ring (where the in-buffer hold below can no
-                // longer anchor it).
-                captureSingleFrame(dispStart, displaySamples, available, subSampleOffset);
-            }
-            haveFrame = true;
-        }
-
-        // SINGLE armed but no trigger fired this paint: keep waiting.  Show the
-        // previously held frame if there is one, otherwise stay blank — do NOT
-        // capture or free-run; the view updates only when the trigger actually
-        // fires (captured by step 1 above).
-        if (triggerMode == TriggerMode.SINGLE && singleArmed && !foundTrigger) {
-            if (singleHeld) {
-                renderHeldCapturedFrame(gc, w, h, showL, showR,
-                        leftVDiv, rightVDiv, sincL, sincR, acL, acR);
-            }
+            lastTriggerAbsPos          = bufStartAbs + triggerInt;
+            lastTriggerSubSampleOffset = triggerFrac - triggerInt;
+            anchorAbs  = bufStartAbs + triggerFrac;
+            offsetFrac = triggerPosFracReal;            // virtual-capable: shift+wheel can carry it off-screen
+            lastFrameWasNew = true;                     // every triggered paint is a fresh frame (cap/s)
+        } else if (triggerMode == TriggerMode.SINGLE && singleArmed) {
+            // Armed, still waiting: hold the captured frame or stay blank — never free-run.
+            if (singleHeld) renderHeldCapturedFrame(gc, w, h, showL, showR,
+                    leftVDiv, rightVDiv, sincL, sincR, acL, acR);
             return;
-        }
-
-        // 2. Otherwise hold the previously triggered frame if it's still
-        //    in-buffer.  Recompute dispStart / subSampleOffset for the
-        //    current displaySamples (e.g. after the user changed time/div).
-        if (!haveFrame && lastTriggerAbsPos >= 0) {
-            double localTriggerFrac = (lastTriggerAbsPos - bufStartAbs) + lastTriggerSubSampleOffset;
-            double windowLeftT = localTriggerFrac - displaySamples * triggerPosFrac;
-            int holdStart = (int) Math.floor(windowLeftT);
-            if (holdStart >= Lanczos.LANCZOS_PADDING
-                    && holdStart + displaySamples + Lanczos.LANCZOS_PADDING <= available) {
-                dispStart = holdStart;
-                subSampleOffset = windowLeftT - holdStart;
-                haveFrame = true;
-            }
-        }
-
-        // NORMAL holds the last triggered frame indefinitely: once it has
-        // scrolled out of the live ring (the in-buffer hold above can no longer
-        // anchor it), fall back to the frozen captured copy instead of blanking.
-        if (!haveFrame && triggerMode == TriggerMode.NORMAL && singleHeld) {
+        } else if (triggerMode == TriggerMode.AUTO) {
+            // Free-run on the latest samples (no trigger seen): latest (− sinc pad) at the right edge.
+            int rightPad = Math.min(Lanczos.LANCZOS_PADDING, Math.max(0, available - displaySamples));
+            anchorAbs  = (double) latestAbs - rightPad;
+            offsetFrac = 1.0;
+            lastFrameWasNew = true;
+        } else if (lastTriggerAbsPos >= 0
+                && holdFitsInBuffer(lastTriggerAbsPos + lastTriggerSubSampleOffset,
+                                    triggerPosFracReal, displaySamples, bufStartAbs, available)) {
+            // NORMAL: hold the last trigger while the frame is still in the live ring.
+            anchorAbs  = lastTriggerAbsPos + lastTriggerSubSampleOffset;
+            offsetFrac = triggerPosFracReal;
+        } else if (singleHeld) {
+            // NORMAL frame scrolled out of the ring → the frozen captured copy.
             renderHeldCapturedFrame(gc, w, h, showL, showR,
                     leftVDiv, rightVDiv, sincL, sincR, acL, acR);
             return;
+        } else {
+            return;                                     // NORMAL, never triggered → blank
         }
 
-        // 3. Last resort — only AUTO free-runs on the latest samples when no
-        //    trigger has been seen.  SINGLE never reaches here: not-armed
-        //    returned at the top, armed-and-waiting returned just above, and an
-        //    armed trigger set haveFrame in step 1.  NORMAL with no captured
-        //    frame yet (never triggered) stays blank.
-        if (!haveFrame) {
-            if (triggerMode == TriggerMode.AUTO) {
-                int rightPad = Math.min(Lanczos.LANCZOS_PADDING, Math.max(0, available - displaySamples));
-                int dispEnd  = available - rightPad;
-                dispStart = Math.max(0, dispEnd - displaySamples);
-                dispCount = dispEnd - dispStart;
-                subSampleOffset = 0.0;
-                // Free-run: every paint shows the latest samples, so every
-                // paint is a fresh frame.
-                lastFrameWasNew = true;
-            } else {
-                return;
+        ScopeNav.Viewport vp = nav.viewport(anchorAbs, offsetFrac, displaySamples, bufStartAbs);
+        dispStart       = vp.dispStart();
+        subSampleOffset = vp.subSampleOffset();
+        dispCount       = vp.dispCount();
+
+        // SINGLE / NORMAL persistence: capture the displayed frame (clamped in-buffer)
+        // on a fresh trigger so the trace can be held after triggers stop — and disarm
+        // SINGLE so its Start toggle pops back out.
+        if (foundTrigger && !frozen
+                && ((triggerMode == TriggerMode.SINGLE && singleArmed) || triggerMode == TriggerMode.NORMAL)) {
+            int capStart = Math.max(0, Math.min(dispStart, available - displaySamples));
+            captureSingleFrame(capStart, displaySamples, available, subSampleOffset);
+            if (triggerMode == TriggerMode.SINGLE && singleArmed) {
+                singleArmed = false;
+                MessageBus.instance().publish(Events.SCOPE_SINGLE_DISARMED);
             }
         }
         if (dispCount < 2) return;
@@ -2341,9 +2621,18 @@ public final class ScopeView extends AbstractMeasurementView {
         double dcL = acL ? acDcMean(true)  : 0.0;
         double dcR = acR ? acDcMean(false) : 0.0;
         // Remember this live window (absolute) so a later mode-switch freeze can
-        // re-grab the exact frame on screen now, not newer samples.
-        lastLiveDispStartAbs    = bufStartAbs + dispStart;
-        lastLiveSubSampleOffset = subSampleOffset;
+        // re-grab the exact frame on screen now, not newer samples.  Captured only
+        // while live (not on frozen re-paints, which would drift the anchor as the
+        // user pans/zooms the stopped frame).
+        if (!frozen) {
+            lastLiveDispStartAbs    = bufStartAbs + dispStart;
+            lastLiveSubSampleOffset = subSampleOffset;
+            // Anchor at the point ACTUALLY shown at the offset fraction — offsetFrac,
+            // not the trigger slider — so an AUTO free-run frame (offsetFrac = 1.0,
+            // right-aligned) freezes where it was displayed, not 0.7 div off.
+            lastLiveAnchorAbs       = bufStartAbs + dispStart
+                                    + Math.round(displaySamples * offsetFrac);
+        }
         renderTraces(gc, w, h, leftBuf, rightBuf, available,
                      dispStart, subSampleOffset, dispCount,
                      showL, showR, leftVDiv, rightVDiv, sincL, sincR, dcL, dcR);
@@ -2364,7 +2653,7 @@ public final class ScopeView extends AbstractMeasurementView {
      *  DUAL_TONE mode (which is also the only condition under which
      *  {@link #debugBeatSignal} is non-null) AND the user has the
      *  "Reconstructed beat" checkbox enabled in the Trigger tab. */
-    private void drawBeatOverlay(GC gc, int w, int h,
+    private void drawBeatOverlay(MeasurementPainter gc, int w, int h,
                                  int dispStart, double subSampleOffset, int dispCount,
                                  int dataLen, Channel triggerCh,
                                  double leftVDiv, double rightVDiv) {
@@ -2558,7 +2847,7 @@ public final class ScopeView extends AbstractMeasurementView {
      *  trigger).  AC channels subtract the DC cached at capture ({@link #capturedDcL}
      *  / {@link #capturedDcR}) — NOT the live worker mean — so the frozen trace stays
      *  put instead of drifting as the worker keeps averaging Vmean after the freeze. */
-    private void renderHeldCapturedFrame(GC gc, int w, int h,
+    private void renderHeldCapturedFrame(MeasurementPainter gc, int w, int h,
                                          boolean showL, boolean showR,
                                          double leftVDiv, double rightVDiv,
                                          boolean sincL, boolean sincR,
@@ -2631,7 +2920,7 @@ public final class ScopeView extends AbstractMeasurementView {
      * The sub-sample offset shifts the rendered signal by a fraction of a
      * sample so the trigger lands precisely on the centre pixel.
      */
-    private void renderTraces(GC gc, int w, int h,
+    private void renderTraces(MeasurementPainter gc, int w, int h,
                               float[] dataLeft, float[] dataRight, int dataLen,
                               int dispStart, double subSampleOffset, int dispCount,
                               boolean showL, boolean showR,
@@ -2639,6 +2928,13 @@ public final class ScopeView extends AbstractMeasurementView {
                               boolean sincEnabledL, boolean sincEnabledR,
                               double dcOffsetL, double dcOffsetR) {
         if (dispCount < 2) return;
+        // Defensive: dispStart/dispCount can run far past the buffer on a held-frame or
+        // off-screen-offset zoom, and dataLen must never exceed the channel arrays we
+        // were handed.  Clamp it so the snapshot copy (captureFrame) and the sample
+        // reads (drawTrace / TraceEnvelope) stay in bounds — both already blank any
+        // column the data can't fill, so this only caps the count, never the view.
+        if (dataLeft  != null) dataLen = Math.min(dataLen, dataLeft.length);
+        if (dataRight != null) dataLen = Math.min(dataLen, dataRight.length);
         // Snapshot what we're about to draw (live view only) so a screenshot
         // is a carbon copy of the on-screen trace.
         if (frozenFrame == null) {
@@ -2698,18 +2994,20 @@ public final class ScopeView extends AbstractMeasurementView {
     }
 
     /**
-     * Draws a waveform.  When {@code samplesPerPx ≤ Lanczos.MAX_LANCZOS_DOWNSAMPLE}
-     * the signal is band-limit-reconstructed via a Lanczos-windowed sinc kernel
-     * scaled to the output rate (no aliasing into beat envelopes).  Above that
-     * threshold per-column min/max bars take over.  A 5-px filled dot is
-     * overlaid at each sample when sample spacing exceeds 10 px.
+     * Draws a waveform.  With sin(x)/x enabled the signal is always
+     * band-limit-reconstructed via a Lanczos-windowed sinc kernel scaled to the
+     * output rate (no aliasing into beat envelopes), at every time base.  With it
+     * off, a linearly-interpolated per-column stroke is used while
+     * {@code samplesPerPx ≤ Lanczos.MAX_LANCZOS_DOWNSAMPLE} and per-column min/max
+     * bars take over above that.  A 5-px filled dot is overlaid at each sample when
+     * sample spacing exceeds 10 px.
      *
      * <p>{@code subSampleOffset} (range [0, 1)) shifts the rendered signal by
      * a fraction of a sample in the input-sample direction — used by the
      * trigger logic to anchor the display centre on the band-limited zero
      * crossing instead of the nearest raw sample.
      */
-    private void drawTrace(GC gc, float[] data, int n,
+    private void drawTrace(MeasurementPainter gc, float[] data, int n,
                                   int dispStart, double subSampleOffset, int dispCount,
                                   int width, int height, double centerY, double vScale,
                                   float lineWidth, Color color,
@@ -2718,12 +3016,23 @@ public final class ScopeView extends AbstractMeasurementView {
         gc.setForeground(color);
         double samplesPerPx = (double) dispCount / width;
         double pxPerSample = (double) width / dispCount;
-        if (samplesPerPx <= Lanczos.MAX_LANCZOS_DOWNSAMPLE) {
-            // Stroke through the shared paintPolyline — the same clipped-Path renderer as
-            // the FFT / FreqResp traces.  Sinc reconstructs one Y per pixel column (the
-            // kernel's scale = samplesPerPx integrates the in-between samples, and it
-            // still reads its own LANCZOS_PADDING samples, so edge values are accurate);
-            // linear strokes one point per SAMPLE so no peak between columns is lost.
+        // One smooth point per pixel column while there is at most one sample per
+        // pixel — sin(x)/x reconstructs BETWEEN samples, linear interpolates.  Above
+        // one sample per pixel a single point per column would either stair-step
+        // (linear) or, with the downsampling-scaled sinc kernel, low-pass narrow
+        // pulses and the noise band away, so a CONNECTED per-column min/max envelope
+        // takes over (drawEnvelope) — sin(x)/x feeds it a dense scale-1 reconstruction
+        // so the band-limited pulse overshoot and noise survive the decimation.
+        boolean envelope = sincEnabled ? samplesPerPx > 1.0
+                                       : samplesPerPx > Lanczos.MAX_LANCZOS_DOWNSAMPLE;
+        if (!envelope) {
+            // One smooth point per pixel column — this branch is at most ~one sample per
+            // pixel (sin x/x) or <= MAX_LANCZOS_DOWNSAMPLE (linear).  Stroke through the
+            // shared paintPolyline — the same clipped-Path renderer as the FFT / FreqResp
+            // traces.  Sin x/x reconstructs band-limited values BETWEEN samples at scale
+            // max(1, spp) (so spp <= 1 here is true Whittaker-Shannon) and still reads its
+            // own LANCZOS_PADDING samples, so edge values are accurate; linear interpolates
+            // (lerpAt) one point per column.
             Rectangle plot = new Rectangle(0, 0, width, height);
             if (sincEnabled) {
                 double scale = Math.max(1.0, samplesPerPx);
@@ -2734,7 +3043,7 @@ public final class ScopeView extends AbstractMeasurementView {
                         i -> sincTraceX(i, width),
                         i -> {
                             double pos = dispStart + subSampleOffset + sincTraceX(i, width) * samplesPerPx;
-                            if (blankBeyondData && (pos < 0 || pos > n - 1)) return Double.NaN;
+                            if (pos < 0 || pos > n - 1) return Double.NaN;   // no sample there → blank the edge overhang
                             return centerY - (Lanczos.lanczos(data, n, pos, scale) - dcOffset) * vScale;
                         });
             } else {
@@ -2747,7 +3056,7 @@ public final class ScopeView extends AbstractMeasurementView {
                         i -> sincTraceX(i, width),
                         i -> {
                             double pos = dispStart + subSampleOffset + sincTraceX(i, width) * samplesPerPx;
-                            if (blankBeyondData && (pos < 0 || pos > n - 1)) return Double.NaN;
+                            if (pos < 0 || pos > n - 1) return Double.NaN;   // no sample there → blank the edge overhang
                             return centerY - (lerpAt(data, n, pos) - dcOffset) * vScale;
                         });
             }
@@ -2772,48 +3081,74 @@ public final class ScopeView extends AbstractMeasurementView {
                 }
             }
         } else {
-            // Per-column min/max bars at slow time/div.  Vertical 1-px-wide
-            // bars don't benefit from AA or the Lanczos-branch CAP_ROUND /
-            // JOIN_ROUND thick stroke, and the per-segment GDI overhead
-            // dominates a per-paint cost otherwise.  Save the caller's AA
-            // and line-attributes state, set the fast defaults, draw, then
-            // restore — without the restore the next channel's Lanczos curve
-            // would inherit the 1-px flat-cap stroke and look thinner.
-            int dispLimit = Math.min(dispStart + dispCount, n);
-            int prevAntialias = gc.getAntialias();
-            LineAttributes prevLineAttributes = gc.getLineAttributes();
-            gc.setAntialias(SWT.OFF);
-            gc.setLineAttributes(lineAttrsBars);
-            try {
-                for (int x = 0; x < width; x++) {
-                    int startIdx = dispStart + (int) (x * samplesPerPx + subSampleOffset);
-                    int endIdx   = dispStart + (int) ((x + 1) * samplesPerPx + subSampleOffset);
-                    if (endIdx <= startIdx) endIdx = startIdx + 1;
-                    if (endIdx > dispLimit) endIdx = dispLimit;
-                    if (startIdx < dispStart) startIdx = dispStart;
-                    // Sub-sample offset or float rounding can push startIdx past
-                    // the end of the read; without this clamp we get an
-                    // ArrayIndexOutOfBoundsException on the data load below.
-                    if (startIdx >= dispLimit) {
-                        if (blankBeyondData) continue;   // past captured data: draw nothing
-                        startIdx = dispLimit - 1;
-                    }
-                    if (startIdx < 0) continue;
-                    float min = data[startIdx];
-                    float max = data[startIdx];
-                    for (int i = startIdx + 1; i < endIdx; i++) {
-                        float v = data[i];
-                        if (v < min) min = v;
-                        if (v > max) max = v;
-                    }
-                    int yMin = (int) Math.round(centerY - (min - dcOffset) * vScale);
-                    int yMax = (int) Math.round(centerY - (max - dcOffset) * vScale);
-                    gc.drawLine(x, Math.min(yMin, yMax), x, Math.max(yMin, yMax));
+            drawEnvelope(gc, data, n, dispStart, subSampleOffset, dispCount,
+                    width, centerY, vScale, color, sincEnabled, dcOffset);
+        }
+    }
+
+    /**
+     * Draws a CONNECTED per-column min/max envelope (more than one sample per
+     * pixel) — each column is a {@code [min, max]} vertical bar with a bridging
+     * connector across disjoint adjacent columns ({@link TraceEnvelope#connectorAttach})
+     * so the trace stays continuous instead of floating as the old disconnected bars
+     * did.  Linear takes the raw-sample min/max; sin(x)/x additionally reconstructs
+     * the band-limited curve around each column's extreme samples
+     * ({@link TraceEnvelope#reconstructedColumns}) to recover a peak that the
+     * (clock-drifting) samples missed.
+     *
+     * <p>Vertical 1-px bars + connectors don't benefit from AA or the thick
+     * round-cap stroke, and the per-segment GDI overhead dominates otherwise, so
+     * the caller's AA + line-attributes are saved, the fast {@link #lineAttrsBars}
+     * defaults set, and restored after — else the next channel's Lanczos curve
+     * inherits the 1-px flat-cap stroke and looks thinner.
+     */
+    private void drawEnvelope(MeasurementPainter gc, float[] data, int n,
+                              int dispStart, double subSampleOffset, int dispCount,
+                              int width, double centerY, double vScale, Color color,
+                              boolean sincEnabled, double dcOffset) {
+        double samplesPerPx = (double) dispCount / width;
+        int dispLimit = Math.min(dispStart + dispCount, n);
+        if (envMin == null || envMin.length < width) {
+            envMin   = new float[width];
+            envMax   = new float[width];
+            envEntry = new float[width];
+            envExit  = new float[width];
+        }
+        if (sincEnabled) {
+            TraceEnvelope.reconstructedColumns(data, n, dispStart, subSampleOffset, width,
+                    samplesPerPx, RECON_REFINE_STEP, blankBeyondData, dispLimit, envMin, envMax);
+        } else {
+            TraceEnvelope.rawColumns(data, n, dispStart, subSampleOffset, width,
+                    samplesPerPx, blankBeyondData, dispLimit, envMin, envMax);
+        }
+        // Where each column's connector attaches to its bar — peak/trough-aware,
+        // so an isolated spike is traced to its tip (see TraceEnvelope#connectorAttach).
+        TraceEnvelope.connectorAttach(envMin, envMax, width, envEntry, envExit);
+        gc.setForeground(color);
+        int prevAntialias = gc.getAntialias();
+        LineAttributes prevLineAttributes = gc.getLineAttributes();
+        gc.setAntialias(SWT.OFF);
+        gc.setLineAttributes(lineAttrsBars);
+        try {
+            for (int x = 0; x < width; x++) {
+                float cMin = envMin[x];
+                if (Float.isNaN(cMin)) continue;
+                float cMax = envMax[x];
+                int yOfMin = (int) Math.round(centerY - (cMin - dcOffset) * vScale);   // bottom (larger y)
+                int yOfMax = (int) Math.round(centerY - (cMax - dcOffset) * vScale);   // top (smaller y)
+                gc.drawLine(x, yOfMax, x, yOfMin);   // the bar
+                // Connector from the previous column (drawn iff both ends are set —
+                // the boundary is disjoint and neither column is blank).
+                float exitPrev = x > 0 ? envExit[x - 1] : Float.NaN;
+                if (!Float.isNaN(exitPrev) && !Float.isNaN(envEntry[x])) {
+                    int yExit  = (int) Math.round(centerY - (exitPrev    - dcOffset) * vScale);
+                    int yEntry = (int) Math.round(centerY - (envEntry[x] - dcOffset) * vScale);
+                    gc.drawLine(x - 1, yExit, x, yEntry);
                 }
-            } finally {
-                gc.setAntialias(prevAntialias);
-                gc.setLineAttributes(prevLineAttributes);
             }
+        } finally {
+            gc.setAntialias(prevAntialias);
+            gc.setLineAttributes(prevLineAttributes);
         }
     }
 

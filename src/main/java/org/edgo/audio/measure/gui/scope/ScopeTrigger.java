@@ -85,16 +85,25 @@ public class ScopeTrigger {
         }
         if (state == 0) state = rising ? -1 : +1;
 
-        double lastTrigger = -1.0;
+        // Cheap linear estimate + left index of the COMMITTED crossing.  The costly
+        // sinc refine() runs ONCE at the end, on that single winner — not per level
+        // crossing, not per cycle.  A periodic signal above hysteresis confirms a
+        // trigger every cycle (hundreds over the ~1 s search window) and a noisy
+        // sub-hysteresis signal crosses the level on every wiggle; refining each was
+        // the per-frame cost that throttled AUTO rendering and made the trace feel
+        // frozen.  Only the last trigger is returned, so only it needs sub-sample
+        // precision; the linear estimates drive the minimum-spacing gate.
+        double lastTrigger    = -1.0;
+        int    lastTriggerIdx = -1;
         double pendingCrossing = -1.0;
+        int    pendingPrevIdx  = -1;
         float prev = data[from - 1];
         for (int i = from; i < to; i++) {
             float curr = data[i];
             if (rising) {
                 if (prev < level && curr >= level) {
-                    pendingCrossing = sincRefine
-                            ? refine(data, n, i - 1, i, level, true)
-                            : linear(prev, curr, i - 1, level);
+                    pendingCrossing = linear(prev, curr, i - 1, level);
+                    pendingPrevIdx  = i - 1;
                 }
                 if (curr <= lo) {
                     state = -1;
@@ -102,16 +111,16 @@ public class ScopeTrigger {
                     if (state == -1 && pendingCrossing >= 0
                             && (lastTrigger < 0
                                 || pendingCrossing - lastTrigger >= minSpacingSamples)) {
-                        lastTrigger = pendingCrossing;
+                        lastTrigger    = pendingCrossing;
+                        lastTriggerIdx = pendingPrevIdx;
                     }
                     state = +1;
                     pendingCrossing = -1.0;
                 }
             } else {
                 if (prev > level && curr <= level) {
-                    pendingCrossing = sincRefine
-                            ? refine(data, n, i - 1, i, level, false)
-                            : linear(prev, curr, i - 1, level);
+                    pendingCrossing = linear(prev, curr, i - 1, level);
+                    pendingPrevIdx  = i - 1;
                 }
                 if (curr >= hi) {
                     state = +1;
@@ -119,7 +128,8 @@ public class ScopeTrigger {
                     if (state == +1 && pendingCrossing >= 0
                             && (lastTrigger < 0
                                 || pendingCrossing - lastTrigger >= minSpacingSamples)) {
-                        lastTrigger = pendingCrossing;
+                        lastTrigger    = pendingCrossing;
+                        lastTriggerIdx = pendingPrevIdx;
                     }
                     state = -1;
                     pendingCrossing = -1.0;
@@ -127,7 +137,8 @@ public class ScopeTrigger {
             }
             prev = curr;
         }
-        return lastTrigger;
+        if (lastTriggerIdx < 0 || !sincRefine) return lastTrigger;
+        return refine(data, n, lastTriggerIdx, lastTriggerIdx + 1, level, rising);
     }
 
     /**

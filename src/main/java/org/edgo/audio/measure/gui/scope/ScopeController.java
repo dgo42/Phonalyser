@@ -18,13 +18,16 @@
 
 package org.edgo.audio.measure.gui.scope;
 
+import org.eclipse.swt.widgets.Control;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.scope.gl.GlScopeSurface;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -64,8 +67,20 @@ public final class ScopeController {
      *  realtime repaint ({@link #renderRealtimeFrame}). */
     private ScopeView  view;
     private ZoomedView condensed;
+    /** Set when the scope renders on the GPU (the {@code phonalyser.scope.gpu}
+     *  path): the realtime frame routes through this surface instead of the SWT
+     *  view's GC paint.  Null on the normal CPU path. */
+    private GlScopeSurface glSurface;
     /** Main-view redraws elapsed since the last condensed-view redraw. */
     private int        redrawCounter;
+    /** TEMP: render-tick profiling counter (see {@link #renderRealtimeFrame}). */
+    private int        tickProfile;
+    /** Absolute (fractional) frame under the canvas centre in file / scrolled-back
+     *  navigation; {@code -1} = follow the live tip.  Owned here because deriving
+     *  the view window from it coordinates the main view + condensed strip (and the
+     *  pane's nav slider reads it) — a multi-entity operation, not pane-local. */
+    @Getter @Setter
+    private double     viewCenterFrames = -1.0;
 
     /** Requests the shared capture via the bus and holds the returned live
      *  buffer.  Returns {@code null} when the device fails to open — the
@@ -103,6 +118,45 @@ public final class ScopeController {
         return currentBuffer;
     }
 
+    /** Starts live capture and attaches the views to the live buffer: acquires the
+     *  shared device, wires both canvases to the returned buffer, then starts the
+     *  measurement worker (after the buffer is wired so it sees it).  No-op if the
+     *  device fails to open ({@link #getLastStartError()} carries the reason).  The
+     *  pane updates its Record button around this call. */
+    public synchronized void startCapture() {
+        SignalBufferReader buf = acquireCapture();
+        if (buf == null) return;
+        if (view != null)      view.setBuffer(buf);
+        if (condensed != null) condensed.setBuffer(buf);
+        if (view != null)      view.startMeasurementThread();
+    }
+
+    /** Stops live capture but keeps a frozen snapshot of the last frame attached to
+     *  both views.  Stops the measurement worker first (so it isn't reading a buffer
+     *  being torn down), then releases the device and freezes the snapshot — keeping
+     *  the last measurements + DC means so a post-stop repaint still shows them. */
+    public synchronized void stopCapture() {
+        if (!capturing) return;
+        if (view != null && !view.isDisposed()) view.stopMeasurementThread();
+        SignalBufferReader frozen = releaseCapture();
+        if (frozen != null) {
+            if (view != null && !view.isDisposed())           view.freezeBuffer(frozen);
+            if (condensed != null && !condensed.isDisposed()) condensed.setBuffer(frozen);
+        }
+    }
+
+    /** Re-attaches the views to a capture that survived an in-place pane rebuild
+     *  ({@link #liveBuffer()} still held); returns whether one was re-attached so the
+     *  pane can re-light its Record button. */
+    public synchronized boolean reattachLiveCapture() {
+        SignalBufferReader buf = liveBuffer();
+        if (buf == null) return false;
+        if (view != null)      view.setBuffer(buf);
+        if (condensed != null) condensed.setBuffer(buf);
+        if (view != null)      view.startMeasurementThread();
+        return true;
+    }
+
     /** Human-readable description of the last {@link #acquireCapture()}
      *  failure (or {@code null} if it succeeded / wasn't attempted).
      *  Forwarded from {@code SharedCapture}. */
@@ -118,6 +172,42 @@ public final class ScopeController {
         this.condensed = condensed;
     }
 
+    /** Attaches the GPU surface the pane builds when the GPU scope is enabled; the
+     *  realtime frame then renders through it instead of the view's GC paint. */
+    public void attachGlSurface(GlScopeSurface glSurface) {
+        this.glSurface = glSurface;
+    }
+
+    /**
+     * Re-derives the file/scroll view window — the main view + condensed strip read
+     * back-offsets — from {@link #viewCenterFrames}, and repaints both.  The
+     * positioning maths live in {@link ScopeNav#fileViewWindow}; this just applies
+     * the result to the two views it owns.  The pane syncs its own nav-slider widget
+     * (its concern) after calling this.
+     */
+    public void applyViewState() {
+        if (view == null) return;
+        SignalBufferReader reader = view.getReader();
+        if (reader == null) {
+            view.setViewBackOffsetFrames(0);
+            if (condensed != null) condensed.setViewBackOffsetFrames(0);
+            redrawViews();
+            return;
+        }
+        int displaySamples = ScopeFormat.displaySamplesFor(
+                Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
+        ScopeNav.ViewWindow vw = view.getNav().fileViewWindow(
+                viewCenterFrames, displaySamples, reader.getWritePos(), reader.getCapacity(), reader.getSampleRate());
+        view.setViewBackOffsetFrames(vw.mainBackOffset());
+        if (condensed != null) condensed.setViewBackOffsetFrames(vw.condensedBackOffset());
+        redrawViews();
+    }
+
+    private void redrawViews() {
+        if (view != null && !view.isDisposed())           view.redraw();
+        if (condensed != null && !condensed.isDisposed()) condensed.redraw();
+    }
+
     /** Loop-driven realtime repaint of the scope, called once per frame by the
      *  main event loop's render tick (forwarded through the pane from
      *  {@code MultifunctionalTab}).  Repaints while recording OR showing a loaded
@@ -126,15 +216,37 @@ public final class ScopeController {
      *  repaints decimated.  Returns {@code true} while it should keep the realtime
      *  cadence going. */
     public boolean renderRealtimeFrame() {
-        if (view == null || view.isDisposed() || !view.isVisible()
+        if (view == null || view.isDisposed()
                 || (!capturing && !view.isFileMode())) {
             return false;
         }
+        if (glSurface != null) {
+            Control c = glSurface.control();
+            if (c.isDisposed() || !c.isVisible()) return false;
+            glSurface.render();                 // GPU: NanoVG render of view.paintCanvas
+            if (redrawCounter++ >= CONDENSED_DECIMATION) {
+                redrawCounter = 0;
+                if (condensed != null && !condensed.isDisposed()) condensed.redraw();
+            }
+            return true;
+        }
+        if (!view.isVisible()) return false;
+        long _t0 = System.nanoTime();
         view.redraw();
         view.update();
+        long _t1 = System.nanoTime();
         if (redrawCounter++ >= CONDENSED_DECIMATION) {
             redrawCounter = 0;
             if (condensed != null && !condensed.isDisposed()) condensed.redraw();
+        }
+        long _t2 = System.nanoTime();
+        // TEMP: view.update() forces the whole SWT main-view paint cycle (paintCanvas
+        // + GC setup + double-buffer present); compare it to PAINT-PROFILE's TOTAL to
+        // see the SWT present overhead, and condensed.redraw to see the strip's cost.
+        if (++tickProfile >= 30 && log.isWarnEnabled()) {
+            tickProfile = 0;
+            log.warn(String.format("RENDER-TICK ms: view.update=%.1f condensed.redraw=%.1f",
+                    (_t1 - _t0) / 1e6, (_t2 - _t1) / 1e6));
         }
         return true;
     }
@@ -159,29 +271,35 @@ public final class ScopeController {
      * @param tabControl settings control that owns the V/T scale selectors
      */
     public void performAutoSetup(ScopeView view, ScopeTabControl tabControl) {
-        // Also runs on a loaded signal (file mode): no live capture, but a valid
-        // frame + measurements to scale from.
-        if (view == null || view.isDisposed() || (!capturing && !view.isFileMode())) return;
+        // Also runs on a loaded signal (file mode) and on a STOPPED/frozen scope:
+        // no live capture, but a valid frame + held measurements to scale from.
+        boolean frozen = view != null && !view.isDisposed() && view.isFrozen();
+        if (view == null || view.isDisposed() || (!capturing && !view.isFileMode() && !frozen)) return;
         Preferences prefs = Preferences.instance();
-        double freq = view.getLastFrequencyHz();
         double vpp  = view.getLastVpp();
-        // In dual-tone mode the carrier crosses 0 many times per beat envelope
-        // cycle.  Pick the LOWER of the carrier and |F1-F2| so the time scale
-        // covers at least one full beat envelope — the carrier alone would
-        // render a packed wall of cycles with no visible envelope.
-        double scaleHz = freq;
-        if (prefs.getGenSignalForm().isDualTone()) {
-            double beatHz = Math.abs(prefs.getGenDualToneFreq2Hz()
-                                   - prefs.getGenDualToneFreq1Hz());
-            if (beatHz > 0 && (!Double.isFinite(scaleHz) || beatHz < scaleHz)) {
-                scaleHz = beatHz;
+        // Horizontal scale + trigger reset only when live / file — a stopped scope
+        // keeps the user's current time base and trigger; auto-setup then fixes ONLY
+        // the vertical (V/div + offset) off the frozen frame.
+        if (!frozen) {
+            double freq = view.getLastFrequencyHz();
+            // In dual-tone mode the carrier crosses 0 many times per beat envelope
+            // cycle.  Pick the LOWER of the carrier and |F1-F2| so the time scale
+            // covers at least one full beat envelope — the carrier alone would
+            // render a packed wall of cycles with no visible envelope.
+            double scaleHz = freq;
+            if (prefs.getGenSignalForm().isDualTone()) {
+                double beatHz = Math.abs(prefs.getGenDualToneFreq2Hz()
+                                       - prefs.getGenDualToneFreq1Hz());
+                if (beatHz > 0 && (!Double.isFinite(scaleHz) || beatHz < scaleHz)) {
+                    scaleHz = beatHz;
+                }
             }
-        }
-        if (Double.isFinite(scaleHz) && scaleHz > 0) {
-            double period = 1.0 / scaleHz;
-            double targetTDiv = period * 1.5 / ScopeView.DIVISIONS_X;
-            double newTDiv    = ScopeFormat.ceilToStep(targetTDiv, OscParse.timePerDivTargets());
-            tabControl.setTimePerDiv(newTDiv);
+            if (Double.isFinite(scaleHz) && scaleHz > 0) {
+                double period = 1.0 / scaleHz;
+                double targetTDiv = period * 1.5 / ScopeView.DIVISIONS_X;
+                double newTDiv    = ScopeFormat.ceilToStep(targetTDiv, OscParse.timePerDivTargets());
+                tabControl.setTimePerDiv(newTDiv);
+            }
         }
         if (Double.isFinite(vpp) && vpp > 0) {
             double targetVDiv = vpp / (ScopeView.DIVISIONS_Y * 0.75);
@@ -195,8 +313,16 @@ public final class ScopeController {
         // trace — at 0 V.  Trigger position + level back to centre.
         prefs.setOscLeftOffsetFrac (view.autoSetupOffsetFrac(true,  prefs.getOscLeftVoltsPerDiv()));
         prefs.setOscRightOffsetFrac(view.autoSetupOffsetFrac(false, prefs.getOscRightVoltsPerDiv()));
-        prefs.setOscTriggerPositionFrac(0.5);
-        prefs.setOscTriggerLevelFrac   (0.5);
+        if (!frozen) {
+            prefs.setOscTriggerPositionFrac(0.5);
+            prefs.setOscTriggerLevelFrac   (0.5);
+        } else {
+            // Frozen: keep the user's time base + trigger, BUT recover a trigger offset
+            // that a zoom carried OFF-screen (virtual) so the signal returns to view —
+            // an on-screen offset (in [0,1]) is left exactly as set (don't disturb a good view).
+            double pos = prefs.getOscTriggerPositionFrac();
+            if (pos < 0.0 || pos > 1.0) prefs.setOscTriggerPositionFrac(0.5);
+        }
         prefs.save();
     }
 

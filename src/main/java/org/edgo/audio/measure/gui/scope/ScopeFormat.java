@@ -159,7 +159,159 @@ public class ScopeFormat {
      * 0.5) · oldV / newV + 0.5}.
      */
     public double preserveCanvasMiddle(double offsetFrac, double oldVpdiv, double newVpdiv) {
+        return anchorOffsetAfterZoom(offsetFrac, oldVpdiv, newVpdiv, 0.5);
+    }
+
+    /**
+     * The {@code offsetFrac} that, after V/div changes from {@code oldVpdiv} to
+     * {@code newVpdiv}, keeps the voltage under screen fraction {@code anchorFrac}
+     * fixed (0..1 top..bottom).  Voltage there = {@code (offsetFrac − anchorFrac)·Y·V/div};
+     * holding it constant gives the formula below.  {@code anchorFrac = 0.5} is the
+     * canvas-middle case ({@link #preserveCanvasMiddle}); the mouse-Y fraction is the
+     * ctrl+wheel case.
+     */
+    public double anchorOffsetAfterZoom(double offsetFrac, double oldVpdiv,
+                                        double newVpdiv, double anchorFrac) {
         if (oldVpdiv <= 0 || newVpdiv <= 0) return offsetFrac;
-        return (offsetFrac - 0.5) * oldVpdiv / newVpdiv + 0.5;
+        return anchorFrac + (offsetFrac - anchorFrac) * oldVpdiv / newVpdiv;
+    }
+
+    /** Relative tolerance for matching / comparing a V/div value against a 1-2-5 rung. */
+    private final double V_DIV_RULE_TOL = 1e-6;
+
+    /** Whether {@code v} sits on the 1-2-5 ladder (within {@link #V_DIV_RULE_TOL}). */
+    public boolean onVoltsPerDivRule(double v, double[] rule) {
+        for (double r : rule) {
+            if (Math.abs(v - r) <= V_DIV_RULE_TOL * r) return true;
+        }
+        return false;
+    }
+
+    /**
+     * The next 1-2-5 rung strictly beyond {@code v} in the zoom direction
+     * ({@code dir < 0} = zoom in / smaller V/div, {@code dir > 0} = zoom out /
+     * larger).  Returns {@code v} unchanged at the end of the ladder.
+     */
+    public double nextVoltsPerDivRung(double v, int dir, double[] rule) {
+        if (dir > 0) {
+            for (double r : rule) if (r > v * (1.0 + V_DIV_RULE_TOL)) return r;
+            return v;
+        }
+        for (int i = rule.length - 1; i >= 0; i--) {
+            if (rule[i] < v * (1.0 - V_DIV_RULE_TOL)) return rule[i];
+        }
+        return v;
+    }
+
+    /** Smallest absolute distance from {@code v} to any rung of {@code rule}. */
+    private double distToRule(double v, double[] rule) {
+        double best = Double.MAX_VALUE;
+        for (double r : rule) {
+            double d = Math.abs(v - r);
+            if (d < best) best = d;
+        }
+        return best;
+    }
+
+    /**
+     * Couples both channels' V/div for one zoom step so they ALWAYS keep their
+     * ratio: one channel (the base) snaps to its next 1-2-5 rung and the other
+     * scales by that same factor (so a follower may land off the rule).
+     *
+     * <ul>
+     *   <li>Both on the 1-2-5 rule → the base is whichever choice leaves the SCALED
+     *       channel nearest a rung (smallest {@link #distToRule absolute distance}).</li>
+     *   <li>One off the rule → the on-rule channel is the base; both off → the one
+     *       nearest its next rung in the zoom direction (smallest |ln(ratio)|).</li>
+     * </ul>
+     *
+     * @param leftV   current left V/div  (&gt;0, or &le;0 when that channel is inactive)
+     * @param rightV  current right V/div (&gt;0, or &le;0 when inactive)
+     * @param dir     {@code -1} zoom in (smaller V/div), {@code +1} zoom out (larger)
+     * @param rule    ascending 1-2-5 ladder, e.g. {@code OscParse.voltsPerDivTargets()}
+     * @param vDivMax zoom-out ceiling (FS fills the full grid height); {@code <=0} = none
+     * @return {@code {newLeftV, newRightV}}; an inactive channel is returned unchanged,
+     *         and a blocked zoom-out (would exceed {@code vDivMax}) returns the inputs.
+     */
+    public double[] coupleVoltsPerDivZoom(double leftV, double rightV, int dir,
+                                          double[] rule, double vDivMax) {
+        boolean leftOn  = leftV  > 0;
+        boolean rightOn = rightV > 0;
+        if (!leftOn && !rightOn) return new double[] { leftV, rightV };
+        if (leftOn ^ rightOn) {                       // single active channel
+            double cur  = leftOn ? leftV : rightV;
+            double next = nextVoltsPerDivRung(cur, dir, rule);
+            if (exceedsCeil(dir, next, vDivMax)) next = cur;
+            return new double[] { leftOn ? next : leftV, rightOn ? next : rightV };
+        }
+        boolean lRule = onVoltsPerDivRule(leftV, rule);
+        boolean rRule = onVoltsPerDivRule(rightV, rule);
+        double newL;
+        double newR;
+        if (lRule && rRule) {                         // both on rule: hold the ratio too
+            // Step one channel (the base) to its next rung and scale the other by that
+            // factor; pick the base that leaves the SCALED channel nearest a 1-2-5 rung
+            // (e.g. 500µV/1mV zoom-in -> 250/500µV, since 250 is 50µV off 200, beating
+            // 200/400µV where 400 is 100µV off 500).
+            double lNext = nextVoltsPerDivRung(leftV,  dir, rule);
+            double rNext = nextVoltsPerDivRung(rightV, dir, rule);
+            double scaledRight = rightV * (lNext / leftV);    // left as base
+            double scaledLeft  = leftV  * (rNext / rightV);   // right as base
+            if (distToRule(scaledRight, rule) <= distToRule(scaledLeft, rule)) {
+                newL = lNext;        newR = scaledRight;
+            } else {
+                newL = scaledLeft;   newR = rNext;
+            }
+        } else {                                      // proportional coupling
+            boolean refLeft;
+            if (lRule != rRule) {
+                refLeft = lRule;                      // the on-rule channel leads
+            } else {                                  // both off-rule: nearest its rung leads
+                double tL = nextVoltsPerDivRung(leftV,  dir, rule);
+                double tR = nextVoltsPerDivRung(rightV, dir, rule);
+                refLeft = Math.abs(Math.log(tL / leftV)) <= Math.abs(Math.log(tR / rightV));
+            }
+            double refCur  = refLeft ? leftV : rightV;
+            double refNext = nextVoltsPerDivRung(refCur, dir, rule);
+            double ratio   = refNext / refCur;
+            newL = refLeft ? refNext        : leftV  * ratio;
+            newR = refLeft ? rightV * ratio : refNext;
+        }
+        if (exceedsCeil(dir, newL, vDivMax) || exceedsCeil(dir, newR, vDivMax)) {
+            return new double[] { leftV, rightV };    // zoom-out blocked at FS-fills-height
+        }
+        return new double[] { newL, newR };
+    }
+
+    /** Whether a zoom-out result {@code v} overshoots the {@code vDivMax} ceiling. */
+    private boolean exceedsCeil(int dir, double v, double vDivMax) {
+        return dir > 0 && vDivMax > 0 && v > vDivMax * (1.0 + V_DIV_RULE_TOL);
+    }
+
+    /**
+     * The vertical move limit for one channel: the maximum half-range, in
+     * offsetFrac units, the zero line may sit from canvas middle before the
+     * signal's ±FS extreme reaches the middle.  {@code half = peak/(Ydiv·vDiv)},
+     * floored at 0.5 so the grid edges are always reachable.  The allowed band is
+     * {@code [0.5 - half, 0.5 + half]}.
+     */
+    public double offsetMoveHalfRange(double vDiv, double peakVolts, int divisionsY) {
+        if (vDiv <= 0 || peakVolts <= 0) return 0.5;
+        return Math.max(0.5, peakVolts / (divisionsY * vDiv));
+    }
+
+    /**
+     * Clamps a vertical-move {@code delta} (in offsetFrac units) so the channel's
+     * zero line stays within its {@link #offsetMoveHalfRange} band — i.e. you can
+     * pan the signal only until its ±FS extreme reaches the canvas middle.
+     */
+    public double clampOffsetDelta(double delta, double offsetFrac,
+                                   double vDiv, double peakVolts, int divisionsY) {
+        if (vDiv <= 0) return delta;
+        double half = offsetMoveHalfRange(vDiv, peakVolts, divisionsY);
+        double next = offsetFrac + delta;
+        if (next < 0.5 - half) return (0.5 - half) - offsetFrac;
+        if (next > 0.5 + half) return (0.5 + half) - offsetFrac;
+        return delta;
     }
 }
