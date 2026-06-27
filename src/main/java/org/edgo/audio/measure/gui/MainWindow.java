@@ -53,6 +53,7 @@ import org.edgo.audio.measure.gui.helpviewer.HelpUrls;
 import org.edgo.audio.measure.gui.helpviewer.HelpViewer;
 import org.edgo.audio.measure.gui.helpviewer.UpdateChecker;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.scope.gl.GpuSupport;
 import org.edgo.audio.measure.gui.tips.TipOfTheDayDialog;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -177,7 +178,18 @@ public final class MainWindow {
         // has its real size) to settle them at startup, the same re-layout a
         // resize triggers.
         display.asyncExec(() -> {
-            if (!shell.isDisposed()) shell.layout(true, true);
+            if (shell.isDisposed()) return;
+            shell.layout(true, true);
+            // The GL probe needs a realised window, so it was deferred past
+            // construction (the scope built on the CPU path).  Now the shell is
+            // shown, probe for real exactly once; if the GPU is available and
+            // enabled, rebuild so the scope takes the GL path.  Skipping the probe
+            // until here is what stops the X11 glXMakeCurrent abort at startup.
+            if (!GpuSupport.instance().isProbed()
+                    && GpuSupport.instance().isAvailable(shell)
+                    && Preferences.instance().isUseGpuAcceleration()) {
+                rebuildContent(false);   // silent: idle scope, no "Applying settings…" flash
+            }
         });
         // Fire the silent update check once the shell is up.  The
         // checker spawns its own daemon thread; doing the check from
@@ -218,7 +230,15 @@ public final class MainWindow {
      *  font / language change never silences a running measurement; a
      *  brief "Applying settings…" splash covers the work. */
     public void rebuildContent() {
-        showRebuildSplash(display);
+        rebuildContent(true);
+    }
+
+    /** As {@link #rebuildContent()}, but {@code showSplash=false} skips the
+     *  "Applying settings…" splash — used by the one-shot startup CPU→GPU swap
+     *  (the scope is idle then, so the swap is invisible and the splash would just
+     *  flash). */
+    public void rebuildContent(boolean showSplash) {
+        if (showSplash) showRebuildSplash(display);
         try {
             Menu oldMenu = shell.getMenuBar();
             for (Control c : shell.getChildren()) {
@@ -236,7 +256,7 @@ public final class MainWindow {
             mainTab.applySavedLayoutState();
             shell.layout(true, true);
         } finally {
-            closeRebuildSplash();
+            if (showSplash) closeRebuildSplash();
         }
     }
 
@@ -407,6 +427,7 @@ public final class MainWindow {
         Preferences mwPrefs = Preferences.instance();
         String audioBefore = audioConfigFingerprint(mwPrefs);
         String fontsBefore = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
+        boolean gpuBefore  = mwPrefs.isUseGpuAcceleration();
         new PreferencesDialog(shell).open(() -> {
             String fontsAfter = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
             // Bounce BEFORE a font rebuild: the resume hook belongs to the
@@ -415,7 +436,9 @@ public final class MainWindow {
             if (!audioConfigFingerprint(mwPrefs).equals(audioBefore)) {
                 mainTab.pauseForDialog();
             }
-            if (!fontsAfter.equals(fontsBefore)) {
+            // The GPU toggle, like fonts, takes effect by rebuilding the panes — the
+            // scope pane chooses its surface (GL vs GC) at construction.
+            if (!fontsAfter.equals(fontsBefore) || mwPrefs.isUseGpuAcceleration() != gpuBefore) {
                 rebuildContent();
             }
         });

@@ -41,6 +41,7 @@ import org.eclipse.swt.graphics.FontData;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.gui.bind.Bindings;
+import org.edgo.audio.measure.gui.scope.gl.GpuSupport;
 import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -206,6 +207,15 @@ public final class PreferencesDialog {
         showTipsBtn.setToolTipText(I18n.t("preferences.lookAndFeel.showTipsAtStartup.tooltip"));
         Bindings.check(showTipsBtn, edit.showTipsAtStartupProperty());
         showTipsBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+
+        // Spacer label so the checkbox lines up under the combo (column 2).
+        new Label(lookFeelTab, SWT.NONE);
+        Button useGpuBtn = new Button(lookFeelTab, SWT.CHECK);
+        useGpuBtn.setText(I18n.t("preferences.lookAndFeel.useGpuAcceleration"));
+        useGpuBtn.setToolTipText(I18n.t("preferences.lookAndFeel.useGpuAcceleration.tooltip"));
+        Bindings.check(useGpuBtn, edit.useGpuAccelerationProperty());
+        useGpuBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        useGpuBtn.setEnabled(GpuSupport.instance().isAvailable());   // greyed out when no GPU is available
 
         // UI fonts (normal / bold) — applied via a shell recreate on OK,
         // driven by MainWindow's dialog-close compare (like the language
