@@ -104,6 +104,11 @@ public final class ScopeTabControl extends AbstractTabControl {
         /** A setting changed → redraw both scope canvases and resync the sliders. */
         void requestRedraw();
 
+        /** File mode horizontal zoom: re-centre the view so the sample under the
+         *  mouse ({@code mouseFrac}) stays put as the window resizes for the new
+         *  t/div.  A loaded file has no trigger, so its zoom moves the view centre. */
+        void zoomFileTimeAroundMouse(double mouseFrac, double tDivOld, double tDivNew);
+
         /** The visible time window changed (t/div, scrub) → recompute the
          *  navigation-slider window and the view back-offsets. */
         void applyViewState();
@@ -283,7 +288,14 @@ public final class ScopeTabControl extends AbstractTabControl {
         // its static state.
         if (liveCapture) {
             genChangeListener = cause -> {
-                if (!isDisposed()) getDisplay().asyncExec(this::syncReconstructedBeatEnabled);
+                if (isDisposed()) return;
+                getDisplay().asyncExec(() -> {
+                    if (isDisposed()) return;
+                    syncReconstructedBeatEnabled();
+                    // A real generator change (not a sub-mHz FLL trim) invalidates the
+                    // running scope statistics — drop them so avg/min/max start fresh.
+                    if (cause == GenChangeCause.USER_INPUT) view.resetMeasurementHistory();
+                });
             };
             MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener);
             singleDisarmedListener = ignored -> {
@@ -569,6 +581,9 @@ public final class ScopeTabControl extends AbstractTabControl {
             host.requestRedraw();
             toolbarTabs.refreshTab(TAB_LEFT);
         });
+        // Wheel / arrows / typing on this field change ONLY this channel (via the
+        // selection listener above) — coupling both channels is the ctrl+wheel
+        // scope-zoom gesture alone, not the per-channel V/div field.
 
         leftAc = squareToggle(g, "AC");
         leftAc.setToolTipText(I18n.t("scope.left.ac.tooltip"));
@@ -641,6 +656,8 @@ public final class ScopeTabControl extends AbstractTabControl {
             host.requestRedraw();
             toolbarTabs.refreshTab(TAB_RIGHT);
         });
+        // Wheel / arrows / typing on this field change ONLY this channel (selection
+        // listener above) — coupling is the ctrl+wheel scope zoom alone.
 
         rightAc = squareToggle(g, "AC");
         rightAc.setToolTipText(I18n.t("scope.right.ac.tooltip"));
@@ -1275,24 +1292,8 @@ public final class ScopeTabControl extends AbstractTabControl {
     // V/T scale stepping (driven by the pane's mouse-wheel handler)
     // -------------------------------------------------------------------------
 
-    /**
-     * Steps both visible channels' V/div fields by {@code delta} (negative
-     * = zoom in / smaller V/div, positive = zoom out).  Each call drives the
-     * field to the next standard 1-2-5-10 value above / below the current
-     * free-form value; the existing selection listener then persists the
-     * result into Preferences.
-     */
-    private void stepVoltsPerDiv(int delta) {
-        Preferences prefs = Preferences.instance();
-        if (leftScale != null && !leftScale.isDisposed() && prefs.isOscLeftChannelEnabled()) {
-            leftScale.step(delta);
-        }
-        if (rightScale != null && !rightScale.isDisposed() && prefs.isOscRightChannelEnabled()) {
-            rightScale.step(delta);
-        }
-    }
-
-    /** Steps the t/div selector by {@code delta}.  Same routing as {@link #stepVoltsPerDiv}. */
+    /** Steps the t/div selector by {@code delta} (negative = zoom in / smaller
+     *  t/div, positive = zoom out); the field's selection listener persists it. */
     private void stepTimePerDiv(int delta) {
         if (timeScale == null || timeScale.isDisposed()) return;
         timeScale.step(delta);
@@ -1312,34 +1313,35 @@ public final class ScopeTabControl extends AbstractTabControl {
      *  offsetFrac AFTER, so our value wins and the redraw the listener
      *  scheduled picks it up. */
     public void stepVoltsPerDivAround(int delta, int mouseY, int height) {
-        if (height <= 0) { stepVoltsPerDiv(delta); return; }
         Preferences prefs = Preferences.instance();
-        double mouseFrac = (double) mouseY / height;
-        if (leftScale != null && !leftScale.isDisposed() && prefs.isOscLeftChannelEnabled()) {
-            double vDivOld = leftScale.getValue();
-            double offOld  = prefs.getOscLeftOffsetFrac();
-            leftScale.step(delta);
-            double vDivNew = leftScale.getValue();
-            if (vDivNew != vDivOld) {
-                double vAtMouse = (offOld - mouseFrac) * ScopeView.DIVISIONS_Y * vDivOld;
-                prefs.setOscLeftOffsetFrac(
-                        mouseFrac + vAtMouse / (ScopeView.DIVISIONS_Y * vDivNew));
-                prefs.save();
-                host.requestRedraw();
-            }
+        boolean leftEn  = leftScale  != null && !leftScale.isDisposed()  && prefs.isOscLeftChannelEnabled();
+        boolean rightEn = rightScale != null && !rightScale.isDisposed() && prefs.isOscRightChannelEnabled();
+        if (!leftEn && !rightEn) return;
+        double leftOld  = leftEn  ? leftScale.getValue()  : 0.0;
+        double rightOld = rightEn ? rightScale.getValue() : 0.0;
+        // Anchor the voltage under the mouse Y (ctrl+wheel) or the canvas middle (the
+        // field control passes height<=0).  The engine couples both channels' V/div
+        // and re-anchors each offset; we push its results into the fields + prefs.
+        double anchorFrac = (height > 0) ? (double) mouseY / height : 0.5;
+        double peak = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double[] r = view.getNav().zoomVertical(
+                leftOld,  prefs.getOscLeftOffsetFrac(),  leftEn,
+                rightOld, prefs.getOscRightOffsetFrac(), rightEn,
+                delta, anchorFrac, peak);
+        boolean changed = false;
+        if (leftEn && r[0] != leftOld) {
+            leftScale.setValue(r[0]);                  // listener centre-anchors; override below
+            prefs.setOscLeftOffsetFrac(r[2]);
+            changed = true;
         }
-        if (rightScale != null && !rightScale.isDisposed() && prefs.isOscRightChannelEnabled()) {
-            double vDivOld = rightScale.getValue();
-            double offOld  = prefs.getOscRightOffsetFrac();
-            rightScale.step(delta);
-            double vDivNew = rightScale.getValue();
-            if (vDivNew != vDivOld) {
-                double vAtMouse = (offOld - mouseFrac) * ScopeView.DIVISIONS_Y * vDivOld;
-                prefs.setOscRightOffsetFrac(
-                        mouseFrac + vAtMouse / (ScopeView.DIVISIONS_Y * vDivNew));
-                prefs.save();
-                host.requestRedraw();
-            }
+        if (rightEn && r[1] != rightOld) {
+            rightScale.setValue(r[1]);
+            prefs.setOscRightOffsetFrac(r[3]);
+            changed = true;
+        }
+        if (changed) {
+            prefs.save();
+            host.requestRedraw();
         }
     }
 
@@ -1360,14 +1362,26 @@ public final class ScopeTabControl extends AbstractTabControl {
         }
         Preferences prefs = Preferences.instance();
         double tDivOld   = timeScale.getValue();
-        double posOld    = prefs.getOscTriggerPositionFrac();
+        double mouseFrac = (double) mouseX / width;
         timeScale.step(delta);
         double tDivNew   = timeScale.getValue();
         if (tDivNew == tDivOld) return;
-        double mouseFrac = (double) mouseX / width;
-        double posNew    = mouseFrac - (mouseFrac - posOld) * (tDivOld / tDivNew);
-        if (posNew < 0.0) posNew = 0.0;
-        if (posNew > 1.0) posNew = 1.0;
+        if (view.isFileMode()) {
+            // A loaded file has no trigger: zoom around the mouse by re-centring the view.
+            host.zoomFileTimeAroundMouse(mouseFrac, tDivOld, tDivNew);
+            return;
+        }
+        if (view.getReader() == null) { host.requestRedraw(); return; }
+        int sr      = view.getReader().getSampleRate();
+        int dispOld = ScopeFormat.displaySamplesFor(tDivOld, sr);
+        int dispNew = ScopeFormat.displaySamplesFor(tDivNew, sr);
+        // Anchor on the REAL trigger offset (live + frozen both render the real,
+        // virtual-capable value now): the sample under the mouse stays put while the
+        // offset may carry off-screen — the handle pins to the edge, the time mark shows
+        // the real value.  Uses the actual displaySamples ratio so the anchor is exact
+        // even at fine time bases where the t/div ratio would round-divergently drift.
+        double posOld = prefs.getOscTriggerPositionFrac();
+        double posNew = view.getNav().zoomTriggerOffset(posOld, dispOld, dispNew, mouseFrac, true);
         prefs.setOscTriggerPositionFrac(posNew);
         host.requestRedraw();   // repaint a frozen / file-mode view too (the live render loop is idle then)
     }
