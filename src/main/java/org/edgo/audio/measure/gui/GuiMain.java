@@ -21,6 +21,8 @@ package org.edgo.audio.measure.gui;
 import java.nio.file.Paths;
 import java.util.Locale;
 
+import com.sun.jna.Library;
+import com.sun.jna.Native;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.core.LoggerContext;
@@ -29,6 +31,7 @@ import org.edgo.audio.measure.common.AppPaths;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.gui.automation.AutomationRunner;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.scope.gl.Glfw;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 
@@ -67,6 +70,28 @@ public final class GuiMain {
         logCtx.getConfiguration().getRootLogger().removeAppender("Console");
         logCtx.updateLoggers();
         Logger log = LogManager.getLogger(GuiMain.class);
+
+        // On a Wayland session SWT's GLCanvas can't obtain a GL context (GLX is
+        // X11-only), so the GPU scope is unavailable there.  When GPU acceleration
+        // is enabled, force the GTK backend to X11 (XWayland) so the GL path works
+        // out of the box.  GTK reads GDK_BACKEND from the C environment at init and
+        // the JVM can't set its own env, so call libc setenv via JNA — BEFORE the
+        // Display (the first GTK touch) is created below.  Gated to Linux + a
+        // Wayland session + not already X11 + GPU enabled; harmless if GTK ignores
+        // it (the scope just stays on CPU, as it would have anyway).
+        String osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        if (!osName.contains("win") && !osName.contains("mac")
+                && System.getenv("WAYLAND_DISPLAY") != null
+                && !"x11".equals(System.getenv("GDK_BACKEND"))
+                && Preferences.instance().isUseGpuAcceleration()) {
+            try {
+                Native.load("c", LibC.class).setenv("GDK_BACKEND", "x11", 1);
+                log.info("Wayland + GPU enabled: set GDK_BACKEND=x11 for the GL scope.");
+            } catch (RuntimeException e) {
+                log.warn("Could not set GDK_BACKEND=x11; GPU scope stays on CPU under Wayland: {}",
+                        e.toString());
+            }
+        }
 
         // Route any worker-thread death through log4j.  Without this, an
         // uncaught exception on a background thread (FFT analyser, scope
@@ -152,17 +177,56 @@ public final class GuiMain {
         // no-op one-shot timer paces the next frame; when nothing is live no
         // timer is armed and the loop blocks in sleep() until a real event, so an
         // idle app stays cool.
-        final int RENDER_FRAME_MS = 16;
+        // Self-re-arming heartbeat rather than a one-shot per iteration: a one-shot
+        // timer is consumed (and then lost) when a nested OS modal loop runs — dragging
+        // the floating measurement tool window is one — leaving the main loop blocked in
+        // sleep() forever and the realtime view frozen.  A timer that re-arms ITSELF keeps
+        // firing through the nested loop, so rendering continues during and after it.
+        // When no view is live the chain lapses and the loop blocks in sleep(), so an idle
+        // app stays cool.
+        final int RENDER_FRAME_MS = 1;   // pace the next frame as soon as possible (render time dominates)
+        final Runnable[] heartbeat = new Runnable[1];
+        final boolean[]  beating   = { false };
+        heartbeat[0] = () -> {
+            beating[0] = false;
+            if (window.isDisposed()) return;
+            if (window.renderRealtimeFrame()) {
+                beating[0] = true;
+                display.timerExec(RENDER_FRAME_MS, heartbeat[0]);
+            }
+        };
+        // macOS GPU scope: the floating GLFW child window's input callbacks fire only
+        // during glfwPollEvents, which must run on this (main) thread — and we can't
+        // block in Display.sleep() or that polling stops and the child goes
+        // unresponsive while the scope is stopped.  So when GLFW is live we poll +
+        // short-nap instead of sleeping.  On Windows / Linux (no GLFW) it stays a
+        // blocking sleep, so an idle app draws no CPU.
+        final Glfw glfw = Glfw.instance();
+        final int GLFW_IDLE_NAP_MS = 2;
         while (!window.isDisposed()) {
             while (display.readAndDispatch()) {
                 if (window.isDisposed()) break;
             }
             if (window.isDisposed()) break;
-            boolean active = window.renderRealtimeFrame();
-            if (window.isDisposed()) break;
-            if (active) display.timerExec(RENDER_FRAME_MS, () -> { /* no-op: only wakes sleep() to drive the next frame */ });
-            display.sleep();
+            glfw.poll();
+            if (!beating[0] && window.renderRealtimeFrame()) {   // a view went live → start beating
+                beating[0] = true;
+                display.timerExec(RENDER_FRAME_MS, heartbeat[0]);
+            }
+            if (glfw.isActive()) {
+                try { Thread.sleep(GLFW_IDLE_NAP_MS); } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            } else {
+                display.sleep();
+            }
         }
         display.dispose();
+    }
+
+    /** Minimal libc binding (JNA) for {@code setenv}, used to force GDK_BACKEND=x11
+     *  before GTK initialises (see {@link #main}).  Linux only. */
+    public interface LibC extends Library {
+        int setenv(String name, String value, int overwrite);
     }
 }
