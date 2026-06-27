@@ -132,4 +132,25 @@ class ScopeFormatTest {
         // Beyond the top: returns the largest target.
         assertEquals(10, ScopeFormat.ceilToStep(20.0, targets), 1e-12);
     }
+
+    @Test
+    void offsetMoveHalfRange_flooredAtHalf() {
+        double peak = 1.4142;   // ≈ 1 V rms ADC full-scale peak
+        // V/div where ±FS fits within the grid → half floored at 0.5 ([0,1]).
+        assertEquals(0.5, ScopeFormat.offsetMoveHalfRange(1.0, peak, 10), 1e-9);
+        // Narrow V/div → ±FS spans many divisions → half grows past 0.5.
+        assertEquals(peak / (10 * 0.01), ScopeFormat.offsetMoveHalfRange(0.01, peak, 10), 1e-9);
+    }
+
+    @Test
+    void clampOffsetDelta_keepsZeroLineWithinFsBounds() {
+        double peak = 1.4142;   // bounds at V/div=1 are [0,1]
+        // From centre, +0.6 would pass 1.0 → clamps to the +0.5 that reaches it.
+        assertEquals( 0.5, ScopeFormat.clampOffsetDelta( 0.6, 0.5, 1.0, peak, 10), 1e-9);
+        assertEquals(-0.5, ScopeFormat.clampOffsetDelta(-0.6, 0.5, 1.0, peak, 10), 1e-9);
+        // Within bounds → unchanged.
+        assertEquals( 0.3, ScopeFormat.clampOffsetDelta( 0.3, 0.5, 1.0, peak, 10), 1e-9);
+        // Inactive channel (vDiv<=0) → delta passes through untouched.
+        assertEquals( 0.9, ScopeFormat.clampOffsetDelta( 0.9, 0.5, 0.0, peak, 10), 1e-9);
+    }
 }

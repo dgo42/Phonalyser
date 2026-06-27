@@ -104,9 +104,10 @@ public final class MultifunctionalTab {
         return hSplit.computeSize(SWT.DEFAULT, SWT.DEFAULT, true);
     }
 
-    /** Pauses live capture + generator playback for the lifetime of a
-     *  modal dialog (e.g. Preferences).  Returns a {@link Runnable} that
-     *  resumes both when the dialog closes. */
+    /** Re-applies an audio config (backend / device / rate / bit-depth) committed
+     *  in the Preferences dialog by BOUNCING the live capture, FFT and generator —
+     *  stop + restart so each re-acquires its device at the new settings.  Anything
+     *  that wasn't running stays stopped. */
     public void pauseForDialog() {
         boolean oscWasRunning = oscPane != null && oscPane.isCapturing();
         if (oscWasRunning) oscPane.stopCapture();
@@ -117,7 +118,9 @@ public final class MultifunctionalTab {
         // ignored (the existing buffer keeps running at the OLD rate).
         if (oscWasRunning) oscPane.startCapture();
         if (fftPane != null) fftPane.pauseForDialog();
-        if (genPane != null) genPane.pauseAroundDialog();
+        // pauseAroundDialog() stops the generator and RETURNS its resume hook —
+        // run it now so a tone that was playing restarts on the new device.
+        if (genPane != null) genPane.pauseAroundDialog().run();
     }
 
     /** Loop-driven realtime repaint of the live scope + FFT views, called once

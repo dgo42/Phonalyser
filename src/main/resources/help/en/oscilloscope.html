@@ -108,7 +108,11 @@
         (up = zoom in, i.e. smaller s/div).  Both zooms are <em>anchored at the
         cursor</em>: the voltage (or time) under the pointer stays fixed while
         the scale changes around it.  The same wheel convention applies in
-        every Phonalyser view (scope, FFT, frequency response).</li>
+        every Phonalyser view (scope, FFT, frequency response).  For the full
+        rules — what moves, what stays fixed, the trigger offset travelling
+        off-screen, and how it all works the same whether the scope is live,
+        stopped or showing a loaded file — see
+        <a href="#scope-move-zoom">Moving &amp; zooming the signal</a> below.</li>
   </ol>
 
   <h2 id="scope-buttons">Header buttons</h2>
@@ -398,6 +402,76 @@
   <p>Shown only when hysteresis is enabled; the number is the hysteresis window
      in divisions (e.g. <code>H&nbsp;2.0</code>).  The absence of this tile means
      hysteresis is off.</p>
+
+  <h2 id="scope-move-zoom">Moving &amp; zooming the signal</h2>
+  <p>The trace can be moved and scaled on both axes.  Everything below works the
+     same way whether the scope is <b>live</b> (recording), <b>stopped</b> (showing
+     the last captured buffer) or showing a <b>loaded file</b> — the only difference
+     is that a live capture keeps adding new samples while the other two are
+     frozen.  The two axes are fully independent: a horizontal action never moves
+     or rescales the trace vertically, and a vertical action never touches the
+     horizontal.</p>
+
+  <h3 id="scope-move-h">Moving horizontally</h3>
+  <ul>
+    <li><b>Trigger offset</b> (live and stopped) — drag the triangle on the bottom
+        edge, or use the s/div tile's neighbours.  This slides the trigger point
+        left or right <em>within</em> the screen.</li>
+    <li><b><kbd>Shift</kbd>+wheel</b> (live, stopped and file), or the horizontal
+        scrollbar (file) — moves the signal <b>½ a division per notch</b>, in a
+        straight line, no matter where the trigger sits.  On a stopped capture or a
+        loaded file this scrolls across the <em>entire</em> buffer, not just one
+        screen.</li>
+    <li><b>Off-screen trigger.</b>  Moving or zooming can carry the trigger offset
+        past the edge of the screen.  When that happens the offset line and its
+        handle stay pinned to the left or right edge — so you can always grab them
+        again — but the real offset keeps going, possibly many screens away, and the
+        <b>time figure</b> next to the handle shows that true offset.  Drag the
+        pinned handle back toward the centre to pull the signal into view.</li>
+  </ul>
+
+  <h3 id="scope-zoom-h">Zooming horizontally</h3>
+  <ul>
+    <li><b>Horizontal-resolution control</b> (the s/div field) — zooms around the
+        <b>trigger offset</b>: the trigger stays put and the trace stretches or
+        compresses around it.  A loaded file has no trigger, so it zooms around the
+        <b>middle</b> of the screen instead.</li>
+    <li><b><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+wheel</b> — zooms around the <b>mouse
+        pointer</b>: the moment under the pointer stays fixed.  If the pointer is not
+        on the trigger, the trigger offset moves — and may travel off-screen as
+        described above.</li>
+    <li>Zoom out far enough on a live or stopped capture and the buffer can no longer
+        fill the whole screen; the parts it can't cover are simply left <b>blank</b>
+        at the edges, and the point you zoomed around does not move.  On a loaded
+        file you can zoom out only until the <b>whole file fills the screen width</b>;
+        beyond that the view re-centres on the file.</li>
+  </ul>
+
+  <h3 id="scope-move-v">Moving vertically</h3>
+  <p>The plain <b>wheel</b>, or dragging an offset handle on either side edge, moves
+     <b>both active channels together</b>, keeping their spacing.  You can move the
+     signal until <b>±FS/2</b> — the converter's full-scale edge — reaches the middle
+     of the screen; that is far enough to park any part of the signal at centre, and
+     no further.</p>
+
+  <h3 id="scope-zoom-v">Zooming vertically</h3>
+  <ul>
+    <li>A channel's <b>V/div control</b> (its field — typing, arrows, ↑↓, or the wheel
+        over the field) rescales <b>that channel alone</b>, around the <b>middle</b> of
+        the screen.  The other channel is untouched.</li>
+    <li><b><kbd>Ctrl</kbd>+wheel</b> over the trace is the only gesture that zooms
+        <b>both channels together</b> — around the <b>mouse pointer</b>, always keeping
+        their ratio.  One channel — the <em>base</em> — steps to its next 1‑2‑5 rung and
+        the other scales by that same factor (so a value may land off the sequence).  The
+        base is whichever choice leaves the <em>scaled</em> channel nearest a 1‑2‑5 value
+        — e.g. left <code>500&nbsp;µV/div</code>, right <code>1&nbsp;mV/div</code>: one
+        zoom-in steps the right to <code>500&nbsp;µV/div</code> and scales the left to
+        <code>250&nbsp;µV/div</code> (50&nbsp;µV off the 200&nbsp;µV rung), rather than
+        stepping the left to <code>200&nbsp;µV/div</code> and scaling the right to
+        <code>400&nbsp;µV/div</code> (100&nbsp;µV off 500&nbsp;µV).  A manually-set,
+        off-sequence channel likewise scales in proportion to the channel that steps.</li>
+    <li>You can zoom out only until the full <b>±FS span fills the screen height</b>.</li>
+  </ul>
 
   <hr/>
   <p class="back"><a href="index.html">◀ Back to contents</a></p>
