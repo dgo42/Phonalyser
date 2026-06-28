@@ -18,3 +18,9 @@ source image.
 
 Until these exist, the guarded "Build MSIX" step in the release workflow is
 skipped, so normal (.exe / .jar) builds are unaffected.
+
+The base set (StoreLogo / Square150x150Logo / Square44x44Logo + their
+.scale-200 variants) was rendered from the app's icon vector source at each
+size (crisp at any scale), e.g. with ImageMagick:
+
+    magick -background none -density 384 phonalyser.svg -resize SxS <name>.png
