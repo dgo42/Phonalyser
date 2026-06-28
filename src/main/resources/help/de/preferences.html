@@ -35,6 +35,12 @@
             übernommen — kein Neustart erforderlich.</td></tr>
     <tr><td>Kleine Symbole im Hauptreiter</td>
         <td>Verkleinert die Symbole im Hauptreiter.  Wird sofort übernommen.</td></tr>
+    <tr><td>GPU-Beschleunigung verwenden</td>
+        <td>Rendert das Oszilloskop auf der GPU (OpenGL / NanoVG) für eine
+            deutlich höhere Bildrate und aktiviert das Nachleuchten (siehe Reiter
+            <a href="#prefs-oscilloscope">Oszilloskop</a>).  Automatisch
+            ausgegraut, wenn keine kompatible GPU verfügbar ist — das Oszilloskop
+            verwendet dann CPU-Rendering.</td></tr>
     <tr><td>UI-Schriftart / UI-Schriftart (fett)</td>
         <td>Schriftarten für Achsenbeschriftungen, Messwertanzeigen und Messtabellen
             (fett für hervorgehobenen Tabellentext).  Wird nach OK übernommen.</td></tr>
@@ -77,6 +83,21 @@
     <tr><td>Abtastpunkt-Durchmesser, px</td>
         <td>Größe der pro Abtastwert gezeichneten Punkte bei starker
             Vergrößerung.</td></tr>
+    <tr><td>Nachleuchtdauer</td>
+        <td>Digitales Phosphor-Nachleuchten — wie lange jede durchlaufende Spur
+            sichtbar bleibt, bevor sie verblasst, wie bei einem analogen
+            Oszilloskop.  Wählen Sie <code>Off</code>; eine voreingestellte
+            Abklingzeit <code>0.5 s</code>, <code>1 s</code> oder <code>2 s</code>
+            (eine alte Spur verblasst nach dieser Zeit auf ~37 % und nach der
+            dreifachen Zeit auf ~5 %); <code>∞</code> (Spuren verblassen nie und
+            sammeln sich an, bis sich die Ansicht ändert); oder <code>Manual</code>
+            (verwendet das Feld darunter).  Macht Trigger-Jitter und Rauschen als
+            verblassende Hüllkurve sichtbar.  Erfordert GPU-Beschleunigung (siehe
+            <a href="#prefs-lookfeel">Erscheinungsbild</a>); ohne Wirkung im
+            CPU-Modus.</td></tr>
+    <tr><td>Manuelles Nachleuchten, s</td>
+        <td>Eigene Abklingzeit, 0,1–60 s in 0,5-s-Schritten, verwendet wenn das
+            Nachleuchten auf <code>Manual</code> steht; sonst ausgegraut.</td></tr>
     <tr><td>Linker / Rechter Kanal Farbe</td>
         <td>Spurfarbe pro Kanal (Standardwerte: Cyan <code>#28DCF0</code> /
             Gelb <code>#F0DC28</code>).</td></tr>
