@@ -60,6 +60,7 @@ import org.edgo.audio.measure.gui.common.GcMeasurementPainter;
 import org.edgo.audio.measure.gui.common.MeasurementPainter;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.scope.gl.GlScopeRenderer;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.gui.widgets.BlinkBanner;
 import org.edgo.audio.measure.gui.widgets.ToolButton;
@@ -80,7 +81,7 @@ import lombok.extern.log4j.Log4j2;
  * volts/division and time/division settings.
  */
 @Log4j2
-public final class ScopeView extends AbstractMeasurementView {
+public final class ScopeView extends AbstractMeasurementView implements GlScopeRenderer {
 
     /** Number of horizontal grid divisions.  Package-private so the pane's
      *  mouse-anchored t/div zoom can compute the time at the mouse using
@@ -883,19 +884,62 @@ public final class ScopeView extends AbstractMeasurementView {
 
     /** Renders the scope through a {@link MeasurementPainter} for the GPU surface,
      *  mirroring {@link #onPaint} (paint + capture-rate update) — used as the GL
-     *  surface's renderer when the GPU scope is enabled.  Without the
-     *  {@code updateCaptureRate()} here the cap/s readout never refreshes, because
-     *  the hidden view's {@code onPaint} no longer fires. */
-    public void renderGl(MeasurementPainter painter, int w, int h) {
-        paintCanvas(painter, w, h);
-        drawHeaderOverlay(painter);   // GPU only: the toolbar widgets are hidden, draw them via the painter
-        // The GPU loop renders through the surface, not redraw(), so the redraw() override
-        // that drives the extracted measurement window never fires — do it directly here.
-        if (measurementWindow != null) {
-            measurementWindow.redraw();
+     *  surface's renderer when the GPU scope is enabled.  Split into
+     *  {@link GlScopeRenderer.Phase phases} so the persistence surface can route the
+     *  TRACE into a decayed phosphor buffer and draw the BACKDROP + OVERLAY fresh;
+     *  surfaces without persistence pass {@link GlScopeRenderer.Phase#ALL}. */
+    @Override
+    public void renderGl(MeasurementPainter painter, int w, int h, GlScopeRenderer.Phase phase) {
+        switch (phase) {
+            case BACKDROP -> glBackdrop(painter, w, h);
+            case TRACE    -> glTrace(painter, w, h);
+            case OVERLAY  -> glOverlay(painter, w, h);
+            case ALL      -> { glBackdrop(painter, w, h); glTrace(painter, w, h); glOverlay(painter, w, h); }
         }
+    }
+
+    /** Backdrop phase: per-frame painter setup + background + graticule (never persists). */
+    private void glBackdrop(MeasurementPainter gc, int w, int h) {
+        gc.setAdvanced(true);
+        syncChannelColors();
+        gc.setBackground(color(ColorRole.BACKGROUND));
+        gc.fillRectangle(0, 0, w, h);
+        if (monoFont == null) monoFont = Fonts.instance().normal(getDisplay());
+        gc.setFont(monoFont);
+        drawScopeGrid(gc, w, h);
+    }
+
+    /** Trace phase: the waveforms only — the layer the phosphor buffer accumulates.
+     *  The cap/s computation lives here (not in the always-run overlay) so expose-only
+     *  re-composites — which skip the trace — don't feed stale frames into the rate. */
+    private void glTrace(MeasurementPainter gc, int w, int h) {
+        gc.setAdvanced(true);
+        drawWaveforms(gc, w, h);
         updateCaptureRate();
     }
+
+    /** Overlay phase: sliders, labels, measurement table, header — drawn fresh on top.
+     *  Also runs the per-frame side effects (extracted measurement window + cap/s rate). */
+    private void glOverlay(MeasurementPainter gc, int w, int h) {
+        gc.setAdvanced(true);
+        if (monoFont == null) monoFont = Fonts.instance().normal(getDisplay());
+        gc.setFont(monoFont);
+        drawSliders(gc, w, h);
+        drawEdgeLabels(gc, w, h);
+        drawMeasurements(gc);
+        drawCaptureRate(gc, w);
+        drawFilePath(gc, w);
+        drawHeaderOverlay(gc);   // GPU only: the toolbar widgets are hidden, draw them via the painter
+        // The GPU loop renders through the surface, not redraw(), so the redraw() override
+        // that drives the extracted measurement window never fires — do it directly here.
+        if (measurementWindow != null) measurementWindow.redraw();
+    }
+
+    /** Whether the most recent {@link #drawWaveforms} rendered genuinely new captured
+     *  content (vs a held / re-composited frame) — the phosphor surface consults this to
+     *  decide whether to decay+accumulate or merely re-composite. */
+    @Override
+    public boolean isLastFrameNew() { return lastFrameWasNew; }
 
     /** GPU path only: the header {@link Toolbar} is a hidden child of this view, so
      *  render it into an off-screen image and draw it over the GL trace as a texture

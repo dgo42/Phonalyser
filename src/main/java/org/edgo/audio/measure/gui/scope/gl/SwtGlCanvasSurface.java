@@ -27,6 +27,7 @@ import org.eclipse.swt.widgets.Control;
 import org.edgo.audio.measure.gui.common.NvgMeasurementPainter;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GLCapabilities;
 
 import lombok.Setter;
 
@@ -41,10 +42,9 @@ import static org.lwjgl.nanovg.NanoVGGL2.*;
  *
  * <p>{@code SWT.NO_BACKGROUND} stops SWT erasing the canvas to white between GL
  * swaps (which otherwise flickers).  The GL context and NanoVG are created lazily
- * on the first {@link #render()} (when the context is first current).
- * Rendering is direct on the UI thread — no paint listener — so it is driven by the
- * scope's realtime-frame loop; the double-buffered front buffer holds the last
- * frame between renders, so exposes don't need a repaint.
+ * on the first render (when the context is first current).  Display persistence
+ * ("digital phosphor") is delegated to the shared {@link ScopePhosphor}; here logical
+ * and physical pixels coincide (ratio 1).
  */
 public final class SwtGlCanvasSurface implements GlScopeSurface {
 
@@ -52,6 +52,8 @@ public final class SwtGlCanvasSurface implements GlScopeSurface {
     private long    vg;
     private NvgMeasurementPainter painter;
     private boolean glReady;
+    private boolean fboSupported;
+    private ScopePhosphor phosphor;
 
     @Setter private GlScopeRenderer renderer;
 
@@ -60,9 +62,11 @@ public final class SwtGlCanvasSurface implements GlScopeSurface {
         data.doubleBuffer = true;
         data.stencilSize  = 8;                 // NanoVG anti-aliased stroke path needs stencil
         canvas = new GLCanvas(parent, SWT.NO_BACKGROUND, data);
-        // Also render on SWT paint events (initial show, resize, expose) so the
-        // scope is drawn when stopped too — the realtime loop only fires while live.
-        canvas.addPaintListener(e -> render());
+        // Expose / resize: only RE-COMPOSITE the frozen phosphor (no decay / accumulate) so a
+        // stopped scope's afterglow doesn't fade every time the window is uncovered or resized.
+        canvas.addPaintListener(e -> renderFrame(ScopePhosphor.Kind.COMPOSITE));
+        // Free the GL context + framebuffers when the canvas goes away (pane rebuild / close).
+        canvas.addDisposeListener(e -> dispose());
     }
 
     @Override
@@ -72,10 +76,20 @@ public final class SwtGlCanvasSurface implements GlScopeSurface {
 
     @Override
     public void render() {
+        renderFrame(ScopePhosphor.Kind.REALTIME);
+    }
+
+    @Override
+    public void renderInteractive() {
+        renderFrame(ScopePhosphor.Kind.RESET);
+    }
+
+    private void renderFrame(ScopePhosphor.Kind kind) {
         if (canvas.isDisposed() || renderer == null) return;
         canvas.setCurrent();
         if (!glReady) {
-            GL.createCapabilities();
+            GLCapabilities caps = GL.createCapabilities();
+            fboSupported = caps.OpenGL30;      // raw-GL30 phosphor FBOs need framebuffer objects
             vg = nvgCreate(NVG_ANTIALIAS | NVG_STENCIL_STROKES);
             glReady = true;
         }
@@ -85,18 +99,30 @@ public final class SwtGlCanvasSurface implements GlScopeSurface {
         int w = area.width;
         int h = area.height;
         if (w <= 0 || h <= 0) return;
+        if (painter == null) painter = new NvgMeasurementPainter(vg, canvas.getDisplay());
+        if (phosphor == null) {
+            phosphor = new ScopePhosphor(vg, painter, (v, t, iw, ih) ->
+                    nvglCreateImageFromHandle(v, t, iw, ih,
+                            NVG_IMAGE_FLIPY | NVG_IMAGE_PREMULTIPLIED | NVG_IMAGE_NODELETE));
+        }
 
+        // Win/Linux: logical and physical pixels coincide, ratio 1.
+        GlFrameSize size = new GlFrameSize(w, h, w, h, 1f);
+        if (!fboSupported || !phosphor.render(renderer, kind, size)) {
+            renderWhole(w, h);                 // persistence off / unsupported: direct full render
+        }
+        canvas.swapBuffers();
+    }
+
+    /** Off path: a single-pass full render straight to the screen (no phosphor buffer). */
+    private void renderWhole(int w, int h) {
         GL11.glViewport(0, 0, w, h);
         GL11.glClearColor(0f, 0f, 0f, 1f);
         GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT | GL11.GL_STENCIL_BUFFER_BIT);
-
-        if (painter == null) painter = new NvgMeasurementPainter(vg, canvas.getDisplay());
         nvgBeginFrame(vg, w, h, 1f);
         painter.reset(w, h, 1f);
-        renderer.render(painter, w, h);
+        renderer.renderGl(painter, w, h, GlScopeRenderer.Phase.ALL);
         nvgEndFrame(vg);
-
-        canvas.swapBuffers();
     }
 
     @Override
@@ -105,8 +131,13 @@ public final class SwtGlCanvasSurface implements GlScopeSurface {
             painter.dispose();
             painter = null;
         }
-        if (!canvas.isDisposed() && vg != 0L) {
-            canvas.setCurrent();
+        if (vg != 0L) {
+            // GL deletes need the context current; if the canvas is already gone the context
+            // is too and the driver has freed the GL objects — nvgDelete still frees CPU state.
+            if (!canvas.isDisposed()) {
+                canvas.setCurrent();
+                if (phosphor != null) phosphor.release();
+            }
             nvgDelete(vg);
             vg = 0L;
         }

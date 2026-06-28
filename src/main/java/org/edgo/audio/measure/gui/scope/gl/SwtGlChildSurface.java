@@ -36,6 +36,7 @@ import com.sun.jna.Native;
 import org.lwjgl.glfw.GLFWNativeCocoa;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GLCapabilities;
 
 import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
@@ -67,12 +68,16 @@ import static org.lwjgl.glfw.GLFW.glfwShowWindow;
 import static org.lwjgl.glfw.GLFW.glfwSwapBuffers;
 import static org.lwjgl.glfw.GLFW.glfwSwapInterval;
 import static org.lwjgl.glfw.GLFW.glfwWindowHint;
+import static org.lwjgl.nanovg.NanoVG.NVG_IMAGE_FLIPY;
+import static org.lwjgl.nanovg.NanoVG.NVG_IMAGE_PREMULTIPLIED;
 import static org.lwjgl.nanovg.NanoVG.nvgBeginFrame;
 import static org.lwjgl.nanovg.NanoVG.nvgEndFrame;
 import static org.lwjgl.nanovg.NanoVGGL3.NVG_ANTIALIAS;
+import static org.lwjgl.nanovg.NanoVGGL3.NVG_IMAGE_NODELETE;
 import static org.lwjgl.nanovg.NanoVGGL3.NVG_STENCIL_STROKES;
 import static org.lwjgl.nanovg.NanoVGGL3.nvgCreate;
 import static org.lwjgl.nanovg.NanoVGGL3.nvgDelete;
+import static org.lwjgl.nanovg.NanoVGGL3.nvglCreateImageFromHandle;
 import static org.lwjgl.system.MemoryUtil.NULL;
 
 /**
@@ -129,6 +134,8 @@ public final class SwtGlChildSurface implements GlScopeSurface {
     private long    vg;
     private NvgMeasurementPainter painter;
     private boolean glReady;
+    private boolean fboSupported;
+    private ScopePhosphor phosphor;
 
     private int winW, winH;     // child window size in points (SWT coords)
     private int fbW,  fbH;      // framebuffer size in pixels (Retina-aware)
@@ -169,13 +176,23 @@ public final class SwtGlChildSurface implements GlScopeSurface {
 
     @Override
     public void render() {
+        renderFrame(ScopePhosphor.Kind.REALTIME);
+    }
+
+    @Override
+    public void renderInteractive() {
+        renderFrame(ScopePhosphor.Kind.RESET);
+    }
+
+    private void renderFrame(ScopePhosphor.Kind kind) {
         if (window == NULL || placeholder.isDisposed() || renderer == null) return;
         trackPlaceholder();
         if (winW <= 0 || winH <= 0) return;
 
         glfwMakeContextCurrent(window);
         if (!glReady) {
-            GL.createCapabilities();
+            GLCapabilities caps = GL.createCapabilities();
+            fboSupported = caps.OpenGL30;              // raw-GL30 phosphor FBOs (core in this GL3.2 context)
             glfwSwapInterval(0);                       // no vsync: don't block the UI thread on swap
             vg = nvgCreate(NVG_ANTIALIAS | NVG_STENCIL_STROKES);
             glReady = true;
@@ -183,17 +200,31 @@ public final class SwtGlChildSurface implements GlScopeSurface {
         if (vg == 0L) return;
 
         float px = (winH > 0) ? (float) fbH / winH : 1f;
+        if (painter == null) painter = new NvgMeasurementPainter(vg, placeholder.getDisplay());
+        if (phosphor == null) {
+            phosphor = new ScopePhosphor(vg, painter, (v, t, iw, ih) ->
+                    nvglCreateImageFromHandle(v, t, iw, ih,
+                            NVG_IMAGE_FLIPY | NVG_IMAGE_PREMULTIPLIED | NVG_IMAGE_NODELETE));
+        }
+
+        // macOS Retina: NanoVG draws in logical points (winW × winH) at ratio px; the GL
+        // viewport / framebuffers are the physical pixel size (fbW × fbH).
+        GlFrameSize size = new GlFrameSize(winW, winH, fbW, fbH, px);
+        if (!fboSupported || !phosphor.render(renderer, kind, size)) {
+            renderWhole(px);                           // persistence off / unsupported: direct full render
+        }
+        glfwSwapBuffers(window);
+    }
+
+    /** Off path: a single-pass full render straight to the GLFW window (no phosphor buffer). */
+    private void renderWhole(float px) {
         GL11.glViewport(0, 0, fbW, fbH);
         GL11.glClearColor(0f, 0f, 0f, 1f);
         GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT | GL11.GL_STENCIL_BUFFER_BIT);
-
-        if (painter == null) painter = new NvgMeasurementPainter(vg, placeholder.getDisplay());
         nvgBeginFrame(vg, winW, winH, px);
         painter.reset(winW, winH, px);
-        renderer.render(painter, winW, winH);
+        renderer.renderGl(painter, winW, winH, GlScopeRenderer.Phase.ALL);
         nvgEndFrame(vg);
-
-        glfwSwapBuffers(window);
     }
 
     @Override
@@ -205,6 +236,7 @@ public final class SwtGlChildSurface implements GlScopeSurface {
         if (window != NULL) {
             if (vg != 0L) {
                 glfwMakeContextCurrent(window);
+                if (phosphor != null) phosphor.release();
                 nvgDelete(vg);
                 vg = 0L;
             }
