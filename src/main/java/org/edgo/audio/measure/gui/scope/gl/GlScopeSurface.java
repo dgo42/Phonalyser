@@ -61,11 +61,20 @@ public interface GlScopeSurface {
      *  GL child window tracks. */
     Control control();
 
-    /** Sets the per-frame draw callback (typically {@code view::paintCanvas}). */
+    /** Sets the per-frame draw callback (typically the {@code ScopeView} itself, which
+     *  implements {@link GlScopeRenderer}). */
     void setRenderer(GlScopeRenderer renderer);
 
-    /** Renders one frame now, on the calling (UI) thread. */
+    /** Renders one realtime frame now, on the calling (UI) thread.  With persistence on,
+     *  this is the path that decays + accumulates a genuinely new captured trace. */
     void render();
+
+    /** Renders one frame in response to a UI gesture / settings change (pan, zoom, V/div,
+     *  slider drag) rather than the realtime loop.  With persistence on, the view geometry
+     *  changed, so the old afterglow is at stale coordinates — the surface re-renders the
+     *  trace and RESETS the phosphor instead of accumulating, so the trace tracks the
+     *  gesture rather than smearing.  Default: a plain {@link #render()} (no persistence). */
+    default void renderInteractive() { render(); }
 
     /** Shows or hides the surface when the scope pane expands / collapses.  The
      *  Win/Linux {@code GLCanvas} is a real child that SWT hides with its parent, so
