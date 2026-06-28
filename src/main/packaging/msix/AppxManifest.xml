@@ -16,7 +16,7 @@
   the MSIX_* repo variables (see .github/workflows/release.yml).
 
   Logos referenced below must exist under Assets\ in the package — supply them in
-  packaging/msix/assets/ (see that folder's note for the required sizes).
+  src/main/packaging/msix/assets/ (see that folder's note for the required sizes).
 -->
 <Package
     xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
