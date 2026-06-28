@@ -40,6 +40,7 @@ import org.eclipse.swt.graphics.FontData;
 
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.PersistenceMode;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.scope.gl.GpuSupport;
 import org.edgo.audio.measure.bind.Property;
@@ -114,6 +115,10 @@ public final class PreferencesDialog {
     /** Dot diameters (px): 3…12 in 1-px steps. */
     private static final double DOT_DIAM_MIN_PX = 3;
     private static final double DOT_DIAM_MAX_PX = 12;
+    /** Manual persistence time (s): 0.1…60 in 0.5-s steps, one decimal shown. */
+    private static final double PERSIST_MANUAL_MIN_SEC  = 0.1;
+    private static final double PERSIST_MANUAL_MAX_SEC  = 60;
+    private static final double PERSIST_MANUAL_STEP_SEC = 0.5;
     /** Multi-tone detect threshold (dB): wheel ±10 dB, arrows ±1 dB. */
     private static final double STRONG_TONE_MIN_DB   = 10;
     private static final double STRONG_TONE_MAX_DB   = 140;
@@ -327,6 +332,27 @@ public final class PreferencesDialog {
         dotDiameterSel.setLayoutData(comboData());
         dotDiameterSel.setToolTipText(I18n.t("preferences.dotDiameter.tooltip"));
         Bindings.stepFieldInt(dotDiameterSel, edit.oscDotDiameterProperty());
+
+        // Display persistence ("digital phosphor", GPU path only): a preset decay time
+        // plus a manual-seconds field that's enabled only when the mode is "Manual".
+        new Label(oscTab, SWT.NONE).setText(I18n.t("preferences.persistence"));
+        Combo persistenceCombo = new Combo(oscTab, SWT.READ_ONLY);
+        for (String label : PersistenceMode.LABELS) {
+            persistenceCombo.add(label);
+        }
+        Bindings.combo(persistenceCombo, edit.oscPersistenceModeProperty(), PersistenceMode.values());
+        persistenceCombo.setToolTipText(I18n.t("preferences.persistence.tooltip"));
+        persistenceCombo.setLayoutData(comboData());
+
+        new Label(oscTab, SWT.NONE).setText(I18n.t("preferences.persistence.manual"));
+        NumericStepField persistenceManualSel = new NumericStepField(oscTab, UnitFamily.SECONDS,
+                PERSIST_MANUAL_MIN_SEC, PERSIST_MANUAL_MAX_SEC, PERSIST_MANUAL_STEP_SEC, PERSIST_MANUAL_STEP_SEC, 1, 90);
+        persistenceManualSel.setLayoutData(comboData());
+        persistenceManualSel.setToolTipText(I18n.t("preferences.persistence.manual.tooltip"));
+        Bindings.stepField(persistenceManualSel, edit.oscPersistenceManualSecondsProperty());
+        persistenceManualSel.setEnabled(edit.getOscPersistenceMode() == PersistenceMode.MANUAL);
+        Bindings.onChange(persistenceManualSel, edit.oscPersistenceModeProperty(),
+                m -> persistenceManualSel.setEnabled(m == PersistenceMode.MANUAL));
 
         // Per-channel trace colour — button background reflects the picked
         // colour, held in a local holder for the dialog session; click opens a

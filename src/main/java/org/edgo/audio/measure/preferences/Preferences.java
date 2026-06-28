@@ -47,6 +47,7 @@ import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
+import org.edgo.audio.measure.enums.PersistenceMode;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.enums.WindowType;
@@ -208,6 +209,10 @@ public final class Preferences {
     private final Property<Double> oscTriggerPositionFrac = bound(0.5);
     /** Sliding-window duration (seconds) for measurement avg / min / max / σ. */
     private final Property<Double>         oscMeasurementAverageSeconds = bound(5.0);
+    /** Display persistence ("digital phosphor") mode — GPU path only. */
+    private final Property<PersistenceMode> oscPersistenceMode = bound(PersistenceMode.OFF);
+    /** Manual persistence time (seconds) used when {@link #oscPersistenceMode} is MANUAL. */
+    private final Property<Double>         oscPersistenceManualSeconds = bound(1.0);
     /** Trace stroke width (pixels). */
     private final Property<Double>         oscLineWidth         = bound(2.0);
     /** Sample-dot diameter (pixels) when the inter-sample spacing exceeds 10 px. */
@@ -686,6 +691,8 @@ public final class Preferences {
         c.freqRespNotchBaseHz.set(freqRespNotchBaseHz.get());
 
         c.oscMeasurementAverageSeconds.set(oscMeasurementAverageSeconds.get());
+        c.oscPersistenceMode.set(oscPersistenceMode.get());
+        c.oscPersistenceManualSeconds.set(oscPersistenceManualSeconds.get());
         c.oscLineWidth.set(oscLineWidth.get());
         c.oscDotDiameter.set(oscDotDiameter.get());
         c.fftLineWidth.set(fftLineWidth.get());
@@ -743,6 +750,8 @@ public final class Preferences {
         setFreqRespNotchBaseHz(edit.freqRespNotchBaseHz.get());
 
         setOscMeasurementAverageSeconds(edit.oscMeasurementAverageSeconds.get());
+        setOscPersistenceMode(edit.oscPersistenceMode.get());
+        setOscPersistenceManualSeconds(edit.oscPersistenceManualSeconds.get());
         setOscLineWidth(edit.oscLineWidth.get());
         setOscDotDiameter(edit.oscDotDiameter.get());
         setFftLineWidth(edit.fftLineWidth.get());
@@ -1272,6 +1281,14 @@ public final class Preferences {
     public void setOscMeasurementAverageSeconds(double v) { oscMeasurementAverageSeconds.set(v); }
     public Property<Double> oscMeasurementAverageSecondsProperty() { return oscMeasurementAverageSeconds; }
 
+    public PersistenceMode getOscPersistenceMode() { return oscPersistenceMode.get(); }
+    public void setOscPersistenceMode(PersistenceMode v) { oscPersistenceMode.set(v); }
+    public Property<PersistenceMode> oscPersistenceModeProperty() { return oscPersistenceMode; }
+
+    public double getOscPersistenceManualSeconds() { return oscPersistenceManualSeconds.get(); }
+    public void setOscPersistenceManualSeconds(double v) { oscPersistenceManualSeconds.set(v); }
+    public Property<Double> oscPersistenceManualSecondsProperty() { return oscPersistenceManualSeconds; }
+
     public double getOscLineWidth()            { return oscLineWidth.get(); }
     public void setOscLineWidth(double v)      { oscLineWidth.set(v); }
     public Property<Double> oscLineWidthProperty() { return oscLineWidth; }
@@ -1759,6 +1776,8 @@ public final class Preferences {
         root.put("oscTriggerLevelFrac",    oscTriggerLevelFrac.get());
         root.put("oscTriggerPositionFrac", oscTriggerPositionFrac.get());
         root.put("oscMeasurementAverageSeconds", oscMeasurementAverageSeconds.get());
+        root.put("oscPersistenceMode",           oscPersistenceMode.get().name());
+        root.put("oscPersistenceManualSeconds",  oscPersistenceManualSeconds.get());
         root.put("oscMeasurementChannel",        oscMeasurementChannel.get().name());
         root.put("oscShowStats",                 oscShowStats.get());
         root.put("oscShowMeasurementTable",      oscShowMeasurementTable.get());
@@ -2060,6 +2079,8 @@ public final class Preferences {
         if (root.get("oscTriggerLevelFrac")    instanceof Number n) oscTriggerLevelFrac.set(n.doubleValue());
         if (root.get("oscTriggerPositionFrac") instanceof Number n) oscTriggerPositionFrac.set(n.doubleValue());
         if (root.get("oscMeasurementAverageSeconds") instanceof Number n) oscMeasurementAverageSeconds.set(n.doubleValue());
+        if (root.get("oscPersistenceMode")           instanceof String s) oscPersistenceMode.set(enumOr(PersistenceMode.class, s, oscPersistenceMode.get()));
+        if (root.get("oscPersistenceManualSeconds")  instanceof Number n) oscPersistenceManualSeconds.set(n.doubleValue());
         if (root.get("oscMeasurementChannel")        instanceof String s) oscMeasurementChannel.set(enumOr(Channel.class, s, oscMeasurementChannel.get()));
         if (root.get("oscShowStats")                 instanceof Boolean b) oscShowStats.set(b);
         if (root.get("oscShowMeasurementTable")      instanceof Boolean b) oscShowMeasurementTable.set(b);

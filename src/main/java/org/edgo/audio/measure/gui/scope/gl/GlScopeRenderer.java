@@ -26,9 +26,34 @@ import org.edgo.audio.measure.gui.common.MeasurementPainter;
  * the CPU path makes — {@code view.paintCanvas(painter, w, h)}).  A
  * {@link GlScopeSurface} invokes this between its {@code nvgBeginFrame} /
  * {@code nvgEndFrame} so the same render code drives the GPU backend.
+ *
+ * <p>The frame is split into {@link Phase phases} so the persistence ("digital
+ * phosphor") surface can render only the {@link Phase#TRACE trace} into a decayed
+ * off-screen framebuffer while drawing the {@link Phase#BACKDROP grid} and
+ * {@link Phase#OVERLAY overlay} fresh each frame.  Surfaces without persistence
+ * just call {@link Phase#ALL}.
  */
-@FunctionalInterface
 public interface GlScopeRenderer {
 
-    void render(MeasurementPainter painter, int width, int height);
+    /** Which slice of the frame to draw. */
+    enum Phase {
+        /** The whole frame: backdrop + trace + overlay, in order. */
+        ALL,
+        /** Background fill + graticule (never persists). */
+        BACKDROP,
+        /** The waveforms only — the layer that accumulates in the phosphor buffer. */
+        TRACE,
+        /** Sliders, edge labels, measurement table, header (drawn fresh on top). */
+        OVERLAY;
+
+        private Phase() {}
+    }
+
+    void renderGl(MeasurementPainter painter, int width, int height, Phase phase);
+
+    /** Whether the most recent {@link Phase#TRACE} render produced genuinely new captured
+     *  content (a fresh trigger / free-run frame) rather than a held or re-rendered one.
+     *  The persistence surface consults this to decide whether to decay+accumulate (new)
+     *  or merely re-composite (held). */
+    boolean isLastFrameNew();
 }

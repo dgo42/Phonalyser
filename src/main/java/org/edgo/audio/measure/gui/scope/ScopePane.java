@@ -234,7 +234,7 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
             // repaints + cursor/tooltip back to the canvas.
             viewGd.exclude = true;
             view.setVisible(false);
-            glSurface.setRenderer(view::renderGl);
+            glSurface.setRenderer(view);
             Control gl = glSurface.control();
             gl.addMouseListener(new MouseAdapter() {
                 @Override public void mouseDown(MouseEvent ev)        { view.pointerDown(ev.x, ev.y, ev.button); }
@@ -254,7 +254,9 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
                 renderPending[0] = true;
                 gl.getDisplay().asyncExec(() -> {
                     renderPending[0] = false;
-                    if (!gl.isDisposed()) glSurface.render();
+                    // A gesture / settings change is NOT a new captured frame — re-render the
+                    // trace and reset persistence (geometry changed) instead of accumulating.
+                    if (!gl.isDisposed()) glSurface.renderInteractive();
                 });
             });
         }
