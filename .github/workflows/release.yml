@@ -57,7 +57,7 @@ jobs:
       # for free at publish time).  GUARDED — skipped unless MSIX_IDENTITY_NAME is
       # set, so normal .exe/.jar builds are unaffected.  Needs a Partner Center app
       # reservation (Identity Name + Publisher) and PNG logos in
-      # packaging/msix/assets/.  See PACKAGING.md -> "Microsoft Store (MSIX)".
+      # src/main/packaging/msix/assets/.  See PACKAGING.md -> "Microsoft Store (MSIX)".
       - name: Build MSIX (Microsoft Store)
         if: vars.MSIX_IDENTITY_NAME != ''
         shell: pwsh
@@ -65,21 +65,21 @@ jobs:
           mvn -B -DskipTests package "-Djpackage.type=APP_IMAGE"
           $app = "target/installer/Phonalyser"
           if (-not (Test-Path $app)) { throw "app-image not found at $app" }
-          if (-not (Get-ChildItem packaging/msix/assets/*.png -ErrorAction SilentlyContinue)) {
-            throw "No Store logos in packaging/msix/assets/ (see that folder's README.txt)."
+          if (-not (Get-ChildItem src/main/packaging/msix/assets/*.png -ErrorAction SilentlyContinue)) {
+            throw "No Store logos in src/main/packaging/msix/assets/ (see that folder's README.txt)."
           }
           $pomVer = (Select-Xml -Path pom.xml -XPath "/*[local-name()='project']/*[local-name()='version']").Node.InnerText
           $parts  = ($pomVer -replace '[^0-9.].*$','').Split('.')
           while ($parts.Count -lt 3) { $parts += '0' }
           $ver = ($parts[0..2] -join '.') + '.0'
-          (Get-Content packaging/msix/AppxManifest.xml -Raw).
+          (Get-Content src/main/packaging/msix/AppxManifest.xml -Raw).
             Replace('@IDENTITY_NAME@',  '${{ vars.MSIX_IDENTITY_NAME }}').
             Replace('@PUBLISHER@',      '${{ vars.MSIX_PUBLISHER }}').
             Replace('@PUBLISHER_NAME@', '${{ vars.MSIX_PUBLISHER_NAME }}').
             Replace('@VERSION@',        $ver) |
             Set-Content "$app/AppxManifest.xml" -Encoding utf8
           New-Item -ItemType Directory -Force "$app/Assets" | Out-Null
-          Copy-Item packaging/msix/assets/*.png "$app/Assets/" -Force
+          Copy-Item src/main/packaging/msix/assets/*.png "$app/Assets/" -Force
           $makeappx = (Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin" -Recurse -Filter makeappx.exe |
                        Where-Object FullName -match '\\x64\\' | Sort-Object FullName -Descending | Select-Object -First 1).FullName
           if (-not $makeappx) { throw "makeappx.exe not found (Windows SDK)" }

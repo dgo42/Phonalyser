@@ -117,7 +117,7 @@ To enable it:
 1. **Reserve the app** in **Partner Center** (Microsoft Store) → that gives you
    the package **Identity Name** and **Publisher** (`CN=…`).
 2. Add the Store **logo PNGs** under
-   [packaging/msix/assets/](packaging/msix/assets/) (sizes listed in its
+   [src/main/packaging/msix/assets/](src/main/packaging/msix/assets/) (sizes listed in its
    `README.txt`).
 3. Add repository **variables** (Settings → Secrets and variables → Actions →
    *Variables*):
@@ -128,7 +128,7 @@ To enable it:
    | `MSIX_PUBLISHER` | Partner Center *Publisher* (`CN=…`) |
    | `MSIX_PUBLISHER_NAME` | your Store publisher display name |
 
-On the next tag, the workflow renders [packaging/msix/AppxManifest.xml](packaging/msix/AppxManifest.xml)
+On the next tag, the workflow renders [src/main/packaging/msix/AppxManifest.xml](src/main/packaging/msix/AppxManifest.xml)
 (version filled from `project.version` as `major.minor.build.0`), packs
 `Phonalyser-<ver>.msix`, and attaches it to the draft release. **Upload that
 `.msix` to Partner Center**; the Store signs and distributes it.
