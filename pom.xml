@@ -648,7 +648,7 @@
                                 </goals>
                                 <configuration>
                                     <sources>
-                                        <source>${project.basedir}/pdf-tool/java</source>
+                                        <source>${project.basedir}/src/pdf-tool/java</source>
                                     </sources>
                                 </configuration>
                             </execution>
@@ -682,7 +682,7 @@
                                 <configuration>
                                     <mainClass>org.edgo.build.pdf.MarkdownToPdf</mainClass>
                                     <arguments>
-                                        <argument>${project.basedir}/pdf-tool/fonts</argument>
+                                        <argument>${project.basedir}/src/pdf-tool/fonts</argument>
                                         <argument>${project.basedir}/docs</argument>
                                         <argument>${project.basedir}/docs/ALGORITHMS.md</argument>
                                         <argument>${project.basedir}/docs/ALGORITHMS.uk.md</argument>
