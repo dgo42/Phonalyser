@@ -24,7 +24,6 @@
              plain `mvn compile` resolving on the dev (Windows) machine. -->
         <lwjgl.version>3.3.3</lwjgl.version>
         <lwjgl.natives>natives-windows</lwjgl.natives>
-        <jogl.natives>natives-windows-amd64</jogl.natives>
 
         <!-- Application metadata consumed by jpackage. -->
         <app.name>Phonalyser</app.name>
@@ -220,36 +219,6 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- JOGL — alternative OpenGL binding whose own SWT GLCanvas
-             (com.jogamp.opengl.swt.GLCanvas) manages the GL context itself and is
-             robust on Cocoa, where SWT's built-in GLCanvas NPEs.  Per-OS native
-             via ${jogl.natives}.  Experimental: probing GL embedding on
-             macOS/Wayland. -->
-        <dependency>
-            <groupId>org.jogamp.gluegen</groupId>
-            <artifactId>gluegen-rt</artifactId>
-            <version>2.4.0</version>
-        </dependency>
-        <dependency>
-            <groupId>org.jogamp.jogl</groupId>
-            <artifactId>jogl-all</artifactId>
-            <version>2.4.0</version>
-        </dependency>
-        <dependency>
-            <groupId>org.jogamp.gluegen</groupId>
-            <artifactId>gluegen-rt</artifactId>
-            <version>2.4.0</version>
-            <classifier>${jogl.natives}</classifier>
-            <scope>runtime</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.jogamp.jogl</groupId>
-            <artifactId>jogl-all</artifactId>
-            <version>2.4.0</version>
-            <classifier>${jogl.natives}</classifier>
-            <scope>runtime</scope>
-        </dependency>
-
         <!-- JUnit 5 for testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -258,19 +227,6 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
-
-    <!-- JogAmp (JOGL / GlueGen) is not on Maven Central; its artifacts live in
-         JogAmp's own Maven repository.  Build-wide (Maven repositories can't be
-         scoped per-dependency) and EXPERIMENTAL — only for the JOGL GL-embedding
-         probe.  Remove with the JOGL deps if that path is abandoned. -->
-    <repositories>
-        <repository>
-            <id>jogamp</id>
-            <url>https://jogamp.org/deployment/maven/</url>
-            <releases><enabled>true</enabled></releases>
-            <snapshots><enabled>false</enabled></snapshots>
-        </repository>
-    </repositories>
 
     <profiles>
         <!-- =============================== Windows x86_64 =============================== -->
@@ -290,7 +246,6 @@
                 <jpackage.libDir>$APPDIR/lib/windows</jpackage.libDir>
                 <platform.id>windows</platform.id>
                 <lwjgl.natives>natives-windows</lwjgl.natives>
-                <jogl.natives>natives-windows-amd64</jogl.natives>
             </properties>
             <dependencies>
                 <!-- SWT — Windows x64 binding.  The platform-specific artifact pulls
@@ -441,7 +396,6 @@
                 <jpackage.type>DEB</jpackage.type>
                 <platform.id>linux</platform.id>
                 <lwjgl.natives>natives-linux</lwjgl.natives>
-                <jogl.natives>natives-linux-amd64</jogl.natives>
             </properties>
             <dependencies>
                 <dependency>
@@ -483,7 +437,6 @@
                 <jpackage.type>DEB</jpackage.type>
                 <platform.id>linux-aarch64</platform.id>
                 <lwjgl.natives>natives-linux-arm64</lwjgl.natives>
-                <jogl.natives>natives-linux-aarch64</jogl.natives>
             </properties>
             <dependencies>
                 <dependency>
@@ -524,7 +477,6 @@
                 <jpackage.type>DMG</jpackage.type>
                 <platform.id>macos-x64</platform.id>
                 <lwjgl.natives>natives-macos</lwjgl.natives>
-                <jogl.natives>natives-macosx-universal</jogl.natives>
             </properties>
             <dependencies>
                 <dependency>
@@ -599,7 +551,6 @@
                 <jpackage.type>DMG</jpackage.type>
                 <platform.id>macos</platform.id>
                 <lwjgl.natives>natives-macos-arm64</lwjgl.natives>
-                <jogl.natives>natives-macosx-universal</jogl.natives>
             </properties>
             <dependencies>
                 <dependency>
