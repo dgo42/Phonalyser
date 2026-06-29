@@ -79,7 +79,7 @@ class ScopeMainsCombFreqTest {
         double fs = 384_000;
         int n = 96_000;
         float[] raw = toneUnderMains(fs, n, 1e-4, 4e-4);
-        double fRaw = SignalMeasurements.compute(raw, n, fs, 1.0).getFrequency();
+        double fRaw = SignalMeasurements.from(raw, n, fs, 1.0, true).getFrequency();
         assertTrue(Math.abs(fRaw - TONE_HZ) > 1.0,
                 "expected raw-direct to lock onto mains, not the tone; got " + fRaw);
     }
@@ -102,7 +102,7 @@ class ScopeMainsCombFreqTest {
         int measLen = n - from;
         float[] tail = new float[measLen];
         System.arraycopy(combed, from, tail, 0, measLen);
-        double seed = SignalMeasurements.compute(tail, measLen, fs, 1.0).getFrequency();
+        double seed = SignalMeasurements.from(tail, measLen, fs, 1.0, true).getFrequency();
         double f = SignalMeasurements.refineFrequencyAround(raw, n, fs, seed, 2.0);
         assertTrue(Math.abs(f - TONE_HZ) < 0.01,
                 String.format("seed=%.4f -> %.5f, err %+.5f", seed, f, f - TONE_HZ));

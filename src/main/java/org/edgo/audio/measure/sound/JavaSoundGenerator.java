@@ -22,8 +22,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.sound.sampled.AudioFormat;
-import javax.sound.sampled.AudioSystem;
-import javax.sound.sampled.DataLine;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.Mixer;
 import javax.sound.sampled.SourceDataLine;
@@ -57,25 +55,30 @@ public class JavaSoundGenerator implements AudioPlayback {
     private final int          bytesPerFrame;
     private final String       deviceName;   // null = JavaSound default mixer
     private final PcmQuantizer quantizer;
+    private final JavaSoundDeviceManager deviceManager;
 
     private SourceDataLine   line;
 
-    public JavaSoundGenerator(int sampleRate, int bitDepth, int ditherBits) {
-        this(sampleRate, bitDepth, ditherBits, null);
+    public JavaSoundGenerator(int sampleRate, int bitDepth, int ditherBits,
+                              JavaSoundDeviceManager deviceManager) {
+        this(sampleRate, bitDepth, ditherBits, null, deviceManager);
     }
 
     /**
-     * @param deviceName output device name to honour (matched against
-     *                   {@link Mixer.Info#getName()} substring) — pass
-     *                   {@code null} to let {@link AudioSystem#getLine}
-     *                   pick the platform default mixer.
+     * @param deviceName    output device name to honour (matched against
+     *                      {@link Mixer.Info#getName()} substring) — pass
+     *                      {@code null} to let the platform default mixer be used.
+     * @param deviceManager opens the {@link SourceDataLine} on the mixer whose
+     *                      name matches {@code deviceName} (or the default).
      */
-    public JavaSoundGenerator(int sampleRate, int bitDepth, int ditherBits, String deviceName) {
+    public JavaSoundGenerator(int sampleRate, int bitDepth, int ditherBits, String deviceName,
+                              JavaSoundDeviceManager deviceManager) {
         this.sampleRate     = sampleRate;
         this.bitDepth       = bitDepth;
         this.deviceName     = deviceName;
         this.bytesPerFrame  = (bitDepth / 8) * CHANNELS;
         this.quantizer      = new PcmQuantizer(bitDepth, ditherBits);
+        this.deviceManager  = deviceManager;
     }
 
     @Override
@@ -84,37 +87,13 @@ public class JavaSoundGenerator implements AudioPlayback {
                 AudioFormat.Encoding.PCM_SIGNED,
                 sampleRate, bitDepth, CHANNELS,
                 bytesPerFrame, sampleRate, false);
-        DataLine.Info info = new DataLine.Info(SourceDataLine.class, fmt);
-        Mixer.Info chosenMixer = findMixer(info);
-        if (chosenMixer != null) {
-            line = (SourceDataLine) AudioSystem.getMixer(chosenMixer).getLine(info);
-        } else {
-            line = (SourceDataLine) AudioSystem.getLine(info);
-        }
-        line.open(fmt);
+        line = deviceManager.openOutputLine(deviceName, fmt);
         int hwFrames = line.getBufferSize() / bytesPerFrame;
-        log.info("JavaSound generator opened: format={}, hw-buffer={} frames ({} ms), mixer={}",
-                fmt, hwFrames, hwFrames * 1000 / sampleRate,
-                chosenMixer != null ? chosenMixer.getName() : "<JavaSound default>");
-        if (quantizer.getDitherBits() > 0) log.info("Dithering: TPDF {} bit", quantizer.getDitherBits());
-    }
-
-    /**
-     * Walks {@link AudioSystem#getMixerInfo()} for the first mixer whose
-     * name contains {@link #deviceName} <em>and</em> can supply a
-     * {@link SourceDataLine} matching {@code info}.  Returns {@code null}
-     * if no name was requested or no match exists — the caller then
-     * falls back to {@link AudioSystem#getLine(Line.Info)}.
-     */
-    private Mixer.Info findMixer(DataLine.Info info) {
-        if (deviceName == null || deviceName.isEmpty()) return null;
-        for (Mixer.Info mi : AudioSystem.getMixerInfo()) {
-            if (!mi.getName().contains(deviceName)) continue;
-            Mixer m = AudioSystem.getMixer(mi);
-            if (m.isLineSupported(info)) return mi;
+        if (log.isInfoEnabled()) {
+            log.info("JavaSound generator opened: format={}, hw-buffer={} frames ({} ms)",
+                    fmt, hwFrames, hwFrames * 1000 / sampleRate);
         }
-        log.warn("JavaSound: no mixer matches '{}', falling back to default", deviceName);
-        return null;
+        if (quantizer.getDitherBits() > 0) log.info("Dithering: TPDF {} bit", quantizer.getDitherBits());
     }
 
     @Override

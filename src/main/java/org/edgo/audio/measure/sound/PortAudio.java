@@ -21,6 +21,7 @@ package org.edgo.audio.measure.sound;
 import com.sun.jna.Callback;
 import com.sun.jna.Library;
 import com.sun.jna.Native;
+import com.sun.jna.NativeLibrary;
 import com.sun.jna.NativeLong;
 import com.sun.jna.Pointer;
 import com.sun.jna.PointerType;
@@ -28,6 +29,7 @@ import com.sun.jna.Structure;
 import com.sun.jna.ptr.PointerByReference;
 import lombok.extern.log4j.Log4j2;
 
+import java.io.File;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -240,10 +242,21 @@ public final class PortAudio {
 
     public static synchronized Lib lib() {
         if (LIB == null) {
+            if (log.isInfoEnabled()) {
+                log.info("Loading PortAudio: candidates={}, jna.library.path={}, java.library.path={}",
+                        Arrays.toString(candidateLibraryNames()),
+                        System.getProperty("jna.library.path"),
+                        System.getProperty("java.library.path"));
+            }
             UnsatisfiedLinkError last = null;
             for (String name : candidateLibraryNames()) {
                 try {
                     LIB = Native.load(name, Lib.class);
+                    if (log.isInfoEnabled()) {
+                        File loaded = NativeLibrary.getInstance(name).getFile();
+                        log.info("PortAudio loaded '{}' from {}", name,
+                                loaded != null ? loaded.getAbsolutePath() : "(OS resolver — no file path)");
+                    }
                     break;
                 } catch (UnsatisfiedLinkError ule) {
                     last = ule;
@@ -253,8 +266,8 @@ public final class PortAudio {
                 throw new IllegalStateException(
                         "Could not load PortAudio native library "
                                 + "(tried " + Arrays.toString(candidateLibraryNames())
-                                + " on java.library.path="
-                                + System.getProperty("java.library.path") + ")",
+                                + " on jna.library.path=" + System.getProperty("jna.library.path")
+                                + ", java.library.path=" + System.getProperty("java.library.path") + ")",
                         last);
             }
             // Surface any exception thrown from a callback so it isn't silently dropped.

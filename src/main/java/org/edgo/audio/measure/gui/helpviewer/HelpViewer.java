@@ -181,6 +181,7 @@ public final class HelpViewer {
             "fft.html",
             "freqresp.html",
             "preferences.html",
+            "bench.html",
             "theory/index.html",
             "theory/audio-backend.html",
             "theory/ring-buffer.html",
@@ -236,6 +237,10 @@ public final class HelpViewer {
             "img/oscilloscope-pane.png",
             "img/fft-pane.png",
             "img/dac-predistortion-live.png",
+            "img/faraday-cage-bench.svg",
+            "img/XLR wiring.jpg",
+            "img/twin-T 1kHz filter.jpg",
+            "img/anti RIAA filter 1.jpg",
     };
 
     private static volatile HelpViewer instance;
@@ -303,7 +308,7 @@ public final class HelpViewer {
 
         Path root = resolveLangRoot();
         if (root == null) {
-            Dialogs.error(parent, I18n.t("help.window.title"), I18n.t("help.window.notFound"));
+            Dialogs.error(parent, I18n.t("help.window.title"), notFoundMessage());
             return;
         }
         Path target = root.resolve(file);
@@ -312,7 +317,7 @@ public final class HelpViewer {
                     file, root, INDEX_FILE);
             target = root.resolve(INDEX_FILE);
             if (!Files.isRegularFile(target)) {
-                Dialogs.error(parent, I18n.t("help.window.title"), I18n.t("help.window.notFound"));
+                Dialogs.error(parent, I18n.t("help.window.title"), notFoundMessage());
                 return;
             }
         }
@@ -457,18 +462,45 @@ public final class HelpViewer {
             if (Files.isDirectory(p)) return p;
             log.warn("Help: help.dir = '{}' does not exist; falling back", prop);
         }
+        Path nextToJar = appAdjacentHelpDir();
+        if (nextToJar != null && Files.isDirectory(nextToJar)) return nextToJar;
+        return null;
+    }
+
+    /** The {@code help/} folder that sits next to the running app / JAR — the
+     *  OS-specific install location help is looked for in — whether or not it
+     *  currently exists.  {@code null} when the code source is unknown. */
+    private Path appAdjacentHelpDir() {
         try {
             URI src = HelpViewer.class.getProtectionDomain().getCodeSource().getLocation().toURI();
             Path here = Paths.get(src);
             Path parent = Files.isDirectory(here) ? here : here.getParent();
-            if (parent != null) {
-                Path nextToJar = parent.resolve("help");
-                if (Files.isDirectory(nextToJar)) return nextToJar;
-            }
+            return parent != null ? parent.resolve("help") : null;
         } catch (Throwable ignored) {
-            // CodeSource may be null for some classloaders; fall through.
+            // CodeSource may be null for some classloaders.
+            return null;
         }
-        return null;
+    }
+
+    /** "Help not found" dialog text: the translated message followed by the
+     *  ACTUAL locations help was searched in.  Those differ per OS — the
+     *  install dir next to the app, the per-user data folder — so they are
+     *  listed at runtime rather than baked into the message. */
+    private String notFoundMessage() {
+        return I18n.t("help.window.notFound") + "\n\n" + searchedHelpLocations();
+    }
+
+    private String searchedHelpLocations() {
+        String[] langs = resolveLanguageChain();
+        String lang = langs.length > 0 ? langs[0] : "en";
+        List<String> locs = new ArrayList<>();
+        String prop = System.getProperty("help.dir");
+        if (prop != null && !prop.isEmpty()) locs.add(prop + "  (-Dhelp.dir)");
+        Path adjacent = appAdjacentHelpDir();
+        if (adjacent != null) locs.add(adjacent.resolve(lang).toString());
+        locs.add(AppPaths.instance().helpDir().resolve(lang).toString());
+        locs.add("/help/" + lang + "/  (bundled in the application)");
+        return "    " + String.join("\n    ", locs);
     }
 
     /** Last-ditch classpath fallback used in {@code mvn exec:java} / IDE

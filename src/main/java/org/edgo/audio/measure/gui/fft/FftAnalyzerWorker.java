@@ -109,7 +109,7 @@ public final class FftAnalyzerWorker {
     private final    AtomicBoolean      paused = new AtomicBoolean(false);
     /** Bumped by every {@link #resetStatistics()}.  An analysis tick stamps
      *  the epoch at its start and discards its result when a reset landed
-     *  while it was assembling / analyzing: such a window straddles the
+     *  while it was assembling / analysing: such a window straddles the
      *  signal change — accumulating it would poison the freshly cleared
      *  average, and its stale fundamental would feed the FLL one garbage
      *  trim (enough to drag the live generator far off-frequency). */
@@ -176,7 +176,7 @@ public final class FftAnalyzerWorker {
      *  latest sample on its next tick so the window rebuilds from fresh data
      *  (no stale pre-reset samples leak in).  Re-anchoring on the worker thread
      *  keeps the cursor single-owner even though resets arrive from others. */
-    private volatile boolean reanchorPending = true;
+    private volatile boolean reAnchorPending = true;
     /** Reusable per-tick scratch: {@code analyzeBuf} is the analysis copy (the
      *  comb / FFT window mutate it in place, so it must not be {@link #winBuf}),
      *  {@code hopBuf} stages the fresh hop pulled from the reader each tick. */
@@ -1302,7 +1302,7 @@ public final class FftAnalyzerWorker {
         // FULL needed-sample span of FRESH samples captured AFTER this point.
         firstFrameDone        = false;
         winValid              = false;
-        reanchorPending       = true;
+        reAnchorPending       = true;
         completedAnalyses     = 0;
         resetStatistics();
         paused.set(false);
@@ -1364,7 +1364,7 @@ public final class FftAnalyzerWorker {
         completedAnalyses     = 0;
         firstFrameDone        = false;
         winValid              = false;
-        reanchorPending       = true;
+        reAnchorPending       = true;
         recycleAndClearCache();         // lock-guarded — safe from any thread
         if (running) {
             // Worker-owned state (accumulator, mains tracking) is wiped by the
@@ -1539,9 +1539,9 @@ public final class FftAnalyzerWorker {
         // from FRESH samples captured after this point (no ghosting after the
         // generator stops).  Done on the worker thread to keep the cursor's
         // read position single-owner even though resets arrive from others.
-        if (reanchorPending) {
+        if (reAnchorPending) {
             rdr.seekToLatest();
-            reanchorPending = false;
+            reAnchorPending = false;
             winValid = false;
             if (drainSkipPending.getAndSet(false)) {
                 drainSkipRemaining = (long) Math.ceil(OUTPUT_DRAIN_SKIP_SEC * sampleRate);

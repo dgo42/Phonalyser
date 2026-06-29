@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Browser loopback scope + FFT null test</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, Segoe UI, Roboto, sans-serif; margin: 1.1rem; max-width: 1240px; line-height: 1.4; }
+  h1 { font-size: 1.3rem; }
+  .note { background:#fffbe8; border:1px solid #cc9; color:#553; padding:.55rem .8rem; border-radius:6px; margin:.7rem 0; }
+  @media (prefers-color-scheme: dark){ .note{ background:#2a2810; color:#cda; border-color:#665; } }
+  .row { display:flex; flex-wrap:wrap; gap:.8rem 1.2rem; align-items:flex-end; margin:.5rem 0; }
+  label { display:flex; flex-direction:column; font-size:.78rem; gap:.15rem; }
+  select, input { font-size:.92rem; padding:.28rem; }
+  input[type=number]{ width:7rem; }
+  select.dev{ min-width:16rem; max-width:26rem; }
+  button { font-size:1rem; padding:.45rem 1.1rem; cursor:pointer; }
+  #status { font-style:italic; opacity:.85; margin:.35rem 0; }
+  #readout { font-family:Consolas,Menlo,monospace; font-size:.95rem; white-space:pre; margin:.5rem 0;
+             background:#8881; padding:.55rem .8rem; border-radius:6px; }
+  canvas { width:100%; background:#0b0b12; border:1px solid #444; border-radius:6px; display:block; margin:.4rem 0; }
+  #scope { height:200px; } #spec { height:400px; }
+  small { opacity:.75; }
+  label.chk { flex-direction:row; align-items:center; gap:.35rem; font-size:.92rem; }
+</style>
+</head>
+<body>
+<h1>Browser loopback scope + FFT null test</h1>
+<p>Plays a bin‑snapped sine out the chosen <b>DAC</b> and captures it on the chosen <b>ADC</b>
+(loopback cable DAC→ADC). Input and output run in <b>separate AudioContexts</b> so each stays at its
+own native rate. A <b>pool of Web Workers</b> computes the FFTs in parallel; <b>overlap</b> processing
+runs more frames per second. With <b>FLL + coherent + reject</b> on, a frequency‑lock loop steers the
+generator onto the captured tone, glitch frames are rejected, and averaging goes <b>coherent</b>
+(each frame de‑rotated to a common time origin) — the skirt collapses and the floor digs below the
+incoherent level. Needs a secure context (https or localhost).</p>
+
+<div class="note"><b>This makes sound.</b> Patch the loopback cable and keep amplitude modest
+(default −6&nbsp;dBFS). Set each device's rate in the OS to match the rate you pick so nothing resamples.</div>
+
+<div class="row">
+  <label>Input device (ADC)<select id="inSel" class="dev"></select></label>
+  <label>Input rate<select id="inRate"></select></label>
+  <label>Output device (DAC)<select id="outSel" class="dev"></select></label>
+  <label>Output rate<select id="outRate"></select></label>
+</div>
+<div class="row">
+  <label>Tone (Hz)<input id="freq" type="number" value="1000" step="1"/></label>
+  <label>Amplitude (dBFS)<input id="ampdb" type="number" value="-6" step="1"/></label>
+  <label>FFT size<select id="nfft">
+    <option>16384</option><option>32768</option><option selected>65536</option><option>131072</option><option>262144</option><option>524288</option><option>1048576</option><option>2097152</option>
+  </select></label>
+  <label>Averages<input id="avg" type="number" value="16" step="1" min="1"/></label>
+  <label>Overlap<select id="overlap">
+    <option value="0" selected>0%</option><option value="50">50%</option><option value="75">75%</option><option value="87.5">87.5%</option><option value="93.75">93.75%</option>
+  </select></label>
+  <label>Threads<select id="threads"></select></label>
+  <label>Warm‑up (ms)<input id="warm" type="number" value="500" step="50" min="0"/></label>
+  <label class="chk" title="FLL steers the generator onto the captured tone; then coherent averaging + glitch-frame rejection"><input id="fll" type="checkbox" checked/> FLL + coherent + reject</label>
+</div>
+<div class="row">
+  <button id="go">Scan devices</button>
+  <button id="start" disabled>Start</button>
+  <button id="stop" disabled>Stop</button>
+</div>
+
+<div id="status">idle</div>
+<div id="readout">—</div>
+<canvas id="scope" width="1200" height="200"></canvas>
+<canvas id="spec"  width="1200" height="400"></canvas>
+<p><small>Floor near the ADC's real noise floor ⇒ browser path is clean (capture + generate viable in‑tab).
+Forest of spurs / raised floor / resampler images ⇒ poisoned; the DAC side would need native (Electron/Tauri).</small></p>
+
+<script>
+const $ = s => document.querySelector(s);
+const status = t => { $("#status").textContent = t; };
+const RATES = [44100,48000,88200,96000,176400,192000,352800,384000,705600,768000];
+
+function blackmanHarrisCg(n){
+  const a0=0.35875,a1=0.48829,a2=0.14128,a3=0.01168; let s=0;
+  for(let i=0;i<n;i++){ const x=2*Math.PI*i/(n-1); s+=a0-a1*Math.cos(x)+a2*Math.cos(2*x)-a3*Math.cos(3*x); }
+  return s/n;                              // coherent gain (for level calibration)
+}
+
+// ---------- median / MAD + angle helpers ----------
+function med(a){ if(!a.length)return 0; const c=[...a].sort((x,y)=>x-y), n=c.length; return n&1?c[n>>1]:0.5*(c[(n>>1)-1]+c[n>>1]); }
+function madev(a,m){ if(!a.length)return 0; const d=a.map(v=>Math.abs(v-m)).sort((x,y)=>x-y), n=d.length; const x=n&1?d[n>>1]:0.5*(d[(n>>1)-1]+d[n>>1]); return 1.4826*x; }
+function wrapToPi(a){ let x=(a+Math.PI)%(2*Math.PI); if(x<0)x+=2*Math.PI; return x-Math.PI; }
+
+// FLL — DerotationPhaseLock's measure-then-correct loop, STEERING THE GENERATOR.
+// observe(phase, offset): tracks the raw fundamental phase vs absolute sample offset.
+// Per pair it removes the expected on-bin advance and accumulates the residual slope
+// (Σresidual / Σdelta = 2π·ε/N), so the fractional-bin error ε is read directly — independent
+// of overlap/hop and of dropped frames. One full correction nudges the generator to null it.
+function makeFLL(fundBin, n, windowSamples){
+  return { locked:false, hasPrev:false, prevPhase:0, prevOff:0, sumRes:0, sumDelta:0, count:0, stable:0, windows:0, errBins:0,
+    observe(phase, offset){
+      if(this.hasPrev){
+        const ds = offset - this.prevOff;
+        const exp = 2*Math.PI*fundBin*ds/n;          // expected advance of an on-bin tone over ds samples
+        this.sumRes += wrapToPi(phase - this.prevPhase - exp);
+        this.sumDelta += ds; this.count++;
+      }
+      this.prevPhase=phase; this.prevOff=offset; this.hasPrev=true;
+      let corr=0;
+      if(this.sumDelta >= windowSamples && this.count>=2){
+        this.windows++;
+        const eps = (this.sumRes/this.sumDelta) * n/(2*Math.PI);   // fractional-bin error (bins)
+        this.errBins = eps;
+        if(Math.abs(eps) < 5e-4){ if(++this.stable>=2) this.locked=true; }
+        else { this.stable=0; if(!this.locked) corr=eps; }          // full correction → steer generator
+        if(!this.locked && this.windows>=12) this.locked=true;       // fallback: accept best ε
+        this.sumRes=0; this.sumDelta=0; this.count=0; this.hasPrev=false;
+      }
+      return corr;
+    } };
+}
+
+// Frame rejector — gates 2 (broadband floor lift) and 3 (total-power outlier) of
+// SpectralDiscontinuityDetector: log-spaced band levels vs a running per-band median with
+// MAD-self-calibrated thresholds. (Gate 1, the near-carrier pedestal, needs the tone-lobe
+// finder and is omitted.) Magnitude-based, so the de-rotated spectrum is fine.
+function makeRejector(){
+  const B=24, REF_L=8, CAL=12, K=6.0, GUARD_DB=10.0, MIN_MAD=0.5;
+  return { half:-1, lo:[], hi:[], ref:[], scoreHist:[], powerHist:[],
+    configure(half){
+      if(half===this.half) return;
+      this.half=half; this.lo=[]; this.hi=[]; this.ref=[]; this.scoreHist=[]; this.powerHist=[];
+      const lnHi=Math.log(half); let prev=1;
+      for(let b=0;b<B;b++){ let e=Math.round(Math.exp(lnHi*(b+1)/B)); e=Math.max(prev+2,Math.min(half,e)); this.lo.push(prev); this.hi.push(e); prev=e; if(e>=half)break; }
+    },
+    reject(re,im,half){
+      this.configure(half);
+      const bands=this.lo.length, level=new Float64Array(bands); let totalPow=0;
+      for(let b=0;b<bands;b++){ let s=0; for(let k=this.lo[b];k<this.hi[b];k++) s+=re[k]*re[k]+im[k]*im[k];
+        const n=this.hi[b]-this.lo[b]; level[b]=10*Math.log10((n>0?s/n:0)+1e-300); totalPow+=s; }
+      const powerDb=10*Math.log10(totalPow+1e-300);
+      const isLine=b=>{ const lo=Math.max(0,b-3),hi=Math.min(bands,b+4),loc=[]; for(let j=lo;j<hi;j++)loc.push(level[j]); return level[b]>med(loc)+GUARD_DB; };
+      if(this.ref.length===0){ this.ref.push(Float64Array.from(level)); this.powerHist.push(powerDb); return false; }
+      const rho=[];
+      for(let b=0;b<bands;b++){ if(isLine(b))continue; rho.push(level[b]-med(this.ref.map(r=>r[b]))); }
+      const score=rho.length?rho.reduce((a,c)=>a+c,0)/rho.length:0;
+      const sMed=med(this.scoreHist), scoreOut = score > sMed + K*Math.max(madev(this.scoreHist,sMed),MIN_MAD);
+      const pMed=med(this.powerHist), powerOut = Math.abs(powerDb-pMed) > K*Math.max(madev(this.powerHist,pMed),MIN_MAD);
+      const rej = scoreOut || powerOut;
+      this.scoreHist.push(score); if(this.scoreHist.length>CAL)this.scoreHist.shift();
+      this.powerHist.push(powerDb); if(this.powerHist.length>CAL)this.powerHist.shift();
+      if(!rej){ this.ref.push(Float64Array.from(level)); if(this.ref.length>REF_L)this.ref.shift(); }
+      return rej;
+    } };
+}
+
+// gen runs in the OUTPUT context, cap in the INPUT context (AudioWorklets).
+const WORKLET = `
+class Gen extends AudioWorkletProcessor { constructor(){ super(); this.ph=0; this.inc=0; this.amp=0;
+  this.port.onmessage=e=>{ if(e.data.inc!=null)this.inc=e.data.inc; if(e.data.amp!=null)this.amp=e.data.amp; }; }
+  process(_,o){ const out=o[0], n=out[0].length; for(let i=0;i<n;i++){ const s=this.amp*Math.sin(this.ph);
+    for(let c=0;c<out.length;c++)out[c][i]=s; this.ph+=this.inc; if(this.ph>=6.283185307179586)this.ph-=6.283185307179586; } return true; } }
+registerProcessor('gen',Gen);
+class Cap extends AudioWorkletProcessor { constructor(){ super(); this.b=new Float32Array(8192); this.w=0; }
+  process(inp){ const a=inp[0]; if(!a||!a[0])return true; const ch=a[0];
+    for(let i=0;i<ch.length;i++){ this.b[this.w++]=ch[i]; if(this.w>=this.b.length){ this.port.postMessage(this.b,[this.b.buffer]); this.b=new Float32Array(8192); this.w=0; } } return true; } }
+registerProcessor('cap',Cap);
+`;
+
+// FFT worker — windows, transforms, extracts the RAW fundamental (for the FLL), then de-rotates
+// every returned bin by e^{-j2πkδ/N} (δ = offset mod N) to align frames to a common time origin
+// so coherent averaging works across OVERLAPPED frames. One whole FFT per worker = pool parallelism.
+const FFT_WORKER = `
+function fft(re,im){ const n=re.length;
+  for(let i=1,j=0;i<n;i++){ let bit=n>>1; for(;j&bit;bit>>=1)j^=bit; j^=bit;
+    if(i<j){ let t=re[i];re[i]=re[j];re[j]=t; t=im[i];im[i]=im[j];im[j]=t; } }
+  for(let len=2;len<=n;len<<=1){ const ang=-2*Math.PI/len,wr=Math.cos(ang),wi=Math.sin(ang),half=len>>1;
+    for(let i=0;i<n;i+=len){ let cr=1,ci=0;
+      for(let k=0;k<half;k++){ const ar=re[i+k],ai=im[i+k],br=re[i+k+half],bi=im[i+k+half];
+        const vr=br*cr-bi*ci,vi=br*ci+bi*cr; re[i+k]=ar+vr; im[i+k]=ai+vi; re[i+k+half]=ar-vr; im[i+k+half]=ai-vi;
+        const ncr=cr*wr-ci*wi; ci=cr*wi+ci*wr; cr=ncr; } } } }
+let N=0, win=null;
+function makeWin(n){ const a0=.35875,a1=.48829,a2=.14128,a3=.01168,w=new Float64Array(n);
+  for(let i=0;i<n;i++){ const x=2*Math.PI*i/(n-1); w[i]=a0-a1*Math.cos(x)+a2*Math.cos(2*x)-a3*Math.cos(3*x); } return w; }
+onmessage = e => { const d=e.data, n=d.n; if(n!==N){ N=n; win=makeWin(n); }
+  const t0=performance.now(), re=new Float64Array(N), im=new Float64Array(N), s=d.samples;
+  for(let i=0;i<N;i++) re[i]=s[i]*win[i];
+  fft(re,im);
+  const half=N>>1, fundRe=re[d.fundBin], fundIm=im[d.fundBin];     // RAW fundamental (for FLL)
+  const delta=((d.offset%N)+N)%N, step=-2*Math.PI*delta/N, cs=Math.cos(step), sn=Math.sin(step);
+  const oRe=new Float64Array(half+1), oIm=new Float64Array(half+1); let cr=1, ci=0;
+  for(let k=0;k<=half;k++){ const rr=re[k], ii=im[k]; oRe[k]=rr*cr-ii*ci; oIm[k]=rr*ci+ii*cr;
+    const ncr=cr*cs-ci*sn; ci=cr*sn+ci*cs; cr=ncr; }                // ×e^{-j2πkδ/N}
+  postMessage({id:d.id, offset:d.offset, re:oRe, im:oIm, fundRe, fundIm, ms:performance.now()-t0}, [oRe.buffer, oIm.buffer]);
+};
+`;
+
+let inCtx, outCtx, stream, running=false;
+let N, cg, pavg, accRe, accIm, framesDone, avgTarget, binW, fundBin, inRate, snapped, warmup, runMsg;
+let ring, ringW, ringFilled, hop, sinceHop, totalSamples, overlapPct;
+const SCOPE_LEN = 1<<15;                  // scope ring length (≈4 cycles down to ~47 Hz @ 384k)
+let fftFps=0, fftCount=0, fftWinT0=0, workerMs=0;   // FFT-frame rate (counted over a fixed window)
+let scopeFps=0, scopeCount=0, scopeWinT0=0, scopeBuf; // scope rate (counted, not instantaneous — immune to burst delivery)
+let genNode, genFreq, outSampleRate;      // generator handle + steered frequency + its sample rate
+let fllOn=true, fll, rejector, rejectedCount=0, coherent=false;
+const FLL_GAIN=0.7;
+// FFT worker pool
+let workers=[], freeW=[], queue=[], dispatchId=0, drainId=0, pendingResults, dropped=0, P=1, MAXQ=4;
+
+function fillRates(sel, def){ sel.innerHTML = RATES.map(r=>`<option ${r===def?'selected':''}>${r}</option>`).join(""); }
+function fillThreads(){ const hc=navigator.hardwareConcurrency||4, max=Math.min(hc,16), def=Math.max(1,hc-2);
+  $("#threads").innerHTML = Array.from({length:max},(_,i)=>i+1).map(n=>`<option ${n===def?'selected':''}>${n}</option>`).join(""); }
+
+async function listDevices(){
+  try { (await navigator.mediaDevices.getUserMedia({audio:true})).getTracks().forEach(t=>t.stop()); }
+  catch(e){ status("mic permission denied — "+e.name); }
+  const devs = await navigator.mediaDevices.enumerateDevices();
+  const ins = devs.filter(d=>d.kind==="audioinput"), outs = devs.filter(d=>d.kind==="audiooutput");
+  $("#inSel").innerHTML  = ins.map(d=>`<option value="${d.deviceId}">${d.label||d.deviceId}</option>`).join("");
+  $("#outSel").innerHTML = outs.map(d=>`<option value="${d.deviceId}">${d.label||d.deviceId}</option>`).join("");
+  fillRates($("#inRate"),384000); fillRates($("#outRate"),384000);
+  $("#start").disabled=false;
+  status(`${ins.length} input(s), ${outs.length} output(s) — pick devices/rates and Start.`);
+}
+
+async function start(){
+  if (running) return;
+  inRate = parseInt($("#inRate").value,10);
+  const outRate = parseInt($("#outRate").value,10);
+  N = parseInt($("#nfft").value,10);
+  avgTarget = Math.max(1, parseInt($("#avg").value,10));
+  overlapPct = parseFloat($("#overlap").value);
+  P = Math.max(1, parseInt($("#threads").value,10));
+  const amp = Math.pow(10, parseFloat($("#ampdb").value)/20);
+  const inId = $("#inSel").value, outId = $("#outSel").value;
+
+  cg = blackmanHarrisCg(N);
+  pavg = new Float64Array(N/2+1); accRe = new Float64Array(N/2+1); accIm = new Float64Array(N/2+1);
+  framesDone=0; coherent=false; rejectedCount=0;
+  binW = inRate / N;
+  snapped = Math.max(binW, Math.round(parseFloat($("#freq").value)/binW)*binW);   // snap to INPUT bin grid
+  fundBin = Math.round(snapped/binW);
+  fll = makeFLL(fundBin, N, 4*N); rejector = makeRejector();
+  hop = Math.max(1, Math.round(N*(1-overlapPct/100)));
+  ring = new Float64Array(N); ringW=0; ringFilled=0; sinceHop=0; totalSamples=0;
+  warmup = Math.round(inRate * Math.max(0, parseFloat($("#warm").value)||0) / 1000);
+  fftFps=0; fftCount=0; fftWinT0=0; workerMs=0; scopeFps=0; scopeCount=0; scopeWinT0=0; scopeBuf=new Float32Array(SCOPE_LEN);
+
+  status("opening contexts + devices…");
+  try {
+    // FFT worker pool
+    const wurl = URL.createObjectURL(new Blob([FFT_WORKER],{type:"application/javascript"}));
+    workers=[]; freeW=[]; queue=[]; dispatchId=0; drainId=0; pendingResults=new Map(); dropped=0; MAXQ=Math.max(4,3*P);
+    for(let i=0;i<P;i++){ const w=new Worker(wurl); w.onmessage=onWorkerResult; w.onerror=ev=>console.error("worker",ev.message); workers.push(w); freeW.push(w); }
+
+    const url = URL.createObjectURL(new Blob([WORKLET],{type:"application/javascript"}));
+    // OUTPUT context (DAC) — generator at the DAC's native rate
+    outCtx = new AudioContext({ sampleRate: outRate, latencyHint:"playback" });
+    if (outCtx.setSinkId && outId){ try{ await outCtx.setSinkId(outId); }catch(e){ console.warn("setSinkId",e); } }
+    await outCtx.audioWorklet.addModule(url);
+    genNode = new AudioWorkletNode(outCtx,"gen",{outputChannelCount:[1]});
+    genNode.port.postMessage({ inc: 2*Math.PI*snapped/outCtx.sampleRate, amp });
+    genNode.connect(outCtx.destination);
+    genFreq = snapped; outSampleRate = outCtx.sampleRate;   // FLL steers genFreq from here
+
+    // INPUT context (ADC) — capture at the ADC's native rate
+    inCtx = new AudioContext({ sampleRate: inRate });
+    await inCtx.audioWorklet.addModule(url);
+    stream = await navigator.mediaDevices.getUserMedia({ audio: {
+      deviceId:{exact:inId}, sampleRate:{exact:inRate}, channelCount:{ideal:1},
+      echoCancellation:false, noiseSuppression:false, autoGainControl:false } });
+    const cap = new AudioWorkletNode(inCtx,"cap");
+    const silent = inCtx.createGain(); silent.gain.value=0;
+    inCtx.createMediaStreamSource(stream).connect(cap).connect(silent).connect(inCtx.destination);
+    cap.port.onmessage = e => onChunk(e.data);
+
+    if (outCtx.state==="suspended") await outCtx.resume();
+    if (inCtx.state==="suspended")  await inCtx.resume();
+    running=true; $("#start").disabled=true; $("#stop").disabled=false;
+    const tr = stream.getAudioTracks()[0].getSettings();
+    runMsg = `running — out ${outCtx.sampleRate} Hz, in ${inCtx.sampleRate} Hz (track ${tr.sampleRate||"?"}), `
+         + `tone ${snapped.toFixed(3)} Hz (bin ${fundBin}), Δf ${binW.toFixed(3)} Hz, ${P} FFT thread(s)`
+         + (outCtx.sampleRate!==inCtx.sampleRate ? "  [different rates — clocks not locked]" : "");
+    status(warmup>0 ? `warm‑up — filling buffer (${(warmup/inRate*1000).toFixed(0)} ms discarded)…` : runMsg);
+  } catch(e){ status("start failed: "+e.name+" — "+e.message); await stop(); }
+}
+
+function onChunk(chunk){
+  if (!running) return;
+  feedScope(chunk);                         // live scope, independent of the FFT pipeline
+  for (let i=0;i<chunk.length;i++){
+    ring[ringW]=chunk[i]; ringW=(ringW+1)%N; if(ringFilled<N)ringFilled++; totalSamples++;
+    if (warmup>0){ warmup--; if(warmup===0) status(runMsg); continue; }   // discard startup transient
+    if (ringFilled>=N){ if(++sinceHop>=hop){ sinceHop=0; emitFrame(); } } // emit a frame every `hop` samples
+  }
+}
+
+function emitFrame(){                         // snapshot the last N samples in order, dispatch to the pool
+  const snap = new Float64Array(N);
+  snap.set(ring.subarray(ringW)); snap.set(ring.subarray(0,ringW), N-ringW);
+  queue.push({ samples:snap, offset: totalSamples - N });
+  while (queue.length > MAXQ){ queue.shift(); dropped++; }   // bound the backlog (overlap frames are redundant)
+  pump();
+}
+
+function pump(){                              // hand queued frames to free workers
+  while (freeW.length && queue.length){
+    const w=freeW.pop(), job=queue.shift(), id=dispatchId++;
+    w.postMessage({ id, samples:job.samples, n:N, offset:job.offset, fundBin }, [job.samples.buffer]);
+  }
+}
+
+function onWorkerResult(e){
+  if (!running) return;
+  const w=e.target; freeW.push(w);
+  pendingResults.set(e.data.id, e.data);
+  while (pendingResults.has(drainId)){      // process IN ORDER so the FLL sees sequential phases
+    const r=pendingResults.get(drainId); pendingResults.delete(drainId); drainId++;
+    processSpectrum(r);
+  }
+  pump();
+}
+
+function processSpectrum(r){
+  const t0=performance.now();
+  fftCount++; if(!fftWinT0) fftWinT0=t0;                  // true rate over a fixed window (drains can burst)
+  if (t0-fftWinT0>=2000){ fftFps=fftCount*1000/(t0-fftWinT0); fftCount=0; fftWinT0=t0; }
+  workerMs = workerMs ? workerMs*0.85 + r.ms*0.15 : r.ms;
+  const re=r.re, im=r.im;                    // de-rotated half spectrum (length N/2+1)
+  fllOn = $("#fll").checked;                 // read live so it can be A/B-toggled
+
+  // 1) glitch-frame rejection (SpectralDiscontinuityDetector gates 2+3) — magnitude-based
+  if (fllOn && rejector.reject(re, im, N/2)){ rejectedCount++; fll.hasPrev=false; finalize(); return; }
+
+  // 2) FLL — measure the RAW fundamental phase vs absolute offset, steer the generator
+  if (fllOn && genNode){
+    const corr = fll.observe(Math.atan2(r.fundIm, r.fundRe), r.offset);
+    if (corr !== 0){ genFreq -= corr*binW*FLL_GAIN; genNode.port.postMessage({ inc: 2*Math.PI*genFreq/outSampleRate }); }
+  }
+
+  // 3) average — coherent (complex, frames de-rotated by the worker) once locked; else incoherent power
+  const wantCoherent = fllOn && fll.locked;
+  if (wantCoherent !== coherent){ coherent = wantCoherent; framesDone=0; accRe.fill(0); accIm.fill(0); pavg.fill(0); }
+  const w = framesDone < avgTarget ? 1/(framesDone+1) : 1/avgTarget;
+  if (coherent) for (let k=0;k<=N/2;k++){ accRe[k]+=(re[k]-accRe[k])*w; accIm[k]+=(im[k]-accIm[k])*w; }
+  else          for (let k=0;k<=N/2;k++){ const pk=re[k]*re[k]+im[k]*im[k]; pavg[k]+=(pk-pavg[k])*w; }
+  if (framesDone < avgTarget) framesDone++;
+  finalize();
+}
+
+function feedScope(chunk){                    // keep the last SCOPE_LEN samples in order, render every chunk
+  if (chunk.length >= SCOPE_LEN) scopeBuf.set(chunk.subarray(chunk.length-SCOPE_LEN));
+  else { scopeBuf.copyWithin(0, chunk.length); scopeBuf.set(chunk, SCOPE_LEN-chunk.length); }
+  const t = performance.now();
+  scopeCount++; if(!scopeWinT0) scopeWinT0=t;             // count renders per wall-second (immune to burst flush)
+  if (t-scopeWinT0>=1000){ scopeFps=scopeCount*1000/(t-scopeWinT0); scopeCount=0; scopeWinT0=t; }
+  renderScope(scopeBuf);
+}
+
+function finalize(){
+  const half=N/2, mag=new Float64Array(half+1);
+  if (coherent) for (let k=0;k<=half;k++){ const a=2*Math.hypot(accRe[k],accIm[k])/(N*cg); mag[k]=a>1e-12?20*Math.log10(a):-240; }
+  else          for (let k=0;k<=half;k++){ const a=2*Math.sqrt(pavg[k])/(N*cg);            mag[k]=a>1e-12?20*Math.log10(a):-240; }
+  renderSpec(mag); readout(mag);
+}
+
+function peakAmp(mag, bin){ let b=-300; for(let k=Math.max(1,bin-2);k<=bin+2&&k<mag.length;k++) b=Math.max(b,mag[k]); return Math.pow(10,b/20); }
+
+function readout(mag){
+  const fundA=peakAmp(mag,fundBin); let hp=0, lines=[];
+  for(let h=2;h<=10;h++){ const b=fundBin*h; if(b>mag.length-1)break; const a=peakAmp(mag,b); hp+=a*a;
+    lines.push(`H${h} ${(b*binW/1000).toFixed(2)}k ${(20*Math.log10(a)).toFixed(1)}`); }
+  const thd=fundA>0?Math.sqrt(hp)/fundA:0;
+  const excl=new Set(); for(let h=1;h<=10;h++)for(let d=-3;d<=3;d++)excl.add(fundBin*h+d);
+  const noise=[]; for(let k=4;k<mag.length;k++) if(!excl.has(k)) noise.push(mag[k]);
+  noise.sort((a,b)=>a-b); const floor=noise.length?noise[noise.length>>1]:-240;
+  $("#readout").textContent =
+    `fundamental  ${(20*Math.log10(fundA)).toFixed(2)} dBFS @ ${(fundBin*binW).toFixed(2)} Hz\n`+
+    `THD (H2..10) ${(thd*100).toExponential(3)} %  (${(20*Math.log10(thd||1e-12)).toFixed(1)} dB)\n`+
+    `noise floor  ${floor.toFixed(1)} dBFS (median, ${binW.toFixed(2)} Hz bins, ${framesDone}/${avgTarget} avg${framesDone>=avgTarget?" ✓":""})   SNR ~ ${(20*Math.log10(fundA)-floor).toFixed(1)} dB\n`+
+    `rate         ${fftFps.toFixed(1)} fps (target ${(inRate/hop).toFixed(1)})   ${P}×worker, FFT ${workerMs.toFixed(0)} ms each   overlap ${overlapPct}% (hop ${(hop/inRate*1000).toFixed(0)} ms)   dropped ${dropped}\n`+
+    `FLL          ${!fllOn?'off':(fll.locked?'LOCKED ✓':'acquiring…')}   err ${(fll.errBins*binW/snapped*1e6).toFixed(3)} ppm   gen ${genFreq.toFixed(4)} Hz   rejected ${rejectedCount}   [${coherent?'coherent':'power'} avg]\n`+
+    lines.join("   ");
+}
+
+function renderScope(buf){
+  const cv=$("#scope"), g=cv.getContext("2d"), W=cv.width, H=cv.height;
+  g.fillStyle="#0b0b12"; g.fillRect(0,0,W,H);
+  let start=0; for(let i=1;i<buf.length-1;i++){ if(buf[i-1]<0&&buf[i]>=0){ start=i; break; } }
+  const period=inRate/snapped, show=Math.max(8,Math.min(buf.length-start, Math.round(period*4)));
+  let m=1e-9; for(let i=start;i<start+show;i++) m=Math.max(m,Math.abs(buf[i]));
+  g.strokeStyle="#333"; g.beginPath(); g.moveTo(0,H/2); g.lineTo(W,H/2); g.stroke();
+  g.strokeStyle="#fd5"; g.lineWidth=1; g.beginPath();
+  for(let i=0;i<show;i++){ const x=i/show*W, y=H/2 - buf[start+i]/m*(H*0.45); i?g.lineTo(x,y):g.moveTo(x,y); }
+  g.stroke();
+  g.fillStyle="#889"; g.font="11px monospace";
+  g.fillText(`±${m.toExponential(2)} FS   ${(show/inRate*1000).toFixed(3)} ms (${(show/period).toFixed(1)} cycles)   scope ${scopeFps.toFixed(1)} fps`,5,14);
+}
+
+function renderSpec(mag){
+  const cv=$("#spec"), g=cv.getContext("2d"), W=cv.width, H=cv.height;
+  g.fillStyle="#0b0b12"; g.fillRect(0,0,W,H);
+  const fMin=10, fMax=mag.length*binW, topDb=0, botDb=-200;
+  const x=f=>(Math.log10(f)-Math.log10(fMin))/(Math.log10(fMax)-Math.log10(fMin))*W;
+  const y=d=>(topDb-d)/(topDb-botDb)*H;
+  g.strokeStyle="#2a2a36"; g.fillStyle="#778"; g.font="11px monospace"; g.lineWidth=1;
+  for(let d=0;d>=botDb;d-=20){ const yy=y(d); g.beginPath(); g.moveTo(0,yy); g.lineTo(W,yy); g.stroke(); g.fillText(d+"",2,yy-2); }
+  for(const f of [10,100,1000,10000,100000]){ if(f>fMax)break; const xx=x(f); g.beginPath(); g.moveTo(xx,0); g.lineTo(xx,H); g.stroke(); g.fillText(f>=1000?(f/1000)+"k":f+"",xx+2,H-4); }
+  g.strokeStyle="#5cf"; g.lineWidth=1; g.beginPath();
+  let started=false,lastPx=-1,colMax=-300;
+  for(let k=1;k<mag.length;k++){ const px=Math.round(x(k*binW)); if(px<0)continue;
+    if(px!==lastPx&&lastPx>=0){ const yy=y(colMax); started?g.lineTo(lastPx,yy):(g.moveTo(lastPx,yy),started=true); colMax=-300; }
+    colMax=Math.max(colMax,mag[k]); lastPx=px; }
+  g.stroke();
+}
+
+async function stop(){
+  running=false; $("#start").disabled=false; $("#stop").disabled=true;
+  try{ workers.forEach(w=>w.terminate()); }catch(_){}
+  workers=[]; freeW=[]; queue=[];
+  try{ if(stream) stream.getTracks().forEach(t=>t.stop()); }catch(_){}
+  try{ if(inCtx) await inCtx.close(); }catch(_){}
+  try{ if(outCtx) await outCtx.close(); }catch(_){}
+  inCtx=outCtx=stream=null; status("stopped.");
+}
+
+fillThreads();
+$("#go").addEventListener("click", ()=>listDevices().catch(e=>status("scan failed: "+e.message)));
+$("#start").addEventListener("click", ()=>start());
+$("#stop").addEventListener("click", ()=>stop());
+</script>
+</body>
+</html>

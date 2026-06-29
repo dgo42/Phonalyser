@@ -19,6 +19,8 @@
 package org.edgo.audio.measure.gui.scope;
 
 import java.util.Arrays;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
@@ -93,6 +95,16 @@ public final class ScopeMeasurementWorker {
      *  the comb-located tone's frequency free of the comb's notch bias. */
     private float[] rawSelBuf;
 
+    /** Off-thread broad-band frequency scan.  A weak / noisy signal needs the
+     *  costly per-bin Goertzel sweep to find its fundamental; running that on
+     *  the measurement thread drops the cadence and throttles the whole table,
+     *  so it runs here instead.  Only f / period lag — every other readout
+     *  stays real-time.  {@link #freqScanBusy} coalesces overlapping requests. */
+    private ExecutorService freqScanExec;
+    private final AtomicBoolean freqScanBusy = new AtomicBoolean(false);
+    private volatile double asyncFrequency = Double.NaN;
+    private float[] freqScanBuf;
+
     /** Per-channel mains-hum combs for the measured values; lazily built
      *  for the capture rate, used when a channel's mains-suppression mode
      *  is IIR_COMB.  DC-preserving, so Vmean still reflects the true bias. */
@@ -158,7 +170,15 @@ public final class ScopeMeasurementWorker {
         // Clear stale state so the first paint after start doesn't show
         // measurements from the previous session.
         lastMeasResult = null;
+        asyncFrequency = Double.NaN;
         clearHistory();
+        if (freqScanExec == null) {
+            freqScanExec = Executors.newSingleThreadExecutor(r -> {
+                Thread th = new Thread(r, "osc-freq-scan");
+                th.setDaemon(true);
+                return th;
+            });
+        }
         Thread t = new Thread(() -> measurementLoop(session), "osc-measurement");
         t.setDaemon(true);
         t.start();
@@ -277,7 +297,7 @@ public final class ScopeMeasurementWorker {
     /**
      * Measurement worker loop: sleeps for {@link #MEAS_COMPUTE_PERIOD_NANOS}
      * between probes, reads the latest samples from the {@link SignalBufferReader},
-     * runs {@link SignalMeasurements#compute}, and stores the result for
+     * runs {@link SignalMeasurements#from}, and stores the result for
      * the SWT thread to pick up at next paint.  Runs at fixed cadence
      * (drift-compensated) so the avg / min / max / σ stats are evenly
      * spaced even if a single compute occasionally overruns the period.
@@ -456,7 +476,16 @@ public final class ScopeMeasurementWorker {
                 data = measTailBuf;
             }
         }
-        SignalMeasurements result = SignalMeasurements.compute(data, measLen, sampleRate, peakVolts);
+        SignalMeasurements result = SignalMeasurements.from(data, measLen, sampleRate, peakVolts, false);
+        if (Double.isNaN(result.getFrequency())) {
+            // Weak / noisy signal: the broad-band fundamental search is too
+            // costly for this thread — it would drop the 10 Hz cadence and
+            // throttle the whole table.  Fold in the latest off-thread result
+            // and kick a fresh scan; only f / period lag, the rest stays live.
+            double async = asyncFrequency;
+            if (!Double.isNaN(async)) result = result.withFrequency(async);
+            submitFrequencyScan(data, measLen, sampleRate, peakVolts);
+        }
         if (rawSel != null && Double.isFinite(result.getFrequency())) {
             // Re-pin the comb-located tone on the raw signal, free of the
             // comb's notch bias, with a narrow band around the seed.
@@ -486,5 +515,29 @@ public final class ScopeMeasurementWorker {
         lastLeftMeanNormalized  = leftMean;
         lastRightMeanNormalized = rightMean;
         lastMeasResult = result;
+    }
+
+    /**
+     * Copies the measured window and runs the broad-band fundamental search on
+     * the {@code osc-freq-scan} thread, publishing {@link #asyncFrequency}.  A
+     * scan already in flight is left to finish, so requests never queue up —
+     * f / period just refresh at the scan's own (slower) rate.
+     */
+    private void submitFrequencyScan(float[] src, int n, int sampleRate, double peakVolts) {
+        if (freqScanExec == null || !freqScanBusy.compareAndSet(false, true)) {
+            return;
+        }
+        if (freqScanBuf == null || freqScanBuf.length < n) {
+            freqScanBuf = new float[n];
+        }
+        System.arraycopy(src, 0, freqScanBuf, 0, n);
+        float[] buf = freqScanBuf;
+        freqScanExec.execute(() -> {
+            try {
+                asyncFrequency = SignalMeasurements.from(buf, n, sampleRate, peakVolts, true).getFrequency();
+            } finally {
+                freqScanBusy.set(false);
+            }
+        });
     }
 }

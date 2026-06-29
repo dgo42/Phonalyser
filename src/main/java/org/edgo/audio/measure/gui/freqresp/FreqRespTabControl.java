@@ -100,7 +100,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
      *  {@link #sweepPointSeries()}.  Manual entry between or beyond the
      *  presets is allowed. */
     private static final double[] SWEEP_POINT_SERIES = {
-            8192, 16384, 65536, 131072, 262144,
+            8192, 16384, 32768, 65536, 131072, 262144,
             524288, 1048576, 2097152, 4194304
     };
     private static final double SWEEP_POINTS_MIN = 8192;
@@ -449,7 +449,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         NumericStepField pointsField = new NumericStepField(g, UnitFamily.NONE,
                 SWEEP_POINTS_MIN, SWEEP_POINTS_MAX, sweepPointSeries(), 0, 110);
         pointsField.setNamedValue(nyquistPointCount(),
-                I18n.t("freqResp.settings.points.nyquistHalf"));
+                I18n.t("freqResp.settings.points.halfScale"));
         pointsField.setToolTipText(I18n.t("freqResp.settings.points.tooltip"));
         pointsField.setLayoutData(comboGd());
         Bindings.stepFieldInt(pointsField, prefs.freqRespSweepPointsProperty());
@@ -489,7 +489,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
             stopField.setMax(nyquist);
             pointsField.setSeries(sweepPointSeries());
             pointsField.setNamedValue(nyquistPointCount(),
-                    I18n.t("freqResp.settings.points.nyquistHalf"));
+                    I18n.t("freqResp.settings.points.halfScale"));
         };
         MessageBus.instance().subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
         addDisposeListener(e ->

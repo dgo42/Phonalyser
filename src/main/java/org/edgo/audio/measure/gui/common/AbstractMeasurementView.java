@@ -33,7 +33,6 @@ import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.LineAttributes;
-import org.eclipse.swt.graphics.Path;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
@@ -205,37 +204,40 @@ public abstract class AbstractMeasurementView extends Canvas {
         return palette.get(role);
     }
 
-    /** Draws {@code s} at ({@code x}, {@code y}) with a 1-px outline
-     *  in the view's {@link ColorRole#BACKGROUND} colour behind the
-     *  current foreground.  Used by views that paint readouts on top
-     *  of a live signal trace (scope, FFT, FreqResp) so the text
-     *  stays legible regardless of the colour of the pixels
-     *  underneath.  The outline matches the chart background — black
-     *  on the scope, white on FFT / FreqResp — giving a background-
-     *  coloured halo that always contrasts the foreground.  Stamps
-     *  the outline colour at the four N/S/E/W ±1-px neighbours (the
-     *  anti-aliased glyph edges fill the diagonals visually — an
-     *  8-neighbour halo reads the same at nearly double the GDI text
-     *  calls, and the scope's readout table alone is ~50 labels per
-     *  paint at 50 fps), then the original foreground on top; restores
-     *  the foreground before returning so the caller's GC state is
-     *  unchanged. */
+    /** Draws {@code s} at ({@code x}, {@code y}) with a 1-px drop shadow in the
+     *  view's {@link ColorRole#BACKGROUND} colour behind the current foreground,
+     *  so readouts painted on top of a live signal trace (scope, FFT, FreqResp)
+     *  stay legible regardless of the pixels underneath.  The shadow matches the
+     *  chart background — black on the scope, white on FFT / FreqResp — so it
+     *  always contrasts the foreground.  One offset stamp plus the foreground on
+     *  top — two GDI text calls per label (the scope's readout table alone is
+     *  ~50 labels per paint); the anti-aliased glyph edges spread the offset
+     *  enough to read as a halo.  Restores the foreground before returning so the
+     *  caller's GC state is unchanged. */
     protected final void drawOutlinedText(GC gc, String s, int x, int y) {
-        Color fg = gc.getForeground();
-        gc.setForeground(color(ColorRole.BACKGROUND));
-        gc.drawText(s, x - 1, y, true);
-        gc.drawText(s, x + 1, y, true);
-        gc.drawText(s, x, y - 1, true);
-        gc.drawText(s, x, y + 1, true);
-        gc.setForeground(fg);
-        gc.drawText(s, x, y, true);
+        drawOutlinedText(new GcMeasurementPainter(gc), s, x, y);
+    }
+
+    /** Painter-backed {@link #drawOutlinedText(GC, String, int, int)} — the real
+     *  implementation; the GC overload bridges to it so callers migrate to a
+     *  {@link MeasurementPainter} (and a NanoVG backend) at their own pace. */
+    protected final void drawOutlinedText(MeasurementPainter p, String s, int x, int y) {
+        Color fg = p.getForeground();
+        p.setForeground(color(ColorRole.BACKGROUND));
+        p.drawText(s, x + 1, y + 1, true);
+        p.setForeground(fg);
+        p.drawText(s, x, y, true);
     }
 
     /** Right-aligned variant of {@link #drawOutlinedText} — places
      *  the text so its right edge lands at {@code rightX}. */
     protected final void drawOutlinedRightAligned(GC gc, String s, int rightX, int y) {
-        Point ts = gc.textExtent(s);
-        drawOutlinedText(gc, s, rightX - ts.x, y);
+        drawOutlinedRightAligned(new GcMeasurementPainter(gc), s, rightX, y);
+    }
+
+    protected final void drawOutlinedRightAligned(MeasurementPainter p, String s, int rightX, int y) {
+        Point ts = p.textExtent(s);
+        drawOutlinedText(p, s, rightX - ts.x, y);
     }
 
     /** Fills the polygon described by {@code poly} with {@code fillColor}
@@ -246,14 +248,18 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  underneath while still blending with the chart background.
      *  Restores foreground / background. */
     protected final void drawOutlinedFilledPolygon(GC gc, int[] poly, Color fillColor) {
-        Color prevBg = gc.getBackground();
-        Color prevFg = gc.getForeground();
-        gc.setBackground(fillColor);
-        gc.fillPolygon(poly);
-        gc.setForeground(color(ColorRole.BACKGROUND));
-        gc.drawPolygon(poly);
-        gc.setBackground(prevBg);
-        gc.setForeground(prevFg);
+        drawOutlinedFilledPolygon(new GcMeasurementPainter(gc), poly, fillColor);
+    }
+
+    protected final void drawOutlinedFilledPolygon(MeasurementPainter p, int[] poly, Color fillColor) {
+        Color prevBg = p.getBackground();
+        Color prevFg = p.getForeground();
+        p.setBackground(fillColor);
+        p.fillPolygon(poly);
+        p.setForeground(color(ColorRole.BACKGROUND));
+        p.drawPolygon(poly);
+        p.setBackground(prevBg);
+        p.setForeground(prevFg);
     }
 
     /** Draws a dashed line from ({@code x1}, {@code y1}) to ({@code x2},
@@ -266,19 +272,24 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  foreground. */
     protected final void drawOutlinedDashedLine(GC gc, int x1, int y1, int x2, int y2,
                                                 int[] dash, Color color) {
-        int prevWidth = gc.getLineWidth();
-        int[] prevDash = gc.getLineDash();
-        Color prevFg = gc.getForeground();
-        gc.setLineDash(dash);
-        gc.setLineWidth(3);
-        gc.setForeground(color(ColorRole.BACKGROUND));
-        gc.drawLine(x1, y1, x2, y2);
-        gc.setLineWidth(1);
-        gc.setForeground(color);
-        gc.drawLine(x1, y1, x2, y2);
-        gc.setLineDash(prevDash);
-        gc.setLineWidth(prevWidth);
-        gc.setForeground(prevFg);
+        drawOutlinedDashedLine(new GcMeasurementPainter(gc), x1, y1, x2, y2, dash, color);
+    }
+
+    protected final void drawOutlinedDashedLine(MeasurementPainter p, int x1, int y1, int x2, int y2,
+                                                int[] dash, Color color) {
+        int prevWidth = p.getLineWidth();
+        int[] prevDash = p.getLineDash();
+        Color prevFg = p.getForeground();
+        p.setLineDash(dash);
+        p.setLineWidth(3);
+        p.setForeground(color(ColorRole.BACKGROUND));
+        p.drawLine(x1, y1, x2, y2);
+        p.setLineWidth(1);
+        p.setForeground(color);
+        p.drawLine(x1, y1, x2, y2);
+        p.setLineDash(prevDash);
+        p.setLineWidth(prevWidth);
+        p.setForeground(prevFg);
     }
 
     /** Returns the live {@link RGB} for {@code role} — never null
@@ -1192,12 +1203,18 @@ public abstract class AbstractMeasurementView extends Canvas {
     protected final void paintPolyline(GC gc, Rectangle plot, Color color,
                                        int lineStyle, int lineWidth,
                                        int n, IntUnaryOperator xAt, IntToDoubleFunction yAt) {
+        paintPolyline(new GcMeasurementPainter(gc), plot, color, lineStyle, lineWidth, n, xAt, yAt);
+    }
+
+    protected final void paintPolyline(MeasurementPainter p, Rectangle plot, Color color,
+                                       int lineStyle, int lineWidth,
+                                       int n, IntUnaryOperator xAt, IntToDoubleFunction yAt) {
         if (n < 2) return;
-        gc.setForeground(color);
-        gc.setLineStyle(lineStyle);
-        gc.setLineWidth(lineWidth);
-        paintPolylineImpl(gc, plot, n, xAt, yAt);
-        if (lineStyle != SWT.LINE_SOLID) gc.setLineStyle(SWT.LINE_SOLID);
+        p.setForeground(color);
+        p.setLineStyle(lineStyle);
+        p.setLineWidth(lineWidth);
+        paintPolylineImpl(p, plot, n, xAt, yAt);
+        if (lineStyle != SWT.LINE_SOLID) p.setLineStyle(SWT.LINE_SOLID);
     }
 
     /** Float-width variant of {@link #paintPolyline(GC, Rectangle, Color, int, int,
@@ -1209,11 +1226,17 @@ public abstract class AbstractMeasurementView extends Canvas {
     protected final void paintPolyline(GC gc, Rectangle plot, Color color,
                                        int lineStyle, float lineWidth,
                                        int n, IntUnaryOperator xAt, IntToDoubleFunction yAt) {
+        paintPolyline(new GcMeasurementPainter(gc), plot, color, lineStyle, lineWidth, n, xAt, yAt);
+    }
+
+    protected final void paintPolyline(MeasurementPainter p, Rectangle plot, Color color,
+                                       int lineStyle, float lineWidth,
+                                       int n, IntUnaryOperator xAt, IntToDoubleFunction yAt) {
         if (n < 2) return;
-        gc.setForeground(color);
-        setTraceLineAttributes(gc, lineWidth, lineStyle);
-        paintPolylineImpl(gc, plot, n, xAt, yAt);
-        if (lineStyle != SWT.LINE_SOLID) gc.setLineStyle(SWT.LINE_SOLID);
+        p.setForeground(color);
+        setTraceLineAttributes(p, lineWidth, lineStyle);
+        paintPolylineImpl(p, plot, n, xAt, yAt);
+        if (lineStyle != SWT.LINE_SOLID) p.setLineStyle(SWT.LINE_SOLID);
     }
 
     /** Applies the pooled float-width round-cap stroke to {@code gc}.  Exposed for
@@ -1222,16 +1245,20 @@ public abstract class AbstractMeasurementView extends Canvas {
      *  pooled — at 65+ paints/s a fresh {@code LineAttributes} per frame measurably
      *  loads the young generation. */
     protected final void setTraceLineAttributes(GC gc, float width, int style) {
+        setTraceLineAttributes(new GcMeasurementPainter(gc), width, style);
+    }
+
+    protected final void setTraceLineAttributes(MeasurementPainter p, float width, int style) {
         traceLineAttributes.width = Math.max(0.5f, width);
         traceLineAttributes.style = style;
-        gc.setLineAttributes(traceLineAttributes);
+        p.setLineAttributes(traceLineAttributes);
     }
 
     /** Pooled stroke for {@link #setTraceLineAttributes} — see its pooling note. */
     private final LineAttributes traceLineAttributes =
             new LineAttributes(1.0f, SWT.CAP_ROUND, SWT.JOIN_ROUND);
 
-    private void paintPolylineImpl(GC gc, Rectangle plot,
+    private void paintPolylineImpl(MeasurementPainter p, Rectangle plot,
                                    int n, IntUnaryOperator xAt, IntToDoubleFunction yAt) {
         ColumnBucketPainter painter = new ColumnBucketPainter(plot);
         int right = plot.x + plot.width;
@@ -1243,7 +1270,7 @@ public abstract class AbstractMeasurementView extends Canvas {
             else if (x > right)  painter.setRightAnchor(x, y);
             else                 painter.add(x, y);
         }
-        painter.drawTo(gc);
+        painter.drawTo(p);
     }
 
     /** Renders a long sequence of data points as a polyline + envelope bars at no more
@@ -1307,9 +1334,13 @@ public abstract class AbstractMeasurementView extends Canvas {
          *  spikes stay sharp) plus a midpoint polyline through every non-empty column
          *  (AA on, sub-pixel).  The caller sets foreground / line width / line style first. */
         public void drawTo(GC gc) {
-            Rectangle prevClip = gc.getClipping();
-            gc.setClipping(plot);
-            int prevAA = gc.getAntialias();
+            drawTo(new GcMeasurementPainter(gc));
+        }
+
+        public void drawTo(MeasurementPainter p) {
+            Rectangle prevClip = p.getClipping();
+            p.setClipping(plot);
+            int prevAA = p.getAntialias();
             int yTop = plot.y, yBot = plot.y + plot.height;
             try {
                 // Pass 1: vertical envelope bars for the dense "1 bin < 1 px" columns.
@@ -1317,47 +1348,43 @@ public abstract class AbstractMeasurementView extends Canvas {
                 // gains nothing from sub-pixel Y.  Y is clamped to the plot (a vertical bar
                 // clips exactly by clamping) so an over-range column never pushes GDI past
                 // its ±32k coord limit, which would wrap the bar off-screen.
-                gc.setAntialias(SWT.OFF);
+                p.setAntialias(SWT.OFF);
                 for (int x = 0; x < cnts.length; x++) {
                     if (cnts[x] < 2 || yMins[x] == yMaxs[x]) continue;
                     int lo = (int) Math.round(Math.max(yTop, Math.min(yBot, yMins[x])));
                     int hi = (int) Math.round(Math.max(yTop, Math.min(yBot, yMaxs[x])));
                     if (lo == hi) continue;
                     int px = plot.x + x;
-                    gc.drawLine(px, lo, px, hi);
+                    p.drawLine(px, lo, px, hi);
                 }
-                // Pass 2: midpoint trace as ONE anti-aliased Path with FLOAT (sub-pixel) Y,
+                // Pass 2: midpoint trace as ONE anti-aliased path with FLOAT (sub-pixel) Y,
                 // so the curve lands between pixel rows instead of stair-stepping (which also
                 // defeats the AA at the joints).  Each segment is Liang-Barsky-clipped to the
                 // plot and only its in-bounds part is appended, so every coordinate stays
                 // within GDI's ±32k range while the whole curve strokes in a single call with
                 // smooth round joins.  Left / right anchors extend it to the edges.
-                gc.setAntialias(SWT.ON);
-                Path path = new Path(gc.getDevice());
-                try {
-                    int prevX = leftAnchorX;
-                    double prevY = leftAnchorY;
-                    boolean penDown = false;
-                    for (int x = 0; x < cnts.length; x++) {
-                        if (cnts[x] == 0) continue;
-                        double midY = (yMins[x] + yMaxs[x]) / 2.0;
-                        int px = plot.x + x;
-                        if (prevX != Integer.MIN_VALUE) {
-                            penDown = clipSegmentToPath(path, prevX, prevY, px, midY, penDown);
-                        }
-                        prevX = px;
-                        prevY = midY;
+                p.setAntialias(SWT.ON);
+                p.beginPath();
+                int prevX = leftAnchorX;
+                double prevY = leftAnchorY;
+                boolean penDown = false;
+                for (int x = 0; x < cnts.length; x++) {
+                    if (cnts[x] == 0) continue;
+                    double midY = (yMins[x] + yMaxs[x]) / 2.0;
+                    int px = plot.x + x;
+                    if (prevX != Integer.MIN_VALUE) {
+                        penDown = clipSegmentToPath(p, prevX, prevY, px, midY, penDown);
                     }
-                    if (rightAnchorX != Integer.MIN_VALUE && prevX != Integer.MIN_VALUE) {
-                        clipSegmentToPath(path, prevX, prevY, rightAnchorX, rightAnchorY, penDown);
-                    }
-                    gc.drawPath(path);
-                } finally {
-                    path.dispose();
+                    prevX = px;
+                    prevY = midY;
                 }
+                if (rightAnchorX != Integer.MIN_VALUE && prevX != Integer.MIN_VALUE) {
+                    clipSegmentToPath(p, prevX, prevY, rightAnchorX, rightAnchorY, penDown);
+                }
+                p.strokePath();
             } finally {
-                gc.setAntialias(prevAA);
-                gc.setClipping(prevClip);
+                p.setAntialias(prevAA);
+                p.setClipping(prevClip);
             }
         }
 
@@ -1369,7 +1396,7 @@ public abstract class AbstractMeasurementView extends Canvas {
          *  ±32k limit while the whole curve still strokes in one {@code drawPath} with
          *  smooth joins.  Returns whether the path now ends at this segment's true endpoint
          *  (pen still down — the next segment may continue without a new {@code moveTo}). */
-        private boolean clipSegmentToPath(Path path, double x0, double y0, double x1, double y1, boolean penDown) {
+        private boolean clipSegmentToPath(MeasurementPainter painter, double x0, double y0, double x1, double y1, boolean penDown) {
             double dx = x1 - x0, dy = y1 - y0;
             double u0 = 0.0, u1 = 1.0;
             double[] p = { -dx, dx, -dy, dy };
@@ -1385,9 +1412,9 @@ public abstract class AbstractMeasurementView extends Canvas {
                 }
             }
             if (!penDown || u0 > 0.0) {
-                path.moveTo((float) (x0 + u0 * dx), (float) (y0 + u0 * dy));
+                painter.moveTo((float) (x0 + u0 * dx), (float) (y0 + u0 * dy));
             }
-            path.lineTo((float) (x0 + u1 * dx), (float) (y0 + u1 * dy));
+            painter.lineTo((float) (x0 + u1 * dx), (float) (y0 + u1 * dy));
             return u1 >= 1.0;
         }
     }

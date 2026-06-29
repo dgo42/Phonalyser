@@ -164,8 +164,8 @@ public final class MainTab {
         return shell.computeSize(SWT.DEFAULT, SWT.DEFAULT, true);
     }
 
-    public Runnable pauseForDialog() {
-        return (multifunctional != null) ? multifunctional.pauseForDialog() : () -> {};
+    public void pauseForDialog() {
+        if (multifunctional != null) multifunctional.pauseForDialog();
     }
 
     public GeneratorPane getGenPane() {
@@ -182,6 +182,15 @@ public final class MainTab {
 
     public FreqRespPane getFreqRespPane() {
         return (frequencyResponse != null) ? frequencyResponse.getPane() : null;
+    }
+
+    /** Loop-driven realtime repaint of the active tab's live views (the scope +
+     *  FFT panes in the multifunctional tab).  Returns {@code true} while a view
+     *  is live so the main event loop keeps the realtime cadence.  Views on a
+     *  non-active top-level tab are hidden, so their own visibility check makes
+     *  this a no-op for them. */
+    public boolean renderRealtimeFrame() {
+        return multifunctional != null && multifunctional.renderRealtimeFrame();
     }
 
     /** Brings a top-level tab forward regardless of the active chrome (top

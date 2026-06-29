@@ -22,18 +22,23 @@ import java.util.function.Consumer;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.ControlListener;
+import org.eclipse.swt.events.MouseAdapter;
+import org.eclipse.swt.events.MouseEvent;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
+import org.eclipse.swt.widgets.Scrollable;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.MainWindow;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.scope.gl.GlScopeSurface;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
@@ -77,13 +82,10 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      * spec.
      */
     private static final double CALIBRATE_MIN_VPP_FRACTION = 0.25;
-    /** Vertical-offset wheel step size as a fraction of the channel's
-     *  full vertical range — 5 % per wheel tick (≈ ½ a division). */
-    private static final double WHEEL_OFFSET_STEP_FRAC = 0.05;
 
     private static final int SCROLLBAR_THICKNESS = 20;
     /** Slider resolution — fixed range; {@link #navSlider}'s selection
-     *  is derived from {@link #viewCenterFrames} via the buffer's
+     *  is derived from {@code viewCenterFrames} via the buffer's
      *  capacity.  Sized large so that arrow-click steps of 1/5 div and
      *  page-click steps of 5 divisions stay accurate at any practical
      *  zoom (1000 was too coarse — rounding visibly distorted the step
@@ -97,22 +99,6 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      *  track, ~24 px at 800 px. */
     private static final int MIN_SCROLLBAR_THUMB = NAV_RANGE / 33;
 
-    /**
-     * Period between scope redraw ticks, in milliseconds.  20 ms (≈ 50 Hz)
-     * is fast enough to read as smooth motion and leaves plenty of idle time
-     * in the OS message queue between paints, so the FFT worker's
-     * {@code display.asyncExec} handoff still gets dispatched even while the
-     * scope is recording.  The previous 1 ms value flooded the message pump
-     * with WM_TIMER + WM_PAINT pairs and starved every other async work item.
-     */
-    private static final int REDRAW_PERIOD_MS = 20;
-    /**
-     * Number of main-view redraws between condensed-view redraws.  The
-     * condensed strip walks ~1 s of audio (lots of samples per pixel) and its
-     * per-paint work would otherwise halve the main view's cap/s.  Updating it
-     * at ~5 Hz is plenty for the human eye and keeps the main trace at full speed.
-     */
-    private static final int CONDENSED_DECIMATION = 10;
 
     // Cached references from IconUtils — owned by the shared cache and
     // disposed centrally when the main shell tears down.
@@ -123,6 +109,9 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
     private final ScopeView              view;
     @Getter
     private final ZoomedView             condensed;
+    /** GPU surface when the scope renders on the GPU (phonalyser.scope.gpu); null on
+     *  the CPU path.  Its GL canvas replaces the view as the visible scope widget. */
+    private GlScopeSurface               glSurface;
     @Getter
     private final Composite              toolbar;
     @Getter
@@ -169,19 +158,16 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      * across zooms.  Kept as a {@code double} so repeated zooms don't
      * accumulate rounding error.
      */
-    private double viewCenterFrames = -1.0;
     private final GridData               condensedGd;
     /** Controller owning the scope's capture-device handshake — the Record
      *  state ({@code isCapturing}), the live buffer reference and the
      *  ACQUIRE/RELEASE bus round-trip.  The pane wires the views around
-     *  it: buffer attach + measurement thread + redraw timer on start,
-     *  frozen-snapshot re-attach on stop.  The live pane receives the
+     *  it: buffer attach + measurement thread on start (the realtime render
+     *  loop drives repaints), frozen-snapshot re-attach on stop.  The live pane receives the
      *  app-lifetime instance (lives in {@code UIEngines}, survives content
      *  rebuilds — a rebuilt pane re-attaches to a still-running capture);
      *  the screenshot-only variant builds its own, which stays idle. */
     private final ScopeController controller;
-    /** Main-view redraws elapsed since the last condensed-view redraw. */
-    private int                          redrawCounter;
     /**
      * Synchronous file loader for the "Open signal…" feature.  Owned by the
      * pane (cleared on dispose / record-start) and shared with the tab
@@ -226,10 +212,54 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
                 I18n.t("scope.title.collapsed"),
                 I18n.t("scope.pane.toggle.tooltip"));
 
+        // GPU scope surface (system property phonalyser.scope.gpu; Win/Linux for
+        // now).  When present, the GL canvas is the visible scope at column 0 and
+        // ScopeView stays the state/paint owner but hidden, rendered into the
+        // surface via view.paintCanvas.  Created BEFORE the view so it takes the
+        // column-0 grid cell; the view is then excluded from the layout.
+        glSurface = liveCapture ? GlScopeSurface.of(group) : null;
+        if (glSurface != null) {
+            glSurface.control().setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        }
+
         view = new ScopeView(group);
         // Column 0 of the 2-col paneLayout — leaves column 1 free for the
         // vertical scrollbar that follows.
-        view.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
+        GridData viewGd = new GridData(SWT.FILL, SWT.FILL, true, true);
+        view.setLayoutData(viewGd);
+        if (glSurface != null) {
+            // GPU: the GL canvas is the visible+interactive scope; the view stays the
+            // state/paint owner but hidden, rendered into the surface.  Forward the
+            // canvas's pointer events to the view's handlers, and route the view's
+            // repaints + cursor/tooltip back to the canvas.
+            viewGd.exclude = true;
+            view.setVisible(false);
+            glSurface.setRenderer(view);
+            Control gl = glSurface.control();
+            gl.addMouseListener(new MouseAdapter() {
+                @Override public void mouseDown(MouseEvent ev)        { view.pointerDown(ev.x, ev.y, ev.button); }
+                @Override public void mouseUp(MouseEvent ev)          { view.pointerUp(); }
+                @Override public void mouseDoubleClick(MouseEvent ev) { view.pointerDoubleClick(ev.x, ev.y, ev.button); }
+            });
+            gl.addMouseMoveListener(ev -> view.pointerMove(ev.x, ev.y));
+            // Coalesce repaints to ONE render per UI event.  A single gesture (e.g.
+            // zoom-around-cursor) sets two prefs — the scale, then the corrected
+            // offset — each requesting a repaint; rendering each immediately would
+            // flash the intermediate stale-offset frame.  asyncExec + a pending flag
+            // collapse them into one correct frame.  The realtime loop renders the
+            // surface directly (not via this), so live cadence is unchanged.
+            final boolean[] renderPending = { false };
+            view.attachGlInput(gl, () -> {
+                if (renderPending[0] || gl.isDisposed()) return;
+                renderPending[0] = true;
+                gl.getDisplay().asyncExec(() -> {
+                    renderPending[0] = false;
+                    // A gesture / settings change is NOT a new captured frame — re-render the
+                    // trace and reset persistence (geometry changed) instead of accumulating.
+                    if (!gl.isDisposed()) glSurface.renderInteractive();
+                });
+            });
+        }
 
         // ----- Right-gap vertical scrollbar (column 1 of the same row) -----
         vertSlider = new FlatScrollbar(group, SWT.VERTICAL);
@@ -294,6 +324,8 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         condensed = new ZoomedView(group);
         condensedGd = new GridData(SWT.FILL, SWT.FILL, true, false);
         condensed.setLayoutData(condensedGd);
+        controller.attachViews(view, condensed);
+        controller.attachGlSurface(glSurface);   // null on the CPU path — clears any stale (disposed) surface
 
         // Toolbar area: the ScopeTabControl on the left (fills) + Record toggle
         // button on the right (fixed).  Each former toolbar Group is a tab
@@ -322,7 +354,7 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         tabControl.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         // Collapsing the tab body keeps the Record button reachable and
         // re-flows the scope view into the freed space.
-        tabControl.setCollapseRelayout(this::onToolbarTabsCollapsed);
+        tabControl.setOwner(this);
 
         // Flush layout caches up the parent chain so the toolbar's
         // GridLayout picks up the new (taller) tab-folder preferred size.
@@ -348,7 +380,7 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
 
         // The wheel handler steps the tab control's scale selectors, so it is
         // installed after the tab control exists.
-        installScopeViewWheelHandler();
+        installScopeViewWheelHandler(glSurface != null ? glSurface.control() : view);
 
         if (liveCapture) {
             wireLiveCaptureLifecycle();
@@ -373,7 +405,7 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      *  inside {@link ScopeTabControl} (the checkbox is its widget). */
     private void wireLiveCaptureLifecycle() {
         wireRecordButton();
-        autoSetupListener        = ignored -> performAutoSetup();
+        autoSetupListener        = ignored -> controller.performAutoSetup(view, tabControl);
         freqRespStartedListener  = ignored -> onFreqRespMeasurementStarted();
         freqRespStoppedListener  = ignored -> onFreqRespMeasurementStopped();
         MessageBus bus = MessageBus.instance();
@@ -396,16 +428,10 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
 
     /** A rebuilt pane may find the injected controller still capturing
      *  (the engines survive content rebuilds): re-attach both views to the
-     *  live buffer, restart the measurement worker + redraw timer and
-     *  light the Record LED. */
+     *  live buffer, restart the measurement worker and light the Record LED
+     *  (the realtime render loop resumes repainting it). */
     private void reattachLiveCapture() {
-        SignalBufferReader buf = controller.liveBuffer();
-        if (buf == null) return;
-        view.setBuffer(buf);
-        condensed.setBuffer(buf);
-        view.startMeasurementThread();
-        scheduleRedraw();
-        setRecordingState(true);
+        if (controller.reattachLiveCapture()) setRecordingState(true);
     }
 
     /** Stops a running capture and grays the Record button — fired by the
@@ -473,7 +499,7 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
                 // scrub the buffer (it would freeze the trace and break
                 // trigger).  Disable the slider and lock the centre
                 // state to "follow latest".
-                viewCenterFrames = -1.0;
+                controller.setViewCenterFrames(-1.0);
                 if (navSlider != null && !navSlider.isDisposed()) {
                     navSlider.setSelection(navSlider.getMaximum() - navSlider.getThumb());
                 }
@@ -527,7 +553,8 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      *  cascade the layout toolbar → group so the scope view reclaims / yields
      *  the freed vertical space.  The control has already applied the
      *  strip-only height to the folder's layout data. */
-    private void onToolbarTabsCollapsed() {
+    @Override
+    protected void onTabCollapse() {
         if (recordButton != null && !recordButton.isDisposed()) {
             Object rd = recordButton.getLayoutData();
             if (rd instanceof GridData rgd) {
@@ -538,6 +565,21 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         }
         if (toolbar != null && !toolbar.isDisposed()) toolbar.layout(true, true);
         if (group   != null && !group.isDisposed())   group.layout(true, true);
+    }
+
+    /** Hide the floating GPU child window when the pane collapses to its title bar —
+     *  otherwise (on macOS) it keeps drawing over whatever expands into the freed
+     *  space.  No-op for the Win/Linux GLCanvas, which SWT hides with its parent. */
+    @Override
+    protected void onCollapsing() {
+        if (glSurface != null) glSurface.setSurfaceVisible(false);
+    }
+
+    /** Re-show + repaint the GPU child window when the pane expands again, so a
+     *  stopped scope isn't left blank after collapse/expand. */
+    @Override
+    protected void onExpanding() {
+        if (glSurface != null) glSurface.setSurfaceVisible(true);
     }
 
     // -------------------------------------------------------------------------
@@ -569,13 +611,13 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         if (reader != null) {
             int displaySamples = ScopeFormat.displaySamplesFor(
                     Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
-            viewCenterFrames = displaySamples / 2.0;
+            controller.setViewCenterFrames(displaySamples / 2.0);
         }
         setNavSliderVisible(true);
         applyViewState();
     }
 
-    /** Builds the offscreen scope clone for {@link #renderOffscreen}: fresh pane,
+    /** Builds the off-screen scope clone for {@link #renderOffscreen}: fresh pane,
      *  the exact frozen frame + buffer + measurements carbon-copied in (so it
      *  works while stopped), tab body collapsed, Record LED matching live. */
     @Override
@@ -597,69 +639,11 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
     }
 
     /**
-     * Auto-setup: picks a t/div that fits ~1.5 periods on screen and a V/div
-     * that makes the signal span ~0.75 of the vertical range, then resets
-     * all offsets and the trigger level to centre.  Same V/div is applied
-     * to both channels (driven by the measurement channel's Vpp).  Wired
-     * to the Auto-Setup button in {@link ScopeView}'s header via
-     * {@link Events#SCOPE_AUTO_SETUP}.
-     *
-     * <p>No-op when the measurement worker has not published a frequency
-     * or Vpp yet (capture not running, or the warm-up window is still
-     * in effect).
-     */
-    private void performAutoSetup() {
-        if (view == null || view.isDisposed()) return;
-        // Refuse to auto-setup when the scope isn't actively recording.
-        // Otherwise the requestRedraw() at the end of this method pulls
-        // whatever the shared SignalBuffer happens to hold (e.g. when
-        // the FFT pane is recording and the audio device is open) and
-        // paints it into the scope view — which looks like the scope
-        // captured a signal even though the user never pressed Record.
-        if (!isCapturing()) return;
-        Preferences prefs = Preferences.instance();
-        double freq = view.getLastFrequencyHz();
-        double vpp  = view.getLastVpp();
-        // In dual-tone mode the carrier crosses 0 many times per beat
-        // envelope cycle.  Auto-setup picks the LOWER of the carrier
-        // frequency and |F1-F2| so the time scale covers at least one
-        // full beat envelope — picking the carrier alone would render
-        // a packed wall of cycles with no visible envelope.
-        double scaleHz = freq;
-        if (prefs.getGenSignalForm().isDualTone()) {
-            double beatHz = Math.abs(prefs.getGenDualToneFreq2Hz()
-                                   - prefs.getGenDualToneFreq1Hz());
-            if (beatHz > 0 && (!Double.isFinite(scaleHz) || beatHz < scaleHz)) {
-                scaleHz = beatHz;
-            }
-        }
-        if (Double.isFinite(scaleHz) && scaleHz > 0) {
-            double period = 1.0 / scaleHz;
-            double targetTDiv = period * 1.5 / ScopeView.DIVISIONS_X;
-            double newTDiv    = ScopeFormat.ceilToStep(targetTDiv, OscParse.timePerDivTargets());
-            tabControl.setTimePerDiv(newTDiv);
-        }
-        if (Double.isFinite(vpp) && vpp > 0) {
-            double targetVDiv = vpp / (ScopeView.DIVISIONS_Y * 0.75);
-            double newVDiv    = ScopeFormat.ceilToStep(targetVDiv, OscParse.voltsPerDivTargets());
-            tabControl.setLeftVoltsPerDiv(newVDiv);
-            tabControl.setRightVoltsPerDiv(newVDiv);
-        }
-        // Reset all offsets and the trigger level to "0" (frac = 0.5 = centre).
-        prefs.setOscLeftOffsetFrac     (0.5);
-        prefs.setOscRightOffsetFrac    (0.5);
-        prefs.setOscTriggerPositionFrac(0.5);
-        prefs.setOscTriggerLevelFrac   (0.5);
-        prefs.save();
-        requestRedraw();
-    }
-
-    /**
      * Slider-moved handler.  In live record mode the slider is disabled
      * (so this should only fire from programmatic syncs we trigger
      * ourselves — those are ignored because they don't move the user's
      * intended centre).  In file mode the user is actively scrubbing;
-     * translate the slider position into a {@link #viewCenterFrames}
+     * translate the slider position into a {@code viewCenterFrames}
      * value and let {@link #applyViewState} push everything else.
      */
     private void onNavSliderMoved() {
@@ -675,19 +659,19 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         int maxSel = navSlider.getMaximum() - navSlider.getThumb();
         if (maxSel <= 0 || maxCenter < minCenter) {
             // No scroll room — view is showing all of the resident data.
-            viewCenterFrames = (writePos + oldest) / 2.0;
+            controller.setViewCenterFrames((writePos + oldest) / 2.0);
         } else {
             double frac = sel / (double) maxSel;
             // Double-precise — sub-frame fraction is preserved so
             // subsequent zooms don't drift.
-            viewCenterFrames = minCenter + frac * (maxCenter - minCenter);
+            controller.setViewCenterFrames(minCenter + frac * (maxCenter - minCenter));
         }
         applyViewState();
     }
 
     /**
      * {@link ScopeTabControl.Host}: single source of truth for everything
-     * that depends on the view's centre.  Reads {@link #viewCenterFrames}
+     * that depends on the view's centre.  Reads {@code viewCenterFrames}
      * (the absolute frame under the canvas centre — {@code -1} for
      * follow-latest) and derives slider thumb size, slider position, the
      * main view's back-offset and the condensed view's back-offset.  Always
@@ -695,46 +679,33 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      */
     @Override
     public void applyViewState() {
+        controller.applyViewState();   // re-derive + repaint the views (multi-entity coordination)
+        syncNavSlider();               // this pane's own scrollbar widget
+    }
+
+    /** Syncs the file-mode nav scrollbar (thumb size, position, step increments) to
+     *  the current view centre.  Pane-local: it only touches this pane's own widget;
+     *  the view-window maths come from {@link ScopeNav#fileViewWindow}. */
+    private void syncNavSlider() {
         SignalBufferReader reader = view.getReader();
-        if (reader == null) {
-            view.setViewBackOffsetFrames(0);
-            condensed.setViewBackOffsetFrames(0);
-            requestRedraw();
-            return;
-        }
-        int displaySamples = ScopeFormat.displaySamplesFor(Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
+        if (reader == null) return;
+        int  displaySamples = ScopeFormat.displaySamplesFor(
+                Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
         long writePos = reader.getWritePos();
         long resident = Math.min(writePos, reader.getCapacity());
+        ScopeNav.ViewWindow vw = view.getNav().fileViewWindow(
+                controller.getViewCenterFrames(), displaySamples, writePos, reader.getCapacity(), reader.getSampleRate());
 
-        // Thumb size = fraction of the buffer the main view is showing.
-        // Floor at MIN_SCROLLBAR_THUMB so the thumb stays grabbable even
-        // when the visible window is a tiny slice of a huge buffer.
-        int thumb;
-        if (resident <= 0) {
-            thumb = NAV_RANGE;
-        } else {
-            double frac = Math.min(1.0, displaySamples / (double) resident);
-            thumb = Math.max(MIN_SCROLLBAR_THUMB,
-                    Math.min(NAV_RANGE, (int) Math.round(frac * NAV_RANGE)));
-        }
+        // Thumb = fraction of the buffer the main view shows, floored at
+        // MIN_SCROLLBAR_THUMB so it stays grabbable on a huge buffer.
+        int thumb = (resident <= 0) ? NAV_RANGE
+                : Math.max(MIN_SCROLLBAR_THUMB,
+                           Math.min(NAV_RANGE, (int) Math.round(Math.min(1.0, displaySamples / (double) resident) * NAV_RANGE)));
         if (navSlider.getThumb() != thumb) navSlider.setThumb(thumb);
         int maxSel = navSlider.getMaximum() - thumb;
 
-        // Valid centre range — left edge can't go below 0, right edge
-        // can't go past writePos (no future frames exist).  In the
-        // live ring-wrap case the oldest still-resident frame is
-        // writePos − capacity.
-        long oldest    = Math.max(0L, writePos - reader.getCapacity());
-        long minCenter = oldest   + displaySamples / 2;
-        long maxCenter = writePos - displaySamples / 2;
-
-        // Arrow click moves 1/5 of a division, page click (empty area
-        // of the scrollbar track) moves 5 divisions — both at the
-        // current t/div.  displaySamples = 10 × t/div, so 1/5 div =
-        // displaySamples/50 frames and 5 div = displaySamples/2 frames.
-        // Convert frames to slider-units via the centre-range / max-sel
-        // ratio.
-        long centerRange = Math.max(0L, maxCenter - minCenter);
+        // Arrow click = 1/5 div, page click = 5 div, in slider units.
+        long centerRange = Math.max(0L, vw.maxCentre() - vw.minCentre());
         if (centerRange > 0 && maxSel > 0) {
             double unitsPerFrame = (double) maxSel / centerRange;
             int arrowStep = Math.max(1, (int) Math.round((displaySamples / 50.0) * unitsPerFrame));
@@ -742,48 +713,26 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
             if (navSlider.getIncrement()     != arrowStep) navSlider.setIncrement(arrowStep);
             if (navSlider.getPageIncrement() != pageStep)  navSlider.setPageIncrement(pageStep);
         }
-
-        long mainOffset;
-        if (viewCenterFrames < 0 || maxCenter < minCenter) {
-            // Follow latest: view ends at writePos, slider pinned to rightmost.
-            mainOffset = 0;
-            if (maxSel > 0) navSlider.setSelection(maxSel);
-        } else {
-            double clampedCenter = Math.max((double) minCenter,
-                                            Math.min((double) maxCenter, viewCenterFrames));
-            // Round once at the boundary to integer frames for the
-            // back-offset math; viewCenterFrames itself keeps its
-            // double precision so repeated zooms don't drift.
-            long viewEndAbs = (long) Math.round(clampedCenter + displaySamples / 2.0);
-            mainOffset      = Math.max(0L, writePos - viewEndAbs);
-            // Sync slider position to the (possibly clamped) centre.
-            if (maxSel > 0) {
-                double range      = Math.max(1.0, (double) (maxCenter - minCenter));
-                double centerFrac = (clampedCenter - minCenter) / range;
-                int newSel = (int) Math.round(centerFrac * maxSel);
-                newSel = Math.max(0, Math.min(maxSel, newSel));
-                if (navSlider.getSelection() != newSel) navSlider.setSelection(newSel);
+        if (maxSel > 0) {
+            int newSel;
+            if (vw.followLatest()) {
+                newSel = maxSel;                      // pinned rightmost
+            } else {
+                double range = Math.max(1.0, (double) (vw.maxCentre() - vw.minCentre()));
+                double frac  = (vw.clampedCentre() - vw.minCentre()) / range;
+                newSel = Math.max(0, Math.min(maxSel, (int) Math.round(frac * maxSel)));
             }
+            if (navSlider.getSelection() != newSel) navSlider.setSelection(newSel);
         }
-        view.setViewBackOffsetFrames(mainOffset);
-
-        // Condensed view: 1 s window centred on the same frame as the
-        // main view's middle.  Clamped so we don't request frames past
-        // writePos or before any resident sample.
-        long mainCenter       = writePos - mainOffset - displaySamples / 2;
-        long condensedViewEnd = mainCenter + reader.getSampleRate() / 2;
-        condensedViewEnd = Math.min(condensedViewEnd, writePos);
-        condensedViewEnd = Math.max(condensedViewEnd, Math.min(writePos, oldest + reader.getSampleRate()));
-        condensed.setViewBackOffsetFrames(Math.max(0L, writePos - condensedViewEnd));
-        requestRedraw();
     }
 
     /**
      * {@link ScopeTabControl.Host}: forces both scope canvases to repaint.
-     * Required for file-mode (openSignal) sessions where there's no periodic
-     * capture redraw timer to pick up UI changes (V/div, t/div, slider, AC,
-     * channel toggles).  Cheap no-op during live recording — the controller's
-     * 1 ms redraw timer would have repainted on its own next tick.
+     * Required for file-mode (openSignal) sessions where the realtime render
+     * loop doesn't repaint (it paints live views only while recording), so a UI
+     * change (V/div, t/div, slider, AC, channel toggles) needs an explicit
+     * repaint.  Cheap no-op during live recording — the render loop repaints
+     * every frame.
      */
     @Override
     public void requestRedraw() {
@@ -794,6 +743,25 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         syncVertSliderFromPrefs();
         if (!view.isDisposed())      view.redraw();
         if (!condensed.isDisposed()) condensed.redraw();
+    }
+
+
+    /** {@link ScopeTabControl.Host}: file-mode horizontal zoom around the mouse. */
+    @Override
+    public void zoomFileTimeAroundMouse(double mouseFrac, double tDivOld, double tDivNew) {
+        SignalBufferReader reader = view.getReader();
+        if (reader == null) return;
+        int  sr      = reader.getSampleRate();
+        int  dispOld = ScopeFormat.displaySamplesFor(tDivOld, sr);
+        int  dispNew = ScopeFormat.displaySamplesFor(tDivNew, sr);
+        long writePos = reader.getWritePos();
+        long oldest   = Math.max(0L, writePos - reader.getCapacity());
+        ScopeNav nav  = view.getNav();
+        double cur  = controller.getViewCenterFrames();
+        if (cur < 0) cur = writePos - dispOld / 2.0;
+        double next = nav.zoomFileCentre(cur, mouseFrac, dispOld, dispNew);
+        controller.setViewCenterFrames(nav.clampFileCentre(next, dispNew, oldest, writePos));
+        applyViewState();
     }
 
     /** Wires the four-mode mouse-wheel handler on the scope canvas.
@@ -807,13 +775,13 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      *  </ul>
      *  The two scale branches step the tab control's V/T selectors; the two
      *  offset branches move pane-owned navigation state. */
-    private void installScopeViewWheelHandler() {
-        view.addListener(SWT.MouseVerticalWheel, e -> {
+    private void installScopeViewWheelHandler(Control target) {
+        target.addListener(SWT.MouseVerticalWheel, e -> {
             if (e.count == 0) return;
             int dir = Integer.signum(e.count);   // wheel up = +1
             boolean ctrl  = (e.stateMask & SWT.CTRL)  != 0;
             boolean shift = (e.stateMask & SWT.SHIFT) != 0;
-            Rectangle area = view.getClientArea();
+            Rectangle area = ((Scrollable) target).getClientArea();
             if (ctrl && shift) {
                 // Shift + Ctrl + wheel: t/div zoom around the mouse X
                 // (wheel up → step DOWN in t/div since smaller t/div is
@@ -843,16 +811,24 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      *  marker drifting with the trace rather than the user's intent). */
     private void stepMeasurementChannelOffset(int dir) {
         Preferences prefs = Preferences.instance();
-        double delta = -dir * WHEEL_OFFSET_STEP_FRAC;
-        prefs.setOscLeftOffsetFrac  (prefs.getOscLeftOffsetFrac()  + delta);
-        prefs.setOscRightOffsetFrac (prefs.getOscRightOffsetFrac() + delta);
+        double peak = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double oldL = prefs.getOscLeftOffsetFrac();
+        double oldR = prefs.getOscRightOffsetFrac();
+        // The engine moves both active channels together, clamped at ±FS/2-at-middle.
+        double[] off = view.getNav().moveVertical(
+                oldL, prefs.getOscLeftVoltsPerDiv(),  prefs.isOscLeftChannelEnabled(),
+                oldR, prefs.getOscRightVoltsPerDiv(), prefs.isOscRightChannelEnabled(),
+                dir, peak);
+        if (off[0] == oldL && off[1] == oldR) return;
+        prefs.setOscLeftOffsetFrac(off[0]);
+        prefs.setOscRightOffsetFrac(off[1]);
         prefs.save();
         syncVertSliderFromPrefs();
         requestRedraw();
     }
 
     /** Shifts the horizontal view position by one wheel tick.  In file mode
-     *  this scrolls {@link #viewCenterFrames}; in live record mode it nudges
+     *  this scrolls {@code viewCenterFrames}; in live record mode it nudges
      *  the trigger position fraction (which is the only horizontal-offset
      *  knob meaningful while the trace tracks the latest writePos).
      *  {@code viewCenterFrames} is clamped to the buffer's valid centre
@@ -862,29 +838,32 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      *  while the value walks back into range. */
     private void stepHorizontalOffset(int dir) {
         Preferences prefs = Preferences.instance();
+        ScopeNav nav = view.getNav();
         if (view.isFileMode()) {
             SignalBufferReader reader = view.getReader();
             if (reader == null) return;
             int displaySamples = ScopeFormat.displaySamplesFor(
                     prefs.getOscTimePerDiv(), reader.getSampleRate());
-            long writePos  = reader.getWritePos();
-            long oldest    = Math.max(0L, writePos - reader.getCapacity());
-            double minCenter = oldest   + displaySamples / 2.0;
-            double maxCenter = writePos - displaySamples / 2.0;
-            if (maxCenter < minCenter) return;   // window bigger than buffer
-            // 1/5 of the visible window per tick — matches the nav slider's
-            // small-step convention.  Wheel up = move backward in time.
-            double stepFrames = displaySamples / 5.0;
-            double cur = (viewCenterFrames < 0) ? maxCenter : viewCenterFrames;
-            double next = cur - dir * stepFrames;
-            if (next < minCenter) next = minCenter;
-            if (next > maxCenter) next = maxCenter;
-            if (next == viewCenterFrames) return;
-            viewCenterFrames = next;
+            long writePos = reader.getWritePos();
+            long oldest   = Math.max(0L, writePos - reader.getCapacity());
+            // Engine: ½-div move of the view centre, clamped to keep the window in the file.
+            double cur  = controller.getViewCenterFrames();
+            if (cur < 0) cur = writePos - displaySamples / 2.0;
+            double next = nav.moveFileCentre(cur, dir, displaySamples, oldest, writePos);
+            if (next == controller.getViewCenterFrames()) return;
+            controller.setViewCenterFrames(next);
             applyViewState();
+        } else if (view.isFrozen()) {
+            // Stopped scope: pan ½ div per tick via the virtual trigger offset; the
+            // view-following read scrolls the whole captured buffer.  ScopeView owns it.
+            if (view.panFrozenOffset(dir)) requestRedraw();
         } else {
-            double cur = prefs.getOscTriggerPositionFrac();
-            double next = ScopeFormat.clamp01(cur + dir * WHEEL_OFFSET_STEP_FRAC);
+            // Live: ½-div trigger-offset move; may go VIRTUAL (handle pins to the L/R
+            // edge, the time-offset mark shows the real value) — so don't clamp.  The
+            // read spans ~2 screens + ~1 s around the trigger; drawTrace blanks any
+            // edge the buffer can't fill.
+            double cur  = prefs.getOscTriggerPositionFrac();
+            double next = nav.moveTriggerOffset(cur, dir);
             if (next == cur) return;
             prefs.setOscTriggerPositionFrac(next);
             prefs.save();
@@ -912,36 +891,8 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         }
     }
 
-    /** V/div of the measurement channel, falling back to the only-visible
-     *  channel if the measurement channel is disabled. */
-    private double measurementChannelVPDiv() {
-        Preferences prefs = Preferences.instance();
-        Channel selected = prefs.getOscMeasurementChannel();
-        boolean showL = prefs.isOscLeftChannelEnabled();
-        boolean showR = prefs.isOscRightChannelEnabled();
-        if (selected == Channel.R && showR) return prefs.getOscRightVoltsPerDiv();
-        if (selected == Channel.L && showL) return prefs.getOscLeftVoltsPerDiv();
-        if (showR)                                  return prefs.getOscRightVoltsPerDiv();
-        return prefs.getOscLeftVoltsPerDiv();
-    }
-
-    /** Returns the {@code [minOffsetFrac, maxOffsetFrac]} the vertical
-     *  scrollbar should cover.  Extended past the usual [0, 1] so the
-     *  trace can move all the way until either ±FS is at the grid centre.
-     *  At wide V/div (the entire ±FS span fits on screen) the range
-     *  collapses back to exactly [0, 1] — there's nothing to scroll. */
-    private double[] offsetFracBounds() {
-        double vpdiv = measurementChannelVPDiv();
-        double fs    = Preferences.instance().getAdcFsVoltageRms() * Math.sqrt(2.0);
-        double half  = (vpdiv <= 0 || fs <= 0)
-                ? 0.5
-                : fs / (ScopeView.DIVISIONS_Y * vpdiv);
-        if (half < 0.5) half = 0.5;
-        return new double[] { 0.5 - half, 0.5 + half };
-    }
-
     /** Maps the vertical slider's selection to an offsetFrac inside the
-     *  scale-dependent bounds returned by {@link #offsetFracBounds}, then
+     *  scale-dependent bounds returned by {@link ScopeView#offsetFracBounds}, then
      *  slides BOTH channel offsets by the same delta.  Trigger level is
      *  not moved — its position is the user's intent, not a side-effect
      *  of trace panning.  Thumb at TOP = signal up (low offsetFrac =
@@ -951,7 +902,7 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         Preferences prefs = Preferences.instance();
         int sel = vertSlider.getSelection();
         int maxSel = vertSlider.getMaximum() - vertSlider.getThumb();
-        double[] bounds = offsetFracBounds();
+        double[] bounds = view.offsetFracBounds();
         double lo = bounds[0], hi = bounds[1];
         double frac = (maxSel <= 0) ? (lo + hi) / 2.0
                                     : lo + (sel / (double) maxSel) * (hi - lo);
@@ -979,7 +930,7 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
     private void syncVertSliderFromPrefs() {
         if (vertSlider == null || vertSlider.isDisposed()) return;
         Preferences prefs = Preferences.instance();
-        double[] bounds = offsetFracBounds();
+        double[] bounds = view.offsetFracBounds();
         double lo = bounds[0], hi = bounds[1];
         double span = hi - lo;
         int thumb;
@@ -1087,21 +1038,8 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      *  to the live buffer, and starts the measurement worker + redraw
      *  timer.  Bails out if the device fails to open — the reason is then
      *  available via {@link #getLastStartError()}. */
-    public synchronized void startCapture() {
-        SignalBufferReader buf = controller.acquireCapture();
-        if (buf == null) return;
-        // Attach the views to the live buffer only when the scope's own Record
-        // button is on.  If the FFT pane held the device open first, the views
-        // stay detached until the user explicitly starts the scope — otherwise
-        // paint events would draw what the audio thread writes while the
-        // scope isn't capturing.
-        view.setBuffer(buf);
-        condensed.setBuffer(buf);
-        // Measurement compute runs on its own daemon thread so the SWT paint
-        // thread doesn't block on the Goertzel scan at high sample rates.
-        // Started after the buffer is wired so the worker sees it.
-        view.startMeasurementThread();
-        scheduleRedraw();
+    public void startCapture() {
+        controller.startCapture();
     }
 
     /** Programmatically engages live capture and lights the Record LED —
@@ -1120,46 +1058,15 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
     /** Stops the capture but keeps a frozen snapshot of the last captured
      *  frame attached to both views.  A subsequent {@link #startCapture()}
      *  replaces the snapshot with a fresh live buffer. */
-    public synchronized void stopCapture() {
-        if (!controller.isCapturing()) return;
-        // Stop the measurement worker first so it doesn't try to read from the
-        // buffer while capture is being torn down.
-        if (!view.isDisposed()) view.stopMeasurementThread();
-        // Snapshot the live buffer so the scope keeps showing the LAST captured
-        // frame after stop.  If the views stayed attached to the shared buffer,
-        // any continued writes (because the FFT pane is still recording) would
-        // visually resume the trace whenever a paint event fires.
-        SignalBufferReader frozen = controller.releaseCapture();
-        if (frozen != null) {
-            if (!view.isDisposed())      view.setBuffer(frozen);
-            if (!condensed.isDisposed()) condensed.setBuffer(frozen);
-        }
+    public void stopCapture() {
+        controller.stopCapture();
     }
 
-    /** Schedules the next paint pass via {@link Display#timerExec}.  The
-     *  callback paints the main scope view <em>synchronously</em>
-     *  ({@code redraw() + update()}) and only then schedules the next timer, so
-     *  the {@value #REDRAW_PERIOD_MS} ms period is measured from end-of-paint —
-     *  the message pump truly idles between scope paints, giving the FFT view's
-     *  pending paint (and the FFT worker's {@code asyncExec} handoff) a chance
-     *  to dispatch.  Without the synchronous {@code update()}, a paint longer
-     *  than the period leaves the next timer permanently armed and back-to-back
-     *  scope paints starve every other UI work item. */
-    private void scheduleRedraw() {
-        if (!controller.isCapturing()) return;
-        view.getDisplay().timerExec(REDRAW_PERIOD_MS, () -> {
-            if (!controller.isCapturing()) return;
-            // Pane torn down while the capture survived (content rebuild)
-            // — stop THIS timer chain; the rebuilt pane runs its own.
-            if (view.isDisposed()) return;
-            view.redraw();
-            view.update();
-            if (redrawCounter++ >= CONDENSED_DECIMATION) {
-                redrawCounter = 0;
-                if (!condensed.isDisposed()) condensed.redraw();
-            }
-            scheduleRedraw();
-        });
+    /** Forwards the main event loop's realtime render tick (from
+     *  {@code MultifunctionalTab}) to the controller, which owns the scope +
+     *  condensed views and decides what to repaint. */
+    public boolean renderRealtimeFrame() {
+        return controller.renderRealtimeFrame();
     }
 
     // -------------------------------------------------------------------------

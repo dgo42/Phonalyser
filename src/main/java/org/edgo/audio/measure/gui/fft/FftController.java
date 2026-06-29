@@ -41,6 +41,7 @@ import org.edgo.audio.measure.gui.common.DebugSwitches;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
 import org.edgo.audio.measure.preferences.Preferences;
 
+import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -88,7 +89,10 @@ public final class FftController {
 
     /** Analysis engine (capture + FFT + averaging on a daemon thread). */
     private final FftAnalyzerWorker worker;
-    /** Calibration entries appended to saved spectra as provenance. */
+    /** Calibration entries appended to saved spectra as provenance.  Owned by
+     *  the controller; its mutations publish {@link Events#FFT_CALIBRATION_CHANGED}
+     *  (silent on the offscreen screenshot variant). */
+    @Getter
     private final FreqRespCorrectionStore correctionStore;
     /** One analyzer instance for the controller's lifetime — its internal
      *  scratch buffer (noise-floor quickselect) is only reused this way. */
@@ -113,10 +117,9 @@ public final class FftController {
      *  ({@code null} for THD captures — the view stays in THD mode). */
     public record LoadedSpectrum(FftResult result, ImdResult imd) {}
 
-    public FftController(FftAnalyzerWorker worker,
-                         FreqRespCorrectionStore correctionStore) {
+    public FftController(FftAnalyzerWorker worker) {
         this.worker          = worker;
-        this.correctionStore = correctionStore;
+        this.correctionStore = new FreqRespCorrectionStore("FFT", Events.FFT_CALIBRATION_CHANGED);
     }
 
     // -------------------------------------------------------------------------

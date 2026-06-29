@@ -79,6 +79,15 @@ public final class NumericStepModel {
      *  notch walks the 10-dB grid (0 → −10 → −20 …) — stepping the linear
      *  value by 10 % would produce 0.83-dB crumbs. */
     private static final double LOG_WHEEL_STEP_DB = 10;
+    /** PERCENT policy's nominal wheel step, shown in {@link #stepHint()}. */
+    private static final String PERCENT_STEP_LABEL = "10 %";
+    /** Language-neutral glyphs for {@link #stepHint()}: mouse wheel, step
+     *  arrows, and the separator between LIST values. */
+    private static final String WHEEL_GLYPH  = "⟳";
+    private static final String ARROWS_GLYPH = "▲▼";
+    private static final String SERIES_SEP   = "·";
+    /** LIST series longer than this are abbreviated to first·…·last. */
+    private static final int SERIES_HINT_MAX = 7;
 
     private enum Policy {
         FIXED, LIST, PERCENT;
@@ -352,8 +361,13 @@ public final class NumericStepModel {
     public String text() {
         if (Double.isInfinite(value)) return "∞";
         if (isNamedValue(value)) return namedValueLabel;
-        Unit u = currentUnit();
-        double x = u.fromCanonical(value);
+        return formatIn(value, currentUnit());
+    }
+
+    /** Formats {@code canonical} in {@code u}: fixed decimals for FIXED policy,
+     *  up-to-{@code maxDecimals} with trailing-zero trim otherwise. */
+    private String formatIn(double canonical, Unit u) {
+        double x = u.fromCanonical(canonical);
         // Locale.ROOT so the decimal separator is always '.', matching the
         // dot-based parser in commit() and the canonical value contract.
         // Without it a comma-decimal UI locale (uk, de, fr, …) renders "0,5",
@@ -363,6 +377,68 @@ public final class NumericStepModel {
                 : trimTrailingZeros(String.format(Locale.ROOT, "%." + maxDecimals + "f", x));
         String suffix = u.suffix();
         return suffix.isEmpty() ? num : num + " " + suffix;
+    }
+
+    /**
+     * Language-neutral, one-line description of what one wheel notch and one
+     * arrow step actually do — for the field's tooltip, so the hint can never
+     * drift from the real behaviour the way a hand-written tooltip does.
+     * Reflects the live policy and display unit:
+     * <ul>
+     *   <li>FIXED → {@code ⟳ ±<wheelStep>, ▲▼ ±<arrowStep>}</li>
+     *   <li>PERCENT (linear) → {@code ⟳ ±10 %, ▲▼ ±1 <unit>}; (dBV) →
+     *       {@code ⟳ ±10 dB, ▲▼ ±1 dB}</li>
+     *   <li>LIST → {@code ⟳▲▼ <values>} (abbreviated when long)</li>
+     * </ul>
+     * Glyphs: {@code ⟳} = mouse wheel, {@code ▲▼} = arrows / step buttons.
+     */
+    public String stepHint() {
+        switch (policy) {
+            case FIXED:
+                return WHEEL_GLYPH + " ±" + formatStep(wheelStep)
+                        + ", " + ARROWS_GLYPH + " ±" + formatStep(arrowStep);
+            case PERCENT: {
+                Unit u = currentUnit();
+                if (u.log()) {
+                    return WHEEL_GLYPH + " ±" + (int) LOG_WHEEL_STEP_DB + " dB, " + ARROWS_GLYPH + " ±1 dB";
+                }
+                String suffix = u.suffix();
+                return WHEEL_GLYPH + " ±" + PERCENT_STEP_LABEL + ", "
+                        + ARROWS_GLYPH + " ±1" + (suffix.isEmpty() ? "" : " " + suffix);
+            }
+            case LIST:
+                return WHEEL_GLYPH + ARROWS_GLYPH + " " + seriesHint();
+            default:
+                return "";
+        }
+    }
+
+    /** A FIXED step rendered in its own natural display unit (so a 0.001 s step
+     *  reads "1 ms", not "0.001 s"). */
+    private String formatStep(double canonicalStep) {
+        return formatIn(canonicalStep, family.displayUnit(canonicalStep));
+    }
+
+    /** The LIST series for {@link #stepHint()}: every entry when short, else
+     *  first·…·last. */
+    private String seriesHint() {
+        int n = series.length;
+        if (n == 0) return "";
+        if (n > SERIES_HINT_MAX) {
+            return seriesEntry(series[0]) + SERIES_SEP + "…" + SERIES_SEP + seriesEntry(series[n - 1]);
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            if (i > 0) sb.append(SERIES_SEP);
+            sb.append(seriesEntry(series[i]));
+        }
+        return sb.toString();
+    }
+
+    private String seriesEntry(double v) {
+        if (Double.isInfinite(v)) return "∞";
+        if (isNamedValue(v)) return namedValueLabel;
+        return formatIn(v, family.displayUnit(v));
     }
 
     /** Parses {@code text} (number + optional unit suffix of this family,

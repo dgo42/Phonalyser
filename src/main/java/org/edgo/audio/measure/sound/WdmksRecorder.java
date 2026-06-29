@@ -203,23 +203,7 @@ public class WdmksRecorder extends AbstractPcmCapture {
     }
 
     private void consumeLoop() {
-        long lastOverflowLogNanos = 0L;
-        final long OVERFLOW_LOG_INTERVAL_NANOS = 1_000_000_000L;
         while (recording.get() || !queue.isEmpty()) {
-            long now = System.nanoTime();
-            if (now - lastOverflowLogNanos >= OVERFLOW_LOG_INTERVAL_NANOS) {
-                long dropped = droppedFramesSinceLog.getAndSet(0);
-                long paOver  = paInputOverflowCount.getAndSet(0);
-                long paUnder = paInputUnderflowCount.getAndSet(0);
-                long allocs  = poolMissAllocSinceLog.getAndSet(0);
-                if (dropped > 0 || paOver > 0 || paUnder > 0 || allocs > 1) {
-                    // allocs == 1 per second can be the cold-start fill; a
-                    // sustained rate means GC pressure on the audio thread.
-                    log.warn("WDM-KS gaps: queue-dropped={} frames (~{} ms), paInputOverflow={}, paInputUnderflow={}, pool-miss-allocs={}",
-                            dropped, dropped * 1000L / Math.max(1, sampleRate), paOver, paUnder, allocs);
-                }
-                lastOverflowLogNanos = now;
-            }
             byte[] buffer = queue.aquire();
             if (buffer == null) {
                 // Ring empty.  Park briefly so we don't busy-spin a core

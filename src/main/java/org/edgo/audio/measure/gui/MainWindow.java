@@ -26,6 +26,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
@@ -39,7 +40,6 @@ import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.program.Program;
 import org.eclipse.swt.widgets.Control;
-import org.eclipse.swt.widgets.DirectoryDialog;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Menu;
@@ -53,6 +53,7 @@ import org.edgo.audio.measure.gui.helpviewer.HelpUrls;
 import org.edgo.audio.measure.gui.helpviewer.HelpViewer;
 import org.edgo.audio.measure.gui.helpviewer.UpdateChecker;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.scope.gl.GpuSupport;
 import org.edgo.audio.measure.gui.tips.TipOfTheDayDialog;
 import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -177,7 +178,18 @@ public final class MainWindow {
         // has its real size) to settle them at startup, the same re-layout a
         // resize triggers.
         display.asyncExec(() -> {
-            if (!shell.isDisposed()) shell.layout(true, true);
+            if (shell.isDisposed()) return;
+            shell.layout(true, true);
+            // The GL probe needs a realised window, so it was deferred past
+            // construction (the scope built on the CPU path).  Now the shell is
+            // shown, probe for real exactly once; if the GPU is available and
+            // enabled, rebuild so the scope takes the GL path.  Skipping the probe
+            // until here is what stops the X11 glXMakeCurrent abort at startup.
+            if (!GpuSupport.instance().isProbed()
+                    && GpuSupport.instance().isAvailable(shell)
+                    && Preferences.instance().isUseGpuAcceleration()) {
+                rebuildContent(false);   // silent: idle scope, no "Applying settings…" flash
+            }
         });
         // Fire the silent update check once the shell is up.  The
         // checker spawns its own daemon thread; doing the check from
@@ -196,6 +208,14 @@ public final class MainWindow {
         return shell.isDisposed();
     }
 
+    /** Loop-driven realtime repaint of the active tab's live views, called once
+     *  per frame by the main event loop's render tick (see {@code GuiMain}).
+     *  Returns {@code true} while a live view is updating so the loop maintains
+     *  the realtime cadence; {@code false} when idle so the loop can truly sleep. */
+    public boolean renderRealtimeFrame() {
+        return mainTab != null && mainTab.renderRealtimeFrame();
+    }
+
     /** Closes the shell, ending the SWT event loop — how an automation
      *  run exits the application when its script completes. */
     public void close() {
@@ -210,7 +230,15 @@ public final class MainWindow {
      *  font / language change never silences a running measurement; a
      *  brief "Applying settings…" splash covers the work. */
     public void rebuildContent() {
-        showRebuildSplash(display);
+        rebuildContent(true);
+    }
+
+    /** As {@link #rebuildContent()}, but {@code showSplash=false} skips the
+     *  "Applying settings…" splash — used by the one-shot startup CPU→GPU swap
+     *  (the scope is idle then, so the swap is invisible and the splash would just
+     *  flash). */
+    public void rebuildContent(boolean showSplash) {
+        if (showSplash) showRebuildSplash(display);
         try {
             Menu oldMenu = shell.getMenuBar();
             for (Control c : shell.getChildren()) {
@@ -228,7 +256,7 @@ public final class MainWindow {
             mainTab.applySavedLayoutState();
             shell.layout(true, true);
         } finally {
-            closeRebuildSplash();
+            if (showSplash) closeRebuildSplash();
         }
     }
 
@@ -399,15 +427,18 @@ public final class MainWindow {
         Preferences mwPrefs = Preferences.instance();
         String audioBefore = audioConfigFingerprint(mwPrefs);
         String fontsBefore = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
+        boolean gpuBefore  = mwPrefs.isUseGpuAcceleration();
         new PreferencesDialog(shell).open(() -> {
             String fontsAfter = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
             // Bounce BEFORE a font rebuild: the resume hook belongs to the
             // CURRENT panes — running it after rebuildContent would drive
             // disposed widgets.
             if (!audioConfigFingerprint(mwPrefs).equals(audioBefore)) {
-                mainTab.pauseForDialog().run();
+                mainTab.pauseForDialog();
             }
-            if (!fontsAfter.equals(fontsBefore)) {
+            // The GPU toggle, like fonts, takes effect by rebuilding the panes — the
+            // scope pane chooses its surface (GL vs GC) at construction.
+            if (!fontsAfter.equals(fontsBefore) || mwPrefs.isUseGpuAcceleration() != gpuBefore) {
                 rebuildContent();
             }
         });
@@ -435,30 +466,83 @@ public final class MainWindow {
         }
     }
 
-    /** Lets a translator regenerate a help bundle's search index in place:
-     *  pick the {@code help/<lang>} folder, rebuild {@code search-index.js}
-     *  and {@code help-index.html} from its current pages. */
+    /** Regenerates the search index ({@code search-index.js} +
+     *  {@code help-index.html}) for EVERY help language bundle in one action.
+     *  The on-disk help source is located automatically (the app run from the
+     *  project root, or derived from the compiled-resources path), so no folder
+     *  has to be picked. */
     private void rebuildHelpIndex() {
-        DirectoryDialog dd = new DirectoryDialog(shell);
-        dd.setText(I18n.t("help.index.rebuild.title"));
-        dd.setMessage(I18n.t("help.index.rebuild.choose"));
-        String picked = dd.open();
-        if (picked == null) return;
-        Path dir = Paths.get(picked);
-        if (!Files.isRegularFile(dir.resolve("index.html"))) {
+        Path root = locateHelpSourceRoot();
+        List<Path> bundles = (root == null) ? List.of() : helpBundles(root);
+        if (bundles.isEmpty()) {
             Dialogs.error(shell, I18n.t("help.index.rebuild.title"),
                     I18n.t("help.index.rebuild.notHelpDir"));
             return;
         }
+        int pages = 0;
+        int topics = 0;
+        int terms = 0;
         try {
-            int[] s = new HelpIndexBuilder(dir).build();
-            Dialogs.info(shell, I18n.t("help.index.rebuild.title"),
-                    I18n.t("help.index.rebuild.done", s[0], s[1], s[2]));
+            for (Path bundle : bundles) {
+                int[] s = new HelpIndexBuilder(bundle).build();
+                log.info("Help index rebuilt for {}: pages={} topics={} terms={}",
+                        bundle.getFileName(), s[0], s[1], s[2]);
+                pages += s[0];
+                topics += s[1];
+                terms += s[2];
+            }
         } catch (IOException ex) {
-            log.error("Help index rebuild failed for {}: {}", dir, ex.getMessage(), ex);
+            log.error("Help index rebuild failed: {}", ex.getMessage(), ex);
             Dialogs.error(shell, I18n.t("help.index.rebuild.title"),
                     I18n.t("help.index.rebuild.failed", ex.getMessage()));
+            return;
         }
+        Dialogs.info(shell, I18n.t("help.index.rebuild.title"),
+                I18n.t("help.index.rebuild.done", pages, topics, terms));
+    }
+
+    /** Resolves the on-disk {@code help/} source root that holds the per-language
+     *  bundles, or {@code null} when it can't be found (e.g. the app isn't run
+     *  from a source checkout).  The index must be written into the SOURCE tree
+     *  (not the compiled {@code target/classes} copy), so this prefers
+     *  {@code <cwd>/src/main/resources/help} and otherwise derives the source
+     *  path from the compiled-resources location. */
+    private Path locateHelpSourceRoot() {
+        Path fromCwd = Paths.get(System.getProperty("user.dir", "."),
+                "src", "main", "resources", "help");
+        if (Files.isDirectory(fromCwd)) return fromCwd;
+        try {
+            URL u = getClass().getClassLoader().getResource("help");
+            if (u != null && "file".equals(u.getProtocol())) {
+                // <root>/target/classes/help -> <root>/src/main/resources/help
+                Path classesHelp = Paths.get(u.toURI());
+                Path projectRoot = classesHelp.getParent().getParent().getParent();
+                Path src = projectRoot.resolve(Paths.get("src", "main", "resources", "help"));
+                if (Files.isDirectory(src)) return src;
+            }
+        } catch (Exception ex) {
+            log.warn("Could not derive help source root from the classpath", ex);
+        }
+        return null;
+    }
+
+    /** Help language bundles under {@code root}: every immediate sub-folder that
+     *  holds an {@code index.html} (one per language), or {@code root} itself
+     *  when it is a single bundle. */
+    private List<Path> helpBundles(Path root) {
+        List<Path> bundles = new ArrayList<>();
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(root, Files::isDirectory)) {
+            for (Path sub : ds) {
+                if (Files.isRegularFile(sub.resolve("index.html"))) bundles.add(sub);
+            }
+        } catch (IOException ex) {
+            log.warn("Could not enumerate help bundles in {}", root, ex);
+        }
+        if (bundles.isEmpty() && Files.isRegularFile(root.resolve("index.html"))) {
+            bundles.add(root);
+        }
+        bundles.sort(Comparator.comparing(p -> p.getFileName().toString()));
+        return bundles;
     }
 
     /** Scans the active i18n source for {@code messages*.properties}

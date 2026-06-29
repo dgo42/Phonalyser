@@ -21,7 +21,6 @@ package org.edgo.audio.measure.gui.widgets;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
-import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
@@ -29,6 +28,8 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Event;
 import org.edgo.audio.measure.gui.common.ColorUtil;
+import org.edgo.audio.measure.gui.common.GcMeasurementPainter;
+import org.edgo.audio.measure.gui.common.MeasurementPainter;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 
@@ -102,39 +103,51 @@ public final class ToolButton extends TransparentComposite {
     }
 
     private void onPaint(PaintEvent e) {
-        GC gc = e.gc;
         Rectangle b = getClientArea();
-        int rw = b.width - 1;
-        int rh = b.height - 1;
+        paintContent(new GcMeasurementPainter(e.gc), 0, 0, b.width, b.height);
+    }
+
+    /** Draws the button through a {@link MeasurementPainter} at ({@code x}, {@code y})
+     *  at its current size — used by the GPU scope to render the (hidden) toolbar
+     *  buttons into the GL canvas, where an SWT control can't overlay it. */
+    public void paintWith(MeasurementPainter p, int x, int y) {
+        paintContent(p, x, y, getSize().x, getSize().y);
+    }
+
+    private void paintContent(MeasurementPainter p, int x, int y, int w, int h) {
+        int rw = w - 1;
+        int rh = h - 1;
         boolean active = toggled || pressed;
         // Active label + border auto-contrast to absolute black/white by the fill's
         // brightness — theme-independent (the FFT's light bg and the scope's black bg alike).
         Color contrast = active
                 ? getDisplay().getSystemColor(ColorUtil.isDark(fillColor) ? SWT.COLOR_WHITE : SWT.COLOR_BLACK)
                 : null;
+        p.setLineWidth(1);   // 1-px frame — the shared GPU painter keeps the previous stroke width
         if (active) {
             if (fillColor != null) {
-                gc.setBackground(fillColor);
-                gc.fillRoundRectangle(0, 0, rw, rh, CORNER_RADIUS, CORNER_RADIUS);
+                p.setBackground(fillColor);
+                p.fillRoundRectangle(x, y, rw, rh, CORNER_RADIUS, CORNER_RADIUS);
             }
             if (label != null) {   // outline label buttons; icon buttons invert via the dark variant
-                gc.setForeground(contrast);
-                gc.drawRoundRectangle(0, 0, rw, rh, CORNER_RADIUS, CORNER_RADIUS);
+                p.setForeground(contrast);
+                p.drawRoundRectangle(x, y, rw, rh, CORNER_RADIUS, CORNER_RADIUS);
             }
         } else if (drawFrame && frameColor != null) {
-            gc.setForeground(frameColor);
-            gc.drawRoundRectangle(0, 0, rw, rh, CORNER_RADIUS, CORNER_RADIUS);
+            p.setForeground(frameColor);
+            p.drawRoundRectangle(x, y, rw, rh, CORNER_RADIUS, CORNER_RADIUS);
         }
         Image icon = (active && darkIcon != null) ? darkIcon : lightIcon;
         if (icon != null && !icon.isDisposed()) {
             Rectangle ib = icon.getBounds();
-            gc.drawImage(icon, (b.width - ib.width) / 2, (b.height - ib.height) / 2);
+            p.drawImage(icon, x + (w - ib.width) / 2, y + (h - ib.height) / 2);
         } else if (label != null) {
             Color lc = active ? contrast : contentColor;
             if (lc != null) {
-                gc.setForeground(lc);
-                Point ext = gc.textExtent(label);
-                gc.drawText(label, (b.width - ext.x) / 2, (b.height - ext.y) / 2, true);
+                p.setFont(getFont());   // the button's own font (e.g. the bold channel font)
+                p.setForeground(lc);
+                Point ext = p.textExtent(label);
+                p.drawText(label, x + (w - ext.x) / 2, y + (h - ext.y) / 2, true);
             }
         }
     }

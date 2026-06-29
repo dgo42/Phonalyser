@@ -6,7 +6,7 @@
 
     <groupId>org.edgo.phonalyser</groupId>
     <artifactId>phonalyser</artifactId>
-    <version>1.0-RC1</version>
+    <version>1.0.2</version>
     <packaging>jar</packaging>
 
     <name>Phonalyser</name>
@@ -19,12 +19,32 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <swt.version>3.126.0</swt.version>
 
+        <!-- LWJGL + NanoVG — GPU (OpenGL) rendering experiment for the scope view.
+             lwjgl.natives is overridden per OS profile below; the default keeps a
+             plain `mvn compile` resolving on the dev (Windows) machine. -->
+        <lwjgl.version>3.3.3</lwjgl.version>
+        <lwjgl.natives>natives-windows</lwjgl.natives>
+        <jogl.natives>natives-windows-amd64</jogl.natives>
+
         <!-- Application metadata consumed by jpackage. -->
         <app.name>Phonalyser</app.name>
         <app.vendor>edgo.org</app.vendor>
-        <app.version>1.0.0</app.version>
+        <!-- jpackage app-version = the Windows MSI ProductVersion, taken straight
+             from project.version.  That version is therefore kept PURE NUMERIC
+             (major.minor.build, no RC suffix) and strictly INCREASING: the MSI
+             refuses to install over an existing copy of the same version
+             ("Another version of this product is already installed").  Mark
+             release candidates / betas with GitHub's pre-release flag, not an
+             -RCn suffix in the number. -->
+        <app.version>${project.version}</app.version>
         <app.mainClass>org.edgo.audio.measure.gui.GuiMain</app.mainClass>
         <app.mainJar>${project.artifactId}-${project.version}-${platform.id}.jar</app.mainJar>
+
+        <!-- Runtime native-library directory inside the jpackage image, used for
+             java.library.path / jna.library.path.  Default $APPDIR (natives staged
+             flat); the Windows profile overrides it to $APPDIR/lib/windows so the
+             packaged layout mirrors the dev layout (lib/windows on the lib path). -->
+        <jpackage.libDir>$APPDIR</jpackage.libDir>
 
         <!-- Short platform tag baked into the fat JAR filename so multiple
              OS builds can sit side-by-side in the same release folder.
@@ -37,6 +57,19 @@
              mvn -o test -Dsurefire.excludedGroups= -Dtest=FftHarmonicStabilityTest#kappaRefitAB -->
         <surefire.excludedGroups>exploratory</surefire.excludedGroups>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- LWJGL BOM pins every lwjgl-* module + native classifier to one version. -->
+            <dependency>
+                <groupId>org.lwjgl</groupId>
+                <artifactId>lwjgl-bom</artifactId>
+                <version>${lwjgl.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <!-- Log4j 2 API -->
@@ -141,6 +174,82 @@
             <version>3.38.0</version>
         </dependency>
 
+        <!-- LWJGL core + OpenGL bindings + NanoVG (GPU vector canvas WITH text).
+             Compile-time API jars are platform-independent; the matching natives
+             (lwjgl core + opengl + nanovg each ship a JNI shim) come in per OS
+             via the ${lwjgl.natives} classifier.  Experimental:
+             drives the GLCanvas scope renderer (see gui.scope.gl). -->
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-opengl</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-nanovg</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-glfw</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-opengl</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-nanovg</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-glfw</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- JOGL — alternative OpenGL binding whose own SWT GLCanvas
+             (com.jogamp.opengl.swt.GLCanvas) manages the GL context itself and is
+             robust on Cocoa, where SWT's built-in GLCanvas NPEs.  Per-OS native
+             via ${jogl.natives}.  Experimental: probing GL embedding on
+             macOS/Wayland. -->
+        <dependency>
+            <groupId>org.jogamp.gluegen</groupId>
+            <artifactId>gluegen-rt</artifactId>
+            <version>2.4.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jogamp.jogl</groupId>
+            <artifactId>jogl-all</artifactId>
+            <version>2.4.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.jogamp.gluegen</groupId>
+            <artifactId>gluegen-rt</artifactId>
+            <version>2.4.0</version>
+            <classifier>${jogl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jogamp.jogl</groupId>
+            <artifactId>jogl-all</artifactId>
+            <version>2.4.0</version>
+            <classifier>${jogl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- JUnit 5 for testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -149,6 +258,19 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <!-- JogAmp (JOGL / GlueGen) is not on Maven Central; its artifacts live in
+         JogAmp's own Maven repository.  Build-wide (Maven repositories can't be
+         scoped per-dependency) and EXPERIMENTAL — only for the JOGL GL-embedding
+         probe.  Remove with the JOGL deps if that path is abandoned. -->
+    <repositories>
+        <repository>
+            <id>jogamp</id>
+            <url>https://jogamp.org/deployment/maven/</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+    </repositories>
 
     <profiles>
         <!-- =============================== Windows x86_64 =============================== -->
@@ -161,9 +283,14 @@
                 </os>
             </activation>
             <properties>
-                <jpackage.type>MSI</jpackage.type>
+                <jpackage.type>EXE</jpackage.type>
                 <jpackage.nativesDir>${project.basedir}/lib/windows</jpackage.nativesDir>
+                <!-- Natives are staged into lib/windows (see stage-windows-natives);
+                     point the runtime library path there, mirroring the dev layout. -->
+                <jpackage.libDir>$APPDIR/lib/windows</jpackage.libDir>
                 <platform.id>windows</platform.id>
+                <lwjgl.natives>natives-windows</lwjgl.natives>
+                <jogl.natives>natives-windows-amd64</jogl.natives>
             </properties>
             <dependencies>
                 <!-- SWT — Windows x64 binding.  The platform-specific artifact pulls
@@ -197,10 +324,10 @@
             </dependencies>
             <build>
                 <plugins>
-                    <!-- Copy the Windows native DLLs + csjsound jar into the
-                         jpackage staging directory so the installer payload
-                         picks them up at $APPDIR (where -Djava.library.path
-                         points at runtime). -->
+                    <!-- Stage the Windows natives into the jpackage payload: the DLLs into
+                         lib/windows (which the runtime library path points at, mirroring the
+                         dev layout) and the csjsound jar at the input root (so jpackage keeps
+                         it on the app classpath). -->
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-antrun-plugin</artifactId>
@@ -213,9 +340,23 @@
                                 </goals>
                                 <configuration>
                                     <target>
-                                        <copy todir="${project.build.directory}/jpackage-input">
+                                        <!-- csjsound DLLs come from lib/windows; portaudio_x64.dll comes
+                                             from the bundled JNA resource (win32-x86-64) instead — lib/windows
+                                             holds a stale build with WDM-KS compiled out (rc=-9979), while the
+                                             resource copy (the one the runnable jar loads, which works) has
+                                             WDM-KS.  Both land in app/lib/windows, where the launcher's
+                                             jna.library.path / java.library.path point. -->
+                                        <copy todir="${project.build.directory}/jpackage-input/lib/windows">
                                             <fileset dir="${project.basedir}/lib/windows">
                                                 <include name="*.dll"/>
+                                                <exclude name="portaudio_x64.dll"/>
+                                            </fileset>
+                                            <fileset dir="${project.basedir}/src/main/resources/win32-x86-64">
+                                                <include name="portaudio_x64.dll"/>
+                                            </fileset>
+                                        </copy>
+                                        <copy todir="${project.build.directory}/jpackage-input">
+                                            <fileset dir="${project.basedir}/lib/windows">
                                                 <include name="csjsound-provider.jar"/>
                                             </fileset>
                                         </copy>
@@ -227,8 +368,59 @@
                     <plugin>
                         <groupId>org.panteleyev</groupId>
                         <artifactId>jpackage-maven-plugin</artifactId>
+                        <!-- Only the icon here — it is valid for BOTH the EXE installer
+                             and the app-image (MSIX) build.  The Windows installer-only
+                             flags (win-menu, win-shortcut, win-menu-group, win-upgrade-uuid)
+                             live in the `windows-installer-extras` profile below; jpackage
+                             rejects them for type app-image, and the release/CI path builds an
+                             app-image via -Djpackage.type=APP_IMAGE (see PACKAGING.md). -->
                         <configuration>
                             <icon>${project.basedir}/src/main/resources/icons/phonalyser.ico</icon>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- ==================== Windows installer-only jpackage options ==================== -->
+        <!-- The win-menu, win-shortcut, win-menu-group and win-upgrade-uuid flags are rejected
+             by jpackage when the type is app-image.  The Windows release builds an app-image
+             (then makeappx → MSIX, see PACKAGING.md) via -Djpackage.type=APP_IMAGE, so these
+             flags MUST NOT be applied on that path.  This profile activates ONLY on a plain
+             Windows build with NO -Djpackage.type override — i.e. when producing the EXE
+             installer — so `mvn clean package` yields an EXE with a Start-menu entry while
+             -Djpackage.type=APP_IMAGE still builds a clean app-image.  (Modern Maven ANDs the
+             two activation conditions: Windows-amd64 AND jpackage.type unset.) -->
+        <profile>
+            <id>windows-installer-extras</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                    <arch>amd64</arch>
+                </os>
+                <property>
+                    <name>!jpackage.type</name>
+                </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <!-- Stable installer UpgradeCode: keeps every build part of the
+                                 same product line so a newer app.version performs a MAJOR
+                                 UPGRADE (removes the old, installs the new) instead of failing
+                                 with "Another version of this product is already installed".
+                                 NEVER change this GUID across releases; pair it with a strictly
+                                 increasing app.version (the installer ProductVersion). -->
+                            <winUpgradeUuid>dd3443af-6db7-442d-9fd3-dd39832a5ae5</winUpgradeUuid>
+                            <!-- Start-menu + Desktop shortcuts, with an installer dialog
+                                 letting the user choose whether to create them. -->
+                            <winMenu>true</winMenu>
+                            <winMenuGroup>Phonalyser</winMenuGroup>
+                            <winShortcut>true</winShortcut>
+                            <winShortcutPrompt>true</winShortcutPrompt>
                         </configuration>
                     </plugin>
                 </plugins>
@@ -248,6 +440,8 @@
             <properties>
                 <jpackage.type>DEB</jpackage.type>
                 <platform.id>linux</platform.id>
+                <lwjgl.natives>natives-linux</lwjgl.natives>
+                <jogl.natives>natives-linux-amd64</jogl.natives>
             </properties>
             <dependencies>
                 <dependency>
@@ -288,6 +482,8 @@
             <properties>
                 <jpackage.type>DEB</jpackage.type>
                 <platform.id>linux-aarch64</platform.id>
+                <lwjgl.natives>natives-linux-arm64</lwjgl.natives>
+                <jogl.natives>natives-linux-aarch64</jogl.natives>
             </properties>
             <dependencies>
                 <dependency>
@@ -327,6 +523,8 @@
             <properties>
                 <jpackage.type>DMG</jpackage.type>
                 <platform.id>macos-x64</platform.id>
+                <lwjgl.natives>natives-macos</lwjgl.natives>
+                <jogl.natives>natives-macosx-universal</jogl.natives>
             </properties>
             <dependencies>
                 <dependency>
@@ -400,6 +598,8 @@
             <properties>
                 <jpackage.type>DMG</jpackage.type>
                 <platform.id>macos</platform.id>
+                <lwjgl.natives>natives-macos-arm64</lwjgl.natives>
+                <jogl.natives>natives-macosx-universal</jogl.natives>
             </properties>
             <dependencies>
                 <dependency>
@@ -772,7 +972,15 @@
                     <mainClass>${app.mainClass}</mainClass>
                     <type>${jpackage.type}</type>
                     <javaOptions>
-                        <option>-Djava.library.path=$APPDIR</option>
+                        <!-- Native search dir.  java.library.path is what System.loadLibrary
+                             (csjsound) uses; JNA (PortAudio) searches jna.library.path.  Both
+                             point at ${jpackage.libDir}, which is $APPDIR by default and
+                             $APPDIR/lib/windows on Windows (where the natives are staged,
+                             mirroring the dev lib/windows layout) so the packaged app loads
+                             the bundled WDM-KS portaudio_x64.dll, not a system PortAudio
+                             (rc=-9979). -->
+                        <option>-Djava.library.path=${jpackage.libDir}</option>
+                        <option>-Djna.library.path=${jpackage.libDir}</option>
                         <option>-Di18n.dir=$APPDIR/i18n</option>
                         <option>-Dhelp.dir=$APPDIR/help</option>
                     </javaOptions>

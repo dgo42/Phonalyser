@@ -30,6 +30,8 @@ import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 
+import org.edgo.audio.measure.gui.i18n.I18n;
+
 /**
  * Small helpers for the recurring {@code new MessageBox(parent, …); setText;
  * setMessage; open;} pattern.  Centralises styling and call-site shape so
@@ -132,10 +134,10 @@ public final class Dialogs {
         buttons.setLayoutData(new GridData(SWT.END, SWT.CENTER, true, false));
 
         Button cancel = new Button(buttons, SWT.PUSH);
-        cancel.setText("Cancel");
+        cancel.setText(I18n.t("common.cancel"));
         cancel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         Button ok = new Button(buttons, SWT.PUSH);
-        ok.setText("OK");
+        ok.setText(I18n.t("common.ok"));
         ok.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         dialog.setDefaultButton(ok);
 

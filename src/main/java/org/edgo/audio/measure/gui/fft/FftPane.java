@@ -119,22 +119,21 @@ public final class FftPane extends AbstractPane {
      * the Record LED lights up and the view simply picks up the worker's
      * next published result.
      */
-    public FftPane(Composite parent, GeneratorController genController, FftController controller,
-                   FreqRespCorrectionStore correctionStore) {
-        this(parent, true, genController, controller, correctionStore);
+    public FftPane(Composite parent, GeneratorController genController, FftController controller) {
+        this(parent, true, genController, controller);
     }
 
     /**
-     * Offscreen screenshot variant: builds its own silent correction store
-     * and an idle controller (worker never started), so constructing it
-     * fires no bus events and opens no audio device.
+     * Offscreen screenshot variant: builds its own idle controller (worker
+     * never started, no audio device opened) and renders from that controller's
+     * store.
      */
     public FftPane(Composite parent) {
-        this(parent, false, null, null, null);
+        this(parent, false, null, null);
     }
 
     private FftPane(Composite parent, boolean liveCapture, GeneratorController genController,
-                    FftController controller, FreqRespCorrectionStore correctionStoreIn) {
+                    FftController controller) {
         super(parent);
         // FFT-length changes, capture acquire / release, and the
         // generator-running query all flow through the MessageBus — no
@@ -161,19 +160,15 @@ public final class FftPane extends AbstractPane {
         plotRow.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         plotRow.setLayout(new FormLayout());
 
-        // The live pane receives the app-lifetime correction store +
-        // controller (built in UIEngines; the store bridges its changes
-        // onto the bus event the worker + tab subscribe to).  The offscreen
-        // screenshot clone (liveCapture=false) builds its own SILENT store —
-        // so building its calibration tab fires no events; corrections are
-        // still applied because the tab repopulates the store from prefs —
-        // and an idle controller whose worker is never started.
-        FreqRespCorrectionStore correctionStore =
-                liveCapture ? correctionStoreIn : new FreqRespCorrectionStore("FFT", null);
+        // The live pane receives the app-lifetime controller (built in
+        // UIEngines), which owns the correction store.  The offscreen
+        // screenshot clone (liveCapture=false) builds its own idle controller
+        // (worker never started) and takes that controller's store.
         if (!liveCapture) {
-            controller = new FftController(new FftAnalyzerWorker(d), correctionStore);
+            controller = new FftController(new FftAnalyzerWorker(d));
         }
         this.controller = controller;
+        FreqRespCorrectionStore correctionStore = controller.getCorrectionStore();
         view = new FftView(plotRow, correctionStore, controller);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);
         magScrollbar.setMinimum(0);
@@ -243,9 +238,7 @@ public final class FftPane extends AbstractPane {
         // Collapsing the tab body (strip double-click / Enter, or the
         // screenshot path) frees vertical space — re-flow the pane so the
         // chart above reclaims it.
-        toolbarTabs.setCollapseRelayout(() -> {
-            if (!group.isDisposed()) group.layout(true, true);
-        });
+        toolbarTabs.setOwner(this);
 
         // Predistortion-wizard button (live pane only) — left of Record,
         // mirroring the Frequency-Response pane's wizard button.  Drives the
@@ -373,6 +366,11 @@ public final class FftPane extends AbstractPane {
         return toolbarTabs;
     }
 
+    @Override
+    protected void onTabCollapse() {
+        if (!group.isDisposed()) group.layout(true, true);
+    }
+
     /** Registers this pane's settings tabs in the component registry under
      *  {@code prefix} so automation can select each by path.  See
      *  {@link FftTabControl#registerTabs}. */
@@ -435,6 +433,13 @@ public final class FftPane extends AbstractPane {
     /** True while the FFT analyser is recording. */
     public boolean isRecording() {
         return controller.isRecording();
+    }
+
+    /** Loop-driven realtime repaint of the FFT view, called once per frame by the
+     *  main event loop's render tick.  Returns {@code true} while the view is live
+     *  (recording) so the loop keeps the realtime cadence going. */
+    public boolean renderRealtimeFrame() {
+        return view != null && !view.isDisposed() && view.renderRealtimeFrame();
     }
 
     /** Pauses FFT recording for the lifetime of a modal dialog (e.g.

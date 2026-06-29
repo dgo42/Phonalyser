@@ -50,14 +50,48 @@ jobs:
 
       # `mvn package` builds the fat JAR, stages it into target/jpackage-input/,
       # and runs jpackage — all in one go (see <executions> in pom.xml).
-      - name: Build fat JAR + MSI installer
+      - name: Build fat JAR + EXE installer
         run: mvn -B -DskipTests package
 
+      # Optional: also pack an MSIX for the Microsoft Store (the Store signs it
+      # for free at publish time).  GUARDED — skipped unless MSIX_IDENTITY_NAME is
+      # set, so normal .exe/.jar builds are unaffected.  Needs a Partner Center app
+      # reservation (Identity Name + Publisher) and PNG logos in
+      # src/main/packaging/msix/assets/.  See PACKAGING.md -> "Microsoft Store (MSIX)".
+      - name: Build MSIX (Microsoft Store)
+        if: vars.MSIX_IDENTITY_NAME != ''
+        shell: pwsh
+        run: |
+          mvn -B -DskipTests package "-Djpackage.type=APP_IMAGE"
+          $app = "target/installer/Phonalyser"
+          if (-not (Test-Path $app)) { throw "app-image not found at $app" }
+          if (-not (Get-ChildItem src/main/packaging/msix/assets/*.png -ErrorAction SilentlyContinue)) {
+            throw "No Store logos in src/main/packaging/msix/assets/ (see that folder's README.txt)."
+          }
+          $pomVer = (Select-Xml -Path pom.xml -XPath "/*[local-name()='project']/*[local-name()='version']").Node.InnerText
+          $parts  = ($pomVer -replace '[^0-9.].*$','').Split('.')
+          while ($parts.Count -lt 3) { $parts += '0' }
+          $ver = ($parts[0..2] -join '.') + '.0'
+          (Get-Content src/main/packaging/msix/AppxManifest.xml -Raw).
+            Replace('@IDENTITY_NAME@',  '${{ vars.MSIX_IDENTITY_NAME }}').
+            Replace('@PUBLISHER@',      '${{ vars.MSIX_PUBLISHER }}').
+            Replace('@PUBLISHER_NAME@', '${{ vars.MSIX_PUBLISHER_NAME }}').
+            Replace('@VERSION@',        $ver) |
+            Set-Content "$app/AppxManifest.xml" -Encoding utf8
+          New-Item -ItemType Directory -Force "$app/Assets" | Out-Null
+          Copy-Item src/main/packaging/msix/assets/*.png "$app/Assets/" -Force
+          $makeappx = (Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin" -Recurse -Filter makeappx.exe |
+                       Where-Object FullName -match '\\x64\\' | Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          if (-not $makeappx) { throw "makeappx.exe not found (Windows SDK)" }
+          & $makeappx pack /d $app /p "target/installer/Phonalyser-$ver.msix" /o
+
+      # The installer is shipped UNSIGNED (see README.md -> "Code signing").
       - uses: actions/upload-artifact@v7
         with:
           name: phonalyser-windows
           path: |
-            target/installer/*.msi
+            target/installer/*.exe
+            target/installer/*.msix
             target/phonalyser-*-windows.jar
 
   # ============================================================== Linux x64
@@ -164,6 +198,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
@@ -173,11 +209,19 @@ jobs:
         with:
           # ** recurses into the installer/ subdirectory that
           # upload-artifact@v4 creates when multiple paths share a parent
-          # (target/) — without ** the .msi/.deb/.dmg get skipped and
+          # (target/) — without ** the .exe/.deb/.dmg get skipped and
           # only the top-level fat JAR makes it onto the release.
+          # The dist/* launcher scripts + per-OS run guides are attached from
+          # the checkout (identical for every release).
           files: |
             artifacts/phonalyser-windows/**
             artifacts/phonalyser-linux/**
             artifacts/phonalyser-macos-x64/**
             artifacts/phonalyser-macos-arm64/**
+            dist/Phonalyser-windows.bat
+            dist/Phonalyser-linux.sh
+            dist/Phonalyser-macos.sh
+            dist/README-windows.txt
+            dist/README-linux.txt
+            dist/README-macos.txt
           draft: true

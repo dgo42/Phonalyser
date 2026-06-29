@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -46,6 +47,7 @@ import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
+import org.edgo.audio.measure.enums.PersistenceMode;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.enums.WindowType;
@@ -127,9 +129,9 @@ public final class Preferences {
      *  buttons (central creation point only — no dialog UI).  Changing
      *  the first two in the Preferences dialog triggers a shell recreate
      *  so every painter picks the new fonts up. */
-    private final Property<String> uiFontNormal  = bound("Consolas|9|normal");
-    private final Property<String> uiFontBold    = bound("Consolas|9|bold");
-    private final Property<String> uiFontChannel = bound("Consolas|12|bold");
+    private final Property<String> uiFontNormal  = bound(defaultUiFont("normal", 0));
+    private final Property<String> uiFontBold    = bound(defaultUiFont("bold", 0));
+    private final Property<String> uiFontChannel = bound(defaultUiFont("bold", 3));
 
     /** When true, the GUI checks GitHub releases for a newer version on
      *  startup.  Stays off by default so the app never makes network
@@ -142,6 +144,10 @@ public final class Preferences {
     /** When true, a "Tip of the day" popup is shown at startup.  Cleared by
      *  the dialog's "Don't show again" checkbox or in Preferences. */
     private final Property<Boolean> showTipsAtStartup = bound(true);
+    /** When true, the oscilloscope renders on the GPU (NanoVG/OpenGL) where available
+     *  — gated by {@code GpuSupport}, so it has no effect on a machine without a
+     *  working GL context (the checkbox is disabled there). */
+    private final Property<Boolean> useGpuAcceleration = bound(true);
 
     private final Map<AudioBackendType, BackendPrefs> perBackend =
             new EnumMap<>(AudioBackendType.class);
@@ -203,6 +209,10 @@ public final class Preferences {
     private final Property<Double> oscTriggerPositionFrac = bound(0.5);
     /** Sliding-window duration (seconds) for measurement avg / min / max / σ. */
     private final Property<Double>         oscMeasurementAverageSeconds = bound(5.0);
+    /** Display persistence ("digital phosphor") mode — GPU path only. */
+    private final Property<PersistenceMode> oscPersistenceMode = bound(PersistenceMode.OFF);
+    /** Manual persistence time (seconds) used when {@link #oscPersistenceMode} is MANUAL. */
+    private final Property<Double>         oscPersistenceManualSeconds = bound(1.0);
     /** Trace stroke width (pixels). */
     private final Property<Double>         oscLineWidth         = bound(2.0);
     /** Sample-dot diameter (pixels) when the inter-sample spacing exceeds 10 px. */
@@ -669,6 +679,7 @@ public final class Preferences {
         c.tabOrientation.set(tabOrientation.get());
         c.smallIconsInMainTab.set(smallIconsInMainTab.get());
         c.showTipsAtStartup.set(showTipsAtStartup.get());
+        c.useGpuAcceleration.set(useGpuAcceleration.get());
         c.uiFontNormal.set(uiFontNormal.get());
         c.uiFontBold.set(uiFontBold.get());
         c.fftStrongToneRelDb.set(fftStrongToneRelDb.get());
@@ -680,6 +691,8 @@ public final class Preferences {
         c.freqRespNotchBaseHz.set(freqRespNotchBaseHz.get());
 
         c.oscMeasurementAverageSeconds.set(oscMeasurementAverageSeconds.get());
+        c.oscPersistenceMode.set(oscPersistenceMode.get());
+        c.oscPersistenceManualSeconds.set(oscPersistenceManualSeconds.get());
         c.oscLineWidth.set(oscLineWidth.get());
         c.oscDotDiameter.set(oscDotDiameter.get());
         c.fftLineWidth.set(fftLineWidth.get());
@@ -728,6 +741,7 @@ public final class Preferences {
         setTabOrientation(edit.tabOrientation.get());
         setSmallIconsInMainTab(edit.smallIconsInMainTab.get());
         setShowTipsAtStartup(edit.showTipsAtStartup.get());
+        setUseGpuAcceleration(edit.useGpuAcceleration.get());
         setUiFontNormal(edit.uiFontNormal.get());
         setUiFontBold(edit.uiFontBold.get());
         setFftStrongToneRelDb(edit.fftStrongToneRelDb.get());
@@ -736,6 +750,8 @@ public final class Preferences {
         setFreqRespNotchBaseHz(edit.freqRespNotchBaseHz.get());
 
         setOscMeasurementAverageSeconds(edit.oscMeasurementAverageSeconds.get());
+        setOscPersistenceMode(edit.oscPersistenceMode.get());
+        setOscPersistenceManualSeconds(edit.oscPersistenceManualSeconds.get());
         setOscLineWidth(edit.oscLineWidth.get());
         setOscDotDiameter(edit.oscDotDiameter.get());
         setFftLineWidth(edit.fftLineWidth.get());
@@ -958,9 +974,31 @@ public final class Preferences {
     public void setShowTipsAtStartup(boolean v) { showTipsAtStartup.set(v); }
     public Property<Boolean> showTipsAtStartupProperty() { return showTipsAtStartup; }
 
+    public boolean isUseGpuAcceleration() { return useGpuAcceleration.get(); }
+    public void setUseGpuAcceleration(boolean v) { useGpuAcceleration.set(v); }
+    public Property<Boolean> useGpuAccelerationProperty() { return useGpuAcceleration; }
+
     public TabOrientation getTabOrientation()  { return tabOrientation.get(); }
     public void setTabOrientation(TabOrientation v) { tabOrientation.set(v); }
     public Property<TabOrientation> tabOrientationProperty() { return tabOrientation; }
+    /** Per-OS default UI font as a {@code "family|size|style"} string: Consolas 9 on
+     *  Windows, Menlo 11 on macOS, DejaVu Sans Mono 11 elsewhere (Linux) — each
+     *  platform's standard monospace face, present out of the box.  {@code sizeBump}
+     *  enlarges the channel-button font above the base size. */
+    private String defaultUiFont(String style, int sizeBump) {
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        String family;
+        int size;
+        if (os.contains("mac")) {
+            family = "Menlo";            size = 11;
+        } else if (os.contains("win")) {
+            family = "Consolas";         size = 9;
+        } else {
+            family = "DejaVu Sans Mono"; size = 11;
+        }
+        return family + '|' + (size + sizeBump) + '|' + style;
+    }
+
     public String getUiFontNormal()            { return uiFontNormal.get(); }
     public void setUiFontNormal(String v)      { uiFontNormal.set(v); }
     public Property<String> uiFontNormalProperty() { return uiFontNormal; }
@@ -1242,6 +1280,14 @@ public final class Preferences {
     public double getOscMeasurementAverageSeconds() { return oscMeasurementAverageSeconds.get(); }
     public void setOscMeasurementAverageSeconds(double v) { oscMeasurementAverageSeconds.set(v); }
     public Property<Double> oscMeasurementAverageSecondsProperty() { return oscMeasurementAverageSeconds; }
+
+    public PersistenceMode getOscPersistenceMode() { return oscPersistenceMode.get(); }
+    public void setOscPersistenceMode(PersistenceMode v) { oscPersistenceMode.set(v); }
+    public Property<PersistenceMode> oscPersistenceModeProperty() { return oscPersistenceMode; }
+
+    public double getOscPersistenceManualSeconds() { return oscPersistenceManualSeconds.get(); }
+    public void setOscPersistenceManualSeconds(double v) { oscPersistenceManualSeconds.set(v); }
+    public Property<Double> oscPersistenceManualSecondsProperty() { return oscPersistenceManualSeconds; }
 
     public double getOscLineWidth()            { return oscLineWidth.get(); }
     public void setOscLineWidth(double v)      { oscLineWidth.set(v); }
@@ -1698,6 +1744,7 @@ public final class Preferences {
         root.put("checkForUpdatesOnStartup",  checkForUpdatesOnStartup.get());
         root.put("includeBetaInUpdateChecks", includeBetaInUpdateChecks.get());
         root.put("showTipsAtStartup",         showTipsAtStartup.get());
+        root.put("useGpuAcceleration",        useGpuAcceleration.get());
         root.put("windowWidth",            windowWidth.get());
         root.put("windowHeight",           windowHeight.get());
         if (genPaneWidth.get() > 0) root.put("genPaneWidth", genPaneWidth.get());
@@ -1729,6 +1776,8 @@ public final class Preferences {
         root.put("oscTriggerLevelFrac",    oscTriggerLevelFrac.get());
         root.put("oscTriggerPositionFrac", oscTriggerPositionFrac.get());
         root.put("oscMeasurementAverageSeconds", oscMeasurementAverageSeconds.get());
+        root.put("oscPersistenceMode",           oscPersistenceMode.get().name());
+        root.put("oscPersistenceManualSeconds",  oscPersistenceManualSeconds.get());
         root.put("oscMeasurementChannel",        oscMeasurementChannel.get().name());
         root.put("oscShowStats",                 oscShowStats.get());
         root.put("oscShowMeasurementTable",      oscShowMeasurementTable.get());
@@ -1993,6 +2042,7 @@ public final class Preferences {
         if (root.get("checkForUpdatesOnStartup")  instanceof Boolean b) checkForUpdatesOnStartup.set(b);
         if (root.get("includeBetaInUpdateChecks") instanceof Boolean b) includeBetaInUpdateChecks.set(b);
         if (root.get("showTipsAtStartup")         instanceof Boolean b) showTipsAtStartup.set(b);
+        if (root.get("useGpuAcceleration")        instanceof Boolean b) useGpuAcceleration.set(b);
         if (root.get("backend") instanceof String s) {
             backend.set(enumOr(AudioBackendType.class, s, backend.get()));
         }
@@ -2029,6 +2079,8 @@ public final class Preferences {
         if (root.get("oscTriggerLevelFrac")    instanceof Number n) oscTriggerLevelFrac.set(n.doubleValue());
         if (root.get("oscTriggerPositionFrac") instanceof Number n) oscTriggerPositionFrac.set(n.doubleValue());
         if (root.get("oscMeasurementAverageSeconds") instanceof Number n) oscMeasurementAverageSeconds.set(n.doubleValue());
+        if (root.get("oscPersistenceMode")           instanceof String s) oscPersistenceMode.set(enumOr(PersistenceMode.class, s, oscPersistenceMode.get()));
+        if (root.get("oscPersistenceManualSeconds")  instanceof Number n) oscPersistenceManualSeconds.set(n.doubleValue());
         if (root.get("oscMeasurementChannel")        instanceof String s) oscMeasurementChannel.set(enumOr(Channel.class, s, oscMeasurementChannel.get()));
         if (root.get("oscShowStats")                 instanceof Boolean b) oscShowStats.set(b);
         if (root.get("oscShowMeasurementTable")      instanceof Boolean b) oscShowMeasurementTable.set(b);

@@ -281,16 +281,16 @@ public final class FreqRespView extends AbstractFreqDomainView {
         phaseFillGray  = new Color(getDisplay(), 0xE6, 0xE6, 0xE6);          // 90% grey so the icon reads
         headerBar = new Toolbar(this, BTN_W, BTN_H);
         leftBtn  = headerBar.chanButton("L", color(ColorRole.TEXT), color(ColorRole.BUTTON_FRAME),
-                color(ColorRole.LEFT_BTN_CHAN),  chanButtonFont, I18n.t("freqresp.button.left.tooltip"),  prefs.isFreqRespLeftVisible(),  "channel");
+                color(ColorRole.LEFT_BTN_CHAN),  chanButtonFont, I18n.t("freqResp.button.left.tooltip"),  prefs.isFreqRespLeftVisible(),  "channel");
         rightBtn = headerBar.chanButton("R", color(ColorRole.TEXT), color(ColorRole.BUTTON_FRAME),
-                color(ColorRole.RIGHT_BTN_CHAN), chanButtonFont, I18n.t("freqresp.button.right.tooltip"), prefs.isFreqRespRightVisible(), "channel");
+                color(ColorRole.RIGHT_BTN_CHAN), chanButtonFont, I18n.t("freqResp.button.right.tooltip"), prefs.isFreqRespRightVisible(), "channel");
         phaseBtn = headerBar.toggleButton(Icon.PHASE_SINE, Icon.PHASE_SINE,
                 phaseFillGray,
-                I18n.t("freqresp.button.phase.tooltip"), prefs.isFreqRespPhaseVisible());
+                I18n.t("freqResp.button.phase.tooltip"), prefs.isFreqRespPhaseVisible());
         autoSetupBtn = headerBar.pushButton(Icon.ARROWS_TO_CIRCLE_DARK, Icon.ARROWS_TO_CIRCLE_LIT,
-                color(ColorRole.TEXT), I18n.t("freqresp.button.autosetup.tooltip"));
+                color(ColorRole.TEXT), I18n.t("freqResp.button.autosetup.tooltip"));
         maxBtn = headerBar.pushButton(Icon.ARROWS_FROM_CIRCLE_DARK, Icon.ARROWS_FROM_CIRCLE_LIT,
-                color(ColorRole.TEXT), I18n.t("freqresp.button.maximize.tooltip"));
+                color(ColorRole.TEXT), I18n.t("freqResp.button.maximize.tooltip"));
         Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
         headerBar.setBounds(MARGIN_LEFT + HEADER_BTN_INSET, BTN_TOP, hbSize.x, hbSize.y);
         headerBar.layout();
@@ -1239,7 +1239,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
             hideSourceBanner();
             return;
         }
-        sourceBanner.setText("Loaded: " + sourceFilePath);
+        sourceBanner.setText(I18n.t("fft.loaded.prefix", sourceFilePath));
         sourceBanner.setVisible(true);
         repositionBanners();
     }

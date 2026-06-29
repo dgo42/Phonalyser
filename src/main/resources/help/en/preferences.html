@@ -35,6 +35,12 @@
             restart.</td></tr>
     <tr><td>Small icons in main tab</td>
         <td>Shrinks the main-tab icons.  Applies live.</td></tr>
+    <tr><td>Use GPU acceleration</td>
+        <td>Renders the oscilloscope on the GPU (OpenGL / NanoVG) for a far
+            higher frame rate and enables display persistence (see the
+            <a href="#prefs-oscilloscope">Oscilloscope</a> tab).  Greyed out
+            automatically when no compatible GPU is available — the scope then
+            uses CPU rendering.</td></tr>
     <tr><td>UI font / UI font (bold)</td>
         <td>Fonts for axis labels, readouts and measurement tables (bold for
             emphasised table text).  Applied on OK.</td></tr>
@@ -74,6 +80,20 @@
     <tr><td>Trace line width, px</td><td>Stroke width of the waveform.</td></tr>
     <tr><td>Sample dot diameter, px</td>
         <td>Size of the per-sample dots drawn when zoomed in.</td></tr>
+    <tr><td>Display persistence</td>
+        <td>Digital-phosphor afterglow — how long each swept trace lingers
+            before fading, like an analog scope.  Choose <code>Off</code>; a
+            preset decay time <code>0.5 s</code>, <code>1 s</code> or
+            <code>2 s</code> (an old trace dims to ~37 % after that time and
+            ~5 % after three times it); <code>∞</code> (traces never fade,
+            accumulating until the view changes); or <code>Manual</code> (use
+            the field below).  Shows trigger jitter and noise as a fading
+            envelope.  Requires GPU acceleration (see
+            <a href="#prefs-lookfeel">Look &amp; Feel</a>); has no effect on the
+            CPU path.</td></tr>
+    <tr><td>Manual persistence, s</td>
+        <td>Custom decay time, 0.1–60 s in 0.5-s steps, used when persistence is
+            set to <code>Manual</code>; greyed out otherwise.</td></tr>
     <tr><td>Left / Right channel colour</td>
         <td>Trace colour per channel (defaults cyan <code>#28DCF0</code> /
             yellow <code>#F0DC28</code>).</td></tr>

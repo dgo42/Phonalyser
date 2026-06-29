@@ -25,6 +25,7 @@ import javax.sound.sampled.AudioInputStream;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 import org.edgo.audio.measure.wav.PcmFileLoader;
 
@@ -81,7 +82,7 @@ public final class ScopeOpenSignal {
     public boolean loadFile(File file) {
         lastError = null;
         if (file == null || !file.isFile()) {
-            lastError = "Pick a file first.";
+            lastError = I18n.t("scope.openSignal.pickFirst");
             return false;
         }
         SignalBufferReader.Builder builder;
@@ -95,7 +96,7 @@ public final class ScopeOpenSignal {
             boolean signed     = fmt.getEncoding().equals(AudioFormat.Encoding.PCM_SIGNED);
             long totalFrames   = (in.getFrameLength() > 0) ? in.getFrameLength() : -1;
             if (totalFrames <= 0) {
-                lastError = "Could not determine sample count for " + file.getName();
+                lastError = I18n.t("scope.openSignal.noSampleCount", file.getName());
                 return false;
             }
             // Buffer sized to the exact frame count so the entire signal
@@ -135,6 +136,7 @@ public final class ScopeOpenSignal {
         if (!mainView.isDisposed()) {
             mainView.setBuffer(reader);
             mainView.setFileMode(true);
+            mainView.startMeasurementThread();   // compute the measurement table for the loaded frame
         }
         if (!condensedView.isDisposed()) condensedView.setBuffer(reader);
         // Redraw immediately so the user sees the static waveform without

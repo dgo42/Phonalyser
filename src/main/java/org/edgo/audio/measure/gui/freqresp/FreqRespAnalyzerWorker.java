@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -162,11 +163,11 @@ public final class FreqRespAnalyzerWorker {
             DeviceRef out = resolveDevice(true,  prefs.current().getOutputDeviceName());
             DeviceRef in  = resolveDevice(false, prefs.current().getInputDeviceName());
             if (out == null) {
-                reportError("No output device selected.  Open Preferences first.");
+                reportError(I18n.t("freqResp.error.noOutputDevice"));
                 return;
             }
             if (in == null) {
-                reportError("No input device selected.  Open Preferences first.");
+                reportError(I18n.t("freqResp.error.noInputDevice"));
                 return;
             }
 

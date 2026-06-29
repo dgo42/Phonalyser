@@ -158,8 +158,8 @@ public final class StartupSplash {
         bgBottom  = color(18, 40, 62);
         grid      = color(60, 92, 134);
         wave      = color(63, 208, 224);
-        barTop    = color(79, 227, 200);
-        barBottom = color(39, 70, 144);
+        barTop    = color(79, 200, 227);
+        barBottom = color(227, 200, 79);
         textMain  = color(234, 242, 255);
         textDim   = color(138, 160, 190);
         accent    = color(99, 210, 226);
@@ -238,10 +238,10 @@ public final class StartupSplash {
         int right = w - MARGIN;
         int baseline = h - 64;
         int span = right - left;
-        int bars = 56;
+        int bars = 60;
         int gap = 2;
         int bw = Math.max(2, span / bars - gap);
-        int maxBar = 96;
+        int maxBar = 90;
         for (int i = 0; i < bars; i++) {
             double f = i / (double) (bars - 1);
             double peak1 = Math.exp(-Math.pow((f - 0.22) / 0.06, 2));
@@ -266,7 +266,7 @@ public final class StartupSplash {
     private void drawWaveform(GC gc, int w, int h) {
         int left = MARGIN;
         int right = w - MARGIN;
-        int mid = 168;
+        int mid = 152;
         int amp = 34;
         int n = right - left;
         int[] pts = new int[(n + 1) * 2];

@@ -26,6 +26,8 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.MessageBox;
 import org.eclipse.swt.widgets.Shell;
 
+import org.edgo.audio.measure.common.StoreUpdate;
+import org.edgo.audio.measure.common.WindowsPackage;
 import org.edgo.audio.measure.gui.i18n.I18n;
 
 import java.net.URI;
@@ -37,9 +39,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * GitHub-releases update check.  Hits {@link HelpUrls#LATEST_RELEASE_API_URL},
- * extracts {@code tag_name}, {@code html_url} and {@code prerelease} from the
- * JSON response, compares the tag against the running app's version via
+ * GitHub-releases update check.  Hits {@link HelpUrls#RELEASES_API_URL} — the
+ * releases list, newest first — extracts {@code tag_name}, {@code html_url} and
+ * {@code prerelease} from the NEWEST release, compares the tag against the
+ * running app's version via
  * {@link Versions#compare(String, String)} and, if a newer release exists,
  * pops a yes/no dialog offering to open the release page in the system
  * browser.
@@ -60,6 +63,8 @@ import java.util.regex.Pattern;
  *
  * <p>JSON parsing is intentionally tiny — three regexes over the response
  * body — to avoid pulling in a JSON library for two fields and a boolean.
+ * The list is sorted newest-first, so the first match of each pattern is the
+ * newest release's field.
  */
 @Log4j2
 @UtilityClass
@@ -72,23 +77,66 @@ public class UpdateChecker {
     private final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
     private final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
 
-    /** User-triggered check via the Help menu.  Always shows a result. */
+    /** User-triggered check via the Help menu.  Always shows a result.  A Store
+     *  (MSIX) install checks the Microsoft Store directly instead of GitHub. */
     public void checkNow(Shell parent) {
         log.info("Manual update check requested");
+        if (WindowsPackage.isPackaged()) {
+            checkStoreInBackground(parent);
+            return;
+        }
         runCheckInBackground(parent, false, true);
     }
 
     /**
      * Startup-time silent check.  Only shows the dialog when a newer
      * release is available; up-to-date / network errors are logged but
-     * not surfaced.
+     * not surfaced.  Skipped for a Microsoft Store (MSIX) install, which
+     * the Store keeps up to date on its own.
      *
      * @param parent      shell to anchor the eventual dialog to
      * @param includeBeta when true, pre-release tags are also considered
      */
     public void checkOnStartup(Shell parent, boolean includeBeta) {
+        if (WindowsPackage.isPackaged()) {
+            log.debug("Microsoft Store (MSIX) package — skipping startup update check (Store auto-updates)");
+            return;
+        }
         log.debug("Startup update check, includeBeta={}", includeBeta);
         runCheckInBackground(parent, true, includeBeta);
+    }
+
+    /**
+     * Direct Microsoft Store update check for a Store (MSIX) install.  Asks the
+     * Store via {@link StoreUpdate}: if it confirms the app is up to date, says
+     * so; otherwise — an update is available, or the query couldn't run — opens
+     * the Store so the user can review / install it there.
+     */
+    private void checkStoreInBackground(Shell parent) {
+        final Display display = parent.getDisplay();
+        Thread t = new Thread(() -> {
+            int count = StoreUpdate.availableUpdateCount();
+            log.info("Store update check: availableUpdateCount={}", count);
+            display.asyncExec(() -> {
+                if (parent.isDisposed()) return;
+                if (count == 0) {
+                    showUpToDate(parent, Versions.appVersion());
+                } else {
+                    openStorePage();
+                }
+            });
+        }, "store-update-check");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** Open the Microsoft Store — the app's product page when its Store ID is
+     *  configured, otherwise the Store's "Downloads &amp; updates" list. */
+    private void openStorePage() {
+        String uri = HelpUrls.STORE_PRODUCT_ID.isEmpty()
+                ? "ms-windows-store://downloadsandupdates"
+                : "ms-windows-store://pdp/?ProductId=" + HelpUrls.STORE_PRODUCT_ID;
+        Program.launch(uri);
     }
 
     private void runCheckInBackground(Shell parent, boolean silentIfUpToDate, boolean includeBeta) {
@@ -136,7 +184,7 @@ public class UpdateChecker {
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
         HttpRequest req = HttpRequest.newBuilder()
-                .uri(URI.create(HelpUrls.LATEST_RELEASE_API_URL))
+                .uri(URI.create(HelpUrls.RELEASES_API_URL))
                 .header("Accept", "application/vnd.github+json")
                 .header("User-Agent", "Phonalyser-update-check")
                 .timeout(REQUEST_TIMEOUT)
