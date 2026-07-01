@@ -54,7 +54,7 @@ public final class ScopeNav {
      * applies {@code mainBackOffset}/{@code condensedBackOffset} to its views and
      * the centre figures to its scrollbar.
      */
-    public record ViewWindow(long mainBackOffset, long condensedBackOffset,
+    public record ViewWindow(double mainBackOffset, long condensedBackOffset,
                              long minCentre, long maxCentre,
                              double clampedCentre, boolean followLatest) {}
 
@@ -108,16 +108,19 @@ public final class ScopeNav {
         long maxCentre = writePos - displaySamples / 2;
         boolean followLatest = centreFrames < 0 || maxCentre < minCentre;
         double clampedCentre;
-        long   mainOffset;
+        double mainOffset;
         if (followLatest) {
             clampedCentre = maxCentre;     // slider pinned rightmost
-            mainOffset    = 0;
+            mainOffset    = 0.0;
         } else {
             clampedCentre = Math.max((double) minCentre, Math.min((double) maxCentre, centreFrames));
-            long viewEndAbs = Math.round(clampedCentre + displaySamples / 2.0);
-            mainOffset = Math.max(0L, writePos - viewEndAbs);
+            // Keep the back-offset FRACTIONAL: a ½-div step is 15.36 samples at 384 kHz,
+            // and rounding to a whole sample would quantise the scroll (→ 41.7 µs, not
+            // 40 µs).  The view carries the fraction into a sub-sample render.
+            double viewEndAbs = clampedCentre + displaySamples / 2.0;
+            mainOffset = Math.max(0.0, writePos - viewEndAbs);
         }
-        long mainCentre = writePos - mainOffset - displaySamples / 2;
+        long mainCentre = writePos - Math.round(mainOffset) - displaySamples / 2;
         long condEnd    = mainCentre + sampleRate / 2;
         condEnd = Math.min(condEnd, writePos);
         condEnd = Math.max(condEnd, Math.min(writePos, oldest + sampleRate));
@@ -140,25 +143,14 @@ public final class ScopeNav {
         return offsetFrac + dir * halfDivOffsetStep();
     }
 
-    /**
-     * Clamps a (possibly virtual) trigger offset so the window still overlaps the
-     * captured buffer {@code [oldest, latest)} by at least {@code minOverlap} samples —
-     * used on a STOPPED scope so a pan can roam the whole buffer but not vanish past it.
-     */
-    public double clampFrozenOffset(double offsetFrac, double anchorAbs, int displaySamples,
-                                    long oldest, long latest, double minOverlap) {
-        double offMin = (anchorAbs - (latest - minOverlap)) / displaySamples;
-        double offMax = (anchorAbs - (oldest - displaySamples + minOverlap)) / displaySamples;
-        if (offsetFrac < offMin) return offMin;
-        if (offsetFrac > offMax) return offMax;
-        return offsetFrac;
-    }
-
-    /** One ½-division move tick of the file-mode view centre (absolute samples), clamped
-     *  so the full window stays inside the file.  {@code dir} matches the wheel sign. */
-    public double moveFileCentre(double centreAbs, int dir, int displaySamples, long oldest, long latest) {
-        double step = (double) displaySamples / (2.0 * divisionsX);   // ½ div
-        return clampFileCentre(centreAbs - dir * step, displaySamples, oldest, latest);
+    /** Moves the file-mode view centre by {@code divisions} grid divisions (signed;
+     *  negative = toward older samples), clamped so the full window stays inside the
+     *  file.  {@code samplesPerDiv} is the EXACT double samples-per-division
+     *  (timePerDiv × sampleRate, NOT derived from the int-rounded window width) so
+     *  fractional steps — ⅕ div = 1.764 samples at 44.1 kHz — accumulate unrounded. */
+    public double moveFileCentre(double centreAbs, double divisions, double samplesPerDiv,
+                                 int displaySamples, long oldest, long latest) {
+        return clampFileCentre(centreAbs + divisions * samplesPerDiv, displaySamples, oldest, latest);
     }
 
     /**

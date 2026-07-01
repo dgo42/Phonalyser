@@ -25,8 +25,10 @@ import javax.sound.sampled.AudioInputStream;
 
 import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
+import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.wav.PcmFileLoader;
 
 /**
@@ -136,6 +138,9 @@ public final class ScopeOpenSignal {
         if (!mainView.isDisposed()) {
             mainView.setBuffer(reader);
             mainView.setFileMode(true);
+            // A loaded file has no trigger; SINGLE (unarmed) would render nothing, so
+            // switch to AUTO on load — file mode ignores the trigger anyway.
+            Preferences.instance().setOscTriggerMode(TriggerMode.AUTO);
             mainView.startMeasurementThread();   // compute the measurement table for the loaded frame
         }
         if (!condensedView.isDisposed()) condensedView.setBuffer(reader);
