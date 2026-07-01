@@ -54,6 +54,9 @@ public final class ScopeController {
      *  it at ~5 Hz keeps the main trace at full cap/s. */
     private static final int CONDENSED_DECIMATION = 10;
 
+    /** Horizontal scroll step of one wheel tick, in grid divisions (½ div). */
+    private static final double HALF_DIV = 0.5;
+
     /** True while the scope's own Record state is on.  Does NOT reflect
      *  the shared capture device — the FFT pane can hold it open via
      *  {@code SharedCapture} while this stays {@code false}. */
@@ -206,6 +209,88 @@ public final class ScopeController {
     private void redrawViews() {
         if (view != null && !view.isDisposed())           view.redraw();
         if (condensed != null && !condensed.isDisposed()) condensed.redraw();
+    }
+
+    /**
+     * Moves the FILE / scrolled-back view centre by one wheel tick (½ division),
+     * clamped so the window stays inside the buffer.  Owns the {@link #viewCenterFrames}
+     * math the pane used to inline; the pane just forwards the wheel direction and then
+     * repaints via {@code applyViewState}.  Returns whether the centre actually moved.
+     */
+    public boolean scrollFileByWheel(int dir) {
+        return scrollFileByDivisions(-dir * HALF_DIV);
+    }
+
+    /**
+     * Moves the FILE / scrolled-back view centre by {@code divisions} grid divisions
+     * (signed; negative = toward older samples), clamped inside the buffer — ½ div per
+     * wheel tick, ⅕ div per scrollbar arrow, 5 div per scrollbar page click.  The step
+     * is computed in EXACT double samples (timePerDiv × sampleRate), never rounded to
+     * whole samples or scrollbar units, so repeated fractional steps accumulate without
+     * drift.  Returns whether the centre actually moved.
+     */
+    public boolean scrollFileByDivisions(double divisions) {
+        if (view == null) return false;
+        SignalBufferReader reader = view.getReader();
+        if (reader == null) return false;
+        double timePerDiv = Preferences.instance().getOscTimePerDiv();
+        int    sr         = reader.getSampleRate();
+        int displaySamples = ScopeFormat.displaySamplesFor(timePerDiv, sr);
+        long writePos = reader.getWritePos();
+        long oldest   = Math.max(0L, writePos - reader.getCapacity());
+        double cur = viewCenterFrames;
+        if (cur < 0) cur = writePos - displaySamples / 2.0;
+        double next = view.getNav().moveFileCentre(cur, divisions, timePerDiv * sr,
+                displaySamples, oldest, writePos);
+        if (next == viewCenterFrames) return false;
+        viewCenterFrames = next;
+        return true;
+    }
+
+    /**
+     * Sets the FILE view centre from the nav-scrollbar thumb fraction {@code frac}
+     * (0 = oldest resident sample, 1 = latest), falling back to the buffer midpoint when
+     * the window is wider than the resident data.  Owns the {@link #viewCenterFrames}
+     * mapping the pane used to inline; the pane just passes its thumb fraction and repaints.
+     */
+    public void scrollFileToSliderFraction(double frac) {
+        if (view == null) return;
+        SignalBufferReader reader = view.getReader();
+        if (reader == null) return;
+        int displaySamples = ScopeFormat.displaySamplesFor(
+                Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
+        long writePos  = reader.getWritePos();
+        long oldest    = Math.max(0L, writePos - reader.getCapacity());
+        long minCenter = oldest   + displaySamples / 2;
+        long maxCenter = writePos - displaySamples / 2;
+        if (maxCenter < minCenter) {
+            viewCenterFrames = (writePos + oldest) / 2.0;   // no scroll room
+        } else {
+            viewCenterFrames = minCenter + frac * (maxCenter - minCenter);
+        }
+    }
+
+    /**
+     * Zooms the FILE / scrolled-back view's t/div around the sample under the mouse
+     * ({@code mouseFrac} across the width): the sample under the pointer stays put as the
+     * window resizes {@code tDivOld → tDivNew}, then the centre is clamped into the file.
+     * Owns the {@link #viewCenterFrames} math the pane used to inline; the pane forwards
+     * the gesture from the t/div wheel-zoom and repaints.
+     */
+    public void zoomFileAroundMouse(double mouseFrac, double tDivOld, double tDivNew) {
+        if (view == null) return;
+        SignalBufferReader reader = view.getReader();
+        if (reader == null) return;
+        int  sr       = reader.getSampleRate();
+        int  dispOld  = ScopeFormat.displaySamplesFor(tDivOld, sr);
+        int  dispNew  = ScopeFormat.displaySamplesFor(tDivNew, sr);
+        long writePos = reader.getWritePos();
+        long oldest   = Math.max(0L, writePos - reader.getCapacity());
+        ScopeNav nav  = view.getNav();
+        double cur = viewCenterFrames;
+        if (cur < 0) cur = writePos - dispOld / 2.0;
+        double next = nav.zoomFileCentre(cur, mouseFrac, dispOld, dispNew);
+        viewCenterFrames = nav.clampFileCentre(next, dispNew, oldest, writePos);
     }
 
     /** Loop-driven realtime repaint of the scope, called once per frame by the
