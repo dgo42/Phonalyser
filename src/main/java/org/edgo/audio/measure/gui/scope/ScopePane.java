@@ -32,6 +32,7 @@ import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Scrollable;
 import org.edgo.audio.measure.enums.Channel;
@@ -98,6 +99,10 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      *  ring buffer.  3 % of NAV_RANGE = 30 000 units, ~18 px at a 600 px
      *  track, ~24 px at 800 px. */
     private static final int MIN_SCROLLBAR_THUMB = NAV_RANGE / 33;
+    /** Nav-scrollbar arrow click: horizontal scroll step in grid divisions (⅕ div). */
+    private static final double ARROW_DIVISIONS = 0.2;
+    /** Nav-scrollbar page (track) click: horizontal scroll step in grid divisions. */
+    private static final double PAGE_DIVISIONS  = 5.0;
 
 
     // Cached references from IconUtils — owned by the shared cache and
@@ -286,14 +291,16 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         navSlider.setThumb(Math.max(1, NAV_RANGE / 20));
         navSlider.setSelection(NAV_RANGE);
         navSlider.setToolTipText(I18n.t("scope.navSlider.tooltip"));
-        // Span both columns so the slider sits below the canvas AND the
-        // vertical-scrollbar gutter, removing the need for a column-1
-        // spacer Composite (GTK gives empty Composites a non-zero
-        // intrinsic height that disrespects heightHint and inflates the
-        // gap above the condensed strip).
+        // Column 0 only (NOT spanning the vertical-scrollbar gutter) so the
+        // slider's width matches the scope canvas / condensed strip and its
+        // right edge lines up with the vertical scrollbar's left edge instead
+        // of stretching under it to the pane's right edge.  A filler Label
+        // (navSliderCorner, below) occupies column 1 of this row so GridLayout's
+        // row-major fill still wraps the condensed strip to the next row; the
+        // Linux navSliderSpacer handles only the row-height quirk.
         GridData navGd = new GridData(SWT.FILL, SWT.FILL, true, false);
         navGd.heightHint     = SCROLLBAR_THICKNESS;
-        navGd.horizontalSpan = 2;
+        navGd.horizontalSpan = 1;
         // Initial state on Linux: collapse the FlatScrollbar's row and
         // show a Label spacer in its place — GTK honours heightHint on
         // Labels but inflates the row when given an invisible Canvas.
@@ -303,17 +310,29 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         navGd.exclude = linux;
         navSlider.setLayoutData(navGd);
         navSlider.setVisible(false);
-        navSlider.addListener(SWT.Selection, e -> onNavSliderMoved());
+        navSlider.addListener(SWT.Selection, this::onNavSliderMoved);
 
         if (linux) {
             navSliderSpacer = new Label(group, SWT.NONE);
             GridData spacerGd = new GridData(SWT.FILL, SWT.CENTER, true, false);
             spacerGd.heightHint     = SCROLLBAR_THICKNESS;
-            spacerGd.horizontalSpan = 2;
+            spacerGd.horizontalSpan = 1;
             // Initially visible (record mode) — toggled inside
             // setNavSliderVisible() when a file is loaded.
             navSliderSpacer.setLayoutData(spacerGd);
         }
+
+        // Filler completing column 1 of the nav-slider row.  The slider (and
+        // its Linux spacer) span only column 0, so without a widget here
+        // GridLayout's row-major fill would flow the condensed strip into
+        // column 1 of THIS row instead of starting a fresh one — collapsing
+        // the layout.  An empty gutter-width cell keeps the slider's right
+        // edge flush with the vertical scrollbar's left edge.
+        Label navSliderCorner = new Label(group, SWT.NONE);
+        GridData cornerGd = new GridData(SWT.FILL, SWT.FILL, false, false);
+        cornerGd.widthHint  = SCROLLBAR_THICKNESS;
+        cornerGd.heightHint = SCROLLBAR_THICKNESS;
+        navSliderCorner.setLayoutData(cornerGd);
 
         // Condensed overview strip just above the toolbar.  Its heightHint is
         // recomputed on every pane resize so the strip stays roughly 1.2 of
@@ -642,33 +661,32 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      * Slider-moved handler.  In live record mode the slider is disabled
      * (so this should only fire from programmatic syncs we trigger
      * ourselves — those are ignored because they don't move the user's
-     * intended centre).  In file mode the user is actively scrubbing;
-     * translate the slider position into a {@code viewCenterFrames}
-     * value and let {@link #applyViewState} push everything else.
+     * intended centre).  In file mode the user is actively scrubbing.
+     * Arrow / page (track) clicks step the centre by their EXACT division
+     * counts (⅕ div / 5 div) through the controller — the slider's int
+     * units can't represent a fractional-sample step, so mapping those
+     * gestures through the selection quantised them (a 40 µs arrow step
+     * became 41.7 µs).  A thumb drag maps the selection fraction as
+     * before.  {@link #applyViewState} then re-syncs the widget's
+     * selection from the model either way.
      */
-    private void onNavSliderMoved() {
+    private void onNavSliderMoved(Event e) {
         if (!view.isFileMode()) return;     // live mode: ignore stray events
-        SignalBufferReader reader = view.getReader();
-        if (reader == null) return;
-        int displaySamples = ScopeFormat.displaySamplesFor(Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
-        long writePos = reader.getWritePos();
-        long oldest   = Math.max(0L, writePos - reader.getCapacity());
-        long minCenter = oldest   + displaySamples / 2;
-        long maxCenter = writePos - displaySamples / 2;
-        int sel    = navSlider.getSelection();
-        int maxSel = navSlider.getMaximum() - navSlider.getThumb();
-        if (maxSel <= 0 || maxCenter < minCenter) {
-            // No scroll room — view is showing all of the resident data.
-            controller.setViewCenterFrames((writePos + oldest) / 2.0);
-        } else {
-            double frac = sel / (double) maxSel;
-            // Double-precise — sub-frame fraction is preserved so
-            // subsequent zooms don't drift.
-            controller.setViewCenterFrames(minCenter + frac * (maxCenter - minCenter));
+        switch (e.detail) {
+            case SWT.ARROW_UP:   controller.scrollFileByDivisions(-ARROW_DIVISIONS); break;
+            case SWT.ARROW_DOWN: controller.scrollFileByDivisions(+ARROW_DIVISIONS); break;
+            case SWT.PAGE_UP:    controller.scrollFileByDivisions(-PAGE_DIVISIONS);  break;
+            case SWT.PAGE_DOWN:  controller.scrollFileByDivisions(+PAGE_DIVISIONS);  break;
+            default:
+                // The controller owns the centre mapping (it owns viewCenterFrames);
+                // the pane just hands it the thumb fraction and repaints.
+                int maxSel = navSlider.getMaximum() - navSlider.getThumb();
+                double frac = (maxSel > 0) ? navSlider.getSelection() / (double) maxSel : 0.0;
+                controller.scrollFileToSliderFraction(frac);
+                break;
         }
         applyViewState();
     }
-
     /**
      * {@link ScopeTabControl.Host}: single source of truth for everything
      * that depends on the view's centre.  Reads {@code viewCenterFrames}
@@ -749,18 +767,8 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
     /** {@link ScopeTabControl.Host}: file-mode horizontal zoom around the mouse. */
     @Override
     public void zoomFileTimeAroundMouse(double mouseFrac, double tDivOld, double tDivNew) {
-        SignalBufferReader reader = view.getReader();
-        if (reader == null) return;
-        int  sr      = reader.getSampleRate();
-        int  dispOld = ScopeFormat.displaySamplesFor(tDivOld, sr);
-        int  dispNew = ScopeFormat.displaySamplesFor(tDivNew, sr);
-        long writePos = reader.getWritePos();
-        long oldest   = Math.max(0L, writePos - reader.getCapacity());
-        ScopeNav nav  = view.getNav();
-        double cur  = controller.getViewCenterFrames();
-        if (cur < 0) cur = writePos - dispOld / 2.0;
-        double next = nav.zoomFileCentre(cur, mouseFrac, dispOld, dispNew);
-        controller.setViewCenterFrames(nav.clampFileCentre(next, dispNew, oldest, writePos));
+        // Centre math lives in the controller (it owns viewCenterFrames); pane repaints.
+        controller.zoomFileAroundMouse(mouseFrac, tDivOld, tDivNew);
         applyViewState();
     }
 
@@ -812,21 +820,11 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      *  — moving it together with the channels was unintuitive (trigger
      *  marker drifting with the trace rather than the user's intent). */
     private void stepMeasurementChannelOffset(int dir) {
-        Preferences prefs = Preferences.instance();
-        double peak = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
-        double oldL = prefs.getOscLeftOffsetFrac();
-        double oldR = prefs.getOscRightOffsetFrac();
-        // The engine moves both active channels together, clamped at ±FS/2-at-middle.
-        double[] off = view.getNav().moveVertical(
-                oldL, prefs.getOscLeftVoltsPerDiv(),  prefs.isOscLeftChannelEnabled(),
-                oldR, prefs.getOscRightVoltsPerDiv(), prefs.isOscRightChannelEnabled(),
-                dir, peak);
-        if (off[0] == oldL && off[1] == oldR) return;
-        prefs.setOscLeftOffsetFrac(off[0]);
-        prefs.setOscRightOffsetFrac(off[1]);
-        prefs.save();
-        syncVertSliderFromPrefs();
-        requestRedraw();
+        // Vertical-offset math lives in ScopeView; the pane re-syncs its slider + repaints.
+        if (view.moveVerticalOffset(dir)) {
+            syncVertSliderFromPrefs();
+            requestRedraw();
+        }
     }
 
     /** Shifts the horizontal view position by one wheel tick.  In file mode
@@ -839,37 +837,19 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      *  value and the next several wheel ticks would appear to "do nothing"
      *  while the value walks back into range. */
     private void stepHorizontalOffset(int dir) {
-        Preferences prefs = Preferences.instance();
-        ScopeNav nav = view.getNav();
         if (view.isFileMode()) {
-            SignalBufferReader reader = view.getReader();
-            if (reader == null) return;
-            int displaySamples = ScopeFormat.displaySamplesFor(
-                    prefs.getOscTimePerDiv(), reader.getSampleRate());
-            long writePos = reader.getWritePos();
-            long oldest   = Math.max(0L, writePos - reader.getCapacity());
-            // Engine: ½-div move of the view centre, clamped to keep the window in the file.
-            double cur  = controller.getViewCenterFrames();
-            if (cur < 0) cur = writePos - displaySamples / 2.0;
-            double next = nav.moveFileCentre(cur, dir, displaySamples, oldest, writePos);
-            if (next == controller.getViewCenterFrames()) return;
-            controller.setViewCenterFrames(next);
-            applyViewState();
+            // File scroll math lives in the controller (it owns viewCenterFrames);
+            // the pane just forwards the wheel tick and repaints on a real move.
+            if (controller.scrollFileByWheel(dir)) applyViewState();
         } else if (view.isFrozen()) {
             // Stopped scope: pan ½ div per tick via the virtual trigger offset; the
             // view-following read scrolls the whole captured buffer.  ScopeView owns it.
             if (view.panFrozenOffset(dir)) requestRedraw();
         } else {
-            // Live: ½-div trigger-offset move; may go VIRTUAL (handle pins to the L/R
-            // edge, the time-offset mark shows the real value) — so don't clamp.  The
-            // read spans ~2 screens + ~1 s around the trigger; drawTrace blanks any
-            // edge the buffer can't fill.
-            double cur  = prefs.getOscTriggerPositionFrac();
-            double next = nav.moveTriggerOffset(cur, dir);
-            if (next == cur) return;
-            prefs.setOscTriggerPositionFrac(next);
-            prefs.save();
-            requestRedraw();
+            // Live: ½-div trigger-offset move, clamped to the last read window so it
+            // never blanks (the offset itself may still go virtual up to that limit).
+            // ScopeView owns the anchor + read bounds.
+            if (view.panLiveOffset(dir)) requestRedraw();
         }
     }
 
@@ -901,26 +881,11 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      *  trace anchored toward top of grid); thumb at BOTTOM = signal down. */
     private void onVertSliderMoved() {
         if (vertSlider == null || vertSlider.isDisposed()) return;
-        Preferences prefs = Preferences.instance();
-        int sel = vertSlider.getSelection();
         int maxSel = vertSlider.getMaximum() - vertSlider.getThumb();
-        double[] bounds = view.offsetFracBounds();
-        double lo = bounds[0], hi = bounds[1];
-        double frac = (maxSel <= 0) ? (lo + hi) / 2.0
-                                    : lo + (sel / (double) maxSel) * (hi - lo);
-        Channel ref = prefs.getOscMeasurementChannel();
-        double prevRef = (ref == Channel.L)
-                ? prefs.getOscLeftOffsetFrac()
-                : prefs.getOscRightOffsetFrac();
-        if (prevRef == frac) return;
-        double delta = frac - prevRef;
-        // No clampFrac here — offsetFrac is intentionally allowed past
-        // [0, 1] so the user can place ±FS at grid centre.  Rendering
-        // honours the extended range (see drawTrace centerY math).
-        prefs.setOscLeftOffsetFrac  (prefs.getOscLeftOffsetFrac()  + delta);
-        prefs.setOscRightOffsetFrac (prefs.getOscRightOffsetFrac() + delta);
-        prefs.save();
-        requestRedraw();
+        // maxSel <= 0 → no scroll room; pass 0.5 so the view maps to the mid-point.
+        double sliderFrac = (maxSel > 0) ? vertSlider.getSelection() / (double) maxSel : 0.5;
+        // The offset mapping (bounds → frac → delta) lives in ScopeView; pane repaints.
+        if (view.setVerticalOffsetFromSliderFraction(sliderFrac)) requestRedraw();
     }
 
     /** Reads the current measurement-channel offset from prefs and pushes
@@ -1078,14 +1043,13 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
     private GridLayout paneLayout() {
         // 2 columns: column 0 holds the scope canvas and every other row;
         // column 1 is the 20-px-wide right gap for the vertical scrollbar.
-        // Margins are 0 so the content sits flush against the SWT.BORDER.
-        // verticalSpacing = 2 gives a small breathing gap between the
-        // PaneTitle header Label and the scope canvas below it (also
-        // applies between every other row — minor side effect, acceptable).
+        // Margins and both spacings are 0 so the content sits flush against
+        // the SWT.BORDER and the horizontal nav scrollbar sits flush between
+        // the canvas and the condensed strip.
         GridLayout gl = new GridLayout(2, false);
         gl.marginWidth  = 0;
         gl.marginHeight = 0;
-        gl.verticalSpacing = 2;
+        gl.verticalSpacing = 0;
         gl.horizontalSpacing = 0;
         return gl;
     }
