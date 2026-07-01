@@ -44,6 +44,7 @@ import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.fft.FftController;
 import org.edgo.audio.measure.gui.fft.FftView;
 import org.edgo.audio.measure.gui.fft.ImdResult;
@@ -136,6 +137,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     /** Opens the wizard and blocks until it is dismissed. */
     public void open() {
         dialog = new Shell(parentShell, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.RESIZE);
+        ShellIcons.apply(dialog);
         dialog.setText(I18n.t("predistortion.wizard.title"));
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 12; gl.marginHeight = 12; gl.verticalSpacing = 8;

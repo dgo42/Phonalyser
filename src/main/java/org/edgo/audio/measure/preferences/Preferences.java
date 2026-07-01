@@ -317,9 +317,9 @@ public final class Preferences {
     private final Property<String> genDpdFolder = bound(null);
     /** DAC predistortion wizard: FFT averages per round.  Persisted so the
      *  user's choice survives reopening the wizard and restarting the app. */
-    private final Property<Integer> predistortionAverages    = bound(100);
+    private final Property<Integer> predistortionAverages    = bound(64);
     /** DAC predistortion wizard: target distortion to stop at (%); 0 = run to stall. */
-    private final Property<Double>  predistortionTargetPct   = bound(0.0);
+    private final Property<Double>  predistortionTargetPct   = bound(0.000001);
     /** Rectangle / pulse duty cycle as a fraction in [0.001, 0.999].  Default 50 %. */
     private final Property<Double>  genRectangleDuty = bound(0.5);
     /** Triangle duty cycle (rise-portion fraction) in [0.001, 0.999].  Default 50 %
@@ -511,6 +511,17 @@ public final class Preferences {
     /** Silent lead-in prepended to the sweep, in seconds.  Lets the DAC →
      *  ADC chain settle before the first sweep sample lands. */
     private final Property<Double>  freqRespLeadInSec        = bound(0.2);
+
+    /** Tune-notch wizard sweep start frequency in Hz; persisted independently
+     *  of the main FreqResp pane so the dialog remembers its own fields. */
+    private final Property<Double>  tuneNotchStartHz         = bound(900.0);
+    /** Tune-notch wizard sweep stop frequency in Hz. */
+    private final Property<Double>  tuneNotchStopHz          = bound(1100.0);
+    /** Tune-notch wizard generator drive amplitude at the DAC, V RMS. */
+    private final Property<Double>  tuneNotchAmplitudeVrms   = bound(1.0);
+    /** Tune-notch wizard target (desired) notch frequency in Hz — the dashed
+     *  marker the live readout is tuned onto. */
+    private final Property<Double>  tuneNotchTargetHz        = bound(1000.0);
 
     /** Whether the left-channel trace is visible on the view (toggle on the
      *  view's header).  L + R are independent toggles, not single-choice. */
@@ -1602,6 +1613,22 @@ public final class Preferences {
     public void setFreqRespLeadInSec(double v) { freqRespLeadInSec.set(v); }
     public Property<Double> freqRespLeadInSecProperty() { return freqRespLeadInSec; }
 
+    public double getTuneNotchStartHz()        { return tuneNotchStartHz.get(); }
+    public void setTuneNotchStartHz(double v)  { tuneNotchStartHz.set(v); }
+    public Property<Double> tuneNotchStartHzProperty() { return tuneNotchStartHz; }
+
+    public double getTuneNotchStopHz()         { return tuneNotchStopHz.get(); }
+    public void setTuneNotchStopHz(double v)   { tuneNotchStopHz.set(v); }
+    public Property<Double> tuneNotchStopHzProperty() { return tuneNotchStopHz; }
+
+    public double getTuneNotchAmplitudeVrms()  { return tuneNotchAmplitudeVrms.get(); }
+    public void setTuneNotchAmplitudeVrms(double v) { tuneNotchAmplitudeVrms.set(v); }
+    public Property<Double> tuneNotchAmplitudeVrmsProperty() { return tuneNotchAmplitudeVrms; }
+
+    public double getTuneNotchTargetHz()       { return tuneNotchTargetHz.get(); }
+    public void setTuneNotchTargetHz(double v) { tuneNotchTargetHz.set(v); }
+    public Property<Double> tuneNotchTargetHzProperty() { return tuneNotchTargetHz; }
+
     public double getFreqRespNyquistFraction() { return freqRespNyquistFraction.get(); }
     public void setFreqRespNyquistFraction(double v) { freqRespNyquistFraction.set(v); }
     public Property<Double> freqRespNyquistFractionProperty() { return freqRespNyquistFraction; }
@@ -1921,6 +1948,10 @@ public final class Preferences {
         root.put("freqRespFftSize",           freqRespFftSize.get());
         root.put("freqRespDitherBits",        freqRespDitherBits.get());
         root.put("freqRespLeadInSec",         freqRespLeadInSec.get());
+        root.put("tuneNotchStartHz",          tuneNotchStartHz.get());
+        root.put("tuneNotchStopHz",           tuneNotchStopHz.get());
+        root.put("tuneNotchAmplitudeVrms",    tuneNotchAmplitudeVrms.get());
+        root.put("tuneNotchTargetHz",         tuneNotchTargetHz.get());
         root.put("freqRespLeftVisible",       freqRespLeftVisible.get());
         root.put("freqRespRightVisible",      freqRespRightVisible.get());
         root.put("freqRespPhaseVisible",      freqRespPhaseVisible.get());
@@ -2220,6 +2251,10 @@ public final class Preferences {
         }
         if (root.get("freqRespDitherBits")        instanceof Number  n) freqRespDitherBits.set(n.intValue());
         if (root.get("freqRespLeadInSec")         instanceof Number  n) freqRespLeadInSec.set(n.doubleValue());
+        if (root.get("tuneNotchStartHz")          instanceof Number  n) tuneNotchStartHz.set(n.doubleValue());
+        if (root.get("tuneNotchStopHz")           instanceof Number  n) tuneNotchStopHz.set(n.doubleValue());
+        if (root.get("tuneNotchAmplitudeVrms")    instanceof Number  n) tuneNotchAmplitudeVrms.set(n.doubleValue());
+        if (root.get("tuneNotchTargetHz")         instanceof Number  n) tuneNotchTargetHz.set(n.doubleValue());
         if (root.get("freqRespLeftVisible")       instanceof Boolean b) freqRespLeftVisible.set(b);
         if (root.get("freqRespRightVisible")      instanceof Boolean b) freqRespRightVisible.set(b);
         if (root.get("freqRespPhaseVisible")      instanceof Boolean b) freqRespPhaseVisible.set(b);

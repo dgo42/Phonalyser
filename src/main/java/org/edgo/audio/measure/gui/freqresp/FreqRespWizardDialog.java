@@ -46,6 +46,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
+import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -106,6 +107,7 @@ public final class FreqRespWizardDialog {
     /** Opens the wizard and blocks until the user finishes / cancels. */
     public void open() {
         dialog = new Shell(parentShell, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.RESIZE);
+        ShellIcons.apply(dialog);
         dialog.setText(I18n.t("freqResp.wizard.title"));
         dialog.setSize(540, 360);
         GridLayout outer = new GridLayout(1, false);
