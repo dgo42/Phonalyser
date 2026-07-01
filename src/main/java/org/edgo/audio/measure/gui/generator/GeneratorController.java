@@ -145,27 +145,27 @@ public final class GeneratorController {
         });
         onPref(prefs.genDitherBitsProperty(), this::setDitherBits);
         onPref(prefs.genSweepFreqStartHzProperty(), v -> {
-            setSweepFreqStart(v);
+            if (!restartFarinaOnParamChange()) setSweepFreqStart(v);
             publishSignalChanged();
         });
         onPref(prefs.genSweepFreqEndHzProperty(), v -> {
-            setSweepFreqEnd(v);
+            if (!restartFarinaOnParamChange()) setSweepFreqEnd(v);
             publishSignalChanged();
         });
         onPref(prefs.genSweepDurationSecProperty(), v -> {
-            setSweepDurationSeconds(v);
+            if (!restartFarinaOnParamChange()) setSweepDurationSeconds(v);
             publishSignalChanged();
         });
         onPref(prefs.genSweepFadeInSecProperty(), v -> {
-            setSweepFadeInSeconds(v);
+            if (!restartFarinaOnParamChange()) setSweepFadeInSeconds(v);
             publishSignalChanged();
         });
         onPref(prefs.genSweepFadeOutSecProperty(), v -> {
-            setSweepFadeOutSeconds(v);
+            if (!restartFarinaOnParamChange()) setSweepFadeOutSeconds(v);
             publishSignalChanged();
         });
         onPref(prefs.genSweepLoopProperty(), v -> {
-            setSweepLoop(v);
+            if (!restartFarinaOnParamChange()) setSweepLoop(v);
             publishSignalChanged();
         });
         onPref(prefs.genPlayFromLoopProperty(), filePlayer::setLoop);
@@ -650,6 +650,19 @@ public final class GeneratorController {
     public synchronized void restart() {
         stop();
         start();
+    }
+
+    /** A Farina (LOG) sweep can't live-edit its pre-rendered buffer without the
+     *  playback dropping to silence, so a parameter change while it is running
+     *  does a full restart instead — the tone resumes with the new parameters
+     *  (start() rebuilds the generator from the just-committed prefs).  Returns
+     *  {@code true} when it restarted, so the caller skips the live setter. */
+    private boolean restartFarinaOnParamChange() {
+        if (isRunning() && Preferences.instance().getGenSignalForm() == GenSignalForm.LOG_SWEEP) {
+            restart();
+            return true;
+        }
+        return false;
     }
 
     /** Stops both engines — used when the FreqResp sweep claims the DAC

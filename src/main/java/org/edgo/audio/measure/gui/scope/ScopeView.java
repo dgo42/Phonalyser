@@ -274,6 +274,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private double  lastHeldTimePerDiv;
     private int     lastHeldDispCount;
     private boolean blankBeyondData;
+    /** Canvas X to anchor the next frozen-frame t/div change around, or -1 to
+     *  anchor on the screen centre.  The wheel-zoom sets it (cursor); a t/div
+     *  FIELD change leaves it -1 so the trace stays centred instead of jumping
+     *  to the stale cursor position.  Consumed by {@link #renderHeldCapturedFrame}. */
+    private int     heldZoomAnchorX = -1;
 
     /**
      * Last trigger mode seen by {@link #drawWaveforms} — used to detect
@@ -2197,6 +2202,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
     }
 
+    /** The wheel-zoom anchors the next frozen-frame t/div change around the
+     *  cursor; a t/div field change leaves it unset so the trace stays centred.
+     *  See {@link #heldZoomAnchorX}. */
+    public void setHeldZoomAnchorForNextScale(int canvasX) {
+        heldZoomAnchorX = canvasX;
+    }
+
     /** Pointer moved — drives a slider drag, else updates the hover cursor /
      *  tooltip on the {@link #pointerHost} (the visible widget). */
     public void pointerMove(int x, int y) {
@@ -2909,9 +2921,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         if (lastHeldTimePerDiv <= 0) {                            // not yet anchored
             heldViewStart = capturedDispStart + capturedSubSampleOffset;
         } else if (curTDiv != lastHeldTimePerDiv && lastHeldDispCount > 0) {
-            double frac         = (w > 0) ? ScopeFormat.clamp01((double) hoverX / w) : 0.5;
-            double cursorSample = heldViewStart + frac * lastHeldDispCount;   // sample under cursor before zoom
-            heldViewStart       = cursorSample - frac * dispCount;            // keep it under the cursor
+            // Wheel zoom keeps the sample under the cursor put; a t/div FIELD
+            // change (anchor unset) keeps the SCREEN CENTRE put so the trace
+            // doesn't jump off-centre onto the stale cursor position.
+            double frac         = (heldZoomAnchorX >= 0 && w > 0)
+                    ? ScopeFormat.clamp01((double) heldZoomAnchorX / w) : 0.5;
+            heldZoomAnchorX     = -1;                                         // consumed
+            double cursorSample = heldViewStart + frac * lastHeldDispCount;   // sample under anchor before zoom
+            heldViewStart       = cursorSample - frac * dispCount;            // keep it under the anchor
         }
         lastHeldTimePerDiv = curTDiv;
         lastHeldDispCount  = dispCount;

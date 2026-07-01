@@ -62,6 +62,7 @@ import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
+import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
@@ -1227,6 +1228,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         // Floating tool window: on-top so it stays visible, but NOT modal — the
         // user can keep watching the scope / FFT while it records.
         Shell dlg = new Shell(getShell(), SWT.TOOL | SWT.TITLE | SWT.CLOSE | SWT.ON_TOP);
+        ShellIcons.apply(dlg);
         dlg.setText(I18n.t("scope.save.recording.title"));
         dlg.setLayout(new GridLayout(1, false));
         Label lbl = new Label(dlg, SWT.NONE);

@@ -30,6 +30,7 @@ import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.gui.common.Icon;
+import org.edgo.audio.measure.gui.common.ShellIcons;
 
 /**
  * A reusable extracted-table tool window — a {@code DIALOG_TRIM} {@link Shell} hosting a
@@ -72,6 +73,7 @@ public final class ToolWindow {
         this.buttonHeight    = buttonHeight;
         // DIALOG_TRIM = TITLE | CLOSE | BORDER, no resize — the owner sizes it explicitly.
         shell = new Shell(owner.getShell(), SWT.DIALOG_TRIM);
+        ShellIcons.apply(shell);
         shell.setLayout(new FillLayout());
         canvas = new Canvas(shell, SWT.DOUBLE_BUFFERED);
         canvas.setBackground(background);

@@ -23,6 +23,7 @@ import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.cli.util.StereoSamples;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.generator.SignalGenerator;
 
 import java.util.Locale;
@@ -74,7 +75,6 @@ public final class FreqRespAnalyzer {
     public StereoFreqRespResult run(ProgressCallback progress, Cancellable cancel) throws Exception {
         validate();
 
-        double[] freqs        = USE_LOG_GRID ? buildLogSpacedFreqs() : buildLinearFreqs();
         int      sweepSamples = (int) Math.round(cfg.getDurationSec() * cfg.getSampleRate());
         int      leadInSamples = (int) Math.round(cfg.getLeadInSec() * cfg.getSampleRate());
         int      tailSamples  = cfg.getSampleRate() / 2;
@@ -116,6 +116,22 @@ public final class FreqRespAnalyzer {
 
         if (cfg.getRawCaptureListener() != null) {
             cfg.getRawCaptureListener().onRawCapture(rec);
+        }
+
+        // Output grid sampled at the deconvolution's FFT bin centres so each
+        // bin is read with fractional offset 0 — no phase-sensitive complex
+        // interpolation between bins (which combs the trace).  Built from the
+        // ACTUAL capture length so binHz matches computeFromLogSweep's
+        // nextPow2(...) FFT; a band with more bins than sweepPoints (wide band
+        // / fine grid) falls back to a log grid capped at sweepPoints.
+        double[] freqs;
+        if (USE_LOG_GRID) {
+            int deconvM = MathUtil.nextPow2(Math.max(rec.left().length, leadInSamples + sweepSamples));
+            double binHz = cfg.getSampleRate() / (double) deconvM;
+            freqs = FreqRespCalHelper.binAlignedFreqs(
+                    cfg.getStartHz(), cfg.getStopHz(), binHz, cfg.getSweepPoints());
+        } else {
+            freqs = buildLinearFreqs();
         }
 
         checkCancel(cancel);
@@ -176,20 +192,6 @@ public final class FreqRespAnalyzer {
         if (cfg.getLeadInSec() < 0.05)               throw new IllegalArgumentException("leadInSec must be >= 0.05");
         if (cfg.getAmplitudeVrms() <= 0.0)           throw new IllegalArgumentException("amplitudeVrms must be > 0");
         if (cfg.getStereoCaptureProvider() == null)  throw new IllegalArgumentException("stereoCaptureProvider is required");
-    }
-
-    /** Log-spaced output grid: N points from startHz to stopHz with
-     *  geometric spacing.  freqs[0] = startHz, freqs[N-1] = stopHz. */
-    private double[] buildLogSpacedFreqs() {
-        int n = cfg.getSweepPoints();
-        double[] freqs = new double[n];
-        double logStart = Math.log(cfg.getStartHz());
-        double logEnd   = Math.log(cfg.getStopHz());
-        for (int i = 0; i < freqs.length; i++) {
-            double t = i / (double) (freqs.length - 1);
-            freqs[i] = Math.exp(logStart + (logEnd - logStart) * t);
-        }
-        return freqs;
     }
 
     /** Linearly-spaced output grid: N evenly-spaced points from startHz

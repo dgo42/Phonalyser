@@ -105,6 +105,7 @@ public final class Dialogs {
     public static String promptString(Shell parent, String title,
                                       String prompt, String initialValue) {
         Shell dialog = new Shell(parent, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL);
+        ShellIcons.apply(dialog);
         if (title != null) dialog.setText(title);
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth  = 16;

@@ -43,6 +43,13 @@ public final class Events {
      *  Nyquist, the sweep-points series' sample-rate/2 entry). */
     public static final String AUDIO_FORMAT_CHANGED = "preferences.audioFormat.changed";
 
+    /** Published by the Preferences dialog JUST BEFORE the audio backend is
+     *  switched, when the backend actually changed.  Lets a running FFT
+     *  recording stop cleanly before the old capture device is torn down, so it
+     *  can be restarted on the new backend (on {@link #AUDIO_FORMAT_CHANGED})
+     *  instead of being left dead.  No payload. */
+    public static final String AUDIO_BACKEND_CHANGING = "preferences.audioBackend.changing";
+
     /** Prefix for pane-title click events.  The full event name is
      *  built by {@link #paneTitleClick(int)} from the ID passed to
      *  {@code PaneTitle}'s constructor.  Subscribers pick their pane

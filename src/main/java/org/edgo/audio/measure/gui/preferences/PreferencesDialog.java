@@ -50,6 +50,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Fonts;
+import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.enums.TabOrientation;
@@ -164,6 +165,7 @@ public final class PreferencesDialog {
      */
     public Shell open(Runnable onClose) {
         Shell dialog = new Shell(parent, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL);
+        ShellIcons.apply(dialog);
         if (onClose != null) dialog.addDisposeListener(e -> onClose.run());
         dialog.setText(I18n.t("preferences.title"));
         GridLayout outer = new GridLayout(1, false);
@@ -763,6 +765,12 @@ public final class PreferencesDialog {
                     bp.getInputSampleRate(),  bp.getInputBitDepth(),
                     bp.getOutputDeviceName() != null ? bp.getOutputDeviceName() : "<none>",
                     bp.getOutputSampleRate(), bp.getOutputBitDepth());
+            // A real backend switch tears down the active devices; stop the
+            // generator cleanly FIRST so its DDS thread isn't racing the
+            // teardown (capture stops via the teardown either way).
+            if (edit.getBackend() != Preferences.instance().getBackend()) {
+                MessageBus.instance().publish(Events.AUDIO_BACKEND_CHANGING);
+            }
             // Single hand-off: commit the whole working copy to the live
             // singleton (which also persists once).
             Preferences.instance().applyFromDialog(edit);

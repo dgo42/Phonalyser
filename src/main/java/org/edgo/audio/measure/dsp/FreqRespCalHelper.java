@@ -106,6 +106,45 @@ public class FreqRespCalHelper {
         return (int) (sweepSamples * SWEEP_FADE_FRACTION_PER_SIDE);
     }
 
+    /** Output frequency grid sampled EXACTLY at the deconvolution's FFT bin
+     *  centres ({@code k·binHz}) across {@code [startHz, stopHz]}, so
+     *  {@link #computeFromLogSweep} reads each bin with fractional offset 0 —
+     *  no phase-sensitive complex interpolation between bins (which facets the
+     *  trace into a frame-to-frame comb).  {@code binHz} must be
+     *  {@code sampleRate / nextPow2(captureLength)} — the spacing of the FFT
+     *  {@code computeFromLogSweep} builds.
+     *
+     *  <p>When the band spans more than {@code maxPoints} bins (a wide band on
+     *  a fine grid) the between-bin wiggle is sub-point anyway and a full bin
+     *  grid would explode the point count, so it falls back to {@link
+     *  #logSpacedFreqs} capped at {@code maxPoints}. */
+    public double[] binAlignedFreqs(double startHz, double stopHz, double binHz, int maxPoints) {
+        int k0 = Math.max(1, (int) Math.ceil(startHz / binHz));
+        int k1 = (int) Math.floor(stopHz / binHz);
+        int n  = k1 - k0 + 1;
+        if (n < 2 || n > maxPoints) {
+            return logSpacedFreqs(startHz, stopHz, Math.min(maxPoints, Math.max(2, n)));
+        }
+        double[] freqs = new double[n];
+        for (int i = 0; i < n; i++) {
+            freqs[i] = (k0 + i) * binHz;
+        }
+        return freqs;
+    }
+
+    /** Log-spaced (geometric) output grid: {@code points} points from
+     *  {@code startHz} to {@code stopHz} inclusive. */
+    public double[] logSpacedFreqs(double startHz, double stopHz, int points) {
+        double[] freqs = new double[points];
+        double logStart = Math.log(startHz);
+        double logEnd   = Math.log(stopHz);
+        for (int i = 0; i < points; i++) {
+            double t = i / (double) (points - 1);
+            freqs[i] = Math.exp(logStart + (logEnd - logStart) * t);
+        }
+        return freqs;
+    }
+
     /**
      * Reconstructs the per-frequency filter calibration H(f) from the captured
      * recording of a Farina log-sweep by direct frequency-domain deconvolution:
@@ -136,6 +175,20 @@ public class FreqRespCalHelper {
             double[] yRec, double[] sweepRef, int leadInSamples,
             int sampleRate, double[] freqs, double amplitudeVRms, double adcFsVoltageRms,
             int fadeSamples, String channelLabel) {
+        return computeFromLogSweep(yRec, sweepRef, leadInSamples, sampleRate, freqs,
+                amplitudeVRms, adcFsVoltageRms, fadeSamples, channelLabel, true);
+    }
+
+    /** As above, but {@code applySavGol=false} skips the final Savitzky-Golay
+     *  output smoothing.  The Tune-notch wizard disables it: its bin-aligned
+     *  output grid is coarse (a few Hz per point), so the fixed
+     *  {@link #SAVGOL_WINDOW}-point SG window spans ~15-20 Hz and rounds the
+     *  bottom off a deep, narrow notch null (it read ≈9 dB shallow).  A dense
+     *  main-pane grid keeps SG on, where the window is sub-Hz and harmless. */
+    public FreqRespCalibration computeFromLogSweep(
+            double[] yRec, double[] sweepRef, int leadInSamples,
+            int sampleRate, double[] freqs, double amplitudeVRms, double adcFsVoltageRms,
+            int fadeSamples, String channelLabel, boolean applySavGol) {
         final String tag = (channelLabel == null || channelLabel.isEmpty())
                 ? "" : "[" + channelLabel + "] ";
         int xLen   = leadInSamples + sweepRef.length;
@@ -317,7 +370,7 @@ public class FreqRespCalHelper {
         // Magnitude is smoothed directly; phase is smoothed in (sin, cos)
         // space and recombined via atan2 to handle ±π wraparound at
         // notches without artefacts.  Boundary samples use reflection.
-        if (USE_SAVGOL_FILTER && nPoints >= SAVGOL_WINDOW) {
+        if (USE_SAVGOL_FILTER && applySavGol && nPoints >= SAVGOL_WINDOW) {
             double[] coeffs = savGolCoefficients(SAVGOL_WINDOW, SAVGOL_ORDER);
             double[] smoothMag = new double[nPoints];
             double[] sinPh     = new double[nPoints];
