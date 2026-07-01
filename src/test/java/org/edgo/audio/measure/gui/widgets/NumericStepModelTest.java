@@ -278,8 +278,12 @@ class NumericStepModelTest {
         NumericStepModel m = new NumericStepModel(UnitFamily.FREQUENCY, 1, 192_000, 9);
         assertTrue(m.commit("1.5 kHz"));
         assertEquals(1500, m.getValue(), EPS);
-        assertTrue(m.commit("200"));      // suffix-less = Hz
-        assertEquals(200, m.getValue(), EPS);
+        assertTrue(m.commit("10k"));      // "k" short alias for kHz
+        assertEquals(10_000, m.getValue(), EPS);
+        assertTrue(m.commit("20kh"));     // "kh" short alias for kHz
+        assertEquals(20_000, m.getValue(), EPS);
+        assertTrue(m.commit("1002"));     // digits-only = base unit Hz (NOT the displayed kHz)
+        assertEquals(1002, m.getValue(), EPS);
         assertTrue(m.commit("1,5kHz"));   // decimal comma, no space
         assertEquals(1500, m.getValue(), EPS);
         assertFalse(m.commit("12 parsec"));
@@ -325,12 +329,12 @@ class NumericStepModelTest {
     }
 
     @Test
-    void perDiv_suffixlessEntryUsesDisplayedUnit() {
+    void perDiv_suffixlessEntryUsesBaseUnit() {
         double[] series = {1e-6, 1e-3, 1.0};
         NumericStepModel m = new NumericStepModel(UnitFamily.VOLTS_PER_DIV, 1e-6, 500, series, 3);
         m.setValue(2e-3);                 // displays as mV/div
-        assertTrue(m.commit("5"));        // means 5 mV/div
-        assertEquals(5e-3, m.getValue(), EPS);
+        assertTrue(m.commit("5"));        // digits-only = base unit V/div (NOT the displayed mV/div)
+        assertEquals(5.0, m.getValue(), EPS);
     }
 
     @Test
@@ -338,7 +342,7 @@ class NumericStepModelTest {
         NumericStepModel m = new NumericStepModel(UnitFamily.FREQUENCY, 1, 192_000, 9);
         assertTrue(m.commit("300 kHz"));
         assertEquals(192_000, m.getValue(), EPS, "clamped to Nyquist");
-        assertTrue(m.commit("0.2"));
+        assertTrue(m.commit("0.2"));      // digits-only = base unit Hz, below min
         assertEquals(1, m.getValue(), EPS, "clamped to min");
     }
 

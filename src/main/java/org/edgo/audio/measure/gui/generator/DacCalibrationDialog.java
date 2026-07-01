@@ -29,6 +29,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.i18n.I18n;
 
 import java.util.Locale;
@@ -53,6 +54,7 @@ public final class DacCalibrationDialog {
 
     public DacCalibrationDialog(Shell parent, double configuredVrms, DoubleConsumer onCalibrate) {
         dialog = new Shell(parent, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL);
+        ShellIcons.apply(dialog);
         dialog.setText(I18n.t("calibrate.dac.title"));
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth  = 16;

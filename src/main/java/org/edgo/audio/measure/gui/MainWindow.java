@@ -48,6 +48,7 @@ import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ShellIcons;
+import org.edgo.audio.measure.gui.freqresp.TuneNotchWizardDialog;
 import org.edgo.audio.measure.gui.helpviewer.HelpIndexBuilder;
 import org.edgo.audio.measure.gui.helpviewer.HelpUrls;
 import org.edgo.audio.measure.gui.helpviewer.HelpViewer;
@@ -341,14 +342,17 @@ public final class MainWindow {
             addLanguageMenuItem(languageMenu, tag, displayLabel(tag));
         }
 
-        // Tools → Preferences.  On macOS this is the application-menu "Settings…"
-        // item (wired in wireMacSystemMenu); since it is the only Tools entry,
-        // the whole Tools menu is omitted there.
+        // Tools menu.  "Tune notch" is present on every platform; Preferences
+        // is only added on non-macOS — on macOS it is the application-menu
+        // "Settings…" item (wired in wireMacSystemMenu).
+        MenuItem toolsCascade = new MenuItem(menuBar, SWT.CASCADE);
+        toolsCascade.setText(I18n.t("menu.tools"));
+        Menu toolsMenu = new Menu(shell, SWT.DROP_DOWN);
+        toolsCascade.setMenu(toolsMenu);
+        MenuItem tuneNotchItem = new MenuItem(toolsMenu, SWT.PUSH);
+        tuneNotchItem.setText(I18n.t("menu.tools.tuneNotch"));
+        tuneNotchItem.addListener(SWT.Selection, e -> openTuneNotchDialog());
         if (!mac) {
-            MenuItem toolsCascade = new MenuItem(menuBar, SWT.CASCADE);
-            toolsCascade.setText(I18n.t("menu.tools"));
-            Menu toolsMenu = new Menu(shell, SWT.DROP_DOWN);
-            toolsCascade.setMenu(toolsMenu);
             MenuItem preferencesItem = new MenuItem(toolsMenu, SWT.PUSH);
             preferencesItem.setText(I18n.t("menu.tools.preferences"));
             preferencesItem.addListener(SWT.Selection, e -> openPreferencesDialog());
@@ -442,6 +446,12 @@ public final class MainWindow {
                 rebuildContent();
             }
         });
+    }
+
+    /** Opens the Tune-notch wizard — a continuous Farina-sweep frequency
+     *  response chart for live notch-filter tuning. */
+    private void openTuneNotchDialog() {
+        new TuneNotchWizardDialog(shell).open();
     }
 
     /** Shows the splash in its "About" mode.  Shared by the Help menu

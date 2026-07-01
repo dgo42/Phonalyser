@@ -785,7 +785,9 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
             if (ctrl && shift) {
                 // Shift + Ctrl + wheel: t/div zoom around the mouse X
                 // (wheel up → step DOWN in t/div since smaller t/div is
-                // finer time resolution).
+                // finer time resolution).  Anchor a frozen-frame re-centre on
+                // the cursor (a t/div FIELD change leaves it centred — see #5.1).
+                if (view.isFrozen()) view.setHeldZoomAnchorForNextScale(e.x);
                 tabControl.stepTimePerDivAround(-dir, e.x, area.width);
             } else if (ctrl) {
                 // Ctrl + wheel: V/div zoom around the mouse Y (wheel up →

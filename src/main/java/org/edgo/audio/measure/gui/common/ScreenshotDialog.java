@@ -142,6 +142,7 @@ public final class ScreenshotDialog {
 
     public void open() {
         Shell dialog = new Shell(parent, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL);
+        ShellIcons.apply(dialog);
         dialog.setText(I18n.t("screenshot.title"));
         GridLayout layout = new GridLayout(2, false);
         layout.marginWidth  = 12;

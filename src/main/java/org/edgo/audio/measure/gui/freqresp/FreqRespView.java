@@ -803,6 +803,15 @@ public final class FreqRespView extends AbstractFreqDomainView {
         return softMagTopDb(MAG_TOP_MAX_DB, FREQ_MIN_FLOOR_HZ, nyquistHz());
     }
 
+    /** Shows / hides the header button row (L / R / phase / auto-setup / max).
+     *  The Tune-notch wizard embeds this view as a bare chart and hides the
+     *  controls. */
+    public void setHeaderControlsVisible(boolean v) {
+        if (headerBar != null) {
+            headerBar.setVisible(v);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Paint
     // -------------------------------------------------------------------------
@@ -848,7 +857,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
                     .withFormat(LabelFormat.FREQ);
             AxisSpec yLeftSpec = AxisSpec.linearNice(magBot, magTop, 10, 5.0)
                     .withFormat(LabelFormat.DB)
-                    .withUnit("dB");
+                    .withUnit(I18n.t("unit.db"));
             AxisSpec yRightSpec = phaseVisible
                     ? AxisSpec.linear(-180, 180, 8)
                             .withFormat(LabelFormat.PHASE_DEG)

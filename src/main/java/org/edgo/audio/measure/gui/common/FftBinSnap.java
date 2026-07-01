@@ -39,11 +39,12 @@ import org.edgo.audio.measure.preferences.Preferences;
 public class FftBinSnap {
 
     /** Returns {@code raw} rounded to the nearest FFT bin centre when
-     *  the user has enabled snap-to-FFT-bin with a SINE or DUAL_TONE
-     *  waveform.  Otherwise returns {@code raw} unchanged. */
+     *  the user has enabled snap-to-FFT-bin with a SINE, SINE_COMP or
+     *  DUAL_TONE waveform.  Otherwise returns {@code raw} unchanged. */
     public double snapIfEnabled(Preferences prefs, GenSignalForm form,
                                 int sampleRate, double raw) {
-        if (form != GenSignalForm.SINE && form != GenSignalForm.DUAL_TONE) return raw;
+        if (form != GenSignalForm.SINE && form != GenSignalForm.DUAL_TONE
+                && form != GenSignalForm.SINE_COMP) return raw;
         if (!prefs.isGenSnapToFftBin()) return raw;
         int fftSize = prefs.getFftLength();
         if (fftSize < 8 || sampleRate <= 0) return raw;

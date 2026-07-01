@@ -1041,16 +1041,17 @@ public final class GeneratorPane extends AbstractPane {
     /**
      * Refreshes the "Frequency" label text.  Appends a bracketed
      * correction for forms that have one: RECTANGLE shows the
-     * integer-sample-period frequency, SINE (when "snap to FFT bin"
-     * is checked) shows the FFT-bin-snapped frequency.  All other
-     * forms show plain "Frequency".
+     * integer-sample-period frequency, SINE / compensated sine (when
+     * "snap to FFT bin" is checked) show the FFT-bin-snapped frequency.
+     * All other forms show plain "Frequency".
      */
     private void updateFreqLabel() {
         GenSignalForm form = formCombo.getSelectedForm();
         String corrected = null;
         if (form == GenSignalForm.RECTANGLE) {
             corrected = formatLabelHz(controller.correctedRectangleHz());
-        } else if (form == GenSignalForm.SINE && fftSnapBtn.getSelection()) {
+        } else if ((form == GenSignalForm.SINE || form == GenSignalForm.SINE_COMP)
+                   && fftSnapBtn.getSelection()) {
             corrected = formatLabelHz(controller.effectiveFrequency());
         }
         freqLabel.setText(corrected == null ? I18n.t("generator.frequency")
