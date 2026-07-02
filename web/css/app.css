@@ -1,0 +1,792 @@
+/*
+ * Phonalyser web — native-desktop look, matching the Java/SWT app.
+ * GNU AGPL v3 or later.
+ */
+
+:root {
+  --win-bg: #f0f0f0;
+  --panel: #f0f0f0;
+  --field-border: #8e8e8e;
+  --hdr-border: #c4c4c4;
+  --strip-border: #abadb3;
+  --ink: #1b1b1b;
+  --muted: #8a8a8a;
+  --accent: #1f6feb;
+  --yellow: #f0dc28;
+  --yellow-br: #b89200;
+  --green: #19a319;
+  --led-off: #5a0e0e;
+  --led-on: #ff0000;
+  --tile: #e0e0e0;
+  --tile-ink: #202020;
+  --led: #ff2020;
+  --onair-grey: #787878;
+  --onair-dim: #aa0000;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+/* This is an app, not a document — chrome text is not selectable; fields + readouts are. */
+body { user-select: none; -webkit-user-select: none; }
+input, textarea, select, .nf-input, #readout, #imdText, #frReadout, pre { user-select: text; -webkit-user-select: text; }
+body {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 13px; color: var(--ink); background: var(--win-bg);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+
+/* ===== menu bar ===== */
+.menubar { display: flex; align-items: center; gap: 2px; height: 28px; padding: 0 8px;
+  background: var(--win-bg); border-bottom: 1px solid var(--hdr-border); flex: 0 0 auto; }
+.menu-title { font-weight: 700; margin-right: 14px; }
+.menu-item { padding: 3px 8px; border-radius: 3px; cursor: pointer; }
+.menu-item:hover { background: #dcdcdc; color: #000; }   /* keep dark ink on the light hover bg (item 16) */
+.menu-spacer { flex: 1; }
+.menu-lang { width: auto; }
+.menu-ver { color: var(--muted); font-size: 11px; }
+
+/* Language submenu (C37): 32 locales must all stay reachable on a short window.
+   Compact items + a height cap = the available viewport (minus a small margin),
+   so the dropdown scrolls ONLY when it genuinely doesn't fit — when there's room
+   for every locale it shows NO scrollbar (no fixed 32rem cap that would clip a
+   menu that would otherwise fit). Bootstrap's popper flips the menu above/below
+   to maximise the space this cap then fills. */
+#langMenu { max-height: calc(100vh - 4rem); overflow-y: auto; --bs-dropdown-min-width: 9rem; }
+#langMenu .dropdown-item { font-size: 12px; padding: 2px 10px; line-height: 1.3; }
+
+/* ===== main tabs ===== */
+.main-tabs { border-bottom: 1px solid var(--hdr-border); padding: 4px 6px 0; gap: 2px; flex: 0 0 auto; background: var(--win-bg); }
+.main-tabs .nav-link { color: #000; font-size: 13px; padding: 3px 14px; border: 1px solid transparent; border-bottom: none;
+  border-radius: 3px 3px 0 0; background: linear-gradient(#fbfbfb, #eef0f2); }
+.main-tabs .nav-link.active { background: #fff; border-color: var(--hdr-border); color: #000; font-weight: 400; }
+.main-tabs .nav-link { display: inline-flex; align-items: center; gap: 6px; }   /* icon + label */
+.main-tabs .main-tab-icon { width: 20px; height: 20px; flex: 0 0 auto; }        /* Swiss-knife / RIAA tab icons */
+/* Small icons in TOP mode (Java: SWISS_SMALL vs SWISS_MID). */
+body.small-icons:not(.orient-left) .main-tabs .main-tab-icon { width: 15px; height: 15px; }
+
+/* Main-tab orientation = LEFT (Java MainTab.buildLeftSidebar): a VERTICAL icon sidebar on the
+   left with the selected tab's content to its right. Faithful to the SWT 2-col grid — sidebar
+   56px (big) / 42px (small icons), large icon + vertical label per button. Toggled live by
+   applyLookAndFeel(); Bootstrap tabs still switch the panes, so only the layout changes. */
+body.orient-left { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto 1fr;
+  grid-template-areas: "menu menu" "tabs content"; }
+body.orient-left .menubar { grid-area: menu; }
+body.orient-left .tab-content { grid-area: content; min-width: 0; }
+body.orient-left .main-tabs { grid-area: tabs; flex-direction: column; align-items: center;
+  width: 56px; padding: 4px; gap: 4px; border-bottom: none; border-right: 1px solid var(--hdr-border); }
+body.orient-left .main-tabs .nav-item { width: 100%; }
+body.orient-left .main-tabs .nav-link { flex-direction: column; align-items: center; gap: 4px; width: 100%; padding: 6px 2px; }
+body.orient-left .main-tabs .main-tab-icon { width: 40px; height: 40px; }
+body.orient-left .main-tabs .nav-link span { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 11px; white-space: nowrap; }   /* label reads bottom→top */
+body.orient-left.small-icons .main-tabs { width: 42px; }
+body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28px; }
+
+.tab-content { flex: 1; min-height: 0; display: flex; }
+.tab-content > .tab-pane.active { flex: 1; min-height: 0; display: flex; flex-direction: column; width: 100%; }
+
+/* ===== workspace ===== */
+.workspace { flex: 1; min-height: 0; display: flex; }
+.gen-col { flex: 0 0 var(--gen-w, 330px); overflow-y: auto; min-width: 0; }
+.right-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.scope-pane { flex: var(--scope-grow, 1) 1 0; min-height: 0; }
+.fft-pane { flex: var(--fft-grow, 1) 1 0; min-height: 0; }
+
+/* SASH splitters (replace the old static 4px borders); hover/disabled tints
+   mirror MultifunctionalTab.tintSash (#808080 → #C8C8C8, default cursor when
+   the adjacent pane is collapsed). */
+.sash { background: #808080; flex: 0 0 4px; z-index: 4; }
+.sash.vertical-sash { cursor: col-resize; width: 4px; }
+.sash.horizontal-sash { cursor: row-resize; height: 4px; }
+.sash:hover { background: #c8c8c8; }
+.sash.disabled { cursor: default; background: #808080; }
+
+/* ===== pane ===== */
+.pane { display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
+.scope-pane, .fft-pane { position: relative; }   /* containing block for the canvas-wrap overlays (lr-tools, readout) */
+.pane-header { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px;
+  background: var(--panel); font-size: 12.5px; color: #000; flex: 0 0 auto; cursor: pointer; }
+
+/* collapsed: pane shrinks to the title strip (≈28px) and hides its body. */
+.pane.collapsed .pane-body,
+.pane.collapsed .canvas-wrap,
+.pane.collapsed .scope-main,
+.pane.collapsed .scope-hscroll,
+.pane.collapsed .scope-zoomed-wrap,
+.pane.collapsed .tiletabs,
+.pane.collapsed .tab-panel,
+.pane.collapsed .gen-controls { display: none; }
+.gen-col.collapsed { flex: 0 0 28px; overflow: hidden; }
+.scope-pane.collapsed, .fft-pane.collapsed { flex: 0 0 28px; }
+/* rotated header for the narrow collapsed generator strip (bottom-to-top). */
+.gen-col.collapsed .pane-header { height: auto; flex: 1; writing-mode: vertical-rl;
+  transform: rotate(180deg); justify-content: flex-start; padding: 8px 0; }
+.gen-col.collapsed .on-air { display: none; }
+.pane-caret { font-size: 12px; color: #000; }
+/* Signal-form caption row: label left, ON-AIR banner right-anchored (Java formAndAirRow). */
+.form-air-row { display: flex; align-items: center; gap: 6px; }
+.on-air { margin-left: auto; color: var(--onair-grey); font-weight: 700; font-size: 11px; letter-spacing: .5px; display: flex; align-items: center; gap: 5px; }
+.on-air .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--onair-grey); }
+.on-air.live .dot { background: var(--led-on); }   /* LED stays solid red while on air */
+.on-air.live { color: var(--led-on); animation: onair-blink 1s steps(1, end) infinite; }
+@keyframes onair-blink { 0% { color: var(--led-on); } 50% { color: var(--onair-dim); } 100% { color: var(--led-on); } }
+
+/* ===== generator controls ===== */
+.gen-controls { padding: 6px 10px 12px; }
+.field-label { display: block; font-size: 12px; margin: 6px 0 2px; }
+.field-label.text-muted { color: var(--muted); }
+/* Greyed (disabled) field label — lets a control's label be greyed IN PLACE (e.g. the
+   duty-cycle label when the waveform has no duty) instead of being hidden. */
+.field-label.disabled { color: var(--muted); }
+/* Generator sweep sub-panel: Java GeneratorPane.sweepPanel is a 2-col GridLayout
+   (label | field per row). Mirror it — the five label+field pairs lay out inline; the
+   section heading and the Loop check span both columns. (#sweepWrap's display:grid/none
+   is set by generator-pane.js when sweep mode toggles.) */
+#sweepWrap { grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; }
+#sweepWrap > .field-label { margin: 2px 0; white-space: nowrap; }
+#sweepWrap > label.field-label:not([for]), #sweepWrap > .form-check { grid-column: 1 / -1; }
+.numfield, .filefield, .combo { display: flex; align-items: stretch; height: 24px; }
+.numfield .nf-input, .filefield .nf-input {
+  flex: 1; min-width: 0; border: 1px solid var(--field-border); background: #fff; text-align: right;
+  padding: 2px 6px; font-size: 12.5px; outline: none; }
+.filefield .nf-input { text-align: left; }
+.numfield .nf-unit { display: flex; align-items: center; padding: 0 7px; border: 1px solid var(--field-border); border-left: none;
+  background: #f4f4f4; color: #444; font-size: 12px; }
+.numfield .nf-step { display: flex; flex-direction: column; border: 1px solid var(--field-border); border-left: none; border-radius: 0 2px 2px 0; overflow: hidden; }
+/* Match the scope numeric fields: rounded outer corners + accent focus border (no square box). */
+.numfield .nf-input { border-radius: 2px 0 0 2px; border-right: none; padding: 1px 6px; }
+.numfield .nf-input:focus { border-color: var(--accent); }
+/* Spinner caret glyphs use the original SVG icons (caret-up / caret-down) instead of
+   the ▲▼ text; font-size:0 hides the literal glyph, the icon is a centred background. */
+.numfield .nf-step button { flex: 1; width: 16px; border: none; background: #efefef no-repeat center / 8px 8px;
+  font-size: 0; line-height: 1; color: #444; cursor: pointer; padding: 0; }
+.numfield .nf-step button:first-child { background-image: url(../assets/icons/caret-up.svg); }
+.numfield .nf-step button:last-child { background-image: url(../assets/icons/caret-down.svg); }
+.numfield .nf-step button + button { border-top: 1px solid var(--field-border); }
+.numfield .nf-step button:hover { background-color: #e0e0e0; }
+.numfield.disabled .nf-input, .numfield.disabled .nf-unit { color: var(--muted); background: #f5f5f5; }
+.numfield.sm { height: 24px; max-width: 130px; }
+.combo .combo-ico { display: flex; align-items: center; padding: 0 6px; border: 1px solid var(--field-border); border-right: none; background: #f4f4f4; color: #555; }
+.combo .form-select { border-radius: 0; border-color: var(--field-border); font-size: 12.5px; }
+
+/* custom signal-form combo (waveform pictogram + label) */
+.form-combo { position: relative; width: 100%; height: 28px; }
+.form-combo-btn { display: flex; align-items: center; gap: 4px; width: 100%; height: 28px;
+  border: 1px solid var(--field-border); background: #fff; padding: 2px 24px 2px 4px; font-size: 12.5px;
+  text-align: left; color: var(--ink); cursor: pointer; }
+.form-combo-btn::after { position: absolute; right: 9px; top: 50%; transform: translateY(-25%); }
+.form-combo-ico { width: 24px; height: 24px; flex: 0 0 auto; }
+.form-combo-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.form-combo-menu { font-size: 12.5px; min-width: 100%; border-radius: 0; padding: 2px; }
+.form-combo-item { display: flex; align-items: center; gap: 4px; padding: 3px 8px; }
+.form-combo-item .form-combo-ico { width: 24px; height: 24px; }
+.form-combo-item:active { background: var(--accent); color: #fff; }
+.form-combo-item:active .form-combo-ico { filter: invert(1); }
+.filefield .icon-btn { display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--field-border); border-left: none; background: #f1f1f1; width: 26px; height: 24px; font-size: 13px; line-height: 1; cursor: pointer; color: #444; padding: 0; }
+.filefield .icon-btn:hover { background: #e4e4e4; }
+.filefield .icon-btn.play { color: var(--green); opacity: .7; font-size: 21px; }  /* green like the big play button, bigger icon */
+.filefield .icon-btn.play.playing { color: var(--green); opacity: 1; }            /* full-bright green while playing */
+.form-check-sm { font-size: 12px; margin: 6px 0; min-height: auto; }
+.form-check-sm .form-check-label { font-size: 12px; }
+
+.gen-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+.round-btn { width: 43px; height: 43px; border-radius: 4px; border: 1px solid var(--field-border); background: #f6f6f6; font-size: 18px; color: #333; cursor: pointer; }
+.round-btn.active { background: #dbe9ff; border-color: var(--accent); color: var(--accent); }
+/* Main Play button — green play glyph (Java playDimBig idle → playLitBig running); the icon
+   stays a PLAY triangle while running (tooltip flips to Stop), it does NOT become a stop square. */
+.play-big { width: 43px; height: 43px; border: 1px solid var(--field-border); border-radius: 6px; background: #fff; color: var(--green);
+  font-size: 38px; line-height: 0; cursor: pointer; padding: 0; opacity: .7; display: inline-flex; align-items: center; justify-content: center; }
+.play-big.playing { opacity: 1; filter: brightness(1.45) drop-shadow(0 0 6px var(--green)); }   /* lighter/lit while playing */
+
+/* ===== canvas areas ===== */
+.canvas-wrap { position: relative; flex: 1; min-height: 0; min-width: 0; }
+.scope-canvas { width: 100%; height: 100%; display: block; background: #000; }
+
+/* ===== scope view stack (Java ScopePane: main view / nav scrollbar / zoomed view) =====
+   The .scope-pane is a flex column; .scope-main takes the bulk of the height, with the
+   short zoomed overview pinned below it and the horizontal scrollbar gap between them. */
+.scope-main { display: flex; flex: 1; min-height: 0; }
+/* Full-height vertical FlatScrollbar in the right gutter (Java ScopePane vertSlider,
+   SCROLLBAR_THICKNESS = 20 px). Spans the whole main-view height. */
+.scope-vscroll { flex: 0 0 20px; width: 20px; height: 100%; display: block; cursor: pointer; }
+/* Horizontal FlatScrollbar gap between the main and zoomed views (item 7): the
+   gap is ALWAYS reserved so the two views never butt together; the scrollbar canvas
+   only paints (and accepts input) in file mode (.show). Right-padded so it never
+   underlaps the vertical scrollbar's gutter. */
+.scope-hscroll { flex: 0 0 18px; height: 18px; width: 100%; display: block; cursor: pointer;
+  padding-right: 20px; box-sizing: border-box; visibility: hidden; }
+.scope-hscroll.show { visibility: visible; cursor: pointer; }
+/* The FFT frequency FlatScrollbar (Java FftPane freqScrollbar) is a PERMANENT bar
+   pinned directly under the plot — unlike the scope nav scrollbar it is not gated
+   on file mode, so it is always visible (full plot width, right-padded to clear the
+   vertical magnitude scrollbar gutter — Java: right = FormAttachment(100, -18)). */
+#fftHScroll.scope-hscroll { visibility: visible; }
+/* Short zoomed overview strip (Java ZoomedView). Right-padded so its width matches
+   the main scope view (not stretching under the vertical scrollbar gutter). */
+.scope-zoomed-wrap { flex: 0 0 56px; min-height: 0; padding-right: 20px; box-sizing: border-box; }
+.scope-zoomed-canvas { width: 100%; height: 100%; display: block; background: #000; }
+#scopeTrigStart.armed { background: var(--yellow, #ffd700); color: #000; border-color: #000; }
+.fft-canvas { width: 100%; height: 100%; display: block; background: #fff; }
+.lr-tools { position: absolute; top: 5px; left: 8px; display: flex; gap: 0; z-index: 3; border: 1px solid #606060; }
+/* #13 + #18: the FFT and FreqResp views paint their magnitude-axis UNIT caption ('dBFS' /
+   'V' / 'dB') on the canvas at the top-LEFT corner, inside the 68px left margin. The default
+   left:8px toolbar sat on top of it. Java places the headerBar just to the RIGHT of the left
+   margin — FftView.java:497 left = MARGIN_LEFT(68)+4; FreqRespView.java:295 x = MARGIN_LEFT(68)
+   + HEADER_BTN_INSET — so it never covers the caption. Mirror that: shift the toolbar to
+   left:72px for both panes (staying left-anchored, clear of the FFT top-right .fft-meta). The
+   scope canvas draws NO top-left unit caption, so the scope toolbar stays at left:8px. */
+.fft-pane .lr-tools, #tab-fr .lr-tools { left: 72px; }
+.lr { width: 22px; height: 22px; border: none; border-right: 1px solid #606060; background: #dcdcdc; font-weight: 700; font-size: 12px; cursor: pointer; padding: 0; color: #202020; }
+.lr:last-child { border-right: none; }
+.lr.on { background: var(--yellow); border-color: #000; color: #000; }
+.lr.l.on { background: #00d7ff; color: #000; }
+.lr.r.on { background: #ffd700; color: #000; }
+.lr.ico { font-weight: 400; font-size: 11px; color: #444; }
+/* Hover feedback that keeps the glyph/text contrasting (item 16): an unselected
+   button darkens its light background but holds dark ink; a selected (channel-
+   coloured) button keeps its black ink on hover, never washing out. */
+.lr:hover { background: #cfcfcf; color: #101010; }
+.lr.ico:hover { color: #222; }
+.lr.on:hover, .lr.l.on:hover, .lr.r.on:hover,
+.lr.ml.on:hover, .lr.mr.on:hover { color: #000; filter: brightness(0.94); }
+
+/* ===== canvas-overlay toolbar (Java ToolButton: NO_BACKGROUND|SWT.TRANSPARENT) =====
+   The L/R + icon buttons floating over the black scope / FFT / freq-resp plots are
+   TRANSPARENT chips — no opaque chrome, no enclosing box (unlike the .smw-btnrow
+   toolbar, which is on a light surface and keeps its grey buttons + border). */
+.canvas-wrap .lr-tools { border: none; }
+.canvas-wrap .lr { background: transparent; border-right: none; color: #c8c8c8;
+  border-radius: 4px; }
+/* Unselected channel button (Java chanButton drawFrame=true, frame = channel colour):
+   a thin 1px rounded-rect outline in the channel colour over a transparent interior. */
+.canvas-wrap .lr.l, .canvas-wrap .lr.ml { border: 1px solid #00d7ff; color: #00d7ff; }
+.canvas-wrap .lr.r, .canvas-wrap .lr.mr { border: 1px solid #ffd700; color: #ffd700; }
+/* Inactive icon button (Java pushButton setDrawFrame(false), null frame): bare icon,
+   no background, no border. */
+.canvas-wrap .lr.ico { border: none; }
+/* Hover over the canvas = a subtle translucent overlay, not an opaque grey, keeping
+   the icon/text legible. */
+.canvas-wrap .lr:hover { background: rgba(255, 255, 255, .12); color: #fff; }
+/* SELECTED/active stays filled in the channel colour (already correct). */
+.canvas-wrap .lr.on, .canvas-wrap .lr.l.on, .canvas-wrap .lr.r.on,
+.canvas-wrap .lr.ml.on, .canvas-wrap .lr.mr.on { color: #000; }
+.canvas-wrap .lr.l.on, .canvas-wrap .lr.ml.on { background: #00d7ff; border-color: #00d7ff; }
+.canvas-wrap .lr.r.on, .canvas-wrap .lr.mr.on { background: #ffd700; border-color: #ffd700; }
+.canvas-wrap .lr.ico.on { background: var(--yellow, #ffd700); border-color: var(--yellow, #ffd700); color: #000; }
+/* Scope overlay sits on a BLACK canvas, so the bare (black-fill) icon SVGs are
+   inverted to white to read against it (Java renders the light icon variant on the
+   transparent background). The FFT/freq-resp L/R buttons sit on a light scale gutter,
+   so their icons stay dark. The reset glyph keeps its own red tint; an active icon
+   button fills yellow and shows its dark glyph (no invert). */
+.scope-pane .canvas-wrap .lr.ico:not(.reset):not(.on) .lr-svg { filter: invert(1); }
+/* Original Font-Awesome SVG glyphs on the header buttons (Java Icon.* PNGs). The SVGs
+   default to a black fill; size them to the button and keep them crisp. */
+.lr-svg { width: 14px; height: 14px; display: block; margin: auto; }
+/* Reset / clear-stats glyph is RED (Java ColorRole.RESET = 0xDC1414, Icon.ROTATE_LEFT_RED).
+   Tint the black SVG to that red via a colour filter. */
+.lr.ico.reset { color: #dc1414; }
+.lr.ico.reset .lr-svg { filter: invert(18%) sepia(96%) saturate(5000%) hue-rotate(353deg) brightness(78%) contrast(98%); }
+/* Measurement-channel picker (L/R) in the header — distinct from the enable L/R; the
+   selected one fills in its channel colour. */
+.lr.ml.on { background: #00d7ff; color: #000; }
+.lr.mr.on { background: #ffd700; color: #000; }
+/* Pressed state for the gauge / stats toggle header buttons. */
+.lr.ico.on { background: var(--yellow, #ffd700); color: #000; }
+
+/* ===== scope measurement table (Java ScopeView.drawMeasurementTable) =====
+   FIXED column layout: monospace digits + per-column fixed widths so the
+   columns never shift as the values change width (Java COL_*_RIGHT fixed pixel
+   positions). table-layout:fixed pins each column regardless of content. */
+/* Embedded (in-canvas) overlay: NO background fill — the text sits straight over the
+   trace, made legible by a black outline (text-shadow in 4 directions) so it reads
+   against both the trace and the dark graticule. Fixed, narrow column widths. */
+.scope-meas-table { position: absolute; top: 32px; left: 8px; z-index: 3;
+  table-layout: fixed; width: max-content; border-collapse: collapse; pointer-events: none;
+  font-family: var(--ui-font, 'Courier New'), monospace; font-size: var(--ui-font-size, 11px); line-height: 1.25;
+  font-weight: var(--ui-font-weight, normal); font-style: var(--ui-font-style, normal);
+  font-variant-numeric: tabular-nums; color: #f0f0f0; background: transparent;
+  text-shadow: 1px 0 0 #000, -1px 0 0 #000, 0 1px 0 #000, 0 -1px 0 #000; }
+.scope-meas-table th, .scope-meas-table td { padding: 0 4px; white-space: nowrap;
+  overflow: hidden; text-overflow: clip; }
+.scope-meas-table thead th { color: #c8c8c8; font-weight: 400; }
+/* FIXED first (row-name) column width too (C18): min == max == width so the
+   whole table never shifts when the auto-ranging unit in the row name
+   ("Vpp, µV" vs "Vpp, mV" vs "Vpp, V") changes width. Wide enough to hold the
+   longest name+unit ("Vmean, µV"); table-layout:fixed + the table's definite
+   max-content width make the per-cell widths authoritative so no boundary moves. */
+.scope-meas-table .mt-name { text-align: left; width: 76px; min-width: 76px; max-width: 76px; }
+.scope-meas-table .mt-cur, .scope-meas-table th.mt-cur { width: 52px; min-width: 52px; max-width: 52px; }
+.scope-meas-table .mt-stat, .scope-meas-table th.mt-stat { width: 52px; min-width: 52px; max-width: 52px; }
+.scope-meas-table .mt-cur, .scope-meas-table .mt-stat,
+.scope-meas-table td.mt-num { text-align: right; }
+/* Floating pop-out window (Java createMeasurementWindow / ToolWindow): a titled
+   panel that floats ABOVE the pane divider (high z-index, fixed positioning so it
+   isn't clipped by the tile-tab strip). The title bar + button row sit at the top. */
+.scope-meas-table.popped { position: fixed; top: 80px; left: 80px; z-index: 50; pointer-events: auto;
+  background: rgba(20,20,20,.97); border: 1px solid #606060; box-shadow: 0 4px 14px rgba(0,0,0,.5);
+  padding-top: 0; }
+.scope-meas-window { position: fixed; top: 80px; left: 80px; z-index: 50; display: none;
+  background: rgba(20,20,20,.97); border: 1px solid #606060; box-shadow: 0 6px 18px rgba(0,0,0,.6); }
+.scope-meas-window.open { display: block; }
+/* Title bar matches the scope pane header (Java: same title colour as the pane title) —
+   light panel background, black title text. */
+.scope-meas-window .smw-titlebar { display: flex; align-items: center; gap: 0; height: 22px;
+  background: var(--panel); border-bottom: 1px solid #606060; cursor: move; user-select: none; }
+.scope-meas-window .smw-title { flex: 1; padding: 0 8px; font-size: 12.5px; color: #000;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Stats-toggle + reset row pinned UNDER the title, left-aligned, so it never jumps when
+   the stats columns toggle on/off. */
+.scope-meas-window .smw-btnrow { display: flex; gap: 0; padding: 4px 6px 0;
+  border: 1px solid #606060; border-top: none; border-bottom: none; width: max-content; }
+.scope-meas-window .smw-btnrow .lr { border-right: 1px solid #606060; }
+.scope-meas-window .smw-btnrow .lr:last-child { border-right: none; }
+.scope-meas-window .smw-titlebar .lr { height: 21px; border-right: none; border-left: 1px solid #606060; }
+.scope-meas-window .smw-close { color: #000; }
+.scope-meas-window .scope-meas-table { position: static; top: auto; left: auto; z-index: auto;
+  pointer-events: auto; background: transparent; margin: 2px 0; }
+/* Stream-forward record progress window (Java startStreamingSave floating tool window):
+   centred near the top, on top of the scope view; the user keeps watching while it records. */
+/* #1: the stream-forward record progress window is a NORMAL (light) tool window, not the
+   dark scope-measurement chrome it shares the .scope-meas-window class with. Override the dark
+   panel background + border and the light progress text with a light panel + dark text. The
+   .smw-titlebar already uses the light var(--panel), so only the body + progress need it. */
+.scope-rec-window { top: 120px; left: 50%; transform: translateX(-50%); min-width: 300px;
+  background: var(--panel); border: 1px solid var(--field-border); }
+.scope-rec-window .scope-rec-body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 8px;
+  background: var(--panel); }
+.scope-rec-window .scope-rec-progress { font-size: 12.5px; color: var(--ink); }
+.scope-rec-window .scope-rec-bar { width: 100%; height: 14px; }
+.scope-rec-window .scope-rec-btnrow { display: flex; justify-content: flex-end; }
+/* FFT distortion (THD/IMD) pop-out window (Java FftView.createToolWindow / ToolWindow):
+   same floating chrome as the scope measurement window, but NO button row — the FFT tool
+   window only hosts the painted distortion table (the toggles stay in the main header).
+   The pane agent sizes #fftMeasCanvas to the table's natural extent and paints into it.
+   #17: Java's ToolWindow is a normal LIGHT window (ToolWindow.java:77 bg = 0xFFFFFF), so —
+   like the .scope-rec-window override below — replace the dark .scope-meas-window chrome
+   with the light panel frame, and keep the body padding ring white to match the
+   white-painted canvas (fft-pane.js paintDistortionFloat). */
+.fft-meas-window { top: 96px; left: 96px;
+  background: var(--panel); border: 1px solid var(--field-border); }
+.fft-meas-window .fft-meas-body { padding: 4px 6px 6px; background: #fff; }
+/* The pane agent (paintDistortionFloat) sizes the backing store at the DPR and falls back
+   to 360x220 client px, so give the canvas that CSS box as a default. */
+.fft-meas-window .fft-meas-canvas { display: block; width: 360px; height: 220px; }
+/* Keep the readonly path + folder-open button on ONE row (mirror #fftLoadPanel) so the panel
+   height stays equal to the other scope tabs. Issue #15 regressed scope-smoke's tab-height
+   parity: the .scope-row default flex-wrap:wrap let the new input wrap to a 2nd line (74px vs
+   40px). nowrap + the min-width:0 above keeps it single-line. */
+#scopeLoadPanel .scope-row { flex-wrap: nowrap; }
+/* Loaded-file banner (Java ScopeView.drawFilePath / BlinkBanner): top-right BELOW the
+   cap/s readout (which sits on the y≈16 baseline), blinking #FFFFFF↔#AAAAAA every 500 ms,
+   left-truncated with an "…". Dropped deeper (top 24px) so it never overlaps the cap/s. */
+.scope-file-banner { position: absolute; top: 24px; right: 78px; z-index: 4; pointer-events: none;
+  font-size: 12px; font-weight: 600; max-width: 50%; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; direction: rtl; text-align: right;
+  text-shadow: -1px -1px 0 #1a1a1a, 1px -1px 0 #1a1a1a, -1px 1px 0 #1a1a1a, 1px 1px 0 #1a1a1a;
+  animation: scope-banner-blink 1s steps(1, end) infinite; }
+@keyframes scope-banner-blink { 0% { color: #ffffff; } 50% { color: #aaaaaa; } 100% { color: #ffffff; } }
+/* ===== scope edge-label overlay (Java ScopeView.drawCaptureRate / drawEdgeLabels) =====
+   FIXED-size DOM text over the trace canvas: the cap/s readout (top-right) and the
+   V/time edge labels (top/bottom-centre for V, left/right-middle for time). Drawn as
+   real DOM — NOT baked into the trace bitmap — so a screenshot that stretches the
+   trace canvas leaves this text at its on-screen pixel size. The layer overlaps the
+   canvas exactly (inset:0 of the positioned .canvas-wrap) and is click-through; the
+   individual labels re-enable pointer events so their `title` tooltips show. */
+.scope-overlay { position: absolute; inset: 0; z-index: 3; pointer-events: none; overflow: hidden; }
+.scope-ovl-label { position: absolute; font: 11px monospace; line-height: 1; white-space: nowrap;
+  pointer-events: auto;
+  text-shadow: 1px 0 0 #000, -1px 0 0 #000, 0 1px 0 #000, 0 -1px 0 #000; }
+
+/* Trigger-level / trigger-position / channel-offset SLIDERS — moved off the trace
+   canvas into the fixed-size overlay so a stretched screenshot leaves their dashed
+   lines + triangle grips at their on-screen pixel size. Positioned by PERCENT (top/
+   left fraction set inline by ScopeView._positionSlider, tracking the resizable view)
+   but FIXED 1.5px line thickness / fixed triangle size. The line colour rides a
+   --slider-color custom property so a CSS triangle keeps three transparent sides.
+   pointer-events:none — the canvas still owns all the drag hit-testing. */
+.scope-ovl-slider { position: absolute; pointer-events: none; box-sizing: border-box; }
+
+/* Dashed line: a black UNDERLAY (1px wider, drawn below) with the bright COLOURED
+   core on top, faithful to the old two-stroke canvas outline. Horizontal lines pin a
+   1.5px dashed TOP border; vertical lines a 1.5px dashed LEFT border. */
+.scope-ovl-hline { height: 0; border-top: 1.5px dashed transparent; }
+.scope-ovl-vline { width: 0; border-left: 1.5px dashed transparent; }
+/* Centre the border on the fraction line (the border renders OUTSIDE the top/left
+   edge, so pull back by half the border width). */
+.scope-ovl-slidercore.scope-ovl-hline { border-top-color: var(--slider-color, #fff); margin-top: -0.75px; }
+.scope-ovl-slidercore.scope-ovl-vline { border-left-color: var(--slider-color, #fff); margin-left: -0.75px; }
+.scope-ovl-sliderunder.scope-ovl-hline { border-top-color: #000; border-top-width: 3.5px; margin-top: -1.75px; }
+.scope-ovl-sliderunder.scope-ovl-vline { border-left-color: #000; border-left-width: 3.5px; margin-left: -1.75px; }
+
+/* Triangle HANDLES — fixed-size CSS border-triangles (10px long axis into the grid,
+   6px perpendicular half-extent), the SAME size as the old canvas grips. Only the one
+   solid border carries --slider-color; the other three stay transparent so the grip
+   is a triangle, not a box. Each sits at its line edge, centred on the line. */
+.scope-ovl-sliderhandle { width: 0; height: 0; }
+.scope-ovl-tri-right { left: 0; transform: translateY(-50%);
+  border-top: 6px solid transparent; border-bottom: 6px solid transparent;
+  border-left: 10px solid var(--slider-color, #fff); }
+.scope-ovl-tri-left { right: 0; transform: translateY(-50%);
+  border-top: 6px solid transparent; border-bottom: 6px solid transparent;
+  border-right: 10px solid var(--slider-color, #fff); }
+.scope-ovl-tri-up { bottom: 0; transform: translateX(-50%);
+  border-left: 6px solid transparent; border-right: 6px solid transparent;
+  border-bottom: 10px solid var(--slider-color, #fff); }
+
+.fft-meta { position: absolute; top: 5px; right: 18px; display: flex; align-items: center; gap: 12px; z-index: 3; font-size: 11px; color: #555; }
+.fft-meta .unit-sel { width: auto; font-size: 11px; padding: 1px 18px 1px 6px; }
+
+/* ===== tile tabs ===== */
+.tiletabs { display: flex; align-items: stretch; height: 46px; background: #f0f0f0;
+  border-top: 1px solid var(--strip-border); border-bottom: 1px solid var(--strip-border); padding-left: 2px; flex: 0 0 auto; }
+.tiletabs .tab { position: relative; min-width: 50px; padding: 1px 22px 4px 15px; margin-right: -14px; cursor: pointer;
+  background: #f0f0f0;
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 100%, 0 100%); }
+.tiletabs .tab::after { content: ""; position: absolute; top: 0; right: 16px; bottom: 0; width: 0;
+  border-right: 1px solid var(--strip-border); transform: skewX(18deg); transform-origin: top right; }
+/* Hover feedback on an inactive tab: lighten toward the active white but keep the
+   title/sub ink dark so the label stays readable (item 16). */
+.tiletabs .tab:not(.active):hover { background: #e6e6e6; }
+.tiletabs .tab:not(.active):hover .t-title { color: #000; }
+.tiletabs .tab.active { background: #fff; z-index: 2; padding-left: 11px; }
+.tiletabs .tab .t-title { font-size: 12px; line-height: 1.1; color: #000; }
+.tiletabs .tab .t-sub { display: flex; align-items: center; gap: 3px; margin-top: 4px;
+  font-size: 11px; color: var(--tile-ink); line-height: 1; white-space: nowrap; }
+.tiletabs .tab .t-sub .tile { display: inline-flex; align-items: center; height: 18px; padding: 0 4px;
+  background: var(--tile); color: var(--tile-ink); border-radius: 4px; }
+.tiletabs .tab .led-sm { display: inline-flex; width: 18px; height: 18px; padding: 0; border-radius: 4px;
+  background: var(--tile); align-items: center; justify-content: center; margin: 0; vertical-align: middle; }
+.tiletabs .tab .led-sm::before { content: ""; width: 16px; height: 16px; border-radius: 50%; background: var(--led); }
+.tiletabs .tab-spacer { flex: 1; }
+/* #6: the FFT tab-folder header must be the SAME height as the scope's (Java TileTabFolder
+   uses one shared tileHeight for every pane). The 43px predist + record buttons live in this
+   strip, so a shorter strip made them overlap the components below — keep it at the scope's
+   46px default (no height override) so they clear the panel underneath. */
+/* Record buttons (scope + FFT): a bordered button like all the others, with a red LED dot inside. */
+.led-btn { align-self: center; width: 43px; height: 43px; border-radius: 6px; border: 1px solid var(--field-border); margin: 0 8px 0 0;
+  background: #fff; cursor: pointer; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.led-btn:hover { background: #f4f4f4; }
+.led-btn::before { content: ""; width: 26px; height: 26px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #c87a7a, #7a2424); }
+.led-btn.rec::before { background: radial-gradient(circle at 40% 35%, #ff4d4d, #cc0000); box-shadow: 0 0 7px var(--led-on); }
+
+/* ===== tile-tab body (FFT / scope / freqresp settings panel) =====
+   Java TileTabFolder: the active tab BODY opens directly UNDER the tab-header
+   strip and shares the column with the view — it does NOT float over the
+   canvas.  So the body is an in-flow block at the bottom of the pane
+   (flex:0 0 auto); the canvas-wrap above (flex:1) shrinks to make room and
+   reclaims the height when the body collapses (clicking the active tab again). */
+.tab-panel { display: none; flex: 0 0 auto; padding: 8px 10px;
+  background: var(--panel); border-top: 1px solid var(--strip-border); overflow: auto; }
+.tab-panel.show { display: block; }
+.settings-grid { display: grid; grid-template-columns: auto auto auto auto; gap: 4px 8px; align-items: center; }
+.settings-grid label { font-size: 12.5px; text-align: left; }
+.settings-grid .form-select, .settings-grid .form-control { font-size: 12.5px; }
+.settings-checks { display: flex; gap: 16px; margin-top: 6px; flex-wrap: wrap; }
+.stopafter-cell { display: flex; align-items: center; gap: 6px; }
+.stopafter-cell .numfield { flex: 0 0 auto; }
+/* FFT settings grid: match Java FftTabControl.buildSettingsTab density — a tight
+   4-column grid (label | control | label | control), left-packed, content-sized
+   columns instead of stretching the selects across the full pane width. */
+.fft-pane .settings-grid { grid-template-columns: auto 150px auto 150px; justify-content: start;
+  gap: 4px 8px; column-gap: 8px; }
+.fft-pane .settings-grid .form-select { width: 100%; height: 24px; padding: 1px 22px 1px 6px; }
+.fft-pane .settings-grid .form-control { width: 100%; height: 24px; padding: 1px 6px; }
+.fft-pane .settings-grid .form-check label { white-space: nowrap; }
+/* Checkbox knobs span the label+control pair (Java: horizontalSpan = 2). */
+.fft-pane .settings-grid > .form-check { grid-column: span 2; }
+/* Stop-after + Mains row spans the whole 4-column grid (Java stopRow). */
+.fft-pane .settings-grid .grid-span4 { grid-column: 1 / -1; }
+.fft-pane .settings-grid .grid-span4 .form-select { width: 150px; }
+/* Averages NumericStepField (Java averagesField) — fill the 150px control column and keep the
+   uniform 24px field height (item #5), matching the selects on the same rows. */
+.fft-pane .settings-grid > .numfield { width: 150px; max-width: 150px; height: 24px; }
+/* The FFT-settings .numfield.sm (#averages) fills its 150px control column like the selects. */
+.fft-pane .settings-grid > .numfield.sm { width: 150px; max-width: 150px; height: 24px; }
+/* #4: THD tab — COMPACT Java field widths instead of the 150px control column, on
+   content-sized grid columns (Java GridLayout(4) packs to content). NumericStepField
+   width hints: distMin/distMax 90 (FftTabControl.java:570-572/594-596), manualFund 110
+   (:624-625), maxThd/maxCalc 60 (:640-641/:654-655). Uniform 24px height; the fields
+   left-align inside their column so the label|field columns stay aligned across rows. */
+.fft-pane .settings-grid.thd-grid { grid-template-columns: auto auto auto auto; }
+.fft-pane .settings-grid.thd-grid > .numfield.sm { width: 90px; max-width: 90px; height: 24px; }
+.fft-pane .thd-grid > .numfield.sm:has(#fftManualFund) { width: 110px; max-width: 110px; }
+.fft-pane .thd-grid > .numfield.sm:has(#thdMaxH),
+.fft-pane .thd-grid > .numfield.sm:has(#thdCalcMaxH) { width: 60px; max-width: 60px; }
+
+/* ===== scope settings tabs: one COMPACT inline row (Java ScopeTabControl
+   buildLeftGroup/Right/Horizontal/Trigger) =====
+   Every scope tab body is a single row of inline controls. A reserved body
+   height keeps all tabs the same height so switching tabs never jumps the
+   layout. */
+.scope-pane .tab-panel { min-height: 40px; padding: 6px 10px; box-sizing: border-box; }
+.scope-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.scope-row .scope-inline-label { font-size: 12.5px; white-space: nowrap; margin: 0; }
+.scope-row .numfield.sm { height: 24px; max-width: 130px; }
+.scope-row .form-select-sm { height: 24px; padding: 1px 22px 1px 6px; font-size: 12.5px; }
+/* square toggle button (Java squareToggle, SQUARE_BUTTON = 32 px → 24 px web to
+   match the field height). Pressed = .active in the channel colour. */
+.scope-row .sq-toggle { height: 24px; min-width: 28px; padding: 0 6px; border: 1px solid var(--field-border);
+  background: #f6f6f6; font-weight: 700; font-size: 12px; color: #202020; cursor: pointer; border-radius: 2px; }
+.scope-row .sq-toggle:hover { background: #ececec; }
+.scope-row .sq-toggle.active { background: #dbe9ff; border-color: var(--accent); color: var(--accent); }
+/* Single-select toggle group (Java buildTriggerGroup: makeDependentGroup of
+   squareToggle buttons for Channel / Edge / Mode). The buttons butt together as
+   one segmented control; the .active one shows in the accent colour. */
+.scope-row .trig-toggle-group { display: inline-flex; }
+.scope-row .trig-toggle-group .sq-toggle { border-radius: 0; margin-left: -1px; }
+.scope-row .trig-toggle-group .sq-toggle:first-child { border-radius: 2px 0 0 2px; margin-left: 0; }
+.scope-row .trig-toggle-group .sq-toggle:last-child { border-radius: 0 2px 2px 0; }
+.scope-row .trig-toggle-group .sq-toggle.active { position: relative; z-index: 1; }
+/* sin x / x interpolation: a checkbox + the literal fraction (sin x over x). */
+.scope-row .sinc-check { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; margin: 0; cursor: pointer; }
+.scope-row .sinc-check .form-check-input { margin: 0; }
+.sinc-frac { display: inline-flex; flex-direction: column; align-items: center; line-height: 1; font-style: italic; font-size: 11px; }
+.sinc-frac .sinc-num { padding: 0 3px; border-bottom: 1px solid currentColor; }
+.sinc-frac .sinc-den { padding: 1px 3px 0; }
+.scope-row .btn-sm { height: 24px; padding: 1px 8px; }
+/* Mains / LPF / trigger / format combos are SMALL inline (Java READ_ONLY combos
+   sized to their content), NOT full-width selects that wrap to their own row
+   (item 1). A fixed compact width keeps the whole tab body on one line. */
+.scope-row .scope-combo-sm { flex: 0 0 auto; width: auto; min-width: 92px; max-width: 132px;
+  height: 24px; padding: 1px 22px 1px 6px; font-size: 12.5px; }
+/* Scope save-name field (the file picker's suggested name; its extension derives
+   the WAV/FLAC/AIFF format — no separate format combo). Bounded width so the whole
+   save row stays on one line and the panel height matches the other scope tabs. */
+.scope-row .scope-save-name { flex: 0 1 auto; width: 130px; min-width: 92px; max-width: 160px;
+  height: 24px; padding: 1px 6px; font-size: 12.5px; }
+/* Scope numeric fields now use the SAME generalized .numfield / .nf-input / .nf-unit / .nf-step
+   classes as the generator / FFT / FreqResp (no Bootstrap input-group / form-control), so every
+   NumericStepField across the app renders identically; only the compact width comes from
+   .scope-row .numfield.sm above. */
+.scope-row .numfield .nf-input { flex: 0 1 auto; width: 64px; min-width: 48px; }
+/* Java PresetBar = editable combo + Save/Load/Delete (item C21). Bootstrap 5
+   "buttons with dropdowns" input-group: the editable name input + a dropdown
+   button (lists saved presets) + Save / Load / Delete, all on ONE compact 24px
+   row so the panel is the same height as the other scope tabs (no wrapping). */
+.scope-row .preset-group { flex-wrap: nowrap; width: 100%; }
+.scope-row .preset-group .form-control { flex: 1; width: auto; min-width: 120px;
+  height: 24px; padding: 1px 6px; font-size: 12.5px; }
+.scope-row .preset-group .btn { height: 24px; padding: 1px 8px; font-size: 12.5px; display: inline-flex;
+  align-items: center; }
+.scope-row .preset-group .dropdown-menu { font-size: 12.5px; --bs-dropdown-min-width: 8rem; }
+.scope-row .preset-group .dropdown-item { font-size: 12.5px; padding: 3px 12px; }
+/* The saved-preset dropdown menu must escape the panel's overflow:auto clip. */
+#scopePresets.tab-panel { overflow: visible; }
+/* Java icon-only PUSH buttons (camera / crosshair / folder-open / floppy). */
+.scope-row .icon-btn { display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 24px; padding: 0; }
+/* Java icon-only PUSH buttons (camera / crosshair / folder-open / floppy). */
+.util-tab { padding: 5px 10px !important; }
+/* Generalized icon-only PUSH button (Java camera / crosshair / folder-open / floppy) — shared
+   by the scope utility bar AND the generator (Calibrate-DAC), so they render identically. */
+.util-btn { display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; }
+.util-btn-wd { width: 32px; }
+.util-btn ::before { font-size: 1.4rem; font-weight: bolder !important; }
+/* Bootstrap custom-file input (item 3): the vendored Bootstrap 5 dropped the BS4
+   .custom-file widget, so reproduce the "Choose file… / Browse" look here. The real
+   <input type=file> overlays the styled label; ::after renders the Browse button. */
+.scope-row .custom-file { position: relative; display: inline-flex; height: 24px;
+  flex: 1 1 auto; min-width: 180px; }
+.scope-row .custom-file.fill { flex: 1 1 auto; }
+.scope-row .custom-file-input { position: absolute; inset: 0; width: 100%; height: 24px;
+  margin: 0; opacity: 0; cursor: pointer; z-index: 2; }
+.scope-row .custom-file-label { flex: 1 1 auto; height: 24px; margin: 0; line-height: 22px;
+  padding: 0 8px; font-size: 12.5px; color: #555; background: #fff;
+  border: 1px solid var(--field-border); border-radius: 2px; overflow: hidden;
+  white-space: nowrap; text-overflow: ellipsis; }
+.scope-row .custom-file-label::after { content: var(--browse-label, "Browse"); position: absolute;
+  top: 0; right: 0; height: 24px; line-height: 22px; padding: 0 10px; color: #333;
+  background: #e9e9e9; border-left: 1px solid var(--field-border); }
+/* Java read-only loaded-path Text — shows the chosen file name beside the picker. */
+.scope-row .scope-loaded-path { font-size: 11px; color: #888; align-self: center;
+  max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Save-to file component (Java buildScopeSaveToGroup path field + folder-open Browse):
+   the same .filefield input+icon-button unit as the generator "Load from…", sized to
+   fit the scope control row. The button is trimmed to the row's 24 px height. */
+.scope-row .scope-save-file.fill { flex: 1 1 auto; width: auto; min-width: 130px; max-width: none; height: 24px; }
+.scope-row .scope-save-file .nf-input { flex: 1 1 auto; min-width: 0; font-size: 12.5px;
+  border-radius: 2px 0 0 2px; }
+.scope-row .scope-save-file .icon-btn { width: 30px; height: 24px; border-radius: 0 2px 2px 0; }
+.readout { font-family: var(--ui-font, Consolas), Menlo, monospace; font-size: var(--ui-font-size, 12px); font-weight: var(--ui-font-weight, normal); font-style: var(--ui-font-style, normal); white-space: pre; background: #1b1b22; color: #cdd;
+  padding: 8px 10px; border-radius: 5px; margin: 12px 0 0; max-height: 130px; overflow: auto; }
+/* Always-visible FFT live readout (Java FftView canvas overlay): single-tone
+   #readout and dual-tone #imdText share the bottom-left of the spectrum canvas;
+   app.js toggles which one is visible. */
+.fft-readout { position: absolute; left: 8px; bottom: 8px; margin: 0; z-index: 3;
+  background: rgba(27,27,34,.82); max-width: calc(100% - 16px); max-height: 40%;
+  pointer-events: auto; }
+.fft-readout[hidden] { display: none; }
+/* #10c: the predistortion status line — a PLAIN single line (Java statusText() is a bare
+   Label, not a boxed panel). Strip the .readout dark box AND any panel chrome: transparent,
+   no border, no rounded box, no padding; wrap long phase text instead of scrolling. */
+#dpdProgress { background: transparent; color: inherit; border: 0; border-radius: 0;
+  padding: 0; margin: 0 0 4px; white-space: pre-wrap; overflow: hidden; max-height: none; }
+/* #10: the predistortion dialog is movable (header drag, app.js) AND resizable. Bootstrap
+   pins pointer-events:none on .modal-dialog and hands them to .modal-content, so the resize
+   handle MUST live on .modal-content (a handle on .modal-dialog is dead). app.js adds
+   .dpd-resizable to the content on show and clears its width/height on hide, so this default
+   re-applies each open (Java pack() re-pack). #10: default 600x810 — at 600px wide the
+   populated content (FFT-info 3 lines + 9 metric lines) measures 807px with NO body scroll
+   (probe web/test/e2e/_dpd-size-probe.mjs prints {contentH:807}; re-run after i18n/markup
+   changes), rounded to 810px for line-wrap slack; capped at 90vh for short viewports. */
+#predistModal .modal-dialog { max-width: none; margin: 1.5rem auto; }
+#predistModal .modal-content.dpd-resizable {
+  resize: both; overflow: hidden;                 /* resize needs overflow != visible */
+  width: 600px; height: auto;                     /* #10 follow-up: FIT the content — no fixed
+                                                     height guess (810px was tight on some font
+                                                     renderings → a scrollbar); auto can't scroll */
+  min-width: 420px; min-height: 380px; max-width: 96vw; max-height: 90vh;
+  display: flex; flex-direction: column; }        /* so .modal-body flexes/scrolls when shrunk */
+/* Only the body scrolls when the user shrinks the window; header + footer stay put. */
+#predistModal .modal-body { overflow: auto; flex: 1 1 auto; }
+#predistModal .modal-header { cursor: move; }
+
+/* FreqResp settings grid: 4 columns, compact stepper width. Left-packed (width:max-content +
+   justify-content:start) so the 2nd label/field pair sits adjacent to the first instead of
+   stretching to the far-right edge (Java compact toolbar). */
+.fr-settings-grid { grid-template-columns: auto 130px auto 130px; gap: 4px 6px;
+  width: max-content; justify-content: start; }
+.fr-settings-grid label { font-size: 12.5px; }
+.fr-riaa-checks { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; }
+.fr-riaa-checks .form-check-sm { margin: 2px 0; }
+
+/* FreqResp action cluster (wizard + green play) at the right of the tile-tab strip */
+.fr-actions { align-self: center; display: flex; gap: 4px; margin: 0 8px; border: 1px solid #b9b9b9; padding: 2px; }
+.fr-wizard { width: 40px; height: 40px; border: 1px solid var(--field-border); background: #fff; color: #333;
+  font-size: 18px; cursor: pointer; padding: 0; }
+.fr-play { width: 44px; height: 40px; border: 1px solid var(--field-border); background: #fff; color: var(--green);
+  font-size: 30px; line-height: 0; cursor: pointer; padding: 0; }
+
+/* FreqResp pane: static title (no caret, flat grey); flat panel body */
+#tab-fr .pane-header { background: var(--win-bg); }
+#tab-fr .pane-header .pane-caret { display: none; }
+#tab-fr .tab-panel { background: var(--panel); box-shadow: none; }
+
+/* FreqResp Calibration tab: one row per loaded .frc (path · Active · load/clear/add/remove). */
+.fr-cal-rows { display: flex; flex-direction: column; gap: 4px; }
+.fr-cal-row { display: flex; align-items: center; gap: 6px; }
+.fr-cal-row .fr-cal-path { flex: 1 1 auto; min-width: 120px; height: 24px; font-size: 12.5px; }
+.fr-cal-row .form-check-label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; font-size: 12.5px; margin: 0; }
+.fr-cal-row .btn-sm { height: 24px; padding: 1px 6px; display: inline-flex; align-items: center; }
+
+/* FFT Calibration tab (Java FftTabControl.buildCalibrationTab / createFftCalRowUi): a
+   7-column row in order — pathField · Active · With-noise · load · clear · add · remove.
+   Container GridLayout marginWidth 8 / marginHeight 6 / verticalSpacing 4; per-row
+   horizontalSpacing 6. The path Text is GridData(FILL, CENTER, true, false) widthHint 320 —
+   it grabs the horizontal space and pushes the checkboxes + the four icon buttons to the
+   right. The buttons are icon-only PUSH buttons (FOLDER_OPEN / RECTANGLE_XMARK / PLUS /
+   MINUS) of IconUtils.FILE_BUTTON_HEIGHT; remove is hidden (visibility) on row 0 so its
+   column stays reserved and the buttons line up across rows. */
+#fftCalRows { display: flex; flex-direction: column; gap: 8px; padding: 6px 8px; }   /* #5: rows separated by EXACTLY the 8px column gap (rows carry no margins) */
+.fft-cal-row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+/* #5: the path field FILLS the free width (no fixed/min cap that would overflow a narrow
+   pane — the removed inline max-width IS the stretch fix); a small floor keeps it usable. */
+.fft-cal-row .fcal-path { flex: 1 1 auto; min-width: 120px; max-width: none; height: 24px; font-size: 12.5px; }
+.fft-cal-row .form-check { display: inline-flex; align-items: center; white-space: nowrap; margin: 0; padding: 0; min-height: 0; }
+.fft-cal-row .form-check .form-check-input { margin: 0 4px 0 0; float: none; }
+.fft-cal-row .form-check > span { font-size: 12.5px; }
+.fft-cal-row .btn-sm { height: 24px; padding: 1px 6px; display: inline-flex; align-items: center; justify-content: center; }
+.fft-cal-row .btn-sm .tool-svg { display: block; }
+/* #5: colour the calibration row icons to match the Java desktop row — ADD(+) green,
+   CLEAR(×) + REMOVE(−) red, open-folder (load) neutral/default. The .frc rows are built
+   in fft-tab-control.js with a plain btn-outline-secondary look; tint the black SVG glyphs
+   here (green = --green, red = the same filter as .lr.ico.reset / .svg-red). */
+.fft-cal-row .fcal-add img {
+  filter: invert(46%) sepia(72%) saturate(560%) hue-rotate(74deg) brightness(93%) contrast(90%); }
+.fft-cal-row .fcal-clear img, .fft-cal-row .fcal-remove img {
+  filter: invert(18%) sepia(96%) saturate(5000%) hue-rotate(353deg) brightness(78%) contrast(98%); }
+
+/* FreqResp Save-to / Load-from tabs share the .scope-row layout; the path field grows. */
+#frSavePanel .form-control, #frLoadPanel .form-control { flex: 1 1 auto; min-width: 120px; }
+/* Keep the path + icon button on ONE row (the path shrinks instead of wrapping the icon below). */
+#frSavePanel .scope-row, #frLoadPanel .scope-row { flex-wrap: nowrap; }
+#frSavePanel .scope-row .form-control, #frLoadPanel .scope-row .form-control { flex: 1 1 auto; min-width: 0; }
+/* FFT Save-to / Load-from tabs (mirror the FreqResp panels): path grows, icon stays on-row. */
+#fftSavePanel .scope-row, #fftLoadPanel .scope-row { flex-wrap: nowrap; }
+#fftSavePanel .scope-row .form-control, #fftLoadPanel .scope-row .form-control { flex: 1 1 auto; min-width: 0; }
+
+/* FreqResp sweep busy meter (level-vs-time chart). */
+.fr-meter { width: 100%; height: 100px; display: block; background: #fff; border: 1px solid var(--field-border); }
+
+/* FreqResp wizard pages: one shown at a time (the host toggles d-none). */
+.fr-wiz-page { min-height: 120px; }
+
+/* ===== status bar ===== */
+.statusbar { flex: 0 0 auto; height: 22px; padding: 2px 10px; background: var(--win-bg); border-top: 1px solid var(--hdr-border);
+  font-size: 11.5px; color: #555; overflow: hidden; white-space: nowrap; }
+
+/* ===== preferences modal ===== */
+.prefs.modal-content { background: var(--win-bg); }
+.prefs .modal-header, .prefs .modal-footer { background: var(--win-bg); border-color: var(--hdr-border); }
+.prefs .modal-body { background: var(--win-bg); min-height: 360px; }   /* fixed height = tallest tab (FFT), so switching tabs doesn't resize the dialog */
+.prefs .prefs-tabs { border-bottom: 1px solid var(--field-border); gap: 0; background: var(--win-bg); padding: 0; }
+.prefs .prefs-tabs .nav-link { font-size: 13px; padding: 4px 12px; color: #333; font-weight: 400;
+  border: 1px solid transparent; border-bottom: none; border-radius: 3px 3px 0 0; margin-bottom: -1px; background: transparent; }
+.prefs .prefs-tabs .nav-link:hover { background: #e8e8e8; }
+.prefs .prefs-tabs .nav-link.active { color: #c8643c; font-weight: 400;
+  background: #fff; border-color: var(--field-border); border-bottom-color: #fff; }
+.prefs .prefs-tabs .nav-link:disabled { color: #333; opacity: 1; }
+.prefs .form-select, .prefs .form-control { border: 1px solid var(--field-border); border-radius: 2px; font-size: 13px; max-width: 360px; }
+.prefs .prefs-group .row > .col { flex: 0 1 auto; }
+.prefs-group { border: 1px solid var(--field-border); border-radius: 3px; padding: 8px 10px 10px; background: #f7f7f7; }
+.prefs-group legend { float: none; width: auto; font-size: 12px; padding: 0 5px; margin: 0 0 0 6px; color: #1b1b1b; }
+/* Java PreferencesDialog GridLayout(2): label (natural width, left) | field (fills), inline. */
+.prefs-grid { display: grid; grid-template-columns: max-content 1fr; gap: 7px 10px; align-items: center; }
+.prefs-grid label { text-align: left; font-size: 12.5px; white-space: nowrap; margin: 0; }
+.prefs-grid .form-select, .prefs-grid .form-control { border-radius: 0; }
+
+/* DAC-predistortion wizard live UI (Java convergence chart + metric panel): g38/g49. */
+.dpd-chart { display: block; width: 100%; height: 150px; border: 1px solid #ddd; border-radius: 3px; background: #fff; }
+/* #10c: plain 'Key:  value' metric lines (Java uses one plain Label per line, no dotted
+   rules / no key|value box). _updateMetrics emits <div class="dpd-line"> children into the
+   2-column grid (mirrors Java GridLayout(2,true)); the old .dpd-m/.dpd-mk/.dpd-mv boxed
+   markup is no longer emitted, so those selectors are retired. */
+.dpd-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; font-size: 11px; }
+.dpd-line { font-size: 12px; white-space: nowrap; }
+.dpd-fft { font-family: Consolas, monospace; }
+
+/* FFT predistortion-wizard toolbar button — sits left of the Record LED (Java FftPane toolbarRow). */
+.fft-tool-btn { align-self: center; width: 43px; height: 43px; margin: 0 6px 0 0; padding: 0; border: 1px solid var(--field-border);
+  border-radius: 6px; background: #fafafa; color: #555; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.fft-tool-btn:hover { background: #efefef; color: #222; }
+.fft-tool-btn .tool-svg { width: 30px; height: 30px; }   /* Java ACTION_ICON_SIZE (33) scaled to the 43px box */
+/* DAC-calibrate button: same 43×43 size as the main generator play button. */
+#calibrateDac.util-btn { width: 43px; height: 43px; }
+#calibrateDac .util-svg { width: 30px; height: 30px; }
+/* FFT tab-panels share the MAXIMAL panel height so switching tabs never resizes the pane (ergonomic).
+   Tuned down again to 152px (#4.1 follow-up): moving Threads onto the Coherent/LogAxis row removed
+   one 24px row + 4px gap from the tallest panel (FFT settings). */
+.fft-pane .tab-panel { min-height: 152px; box-sizing: border-box; }
+
+/* Java SVG icons rendered as <img> on buttons (use the ported SVG, never a Bootstrap glyph;
+   play/record buttons are the only exception). Red = the same filter as .lr.ico.reset. */
+.tool-svg { width: 24px; height: 24px; display: block; }
+/* Scope trigger arm/single button (Java triggerStartBtn): a DARK square toggle (not a
+   green Bootstrap button) carrying the PLAY_DARK_SMALL icon — square (w = h), matching
+   the trigger toggle height, bigger icon. Disabled/idle = dark grey; .armed = yellow. */
+#scopeTrigStart { width: 24px; height: 24px; min-width: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center; font-size: 15px; line-height: 1; background: #3a3a3a; border: 1px solid #2a2a2a; color: #e8e8e8; border-radius: 2px; }
+#scopeTrigStart:hover:not(:disabled) { background: #4a4a4a; }
+#scopeTrigStart:disabled { opacity: 0.5; }
+.util-svg { width: 18px; height: 18px; display: block; margin: auto; }
+.ff-svg { width: 13px; height: 13px; display: block; margin: auto; }
+.svg-red { filter: invert(18%) sepia(96%) saturate(5000%) hue-rotate(353deg) brightness(78%) contrast(98%); }
+
+/* #14: every icon inside a SMALL icon-button (generator + scope filefield .icon-btn;
+   FFT/FreqResp calibration + save/load .btn-sm) is 20px HIGH, width auto (keep the
+   glyph's aspect ratio). Scoped to the small icon-buttons only — the larger action
+   buttons (.util-btn camera/crosshair, .fft-tool-btn wand, canvas-overlay .lr) keep
+   their own sizes. Button padding trimmed so the rows stay compact. */
+.filefield .icon-btn img, .scope-row .icon-btn img,
+.fft-cal-row .btn-sm img, .fr-cal-row .btn-sm img,
+#fftSavePanel .btn-sm img, #fftLoadPanel .btn-sm img,
+#frSavePanel .btn-sm img, #frLoadPanel .btn-sm img {
+  height: 20px; width: auto; }
+
+/* Chromium-engine gate: full-screen blocking overlay shown when the app refuses to run. */
+#unsupportedBrowser { position: fixed; inset: 0; z-index: 99999; background: rgba(18, 18, 22, 0.94);
+  display: flex; align-items: center; justify-content: center; padding: 24px; }
+#unsupportedBrowser .ub-box { max-width: 540px; background: #fff; border: 1px solid #c01c28; border-radius: 8px;
+  padding: 22px 26px; color: #222; font-size: 14px; line-height: 1.55; box-shadow: 0 10px 50px rgba(0, 0, 0, .6); }
+#unsupportedBrowser .ub-title { font-size: 18px; font-weight: 700; color: #c01c28; margin-bottom: 10px; }
+#unsupportedBrowser p { margin: 8px 0 0; }
+

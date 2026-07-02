@@ -1,0 +1,32 @@
+{
+  "name": "phonalyser-web",
+  "version": "1.0.2",
+  "private": true,
+  "description": "Phonalyser.web — precision audio measurement workbench (web port)",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "vendor": "node scripts/vendor.mjs",
+    "postinstall": "node scripts/vendor.mjs",
+    "build": "node build.mjs",
+    "build:debug": "node build.mjs --debug",
+    "build:copy-help": "node scripts/build-help.mjs",
+    "import-help": "node scripts/import-help.mjs",
+    "capture-help": "node scripts/capture-help-screenshots.mjs",
+    "dev": "node scripts/serve.mjs",
+    "audit": "npm audit",
+    "outdated": "npm outdated",
+    "e2e": "node test/e2e/scope-smoke.mjs"
+  },
+  "dependencies": {
+    "@popperjs/core": "^2.11.8",
+    "bootstrap": "^5.3.3",
+    "bootstrap-icons": "^1.11.3",
+    "jquery": "^3.7.1",
+    "libflacjs": "^5.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "playwright": "^1.61.0"
+  }
+}
