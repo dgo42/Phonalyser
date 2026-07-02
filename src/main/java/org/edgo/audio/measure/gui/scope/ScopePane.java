@@ -37,6 +37,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Scrollable;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.gui.MainWindow;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.scope.gl.GlScopeSurface;
@@ -66,13 +67,14 @@ import lombok.extern.log4j.Log4j2;
  * instead of a bitmap scale.
  *
  * <p>All of the tab settings (channel / trigger / preset / utility /
- * save-load) live in the self-contained {@link ScopeTabControl}; the pane
- * implements its {@link ScopeTabControl.Host} so the tabs can ask it to
- * redraw, recompute the view window, stop capture before a file load, or open
- * the screenshot dialog without holding a reference to the whole pane.
+ * save-load) live in the self-contained {@link ScopeTabControl}; redraws,
+ * view-state recomputes, persistence wipes and the open-signal load flow DOWN
+ * through the injected {@link ScopeController}, and the pane reacts to state it
+ * mirrors (nav slider ← the controller's view-state event, vertical slider ←
+ * offset/scale preference properties, Record button ← the bus).
  */
 @Log4j2
-public final class ScopePane extends AbstractPane implements ScopeTabControl.Host {
+public final class ScopePane extends AbstractPane {
 
     /**
      * Minimum peak-to-peak signal amplitude (as a fraction of the ADC's
@@ -137,6 +139,10 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
     /** {@link Events#FREQRESP_MEASUREMENT_STOPPED} subscriber — re-enables
      *  the Record button once the sweep finishes. */
     private Consumer<Void>               freqRespStoppedListener;
+    /** {@link Events#SCOPE_RECORDING_STOPPED} subscriber — pops the Record
+     *  toggle back out when the controller stops a capture programmatically
+     *  (an open-signal load).  Live pane only. */
+    private Consumer<Void>               recordingStoppedListener;
 
     /** Horizontal navigation slider sitting above the condensed strip. */
     private FlatScrollbar                navSlider;
@@ -175,9 +181,9 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
     private final ScopeController controller;
     /**
      * Synchronous file loader for the "Open signal…" feature.  Owned by the
-     * pane (cleared on dispose / record-start) and shared with the tab
-     * control's Open-signal tab, which drives it.  {@code null} on the
-     * screenshot-only variant.
+     * pane (cleared on dispose / record-start) and attached to the controller,
+     * whose {@link ScopeController#openSignalFile} drives it.  {@code null} on
+     * the screenshot-only variant.
      */
     private final ScopeOpenSignal        loader;
 
@@ -280,6 +286,21 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         vertSlider.addListener(SWT.Selection, e -> onVertSliderMoved());
         // Initial selection from the prefs.
         syncVertSliderFromPrefs();
+        // The vertical slider mirrors PERSISTED offset / scale preferences —
+        // react to the property changes directly (wheel moves, V/div zoom,
+        // channel switch, presets, in-view L/R clicks) instead of piggybacking
+        // on repaint requests.  FlatScrollbar.setSelection doesn't fire, so a
+        // user drag (prefs write → this sync) can't loop.
+        Preferences vsPrefs = Preferences.instance();
+        Bindings.onChange(vertSlider, vsPrefs.oscLeftOffsetFracProperty(),      v -> syncVertSliderFromPrefs());
+        Bindings.onChange(vertSlider, vsPrefs.oscRightOffsetFracProperty(),     v -> syncVertSliderFromPrefs());
+        Bindings.onChange(vertSlider, vsPrefs.oscLeftVoltsPerDivProperty(),     v -> syncVertSliderFromPrefs());
+        Bindings.onChange(vertSlider, vsPrefs.oscRightVoltsPerDivProperty(),    v -> syncVertSliderFromPrefs());
+        Bindings.onChange(vertSlider, vsPrefs.oscMeasurementChannelProperty(),  v -> syncVertSliderFromPrefs());
+        // Channel-enable flags too: offsetFracBounds falls back to the OTHER
+        // channel's V/div when the measurement channel is disabled.
+        Bindings.onChange(vertSlider, vsPrefs.oscLeftChannelEnabledProperty(),  v -> syncVertSliderFromPrefs());
+        Bindings.onChange(vertSlider, vsPrefs.oscRightChannelEnabledProperty(), v -> syncVertSliderFromPrefs());
 
         // Navigation slider between the main view and the condensed
         // strip.  Selection = how far back from the live writePos the
@@ -343,8 +364,19 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         condensed = new ZoomedView(group);
         condensedGd = new GridData(SWT.FILL, SWT.FILL, true, false);
         condensed.setLayoutData(condensedGd);
-        controller.attachViews(view, condensed);
+        // The synchronous file loader is shared by the tab control's Open-signal
+        // flow (driven via the controller) and the Record button (which clears it
+        // on record start), so it is built with the views and attached alongside.
+        loader = liveCapture ? new ScopeOpenSignal(view, condensed) : null;
+        controller.attachViews(view, condensed, loader);
         controller.attachGlSurface(glSurface);   // null on the CPU path — clears any stale (disposed) surface
+        // The nav scrollbar mirrors the controller's TRANSIENT view-centre state
+        // (not a preference), so it re-syncs off the controller's view-state
+        // event — fired by every applyViewState() recompute.
+        controller.setOnViewStateChanged(() -> {
+            setNavSliderVisible(view.isFileMode());
+            syncNavSlider();
+        });
 
         // Toolbar area: the ScopeTabControl on the left (fills) + Record toggle
         // button on the right (fixed).  Each former toolbar Group is a tab
@@ -360,16 +392,12 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         toolbarLayout.horizontalSpacing = 6;
         toolbar.setLayout(toolbarLayout);
 
-        // The synchronous file loader is shared with the tab control's
-        // Open-signal tab (which drives it) and the Record button (which
-        // clears it on record start), so it must exist before the tab control.
-        loader = liveCapture ? new ScopeOpenSignal(view, condensed) : null;
-
         // The tile-tab folder + every channel / trigger / preset / utility /
         // save-load tab live in a self-contained control; the pane keeps only
-        // the chart, sliders and Record button.  Cross-boundary concerns are
-        // routed back here through ScopeTabControl.Host (implemented below).
-        tabControl = new ScopeTabControl(toolbar, view, loader, this, liveCapture);
+        // the chart, sliders and Record button.  Cross-boundary operations flow
+        // down through the shared controller (injected here, not a pane
+        // back-reference).
+        tabControl = new ScopeTabControl(toolbar, view, controller, liveCapture);
         tabControl.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         // Collapsing the tab body keeps the Record button reachable and
         // re-flows the scope view into the freed space.
@@ -427,15 +455,23 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         autoSetupListener        = ignored -> controller.performAutoSetup(view, tabControl);
         freqRespStartedListener  = ignored -> onFreqRespMeasurementStarted();
         freqRespStoppedListener  = ignored -> onFreqRespMeasurementStopped();
+        recordingStoppedListener = ignored -> {
+            if (recordButton != null && !recordButton.isDisposed() && recordButton.getSelection()) {
+                recordButton.setSelection(false);
+                recordButton.setImage(recordDim);
+            }
+        };
         MessageBus bus = MessageBus.instance();
         bus.subscribe(Events.SCOPE_AUTO_SETUP,             autoSetupListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
+        bus.subscribe(Events.SCOPE_RECORDING_STOPPED,      recordingStoppedListener);
         group.addDisposeListener(e -> {
             MessageBus bus2 = MessageBus.instance();
             bus2.unsubscribe(Events.SCOPE_AUTO_SETUP,             autoSetupListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED, freqRespStartedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED, freqRespStoppedListener);
+            bus2.unsubscribe(Events.SCOPE_RECORDING_STOPPED,      recordingStoppedListener);
             loader.clear();
             // The injected controller deliberately keeps capturing — a
             // content rebuild (language / font change) must not drop the
@@ -602,39 +638,9 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
     }
 
     // -------------------------------------------------------------------------
-    // Pane-owned dialogs + ScopeTabControl.Host
+    // Pane-owned dialogs + widget syncs
     // -------------------------------------------------------------------------
 
-
-    /** {@link ScopeTabControl.Host}: stop live capture before an open-signal
-     *  load swaps the buffer out from under it.  No-op when not recording. */
-    @Override
-    public void stopCaptureForFileLoad() {
-        if (isCapturing()) {
-            stopCapture();
-            recordButton.setSelection(false);
-            recordButton.setImage(recordDim);
-        }
-    }
-
-    /** {@link ScopeTabControl.Host}: a signal file finished loading — centre
-     *  the view on its start, show the navigation slider (file mode) and
-     *  apply the view state. */
-    @Override
-    public void onSignalFileLoaded() {
-        // Centre the view on the start of the loaded signal so the first
-        // frames are visible.  Slider is enabled only in file mode — in live
-        // record it's disabled so the user can't scroll away from the live
-        // tip and break trigger.
-        SignalBufferReader reader = view.getReader();
-        if (reader != null) {
-            int displaySamples = ScopeFormat.displaySamplesFor(
-                    Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
-            controller.setViewCenterFrames(displaySamples / 2.0);
-        }
-        setNavSliderVisible(true);
-        applyViewState();
-    }
 
     /** Builds the off-screen scope clone for {@link #renderOffscreen}: fresh pane,
      *  the exact frozen frame + buffer + measurements carbon-copied in (so it
@@ -667,8 +673,8 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
      * units can't represent a fractional-sample step, so mapping those
      * gestures through the selection quantised them (a 40 µs arrow step
      * became 41.7 µs).  A thumb drag maps the selection fraction as
-     * before.  {@link #applyViewState} then re-syncs the widget's
-     * selection from the model either way.
+     * before.  {@link ScopeController#applyViewState()} then re-syncs the
+     * widget's selection from the model either way (via the view-state event).
      */
     private void onNavSliderMoved(Event e) {
         if (!view.isFileMode()) return;     // live mode: ignore stray events
@@ -685,35 +691,18 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
                 controller.scrollFileToSliderFraction(frac);
                 break;
         }
-        applyViewState();
-    }
-    /**
-     * {@link ScopeTabControl.Host}: single source of truth for everything
-     * that depends on the view's centre.  Reads {@code viewCenterFrames}
-     * (the absolute frame under the canvas centre — {@code -1} for
-     * follow-latest) and derives slider thumb size, slider position, the
-     * main view's back-offset and the condensed view's back-offset.  Always
-     * ends with a redraw.
-     */
-    @Override
-    public void applyViewState() {
-        controller.applyViewState();   // re-derive + repaint the views (multi-entity coordination)
-        syncNavSlider();               // this pane's own scrollbar widget
-    }
-
-    /** {@link ScopeTabControl.Host}: wipe the persistence afterglow (GPU phosphor;
-     *  no-op on the CPU path, which has no persistence) and repaint so the wipe
-     *  shows immediately. */
-    @Override
-    public void clearPersistence() {
-        if (glSurface != null) glSurface.clearPersistence();
-        requestRedraw();
+        // The controller recompute fires its view-state event, which re-syncs
+        // this slider's thumb/selection from the model.
+        controller.applyViewState();
     }
 
     /** Syncs the file-mode nav scrollbar (thumb size, position, step increments) to
      *  the current view centre.  Pane-local: it only touches this pane's own widget;
      *  the view-window maths come from {@link ScopeNav#fileViewWindow}. */
     private void syncNavSlider() {
+        // Guard both widgets: the hook lives on the app-lifetime controller, so a
+        // stale registration (pane rebuild) must stay inert, never crash.
+        if (navSlider == null || navSlider.isDisposed() || view.isDisposed()) return;
         SignalBufferReader reader = view.getReader();
         if (reader == null) return;
         int  displaySamples = ScopeFormat.displaySamplesFor(
@@ -754,31 +743,14 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
     }
 
     /**
-     * {@link ScopeTabControl.Host}: forces both scope canvases to repaint.
-     * Required for file-mode (openSignal) sessions where the realtime render
-     * loop doesn't repaint (it paints live views only while recording), so a UI
-     * change (V/div, t/div, slider, AC, channel toggles) needs an explicit
-     * repaint.  Cheap no-op during live recording — the render loop repaints
-     * every frame.
+     * Repaints both scope canvases after a pane-local navigation gesture (wheel
+     * pan / vertical move).  Required for stopped / file-mode sessions where the
+     * realtime render loop is idle; a cheap no-op while recording.  The vertical
+     * slider follows via its preference-property subscriptions.
      */
-    @Override
-    public void requestRedraw() {
-        // Keep the vertical scrollbar in sync with the measurement-channel
-        // offset on every redraw — covers cases where the channel was
-        // changed inside ScopeView (L/R click) without the pane explicitly
-        // seeing it.
-        syncVertSliderFromPrefs();
+    private void requestRedraw() {
         if (!view.isDisposed())      view.redraw();
         if (!condensed.isDisposed()) condensed.redraw();
-    }
-
-
-    /** {@link ScopeTabControl.Host}: file-mode horizontal zoom around the mouse. */
-    @Override
-    public void zoomFileTimeAroundMouse(double mouseFrac, double tDivOld, double tDivNew) {
-        // Centre math lives in the controller (it owns viewCenterFrames); pane repaints.
-        controller.zoomFileAroundMouse(mouseFrac, tDivOld, tDivNew);
-        applyViewState();
     }
 
     /** Wires the four-mode mouse-wheel handler on the scope canvas.
@@ -849,7 +821,7 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         if (view.isFileMode()) {
             // File scroll math lives in the controller (it owns viewCenterFrames);
             // the pane just forwards the wheel tick and repaints on a real move.
-            if (controller.scrollFileByWheel(dir)) applyViewState();
+            if (controller.scrollFileByWheel(dir)) controller.applyViewState();
         } else if (view.isFrozen()) {
             // Stopped scope: pan ½ div per tick via the virtual trigger offset; the
             // view-following read scrolls the whole captured buffer.  ScopeView owns it.
