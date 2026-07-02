@@ -18,6 +18,10 @@
 
 package org.edgo.audio.measure.gui.scope.gl;
 
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.TriggerEdge;
+import org.edgo.audio.measure.enums.TriggerMode;
+import org.edgo.audio.measure.enums.TriggerType;
 import org.edgo.audio.measure.gui.common.NvgMeasurementPainter;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.lwjgl.nanovg.NVGColor;
@@ -73,10 +77,14 @@ final class ScopePhosphor {
     enum Kind {
         /** Realtime loop: decay + accumulate the trace, but only if it's genuinely new. */
         REALTIME,
-        /** UI gesture / settings change: re-render the trace and reset the afterglow. */
+        /** UI gesture / geometry change: re-render the trace and reset the afterglow. */
         RESET,
         /** Expose / resize: re-composite the frozen phosphor (no decay, no accumulate). */
-        COMPOSITE;
+        COMPOSITE,
+        /** Signal-affecting change (trigger source/type/edge, generator): wipe the
+         *  afterglow WITHOUT re-stamping — the current trace is still anchored on the
+         *  pre-change event; stay blank until the next genuinely new frame. */
+        CLEAR;
 
         private Kind() {}
     }
@@ -96,6 +104,23 @@ final class ScopePhosphor {
     private int  fboH;
     private long lastAccumNanos;
     private boolean haveLastAccum;  // false until the first accumulate / after a reset
+    /** Set (from any thread) when a non-render code path invalidates the afterglow
+     *  (e.g. a USER generator change); consumed as {@link Kind#CLEAR} next frame. */
+    private volatile boolean clearRequested;
+    // Settings the current afterglow was accumulated under, watched per frame so
+    // every entry path (toolbar, wheel, presets, bus) is covered: a trigger-source
+    // change CLEARs, a geometry change RESETs.  prefsSeen gates the first frame.
+    private boolean     prefsSeen;
+    private TriggerMode lastTriggerMode;
+    private TriggerType lastTriggerType;
+    private TriggerEdge lastTriggerEdge;
+    private Channel     lastTriggerChannel;
+    private double      lastTimePerDiv;
+    private double      lastLeftVdiv;
+    private double      lastRightVdiv;
+    private double      lastLeftOff;
+    private double      lastRightOff;
+    private double      lastTriggerPos;
 
     // This frame's dimensions — set at the top of render(), read by the helpers.
     private int   logicalW;
@@ -117,11 +142,49 @@ final class ScopePhosphor {
      * so the surface falls back to a direct full render.
      */
     boolean render(GlScopeRenderer renderer, Kind kind, GlFrameSize size) {
-        double persistSeconds = persistenceSeconds();   // 0 = off, < 0 = infinite, > 0 = decay time
+        Preferences prefs = Preferences.instance();
+        double persistSeconds = persistenceSeconds(prefs);   // 0 = off, < 0 = infinite, > 0 = decay time
         if (persistSeconds == 0.0) {
             release();
             return false;
         }
+        // Trigger source/type/edge/mode changes and external clear requests
+        // invalidate the afterglow AND the current trace's anchor → CLEAR (blank
+        // until the next genuinely new frame; re-stamping would freeze the stale-
+        // anchored trace, which rare glitch triggers barely decay).  Geometry
+        // changes only move the coordinates → RESET (wipe + re-stamp).
+        boolean extClear = clearRequested;
+        clearRequested = false;
+        TriggerMode trigMode = prefs.getOscTriggerMode();
+        TriggerType trigType = prefs.getOscTriggerType();
+        TriggerEdge trigEdge = prefs.getOscTriggerEdge();
+        Channel     trigCh   = prefs.getOscTriggerChannel();
+        double tDiv = prefs.getOscTimePerDiv();
+        double lVd  = prefs.getOscLeftVoltsPerDiv();
+        double rVd  = prefs.getOscRightVoltsPerDiv();
+        double lOff = prefs.getOscLeftOffsetFrac();
+        double rOff = prefs.getOscRightOffsetFrac();
+        double tPos = prefs.getOscTriggerPositionFrac();
+        boolean triggerChanged  = prefsSeen && (trigMode != lastTriggerMode
+                || trigType != lastTriggerType || trigEdge != lastTriggerEdge
+                || trigCh != lastTriggerChannel);
+        boolean geometryChanged = prefsSeen && (tDiv != lastTimePerDiv
+                || lVd != lastLeftVdiv || rVd != lastRightVdiv
+                || lOff != lastLeftOff || rOff != lastRightOff
+                || tPos != lastTriggerPos);
+        lastTriggerMode    = trigMode;
+        lastTriggerType    = trigType;
+        lastTriggerEdge    = trigEdge;
+        lastTriggerChannel = trigCh;
+        lastTimePerDiv = tDiv;
+        lastLeftVdiv   = lVd;
+        lastRightVdiv  = rVd;
+        lastLeftOff    = lOff;
+        lastRightOff   = rOff;
+        lastTriggerPos = tPos;
+        prefsSeen = true;
+        if (extClear || triggerChanged) kind = Kind.CLEAR;
+        else if (geometryChanged)       kind = Kind.RESET;
         logicalW   = size.logicalW();
         logicalH   = size.logicalH();
         pixelW     = size.pixelW();
@@ -145,6 +208,7 @@ final class ScopePhosphor {
                 resetPhosphor();
             }
             case COMPOSITE -> { /* phosphor frozen — just re-composite below */ }
+            case CLEAR -> clearPhosphor();
         }
         // Seed an empty phosphor (first frame, or a resize just reallocated + cleared it) from
         // the current trace, so the persisted layer is never blank — vital for a STOPPED scope,
@@ -204,6 +268,28 @@ final class ScopePhosphor {
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
         lastAccumNanos = now;
         haveLastAccum  = true;
+    }
+
+    /** Signal-affecting change: wipe the afterglow to transparent WITHOUT stamping the
+     *  current trace — it is still anchored on the pre-change event, and with rare
+     *  (glitch) triggers the decay would keep it visible for minutes.  The buffer
+     *  counts as valid so the seeding path doesn't immediately re-stamp; the next
+     *  genuinely new frame starts the accumulation fresh. */
+    private void clearPhosphor() {
+        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, phosphorFbo);
+        GL11.glViewport(0, 0, pixelW, pixelH);
+        GL11.glClearColor(0f, 0f, 0f, 0f);
+        GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
+        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
+        lastAccumNanos = System.nanoTime();
+        haveLastAccum  = true;
+    }
+
+    /** Requests a {@link Kind#CLEAR} on the next rendered frame — called (from any
+     *  thread) when non-render code invalidates the afterglow, e.g. a USER generator
+     *  change arriving over the bus. */
+    void clearPersistence() {
+        clearRequested = true;
     }
 
     /** UI gesture / seed: wipe the (possibly stale-coordinate) afterglow and stamp the
@@ -322,8 +408,7 @@ final class ScopePhosphor {
     }
 
     /** Resolved persistence time from preferences: 0 = off, &lt; 0 = infinite, &gt; 0 = decay seconds. */
-    private double persistenceSeconds() {
-        Preferences prefs = Preferences.instance();
+    private double persistenceSeconds(Preferences prefs) {
         return prefs.getOscPersistenceMode().effectiveSeconds(prefs.getOscPersistenceManualSeconds());
     }
 }

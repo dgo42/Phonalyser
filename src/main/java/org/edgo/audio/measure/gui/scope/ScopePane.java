@@ -701,6 +701,15 @@ public final class ScopePane extends AbstractPane implements ScopeTabControl.Hos
         syncNavSlider();               // this pane's own scrollbar widget
     }
 
+    /** {@link ScopeTabControl.Host}: wipe the persistence afterglow (GPU phosphor;
+     *  no-op on the CPU path, which has no persistence) and repaint so the wipe
+     *  shows immediately. */
+    @Override
+    public void clearPersistence() {
+        if (glSurface != null) glSurface.clearPersistence();
+        requestRedraw();
+    }
+
     /** Syncs the file-mode nav scrollbar (thumb size, position, step increments) to
      *  the current view centre.  Pane-local: it only touches this pane's own widget;
      *  the view-window maths come from {@link ScopeNav#fileViewWindow}. */

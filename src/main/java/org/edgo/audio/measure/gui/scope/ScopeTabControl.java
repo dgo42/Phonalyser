@@ -54,6 +54,7 @@ import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.TriggerEdge;
+import org.edgo.audio.measure.enums.TriggerType;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
@@ -105,6 +106,11 @@ public final class ScopeTabControl extends AbstractTabControl {
         /** A setting changed → redraw both scope canvases and resync the sliders. */
         void requestRedraw();
 
+        /** A signal-affecting change (e.g. a USER generator change) invalidated the
+         *  persistence afterglow — wipe it (GPU phosphor; no-op on the CPU path)
+         *  and repaint. */
+        void clearPersistence();
+
         /** File mode horizontal zoom: re-centre the view so the sample under the
          *  mouse ({@code mouseFrac}) stays put as the window resizes for the new
          *  t/div.  A loaded file has no trigger, so its zoom moves the view centre. */
@@ -139,6 +145,10 @@ public final class ScopeTabControl extends AbstractTabControl {
     /** Trigger hysteresis: 0…5 divisions in 0.1-div steps, one decimal. */
     private static final double HYST_MAX_DIV  = 5;
     private static final double HYST_STEP_DIV = 0.1;
+    /** Delay before a USER generator change wipes the persistence afterglow —
+     *  covers the DAC → loopback → ADC → capture-buffer latency so the wipe lands
+     *  after the OLD signal has flushed out of the display path. */
+    private static final int GEN_CLEAR_DELAY_MS = 250;
     /** Save-duration field bounds (s). */
     private static final double SAVE_DURATION_MIN_SEC = 0.001;
     private static final double TIME_MAX_SEC          = 1_000_000;
@@ -199,6 +209,7 @@ public final class ScopeTabControl extends AbstractTabControl {
     private Combo  leftLpf, rightLpf;
     private Button chL, chR;
     private Button edgeRise, edgeFall;
+    private Button typeEdge, typeGlitch;
     private Button modeAuto, modeNormal, modeSingle;
     /** Reference to the trigger toolbar tab content so it can be enabled/disabled
      *  when switching between live record and file (openSignal) modes. */
@@ -294,8 +305,23 @@ public final class ScopeTabControl extends AbstractTabControl {
                     if (isDisposed()) return;
                     syncReconstructedBeatEnabled();
                     // A real generator change (not a sub-mHz FLL trim) invalidates the
-                    // running scope statistics — drop them so avg/min/max start fresh.
-                    if (cause == GenChangeCause.USER_INPUT) view.resetMeasurementHistory();
+                    // running scope statistics AND the persistence afterglow (it shows
+                    // the OLD signal).  The afterglow wipe is DELAYED: the change takes
+                    // DAC → loopback → ADC → capture-buffer latency to reach the
+                    // display, so an instant wipe would re-accumulate old-signal
+                    // frames captured before the change arrived.
+                    if (cause == GenChangeCause.USER_INPUT) {
+                        view.resetMeasurementHistory();
+                        getDisplay().timerExec(GEN_CLEAR_DELAY_MS, () -> {
+                            if (isDisposed()) return;
+                            // The signal transition itself is a discontinuity: the
+                            // glitch trigger fires on it and NORMAL would hold that
+                            // transition frame forever — drop the anchor along with
+                            // the afterglow, once the change has flushed through.
+                            view.resetTriggerHold();
+                            host.clearPersistence();
+                        });
+                    }
                 });
             };
             MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, genChangeListener);
@@ -464,6 +490,10 @@ public final class ScopeTabControl extends AbstractTabControl {
                         I18n.t(prefs.getOscTriggerEdge() == TriggerEdge.RISE
                                 ? "scope.tile.trigger.edge.rise"
                                 : "scope.tile.trigger.edge.fall")));
+                if (prefs.getOscTriggerType() == TriggerType.GLITCH) {
+                    tiles.add(TileTabFolder.Tile.text("G",
+                            I18n.t("scope.tile.trigger.type.glitch")));
+                }
                 String modeKey;
                 switch (prefs.getOscTriggerMode()) {
                     case AUTO:   modeKey = "scope.tile.trigger.mode.auto";   break;
@@ -745,7 +775,11 @@ public final class ScopeTabControl extends AbstractTabControl {
         chMap.put(chL, Channel.L);
         chMap.put(chR, Channel.R);
         Bindings.radio(chMap, prefs.oscTriggerChannelProperty());
-        Bindings.onChange(toolbarTabs, prefs.oscTriggerChannelProperty(), v -> toolbarTabs.refreshTab(TAB_TRIGGER));
+        Bindings.onChange(toolbarTabs, prefs.oscTriggerChannelProperty(), v -> {
+            toolbarTabs.refreshTab(TAB_TRIGGER);
+            view.resetTriggerHold();   // other channel's anchor is stale — see the type listener
+            host.requestRedraw();
+        });
 
         Composite edgeSet = new Composite(g, SWT.NONE);
         edgeSet.setLayout(flushRowLayoutHorizontal(2));
@@ -758,7 +792,50 @@ public final class ScopeTabControl extends AbstractTabControl {
         edgeMap.put(edgeRise, TriggerEdge.RISE);
         edgeMap.put(edgeFall, TriggerEdge.FALL);
         Bindings.radio(edgeMap, prefs.oscTriggerEdgeProperty());
-        Bindings.onChange(toolbarTabs, prefs.oscTriggerEdgeProperty(), v -> toolbarTabs.refreshTab(TAB_TRIGGER));
+        Bindings.onChange(toolbarTabs, prefs.oscTriggerEdgeProperty(), v -> {
+            toolbarTabs.refreshTab(TAB_TRIGGER);
+            view.resetTriggerHold();   // old-edge anchor is stale — see the type listener
+            host.requestRedraw();
+        });
+
+        // Trigger event type: E = level-crossing edge trigger, G = dV/dt
+        // glitch trigger (dropped-sample DAC gaps).  The ↑/↓ edge selection
+        // applies to both — crossing direction vs. jump sign.
+        Composite typeSet = new Composite(g, SWT.NONE);
+        typeSet.setLayout(flushRowLayoutHorizontal(2));
+        typeEdge   = squareToggle(typeSet, "E");
+        typeGlitch = squareToggle(typeSet, "G");
+        typeEdge  .setToolTipText(I18n.t("scope.trigger.type.edge.tooltip"));
+        typeGlitch.setToolTipText(I18n.t("scope.trigger.type.glitch.tooltip"));
+        makeDependentGroup(typeEdge, typeGlitch);
+        Map<Button, TriggerType> typeMap = new LinkedHashMap<>();
+        typeMap.put(typeEdge,   TriggerType.EDGE);
+        typeMap.put(typeGlitch, TriggerType.GLITCH);
+        Bindings.radio(typeMap, prefs.oscTriggerTypeProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscTriggerTypeProperty(), v -> {
+            toolbarTabs.refreshTab(TAB_TRIGGER);
+            // Drop the held anchor (it belongs to the OLD trigger; any later
+            // interactive render would re-stamp its stale trace into the wiped
+            // afterglow) and repaint so the phosphor clears immediately.
+            view.resetTriggerHold();
+            host.requestRedraw();
+        });
+
+        // Glitch in AUTO makes no sense — free-run repaints at the render rate, so
+        // a caught glitch frame would be overwritten immediately.  Selecting AUTO
+        // flips the type back to EDGE, and G stays disabled until NORMAL / SINGLE.
+        if (prefs.getOscTriggerMode() == TriggerMode.AUTO
+                && prefs.getOscTriggerType() == TriggerType.GLITCH) {
+            prefs.setOscTriggerType(TriggerType.EDGE);
+        }
+        typeGlitch.setEnabled(prefs.getOscTriggerMode() != TriggerMode.AUTO);
+        Bindings.onChange(toolbarTabs, prefs.oscTriggerModeProperty(), m -> {
+            if (m == TriggerMode.AUTO && prefs.getOscTriggerType() == TriggerType.GLITCH) {
+                prefs.setOscTriggerType(TriggerType.EDGE);
+            }
+            typeGlitch.setEnabled(m != TriggerMode.AUTO);
+            host.requestRedraw();   // let the phosphor wipe the stale afterglow at once
+        });
 
         Composite modeSet = new Composite(g, SWT.NONE);
         modeSet.setLayout(flushRowLayoutHorizontal(2));
@@ -899,6 +976,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         p.setTriggerPositionFrac(prefs.getOscTriggerPositionFrac());
         p.setTriggerChannel(prefs.getOscTriggerChannel());
         p.setTriggerEdge(prefs.getOscTriggerEdge());
+        p.setTriggerType(prefs.getOscTriggerType());
         p.setTriggerMode(prefs.getOscTriggerMode());
         p.setTriggerLevelFrac(prefs.getOscTriggerLevelFrac());
         return p;
@@ -935,6 +1013,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         prefs.setOscRightLpf(p.getRightLpf());
         prefs.setOscTriggerChannel(p.getTriggerChannel());
         prefs.setOscTriggerEdge   (p.getTriggerEdge());
+        prefs.setOscTriggerType   (p.getTriggerType());
         prefs.setOscTriggerMode   (p.getTriggerMode());
         syncTriggerStart();
         // Fractions — overwrite the values the scale listeners would have

@@ -113,4 +113,79 @@ class ScopeTriggerTest {
         // lands at 31.5.
         assertEquals(31.5, trig, 1e-9);
     }
+
+    // ---- glitch (discontinuity) trigger ----
+
+    /** 1 ms merge window at the test's 384 kHz rate. */
+    private static final int MERGE = 384;
+
+    /** ~2 kHz sine at 384 kHz (192 samples/period) with amplitude {@code a}. */
+    private float[] glitchTestSine(int n, double a) {
+        float[] d = new float[n];
+        double w = 2 * Math.PI / 192.0;
+        for (int i = 0; i < n; i++) d[i] = (float) (a * Math.sin(w * i));
+        return d;
+    }
+
+    @Test
+    void findGlitch_cleanSine_noTrigger() {
+        // A sine's largest |Δ²| is π/2 × its mean |Δ²| — far below the 8×
+        // threshold, so a clean tone must never fire, at any amplitude.
+        for (double a : new double[] { 1.0, 0.001 }) {
+            float[] d = glitchTestSine(4096, a);
+            assertEquals(-1.0, ScopeTrigger.findGlitch(d, 1, d.length, true,  MERGE, Double.NaN), 1e-12);
+            assertEquals(-1.0, ScopeTrigger.findGlitch(d, 1, d.length, false, MERGE, Double.NaN), 1e-12);
+        }
+    }
+
+    @Test
+    void findGlitch_droppedSamplesGap_anchorsStartOrEnd() {
+        // Dropped-samples DAC gap: output zeroed for 150 samples starting at
+        // the positive peak.  Entry and recovery bursts merge into ONE glitch;
+        // ↑ (anchorStart) lands on the last clean sample before the drop,
+        // ↓ on the first settled sample after the recovery.
+        float[] d = glitchTestSine(4096, 1.0);
+        int gapStart = 1968;
+        int gapEnd   = gapStart + 150;
+        for (int i = gapStart; i < gapEnd; i++) d[i] = 0f;
+
+        double start = ScopeTrigger.findGlitch(d, 1, d.length, true,  MERGE, Double.NaN);
+        double end   = ScopeTrigger.findGlitch(d, 1, d.length, false, MERGE, Double.NaN);
+        assertEquals(gapStart - 1, start, 1e-9, "glitch start anchor");
+        assertEquals(gapEnd + 1,   end,   1e-9, "glitch end anchor");
+    }
+
+    @Test
+    void findGlitch_zeroCrossingSplice_detected() {
+        // ADC-side cutoff at a rising zero crossing: the waveform splices into
+        // a FALLING crossing — value stays ≈ 0 (no dV/dt step for a first-
+        // difference gate) but the slope flips, breaking the local linear
+        // prediction by ~2·A·ω/fs ≈ 60× the sine's curvature ceiling.
+        int splice = 2112;                    // multiple of 192 → rising crossing
+        float[] d = glitchTestSine(4096, 1.0);
+        double w = 2 * Math.PI / 192.0;
+        for (int k = splice; k < d.length; k++) {
+            d[k] = (float) -Math.sin(w * (k - splice));   // descending through zero
+        }
+        double start = ScopeTrigger.findGlitch(d, 1, d.length, true, MERGE, Double.NaN);
+        assertEquals(splice, start, 1e-9, "splice detected at the crossing");
+    }
+
+    @Test
+    void findGlitch_amplitudeIndependent() {
+        // The threshold scales with the signal's own mean |Δ²|, so the same
+        // relative gap fires identically on a 1 mV-scale signal.
+        float[] d = glitchTestSine(4096, 0.001);
+        int gapStart = 1968;
+        for (int i = gapStart; i < gapStart + 150; i++) d[i] = 0f;
+        assertEquals(gapStart - 1,
+                ScopeTrigger.findGlitch(d, 1, d.length, true, MERGE, Double.NaN), 1e-9);
+    }
+
+    @Test
+    void findGlitch_flatSignal_returnsMinusOne() {
+        float[] d = new float[512];
+        for (int i = 0; i < d.length; i++) d[i] = 0.25f;
+        assertEquals(-1.0, ScopeTrigger.findGlitch(d, 1, d.length, true, MERGE, Double.NaN), 1e-12);
+    }
 }
