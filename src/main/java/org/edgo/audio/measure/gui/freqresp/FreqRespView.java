@@ -324,6 +324,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         addListener(SWT.MouseWheel, this::onMouseWheel);
         addListener(SWT.MouseMove,  this::onMouseMove);
         addListener(SWT.MouseExit,  e -> { mouseInPlot = false; redraw(); });
+        installRectZoom(this, true);   // drag-select zoom + Ctrl+Z undo (base machinery)
 
         // Re-trace whenever the active calibration changes (load, clear, or
         // wizard Apply).  The view divides the raw result by the new
@@ -888,6 +889,73 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (mouseInPlot) {
             drawCrosshair(gc, plot, freqMin, freqMax, magTop, magBot, phaseVisible);
         }
+        Rectangle canvas = getClientArea();
+        drawRectZoomOverlay(gc, canvas.width, canvas.height);
+    }
+
+    // -------------------------------------------------------------------------
+    // Rectangular zoom (base machinery in AbstractMeasurementView)
+    // -------------------------------------------------------------------------
+
+    /** X = displayed frequency window (always log), Y = the magnitude-dB
+     *  window.  The fixed ±180° phase axis is not zoom state. */
+    @Override
+    protected ZoomState captureZoomState() {
+        Preferences prefs = Preferences.instance();
+        return new ZoomState(prefs.getFreqRespFreqMinHz(), prefs.getFreqRespFreqMaxHz(),
+                new double[] { prefs.getFreqRespMagBotDb() },
+                new double[] { prefs.getFreqRespMagTopDb() });
+    }
+
+    /** Applies through the canonical range-change protocol, clamped like the
+     *  wheel zoom; the pane's FREQRESP_RANGE_CHANGED subscriber re-syncs the
+     *  scrollbars. */
+    @Override
+    protected boolean applyZoomState(ZoomState s) {
+        Preferences prefs = Preferences.instance();
+        double fMin = Math.max(FREQ_MIN_FLOOR_HZ, s.xMin());
+        double fMax = Math.min(nyquistHz(), s.xMax());
+        double top  = Math.min(MAG_TOP_ZOOM_MAX_DB, s.yMax()[0]);
+        double bot  = Math.max(MAG_BOT_MIN_DB, s.yMin()[0]);
+        if (fMax <= fMin || top <= bot) return false;   // degenerate after clamping
+        prefs.setFreqRespFreqMinHz(fMin);
+        prefs.setFreqRespFreqMaxHz(fMax);
+        prefs.setFreqRespMagTopDb(top);
+        prefs.setFreqRespMagBotDb(bot);
+        prefs.save();
+        publishRangeChanged();
+        redraw();
+        return true;
+    }
+
+    /** Log-domain on X, linear-dB on Y — the crosshair / wheel-zoom mappings.
+     *  Returns {@code null} for a selection that clamps to a degenerate range
+     *  (e.g. the Nyquist ceiling dropped below the displayed window), so the
+     *  base cancels the zoom instead of pushing a no-op undo entry. */
+    @Override
+    protected ZoomState zoomStateForRect(Rectangle sel) {
+        Preferences prefs = Preferences.instance();
+        Rectangle plot = plotRect(prefs);
+        if (plot == null) return null;
+        double fMin = Math.max(1.0, prefs.getFreqRespFreqMinHz());
+        double fMax = prefs.getFreqRespFreqMaxHz();
+        double top  = prefs.getFreqRespMagTopDb();
+        double span = top - prefs.getFreqRespMagBotDb();
+        double newTop  = Math.min(MAG_TOP_ZOOM_MAX_DB,
+                top - (sel.y - plot.y) / (double) plot.height * span);
+        double newBot  = Math.max(MAG_BOT_MIN_DB,
+                top - (sel.y + sel.height - plot.y) / (double) plot.height * span);
+        double newFMin = Math.max(FREQ_MIN_FLOOR_HZ, xToFreq(sel.x, plot, fMin, fMax, true));
+        double newFMax = Math.min(nyquistHz(), xToFreq(sel.x + sel.width, plot, fMin, fMax, true));
+        if (newFMax <= newFMin || newTop <= newBot) return null;
+        return new ZoomState(newFMin, newFMax,
+                new double[] { newBot }, new double[] { newTop });
+    }
+
+    /** Selections live inside the plot area (between the axis-label margins). */
+    @Override
+    protected Rectangle zoomableArea() {
+        return plotRect(Preferences.instance());
     }
 
     /** Static-trace-layer cache key.  Lombok {@code @EqualsAndHashCode} derives

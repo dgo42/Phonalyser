@@ -18,8 +18,10 @@
 
 package org.edgo.audio.measure.gui.common;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
@@ -37,7 +39,14 @@ import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Canvas;
+import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
+import org.eclipse.swt.widgets.Listener;
+import org.eclipse.swt.widgets.Scrollable;
+import org.eclipse.swt.widgets.Shell;
+import org.eclipse.swt.widgets.Spinner;
+import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.widgets.ToolButton;
@@ -58,11 +67,16 @@ import org.edgo.audio.measure.preferences.Preferences;
  *       — plus the grid + axis facility used by every chart.</li>
  * </ul>
  *
- * <p>This is deliberately minimal: no abstract methods, no mouse listeners
- * installed by the base.  Header buttons are now {@code ToolButton} widgets in
- * each view, so the old hotspot registry is gone; subclasses keep their own
- * {@code onMouseMove} / {@code onMouseDown} handlers for sliders, crosshairs,
- * and editable labels.
+ * <p>The base installs no listeners of its own except through the opt-in
+ * rectangular-zoom facility ({@link #installRectZoom}): a drag on the plot
+ * selects a rectangle that is stretched to the full view, with the previous
+ * pan/zoom pushed on a per-view undo stack (Ctrl+Z pops it).  The zoom
+ * semantics live in the subclasses via {@link #captureZoomState()},
+ * {@link #applyZoomState(ZoomState)} and {@link #zoomStateForRect(Rectangle)};
+ * a view that isn't zoomable (the condensed strip) simply never installs.
+ * Header buttons are {@code ToolButton} widgets in each view; subclasses keep
+ * their own {@code onMouseMove} / {@code onMouseDown} handlers for sliders,
+ * crosshairs, and editable labels.
  */
 public abstract class AbstractMeasurementView extends Canvas {
 
@@ -135,6 +149,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         /** RIAA / reference curve trace (FreqResp only). */               RIAA_TRACE,
         /** Compare-mode trace — dark green (FreqResp only). */            COMPARE_TRACE,
         /** Active state fill of FreqResp toggle buttons. */               BUTTON_ACTIVE,
+        /** Rect-zoom rubber band + the focused-view 1-px edge border. */  ACCENT,
     }
 
     /** Packed-RGB defaults for every {@link ColorRole}.  Subclass
@@ -162,6 +177,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         m.put(ColorRole.WARNING_DIM,     0x202020);
         m.put(ColorRole.COMPARE_TRACE,   0x1B5E20);
         m.put(ColorRole.BUTTON_ACTIVE,   0xC0D8F0);
+        m.put(ColorRole.ACCENT,          0x8CFF00);   // bright green — visible on light AND dark plots #8Cff00
         DEFAULT_RGB = m;
     }
 
@@ -184,6 +200,273 @@ public abstract class AbstractMeasurementView extends Canvas {
             if (rgb == null) continue;     // role unused by this view
             palette.put(role, newColor(rgb));
         }
+    }
+
+    // =========================================================================
+    // Rectangular zoom with undo (opt-in via installRectZoom).
+    //
+    // A button-1 drag on the plot selects a rectangle; on release the
+    // selection is stretched to the full view and the PREVIOUS pan/zoom is
+    // pushed on a per-view undo stack — Ctrl+Z pops it until empty.  The base
+    // owns the generic machinery (drag lifecycle, rubber-band + focus-border
+    // overlay, undo stack, focus / hover targeting); the subclass owns the
+    // semantics through the three abstract methods, exchanging the uniform
+    // ZoomState with the base.
+    // =========================================================================
+
+    /**
+     * Uniform pan/zoom memento: the data intervals mapped onto the plot.
+     * X = time (scope) or frequency (FFT / FreqResp); one Y interval per
+     * vertical scale — the scope's two channels, the single dB axis of the
+     * frequency-domain views.  Units are the owning view's own; the base
+     * never interprets the numbers, it only stacks and returns them.
+     */
+    public record ZoomState(double xMin, double xMax, double[] yMin, double[] yMax) { }
+
+    /** Undo-stack depth bound — beyond it the OLDEST zoom states are dropped. */
+    private static final int ZOOM_UNDO_LIMIT = 32;
+    /** Minimum selection edge (px) for a drag to count as a zoom — anything
+     *  smaller is a plain focus click. */
+    private static final int ZOOM_MIN_SELECTION_PX = 8;
+    /** Widget-data key marking a control as a measurement view's interaction
+     *  host, so views recognise each other's hosts during focus targeting
+     *  without any global registry. */
+    private static final String ZOOM_HOST_DATA_KEY = "measurementViewZoomHost";
+
+    /** The control the user interacts with — this canvas normally, the GL
+     *  canvas replacing it on the GPU scope.  Null until installRectZoom. */
+    private Control zoomHost;
+    /** Undo stack of pre-zoom states; newest first. */
+    private final Deque<ZoomState> zoomUndoStack = new ArrayDeque<>();
+    private boolean zoomDragActive;
+    private int     zoomDragStartX;
+    private int     zoomDragStartY;
+    private int     zoomDragCurX;
+    private int     zoomDragCurY;
+    private boolean zoomHostFocused;
+    private boolean zoomHostHovered;
+    /** Display-wide Ctrl+Z filter; registered once, removed on view dispose. */
+    private Listener zoomKeyFilter;
+    /** Shell Activate/Deactivate → overlay repaint; registered once, removed
+     *  on view dispose (the shell usually outlives the view). */
+    private Listener zoomShellActivationListener;
+
+    /** The current pan/zoom as a uniform memento — pushed before every rect
+     *  zoom, replayed by Ctrl+Z.  {@code null} = nothing to remember. */
+    protected abstract ZoomState captureZoomState();
+
+    /** Applies a memento produced by {@link #captureZoomState()} or computed
+     *  by {@link #zoomStateForRect} — the single mutation gateway shared by
+     *  zoom and undo.  Returns whether the state was actually applied: a
+     *  restore may clamp degenerate after the environment changed (e.g. the
+     *  Nyquist ceiling dropped below the stored window), and undo then skips
+     *  the dead entry instead of silently eating a Ctrl+Z. */
+    protected abstract boolean applyZoomState(ZoomState state);
+
+    /** Maps the committed selection rectangle (host pixels) to the new zoom
+     *  state — the subclass owns its pixel↔value mapping (log axes, plot
+     *  margins, per-channel scales).  {@code null} cancels the zoom. */
+    protected abstract ZoomState zoomStateForRect(Rectangle selection);
+
+    /** The region a selection may start in and is clamped to, in host pixels.
+     *  Default: the full host client area; the frequency-domain views return
+     *  their plot rectangle (inside the axis-label margins). */
+    protected Rectangle zoomableArea() {
+        return (zoomHost instanceof Scrollable s) ? s.getClientArea() : getClientArea();
+    }
+
+    /** Whether a selection drag may START at (x, y) — subclasses veto their
+     *  interactive hit zones (slider handles, header buttons, labels). */
+    protected boolean isRectZoomBlockedAt(int x, int y) {
+        return false;
+    }
+
+    /**
+     * Activates rectangular zoom with {@code host} as the interaction control
+     * ({@code this} normally; the GL canvas on the GPU scope, which re-installs
+     * when it attaches).  With {@code hookMouse} the base wires the drag to the
+     * host's own mouse events; the scope passes {@code false} and forwards from
+     * its pointer funnel instead.
+     */
+    protected final void installRectZoom(Control host, boolean hookMouse) {
+        this.zoomHost = host;
+        host.setData(ZOOM_HOST_DATA_KEY, this);
+        host.addListener(SWT.FocusIn,    e -> { zoomHostFocused = true;  requestZoomOverlayRepaint(); });
+        host.addListener(SWT.FocusOut,   e -> { zoomHostFocused = false; requestZoomOverlayRepaint(); });
+        host.addListener(SWT.MouseEnter, e -> { zoomHostHovered = true;  requestZoomOverlayRepaint(); });
+        host.addListener(SWT.MouseExit,  e -> { zoomHostHovered = false; requestZoomOverlayRepaint(); });
+        if (hookMouse) {
+            host.addListener(SWT.MouseDown, e -> rectZoomPointerDown(e.x, e.y, e.button));
+            host.addListener(SWT.MouseMove, e -> rectZoomPointerMove(e.x, e.y));
+            host.addListener(SWT.MouseUp,   e -> rectZoomPointerUp());
+        }
+        if (zoomKeyFilter == null) {
+            zoomKeyFilter = e -> {
+                // Exact Ctrl+Z only — Ctrl+Shift+Z (redo) and other combos pass through.
+                if (e.keyCode == 'z' && (e.stateMask & SWT.MODIFIER_MASK) == SWT.MOD1
+                        && isZoomUndoTarget() && undoZoom()) {
+                    e.doit = false;
+                }
+            };
+            getDisplay().addFilter(SWT.KeyDown, zoomKeyFilter);
+            addDisposeListener(e -> getDisplay().removeFilter(SWT.KeyDown, zoomKeyFilter));
+        }
+        if (zoomShellActivationListener == null) {
+            // Border/undo eligibility follows the ACTIVE shell (isZoomUndoTarget),
+            // which can change with none of the focus/hover events firing (Alt+Tab
+            // with the pointer resting on the plot) — repaint on activation flips
+            // so a stopped view never keeps a stale border.
+            zoomShellActivationListener = e -> requestZoomOverlayRepaint();
+            Shell shell = getShell();
+            shell.addListener(SWT.Activate,   zoomShellActivationListener);
+            shell.addListener(SWT.Deactivate, zoomShellActivationListener);
+            addDisposeListener(e -> {
+                if (!shell.isDisposed()) {
+                    shell.removeListener(SWT.Activate,   zoomShellActivationListener);
+                    shell.removeListener(SWT.Deactivate, zoomShellActivationListener);
+                }
+            });
+        }
+    }
+
+    /** Button-1 press at host pixel (x, y): focuses the view and, outside the
+     *  blocked zones, starts a selection drag.  Returns whether a drag began. */
+    protected final boolean rectZoomPointerDown(int x, int y, int button) {
+        if (zoomHost == null || button != 1) return false;
+        zoomHost.setFocus();      // click-to-focus even when the drag can't start
+        Rectangle area = zoomableArea();
+        if (area == null || !area.contains(x, y) || isRectZoomBlockedAt(x, y)) return false;
+        zoomDragActive = true;
+        zoomDragStartX = x;
+        zoomDragStartY = y;
+        zoomDragCurX   = x;
+        zoomDragCurY   = y;
+        return true;
+    }
+
+    /** Drag update — repaints the rubber band. */
+    protected final void rectZoomPointerMove(int x, int y) {
+        if (!zoomDragActive) return;
+        zoomDragCurX = x;
+        zoomDragCurY = y;
+        requestZoomOverlayRepaint();
+    }
+
+    /** Whether a selection drag is currently in progress. */
+    protected final boolean isRectZoomDragActive() {
+        return zoomDragActive;
+    }
+
+    /** Repaint request for a change that only affects the rect-zoom OVERLAY
+     *  (rubber band, focus border) — the plotted content is untouched.  The
+     *  GPU scope overrides this to re-composite the frozen phosphor instead
+     *  of resetting it; the default is a plain redraw. */
+    protected void requestZoomOverlayRepaint() {
+        redraw();
+    }
+
+    /** Release: commits the selection when it spans at least
+     *  {@link #ZOOM_MIN_SELECTION_PX} on both axes — pushes the pre-zoom state
+     *  and applies the stretched one.  Returns whether a zoom happened. */
+    protected final boolean rectZoomPointerUp() {
+        if (!zoomDragActive) return false;
+        zoomDragActive = false;
+        Rectangle sel = normalizedSelection();
+        // Erasing the band touches only the overlay layer — a plain click or an
+        // aborted drag must not reset the GPU phosphor (the committed path gets
+        // its full redraw from applyZoomState).
+        requestZoomOverlayRepaint();
+        // Clamp BEFORE the minimum-size gate: a drag ending outside the plot
+        // must not shrink to a sliver that then stretches to the full view.
+        Rectangle area = zoomableArea();
+        if (area != null) sel = sel.intersection(area);
+        if (sel.width < ZOOM_MIN_SELECTION_PX || sel.height < ZOOM_MIN_SELECTION_PX) return false;
+        ZoomState next = zoomStateForRect(sel);
+        if (next == null) return false;
+        ZoomState prev = captureZoomState();
+        if (!applyZoomState(next)) return false;
+        if (prev != null) {
+            while (zoomUndoStack.size() >= ZOOM_UNDO_LIMIT) zoomUndoStack.removeLast();
+            zoomUndoStack.push(prev);
+        }
+        return true;
+    }
+
+    /** Re-applies the newest restorable zoom state, dropping entries whose
+     *  restore no-ops; {@code false} when the stack runs out. */
+    private boolean undoZoom() {
+        ZoomState prev;
+        while ((prev = zoomUndoStack.poll()) != null) {
+            if (applyZoomState(prev)) {
+                redraw();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Drops the whole undo history — a mode switch (record ↔ file on the
+     *  scope) makes the stacked states meaningless. */
+    protected final void clearZoomHistory() {
+        zoomUndoStack.clear();
+    }
+
+    /** The current selection with positive width/height. */
+    private Rectangle normalizedSelection() {
+        return new Rectangle(
+                Math.min(zoomDragStartX, zoomDragCurX),
+                Math.min(zoomDragStartY, zoomDragCurY),
+                Math.abs(zoomDragCurX - zoomDragStartX),
+                Math.abs(zoomDragCurY - zoomDragStartY));
+    }
+
+    /**
+     * Whether this view is the Ctrl+Z target (and shows the accent border):
+     * its host is focused, or it is hovered while the focus sits on neither
+     * another view's host nor a text-editing widget (whose own Ctrl+Z wins).
+     */
+    protected final boolean isZoomUndoTarget() {
+        if (zoomHost == null || zoomHost.isDisposed()) return false;
+        // The active shell must be this view's shell or one of its child shells
+        // (an extracted tool window keeps the main view targetable): an offscreen
+        // screenshot clone — whose hidden shell may traverse-focus this canvas —
+        // never sees its shell active, so no border bakes into the image, and a
+        // backgrounded app (active shell null) shows no border either.
+        Control active = getDisplay().getActiveShell();
+        while (active != null && active != getShell()) active = active.getParent();
+        if (active == null) return false;
+        if (zoomHostFocused) return true;
+        if (!zoomHostHovered) return false;
+        Control focus = getDisplay().getFocusControl();
+        if (focus == null) return true;
+        if (focus.getData(ZOOM_HOST_DATA_KEY) != null) return false;   // another view owns it
+        return !(focus instanceof Text || focus instanceof Combo || focus instanceof Spinner);
+    }
+
+    /** Draws the rect-zoom layer — call LAST in the subclass's paint: the
+     *  rubber band while dragging, and the 1-px accent border when this view
+     *  is the Ctrl+Z target.  Both are drawn inside the canvas edge — no
+     *  size / padding / margin impact. */
+    protected final void drawRectZoomOverlay(MeasurementPainter p, int w, int h) {
+        Color accent = color(ColorRole.ACCENT);
+        if (accent == null) return;
+        boolean band = zoomDragActive;
+        boolean border = isZoomUndoTarget();
+        if (!band && !border) return;
+        p.setLineAttributes(new LineAttributes(1.0f));
+        p.setForeground(accent);
+        if (border) p.drawRectangle(0, 0, w - 1, h - 1);
+        if (band) {
+            Rectangle sel = normalizedSelection();
+            if (sel.width > 0 && sel.height > 0) {
+                p.drawRectangle(sel.x, sel.y, sel.width, sel.height);
+            }
+        }
+    }
+
+    /** GC convenience overload for views that paint straight to a GC. */
+    protected final void drawRectZoomOverlay(GC gc, int w, int h) {
+        drawRectZoomOverlay(new GcMeasurementPainter(gc), w, h);
     }
 
     /** Returns {@code packedRgb} with each 8-bit channel scaled by

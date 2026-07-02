@@ -76,6 +76,13 @@ public interface GlScopeSurface {
      *  gesture rather than smearing.  Default: a plain {@link #render()} (no persistence). */
     default void renderInteractive() { render(); }
 
+    /** Renders one frame for a change that only affects the OVERLAY layer (rect-zoom
+     *  rubber band, focus border) — the trace geometry is untouched, so the frozen
+     *  phosphor is only RE-COMPOSITED (like an expose), never decayed or reset:
+     *  hovering / dragging a selection must not wipe a stopped scope's afterglow.
+     *  Default: a plain {@link #render()} (no persistence). */
+    default void renderOverlay() { render(); }
+
     /** Wipes the persistence afterglow on the next rendered frame WITHOUT re-stamping
      *  the current trace — for signal-affecting changes (e.g. a USER generator change)
      *  where the on-screen trace is still anchored on the pre-change event.  Safe from
