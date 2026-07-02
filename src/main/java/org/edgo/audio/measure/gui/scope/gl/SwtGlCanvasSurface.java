@@ -85,6 +85,11 @@ public final class SwtGlCanvasSurface implements GlScopeSurface {
     }
 
     @Override
+    public void renderOverlay() {
+        renderFrame(ScopePhosphor.Kind.COMPOSITE);
+    }
+
+    @Override
     public void clearPersistence() {
         ScopePhosphor p = phosphor;
         if (p != null) p.clearPersistence();

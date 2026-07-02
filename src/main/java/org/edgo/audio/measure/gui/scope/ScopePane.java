@@ -259,17 +259,30 @@ public final class ScopePane extends AbstractPane {
             // flash the intermediate stale-offset frame.  asyncExec + a pending flag
             // collapse them into one correct frame.  The realtime loop renders the
             // surface directly (not via this), so live cadence is unchanged.
+            // Two request levels share one coalesced render: FULL (geometry / settings
+            // changed → renderInteractive resets the phosphor to the new coordinates)
+            // and OVERLAY-only (rect-zoom rubber band / focus border → renderOverlay
+            // re-composites, preserving a stopped scope's afterglow).  If both arrive
+            // in the same batch, FULL wins.
             final boolean[] renderPending = { false };
-            view.attachGlInput(gl, () -> {
+            final boolean[] fullPending   = { false };
+            Runnable schedule = () -> {
                 if (renderPending[0] || gl.isDisposed()) return;
                 renderPending[0] = true;
                 gl.getDisplay().asyncExec(() -> {
                     renderPending[0] = false;
+                    boolean full = fullPending[0];
+                    fullPending[0] = false;
+                    if (gl.isDisposed()) return;
                     // A gesture / settings change is NOT a new captured frame — re-render the
                     // trace and reset persistence (geometry changed) instead of accumulating.
-                    if (!gl.isDisposed()) glSurface.renderInteractive();
+                    if (full) glSurface.renderInteractive();
+                    else      glSurface.renderOverlay();
                 });
-            });
+            };
+            view.attachGlInput(gl,
+                    () -> { fullPending[0] = true; schedule.run(); },
+                    schedule);
         }
 
         // ----- Right-gap vertical scrollbar (column 1 of the same row) -----
@@ -369,6 +382,7 @@ public final class ScopePane extends AbstractPane {
         // on record start), so it is built with the views and attached alongside.
         loader = liveCapture ? new ScopeOpenSignal(view, condensed) : null;
         controller.attachViews(view, condensed, loader);
+        view.attachController(controller);   // file-mode rect zoom drives viewCenterFrames
         controller.attachGlSurface(glSurface);   // null on the CPU path — clears any stale (disposed) surface
         // The nav scrollbar mirrors the controller's TRANSIENT view-centre state
         // (not a preference), so it re-syncs off the controller's view-state

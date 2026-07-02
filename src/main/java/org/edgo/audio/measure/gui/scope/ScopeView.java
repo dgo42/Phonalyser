@@ -72,7 +72,6 @@ import org.edgo.audio.measure.gui.widgets.TransparentComposite;
 import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.Getter;
-import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -264,9 +263,18 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /** GPU repaint hook: {@link #redraw()} runs it so every repaint reaches the GL
      *  surface while the view is hidden.  Null on the CPU path. */
     private Runnable glRepaint;
+    /** GPU OVERLAY-only repaint hook (rect-zoom rubber band / focus border): the
+     *  pane routes it to a phosphor re-composite instead of a reset, so hovering
+     *  or dragging a selection never wipes the persistence afterglow.  Null on
+     *  the CPU path. */
+    private Runnable glOverlayRepaint;
     /** The GPU-drawn header button currently pressed (the mouse was forwarded to it),
      *  so the release goes to the same button.  Null on the CPU path / no press. */
     private ToolButton pressedHeaderButton;
+    /** Pane-attached controller — the rect zoom's FILE-mode horizontal part
+     *  goes through its {@code viewCenterFrames} + {@code applyViewState}. */
+    private ScopeController controller;
+    public void attachController(ScopeController controller) { this.controller = controller; }
     /** Frozen-frame magnify state.  {@code heldViewStart} is the captured-buffer
      *  sample shown at the LEFT edge of the held view (may be negative or past the
      *  data — where it is, {@code blankBeyondData} makes {@link #drawTrace} draw
@@ -377,7 +385,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      */
     @Getter
     private volatile double viewBackOffsetFrames;
-    public void setViewBackOffsetFrames(double v) { this.viewBackOffsetFrames = Math.max(0.0, v); }
+    public void setViewBackOffsetFrames(double v) {
+        double clamped = Math.max(0.0, v);
+        // Live view: crossing 0 ↔ >0 switches the window model between
+        // trigger-anchored and absolute — zoom mementos can't cross it.
+        // File mode stays absolute at offset 0, so its history survives.
+        if (!fileMode && (this.viewBackOffsetFrames == 0.0) != (clamped == 0.0)) clearZoomHistory();
+        this.viewBackOffsetFrames = clamped;
+    }
     /** TEMP: paint-profiling frame counter (see {@link #paintCanvas}). */
     private int paintProfileTick;
     /**
@@ -388,8 +403,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * positions.  Set by {@link ScopeOpenSignal#loadFile} on load and
      * cleared by {@link ScopeOpenSignal#clear}.
      */
-    @Getter @Setter
+    @Getter
     private volatile boolean fileMode;
+    public void setFileMode(boolean fileMode) {
+        // A mode switch invalidates every stacked zoom state — live mementos are
+        // trigger-relative seconds, file mementos absolute frames.  A true→true
+        // call is a NEW file loading over the old one: its mementos hold absolute
+        // frames of the previous file's timeline, equally meaningless.
+        if (fileMode || this.fileMode) clearZoomHistory();
+        this.fileMode = fileMode;
+    }
 
     /** Path of the currently-loaded openSignal file ({@code null} = not in
      *  file mode).  Rendered in the canvas top-right corner with a 20 px
@@ -622,6 +645,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             @Override public void mouseDoubleClick(MouseEvent ev) { pointerDoubleClick(ev.x, ev.y, ev.button); }
         });
         addMouseMoveListener(ev -> pointerMove(ev.x, ev.y));
+        // Rect zoom feeds off the pointer funnel above (hookMouse=false), so the
+        // GL canvas path is covered too; attachGlInput re-installs on the GL host.
+        installRectZoom(this, false);
         addDisposeListener(e -> {
             measWorker.stop();
             disposePalette();
@@ -946,6 +972,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         long _tMeas = System.nanoTime();
         drawCaptureRate(gc, w);
         drawFilePath(gc, w);
+        drawRectZoomOverlay(gc, w, h);
         // TEMP paint profiling — once per ~30 paints, log the per-section ms so we
         // can see where the frame time goes.  Remove once the hot section is fixed.
         long _tEnd = System.nanoTime();
@@ -1007,6 +1034,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         drawCaptureRate(gc, w);
         drawFilePath(gc, w);
         drawHeaderOverlay(gc);   // GPU only: the toolbar widgets are hidden, draw them via the painter
+        drawRectZoomOverlay(gc, w, h);
         // The GPU loop renders through the surface, not redraw(), so the redraw() override
         // that drives the extracted measurement window never fires — do it directly here.
         if (measurementWindow != null) measurementWindow.redraw();
@@ -1516,6 +1544,19 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
     }
 
+    /** GPU: overlay-only repaints (rubber band, focus border) re-composite the
+     *  phosphor instead of resetting it — see {@link #glOverlayRepaint}. */
+    @Override
+    protected void requestZoomOverlayRepaint() {
+        if (glOverlayRepaint != null) {
+            super.redraw();               // keep the (hidden) canvas + tool window consistent
+            glOverlayRepaint.run();
+            if (measurementWindow != null) measurementWindow.redraw();
+        } else {
+            redraw();
+        }
+    }
+
     /**
      * Starts the background measurement worker.  Idempotent — calling while
      * the worker is already running is a no-op.  Invoked by
@@ -1886,7 +1927,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // line left end.  Using the worst-case width yields a uniform stop
         // even at slider-Y positions where the lines would not actually
         // overlap, but the result reads as a clean broken track.
-        double levelFrac = ScopeFormat.clamp01(prefs.getOscTriggerLevelFrac());
+        // Draw position clamps to the canvas edge, but the VOLTAGE label below
+        // uses the raw (virtual-capable) fraction — a vertical zoom can park
+        // the level outside the view, and the label must state the threshold
+        // the trigger actually fires at, not the edge voltage under the
+        // pinned handle.
+        double levelFracRaw = prefs.getOscTriggerLevelFrac();
+        double levelFrac = ScopeFormat.clamp01(levelFracRaw);
         int levelY = (int) Math.round(levelFrac * h);
         // Trigger-level marker is ALWAYS yellow — a fixed scope-trigger colour,
         // independent of which channel is the trigger source or its trace colour.
@@ -1899,7 +1946,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 ? prefs.getOscLeftOffsetFrac()
                 : prefs.getOscRightOffsetFrac();
         double trigVDiv  = (trigCh == Channel.L) ? leftVDiv : rightVDiv;
-        double levelVolts = (trigOffsetFrac - levelFrac) * DIVISIONS_Y * trigVDiv;
+        double levelVolts = (trigOffsetFrac - levelFracRaw) * DIVISIONS_Y * trigVDiv;
         String levelStr = ScopeFormat.formatVolts(levelVolts, trigVDiv);
         Point lvs = gc.textExtent(levelStr);
 
@@ -2261,9 +2308,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * mouseUp so we don't hammer the YAML file during a drag).
      */
     /** Pointer pressed at ({@code x}, {@code y}) in the visible scope canvas —
-     *  grabs a slider handle under the cursor.  Public so the GPU path's GL canvas
-     *  can forward to it (this view is hidden then; coordinates are canvas-local
-     *  and the hit-test bounds were laid out at the canvas size). */
+     *  grabs a slider handle / header button under the cursor, else starts a
+     *  rect-zoom selection drag (which also focuses the view).  Public so the
+     *  GPU path's GL canvas can forward to it (this view is hidden then;
+     *  coordinates are canvas-local and the hit-test bounds were laid out at
+     *  the canvas size). */
     public void pointerDown(int x, int y, int button) {
         if (button != 1) return;
         ToolButton hb = headerButtonAt(x, y);   // GPU path: GL-drawn buttons forward here
@@ -2282,10 +2331,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
         if (draggingSlider != null) {
             updateSliderFromMouse(x, y);
+        } else {
+            // No slider grabbed: focus the view and possibly start a rect-zoom drag.
+            rectZoomPointerDown(x, y, button);
         }
     }
 
-    /** Pointer released — ends a slider drag and persists the new value. */
+    /** Pointer released — commits a rect-zoom selection, else ends a slider
+     *  drag and persists the new value. */
     public void pointerUp() {
         if (pressedHeaderButton != null) {
             pressedHeaderButton.notifyListeners(SWT.MouseUp, new Event());
@@ -2293,6 +2346,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             redraw();
             return;
         }
+        if (rectZoomPointerUp()) return;
         if (draggingSlider != null) {
             Preferences.instance().save();
             draggingSlider = null;
@@ -2332,13 +2386,200 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         heldZoomAnchorX = canvasX;
     }
 
-    /** Pointer moved — drives a slider drag, else updates the hover cursor /
-     *  tooltip on the {@link #pointerHost} (the visible widget). */
+    // -------------------------------------------------------------------------
+    // Rectangular zoom (base machinery in AbstractMeasurementView)
+    // -------------------------------------------------------------------------
+
+    /** X = the displayed time window — trigger-relative SECONDS on the
+     *  trigger-anchored live/frozen view, absolute FRAMES whenever the render
+     *  places the window absolutely (file mode OR scrolled back from the live
+     *  tip; same condition as the render's nav branch).  Mode/model switches
+     *  clear the undo stack, so mementos never cross the two.  Y = each
+     *  channel's displayed voltage window; both round-trip losslessly to
+     *  t/div + trigger frac + V/div + offsetFrac. */
+    @Override
+    protected ZoomState captureZoomState() {
+        Preferences prefs = Preferences.instance();
+        double window = prefs.getOscTimePerDiv() * DIVISIONS_X;
+        double xMin;
+        double xMax;
+        if (isAbsoluteWindow()) {
+            SignalBufferReader r = reader;
+            if (r == null || controller == null) return null;
+            xMax = r.getWritePos() - getViewBackOffsetFrames();
+            xMin = xMax - window * r.getSampleRate();
+        } else {
+            double p = prefs.getOscTriggerPositionFrac();
+            xMin = -p * window;
+            xMax = (1 - p) * window;
+        }
+        double lOff  = prefs.getOscLeftOffsetFrac();
+        double lVdiv = prefs.getOscLeftVoltsPerDiv();
+        double rOff  = prefs.getOscRightOffsetFrac();
+        double rVdiv = prefs.getOscRightVoltsPerDiv();
+        return new ZoomState(xMin, xMax,
+                new double[] { (lOff - 1) * DIVISIONS_Y * lVdiv, (rOff - 1) * DIVISIONS_Y * rVdiv },
+                new double[] {  lOff      * DIVISIONS_Y * lVdiv,  rOff      * DIVISIONS_Y * rVdiv });
+    }
+
+    @Override
+    protected boolean applyZoomState(ZoomState s) {
+        Preferences prefs = Preferences.instance();
+        // The trigger level is stored as a SCREEN fraction — after the vertical
+        // ranges change, the same fraction is a different VOLTAGE, so the
+        // trigger would re-fire at a different waveform point and shift the
+        // trigger-anchored window sideways.  Hold the trigger voltage invariant:
+        // volts under the OLD trigger-channel mapping → fraction under the NEW.
+        boolean trigLeft = prefs.getOscTriggerChannel() == Channel.L;
+        double  oldOff   = trigLeft ? prefs.getOscLeftOffsetFrac()  : prefs.getOscRightOffsetFrac();
+        double  oldVdiv  = trigLeft ? prefs.getOscLeftVoltsPerDiv() : prefs.getOscRightVoltsPerDiv();
+        double  levelVolts = (oldOff - prefs.getOscTriggerLevelFrac()) * DIVISIONS_Y * oldVdiv;
+        applyChannelVoltageRange(prefs, true,  s.yMin()[0], s.yMax()[0]);
+        applyChannelVoltageRange(prefs, false, s.yMin()[1], s.yMax()[1]);
+        double newOff  = trigLeft ? prefs.getOscLeftOffsetFrac()  : prefs.getOscRightOffsetFrac();
+        double newVdiv = trigLeft ? prefs.getOscLeftVoltsPerDiv() : prefs.getOscRightVoltsPerDiv();
+        if (newVdiv > 0) {
+            // Virtual-capable like the trigger offset: a zoom that excludes the
+            // trigger voltage parks the level outside [0,1] — honest, undoable.
+            prefs.setOscTriggerLevelFrac(newOff - levelVolts / (DIVISIONS_Y * newVdiv));
+        }
+        double span = s.xMax() - s.xMin();
+        if (span > 0) {
+            // The toolbar t/div field clamps at T_PER_DIV_MIN — writing below it
+            // would let the field's reverse binding desync pref and display, so
+            // the zoom obeys the same floor.  When the floor engages, the
+            // trigger branch keeps the selection's left edge (p pins xMin);
+            // the absolute branch widens around the selection's centre.
+            if (isAbsoluteWindow()) {
+                SignalBufferReader r = reader;
+                if (r != null && controller != null) {
+                    // Centre first: the t/div binding chain ends in applyViewState,
+                    // which must already see the new centre.  The explicit call
+                    // after covers an unchanged t/div (Property.set no-ops).
+                    controller.setViewCenterFrames((s.xMin() + s.xMax()) / 2.0);
+                    prefs.setOscTimePerDiv(Math.max(ScopeTabControl.T_PER_DIV_MIN,
+                            span / r.getSampleRate() / DIVISIONS_X));
+                    controller.applyViewState();
+                }
+            } else {
+                double tDiv = Math.max(ScopeTabControl.T_PER_DIV_MIN, span / DIVISIONS_X);
+                if (controller != null) {
+                    // The view is trigger-anchored here (backOffset == 0), but a
+                    // stale scroll centre from an earlier excursion would make the
+                    // t/div binding's applyViewState re-derive a back-offset
+                    // against the advanced writePos and flip the render into the
+                    // absolute nav branch mid-commit — pin the centre to
+                    // follow-latest, which is what the screen actually shows.
+                    controller.setViewCenterFrames(-1.0);
+                }
+                seedHeldZoomAnchor(s, tDiv, prefs);
+                prefs.setOscTimePerDiv(tDiv);
+                prefs.setOscTriggerPositionFrac(-s.xMin() / (tDiv * DIVISIONS_X));   // virtual-capable
+            }
+        }
+        prefs.save();
+        redraw();
+        return true;
+    }
+
+    /** Trigger-less held frame (entry snapshot): its renderer ignores the
+     *  trigger-position pref and anchors a t/div change at {@link
+     *  #heldZoomAnchorX} — seed it with the fixed point of the window change,
+     *  {@code anchor/width = (newXMin - curXMin) / (curSpan - newSpan)}, so
+     *  both a committed selection and its Ctrl+Z inverse land exactly (a
+     *  linear map and its inverse share the fixed point).  Skipped when the
+     *  t/div pref won't change (nothing would consume the anchor). */
+    private void seedHeldZoomAnchor(ZoomState s, double tDiv, Preferences prefs) {
+        if (!singleHeld || !Double.isNaN(capturedTriggerLocal)) return;
+        if (tDiv == prefs.getOscTimePerDiv()) return;
+        ZoomState cur = captureZoomState();
+        Rectangle area = zoomableArea();
+        if (cur == null || area == null || area.width <= 0) return;
+        double denom = (cur.xMax() - cur.xMin()) - tDiv * DIVISIONS_X;
+        if (denom == 0) return;
+        int anchor = (int) Math.round(area.width * (s.xMin() - cur.xMin()) / denom);
+        heldZoomAnchorX = Math.max(0, Math.min(area.width, anchor));
+    }
+
+    /** Whether the render places the time window ABSOLUTELY (right edge =
+     *  writePos − backOffset) rather than trigger-anchored — the exact
+     *  condition of the paint's nav branch, which the zoom's X model must
+     *  match. */
+    private boolean isAbsoluteWindow() {
+        return fileMode || getViewBackOffsetFrames() > 0;
+    }
+
+    /** Voltage window → V/div + offsetFrac for one channel: {@code vDiv =
+     *  span/10}, {@code offsetFrac = top/span} (the zero line's screen
+     *  fraction).  The toolbar V/div fields follow via their reverse binding. */
+    private void applyChannelVoltageRange(Preferences prefs, boolean left, double bottomV, double topV) {
+        double span = topV - bottomV;
+        if (span <= 0) return;
+        // Same floor as the toolbar V/div field — see the t/div clamp rationale.
+        double vDiv = Math.max(ScopeTabControl.V_PER_DIV_MIN, span / DIVISIONS_Y);
+        double off  = topV / (vDiv * DIVISIONS_Y);
+        if (left) {
+            prefs.setOscLeftOffsetFrac(off);
+            prefs.setOscLeftVoltsPerDiv(vDiv);
+        } else {
+            prefs.setOscRightOffsetFrac(off);
+            prefs.setOscRightVoltsPerDiv(vDiv);
+        }
+    }
+
+    /** The scope plots edge-to-edge (no axis margins), so the selection maps
+     *  linearly onto the current window on both axes — per channel vertically,
+     *  since the rect is screen-space and applies to every scale alike. */
+    @Override
+    protected ZoomState zoomStateForRect(Rectangle sel) {
+        Rectangle area = zoomableArea();
+        if (area == null || area.width <= 0 || area.height <= 0) return null;
+        ZoomState cur = captureZoomState();
+        if (cur == null) return null;
+        double fx0 = (sel.x - area.x) / (double) area.width;
+        double fx1 = (sel.x + sel.width - area.x) / (double) area.width;
+        double xSpan = cur.xMax() - cur.xMin();
+        double fy0 = (sel.y - area.y) / (double) area.height;
+        double fy1 = (sel.y + sel.height - area.y) / (double) area.height;
+        double[] nyMin = new double[2];
+        double[] nyMax = new double[2];
+        for (int ch = 0; ch < 2; ch++) {
+            double top  = cur.yMax()[ch];
+            double span = top - cur.yMin()[ch];
+            nyMax[ch] = top - fy0 * span;
+            nyMin[ch] = top - fy1 * span;
+        }
+        return new ZoomState(cur.xMin() + fx0 * xSpan, cur.xMin() + fx1 * xSpan, nyMin, nyMax);
+    }
+
+    /** Slider handles, header buttons and the hoverable labels stay clickable —
+     *  a selection drag can't start on them. */
+    @Override
+    protected boolean isRectZoomBlockedAt(int x, int y) {
+        return offsetSliderBounds.contains(x, y)
+                || triggerLevelBounds.contains(x, y)
+                || triggerPosBounds.contains(x, y)
+                || headerButtonAt(x, y) != null
+                || timeLeftLabelBounds.contains(x, y)
+                || timeRightLabelBounds.contains(x, y)
+                || leftMaxLabelBounds.contains(x, y)
+                || leftMinLabelBounds.contains(x, y)
+                || rightMaxLabelBounds.contains(x, y)
+                || rightMinLabelBounds.contains(x, y);
+    }
+
+    /** Pointer moved — drives a slider drag or a rect-zoom selection drag, else
+     *  updates the hover cursor / tooltip on the {@link #pointerHost} (the
+     *  visible widget). */
     public void pointerMove(int x, int y) {
         if (draggingSlider != null) {
             updateSliderFromMouse(x, y);
             return;
         }
+        rectZoomPointerMove(x, y);   // rubber-band update (no-op unless dragging)
+        // Mid-selection the hover hit-tests stay quiet — no cursor flips or
+        // tooltips while the rubber band crosses sliders / header buttons.
+        if (isRectZoomDragActive()) return;
         int cursorId;
         String tip;
         ToolButton headerBtn = headerButtonAt(x, y);
@@ -2385,9 +2626,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  pointer events here, cursor/tooltip + pointer geometry use {@code host}, and
      *  {@link #redraw()} renders through {@code repaint}.  The CPU path keeps the
      *  {@code this} / direct-redraw defaults. */
-    public void attachGlInput(Control host, Runnable repaint) {
-        this.pointerHost = host;
-        this.glRepaint   = repaint;
+    public void attachGlInput(Control host, Runnable repaint, Runnable overlayRepaint) {
+        this.pointerHost      = host;
+        this.glRepaint        = repaint;
+        this.glOverlayRepaint = overlayRepaint;
+        // The GL canvas is now the interaction control — re-home the rect-zoom
+        // focus/hover tracking (its mouse input still arrives via the pointer
+        // funnel the pane forwards, so hookMouse stays off).
+        installRectZoom(host, false);
         // GPU path: the header buttons are drawn into the GL canvas, so the real
         // Toolbar widget must be hidden.  On GTK a SWT.NO_BACKGROUND composite still
         // paints the theme (grey) background and a NO_BACKGROUND child's window isn't
