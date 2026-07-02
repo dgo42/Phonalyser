@@ -50,6 +50,7 @@ import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.PersistenceMode;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
+import org.edgo.audio.measure.enums.TriggerType;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
 import org.edgo.audio.measure.bind.Property;
@@ -170,6 +171,8 @@ public final class Preferences {
     private final Property<Double>  oscTimePerDiv       = bound(1e-3);
     private final Property<Channel> oscTriggerChannel = bound(Channel.L);
     private final Property<TriggerEdge>    oscTriggerEdge    = bound(TriggerEdge.RISE);
+    /** Trigger event type: EDGE = level crossing, GLITCH = dV/dt jump. */
+    private final Property<TriggerType>    oscTriggerType    = bound(TriggerType.EDGE);
     private final Property<TriggerMode>    oscTriggerMode    = bound(TriggerMode.AUTO);
     /** Trigger hysteresis in oscilloscope divisions; 0 disables hysteresis. */
     private final Property<Double>         oscTriggerHysteresisDiv = bound(0.0);
@@ -1248,6 +1251,10 @@ public final class Preferences {
     public void setOscTriggerEdge(TriggerEdge v) { oscTriggerEdge.set(v); }
     public Property<TriggerEdge> oscTriggerEdgeProperty() { return oscTriggerEdge; }
 
+    public TriggerType getOscTriggerType()     { return oscTriggerType.get(); }
+    public void setOscTriggerType(TriggerType v) { oscTriggerType.set(v); }
+    public Property<TriggerType> oscTriggerTypeProperty() { return oscTriggerType; }
+
     public TriggerMode getOscTriggerMode()     { return oscTriggerMode.get(); }
     public void setOscTriggerMode(TriggerMode v) { oscTriggerMode.set(v); }
     public Property<TriggerMode> oscTriggerModeProperty() { return oscTriggerMode; }
@@ -1788,6 +1795,7 @@ public final class Preferences {
         root.put("oscTimePerDiv",       oscTimePerDiv.get());
         root.put("oscTriggerChannel",      oscTriggerChannel.get().name());
         root.put("oscTriggerEdge",         oscTriggerEdge.get().name());
+        root.put("oscTriggerType",         oscTriggerType.get().name());
         root.put("oscTriggerMode",         oscTriggerMode.get().name());
         root.put("oscTriggerHysteresisDiv",     oscTriggerHysteresisDiv.get());
         root.put("oscTriggerHysteresisEnabled", oscTriggerHysteresisEnabled.get());
@@ -2095,6 +2103,7 @@ public final class Preferences {
         if (root.get("oscTimePerDiv")          instanceof Number n) oscTimePerDiv.set(n.doubleValue());
         if (root.get("oscTriggerChannel")      instanceof String  s) oscTriggerChannel.set(enumOr(Channel.class, s, oscTriggerChannel.get()));
         if (root.get("oscTriggerEdge")         instanceof String  s) oscTriggerEdge.set(enumOr(TriggerEdge.class,    s, oscTriggerEdge.get()));
+        if (root.get("oscTriggerType")         instanceof String  s) oscTriggerType.set(enumOr(TriggerType.class,    s, oscTriggerType.get()));
         if (root.get("oscTriggerMode")         instanceof String  s) oscTriggerMode.set(enumOr(TriggerMode.class,    s, oscTriggerMode.get()));
         if (root.get("oscTriggerHysteresisDiv")     instanceof Number  n) oscTriggerHysteresisDiv.set(n.doubleValue());
         if (root.get("oscTriggerHysteresisEnabled") instanceof Boolean b) oscTriggerHysteresisEnabled.set(b);

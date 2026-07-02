@@ -19,6 +19,7 @@
 package org.edgo.audio.measure.gui.scope;
 
 import org.edgo.audio.measure.common.Lanczos;
+import org.edgo.audio.measure.dsp.TimeDiscontinuityDetector;
 
 import lombok.experimental.UtilityClass;
 
@@ -35,6 +36,25 @@ import lombok.experimental.UtilityClass;
  */
 @UtilityClass
 public class ScopeTrigger {
+
+    /** The shared time-domain discontinuity detector (pure math, stateless) —
+     *  the same instance the FFT worker's rejection gate uses, so the scope
+     *  trigger and the FFT agree on what counts as a damaged block. */
+    private static final TimeDiscontinuityDetector GLITCH_DETECTOR = new TimeDiscontinuityDetector();
+
+    /**
+     * Finds the rightmost waveform discontinuity in {@code data[from .. to)} —
+     * see {@link TimeDiscontinuityDetector#findDiscontinuity} for the detection
+     * model (sinusoid-recurrence prediction error, burst merging, anchoring).
+     * {@code anchorStart}: {@code true} → the last clean sample before the
+     * glitch, {@code false} → the first settled sample after it.  {@code omega}
+     * = {@code 2π·fundamental/sampleRate} when the fundamental is known,
+     * {@code NaN} to self-estimate.  Returns {@code -1.0} when nothing qualifies.
+     */
+    public double findGlitch(float[] data, int from, int to, boolean anchorStart,
+                             int mergeSamples, double omega) {
+        return GLITCH_DETECTOR.findDiscontinuity(data, from, to, anchorStart, mergeSamples, omega);
+    }
 
     /**
      * Walks {@code data[from .. to)} with a hysteresis-banded Schmitt
