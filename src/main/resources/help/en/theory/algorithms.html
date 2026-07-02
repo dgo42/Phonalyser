@@ -102,6 +102,15 @@
         <td>Dual-threshold edge qualification so noise riding on the
             signal can't double-fire the trigger.</td>
         <td><a href="oscilloscope.html#trigger">Oscilloscope — trigger</a></td></tr>
+    <tr><td>Sinusoid-recurrence discontinuity detector</td>
+        <td>Predicts each sample from the two before it via the tone's own
+            recurrence <i>d</i><sub>i</sub> ≈ 2 cos <i>ω</i> ·
+            <i>d</i><sub>i−1</sub> − <i>d</i><sub>i−2</sub>; the prediction
+            error sits at the noise floor on a clean signal and jumps decades
+            above an 8×-mean threshold at any splice or dropout — the scope's
+            glitch trigger and the FFT's time-domain capture gate share the
+            same detector, so both agree on what counts as damage.</td>
+        <td><a href="oscilloscope.html#trigger">Oscilloscope — trigger</a></td></tr>
     <tr><td>Chebyshev IIR low-pass + median de-spike</td>
         <td>High-frequency spike removal before display and
             measurement.</td>
@@ -149,6 +158,12 @@
     <tr><td>Welford's online variance</td>
         <td>One-pass mean and σ for the live measurement statistics
             table.</td>
+        <td><a href="oscilloscope.html#measure">Oscilloscope —
+            measurements</a></td></tr>
+    <tr><td>Whole-period V<sub>mean</sub>/V<sub>rms</sub> integration</td>
+        <td>Integrates over an integer number of signal periods, so the
+            partial-cycle remainder — a reading scatter that grows with
+            amplitude — drops out of the mean and RMS.</td>
         <td><a href="oscilloscope.html#measure">Oscilloscope —
             measurements</a></td></tr>
     <tr><td>Exponential moving average</td>

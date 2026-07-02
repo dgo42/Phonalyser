@@ -38,13 +38,18 @@
   <ol start="5">
     <li><b>Das passive 1-kHz-twin-T-Notch einschleifen</b> zwischen DAC und ADC
         (<a href="theory/dac-predistortion.html#notch">warum ein Notch</a>).</li>
+    <li><b>Das Notch auf den Ton abgleichen</b> mit dem
+        <a href="freqresp.html#freqresp-tune-notch">Kerbfilter-Abgleich-Assistenten</a>
+        (Extras → Kerbfilter abgleichen): die Zielfrequenz auf Ihre Messfrequenz
+        setzen und die Potis trimmen, während der Live-Sweep die Tiefe des Notch
+        zeigt und wie weit sein Minimum vom Ziel entfernt liegt.</li>
     <li><b>Den Frequenzgang des Notch messen</b>
         <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
         und ihn in einer <em>separaten</em> Datei speichern (auch dieses wird herausgerechnet).</li>
   </ol>
 
   <h2>3 · Den Ton einrasten</h2>
-  <ol start="7">
+  <ol start="8">
     <li><b>Einen Sinus mit 1003 Hz laufen lassen</b>
         <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
         — ein paar Hertz neben 1 kHz, um den Mains-Harmonischen auszuweichen — mit
@@ -64,7 +69,7 @@
   </ol>
 
   <h2>4 · Vorverzerren, dann messen</h2>
-  <ol start="12">
+  <ol start="13">
     <li><b>Den DAC-Vorverzerrungs-Assistenten öffnen</b> — die
         <a href="theory/dac-predistortion.html">Assistent</a>-Schaltfläche
         <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><line x1="5" y1="12.5" x2="11.5" y2="5.5" stroke="#444" stroke-width="2" stroke-linecap="round"/><polygon points="13,1.8 13.7,3.6 15.5,4.2 13.7,4.8 13,6.6 12.3,4.8 10.5,4.2 12.3,3.6" fill="#f0a800"/><circle cx="16.5" cy="9.5" r="0.9" fill="#f0a800"/></svg>.</li>
