@@ -52,7 +52,6 @@ import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.enums.TriggerType;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
 import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.enums.TabOrientation;
 import org.yaml.snakeyaml.DumperOptions;
