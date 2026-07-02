@@ -208,6 +208,12 @@ public final class Events {
      *  toggle can pop back out.  No payload. */
     public static final String SCOPE_SINGLE_DISARMED = "scope.single.disarmed";
 
+    /** Published by {@code ScopeController} on the UI thread when it stops a
+     *  running live capture programmatically (an open-signal load swapping the
+     *  buffer out), so the pane can pop its Record toggle back out.  No
+     *  payload.  Subscriber: {@code ScopePane}. */
+    public static final String SCOPE_RECORDING_STOPPED = "scope.recording.stopped";
+
     /** Notification — the FreqResp view's visible freq / magnitude pan
      *  window changed.  No payload — subscribers read fresh values from
      *  {@code Preferences}.  Mirror of {@link #FFT_RANGE_CHANGED} for the

@@ -59,6 +59,7 @@ import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
@@ -84,55 +85,21 @@ import lombok.extern.log4j.Log4j2;
  * and the {@code .wav}/{@code .flac} save + open-signal file flows.
  *
  * <p>The host {@link ScopePane} keeps the chart (main + condensed views), the
- * navigation / vertical scrollbars and the Record button.  The cross-boundary
- * concerns are funnelled through {@link Host} — a narrow, <em>per-pane</em>
- * collaborator the pane implements — rather than a global bus, because a scope
- * redraw / view-state recompute must target the one pane whose setting changed
- * (the screenshot renderer constructs a second, offscreen pane that must stay
- * independent).  The pane drives the few widgets it must reach (the scale
+ * navigation / vertical scrollbars and the Record button.  Cross-boundary
+ * operations flow DOWN through the constructor-injected {@link ScopeController}
+ * — redraws, view-state recomputes, persistence wipes and the open-signal file
+ * load are controller duties — rather than through a global bus, because they
+ * must target the one pane/controller pair whose setting changed (the
+ * screenshot renderer constructs a second, offscreen pane with its own idle
+ * controller that must stay independent).  The single pane-owned action, the
+ * screenshot dialog, is reached through the generic {@code AbstractTabControl}
+ * owner channel.  The pane drives the few widgets it must reach (the scale
  * selectors on a mouse-wheel zoom or auto-setup, the trigger group on a
  * record / file-load switch, the calibrate button on the capture gate) through
  * this control's small public command API.
  */
 @Log4j2
 public final class ScopeTabControl extends AbstractTabControl {
-
-    /** The {@link ScopePane} operations this control invokes.  Implemented by
-     *  the pane and passed in at construction so the tabs can request a chart
-     *  redraw, a view-window recompute, or the capture-lifecycle steps a file
-     *  load triggers — without the control holding a back-reference to the
-     *  whole pane. */
-    public interface Host {
-        /** A setting changed → redraw both scope canvases and resync the sliders. */
-        void requestRedraw();
-
-        /** A signal-affecting change (e.g. a USER generator change) invalidated the
-         *  persistence afterglow — wipe it (GPU phosphor; no-op on the CPU path)
-         *  and repaint. */
-        void clearPersistence();
-
-        /** File mode horizontal zoom: re-centre the view so the sample under the
-         *  mouse ({@code mouseFrac}) stays put as the window resizes for the new
-         *  t/div.  A loaded file has no trigger, so its zoom moves the view centre. */
-        void zoomFileTimeAroundMouse(double mouseFrac, double tDivOld, double tDivNew);
-
-        /** The visible time window changed (t/div, scrub) → recompute the
-         *  navigation-slider window and the view back-offsets. */
-        void applyViewState();
-
-        /** Stop live capture before an open-signal load swaps the buffer out:
-         *  stops the controller and pops the Record button back off.  No-op
-         *  when not recording. */
-        void stopCaptureForFileLoad();
-
-        /** A signal file finished loading → centre the view on its start, show
-         *  the navigation slider (file mode) and apply the view state. */
-        void onSignalFileLoaded();
-
-        /** Open the pane's screenshot dialog (the pane clones itself offscreen
-         *  to render the snapshot).  Implemented by {@code AbstractPane}. */
-        void openScreenshotDialog();
-    }
 
     /** Side length of every small in-group toggle button (px). */
     public  static final int SQUARE_BUTTON = 32;
@@ -171,10 +138,7 @@ public final class ScopeTabControl extends AbstractTabControl {
     private static final int NUM_CUSTOM_TABS = 4;
 
     private final ScopeView         view;
-    /** Synchronous file loader for the "Open signal…" feature; {@code null} on
-     *  the screenshot-only variant ({@code liveCapture = false}). */
-    private final ScopeOpenSignal   loader;
-    private final Host              host;
+    private final ScopeController   controller;
 
     // Cached references from IconUtils — owned by the shared cache and
     // disposed centrally when the main shell tears down.  (camera / crosshair
@@ -232,12 +196,11 @@ public final class ScopeTabControl extends AbstractTabControl {
      *  toggle back out when a SINGLE shot fires.  Live pane only. */
     private Consumer<Void>               singleDisarmedListener;
 
-    public ScopeTabControl(Composite parent, ScopeView view, ScopeOpenSignal loader,
-                           Host host, boolean liveCapture) {
+    public ScopeTabControl(Composite parent, ScopeView view, ScopeController controller,
+                           boolean liveCapture) {
         super(parent, SWT.NONE);
-        this.view   = view;
-        this.loader = loader;
-        this.host   = host;
+        this.view       = view;
+        this.controller = controller;
 
         Display d = parent.getDisplay();
         this.floppyDiskIcon = IconUtils.icon(d, Icon.FLOPPY_DISK);
@@ -319,7 +282,7 @@ public final class ScopeTabControl extends AbstractTabControl {
                             // transition frame forever — drop the anchor along with
                             // the afterglow, once the change has flushed through.
                             view.resetTriggerHold();
-                            host.clearPersistence();
+                            controller.clearPersistence();
                         });
                     }
                 });
@@ -585,7 +548,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         leftToggle.setToolTipText(I18n.t("scope.left.toggle.tooltip"));
         Bindings.check(leftToggle, prefs.oscLeftChannelEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscLeftChannelEnabledProperty(), v -> {
-            host.requestRedraw();
+            controller.redrawViews();
             toolbarTabs.refreshTab(TAB_LEFT);
         });
 
@@ -609,7 +572,7 @@ public final class ScopeTabControl extends AbstractTabControl {
             prefs.setOscLeftOffsetFrac(
                     ScopeFormat.preserveCanvasMiddle(prefs.getOscLeftOffsetFrac(), oldV, newV));
             prefs.setOscLeftVoltsPerDiv(newV);
-            host.requestRedraw();
+            controller.redrawViews();
             toolbarTabs.refreshTab(TAB_LEFT);
         });
         // Wheel / arrows / typing on this field change ONLY this channel (via the
@@ -620,7 +583,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         leftAc.setToolTipText(I18n.t("scope.left.ac.tooltip"));
         Bindings.check(leftAc, prefs.oscLeftAcModeProperty());
         Bindings.onChange(toolbarTabs, prefs.oscLeftAcModeProperty(), v -> {
-            host.requestRedraw();
+            controller.redrawViews();
             toolbarTabs.refreshTab(TAB_LEFT);
         });
 
@@ -630,7 +593,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         leftSinc.setToolTipText(I18n.t("scope.sinc.tooltip"));
         Bindings.check(leftSinc, prefs.oscLeftSincInterpEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscLeftSincInterpEnabledProperty(), v -> {
-            host.requestRedraw();
+            controller.redrawViews();
             toolbarTabs.refreshTab(TAB_LEFT);
         });
         leftSinc.addDisposeListener(e -> sincImg.dispose());
@@ -641,7 +604,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         leftMains.setToolTipText(I18n.t("scope.mains.tooltip"));
         Bindings.combo(leftMains, prefs.oscLeftMainsSuppressionProperty(), MainsSuppression.values());
         Bindings.onChange(toolbarTabs, prefs.oscLeftMainsSuppressionProperty(), v -> {
-            host.requestRedraw();
+            controller.redrawViews();
             toolbarTabs.refreshTab(TAB_LEFT);
         });
 
@@ -651,7 +614,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         leftLpf.setToolTipText(I18n.t("scope.lpf.tooltip"));
         Bindings.combo(leftLpf, prefs.oscLeftLpfProperty(), LpfMode.values());
         Bindings.onChange(toolbarTabs, prefs.oscLeftLpfProperty(), v -> {
-            host.requestRedraw();
+            controller.redrawViews();
             toolbarTabs.refreshTab(TAB_LEFT);
         });
     }
@@ -666,7 +629,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         rightToggle.setToolTipText(I18n.t("scope.right.toggle.tooltip"));
         Bindings.check(rightToggle, prefs.oscRightChannelEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscRightChannelEnabledProperty(), v -> {
-            host.requestRedraw();
+            controller.redrawViews();
             toolbarTabs.refreshTab(TAB_RIGHT);
         });
 
@@ -684,7 +647,7 @@ public final class ScopeTabControl extends AbstractTabControl {
             prefs.setOscRightOffsetFrac(
                     ScopeFormat.preserveCanvasMiddle(prefs.getOscRightOffsetFrac(), oldV, newV));
             prefs.setOscRightVoltsPerDiv(newV);
-            host.requestRedraw();
+            controller.redrawViews();
             toolbarTabs.refreshTab(TAB_RIGHT);
         });
         // Wheel / arrows / typing on this field change ONLY this channel (selection
@@ -694,7 +657,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         rightAc.setToolTipText(I18n.t("scope.right.ac.tooltip"));
         Bindings.check(rightAc, prefs.oscRightAcModeProperty());
         Bindings.onChange(toolbarTabs, prefs.oscRightAcModeProperty(), v -> {
-            host.requestRedraw();
+            controller.redrawViews();
             toolbarTabs.refreshTab(TAB_RIGHT);
         });
 
@@ -704,7 +667,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         rightSinc.setToolTipText(I18n.t("scope.sinc.tooltip"));
         Bindings.check(rightSinc, prefs.oscRightSincInterpEnabledProperty());
         Bindings.onChange(toolbarTabs, prefs.oscRightSincInterpEnabledProperty(), v -> {
-            host.requestRedraw();
+            controller.redrawViews();
             toolbarTabs.refreshTab(TAB_RIGHT);
         });
         rightSinc.addDisposeListener(e -> sincImg.dispose());
@@ -715,7 +678,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         rightMains.setToolTipText(I18n.t("scope.mains.tooltip"));
         Bindings.combo(rightMains, prefs.oscRightMainsSuppressionProperty(), MainsSuppression.values());
         Bindings.onChange(toolbarTabs, prefs.oscRightMainsSuppressionProperty(), v -> {
-            host.requestRedraw();
+            controller.redrawViews();
             toolbarTabs.refreshTab(TAB_RIGHT);
         });
 
@@ -725,7 +688,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         rightLpf.setToolTipText(I18n.t("scope.lpf.tooltip"));
         Bindings.combo(rightLpf, prefs.oscRightLpfProperty(), LpfMode.values());
         Bindings.onChange(toolbarTabs, prefs.oscRightLpfProperty(), v -> {
-            host.requestRedraw();
+            controller.redrawViews();
             toolbarTabs.refreshTab(TAB_RIGHT);
         });
     }
@@ -742,12 +705,13 @@ public final class ScopeTabControl extends AbstractTabControl {
         Bindings.stepField(timeScale, prefs.oscTimePerDivProperty());
         // viewCenterFrames is the primary state and does NOT change on
         // t/div — only the window's width changes.  applyViewState
-        // re-derives slider thumb + position so the centred frame stays
-        // put (and ends in requestRedraw).  In live-record mode
+        // re-derives the view window, repaints, and fires the view-state
+        // event so the pane's nav slider re-syncs its thumb + position and
+        // the centred frame stays put.  In live-record mode
         // viewCenterFrames is -1 (follow-latest) so the trace continues
         // tracking writePos.
         Bindings.onChange(toolbarTabs, prefs.oscTimePerDivProperty(), v -> {
-            host.applyViewState();
+            controller.applyViewState();
             toolbarTabs.refreshTab(TAB_HORIZONTAL);
         });
 
@@ -778,7 +742,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         Bindings.onChange(toolbarTabs, prefs.oscTriggerChannelProperty(), v -> {
             toolbarTabs.refreshTab(TAB_TRIGGER);
             view.resetTriggerHold();   // other channel's anchor is stale — see the type listener
-            host.requestRedraw();
+            controller.redrawViews();
         });
 
         Composite edgeSet = new Composite(g, SWT.NONE);
@@ -795,7 +759,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         Bindings.onChange(toolbarTabs, prefs.oscTriggerEdgeProperty(), v -> {
             toolbarTabs.refreshTab(TAB_TRIGGER);
             view.resetTriggerHold();   // old-edge anchor is stale — see the type listener
-            host.requestRedraw();
+            controller.redrawViews();
         });
 
         // Trigger event type: E = level-crossing edge trigger, G = dV/dt
@@ -818,7 +782,7 @@ public final class ScopeTabControl extends AbstractTabControl {
             // interactive render would re-stamp its stale trace into the wiped
             // afterglow) and repaint so the phosphor clears immediately.
             view.resetTriggerHold();
-            host.requestRedraw();
+            controller.redrawViews();
         });
 
         // Glitch in AUTO makes no sense — free-run repaints at the render rate, so
@@ -834,7 +798,7 @@ public final class ScopeTabControl extends AbstractTabControl {
                 prefs.setOscTriggerType(TriggerType.EDGE);
             }
             typeGlitch.setEnabled(m != TriggerMode.AUTO);
-            host.requestRedraw();   // let the phosphor wipe the stale afterglow at once
+            controller.redrawViews();   // let the phosphor wipe the stale afterglow at once
         });
 
         Composite modeSet = new Composite(g, SWT.NONE);
@@ -914,7 +878,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         // Preferences binding.  Only the checked value binds to the pref.
         reconstructedBeatBtn.setEnabled(isGeneratorDualTone());
         Bindings.check(reconstructedBeatBtn, prefs.oscShowReconstructedBeatProperty());
-        Bindings.onChange(toolbarTabs, prefs.oscShowReconstructedBeatProperty(), v -> host.requestRedraw());
+        Bindings.onChange(toolbarTabs, prefs.oscShowReconstructedBeatProperty(), v -> controller.redrawViews());
     }
 
     /** True when the generator is currently in {@code DUAL_TONE} form
@@ -1027,7 +991,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         toolbarTabs.refreshTab(TAB_RIGHT);
         toolbarTabs.refreshTab(TAB_HORIZONTAL);
         toolbarTabs.refreshTab(TAB_TRIGGER);
-        host.requestRedraw();
+        controller.redrawViews();
     }
 
     /** Re-applies the "Start button enabled iff Single mode is selected"
@@ -1059,8 +1023,11 @@ public final class ScopeTabControl extends AbstractTabControl {
         shotBtn.setToolTipText(I18n.t("scope.screenshot.tooltip"));
         shotBtn.setLayoutData(new RowData(IconUtils.ACTION_BUTTON_PX, IconUtils.ACTION_BUTTON_PX));
         // The screenshot dialog clones the whole pane offscreen, so the pane
-        // owns it; ask the host to open it.
-        shotBtn.addListener(SWT.Selection, e -> host.openScreenshotDialog());
+        // (AbstractPane) owns it — reach it through the generic owner channel.
+        shotBtn.addListener(SWT.Selection, e -> {
+            AbstractPane owner = getOwner();
+            if (owner != null) owner.openScreenshotDialog();
+        });
 
         calibrateButton = new Button(g, SWT.PUSH);
         calibrateButton.setImage(crosshairIcon);
@@ -1172,10 +1139,12 @@ public final class ScopeTabControl extends AbstractTabControl {
     }
 
     /**
-     * Opens the file picker; on a successful pick stops the live
-     * recording (if any, via the host) and loads the file synchronously
-     * via {@link ScopeOpenSignal#loadFile}.  Surfaces decode failure as a
-     * MessageBox.  No-op when the user cancels.
+     * Opens the file picker; on a successful pick hands the file to
+     * {@link ScopeController#openSignalFile}, which owns the load lifecycle
+     * (stop live capture, decode, re-centre the view).  This widget keeps only
+     * its own concerns: the dialog, the path field / prefs, the trigger-group
+     * gating, and surfacing a decode failure as a MessageBox.  No-op when the
+     * user cancels.
      */
     private void doOpenSignalBrowse() {
         Preferences prefs = Preferences.instance();
@@ -1190,15 +1159,12 @@ public final class ScopeTabControl extends AbstractTabControl {
         String picked = fd.open();
         if (picked == null) return;
 
-        // Open-signal and Record share the scope buffer — stop the live
-        // capture before swapping the buffer out from under it (the pane
-        // owns the controller + Record button), and drop the calibrate gate.
-        host.stopCaptureForFileLoad();
+        // Drop the calibrate gate while the buffer is swapped; the controller
+        // stops the live capture, loads the file and re-centres the view.
         setCalibrateEnabled(false);
 
         File pickedFile = new File(picked);
-        boolean ok = (loader != null) && loader.loadFile(pickedFile);
-        if (ok) {
+        if (controller.openSignalFile(pickedFile)) {
             openSignalPathField.setText(picked);
             openSignalPathField.setToolTipText(picked);
             prefs.setOscPlayFromPath(picked);
@@ -1209,15 +1175,14 @@ public final class ScopeTabControl extends AbstractTabControl {
             // trigger group so the user can't accidentally toggle
             // settings that don't apply to a static signal.
             setSubtreeEnabled(triggerGroup, false);
-            // Centre the view on the start of the loaded signal, show the
-            // nav slider (file mode) and apply the view state — pane state.
-            host.onSignalFileLoaded();
             view.setFilePath(picked);
         } else {
-            String err = (loader != null) ? loader.getLastError() : I18n.t("scope.openSignal.loaderUnavailable");
+            // A null error means no loader is attached (screenshot-only pane —
+            // unreachable from this live-only tab, kept for honesty).
+            String err = controller.getLastOpenSignalError();
             Dialogs.error(getShell(),
                     I18n.t("scope.openSignal.error"),
-                    err != null ? err : I18n.t("common.error.fileOpenUnknown"));
+                    err != null ? err : I18n.t("scope.openSignal.loaderUnavailable"));
         }
     }
 
@@ -1422,7 +1387,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         }
         if (changed) {
             prefs.save();
-            host.requestRedraw();
+            controller.redrawViews();
         }
     }
 
@@ -1448,11 +1413,13 @@ public final class ScopeTabControl extends AbstractTabControl {
         double tDivNew   = timeScale.getValue();
         if (tDivNew == tDivOld) return;
         if (view.isFileMode()) {
-            // A loaded file has no trigger: zoom around the mouse by re-centring the view.
-            host.zoomFileTimeAroundMouse(mouseFrac, tDivOld, tDivNew);
+            // A loaded file has no trigger: zoom around the mouse by re-centring
+            // the view — the controller owns the centre math and view state.
+            controller.zoomFileAroundMouse(mouseFrac, tDivOld, tDivNew);
+            controller.applyViewState();
             return;
         }
-        if (view.getReader() == null) { host.requestRedraw(); return; }
+        if (view.getReader() == null) { controller.redrawViews(); return; }
         int sr      = view.getReader().getSampleRate();
         int dispOld = ScopeFormat.displaySamplesFor(tDivOld, sr);
         int dispNew = ScopeFormat.displaySamplesFor(tDivNew, sr);
@@ -1464,7 +1431,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         double posOld = prefs.getOscTriggerPositionFrac();
         double posNew = view.getNav().zoomTriggerOffset(posOld, dispOld, dispNew, mouseFrac, true);
         prefs.setOscTriggerPositionFrac(posNew);
-        host.requestRedraw();   // repaint a frozen / file-mode view too (the live render loop is idle then)
+        controller.redrawViews();   // repaint a frozen / file-mode view too (the live render loop is idle then)
     }
 
     // -------------------------------------------------------------------------

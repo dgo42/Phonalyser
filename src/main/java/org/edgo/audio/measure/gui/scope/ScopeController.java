@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.gui.scope;
 
+import java.io.File;
+
 import org.eclipse.swt.widgets.Control;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -40,11 +42,13 @@ import lombok.extern.log4j.Log4j2;
  * <p>The pane orchestrates the VIEW side around these calls — attaching
  * the returned live buffer to its canvases, starting the measurement
  * thread and redraw timer on acquire, re-attaching the frozen snapshot on
- * release.  Auto-setup is a control operation and lives here (see
-     * {@link #performAutoSetup}); the save / open-signal features stay with their
- * widgets: their engines ({@code ScopeFileSaver}, {@code ScopeOpenSignal},
- * {@code StereoPcmIo}, {@code ScopeMeasurementWorker}) are already
- * separate classes, and their orchestration reads displayed view state.
+ * release.  Auto-setup, the open-signal load lifecycle
+ * ({@link #openSignalFile}), view-state recomputes ({@link #applyViewState},
+ * which fires {@link #onViewStateChanged} for the pane's nav slider),
+ * repaints and persistence wipes are control operations and live here; the
+ * save feature stays with its widget ({@code ScopeFileSaver} /
+ * {@code StereoPcmIo} are separate engines whose orchestration reads
+ * displayed view state).
  */
 @Log4j2
 public final class ScopeController {
@@ -84,6 +88,14 @@ public final class ScopeController {
      *  pane's nav slider reads it) — a multi-entity operation, not pane-local. */
     @Getter @Setter
     private double     viewCenterFrames = -1.0;
+    /** Synchronous open-signal file loader, attached with the views; {@code null}
+     *  on the screenshot-only pane (no live capture, no file loading). */
+    private ScopeOpenSignal loader;
+    /** Fired after every {@link #applyViewState()} recompute — the pane registers
+     *  its nav-scrollbar sync here ({@code viewCenterFrames} is transient controller
+     *  state, not a preference, so the widget can't observe it any other way). */
+    @Setter
+    private Runnable   onViewStateChanged;
 
     /** Requests the shared capture via the bus and holds the returned live
      *  buffer.  Returns {@code null} when the device fails to open — the
@@ -168,11 +180,13 @@ public final class ScopeController {
     }
 
     /** Attaches (or re-attaches, after a pane rebuild) the views this controller
-     *  drives.  The pane builds the views, so they arrive here rather than via
-     *  the constructor. */
-    public void attachViews(ScopeView view, ZoomedView condensed) {
+     *  drives, plus the open-signal loader bound to them ({@code null} on the
+     *  screenshot-only pane).  The pane builds all three, so they arrive here
+     *  rather than via the constructor. */
+    public void attachViews(ScopeView view, ZoomedView condensed, ScopeOpenSignal loader) {
         this.view      = view;
         this.condensed = condensed;
+        this.loader    = loader;
     }
 
     /** Attaches the GPU surface the pane builds when the GPU scope is enabled; the
@@ -183,10 +197,10 @@ public final class ScopeController {
 
     /**
      * Re-derives the file/scroll view window — the main view + condensed strip read
-     * back-offsets — from {@link #viewCenterFrames}, and repaints both.  The
-     * positioning maths live in {@link ScopeNav#fileViewWindow}; this just applies
-     * the result to the two views it owns.  The pane syncs its own nav-slider widget
-     * (its concern) after calling this.
+     * back-offsets — from {@link #viewCenterFrames}, repaints both, and fires
+     * {@link #onViewStateChanged} so the pane can re-sync its nav-scrollbar widget.
+     * The ONE view-state recompute in the system; the positioning maths live in
+     * {@link ScopeNav#fileViewWindow}.
      */
     public void applyViewState() {
         if (view == null) return;
@@ -195,6 +209,7 @@ public final class ScopeController {
             view.setViewBackOffsetFrames(0);
             if (condensed != null) condensed.setViewBackOffsetFrames(0);
             redrawViews();
+            fireViewStateChanged();
             return;
         }
         int displaySamples = ScopeFormat.displaySamplesFor(
@@ -204,11 +219,60 @@ public final class ScopeController {
         view.setViewBackOffsetFrames(vw.mainBackOffset());
         if (condensed != null) condensed.setViewBackOffsetFrames(vw.condensedBackOffset());
         redrawViews();
+        fireViewStateChanged();
     }
 
-    private void redrawViews() {
+    private void fireViewStateChanged() {
+        Runnable listener = onViewStateChanged;
+        if (listener != null) listener.run();
+    }
+
+    /** Repaints both scope canvases (main + condensed).  The settings toolbar calls
+     *  this after a preference change — required for stopped / file-mode sessions
+     *  where the realtime render loop is idle; a cheap no-op while recording. */
+    public void redrawViews() {
         if (view != null && !view.isDisposed())           view.redraw();
         if (condensed != null && !condensed.isDisposed()) condensed.redraw();
+    }
+
+    /** Wipes the persistence afterglow (GPU phosphor; no-op on the CPU path,
+     *  which has no persistence) and repaints so the wipe shows immediately. */
+    public void clearPersistence() {
+        if (glSurface != null) glSurface.clearPersistence();
+        redrawViews();
+    }
+
+    /**
+     * Loads a signal file into the scope: stops a running live capture first (the
+     * loaded file swaps the shared buffer out from under it; the pane pops its
+     * Record toggle via {@link Events#SCOPE_RECORDING_STOPPED}), decodes the file
+     * through the attached {@link ScopeOpenSignal}, then centres the view on the
+     * file's start and recomputes the view state.  Returns whether the load
+     * succeeded — on {@code false} the caller surfaces
+     * {@link #getLastOpenSignalError()}.
+     */
+    public boolean openSignalFile(File file) {
+        if (loader == null) return false;
+        if (isCapturing()) {
+            stopCapture();
+            MessageBus.instance().publish(Events.SCOPE_RECORDING_STOPPED);
+        }
+        if (!loader.loadFile(file)) return false;
+        SignalBufferReader reader = (view != null) ? view.getReader() : null;
+        if (reader != null) {
+            // Centre on the start of the loaded signal so the first frames show.
+            int displaySamples = ScopeFormat.displaySamplesFor(
+                    Preferences.instance().getOscTimePerDiv(), reader.getSampleRate());
+            viewCenterFrames = displaySamples / 2.0;
+        }
+        applyViewState();
+        return true;
+    }
+
+    /** Human-readable description of the last {@link #openSignalFile} failure
+     *  ({@code null} when it succeeded or no loader is attached). */
+    public String getLastOpenSignalError() {
+        return (loader == null) ? null : loader.getLastError();
     }
 
     /**
