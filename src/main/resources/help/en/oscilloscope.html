@@ -19,7 +19,10 @@
      channels (L / R) share the trigger; each has its own V/div,
      coupling, interpolation, and vertical offset.  The capture rate
      readout in the top-right corner (<code>cap/s</code>) shows how
-     many frames per second the view is rendering.</p>
+     many frames per second the view is rendering — or, with the
+     <a href="#scope-trigger-type">glitch trigger</a>, how many glitches per
+     second have been caught (see
+     <a href="#scope-caps">Capture-rate readout</a>).</p>
 
   <div class="shot">
     <img src="img/oscilloscope-pane.png" alt="Oscilloscope pane"/>
@@ -161,7 +164,12 @@
 
   <h2 id="scope-meas-table">Measurement table</h2>
   <p>Compact grid in the top-left of the trace area.  Eight rows, up to five
-     value columns (<code>cur</code> + the four stats columns).</p>
+     value columns (<code>cur</code> + the four stats columns).  Vmean and Vrms
+     are integrated over a <b>whole number of signal periods</b> rather than the
+     raw frame, so their statistics stay steady instead of wobbling with however
+     many part-periods happen to fit the window (see
+     <a href="theory/oscilloscope.html#measure">how the numbers are
+     measured</a>).</p>
 
   <table class="controls">
     <tr><th>Row</th><th>Meaning</th></tr>
@@ -220,6 +228,21 @@
   <p>The horizontal scrollbar appears <b>only when an audio file is loaded</b> —
      it is there to move a long recording left / right.  During live capture
      there is nothing earlier to scroll back to, so it stays hidden.</p>
+
+  <h3 id="scope-caps">Capture-rate readout (cap/s)</h3>
+  <p>Pale-grey figure in the top-right corner of the trace area.  With the
+     <b>edge</b> trigger it shows how many new frames per second the view is
+     rendering — a smoothed rate that sinks toward zero while nothing
+     triggers.  With the <a href="#scope-trigger-type"><b>glitch</b>
+     trigger</a> it becomes a <b>cumulative glitches-per-second counter</b>:
+     the total number of glitches caught divided by the time spent recording,
+     shown to three decimals so an event every few minutes still reads e.g.
+     <code>0.008</code> instead of rounding to zero.  The count starts afresh
+     when the glitch type is entered or a new record starts, and the readout
+     stays visible for the whole record — even while reading
+     <code>0.000</code>.  When recording stops, the last value stays
+     <b>frozen</b> on screen until the next record.  Hidden while a file is
+     loaded (nothing is being captured).</p>
 
   <h2 id="scope-tabs">Toolbar tabs</h2>
   <p>The settings-tab strip at the bottom of the pane holds per-channel,
@@ -286,7 +309,39 @@
 
   <h4 id="scope-trigger-edge">Edge</h4>
   <p>↑ / ↓ pair.  Rising edge triggers when the signal crosses the
-     trigger level going up; falling edge for going down.</p>
+     trigger level going up; falling edge for going down.  With the
+     <a href="#scope-trigger-type">glitch type</a> the same pair picks the
+     <b>display anchor</b> instead: ↑ anchors the display on the <b>start</b>
+     of the glitch (the last clean sample before the break), ↓ on its
+     <b>end</b> (the first settled sample after it).</p>
+
+  <h4 id="scope-trigger-type">Type (E / G)</h4>
+  <p>E / G pair choosing what the trigger reacts to.</p>
+  <ul>
+    <li><b>E — edge</b>: the classic comparator described above — fires when
+        the trigger-channel signal crosses the trigger level in the chosen
+        direction.</li>
+    <li><b>G — glitch</b>: fires on <b>any waveform discontinuity</b>,
+        anywhere on the wave, in either direction — an amplitude step (a
+        dropped-sample gap from a USB hiccup or a converter under-run) as well
+        as a slope break (a splice where the wave carries on from the wrong
+        phase).  Made for hunting rare transfer faults: leave it recording in
+        Normal mode and every discontinuity is caught and displayed, or use
+        Single mode to freeze the first one.</li>
+  </ul>
+  <p>The glitch detector does not use the trigger level — it predicts each
+     sample from the sinusoid's own recurrence and fires when the prediction
+     error stands well clear of the noise floor, so it catches faults far too
+     small to reach any edge level.  The level marker and
+     <a href="#scope-trigger-hysteresis">hysteresis</a> therefore play no part
+     in glitch mode.  Break points closer together than 1&nbsp;ms merge into
+     one event, so a dropout's entry and recovery count as a single glitch.
+     While the glitch type is active, the <code>cap/s</code> readout turns
+     into a cumulative glitches-per-second counter (see
+     <a href="#scope-caps">Capture-rate readout</a>).  For how the detector
+     tells a genuine break from noise, see
+     <a href="theory/oscilloscope.html#trigger">Theory of operation ▸
+     Oscilloscope ▸ Triggering</a>.</p>
 
   <h4 id="scope-trigger-mode">Mode</h4>
   <p>A / N / S — Auto, Normal, Single.</p>
@@ -298,6 +353,10 @@
     <li><b>Single</b> — one-shot.  Arm with the play button to its
         right; captures the next trigger event and stops.</li>
   </ul>
+  <p>The <a href="#scope-trigger-type">glitch type</a> works only in Normal
+     and Single — in Auto the display free-runs and would overwrite a caught
+     glitch immediately, so switching to Auto forces the type back to edge and
+     greys the G button out.</p>
 
   <h4 id="scope-trigger-start">Start (Single re-arm)</h4>
   <p>Active only when the mode is <b>Single</b>.  Pressing it arms the next
@@ -311,7 +370,9 @@
      <code>(level + hyst)</code>.  This <b>stabilises the trigger on a weak or
      noisy signal</b> — without it, noise around the level causes a flurry of
      false triggers and a jittery trace.  The selector greys out when the
-     checkbox is off; the value is preserved when toggled.</p>
+     checkbox is off; the value is preserved when toggled.  Applies to the
+     edge type only — the <a href="#scope-trigger-type">glitch trigger</a>
+     ignores level and hysteresis alike.</p>
 
   <h4 id="scope-trigger-beat">Reconstructed beat</h4>
   <p>Checkbox, <b>enabled only when the generator is in
@@ -393,7 +454,13 @@
      the trigger.</p>
 
   <h3 id="scope-tile-trigger-edge">Trigger-edge tile</h3>
-  <p>↑ for rising, ↓ for falling.</p>
+  <p>↑ for rising, ↓ for falling.  With the glitch type: anchor on the
+     glitch's start (↑) or end (↓).</p>
+
+  <h3 id="scope-tile-trigger-type">Trigger-type tile</h3>
+  <p><code>G</code> — shown only while the
+     <a href="#scope-trigger-type">glitch trigger</a> is selected.  The absence
+     of this tile means the edge type.</p>
 
   <h3 id="scope-tile-trigger-mode">Trigger-mode tile</h3>
   <p><code>A</code>, <code>N</code> or <code>S</code> — Auto, Normal, Single.</p>
@@ -471,6 +538,59 @@
         <code>400&nbsp;µV/div</code> (100&nbsp;µV off 500&nbsp;µV).  A manually-set,
         off-sequence channel likewise scales in proportion to the channel that steps.</li>
     <li>You can zoom out only until the full <b>±FS span fills the screen height</b>.</li>
+  </ul>
+
+  <h3 id="scope-zoom-rect">Rubber-band zoom &amp; Ctrl+Z</h3>
+  <p>Drag with the <b>left button</b> across the trace to draw a rectangle;
+     release, and the selection stretches to fill the whole view — the one
+     gesture that rescales both axes at once.  A selection smaller than
+     8&nbsp;pixels either way is ignored, so a stray click does nothing.  The
+     drag must start on the open plot area — not on a marker handle, a header
+     button or an axis label.  It works the same whether the scope is live,
+     stopped or showing a loaded file, and the same gesture zooms the FFT and
+     frequency-response views too (the condensed strip in a split layout is
+     not zoomable).</p>
+  <ul>
+    <li><b>Trigger preserved.</b>  The trigger level and trigger offset are
+        carried across the zoom as a voltage and a time, so the trigger keeps
+        firing at the same point of the waveform after the view rescales.</li>
+    <li><b><kbd>Ctrl</kbd>+<kbd>Z</kbd> rolls back.</b>  Every rubber-band zoom
+        is remembered, up to 32 steps per view, and
+        <kbd>Ctrl</kbd>+<kbd>Z</kbd> — with exactly that modifier, nothing
+        else held — undoes them one at a time.  The history is cleared when
+        the scope switches between live capture and file mode, or a new file
+        is loaded.</li>
+    <li><b>Which view undoes.</b>  <kbd>Ctrl</kbd>+<kbd>Z</kbd> acts on the
+        view you last clicked or, failing that, the one under the pointer; a
+        <b>1-pixel bright-green border</b> around a view marks it as the
+        current target.  A text field being edited keeps
+        <kbd>Ctrl</kbd>+<kbd>Z</kbd> for its own text undo.</li>
+  </ul>
+
+  <h2 id="scope-persistence">Display persistence (afterglow)</h2>
+  <p>With <a href="preferences.html#prefs-oscilloscope">Preferences ▸
+     Oscilloscope ▸ Display persistence</a> set to anything but
+     <code>Off</code>, every swept trace lingers and fades like the phosphor
+     of an analog scope, so trigger jitter and noise pile up into a visible
+     envelope.  Decay times of 0.5, 1, 2, 5, 10, 15 and 20&nbsp;s are offered,
+     plus <code>∞</code> (traces never fade) and a manual value.  Persistence
+     requires GPU acceleration (Preferences ▸ Look&nbsp;&amp;&nbsp;Feel) and
+     has no effect on the CPU renderer.</p>
+  <p>The afterglow follows a few rules so it never shows stale geometry:</p>
+  <ul>
+    <li><b>Moving or zooming</b> the trace — any gesture above, or a V/div,
+        t/div, offset or trigger-position change — wipes the glow and
+        immediately re-draws the current trace at its new position, so the
+        picture never smears across the screen.</li>
+    <li><b>Changing a trigger setting</b> (source channel, type, edge or mode)
+        clears the glow outright: the accumulated traces were anchored on the
+        old trigger event and would only mislead.</li>
+    <li><b>Changing the generator signal</b> clears it too, after a
+        quarter-second pause that lets the old signal flush through the
+        loopback path.  The generator's automatic frequency-lock trims are
+        exempt — they never wipe the glow.</li>
+    <li>While the scope is <b>stopped</b>, the afterglow freezes exactly as it
+        was and resumes fading when recording restarts.</li>
   </ul>
 
   <hr/>

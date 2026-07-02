@@ -355,10 +355,11 @@
 
   <h3>Signal discontinuity — detected in the spectrum</h3>
   <p>Subtler breaks — the generator pausing (the signal goes stale), a
-     capture hiccup swallowing a span, a phase jump — are hard to police in
-     the time domain when the signal is weak. Detection therefore happens in
-     the frequency domain, where each new block is compared with the running
-     statistics of the blocks already accepted. Per block:</p>
+     capture hiccup swallowing a span, a phase jump — leave no reported hole
+     in the stream: they have to be found in the signal itself. Detection
+     runs on two complementary fronts. The first is the frequency domain,
+     where each new block is compared with the running statistics of the
+     blocks already accepted. Per block:</p>
   <ol>
     <li>The spectrum is reduced to a set of <b>log-spaced band levels</b>
         (average power per band, in dB), and bands holding genuine spectral
@@ -389,8 +390,47 @@
      so one early glitch can neither poison the reference nor cause false
      rejections later.</p>
 
+  <h3>Signal discontinuity — caught in the raw waveform</h3>
+  <p>The spectral gates judge a block by its statistics, and statistics can
+     be diluted: a splice of a hundred-odd microseconds — the observed USB
+     capture dropouts run 120–160 µs — sits inside a block that may span
+     seconds, and its splattered energy, spread across the whole spectrum,
+     can stay under thresholds that must be generous enough not to fire on
+     ordinary leakage breathing. So each block's raw samples are screened
+     as well, by the <b>same discontinuity detector that drives the
+     oscilloscope's glitch trigger</b>: a sinusoid-recurrence predictor
+     whose error baseline is the noise floor itself — not the signal's own
+     curvature — so an amplitude step or a slope break stands decades proud
+     of it, anywhere on the waveform and at any frequency. (The predictor's
+     derivation — and why the naive second difference goes deaf at high
+     frequencies — is in the
+     <a href="oscilloscope.html#trigger">oscilloscope chapter's trigger
+     section</a>.) The predictor is pinned to the measured fundamental when
+     one is known and estimates its own coefficient otherwise, so the screen
+     works on external signals too. When it fires, the block is excluded and
+     the stream re-synchronises exactly as for a spectral rejection.</p>
+  <p>The two screens cover each other's blind spots. The time screen
+     catches the sharp, local break whose spectral footprint is faint —
+     dropped samples, a converter cutoff, a phase splice; the spectral
+     gates catch damage that leaves every individual sample plausible — a
+     uniform floor lift, or a stalled generator whose output is perfectly
+     smooth but stale. And because the analyser and the oscilloscope share
+     one detector, the two instruments agree on what counts as a damaged
+     capture: a glitch the scope will trigger on is a block the average
+     will refuse.</p>
+  <p>One timing subtlety applies to the re-sync itself. The detector fires
+     on the glitch's <em>entry</em> edge — but the dropout that raised the
+     alarm may still be in flight when the read cursor re-anchors at the
+     newest sample, so rebuilding immediately could start the new window
+     <em>inside</em> the glitch and trip the detector again on the same
+     event. After a discontinuity re-sync the analyser therefore reads and
+     <b>discards the first 5 ms</b> of fresh samples — some 30–40 times the
+     observed dropout length — before rebuilding, so the first block after
+     a re-sync provably starts past the glitch's end and enters the average
+     clean.</p>
+
   <div class="note"><b>What a re-sync does — and does not — cost.</b>  In
-     both cases the offending window is discarded and the stream re-anchors,
+     every case the offending window is discarded and the stream re-anchors,
      but the <em>accumulated average survives</em>: the de-rotation absorbs
      the coverage gap, and the running phase lock applies a one-shot full
      realignment on the next clean block (a re-synchronised stream generally

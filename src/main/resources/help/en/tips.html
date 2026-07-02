@@ -59,6 +59,20 @@
      <code>-3 dBV</code>, <code>2 kHz</code>), or scroll the wheel, click the
      ▲/▼ arrows, or press the keyboard <kbd>↑</kbd>/<kbd>↓</kbd> keys to step.</div>
 
+  <div class="tip"><b>Skip the unit — plain digits mean the base unit.</b>
+     Type just a number and the field takes it in its base unit: <code>1000</code>
+     in a frequency field is 1000&nbsp;Hz, in an amplitude field 1000&nbsp;V, in a
+     time field 1000&nbsp;s.  And kilohertz has short forms: <code>1.5k</code>,
+     <code>1.5kh</code> and <code>1.5khz</code> all mean 1.5&nbsp;kHz.</div>
+
+  <div class="tip"><b>Drag a rectangle to zoom into exactly that region.</b>
+     In the oscilloscope, FFT and frequency-response views, drag with the left
+     button to rubber-band the area you care about — on release it stretches to
+     fill the view (the scope keeps the trigger level and position on the same
+     waveform point).  <kbd>Ctrl</kbd>+<kbd>Z</kbd> steps back through the last
+     32 zooms of the view under the pointer or with focus — a thin green border
+     marks which view will take the undo.</div>
+
   <div class="tip"><b>Sinc interpolation only matters when you're zoomed in.</b>
      The Sin/Lin switch changes the trace only when sample points are at least
      a couple of pixels apart on screen; otherwise straight lines look

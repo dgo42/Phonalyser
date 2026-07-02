@@ -45,6 +45,8 @@
     <ul>
       <li><a href="theory/fft.html#plot">Calibration and plot-time corrections</a> <span class="small">(Theory ▸ FFT analyser)</span> — <span class="small">The averaging accumulator holds the raw spectrum. Everything corrective is applied when the curve is drawn, so toggling a…</span></li>
       <li><a href="theory/freq-resp.html#cal">Calibration: measuring the measurer</a> <span class="small">(Theory ▸ Frequency response)</span> — <span class="small">A frequency-response sweep measures the whole chain: the DAC, the cabling, and the ADC, as well as the device under test. To…</span></li>
+      <li><a href="fft.html#fft-resync-banner">Capture re-sync banner</a> <span class="small">(FFT analyser)</span> — <span class="small">While averaging, every capture block is vetted before it may enter the average. Two independent checks run on each block: a…</span></li>
+      <li><a href="oscilloscope.html#scope-caps">Capture-rate readout (cap/s)</a> <span class="small">(Oscilloscope)</span> — <span class="small">Pale-grey figure in the top-right corner of the trace area. With the edge trigger it shows how many new frames per second the…</span></li>
       <li><a href="oscilloscope.html#scope-trigger-channel">Channel</a> <span class="small">(Oscilloscope)</span> — <span class="small">Pair of L / R toggles picking which channel drives the trigger…</span></li>
       <li><a href="oscilloscope.html#scope-offset-sliders">Channel offset markers</a> <span class="small">(Oscilloscope)</span> — <span class="small">Each enabled channel has its own vertical-offset marker (dashed zero-line + triangle handle), and both handles are on the LEFT…</span></li>
       <li><a href="oscilloscope.html#scope-tile-led">Channel-enabled LED</a> <span class="small">(Oscilloscope)</span> — <span class="small">An LED tile on the Left / Right tab, shown only while that channel is enabled (absent when the channel is…</span></li>
@@ -63,6 +65,7 @@
     </ul>
     <h3>D</h3>
     <ul>
+      <li><a href="oscilloscope.html#scope-persistence">Display persistence (afterglow)</a> <span class="small">(Oscilloscope)</span> — <span class="small">With Preferences ▸ Oscilloscope ▸ Display persistence set to anything but Off , every swept trace lingers and fades like the…</span></li>
       <li><a href="fft.html#fft-distortion-toggle">Distortion table</a> <span class="small">(FFT analyser)</span> — <span class="small">Shows / hides the THD info table overlay in the top-left of the canvas. The button itself appears only after the first analysis…</span></li>
       <li><a href="fft.html#fft-distortion-band-dim">Distortion-band dimming</a> <span class="small">(FFT analyser)</span> — <span class="small">Light-grey overlay covering frequencies outside the active distortion HP / distortion LP window. Shows at a glance which bands…</span></li>
       <li><a href="fft.html#fft-tile-distrange">Distortion-range tile</a> <span class="small">(FFT analyser)</span> — <span class="small">On the THD settings tab. Shows the SNR / N+D integration band: both bounds active → 50-20k ; HP only (no LP) → 50-∞ ; LP only (no</span></li>
@@ -78,7 +81,7 @@
     </ul>
     <h3>E</h3>
     <ul>
-      <li><a href="oscilloscope.html#scope-trigger-edge">Edge</a> <span class="small">(Oscilloscope)</span> — <span class="small">↑ / ↓ pair. Rising edge triggers when the signal crosses the trigger level going up; falling edge for going…</span></li>
+      <li><a href="oscilloscope.html#scope-trigger-edge">Edge</a> <span class="small">(Oscilloscope)</span> — <span class="small">↑ / ↓ pair. Rising edge triggers when the signal crosses the trigger level going up; falling edge for going down. With the glitch</span></li>
       <li><a href="fft.html#fft-dist-min">Enable distortion HP + frequency</a> <span class="small">(FFT analyser)</span> — <span class="small">Sets the lower bound of the band used for SNR / N+D integration. Below this frequency, noise and spurs are excluded — useful for…</span></li>
       <li><a href="fft.html#fft-dist-max">Enable distortion LP + frequency</a> <span class="small">(FFT analyser)</span> — <span class="small">Same, for the upper bound. Excludes high-frequency noise above the band of interest (e.g. above 20 kHz for…</span></li>
       <li><a href="fft.html#fft-thd-enob">ENOB</a> <span class="small">(FFT analyser)</span> — <span class="small">Effective number of bits = (SINAD − 1.76) / 6.02. Reflects the ADC + capture chain&#x27;s combined dynamic…</span></li>
@@ -159,7 +162,7 @@
     <ul>
       <li><a href="fft.html#fft-mag-unit">Magnitude unit</a> <span class="small">(FFT analyser)</span> — <span class="small">Combo at the top-right with four choices: V , V/√Hz , dBV , dBFS . Switching unit converts the axis labels and scrollbar bounds…</span></li>
       <li><a href="fft.html#fft-mains-suppression">Mains suppression</a> <span class="small">(FFT analyser)</span> — <span class="small">Combo — None or IIR comb . The comb pre-filters the captured signal before averaging with a frequency-tracked IIR comb locked to…</span></li>
-      <li><a href="theory/oscilloscope.html#mains">Mains-hum rejection: the tracked comb</a> <span class="small">(Theory ▸ Oscilloscope)</span> — <span class="small">Mains interference sits at the line frequency and every integer harmonic of it. A single feedback comb filter [3] places a notch…</span></li>
+      <li><a href="theory/oscilloscope.html#mains">Mains-hum rejection: the tracked comb</a> <span class="small">(Theory ▸ Oscilloscope)</span> — <span class="small">Mains interference sits at the line frequency and every integer harmonic of it. A single feedback comb filter [6] places a notch…</span></li>
       <li><a href="fft.html#fft-manual-fund">Manual fundamental</a> <span class="small">(FFT analyser)</span> — <span class="small">When on, the analyser treats this value as the fundamental&#x27;s dBV instead of using the de-embedded value or the one from the…</span></li>
       <li><a href="fft.html#fft-tile-manfund">Manual-fundamental tile</a> <span class="small">(FFT analyser)</span> — <span class="small">manF . Visible only when the manual-fundamental override is enabled. ◀ Back to…</span></li>
       <li><a href="fft.html#fft-max-harmonic-thd">Max harmonic for THD</a> <span class="small">(FFT analyser)</span> — <span class="small">Numeric (2 .. 9). Upper bound of the harmonics summed into the THD ratio. THD H2..N uses harmonics 2 through this…</span></li>
@@ -167,7 +170,7 @@
       <li><a href="fft.html#fft-tile-maxharmonic">Max-harmonic tile</a> <span class="small">(FFT analyser)</span> — <span class="small">H9 — the max harmonic for the THD…</span></li>
       <li><a href="fft.html#fft-maximize">Maximise</a> <span class="small">(FFT analyser)</span> — <span class="small">The inverse of Auto-Setup: sets the widest sensible view — frequency 0 .. Nyquist. The magnitude range is signal-independent only</span></li>
       <li><a href="credits.html#credits-hardware">Measurement hardware</a> <span class="small">(Credits)</span> — <span class="small">A measurement is only as clean as the converters in front of the software. Phonalyser was developed and validated against…</span></li>
-      <li><a href="oscilloscope.html#scope-meas-table">Measurement table</a> <span class="small">(Oscilloscope)</span> — <span class="small">Compact grid in the top-left of the trace area. Eight rows, up to five value columns ( cur + the four stats columns). Row Meaning</span></li>
+      <li><a href="oscilloscope.html#scope-meas-table">Measurement table</a> <span class="small">(Oscilloscope)</span> — <span class="small">Compact grid in the top-left of the trace area. Eight rows, up to five value columns ( cur + the four stats columns). Vmean and…</span></li>
       <li><a href="theory/dac-predistortion.html#imd">Measuring intermodulation — the two-tone notch</a> <span class="small">(Theory ▸ DAC pre-distortion)</span> — <span class="small">The wizard&#x27;s dual-tone path pre-distorts intermodulation , and that measurement meets the same wall as THD, doubled. A CCIF…</span></li>
       <li><a href="oscilloscope.html#scope-trigger-mode">Mode</a> <span class="small">(Oscilloscope)</span> — <span class="small">A / N / S — Auto, Normal, Single. Auto — runs free, displays the trace whether or not the trigger condition is met. Normal — only</span></li>
       <li><a href="oscilloscope.html#scope-move-zoom">Moving &amp; zooming the signal</a> <span class="small">(Oscilloscope)</span> — <span class="small">The trace can be moved and scaled on both axes. Everything below works the same way whether the scope is live (recording),…</span></li>
@@ -191,7 +194,7 @@
     </ul>
     <h3>P</h3>
     <ul>
-      <li><a href="freqresp.html#freqresp-panzoom">Pan &amp; zoom (mouse wheel)</a> <span class="small">(Frequency response)</span> — <span class="small">Over the plot — wheel : pan the magnitude (vertical) axis; Shift+wheel : pan the frequency (horizontal) axis; Ctrl+wheel : zoom…</span></li>
+      <li><a href="freqresp.html#freqresp-panzoom">Pan &amp; zoom</a> <span class="small">(Frequency response)</span> — <span class="small">Over the plot — wheel : pan the magnitude (vertical) axis; Shift+wheel : pan the frequency (horizontal) axis; Ctrl+wheel : zoom…</span></li>
       <li><a href="theory/fft.html#manual-fund">Pinning the fundamental by hand on a steep notch</a> <span class="small">(Theory ▸ FFT analyser)</span> — <span class="small">The fundamental is the one level the notch calibration recovers least reliably. A passive twin-T notch &#x27;s flank around its null…</span></li>
       <li><a href="generator.html#generator-play">Play / Stop</a> <span class="small">(Generator)</span> — <span class="small">Large play button anchored to the bottom-right of the pane. Starts the tone generator with the current form / frequency /…</span></li>
       <li><a href="generator.html#generator-play-file">Play / Stop file</a> <span class="small">(Generator)</span> — <span class="small">Small play LED next to the path field. Lit while the file is playing, dim otherwise. Starting file playback stops the tone…</span></li>
@@ -218,7 +221,7 @@
       <li><a href="theory/derotation-accuracy.html#refs">References</a> <span class="small">(Theory ▸ De-rotation accuracy)</span> — <span class="small">1. The 1/√(2ρ) phase-estimation error of a tone in noise is the high-SNR Cramér–Rao bound — Wikipedia: Cramér–Rao bound . 2.…</span></li>
       <li><a href="theory/fft.html#refs">References</a> <span class="small">(Theory ▸ FFT analyser)</span> — <span class="small">1. Window functions and leakage — Wikipedia: Window function ; the HFT (flat-top) family: G. Heinzel et al., &quot;Spectrum and…</span></li>
       <li><a href="theory/freq-resp.html#refs">References</a> <span class="small">(Theory ▸ Frequency response)</span> — <span class="small">1. A. Farina, &quot;Simultaneous measurement of impulse response and distortion with a swept-sine technique&quot; , 108th AES Convention,…</span></li>
-      <li><a href="theory/oscilloscope.html#refs">References</a> <span class="small">(Theory ▸ Oscilloscope)</span> — <span class="small">1. Goertzel algorithm (single-bin DFT) — Wikipedia: Goertzel algorithm . 2. Hann window and spectral leakage — Wikipedia: Hann…</span></li>
+      <li><a href="theory/oscilloscope.html#refs">References</a> <span class="small">(Theory ▸ Oscilloscope)</span> — <span class="small">1. The sinusoid recurrence (1) is the order-2 case of linear prediction — Wikipedia: Linear prediction . 2. Goertzel algorithm…</span></li>
       <li><a href="theory/ring-buffer.html#refs">References</a> <span class="small">(Theory ▸ Ring buffer &amp; consumers)</span> — <span class="small">Circular (ring) buffers in general — Wikipedia: Circular buffer . The underlying coordination pattern — Wikipedia:…</span></li>
       <li><a href="theory/generator.html#refs">References</a> <span class="small">(Theory ▸ Signal generator)</span> — <span class="small">Direct digital synthesis — Wikipedia: Direct digital synthesis ; in depth: Analog Devices tutorial MT-085, &quot;Fundamentals of…</span></li>
       <li><a href="fft.html#fft-reset">Reset averaging buffer</a> <span class="small">(FFT analyser)</span> — <span class="small">Red counterclockwise-arrow button (a &quot;roll back to the start&quot; reset). Wipes the averaging buffer + retained spectrum and rearms…</span></li>
@@ -226,6 +229,8 @@
       <li><a href="theory/fft.html#resolution">Resolution, windows, overlap</a> <span class="small">(Theory ▸ FFT analyser)</span> — <span class="small">An FFT of length N at sample rate f s produces bins spaced f s / N apart; longer transforms (up to 4M points here) buy finer…</span></li>
       <li><a href="freqresp.html#freqresp-tab-riaa">RIAA &amp; IEC</a> <span class="small">(Frequency response)</span> — <span class="small">Control Notes Show RIAA curve Overlay the RIAA reference, aligned at 1 kHz. This gate enables the three controls below. Reverse…</span></li>
       <li><a href="oscilloscope.html#scope-tab-right">Right tab</a> <span class="small">(Oscilloscope)</span> — <span class="small">Identical layout to the Left tab — channel toggle, V/div, AC/DC and Sin/Lin, but for the right…</span></li>
+      <li><a href="fft.html#fft-rect-zoom">Rubber-band zoom &amp; Ctrl+Z</a> <span class="small">(FFT analyser)</span> — <span class="small">Hold the left mouse button inside the plot and drag: a thin bright-green rectangle follows the pointer, and on release the view…</span></li>
+      <li><a href="oscilloscope.html#scope-zoom-rect">Rubber-band zoom &amp; Ctrl+Z</a> <span class="small">(Oscilloscope)</span> — <span class="small">Drag with the left button across the trace to draw a rectangle; release, and the selection stretches to fill the whole view — the</span></li>
       <li><a href="freqresp.html#freqresp-measure">Running a measurement</a> <span class="small">(Frequency response)</span> — <span class="small">Press Play to sweep. Capture and generator playback are taken over for the run, a modal progress dialog shows a live…</span></li>
     </ul>
     <h3>S</h3>
@@ -270,8 +275,10 @@
       <li><a href="fft.html#fft-thd-thdpn">THD+N</a> <span class="small">(FFT analyser)</span> — <span class="small">Total harmonic distortion + noise. Same numerator as N+D, normalised to the…</span></li>
       <li><a href="theory/ring-buffer.html#sharedcapture">The capture session: who owns the device</a> <span class="small">(Theory ▸ Ring buffer &amp; consumers)</span> — <span class="small">The input device and the live ring have exactly one owner — the capture session . Views never open the device themselves; they…</span></li>
       <li><a href="theory/fft.html#metrics">The distortion and noise metrics</a> <span class="small">(Theory ▸ FFT analyser)</span> — <span class="small">From the averaged spectrum, with the fundamental level A 1 and harmonic levels A h : THD = √( Σ h ≥2 A h ² ) / A 1 (4) SNR…</span></li>
+      <li><a href="theory/oscilloscope.html#glitch">The glitch trigger: firing on damage, not on a level</a> <span class="small">(Theory ▸ Oscilloscope)</span> — <span class="small">Some events worth catching are not level crossings at all. A capture hiccup that swallows samples leaves an amplitude step or a…</span></li>
       <li><a href="theory/fft.html#leakage">The neighbour bin: where the leaked power goes</a> <span class="small">(Theory ▸ FFT analyser)</span> — <span class="small">However good the alignment, the tone&#x27;s true position κ is never perfectly on the bin — and any offset splits the tone&#x27;s power…</span></li>
       <li><a href="theory/dac-predistortion.html#drift">The notch drifts — so the fundamental must be defined manually</a> <span class="small">(Theory ▸ DAC pre-distortion)</span> — <span class="small">A twin-T notch nulls at f 0 = 1 / (2π RC ) (1) so its null frequency tracks the product RC . Resistors and capacitors change…</span></li>
+      <li><a href="theory/freq-resp.html#notch">The notch-tuning sweep: a live variant</a> <span class="small">(Theory ▸ Frequency response)</span> — <span class="small">Measuring the distortion of a very clean source calls for a passive twin-T notch filter [4] ahead of the ADC: it pulls the…</span></li>
       <li><a href="theory/generator.html#dds">The phase accumulator</a> <span class="small">(Theory ▸ Signal generator)</span> — <span class="small">All periodic waveforms are driven by a 64-bit phase accumulator φₐ: an unsigned integer representing the phase as a fraction of…</span></li>
       <li><a href="theory/dac-predistortion.html#purpose">The question this page answers</a> <span class="small">(Theory ▸ DAC pre-distortion)</span> — <span class="small">Every DAC adds harmonic distortion of its own. When you measure a device under test you want the stimulus to be cleaner than the…</span></li>
       <li><a href="theory/derotation-accuracy.html#purpose">The question this page answers</a> <span class="small">(Theory ▸ De-rotation accuracy)</span> — <span class="small">Coherent averaging only works because every captured block is rotated back onto a common phase before it is summed — the…</span></li>
@@ -289,12 +296,15 @@
       <li><a href="fft.html#fft-toolbar">Top toolbar (above the tab strip)</a> <span class="small">(FFT analyser)</span></li>
       <li><a href="oscilloscope.html#scope-tab-trigger">Trigger tab</a> <span class="small">(Oscilloscope)</span></li>
       <li><a href="oscilloscope.html#scope-tile-trigger-channel">Trigger-channel tile</a> <span class="small">(Oscilloscope)</span> — <span class="small">L or R — which channel is currently used to arm the…</span></li>
-      <li><a href="oscilloscope.html#scope-tile-trigger-edge">Trigger-edge tile</a> <span class="small">(Oscilloscope)</span> — <span class="small">↑ for rising, ↓ for…</span></li>
+      <li><a href="oscilloscope.html#scope-tile-trigger-edge">Trigger-edge tile</a> <span class="small">(Oscilloscope)</span> — <span class="small">↑ for rising, ↓ for falling. With the glitch type: anchor on the glitch&#x27;s start (↑) or end…</span></li>
       <li><a href="oscilloscope.html#scope-trigger-handle">Trigger-level marker</a> <span class="small">(Oscilloscope)</span> — <span class="small">A horizontal marker line whose triangle handle is on the right edge . The marker can be moved only by dragging that handle up or…</span></li>
       <li><a href="oscilloscope.html#scope-tile-trigger-mode">Trigger-mode tile</a> <span class="small">(Oscilloscope)</span> — <span class="small">A , N or S — Auto, Normal,…</span></li>
       <li><a href="oscilloscope.html#scope-position-handle">Trigger-offset marker</a> <span class="small">(Oscilloscope)</span> — <span class="small">A vertical marker line whose triangle handle is on the bottom edge . It sets where in the window the trigger event sits. Move it…</span></li>
+      <li><a href="oscilloscope.html#scope-tile-trigger-type">Trigger-type tile</a> <span class="small">(Oscilloscope)</span> — <span class="small">G — shown only while the glitch trigger is selected. The absence of this tile means the edge…</span></li>
       <li><a href="theory/oscilloscope.html#trigger">Triggering</a> <span class="small">(Theory ▸ Oscilloscope)</span> — <span class="small">A free-running scope would redraw the waveform at a random phase each frame, so a periodic signal would appear to slide across…</span></li>
+      <li><a href="freqresp.html#freqresp-tune-notch">Tune-notch wizard</a> <span class="small">(Frequency response)</span> — <span class="small">A passive notch filter (typically a twin-T) ahead of the input is the classic way to measure distortion below the analyser&#x27;s own…</span></li>
       <li><a href="theory/fft.html#dualtone">Two-tone (intermodulation)</a> <span class="small">(Theory ▸ FFT analyser)</span> — <span class="small">With two tones present, the products of interest are not harmonics of one tone but combinations a · f ₁ + b · f ₂. The analyser…</span></li>
+      <li><a href="oscilloscope.html#scope-trigger-type">Type (E / G)</a> <span class="small">(Oscilloscope)</span> — <span class="small">E / G pair choosing what the trigger reacts to. E — edge : the classic comparator described above — fires when the…</span></li>
     </ul>
     <h3>U</h3>
     <ul>
@@ -382,6 +392,7 @@
       <li><b>Ctrl +wheel</b> — <a href="oscilloscope.html#">Oscilloscope</a></li>
       <li><b>Ctrl+Shift+wheel</b> — <a href="fft.html#">FFT analyser</a>, <a href="freqresp.html#">Frequency response</a>, <a href="tips.html#">Tips</a></li>
       <li><b>Ctrl+wheel</b> — <a href="fft.html#">FFT analyser</a>, <a href="freqresp.html#">Frequency response</a>, <a href="tips.html#">Tips</a></li>
+      <li><b>Ctrl+Z</b> — <a href="fft.html#">FFT analyser</a>, <a href="freqresp.html#">Frequency response</a></li>
     </ul>
     <h3>D</h3>
     <ul>
@@ -411,6 +422,7 @@
     </ul>
     <h3>E</h3>
     <ul>
+      <li><b>E — edge</b> — <a href="oscilloscope.html#">Oscilloscope</a></li>
       <li><b>E1DA</b> — <a href="credits.html#credits-hardware">Credits ▸ Measurement hardware</a>, <a href="credits.html#">Credits</a></li>
       <li><b>Electric fields</b> — <a href="bench.html#">Measurement bench &amp; wiring</a></li>
       <li><b>ELF</b> — <a href="bench.html#refs">Measurement bench &amp; wiring ▸ References</a></li>
@@ -432,11 +444,13 @@
       <li><b>FLL</b> — <a href="howto.html#">World&#x27;s shortest HOW-TO ▸ 3 · Lock the tone</a>, <a href="theory/algorithms.html#filtering">Theory ▸ Algorithm reference ▸ Filtering &amp; estimation</a>, <a href="theory/dac-predistortion.html#bigpicture">Theory ▸ DAC pre-distortion ▸ Big picture: drift moves the fundamental, barely touches the harmonics</a>, <a href="theory/fft.html#ongrid">Theory ▸ FFT analyser ▸ Keeping the tone on the grid: snap and the FLL</a></li>
       <li><b>Format not supported</b> — <a href="theory/audio-backend.html#">Theory ▸ Audio backend</a></li>
       <li><b>Frequency response</b> — <a href="index.html#">Help</a>, <a href="theory/index.html#">Theory ▸ Overview</a></li>
-      <li><b>FS</b> — <a href="oscilloscope.html#scope-move-v">Oscilloscope ▸ Moving vertically</a>, <a href="oscilloscope.html#scope-zoom-v">Oscilloscope ▸ Zooming vertically</a></li>
+      <li><b>FS</b> — <a href="freqresp.html#freqresp-tab-settings">Frequency response ▸ Settings</a>, <a href="oscilloscope.html#scope-move-v">Oscilloscope ▸ Moving vertically</a>, <a href="oscilloscope.html#scope-zoom-v">Oscilloscope ▸ Zooming vertically</a>, <a href="theory/freq-resp.html#deconv">Theory ▸ Frequency response ▸ Cleaning up the raw division</a></li>
+      <li><b>FS/2</b> — <a href="freqresp.html#">Frequency response</a>, <a href="theory/freq-resp.html#">Theory ▸ Frequency response</a></li>
       <li><b>FT</b> — <a href="fft.html#fft-tile-window">FFT analyser ▸ Window tile</a></li>
     </ul>
     <h3>G</h3>
     <ul>
+      <li><b>G — glitch</b> — <a href="oscilloscope.html#">Oscilloscope</a></li>
       <li><b>Generator</b> — <a href="index.html#">Help</a></li>
       <li><b>Goertzel</b> — <a href="theory/algorithms.html#spectral">Theory ▸ Algorithm reference ▸ Spectral analysis</a>, <a href="theory/oscilloscope.html#freq">Theory ▸ Oscilloscope ▸ Frequency — crossings, then Goertzel refinement</a>, <a href="theory/oscilloscope.html#refs">Theory ▸ Oscilloscope ▸ References</a></li>
       <li><b>GUI</b> — <a href="theory/audio-backend.html#who">Theory ▸ Audio backend ▸ Who uses the backend</a></li>
@@ -516,9 +530,10 @@
       <li><b>NIEHS</b> — <a href="bench.html#refs">Measurement bench &amp; wiring ▸ References</a></li>
       <li><b>None</b> — <a href="fft.html#">FFT analyser</a></li>
       <li><b>Normal</b> — <a href="oscilloscope.html#">Oscilloscope</a></li>
+      <li><b>Notch readout</b> — <a href="freqresp.html#">Frequency response</a></li>
       <li><b>NP0</b> — <a href="theory/dac-predistortion.html#tempco">Theory ▸ DAC pre-distortion ▸ How much does each resistor class drift?</a>, <a href="theory/dac-predistortion.html#imd">Theory ▸ DAC pre-distortion ▸ Measuring intermodulation — the two-tone notch</a></li>
       <li><b>Numeric fields</b> — <a href="index.html#">Help</a></li>
-      <li><b>Nyquist</b> — <a href="external/fft-analysis.html#">Further reading ▸ FFT analysis essentials ▸ The core trade-off: resolution vs. time</a>, <a href="fft.html#fft-maximize">FFT analyser ▸ Maximise</a>, <a href="freqresp.html#freqresp-buttons">Frequency response ▸ Header buttons</a>, <a href="freqresp.html#freqresp-crosshair">Frequency response ▸ Crosshair readout</a>, <a href="freqresp.html#freqresp-tab-settings">Frequency response ▸ Settings</a>, <a href="preferences.html#prefs-freqresp">Preferences ▸ Frequency response</a></li>
+      <li><b>Nyquist</b> — <a href="external/fft-analysis.html#">Further reading ▸ FFT analysis essentials ▸ The core trade-off: resolution vs. time</a>, <a href="fft.html#fft-maximize">FFT analyser ▸ Maximise</a>, <a href="freqresp.html#freqresp-buttons">Frequency response ▸ Header buttons</a>, <a href="freqresp.html#freqresp-panzoom">Frequency response ▸ Pan &amp; zoom</a>, <a href="freqresp.html#freqresp-crosshair">Frequency response ▸ Crosshair readout</a>, <a href="freqresp.html#freqresp-tab-settings">Frequency response ▸ Settings</a></li>
     </ul>
     <h3>O</h3>
     <ul>
@@ -551,11 +566,11 @@
       <li><b>Red dots</b> — <a href="theory/fft.html#">Theory ▸ FFT analyser</a></li>
       <li><b>REW</b> — <a href="credits.html#credits-inspiration">Credits ▸ Inspiration</a>, <a href="theory/index.html#">Theory ▸ Overview ▸ Theory of operation</a></li>
       <li><b>RIAA</b> — <a href="bench.html#">Measurement bench &amp; wiring ▸ Example DUTs</a>, <a href="freqresp.html#">Frequency response ▸ Frequency response</a>, <a href="freqresp.html#freqresp-overview">Frequency response ▸ At a glance</a>, <a href="freqresp.html#freqresp-tabs">Frequency response ▸ Settings tabs</a>, <a href="freqresp.html#freqresp-tab-riaa">Frequency response ▸ RIAA &amp; IEC</a>, <a href="freqresp.html#freqresp-tab-presets">Frequency response ▸ Presets</a></li>
-      <li><b>RMS</b> — <a href="external/fft-analysis.html#">Further reading ▸ FFT analysis essentials ▸ Averaging and overlap</a>, <a href="freqresp.html#freqresp-tab-settings">Frequency response ▸ Settings</a>, <a href="freqresp.html#freqresp-tab-utility">Frequency response ▸ Utility</a>, <a href="freqresp.html#freqresp-measure">Frequency response ▸ Running a measurement</a>, <a href="generator.html#">Generator ▸ Generator</a>, <a href="generator.html#generator-dualtone">Generator ▸ Dual tone (IMD)</a></li>
+      <li><b>RMS</b> — <a href="external/fft-analysis.html#">Further reading ▸ FFT analysis essentials ▸ Averaging and overlap</a>, <a href="freqresp.html#freqresp-tab-settings">Frequency response ▸ Settings</a>, <a href="freqresp.html#freqresp-tab-utility">Frequency response ▸ Utility</a>, <a href="freqresp.html#freqresp-measure">Frequency response ▸ Running a measurement</a>, <a href="freqresp.html#freqresp-tune-notch">Frequency response ▸ Tune-notch wizard</a>, <a href="generator.html#">Generator ▸ Generator</a></li>
     </ul>
     <h3>S</h3>
     <ul>
-      <li><b>Savitzky-Golay</b> — <a href="theory/algorithms.html#filtering">Theory ▸ Algorithm reference ▸ Filtering &amp; estimation</a>, <a href="theory/freq-resp.html#deconv">Theory ▸ Frequency response ▸ Cleaning up the raw division</a>, <a href="theory/freq-resp.html#refs">Theory ▸ Frequency response ▸ References</a></li>
+      <li><b>Savitzky-Golay</b> — <a href="theory/algorithms.html#filtering">Theory ▸ Algorithm reference ▸ Filtering &amp; estimation</a>, <a href="theory/freq-resp.html#deconv">Theory ▸ Frequency response ▸ Cleaning up the raw division</a>, <a href="theory/freq-resp.html#notch">Theory ▸ Frequency response ▸ The notch-tuning sweep: a live variant</a>, <a href="theory/freq-resp.html#refs">Theory ▸ Frequency response ▸ References</a></li>
       <li><b>Savitzky–Golay</b> — <a href="theory/freq-resp.html#refs">Theory ▸ Frequency response ▸ References</a></li>
       <li><b>Schmitt</b> — <a href="oscilloscope.html#scope-trigger-hysteresis">Oscilloscope ▸ Hysteresis</a>, <a href="theory/algorithms.html#filtering">Theory ▸ Algorithm reference ▸ Filtering &amp; estimation</a></li>
       <li><b>SFDR</b> — <a href="theory/fft.html#refs">Theory ▸ FFT analyser ▸ References</a></li>
@@ -570,12 +585,14 @@
       <li><b>SNR</b> — <a href="fft.html#">FFT analyser ▸ FFT analyser</a>, <a href="fft.html#fft-distortion-band-dim">FFT analyser ▸ Distortion-band dimming</a>, <a href="fft.html#fft-thd-span">FFT analyser ▸ Span row</a>, <a href="fft.html#fft-dist-min">FFT analyser ▸ Enable distortion HP + frequency</a>, <a href="fft.html#fft-tile-distrange">FFT analyser ▸ Distortion-range tile</a>, <a href="index.html#">Help ▸ Modules</a></li>
       <li><b>Start</b> — <a href="howto.html#">World&#x27;s shortest HOW-TO</a></li>
       <li><b>Start recording</b> — <a href="howto.html#">World&#x27;s shortest HOW-TO</a></li>
+      <li><b>Status line</b> — <a href="freqresp.html#">Frequency response</a></li>
       <li><b>Stream consumers</b> — <a href="theory/ring-buffer.html#">Theory ▸ Ring buffer &amp; consumers</a></li>
       <li><b>Strong fundamental</b> — <a href="theory/fft.html#">Theory ▸ FFT analyser</a></li>
     </ul>
     <h3>T</h3>
     <ul>
       <li><b>Tab tiles</b> — <a href="index.html#">Help</a></li>
+      <li><b>Target marker</b> — <a href="freqresp.html#">Frequency response</a></li>
       <li><b>TCR</b> — <a href="theory/dac-predistortion.html#refs">Theory ▸ DAC pre-distortion ▸ References</a></li>
       <li><b>THD</b> — <a href="bench.html#">Measurement bench &amp; wiring ▸ Measurement bench &amp; wiring</a>, <a href="credits.html#credits-thanks">Credits ▸ With thanks</a>, <a href="credits.html#credits-hardware">Credits ▸ Measurement hardware</a>, <a href="fft.html#">FFT analyser ▸ FFT analyser</a>, <a href="fft.html#fft-distortion-toggle">FFT analyser ▸ Distortion table</a>, <a href="fft.html#fft-external">FFT analyser ▸ External-window toggle</a></li>
       <li><b>THD settings</b> — <a href="fft.html#">FFT analyser</a></li>
@@ -591,7 +608,7 @@
     </ul>
     <h3>U</h3>
     <ul>
-      <li><b>USB</b> — <a href="credits.html#credits-hardware">Credits ▸ Measurement hardware</a></li>
+      <li><b>USB</b> — <a href="credits.html#credits-hardware">Credits ▸ Measurement hardware</a>, <a href="oscilloscope.html#scope-trigger-type">Oscilloscope ▸ Type (E / G)</a>, <a href="theory/fft.html#">Theory ▸ FFT analyser ▸ Signal discontinuity — caught in the raw waveform</a>, <a href="theory/oscilloscope.html#glitch">Theory ▸ Oscilloscope ▸ The glitch trigger: firing on damage, not on a level</a></li>
     </ul>
     <h3>V</h3>
     <ul>
