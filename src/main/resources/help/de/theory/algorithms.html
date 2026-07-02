@@ -108,6 +108,18 @@
         <td>Doppelschwellen-Flankenqualifikation, damit Rauschen auf dem
             Signal den Trigger nicht doppelt auslöst.</td>
         <td><a href="oscilloscope.html#trigger">Oszilloskop — Trigger</a></td></tr>
+    <tr><td>Sinus-Rekurrenz-Diskontinuitätsdetektor</td>
+        <td>Sagt jedes Sample aus den zwei vorangehenden über die
+            Rekurrenz des Tons selbst voraus,
+            <i>d</i><sub>i</sub> ≈ 2 cos <i>ω</i> ·
+            <i>d</i><sub>i−1</sub> − <i>d</i><sub>i−2</sub>; der
+            Vorhersagefehler liegt bei sauberem Signal auf dem Rauschpegel
+            und springt bei jeder Klebestelle oder jedem Aussetzer um
+            Größenordnungen über eine 8×-Mittelwert-Schwelle — der
+            Störungstrigger des Oszilloskops und das Zeitbereichs-Erfassungsgatter
+            der FFT teilen sich denselben Detektor, sodass beide sich einig
+            sind, was als Beschädigung zählt.</td>
+        <td><a href="oscilloscope.html#trigger">Oszilloskop — Trigger</a></td></tr>
     <tr><td>Chebyshev IIR-Tiefpass + Median-Entstörer</td>
         <td>Hochfrequente Impulsunterdrückung vor Anzeige und
             Messung.</td>
@@ -155,6 +167,13 @@
     <tr><th>Algorithmus</th><th>Funktion hier</th><th>In dieser Hilfe</th></tr>
     <tr><td>Welfords Online-Varianz</td>
         <td>Einpass-Mittelwert und σ für die Live-Messstatistiktabelle.</td>
+        <td><a href="oscilloscope.html#measure">Oszilloskop —
+            Messungen</a></td></tr>
+    <tr><td>Ganzperioden-Integration von V<sub>mean</sub>/V<sub>rms</sub></td>
+        <td>Integriert über eine ganzzahlige Anzahl von Signalperioden,
+            sodass der Teilperioden-Rest — eine Messwertstreuung, die mit
+            der Amplitude wächst — aus Mittelwert und Effektivwert
+            herausfällt.</td>
         <td><a href="oscilloscope.html#measure">Oszilloskop —
             Messungen</a></td></tr>
     <tr><td>Exponentieller gleitender Mittelwert</td>
