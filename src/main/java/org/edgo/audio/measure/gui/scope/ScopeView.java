@@ -48,8 +48,10 @@ import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.OscSliderId;
+import org.edgo.audio.measure.dsp.TimeDiscontinuityDetector;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
+import org.edgo.audio.measure.enums.TriggerType;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -316,6 +318,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * paint, just with the cached values.
      */
     private static final long READOUT_THROTTLE_NS = 200_000_000L;
+    /** Minimum glitch-mode collection time before the cumulative rate is shown —
+     *  below this, count ÷ elapsed is dominated by start-up jitter, so read 0. */
+    private static final double GLITCH_RATE_MIN_SECONDS = 1.0;
     private MeasurementRow[]  cachedMeasurementRows;
     /** The worker result the cached rows were built from; the rows rebuild when the
      *  worker posts a NEW result (its own compute rhythm) rather than on a display
@@ -357,6 +362,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
 
     /** Set by {@link #drawWaveforms} each paint; consumed by {@link #updateCaptureRate}. */
     private boolean lastFrameWasNew;
+    /** Glitch-mode capture-rate state: rare events make a per-interval EMA useless, so
+     *  the readout is total caught ÷ collection time.  Counting restarts when glitch
+     *  mode is entered or a new record begins (detected via {@link #rateSawFrozen}). */
+    private long    glitchCountStartNanos;
+    private int     glitchCount;
+    private boolean rateWasGlitchMode;
+    private boolean rateSawFrozen;
     /**
      * How many samples back from the live writePos the view should anchor
      * its right edge.  0 = follow latest (default); positive values let
@@ -872,6 +884,20 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
     }
 
+    /** Drops the held trigger anchor and captured frame — called when the trigger
+     *  SOURCE changes (type / edge / channel) or the generated signal changes: the
+     *  old anchor belongs to the old trigger/signal and would keep re-rendering a
+     *  stale trace (and re-stamp it into the persistence afterglow on the next
+     *  interactive render).  NORMAL / SINGLE then stay blank until the new trigger
+     *  fires.  Also restarts the glitch-mode cap/s collection — events caught under
+     *  the old trigger/signal (e.g. the generator transition itself, which IS a
+     *  discontinuity) don't belong in the new count. */
+    public void resetTriggerHold() {
+        lastTriggerAbsPos = -1;
+        singleHeld = false;
+        glitchCountStartNanos = 0;
+    }
+
     private void onPaint(PaintEvent e) {
         Rectangle area = getClientArea();
         int w = area.width;
@@ -1098,7 +1124,32 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * NORMAL pane reads ~0 cap/s instead of the paint rate.
      */
     private void updateCaptureRate() {
+        if (frozen) {
+            rateSawFrozen = true;   // stopped: freeze the readout at its last value
+            return;
+        }
         long now = System.nanoTime();
+        boolean glitchMode = Preferences.instance().getOscTriggerType() == TriggerType.GLITCH;
+        if (glitchMode) {
+            // Glitch rate = caught count ÷ collection time.  Events are seconds to
+            // minutes apart, so a per-interval EMA would just decay toward 0 between
+            // catches; the cumulative rate is the honest figure.
+            if (!rateWasGlitchMode || rateSawFrozen || glitchCountStartNanos == 0) {
+                glitchCountStartNanos = now;
+                glitchCount = 0;
+            }
+            if (lastFrameWasNew) {
+                glitchCount++;
+                lastNewFrameNanos = now;
+            }
+            double elapsed = (now - glitchCountStartNanos) * 1e-9;
+            captureRate = (elapsed >= GLITCH_RATE_MIN_SECONDS) ? glitchCount / elapsed : 0.0;
+            rateWasGlitchMode = true;
+            rateSawFrozen = false;
+            return;
+        }
+        rateWasGlitchMode = false;
+        rateSawFrozen = false;
         if (lastFrameWasNew) {
             if (lastNewFrameNanos > 0) {
                 double dt = (now - lastNewFrameNanos) * 1e-9;
@@ -1128,10 +1179,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
 
     /** Pale-grey "123.4 cap/s" readout in the top-right corner. */
     private void drawCaptureRate(MeasurementPainter gc, int w) {
-        // Hidden whenever this paint rendered a frozen frame (held SINGLE/NORMAL
-        // shot, blank pane, file / scrolled-back view): cap/s is meaningless
-        // without a live, self-refreshing capture.
-        if (reader == null || captureRate <= 0 || !lastFrameWasNew) return;
+        // Visible for the whole live record — even reading 0.0.  In glitch mode a
+        // new frame only arrives per glitch, so this readout IS the glitches/s
+        // counter and must not vanish between events.  A STOPPED scope keeps
+        // showing the last live value; hidden only in file mode (no capture) and
+        // before the first capture ever ran.
+        if (reader == null || fileMode) return;
+        if (frozen && lastNewFrameNanos <= 0) return;
         gc.setAntialias(SWT.OFF);
         gc.setTextAntialias(SWT.ON);
         gc.setForeground(color(ColorRole.TEXT));
@@ -1140,7 +1194,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // paint so the readout never blanks.
         long now = System.nanoTime();
         if (cachedCapsString.isEmpty() || now - lastCapsBuildNanos >= READOUT_THROTTLE_NS) {
-            cachedCapsString   = String.format("%.1f cap/s", captureRate);
+            // 3 decimals: in glitch mode the rate is glitches/s and a rare event
+            // (one per minutes) reads e.g. 0.008 — one decimal would show 0.0.
+            cachedCapsString   = String.format("%.3f cap/s", captureRate);
             lastCapsBuildNanos = now;
         }
         Point ts = gc.textExtent(cachedCapsString);
@@ -2669,10 +2725,30 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 debugBeatSignal = effectiveData;
             }
         }
-        double triggerFrac = (searchTo > searchFrom)
-                ? ScopeTrigger.find(effectiveData, available, searchFrom, searchTo,
-                              effectiveTriggerLevel, rising, effectiveSinc, triggerHysteresis)
-                : -1.0;
+        double triggerFrac;
+        if (searchTo <= searchFrom) {
+            triggerFrac = -1.0;
+        } else if (prefs.getOscTriggerType() == TriggerType.GLITCH) {
+            // Discontinuity trigger: fires where the signal breaks the sinusoid-
+            // recurrence prediction — level steps AND slope splices, anywhere on
+            // the wave, regardless of direction.  ↑ anchors the display on the
+            // glitch's start, ↓ on its end.  Level / hysteresis / sinc refine
+            // don't apply.  The measured frequency pins the recurrence exactly
+            // (noise-floor baseline at any f); it applies only when the
+            // measurement channel IS the trigger channel — otherwise the
+            // detector self-estimates from the window.
+            int glitchSr = b.getSampleRate();
+            SignalMeasurements meas = measWorker.getLastMeasResult();
+            double measHz = (meas != null && prefs.getOscMeasurementChannel() == triggerCh)
+                    ? meas.getFrequency() : Double.NaN;
+            double omega = (measHz > 0 && measHz < glitchSr / 2.0)
+                    ? 2.0 * Math.PI * measHz / glitchSr : Double.NaN;
+            triggerFrac = ScopeTrigger.findGlitch(effectiveData, searchFrom, searchTo, rising,
+                    (int) Math.round(glitchSr * TimeDiscontinuityDetector.MERGE_SECONDS), omega);
+        } else {
+            triggerFrac = ScopeTrigger.find(effectiveData, available, searchFrom, searchTo,
+                              effectiveTriggerLevel, rising, effectiveSinc, triggerHysteresis);
+        }
         boolean foundTrigger = (triggerFrac >= 0);
 
         // ---------------------------------------------------------------

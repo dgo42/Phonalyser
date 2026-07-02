@@ -24,6 +24,7 @@ import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
+import org.edgo.audio.measure.enums.TriggerType;
 
 /**
  * Snapshot of every oscilloscope control whose value is part of a
@@ -53,6 +54,7 @@ public class OscPreset {
     private double  triggerPositionFrac      = 0.5;
     private Channel triggerChannel    = Channel.L;
     private TriggerEdge    triggerEdge       = TriggerEdge.RISE;
+    private TriggerType    triggerType       = TriggerType.EDGE;
     private TriggerMode    triggerMode       = TriggerMode.AUTO;
     private double  triggerLevelFrac         = 0.5;
 }
