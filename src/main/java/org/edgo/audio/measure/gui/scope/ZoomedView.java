@@ -83,6 +83,15 @@ public final class ZoomedView extends AbstractMeasurementView {
         addDisposeListener(e -> disposePalette());
     }
 
+    // The condensed strip is a fixed 1-second overview — rectangular zoom is
+    // never installed here, so the base's zoom hooks stay inert.
+    @Override
+    protected ZoomState captureZoomState() { return null; }
+    @Override
+    protected boolean applyZoomState(ZoomState state) { return false; }
+    @Override
+    protected ZoomState zoomStateForRect(Rectangle selection) { return null; }
+
     public void setViewBackOffsetFrames(long v) { this.viewBackOffsetFrames = Math.max(0L, v); }
 
     public void setBuffer(SignalBufferReader reader) {

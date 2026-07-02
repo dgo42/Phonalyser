@@ -104,10 +104,12 @@ public final class ScopeTabControl extends AbstractTabControl {
     /** Side length of every small in-group toggle button (px). */
     public  static final int SQUARE_BUTTON = 32;
 
-    /** Vertical / horizontal resolution bounds (canonical V and s per div). */
-    private static final double V_PER_DIV_MIN = 1e-9;
+    /** Vertical / horizontal resolution bounds (canonical V and s per div).
+     *  The MINs are package-visible: ScopeView's rect zoom clamps to the same
+     *  floors, or the fields' reverse bindings would desync pref and display. */
+    static  final double V_PER_DIV_MIN = 1e-9;
     private static final double V_PER_DIV_MAX = 500;
-    private static final double T_PER_DIV_MIN = 1e-6;
+    static  final double T_PER_DIV_MIN = 1e-6;
     private static final double T_PER_DIV_MAX = 1.0;
     /** Trigger hysteresis: 0…5 divisions in 0.1-div steps, one decimal. */
     private static final double HYST_MAX_DIV  = 5;
@@ -575,6 +577,14 @@ public final class ScopeTabControl extends AbstractTabControl {
             controller.redrawViews();
             toolbarTabs.refreshTab(TAB_LEFT);
         });
+        // Reverse sync: programmatic V/div writes (rect zoom, its Ctrl+Z undo)
+        // refresh the field.  Loop-safe: setValue fires only on a real change,
+        // the listener's preserveCanvasMiddle is identity at old == new (the
+        // pref already holds the new value when this runs), and Property.set
+        // no-ops on equal values.
+        Bindings.onChange(toolbarTabs, prefs.oscLeftVoltsPerDivProperty(), v -> {
+            if (leftScale != null && !leftScale.isDisposed()) leftScale.setValue(v);
+        });
         // Wheel / arrows / typing on this field change ONLY this channel (via the
         // selection listener above) — coupling both channels is the ctrl+wheel
         // scope-zoom gesture alone, not the per-channel V/div field.
@@ -649,6 +659,10 @@ public final class ScopeTabControl extends AbstractTabControl {
             prefs.setOscRightVoltsPerDiv(newV);
             controller.redrawViews();
             toolbarTabs.refreshTab(TAB_RIGHT);
+        });
+        // Reverse sync — see the leftScale twin for the loop-safety argument.
+        Bindings.onChange(toolbarTabs, prefs.oscRightVoltsPerDivProperty(), v -> {
+            if (rightScale != null && !rightScale.isDisposed()) rightScale.setValue(v);
         });
         // Wheel / arrows / typing on this field change ONLY this channel (selection
         // listener above) — coupling is the ctrl+wheel scope zoom alone.

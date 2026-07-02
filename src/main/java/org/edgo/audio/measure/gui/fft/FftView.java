@@ -552,6 +552,7 @@ public final class FftView extends AbstractFreqDomainView {
         addMouseMoveListener(this::onMouseMove);
         setCursor(getDisplay().getSystemCursor(SWT.CURSOR_CROSS));   // plot crosshair cursor, set once
         addListener(SWT.MouseVerticalWheel, this::onMouseWheel);
+        installRectZoom(this, true);   // drag-select zoom + Ctrl+Z undo (base machinery)
         addMouseTrackListener(new org.eclipse.swt.events.MouseTrackAdapter() {
             @Override
             public void mouseExit(MouseEvent e) {
@@ -1276,10 +1277,74 @@ public final class FftView extends AbstractFreqDomainView {
                 && crossY >= plot.y && crossY < plot.y + plot.height) {
             drawCrosshair(gc, plot, lastResult, unit, freqMin, freqMax, magTop, magBot, logFreq);
         }
+        drawRectZoomOverlay(gc, area.width, area.height);
         if (log.isWarnEnabled() && gotFftResult && DebugSwitches.SHOW_FFT_ANALYZE_TIME) {
             log.warn("          3. FFT result rendered in {} ms", (double)(System.nanoTime() - startRender) / 1_000_000);
             gotFftResult = false;
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Rectangular zoom (base machinery in AbstractMeasurementView)
+    // -------------------------------------------------------------------------
+
+    /** X = displayed frequency window (Hz), Y = the magnitude window in
+     *  CANONICAL dBFS — the unit the range prefs store for every display unit. */
+    @Override
+    protected ZoomState captureZoomState() {
+        Preferences prefs = Preferences.instance();
+        return new ZoomState(prefs.getFftFreqMinHz(), prefs.getFftFreqMaxHz(),
+                new double[] { prefs.getFftMagBottom() },
+                new double[] { prefs.getFftMagTop() });
+    }
+
+    /** Applies through the canonical range-change protocol; the pane's
+     *  FFT_RANGE_CHANGED subscriber clamps to [binSize, Nyquist] ×
+     *  [floor, ceiling] and realigns the scrollbars. */
+    @Override
+    protected boolean applyZoomState(ZoomState s) {
+        Preferences prefs = Preferences.instance();
+        prefs.setFftFreqMinHz(s.xMin());
+        prefs.setFftFreqMaxHz(s.xMax());
+        prefs.setFftMagBottom(s.yMin()[0]);
+        prefs.setFftMagTop(s.yMax()[0]);
+        prefs.save();
+        fireRangeChanged();
+        redraw();
+        return true;
+    }
+
+    /** Log-aware on X (the axis flag decides); Y maps the pixel fraction
+     *  linearly onto the dBFS prefs — the wheel-zoom convention, correct for
+     *  every display unit since linear-in-dB equals log-in-V. */
+    @Override
+    protected ZoomState zoomStateForRect(Rectangle sel) {
+        Preferences prefs = Preferences.instance();
+        Rectangle plot = zoomableArea();
+        if (plot == null || plot.width <= 0 || plot.height <= 0) return null;
+        boolean logFreq = prefs.isFftLogFreqAxis();
+        // Mirror the paint's axis preparation exactly (same order): floor fMin
+        // at 0, stretch sub-1-Hz spans to 1 Hz, then the log floor — otherwise
+        // a selection on a stretched axis maps onto the wrong frequencies.
+        double fMin = Math.max(0, prefs.getFftFreqMinHz());
+        double fMax = Math.max(fMin + 1, prefs.getFftFreqMaxHz());
+        if (logFreq && fMin < 1) fMin = 1;      // the paint floors log fMin at 1 Hz
+        double top  = prefs.getFftMagTop();
+        double span = top - prefs.getFftMagBottom();
+        double newTop = top - (sel.y - plot.y) / (double) plot.height * span;
+        double newBot = top - (sel.y + sel.height - plot.y) / (double) plot.height * span;
+        return new ZoomState(
+                xToFreq(sel.x, plot, fMin, fMax, logFreq),
+                xToFreq(sel.x + sel.width, plot, fMin, fMax, logFreq),
+                new double[] { newBot }, new double[] { newTop });
+    }
+
+    /** Selections live inside the plot area (between the axis-label margins). */
+    @Override
+    protected Rectangle zoomableArea() {
+        Rectangle area = getClientArea();
+        return new Rectangle(MARGIN_LEFT, MARGIN_TOP,
+                area.width - MARGIN_LEFT - 1, area.height - MARGIN_TOP - MARGIN_BOTTOM);
     }
 
     /** Tints the spectrum area outside the active distortion-HP /
