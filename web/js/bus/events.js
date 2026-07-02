@@ -1,0 +1,165 @@
+/*
+ * Phonalyser web — canonical names for every event passed through the MessageBus.
+ *
+ * Faithful port of org.edgo.audio.measure.gui.bus.Events. Always reference these constants at call
+ * sites — never a string literal — so renaming an event is a single-file change and a typo at the
+ * publisher won't silently bypass every subscriber. Each constant documents its payload. The
+ * string values match the Java baseline. (The Java "marshal to the UI thread" caveats don't apply:
+ * JS is single-threaded; workers already marshal via postMessage.)
+ * GNU Affero General Public License v3 or later.
+ */
+
+export const Events = Object.freeze({
+  /** Fired by the FFT pane when the user picks a new FFT length. No payload — subscribers read the
+   *  fresh value from Preferences.instance().fftLength. */
+  FFT_LENGTH_CHANGED: 'fft.length.changed',
+
+  /** Fired once by the Preferences dialog's OK after the working copy is committed — the audio
+   *  backend, devices, sample rates or bit depths may have changed. No payload — subscribers read
+   *  the fresh values from Preferences. Used by numeric fields whose bounds derive from the audio
+   *  format (frequency ceilings at Nyquist, the sweep-points series' sample-rate/2 entry). */
+  AUDIO_FORMAT_CHANGED: 'preferences.audioFormat.changed',
+
+  /** Prefix for pane-title click events. The full name is built by paneTitleClick(id). Subscribers
+   *  pick their pane by ID — one subscriber per ID. */
+  PANE_TITLE_CLICK_PREFIX: 'paneTitle.click.',
+
+  /** Request — opens (or refcount-increments) the shared input capture device. Responder: the
+   *  SharedCapture singleton. Response: the live SignalBuffer on success, or null on failure. */
+  CAPTURE_ACQUIRE: 'capture.acquire',
+
+  /** Notification — releases one reference on the shared capture device. The device is closed only
+   *  when the last consumer has released. */
+  CAPTURE_RELEASE: 'capture.release',
+
+  /** Notification — the shared capture device just appended a fresh batch of samples to its
+   *  SignalBuffer. No payload. Drives the oscilloscope's capture-driven redraw. */
+  CAPTURE_BATCH_AVAILABLE: 'capture.batch.available',
+
+  /** Request — asks whether the audio generator is currently producing a signal (DDS tone or WAV
+   *  file player). Responder: the generator pane. Response: boolean (null when no responder). */
+  GENERATOR_RUNNING: 'generator.running',
+
+  /** Notification — a generator signal parameter (frequency, amplitude, waveform, …) changed.
+   *  Payload: GenChangeCause — USER_INPUT when the user moved a control, FLL_TRIM when the FFT-side
+   *  frequency-lock loop applied a sub-Hz alignment trim. Subscribers caching results derived from
+   *  the generated signal MUST treat USER_INPUT as "drop everything; restart" but keep their cache
+   *  + averaging alive for FLL_TRIM. */
+  GENERATOR_SIGNAL_CHANGED: 'generator.signal.changed',
+
+  /** Notification — the FFT-side frequency-lock loop wants the generator to adopt a new fundamental
+   *  frequency WITHOUT restarting the FFT averaging accumulator. Payload: new frequency in Hz
+   *  (number). Subscriber: generator pane; it live-applies the freq and republishes
+   *  GENERATOR_SIGNAL_CHANGED with cause FLL_TRIM so the FFT worker keeps its averaging. */
+  GENERATOR_FREQ_TRIM: 'generator.freq.trim',
+
+  /** Notification — as GENERATOR_FREQ_TRIM, for the SECOND tone of a DUAL_TONE waveform.
+   *  Payload: new frequency in Hz (number). */
+  GENERATOR_FREQ_TRIM_2: 'generator.freq.trim.2',
+
+  /** Notification — the FFT-side frequency-lock loops were reset; the generator must drop any
+   *  residual FLL trim and return its running tone(s) to the configured (snapped) frequencies.
+   *  No payload. Subscriber: generator pane (re-applies the snap targets). */
+  GENERATOR_FREQ_TRIM_RESET: 'generator.freq.trim.reset',
+
+  /** Notification — the fundamental magnitude(s) moved by more than the drift threshold between the
+   *  first result after a generator change and the result where the frequency lock finished
+   *  aligning; the running average still contains pre-alignment frames at a depressed level, so the
+   *  user should reset statistics. Payload: largest per-tone delta in dB (number). Subscriber:
+   *  FFT view (20 s blinking warning banner). */
+  FFT_ALIGN_MAG_DRIFT: 'fft.align.mag.drift',
+
+  /** Notification — the FFT view's visible freq/magnitude pan window changed (wheel zoom, drag,
+   *  auto-setup, maximize). No payload — subscribers (the FFT pane's scrollbars) read Preferences. */
+  FFT_RANGE_CHANGED: 'fft.range.changed',
+
+  /** Notification — the FFT analyser auto-stopped because the configured stop-after-N count was
+   *  reached. Subscribers (the FFT pane) flip Record back off and release the shared capture.
+   *  No payload. */
+  FFT_RECORDING_AUTO_STOPPED: 'fft.recording.auto-stopped',
+
+  /** Request — the FFT tab control wants live recording stopped (the user is loading a static
+   *  spectrum that must not be overwritten). No payload. Subscriber: the FFT pane (owns Record +
+   *  the shared-capture reference); flips Record off if it was on. */
+  FFT_RECORDING_STOP_REQUESTED: 'fft.recording.stop-requested',
+
+  /** Request — the FFT tab control's Utility-tab camera button was clicked. No payload.
+   *  Subscriber: the FFT pane (owns the screenshot dialog). */
+  FFT_SCREENSHOT_REQUESTED: 'fft.screenshot.requested',
+
+  /** Notification — a fresh FFT analyser result is ready for display. Payload: the FftResult (may
+   *  be null when the worker just wants a repaint without new data, e.g. after resetStatistics).
+   *  Subscribers MUST handle null. */
+  FFT_RESULT_AVAILABLE: 'fft.result.available',
+
+  /** Notification — the FFT analyser re-synced its capture window (ring overrun, dropped-sample
+   *  gap, or signal discontinuity); the running average is kept. Payload: the i18n message-key
+   *  (string) the view shows as a blinking warning. */
+  FFT_CAPTURE_RESYNC: 'fft.capture.resync',
+
+  /** Notification — the FFT pane's loaded calibration list changed (file added/removed/replaced/
+   *  cleared). No payload — subscribers read the correction store; the view re-derives the
+   *  calibrated spectrum / harmonic dot positions on next paint. */
+  FFT_CALIBRATION_CHANGED: 'fft.calibration.changed',
+
+  /** Notification — the generator's file-player finished (user stop, EOF without loop, or error).
+   *  Subscribers (the generator pane) reset the play-from LED. No payload. */
+  FILE_PLAY_STOPPED: 'filePlay.stopped',
+
+  /** Notification — the user clicked the scope's Auto-Setup button. Subscribers (the scope pane)
+   *  re-fit the vertical/horizontal scales to the current signal. No payload. */
+  SCOPE_AUTO_SETUP: 'scope.autoSetup',
+
+  /** Notification — a SINGLE-mode shot disarmed itself because the awaited trigger fired, so the
+   *  trigger Start toggle can pop back out. No payload. */
+  SCOPE_SINGLE_DISARMED: 'scope.single.disarmed',
+
+  /** Notification — the FreqResp view's visible freq/magnitude pan window changed. No payload —
+   *  subscribers read Preferences. Mirror of FFT_RANGE_CHANGED for the Frequency Response pane. */
+  FREQRESP_RANGE_CHANGED: 'freqResp.range.changed',
+
+  /** Notification — the active Frequency Response calibration changed (loaded, cleared, or replaced
+   *  by the wizard). No payload — subscribers read the correction store. */
+  FREQRESP_CALIBRATION_CHANGED: 'freqResp.calibration.changed',
+
+  /** Notification — the FreqResp pane started a measurement. No payload. Other panes (FFT, scope)
+   *  disable their Record buttons for the duration so the shared capture isn't contended. */
+  FREQRESP_MEASUREMENT_STARTED: 'freqResp.measurement.started',
+
+  /** Notification — the FreqResp pane finished (or aborted) a measurement. No payload.
+   *  Counterpart to FREQRESP_MEASUREMENT_STARTED. */
+  FREQRESP_MEASUREMENT_STOPPED: 'freqResp.measurement.stopped',
+
+  /** Notification — a fresh sweep measurement is available for display. Payload: the
+   *  StereoFreqRespResult (both channels). */
+  FREQRESP_RESULT_AVAILABLE: 'freqResp.result.available',
+
+  /** Notification — a sweep measurement aborted with an error. Payload: the human-readable failure
+   *  reason (string). Always followed by FREQRESP_MEASUREMENT_STOPPED. */
+  FREQRESP_MEASUREMENT_FAILED: 'freqResp.measurement.failed',
+
+  /** Notification — a parameter affecting how the compare-mode curve is derived (e.g. smoothing
+   *  window size) changed. No payload — subscribers (the FreqResp view) re-derive the smoothed
+   *  diff, refresh the anchor / min-max table, and redraw. Distinct from FREQRESP_RANGE_CHANGED
+   *  because the visible band itself does not change. */
+  FREQRESP_COMPARE_PARAMS_CHANGED: 'freqResp.compare.params.changed',
+
+  /** A .frc calibration file was just (over)written to disk. Payload: the saved path (string). The
+   *  FFT and Frequency-Response calibration tabs each reload any loaded row referencing the same
+   *  file, so a freshly-saved calibration takes effect immediately. */
+  CALIBRATION_FILE_SAVED: 'calibration.file.saved',
+});
+
+/**
+ * Payload of GENERATOR_SIGNAL_CHANGED (faithful port of enums/GenChangeCause). Lets subscribers
+ * tell a user-initiated generator change from a closed-loop FLL trim: USER_INPUT means "the signal
+ * really changed — drop everything; restart", while FLL_TRIM is a sub-Hz alignment tweak that MUST
+ * keep any averaging / accumulated statistics alive.
+ */
+export const GenChangeCause = Object.freeze({ USER_INPUT: 'USER_INPUT', FLL_TRIM: 'FLL_TRIM' });
+
+/** Pane-title IDs. Each pane passes a distinct value to its title bar; subscribers route by ID. */
+export const PaneId = Object.freeze({ GENERATOR: 1, SCOPE: 2, FFT: 3, FREQRESP: 4 });
+
+/** Event name for a click on the title bar with `id` — so the format lives in exactly one place. */
+export function paneTitleClick(id) { return Events.PANE_TITLE_CLICK_PREFIX + id; }
