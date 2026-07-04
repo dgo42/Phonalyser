@@ -21,6 +21,8 @@ import { OscPreset } from '../store/preferences.js';
 // WAV/AIFF; the web streaming WAV/AIFF sinks stay in io/scope-capture.js, whose
 // openStreamingSink cannot host libFLAC's self-framing encoder).
 import { saveStreamingFlac } from '../io/flac.js';
+import { TileTabs } from '../widgets/tile-tabs.js';
+import { PresetBar } from '../widgets/preset-bar.js';
 
 /** FLAC exports are capped at 24 bits/sample EVERYWHERE in the web port — the
  *  WASM libFLAC reference encoder rejects 32-bit (encodeFlac's guard; Java's
@@ -356,43 +358,9 @@ export class ScopeTabControl {
     // Mirror everything back into the controls.
     this.seedScopeControls();
   }
-  refreshOscPresetList() {
-    // Populate the input-group dropdown (Bootstrap "buttons with dropdowns"): one
-    // menu item per saved preset name. The toggle button is disabled when empty.
-    const $menu = $('#scopePresetMenu').empty();
-    const names = [...this.prefs.oscPresets.keys()];
-    for (const name of names) {
-      $('<li>').append($('<button type="button" class="dropdown-item">').text(name)).appendTo($menu);
-    }
-    $('#scopePresetMenuBtn').prop('disabled', names.length === 0);
-    this.refreshOscPresetButtons();
-    this.host.refreshTiles();   // "N saved" Presets tile follows the preset count (Java refreshTab)
-  }
-
-  /** Save / Load / Delete enablement (faithful port of PresetBar.refreshButtons):
-   *  empty name → all disabled; a NEW name → Save only; an EXISTING name → Load /
-   *  Delete always, and Save only when the current settings differ from the saved
-   *  snapshot. JSON equality stands in for Java's OscPreset.equals (plain POJO of
-   *  primitives + strings). Called on name input, dropdown pick, and after
-   *  save/delete. */
-  refreshOscPresetButtons() {
-    const name = ($('#scopePresetName').val() || '').trim();
-    const $save = $('#scopePresetSave'), $load = $('#scopePresetLoad'), $delete = $('#scopePresetDelete');
-    if (!name) {
-      $save.prop('disabled', true); $load.prop('disabled', true); $delete.prop('disabled', true);
-      return;
-    }
-    const existing = this.prefs.oscPresets.get(name);
-    if (!existing) {
-      $save.prop('disabled', false);   // new name — Save creates it
-      $load.prop('disabled', true); $delete.prop('disabled', true);
-    } else {
-      // Existing — Save only if the current settings differ; Load / Delete always.
-      const differs = JSON.stringify(existing) !== JSON.stringify(this.captureOscPreset());
-      $save.prop('disabled', !differs);
-      $load.prop('disabled', false); $delete.prop('disabled', false);
-    }
-  }
+  /** Repopulates the preset dropdown + chip + button enablement — delegates to the shared
+   *  PresetBar. Kept as a named method for app.js init. */
+  refreshOscPresetList() { this._presetBar.refreshList(); }
 
   /** Save is enabled only once a target has been chosen this session (#2): the
    *  two-button flow means Save writes to the pre-picked target silently and never
@@ -418,14 +386,8 @@ export class ScopeTabControl {
     const getField = (id) => this._getField(id);
     const setStatus = (m) => this._setStatus(m);
 
-    // Scope tile-tabs — Left/Right/Horizontal/Trigger own their control panels.
-    $('#scopeTabs .tab').on('click', function () {
-      const panel = $(this).data('panel');
-      const wasOpen = $(this).hasClass('active') && panel && $('#' + panel).hasClass('show');
-      $('#scopeTabs .tab').removeClass('active'); $(this).addClass('active');
-      $('#scopeLeft, #scopeRight, #scopeHoriz, #scopeTrig, #scopePresets, #scopeUtility, #scopeSavePanel, #scopeLoadPanel').removeClass('show');
-      if (panel && !wasOpen) $('#' + panel).addClass('show');
-    });
+    // Scope tile-tabs — Left/Right/Horizontal/Trigger own their control panels (Java TileTabFolder).
+    new TileTabs('#scopeTabs').bind();
 
     // Scope control panels (Java ScopeTabControl) → the osc* prefs the scope view reads.
     // Channel-enable + AC coupling are square toggle BUTTONS (Java squareToggle):
@@ -646,43 +608,22 @@ export class ScopeTabControl {
       } catch (e) { setStatus(t('scope.openSignal.error') + ': ' + e.message); }
     });
 
-    // ----- Scope Presets (Java ScopeTabControl PresetBar<OscPreset>) -----
-    // Re-evaluate Save enablement as the name is typed (Java combo SWT.Modify).
-    $('#scopePresetName').on('input', () => this.refreshOscPresetButtons());
-    // Picking a saved preset from the dropdown fills the name field so Load / Delete
-    // act on it (Java PresetBar editable combo: selecting a name populates the combo).
-    $('#scopePresetMenu').on('click', '.dropdown-item', (ev) => {
-      $('#scopePresetName').val($(ev.currentTarget).text());
-      this.refreshOscPresetButtons();
+    // ----- Scope Presets (Java ScopeTabControl → PresetBar<OscPreset>) -----
+    this._presetBar = new PresetBar({
+      ids: { name: '#scopePresetName', save: '#scopePresetSave', load: '#scopePresetLoad',
+        delete: '#scopePresetDelete', menu: '#scopePresetMenu', menuBtn: '#scopePresetMenuBtn' },
+      store: {
+        presets: () => prefs.oscPresets,
+        put: (n, p) => prefs.putOscPreset(n, p),
+        remove: (n) => prefs.removeOscPreset(n),
+        captureCurrent: () => this.captureOscPreset(),
+        apply: (p) => this.applyOscPreset(p),
+      },
+      confirm: (title, msg) => this._showConfirm(title, msg),
+      i18nPrefix: 'scope.presets',
+      onChanged: () => this.host.refreshTiles(),   // "N saved" Presets tile follows the count
     });
-    $('#scopePresetSave').on('click', async () => {
-      const name = ($('#scopePresetName').val() || '').trim();
-      if (!name) return;
-      // Confirm before overwriting an existing preset (Java PresetBar.onSave → Dialogs.confirm
-      // with the scope.presets.overwrite.title / .message keys); Cancel aborts.
-      if (prefs.oscPresets.has(name)
-          && !await this._showConfirm(t('scope.presets.overwrite.title'), t('scope.presets.overwrite.message', name))) return;
-      prefs.putOscPreset(name, this.captureOscPreset());
-      this.refreshOscPresetList();
-    });
-    $('#scopePresetLoad').on('click', () => {
-      const name = ($('#scopePresetName').val() || '').trim();
-      const p = prefs.oscPresets.get(name);
-      if (!p) return;
-      this.applyOscPreset(p);
-      this.refreshOscPresetButtons();
-    });
-    $('#scopePresetDelete').on('click', async () => {
-      const name = ($('#scopePresetName').val() || '').trim();
-      if (!prefs.oscPresets.has(name)) return;
-      // Confirm before deleting (Java PresetBar.onDelete → Dialogs.confirm with the
-      // scope.presets.delete.title / .message keys); Cancel aborts. Uses the shared
-      // Bootstrap confirm modal, not the native confirm().
-      const ok = await this._showConfirm(t('scope.presets.delete.title'), t('scope.presets.delete.message', name));
-      if (!ok) return;
-      prefs.removeOscPreset(name);
-      this.refreshOscPresetList();
-    });
+    this._presetBar.bind();
 
     // ----- Scope Utility: ADC calibrate (Java AdcCalibrationDialog) -----
     // Opens a small Bootstrap modal (mirroring DacCalibrationDialog) seeded with the live

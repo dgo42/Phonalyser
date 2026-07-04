@@ -13,10 +13,10 @@
  * setTriggerControlsEnabled / syncOffsetScrollbar / redrawScrollbars / syncMeasChannelButtons /
  * syncMeasButtons / recState / onFileBack / stopCaptureForFileLoad / onSignalFileLoaded) are now
  * the pane's public methods. render() is the scope branch of the MAIN rAF loop (which stays in
- * app.js for now and calls scopePane.render() each frame). Reaches the SHELL state it does not
- * own (the scopeRec lifecycle flag + the shared `busy` re-entrancy guard, the readConfig
- * snapshot, the latest live scope frame) only through injected closures — there is ONE source of
- * truth for those flags in app.js. The scope V/div + t/div + hysteresis NumericStepFields are
+ * app.js for now and calls scopePane.render() each frame). Reads engine.scope.recording (the
+ * controller owns the recording flag) and reaches the SHELL state it does not own (the shared
+ * `busy` re-entrancy guard, the readConfig snapshot, the latest live scope frame) through
+ * injected closures. The scope V/div + t/div + hysteresis NumericStepFields are
  * built in app.js's initStepFields and reached here via the injected getField; the ScopeView,
  * the FlatScrollbar widget class (imported directly), and tileChips are injected too.
  */
@@ -48,21 +48,21 @@ export class ScopePane {
   /**
    * @param engine the AudioEngine (scope record lifecycle; live measurement / zoomed-window reads).
    * @param prefs  Preferences.
-   * @param deps   {view, getField, tileChips, isScopeRec, setScopeRec, isBusy, setBusy,
+   * @param deps   {view, getField, tileChips, isScopeRec, isBusy, setBusy,
    *                getLatestScope, readConfig, syncCalibrateGate}
    *   - view: the ScopeView (Java holds `view` as a field) — the trace canvas painter,
    *       single-armed / file-mode state, latest measurement, auto-setup.
    *   - getField: (id) => the scope NumericStepField (built in app.js initStepFields) — the
    *       hysteresis field re-gate in setTriggerControlsEnabled.
    *   - tileChips: (...vals) => the `.tile` chip-span HTML (shared with the FFT tiles).
-   *   - isScopeRec / setScopeRec: the shared scope-recording flag accessors (one source of truth).
+   *   - isScopeRec: () => engine.scope.recording — the controller owns the flag; the pane only reads it.
    *   - isBusy / setBusy: the shared async re-entrancy guard accessors (Record serializes with it).
    *   - getLatestScope: () => the latest live scope frame {buf, info} (set by engine.onScope in app.js).
    *   - readConfig: () => snapshot the live UI into engine.config before a record start.
    *   - syncCalibrateGate: () => re-gate the ScopeTabControl Calibrate button each live frame
    *       (the tab-control is built AFTER the pane, so app.js defers to it through this closure).
    */
-  constructor(engine, prefs, { view, getField, tileChips, isScopeRec, setScopeRec,
+  constructor(engine, prefs, { view, getField, tileChips, isScopeRec,
     isBusy, setBusy, getLatestScope, readConfig, syncCalibrateGate }) {
     this.engine = engine;
     this.prefs = prefs;
@@ -70,7 +70,6 @@ export class ScopePane {
     this._getField = getField;
     this._tileChips = tileChips;
     this._isScopeRec = isScopeRec;
-    this._setScopeRec = setScopeRec;
     this._isBusy = isBusy;
     this._setBusy = setBusy;
     this._getLatestScope = getLatestScope;
@@ -124,9 +123,9 @@ export class ScopePane {
     $('.scope-pane .led-btn').prop('disabled', true);
     // Stop the scope via the ENGINE unconditionally — NOT gated on the shell record flag
     // (see FftPane.onFreqRespMeasurementStarted): a shell/controller desync must not leave
-    // the scope consuming the sweep. setRecording is a no-op when already off; reconcile
-    // the shell flag + LED to the engine's real state.
-    this._setScopeRec(await this.engine.scope.setRecording(false));
+    // the scope consuming the sweep. setRecording is a no-op when already off; sync the
+    // LED to the engine's real state.
+    await this.engine.scope.setRecording(false);
     this.syncScopeLed();
   }
 
@@ -619,7 +618,7 @@ export class ScopePane {
         // gap isn't folded into the cumulative rate (Java rateSawFrozen restart).
         scopeView.restartGlitchRate();
       }
-      try { this._setScopeRec(await engine.scope.setRecording(want)); }   // reconcile: false if the device failed to open
+      try { await engine.scope.setRecording(want); }   // the controller reconciles _scopeOn: false if the device failed to open
       finally { this.syncScopeLed(); this._setBusy(false); }
     });
   }
@@ -645,7 +644,7 @@ export class ScopePane {
   async stopCaptureForFileLoad() {
     if (this._isScopeRec()) {
       try { await this.engine.scope.setRecording(false); } catch (e) { /* ignore */ }
-      this._setScopeRec(false); this.syncScopeLed();
+      this.syncScopeLed();
       // Java ScopeController.openSignalFile publishes this after a programmatic stop
       // so the pane pops its Record toggle; the web LED is synced inline above, the
       // event is published for any other listener (parity with the Java bus contract).

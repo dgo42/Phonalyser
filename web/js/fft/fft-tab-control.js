@@ -25,6 +25,8 @@ import * as fileStore from '../io/file-store.js';
 import { putCal, getCal } from '../io/cal-store.js';
 import { CalibrationEntry } from '../store/preferences.js';
 import { registerShotCanvasRenderer, ensureShotRenderCanvas } from '../shell/screenshot.js';
+import { TileTabs } from '../widgets/tile-tabs.js';
+import { PresetBar } from '../widgets/preset-bar.js';
 
 // FftOverlap enum token → display %, for the FFT-settings sub-label.
 const OVERLAP_PCT = { PCT_0: '0', PCT_50: '50', PCT_75: '75', PCT_87_5: '87.5', PCT_93_75: '93.75' };
@@ -237,6 +239,7 @@ export class FftTabControl {
     $('.fft-pane .lr.l, .fft-pane .lr.r').removeClass('on');
     $('.fft-pane .lr.' + (prefs.fftChannel.get() === 'R' ? 'r' : 'l')).addClass('on');
     $('#logAxis').prop('checked', prefs.fftLogFreqAxis.get());
+    $('#fftDetectTimeDisc').prop('checked', prefs.fftDetectTimeDiscontinuity.get());
     $('#fftMagUnit').val(prefs.fftMagUnit.get());
     $('#fftFundFromGen').prop('checked', prefs.fftFundFromGenerator.get());
     // THD NumericStepFields (#4) — push the prefs into the widgets (setValue is silent).
@@ -296,25 +299,9 @@ export class FftTabControl {
     this.fftView.applyPrefs();
     this._restartFft();
   }
-  refreshFftPresetList() {
-    const $menu = $('#fftPresetMenu').empty();
-    const names = [...this.prefs.fftPresets.keys()];
-    for (const name of names) $('<li>').append($('<button type="button" class="dropdown-item">').text(name)).appendTo($menu);
-    $('#fftPresetMenuBtn').prop('disabled', names.length === 0);
-    this.updatePresetTabSub();   // repaint the "N saved" tile chip
-    this.refreshFftPresetButtons();
-  }
-  refreshFftPresetButtons() {
-    const name = ($('#fftPresetName').val() || '').trim();
-    const $s = $('#fftPresetSave'), $l = $('#fftPresetLoad'), $d = $('#fftPresetDelete');
-    if (!name) { $s.prop('disabled', true); $l.prop('disabled', true); $d.prop('disabled', true); return; }
-    const existing = this.prefs.fftPresets.get(name);
-    if (!existing) { $s.prop('disabled', false); $l.prop('disabled', true); $d.prop('disabled', true); }
-    else {
-      $s.prop('disabled', JSON.stringify(existing) === JSON.stringify(this.captureFftPreset()));
-      $l.prop('disabled', false); $d.prop('disabled', false);
-    }
-  }
+  /** Repopulates the preset dropdown + chip + button enablement — delegates to the shared
+   *  PresetBar. Kept as a named method for app.js init + the tiles refresh. */
+  refreshFftPresetList() { this._presetBar.refreshList(); }
 
   /** #28 screenshot: re-renders the FFT view — the SAME live FftView instance, so the
    *  SAME paint path (grid + axis ticks, trace, harmonic dots, readout + THD/IMD table)
@@ -520,47 +507,25 @@ export class FftTabControl {
       };
     }
 
-    // ----- tile tabs: toggle the drop-down panel a tile owns (collapsed by default) -----
-    $('#fftTabs .tab').on('click', function () {
-      const panel = $(this).data('panel');               // '' for non-panel tiles
-      const wasOpen = $(this).hasClass('active') && panel && $('#' + panel).hasClass('show');
-      $('#fftTabs .tab').removeClass('active'); $(this).addClass('active');
-      // Hide EVERY FFT tab-panel before showing the clicked one, so exactly one
-      // panel shows at a time (Java CTabFolder: selecting a tab hides the rest).
-      // The earlier explicit list omitted #fftSavePanel/#fftLoadPanel, so once
-      // opened they never closed and Settings + Save + Load stacked. Scope to
-      // #fftPane — the FreqResp pane reuses the .fft-pane class but a different
-      // <section> (no #fftPane), so its panels stay untouched.
-      $('#fftPane .tab-panel').removeClass('show');
-      if (panel && !wasOpen) $('#' + panel).addClass('show');
-    });
+    // ----- tile tabs: toggle the drop-down panel a tile owns (Java TileTabFolder) -----
+    new TileTabs('#fftTabs').bind();
 
-    // ----- FFT Presets tab (Java FftTabControl.buildPresetsTab → PresetBar): named save/load/delete (g21) -----
-    $('#fftPresetName').on('input', () => this.refreshFftPresetButtons());
-    $('#fftPresetMenu').on('click', '.dropdown-item', (ev) => { $('#fftPresetName').val($(ev.currentTarget).text()); this.refreshFftPresetButtons(); });
-    $('#fftPresetSave').on('click', async () => {
-      const name = ($('#fftPresetName').val() || '').trim();
-      if (!name) return;
-      // Confirm before overwriting an existing preset (Java PresetBar overwrite dialog).
-      if (prefs.fftPresets.has(name)) {
-        const ok = await showConfirm(t('fft.presets.overwrite.title'), t('fft.presets.overwrite.message', name));
-        if (!ok) return;
-      }
-      prefs.putFftPreset(name, this.captureFftPreset());
-      $('#fftPresetName').val(name);   // reflect the trimmed name (Java combo.setText)
-      this.refreshFftPresetList();
+    // ----- FFT Presets tab (Java FftTabControl.buildPresetsTab → PresetBar<FftPreset>) -----
+    this._presetBar = new PresetBar({
+      ids: { name: '#fftPresetName', save: '#fftPresetSave', load: '#fftPresetLoad',
+        delete: '#fftPresetDelete', menu: '#fftPresetMenu', menuBtn: '#fftPresetMenuBtn' },
+      store: {
+        presets: () => prefs.fftPresets,
+        put: (n, p) => prefs.putFftPreset(n, p),
+        remove: (n) => prefs.removeFftPreset(n),
+        captureCurrent: () => this.captureFftPreset(),
+        apply: (p) => this.applyFftPreset(p),
+      },
+      confirm: (title, msg) => showConfirm(title, msg),
+      i18nPrefix: 'fft.presets',
+      onChanged: () => this.updatePresetTabSub(),   // repaint the "N saved" tile chip
     });
-    $('#fftPresetLoad').on('click', () => {
-      const p = prefs.fftPresets.get(($('#fftPresetName').val() || '').trim());
-      if (p) { this.applyFftPreset(p); this.refreshFftPresetButtons(); }
-    });
-    $('#fftPresetDelete').on('click', async () => {
-      const name = ($('#fftPresetName').val() || '').trim();
-      if (!prefs.fftPresets.has(name)) return;
-      const ok = await showConfirm(t('fft.presets.delete.title'), t('fft.presets.delete.message', name));
-      if (!ok) return;
-      prefs.removeFftPreset(name); this.refreshFftPresetList();
-    });
+    this._presetBar.bind();
 
     // ----- FFT Utility tab (Java FftTabControl.buildUtilityTab): screenshot + ADC calibrate (g22) -----
     // Screenshot (#28): the FFT Utility camera (#fftShot) opens the SHARED composited ScreenshotDialog
@@ -657,6 +622,7 @@ export class FftTabControl {
         // buildLoadFromTab: pathField.setText(chosen) + prefs.setFftLoadPath).
         prefs.fftLoadPath.set(f.name); prefs.save();
         $('#fftLoadPath').val(f.name).attr('title', f.name);
+        this.host.showLoadedBanner(f.name);   // "Loaded: file" blink (Java FftView.setSourceFilePath)
         $('#status').text(`loaded ${f.name}`);
       } catch (e) { $('#status').text('FFT load failed: ' + e.message); }
     });
@@ -895,6 +861,13 @@ export class FftTabControl {
 
     // Logarithmic frequency axis toggle (Java fftLogFreqAxis) — drives the FFT view.
     $('#logAxis').on('change', () => { prefs.fftLogFreqAxis.set($('#logAxis').is(':checked')); this.fftView.applyPrefs(); });
+    // Time-domain discontinuity gate toggle (Java detectTimeDiscCheck bound to the pref, read
+    // live by the worker): mirror into engine.config so the change takes effect mid-record.
+    $('#fftDetectTimeDisc').on('change', () => {
+      const v = $('#fftDetectTimeDisc').is(':checked');
+      prefs.fftDetectTimeDiscontinuity.set(v);
+      this.engine.config.fftDetectTimeDiscontinuity = v;
+    });
     // FFT magnitude-unit selector (Java magUnitCombo) — relabels the view's y-axis
     // (V / V√Hz / dBV / dBFS); the range stays canonical dBFS, so this is draw-time only.
     $('#fftMagUnit').on('change', () => { prefs.fftMagUnit.set($('#fftMagUnit').val()); this.fftView.applyPrefs(); });

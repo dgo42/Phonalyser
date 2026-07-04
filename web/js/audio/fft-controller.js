@@ -108,6 +108,20 @@ export class FftController {
     // Epoch bumped on every accumulator reset; in-flight worker results stamped with an
     // older epoch are dropped so a window straddling the reset can't poison the average.
     this._accumEpoch = 0;
+    // Step 5b dual-fold parity harness (default OFF → the fold runs only here on main, zero
+    // overhead). Flip via localStorage 'foldInWorker'='1' + reload: the worker then runs a
+    // SHADOW copy of the cross-tick fold and this controller logs main-vs-worker spectrum
+    // parity. Steady-state clean runs are bit-identical; a mid-run reset/glitch desyncs the
+    // two depths (an async worker can't drop the same straddling window) — reported, not failed.
+    this._foldInWorker = (() => {
+      try { return !!(globalThis.localStorage && localStorage.getItem('foldInWorker') === '1'); }
+      catch (_) { return false; }
+    })();
+    this._parityDesynced = false;
+    // One-shots → the worker's shadow accumulator, so it resets / re-anchors at the SAME ticks
+    // this controller's own accumulator does (set at every _accum.reset() / _accum.onResync()).
+    this._workerResetPending = false;
+    this._workerResyncPending = false;
     // Previous tick's averaging mode, for the mode-transition reset (Java lastAccumulate /
     // lastForeverMode / lastRingN): flip, ring↔∞ switch, or a SMALLER ring drops the depth.
     this._lastAccumulate = false;
@@ -200,6 +214,7 @@ export class FftController {
     this._winAbsStart = 0; this._dispatchedOnce = false;
     this._accum.reset();
     this._accumEpoch++;
+    this._workerResetPending = true;
     this._drainSkipRemaining = Math.ceil(OUTPUT_DRAIN_SKIP_SEC * (this.config.inRate || 0));
   }
 
@@ -266,6 +281,31 @@ export class FftController {
    *  detectStrongTones). Takes effect on the next accumulator restart. */
   setStrongToneRelDb(db) { if (this._accum) this._accum.setStrongToneRelDb(db); }
 
+  /** Step 5b parity harness (FOLD_IN_WORKER): assert the worker's SHADOW cross-tick fold
+   *  produced the same cumulative spectrum this controller's own fold did. Compared only when
+   *  the two depths agree — an async worker can't drop the exact window a mid-run reset drops,
+   *  so a reset/glitch transiently offsets the depths (reported once, then re-syncs on the next
+   *  clean record). A steady-state |Δ| above 1e-9 dB is a real fold-port bug. */
+  _checkFoldParity(r) {
+    const mainFrames = this._accum.accumFrames;
+    if (r.wAccumFrames !== mainFrames) {
+      if (!this._parityDesynced) {
+        this._parityDesynced = true;
+        console.warn(`[FOLD_IN_WORKER] fold depths desynced (main ${mainFrames} vs worker ${r.wAccumFrames}) — expected after a reset/glitch; restart the FFT to re-test parity`);
+      }
+      return;
+    }
+    if (this._parityDesynced) { this._parityDesynced = false; console.info('[FOLD_IN_WORKER] fold depths re-synced'); }
+    const a = r.amplitudeDbFs, w = r.wAmp;
+    let maxAbs = 0, at = -1;
+    for (let k = 0; k < a.length; k++) {
+      const dd = Math.abs(a[k] - w[k]);
+      if (dd > maxAbs) { maxAbs = dd; at = k; }
+    }
+    if (maxAbs > 1e-9) console.warn(`[FOLD_IN_WORKER] spectrum parity FAIL: max |Δ|=${maxAbs.toExponential(3)} dB at bin ${at} (depth ${mainFrames})`);
+    else if ((this._analysesTicks & 127) === 0) console.info(`[FOLD_IN_WORKER] parity OK: max |Δ|=${maxAbs.toExponential(3)} dB (depth ${mainFrames})`);
+  }
+
   /** FFT averages accumulated since the last reset (predistortion host) — the
    *  per-tick analysis count (Java getCompletedAnalyses / completedAnalyses). */
   completedAnalyses() { return this._analysesTicks; }
@@ -283,7 +323,7 @@ export class FftController {
     // Java resetStatistics calls paused.set(false): a predistortion-round reset must
     // RESUME the feed after a prior stop-after-N auto-stop, else the next round starves.
     this._fftPausedByStopN = false;
-    if (this._accum) { this._accum.reset(); this._accumEpoch++; }
+    if (this._accum) { this._accum.reset(); this._accumEpoch++; this._workerResetPending = true; }
   }
 
   /** Selects which ADC channel the FFT ANALYZES (Java FftView button →
@@ -370,6 +410,7 @@ export class FftController {
     this._accum.setStrongToneRelDb(this.config.fftStrongToneRelDb ?? 100.0);
     this._accum.reset();
     this._accumEpoch++;
+    this._workerResetPending = true;
     this._lastAccumulate = false;
     this._lastForeverMode = false;
     this._lastRingN = -1;
@@ -477,6 +518,7 @@ export class FftController {
       this._winAbsStart = 0; this._dispatchedOnce = false;
       this._accumEpoch++;       // drop ONLY the in-flight old-geometry window
       this._accum.onResync();   // re-anchor κ slope + PLL; the collected DEPTH survives
+      this._workerResyncPending = true;
     }
     if (c.fllOn && !this._lastFllOn) this._fll.reset();
     this._lastFllOn = !!c.fllOn;
@@ -541,6 +583,7 @@ export class FftController {
     this._winAbsStart = 0; this._dispatchedOnce = false;
     this._accum.reset();
     this._accumEpoch++;
+    this._workerResetPending = true;
   }
 
   /** Recovery for a detected in-window signal discontinuity (Java FftAnalyzerWorker
@@ -565,6 +608,7 @@ export class FftController {
     this._winAbsStart = 0; this._dispatchedOnce = false;
     this._accum.onResync();   // KEEP the collected depth; re-anchor κ slope + PLL
     this._accumEpoch++;       // drop any in-flight window straddling the re-sync
+    this._workerResyncPending = true;
     MessageBus.instance().publish(Events.FFT_CAPTURE_RESYNC, 'fft.warning.discontinuity');
   }
 
@@ -678,6 +722,13 @@ export class FftController {
     this._busy = true;
     const c = this.config;
     const dual = isDualTone(c.form);
+    // Step 5 fold-control (main→worker): the values the cross-tick fold needs so the worker can
+    // run a lockstep SHADOW copy for the FOLD_IN_WORKER parity harness (§5b). resetAccum /
+    // resyncAccum are one-shots fired wherever this controller resets / re-anchors its OWN
+    // accumulator, so the shadow tracks it. Ignored by the worker unless foldInWorker.
+    const forever = this.foreverMode, ringN = this.ringN;
+    const resetAccum = this._workerResetPending; this._workerResetPending = false;
+    const resyncAccum = this._workerResyncPending; this._workerResyncPending = false;
     this.worker.postMessage({
       id: this._dispatchId++, samples: snap, sampleRate: c.inRate, fftSize: this.N,
       harmonicCount: c.harmonicCount, windowType: c.window, overlap: c.overlap,
@@ -689,7 +740,17 @@ export class FftController {
       // Time-domain discontinuity gate (Java: if (USE_TIME_DISCONTINUITY && accumulate)):
       // the raw window lives in the worker after this transfer, so the worker runs the
       // detector pass — but only when this tick will accumulate, exactly as Java.
-      timeGate: USE_TIME_DISCONTINUITY && (this.foreverMode || this.ringN >= 2),
+      // ...and only when the user leaves the gate ON (Java FftAnalyzerWorker:1818 also requires
+      // prefs.isFftDetectTimeDiscontinuity()). Read from the live config so an unchecked box takes
+      // effect mid-record without a restart. undefined (pre-readConfig) defaults to ON.
+      timeGate: USE_TIME_DISCONTINUITY && (this.foreverMode || this.ringN >= 2)
+        && this.config.fftDetectTimeDiscontinuity !== false,
+      // Step 5b shadow-fold control (ignored unless foldInWorker).
+      foldInWorker: this._foldInWorker,
+      winAbsStart: this._tickAbsStart,
+      accumulate: forever || ringN >= 2, targetN: forever ? Infinity : 2 * ringN,
+      spectralGate: true, strongToneRelDb: this.config.fftStrongToneRelDb ?? 100.0,
+      resetAccum, resyncAccum,
     }, [snap.buffer]);
   }
 
@@ -728,6 +789,7 @@ export class FftController {
         || forever !== this._lastForeverMode
         || (!forever && ringN < this._lastRingN)) {
       this._accum.reset();
+      this._workerResetPending = true;
       this._analysesTicks = 0;   // Java discard branch zeroes completedAnalyses too
       this._analysesDone = 0;
     }
@@ -829,6 +891,11 @@ export class FftController {
     // shown spectrum is the deep cumulative average, with THD/SNR re-derived from it.
     if (accumulated) {
       this._accum.overlayOnto(r);            // r.amplitudeDbFs/re/im ← cumulative average
+      // Step 5b: compare THIS main fold's cumulative spectrum to the worker's shadow fold
+      // (both pure overlayOnto outputs, pre-recompute) — the correctness gate before flipping
+      // the fold into the worker. Only when the depths agree (a mid-run reset/glitch transiently
+      // desyncs the async worker; that is reported, not a failure).
+      if (this._foldInWorker && r.wAmp) this._checkFoldParity(r);
       this._coordAnalyzer.recomputeStats(r); // re-derive fundamental/harmonics/THD/SNR
       r.frameCount = this._accum.accumFrames;
       // Pinned coherent κ for the plot-time "before" dots (NaN ⇒ single tick).

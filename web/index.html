@@ -48,7 +48,7 @@
     </ul>
   </div>
   <span class="menu-spacer"></span>
-  <span class="menu-ver">v1.0.2 · web</span>
+  <span class="menu-ver">v1.0.3 beta · web</span>
 </div>
 
 <!-- ===== top-level tabs ===== -->
@@ -414,6 +414,14 @@
             <div class="fft-meta"><span id="pctLbl" data-i18n-title="fft.fillPercent.tooltip">0%</span><span id="avgLbl" data-i18n-title="fft.avgCount.tooltip">0 average(s)</span>
               <select id="fftMagUnit" class="form-select form-select-sm unit-sel" data-i18n-title="fft.magUnit.tooltip"><option value="V">V</option><option value="V_SQRT_HZ">V/√Hz</option><option value="DBV" selected>dBV</option><option value="DBFS">dBFS</option></select></div>
             <canvas id="spec" width="1200" height="440" class="fft-canvas"></canvas>
+            <!-- Self-blinking discontinuity / overrun warning (Java FftView.onCaptureResync →
+                 BlinkBanner): shown while the analyser re-syncs past a glitch, cleared by the
+                 pane on the next fresh result. -->
+            <div id="fftWarnBanner" class="fft-warn-banner" hidden></div>
+            <!-- Loaded static-.fft indicator (Java FftView.setSourceFilePath → BlinkBanner):
+                 "Loaded: file" while a loaded spectrum is displayed; cleared when live recording
+                 resumes. Top slot; the re-sync warning sits a little lower to avoid overlap. -->
+            <div id="fftLoadedBanner" class="fft-loaded-banner" hidden></div>
             <!-- The THD / IMD measurement table is painted ON the canvas by FftView
                  (Java FftView.drawDistortionTable / drawImdTable). -->
             <!-- Popped-out THD/IMD table window (Java FftView.createToolWindow / ToolWindow): a titled
@@ -550,6 +558,7 @@
               <div class="stopafter-cell grid-span4">
                 <div class="form-check form-check-sm mb-0"><input id="coherent" class="form-check-input" type="checkbox" checked data-i18n-title="fft.settings.coherent.tooltip"/><label class="form-check-label" for="coherent" data-i18n="fft.settings.coherent" data-i18n-title="fft.settings.coherent.tooltip">Coherent averaging</label></div>
                 <div class="form-check form-check-sm mb-0"><input id="logAxis" class="form-check-input" type="checkbox" checked data-i18n-title="fft.settings.logFreq.tooltip"/><label class="form-check-label" for="logAxis" data-i18n="fft.settings.logFreq" data-i18n-title="fft.settings.logFreq.tooltip">Logarithmic frequency axis</label></div>
+                <div class="form-check form-check-sm mb-0"><input id="fftDetectTimeDisc" class="form-check-input" type="checkbox" checked data-i18n-title="fft.settings.detectTimeDiscontinuity.tooltip"/><label class="form-check-label" for="fftDetectTimeDisc" data-i18n="fft.settings.detectTimeDiscontinuity" data-i18n-title="fft.settings.detectTimeDiscontinuity.tooltip">Detect time discontinuity</label></div>
                 <label class="mb-0">Threads:</label>
                 <select id="threads" class="form-select form-select-sm"></select>
               </div>
@@ -620,7 +629,7 @@
           <div class="scope-main">
           <div class="canvas-wrap">
             <div class="lr-tools">
-              <button class="lr l on" data-i18n-title="freqResp.button.left.tooltip">L</button><button class="lr r" data-i18n-title="freqResp.button.right.tooltip">R</button><button class="lr ico" data-i18n-title="freqResp.button.phase.tooltip"><i class="bi bi-graph-up"></i></button><button class="lr ico" data-i18n-title="freqResp.button.autosetup.tooltip"><i class="bi bi-arrows-angle-contract"></i></button><button class="lr ico" data-i18n-title="freqResp.button.maximize.tooltip"><i class="bi bi-arrows-fullscreen"></i></button>
+              <button class="lr l on" data-i18n-title="freqResp.button.left.tooltip">L</button><button class="lr r" data-i18n-title="freqResp.button.right.tooltip">R</button><button class="lr ico" data-i18n-title="freqResp.button.phase.tooltip"><img src="assets/icons/phase-sine.svg" class="lr-svg" alt=""></button><button class="lr ico" data-i18n-title="freqResp.button.autosetup.tooltip"><img src="assets/icons/arrows-to-circle.svg" class="lr-svg" alt=""></button><button class="lr ico" data-i18n-title="freqResp.button.maximize.tooltip"><img src="assets/icons/arrows-from-circle.svg" class="lr-svg" alt=""></button>
             </div>
             <canvas id="frPlot" width="1200" height="440" class="fft-canvas"></canvas>
           </div>

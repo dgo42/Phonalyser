@@ -17,6 +17,10 @@
  * persistence; the workspace DOM ids are reached directly via the global `$` / getElementById.
  */
 
+import { MessageBus } from '../bus/message-bus.js';
+import { PaneId, paneTitleClick } from '../bus/events.js';
+import { PaneTitle } from '../widgets/pane-title.js';
+
 // ============================ Pane layout: collapse + sash ============================
 // Port of MultifunctionalTab's collapsible panes + draggable SASH splitters.
 // Generator is a fixed-pixel column (min 200px); scope/fft share the right column
@@ -75,13 +79,15 @@ export class MainTab {
       preCollapseVGrow: null,
     };
 
-    const setCaret = (pane, collapsed) => {
-      const c = pane.querySelector('.pane-caret'); if (c) c.textContent = collapsed ? '▶' : '▼';
-    };
+    // Title bars own their caret glyph + publish paneTitleClick on click (Java PaneTitle);
+    // this layout owner subscribes below and performs the collapse. FR pane title is static.
+    const genTitle = new PaneTitle(genCol.querySelector('.pane-header[data-collapse]'), PaneId.GENERATOR);
+    const oscTitle = new PaneTitle(scopePaneEl.querySelector('.pane-header[data-collapse]'), PaneId.SCOPE);
+    const fftTitle = new PaneTitle(fftPaneEl.querySelector('.pane-header[data-collapse]'), PaneId.FFT);
 
     function applyGen() {
       genCol.classList.toggle('collapsed', state.genCollapsed);
-      setCaret(genCol, state.genCollapsed);
+      genTitle.setCollapsed(state.genCollapsed);
       if (state.genCollapsed) { genCol.style.removeProperty('--gen-w'); return; }
       const avail = ws.clientWidth - 4;
       const w = Math.max(MIN_WIDTH_PX, Math.min(state.genWidthPx, avail - MIN_WIDTH_PX));
@@ -91,8 +97,8 @@ export class MainTab {
     function applyVertical() {
       scopePaneEl.classList.toggle('collapsed', state.oscCollapsed);
       fftPaneEl.classList.toggle('collapsed', state.fftCollapsed);
-      setCaret(scopePaneEl, state.oscCollapsed);
-      setCaret(fftPaneEl, state.fftCollapsed);
+      oscTitle.setCollapsed(state.oscCollapsed);
+      fftTitle.setCollapsed(state.fftCollapsed);
       if (!state.oscCollapsed && !state.fftCollapsed) {
         scopePaneEl.style.setProperty('--scope-grow', state.vGrow[0]);
         fftPaneEl.style.setProperty('--fft-grow', state.vGrow[1]);
@@ -123,13 +129,13 @@ export class MainTab {
       if (!state.oscCollapsed && !state.fftCollapsed) { prefs.multiVSplitWeights = state.vGrow.slice(); prefs.save(); }
     }
 
-    // Caret/title clicks (FR pane title is static — its caret is hidden by CSS).
-    document.querySelectorAll('#tab-multi .pane-header[data-collapse]').forEach((hdr) => {
-      hdr.addEventListener('mousedown', () => {
-        const which = hdr.getAttribute('data-collapse');
-        if (which === 'gen') toggleGen(); else if (which === 'osc') toggleOsc(); else if (which === 'fft') toggleFft();
-      });
-    });
+    // Title-bar clicks route through the bus (Java PaneTitle publishes paneTitleClick →
+    // MultifunctionalTab subscribes). The PaneTitle widgets above publish; this layout owner
+    // subscribes by pane id and performs the collapse (osc/fft mutual exclusion stays here).
+    const bus = MessageBus.instance();
+    bus.subscribe(paneTitleClick(PaneId.GENERATOR), () => toggleGen());
+    bus.subscribe(paneTitleClick(PaneId.SCOPE), () => toggleOsc());
+    bus.subscribe(paneTitleClick(PaneId.FFT), () => toggleFft());
 
     // Horizontal sash drag — blocked when the generator is collapsed; clamps the
     // generator width to ≥ MIN_WIDTH_PX and ≤ avail−MIN_WIDTH_PX (Java sashFilter).

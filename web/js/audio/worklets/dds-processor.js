@@ -29,7 +29,6 @@ class DdsProcessor extends AudioWorkletProcessor {
       amplitudeVRms: po.amplitudeVRms != null ? po.amplitudeVRms : 1.0,
       dacFsVoltageAmpl: po.dacFsVoltageAmpl != null ? po.dacFsVoltageAmpl : Math.sqrt(2.0),
     });
-    this._running = true;
     this.port.onmessage = (e) => this._onMessage(e.data || {});
   }
 
@@ -40,8 +39,6 @@ class DdsProcessor extends AudioWorkletProcessor {
    */
   _onMessage(d) {
     const k = this._kernel;
-    if (d.type === 'stop') { this._running = false; return; }
-    if (d.type === 'start') { this._running = true; return; }
 
     if (d.form != null) k.setForm(d.form);
     if (d.frequency != null) k.setFrequency(d.frequency);
@@ -89,10 +86,6 @@ class DdsProcessor extends AudioWorkletProcessor {
     if (!out || out.length === 0) return true;
     const n = out[0].length;
     const k = this._kernel;
-    if (!this._running) {
-      for (let c = 0; c < out.length; c++) out[c].fill(0);
-      return true;
-    }
     const ch0 = out[0];
     for (let i = 0; i < n; i++) ch0[i] = k.nextSample();
     for (let c = 1; c < out.length; c++) out[c].set(ch0); // same signal on all channels

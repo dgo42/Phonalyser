@@ -17,6 +17,7 @@
 import { FftAnalyzer } from '../fft/fft-analyzer.js';
 import { FftResult } from '../fft/fft-result.js';
 import { TimeDiscontinuityDetector } from '../dsp/time-discontinuity.js';
+import { FftAccumulator } from '../fft/fft-accumulator.js';
 
 const analyzer = new FftAnalyzer();
 const slot = new FftResult();   // reused pool slot — analyze/prelude/finalize write into it
@@ -28,6 +29,12 @@ const slot = new FftResult();   // reused pool slot — analyze/prelude/finalize
 // agree on what counts as a damaged block. The detector pass runs HERE (the raw window is
 // transferred to this worker); the controller applies the re-sync recovery off the flag.
 const timeDetector = new TimeDiscontinuityDetector();
+
+// Step 5b: worker-side SHADOW copy of the cross-tick fold (FOLD_IN_WORKER parity harness).
+// Lazily created; runs the exact FftAccumulator the controller runs, fed the same per-window
+// results + reset/resync one-shots, so the controller can prove the fold ports byte-for-byte
+// before it is moved off the main thread (§5c). null / unused unless d.foldInWorker.
+let shadowAccum = null;
 
 /** Java FftAnalyzerWorker doAnalysis (time-domain gate): the tick's own refined
  *  fundamental pins the recurrence prediction exactly, so the reject threshold rides
@@ -42,8 +49,58 @@ function timeDiscontinuity(samples, r) {
   return timeDetector.detect(samples, samples.length, omega);
 }
 
+/** Fundamental bin(s) the spectral gate measures the near-carrier pedestal around
+ *  (mirror of FftController._fundamentalBins) — needed by the shadow fold's reject(). */
+function fundamentalBins(r) {
+  if (!(r.freqResolution > 0)) return null;
+  const f1 = (Number.isFinite(r.fundamentalHzRefined) && r.fundamentalHzRefined > 0)
+    ? Math.round(r.fundamentalHzRefined / r.freqResolution) : -1;
+  const f2 = (Number.isFinite(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0)
+    ? Math.round(r.fundamental2HzRefined / r.freqResolution) : -1;
+  if (f1 > 0 && f2 > 0) return Int32Array.of(f1, f2);
+  if (f1 > 0) return Int32Array.of(f1);
+  if (f2 > 0) return Int32Array.of(f2);
+  return null;
+}
+
+/** Step 5b: run the shadow cross-tick fold for this tick and return the cumulative spectrum
+ *  for the controller's parity check, or null if the tick was gated out / not accumulated.
+ *  Mirrors FftController._onWorkerResult's fold (same FftAccumulator, same gate order
+ *  time→spectral, same reset/resync one-shots), overlaid onto a SCRATCH copy so the posted
+ *  per-window arrays stay raw for the main fold. */
+function shadowFold(d, r, timeDisc) {
+  if (!shadowAccum) shadowAccum = new FftAccumulator();
+  if (d.resetAccum) shadowAccum.reset();
+  if (d.resyncAccum) shadowAccum.onResync();
+  shadowAccum.setStrongToneRelDb(d.strongToneRelDb ?? 100.0);
+  if (!d.accumulate) return null;
+  if (timeDisc) return null;                         // time gate: dropped, not folded
+  if (d.spectralGate && shadowAccum.reject(r.re, r.im, r.fftSize / 2, r.freqResolution, fundamentalBins(r))) {
+    return null;                                     // spectral gate: dropped
+  }
+  if (!shadowAccum.accumulate(r, d.winAbsStart, !!r.coherentAveraging, d.targetN)) return null;
+  const scratch = {
+    fftSize: r.fftSize, freqResolution: r.freqResolution, fundamentalHzRefined: r.fundamentalHzRefined,
+    re: r.re.slice(), im: r.im.slice(), amplitudeDbFs: r.amplitudeDbFs.slice(), phaseDeg: r.phaseDeg.slice(),
+  };
+  shadowAccum.overlayOnto(scratch);
+  return { wAmp: scratch.amplitudeDbFs, wAccumFrames: shadowAccum.accumFrames };
+}
+
+/** Compute the time-domain gate verdict + (optionally) the shadow fold, then post the result. */
+function finishAndPost(r, d, id, t0) {
+  const timeDisc = d.timeGate && timeDiscontinuity(d.samples, r);
+  const shadow = d.foldInWorker ? shadowFold(d, r, timeDisc) : null;
+  postResult(r, id, t0, timeDisc, shadow);
+}
+
 // Nested parallel pool (threads > 1). The controller serializes dispatches
 // (one analysis in flight), so a single pending gather is enough.
+// A hung sub-worker (no partial, no error) would otherwise leave `pending` unresolved and the
+// controller's one-in-flight gate stuck forever → the whole FFT stalls. The watchdog tears the
+// pool down and finishes the tick SERIALLY so analysis self-heals (no Java analog — its pool
+// runs in one JVM; a browser sub-worker can wedge independently).
+const POOL_WATCHDOG_MS = 5000;
 let pool = [];
 let pending = null;
 
@@ -67,7 +124,7 @@ function ensurePool(W) {
  *  transferring `slot`'s) keeps the pool slot reusable next tick.
  *  `timeDisc` = the time-domain discontinuity verdict for this window (the
  *  controller mirrors Java's gate order off it — time gate before spectral). */
-function postResult(r, id, t0, timeDisc) {
+function postResult(r, id, t0, timeDisc, shadow) {
   const out = {
     id,
     ms: performance.now() - t0,
@@ -94,10 +151,14 @@ function postResult(r, id, t0, timeDisc) {
     imdProductB: r.imdProductB ? r.imdProductB.slice() : null,
     imdProductBin: r.imdProductBin ? r.imdProductBin.slice() : null,
   };
-  self.postMessage(out, [
+  // Step 5b: attach the shadow fold's cumulative spectrum for the controller's parity check.
+  if (shadow) { out.wAmp = shadow.wAmp; out.wAccumFrames = shadow.wAccumFrames; }
+  const transfer = [
     out.amplitudeDbFs.buffer, out.phaseDeg.buffer, out.re.buffer, out.im.buffer,
     out.harmonicBins.buffer, out.harmonicHz.buffer, out.harmonicDbFs.buffer, out.harmonicPct.buffer,
-  ]);
+  ];
+  if (shadow) transfer.push(out.wAmp.buffer);
+  self.postMessage(out, transfer);
 }
 
 /** threads > 1: single-threaded prelude here, per-frame accumulation fanned out
@@ -119,7 +180,7 @@ function analyzePooled(d, W, t0) {
       const part = analyzer.accumulatePartial(d.samples, 0, frameCount, sp);
       r = analyzer.finalize(part, sp, d.snrFreqMin, d.snrFreqMax, fundRefDbFs, slot);
     } catch (err) { self.postMessage({ id: d.id, error: err.message }); return; }
-    postResult(r, d.id, t0, d.timeGate && timeDiscontinuity(d.samples, r));
+    finishAndPost(r, d, d.id, t0);
     return;
   }
 
@@ -128,7 +189,7 @@ function analyzePooled(d, W, t0) {
   // got transferred COPIES, so d.samples stays intact through the gather).
   pending = { id: d.id, t0, sp, partials: new Array(W), got: 0, want: W, error: null,
     snrLo: d.snrFreqMin, snrHi: d.snrFreqMax, fundRefDbFs,
-    samples: d.samples, timeGate: !!d.timeGate };
+    samples: d.samples, timeGate: !!d.timeGate, d };
   // Contiguous frame ranges: the first (frameCount % W) ranges carry one extra
   // frame so the union covers [0, frameCount) with no gaps/overlap.
   const base = Math.floor(frameCount / W);
@@ -147,6 +208,9 @@ function analyzePooled(d, W, t0) {
     }, [win.buffer]);
     frameStart = frameEnd;
   }
+  // Self-heal a wedged sub-worker: if the gather hasn't completed in POOL_WATCHDOG_MS, finish
+  // this tick serially (onPoolTimeout). Cleared in onPartial the moment the gather completes.
+  pending.watchdog = setTimeout(() => onPoolTimeout(d.id), POOL_WATCHDOG_MS);
 }
 
 /** Gathers one sub-worker's partial sum; once all are in, merges (associative)
@@ -159,13 +223,31 @@ function onPartial(p) {
   if (++g.got < g.want) return;
 
   pending = null;
+  clearTimeout(g.watchdog);
   if (g.error) { self.postMessage({ id: g.id, error: g.error }); return; }
   let r;
   try {
     const merged = analyzer.mergePartials(g.partials, g.sp);
     r = analyzer.finalize(merged, g.sp, g.snrLo, g.snrHi, g.fundRefDbFs, slot);
   } catch (err) { self.postMessage({ id: g.id, error: err.message }); return; }
-  postResult(r, g.id, g.t0, g.timeGate && timeDiscontinuity(g.samples, r));
+  finishAndPost(r, g.d, g.id, g.t0);
+}
+
+/** Watchdog: a sub-worker wedged (no partial, no error) — tear the pool down (rebuilt on the
+ *  next threads>1 dispatch) and finish THIS tick on the coordinator thread so the controller's
+ *  one-in-flight gate resolves instead of stalling the FFT forever. */
+function onPoolTimeout(id) {
+  const g = pending;
+  if (!g || g.id !== id) return;   // already completed (watchdog cleared) or superseded
+  pending = null;
+  for (const w of pool) { try { w.terminate(); } catch (_) {} }
+  pool = [];
+  let r;
+  try {
+    const part = analyzer.accumulatePartial(g.samples, 0, g.sp.frameCount, g.sp);
+    r = analyzer.finalize(part, g.sp, g.snrLo, g.snrHi, g.fundRefDbFs, slot);
+  } catch (err) { self.postMessage({ id: g.id, error: err.message }); return; }
+  finishAndPost(r, g.d, g.id, g.t0);
 }
 
 self.onmessage = (e) => {
@@ -191,5 +273,5 @@ self.onmessage = (e) => {
     self.postMessage({ id: d.id, error: err.message });
     return;
   }
-  postResult(r, d.id, t0, d.timeGate && timeDiscontinuity(d.samples, r));
+  finishAndPost(r, d, d.id, t0);
 };

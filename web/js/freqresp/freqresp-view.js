@@ -31,6 +31,14 @@ import { lanczosNaN, LANCZOS_A, MAX_LANCZOS_DOWNSAMPLE } from '../dsp/lanczos.js
 // installRectZoom base machinery); this view supplies the log-freq / dB
 // pixel↔value mappings + clamps (Java FreqRespView zoom overrides).
 import { RectZoom } from '../ui/rect-zoom.js';
+// Shared axis tick generation + label formatters (Java AbstractMeasurementView) — the adaptive
+// log / sub-decade frequency ticks + the fine crosshair frequency readout.
+import {
+  isSubDecade, isDecadeValue, minSpacing,
+  logMajorTicks, logMinorTicks, adaptiveLogLabels,
+  niceLinearMajors, subDecadeMinors,
+  formatFrequency, formatFreqTick, formatFrequencyFine,
+} from '../ui/axis-format.js';
 
 // ----- packed-int colour → CSS hex (matches the fft-view helper) -----
 const colorHex = (c) => '#' + (c & 0xffffff).toString(16).padStart(6, '0');
@@ -44,6 +52,8 @@ const MARGIN_RIGHT_PHASE = 52;
 // Axis tick length (Java AbstractMeasurementView.MAJOR_TICK_LEN) — used to inset the
 // left-Y unit caption from the plot's left edge, mirroring drawAxisCaptions.
 const MAJOR_TICK_LEN = 6;
+// Sub-decade X-axis nice-linear tick target (Java AbstractMeasurementView.SUB_DECADE_TICK_TARGET).
+const SUB_DECADE_TICK_TARGET = 12;
 
 // ----- Lanczos trace smoothing (FreqRespView.LANCZOS_TRACES path) -----
 /** Master on/off for sinc (Lanczos) trace smoothing. Off = linear segments. */
@@ -207,6 +217,12 @@ export class FreqRespView {
 
   hasAnyResult() { return this.leftResult != null || this.rightResult != null; }
 
+  /** Read-only accessors used by the Save-to handler — the current calibrated/displayed L/R
+   *  result, or null (faithful port of FreqRespView.getLeftResultOrNull / getRightResultOrNull,
+   *  which return the `leftResult` / `rightResult` fields). */
+  getLeftResultOrNull() { return this.leftResult || null; }
+  getRightResultOrNull() { return this.rightResult || null; }
+
   // ===========================================================================
   // Render-time calibration (FreqRespView.applyCurrentCalibration)
   // ===========================================================================
@@ -358,8 +374,16 @@ export class FreqRespView {
   render() {
     const g = this.g, cv = this.cv, prefs = this.prefs;
     const W = cv.clientWidth || 1200, H = cv.clientHeight || 440;
-    if (cv.width !== W) cv.width = W;
-    if (cv.height !== H) cv.height = H;
+    // HiDPI backing store (mirror of FftView.render #27): backing px = CSS px ×
+    // devicePixelRatio, then setTransform(dpr,…) so 1 CSS px == dpr device px and the text /
+    // grid / traces stay crisp at native resolution instead of being drawn at CSS size then
+    // upscaled by the browser (the blur vs the FFT view). All drawing below is in CSS-px
+    // (W, H) coordinates.
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    const bw = Math.round(W * dpr), bh = Math.round(H * dpr);
+    if (cv.width !== bw) cv.width = bw;
+    if (cv.height !== bh) cv.height = bh;
+    if (g.setTransform) g.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const phaseVisible = prefs.freqRespPhaseVisible.get();
     const rightMargin = phaseVisible ? MARGIN_RIGHT_PHASE : MARGIN_RIGHT_NO_PHASE;
@@ -382,15 +406,25 @@ export class FreqRespView {
     // Compare mode draws the (measured − reference) subtraction curve instead of the
     // raw traces + RIAA overlay (FreqRespView.onPaint branch).
     const compareActive = prefs.freqRespCompareMode.get() && this.hasAnyResult() && prefs.freqRespShowRiaa.get();
+    // Clip the DATA drawing to the plot rect (Java setClipping(plot)) so a trace / RIAA curve
+    // that runs off the top or bottom of the dB range is cut at the frame (keeping its true
+    // slope) instead of spilling over the border or flattening against the edge. Grid, axis
+    // labels and the crosshair readout draw OUTSIDE this clip.
+    g.save();
+    g.beginPath();
+    g.rect(plot.x, plot.y, plot.w, plot.h);
+    g.clip();
     if (compareActive) {
       this._drawCompareTrace(g, plot, freqMin, freqMax, magTop, magBot);
-      this._drawCompareMeasurementTable(g, plot);
     } else {
       this._drawTraces(g, plot, freqMin, freqMax, magTop, magBot, phaseVisible);
       if (prefs.freqRespShowRiaa.get()) {
         this._drawRiaaOverlay(g, plot, freqMin, freqMax, magTop, magBot);
       }
     }
+    g.restore();
+    // The compare min/max table is an overlay (not trace data) — drawn unclipped, as before.
+    if (compareActive) this._drawCompareMeasurementTable(g, plot);
     if (this._mouseInPlot) {
       this._drawCrosshair(g, plot, freqMin, freqMax, magTop, magBot, phaseVisible);
     }
@@ -416,19 +450,52 @@ export class FreqRespView {
       g.textAlign = 'right'; g.fillText(formatDbBare(d), plot.x - 6, yy);
     }
 
-    // Log-decade frequency gridlines (major at m=1, minor at 2..9).
+    // Frequency gridlines + labels (Java AbstractMeasurementView majorTicks/minorTicks +
+    // drawGrid). Wide log (≥1 decade): 1..9×10ⁿ grid with adaptiveLogLabels decade-thinning.
+    // Sub-decade zoom: nice-linear majors/minors + step-aware Hz labels, so a ~9 Hz window
+    // shows 998…1007 Hz instead of a lone "1 kHz".
     g.textAlign = 'center'; g.textBaseline = 'top';
-    for (let dec = 0.1; dec <= 1000000; dec *= 10) {
-      for (let m = 1; m < 10; m++) {
-        const f = dec * m;
-        if (f < freqMin || f > freqMax) continue;
-        const xx = xOf(f);
-        g.strokeStyle = m === 1 ? '#cfcfcf' : '#eee';
-        g.beginPath(); g.moveTo(xx, plot.y); g.lineTo(xx, plot.y + plot.h); g.stroke();
-        if (m === 1) {
-          g.fillStyle = '#333';
-          g.fillText(f >= 1000 ? (f / 1000) + ' kHz' : f.toFixed(f < 1 ? 1 : 0) + ' Hz', xx, plot.y + plot.h + 2);
-        }
+    const wideLog = !isSubDecade(freqMin, freqMax);
+    const xMajors = wideLog ? logMajorTicks(freqMin, freqMax)
+                            : niceLinearMajors(freqMin, freqMax, SUB_DECADE_TICK_TARGET);
+    const xMinors = wideLog ? logMinorTicks(freqMin, freqMax)
+                            : subDecadeMinors(freqMin, freqMax);
+    for (const f of xMinors) {
+      if (f < freqMin || f > freqMax) continue;
+      const xx = xOf(f);
+      g.strokeStyle = '#eee';
+      g.beginPath(); g.moveTo(xx, plot.y); g.lineTo(xx, plot.y + plot.h); g.stroke();
+    }
+    for (const f of xMajors) {
+      if (f < freqMin || f > freqMax) continue;
+      const xx = xOf(f);
+      g.strokeStyle = '#cfcfcf';
+      g.beginPath(); g.moveTo(xx, plot.y); g.lineTo(xx, plot.y + plot.h); g.stroke();
+    }
+    // Labels: adaptive-thinned decades (wide) or the nice-linear set (sub-decade), a step-aware
+    // formatter, and a pixel-aware two-pass overlap-skip (round decades placed first so they are
+    // never thinned away). Java drawGrid label loop.
+    const labelPositions = wideLog ? adaptiveLogLabels(freqMin, freqMax) : xMajors;
+    const fineStep = wideLog ? 0 : minSpacing(labelPositions);
+    g.fillStyle = '#333';
+    const gap = g.measureText('0').width;
+    const labelY = plot.y + plot.h + 2;
+    const boxes = labelPositions.map((v) => {
+      const s = fineStep > 0 ? formatFreqTick(v, fineStep) : formatFrequency(v);
+      const sw = g.measureText(s).width;
+      const cx = xOf(v);
+      return { v, s, cx, l: cx - sw / 2, r: cx + sw / 2, done: false };
+    });
+    const placed = [];
+    for (let pass = 0; pass < 2; pass++) {
+      for (const b of boxes) {
+        if (b.done || (pass === 0) !== isDecadeValue(b.v)) continue;
+        if (b.v < freqMin || b.v > freqMax) continue;
+        let clash = false;
+        for (const o of placed) { if (b.l < o.r + gap && b.r + gap > o.l) { clash = true; break; } }
+        if (clash) continue;
+        g.fillText(b.s, b.cx, labelY);
+        placed.push(b); b.done = true;
       }
     }
 
@@ -480,11 +547,13 @@ export class FreqRespView {
   _paintMag(g, result, plot, freqMin, freqMax, magTop, magBot, color, lw) {
     const freqs = result.freqs, mag = result.magLin;
     if (!freqs || !mag) return;
-    const clampY = (d) => plot.y + (magTop - Math.max(magBot, Math.min(magTop, d))) / (magTop - magBot) * plot.h;
+    // True (unclamped) Y — the render-time plot-rect clip cuts an out-of-range trace at the
+    // frame keeping its slope (Java setClipping), instead of flattening it against the edge.
+    const yOf = (d) => plot.y + (magTop - d) / (magTop - magBot) * plot.h;
     // toDb reconstructs in LINEAR magnitude (matching Java paintTrace: Lanczos runs
     // on magLin, then linToDb with a floor so overshoot can't log a negative), so a
     // deep narrow null recovers its smooth rounded shape rather than a straight V.
-    const toY = (v) => clampY(20 * Math.log10(Math.max(LANCZOS_MAG_FLOOR_LIN, v)));
+    const toY = (v) => yOf(20 * Math.log10(Math.max(LANCZOS_MAG_FLOOR_LIN, v)));
     this._paintDataTrace(g, plot, freqMin, freqMax, color, lw, [], freqs, mag, toY);
   }
 
@@ -617,14 +686,14 @@ export class FreqRespView {
     const anchorDb = this._riaaAnchorDb();
     const color = colorHex(prefs.freqRespReferenceColor.get());
     const lw = prefs.freqRespLineWidth.get();
-    const clampY = (d) => plot.y + (magTop - Math.max(magBot, Math.min(magTop, d))) / (magTop - magBot) * plot.h;
+    const yOf = (d) => plot.y + (magTop - d) / (magTop - magBot) * plot.h;   // unclamped; clipped at the frame
     g.strokeStyle = color; g.lineWidth = lw; g.setLineDash([4, 4]);
     g.beginPath();
     const step = 5;
     let started = false;
     for (let px = 0; px <= plot.w; px += step) {
       const f = this._xFractionToFreq(px / plot.w, freqMin, freqMax);
-      const yy = clampY(anchorDb + evalDb(f, rev, iec));
+      const yy = yOf(anchorDb + evalDb(f, rev, iec));
       const xx = plot.x + px;
       started ? g.lineTo(xx, yy) : (g.moveTo(xx, yy), started = true);
     }
@@ -744,7 +813,7 @@ export class FreqRespView {
     const smoothed = this._getCompareDiff(src, reverse, iec).smoothed;
     const freqs = src.freqs;
     const xOf = (f) => plot.x + this._freqToXFraction(f, freqMin, freqMax) * plot.w;
-    const clampY = (d) => plot.y + (magTop - Math.max(magBot, Math.min(magTop, d))) / (magTop - magBot) * plot.h;
+    const yOf = (d) => plot.y + (magTop - d) / (magTop - magBot) * plot.h;   // unclamped; clipped at the frame
     g.strokeStyle = '#c000c0'; g.lineWidth = prefs.freqRespLineWidth.get(); g.setLineDash([]);
     g.beginPath();
     let started = false;
@@ -753,7 +822,7 @@ export class FreqRespView {
       if (f < freqMin || f > freqMax) continue;
       const v = smoothed[i];
       if (!Number.isFinite(v)) { started = false; continue; }   // NaN → gap
-      const xx = xOf(f), yy = clampY(v);
+      const xx = xOf(f), yy = yOf(v);
       started ? g.lineTo(xx, yy) : (g.moveTo(xx, yy), started = true);
     }
     g.stroke();
@@ -818,7 +887,7 @@ export class FreqRespView {
     g.setLineDash([]);
 
     const lines = [];
-    lines.push('f = ' + formatFreq(cursorFreq));
+    lines.push('f = ' + formatFrequencyFine(cursorFreq));
     let magFrac = (this._mouseY - plot.y) / plot.h;
     if (magFrac < 0) magFrac = 0; if (magFrac > 1) magFrac = 1;
     lines.push('y = ' + formatDbReadout(magTop - magFrac * (magTop - magBot)));
@@ -1268,12 +1337,6 @@ function formatDbReadout(db) {
 function formatPhaseReadout(deg) {
   if (!Number.isFinite(deg)) return '—';
   return formatSignificant(deg, 4) + '°';
-}
-
-function formatFreq(f) {
-  if (!Number.isFinite(f)) return '—';
-  if (f >= 1000) return (f / 1000).toFixed(3) + ' kHz';
-  return f.toFixed(f < 10 ? 3 : 2) + ' Hz';
 }
 
 /** Log-frequency linear interpolation of a value array aligned 1:1 with a freq grid
