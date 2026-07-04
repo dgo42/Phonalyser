@@ -22,7 +22,7 @@ import { chromium } from 'playwright';
 
 const WEB = normalize(join(dirname(fileURLToPath(import.meta.url)), '..'));
 const VIEW = { width: 1280, height: 768 };   // FIXED capture window (project requirement)
-const LANG = 'en';
+const LANGS = ['en', 'de', 'uk'];   // capture EVERY language (app UI switched + reloaded per pass)
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
   '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.wasm': 'application/wasm',
@@ -72,6 +72,20 @@ async function closePrefs(page) {
     if (m) m.hide();
   });
   await page.waitForTimeout(400);   // fade-out
+}
+
+// New dialog specs (tune-notch, dac-predistortion): show the modal DIRECTLY so its static
+// layout renders in the current locale WITHOUT starting a live sweep/run (open() would); clip
+// the modal-content; hide it after so the backdrop doesn't swallow later specs.
+async function showModal(page, id) {
+  await page.evaluate((mid) => window.bootstrap.Modal.getOrCreateInstance(document.getElementById(mid)).show(), id);
+  await page.waitForSelector(`#${id}.show`, { timeout: 5000 });
+  await page.waitForTimeout(500);
+  return page.$(`#${id} .modal-content`);
+}
+async function hideModal(page, id) {
+  await page.evaluate((mid) => { const m = window.bootstrap.Modal.getInstance(document.getElementById(mid)); if (m) m.hide(); }, id);
+  await page.waitForTimeout(400);
 }
 
 // Per-tab toolbar shot (Oscilloscope - Trigger.png & co): activate one tile-tab so its
@@ -145,6 +159,12 @@ const SPECS = [
       return page.$('#tab-fr .fft-pane');
     } },
 
+  // ── New help pages this sync: the Tune-notch + DAC-predistortion dialogs ─────────────
+  { id: 'tune-notch', file: 'tune-notch.png', ready: true,
+    shot: (page) => showModal(page, 'tuneNotchModal'), after: (page) => hideModal(page, 'tuneNotchModal') },
+  { id: 'dac-predistortion', file: 'dac-predistortion-wizard.png', ready: true,
+    shot: (page) => showModal(page, 'predistModal'), after: (page) => hideModal(page, 'predistModal') },
+
   // ── Preferences dialog tabs (part 2, landed). Every prefs spec closes the modal
   //    after its capture (`after`), so later specs never sit under a leftover backdrop.
   { id: 'prefs-lookfeel', file: 'Preferences Look and Feel.png', ready: true,
@@ -202,22 +222,33 @@ await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
 await page.waitForSelector('#scopePane', { timeout: 10000 }).catch(() => {});
 await page.waitForTimeout(500);   // let layout/fonts settle
 
-const imgDir = join(WEB, 'help', LANG, 'img');
-mkdirSync(imgDir, { recursive: true });
-
 let done = 0, skipped = 0;
-for (const spec of todo) {
-  if (!spec.ready) { console.log(`skip (web UI not ready): ${spec.id} → ${spec.file}`); skipped++; continue; }
-  const out = join(imgDir, spec.file);
-  // shot() → ElementHandle, {clip: rect} (a region no single element wraps — the
-  // tab-strip + sibling panel shots), or null for the whole 1280×768 window.
-  const el = spec.shot ? await spec.shot(page) : null;
-  if (el && el.clip) await page.screenshot({ path: out, clip: el.clip });
-  else if (el) await el.screenshot({ path: out });
-  else await page.screenshot({ path: out });
-  if (spec.after) await spec.after(page);   // per-spec cleanup (close the prefs modal)
-  console.log(`captured: ${spec.id} → help/${LANG}/img/${spec.file}`);
-  done++;
+for (const lang of LANGS) {
+  // 'en' is the fresh initial load; for the others switch the UI language then RELOAD so each
+  // pass starts from a clean, correctly-localised state (init reads prefs.uiLanguage on load;
+  // the #langMenu handler persists it via the 250ms-debounced save, so wait before reloading).
+  if (lang !== 'en') {
+    await page.evaluate((t) => window.jQuery(`#langMenu [data-lang="${t}"]`).trigger('click'), lang);
+    await page.waitForTimeout(700);
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForSelector('#scopePane', { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(600);   // layout/fonts settle in the new locale
+  }
+  const imgDir = join(WEB, 'help', lang, 'img');
+  mkdirSync(imgDir, { recursive: true });
+  for (const spec of todo) {
+    if (!spec.ready) { if (lang === 'en') { console.log(`skip (web UI not ready): ${spec.id} → ${spec.file}`); skipped++; } continue; }
+    const out = join(imgDir, spec.file);
+    // shot() → ElementHandle, {clip: rect} (a region no single element wraps — the
+    // tab-strip + sibling panel shots), or null for the whole 1280×768 window.
+    const el = spec.shot ? await spec.shot(page) : null;
+    if (el && el.clip) await page.screenshot({ path: out, clip: el.clip });
+    else if (el) await el.screenshot({ path: out });
+    else await page.screenshot({ path: out });
+    if (spec.after) await spec.after(page);   // per-spec cleanup (close the modal)
+    console.log(`captured: ${lang}/${spec.id} → help/${lang}/img/${spec.file}`);
+    done++;
+  }
 }
 
 await browser.close();

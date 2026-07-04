@@ -128,10 +128,11 @@ export function logSpacedFreqs(startHz, stopHz, points) {
  * @param {number} [fadeSamples=0]        per-side Hann fade length applied to the reference (match the player)
  * @param {boolean} [applySavGolFilter=true] false skips the final Savitzky-Golay output smoothing.
  *   Java's applySavGol overload parameter (renamed here so it doesn't shadow the imported
- *   applySavGol kernel). The Tune-notch wizard disables it: its bin-aligned output grid is
- *   coarse (a few Hz per point), so the fixed SAVGOL_WINDOW-point SG window spans ~15-20 Hz
- *   and rounds the bottom off a deep, narrow notch null (it read ≈9 dB shallow). A dense
- *   main-pane grid keeps SG on, where the window is sub-Hz and harmless.
+ *   applySavGol kernel). BOTH the Tune-notch wizard AND the main FreqResp sweep disable it
+ *   (Java FreqRespAnalyzer passes applySavGol=false on both channels): the SG window rounds the
+ *   bottom off a deep, narrow notch null (it read ≈9 dB shallow), so smoothing would hide the very
+ *   feature the measurement exists to show. The default stays true for any OTHER caller (the Java
+ *   8-arg overload the CLI still uses).
  * @returns {FreqRespCalibration} the per-point calibration on the {@code freqs} grid
  */
 export function computeFromLogSweep(
