@@ -126,7 +126,7 @@ export class ScopePane {
     // (see FftPane.onFreqRespMeasurementStarted): a shell/controller desync must not leave
     // the scope consuming the sweep. setRecording is a no-op when already off; reconcile
     // the shell flag + LED to the engine's real state.
-    this._setScopeRec(await this.engine.setScopeRecording(false));
+    this._setScopeRec(await this.engine.scope.setRecording(false));
     this.syncScopeLed();
   }
 
@@ -619,7 +619,7 @@ export class ScopePane {
         // gap isn't folded into the cumulative rate (Java rateSawFrozen restart).
         scopeView.restartGlitchRate();
       }
-      try { this._setScopeRec(await engine.setScopeRecording(want)); }   // reconcile: false if the device failed to open
+      try { this._setScopeRec(await engine.scope.setRecording(want)); }   // reconcile: false if the device failed to open
       finally { this.syncScopeLed(); this._setBusy(false); }
     });
   }
@@ -644,7 +644,7 @@ export class ScopePane {
   // swapping the buffer out (Java host.stopCaptureForFileLoad). No-op if not recording.
   async stopCaptureForFileLoad() {
     if (this._isScopeRec()) {
-      try { await this.engine.setScopeRecording(false); } catch (e) { /* ignore */ }
+      try { await this.engine.scope.setRecording(false); } catch (e) { /* ignore */ }
       this._setScopeRec(false); this.syncScopeLed();
       // Java ScopeController.openSignalFile publishes this after a programmatic stop
       // so the pane pops its Record toggle; the web LED is synced inline above, the
