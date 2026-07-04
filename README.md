@@ -4,7 +4,7 @@
 frequency response, and oscilloscope-style inspection, built around coherent FFT
 averaging and bit-exact playback/capture.
 
-**Project site:** <https://phonalyser.github.io/>
+**Project site:** <https://dgo42.github.io/Phonalyser/>
 
 ![Phonalyser](doc/screenshots/phonalyser.png)
 
@@ -32,7 +32,7 @@ averaging and bit-exact playback/capture.
 
 **Run it in your browser — no install.** A WebAudio port of Phonalyser runs the
 full analyzer (FFT, oscilloscope, signal generator) directly in a modern browser
-(Chrome/Edge) at **<https://phonalyser.github.io/web/>** — nothing to download.
+(Chrome/Edge) at **<https://dgo42.github.io/Phonalyser/web/>** — nothing to download.
 
 To install the desktop app instead, each release offers two ways to run
 Phonalyser:
