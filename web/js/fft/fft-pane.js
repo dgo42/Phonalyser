@@ -107,7 +107,7 @@ export class FftPane {
     // the FreqResp sweep and made the measurement ride its still-open capture. setRecording
     // is a no-op when already off, so this is safe; reconcile the shell flag + LED to the
     // engine's real state.
-    this._setFftRec(await this.engine.setFftRecording(false));
+    this._setFftRec(await this.engine.fft.setRecording(false));
     this.syncFftLed();
   }
 
@@ -291,7 +291,7 @@ export class FftPane {
   // the engine paused feeding; tear down the FFT consumer and un-light the Record LED.
   async onFftAutoStopped() {
     if (!this._isFftRec()) return;
-    try { this._setFftRec(await this.engine.setFftRecording(false)); } finally { this.syncFftLed(); }
+    try { this._setFftRec(await this.engine.fft.setRecording(false)); } finally { this.syncFftLed(); }
   }
 
   // Loading a static .fft must stop live recording so the loaded trace isn't overwritten by
@@ -299,7 +299,7 @@ export class FftPane {
   // and shared capture). Same teardown as the auto-stop subscriber: stop the consumer + LED.
   async onRecordingStopRequested() {
     if (!this._isFftRec()) return;
-    try { this._setFftRec(await this.engine.setFftRecording(false)); } finally { this.syncFftLed(); }
+    try { this._setFftRec(await this.engine.fft.setRecording(false)); } finally { this.syncFftLed(); }
   }
 
   // ----- distortion-table toggle + reset + FLOAT buttons (Java FftView distortionBtn / resetBtn /
@@ -471,7 +471,7 @@ export class FftPane {
       this._setBusy(true);
       const want = !this._isFftRec();
       if (want) this._readConfig();                      // FFT geometry from the live UI
-      try { this._setFftRec(await engine.setFftRecording(want)); }   // reconcile: false if the device failed to open
+      try { this._setFftRec(await engine.fft.setRecording(want)); }   // reconcile: false if the device failed to open
       finally { this.syncFftLed(); this._setBusy(false); }
     });
   }
