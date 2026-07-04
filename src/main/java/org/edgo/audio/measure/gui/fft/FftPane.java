@@ -72,6 +72,9 @@ public final class FftPane extends AbstractPane {
      *  accumulator keeps counting through a language / font change); the
      *  offscreen screenshot clone builds its own idle instance. */
     private final FftController controller;
+    /** The generator controller the predistortion wizard drives — stored so
+     *  {@link #openPredistortionForCapture()} can construct the wizard. */
+    private final GeneratorController genController;
     private FlatScrollbar   freqScrollbar;
     private FlatScrollbar   magScrollbar;
 
@@ -138,6 +141,20 @@ public final class FftPane extends AbstractPane {
         this(parent, false, null, null);
     }
 
+    /** Builds + shows the DAC-predistortion wizard non-modally for a help
+     *  capture and returns it, so an automation script can drive it (set target,
+     *  start, screenshot) without the modal loop.  The live pane owns the
+     *  wizard's collaborators, so it constructs the wizard here rather than
+     *  exposing them.  Returns {@code null} on the offscreen (non-live) pane. */
+    public PredistortionWizardDialog openPredistortionForCapture() {
+        if (genController == null) return null;
+        PredistortionWizardDialog d = new PredistortionWizardDialog(
+                getGroup().getShell(), genController, controller, view,
+                controller.getCorrectionStore());
+        d.buildAndShow();
+        return d;
+    }
+
     private FftPane(Composite parent, boolean liveCapture, GeneratorController genController,
                     FftController controller) {
         super(parent);
@@ -174,6 +191,7 @@ public final class FftPane extends AbstractPane {
             controller = new FftController(new FftAnalyzerWorker(d));
         }
         this.controller = controller;
+        this.genController = genController;
         FreqRespCorrectionStore correctionStore = controller.getCorrectionStore();
         view = new FftView(plotRow, correctionStore, controller);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);

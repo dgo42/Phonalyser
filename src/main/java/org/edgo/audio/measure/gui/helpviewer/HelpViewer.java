@@ -180,6 +180,8 @@ public final class HelpViewer {
             "oscilloscope.html",
             "fft.html",
             "freqresp.html",
+            "tune-notch.html",
+            "dac-predistortion.html",
             "preferences.html",
             "bench.html",
             "theory/index.html",
@@ -191,6 +193,7 @@ public final class HelpViewer {
             "theory/derotation-accuracy.html",
             "theory/dac-predistortion.html",
             "theory/freq-resp.html",
+            "theory/tune-notch.html",
             "theory/algorithms.html",
             "external/fft-analysis.html",
             "external/sine-sweep.html",
@@ -227,6 +230,7 @@ public final class HelpViewer {
             "img/FreqResp - Load calibration.png",
             "img/FreqResp - Save to.png",
             "img/FreqResp - Load from.png",
+            "img/tune-notch.png",
             "img/Preferences Look and Feel.png",
             "img/Preferences Audio.png",
             "img/Preferences Oscilloscope.png",
@@ -237,6 +241,7 @@ public final class HelpViewer {
             "img/oscilloscope-pane.png",
             "img/fft-pane.png",
             "img/dac-predistortion-live.png",
+            "img/dac-predistortion-wizard.png",
             "img/faraday-cage-bench.svg",
             "img/XLR wiring.jpg",
             "img/twin-T 1kHz filter.jpg",
@@ -250,8 +255,12 @@ public final class HelpViewer {
     private Shell openShell;
     /** Cached language-specific help root (i.e. the directory holding
      *  the index.html / chapter files for the active language).
-     *  Resolved once per JVM lifetime — see {@link #resolveLangRoot}. */
+     *  Re-resolved when the UI language changes — see {@link #resolveLangRoot}. */
     private volatile Path langRoot;
+    /** The requested UI language {@link #langRoot} was resolved for.  When the
+     *  user switches UI language the cached root is stale, so a reopen must
+     *  re-resolve (and, in dev mode, re-extract) for the new language. */
+    private volatile String langRootLang;
 
     private HelpViewer() {}
 
@@ -384,6 +393,48 @@ public final class HelpViewer {
         openShell = s;
     }
 
+    /** Reloads the open help window in the current UI language.  A live language
+     *  switch rebuilds the main window but not this separate Shell, so
+     *  {@code MainWindow.rebuildContent} calls this to carry the help window
+     *  along — no reopen needed.  No-op when help is closed or the language is
+     *  unchanged. */
+    public void refreshLanguage() {
+        if (openShell == null || openShell.isDisposed()) return;
+        String[] langs = resolveLanguageChain();
+        String want = langs.length > 0 ? langs[0] : FALLBACK_LANG;
+        if (want.equals(langRootLang)) return;   // language unchanged — nothing to do
+        Browser b = findBrowser(openShell);
+        if (b == null) return;
+        String rel = relativeToRoot(b.getUrl());   // page + anchor, against the OLD root
+        Path root = resolveLangRoot();             // re-resolves: want != langRootLang
+        if (root == null) return;
+        String anchor = "";
+        int hash = rel.indexOf('#');
+        if (hash >= 0) { anchor = rel.substring(hash); rel = rel.substring(0, hash); }
+        if (rel.isEmpty()) rel = INDEX_FILE;
+        Path target = root.resolve(rel);
+        if (!Files.isRegularFile(target)) target = root.resolve(INDEX_FILE);
+        b.setUrl(target.toUri().toString() + anchor);
+    }
+
+    /** The help-root-relative {@code file[#anchor]} of a loaded {@code file://}
+     *  URL, or {@code ""} when it can't be mapped (caller falls back to the
+     *  index). */
+    private String relativeToRoot(String url) {
+        if (url == null || langRoot == null) return "";
+        String frag = "";
+        int hash = url.indexOf('#');
+        if (hash >= 0) { frag = url.substring(hash); url = url.substring(0, hash); }
+        int q = url.indexOf('?');
+        if (q >= 0) url = url.substring(0, q);   // drop a ?hl=… search-highlight query
+        try {
+            Path cur = Paths.get(URI.create(url));
+            return langRoot.relativize(cur).toString().replace('\\', '/') + frag;
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
     /** Creates the browser widget, preferring the Edge (WebView2) engine on
      *  Windows: it renders sharper and handles the mouse thumb buttons
      *  (back / forward) natively.  Falls back to the platform default (the
@@ -415,10 +466,18 @@ public final class HelpViewer {
      *  source first ({@code -Dhelp.dir} or {@code help/} next to the
      *  running JAR) so user edits and translations show up without a
      *  rebuild; only falls back to the classpath bundle when nothing
-     *  on disk is found.  Result cached for the JVM lifetime. */
+     *  on disk is found.  Result cached until the UI language changes. */
     private synchronized Path resolveLangRoot() {
-        if (langRoot != null && Files.isDirectory(langRoot)) return langRoot;
         String[] langs = resolveLanguageChain();
+        String want = langs.length > 0 ? langs[0] : FALLBACK_LANG;
+        // Re-resolve when the UI language changed since langRoot was cached, so
+        // switching language and reopening help shows the new language without a
+        // JVM restart.
+        if (langRoot != null && Files.isDirectory(langRoot) && want.equals(langRootLang)) {
+            return langRoot;
+        }
+        langRoot = null;
+        langRootLang = want;
         for (Path base : externalHelpBases()) {
             for (String lang : langs) {
                 Path candidate = base.resolve(lang);

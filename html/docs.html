@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Phonalyser — Documentation</title>
+  <link rel="icon" type="image/svg+xml" href="img/logo.svg"/>
+  <link rel="stylesheet" href="css/site.css"/>
+</head>
+<body>
+
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <img src="img/logo.svg" alt=""/>
+      <b>Phonalyser</b>
+    </a>
+    <nav class="menu">
+      <a href="index.html">Home</a>
+      <a href="changelog.html">What's new</a>
+      <a href="screenshots.html">Screenshots</a>
+
+      <details class="submenu" open>
+        <summary>Download <span class="caret">▸</span></summary>
+        <a href="download.html">All downloads</a>
+        <a class="ext" href="https://github.com/dgo42/Phonalyser/releases/latest"
+           target="_blank" rel="noopener">GitHub — latest release</a>
+        <a class="ext" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
+           target="_blank" rel="noopener">Microsoft Store</a>
+        <a class="disabled" title="Reserved — coming soon">macOS <span class="soon">soon</span></a>
+      </details>
+
+      <a href="docs.html" class="active">Docs</a>
+      <a href="translation.html">Translation</a>
+      <a href="bench.html">Measurement bench</a>
+      <a href="web/index.html">Web version</a>
+    </nav>
+    <div class="sidebar-foot">
+      AGPL-3.0 ·
+      <a href="https://github.com/dgo42/Phonalyser" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="hero">
+      <img src="img/logo.svg" alt="Phonalyser logo"/>
+      <div>
+        <h1>Documentation</h1>
+        <p class="sub">Where Phonalyser keeps your preferences, logs and other
+           per-user files.</p>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <h2>Preferences &amp; log location</h2>
+      <p>Phonalyser never writes inside its install directory (a packaged
+         <code>.app</code>, <code>Program&nbsp;Files</code>, or a system package
+         is read-only). Preferences and logs live in the per-user location for
+         each OS:</p>
+      <table>
+        <tr><th>OS</th><th>Preferences</th><th>Logs</th></tr>
+        <tr><td><b>Windows</b></td><td><code>%APPDATA%\Phonalyser\</code></td><td><code>%APPDATA%\Phonalyser\logs\</code></td></tr>
+        <tr><td><b>macOS</b></td><td><code>~/Library/Application Support/Phonalyser/</code></td><td><code>~/Library/Application Support/Phonalyser/logs/</code></td></tr>
+        <tr><td><b>Linux</b></td><td><code>$XDG_CONFIG_HOME/Phonalyser</code> (or <code>~/.config/Phonalyser</code>)</td><td><code>/var/log/phonalyser</code> when writable, otherwise <code>…/Phonalyser/logs</code></td></tr>
+      </table>
+      <p>Override the base directory with <code>-Dapp.data.dir=&lt;path&gt;</code>.</p>
+
+      <div class="note"><b>Theory of operation.</b> How each module works
+         inside — coherent averaging, triggering, deconvolution, DAC
+         pre-distortion, notch tuning — is documented in the app's built-in help
+         (<i>Help ▸ Show help ▸ Theory of operation</i>) and in the
+         <a href="https://github.com/dgo42/Phonalyser/blob/main/docs/ALGORITHMS.md"
+            target="_blank" rel="noopener">ALGORITHMS.md</a> engineering catalogue
+         on GitHub.</div>
+
+    </div>
+  </main>
+
+</body>
+</html>

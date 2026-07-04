@@ -37,12 +37,14 @@ import org.edgo.audio.measure.preferences.Preferences;
  * <p>The constructor subscribes to the preferences the timing rules depend
  * on (FFT size, lead-in) and to audio-format changes, re-deriving and
  * persisting {@code freqRespDurationSec} — the tab control only renders it.
- * Towards the view the controller publishes nothing itself: the worker
- * reports through {@link Events#FREQRESP_MEASUREMENT_STARTED} /
- * {@link Events#FREQRESP_RESULT_AVAILABLE} /
- * {@link Events#FREQRESP_MEASUREMENT_FAILED} /
- * {@link Events#FREQRESP_MEASUREMENT_STOPPED}, and the pane / view
- * subscribe to those.
+ * It also owns the result {@link FreqRespView}: on {@link
+ * Events#FREQRESP_RESULT_AVAILABLE} (the worker's finished deconvolution) it
+ * clears and repopulates the view directly on the UI thread.  The view is a
+ * passive component — it does NOT subscribe to the measurement lifecycle
+ * itself, so a shared {@link Events#FREQRESP_MEASUREMENT_STARTED} (e.g. the
+ * Tune-notch wizard grabbing the audio device) cannot wipe its graph.  The
+ * pane still handles {@link Events#FREQRESP_MEASUREMENT_STOPPED} /
+ * {@link Events#FREQRESP_MEASUREMENT_FAILED} for control-locking + errors.
  */
 public final class FreqRespController {
 
@@ -64,8 +66,21 @@ public final class FreqRespController {
      *  constructor; run by {@link #shutdown()}. */
     private final List<Runnable> unsubscribes = new ArrayList<>();
 
-    public FreqRespController(Executor uiExecutor) {
+    public FreqRespController(Executor uiExecutor, FreqRespView view) {
         this.uiExecutor = uiExecutor;
+        // The view is a passive component owned by this controller: when the
+        // worker's deconvolution finishes, drive it directly — clear the old
+        // trace, then show both channels — marshalled to the UI thread.  The
+        // view is NOT a bus subscriber for its result lifecycle, so a shared
+        // FREQRESP_MEASUREMENT_STARTED (e.g. the Tune-notch wizard grabbing the
+        // audio device) can never wipe this graph.
+        onBus(Events.FREQRESP_RESULT_AVAILABLE, (StereoFreqRespResult stereo) ->
+                uiExecutor.execute(() -> {
+                    if (stereo == null || view.isDisposed()) return;
+                    view.clearResults();
+                    view.setLeftResult(stereo.left());
+                    view.setRightResult(stereo.right());
+                }));
         Preferences prefs = Preferences.instance();
         onPref(prefs.freqRespFftSizeProperty(), n -> deriveDuration());
         onPref(prefs.freqRespLeadInSecProperty(), v -> {

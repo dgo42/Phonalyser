@@ -46,6 +46,7 @@ import org.eclipse.swt.widgets.Menu;
 import org.eclipse.swt.widgets.MenuItem;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.freqresp.TuneNotchWizardDialog;
@@ -259,6 +260,11 @@ public final class MainWindow {
         } finally {
             if (showSplash) closeRebuildSplash();
         }
+        // A live language switch rebuilt the main window above; carry the
+        // separate help window (if open) to the new language too — it is its own
+        // Shell, so the rebuild does not reach it.  No-op unless the language
+        // actually changed and help is open.
+        HelpViewer.instance().refreshLanguage();
     }
 
     /** The audio configuration the running streams depend on — backend +
@@ -351,10 +357,12 @@ public final class MainWindow {
         toolsCascade.setMenu(toolsMenu);
         MenuItem tuneNotchItem = new MenuItem(toolsMenu, SWT.PUSH);
         tuneNotchItem.setText(I18n.t("menu.tools.tuneNotch"));
+        tuneNotchItem.setImage(IconUtils.icon(shell.getDisplay(), Icon.NOTCH_FILTER));
         tuneNotchItem.addListener(SWT.Selection, e -> openTuneNotchDialog());
         if (!mac) {
             MenuItem preferencesItem = new MenuItem(toolsMenu, SWT.PUSH);
             preferencesItem.setText(I18n.t("menu.tools.preferences"));
+            preferencesItem.setImage(IconUtils.icon(shell.getDisplay(), Icon.GEAR));
             preferencesItem.addListener(SWT.Selection, e -> openPreferencesDialog());
         }
 

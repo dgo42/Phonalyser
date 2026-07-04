@@ -57,8 +57,12 @@ The detailed per-module sections below carry the math and `file:line` citations.
 | **Bilinear transform + pre-warping** | analog→digital pole mapping `tan(π·fc/fs)` | §2.5 |
 | **Median (de-spike) filter** | sliding-window median, edge-preserving impulse removal | §2.5 |
 | **IIR feedback comb** | `(1−z⁻ᴺ)/(1−α·z⁻ᴺ)` mains-harmonic notch comb | §2.5, §3.15 |
+| **LMS line canceller** | adaptive sinusoid-model mains suppression; per-harmonic quadrature weights, Rodrigues-rotated references, no DC term | §2.5 |
+| **Synchronous template subtraction** | period-locked 512-bin mains-cycle template, LMS-learned, preserves non-periodic tones | §2.5 |
+| **Mains 50/60 Hz auto-detection** | Goertzel dual-band scan + parabolic sub-step + EWMA lock | §2.5 |
 | **Synchronous I/Q (lock-in) detection** | quadrature correlation to recover the dual-tone beat phase | §2.6 |
 | **Frequency-domain deconvolution `H=Y/X`** | full transfer function (mag+phase) from one FFT pair | §4.3 |
+| **Looping circular-transform deconvolution** | power-of-two-period FFT ⇒ shift-invariant `\|H\|`; live tune-notch tracking with no trigger | §4.11 |
 | **Linear-phase delay rotation** | DAC↔ADC transport-delay removal via `e^{j2πkδ/M}` | §4.3 |
 | **Impulse-response time-gating** | Hann-gated IR to trade resolution for less ripple (off by default) | §4.3 |
 | **RIAA phono EQ** | 3180/318/75 µs (+IEC 7950 µs) time-constant network | §4.7 |
@@ -75,6 +79,17 @@ The detailed per-module sections below carry the math and `file:line` citations.
 | **Liang–Barsky line clipping** | per-segment polyline clip so far-off coords don't wrap (GDI ±32k) | §3.16 |
 | **1-2-5 decade "nice number" ticks** | log/linear axis major/minor tick generation | §2.8, §3.16 |
 | **Min/max column decimation** | per-pixel-column envelope bars for dense waveforms/spectra | §2.9, §3.16 |
+| **Digital-phosphor persistence** | RGBA16F framebuffer with exponential `exp(−dt/τ)` afterglow decay (GL path) | §2.11 |
+
+### ADC characterisation
+
+| Algorithm | What it is | Where |
+|---|---|---|
+| **Code-density histogram** | per-code hit-count linearity test; `2^bitDepth` bins, chunked 32-bit storage | §5.1 |
+| **Arcsine (sine-wave) PDF reference** | ideal code density `1/(π√(A²−V²))`; CDF-inversion amplitude estimate | §5.1 |
+| **Moving-average / FIR density reference** | 12/25-tap FIR-smoothed count as the ideal, outlier-trimmed | §5.1 |
+| **DNL / INL code-density test** | `DNL=weight−1`, `INL=ΣDNL` in LSB | §5.2 |
+| **Least-squares sine-fit calibration** | golden-section frequency + 3×3 normal-equation sine fit → per-code error | §5.3 |
 
 ## Conventions & shared primitives
 
@@ -104,9 +119,10 @@ A few facts recur throughout; they are stated once here:
 ## Contents
 
 1. [Signal Generator](#1-signal-generator) — DDS synthesis, waveform math, sweeps, FFT-bin snapping, dither/PCM, output backends
-2. [Oscilloscope](#2-oscilloscope) — triggering, raw-signal frequency measurement, Lanczos reconstruction, DSP filters, beat reconstruction, rendering
+2. [Oscilloscope](#2-oscilloscope) — triggering, raw-signal frequency measurement, Lanczos reconstruction, DSP filters (comb / LMS / sync-subtract mains), beat reconstruction, rendering, digital-phosphor persistence
 3. [FFT Analyzer](#3-fft-analyzer) — radix-2 FFT, windows, coherent averaging & phase-lock, THD/IMD/noise floor, lobe stretch, discontinuity rejection, mains suppression, shared plotting
-4. [Frequency Response](#4-frequency-response) — Farina log-sweep deconvolution, Savitzky-Golay smoothing, `.frc` calibration, RIAA EQ, compare/diff, live metering
+4. [Frequency Response](#4-frequency-response) — Farina log-sweep deconvolution, Savitzky-Golay smoothing, `.frc` calibration, RIAA EQ, compare/diff, live metering, tune-notch live measurement
+5. [ADC Characterisation](#5-adc-characterisation) — code-density histogram (arcsine / moving-average PDF), DNL/INL, regression sine-fit calibration
 
 ---
 
@@ -299,7 +315,14 @@ The `scale` parameter widens the kernel to act as an **anti-aliasing low-pass at
 
 The scope re-tracks at most every 200 ms (`MAINS_TRACK_PERIOD_NANOS`), and `reset()`s+re-applies the comb each paint over the contiguous read window so its start transient stays off-screen-left in the pre-roll (`applyMainsSuppression`, `ScopeView.java:1244`). (This is the *time-domain* comb; the FFT module uses a separate frequency-domain `applySpectrumCorrection` divide, also in this class at `:203`, not used by the scope.) Because the comb's delay lines start zeroed each pass, the worker measures the **settled tail** (`≈ 3·fs/(π·BW)` samples in, capped at half the window) rather than the un-suppressed head when computing Vpp/Vrms (`ScopeMeasurementWorker.java:431`).
 
-Filter order of application per paint/measurement: HF LPF/despike → mains comb → trigger/draw/measure (`ScopeView.java:1877`, `ScopeMeasurementWorker.java:382`).
+Filter order of application per paint/measurement: HF LPF/despike → mains suppression → trigger/draw/measure (`ScopeView.java:1877`, `ScopeMeasurementWorker.java:382`).
+
+**Adaptive alternatives to the comb.** `enums/MainsSuppression.java` offers four per-channel scope modes (`oscLeftMainsSuppression`/`oscRightMainsSuppression`): `NONE`, `IIR_COMB` (above), `SYNC_SUBTRACT` and `LMS`. All three active filters share the `MainsFrequencyTracker` 50/60 Hz lock (Goertzel dual-band scan + parabolic sub-step + EWMA, the same math the comb's `track()` uses) and all apply through `processPreservingDc` (hum out, operating-point DC kept). Unlike the comb — which `reset()`s each paint so its start transient stays off-screen — the two adaptive filters **retain state across paints** so their learned estimate keeps converging.
+
+- **Synchronous template subtraction** (`MainsSyncSubtractFilter.java`) learns one period-locked template of `TEMPLATE_BINS = 512` phase bins spanning exactly one mains cycle — effective rate `512·f₀ ≈ 25.6 kHz`, so any in-band test tone aliases *above* the audio band and is not captured. Mains phase is tracked in *periods* `[0,1)` by a continuous accumulator advanced by the inter-call sample-index delta (`:145`), keeping it aligned across the scope's non-contiguous snapshots and the FFT's overlapping windows. At fractional phase the template is linearly interpolated (`bin0 = ⌊φ·M⌋`, weight `w`), the residual `r = x − est` is output, and the two straddling bins are LMS-nudged `template[b] += MU·r·weight` with a deliberately small `MU = 0.001` (`:65`) so non-periodic tones average out instead of leaking in (~5 s convergence, fine for rock-stable mains). `processPreservingDc` subtracts only `est − mean(template)` so block DC survives (`:156`).
+- **LMS line canceller** (`MainsLmsFilter.java`) models the mains as fundamental + harmonics up to `MAX_HARMONIC_HZ = 1000 Hz` (`kMax = ⌊1000/f₀⌋`), each a **quadrature reference pair** `(cos kφ, sin kφ)` with adaptive weights `wc[k], ws[k]`. Per-sample the references advance by a **Rodrigues rotation** `(c,s) → (c·c₁ − s·s₁, s·c₁ + c·s₁)` (`:154`) to avoid per-sample trig; the window-start phase rides the same inter-call-delta accumulator. Each sample subtracts `est = Σ_k wc[k]·cos kφ + ws[k]·sin kφ`, outputs `error = x − est`, then updates `wc[k] += MU·error·cos kφ`, `ws[k] += MU·error·sin kφ` with `MU = 5e-4` (`:57`) setting the notch bandwidth. The model carries no DC term, so DC is preserved by construction.
+
+Only the comb reaches the FFT plot path (as the frequency-domain divide, [§3.15](#315-frequency-domain-mains-suppression-plot-time-comb-correction)); `SYNC_SUBTRACT` and `LMS` are scope-time-domain only.
 
 ### 2.6 Dual-tone beat-envelope reconstruction
 
@@ -328,11 +351,19 @@ Filter order of application per paint/measurement: HF LPF/despike → mains comb
 
 **Grid / graticule** — linear 10×10 division grid via the shared `drawGrid` with a centred crosshair carrying `TICKS_PER_DIV` minor ticks (`paintCanvas`, `ScopeView.java:728`). `ZoomedView` draws its own grid + midline (`:126`). Sliders are dashed cross-hairs with filled triangle handles (`drawSliders`, `:1359`); ±FS boundary lines, edge voltage/time labels (`drawEdgeLabels`, `:1643`), and a measurement table complete the overlay.
 
-**Anti-aliasing/persistence** — curves use `SWT.ON` AA; grid and bars use `SWT.OFF` (sharp). There is **no persistence/phosphor decay** — each paint redraws a single frame. A frozen `RenderedFrame` snapshot (windowed samples + render params, `:1151`) lets the screenshot pane reproduce the exact on-screen (possibly frozen) trace.
+**Anti-aliasing** — curves use `SWT.ON` AA; grid and bars use `SWT.OFF` (sharp). The **CPU/SWT software path has no persistence** — each paint redraws a single frame; a frozen `RenderedFrame` snapshot (windowed samples + render params, `:1151`) lets the screenshot pane reproduce the exact on-screen (possibly frozen) trace. Digital-phosphor afterglow exists only on the GPU path — see [§2.11](#211-digital-phosphor-persistence-gl-path).
 
 ### 2.10 Capture-threading & buffering model
 
 The view reads a shared `SignalBufferReader` ring relative to its `writePos` via `readEndingAt`/`readLatest`; no read cursor is mutated, so the live capture and the scope never contend (`ScopeView.java:96`). The measurement worker (`ScopeMeasurementWorker`) runs a daemon thread at a fixed **10 Hz** drift-compensated cadence (`MEAS_COMPUTE_PERIOD_NANOS`, `:52`; loop `:279`) so avg/min/max/σ samples are evenly spaced; it caps each read at `MEAS_MAX_SAMPLES = 96000` (`:59`) and excludes a 500 µs `AC_WARMUP_NANOS` prefix to dodge the ADC startup transient that would bias the published DC mean (`:362`). Results land in a 1024-deep history ring (`measHistory`, `:107`) guarded by `measHistoryLock`; the paint thread reads snapshots and walks the ring under that lock (`walkRecentHistory`, `:183`; `averagedChannelMean`, `:200`). The AC-coupling DC subtraction uses a ≥ 500 ms-averaged per-channel mean (`AC_DC_MIN_AVG_NANOS`, `ScopeView.java:295`) so the trace and trigger don't wobble between worker ticks. `cap/s` is an EMA of the inter-new-frame interval, decaying toward zero on frozen frames (`updateCaptureRate`, `:770`).
+
+### 2.11 Digital-phosphor persistence (GL path)
+
+`ScopePhosphor.java` gives the GPU (GL / NanoVG) scope an oscilloscope-style **digital-phosphor afterglow**; the CPU/SWT render path ([§2.9](#29-graphics-scaling-polyline-rendering-decimation-grid)) has none, and the feature is flagged "GPU path only" in `Preferences.java:223`. Two off-screen **RGBA16F** framebuffers are kept: a *scratch* buffer holding just the current frame's trace, and a *phosphor* buffer accumulating the decayed history. The 16-bit-float format is deliberate — repeated multiplicative decay reaches zero cleanly instead of leaving the "permanent ghost" an 8-bit texture's integer quantization would (`:397`).
+
+- **Exponential decay.** On each genuinely new captured frame (`renderer.isLastFrameNew()`, `:203`) the phosphor is faded by `fade = 1 − exp(−dt/τ)`, `dt = min(now − lastAccum, MAX_DECAY_SECONDS)` (`:262`). The `MAX_DECAY_SECONDS = 0.5` clamp (`:63`) makes a resume-after-pause fade gently over several frames instead of wiping in one step. The fade is a multiplicative blend `dst ← dst·exp(−dt/τ)` through NanoVG's `GL_ZERO, GL_ONE_MINUS_SRC_ALPHA` composite (`:330`); the fresh scratch trace is then composited over with premultiplied source-over (`:266`). `τ` is the user-selected time constant.
+- **Modes** (`enums/PersistenceMode.java`, `oscPersistenceMode`): `OFF` (phosphor buffer never created, `render()` returns false `:147`), fixed constants `0.5 / 1 / 2 / 5 / 10 / 15 / 20 s`, `INFINITE` (`τ < 0` skips the decay step — accumulate forever, `:265`), and `MANUAL` (τ read from `oscPersistenceManualSeconds`, `effectiveSeconds()` `:54`).
+- **Frame kinds** (`:76`) pick decay vs wipe per frame: `REALTIME` decays + stamps only on a new frame; `RESET` wipes and re-stamps on a geometry change (pan / zoom / V-div drag) so the trace doesn't smear under the gesture (`:297`); `CLEAR` wipes without re-stamping on a trigger / signal-source change (`:278`); `COMPOSITE` re-shows the frozen afterglow on expose / resize without decaying it (`:210`).
 
 ---
 
@@ -581,3 +612,43 @@ The view extends the shared `AbstractFreqDomainView`/`AbstractMeasurementView` e
 - **Zoom/pan**: log-frequency zoom around the cursor (`:1485`, geometric), linear-dB magnitude zoom/pan, all persisted to `Preferences` and published on `FREQRESP_RANGE_CHANGED`.
 
 The CLI path (`FreqRespMode.java`) renders an equivalent JFreeChart PNG with a custom `LogAxis` whose `refreshTicks` places majors at {1,2,3,5,7}×10ⁿ, magnitude on the left axis and unwrapped phase (dashed) on a right axis.
+
+### 4.11 Tune-notch live measurement (looping circular-transform deconvolution)
+
+The Tune-notch wizard (`TuneNotchWizardDialog` + `NotchSweepEngine.java`) shows a passive twin-T notch's magnitude response refreshing a few times a second while the user turns the trimmer, so the null can be walked onto the target frequency by ear/eye. It reuses the freq-resp deconvolution kernel ([§4.3](#43-frequency-domain-deconvolution-h--yx)) but drives it very differently.
+
+- **Looping capture, no per-sweep re-open.** The engine opens the device once and streams a **continuously looping** Farina log-sweep into a circular ring buffer (`NotchSweepEngine.java:38`), avoiding the ~1.5 s open/close cost the main freq-resp pays per measurement. Ring capacity is `max(sampleRate, 4·sweepSamples)` (`:148`); the wizard polls `latestPeriod(n)` ~10×/s to grab the most-recent `n` samples, unwrapping wraparound modulo `ringCapacity` (`:191`).
+- **Power-of-two period ⇒ circular transform.** The sweep period is `round(0.26 s·fs)` rounded to the **nearest power of two** (≈ 0.19–0.34 s/pass; grab cadence `loopPeriodMs = round(sweepSamples/fs·1000)`, a few passes a second) (`TuneNotchWizardDialog.java:501`, `:507`). With the period a power of two and lead-in zero, `computeFromLogSweep`'s `M = nextPow2(...)` equals `sweepSamples` exactly, so the FFT is **circular, not zero-padded**. A window grabbed at an arbitrary ring phase is then a circular *shift* of the periodic signal — and a shift preserves `|H(f)|`, so **no trigger or loop-cycle alignment is needed** and there is no wrap-smearing. (A non-power-of-two period would zero-pad, an unaligned grab would wrap across the seam, and every bin would spike.)
+- **Response per pass.** Each grab deconvolves L and R separately via `computeFromLogSweep` (`:597`) — `H(k) = Y(k)/X(k)`, magnitude `|H|` on a **bin-aligned** output grid (`:531`, exact FFT-bin centres, no faceting), normalized by ADC peak. Loop-seam Hann fades (`FADE_SEC = 0.025 s`, `:504`) on both the played sweep and the deconvolution reference cancel in `Y/X`.
+- **Savitzky-Golay is OFF here** (`applySavGol = false`, `:600`). The bin-aligned grid is coarse (a few Hz/point over the 600-px chart); the fixed 7-point SG window would span ~15–20 Hz and round ~9 dB off the bottom of a sharp null. The main freq-resp pane uses a denser log grid where the same window is sub-Hz, so it leaves SG on.
+- **Null tracking.** Per result the deepest notch is found by `argmin` of the linear magnitude, then a 3-point **parabolic interpolation in linear magnitude** (`δ = ½(y₋₁−y₊₁)/(y₋₁−2y₀+y₊₁)`, `:651`) refines the null frequency and depth to sub-bin (linear, not dB — the dip is locally parabolic in linear space); `(notchHz, notchDb)` drive the on-chart readout (`:634`).
+
+---
+
+## 5. ADC Characterisation
+
+Beyond the live GUI, the CLI (`--mode …`) characterises an ADC's linearity from a captured tone. These paths live outside the four GUI modules and are documented here for completeness; the math is code-density (histogram) and least-squares regression.
+
+### 5.1 Code-density histogram
+
+`AdcHistogram.java` bins every captured sample by its integer ADC code (`2^bitDepth` bins). For `bitDepth ≤ 24` a single `int[2^bitDepth]` holds the counts; for 32-bit codes the 16 G-entry table is split into eight `int[2^29]` chunks addressed by a 3-bit selector + 29-bit offset (`:49`, `:83`). Sample→code masks the low `bitDepth` bits of the signed sample (`:91`); the class also tracks `uniqueCodes`, `min/maxCount` and `totalCount` as capture-quality metrics. `HistogramMode.java` records live audio for a set duration, skips the first ~100 ms of startup transient, and can export/replay the histogram as CSV (`code_unsigned;count`).
+
+The **expected** per-code density (the ideal a real code count is compared against) comes from `WeightedBuffer.java` in two forms:
+- **Moving-average reference** — `weighted[k] = count[k] / movingAvg[k]`, where `movingAvg` is a 12- or 25-tap **FIR** (`FIR.java`, direct-form tapped delay line) smoothing of the raw counts; the global average is recomputed only over codes whose weight lands in `[0.5, 2.0]` to drop rails and outliers (`:130`).
+- **Sine (arcsine) PDF reference** — for a known sine stimulus the theoretical code density is the arcsine law `f(V) = 1 / (π·√(A² − V²))` (`:266`). Amplitude `A` may be supplied or estimated by inverting the empirical CDF at quantiles `F ∈ [0.10,0.40] ∪ [0.60,0.90]` (avoiding rails and the singular median, `:404`); when `A > 1` (clipping) the rail bins absorb the clipped fraction `(2/π)·arccos(1/A)` (`:246`).
+
+### 5.2 DNL / INL (code-density test)
+
+`DnlInlExporter.java` turns the per-code weights into converter-linearity curves in LSB:
+- **DNL** — `DNL[k] = weighted[k] − 1` (a code wider than ideal counts fewer hits → positive DNL).
+- **INL** — `INL[k] = Σ_{i≤k} DNL[i]`, the running integral of DNL from code 0 (`:99`).
+
+Both are computed in one pass and exported (`code_hex;code_unsigned;{dnl,inl}_lsb`); for charting the per-code values are bucket-averaged to one point per pixel, X = code·scaleVolts/binCount, Y = LSB, with 10 % auto-margins (`:72`).
+
+### 5.3 Regression sine-fit calibration
+
+When histogram binning is too noisy or unavailable, `RegressionCalibrator.java` (`RegressCalibrateMode`) recovers the per-code error curve directly from the raw samples by least squares:
+1. **Frequency** — FFT peak for a rough estimate, then a **golden-section search** minimizing residual sum of squares (`:240`, tested on ≤ 2¹⁶ samples for speed).
+2. **Linear LS sine fit** — `y[n] = a·sin ωn + b·cos ωn + c` via 3×3 normal equations over all samples; `A = √(a²+b²)`, `φ = atan2(b,a)`, DC `c` (`:289`).
+3. **Per-code error** — for each sample accumulate `sample − ideal` (LSB) into `errorSum[code]`; average per code, then linearly interpolate interior codes the signal never visited (`:158`, `:198`).
+4. **Export** — smooth the per-code error with a Gaussian-weighted moving average (`σ = √codeCount/2`, radius 3σ) and write effective bin widths `voltPerLsb·(1 − ΔsmoothedError)` in the same `weighted_scaled` format the histogram path emits, so both feed the same downstream linearization (`:364`).

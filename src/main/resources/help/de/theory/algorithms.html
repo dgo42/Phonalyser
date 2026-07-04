@@ -94,6 +94,14 @@
             spektralen Störungsgatter — aus den Daten gelernt, unempfindlich
             gegenüber Ausreißern.</td>
         <td><a href="fft.html#rejection">FFT — Störungsunterdrückung</a></td></tr>
+    <tr><td>Tonkeulen-Streckung (ToneLobeLift)</td>
+        <td>Skaliert die Hauptkeule eines Tons als vertikale Streckung, an
+            den Rauschpegel angeheftet — eine glatte Kuppel, nie ein
+            flachgedeckelter gleichmäßiger Hub — für die
+            <code>.frc</code>-Kalibrierung und die Pegelung der manuellen
+            Grundfrequenz.</td>
+        <td>— (Spektral-Rendering; siehe das vollständige
+            Dokument<sup><a href="#ref-doc">[1]</a></sup>)</td></tr>
   </table>
 
   <h2 id="filtering">Filterung &amp; Schätzung</h2>
@@ -131,6 +139,13 @@
             auf dem Oszilloskop angewendet, als Plotzeit-Spektralkorrektur
             in der FFT.</td>
         <td><a href="oscilloscope.html#mains">Oszilloskop — Netz-Kammfilter</a></td></tr>
+    <tr><td>Adaptive Netzentstörer (LMS, synchrone Subtraktion)</td>
+        <td>Zwei wählbare Alternativen zum Kammfilter: ein LMS-Leitungslöscher
+            mit quadraturbezogenen Gewichten je Oberwelle und ein
+            periodengekoppelter 512-Bin-Vorlagensubtrahierer — beide lernen
+            den Brumm und lassen nichtperiodische Testtöne unberührt. Ein
+            gemeinsamer Goertzel-Tracker erkennt automatisch 50 vs. 60 Hz.</td>
+        <td><a href="oscilloscope.html#mains">Oszilloskop — Netzentstörung</a></td></tr>
     <tr><td>Synchrone I/Q (Lock-in) Detektion</td>
         <td>Ermittelt die Phase der Zweikanalton-Schwebungseinhüllenden,
             damit der Trigger einmal pro Schwebung einrastet.</td>
@@ -139,6 +154,13 @@
         <td>Die vollständige Übertragungsfunktion — Betrag und Phase —
             aus einem einzigen Sweep.</td>
         <td><a href="freq-resp.html#how">Frequenzgang</a></td></tr>
+    <tr><td>Zirkuläre Entfaltung mit Endlos-Sweep</td>
+        <td>Zwingt die Sweep-Periode auf eine Zweierpotenz, sodass die FFT
+            zirkulär ist — ein bei beliebiger Phase entnommenes Fenster ist
+            eine Verschiebung, und eine Verschiebung erhält |H| — was ein
+            triggerfreies Live-Nachführen der Kerbe, einige Male pro Sekunde,
+            im Kerbfilter-Assistenten ermöglicht.</td>
+        <td><a href="tune-notch.html">Kerbfilter-Abgleich</a></td></tr>
     <tr><td>Lineare Phasenverzögerungs-Rotation</td>
         <td>Entfernt die DAC↔ADC-Rundlaufverzögerung, sodass nur die
             geräteeigene Phase verbleibt.</td>
@@ -187,6 +209,39 @@
             dichte Daten.</td>
         <td>— (Rendering-Interna; siehe das vollständige
             Dokument<sup id="cite-1b"><a href="#ref-doc">[1]</a></sup>)</td></tr>
+    <tr><td>Digital-Phosphor-Nachleuchten</td>
+        <td>Oszilloskoptypisches Nachleuchten auf dem GPU-Kurvenpfad: ein
+            RGBA16F-Framebuffer, bei jedem neuen Bild um exp(−dt/τ) gedimmt,
+            mit Aus / fest / unendlich / manuell einstellbaren
+            Zeitkonstanten.</td>
+        <td>— (GPU-Rendering; siehe das vollständige
+            Dokument<sup><a href="#ref-doc">[1]</a></sup>)</td></tr>
+  </table>
+
+  <h2 id="adc">ADC-Charakterisierung</h2>
+  <table class="controls">
+    <tr><th>Algorithmus</th><th>Funktion hier</th><th>In dieser Hilfe</th></tr>
+    <tr><td>Codedichte-Histogramm</td>
+        <td>Ordnet jedes erfasste Sample seinem ADC-Code zu (2<sup>Bits</sup>
+            Bins) und vergleicht die Zählwerte mit einer idealen Dichte —
+            einer gleitenden-Mittelwert-/FIR-Referenz oder dem
+            Arkussinus-Gesetz eines bekannten Sinus — um die
+            Wandlerlinearität sichtbar zu machen.</td>
+        <td>— (Kommandozeilenmodus; siehe das vollständige
+            Dokument<sup><a href="#ref-doc">[1]</a></sup>)</td></tr>
+    <tr><td>DNL / INL (Codedichte-Test)</td>
+        <td>Differentielle Nichtlinearität DNL = Gewicht − 1 und ihr
+            laufendes Integral INL, in LSB, direkt aus den
+            Histogramm-Zählwerten.</td>
+        <td>— (Kommandozeilenmodus; siehe das vollständige
+            Dokument<sup><a href="#ref-doc">[1]</a></sup>)</td></tr>
+    <tr><td>Kalibrierung per Sinus-Ausgleich (kleinste Quadrate)</td>
+        <td>Gewinnt Amplitude, Phase, DC und eine Fehlerkurve je Code direkt
+            aus den Rohsamples über eine Golden-Section-Frequenzsuche und
+            einen 3×3-Normalgleichungs-Sinusfit — für den Fall, dass die
+            Histogramm-Klassierung zu verrauscht ist.</td>
+        <td>— (Kommandozeilenmodus; siehe das vollständige
+            Dokument<sup><a href="#ref-doc">[1]</a></sup>)</td></tr>
   </table>
 
   <div class="note"><b>Vertiefung.</b>  Jeder obige Eintrag wird vollständig

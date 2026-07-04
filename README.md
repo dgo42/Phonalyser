@@ -4,6 +4,8 @@
 frequency response, and oscilloscope-style inspection, built around coherent FFT
 averaging and bit-exact playback/capture.
 
+**Project site:** <https://phonalyser.github.io/>
+
 ![Phonalyser](docs/screenshots/phonalyser.png)
 
 ## Highlights
@@ -14,7 +16,13 @@ averaging and bit-exact playback/capture.
   (e.g. E1DA Cosmos), coherent averaging to pull the noise floor down.
 - **Oscilloscope** — triggered time-domain view with Vpp/Vrms/period/frequency stats.
 - **Frequency response** — log-sweep / multitone with deconvolution and calibration.
-- **Signal generator** — sine, dual-tone (IMD), sweep, DDS, with DAC predistortion.
+- **Signal generator** — sine, dual-tone (IMD), sweep, DDS.
+- **DAC pre-distortion calibration** — a closed-loop wizard that iteratively
+  cancels the converter's own harmonics (and dual-tone IMD), pushing the
+  playback chain's distortion far below what the DAC produces alone.
+- **Notch-filter tuning** — a live module for trimming a passive twin-T notch:
+  a continuously looping sweep tracks the null in real time so you can walk it
+  onto the target frequency, then de-embed the notch's response from the FFT.
 - **Multi-backend audio** — WASAPI & WDM-KS (Windows), CoreAudio (macOS),
   JavaSound (Linux); high sample rates and 16/24/32-bit.
 
@@ -22,7 +30,12 @@ averaging and bit-exact playback/capture.
 
 ## Download & run
 
-Each release offers two ways to run Phonalyser:
+**Run it in your browser — no install.** A WebAudio port of Phonalyser runs the
+full analyzer (FFT, oscilloscope, signal generator) directly in a modern browser
+(Chrome/Edge) at **<https://phonalyser.github.io/web/>** — nothing to download.
+
+To install the desktop app instead, each release offers two ways to run
+Phonalyser:
 
 **Native installers** (recommended) — they bundle their own Java runtime, so
 nothing else is needed:
