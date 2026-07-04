@@ -12,6 +12,8 @@
 import { SignalBufferReader, OVERRUN } from './signal-buffer-reader.js';
 import { isDualTone } from '../generator/dds-kernel.js';
 import { BUFFER_SECONDS } from './shared-capture.js';
+import { MessageBus } from '../bus/message-bus.js';
+import { Events } from '../bus/events.js';
 
 // Scope window sizing (faithful to Java ScopeView.drawWaveforms line ~2007):
 //   wanted = 2·displaySamples + 2·LANCZOS_PADDING + extraLookback
@@ -61,6 +63,12 @@ export class ScopeController {
     this._measGapL = null; this._measGapR = null;
     this._zoomBufL = null; this._zoomBufR = null;
     this.onScope = null;   // (buf, info) => void — per capture batch
+    // Self-feed off the LIVE capture: Java consumers subscribe to CAPTURE_BATCH_AVAILABLE and read
+    // their own cursor — no central dispatcher pumps us. Fires only for the live capture (the
+    // measurement capture doesn't publish), and only feeds while this scope is recording.
+    MessageBus.instance().subscribe(Events.CAPTURE_BATCH_AVAILABLE, () => {
+      if (this._scopeOn) this.feedScope();
+    });
   }
 
   /** True while the scope is recording. */

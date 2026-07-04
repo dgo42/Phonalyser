@@ -40,11 +40,15 @@ export class SharedCapture {
    *   - computeAnalysisFreqs: () => void — recomputes the analysis freqs once the real input rate
    *     is known (the scope reads `snapped` even with no generator and no FFT).
    */
-  constructor({ getConfig, status, onBatch, computeAnalysisFreqs }) {
+  constructor({ getConfig, status, onBatch, computeAnalysisFreqs, publishBatch } = {}) {
     this._getConfig = getConfig;
     this._status = status || (() => {});
     this._onBatch = onBatch || (() => {});
     this._computeAnalysisFreqs = computeAnalysisFreqs || (() => {});
+    // When true, publish CAPTURE_BATCH_AVAILABLE after each staged batch so consumers can
+    // self-feed off their own cursors (the LIVE scope/FFT capture). The measurement capture
+    // leaves this false so a sweep's batches never trigger the live consumers.
+    this._publishBatch = !!publishBatch;
     this._refCount = 0;
     this._buffer = null;            // the one shared SignalBuffer ring (null when closed)
     this.inCtx = null;
@@ -227,5 +231,8 @@ export class SharedCapture {
     if (!buf) return;
     buf.appendBatch(d.l, d.r, d.n);
     this._onBatch(d);
+    // Java SharedCapture publishes CAPTURE_BATCH_AVAILABLE; the scope + FFT consumers subscribe
+    // and read their own cursors. Only the live capture opts in (publishBatch).
+    if (this._publishBatch) MessageBus.instance().publish(Events.CAPTURE_BATCH_AVAILABLE);
   }
 }
