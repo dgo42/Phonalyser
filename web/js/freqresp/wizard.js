@@ -117,7 +117,9 @@ export class FreqRespWizard {
    *  page 2 sweeps with the page-1 loopback divided out so the DUT shows alone (Java runMeasurement). */
   async runMeasurement(directLeg) {
     if (this.host.running) return;
-    if (!this.host.engine.running) { this.host.status(t('freqResp.error.noDevice')); return; }
+    // No engine-running precondition: captureAndDeconvolve owns the full measurement
+    // lifecycle (publish STARTED → wait idle → own playback + capture), so the wizard
+    // sweep works from ANY prior state, exactly like the Play button.
     const $ = this.$;
     $('#frWizPlay1, #frWizPlay2, #frWizBack, #frWizNext').prop('disabled', true);
     // Hide the wizard while the busy meter modal is up (one modal at a time).

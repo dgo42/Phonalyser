@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Frequency response</title>
+  <title>Phonalyser.web — Frequency response</title>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -44,13 +44,16 @@
     <li><b>Crosshair readout.</b>  A dashed cross follows the pointer with a
         floating box showing frequency, magnitude and (when shown) phase and
         the compare Δ.  <a href="#freqresp-crosshair">Crosshair</a>.</li>
-    <li><b>Pan &amp; zoom (mouse wheel).</b>  The same wheel convention as
-        every Phonalyser view — <a href="#freqresp-panzoom">Pan &amp;
-        zoom</a>.</li>
+    <li><b>Pan &amp; zoom.</b>  The same wheel convention as every Phonalyser.web
+        view, plus a drag-a-rectangle zoom with Ctrl+Z undo —
+        <a href="#freqresp-panzoom">Pan &amp; zoom</a>.</li>
     <li><b>Calibration de-embedding.</b>  Load one or more <code>.frc</code> /
         CSV correction files to subtract a known interface response from the
         measurement.  <a href="#freqresp-tab-calibration">Load calibration
         tab</a>.</li>
+    <li><b>Tune-notch wizard.</b>  A live, continuously refreshing response
+        display for trimming a twin-T notch filter onto a target frequency —
+        <a href="#freqresp-tune-notch">Tune-notch wizard</a>.</li>
   </ol>
 
   <h2 id="freqresp-buttons">Header buttons</h2>
@@ -77,7 +80,7 @@
             <a href="#freqresp-measure">Running a measurement</a>).</td></tr>
   </table>
 
-  <h2 id="freqresp-panzoom">Pan &amp; zoom (mouse wheel)</h2>
+  <h2 id="freqresp-panzoom">Pan &amp; zoom</h2>
   <p>Over the plot —
      <b>wheel</b>: pan the magnitude (vertical) axis;
      <b>Shift+wheel</b>: pan the frequency (horizontal) axis;
@@ -90,6 +93,23 @@
      view, so it tracks the zoom (it grows / shrinks as you scale).  Click the
      empty track to page toward the pointer, or hold the button down to keep
      paging until the thumb reaches the cursor.</p>
+  <p><b>Rectangle zoom.</b>  Drag with the left mouse button inside the plot to
+     draw a rubber-band rectangle; on release the selected region stretches to
+     fill the view — frequency and magnitude zoom together in one gesture.
+     Selections smaller than 8 pixels in either direction are ignored, so a
+     stray click doesn't zoom.  The drag must start inside the plot area
+     (not on the axis labels), and the result stays clamped to the plot's
+     limits (1&nbsp;Hz up to the Nyquist fraction horizontally).  The same
+     gesture works in the scope and FFT views.</p>
+  <p><b>Ctrl+Z — step back.</b>  Every rectangle zoom remembers the window it
+     replaced; press <b>Ctrl+Z</b> (exactly Ctrl — Ctrl+Shift+Z and other
+     combinations are ignored) to step back through up to 32 previous windows
+     per view.  Wheel pan / zoom is not recorded — only rectangle zooms add
+     steps.  Ctrl+Z acts on the view that has keyboard focus (click a plot to
+     focus it) or, when no view is focused, the one under the pointer; the
+     targeted view is marked by a thin bright-green border around its edge.
+     While a text-entry field has focus, Ctrl+Z belongs to that field's own
+     undo instead.</p>
 
   <h2 id="freqresp-crosshair">Crosshair readout</h2>
   <p>Moving the pointer inside the plot draws a dashed cross and a floating
@@ -125,9 +145,12 @@
             rejection at the cost of a longer sweep; the label shows the
             resulting sweep duration.</td></tr>
     <tr><td>Sweep points</td>
-        <td>Number of frequency points generated for the sweep (8192 …
-            10M).  The wheel jumps power-of-two presets plus a sample-rate
-            derived "Nyquist/2" entry.</td></tr>
+        <td>Number of log-spaced output points the deconvolution emits
+            (8192 … 10M).  The wheel steps through power-of-two presets
+            (8192, 16384, 32768, … up to 4194304) plus an <b>FS/2</b> entry
+            equal to half the current sample rate (24000 at 48&nbsp;kHz,
+            96000 at 192&nbsp;kHz — it tracks the audio format); any value in
+            range can also be typed directly.</td></tr>
     <tr><td>Lead-in, s</td>
         <td>Silent / settle time before the sweep proper, so the chain is in
             steady state when measurement starts.</td></tr>
@@ -239,6 +262,75 @@
      by the FFT size and sample rate.  Because the reference is the exact
      pre-rendered sweep that was played, the result is the device's true
      transfer function, not an estimate — see
+     <a href="theory/freq-resp.html">Theory ▸ Frequency response</a>.</p>
+
+  <h2 id="freqresp-tune-notch">Tune-notch wizard</h2>
+  <p>A passive notch filter (typically a twin-T) ahead of the input is the
+     classic way to measure distortion below the analyser's own floor: it
+     removes the fundamental before the ADC, so the FFT sees the harmonics
+     without the converter's own distortion products.  But the notch only
+     works if its null sits exactly on the test frequency — and on a twin-T
+     the centre and the depth move together as you turn the trimmers.  The
+     wizard gives you a <b>live, continuously refreshing</b> picture of the
+     notch so you can watch the null move while you adjust the filter with a
+     screwdriver in hand.</p>
+  <p>Open it from the main menu: <b>Tools ▸ Tune notch…</b>.  While the dialog
+     is open it takes over playback and capture — the generator, oscilloscope,
+     FFT and any frequency-response sweep stop for the duration.  Wire the
+     signal path as for the later distortion measurement: output ▸ notch
+     filter ▸ input.</p>
+  <table class="controls">
+    <tr><th>Control</th><th>Notes</th></tr>
+    <tr><td>Start frequency, Hz</td>
+        <td>Low edge of the displayed band.  Accepts kHz shorthand — typing
+            <code>1.5k</code> means 1500&nbsp;Hz; plain digits are read as
+            Hz.</td></tr>
+    <tr><td>Stop frequency, Hz</td>
+        <td>High edge of the displayed band, up to Nyquist.</td></tr>
+    <tr><td>Amplitude (RMS)</td>
+        <td>Drive level of the tuning sweep, in volts RMS; accepts
+            µV / mV / V / dBV.</td></tr>
+    <tr><td>Target frequency, Hz</td>
+        <td>The frequency you are tuning the notch onto — drawn as a dashed
+            vertical marker on the plot (see below).</td></tr>
+    <tr><td>Close</td>
+        <td>Stops the tuning loop, releases the audio device and restores the
+            main frequency-response view.</td></tr>
+  </table>
+  <p>All four values are remembered between sessions.  Editing the start /
+     stop fields re-scales the frequency axis immediately.</p>
+  <p><b>What you see.</b>  The plot shows the measured (input) channel's
+     response, rebuilt roughly <b>ten times a second</b> from a short looping
+     sweep (about a quarter of a second per pass) — each turn of a trimmer
+     shows up within a fraction of a second.  The vertical axis fits itself to
+     the trace automatically.  Three live elements sit on the plot:</p>
+  <ol class="features">
+    <li><b>Notch readout</b> (top-left): the frequency of the deepest null
+        found in the current sweep and its depth in dB.  The null position is
+        interpolated between sweep points, so it reads finer than the sweep
+        grid.</li>
+    <li><b>Target marker</b>: a dashed vertical line at the target frequency.
+        Its colour grades from <b>red</b> (50&nbsp;dB or less attenuation at
+        the target) to <b>green</b> (90&nbsp;dB or deeper).  The colour
+        reflects the attenuation <em>at the target frequency</em>, not at
+        wherever the null currently sits — a deep notch parked at the wrong
+        frequency still shows red.</li>
+    <li><b>Status line</b>: the running sweep count and the progress toward
+        the next result.</li>
+  </ol>
+  <div class="note">The response smoothing used elsewhere in this pane is
+     switched <b>off</b> in the wizard: smoothing a sharp null would round it
+     several dB shallower than it really is, so here the notch depth reads
+     true.</div>
+  <p><b>Tuning workflow.</b>  Set the target to your distortion-test
+     frequency and bracket it with the start / stop band.  Turn the notch's
+     frequency trimmer until the readout's null frequency lands on the target
+     and the marker turns green, then adjust the balance / depth trimmer for
+     maximum depth; on a twin-T the two interact, so iterate a couple of
+     times.  When the null sits on the target at full depth, close the wizard
+     and run the distortion measurement in the <a href="fft.html">FFT</a>
+     pane.  The measurement behind the display is the same played-sweep
+     deconvolution as a normal frequency-response run — see
      <a href="theory/freq-resp.html">Theory ▸ Frequency response</a>.</p>
 
 <script src="help-viewer.js"></script>

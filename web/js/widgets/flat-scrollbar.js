@@ -13,6 +13,27 @@
 // = ±pageIncrement, thumb drag = continuous, hold-on-arrow = 10 Hz auto-repeat
 // after a 300 ms delay, wheel = ±increment, double-click on the thumb recentres.
 // The host passes a <canvas>; the widget owns its painting + mouse wiring.
+// Like the Java widget (SWT.Selection event.detail), each onChange call carries
+// the gesture as a second ScrollDetail argument — ARROW_UP/ARROW_DOWN (arrows +
+// wheel), PAGE_UP/PAGE_DOWN (track click), DRAG (thumb drag), NONE otherwise —
+// so a listener can apply an exact model step for arrow/page gestures instead
+// of the int-quantised selection delta.
+
+/**
+ * Gesture carried by each onChange call (Java: SWT.Selection event.detail —
+ * ARROW_UP/ARROW_DOWN for arrow clicks + wheel, PAGE_UP/PAGE_DOWN for track
+ * clicks, DRAG for thumb drags, NONE otherwise) so a listener can apply an
+ * exact model step for arrow/page gestures instead of the int-quantised
+ * selection delta.
+ */
+export const ScrollDetail = Object.freeze({
+  NONE: 'none',
+  ARROW_UP: 'arrowUp',
+  ARROW_DOWN: 'arrowDown',
+  PAGE_UP: 'pageUp',
+  PAGE_DOWN: 'pageDown',
+  DRAG: 'drag',
+});
 
 const ARROW_SIZE = 18;        // px of each end-arrow along the scrolling axis
 const REPEAT_DELAY_MS = 300;  // initial hold delay before auto-repeat
@@ -22,7 +43,9 @@ const MIN_THUMB_PX = 20;      // floor so the thumb stays grabbable at any zoom
 
 export class FlatScrollbar {
   /** @param {HTMLCanvasElement} canvas
-   *  @param {{vertical?: boolean, onChange?: (sel:number)=>void}} opts */
+   *  @param {{vertical?: boolean, onChange?: (sel:number, detail:string)=>void}} opts
+   *  `detail` is one of {@link ScrollDetail}, naming the gesture that moved
+   *  the selection (Java: SWT.Selection event.detail). */
   constructor(canvas, { vertical = false, onChange = null } = {}) {
     this.cv = canvas;
     this.g = canvas.getContext('2d');
@@ -186,8 +209,16 @@ export class FlatScrollbar {
     const { w, h } = this._size();
     const axisPx = this._axisPx(e);
     const trackEnd = (this.vertical ? h : w) - ARROW_SIZE;
-    if (axisPx < ARROW_SIZE) { this._stepBy(-this.increment); this._startArrowRepeat(-this.increment); return; }
-    if (axisPx >= trackEnd) { this._stepBy(this.increment); this._startArrowRepeat(this.increment); return; }
+    if (axisPx < ARROW_SIZE) {
+      this._stepBy(-this.increment, ScrollDetail.ARROW_UP);
+      this._startArrowRepeat(-this.increment, ScrollDetail.ARROW_UP);
+      return;
+    }
+    if (axisPx >= trackEnd) {
+      this._stepBy(this.increment, ScrollDetail.ARROW_DOWN);
+      this._startArrowRepeat(this.increment, ScrollDetail.ARROW_DOWN);
+      return;
+    }
     const tr = this._thumbRect();
     const thumbStart = this.vertical ? tr[1] : tr[0];
     const thumbEnd = thumbStart + (this.vertical ? tr[3] : tr[2]);
@@ -195,9 +226,11 @@ export class FlatScrollbar {
       this.dragging = true;
       this.dragOffset = axisPx - thumbStart;
     } else if (axisPx < thumbStart) {
-      this._stepBy(-this.pageIncrement); this._startTrackRepeat(-this.pageIncrement, axisPx);
+      this._stepBy(-this.pageIncrement, ScrollDetail.PAGE_UP);
+      this._startTrackRepeat(-this.pageIncrement, ScrollDetail.PAGE_UP, axisPx);
     } else {
-      this._stepBy(this.pageIncrement); this._startTrackRepeat(this.pageIncrement, axisPx);
+      this._stepBy(this.pageIncrement, ScrollDetail.PAGE_DOWN);
+      this._startTrackRepeat(this.pageIncrement, ScrollDetail.PAGE_DOWN, axisPx);
     }
   }
 
@@ -219,7 +252,7 @@ export class FlatScrollbar {
     if (center === this.selection) return;
     this.selection = center;
     this.redraw();
-    this._fire();
+    this._fire(ScrollDetail.NONE);
   }
 
   _onMouseMove(e) {
@@ -247,7 +280,7 @@ export class FlatScrollbar {
     if (newSel !== this.selection) {
       this.selection = this._clampVal(newSel, this.minimum, this.maximum - this.thumb);
       this.redraw();
-      this._fire();
+      this._fire(ScrollDetail.DRAG);
     }
   }
 
@@ -255,16 +288,16 @@ export class FlatScrollbar {
     e.preventDefault();
     if (e.deltaY === 0) return;
     const dir = e.deltaY < 0 ? 1 : -1;   // wheel up = selection decreases (Java)
-    this._stepBy(-dir * this.increment);
+    this._stepBy(-dir * this.increment, dir > 0 ? ScrollDetail.ARROW_UP : ScrollDetail.ARROW_DOWN);
   }
 
   // ----- helpers -----
-  _stepBy(delta) {
+  _stepBy(delta, detail) {
     const clamped = this._clampVal(this.selection + delta, this.minimum, this.maximum - this.thumb);
     if (clamped === this.selection) return;
     this.selection = clamped;
     this.redraw();
-    this._fire();
+    this._fire(detail);
   }
 
   _clamp() { this.selection = this._clampVal(this.selection, this.minimum, this.maximum - this.thumb); }
@@ -276,18 +309,18 @@ export class FlatScrollbar {
     return v;
   }
 
-  _startArrowRepeat(delta) {
+  _startArrowRepeat(delta, detail) {
     this._stopRepeat();
-    const tick = () => { this._stepBy(delta); this._repeatTimer = setTimeout(tick, ARROW_REPEAT_MS); };
+    const tick = () => { this._stepBy(delta, detail); this._repeatTimer = setTimeout(tick, ARROW_REPEAT_MS); };
     this._repeatTimer = setTimeout(tick, REPEAT_DELAY_MS);
   }
 
-  _startTrackRepeat(delta, axisPx) {
+  _startTrackRepeat(delta, detail, axisPx) {
     this._stopRepeat();
     const tick = () => {
       if (this._thumbCovers(axisPx)) { this._stopRepeat(); return; }
       const before = this.selection;
-      this._stepBy(delta);
+      this._stepBy(delta, detail);
       if (this.selection === before) { this._stopRepeat(); return; }   // hit an end
       this._repeatTimer = setTimeout(tick, TRACK_REPEAT_MS);
     };
@@ -305,5 +338,5 @@ export class FlatScrollbar {
     if (this._repeatTimer != null) { clearTimeout(this._repeatTimer); this._repeatTimer = null; }
   }
 
-  _fire() { if (this.onChange) this.onChange(this.selection); }
+  _fire(detail) { if (this.onChange) this.onChange(this.selection, detail); }
 }

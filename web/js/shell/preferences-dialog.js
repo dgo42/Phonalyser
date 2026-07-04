@@ -6,6 +6,9 @@
  * Faithful port of gui/preferences/PreferencesDialog.
  */
 
+import { MessageBus } from '../bus/message-bus.js';
+import { Events } from '../bus/events.js';
+
 // Staged exactly like the audio controls: seeded from the live prefs on open, written to
 // prefs + applied ONLY on OK (Cancel/Esc/X leave the prefs untouched — the next open
 // re-seeds). Every label reuses an existing Java i18n key; no new keys. Colours are stored
@@ -246,6 +249,17 @@ export class PreferencesDialog {
 
     prefs.freqRespLineWidth.set(Math.max(1, Math.min(5, num('#prefFrLineWidth', 2))));
     prefs.freqRespNyquistFraction.set(Math.max(0.83, Math.min(1, num('#prefFrMaxNyq', 100) / 100)));
+    // FreqResp Nyquist fraction → freq-window clamp (Java Preferences.applyFromDialog,
+    // Preferences.java:797-805): if the new max-band drops below the current right edge,
+    // pull freqMaxHz (and freqMinHz if needed) in so the view re-clamps to the new ceiling.
+    {
+      const sr = this.inRate();
+      const maxBand = (sr > 0 ? sr * 0.5 : 24000.0) * prefs.freqRespNyquistFraction.get();
+      if (prefs.freqRespFreqMaxHz.get() > maxBand) {
+        prefs.freqRespFreqMaxHz.set(maxBand);
+        if (prefs.freqRespFreqMinHz.get() > maxBand) prefs.freqRespFreqMinHz.set(Math.max(1.0, maxBand * 0.5));
+      }
+    }
     prefs.freqRespCompareSmoothWindow.set(Math.max(0, Math.min(100, Math.round(num('#prefFrSmooth', 6)))));
     prefs.freqRespNotchEnabled.set($('#prefFrNotch').is(':checked'));
     prefs.freqRespNotchBaseHz.set(parseInt($('#prefFrNotchHz').val(), 10) || 50);
@@ -261,6 +275,10 @@ export class PreferencesDialog {
     // exists, part 5.)
     this.applyLookAndFeel();
     if (typeof this.fftView !== 'undefined' && this.fftView && this.fftView.applyPrefs) this.fftView.applyPrefs();
+    // Fire the FreqResp range-changed event so the FreqResp host re-clamps its view to the
+    // new Nyquist ceiling and re-syncs its scrollbars (Java PreferencesDialog OK handler,
+    // PreferencesDialog.java:784: bus.publish(Events.FREQRESP_RANGE_CHANGED)).
+    MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
   }
 
   /** Applies Look & Feel prefs LIVE (no reload): main-tab orientation (TOP strip / LEFT
@@ -301,6 +319,20 @@ export class PreferencesDialog {
       if (inDev && inputs.some(d => d.id === inDev)) $('#inSel').val(inDev);
       if (outDev && outputs.some(d => d.id === outDev)) $('#outSel').val(outDev);
       this.applyInputDeviceRate();   // #inRate shows ONLY the selected device's native rate
+      // Seed the live engine config from the freshly-selected devices. The pane Record
+      // paths call readConfig() before opening the device, but the FreqResp sweep and the
+      // Tune-notch wizard read engine.config DIRECTLY — so on a cold page (before any
+      // scope/gen/FFT start ran readConfig) config.inDeviceId was still '' and their
+      // getUserMedia({deviceId:{exact:''}}) threw OverconstrainedError → the measurement
+      // couldn't start until a scope/gen start happened to populate it. Seed it here so
+      // every path has the configured device from load. Skipped while the Preferences
+      // dialog is staging (it commits its own selection on OK via applyAudioPrefs).
+      if (!this._staging) {
+        this.engine.config.inDeviceId = $('#inSel').val();
+        this.engine.config.outDeviceId = $('#outSel').val();
+        this.engine.config.inRate = parseInt($('#inRate').val(), 10) || this.engine.config.inRate;
+        this.engine.config.outRate = parseInt($('#outRate').val(), 10) || this.engine.config.outRate;
+      }
       $('#status').text(`${inputs.length} input(s), ${outputs.length} output(s) found — pick devices and press ▶.`);
     } catch (e) { $('#status').text('scan failed: ' + e.message); }
     finally { this.setBusy(false); $('#scan').prop('disabled', false); }

@@ -1,85 +1,84 @@
 # PORT-STATUS — ported-module → live-engine integration checklist
 
-Status of the Java→JS port under `web/js/`, and the concrete rewiring each
-ported module needs so the **live engine** (`web/js/audio/backend.js`, still a
-self-contained prototype DSP) and the **UI** (`web/js/shell/app.js`,
-`web/index.html`) call the faithful ports instead of the prototype math.
+Status of the Java→JS port under `web/js/`, and the wiring state of each ported
+module in the **live engine** (`web/js/audio/backend.js` + controllers) and the
+**UI** (`web/js/shell/app.js`, `web/index.html`).
 
 ## State of the port
 
-**All ten ported subsystems now have source files** (faithful, AGPL-headed,
-`node --check`-clean). The blocker is no longer the port — it is the wiring:
+**All ten ported subsystems are wired and live.** The engine runs on the
+faithful ports, not the prototype math:
 
-- The live engine `audio/backend.js` still uses ONLY the prototype DSP:
-  `dsp/window.js` (`WINDOWS`), `dsp/fll.js` (`GeneratorFLL`),
-  `dsp/discontinuity.js`, `dsp/analyzer.js` (`computeMetrics`). It hand-rolls the
-  FFT averaging / fundamental / THD path in `_processSpectrum` / `_finalize`.
-- The UI `shell/app.js` imports only `audio/backend.js`, `ui/fft-view.js`,
-  `ui/scope-view.js`. No store/preferences, no i18n, no file I/O, no generator
-  DDS, no scope DSP, no freqresp.
-- The output generator is the minimal single-sine `worklets/generator-processor.js`
-  (`{inc, amp}` port protocol); the faithful `worklets/dds-processor.js` +
-  `generator/dds-kernel.js` exist but are **not loaded** by `backend.js`.
-
-**Verification.** A repo-wide grep for imports of `../fft/…`, `../generator/…`,
-`../scope/…`, `../freqresp/…`, `../predistortion/…`, `../io/…`, `../store/…`,
-`../i18n/…`, and the new `dsp/{mathutil,lanczos,savgol,riaa,tone-lobe-lift,mains}`
-modules from `web/js/audio` and `web/js/shell` returns **zero matches**. Every
-faithful module below is correct and unwired.
+- `audio/fft-controller.js` + `audio/fft-worker.js` drive `fft/fft-analyzer.js`
+  (`FftAnalyzer.analyze()` is the canonical per-window path); results flow as
+  full `FftResult` payloads through `fft/fft-view-correction.js` (render-time
+  `.frc` de-embed, mains spectral correction, live IMD) into `ui/fft-view.js`.
+- The output generator is the faithful `worklets/dds-processor.js` +
+  `generator/dds-kernel.js`, loaded unconditionally by
+  `audio/generator-controller.js`. The prototype `generator-processor.js` is no
+  longer loaded anywhere.
+- The scope runs the ported trigger (`scope/scope-trigger.js`), measurements
+  (`scope/signal-measurements.js`), Lanczos rendering (`dsp/lanczos.js`) and all
+  three mains cancellers (`dsp/mains/*`).
+- Preferences (`store/preferences.js`) and i18n (`i18n/i18n.js`, 32 locales)
+  bootstrap the shell; all file I/O (`io/*`) is wired through the panes.
 
 Inventory under `web/js/`:
 
 ```
-dsp/   fft.js window.js fll.js discontinuity.js analyzer.js          (prototype, wired)
-       mathutil.js lanczos.js savgol.js riaa.js tone-lobe-lift.js    (ported, unwired)
-       mains/frequency-tracker.js mains/comb-filter.js               (ported, unwired)
-fft/   imd-analyzer.js fft-result.js fft-analyzer.js                 (ported, unwired)
-generator/ dds-kernel.js                                            (ported, unwired)
-scope/ scope-trigger.js signal-measurements.js                      (ported, unwired)
-freqresp/ farina-sweep.js deconvolve.js                             (ported, unwired)
-predistortion/ harmonic-compensation.js intermod-compensation.js engine.js  (ported, unwired)
-io/    wav.js frc.js fft-spectrum.js dpd.js scope-capture.js file-picker.js  (ported, unwired)
-store/ preferences.js                                               (ported, unwired)
-i18n/  i18n.js locales.js   (+ web/i18n/messages.properties)         (ported, unwired)
-audio/ backend.js fft-worker.js                                     (prototype engine, wired)
-       worklets/{capture,generator}-processor.js                    (prototype, wired)
-       worklets/dds-processor.js                                    (ported, unwired)
-shell/app.js  ui/fft-view.js  ui/scope-view.js                      (prototype UI, wired)
+dsp/   fft.js window.js fll.js discontinuity.js                       (wired)
+       mathutil.js lanczos.js savgol.js riaa.js tone-lobe-lift.js     (ported, wired)
+       mains/frequency-tracker.js mains/comb-filter.js                (ported, wired)
+       mains/sync-subtract-filter.js mains/lms-filter.js mains/factory.js  (ported, wired)
+fft/   imd-analyzer.js fft-result.js fft-analyzer.js fft-compensation.js
+       fft-view-correction.js fft-tab-control.js                      (ported, wired)
+generator/ dds-kernel.js generator-pane.js                            (ported, wired)
+scope/ scope-trigger.js signal-measurements.js scope-tab-control.js scope-pane.js  (ported, wired)
+freqresp/ farina-sweep.js deconvolve.js                               (ported, wired)
+predistortion/ harmonic-compensation.js intermod-compensation.js engine.js  (ported, wired)
+io/    wav.js frc.js fft-spectrum.js dpd.js scope-capture.js file-picker.js flac.js  (ported, wired)
+store/ preferences.js                                                 (ported, wired)
+i18n/  i18n.js locales.js   (+ web/i18n/messages*.properties ×32)     (ported, wired)
+audio/ backend.js fft-controller.js generator-controller.js scope-controller.js
+       fft-worker.js worklets/{capture,dds}-processor.js              (wired)
+shell/ app.js freqresp-host.js predistortion-host.js predistortion-wizard.js
+       preferences-dialog.js  ui/fft-view.js ui/scope-view.js         (wired)
 ```
 
 ---
 
-## Current loop — parts 1–5 (in progress)
+## Current loop — parts 1–5
 
-Bringing five desktop features to completion in the web app, each compared back to Java
-(via the sync-java-to-web loop) and iterated to close differences:
+Five desktop features brought to completion in the web app, each compared back to
+Java (sync-java-to-web loop) and iterated to close differences. **Java-delta
+sync of 2026-07-03:** a full reconciliation pass audited every module's
+integration TODOs against the live code and closed the remaining gaps (live
+dual-tone IMD verified, `harmonicCount` from prefs verified, FFT pre-FFT
+time-domain mains path made faithful to `FftAnalyzerWorker.mainsTimeFilter`,
+DDS kernel phase-accumulator NaN bug fixed, help screenshots recaptured for all
+12 specs, i18n key sets realigned across all 32 locale files).
 
-1. **Help system** — copy the desktop HTML help + lunr search (build-time index) + screenshots
-   re-captured from the WEB app. **Framework DONE** (see below); screenshots captured per
-   feature as parts 2–5 land.
-2. **Preferences** — Look & Feel / Oscilloscope / FFT / FreqResp tabs. ✅ DONE.
-3. **Generator** — ✅ to completion vs `GeneratorPane`/`GeneratorController`/`SignalGenerator`
-   (exhaustive 21-gap verified diff; e2e C32/C33 cover every form). Fixed: **emit frequency**
-   per form (RECTANGLE sample-period-aligned `fs/round(fs/f)`, SINE/DUAL bin-snap only when
-   snap on, else raw — and the live freq-edit drop bug); the **freq + duty bracket labels**
-   (RECTANGLE corrected, SINE+snap, else plain; RECTANGLE duty sample-quantised); **per-form
-   duty** (`genRectangleDuty`/`genTriangleDuty` seed/reload/write); **dual-tone** Frequency 1
-   surfaced + per-tone snapped labels + snap below the freq block; **noise** disables the
-   frequency field; **dither** list 0..outputBitDepth rebuilt on open; **sweep fields** →
-   NumericStepFields (wheel/arrow/unit) + Sweep group label; **WAV export** uses the configured
-   bit depth + sample-aligns RECTANGLE + truncates to whole periods; **.dpd compensation** row
-   wired (browse/clear/form-tracking, applied via the worklet for COMP forms); **Calibrate-DAC**
-   button + dialog; **ON-AIR** ~1 Hz blink; **FreqResp interlock** (gen play buttons locked
-   during a sweep). Note: triangle/rectangle KERNEL math was already a faithful identical port.
-   Deferred (low, part-4-coupled): relocating the FLL/predistortion buttons out of the gen
-   footer. Audio output still needs hardware to confirm.
-4. **FFT** + wizard — to completion.
-5. **FreqResp** + wizard — to completion.
+1. **Help system** — ✅ framework DONE (see below). Screenshot capture now covers
+   **all 12 specs** (`scripts/capture-help-screenshots.mjs`: gen-dualtone,
+   gen-sweep, fft, freqresp, all 5 prefs tabs added 2026-07-03; 12 captured,
+   0 skipped, all verified non-blank). Remaining: optional in-app `?hl=`
+   search-term highlighter (the desktop HelpViewer injected one).
+2. **Preferences** — ✅ DONE (Look & Feel / Oscilloscope / FFT / FreqResp tabs).
+3. **Generator** — ✅ DONE vs `GeneratorPane`/`GeneratorController`/`SignalGenerator`
+   (exhaustive 21-gap verified diff; e2e C32/C33 cover every form). Deferred
+   (low): relocating the FLL/predistortion buttons out of the gen footer. Audio
+   output still needs hardware to confirm.
+4. **FFT** + wizard — ✅ DONE. FFT brain, live IMD readout, mains (all three
+   modes incl. pre-FFT time-domain cancellers), `.fft`/`.frc` I/O, predistortion
+   wizard all wired and verified in the 2026-07-03 reconciliation.
+5. **FreqResp** + wizard — ✅ DONE. Sweep drive, deconvolution, RIAA overlay,
+   calibration rows, presets, 3-page wizard, `.frc` save/load all wired and
+   verified.
 
-🔒 **No oscilloscope/Scope changes without explicit user review.** When building the
-FFT/FreqResp **Utility** tabs, preserve the user's manual button/icon-size CSS (and generalize
-the shared tab-toolbar classes — Presets / Utility / Save to… / Load from… / Load calibration…
-— for reuse across Scope, FFT, FreqResp).
+When touching the FFT/FreqResp **Utility** tabs, preserve the manual
+button/icon-size CSS (the shared tab-toolbar classes — Presets / Utility /
+Save to… / Load from… / Load calibration… — are generalized for reuse across
+Scope, FFT, FreqResp).
 
 ### Part 1 — Help system  ✅ FRAMEWORK DONE
 
@@ -94,23 +93,19 @@ is the web's own copy that diverges only in screenshots + the build-time-regener
   index + copy `web/help` → `dist/help`. A regular `npm run build` does NOT touch help. See
   `HOWTO-BUILD.md`.
 - `scripts/capture-help-screenshots.mjs` (`npm run capture-help`) — capture screenshots from the
-  running WEB app at a fixed **1280×768** window. Ready: app/scope/generator; the rest are
-  skipped until their panes land.
+  running WEB app at a fixed **1280×768** window. **All 12 specs ready and capturing**
+  (app, scope, generator, gen-dualtone, gen-sweep, fft, freqresp, 5 prefs tabs).
 - **sync-help** skill — the Java→web help refresh loop.
 - Help menu (`#menuHelp`) + **F1** (contents) / **Ctrl+F1** (contextual) → open
   `help/<lang>/index.html` in a 1024×800 pop-up window, its top-left corner aligned to the
   app window's top-right corner.
 
-**TODO (part 1):** capture the web screenshots per feature once its pane is complete; optional
-in-app `?hl=` search-term highlighter (the desktop HelpViewer injected one).
-
-> NOTE: the "State of the port" inventory above predates the live wiring done since (scope view,
-> signal-measurements + the contiguous measurement pool, partial generator, FFT view). It is
-> being reconciled feature-by-feature through this loop.
+**TODO (part 1):** optional in-app `?hl=` search-term highlighter (the desktop
+HelpViewer injected one).
 
 ---
 
-## 1. FFT analyzer brain — `web/js/fft/fft-analyzer.js` + `fft/fft-result.js`  ✅ PORTED, ⛔ UNWIRED
+## 1. FFT analyzer brain — `web/js/fft/fft-analyzer.js` + `fft/fft-result.js`  ✅ PORTED, ✅ WIRED
 
 Faithful port of `FftAnalyzer` (+ the `MathUtil` helpers) and `FftResult`.
 
@@ -128,46 +123,24 @@ Faithful port of `FftAnalyzer` (+ the `MathUtil` helpers) and `FftResult`.
 - `class FftResult` — all desktop fields (`re`/`im`/`amplitudeDbFs`/`phaseDeg` `Float64Array`, `harmonicBins` `Int32Array`, metrics, `imdProductA/B/Bin`, `rawFundRe/Im`, `rawPeakRe/Im`, gate snapshots; `fundamental2HzRefined`/`coherentKappa`/`fundamentalTrueDbFs`/`rawFund*` default NaN).
   - `ensureArrays(binCount, harmonicCount)`, `deepCopy() -> FftResult`, `noisePeakFloorDbFs() -> number`, `localNoiseFloorDbFs() -> number`, `rawHarmonicDbFs(i) -> number`, `captureRawPeaks()`.
 
-### What `analyze` produces that the engine needs
-`fundamentalHzRefined`, `fundamental2HzRefined`, `fundamentalTrueDbFs`,
-`amplitudeDbFs`, `freqResolution`, `re`/`im`, `imdProduct*`, `rawFund*`/`rawPeak*`
-— i.e. the EXACT `r` object the IMD analyzer, both predistortion accumulators and
-the .fft saver consume. Wiring this is the prerequisite for every dual-tone /
-predistortion feature.
-
-### INTEGRATION TODO — FFT brain
-1. **Replace the hand-rolled spectrum path.** In `backend.js`, the per-frame FFT
-   today happens in `fft-worker.js` and the averaging/fundamental/THD in
-   `_processSpectrum`/`_finalize`. Two viable shapes:
-   - **(a) Buffer-and-analyze** (simplest, matches Java's frame loop): collect a
-     window of `N·(frames)` capture samples into a `Float64Array`, then call
-     `new FftAnalyzer().analyze(buf, inRate, fftSize, harmCount, windowToken,
-     overlapToken, snrMin, snrMax, coherent, NaN, expectedFundHz)` on a worker.
-     `analyze` does its own cross-frame coherent/incoherent averaging, so the
-     engine's `accRe/accIm/pavg` accumulators become redundant.
-   - **(b) Keep the streaming pool** but have each worker return `re/im`, and on
-     the main thread average into an `FftResult` and call `recomputeStats(r)` for
-     metrics. More code; only worth it if the realtime FPS of (a) is too low.
-   Pick (a) unless profiling forces (b).
-2. **Map UI tokens to enum tokens.** `index.html` uses `blackmanHarris/hann/rectangular`
-   and overlap `0/50/75/87.5/93.75`. `buildWindow` wants `BH4/HANN/RECT/BH7/FT/…`;
-   `overlap` wants `PCT_0/PCT_50/PCT_75/PCT_87_5/PCT_93_75` (or a fraction). Add a
-   small map in `readConfig()` (or switch the `<option value>`s to the enum
-   tokens directly). Expose the full 13-window list in the `#window` select.
-3. **Feed the FLL.** The worker FLL today reads `r.fundIm/r.fundRe`. With the
-   brain, derive the fundamental phasor from `result.re[fundamentalBin]` /
-   `result.im[fundamentalBin]` (coherent path) and keep steering the generator —
-   OR drive the FLL from `fundamentalHzRefined` directly (sub-bin, cleaner).
-4. **Result payload.** Replace the ad-hoc `onResult({mag, binW, fundBin, metrics…})`
-   with the `FftResult`. Update `ui/fft-view.js` + `app.js updateReadout` to read
-   `amplitudeDbFs`, `fundamentalDbFs`, `fundamentalHzRefined`, `thdPct`, `thdDb`,
-   `snrDb`, `sinadDb`, `avgNoiseFloorDbFs`, `harmonicDbFs[]`/`harmonicHz[]`.
-5. `harmonicCount` should be `max(9, prefs.fftCalcMaxHarmonic)` once preferences
-   is wired; default 9 until then.
+### Done log — FFT brain (all integration TODOs closed)
+1. Spectrum path — buffer-and-analyze shape (a): `fft-worker.js` runs
+   `FftAnalyzer.analyze()` per dispatched window (`fft-controller.js
+   _setupFftAnalysis` configures window/overlap/harmonicCount/coherent).
+2. UI tokens — `index.html` `#window`/`#overlap` selects use the enum tokens
+   directly (all 13 window types, `PCT_*` overlaps).
+3. FLL — steers off `r.fundamentalHzRefined` (sub-bin), posts `{frequency}` to
+   `dds-processor` (`fft-controller.js`). See §2 for the F2 caveat.
+4. Result payload — `fft-worker.js postResult()` clones the full `FftResult`
+   (spectra, refined fundamentals, harmonics, THD/SNR/SINAD, IMD grid);
+   `fft-pane.js setResult(r)` renders it directly.
+5. `harmonicCount` from prefs — `app.js:504`:
+   `c.harmonicCount = Math.max(9, prefs.fftCalcMaxHarmonic.get()) - 1`
+   (faithful to Java `FftAnalyzerWorker`, including the `-1`).
 
 ---
 
-## 2. IMD / dual-tone analyzer — `web/js/fft/imd-analyzer.js`  ✅ PORTED, ⛔ UNWIRED
+## 2. IMD / dual-tone analyzer — `web/js/fft/imd-analyzer.js`  ✅ PORTED, ✅ WIRED
 
 Faithful port of `ImdAnalyzer` + `ImdResult`.
 
@@ -182,40 +155,39 @@ Faithful port of `ImdAnalyzer` + `ImdResult`.
   dfd2Pct dfd3Pct imdPwrPct tdnPct` + per-order `Float64Array`s
   `dnLHz dnHHz dnLPct dnHPct dnLDbV dnHDbV` indexed `2..MAX_ORDER`.
 
-### INTEGRATION TODO — IMD analyzer
-1. **Generate the second tone.** Switch the engine's output node from
-   `generator-processor` to the faithful `dds-processor` (module 3) and set
-   `form: DUAL_TONE`, `frequency`, `frequency2`. (`generator-processor` cannot
-   make two tones.) Gate `analyzeImd` on dual-tone mode (Java attaches `ImdResult`
-   only in DUAL_TONE) — mirror that.
-2. **Produce a dual-tone `r`.** With the FFT brain wired (module 1),
-   `FftAnalyzer.setMultiTone(true)` + `setSecondToneHintHz(f2)` makes `analyze`
-   populate `fundamental2HzRefined` and the IMD-product grid directly — pass that
-   `FftResult` straight to `analyzeImd`. Until the brain is wired, hand-build
-   `{amplitudeDbFs: mag, freqResolution: binW, fundamentalHzRefined: <refine
-   fundBin> | NaN, fundamental2HzRefined: <refine tone2 bin> | NaN,
-   fundamentalTrueDbFs: NaN}` (the analyzer falls back to its own local-peak
-   refine when the refined estimates are NaN/≤0).
-3. **Supply `dbvOffsetDb`.** Use `Preferences.instance().dbvOffsetDb` (module 9)
-   once wired; ratios (`*Pct`, `diffHz`, `*DbFs`) are offset-invariant so `0` is a
-   safe placeholder.
-4. **Call + render.** In `_finalize` (dual-tone branch) attach `imd =
-   analyzeImd(r, c.toneHz, c.tone2Hz, dbvOffset)` to the result payload. Add an
-   "IMD" readout (the `#fftTabs` has an inert "THD settings" tile — add an
-   analogous IMD tile) showing `f1/f2 Hz`, `f1/f2 DbV` + `Mag`, `diffHz`,
-   `dfd2Pct/dfd3Pct`, `imdPwrPct`, `tdnPct`, and the `dnL*/dnH*` table (`2..5`).
-   In `ui/fft-view.js` mark both tones at `f1DbFs`/`f2DbFs`.
-5. **Mode switch** SINGLE↔DUAL_TONE changes generator structure → route through
-   the same restart path as the structural FFT changes
-   (`#fftSize,#window,#overlap,#threads` handler: `stop(); readConfig(); start()`).
+### Done log — IMD analyzer (all integration TODOs closed)
+1. Second tone — `dds-processor` generates DUAL_TONE (`generator-controller.js`
+   posts `frequency2`/`dualAmp1Pct`/`dualAmp2Pct`); `analyzeImd` gated on
+   `isDualTone(form)`.
+2. Dual-tone `r` — worker calls `setMultiTone` + `setSecondToneHintHz` per
+   dispatch; `analyze` populates `fundamental2HzRefined` + the IMD-product grid.
+3. `dbvOffsetDb` — supplied live from `Preferences` (computed from
+   `adcFsVoltageRms`, wired at `app.js:522`).
+4. **Live IMD readout** — computed in the VIEW layer (correct per the Java
+   architecture: off the DE-EMBEDDED spectrum, not the raw engine result):
+   `fft-view-correction.js:66` — `r.imd = isDualTone(c.form) ? analyzeImd(r,
+   c.toneHz, c.tone2Hz, c.dbvOffsetDb) : null`, invoked on every frame via
+   `app.js engine.onResult → fftViewCorrection.apply(r)`; rendered by
+   `ui/fft-view.js drawImdTable` + tone markers. Loaded `.fft` files get the
+   same treatment in `fft-tab-control.js`.
+5. Mode switch SINGLE↔DUAL_TONE — routed through `restartGenerator()`
+   (structural worklet rebuild); `Events.GENERATOR_SIGNAL_CHANGED` resets the
+   FFT accumulator + FLL.
+
+### Open — accepted web limitation
+- **Dual-tone F2 FLL steering.** Java runs a second `FrequencyAligner` (`fll2`)
+  off `imd.f2`; the web steers only tone 1 (`fft-controller.js:873-877`
+  documents this). A faithful F2 loop needs a structural second-loop +
+  lock-state addition to `GeneratorController`. `fundamental2HzRefined` IS
+  stamped; only the steering is missing.
 
 ---
 
-## 3. Signal generator (DDS) — `web/js/generator/dds-kernel.js` + `audio/worklets/dds-processor.js`  ✅ PORTED, ⛔ UNWIRED
+## 3. Signal generator (DDS) — `web/js/generator/dds-kernel.js` + `audio/worklets/dds-processor.js`  ✅ PORTED, ✅ WIRED
 
-Faithful port of `SignalGenerator` (DDS kernels, 64-bit BigInt phase accumulator,
+Faithful port of `SignalGenerator` (DDS kernels, 64-bit phase accumulator,
 all waveforms, pink-noise Voss–McCartney, `.dpd` comp, dither). The worklet
-registers `dds-processor` (does NOT replace `generator-processor`).
+registers `dds-processor` — the ONLY output worklet the app loads.
 
 ### Exports — `dds-kernel.js`
 - `GenSignalForm` (frozen string enum: SINE SINE_COMP TRIANGLE RECTANGLE
@@ -236,38 +208,43 @@ registers `dds-processor` (does NOT replace `generator-processor`).
 - `tpdfNoise(ditherBits,rng=Math.random) -> number`, `quantizePcm(sample,bitDepth,ditherBits=0,rng) -> number`.
 
 ### Worklet — `dds-processor.js` (`registerProcessor('dds-processor')`)
-- Built from `processorOptions {form,frequency,amplitudeVRms,dacFsVoltageAmpl}`.
+- Built from `processorOptions {form,frequency,sampleRate,amplitudeVRms,dacFsVoltageAmpl}`.
 - `port.onmessage` protocol: `{form, frequency, frequency2, amplitudeVRms,
   dacFsVoltageAmpl, rectDuty, triDuty, dualAmp1Pct+dualAmp2Pct, linearSweep,
   logSweep, sweepParams, resetSweepPosition, compensation, dualToneCompensation,
   dpdText(+dpdFrequency), clearCompensation, type:'start'|'stop'}`.
 
-### INTEGRATION TODO — DDS generator
-1. **Swap the output worklet.** In `backend.start()` replace
-   `addModule('./worklets/generator-processor.js')` + the `generator-processor`
-   node with `./worklets/dds-processor.js` + a `dds-processor` node. Construct it
-   with `processorOptions: {form, frequency: snapped, sampleRate: outRate,
-   amplitudeVRms, dacFsVoltageAmpl}`. NOTE the kernel takes **V RMS** amplitude,
-   not dBFS — convert the UI `ampDbfs` (or wire preferences `genAmplitudeVrms`).
-2. **Rewrite `retuneGenerator()`** to post the DDS protocol
-   (`{frequency}` / `{amplitudeVRms}`) instead of `{inc}` / `{amp}`. The FLL steer
-   in `_processSpectrum` posts `{inc: …}` today → change to `{frequency: genFreq}`.
-3. **UI controls.** `index.html` has a single `<option>Sine</option>` in
-   `#signalForm` and disabled Duty / Dither / Corrections fields. Populate
-   `#signalForm` from `GenSignalForm`; enable Duty (→ `setRectangleDuty`/
-   `setTriangleDuty`), Dither (→ `genDitherBits` + `quantizePcm` on file render),
-   and the Corrections file field (→ read `.dpd`, post `{dpdText}`). Add F2
-   freq/amp inputs for DUAL_TONE.
-4. **Sweeps / .dpd** are message-driven and ready; wire the freqresp tab (module 5)
-   and the predistortion engine (module 6) to post `logSweep` / `compensation`.
+### Done log — DDS generator (all integration TODOs closed)
+1. Worklet swap — `generator-controller.js:176` loads `dds-processor`
+   unconditionally on start, constructed with
+   `{form, frequency, sampleRate, amplitudeVRms: ampVrmsOf(c), dacFsVoltageAmpl}`.
+2. Retune protocol — `retuneGenerator()` posts `{frequency, amplitudeVRms,
+   rectDuty, triDuty, frequency2, dualAmp*Pct}` (not `{inc}`); the FLL steer
+   posts `{frequency: genFreq}`.
+3. UI controls — all `GenSignalForm` variants wired (form change →
+   `restartGenerator()`), duty live-edits, dither (file render via
+   `quantizePcm`, combo capped at output bit depth), `.dpd` corrections row
+   (browse/clear/form-tracking, `{dpdText,dpdFrequency}` posted on start), F2
+   freq/amps bin-snapped.
+4. Sweeps / `.dpd` — `_postSweepConfig()` posts `{linearSweep|logSweep,
+   sweepParams}` on start + retune; LOG_SWEEP param edits force a full restart
+   (pre-rendered buffer); freqresp (§5) and predistortion (§6) post
+   `logSweep` / `compensation` live.
+5. **2026-07-03 kernel fix** — phase-accumulator turn reconstruction rounded to
+   exactly 1.0 at integer-ratio frequencies (e.g. 1000 Hz @ 48 kHz), so
+   `SINE_TABLE[4096]` → NaN every cycle. Fixed faithful to Java:
+   `phaseTurn53(hi,lo)` reconstructs the top 53 bits
+   (`(phaseAcc >>> 11) * 2^-53`) and `ddsSineOf`/`ddsCosOf` mask the table index
+   (`& (TABLE_SIZE-1)`, Java's top-12-bit extraction). All 81 kernel tests green.
 
 ---
 
-## 4. Oscilloscope DSP — `web/js/scope/scope-trigger.js` + `scope/signal-measurements.js`  ✅ PORTED, ⛔ UNWIRED
+## 4. Oscilloscope DSP — `web/js/scope/scope-trigger.js` + `scope/signal-measurements.js`  ✅ PORTED, ✅ WIRED
 Supporting: `dsp/lanczos.js`.
 
 ### Exports — `scope-trigger.js`
 - `find(data, n, from, to, level, rising, sincRefine, hysteresis, minSpacingSamples=0) -> number` (rightmost crossing, −1 if none).
+- `findGlitch(data, from, to, rising, mergeSamples, omega) -> number`.
 - `refine(data, n, a, b, level, rising) -> number` (10-iter sinc bisection).
 - `linear(prev, curr, prevIdx, level) -> number`.
 
@@ -276,27 +253,28 @@ Supporting: `dsp/lanczos.js`.
 - `refineFrequencyAround(data, n, sampleRate, seedHz, halfHz) -> number`.
 - `withFrequency(m, freq) -> m'`, `withoutTimes(m) -> m'`.
 - `reconstructBeatSignal(data, available, sampleRate, f1Hz, f2Hz, scratch?) -> Float32Array`.
+- `MeasurementStats`, `WindowedSignalAccumulator` + formatters `forVolts/forTime/forFreq/forPct`.
 
 ### Exports — `lanczos.js`
 - `lanczos(data,n,t,scale) -> number`, `lanczosNaN(data,n,t,scale) -> number`, `sinc(x) -> number`;
   consts `LANCZOS_A`(16), `MAX_LANCZOS_DOWNSAMPLE`(5), `LANCZOS_PADDING`(80).
 
-### INTEGRATION TODO — scope DSP
-1. **Replace the prototype trigger in `ui/scope-view.js`.** It uses a bare rising
-   zero-cross. Compute a half-amplitude `level`, then
-   `find(buf, n, searchFrom, searchTo, level, rising, sincRefine, hysteresis)`
-   with `searchFrom = LANCZOS_PADDING + leftHalf + 1`,
-   `searchTo = available - rightHalf - LANCZOS_PADDING` (import `LANCZOS_PADDING`).
-   Use `lanczos(buf, n, t, scale)` to draw band-limited sample dots.
-2. **Measurements readout.** Call `compute(buf, n, sampleRate, peakVolts)`
-   (`peakVolts = adcFsVoltageRms·√2`) and show Vpp/Vrms/Vmean/freq/period/duty/rise/fall
-   in the scope tile (`#scopeTabs` Left/Right tiles show inert `100u ac sin` text today).
-3. **DUAL_TONE beat view.** When dual-tone, feed `find` the output of
-   `reconstructBeatSignal(buf, available, sampleRate, f1, f2)` with
-   `sincRefine=false`, and on the measurements apply
-   `withFrequency(m, refineFrequencyAround(rawSel, …))` / `withoutTimes(m)`.
-4. The mains comb / settled-tail measurement (module 9 `mains/`) is a separate
-   worker concern; not required for the basic scope readout.
+### Done log — scope DSP (all integration TODOs closed)
+1. Trigger — `ui/scope-view.js` uses `find()`/`findGlitch()` with
+   `LANCZOS_PADDING`-bounded search windows, hysteresis, `minSpacing` beat
+   holdoff; band-limited sinc dots via `lanczos()`.
+2. Measurements — `compute()` + persistent `WindowedSignalAccumulator` pool
+   (streaming HF-LPF + mains comb), 8-row table (Vpp/Vrms/Vmean/Tp/Tr/Tf/f/Duty)
+   throttled at READOUT_THROTTLE_MS.
+3. DUAL_TONE beat view — `reconstructBeatSignal()` feeds the trigger with
+   half-beat-cycle holdoff; measurements use
+   `withFrequency(withoutTimes(m), refineFrequencyAround(...))`.
+4. Mains suppression — all three `MainsSuppression` modes (IIR_COMB /
+   SYNC_SUBTRACT / LMS) wired per channel into the display path, the live
+   measurement pass (settled tail for the comb + raw-window ±2 Hz frequency
+   re-pin — never derive frequency from the comb output) and the streaming
+   amplitude pool; windows carry `absStart`/`measAbsStart` so the phase-locked
+   cancellers stay aligned. See §8.
 
 ---
 
@@ -304,10 +282,12 @@ Supporting: `dsp/lanczos.js`.
 
 > Wired in `web/js/shell/freqresp-host.js` (driven from `index.html` `#tab-fr`):
 > drives a LOG_SWEEP through the live DDS (`engine.postGen({logSweep},{form:LOG_SWEEP})`),
-> records the loopback via the engine's new capture-recording tap, deconvolves with
+> records the loopback via the engine's capture-recording tap, deconvolves with
 > `computeFromLogSweep(renderLogSweep(...))`, plots magLin→dB + phase on `#frPlot`,
-> RIAA overlay via `dsp/riaa.evalDb`, save/load `.frc` (+ `divideInPlace` de-embed of
-> a loaded `.frc`).
+> RIAA overlay via `dsp/riaa.evalDb`, save/load `.frc` (+ `divideInPlace` de-embed).
+> Beyond the original scope: 3-page wizard (loopback → DUT → save+apply),
+> calibration-tab multi-row `.frc` loader (chained de-embeds, persisted),
+> presets subsystem, live sweep meter.
 Supporting: `dsp/savgol.js`, `dsp/riaa.js`, `dsp/fft.js`.
 
 ### Exports — `farina-sweep.js`
@@ -324,18 +304,17 @@ Supporting: `dsp/savgol.js`, `dsp/riaa.js`, `dsp/fft.js`.
 - `savGolCoefficients(window,order)`, `applySavGol(arr,i,coeffs)`, `invertSquareMatrix(a)`.
 - `evalDb(fHz, reverse, iec) -> number`; consts `T1_SEC..T4_SEC`, `REF_HZ`(1000).
 
-### INTEGRATION TODO — freqresp
-1. **The `#tab-fr` pane is a placeholder `alert`.** Build the FR UI (sweep
-   start/end/duration, run button, magnitude+phase plot, RIAA overlay toggle,
-   save/load `.frc`).
-2. **Drive a sweep.** Use the DDS generator (module 3): post `{logSweep:{f0,f1,
-   sweepSamples,leadInSamples}}` then `{form:'LOG_SWEEP'}`; capture the loopback.
-3. **Deconvolve.** Call `computeFromLogSweep(captured, renderLogSweep(f0,f1,…),
-   leadIn, sampleRate, freqGrid, amplitudeVRms, adcFsVoltageRms,
-   sweepFadeSamples(sweepSamples))`. Plot `magLin`→dB and `phaseRad`.
-4. **RIAA / cal de-embed.** `evalDb(f, reverse, iec)` for the RIAA overlay;
-   `divideInPlace(measured, loadFrc(...).left)` to de-embed a loaded `.frc`.
-5. Save/load via `io/frc.js` (module 7) + `io/file-picker.js`.
+### Done log — freqresp (all 5 integration TODOs closed; verified 2026-07-03)
+FR UI + run button + magnitude/phase plot (1); sweep drive via
+`postGen({logSweep},{form:LOG_SWEEP})` + capture recording (2); stereo
+deconvolution `renderLogSweep` → `computeFromLogSweep` →
+`makeFreqRespResult`/`setStereoResult` (3); RIAA overlay + `divideInPlace`
+de-embed in wizard and Load-calibration paths (4); `.frc` round-trip via
+`io/frc.js` + `file-picker.js` (5).
+
+### Open — optional
+- ADC/DAC calibration dialogs from the FR host are stubs (logging only,
+  `freqresp-host.js:534-535`).
 
 ---
 
@@ -344,12 +323,15 @@ Supporting: `dsp/savgol.js`, `dsp/riaa.js`, `dsp/fft.js`.
 > Wired via `web/js/shell/predistortion-host.js` (a `PredistortionHost`) + the
 > `#predistModal` wizard in `index.html`/`app.js`: `configureForRun` = coherent ∞
 > gen-locked averaging (restart preserving config), `readResult` =
-> `FftResult.deepCopy`, `imdPct` = `analyzeImd(...).imdPwrPct`, `applyCompensation`/
-> `applyDualToneCompensation` post `{compensation:makeCompensation(...)}` /
-> `{dualToneCompensation:makeDualToneComp(...)}` to `dds-processor`,
-> `correctionEntries` = the shared loaded-`.frc` store (`frcStore`), anchors from
-> `Preferences`. Run control = averages + target THD% with a live progress readout;
-> `.dpd` saved via `io/dpd.write{Harmonic,Intermod}Dpd` + `file-picker.saveFile`.
+> `FftResult.adopt(...).deepCopy()`, `imdPct` = `analyzeImd(...).imdPwrPct`,
+> `applyCompensation`/`applyDualToneCompensation` post
+> `{compensation:makeCompensation(...)}` / `{dualToneCompensation:makeDualToneComp(...)}`
+> to `dds-processor`, `correctionEntries` = the shared loaded-`.frc` store
+> (`frcStore`, populated by FFT "Load calibration", injected in `app.js:1099`),
+> anchors from `Preferences`. Wizard: live phase state machine, 100 ms-polled
+> convergence chart, run/stop/stop-round, best-round snapshot, `.dpd` save
+> (`io/dpd.write{Harmonic,Intermod}Dpd` + full provenance header/filename) then
+> Apply → posts correction + switches to SINE_COMP/DUAL_TONE_COMP.
 Serialisation: `io/dpd.js`.
 
 ### Exports
@@ -374,37 +356,23 @@ Serialisation: `io/dpd.js`.
 - `writeIntermodDpd(comp, extraHeaderLines, f1Hz, f2Hz, fundamentalDbFs, sampleRate, bitDepth, amplitudeVrms, calResponseAt, adcFsVoltageRms, dacFundamentalVrms) -> string`.
 - `readDpd(text, frequency, sampleRate) -> {dualTone, amp, phi, harmonicNumbers, coefA, coefB}`, `isDualToneDpd(text) -> bool`.
 
-### INTEGRATION TODO — predistortion
-1. **Implement a `PredistortionHost`** in the shell, bridging the engine to the
-   live engine + UI. The host methods must:
-   - `configureForRun` → set the FFT to infinite coherent generator-locked
-     averaging (needs module 1 wired); `startRecording` → ensure capture running.
-   - `readResult()` → `FftResult.deepCopy()` of the last analyzer result (module 1).
-   - `imdPct(r)` → `analyzeImd(r, f1, f2, dbvOffset).imdPwrPct` (module 2).
-   - `applyCompensation` / `applyDualToneCompensation` → post `{compensation:
-     makeCompensation(...)}` / `{dualToneCompensation: makeDualToneComp(...)}` to
-     the `dds-processor` (module 3).
-   - `correctionEntries` → loaded `.frc` store (`{calibration:{left,right}}`,
-     `FreqRespCalibration`-shaped) for `_calResponseAt`.
-   - `adcFsVoltageRms`/`genAmplitudeVrms`/`maxHarmonics`/`dualToneSplitPct` →
-     `Preferences` getters (module 9).
-2. **Wizard UI.** Add a "Run predistortion" control (averages + target THD%);
-   wire `onRound`/`onFinished` listeners to a progress readout. The Generator
-   pane's inert "Corrections" file field is the save target.
-3. **Save `.dpd`.** After `runLoop`, `writeHarmonicDpd(engine.bestApplied, …)` /
-   `writeIntermodDpd(engine.bestIntermod, …)` → `io/file-picker.saveFile`.
-   `extraHeaderLines` (format_version / kind / provenance) are supplied by the
-   caller, not generated by `dpd.js`.
+### Done log — predistortion (all integration TODOs closed; verified 2026-07-03)
+Host bridge with all seven contract methods live (1); wizard UI with
+averages + target THD%, `onRound`/`onFinished` progress, convergence chart (2);
+`.dpd` save via `writeHarmonicDpd`/`writeIntermodDpd` → `file-picker.saveFile`,
+then Apply + form switch (3). frcStore chain verified end-to-end:
+`fft-tab-control.js:727` populates → `app.js:1099` injects →
+`predistortion/engine.js _calResponseAt` consumes.
 
 ---
 
-## 7. File formats — `web/js/io/{wav,frc,fft-spectrum,dpd,scope-capture,file-picker}.js`  ✅ PORTED, ⛔ UNWIRED
+## 7. File formats — `web/js/io/{wav,frc,fft-spectrum,dpd,scope-capture,file-picker,flac}.js`  ✅ PORTED, ✅ WIRED
 
 ### Exports
 - `wav.js`: `readWav(ArrayBuffer|Uint8Array) -> {sampleRate,channels,bitsPerSample,frameCount,ch0,ch1}`;
   `class WavWriter(sampleRate,channels,bitsPerSample,floatFormat=false)` (`writeRaw`, `writeFloats`, `finish() -> Uint8Array`);
   `class AiffWriter(sampleRate,channels,bitsPerSample)` (`writeRaw`, `finish()`);
-  `createFlacWriter(...)` (**stub — throws**; FLAC needs a WASM codec), `FLAC_MAX_SAMPLE_RATE`(655350).
+  `createFlacWriter(...)` (validating stub — superseded by `io/flac.js`), `FLAC_MAX_SAMPLE_RATE`(655350).
 - `frc.js`: `saveFrc(stereo, meta={}) -> string`, `loadFrc(text) -> {left,right}`, `FRC_FORMAT_VERSION`(1).
 - `fft-spectrum.js`: `loadSpectrum(text, dbvOffsetDb, harmCount, parabolicBinInterp) -> {result, modeImd, tone1Hz, tone2Hz, dbvOffsetDb}`,
   `saveSpectrum(r, meta={}) -> string`, `FFT_FORMAT_VERSION`(1), `LOADED_FUND_MIN_HZ`(10).
@@ -414,25 +382,25 @@ Serialisation: `io/dpd.js`.
 - `file-picker.js`: `async saveFile(data, suggestedName, types=[]) -> {name, saved}`,
   `async openFile(types=[]) -> {name, bytes}|null`, `bytesToText(bytes) -> string`.
 
-### INTEGRATION TODO — file I/O
-1. **Generator "Save to…"** → render N seconds via `DdsKernel.fill` (or the
-   running worklet), `quantizePcm` per sample at `genDitherBits`, write with
-   `WavWriter`/`AiffWriter`, hand to `saveFile`. FLAC paths throw → fall back to
-   WAV/AIFF.
-2. **Scope "Save to…"** → `saveScopeCapture(L, R, actual, name, rate, depth, freq)`
-   then `saveFile`. "Load signal…" → `openFile` + `readWav` (or `decodeStereo`).
-3. **FFT "Save to…"/"Load from…"** → `saveSpectrum(result, meta)` /
-   `loadSpectrum(text, dbvOffsetDb, max(9,maxHarm), MathUtil.parabolicBinInterp)`
-   (import `parabolicBinInterp` from `dsp/mathutil.js`); after load run
-   `FftAnalyzer.recomputeStats(result)` and, for IMD files, `analyzeImd(...)`.
-4. **FFT "Load calibration…"** → `loadFrc(text)` into the `.frc` store the
-   predistortion engine + freqresp de-embed read.
-5. All the inert file fields in `index.html` (Corrections, Save to…, Load from…,
-   scope Save/Load, FFT Save/Load/Load-calibration) are the wiring targets.
+### Done log — file I/O (all closed)
+1. Generator "Save to…" — `generator/generator-pane.js` `#genSaveBtn`: renders
+   via `DdsKernel.nextSample()` (dual-tone snap, duty, .dpd compensation,
+   sweeps), `quantizePcm` at the dither setting, stereo-duplicates, writes
+   through `saveScopeCapture` (container by chosen extension: WAV/AIFF/FLAC) —
+   faithful to Java `SignalFileExporter`.
+2. Scope "Save to…" / "Load signal…" — ScopeTabControl via `saveScopeCapture` +
+   `readWav`/`readAiff`/`decodeFlac`.
+3. FFT "Save to…"/"Load from…" — `saveSpectrum`/`loadSpectrum` + post-load
+   `recomputeStats` / `analyzeImd`.
+4. FFT "Load calibration…" — `loadFrc` → shared `frcStore` →
+   `fftViewCorrection.setFrcEntries` + predistortion `correctionEntries`.
+5. All file fields wired through `io/file-picker.js`.
+6. FLAC — `io/flac.js` (libflacjs WASM) provides `decodeFlac`/`encodeFlac`;
+   falls back to WAV/AIFF if the codec fails to load.
 
 ---
 
-## 8. Supporting DSP — `web/js/dsp/{mathutil,tone-lobe-lift}.js` + `dsp/mains/{frequency-tracker,comb-filter}.js`  ✅ PORTED, ⛔ UNWIRED
+## 8. Supporting DSP — `web/js/dsp/{mathutil,tone-lobe-lift}.js` + `dsp/mains/{frequency-tracker,comb-filter,sync-subtract-filter,lms-filter,factory}.js`  ✅ PORTED, ✅ WIRED
 
 ### Exports
 - `mathutil.js`: `chebyshevT(n,x)`, `acosh(x)`, `parabolicBinInterp(re,im,peakBin,fftSize)`, `nextPow2(x)`, `besselI0(x)`.
@@ -440,25 +408,46 @@ Serialisation: `io/dpd.js`.
   `localFloor(mag,peak,maxBin)`, `lobeBins(mag,peak,maxBin,floor) -> [lo,hi]`, `stretch(mag,floor,peak,factor)` (`mag` = `k=>magnitude` accessor).
 - `mains/frequency-tracker.js`: `class MainsFrequencyTracker(sampleRate)` —
   `track(ref,len) -> number|NaN`, `getLockHz()`, `resetTracking()`; consts `MIN_MAINS_HZ`(45), `MAX_MAINS_HZ`(65).
+  Owned/used by the three filters below (same ownership as Java).
 - `mains/comb-filter.js`: `class MainsCombFilter(sampleRate, notchBandwidthHz)` —
   `getMainsHz`, `isTuned`, `magnitudeAt(f)`, `correctionDb(f)`,
   `applySpectrumCorrection(dbFs,dbV,freqResolution,f0Hz)`, `retune(f0)`, `track(ref,len)`,
   `process(data,len,absStart=0)`, `processPreservingDc(...)`, `reset`, `resetTracking`;
   const `DEFAULT_NOTCH_BANDWIDTH_HZ`(2.5).
+- `mains/sync-subtract-filter.js`: `class MainsSyncSubtractFilter(sampleRate)` —
+  period-locked synchronous subtraction (512-bin template, MU 0.001); same
+  track/process/reset contract, absStart-delta phase alignment.
+- `mains/lms-filter.js`: `class MainsLmsFilter(sampleRate)` — adaptive quadrature
+  LMS line canceller (harmonics ≤ 1 kHz, MU 5e-4); same contract (DC-free model,
+  both process entry points identical).
+- `mains/factory.js`: `mainsFilterOf(mode, sampleRate, combNotchBwHz) -> filter|null`
+  (Java `MainsFilters.of`; `'NONE'` → null).
 
-### INTEGRATION TODO — supporting DSP
-- `parabolicBinInterp` is a dependency of `io/fft-spectrum.loadSpectrum` (module 7).
-- `mains/` is consumed by the scope worker (mains suppression, settled-tail) and
-  the FFT mains-rejection path — wire when those features are exposed in the UI
-  (`oscLeftMainsSuppression`/`fftMainsSuppression` prefs are already modelled,
-  module 9). `factory.js` (`MainsFilters.of`) was NOT ported (its other cases need
-  `MainsSyncSubtractFilter`/`MainsLmsFilter`, out of scope).
-- `tone-lobe-lift.js` is a display enhancement (lobe lift in the FFT plot) — wire
-  into `ui/fft-view.js` when desired; not on any critical path.
+### Done log — supporting DSP (all closed)
+- `parabolicBinInterp` — dependency of `io/fft-spectrum.loadSpectrum`, wired.
+- Mains — **scope**: `ui/scope-view.js` selects the canceller by the
+  per-channel `osc{Left,Right}MainsSuppression` pref (`#scopeLeftMains`/
+  `#scopeRightMains` combos) in the display path (`_applyChannelFilters`,
+  comb-only reset — Java ScopeView.applyMainsSuppression), the live measurement
+  pass (own `<ch>Meas` filter state, settled tail for IIR_COMB + raw-window
+  ±2 Hz frequency re-pin — Java ScopeMeasurementWorker) and the streaming pool
+  (`_streamFilterGap`, persistent state + running absStart); windows carry
+  `absStart`/`measAbsStart` (Java `bufStartAbs`) for phase-locked alignment.
+  **FFT**: `audio/fft-controller.js _applyFftMains` (Java
+  FftAnalyzerWorker.mainsTimeFilter) — IIR_COMB tracks-only + plot-time spectral
+  correction (`fft-view-correction.js`); SYNC_SUBTRACT/LMS build the true
+  canceller via `mainsFilterOf` (persistent state across windows,
+  `absCapStart`-aligned `processPreservingDc`) and filter the window in place
+  pre-FFT. (Java's `setFrameCache(null)` bypass has no web counterpart — the
+  web port has no raw-frame FFT cache.)
+- `tone-lobe-lift.js` — wired into the `.frc` de-embed pipeline
+  (`fft/fft-compensation.js` per-tone lobe stretch, consumed by
+  `fft-view-correction.js` at render time), matching Java FreqRespCalHelper —
+  i.e. baked into the calibration correction, not a display-only toggle.
 
 ---
 
-## 9. Preferences & persistence — `web/js/store/preferences.js`  ✅ PORTED, ⛔ UNWIRED
+## 9. Preferences & persistence — `web/js/store/preferences.js`  ✅ PORTED, ✅ WIRED
 
 Faithful port of `Preferences` (+ `BackendPrefs`, `OscPreset`, `FftPreset`,
 `FreqRespPreset`, `CalibrationEntry`). Persists to `localStorage`.
@@ -475,25 +464,21 @@ Faithful port of `Preferences` (+ `BackendPrefs`, `OscPreset`, `FftPreset`,
   - every setting is a public observable `Property` (e.g. `prefs.fftLength.get()/.set(v)`,
     `prefs.genAmplitudeVrms`, `prefs.genSignalForm`, `prefs.adcFsVoltageRms`, …).
 
-### INTEGRATION TODO — preferences
-1. **Bootstrap.** `const prefs = Preferences.instance(); prefs.load();` at app
-   start; `prefs.flush()` on `pagehide`/`beforeunload`.
-2. **Bind the UI to `Property`s** instead of `engine.config`. Replace the
-   transient `readConfig()` reads with `prefs.fftLength.get()`,
-   `prefs.fftWindow.get()`, `prefs.genFrequencyHz.get()`,
-   `prefs.genAmplitudeVrms.get()`, etc.; write back on change. The Preferences
-   modal device/rate selects map to `prefs.current()` `BackendPrefs`
-   (`inputDeviceName`/`outputDeviceName` = Web Audio `deviceId`,
-   `inputSampleRate`/`outputSampleRate`).
-3. **Supply the calibration anchors** every other module needs:
-   `prefs.dbvOffsetDb` (IMD/FFT dBV), `prefs.adcFsVoltageRms` (scope peakVolts,
-   predistortion), `prefs.dacFsVoltageAmpl` (DDS amplitude scale).
+### Done log — preferences (all closed)
+1. Bootstrap — `Preferences.instance()` at app start (loads in the constructor);
+   `prefs.flush()` in `teardown()` (pagehide).
+2. UI ↔ Property binding — `bidiBind` helper + direct Property wiring in app.js
+   / the pane controls; the Preferences modal device/rate selects map to
+   `prefs.current()` `BackendPrefs`.
+3. Calibration anchors — `prefs.dbvOffsetDb` / `adcFsVoltageRms` /
+   `dacFsVoltageAmpl` flow into FftView, ScopeView, the engine config and the
+   predistortion host; changing either FS voltage resets FFT/scope.
 4. Dialog helpers `copyForDialog`/`applyFromDialog` were NOT ported (SWT-only);
-   add them if a non-trivial Preferences-dialog apply/cancel is needed.
+   the web PreferencesDialog binds Propertys directly.
 
 ---
 
-## 10. Internationalization — `web/js/i18n/{i18n,locales}.js` (+ `web/i18n/messages.properties`)  ✅ PORTED, ⛔ UNWIRED
+## 10. Internationalization — `web/js/i18n/{i18n,locales}.js` (+ `web/i18n/messages*.properties`)  ✅ PORTED, ✅ WIRED
 
 Faithful port of `I18n` + language discovery.
 
@@ -504,43 +489,45 @@ Faithful port of `I18n` + language discovery.
 - `locales.js`: `LOCALES` (frozen `[{tag,file,endonym}]`, 32 entries),
   `localeByTag(tag) -> LocaleEntry|undefined`.
 
-### INTEGRATION TODO — i18n
-1. **Bootstrap.** `await initBase();` then `await setLocale(prefs.uiLanguage.get())`
-   before first paint.
-2. **Externalise strings.** `index.html` + `app.js` hard-code English. Replace
-   visible strings with `t('key')` (keys already exist in
-   `web/i18n/messages.properties`, 649 keys English base). Add a language picker
-   populated from `LOCALES`, writing `prefs.uiLanguage`.
-3. **Stage other locales.** Only `messages.properties` (English) is in `web/i18n/`.
-   Copy `src/main/resources/i18n/messages_<tag>.properties` into `web/i18n/` to
-   enable each language; `setLocale` fetches them on demand (falls back to base
-   English per missing key).
+### Done log — i18n (all closed)
+1. Bootstrap — app.js init: `await initBase()` then
+   `await setLocale(prefs.uiLanguage.get())` before first paint.
+2. Externalise strings — the shell + all panes/dialogs resolve through
+   `t('key')`; the Language menu (`#langMenu`) is built from `LOCALES`, persists
+   `prefs.uiLanguage` and live re-renders the chrome on switch.
+3. Stage other locales — all 31 `messages_<tag>.properties` staged in
+   `web/i18n/`, row-aligned with the web-only keys appended; `setLocale` fetches
+   on demand (base-English fallback per key).
+4. **2026-07-03 key realignment** — all 32 files verified to identical key sets
+   (674 keys each): added `web.browser.unsupported.title/.message` translations
+   to all 31 locales, removed the orphan `preferences.lookAndFeel.recreateNote`
+   (no Java counterpart) and the unreferenced `web.utility.screenshot` (de);
+   `web/test/i18n-check.mjs` passes.
 
 ---
 
 ## Modules referenced by the source app but NOT ported
 
-- **`MainsFilters.of` factory** (`dsp/mains/factory.js`) — needs
-  `MainsSyncSubtractFilter` / `MainsLmsFilter` (out of scope). Only the COMB case
-  is ported.
-- **FLAC encode** — `io/wav.js createFlacWriter` is a validating stub; needs a
-  WASM codec. Save paths must fall back to WAV/AIFF.
 - **`USE_IR_GATING` branch** in the freqresp deconvolution — compiled OFF in Java,
   intentionally omitted.
-- **`copyForDialog`/`applyFromDialog`** Preferences SWT-dialog helpers — not ported.
+- **`copyForDialog`/`applyFromDialog`** Preferences SWT-dialog helpers — not ported
+  (web binds Propertys directly).
+
+(Formerly on this list, since ported: the `MainsFilters.of` factory +
+SYNC_SUBTRACT/LMS cancellers — `dsp/mains/{factory,sync-subtract-filter,lms-filter}.js`;
+FLAC encode — `io/flac.js` libflacjs WASM.)
 
 ---
 
 ## Summary
 
 - **10 of 10** listed subsystems are ported, faithful, and syntax-clean.
-- **0 of 10** are wired: `audio/backend.js` + `shell/app.js` + `index.html` still
-  run entirely on the prototype DSP (`dsp/analyzer.js`, `dsp/fll.js`,
-  `worklets/generator-processor.js`) and import none of the ported modules.
-- **Critical path** to a faithful live app, in order:
-  1. **FFT brain** (module 1) — the `FftResult` producer everything else consumes.
-  2. **DDS generator** (module 3) — required for dual-tone, sweeps, .dpd, dither.
-  3. **Preferences** (module 9) — supplies `dbvOffsetDb` / `adcFsVoltageRms` /
-     `dacFsVoltageAmpl` and replaces the transient `engine.config`.
-  4. IMD (2), scope DSP (4) and file I/O (7) layer on once 1+3 land.
-  5. Freqresp (5) and predistortion (6) are end-features depending on 1+3+7+9.
+- **10 of 10** are wired: the live app runs on the faithful engine — FFT brain +
+  IMD in the worker/pool, DDS worklet generator, scope DSP + mains cancellers
+  (scope AND pre-FFT), freqresp, predistortion, file I/O, Preferences-backed
+  config and full i18n (32 locales, identical key sets).
+- **Open items** (tracked above): dual-tone F2 FLL steering (§2, accepted web
+  limitation pending a structural GeneratorController change); optional `?hl=`
+  help highlighter (part 1); FR-host ADC/DAC calibration dialogs (§5, stubs);
+  gen-footer FLL/predistortion button relocation (part 3, deferred); audio
+  output hardware confirmation (part 3).

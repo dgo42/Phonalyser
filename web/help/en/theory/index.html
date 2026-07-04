@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Theory of operation</title>
+  <title>Phonalyser.web — Theory of operation</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -10,7 +10,7 @@
   <p class="back"><a href="../index.html">◀ Back to contents</a></p>
 
   <h1>Theory of operation</h1>
-  <p>This chapter explains how Phonalyser works <em>inside</em> — what
+  <p>This chapter explains how Phonalyser.web works <em>inside</em> — what
      actually happens to your signal between the moment it is synthesized and
      the moment a THD number appears on screen.  It is written for the
      measurement user: you don't need to know anything about software
@@ -20,7 +20,7 @@
      <a href="../oscilloscope.html">Oscilloscope</a>,
      <a href="../fft.html">FFT analyser</a>).</p>
 
-  <div class="note"><b>A tip of the hat.</b>  Phonalyser owes its existence
+  <div class="note"><b>A tip of the hat.</b>  Phonalyser.web owes its existence
      to <a href="https://www.roomeqwizard.com/">REW (Room EQ Wizard)</a> —
      working with that excellent tool inspired the author to build a
      measurement application of his own, aiming at even more comprehensive
@@ -29,7 +29,7 @@
      here).</div>
 
   <h2>The signal path</h2>
-  <p>Everything in Phonalyser hangs off one loop: synthesized samples leave
+  <p>Everything in Phonalyser.web hangs off one loop: synthesized samples leave
      through the DAC, pass through the device under test, return through the
      ADC, and are distributed to the analysis views through a shared ring
      buffer.</p>
@@ -146,7 +146,7 @@
   <h2>Chapters</h2>
   <div class="toc">
     <a href="audio-backend.html"><b>Audio backend</b> — the bit-exact bridge
-       between Phonalyser and the sound hardware: what it guarantees, how a
+       between Phonalyser.web and the sound hardware: what it guarantees, how a
        capture and a playback session work, who shares the devices</a>
     <a href="ring-buffer.html"><b>Ring buffer &amp; consumers</b> — the shared
        22-second capture memory, independent read cursors, and what happens

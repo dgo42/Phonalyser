@@ -62,6 +62,29 @@ export class GeneratorPane {
     this.genCorrNames = {};
     // The loaded file-player signal: { channels:[Float32Array,Float32Array], sampleRate }.
     this.genFileSig = null;
+
+    // FreqResp measurement lifecycle (Java GeneratorPane freqRespStarted/StoppedListener):
+    // the GeneratorController stops both engines in its OWN subscription; here only the
+    // visuals — clear the play LEDs + ON-AIR and gray both Play buttons for the sweep.
+    const bus = MessageBus.instance();
+    bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, () => this.onFreqRespMeasurementStarted());
+    bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => this.onFreqRespMeasurementStopped());
+  }
+
+  /** FREQRESP_MEASUREMENT_STARTED handler — the controller stops both engines in its own
+   *  subscription; here only the visuals: dim and gray both Play buttons while the sweep
+   *  drives the DAC (Java GeneratorPane.onFreqRespMeasurementStarted). */
+  onFreqRespMeasurementStarted() {
+    this._setGenRunning(false);
+    $('#genPlay').removeClass('playing').attr('title', t('generator.play.start'));
+    this.setGenFileBtn(false);   // also drops the ON-AIR banner (generator flag is off)
+    $('#genPlay, #genFilePlay').prop('disabled', true);
+  }
+
+  /** Counterpart that re-enables both Play buttons after the sweep
+   *  (Java GeneratorPane.onFreqRespMeasurementStopped). */
+  onFreqRespMeasurementStopped() {
+    $('#genPlay, #genFilePlay').prop('disabled', false);
   }
 
   /** Push every generator pref into its control widget — the init seed + the FFT-preset
@@ -119,9 +142,9 @@ export class GeneratorPane {
     if (form === GenSignalForm.RECTANGLE) {
       corrected = (raw > 0 && fs > 0) ? fs / Math.max(2, Math.round(fs / raw)) : raw;
     } else if ((form === GenSignalForm.SINE || form === GenSignalForm.SINE_COMP) && snap && binW > 0) {
-      // SINE_COMP included: Java's updateFreqLabel:1053 brackets plain SINE only, but a compensated
-      // sine IS bin-aligned here — the FLL snaps it as a SINE (Java FftController:315, hard-coded SINE)
-      // so the captured tone sits on the FFT bin. Show that snapped frequency for parity with SINE.
+      // SINE_COMP included: Java updateFreqLabel brackets SINE and SINE_COMP alike, and
+      // FftBinSnap.snapIfEnabled admits SINE_COMP (4887ecb), so a compensated sine both emits
+      // and is labelled with the bin-snapped frequency exactly like plain SINE.
       corrected = Math.round(raw / binW) * binW;
     }
     $('#freqLabel').text(corrected == null
@@ -285,10 +308,28 @@ export class GeneratorPane {
     const prefs = this.prefs, engine = this.engine;
     // Numeric sweep fields are NumericStepFields (their onChange writes pref+config+retune in
     // initStepFields); only the loop toggle is bound here.
-    $('#sweepLoop').on('change', () => {
+    $('#sweepLoop').on('change', async () => {
       const on = $('#sweepLoop').is(':checked');
-      prefs.genSweepLoop.set(on); engine.config.sweepLoop = on; engine.retuneGenerator();
+      prefs.genSweepLoop.set(on);
+      // Java genSweepLoopProperty binding (4887ecb): a running Farina sweep restarts
+      // instead of live-editing; the restart's readConfig picks the new loop flag up.
+      if (await this.restartFarinaOnParamChange()) return;
+      engine.config.sweepLoop = on; engine.retuneGenerator();
     });
+  }
+
+  /** Faithful port of GeneratorController.restartFarinaOnParamChange (4887ecb): a Farina
+   *  (LOG) sweep can't live-edit its pre-rendered buffer without the playback dropping to
+   *  silence, so a sweep-parameter change while it is running does a full restart instead —
+   *  the tone resumes with the new parameters (restartGenerator re-reads the just-committed
+   *  UI via readConfig, as Java's start() rebuilds from the committed prefs). Returns
+   *  {@code true} when it restarted, so the caller skips the live setter + retune. */
+  async restartFarinaOnParamChange() {
+    if (this._isGenRunning() && this.prefs.genSignalForm.get() === GenSignalForm.LOG_SWEEP) {
+      await this.restartGenerator();
+      return true;
+    }
+    return false;
   }
 
   // ----- custom signal-form combo: waveform pictogram + label per item -----

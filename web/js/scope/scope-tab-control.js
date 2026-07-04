@@ -135,6 +135,14 @@ export class ScopeTabControl {
     $('#scopeRightLpf').val(prefs.oscRightLpf.get());
     this.trigGroupSet('scopeTrigCh', prefs.oscTriggerChannel.get());
     this.trigGroupSet('scopeTrigEdge', prefs.oscTriggerEdge.get());
+    // Glitch in AUTO makes no sense — normalize a persisted GLITCH+AUTO combo back to
+    // EDGE at seed time (Java buildTriggerGroup build-time normalization), then seed
+    // the E/G type group and gate G on the trigger mode.
+    if (prefs.oscTriggerMode.get() === 'AUTO' && prefs.oscTriggerType.get() === 'GLITCH') {
+      prefs.oscTriggerType.set('EDGE');
+    }
+    this.trigGroupSet('scopeTrigType', prefs.oscTriggerType.get());
+    this.host.syncGlitchTypeEnabled();
     this.trigGroupSet('scopeTrigMode', prefs.oscTriggerMode.get());
     $('#scopeTrigHystEn').prop('checked', prefs.oscTriggerHysteresisEnabled.get());
     $('#scopeTrigBeat').prop('checked', prefs.oscShowReconstructedBeat.get());
@@ -309,6 +317,7 @@ export class ScopeTabControl {
     p.triggerPositionFrac = prefs.oscTriggerPositionFrac.get();
     p.triggerChannel = prefs.oscTriggerChannel.get();
     p.triggerEdge = prefs.oscTriggerEdge.get();
+    p.triggerType = prefs.oscTriggerType.get();
     p.triggerMode = prefs.oscTriggerMode.get();
     p.triggerLevelFrac = prefs.oscTriggerLevelFrac.get();
     return p;
@@ -334,6 +343,7 @@ export class ScopeTabControl {
     prefs.oscRightLpf.set(p.rightLpf);
     prefs.oscTriggerChannel.set(p.triggerChannel);
     prefs.oscTriggerEdge.set(p.triggerEdge);
+    prefs.oscTriggerType.set(p.triggerType || 'EDGE');
     prefs.oscTriggerMode.set(p.triggerMode);
     this.host.syncTriggerStart();
     // Fractions — overwrite the values the scale listeners would have clobbered.
@@ -434,9 +444,43 @@ export class ScopeTabControl {
     $('#scopeLeftLpf').on('change', () => { prefs.oscLeftLpf.set($('#scopeLeftLpf').val()); host.requestRedraw(); });
     $('#scopeRightLpf').on('change', () => { prefs.oscRightLpf.set($('#scopeRightLpf').val()); host.requestRedraw(); });
 
-    this.wireTrigGroup('scopeTrigCh', (v) => { prefs.oscTriggerChannel.set(v); host.refreshTiles(); });
-    this.wireTrigGroup('scopeTrigEdge', (v) => { prefs.oscTriggerEdge.set(v); host.refreshTiles(); });
-    this.wireTrigGroup('scopeTrigMode', (v) => { prefs.oscTriggerMode.set(v); host.syncTriggerStart(); host.refreshTiles(); });
+    // Channel / edge / type changes drop the held trigger anchor (Java onChange
+    // listeners → view.resetTriggerHold + controller.redrawViews): the old anchor
+    // belongs to the OLD trigger source and would keep re-rendering a stale trace.
+    // NORMAL / SINGLE then stay blank until the new trigger fires.
+    this.wireTrigGroup('scopeTrigCh', (v) => {
+      prefs.oscTriggerChannel.set(v); host.refreshTiles();
+      view.resetTriggerHold();   // other channel's anchor is stale
+      host.requestRedraw();
+    });
+    this.wireTrigGroup('scopeTrigEdge', (v) => {
+      prefs.oscTriggerEdge.set(v); host.refreshTiles();
+      view.resetTriggerHold();   // old-edge anchor is stale
+      host.requestRedraw();
+    });
+    // Trigger event type: E = level-crossing edge trigger, G = dV/dt glitch trigger
+    // (dropped-sample DAC gaps). The ↑/↓ edge selection applies to both — crossing
+    // direction vs. glitch start/end anchor.
+    this.wireTrigGroup('scopeTrigType', (v) => {
+      prefs.oscTriggerType.set(v); host.refreshTiles();
+      view.resetTriggerHold();   // the held anchor belongs to the OLD trigger type
+      host.requestRedraw();
+    });
+    this.wireTrigGroup('scopeTrigMode', (v) => {
+      prefs.oscTriggerMode.set(v);
+      // Glitch in AUTO makes no sense — free-run repaints at the render rate, so a
+      // caught glitch frame would be overwritten immediately. Selecting AUTO flips
+      // the type back to EDGE, and G stays disabled until NORMAL / SINGLE (Java
+      // oscTriggerModeProperty listener).
+      if (v === 'AUTO' && prefs.oscTriggerType.get() === 'GLITCH') {
+        prefs.oscTriggerType.set('EDGE');
+        this.trigGroupSet('scopeTrigType', 'EDGE');
+        view.resetTriggerHold();   // the glitch anchor is stale under the new type
+      }
+      host.syncGlitchTypeEnabled();
+      host.syncTriggerStart(); host.refreshTiles();
+      host.requestRedraw();
+    });
     // Trigger level (fraction of canvas height, Java oscTriggerLevelFrac) +
     // hysteresis enable/div (oscTriggerHysteresisEnabled / oscTriggerHysteresisDiv).
     $('#scopeTrigHystEn').on('change', () => {
@@ -582,6 +626,16 @@ export class ScopeTabControl {
         }
         // File mode: a static loaded signal free-runs with no trigger search / overlay.
         view.fileMode = true;
+        // A loaded file has no trigger; SINGLE (unarmed) would render nothing, so
+        // switch to AUTO on load — file mode ignores the trigger anyway (Java
+        // ScopeOpenSignal.loadFile → setOscTriggerMode(AUTO)). AUTO forces the
+        // trigger type back to EDGE (the mode-listener rule).
+        prefs.oscTriggerMode.set('AUTO');
+        if (prefs.oscTriggerType.get() === 'GLITCH') prefs.oscTriggerType.set('EDGE');
+        this.trigGroupSet('scopeTrigMode', 'AUTO');
+        this.trigGroupSet('scopeTrigType', prefs.oscTriggerType.get());
+        host.syncTriggerStart();
+        host.refreshTiles();
         host.setTriggerControlsEnabled(false);
         prefs.oscPlayFromPath.set(f.name); prefs.save();   // Java doOpenSignalBrowse persists the load path
         $('#scopeLoadedPath').val(f.name).attr('title', f.name);   // #15 readonly last-loaded-file field

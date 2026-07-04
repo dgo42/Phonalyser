@@ -110,6 +110,10 @@ const TABLE_BITS = 12;
 const TABLE_SIZE = 1 << TABLE_BITS; // 4096
 /** Radix (2^32) of the two-word 64-bit fixed-point phase accumulator. */
 const PHASE_2P32 = 4294967296;
+/** 1/2^53 — scales the top 53 bits of the accumulator to a turn in [0,1) (Constants.ONE_OVER_2_53). */
+const ONE_OVER_2_53 = 2 ** -53;
+/** 2^21 — lifts the high word into the top-53-bit turn (the hi word carries bits 33..53 of it). */
+const HI_TO_TOP53 = 1 << 21;
 /**
  * Splits a turns-per-sample increment (double in [0,1)) into the high + low 32-bit words of a
  * 64-bit fixed-point increment, so the phase can advance by EXACT integer addition each sample
@@ -157,20 +161,42 @@ function wrapTurn(ph) {
   return ph - Math.floor(ph);
 }
 
-/** sin(θ) for a phase in turns [0,1) (table + Taylor); allocation-free. */
+/**
+ * Turn fraction [0,1) from the top 53 bits of the hi:lo accumulator — the web
+ * mirror of SignalGenerator's `(phaseAcc >>> 11) * ONE_OVER_2_53`. Reconstructing
+ * only the top 53 bits keeps the result STRICTLY below 1.0 (max = 1 − 2^-53), so
+ * `ph * TABLE_SIZE` can never round up to TABLE_SIZE and index off the table —
+ * unlike the full `(hi + lo/2^32)/2^32`, which rounds to exactly 1.0 when the
+ * accumulator sits just under 2^64 (the wrap point hit at integer-ratio
+ * frequencies such as 100 Hz / 1000 Hz).
+ */
+function phaseTurn53(hi, lo) {
+  return (hi * HI_TO_TOP53 + (lo >>> 11)) * ONE_OVER_2_53;
+}
+
+/** sin(θ) for a phase in turns [0,1) (table + Taylor); allocation-free.
+ *  `cell & (TABLE_SIZE-1)` mirrors Java's top-12-bit index extraction
+ *  (`phaseAcc >>> (64-TABLE_BITS)`, always 0..4095): when a phase whose period
+ *  evenly divides the accumulator (e.g. an integer frequency) rounds up to
+ *  exactly 1.0, `ph*TABLE_SIZE` is 4096 and the mask folds it back to 0 (whose
+ *  Δθ is 0), avoiding an out-of-range read that would return NaN. */
 function ddsSineOf(ph) {
   const scaled = ph * TABLE_SIZE;
-  const idx = scaled | 0;
-  const dx = (scaled - idx) * RAD_PER_CELL;
+  const cell = scaled | 0;
+  const idx = cell & (TABLE_SIZE - 1);
+  const dx = (scaled - cell) * RAD_PER_CELL;
   const dx2 = dx * dx;
   return SINE_TABLE[idx] * taylorCos(dx2) + COS_TABLE[idx] * taylorSin(dx, dx2);
 }
 
-/** cos(θ) for a phase in turns [0,1) (table + Taylor); allocation-free. */
+/** cos(θ) for a phase in turns [0,1) (table + Taylor); allocation-free.
+ *  Index masked like {@link ddsSineOf} so a phase rounding to exactly 1.0 wraps
+ *  to table cell 0 rather than reading past the end (NaN). */
 function ddsCosOf(ph) {
   const scaled = ph * TABLE_SIZE;
-  const idx = scaled | 0;
-  const dx = (scaled - idx) * RAD_PER_CELL;
+  const cell = scaled | 0;
+  const idx = cell & (TABLE_SIZE - 1);
+  const dx = (scaled - cell) * RAD_PER_CELL;
   const dx2 = dx * dx;
   return COS_TABLE[idx] * taylorCos(dx2) - SINE_TABLE[idx] * taylorSin(dx, dx2);
 }
@@ -673,9 +699,9 @@ export class DdsKernel {
    */
   nextSample() {
     // Derive the turn fraction(s) [0,1) from the EXACT 64-bit accumulator(s) for this sample.
-    this._phaseAcc = (this._phaseHi + this._phaseLo / PHASE_2P32) / PHASE_2P32;
+    this._phaseAcc = phaseTurn53(this._phaseHi, this._phaseLo);
     const dual = this.form === GenSignalForm.DUAL_TONE || this.form === GenSignalForm.DUAL_TONE_COMP;
-    if (dual) this._phaseAcc2 = (this._phase2Hi + this._phase2Lo / PHASE_2P32) / PHASE_2P32;
+    if (dual) this._phaseAcc2 = phaseTurn53(this._phase2Hi, this._phase2Lo);
     let raw;
     switch (this.form) {
       case GenSignalForm.SINE: raw = ddsSineOf(this._phaseAcc); break;

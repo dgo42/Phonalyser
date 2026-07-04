@@ -46,6 +46,13 @@ const SAVE_COALESCE_MS = 250;
 /** Factory-default ADC full-scale RMS voltage (Preferences.DEFAULT_ADC_FS_VRMS). */
 const DEFAULT_ADC_FS_VRMS = 1.7931;
 
+/** Sentinel "unset" value for the rate-dependent FreqResp defaults
+ *  (stop = Nyquist, points = FS/2). A fresh install with no saved value keeps
+ *  this until _seedRateDependentFreqRespDefaults resolves it from the current
+ *  device sample rate; any saved value is a real number and overrides it
+ *  (Preferences.FREQRESP_RATE_DEFAULT_SENTINEL). */
+const FREQRESP_RATE_DEFAULT_SENTINEL = 0;
+
 /**
  * Per-OS default UI font as a {@code "family|size|style"} string (faithful port of
  * Preferences.defaultUiFont): Consolas 9 on Windows, Menlo 11 on macOS, DejaVu Sans
@@ -74,6 +81,7 @@ const E = {
   AudioBackendType: ['WASAPI', 'WDMKS', 'COREAUDIO', 'JAVASOUND'],
   Channel: ['L', 'R'],
   TriggerEdge: ['RISE', 'FALL'],
+  TriggerType: ['EDGE', 'GLITCH'],
   TriggerMode: ['AUTO', 'NORMAL', 'SINGLE'],
   MainsSuppression: ['NONE', 'IIR_COMB', 'SYNC_SUBTRACT', 'LMS'],
   LpfMode: ['NONE', 'HZ_80', 'DESPIKE'],
@@ -201,6 +209,7 @@ export class OscPreset {
     this.triggerPositionFrac = 0.5;
     this.triggerChannel = 'L';
     this.triggerEdge = 'RISE';
+    this.triggerType = 'EDGE';
     this.triggerMode = 'AUTO';
     this.triggerLevelFrac = 0.5;
   }
@@ -258,16 +267,21 @@ export class FreqRespPreset {
  * toggles. {@code path} is plain mutable state (no change notification); active
  * and withNoise are observable so the row's checkbox can two-way bind, and so a
  * toggle persists through the debounced save when the entry is tracked.
+ * {@code hash} is the SHA-256 hex of the original bytes (set by cal-store.js
+ * putCal at load time); null when the file has not yet been stored.
  */
 export class CalibrationEntry {
   /**
    * @param {?string} [path=null]
    * @param {boolean} [active=false]
    * @param {boolean} [withNoise=false]
+   * @param {?string} [hash=null]
    */
-  constructor(path = null, active = false, withNoise = false) {
+  constructor(path = null, active = false, withNoise = false, hash = null) {
     /** @type {?string} */
     this.path = path;
+    /** @type {?string} SHA-256 hex of the original .frc bytes; null until putCal. */
+    this.hash = hash;
     this._active = new Property(active);
     this._withNoise = new Property(withNoise);
   }
@@ -286,7 +300,11 @@ export class CalibrationEntry {
  * {@link PREFS_KEY}.
  */
 export class Preferences {
-  constructor() {
+  constructor(detached = false) {
+    // Detached copy (see copyForDialog): never loads from / writes to localStorage,
+    // so a dialog can mutate it freely and drop it on close. Mirrors the Java
+    // private Preferences(boolean detached) constructor.
+    this.transientMode = !!detached;
     /** @type {Map<string, BackendPrefs>} keyed by AudioBackendType name. */
     this._perBackend = new Map();
 
@@ -311,12 +329,15 @@ export class Preferences {
     this.oscLeftVoltsPerDiv = this._bound(0.1);
     this.oscRightVoltsPerDiv = this._bound(0.1);
     this.oscTimePerDiv = this._bound(1e-3);
-    // Per-pane last-used screenshot size (0 = fall back to the pane's native size). The
-    // FFT / FreqResp panes get their own fft*/fr* keys when those screenshots land.
-    this.oscScreenshotWidth = this._bound(0);
-    this.oscScreenshotHeight = this._bound(0);
+    // Per-pane last-used screenshot size (0 = fall back to the pane's native size).
+    // scope*/fft*/freqResp* keep the three panes independent (see fftScreenshotWidth
+    // and freqRespScreenshotWidth below).
+    this.scopeScreenshotWidth = this._bound(0);
+    this.scopeScreenshotHeight = this._bound(0);
     this.oscTriggerChannel = this._bound('L');
     this.oscTriggerEdge = this._bound('RISE');
+    // Trigger event type: EDGE = level crossing, GLITCH = dV/dt jump.
+    this.oscTriggerType = this._bound('EDGE');
     this.oscTriggerMode = this._bound('AUTO');
     this.oscTriggerHysteresisDiv = this._bound(0.0);
     this.oscTriggerHysteresisEnabled = this._bound(false);
@@ -337,8 +358,6 @@ export class Preferences {
     this.oscLeftChannelColor = this._bound(0x00d7ff);
     this.oscRightChannelColor = this._bound(0xffd700);
 
-    this.screenshotWidth = this._bound(0);
-    this.screenshotHeight = this._bound(0);
     this.screenshotFolder = this._bound(null);
     this.screenshotCommentFont = this._bound(null);
     this.oscMeasurementChannel = this._bound('L');
@@ -372,8 +391,8 @@ export class Preferences {
     // there's nothing but a bare checkmark to show — the full OS path stays unavailable).
     this.genDpdName = this._bound(null);
     this.genDpdDualName = this._bound(null);
-    this.predistortionAverages = this._bound(100);
-    this.predistortionTargetPct = this._bound(0.0);
+    this.predistortionAverages = this._bound(64);
+    this.predistortionTargetPct = this._bound(0.000001);
     this.genRectangleDuty = this._bound(0.5);
     this.genTriangleDuty = this._bound(0.5);
     this.genSweepFreqStartHz = this._bound(20.0);
@@ -406,6 +425,9 @@ export class Preferences {
     // ---- FFT pane ----
     this.fftLength = this._bound(65536);
     this.fftAverages = this._bound(4.0);
+    // Web-only: FFT worker-pool size (#threads select). No Java counterpart —
+    // the desktop parallelises automatically.
+    this.fftThreads = this._bound(1);
     this.fftStopAfterNEnabled = this._bound(false);
     this.fftStopAfterN = this._bound(10);
     this.fftFundFromGenerator = this._bound(false);
@@ -427,6 +449,10 @@ export class Preferences {
     this.fftManualFundEnabled = this._bound(false);
     this.fftChannel = this._bound('L');
     this.fftMagUnit = this._bound('DBV');
+    // Per-pane last-used screenshot size (0 = fall back to the pane's native size); mirrors
+    // scopeScreenshotWidth/Height so the FFT shot remembers its OWN size independently.
+    this.fftScreenshotWidth = this._bound(0);
+    this.fftScreenshotHeight = this._bound(0);
     this.fftDistortionTableVisible = this._bound(true);
     this.fftFreqMinHz = this._bound(20.0);
     this.fftFreqMaxHz = this._bound(20000.0);
@@ -453,15 +479,24 @@ export class Preferences {
     this.freqRespPresets = new Map();
 
     // ---- Frequency Response pane ----
-    this.freqRespStartHz = this._bound(20.0);
-    this.freqRespStopHz = this._bound(20000.0);
-    this.freqRespAmplitudeVrms = this._bound(0.5);
+    this.freqRespStartHz = this._bound(1.0);
+    // Sentinel 0 = "unset": resolved to the device Nyquist (rate/2) on a fresh
+    // install by _seedRateDependentFreqRespDefaults; a saved value overrides.
+    this.freqRespStopHz = this._bound(FREQRESP_RATE_DEFAULT_SENTINEL);
+    this.freqRespAmplitudeVrms = this._bound(1.0);
     this.freqRespAmplitudeDbvDisplay = this._bound(false);
-    this.freqRespSweepPoints = this._bound(65536);
+    // Sentinel 0 = "unset": resolved to the FS/2 point count (rate/2) on a fresh
+    // install by _seedRateDependentFreqRespDefaults; a saved value overrides.
+    this.freqRespSweepPoints = this._bound(FREQRESP_RATE_DEFAULT_SENTINEL);
     this.freqRespDurationSec = this._bound(5.5);
-    this.freqRespFftSize = this._bound(524288);
+    this.freqRespFftSize = this._bound(4194304);
     this.freqRespDitherBits = this._bound(0);
-    this.freqRespLeadInSec = this._bound(0.2);
+    this.freqRespLeadInSec = this._bound(0.05);
+    // Tune-notch wizard fields, persisted independently of the main FreqResp pane.
+    this.tuneNotchStartHz = this._bound(900.0);
+    this.tuneNotchStopHz = this._bound(1100.0);
+    this.tuneNotchAmplitudeVrms = this._bound(1.0);
+    this.tuneNotchTargetHz = this._bound(1000.0);
     this.freqRespLeftVisible = this._bound(true);
     this.freqRespRightVisible = this._bound(false);
     this.freqRespPhaseVisible = this._bound(false);
@@ -490,14 +525,21 @@ export class Preferences {
     this.freqRespLoadFolder = this._bound(null);
     this.freqRespLoadPath = this._bound(null);
     this.freqRespActiveTabIndex = this._bound(0);
+    // Per-pane last-used screenshot size (0 = fall back to the pane's native size); mirrors
+    // scopeScreenshotWidth/Height so the FreqResp shot remembers its OWN size independently.
+    this.freqRespScreenshotWidth = this._bound(0);
+    this.freqRespScreenshotHeight = this._bound(0);
 
     // ---- cached constants (recomputed on the relevant changes / on load) ----
     /** dBV = dBFS + dbvOffsetDb (= 20·log10(adcFsVoltageRms)). */
     this.dbvOffsetDb = 20.0 * Math.log10(DEFAULT_ADC_FS_VRMS);
     /** √(bin bandwidth) = √(inputSampleRate / fftLength); the V→V/√Hz divisor. */
     this.binBwSqrt = 1.0;
-    /** When true, save() is a no-op (Preferences.transientMode — CLI/headless). */
-    this.transientMode = false;
+    // transientMode was already set from the `detached` ctor arg at the top of the
+    // constructor. When true, save() is a no-op and load()/seed are skipped, so a
+    // dialog copy (copyForDialog) never touches localStorage. Do NOT reset it here —
+    // an unconditional `= false` clobbered the detached flag, making the wizard's copy
+    // non-transient so its save() overwrote the main pane's persisted range/channel.
 
     // ---- save coalescing / load-suppression flags ----
     this._loading = false;
@@ -508,10 +550,44 @@ export class Preferences {
     this.fftLength.addListener(() => this._recomputeBinBw());
     this.backend.addListener(() => this._recomputeBinBw());
 
-    this.load();
+    if (!this.transientMode) this.load();
     // Covers the no-document case AND the per-backend sample rate, a plain POJO
     // write the listeners cannot observe.
     this._recomputeBinBw();
+    // Resolve the rate-dependent FreqResp defaults (stop = Nyquist,
+    // points = FS/2) on a fresh install where load() left the sentinels.
+    // Only the live (non-detached) instance seeds; a detached copy receives the
+    // already-resolved values through copyForDialog's _fromMap.
+    if (!this.transientMode) this._seedRateDependentFreqRespDefaults();
+  }
+
+  /** Resolves the rate-dependent FreqResp defaults left as sentinels after
+   *  load(): on a fresh install the stop frequency becomes the current device
+   *  Nyquist (rate/2) and the sweep-points count becomes the FS/2 point count
+   *  (rate/2). A user with a stored value never hits the sentinel, so their
+   *  choice is preserved (Preferences.seedRateDependentFreqRespDefaults). */
+  _seedRateDependentFreqRespDefaults() {
+    const rate = this.current().inputSampleRate;
+    if (!(rate > 0)) return;
+    const nyquist = rate / 2.0;
+    if (this.freqRespStopHz.get() === FREQRESP_RATE_DEFAULT_SENTINEL) {
+      this.freqRespStopHz.set(nyquist);
+    }
+    if (this.freqRespSweepPoints.get() === FREQRESP_RATE_DEFAULT_SENTINEL) {
+      this.freqRespSweepPoints.set(trunc(nyquist));
+    }
+  }
+
+  /** Faithful port of Preferences.copyForDialog(): a DETACHED copy seeded with the
+   *  current values that never loads from / writes to localStorage. The tune-notch
+   *  wizard hands this to its embedded FreqRespView so every range / auto-fit /
+   *  zoom edit stays in the copy and the shared main-pane view is never touched. */
+  copyForDialog() {
+    const c = new Preferences(true);
+    c._loading = true;
+    try { c._fromMap(this._toMap()); } finally { c._loading = false; }
+    c._recomputeBinBw();
+    return c;
   }
 
   /** Shared singleton (Preferences.instance). */
@@ -821,10 +897,11 @@ export class Preferences {
     root.oscLeftVoltsPerDiv = this.oscLeftVoltsPerDiv.get();
     root.oscRightVoltsPerDiv = this.oscRightVoltsPerDiv.get();
     root.oscTimePerDiv = this.oscTimePerDiv.get();
-    root.oscScreenshotWidth = this.oscScreenshotWidth.get();
-    root.oscScreenshotHeight = this.oscScreenshotHeight.get();
+    root.scopeScreenshotWidth = this.scopeScreenshotWidth.get();
+    root.scopeScreenshotHeight = this.scopeScreenshotHeight.get();
     root.oscTriggerChannel = this.oscTriggerChannel.get();
     root.oscTriggerEdge = this.oscTriggerEdge.get();
+    root.oscTriggerType = this.oscTriggerType.get();
     root.oscTriggerMode = this.oscTriggerMode.get();
     root.oscTriggerHysteresisDiv = this.oscTriggerHysteresisDiv.get();
     root.oscTriggerHysteresisEnabled = this.oscTriggerHysteresisEnabled.get();
@@ -886,8 +963,6 @@ export class Preferences {
     root.oscDotDiameter = this.oscDotDiameter.get();
     root.oscLeftChannelColor = formatHtmlColor(this.oscLeftChannelColor.get());
     root.oscRightChannelColor = formatHtmlColor(this.oscRightChannelColor.get());
-    if (this.screenshotWidth.get() > 0) root.screenshotWidth = this.screenshotWidth.get();
-    if (this.screenshotHeight.get() > 0) root.screenshotHeight = this.screenshotHeight.get();
     if (this.screenshotFolder.get() != null) root.screenshotFolder = this.screenshotFolder.get();
     if (this.screenshotCommentFont.get() != null) root.screenshotCommentFont = this.screenshotCommentFont.get();
 
@@ -913,6 +988,7 @@ export class Preferences {
           triggerPositionFrac: p.triggerPositionFrac,
           triggerChannel: p.triggerChannel,
           triggerEdge: p.triggerEdge,
+          triggerType: p.triggerType,
           triggerMode: p.triggerMode,
           triggerLevelFrac: p.triggerLevelFrac,
         };
@@ -923,6 +999,7 @@ export class Preferences {
     // ---- FFT pane state ----
     root.fftLength = this.fftLength.get();
     root.fftAverages = this.fftAverages.get();
+    root.fftThreads = this.fftThreads.get();
     root.fftStopAfterNEnabled = this.fftStopAfterNEnabled.get();
     root.fftStopAfterN = this.fftStopAfterN.get();
     root.fftFundFromGenerator = this.fftFundFromGenerator.get();
@@ -944,6 +1021,8 @@ export class Preferences {
     root.fftManualFundEnabled = this.fftManualFundEnabled.get();
     root.fftChannel = this.fftChannel.get();
     root.fftMagUnit = this.fftMagUnit.get();
+    if (this.fftScreenshotWidth.get() > 0) root.fftScreenshotWidth = this.fftScreenshotWidth.get();
+    if (this.fftScreenshotHeight.get() > 0) root.fftScreenshotHeight = this.fftScreenshotHeight.get();
     root.fftDistortionTableVisible = this.fftDistortionTableVisible.get();
     root.fftFreqMinHz = this.fftFreqMinHz.get();
     root.fftFreqMaxHz = this.fftFreqMaxHz.get();
@@ -957,6 +1036,7 @@ export class Preferences {
       root.fftCalibrations = this.fftCalibrations.map((e) => {
         const m = {};
         if (e.path != null) m.path = e.path;
+        if (e.hash != null) m.hash = e.hash;
         m.active = e.active().get();
         m.withNoise = e.withNoise().get();
         return m;
@@ -982,6 +1062,10 @@ export class Preferences {
     root.freqRespFftSize = this.freqRespFftSize.get();
     root.freqRespDitherBits = this.freqRespDitherBits.get();
     root.freqRespLeadInSec = this.freqRespLeadInSec.get();
+    root.tuneNotchStartHz = this.tuneNotchStartHz.get();
+    root.tuneNotchStopHz = this.tuneNotchStopHz.get();
+    root.tuneNotchAmplitudeVrms = this.tuneNotchAmplitudeVrms.get();
+    root.tuneNotchTargetHz = this.tuneNotchTargetHz.get();
     root.freqRespLeftVisible = this.freqRespLeftVisible.get();
     root.freqRespRightVisible = this.freqRespRightVisible.get();
     root.freqRespPhaseVisible = this.freqRespPhaseVisible.get();
@@ -1006,6 +1090,7 @@ export class Preferences {
       root.freqRespCalibrations = this.freqRespCalibrations.map((e) => {
         const m = {};
         if (e.path != null) m.path = e.path;
+        if (e.hash != null) m.hash = e.hash;
         m.active = e.active().get();
         return m;
       });
@@ -1015,6 +1100,8 @@ export class Preferences {
     if (this.freqRespLoadFolder.get() != null) root.freqRespLoadFolder = this.freqRespLoadFolder.get();
     if (this.freqRespLoadPath.get() != null) root.freqRespLoadPath = this.freqRespLoadPath.get();
     root.freqRespActiveTabIndex = this.freqRespActiveTabIndex.get();
+    if (this.freqRespScreenshotWidth.get() > 0) root.freqRespScreenshotWidth = this.freqRespScreenshotWidth.get();
+    if (this.freqRespScreenshotHeight.get() > 0) root.freqRespScreenshotHeight = this.freqRespScreenshotHeight.get();
 
     if (this.fftPresets.size > 0) {
       const fpMap = {};
@@ -1114,10 +1201,17 @@ export class Preferences {
     if (isNum(g('oscLeftVoltsPerDiv'))) this.oscLeftVoltsPerDiv.set(g('oscLeftVoltsPerDiv'));
     if (isNum(g('oscRightVoltsPerDiv'))) this.oscRightVoltsPerDiv.set(g('oscRightVoltsPerDiv'));
     if (isNum(g('oscTimePerDiv'))) this.oscTimePerDiv.set(g('oscTimePerDiv'));
-    if (isNum(g('oscScreenshotWidth'))) this.oscScreenshotWidth.set(g('oscScreenshotWidth'));
-    if (isNum(g('oscScreenshotHeight'))) this.oscScreenshotHeight.set(g('oscScreenshotHeight'));
+    // Scope screenshot size: new scope* key, migrating the legacy osc* and the even
+    // older shared screenshot* keys so saved prefs still restore the scope's size.
+    if (isNum(g('scopeScreenshotWidth'))) this.scopeScreenshotWidth.set(trunc(g('scopeScreenshotWidth')));
+    else if (isNum(g('oscScreenshotWidth'))) this.scopeScreenshotWidth.set(trunc(g('oscScreenshotWidth')));
+    else if (isNum(g('screenshotWidth'))) this.scopeScreenshotWidth.set(trunc(g('screenshotWidth')));
+    if (isNum(g('scopeScreenshotHeight'))) this.scopeScreenshotHeight.set(trunc(g('scopeScreenshotHeight')));
+    else if (isNum(g('oscScreenshotHeight'))) this.scopeScreenshotHeight.set(trunc(g('oscScreenshotHeight')));
+    else if (isNum(g('screenshotHeight'))) this.scopeScreenshotHeight.set(trunc(g('screenshotHeight')));
     if (isStr(g('oscTriggerChannel'))) this.oscTriggerChannel.set(enumOr('Channel', g('oscTriggerChannel'), this.oscTriggerChannel.get()));
     if (isStr(g('oscTriggerEdge'))) this.oscTriggerEdge.set(enumOr('TriggerEdge', g('oscTriggerEdge'), this.oscTriggerEdge.get()));
+    if (isStr(g('oscTriggerType'))) this.oscTriggerType.set(enumOr('TriggerType', g('oscTriggerType'), this.oscTriggerType.get()));
     if (isStr(g('oscTriggerMode'))) this.oscTriggerMode.set(enumOr('TriggerMode', g('oscTriggerMode'), this.oscTriggerMode.get()));
     if (isNum(g('oscTriggerHysteresisDiv'))) this.oscTriggerHysteresisDiv.set(g('oscTriggerHysteresisDiv'));
     if (isBool(g('oscTriggerHysteresisEnabled'))) this.oscTriggerHysteresisEnabled.set(g('oscTriggerHysteresisEnabled'));
@@ -1180,8 +1274,6 @@ export class Preferences {
     if (isNum(g('oscDotDiameter'))) this.oscDotDiameter.set(trunc(g('oscDotDiameter')));
     this._loadColor(g('oscLeftChannelColor'), this.oscLeftChannelColor);
     this._loadColor(g('oscRightChannelColor'), this.oscRightChannelColor);
-    if (isNum(g('screenshotWidth'))) this.screenshotWidth.set(trunc(g('screenshotWidth')));
-    if (isNum(g('screenshotHeight'))) this.screenshotHeight.set(trunc(g('screenshotHeight')));
     if (isStr(g('screenshotFolder'))) this.screenshotFolder.set(g('screenshotFolder'));
     if (isStr(g('screenshotCommentFont'))) this.screenshotCommentFont.set(g('screenshotCommentFont'));
 
@@ -1208,6 +1300,7 @@ export class Preferences {
         if (isNum(pm.triggerPositionFrac)) p.triggerPositionFrac = pm.triggerPositionFrac;
         if (isStr(pm.triggerChannel)) p.triggerChannel = enumOr('Channel', pm.triggerChannel, p.triggerChannel);
         if (isStr(pm.triggerEdge)) p.triggerEdge = enumOr('TriggerEdge', pm.triggerEdge, p.triggerEdge);
+        if (isStr(pm.triggerType)) p.triggerType = enumOr('TriggerType', pm.triggerType, p.triggerType);
         if (isStr(pm.triggerMode)) p.triggerMode = enumOr('TriggerMode', pm.triggerMode, p.triggerMode);
         if (isNum(pm.triggerLevelFrac)) p.triggerLevelFrac = pm.triggerLevelFrac;
         this.oscPresets.set(key, p);
@@ -1217,6 +1310,7 @@ export class Preferences {
     // ---- FFT pane state ----
     if (isNum(g('fftLength'))) this.fftLength.set(trunc(g('fftLength')));
     if (isNum(g('fftAverages'))) this.fftAverages.set(g('fftAverages'));
+    if (isNum(g('fftThreads'))) this.fftThreads.set(Math.max(1, Math.min(16, trunc(g('fftThreads')))));
     if (isBool(g('fftStopAfterNEnabled'))) this.fftStopAfterNEnabled.set(g('fftStopAfterNEnabled'));
     if (isNum(g('fftStopAfterN'))) this.fftStopAfterN.set(trunc(g('fftStopAfterN')));
     if (isBool(g('fftFundFromGenerator'))) this.fftFundFromGenerator.set(g('fftFundFromGenerator'));
@@ -1243,6 +1337,8 @@ export class Preferences {
     if (isBool(g('fftManualFundEnabled'))) this.fftManualFundEnabled.set(g('fftManualFundEnabled'));
     if (isStr(g('fftChannel'))) this.fftChannel.set(enumOr('Channel', g('fftChannel'), this.fftChannel.get()));
     if (isStr(g('fftMagUnit'))) this.fftMagUnit.set(enumOr('MagnitudeUnit', g('fftMagUnit'), this.fftMagUnit.get()));
+    if (isNum(g('fftScreenshotWidth'))) this.fftScreenshotWidth.set(g('fftScreenshotWidth'));
+    if (isNum(g('fftScreenshotHeight'))) this.fftScreenshotHeight.set(g('fftScreenshotHeight'));
     if (isBool(g('fftDistortionTableVisible'))) this.fftDistortionTableVisible.set(g('fftDistortionTableVisible'));
     if (isNum(g('fftFreqMinHz'))) this.fftFreqMinHz.set(g('fftFreqMinHz'));
     if (isNum(g('fftFreqMaxHz'))) this.fftFreqMaxHz.set(g('fftFreqMaxHz'));
@@ -1269,6 +1365,10 @@ export class Preferences {
     }
     if (isNum(g('freqRespDitherBits'))) this.freqRespDitherBits.set(trunc(g('freqRespDitherBits')));
     if (isNum(g('freqRespLeadInSec'))) this.freqRespLeadInSec.set(g('freqRespLeadInSec'));
+    if (isNum(g('tuneNotchStartHz'))) this.tuneNotchStartHz.set(g('tuneNotchStartHz'));
+    if (isNum(g('tuneNotchStopHz'))) this.tuneNotchStopHz.set(g('tuneNotchStopHz'));
+    if (isNum(g('tuneNotchAmplitudeVrms'))) this.tuneNotchAmplitudeVrms.set(g('tuneNotchAmplitudeVrms'));
+    if (isNum(g('tuneNotchTargetHz'))) this.tuneNotchTargetHz.set(g('tuneNotchTargetHz'));
     if (isBool(g('freqRespLeftVisible'))) this.freqRespLeftVisible.set(g('freqRespLeftVisible'));
     if (isBool(g('freqRespRightVisible'))) this.freqRespRightVisible.set(g('freqRespRightVisible'));
     if (isBool(g('freqRespPhaseVisible'))) this.freqRespPhaseVisible.set(g('freqRespPhaseVisible'));
@@ -1303,7 +1403,8 @@ export class Preferences {
         if (!asMap(o)) continue;
         const path = isStr(o.path) ? o.path : null;
         const active = isBool(o.active) && o.active;
-        const e = new CalibrationEntry(path, active, false);
+        const hash = isStr(o.hash) ? o.hash : null;
+        const e = new CalibrationEntry(path, active, false, hash);
         this.freqRespCalibrations.push(e);
         this._trackCalibration(e);
       }
@@ -1313,6 +1414,8 @@ export class Preferences {
     if (isStr(g('freqRespLoadFolder'))) this.freqRespLoadFolder.set(g('freqRespLoadFolder'));
     if (isStr(g('freqRespLoadPath'))) this.freqRespLoadPath.set(g('freqRespLoadPath'));
     if (isNum(g('freqRespActiveTabIndex'))) this.freqRespActiveTabIndex.set(trunc(g('freqRespActiveTabIndex')));
+    if (isNum(g('freqRespScreenshotWidth'))) this.freqRespScreenshotWidth.set(g('freqRespScreenshotWidth'));
+    if (isNum(g('freqRespScreenshotHeight'))) this.freqRespScreenshotHeight.set(g('freqRespScreenshotHeight'));
     if (isStr(g('fftLoadFolder'))) this.fftLoadFolder.set(g('fftLoadFolder'));
     if (Array.isArray(g('fftCalibrations'))) {
       this.fftCalibrations.length = 0;
@@ -1321,7 +1424,8 @@ export class Preferences {
         const path = isStr(o.path) ? o.path : null;
         const active = isBool(o.active) && o.active;
         const withNoise = isBool(o.withNoise) && o.withNoise;
-        const e = new CalibrationEntry(path, active, withNoise);
+        const hash = isStr(o.hash) ? o.hash : null;
+        const e = new CalibrationEntry(path, active, withNoise, hash);
         this.fftCalibrations.push(e);
         this._trackCalibration(e);
       }

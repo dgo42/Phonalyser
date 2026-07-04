@@ -16,9 +16,31 @@
  */
 import { FftAnalyzer } from '../fft/fft-analyzer.js';
 import { FftResult } from '../fft/fft-result.js';
+import { TimeDiscontinuityDetector } from '../dsp/time-discontinuity.js';
 
 const analyzer = new FftAnalyzer();
 const slot = new FftResult();   // reused pool slot — analyze/prelude/finalize write into it
+
+// Time-domain discontinuity gate (Java FftAnalyzerWorker.timeDetector) — the scope's
+// glitch detector run on the tick's raw window. A splice/dropout breaks the sinusoid
+// recurrence decades above the noise floor even when its spectral footprint slips under
+// the frequency-domain gates (and vice versa), so the scope trigger and the FFT rejection
+// agree on what counts as a damaged block. The detector pass runs HERE (the raw window is
+// transferred to this worker); the controller applies the re-sync recovery off the flag.
+const timeDetector = new TimeDiscontinuityDetector();
+
+/** Java FftAnalyzerWorker doAnalysis (time-domain gate): the tick's own refined
+ *  fundamental pins the recurrence prediction exactly, so the reject threshold rides
+ *  on the noise floor at any signal frequency; NaN (no tone) self-estimates.
+ *  @param {Float64Array} samples the raw tick window
+ *  @param {FftResult} r this tick's analyzed result (fundamentalHzRefined + sampleRate)
+ *  @returns {boolean} true ⇒ the window contains a time-domain discontinuity */
+function timeDiscontinuity(samples, r) {
+  const f0 = r.fundamentalHzRefined;
+  const omega = (f0 > 0 && f0 < r.sampleRate / 2.0)
+    ? 2.0 * Math.PI * f0 / r.sampleRate : NaN;
+  return timeDetector.detect(samples, samples.length, omega);
+}
 
 // Nested parallel pool (threads > 1). The controller serializes dispatches
 // (one analysis in flight), so a single pending gather is enough.
@@ -42,11 +64,14 @@ function ensurePool(W) {
 
 /** Transferable snapshot of the FftResult fields the engine + the render-time
  *  .frc de-embed + the readout consume. Cloning the spectral arrays (not
- *  transferring `slot`'s) keeps the pool slot reusable next tick. */
-function postResult(r, id, t0) {
+ *  transferring `slot`'s) keeps the pool slot reusable next tick.
+ *  `timeDisc` = the time-domain discontinuity verdict for this window (the
+ *  controller mirrors Java's gate order off it — time gate before spectral). */
+function postResult(r, id, t0, timeDisc) {
   const out = {
     id,
     ms: performance.now() - t0,
+    timeDiscontinuity: !!timeDisc,
     fftSize: r.fftSize, sampleRate: r.sampleRate, frameCount: r.frameCount,
     freqResolution: r.freqResolution, windowType: r.windowType, overlap: r.overlap,
     amplitudeDbFs: r.amplitudeDbFs.slice(), phaseDeg: r.phaseDeg.slice(),
@@ -94,13 +119,16 @@ function analyzePooled(d, W, t0) {
       const part = analyzer.accumulatePartial(d.samples, 0, frameCount, sp);
       r = analyzer.finalize(part, sp, d.snrFreqMin, d.snrFreqMax, fundRefDbFs, slot);
     } catch (err) { self.postMessage({ id: d.id, error: err.message }); return; }
-    postResult(r, d.id, t0);
+    postResult(r, d.id, t0, d.timeGate && timeDiscontinuity(d.samples, r));
     return;
   }
 
   ensurePool(W);
+  // `samples` kept by reference for the post-gather time-domain gate (the sub-workers
+  // got transferred COPIES, so d.samples stays intact through the gather).
   pending = { id: d.id, t0, sp, partials: new Array(W), got: 0, want: W, error: null,
-    snrLo: d.snrFreqMin, snrHi: d.snrFreqMax, fundRefDbFs };
+    snrLo: d.snrFreqMin, snrHi: d.snrFreqMax, fundRefDbFs,
+    samples: d.samples, timeGate: !!d.timeGate };
   // Contiguous frame ranges: the first (frameCount % W) ranges carry one extra
   // frame so the union covers [0, frameCount) with no gaps/overlap.
   const base = Math.floor(frameCount / W);
@@ -137,7 +165,7 @@ function onPartial(p) {
     const merged = analyzer.mergePartials(g.partials, g.sp);
     r = analyzer.finalize(merged, g.sp, g.snrLo, g.snrHi, g.fundRefDbFs, slot);
   } catch (err) { self.postMessage({ id: g.id, error: err.message }); return; }
-  postResult(r, g.id, g.t0);
+  postResult(r, g.id, g.t0, g.timeGate && timeDiscontinuity(g.samples, r));
 }
 
 self.onmessage = (e) => {
@@ -163,5 +191,5 @@ self.onmessage = (e) => {
     self.postMessage({ id: d.id, error: err.message });
     return;
   }
-  postResult(r, d.id, t0);
+  postResult(r, d.id, t0, d.timeGate && timeDiscontinuity(d.samples, r));
 };

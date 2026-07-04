@@ -17,6 +17,7 @@ import { FftAccumulator } from '../fft/fft-accumulator.js';
 import { isDualTone } from '../generator/dds-kernel.js';
 import { OVERRUN } from './signal-buffer-reader.js';
 import { MainsCombFilter, DEFAULT_NOTCH_BANDWIDTH_HZ } from '../dsp/mains/comb-filter.js';
+import { mainsFilterOf } from '../dsp/mains/factory.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events, GenChangeCause } from '../bus/events.js';
 import { FrequencyFll } from '../dsp/fll.js';
@@ -27,6 +28,19 @@ import { FrequencyFll } from '../dsp/fll.js';
  *  before it drains straddles both signals — poisoning the fresh accumulator AND feeding
  *  the FLL a smeared, plausible-looking first measurement. */
 const OUTPUT_DRAIN_SKIP_SEC = 0.7;
+/** Guard skipped after a discontinuity re-sync, ahead of the first fresh window (Java
+ *  POST_GLITCH_SKIP_SEC): detection fires on the glitch's START, and the glitch (the
+ *  observed USB gaps run 120–160 µs) plus any settling can still be in flight at
+ *  "latest" — 5 ms of discarded samples puts the rebuild safely past its end. */
+const POST_GLITCH_SKIP_SEC = 0.005;
+/** Time-domain discontinuity gate toggle (Java FftAnalyzerWorker.USE_TIME_DISCONTINUITY):
+ *  the scope's glitch detector run on the tick's raw window — a splice/dropout breaks the
+ *  sinusoid recurrence decades above the noise floor even when its spectral footprint
+ *  slips under the frequency-domain gates (and vice versa), so the scope trigger and the
+ *  FFT rejection agree on what counts as a damaged block. The O(n) detector pass runs in
+ *  fft-worker.js (which holds the raw window); this flag arms it per dispatch and gates
+ *  the re-sync off the returned verdict. */
+const USE_TIME_DISCONTINUITY = true;
 /** FLL measurement plausibility bound, absolute floor in FFT bins (Java
  *  FLL_MAX_ERROR_BINS) — keeps the gate permissive at low target frequencies
  *  where the ppm part collapses below the spectral resolution. */
@@ -127,7 +141,14 @@ export class FftController {
     this._fftMains = null;
     this._fftMainsRate = 0;
     this._fftMainsF0 = 0;         // last tracked mains fundamental (Hz); 0 = unlocked
-    this._fftMainsTick = 0;       // re-track cadence counter
+    this._fftMainsTick = 0;       // re-track cadence counter (shared by both branches)
+    // SYNC_SUBTRACT / LMS pre-FFT time-domain filter (Java FftAnalyzerWorker
+    // mainsTimeFilter / mainsTimeFilterMode / mainsTimeFilterSampleRate): built by
+    // mainsFilterOf, recreated when the mode or sample rate changes, state PERSISTENT
+    // across windows (the absStart delta keeps the phase-locked template aligned).
+    this._fftTimeFilter = null;
+    this._fftTimeFilterMode = 'NONE';
+    this._fftTimeFilterRate = 0;
     this.onResult = null;          // (result) => void — RAW per-window result; the view applies .frc/mains/IMD
     this.onFftAutoStopped = null;  // () => void — stop-after-N tripped
     // Last DISPLAY-rebuild timestamp (Java FftAnalyzerWorker.lastShowNanos, in ms here):
@@ -513,6 +534,31 @@ export class FftController {
     this._accumEpoch++;
   }
 
+  /** Recovery for a detected in-window signal discontinuity (Java FftAnalyzerWorker
+   *  .onSignalDiscontinuity) — the same re-sync as a ring overrun: discard the glitched
+   *  window, re-anchor to "now" and rebuild, but KEEP the running average (onResync
+   *  re-anchors the κ slope / PLL — the web analog of Java's kappaSkipNext /
+   *  multiKappaSkipNext / gapRecoverPending; the de-rotation absorbs the coverage gap).
+   *  Reuses the drain-skip: the next feed consumes + discards POST_GLITCH_SKIP_SEC of
+   *  samples before rebuilding the window, so the rebuild starts past the glitch's END,
+   *  not at its detected start (max keeps a larger pending drain). Shared by the
+   *  time-domain and the spectral gates, exactly as Java. Publishes the re-sync banner
+   *  message-key (Java publishCaptureBanner — same event + i18n key). */
+  _onSignalDiscontinuity() {
+    const reader = this._fftReader;
+    if (reader) {
+      reader.seekToLatest();
+      this._absNextSample = reader.getReadPos();
+    }
+    this._drainSkipRemaining = Math.max(this._drainSkipRemaining,
+      Math.ceil(POST_GLITCH_SKIP_SEC * (this.config.inRate || 0)));
+    this.bufFilled = 0; this.bufW = 0; this._refill = this.hop;
+    this._winAbsStart = 0; this._dispatchedOnce = false;
+    this._accum.onResync();   // KEEP the collected depth; re-anchor κ slope + PLL
+    this._accumEpoch++;       // drop any in-flight window straddling the re-sync
+    MessageBus.instance().publish(Events.FFT_CAPTURE_RESYNC, 'fft.warning.discontinuity');
+  }
+
   /** Accumulate `n` contiguous samples into the analysis ring and dispatch a
    *  window every `hop` samples once the ring has filled. Identical buffer-and-
    *  analyze logic the fused engine ran per chunk, now fed from the FFT cursor. */
@@ -545,33 +591,47 @@ export class FftController {
    *  raw so the coherent average is undisturbed).  Returns the dBFS spectrum the
    *  IIR comb correction must be applied to at render time, via this._fftMainsF0.
    *
-   *  Boundary vs Java: the web only has the IIR comb DSP (no dedicated synchronous-
-   *  subtraction / LMS line canceller), so SYNC_SUBTRACT / LMS map to the closest
-   *  faithful approximation — the same comb applied in the time domain (as the
-   *  scope pane does) rather than period-locked subtraction / adaptive LMS. */
-  _applyFftMains(snap, sampleRate) {
+   *  SYNC_SUBTRACT / LMS remove the hum from the window IN PLACE before the FFT
+   *  (Java mainsTimeFilter path): both subtract only the additive hum, leaving the
+   *  test tone's amplitude and phase intact, so the coherent de-rotation / average
+   *  is undisturbed.  The filter instance is PERSISTENT (its template / taps adapt
+   *  tick to tick) and `absCapStart` — the window's absolute capture position (Java
+   *  samplesAbsStart) — keeps the period-locked state phase-aligned across the
+   *  overlapping hop-spaced windows. */
+  _applyFftMains(snap, sampleRate, absCapStart) {
     const mode = this.config.mainsSuppression || 'NONE';
     if (mode === 'NONE') { this._fftMainsF0 = 0; return; }
-    if (!this._fftMains || this._fftMainsRate !== sampleRate) {
-      this._fftMains = new MainsCombFilter(sampleRate, DEFAULT_NOTCH_BANDWIDTH_HZ);
-      this._fftMainsRate = sampleRate;
-      this._fftMainsTick = 0;
-    }
-    const comb = this._fftMains;
-    // Re-track every Nth tick only (a second of samples gives a mHz estimate).
-    if (this._fftMainsTick++ % MAINS_TRACK_TICK_INTERVAL === 0) {
-      comb.track(snap, Math.min(snap.length, sampleRate));
-    }
     if (mode === 'IIR_COMB') {
+      if (!this._fftMains || this._fftMainsRate !== sampleRate) {
+        this._fftMains = new MainsCombFilter(sampleRate, DEFAULT_NOTCH_BANDWIDTH_HZ);
+        this._fftMainsRate = sampleRate;
+        this._fftMainsTick = 0;
+      }
+      const comb = this._fftMains;
+      // Re-track every Nth tick only (a second of samples gives a mHz estimate).
+      if (this._fftMainsTick++ % MAINS_TRACK_TICK_INTERVAL === 0) {
+        comb.track(snap, Math.min(snap.length, sampleRate));
+      }
       // Plot-time spectral correction — leave the window (and the worker
       // accumulator) raw; remember the locked fundamental for _onWorkerResult.
       this._fftMainsF0 = comb.isTuned() ? comb.getMainsHz() : 0;
-    } else {
-      // SYNC_SUBTRACT / LMS → time-domain comb on the window before the FFT.
-      this._fftMainsF0 = 0;
-      comb.reset();
-      comb.processPreservingDc(snap, snap.length, 0);
+      return;
     }
+    // SYNC_SUBTRACT / LMS → true time-domain canceller pre-FFT (Java
+    // FftAnalyzerWorker.mainsTimeFilter(mode, sampleRate) via MainsFilters.of).
+    this._fftMainsF0 = 0;
+    if (!this._fftTimeFilter || this._fftTimeFilterMode !== mode
+        || this._fftTimeFilterRate !== sampleRate) {
+      this._fftTimeFilter = mainsFilterOf(mode, sampleRate, DEFAULT_NOTCH_BANDWIDTH_HZ);
+      this._fftTimeFilterMode = mode;
+      this._fftTimeFilterRate = sampleRate;
+      this._fftMainsTick = 0;
+    }
+    const mf = this._fftTimeFilter;
+    if (this._fftMainsTick++ % MAINS_TRACK_TICK_INTERVAL === 0) {
+      mf.track(snap, Math.min(snap.length, sampleRate));
+    }
+    mf.processPreservingDc(snap, snap.length, absCapStart);
   }
 
   /** The dBFS reference anchor passed into FftAnalyzer for the THD "manual
@@ -595,7 +655,7 @@ export class FftController {
     const L = this.bufLen, snap = new Float64Array(L);
     snap.set(this.buf.subarray(this.bufW));
     snap.set(this.buf.subarray(0, this.bufW), L - this.bufW);
-    this._applyFftMains(snap, this.config.inRate);   // mains suppression on the window (+ plot-time f0)
+    this._applyFftMains(snap, this.config.inRate, absCapStart);   // mains suppression on the window (+ plot-time f0)
     // Stamp this tick's absolute window start + accumulator epoch so _onWorkerResult
     // folds the result in with the right de-rotation delta and drops it if a reset
     // (epoch bump) landed while it was analyzing.
@@ -617,6 +677,10 @@ export class FftController {
       fundRefDbFs: this._fundRefDbFs(),   // THD manual-fundamental anchor (NaN = auto-detect)
       multiTone: dual, secondToneHintHz: dual ? c.tone2Hz : NaN,
       threads: this.poolSize,   // >1 → the worker fans out to its nested pool
+      // Time-domain discontinuity gate (Java: if (USE_TIME_DISCONTINUITY && accumulate)):
+      // the raw window lives in the worker after this transfer, so the worker runs the
+      // detector pass — but only when this tick will accumulate, exactly as Java.
+      timeGate: USE_TIME_DISCONTINUITY && (this.foreverMode || this.ringN >= 2),
     }, [snap.buffer]);
   }
 
@@ -664,20 +728,33 @@ export class FftController {
 
     let accumulated = false;
     if (accumulate) {
+      // Time-domain discontinuity gate FIRST (Java FftAnalyzerWorker doAnalysis: the
+      // cheap O(n) pass on the raw window runs before the spectral gate). The detector
+      // itself ran in fft-worker.js — the raw window lives there after the transfer,
+      // and the tick's own refined fundamental pins the recurrence prediction exactly,
+      // so the reject threshold rides on the noise floor at any signal frequency; NaN
+      // (no tone) self-estimates. On detect → the same re-sync + banner as the
+      // spectral gate below, and the block is dropped before it can fold in.
+      if (USE_TIME_DISCONTINUITY && r.timeDiscontinuity) {
+        console.info('Time-domain discontinuity in the tick window — re-sync');
+        this._onSignalDiscontinuity();
+        return;
+      }
       // Frequency-domain glitch / stall rejection (Java FftAnalyzerWorker): compare
       // this tick's spectrum to the running-median reference and re-sync (re-anchor
       // past the glitched overlap) BEFORE it can poison the cross-tick vector average.
       // Java runs this for ANY accumulate tick (coherent OR incoherent) — not gated on
       // the coherent flag. In the incoherent path the analyzer stores the per-window
       // magnitude in r.re (im = 0), so the same magnitude-domain gate applies. On a
-      // reject the accumulator re-anchors its κ slope / PLL (onResync) just as an overrun
-      // does, and we drop the block + bump the epoch so the discarded window can't fold in.
+      // reject the shared recovery (Java onSignalDiscontinuity) re-anchors the cursor
+      // to "now", arms the 5 ms post-glitch drain skip, re-anchors the accumulator's
+      // κ slope / PLL (onResync — the collected depth survives) and bumps the epoch so
+      // the discarded window can't fold in.
       {
         const binW = r.freqResolution;
         const peakBins = this._fundamentalBins(r);
         if (this._accum.reject(r.re, r.im, r.fftSize / 2, binW, peakBins)) {
-          this._accum.onResync();
-          this._accumEpoch++;
+          this._onSignalDiscontinuity();
           return;
         }
       }

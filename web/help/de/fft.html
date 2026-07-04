@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — FFT-Analyser</title>
+  <title>Phonalyser.web — FFT-Analyser</title>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -74,7 +74,9 @@
         <b>Shift+Rad</b> horizontal, <b>Strg+Rad</b> zoomt die Amplitudenachse und
         <b>Strg+Shift+Rad</b> die Frequenzachse — beide Zooms sind am Cursor
         verankert (die Amplitude / Frequenz unter dem Zeiger bleibt fest).
-        Dieselbe Konvention wie in jeder Phonalyser-Ansicht.</li>
+        Dieselbe Konvention wie in jeder Phonalyser.web-Ansicht.  Ziehen mit der
+        linken Maustaste zoomt direkt in eine Auswahl — siehe
+        <a href="#fft-rect-zoom">Gummiband-Zoom</a>.</li>
     <li><b>Einstellungs-Tabs.</b>  Ein Tab je Aspekt; den aktuellen Satz in der
         Leiste ablesen (sie zeigt ein Überlauf-Symbol <code>»</code>, wenn mehr
         vorhanden sind, als hineinpassen).  Zum Zeitpunkt der Erstellung:
@@ -180,13 +182,56 @@
      Zeiger; Schaltfläche gedrückt halten wiederholt die Seitensprünge, bis
      der Schieberegler den Cursor erreicht.  Zum Zoomen das Mausrad über der
      Zeichenfläche verwenden (Rad / Shift+Rad zum Verschieben,
-     Strg+Rad / Strg+Shift+Rad zum Zoomen).</p>
+     Strg+Rad / Strg+Shift+Rad zum Zoomen), oder ein
+     <a href="#fft-rect-zoom">Gummiband-Rechteck</a> aufziehen.</p>
 
   <h3 id="fft-scrollbar-mag">Vertikale Bildlaufleiste (Amplitude)</h3>
   <p>Entsprechend für die Amplitudenachse: verschiebt nur auf / ab, und der
      Schieberegler verfolgt den Amplitudenzoom.  Strg+Rad in der Zeichenfläche
      zoomt die Amplitudenachse um den Cursor, und der Schieberegler wird
      entsprechend aktualisiert.</p>
+
+  <h3 id="fft-rect-zoom">Gummiband-Zoom &amp; Strg+Z</h3>
+  <p>Linke Maustaste innerhalb des Plots gedrückt halten und ziehen: ein
+     dünnes hellgrünes Rechteck folgt dem Zeiger, und beim Loslassen zoomt
+     die Ansicht so, dass die Auswahl den Plot ausfüllt — Frequenz und
+     Amplitude gemeinsam.  Eine Auswahl kleiner als 8 Pixel in einer der
+     beiden Richtungen wird ignoriert (ein versehentlicher Klick zoomt nie),
+     und die Geste beginnt nur innerhalb der Plotfläche, nicht auf den
+     Achsenbeschriftungen.  Dieselbe Geste funktioniert im Oszilloskop und
+     in den Frequenzgang-Ansichten.</p>
+  <p><b>Strg+Z</b> schaltet schrittweise durch die vorherigen Ansichten
+     zurück, bis zu 32 Stufen tief je Ansicht.  Da mehrere Ansichten dieses
+     Tastenkürzel verstehen, wird die Ansicht, auf die Strg+Z wirkt — die
+     zuletzt angeklickte, oder andernfalls die unter dem Zeiger — durch
+     einen dünnen hellgrünen Rand um ihre Kante markiert.  Solange ein
+     Textfeld den Fokus hat, bleibt Strg+Z beim Textfeld (dessen eigenes
+     Rückgängig); nur das reine Strg+Z wird erkannt, keine weiteren
+     Modifikatoren.</p>
+
+  <h3 id="fft-resync-banner">Neusynchronisations-Banner</h3>
+  <p>Während der Mittelung wird jeder Aufnahmeblock geprüft, bevor er in
+     den Mittelwert eingehen darf.  Zwei unabhängige Prüfungen laufen auf
+     jedem Block: eine <b>Zeitbereichs-Unstetigkeitsprüfung</b> auf den
+     Roh-Samples — derselbe Detektor, den der Glitch-Trigger des
+     Oszilloskops verwendet, sodass beide Instrumente darin übereinstimmen,
+     was als beschädigter Block gilt — und ein Satz <b>spektraler Gates</b>,
+     die das Spektrum des Blocks mit der Statistik der bereits akzeptierten
+     Blöcke vergleichen.  Ein Treffer von einem der beiden verwirft das
+     betroffene Fenster und synchronisiert den Analyser neu auf das
+     Live-Signal: das Banner <b>⚠ Signal-Unstetigkeit — neu
+     synchronisiert</b> erscheint im Bereich, und das neu aufgebaute
+     Fenster überspringt die ersten 5&nbsp;ms nach der Neusynchronisation,
+     sodass es sicher hinter dem Ende der Störung beginnt.  Der
+     akkumulierte Mittelwert bleibt erhalten — die Mittelung läuft kohärent
+     weiter, nur der beschädigte Block geht verloren.  (Ein Pufferüberlauf
+     — der Analyser fällt hinter die Aufnahme zurück — synchronisiert auf
+     dieselbe Weise neu, setzt aber den Mittelwert zurück.)  Wie die
+     Detektoren arbeiten, ist unter
+     <a href="theory/fft.html#rejection">Funktionsprinzip ▸ schlechte
+     Blöcke aus dem Mittelwert heraushalten</a> beschrieben.  Häufige
+     Unstetigkeits-Banner bedeuten, dass die Quelle oder die Aufnahme unter
+     Last Störungen aufweist.</p>
 
   <h2 id="fft-thd-table">THD-Infotabelle</h2>
   <p>Kompakter Overlay oben links auf der Zeichenfläche (oder im externen

@@ -114,6 +114,12 @@ export const Events = Object.freeze({
    *  trigger Start toggle can pop back out. No payload. */
   SCOPE_SINGLE_DISARMED: 'scope.single.disarmed',
 
+  /** Notification — a running live scope capture was stopped programmatically (an open-signal
+   *  load swapping the buffer out), so the pane can pop its Record toggle back out. No payload.
+   *  (Java: published by ScopeController.openSignalFile; subscriber ScopePane. The web pane
+   *  syncs its own LED inline in stopCaptureForFileLoad and publishes this for parity.) */
+  SCOPE_RECORDING_STOPPED: 'scope.recording.stopped',
+
   /** Notification — the FreqResp view's visible freq/magnitude pan window changed. No payload —
    *  subscribers read Preferences. Mirror of FFT_RANGE_CHANGED for the Frequency Response pane. */
   FREQRESP_RANGE_CHANGED: 'freqResp.range.changed',
@@ -148,6 +154,14 @@ export const Events = Object.freeze({
    *  FFT and Frequency-Response calibration tabs each reload any loaded row referencing the same
    *  file, so a freshly-saved calibration takes effect immediately. */
   CALIBRATION_FILE_SAVED: 'calibration.file.saved',
+
+  /** Notification — the live audio device failed unexpectedly: getUserMedia / device-open rejected,
+   *  or a running AudioContext went to 'interrupted'/'closed' or fired onerror OUTSIDE our own
+   *  stop (typically the selected input/output device is held exclusively by another application).
+   *  Payload: { direction: 'input'|'output'|null, detail: string }. Subscriber: the shell, which
+   *  shows a user-visible alert modal telling the user which direction failed and what to do. No
+   *  Java counterpart — the desktop backend surfaces the same condition through its own error path. */
+  AUDIO_DEVICE_ERROR: 'audio.device.error',
 });
 
 /**

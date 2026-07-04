@@ -12,6 +12,33 @@
 // interpolation or band-limited sinc reconstruction (Lanczos.lanczos at scale 1).
 
 import { lanczos } from '../dsp/lanczos.js';
+import { TimeDiscontinuityDetector } from '../dsp/time-discontinuity.js';
+
+/** The shared time-domain discontinuity detector (pure math, stateless) —
+ *  the same class the FFT worker's rejection gate uses, so the scope
+ *  trigger and the FFT agree on what counts as a damaged block. */
+const GLITCH_DETECTOR = new TimeDiscontinuityDetector();
+
+/**
+ * Finds the rightmost waveform discontinuity in `data[from .. to)` — see
+ * TimeDiscontinuityDetector.findDiscontinuity (js/dsp/time-discontinuity.js)
+ * for the detection model (sinusoid-recurrence prediction error, burst
+ * merging, anchoring). `anchorStart`: true → the last clean sample before
+ * the glitch, false → the first settled sample after it. `omega` =
+ * 2π·fundamental/sampleRate when the fundamental is known, NaN to
+ * self-estimate. Returns -1.0 when nothing qualifies.
+ *
+ * @param {Float32Array|Float64Array|number[]} data sample buffer
+ * @param {number} from    inclusive search start
+ * @param {number} to      exclusive search end
+ * @param {boolean} anchorStart true → last clean sample before the glitch
+ * @param {number} mergeSamples bursts closer than this merge into one glitch
+ * @param {number} omega   known fundamental as 2π·f/sampleRate, or NaN
+ * @returns {number} glitch anchor index, or -1.0 if none found
+ */
+export function findGlitch(data, from, to, anchorStart, mergeSamples, omega) {
+  return GLITCH_DETECTOR.findDiscontinuity(data, from, to, anchorStart, mergeSamples, omega);
+}
 
 /**
  * Linear interpolation of the `level`-crossing between samples at indices

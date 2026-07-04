@@ -39,6 +39,8 @@ import { GeneratorController } from './generator-controller.js';
 import { ScopeController } from './scope-controller.js';
 import { FftController } from './fft-controller.js';
 import { scanDevices as scanAudioDevices } from './devices.js';
+import { MessageBus } from '../bus/message-bus.js';
+import { Events } from '../bus/events.js';
 
 const HARMONIC_COUNT = 9;                  // H2..H10 default (overridable via config.harmonicCount)
 /** DAC full-scale PEAK voltage (= FS-sine RMS × √2). Default when no preferences anchor. */
@@ -99,6 +101,19 @@ export class AudioEngine {
     // sweep deconvolves both ADC channels against the same reference (Java FreqRespAnalyzer's
     // single stereo pass: rec.left() / rec.right()).
     this._recChunks = null;
+
+    // While a FreqResp / Tune-notch MEASUREMENT owns the shared capture, the scope + FFT
+    // consumers must NOT also process the sweep batches. They publish
+    // FREQRESP_MEASUREMENT_STARTED to stop themselves, but a stale record flag (a
+    // shell/controller desync) or a takeover that ends up riding an already-open capture
+    // would otherwise leak the sweep into the FFT accumulator — the "FFT collected N
+    // averages during a sweep" bug. This flag gates the consumer fan-out in _dispatchBatch
+    // for the measurement's duration; the measurement's OWN tap (_recChunks) and the
+    // Tune-notch wizard's own reader stay authoritative and are unaffected.
+    this._measurementActive = false;
+    const bus = MessageBus.instance();
+    bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, () => { this._measurementActive = true; });
+    bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => { this._measurementActive = false; });
   }
 
   /** True when the generator is producing a signal OR the shared capture device
@@ -106,6 +121,18 @@ export class AudioEngine {
    *  ORed with the generator-running state; freqresp/predistortion gate on it. */
   get running() {
     return this._genOn || this._capture.refCount > 0;
+  }
+
+  /** True when BOTH the input and output devices are genuinely free — no consumer holds the
+   *  shared capture, the input AudioContext has fully closed, the generator is idle and no
+   *  output context (tone / file / sweep) is still open. The measurement idle-wait
+   *  (worker-idle.js) polls THIS rather than {@link #running}: stopGenerator()/release() flip
+   *  their flags SYNCHRONOUSLY but the ctx.close() that actually releases the OS device resolves
+   *  tens of ms later, so a flag-only wait let the takeover reopen the device mid-close →
+   *  NotReadableError (a self-contention). Composed from the two controllers' context state. */
+  get deviceIdle() {
+    return this._capture.refCount === 0 && !this._capture.contextOpen
+      && !this._gen.running && !this._gen.filePlaying && !this._gen.outputContextOpen;
   }
 
   /** Forwards a control message to the running DDS generator worklet (freqresp
@@ -128,6 +155,17 @@ export class AudioEngine {
     }
   }
 
+  /** Drops the samples accumulated so far in the in-flight loopback recording, keeping the
+   *  capture open. The FreqResp sweep calls this AFTER the cold-device warmup so the
+   *  recorded (and live-metered) window starts clean at the sweep — the warmup silence is
+   *  discarded. Without it that silence sat at the front of the recording, shifting the
+   *  busy meter's time axis and pushing the sweep's end past the meter's totalSec span
+   *  (the progress trace started too early and never reached the right edge). No-op when no
+   *  recording is in flight. */
+  resetCaptureRecording() {
+    if (this._recChunks) this._recChunks = { l: [], r: [] };
+  }
+
   /** Ends a loopback recording and returns BOTH concatenated ADC channels
    *  ({left, right}: Float64Array) — mirroring StereoSamples from the Java analyzer's
    *  single stereo capture pass. Releases the recording's own capture reference if it
@@ -147,6 +185,43 @@ export class AudioEngine {
     const right = concat(rec.r);
     if (this._recOwnsCapture) { this._recOwnsCapture = false; await this._capture.release(); }
     return { left, right };
+  }
+
+  /** Number of frames accumulated so far in the in-flight loopback recording (0 when
+   *  not recording). Lets the freqresp busy meter pump the level trace LIVE as the sweep
+   *  collects, mirroring the desktop's per-block StereoCaptureProgress cadence
+   *  (CaptureWithGenerator.runStereo) — the web records in one shot but the chunks grow
+   *  batch-by-batch, so a poller can read the newly-arrived tail as it lands. */
+  recordingLength() {
+    if (!this._recChunks) return 0;
+    let n = 0;
+    for (const c of this._recChunks.r) n += c.length;
+    return n;
+  }
+
+  /** Linear RMS of max(L,R) over the recorded window [fromFrame, fromFrame+count) of the
+   *  in-flight loopback recording — the per-block level the desktop feeds its live meter
+   *  (CaptureWithGenerator emits Math.max(rmsL, rmsR)). Returns 0 when the window is not
+   *  yet fully captured or nothing is recording. Walks the growing chunk lists without
+   *  concatenating, so it stays cheap when polled every few ms. */
+  recordingRms(fromFrame, count) {
+    if (!this._recChunks || count <= 0) return 0;
+    let sumL = 0.0, sumR = 0.0, n = 0, pos = 0;
+    const L = this._recChunks.l, R = this._recChunks.r;
+    for (let ci = 0; ci < R.length; ci++) {
+      const rc = R[ci], lc = L[ci], len = rc.length;
+      if (pos + len <= fromFrame) { pos += len; continue; }
+      const start = Math.max(0, fromFrame - pos);
+      const end = Math.min(len, fromFrame + count - pos);
+      for (let j = start; j < end; j++) {
+        const l = lc[j], r = rc[j];
+        sumL += l * l; sumR += r * r; n++;
+      }
+      pos += len;
+      if (pos >= fromFrame + count) break;
+    }
+    if (n === 0) return 0;
+    return Math.max(Math.sqrt(sumL / n), Math.sqrt(sumR / n));
   }
 
   /** FFT averages accumulated since the last reset (predistortion host). */
@@ -215,6 +290,8 @@ export class AudioEngine {
   // -------------------------------------------------------------------------
 
   async playFileBuffer(channels, sampleRate, loop) { return this._gen.playFileBuffer(channels, sampleRate, loop); }
+  async openSweepContext(requestedRate) { return this._gen.openSweepContext(requestedRate); }
+  async playSweepBuffer(buf, sampleRate) { return this._gen.playSweepBuffer(buf, sampleRate); }
   setFilePlayLoop(loop) { this._gen.setFilePlayLoop(loop); }
   async stopFile() { return this._gen.stopFile(); }
   get filePlaying() { return this._gen.filePlaying; }
@@ -259,6 +336,10 @@ export class AudioEngine {
       this._recChunks.l.push(Float64Array.from(d.l.subarray(0, d.n)));
       this._recChunks.r.push(Float64Array.from(d.r.subarray(0, d.n)));
     }
+    // A measurement (main FreqResp loopback or the Tune-notch wizard) owns the capture
+    // exclusively — do NOT also drive the scope / FFT consumers off the sweep batches,
+    // even if a consumer's record flag is stale. The recording tap above still runs.
+    if (this._measurementActive) return;
     if (this._scope.recording) this._scope.feedScope();
     if (this._fft.recording && !this._fft.pausedByStopN) this._fft.feedFft();
   }

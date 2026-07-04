@@ -11,21 +11,27 @@
 // on the reconstructed |F1-F2| beat envelope and measures with the time-domain
 // fields suppressed. Driven per capture chunk, independent of the FFT.
 
-import { find } from '../scope/scope-trigger.js';
+import { find, findGlitch } from '../scope/scope-trigger.js';
+import { TimeDiscontinuityDetector } from '../dsp/time-discontinuity.js';
 import { lanczos, LANCZOS_PADDING, MAX_LANCZOS_DOWNSAMPLE } from '../dsp/lanczos.js';
 import { compute, withFrequency, withoutTimes, refineFrequencyAround, reconstructBeatSignal,
          MeasurementStats, WindowedSignalAccumulator, forVolts, forTime, forFreq, forPct }
   from '../scope/signal-measurements.js';
 import { FreqScanClient } from '../scope/freq-scan.js';
 import { LowPassFilter, MedianFilter } from '../dsp/lpf.js';
-import { MainsCombFilter } from '../dsp/mains/comb-filter.js';
+import { mainsFilterOf } from '../dsp/mains/factory.js';
 // Pan/zoom engine + the pure nav-math helpers + the trigger-slider enum — the single
 // home for every horizontal/vertical move/zoom transform (Java ScopeNav / ScopeFormat /
 // OscSliderId, OscTriggerMode/Edge). The wheel + on-canvas-slider handlers delegate here
 // instead of re-deriving the math inline.
 import { ScopeNav, DIVISIONS_X as NAV_DIVISIONS_X, DIVISIONS_Y as NAV_DIVISIONS_Y } from '../scope/scope-nav.js';
 import { clamp01 as navClamp01 } from '../scope/scope-format.js';
-import { OscSliderId, TriggerMode, TriggerEdge } from '../scope/scope-enums.js';
+import { OscSliderId, TriggerMode, TriggerEdge, TriggerType } from '../scope/scope-enums.js';
+// Drag-select rectangular zoom + Ctrl+Z undo (Java AbstractMeasurementView's
+// installRectZoom base machinery); the scope supplies the time/volts mappings +
+// trigger preservation (Java ScopeView zoom overrides) and forwards its own
+// pointer funnel (hookMouse = false, like Java's installRectZoom(this, false)).
+import { RectZoom } from './rect-zoom.js';
 
 // Grid divisions (the ½-div wheel step + the V/div ladder math now live in ScopeNav).
 const DIVISIONS_X = NAV_DIVISIONS_X;
@@ -39,6 +45,11 @@ const SCOPE_HF_LPF_ORDER = 8;        // LowPassFilter order for LpfMode.HZ_80
 // ScopeView.RECON_REFINE_STEP).
 const RECON_REFINE_STEP = 0.1;
 const MAINS_NOTCH_BW_HZ = 2.0;       // −3 dB notch width for the scope mains comb
+// Half-width (Hz) of the raw-signal band used to re-pin the comb-located tone's
+// frequency (Java ScopeMeasurementWorker.FREQ_REFINE_HALF_HZ): wide enough to
+// cover the comb's frequency pull, far narrower than the ≥ ~50 Hz spacing of
+// mains harmonics so none competes.
+const FREQ_REFINE_HALF_HZ = 2.0;
 // Graticule cross-hair (Java CrossHairSpec): 5 sub-ticks per division, ±4 px arms.
 const TICKS_PER_DIV = 5;
 const TICK_HALF_LEN = 4;
@@ -48,6 +59,10 @@ const TRACE_EDGE_OVERHANG_PX = 4;
 // Measurement-table rebuild throttle (Java READOUT_THROTTLE_NS = 200 ms).
 const READOUT_THROTTLE_MS = 200;
 const NS_PER_MS = 1e6;
+// Minimum glitch-mode collection time before the cumulative rate is shown — below
+// this, count ÷ elapsed is dominated by start-up jitter, so read 0 (Java
+// ScopeView.GLITCH_RATE_MIN_SECONDS).
+const GLITCH_RATE_MIN_SECONDS = 1.0;
 
 // On-canvas drag-handle geometry (Java ScopeView SLIDER_TRI_LONG / SLIDER_TRI_HALF /
 // SLIDER_GRAB_HALF): a triangle that points into the grid from the edge (now drawn as
@@ -56,6 +71,13 @@ const NS_PER_MS = 1e6;
 // perpendicular direction. These px values still define the canvas-space hit-boxes.
 const SLIDER_TRI_LONG = 10;    // triangle long axis (into the grid)
 const SLIDER_GRAB_HALF = 9;    // hit-zone half-thickness perpendicular to the edge
+
+// Toolbar-field floors (Java ScopeTabControl.T_PER_DIV_MIN / V_PER_DIV_MIN; the
+// web NumericStepModels in app.js initStepFields carry the same min values) —
+// the rect zoom clamps its t/div + V/div writes to the same floors, or the
+// fields' re-sync would desync pref and display.
+const T_PER_DIV_MIN = 1e-6;
+const V_PER_DIV_MIN = 1e-9;
 
 /** Packs an int RGB (0xRRGGBB, as the channel-colour prefs store it) into a
  *  CSS '#rrggbb' string (Java color() role lookup → hex). */
@@ -124,14 +146,19 @@ export class ScopeView {
     // Per-channel HF-cleanup + mains filters, lazily (re)built for the live
     // sample rate; reset/applied each render over each channel's copied buffer.
     // Keyed by channel name ('Left'/'Right') so L and R don't clobber each
-    // other's filter state / scratch when both are drawn.
+    // other's filter state / scratch when both are drawn. The measurement pass
+    // lazily adds its own 'LeftMeas'/'RightMeas' bags (Java's worker owns its
+    // own filters, and the adaptive mains cancellers are stateful).
     this._chanFilt = {
       Left:  { lpf: null, lpfMode: null, lpfRate: 0, mains: null, mainsMode: null, mainsRate: 0, trackT0: 0, buf: null },
       Right: { lpf: null, lpfMode: null, lpfRate: 0, mains: null, mainsMode: null, mainsRate: 0, trackT0: 0, buf: null },
     };
     // File-load mode (Java ScopeView.isFileMode): a static loaded signal free-runs
     // with no trigger search and no trigger overlay. Set by the shell on load.
-    this.fileMode = false;
+    // Exposed through the fileMode accessor below (Java setFileMode), which clears
+    // the rect-zoom undo history on every mode switch AND on a new file loading
+    // over an old one — the stacked mementos belong to the previous timeline.
+    this._fileMode = false;
     // Loaded-file name to stamp STATICALLY on the canvas — set ONLY on the
     // offscreen screenshot clone (Java ScopeView.drawFilePath shows the loaded
     // filename top-right in the captured image). null on the live view, whose
@@ -166,6 +193,19 @@ export class ScopeView {
     // ~60 paint-loop rate. NOT info.scopeFps, which counts every paint iteration.
     this._captureRate = 0;
     this._lastNewFrameMs = 0;
+    // Glitch-mode capture-rate state (Java glitchCountStartNanos / glitchCount /
+    // rateWasGlitchMode): rare events make a per-interval EMA useless, so the readout
+    // is total caught ÷ collection time. Counting restarts when glitch mode is entered,
+    // a new record begins (restartGlitchRate) or the trigger source changes
+    // (resetTriggerHold).
+    this._glitchCountStartMs = 0;
+    this._glitchCount = 0;
+    this._rateWasGlitchMode = false;
+    // Canvas X to anchor the next held-frame t/div change around, or -1 to anchor on
+    // the screen centre (Java ScopeView.heldZoomAnchorX): the wheel-zoom sets it
+    // (cursor); a t/div FIELD change leaves it -1 so the trace stays centred instead
+    // of jumping to the stale cursor position. Consumed by _drawHeldFrame.
+    this._heldZoomAnchorX = -1;
     // On-canvas drag-handle hit-boxes (Java ScopeView offsetSliderBounds /
     // triggerLevelBounds / triggerPosBounds) — refreshed every render in
     // _drawSliders, consumed by the mouse handlers. {x,y,w,h} in canvas px.
@@ -182,6 +222,17 @@ export class ScopeView {
     // useful parent — its overlay just stays null and nothing is drawn (the clone
     // carries the live layer's already-positioned labels).
     this._overlay = this._buildOverlayLayer(canvas);
+    // Drag-select zoom + Ctrl+Z undo (Java ScopeView: installRectZoom(this, false)
+    // — the rect zoom feeds off the pointer funnel below, so hookMouse stays off).
+    this._rectZoom = canvas ? new RectZoom(canvas, {
+      hookMouse: false,
+      captureState: () => this._captureZoomState(),
+      applyState: (s) => this._applyZoomState(s),
+      stateForRect: (sel) => this._zoomStateForRect(sel),
+      zoomableArea: () => this._zoomableArea(),
+      isBlockedAt: (x, y) => this._isRectZoomBlockedAt(x, y),
+      repaintOverlay: () => this._repaintZoomOverlay(),
+    }) : null;
     if (canvas) {
       canvas.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
       canvas.addEventListener('mousedown', (e) => this._onSliderMouseDown(e));
@@ -192,6 +243,17 @@ export class ScopeView {
       window.addEventListener('mousemove', (e) => this._onSliderMouseMove(e));
       window.addEventListener('mouseup', () => this._onSliderMouseUp());
     }
+  }
+
+  /** File-load mode accessor (Java ScopeView.setFileMode): a mode switch
+   *  invalidates every stacked zoom state — live mementos are trigger-relative
+   *  seconds, file mementos absolute frames. A true→true set is a NEW file
+   *  loading over the old one: its mementos hold frames of the previous file's
+   *  timeline, equally meaningless. */
+  get fileMode() { return this._fileMode; }
+  set fileMode(v) {
+    if ((v || this._fileMode) && this._rectZoom) this._rectZoom.clearHistory();
+    this._fileMode = !!v;
   }
 
   /** Builds the DOM overlay layer that carries the FIXED-size text (cap/s readout
@@ -348,6 +410,34 @@ export class ScopeView {
     return this._singleArmed;
   }
 
+  /** Drops the held trigger anchor and captured frame (Java ScopeView.resetTriggerHold)
+   *  — called when the trigger SOURCE changes (type / edge / channel) or the generated
+   *  signal changes: the old anchor belongs to the old trigger/signal and would keep
+   *  re-rendering a stale trace. NORMAL / SINGLE then stay blank until the new trigger
+   *  fires. Also restarts the glitch-mode cap/s collection — events caught under the
+   *  old trigger/signal (e.g. the generator transition itself, which IS a
+   *  discontinuity) don't belong in the new count. */
+  resetTriggerHold() {
+    this._singleHeld = false;
+    this._normalFrame = null;
+    this._frame = null;
+    this._glitchCountStartMs = 0;
+  }
+
+  /** Restarts the glitch-mode cap/s collection (Java rateSawFrozen: a stop/restart
+   *  boundary must not fold the stopped gap into the cumulative rate). Called by the
+   *  pane on record start. */
+  restartGlitchRate() {
+    this._glitchCountStartMs = 0;
+  }
+
+  /** The wheel-zoom anchors the next held-frame t/div change around the cursor; a
+   *  t/div field change leaves it unset so the trace stays centred (Java
+   *  ScopeView.setHeldZoomAnchorForNextScale / heldZoomAnchorX). */
+  setHeldZoomAnchorForNextScale(canvasX) {
+    this._heldZoomAnchorX = canvasX;
+  }
+
   /** The pan/zoom engine with its V/div ladder kept in sync with this.vDivSeries (set
    *  by the shell after construction). The engine reads the ladder live, so refreshing
    *  the field here is enough — no rebuild. */
@@ -366,7 +456,13 @@ export class ScopeView {
     const rect = this.cv.getBoundingClientRect();
     const my = e.clientY - rect.top, mx = e.clientX - rect.left;
     const H = this.cv.clientHeight || 240, W = this.cv.clientWidth || 1200;
-    if (e.ctrlKey && e.shiftKey) this._zoomTimeAround(-dir, mx, W);
+    if (e.ctrlKey && e.shiftKey) {
+      // Anchor a held-frame re-centre on the cursor (Java ScopePane wheel handler:
+      // view.setHeldZoomAnchorForNextScale(e.x) when frozen); a t/div FIELD change
+      // leaves the anchor unset so the held trace stays centred.
+      if (this._singleHeld || this._normalFrame) this.setHeldZoomAnchorForNextScale(mx);
+      this._zoomTimeAround(-dir, mx, W);
+    }
     else if (e.ctrlKey) this._zoomVoltsAround(-dir, my, H);
     else if (e.shiftKey) this._panHorizontal(dir);
     else this._panVertical(dir);
@@ -572,7 +668,11 @@ export class ScopeView {
     // measured. Blank-return when neither channel is enabled (Java line 1940).
     const showL = !p || p.oscLeftChannelEnabled.get();
     const showR = !p || p.oscRightChannelEnabled.get();
-    if (p && !showL && !showR) { this.latest = null; this.measurementRows = null; this._clearOverlayLabels(); return; }
+    if (p && !showL && !showR) {
+      this.latest = null; this.measurementRows = null; this._clearOverlayLabels();
+      if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);   // Java paints the zoom layer on every paint
+      return;
+    }
 
     const searchFrom = LANCZOS_PADDING + 1;
     const searchTo = available - LANCZOS_PADDING;
@@ -584,7 +684,8 @@ export class ScopeView {
       const lc = name;   // 'Left' | 'Right'
       const colorInt = p ? p['osc' + lc + 'ChannelColor'].get()
                          : (lc === 'Left' ? 0x00d7ff : 0xffd700);
-      const procBuf = this._applyChannelFilters(raw, available, sampleRate, lc);
+      const procBuf = this._applyChannelFilters(raw, available, sampleRate, lc,
+        undefined, info.absStart || 0);
       let sum = 0;
       for (let i = searchFrom; i < searchTo; i++) sum += procBuf[i];
       const dcMean = sum / Math.max(1, searchTo - searchFrom);
@@ -664,7 +765,11 @@ export class ScopeView {
     // max(8,…)/min(…,available−2·PADDING) clamp — windowSamples is the literal
     // display window; the dispCount clamp against `available` happens per branch.
     const windowSamples = Math.round(tDiv * DIVISIONS_X * sampleRate);
-    if (windowSamples < 2) { this.latest = null; this.measurementRows = null; return; }
+    if (windowSamples < 2) {
+      this.latest = null; this.measurementRows = null;
+      if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
+      return;
+    }
 
     // Trigger level — Java: levelFrac=oscTriggerLevelFrac, the screen-Y of the
     // dashed level line on the TRIGGER channel; the normalised sample at that Y
@@ -672,10 +777,16 @@ export class ScopeView {
     // channel: the trace has the DC removed, so add the bias back into the
     // threshold. Dual-tone triggers on the band-limited beat envelope.
     const rising = dual ? true : (p ? p.oscTriggerEdge.get() !== TriggerEdge.FALL : true);
-    const levelFrac = p ? clamp01(p.oscTriggerLevelFrac.get()) : 0.5;
+    // The trigger THRESHOLD uses the RAW (virtual-capable) level fraction (Java
+    // drawWaveforms reads getOscTriggerLevelFrac unclamped): a rect zoom that
+    // excludes the trigger voltage parks the fraction outside [0,1], and the
+    // trigger must keep firing at the true (possibly off-screen) threshold. Only
+    // the DRAWN slider position clamps to the canvas edge.
+    const levelFracRaw = p ? p.oscTriggerLevelFrac.get() : 0.5;
+    const levelFrac = clamp01(levelFracRaw);
     const tVDiv = trigDesc.vDiv, tOffsetFrac = trigDesc.offsetFrac;
     const tAc = trigDesc.ac, tDcOff = trigDesc.dcOff;
-    const baseLevel = (tOffsetFrac - levelFrac) * tVDiv * DIVISIONS_Y / peakV;
+    const baseLevel = (tOffsetFrac - levelFracRaw) * tVDiv * DIVISIONS_Y / peakV;
     const level = dual ? 0.0 : baseLevel + (tAc ? tDcOff : 0);
     const hysteresis = (p && p.oscTriggerHysteresisEnabled.get())
       ? p.oscTriggerHysteresisDiv.get() * tVDiv / peakV : 0.0;
@@ -695,9 +806,28 @@ export class ScopeView {
     const rightHalf = Math.ceil(windowSamples * (1 - posFrac));
     const trigFrom = Math.max(1, LANCZOS_PADDING + leftHalf + 1);
     const trigTo = available - rightHalf - LANCZOS_PADDING;
-    const foundFrac = (this.fileMode || !(trigTo > trigFrom)) ? -1
-      : find(trigBuf, available, trigFrom, trigTo, level, rising,
-             trigDesc.sinc && !dual, hysteresis, minSpacing);
+    // GLITCH type: discontinuity trigger — fires where the signal breaks the
+    // sinusoid-recurrence prediction (level steps AND slope splices, anywhere on the
+    // wave, regardless of direction). ↑ anchors the display on the glitch's start,
+    // ↓ on its end. Level / hysteresis / sinc refine don't apply. The measured
+    // frequency pins the recurrence exactly; it applies only when the measurement
+    // channel IS the trigger channel — otherwise the detector self-estimates from the
+    // window. (Java drawWaveforms GLITCH branch → ScopeTrigger.findGlitch.)
+    const glitchMode = !!p && p.oscTriggerType.get() === TriggerType.GLITCH;
+    let foundFrac = -1;
+    if (!this.fileMode && trigTo > trigFrom) {
+      if (glitchMode) {
+        const m = this.latest;
+        const measHz = (m && p.oscMeasurementChannel.get() === trigCh) ? m.frequency : NaN;
+        const omega = (measHz > 0 && measHz < sampleRate / 2.0)
+          ? 2.0 * Math.PI * measHz / sampleRate : NaN;
+        foundFrac = findGlitch(trigBuf, trigFrom, trigTo, rising,
+          Math.round(sampleRate * TimeDiscontinuityDetector.MERGE_SECONDS), omega);
+      } else {
+        foundFrac = find(trigBuf, available, trigFrom, trigTo, level, rising,
+          trigDesc.sinc && !dual, hysteresis, minSpacing);
+      }
+    }
     const foundTrigger = foundFrac >= 0;
 
     // Java navigation/file-mode bypass (drawWaveforms ~2052-2065): a static
@@ -736,9 +866,11 @@ export class ScopeView {
       dispCount = Math.max(0, Math.min(windowSamples, (available - rightPad) - startSample));
       trig = startSample + posFrac * windowSamples;   // for the measurement span below
       // Stash the window geometry so the wheel handlers (file-mode horizontal pan +
-      // t/div zoom-around-cursor) can re-anchor the back-offset against the loaded
-      // buffer without re-deriving it (C34).
-      this._fileGeom = { available, windowSamples, startSample, back };
+      // t/div zoom-around-cursor) and the rect zoom can re-anchor the back-offset
+      // against the loaded buffer without re-deriving it (C34). dispCount is the
+      // span actually mapped across the canvas (short files clamp it), so the rect
+      // zoom's pixel↔frame mapping matches the drawn trace exactly.
+      this._fileGeom = { available, windowSamples, startSample, back, dispCount };
     } else if (mode === TriggerMode.SINGLE) {
       if (this._singleArmed && foundTrigger) {
         trig = foundFrac; capture = true;
@@ -761,7 +893,11 @@ export class ScopeView {
         // Armed but no frame ever rendered: nothing to draw, but do NOT blank the
         // measured state — preserve this.latest / this.measurementRows so autoSetup
         // and the DOM table keep working while we wait for the first trigger.
+        // The cap/s readout stays visible on the blank pane (Java paintCanvas draws
+        // it every paint) — in glitch mode it IS the glitches/s counter.
         this._updateCaptureRate(false);
+        this._drawCaptureRate();
+        if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
         return;
       }
     } else if (mode === TriggerMode.NORMAL) {
@@ -769,8 +905,13 @@ export class ScopeView {
       else if (this._normalFrame) { this._drawHeldFrame(g, W, H); return; }   // hold last
       // Never triggered AND no seeded frame → blank the TRACE only. Do NOT wipe
       // the measured state: _measureLiveWindow already refreshed this.latest /
-      // measurementRows this paint, and the table must keep updating (C24).
-      else { this._updateCaptureRate(false); return; }
+      // measurementRows this paint, and the table must keep updating (C24). The
+      // cap/s readout stays visible on the blank pane (whole-record visibility).
+      else {
+        this._updateCaptureRate(false); this._drawCaptureRate();
+        if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
+        return;
+      }
     } else {
       // AUTO: anchor on the trigger when found (centred via posFrac); otherwise
       // free-run on the latest samples — Java step 3 right-edge-anchors (NOT
@@ -880,6 +1021,10 @@ export class ScopeView {
     if (capture) {
       if (mode === TriggerMode.SINGLE) this._singleHeld = true; else this._normalFrame = this._frame;
     }
+
+    // Rect-zoom rubber band + focused-view accent border — LAST (Java paintCanvas
+    // ends with drawRectZoomOverlay).
+    if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
 
     // expose the latest (measurement-channel) measurement so the shell can fill
     // the scope tiles / autoSetup / calibrate.
@@ -1267,12 +1412,12 @@ export class ScopeView {
     else if (!this.fileMode && this._inBounds(this._triggerLevelBounds, x, y)) this._draggingSlider = OscSliderId.TRIGGER_LEVEL;
     else if (!this.fileMode && this._inBounds(this._triggerPosBounds, x, y)) {
       this._draggingSlider = OscSliderId.TRIGGER_POSITION;
-      // Capture the start point so the handle moves by the dragged DELTA (Java
-      // triggerPosDragStartX / triggerPosDragStartFrac): a handle pinned at the edge
-      // (virtual offset) then tracks continuously back into view instead of jumping.
-      this._triggerPosDragStartX = x;
-      this._triggerPosDragStartFrac = this.prefs.oscTriggerPositionFrac.get();
-    } else return;
+    } else {
+      // No slider grabbed: focus the view and possibly start a rect-zoom
+      // selection drag (Java ScopeView.pointerDown → rectZoomPointerDown).
+      if (this._rectZoom && this._rectZoom.pointerDown(x, y)) e.preventDefault();
+      return;
+    }
     e.preventDefault();
     this._updateSliderFromMouse(x, y);
   }
@@ -1287,6 +1432,12 @@ export class ScopeView {
       return;
     }
     const { x, y } = this._mouseCanvasXY(e);
+    if (this._rectZoom) {
+      this._rectZoom.pointerMove(x, y);   // rubber-band update (no-op unless dragging)
+      // Mid-selection the hover hit-tests stay quiet — no cursor flips or
+      // tooltips while the rubber band crosses sliders (Java pointerMove).
+      if (this._rectZoom.isDragActive()) return;
+    }
     let cursor = '';
     let tip = '';
     if (this._inBounds(this._offsetBounds, x, y)) {
@@ -1306,8 +1457,10 @@ export class ScopeView {
     if (this.cv.title !== tip) this.cv.title = tip;
   }
 
-  /** mouseup: end the drag and persist (Java mouseUp → Preferences.save()). */
+  /** mouseup: commit a rect-zoom selection, else end the slider drag and persist
+   *  (Java ScopeView.pointerUp: rectZoomPointerUp() first, then the slider). */
   _onSliderMouseUp() {
+    if (this._rectZoom && this._rectZoom.pointerUp()) return;
     if (!this._draggingSlider) return;
     this._draggingSlider = null;
     if (this.prefs && this.prefs.save) this.prefs.save();
@@ -1336,8 +1489,8 @@ export class ScopeView {
 
   /** Writes the grabbed slider's pref from the canvas-space mouse position (Java
    *  updateSliderFromMouse): OFFSET ← my/H on the measurement channel and TRIGGER_LEVEL
-   *  ← my/H are clamped to [0,1]; TRIGGER_POSITION is a DELTA-drag (start frac + Δx/W),
-   *  UNCLAMPED so a virtual (off-screen) offset tracks back into view without jumping. */
+   *  ← my/H are clamped to [0,1]; TRIGGER_POSITION is absolute mx/W, clamped to [0,1]
+   *  (grabbing a virtual, edge-pinned handle recaptures it to the cursor). */
   _updateSliderFromMouse(mx, my) {
     const W = this.cv.clientWidth || this.cv.width, H = this.cv.clientHeight || this.cv.height;
     if (W <= 0 || H <= 0 || !this._draggingSlider) return;
@@ -1348,15 +1501,198 @@ export class ScopeView {
     } else if (this._draggingSlider === OscSliderId.TRIGGER_LEVEL) {
       p.oscTriggerLevelFrac.set(clamp01(my / H));
     } else if (this._draggingSlider === OscSliderId.TRIGGER_POSITION) {
-      // Delta-drag, UNCLAMPED: move the REAL offset by the dragged pixel distance so a
-      // handle pinned at the edge (virtual offset) tracks continuously back into view
-      // instead of jumping to the absolute mouse X (Java updateSliderFromMouse
-      // TRIGGER_POSITION branch).
-      p.oscTriggerPositionFrac.set(
-        this._triggerPosDragStartFrac + (mx - this._triggerPosDragStartX) / W);
+      // Absolute: the line follows the cursor (centred under it), clamped to [0,1] —
+      // so grabbing a virtual (edge-pinned) handle recaptures it to the cursor, and
+      // the handle can never be pushed off the view (Java updateSliderFromMouse
+      // TRIGGER_POSITION branch, spec rev).
+      p.oscTriggerPositionFrac.set(clamp01(mx / W));
     }
     // Mirror the change onto the tab fields/tiles (Java refreshTab on the pref change).
     if (this.onSettingsChanged) this.onSettingsChanged();
+  }
+
+  // ───────────── Rectangular zoom (base machinery in rect-zoom.js) ─────────────
+  // Faithful port of the Java ScopeView zoom overrides (commit 73f6c1f). The one
+  // web-model difference: the web LIVE view has no scroll-back (a back-offset > 0
+  // exists only in file mode), so Java's isAbsoluteWindow() == fileMode here and
+  // the live backOffset 0↔>0 history clear has no web counterpart.
+
+  /** The scope plots edge-to-edge (no axis margins) — the zoomable area is the
+   *  full canvas (Java ScopeView inherits the full-client-area default). */
+  _zoomableArea() {
+    const W = this.cv.clientWidth || this.cv.width || 1200;
+    const H = this.cv.clientHeight || this.cv.height || 240;
+    return { x: 0, y: 0, w: W, h: H };
+  }
+
+  /** Slider handles stay grabbable — a selection drag can't start on them (Java
+   *  ScopeView.isRectZoomBlockedAt; the header buttons + edge labels of the Java
+   *  list are DOM elements here — the toolbar sits outside the canvas and the
+   *  overlay labels are pointer-events:none — so only the three canvas hit-boxes
+   *  need blocking). */
+  _isRectZoomBlockedAt(x, y) {
+    return this._inBounds(this._offsetBounds, x, y)
+      || this._inBounds(this._triggerLevelBounds, x, y)
+      || this._inBounds(this._triggerPosBounds, x, y);
+  }
+
+  /** Overlay-only repaint (rubber band / focus border): Canvas2D just redraws the
+   *  current frame (Java requestZoomOverlayRepaint default; the GL phosphor
+   *  re-composite override is GPU-only and intentionally skipped on the web). */
+  _repaintZoomOverlay() {
+    if (this._lastInfo) this.render(this._lastBuf, this._lastInfo);
+    else this.renderIdle();
+  }
+
+  /** X = the displayed time window — trigger-relative SECONDS on the live/frozen
+   *  view, absolute loaded-buffer FRAMES in file mode (the web's absolute-window
+   *  model; mode switches clear the undo stack, so mementos never cross the two).
+   *  Y = each channel's displayed voltage window; both round-trip losslessly to
+   *  t/div + trigger frac + V/div + offsetFrac (Java ScopeView.captureZoomState). */
+  _captureZoomState() {
+    const p = this.prefs;
+    if (!p) return null;
+    const windowSec = p.oscTimePerDiv.get() * DIVISIONS_X;
+    let xMin, xMax;
+    if (this.fileMode) {
+      const geom = this._fileGeom;
+      if (!geom || !this.onFileBack) return null;
+      // The canvas maps [startSample, startSample + dispCount] edge-to-edge
+      // (render() sets samplesPerPx = dispCount / width).
+      xMin = geom.startSample;
+      xMax = geom.startSample + geom.dispCount;
+    } else {
+      const pos = p.oscTriggerPositionFrac.get();   // raw — virtual-capable
+      xMin = -pos * windowSec;
+      xMax = (1 - pos) * windowSec;
+    }
+    const lOff = p.oscLeftOffsetFrac.get(), lVdiv = p.oscLeftVoltsPerDiv.get();
+    const rOff = p.oscRightOffsetFrac.get(), rVdiv = p.oscRightVoltsPerDiv.get();
+    return { xMin, xMax,
+      yMin: [(lOff - 1) * DIVISIONS_Y * lVdiv, (rOff - 1) * DIVISIONS_Y * rVdiv],
+      yMax: [lOff * DIVISIONS_Y * lVdiv, rOff * DIVISIONS_Y * rVdiv] };
+  }
+
+  /** Applies a zoom memento (Java ScopeView.applyZoomState): per-channel V/div +
+   *  offset from the voltage windows, the trigger LEVEL held invariant as a
+   *  VOLTAGE (the pref is a screen fraction — remapped through the old→new
+   *  trigger-channel mapping so the trigger keeps firing on the same waveform
+   *  point; virtual-capable, a zoom may park it outside [0,1]), and the time
+   *  window as t/div + trigger frac (live) or t/div + back-offset (file). */
+  _applyZoomState(s) {
+    const p = this.prefs;
+    if (!p) return false;
+    const trigLeft = p.oscTriggerChannel.get() === 'L';
+    const oldOff = trigLeft ? p.oscLeftOffsetFrac.get() : p.oscRightOffsetFrac.get();
+    const oldVdiv = trigLeft ? p.oscLeftVoltsPerDiv.get() : p.oscRightVoltsPerDiv.get();
+    const levelVolts = (oldOff - p.oscTriggerLevelFrac.get()) * DIVISIONS_Y * oldVdiv;
+    this._applyChannelVoltageRange(true, s.yMin[0], s.yMax[0]);
+    this._applyChannelVoltageRange(false, s.yMin[1], s.yMax[1]);
+    const newOff = trigLeft ? p.oscLeftOffsetFrac.get() : p.oscRightOffsetFrac.get();
+    const newVdiv = trigLeft ? p.oscLeftVoltsPerDiv.get() : p.oscRightVoltsPerDiv.get();
+    if (newVdiv > 0) {
+      // Virtual-capable like the trigger offset: a zoom that excludes the
+      // trigger voltage parks the level outside [0,1] — honest, undoable.
+      p.oscTriggerLevelFrac.set(newOff - levelVolts / (DIVISIONS_Y * newVdiv));
+    }
+    const span = s.xMax - s.xMin;
+    if (span > 0) {
+      if (this.fileMode) {
+        // Absolute branch (Java: controller.setViewCenterFrames + applyViewState):
+        // when the t/div floor engages, the window widens around the selection's
+        // CENTRE. The web drives the pane's back-offset through onFileBack, the
+        // same path as the file-mode wheel zoom.
+        const geom = this._fileGeom;
+        const sr = (this._lastInfo && this._lastInfo.inRate) || 0;
+        if (geom && this.onFileBack && sr > 0) {
+          const tDivNew = Math.max(T_PER_DIV_MIN, span / sr / DIVISIONS_X);
+          p.oscTimePerDiv.set(tDivNew);   // BEFORE onFileBack — the pane's clamp reads the new t/div
+          const wsNew = Math.round(tDivNew * DIVISIONS_X * sr);
+          const rightPad = Math.min(LANCZOS_PADDING, Math.max(0, geom.available - wsNew));
+          const rightEdgeAnchorNew = Math.max(0, geom.available - rightPad - wsNew);
+          const startNew = (s.xMin + s.xMax) / 2 - wsNew / 2;
+          this.onFileBack(Math.round(rightEdgeAnchorNew - startNew));
+        }
+      } else {
+        // Trigger-anchored branch: when the t/div floor engages, p pins the
+        // selection's LEFT edge (Java). A held (trigger-less rendered) frame
+        // anchors at the fixed point of the window change instead.
+        const tDivNew = Math.max(T_PER_DIV_MIN, span / DIVISIONS_X);
+        this._seedHeldZoomAnchor(s, tDivNew);
+        p.oscTimePerDiv.set(tDivNew);
+        p.oscTriggerPositionFrac.set(-s.xMin / (tDivNew * DIVISIONS_X));   // virtual-capable
+      }
+    }
+    if (p.save) p.save();
+    // Mirror onto the tab fields + tiles and repaint a frozen/file view (the Java
+    // V/div reverse bindings + refreshTab + redraw → web onSettingsChanged →
+    // host.refreshFields/refreshTiles/requestRedraw).
+    if (this.onSettingsChanged) this.onSettingsChanged();
+    else this._repaintZoomOverlay();
+    return true;
+  }
+
+  /** Voltage window → V/div + offsetFrac for one channel: vDiv = span/10,
+   *  offsetFrac = top/span (the zero line's screen fraction), clamped at the
+   *  toolbar V/div field's floor (Java ScopeView.applyChannelVoltageRange). */
+  _applyChannelVoltageRange(left, bottomV, topV) {
+    const p = this.prefs;
+    const span = topV - bottomV;
+    if (span <= 0) return;
+    const vDiv = Math.max(V_PER_DIV_MIN, span / DIVISIONS_Y);
+    const off = topV / (vDiv * DIVISIONS_Y);
+    if (left) {
+      p.oscLeftOffsetFrac.set(off);
+      p.oscLeftVoltsPerDiv.set(vDiv);
+    } else {
+      p.oscRightOffsetFrac.set(off);
+      p.oscRightVoltsPerDiv.set(vDiv);
+    }
+  }
+
+  /** Held frame (frozen snapshot): its renderer (_drawHeldFrame) ignores the
+   *  trigger-position pref and anchors a t/div change at _heldZoomAnchorX — seed
+   *  it with the FIXED POINT of the window change, anchor/width =
+   *  (newXMin − curXMin) / (curSpan − newSpan), so both a committed selection and
+   *  its Ctrl+Z inverse land exactly (a linear map and its inverse share the
+   *  fixed point). Skipped when the t/div pref won't change (nothing would
+   *  consume the anchor). Java ScopeView.seedHeldZoomAnchor — the web held-frame
+   *  renderer uses this model for NORMAL holds too, so both hold kinds seed. */
+  _seedHeldZoomAnchor(s, tDiv) {
+    if (!this._singleHeld && !this._normalFrame) return;
+    if (tDiv === this.prefs.oscTimePerDiv.get()) return;
+    const cur = this._captureZoomState();
+    const area = this._zoomableArea();
+    if (!cur || !area || area.w <= 0) return;
+    const denom = (cur.xMax - cur.xMin) - tDiv * DIVISIONS_X;
+    if (denom === 0) return;
+    const anchor = Math.round(area.w * (s.xMin - cur.xMin) / denom);
+    this._heldZoomAnchorX = Math.max(0, Math.min(area.w, anchor));
+  }
+
+  /** The scope plots edge-to-edge, so the selection maps linearly onto the
+   *  current window on both axes — per channel vertically, since the rect is
+   *  screen-space and applies to every scale alike (Java ScopeView.zoomStateForRect). */
+  _zoomStateForRect(sel) {
+    const area = this._zoomableArea();
+    if (!area || area.w <= 0 || area.h <= 0) return null;
+    const cur = this._captureZoomState();
+    if (!cur) return null;
+    const fx0 = (sel.x - area.x) / area.w;
+    const fx1 = (sel.x + sel.w - area.x) / area.w;
+    const xSpan = cur.xMax - cur.xMin;
+    const fy0 = (sel.y - area.y) / area.h;
+    const fy1 = (sel.y + sel.h - area.y) / area.h;
+    const nyMin = [0, 0];
+    const nyMax = [0, 0];
+    for (let ch = 0; ch < 2; ch++) {
+      const top = cur.yMax[ch];
+      const vSpan = top - cur.yMin[ch];
+      nyMax[ch] = top - fy0 * vSpan;
+      nyMin[ch] = top - fy1 * vSpan;
+    }
+    return { xMin: cur.xMin + fx0 * xSpan, xMax: cur.xMin + fx1 * xSpan,
+      yMin: nyMin, yMax: nyMax };
   }
 
   /** Edge labels (Java drawEdgeLabels): absolute time at the left/right of the
@@ -1452,20 +1788,49 @@ export class ScopeView {
     this._lastLiveMeasMs = nowMs;
     const mLen = info.measAvailable;
     if (!this._measScratch || this._measScratch.length < mLen) this._measScratch = new Float32Array(mLen);
-    const span = this._applyChannelFilters(measRaw, mLen, sampleRate, measDesc.name, this._measScratch);
-    let meas = compute(span, mLen, sampleRate, peakVolts, false);   // fast: broad-band scan runs off-thread
+    const span = this._applyChannelFilters(measRaw, mLen, sampleRate, measDesc.name, this._measScratch,
+      info.measAbsStart || 0, measDesc.name + 'Meas');
+    const mainsMode = p ? p['osc' + measDesc.name + 'MainsSuppression'].get() : 'NONE';
+    // The comb's delay lines start zeroed each pass, so its head is an
+    // un-suppressed pass-through that would skew Vpp/Vrms: measure the settled
+    // TAIL instead — ≈3 time-constants in, capped so at least half the window
+    // remains (Java ScopeMeasurementWorker computeMeasurementOnce).
+    let mData = span, mN = mLen;
+    if (mainsMode === 'IIR_COMB') {
+      const settle = Math.trunc(3.0 * sampleRate / (Math.PI * MAINS_NOTCH_BW_HZ));
+      const from = Math.min(settle, Math.trunc(mLen / 2));
+      if (from > 0) { mData = span.subarray(from); mN = mLen - from; }
+    }
+    let meas = compute(mData, mN, sampleRate, peakVolts, false);   // fast: broad-band scan runs off-thread
     if (dual) {
       // Beat view: single-value period/freq/duty are meaningless. Re-measure the
       // (real) tone frequency off the span and drop the time-domain fields.
-      const f = refineFrequencyAround(span, mLen, sampleRate, info.f1Hz, info.f1Hz * 0.25);
+      let f = refineFrequencyAround(span, mLen, sampleRate, info.f1Hz, info.f1Hz * 0.25);
+      // Never derive frequency from the mains-canceller output: re-pin the
+      // filtered-signal seed on the RAW window in a narrow ±2 Hz band (the
+      // canceller notches can sit within a few Hz of the tone and pull it).
+      if (mainsMode !== 'NONE' && f > 0) {
+        const precise = refineFrequencyAround(measRaw, mLen, sampleRate, f, FREQ_REFINE_HALF_HZ);
+        if (precise > 0) f = precise;
+      }
       meas = (f > 0) ? withFrequency(withoutTimes(meas), f) : withoutTimes(meas);
-    } else if (Number.isNaN(meas.frequency)) {
-      // Weak / noisy single tone: the cheap crossing-based search returned no frequency.
-      // Fold in the latest off-thread broad-band scan and kick a fresh one (Java
-      // ScopeMeasurementWorker) — only f / period lag, every other readout stays live.
-      if (Number.isFinite(this._asyncFreq)) meas = withFrequency(meas, this._asyncFreq);
-      if (!this._freqScan) this._freqScan = new FreqScanClient((hz) => { this._asyncFreq = hz; });
-      this._freqScan.submit(span, mLen, sampleRate, peakVolts);
+    } else {
+      if (Number.isNaN(meas.frequency)) {
+        // Weak / noisy single tone: the cheap crossing-based search returned no frequency.
+        // Fold in the latest off-thread broad-band scan and kick a fresh one (Java
+        // ScopeMeasurementWorker) — only f / period lag, every other readout stays live.
+        if (Number.isFinite(this._asyncFreq)) meas = withFrequency(meas, this._asyncFreq);
+        if (!this._freqScan) this._freqScan = new FreqScanClient((hz) => { this._asyncFreq = hz; });
+        this._freqScan.submit(mData, mN, sampleRate, peakVolts);
+      }
+      if (mainsMode !== 'NONE' && Number.isFinite(meas.frequency)) {
+        // Re-pin the canceller-located tone on the RAW signal, free of the comb's
+        // notch bias, in a narrow band around the seed (Java ScopeMeasurementWorker
+        // two-step: the canceller only finds WHICH peak is the fundamental; the
+        // precise frequency always comes from the raw window).
+        const precise = refineFrequencyAround(measRaw, mLen, sampleRate, meas.frequency, FREQ_REFINE_HALF_HZ);
+        if (Number.isFinite(precise)) meas = withFrequency(meas, precise);
+      }
     }
     // Override the short-window amplitude with the POOLED long-window value. The pool is
     // fed the CONTIGUOUS capture gap every paint (_feedMeasurementPool), so Vmean/Vrms/Vpp
@@ -1583,14 +1948,17 @@ export class ScopeView {
       st.lpf.process(out, len);
     } else { st.lpf = null; st.lpfMode = null; }
     if (mainsMode !== 'NONE') {
-      if (!st.mains || st.mainsRate !== sampleRate) {
-        st.mains = new MainsCombFilter(sampleRate, MAINS_NOTCH_BW_HZ);
-        st.mainsRate = sampleRate; st.trackT0 = 0;
+      if (!st.mains || st.mainsRate !== sampleRate || st.mainsMode !== mainsMode) {
+        st.mains = mainsFilterOf(mainsMode, sampleRate, MAINS_NOTCH_BW_HZ);
+        st.mainsRate = sampleRate; st.mainsMode = mainsMode; st.trackT0 = 0; st.absPos = 0;
       }
       const now = performance.now();
       if ((now - st.trackT0) >= 200 || !st.mains.isTuned()) { st.mains.track(out, len); st.trackT0 = now; }
-      st.mains.processPreservingDc(out, len, 0);   // NO reset → continuous comb
-    } else { st.mains = null; }
+      // NO reset → continuous canceller. The gaps are contiguous, so a running
+      // sample counter gives the phase-locked cancellers their absStart deltas.
+      st.mains.processPreservingDc(out, len, st.absPos);
+      st.absPos += len;
+    } else { st.mains = null; st.mainsMode = null; }
     return out;
   }
 
@@ -1600,6 +1968,28 @@ export class ScopeView {
    *  instead of stalling at the last EMA value or showing the paint-loop rate. */
   _updateCaptureRate(newFrame) {
     const now = performance.now();
+    // Glitch mode (Java updateCaptureRate GLITCH branch): rate = caught count ÷
+    // collection time. Events are seconds to minutes apart, so a per-interval EMA
+    // would just decay toward 0 between catches; the cumulative rate is the honest
+    // figure. Counting restarts on glitch-mode entry, a record restart
+    // (restartGlitchRate) and a trigger-source change (resetTriggerHold).
+    const glitchMode = !!this.prefs && !this.fileMode
+      && this.prefs.oscTriggerType.get() === TriggerType.GLITCH;
+    if (glitchMode) {
+      if (!this._rateWasGlitchMode || this._glitchCountStartMs === 0) {
+        this._glitchCountStartMs = now;
+        this._glitchCount = 0;
+      }
+      if (newFrame) {
+        this._glitchCount++;
+        this._lastNewFrameMs = now;
+      }
+      const elapsed = (now - this._glitchCountStartMs) / 1000;
+      this._captureRate = (elapsed >= GLITCH_RATE_MIN_SECONDS) ? this._glitchCount / elapsed : 0.0;
+      this._rateWasGlitchMode = true;
+      return;
+    }
+    this._rateWasGlitchMode = false;
     if (newFrame) {
       if (this._lastNewFrameMs > 0) {
         const dt = (now - this._lastNewFrameMs) / 1000;
@@ -1624,20 +2014,25 @@ export class ScopeView {
     }
   }
 
-  /** Near-white "123.4 cap/s" readout in the top-right corner (Java
-   *  ScopeView.drawCaptureRate). Now a FIXED-size DOM label in the overlay layer
+  /** Near-white "123.456 cap/s" readout in the top-right corner (Java
+   *  ScopeView.drawCaptureRate). A FIXED-size DOM label in the overlay layer
    *  (not painted on the canvas) so a stretched screenshot leaves it at its
-   *  on-screen pixel size. Shows the actual capture/trigger rate
-   *  (this._captureRate), not the paint-loop rate; hidden when the rate is 0. */
-  _drawCaptureRate() {
+   *  on-screen pixel size. Visible for the whole live record — even reading
+   *  0.000: in glitch mode a new frame only arrives per glitch, so this readout
+   *  IS the glitches/s counter and must not vanish between events. A STOPPED
+   *  scope keeps showing the last value (no repaint runs while stopped); hidden
+   *  only in file mode (no capture) and before the first capture ever ran
+   *  (`show` = false from renderIdle). 3 decimals: in glitch mode a rare event
+   *  (one per minutes) reads e.g. 0.008 — one decimal would show 0.0. */
+  _drawCaptureRate(show = true) {
     const o = this._overlay;
     if (!o) return;
+    if (!show || this.fileMode) { o.caps.style.display = 'none'; return; }
     const rate = this._captureRate;
-    if (!(rate > 0)) { o.caps.style.display = 'none'; return; }
     // Throttle the formatted string to ~5 Hz (Java READOUT_THROTTLE_NS = 200 ms).
     const nowMs = performance.now();
     if (this._capsString === '' || nowMs - this._lastCapsBuildMs >= READOUT_THROTTLE_MS) {
-      this._capsString = `${rate.toFixed(1)} cap/s`;
+      this._capsString = `${rate.toFixed(3)} cap/s`;
       this._lastCapsBuildMs = nowMs;
     }
     this._setOverlayLabel(o.caps, this._capsString, '#f0f0f0', '', { right: '8px', top: '4px' });
@@ -1751,7 +2146,8 @@ export class ScopeView {
       this._clearOverlayLabels();
     }
     this._updateCaptureRate(false);
-    this._drawCaptureRate();
+    this._drawCaptureRate(false);   // no capture ever ran → hidden (Java reader == null)
+    if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);   // zoom layer LAST, on the idle grid too
     this._lastBuf = null; this._lastInfo = null;   // mark idle so the ResizeObserver repaints via renderIdle
   }
 
@@ -1794,21 +2190,32 @@ export class ScopeView {
     const p = this.prefs;
     const liveVDiv = (ch) => p ? (p['osc' + (ch === 'L' ? 'Left' : 'Right') + 'VoltsPerDiv'].get() || 0.1) : null;
     const liveOff = (ch) => p ? p['osc' + (ch === 'L' ? 'Left' : 'Right') + 'OffsetFrac'].get() : null;
-    // Horizontal t/div zoom on a FROZEN frame: re-derive the displayed window from the
-    // LIVE t/div (the snapshot holds `available` samples), centre-preserving + clamped,
-    // so Ctrl+Shift+wheel zooms the held trace instead of being a no-op (vertical V/div
-    // already re-scales live above). ratio==1 → the frozen window is used unchanged.
-    let winSamples = f.windowSamples, startS = f.startSample;
-    let sPerPx = f.samplesPerPx, pxPerS = f.pxPerSample;
+    // Horizontal t/div zoom on a FROZEN frame (Java renderHeldCapturedFrame with the
+    // heldViewStart / lastHeldTimePerDiv / lastHeldDispCount model, 4887ecb): re-derive
+    // the displayed window from the LIVE t/div. The held view position persists on the
+    // frame object (f is replaced on every live paint, so a fresh capture re-enters the
+    // not-yet-anchored branch, like Java's entry frame). A WHEEL zoom keeps the sample
+    // under the CURSOR put (this._heldZoomAnchorX, set by the wheel handler); a t/div
+    // FIELD change leaves the anchor unset so the SCREEN CENTRE stays put instead of
+    // jumping to the stale cursor position. NOT clamped — off-buffer edges blank
+    // (blankBeyondData below), matching Java.
     const tDivLive = p ? p.oscTimePerDiv.get() : f.tDivAtFreeze;
-    const ratio = (f.tDivAtFreeze > 0 && tDivLive > 0) ? tDivLive / f.tDivAtFreeze : 1;
-    if (Math.abs(ratio - 1) > 1e-9) {
-      winSamples = Math.max(2, Math.min(f.available, f.windowSamples * ratio));
-      const centre = f.startSample + f.windowSamples / 2;
-      startS = Math.max(0, Math.min(centre - winSamples / 2, f.available - winSamples));
-      sPerPx = winSamples / f.cols;
-      pxPerS = f.cols / winSamples;
+    const scale = (f.tDivAtFreeze > 0 && tDivLive > 0) ? tDivLive / f.tDivAtFreeze : 1;
+    const winSamples = Math.max(2, Math.round(f.windowSamples * scale));
+    if (!(f.heldTDiv > 0)) {                                  // entry frame, not yet anchored
+      f.heldStart = f.startSample;
+    } else if (tDivLive !== f.heldTDiv && f.heldWin > 0) {
+      const frac = (this._heldZoomAnchorX >= 0 && W > 0)
+        ? clamp01(this._heldZoomAnchorX / W) : 0.5;
+      this._heldZoomAnchorX = -1;                             // consumed
+      const anchorSample = f.heldStart + frac * f.heldWin;    // sample under anchor before zoom
+      f.heldStart = anchorSample - frac * winSamples;         // keep it under the anchor
     }
+    f.heldTDiv = tDivLive;
+    f.heldWin = winSamples;
+    const startS = f.heldStart;
+    const sPerPx = winSamples / f.cols;
+    const pxPerS = f.cols / winSamples;
     const drawSnap = (c) => {
       const vDiv = (!c.beat && c.ch && p) ? liveVDiv(c.ch) : c.vDiv;
       const offsetFrac = (!c.beat && c.ch && p) ? liveOff(c.ch) : c.offsetFrac;
@@ -1849,6 +2256,8 @@ export class ScopeView {
     this._updateCaptureRate(false);
     this._drawCaptureRate();
     this._drawStaticFilePath(g, W);
+    // Rect-zoom rubber band + focused-view accent border — LAST (Java paint order).
+    if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
     // Do NOT overwrite this.latest with the stale snapshot meas: _measureLiveWindow
     // refreshed it (and the measurement table) THIS paint, decoupled from the held
     // trace (C24). Fall back to the snapshot's meas only if no live measurement
@@ -1861,23 +2270,34 @@ export class ScopeView {
    * suppression (MainsSuppression) to a copy of {@code buf}, in place on the
    * copy, and returns it. Faithful to ScopeView.applyHfLowPass +
    * applyMainsSuppression: LpfMode.HZ_80 → 80 kHz Chebyshev LP (a no-op below
-   * its Nyquist), DESPIKE → median; mains is the frequency-tracked IIR comb
-   * (the one ported time-domain canceller — SYNC_SUBTRACT / LMS route through it
-   * too, see scope-view notes). No-op (returns the raw buf) when both are NONE.
+   * its Nyquist), DESPIKE → median; mains is the mode-selected time-domain
+   * canceller (dsp/mains/factory: IIR_COMB / SYNC_SUBTRACT / LMS — Java
+   * MainsFilters.of). No-op (returns the raw buf) when both are NONE.
+   * absStart is the absolute index of buf[0] in the capture stream — the
+   * phase-locked cancellers (sync-subtract / LMS) advance their mains phase by
+   * its delta across calls; the comb ignores it. stKey selects the filter-state
+   * bag: the display pass uses the channel name, the measurement pass its own
+   * '<ch>Meas' bag — Java keeps ScopeView's and ScopeMeasurementWorker's
+   * filters separate, and the adaptive cancellers are stateful so the two
+   * windows must not interleave through one instance.
    * @param {Float32Array} buf
    * @param {number} len
    * @param {number} sampleRate
    * @param {'Left'|'Right'} ch
+   * @param {Float32Array} [outScratch]
+   * @param {number} [absStart=0]
+   * @param {string} [stKey=ch]
    * @returns {Float32Array}
    */
-  _applyChannelFilters(buf, len, sampleRate, ch, outScratch) {
+  _applyChannelFilters(buf, len, sampleRate, ch, outScratch, absStart = 0, stKey = ch) {
     const p = this.prefs;
     if (!p) return buf;
     const lpfMode = p['osc' + ch + 'Lpf'].get();
     const mainsMode = p['osc' + ch + 'MainsSuppression'].get();
     if (lpfMode === 'NONE' && mainsMode === 'NONE') return buf;
 
-    const st = this._chanFilt[ch];
+    const st = this._chanFilt[stKey] || (this._chanFilt[stKey] =
+      { lpf: null, lpfMode: null, lpfRate: 0, mains: null, mainsMode: null, mainsRate: 0, trackT0: 0, buf: null });
     // The measurement pass passes its OWN scratch so it doesn't clobber the
     // display descriptor's procBuf (= st.buf), which the freeze-frame capture
     // still reads after the measurement runs.
@@ -1906,19 +2326,20 @@ export class ScopeView {
       st.lpf = null; st.lpfMode = null;
     }
 
-    // --- mains-hum suppression (IIR comb; re-tracked occasionally, reset+applied
-    // each paint over the contiguous window so the comb's start transient stays
-    // off-screen left) ---
+    // --- mains-hum suppression (mode-selected canceller; re-tracked occasionally.
+    // Comb: reset+applied each paint over the contiguous window so its start
+    // transient stays off-screen left; the adaptive cancellers keep their learned
+    // state across paints — Java applyMainsSuppression resets only IIR_COMB) ---
     if (mainsMode !== 'NONE') {
-      if (!st.mains || st.mainsRate !== sampleRate) {
-        st.mains = new MainsCombFilter(sampleRate, MAINS_NOTCH_BW_HZ);
+      if (!st.mains || st.mainsRate !== sampleRate || st.mainsMode !== mainsMode) {
+        st.mains = mainsFilterOf(mainsMode, sampleRate, MAINS_NOTCH_BW_HZ);
         st.mainsRate = sampleRate; st.mainsMode = mainsMode; st.trackT0 = 0;
       }
       const now = performance.now();
       const retrack = (now - st.trackT0) >= 200;   // MAINS_TRACK_PERIOD (~200 ms)
       if (retrack || !st.mains.isTuned()) { st.mains.track(out, len); st.trackT0 = now; }
-      st.mains.reset();
-      st.mains.processPreservingDc(out, len, 0);
+      if (mainsMode === 'IIR_COMB') st.mains.reset();
+      st.mains.processPreservingDc(out, len, absStart);
     } else {
       st.mains = null; st.mainsMode = null;
     }
