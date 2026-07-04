@@ -234,8 +234,8 @@ export class FftTabControl {
     $('#fftStopAfterN').val(prefs.fftStopAfterN.get()).prop('disabled', !prefs.fftStopAfterNEnabled.get());
     $('#fftMains').val(prefs.fftMainsSuppression.get());
 
-    $('#fftPane .lr.l, #fftPane .lr.r').removeClass('on');
-    $('#fftPane .lr.' + (prefs.fftChannel.get() === 'R' ? 'r' : 'l')).addClass('on');
+    $('.fft-pane .lr.l, .fft-pane .lr.r').removeClass('on');
+    $('.fft-pane .lr.' + (prefs.fftChannel.get() === 'R' ? 'r' : 'l')).addClass('on');
     $('#logAxis').prop('checked', prefs.fftLogFreqAxis.get());
     $('#fftMagUnit').val(prefs.fftMagUnit.get());
     $('#fftFundFromGen').prop('checked', prefs.fftFundFromGenerator.get());
