@@ -7,8 +7,9 @@
  * worklet (tone / sweep / dual-tone / compensated), the monitoring file-player lane, and the
  * analysis frequencies (`snapped`/`binW`/`fundBin`) that keep what is PLAYED, MEASURED and SHOWN
  * consistent. Has nothing to do with capture. The shared `config` object is held by reference, so
- * a live edit on either side is visible to both. The FFT-side frequency-lock loop steers the tone
- * through `genFreq` + the FLL trim state held here (the FFT consumer reads/updates them for now).
+ * a live edit on either side is visible to both. The FFT-side frequency-lock loop (which OWNS the
+ * FLL state) steers the tone by publishing GENERATOR_FREQ_TRIM; this controller subscribes and
+ * applies the trim to its worklet (see _applyFllTrim).
  */
 import { GenSignalForm, isDualTone } from '../generator/dds-kernel.js';
 import { MessageBus } from '../bus/message-bus.js';
@@ -85,12 +86,8 @@ export class GeneratorController {
     // True only while WE are stopping the generator, so the context's own 'closed' statechange
     // during stopGenerator() is not misread as an unexpected output-device failure.
     this._closing = false;
-    // FLL trim state (the FFT consumer drives it off fundamentalHzRefined; reset on each start).
-    this.genFreq = 0;
-    this.fllErrHz = 0;
-    this.fllLocked = false;
-    this.fllStable = 0;
-    this.rejectedCount = 0;
+    // FLL trim state moved to FftController (which owns the frequency-lock loop); the generator
+    // only APPLIES trims via the GENERATOR_FREQ_TRIM subscription below.
     // File-player lane (monitoring convenience, NOT the measurement path).
     this._fileSrc = null;
     this._fileCtx = null;
@@ -115,6 +112,13 @@ export class GeneratorController {
     // context was still closing → NotReadableError (a self-contention).
     MessageBus.instance().registerResponder(Events.GENERATOR_RUNNING,
       () => this.running || this.filePlaying || this.outputContextOpen);
+    // FLL trim (Java GeneratorController subscribes GENERATOR_FREQ_TRIM): the FFT consumer owns
+    // the frequency-lock loop and publishes the corrected tone frequency; the generator applies
+    // it to its OWN worklet. No republish of GENERATOR_SIGNAL_CHANGED — an FLL trim is a sub-Hz
+    // tweak that emitted no event before, and re-broadcasting it could spuriously reset other
+    // subscribers (the scope reconstructed-beat gate, the FFT drain-skip).
+    MessageBus.instance().subscribe(Events.GENERATOR_FREQ_TRIM,
+      (freqHz) => this._applyFllTrim(freqHz));
   }
 
   /** Stops BOTH output engines — the DDS tone and the file player (Java
@@ -144,6 +148,12 @@ export class GeneratorController {
   /** Posts a live message to the DDS worklet (no-op when not running). */
   postGen(msg) {
     if (this._genOn && this.genNode) this.genNode.port.postMessage(msg);
+  }
+
+  /** Applies an FLL frequency trim (GENERATOR_FREQ_TRIM) from the FFT consumer to the running
+   *  DDS worklet. No-op when the generator isn't running (dropped, like postGen). */
+  _applyFllTrim(freqHz) {
+    if (this._genOn && this.genNode) this.genNode.port.postMessage({ frequency: freqHz });
   }
 
   /** The frequency the generator actually emits for the current form — faithful port of
@@ -235,10 +245,6 @@ export class GeneratorController {
       return this.lastStartError;
     }
     this.computeAnalysisFreqs();
-    // FLL state (driven off fundamentalHzRefined — sub-bin, generator-steered).
-    this.genFreq = this.snapped;
-    this.fllErrHz = 0; this.fllLocked = false; this.fllStable = 0;
-    this.rejectedCount = 0;
     this._status('opening output context + device…');
     try {
       // OUTPUT context (DAC) — generator at the DAC's native rate. Opened through the
@@ -260,7 +266,6 @@ export class GeneratorController {
       // (esp. the RECTANGLE sample-period alignment) against the ACTUAL context rate.
       this.outSampleRate = this.outCtx.sampleRate;
       this.computeAnalysisFreqs();
-      this.genFreq = this.snapped;
       if (this.outCtx.sampleRate !== c.outRate) {
         debug(`[generator] output rate is ${this.outCtx.sampleRate} Hz (requested ${c.outRate}) — browser/OS capped it; set the Windows output device to ${c.outRate} Hz to avoid resampling/slowdown`);
       }
@@ -313,7 +318,6 @@ export class GeneratorController {
     if (!this._genOn || !this.genNode) return;
     const c = this.config;
     this.computeAnalysisFreqs();   // re-resolve the emit frequency for the (possibly edited) tone/form
-    this.genFreq = this.snapped;
     this.genNode.port.postMessage({
       frequency: this.snapped,      // primary tone — was previously dropped on live freq edits
       amplitudeVRms: ampVrmsOf(c), dacFsVoltageAmpl: c.dacFsVoltageAmpl,

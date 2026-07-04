@@ -120,6 +120,14 @@ export class FftController {
     // integrator. The published generator frequency is snapped + correction. Reset on
     // Record start and on a user signal change (both invalidate the lock).
     this._fll = new FrequencyFll();
+    // FLL display + steer state — OWNED here now (moved off GeneratorController): the corrected
+    // generator frequency + lock status this loop computes and _emit reports. The steer publishes
+    // GENERATOR_FREQ_TRIM; the generator applies it to its worklet.
+    this.genFreq = 0;
+    this.fllErrHz = 0;
+    this.fllLocked = false;
+    this.fllStable = 0;
+    this.rejectedCount = 0;
     // Previous batch's config.fllOn, for the align OFF→ON transition (Java
     // FftView.java:465-466: "Selecting an active alignment mode (PID / FLL) resets its
     // loop so each session converges fresh; NONE deliberately resets nothing").
@@ -169,6 +177,7 @@ export class FftController {
       // FftController.resetFrequencyLock), else its stale correction overshoots the
       // first measurement of the new signal.
       this._fll.reset();
+      this.fllErrHz = 0; this.fllLocked = false; this.fllStable = 0; this.genFreq = this.snapped;
       if (this._fftOn) this._armOutputDrainSkip();
     });
   }
@@ -192,16 +201,6 @@ export class FftController {
   get binW() { return this._gen.binW; }
   get genNode() { return this._gen.genNode; }
   get _genOn() { return this._gen.running; }
-  get genFreq() { return this._gen.genFreq; }
-  set genFreq(v) { this._gen.genFreq = v; }
-  get fllErrHz() { return this._gen.fllErrHz; }
-  set fllErrHz(v) { this._gen.fllErrHz = v; }
-  get fllLocked() { return this._gen.fllLocked; }
-  set fllLocked(v) { this._gen.fllLocked = v; }
-  get fllStable() { return this._gen.fllStable; }
-  set fllStable(v) { this._gen.fllStable = v; }
-  get rejectedCount() { return this._gen.rejectedCount; }
-  set rejectedCount(v) { this._gen.rejectedCount = v; }
   _computeAnalysisFreqs() { this._gen.computeAnalysisFreqs(); }
 
   /** True while the FFT is recording. */
@@ -374,8 +373,11 @@ export class FftController {
     this._dispatchedOnce = false;
     this._drainSkipRemaining = 0;   // fresh session anchors clean — nothing to drain
 
-    // Generator-locked FLL bookkeeping shared with the result handler.
-    this.genFreq = this.genFreq != null ? this.genFreq : this.snapped;
+    // Generator-locked FLL bookkeeping shared with the result handler — a fresh Record session
+    // resets the loop (this._fll.reset in setRecording), so the steer state starts from the base
+    // emit frequency rather than a stale converged value.
+    this.genFreq = this.snapped;
+    this.fllErrHz = 0; this.fllLocked = false; this.fllStable = 0;
     this.framesDone = 0;
     // Stop-after-N restarts its count each Record session (Java zeroes
     // completedAnalyses on start); clear the pause so a fresh start re-feeds.
@@ -869,7 +871,8 @@ export class FftController {
         this._fll.update(fllTarget, r.fundamentalHzRefined,
           this._tickAbsCapStart, this._tickWritePos, this.config.inRate, this.N);
         this.genFreq = fllTarget + this._fll.correction;
-        this.genNode.port.postMessage({ frequency: this.genFreq });
+        // Publish the trim; GeneratorController applies it to its own worklet (was a direct post).
+        MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM, this.genFreq);
         if (traceFll()) {
           // Java log.warn("FLL t1: target=… meas=… corr=… pub=…"), plus the transport
           // timebase + gate so an inert loop is diagnosable (gate held forever ⇒ winStart
@@ -893,7 +896,7 @@ export class FftController {
           this.fllLocked = false;
         }
         // Web limitation (Java runs a second FrequencyAligner, fll2, off imd.f2):
-        // in dual-tone mode only tone 1 is steered here. The web GeneratorController
+        // in dual-tone mode only tone 1 is steered here. This controller
         // models a single FLL state (genFreq / fllErrHz / fllLocked), not Java's twin
         // independent FrequencyAligner loops, so a faithful second-tone trim would need
         // its own loop + lock state. Accepted as a web limitation.
