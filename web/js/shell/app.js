@@ -557,17 +557,17 @@ const tileChips = (...vals) => vals.filter(v => v != null && v !== '').map(v => 
 let latestScope = null;
 // The render-time FFT spectral corrections stay applied in app.js BEFORE the result is handed to
 // the pane; the pane owns latestResult + the dirty flag (Java FftPane.controller last result).
-engine.onResult = (r) => {
+engine.fft.onResult = (r) => {
   // r.channelLeft is stamped in FftController._emit (Java FftAnalyzerWorker:1872
   // stamps it in the worker off wantLeft — the channel it ACTUALLY read). The .frc
   // de-embed + the predistortion cal pick left()/right() off it (fft-view-correction.js).
   fftViewCorrection.apply(r);
   fftPane.setResult(r);
 };
-engine.onScope = (buf, info) => { latestScope = { buf, info }; };
+engine.scope.onScope = (buf, info) => { latestScope = { buf, info }; };
 // Stop-after-N tripped (Java FFT_RECORDING_AUTO_STOPPED → FftPane.disengageRecord):
 // the engine paused feeding; the pane tears down the FFT consumer and un-lights the Record LED.
-engine.onFftAutoStopped = () => fftPane.onFftAutoStopped();
+engine.fft.onFftAutoStopped = () => fftPane.onFftAutoStopped();
 // The MAIN rAF render loop (renderLoop: scopePane.render() + fftPane.render() each frame, each
 // pane self-gated on its OWN record state) moved to shell/main-tab.js (Java MultifunctionalTab);
 // app.js kicks it via mainTab.start() in init (after both panes are constructed).
@@ -589,7 +589,7 @@ engine.onFftAutoStopped = () => fftPane.onFftAutoStopped();
 async function restartFft() {
   if (busy || !fftRec) return;
   busy = true;
-  try { await engine.setFftRecording(false); readConfig(); fftRec = await engine.setFftRecording(true); }
+  try { await engine.fft.setRecording(false); readConfig(); fftRec = await engine.fft.setRecording(true); }
   finally { fftPane.syncFftLed(); busy = false; }
 }
 
@@ -642,7 +642,7 @@ $('.fft-pane .lr.l, .fft-pane .lr.r').on('click', function () {
   const isLeft = $(this).hasClass('l');
   $('.fft-pane .lr.l, .fft-pane .lr.r').removeClass('on'); $(this).addClass('on');
   prefs.fftChannel.set(isLeft ? 'L' : 'R');
-  engine.setFftChannel(isLeft ? 'L' : 'R');
+  engine.fft.setFftChannel(isLeft ? 'L' : 'R');
 });
 // FreqResp L/R: the plot path consumes loadedFrc.left only; keep visual radio.
 $('#tab-fr .lr.l, #tab-fr .lr.r').on('click', function () {
@@ -1198,8 +1198,8 @@ async function restartPreservingConfig() {
   // record flags follow so the FFT view keeps rendering.
   await engine.stop();
   await engine.startGenerator();
-  await engine.setScopeRecording(true);
-  await engine.setFftRecording(true);
+  await engine.scope.setRecording(true);
+  await engine.fft.setRecording(true);
   genRunning = true; scopeRec = true; fftRec = true;
   $('#genPlay').addClass('playing').attr('title', t('generator.play.stop'));
   $('#onAir').addClass('live');

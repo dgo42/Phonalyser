@@ -114,6 +114,14 @@ export class AudioEngine {
     this._recChunks = null;
   }
 
+  /** Consumer/generator controllers. The engine constructs the shared infrastructure and exposes
+   *  the controllers so each pane drives its OWN controller directly (record lifecycle + result
+   *  callbacks) rather than through a fat delegating facade (Java: panes own their controllers). */
+  get generator() { return this._gen; }
+  get capture() { return this._capture; }
+  get scope() { return this._scope; }
+  get fft() { return this._fft; }
+
   /** True when the generator is producing a signal OR the shared capture device
    *  is open (any consumer holds a reference). Mirrors SharedCapture.isCapturing
    *  ORed with the generator-running state; freqresp/predistortion gate on it. */
@@ -243,13 +251,6 @@ export class AudioEngine {
   // #status aria-live element is still updated via onStatus for screen readers).
   _status(t) { debug('[audio]', t); if (this.onStatus) this.onStatus(t); }
 
-  /** The per-analysis result callback + the stop-after-N auto-stop notification live on the FFT
-   *  controller; forward so callers keep using engine.onResult / engine.onFftAutoStopped. */
-  get onResult() { return this._fft.onResult; }
-  set onResult(fn) { this._fft.onResult = fn; }
-  get onFftAutoStopped() { return this._fft.onFftAutoStopped; }
-  set onFftAutoStopped(fn) { this._fft.onFftAutoStopped = fn; }
-
   /** Enumerate input/output devices, each input carrying its probed native rate. Device
    *  enumeration is its own layer (devices.js), not part of the capture/generate engine. */
   scanDevices() { return scanAudioDevices((t) => this._status(t)); }
@@ -330,11 +331,10 @@ export class AudioEngine {
   }
 
   // -------------------------------------------------------------------------
-  // SCOPE — the latest-window consumer lives in ScopeController (this._scope).
-  // The engine delegates the public API; the capture fan-out drives feedScope().
+  // SCOPE — the latest-window consumer lives in ScopeController (engine.scope).
+  // The scope pane drives its record lifecycle directly; the engine still owns
+  // the streaming-save cursor API + the long measurement/zoom reads below.
   // -------------------------------------------------------------------------
-
-  async setScopeRecording(on) { return this._scope.setRecording(on); }
 
   /** Acquires a fresh forward-read capture cursor over the shared ring for the
    *  scope stream-forward record, opening the device if no consumer holds it yet
@@ -370,23 +370,16 @@ export class AudioEngine {
   readMeasurementWindow() { return this._scope.readMeasurementWindow(); }
   readMeasurementGap() { return this._scope.readMeasurementGap(); }
   readZoomedWindow() { return this._scope.readZoomedWindow(); }
-  get onScope() { return this._scope.onScope; }
-  set onScope(fn) { this._scope.onScope = fn; }
 
 
 
   // -------------------------------------------------------------------------
   // FFT — the contiguous-cursor consumer (worker pool + accumulator + FLL + the
-  // render-time .frc/mains de-embed) lives in FftController (this._fft). The
-  // engine delegates the public API; the capture fan-out drives feedFft().
+  // render-time .frc/mains de-embed) lives in FftController (engine.fft). The FFT
+  // pane drives its record lifecycle + channel directly; the cross-cutting stats
+  // API (completedAnalyses / resetAnalyses / nextFrameProgress / reemitFftDisplay)
+  // stays a thin service forward above.
   // -------------------------------------------------------------------------
-
-  async setFftRecording(on) { return this._fft.setRecording(on); }
-
-  /** Selects which ADC channel the FFT analyzes (L → ch0, R → ch1); a real
-   *  change resets the statistics + accumulator (Java FftView button →
-   *  setFftChannel → resetStatistics). Sync — delegates to the FFT controller. */
-  setFftChannel(ch) { return this._fft.setFftChannel(ch); }
 
 
 
@@ -402,14 +395,14 @@ export class AudioEngine {
 
   async start() {
     await this.startGenerator();
-    await this.setScopeRecording(true);
-    await this.setFftRecording(true);
+    await this._scope.setRecording(true);
+    await this._fft.setRecording(true);
   }
 
   async stop() {
     await this.stopGenerator();
-    await this.setScopeRecording(false);
-    await this.setFftRecording(false);
+    await this._scope.setRecording(false);
+    await this._fft.setRecording(false);
     this._status('stopped.');
   }
 }
