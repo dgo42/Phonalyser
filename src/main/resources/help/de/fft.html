@@ -404,6 +404,22 @@
      linear ist nützlich, um gleichmäßig beabstandete Störsignale zu
      erkennen.</p>
 
+  <h4 id="fft-detect-time-discontinuity">Zeitliche Diskontinuität erkennen</h4>
+  <p>Kontrollkästchen, <b>standardmäßig ein</b>.  Während der Mittelung wird
+     jeder Erfassungsblock im Zeitbereich gegen die Sinus-Rekurrenz des Tons
+     geprüft; eine Klebestelle, ein Sample-Ausfall (xrun) oder ein Glitch bricht
+     diese Vorhersage, sodass der Block verworfen und die Erfassung neu
+     synchronisiert wird — derselbe Detektor, der den Störungstrigger des
+     Oszilloskops steuert (siehe
+     <a href="theory/fft.html#rejection">Theorie ▸ schlechte Blöcke aus der
+     Mittelung heraushalten</a>).</p>
+  <p><b>Für ein kleines oder nichtsinusförmiges Signal abwählen.</b>  Ein
+     schwaches (SNR-armes) oder bewusst nichtsinusförmiges Signal bricht die
+     Sinus-Rekurrenz-Vorhersage bei <em>jedem</em> Block, sodass das Gatter alle
+     verwerfen würde und nie ein Spektrum erschiene.  Das Abschalten des Gatters
+     lässt die FFT weiterrechnen; das spektrale Störungsgatter im Frequenzbereich
+     bleibt in jedem Fall aktiv.</p>
+
   <h3 id="fft-tab-thd">Tab „THD-Einstellungen"</h3>
   <p><img src="img/FFT - THD settings.png" alt="Tab THD-Einstellungen"/></p>
 

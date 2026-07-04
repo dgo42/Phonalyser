@@ -163,6 +163,7 @@ public final class FftTabControl extends AbstractTabControl {
     private Combo              mainsSuppressionCombo;
     private Button             fundFromGenCheck;
     private Button             logFreqCheck;
+    private Button             detectTimeDiscCheck;
     private Button             coherentCheck;
     /** "Align generator" — None / PID / FLL — selects the FFT-side
      *  frequency-alignment loop.  Enabled in the UI only when both
@@ -302,6 +303,7 @@ public final class FftTabControl extends AbstractTabControl {
         if (stopAfterNField     != null) stopAfterNField    .setData("helpAnchor", "fft.html#fft-stop-after");
         if (fundFromGenCheck    != null) fundFromGenCheck   .setData("helpAnchor", "fft.html#fft-fund-from-gen");
         if (logFreqCheck        != null) logFreqCheck       .setData("helpAnchor", "fft.html#fft-log-freq-axis");
+        if (detectTimeDiscCheck != null) detectTimeDiscCheck.setData("helpAnchor", "fft.html#fft-detect-time-discontinuity");
         if (coherentCheck       != null) coherentCheck      .setData("helpAnchor", "fft.html#fft-coherent-avg");
         if (distMinEnable       != null) distMinEnable      .setData("helpAnchor", "fft.html#fft-dist-min");
         if (distMinField        != null) distMinField       .setData("helpAnchor", "fft.html#fft-dist-min");
@@ -404,7 +406,7 @@ public final class FftTabControl extends AbstractTabControl {
         // a separate Label was creating an extra gap.
         Composite stopRow = new Composite(g, SWT.NONE);
         GridData stopRowGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
-        stopRowGd.horizontalSpan = 4;
+        stopRowGd.horizontalSpan = 2;
         stopRow.setLayoutData(stopRowGd);
         RowLayout stopRowLayout = new RowLayout(SWT.HORIZONTAL);
         stopRowLayout.marginTop    = 0; stopRowLayout.marginBottom = 0;
@@ -432,12 +434,16 @@ public final class FftTabControl extends AbstractTabControl {
         Bindings.onChange(toolbarTabs, prefs.fftStopAfterNEnabledProperty(),
                 v -> refreshStopAfterEnable());
 
-        // Mains-suppression selector shares the stop-after row.  Pre-filters
-        // the captured signal (50/60 Hz + harmonics) before averaging; tracks
-        // the mains frequency live while recording.
-        new Label(stopRow, SWT.NONE).setText(I18n.t("fft.settings.mainsSuppression"));
-        mainsSuppressionCombo = new Combo(stopRow, SWT.READ_ONLY);
+        // Mains-suppression selector sits in the outer grid's right-hand column
+        // pair (col 2 label + col 3 combo) — sharing the stop-after grid row but
+        // lining up with Window / Averages above and Align generator below,
+        // instead of floating after the stop-after field.  Pre-filters the
+        // captured signal (50/60 Hz + harmonics) before averaging; tracks the
+        // mains frequency live while recording.
+        addLabel(g, I18n.t("fft.settings.mainsSuppression"));
+        mainsSuppressionCombo = new Combo(g, SWT.READ_ONLY);
         mainsSuppressionCombo.setItems(MainsSuppression.LABELS);
+        mainsSuppressionCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         mainsSuppressionCombo.setToolTipText(I18n.t("fft.settings.mainsSuppression.tooltip"));
         Bindings.combo(mainsSuppressionCombo, prefs.fftMainsSuppressionProperty(),
                 MainsSuppression.values());
@@ -489,15 +495,26 @@ public final class FftTabControl extends AbstractTabControl {
         Bindings.onChange(toolbarTabs, prefs.fftCoherentAveragingProperty(),
                 v -> toolbarTabs.refreshTab(TAB_FFT_SETTINGS));
 
+        // Log freq axis and the time-discontinuity gate share this last row —
+        // each spans ONE column (not two) so no extra row is added (the tab must
+        // stay inside the FFT-pane height).
         logFreqCheck = new Button(g, SWT.CHECK);
         logFreqCheck.setText(I18n.t("fft.settings.logFreq"));
-        GridData lgGd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
-        lgGd.horizontalSpan = 2;
-        logFreqCheck.setLayoutData(lgGd);
+        logFreqCheck.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         logFreqCheck.setToolTipText(I18n.t("fft.settings.logFreq.tooltip"));
         // Pure repaint side-effect (axis remap) lives in the view, which
         // subscribes to this same pref — a plain two-way value bind here.
         Bindings.check(logFreqCheck, prefs.fftLogFreqAxisProperty());
+
+        detectTimeDiscCheck = new Button(g, SWT.CHECK);
+        detectTimeDiscCheck.setText(I18n.t("fft.settings.detectTimeDiscontinuity"));
+        detectTimeDiscCheck.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        detectTimeDiscCheck.setToolTipText(I18n.t("fft.settings.detectTimeDiscontinuity.tooltip"));
+        // Checked (the default) runs the time-domain discontinuity gate;
+        // unchecking it lets a small or non-sinusoidal signal keep producing an
+        // FFT — the gate would otherwise reject every such block.  The worker
+        // reads this pref directly.
+        Bindings.check(detectTimeDiscCheck, prefs.fftDetectTimeDiscontinuityProperty());
 
         // Initial enable state + recompute it when fund-from-generator flips
         // (subscribed to the pref, so a preset load drives it too); snap-to-bin
