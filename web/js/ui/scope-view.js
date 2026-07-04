@@ -303,6 +303,11 @@ export class ScopeView {
       timeRight: make('scope-ovl-time'),
       vTop: { L: make('scope-ovl-volt'), R: make('scope-ovl-volt') },
       vBot: { L: make('scope-ovl-volt'), R: make('scope-ovl-volt') },
+      // Slider VALUE labels (Java drawSliders drawOutlinedText): the trigger-level voltage
+      // (right edge, yellow) and each channel's offset voltage (left edge, channel colour),
+      // shown next to their handles.
+      trigLevelVal: make('scope-ovl-volt'),
+      offsetVal: { L: make('scope-ovl-volt'), R: make('scope-ovl-volt') },
       trigLevel: makeSlider('scope-ovl-hline', 'scope-ovl-tri-left'),
       trigPos: makeSlider('scope-ovl-vline', 'scope-ovl-tri-up'),
       offset: {
@@ -371,7 +376,8 @@ export class ScopeView {
   _clearOverlayLabels() {
     const o = this._overlay;
     if (!o) return;
-    for (const el of [o.caps, o.timeLeft, o.timeRight, o.vTop.L, o.vTop.R, o.vBot.L, o.vBot.R]) {
+    for (const el of [o.caps, o.timeLeft, o.timeRight, o.vTop.L, o.vTop.R, o.vBot.L, o.vBot.R,
+      o.trigLevelVal, o.offsetVal.L, o.offsetVal.R]) {
       el.style.display = 'none';
     }
     this._hideSlider(o.trigLevel);
@@ -395,6 +401,26 @@ export class ScopeView {
     s.top = pos.top != null ? pos.top : 'auto';
     s.bottom = pos.bottom != null ? pos.bottom : 'auto';
     s.transform = pos.transform || 'none';
+  }
+
+  /** Voltage string with auto-prefix (V/mV/µV) + V/div-aware precision — faithful port of
+   *  ScopeFormat.formatVolts. The resolution derives from vpdiv (one tenth of a division) so
+   *  the label carries just enough decimals to distinguish adjacent trace pixels. */
+  _fmtVolts(v, vpdiv) {
+    const a = Math.abs(v);
+    let unit, scaledV, scaledRes;
+    if (a >= 1.0)       { unit = 'V';  scaledV = v;       scaledRes = vpdiv * 0.1; }
+    else if (a >= 1e-3) { unit = 'mV'; scaledV = v * 1e3; scaledRes = vpdiv * 0.1 * 1e3; }
+    else if (a >= 1e-6) { unit = 'µV'; scaledV = v * 1e6; scaledRes = vpdiv * 0.1 * 1e6; }
+    else if (a === 0)   return '0 V';
+    else                return v.toExponential(1) + ' V';   // Java %.2g fallback (sub-µV non-zero)
+    let dp;
+    if (scaledRes >= 1.0)   dp = 1;
+    else if (scaledRes > 0) dp = Math.ceil(-Math.log10(scaledRes)) + 1;
+    else                    dp = 3;
+    if (dp < 1) dp = 1;
+    if (dp > 6) dp = 6;
+    return scaledV.toFixed(dp) + ' ' + unit;
   }
 
   /** Arms (or cancels) a SINGLE-shot capture (Java ScopeView.setSingleArmed).
@@ -1333,11 +1359,24 @@ export class ScopeView {
     // mode. The hit-box is still set in CANVAS px so dragging is unchanged.
     if (!this.fileMode) {
       const levelY = Math.round(levelFrac * H);
-      if (o) this._positionSlider(o.trigLevel, 'h', levelFrac, '#ffff00', HANDLE_INSET, 0);
+      if (o) {
+        this._positionSlider(o.trigLevel, 'h', levelFrac, '#ffff00', HANDLE_INSET, 0);
+        // Trigger-level VOLTAGE label (Java drawSliders levelVolts): uses the UNCLAMPED level
+        // + the trigger channel's UNCLAMPED offset so a virtual (off-screen) level still states
+        // its real threshold. Yellow, right edge, left of the handle, centred on the line.
+        const trigCh = p ? p.oscTriggerChannel.get() : 'L';
+        const trigD = descByName[trigCh] || descByName.L || descByName.R;
+        if (trigD) {
+          const levelFracRaw = p ? p.oscTriggerLevelFrac.get() : levelFrac;
+          const levelVolts = (trigD.offsetFrac - levelFracRaw) * DIVISIONS_Y * trigD.vDiv;
+          this._setOverlayLabel(o.trigLevelVal, this._fmtVolts(levelVolts, trigD.vDiv), '#ffff00', '',
+            { right: (SLIDER_TRI_LONG + 6) + 'px', top: (levelFrac * 100) + '%', transform: 'translateY(-50%)' });
+        } else { o.trigLevelVal.style.display = 'none'; }
+      }
       this._triggerLevelBounds = { x: W - SLIDER_TRI_LONG - 2, y: levelY - SLIDER_GRAB_HALF,
         w: SLIDER_TRI_LONG + 4, h: 2 * SLIDER_GRAB_HALF };
     } else {
-      if (o) this._hideSlider(o.trigLevel);
+      if (o) { this._hideSlider(o.trigLevel); o.trigLevelVal.style.display = 'none'; }
       this._triggerLevelBounds = { x: -1, y: -1, w: 0, h: 0 };
     }
 
@@ -1371,13 +1410,23 @@ export class ScopeView {
         // inactive first, active last): lift the active line/handle a stacking level.
         const z = isActive ? '1' : '';
         s.core.style.zIndex = z; s.handle.style.zIndex = z;
+        // Offset VOLTAGE label (Java drawOffsetTrack): (0.5 − rawOffsetFrac)·Ydiv·vDiv, in the
+        // channel colour, left edge, right of the handle, centred on the zero-line.
+        const offsetVolts = (0.5 - d.offsetFrac) * DIVISIONS_Y * d.vDiv;
+        // Label stays FULL channel colour even for the inactive channel (Java drawOffsetTrack:
+        // only the triangle dims); d.hex is the un-attenuated trace colour.
+        this._setOverlayLabel(o.offsetVal[ch], this._fmtVolts(offsetVolts, d.vDiv), d.hex, '',
+          { left: (SLIDER_TRI_LONG + 6) + 'px', top: (clamp01(d.offsetFrac) * 100) + '%', transform: 'translateY(-50%)' });
       }
       if (isActive) {
         this._offsetBounds = { x: 0, y: offsetY - SLIDER_GRAB_HALF,
           w: SLIDER_TRI_LONG + 4, h: 2 * SLIDER_GRAB_HALF };
       }
     };
-    if (o) { this._hideSlider(o.offset.L); this._hideSlider(o.offset.R); }
+    if (o) {
+      this._hideSlider(o.offset.L); this._hideSlider(o.offset.R);
+      o.offsetVal.L.style.display = 'none'; o.offsetVal.R.style.display = 'none';
+    }
     if (activeDesc) {
       for (const ch of ['L', 'R']) {
         const d = descByName[ch];
