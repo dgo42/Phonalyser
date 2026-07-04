@@ -139,9 +139,17 @@ export class FreqRespLiveMeter {
 
   render() {
     const g = this.g, cv = this.cv;
+    // HiDPI backing store matching the CSS box (same pattern as fft-view #27): the backing
+    // store is CSS-px × devicePixelRatio and a setTransform maps 1 CSS px → dpr device px, so
+    // all drawing below is in CSS-px (W, H). The canvas previously set width = clientWidth with
+    // NO dpr and while the modal was still display:none clientWidth read 0 → a mismatched
+    // backing store, which CSS then stretched (the distorted, oversized graph).
     const W = cv.clientWidth || 520, H = cv.clientHeight || 100;
-    if (cv.width !== W) cv.width = W;
-    if (cv.height !== H) cv.height = H;
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    const bw = Math.round(W * dpr), bh = Math.round(H * dpr);
+    if (cv.width !== bw) cv.width = bw;
+    if (cv.height !== bh) cv.height = bh;
+    if (g.setTransform) g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.fillStyle = '#ffffff';
     g.fillRect(0, 0, W, H);
     g.font = '11px "Segoe UI", sans-serif';

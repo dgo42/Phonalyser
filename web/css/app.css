@@ -650,17 +650,15 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .fr-riaa-checks { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; }
 .fr-riaa-checks .form-check-sm { margin: 2px 0; }
 
-/* FreqResp action cluster (wizard + green play) at the right of the tile-tab strip */
-.fr-actions { align-self: center; display: flex; gap: 4px; margin: 0 8px; border: 1px solid #b9b9b9; padding: 2px; }
-.fr-wizard { width: 40px; height: 40px; border: 1px solid var(--field-border); background: #fff; color: #333;
-  font-size: 18px; cursor: pointer; padding: 0; }
-.fr-play { width: 44px; height: 40px; border: 1px solid var(--field-border); background: #fff; color: var(--green);
-  font-size: 30px; line-height: 0; cursor: pointer; padding: 0; }
+/* FreqResp play button: reuses led-btn shape/size; suppress the LED ::before and show play icon */
+.fr-run-btn::before { display: none; }
+.fr-run-btn i { font-size: 28px; color: var(--green); line-height: 1; }
 
-/* FreqResp pane: static title (no caret, flat grey); flat panel body */
+/* FreqResp pane: static title (no caret, flat grey); flat panel body; no enforced min-height
+   (unlike .fft-pane which locks to 152px — FreqResp panels vary significantly in height). */
 #tab-fr .pane-header { background: var(--win-bg); }
 #tab-fr .pane-header .pane-caret { display: none; }
-#tab-fr .tab-panel { background: var(--panel); box-shadow: none; }
+#tab-fr .tab-panel { background: var(--panel); box-shadow: none; min-height: 0; }
 
 /* FreqResp Calibration tab: one row per loaded .frc (path · Active · load/clear/add/remove). */
 .fr-cal-rows { display: flex; flex-direction: column; gap: 4px; }
@@ -705,8 +703,10 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 #fftSavePanel .scope-row, #fftLoadPanel .scope-row { flex-wrap: nowrap; }
 #fftSavePanel .scope-row .form-control, #fftLoadPanel .scope-row .form-control { flex: 1 1 auto; min-width: 0; }
 
-/* FreqResp sweep busy meter (level-vs-time chart). */
-.fr-meter { width: 100%; height: 100px; display: block; background: #fff; border: 1px solid var(--field-border); }
+/* FreqResp sweep busy meter (level-vs-time chart) — fixed 520×100 like the desktop meter
+   strip (FreqRespPane.openBusyShell widthHint/heightHint), so the modal wraps tightly to it
+   and the CSS box always matches the canvas's DPR-scaled backing store (no stretch). */
+.fr-meter { width: 520px; max-width: 100%; height: 100px; display: block; margin: 0 auto; background: #fff; border: 1px solid var(--field-border); }
 
 /* FreqResp wizard pages: one shown at a time (the host toggles d-none). */
 .fr-wiz-page { min-height: 120px; }
@@ -719,6 +719,19 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .prefs.modal-content { background: var(--win-bg); }
 .prefs .modal-header, .prefs .modal-footer { background: var(--win-bg); border-color: var(--hdr-border); }
 .prefs .modal-body { background: var(--win-bg); min-height: 360px; }   /* fixed height = tallest tab (FFT), so switching tabs doesn't resize the dialog */
+/* The shared one-button alert + the confirm dialog reuse .prefs for the window theming (bg /
+   header / footer borders) but hold only a short message — they must NOT inherit the
+   Preferences body's fixed 360px min-height (that left a huge empty area, the "2×2km" modal).
+   Size them to their content and keep them small, matching the app's other simple dialogs.
+   #frBusyModal is the same case: it reuses .prefs only for the window theming but holds just a
+   status line + the fixed 520×100 meter, so it too must drop the 360px floor and wrap tight. */
+#alertModal .modal-body, #confirmModal .modal-body, #frBusyModal .modal-body { min-height: 0; }
+#alertModal .modal-dialog, #confirmModal .modal-dialog { max-width: 460px; }
+/* Preferences dialog (Java PreferencesDialog DIALOG_WIDTH_PX = 700). Bootstrap's default
+   .modal-dialog (500px) squeezed the two-column preference rows; match Java's width so the
+   label|field rows lay out fully. Scoped to #prefsModal (the other .prefs modals size to
+   their own content). */
+#prefsModal .modal-dialog { max-width: 640px; }
 .prefs .prefs-tabs { border-bottom: 1px solid var(--field-border); gap: 0; background: var(--win-bg); padding: 0; }
 .prefs .prefs-tabs .nav-link { font-size: 13px; padding: 4px 12px; color: #333; font-weight: 400;
   border: 1px solid transparent; border-bottom: none; border-radius: 3px 3px 0 0; margin-bottom: -1px; background: transparent; }
@@ -745,6 +758,18 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .dpd-line { font-size: 12px; white-space: nowrap; }
 .dpd-fft { font-family: Consolas, monospace; }
 
+/* Tune-notch wizard (Java TuneNotchWizardDialog): fields grid (GridLayout(4, false) —
+   row 1 start / stop, row 2 amplitude / target), the embedded live chart, and a
+   dialog wide enough to hold it. Java lays 4 fields (FIELD_WIDTH_HINT=110 each) with
+   their labels across two columns. 460px squeezed the two-column Start/Stop |
+   Amplitude/Target row; widened to 580px so both columns (label + numfield + unit +
+   steppers) lay out without cramping. The 400×200 chart stays its size, centered. */
+#tuneNotchModal .tn-dialog { max-width: 660px; }
+.tn-fields { display: grid; grid-template-columns: max-content 1fr max-content 1fr; gap: 6px 8px; align-items: center; }
+.tn-fields label { white-space: nowrap; }
+#tnPlot { display: block; width: 600px; height: 400px; border: 1px solid #ddd; background: #fff; margin: 0 auto; }
+#tnStatus { text-align: left; }
+
 /* FFT predistortion-wizard toolbar button — sits left of the Record LED (Java FftPane toolbarRow). */
 .fft-tool-btn { align-self: center; width: 43px; height: 43px; margin: 0 6px 0 0; padding: 0; border: 1px solid var(--field-border);
   border-radius: 6px; background: #fafafa; color: #555; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
@@ -761,6 +786,8 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 /* Java SVG icons rendered as <img> on buttons (use the ported SVG, never a Bootstrap glyph;
    play/record buttons are the only exception). Red = the same filter as .lr.ico.reset. */
 .tool-svg { width: 24px; height: 24px; display: block; }
+/* Menu-item icons (Java MenuItem.setImage): inline, text-sized, baseline-aligned. */
+.menu-icon { width: 16px; height: 16px; vertical-align: -3px; }
 /* Scope trigger arm/single button (Java triggerStartBtn): a DARK square toggle (not a
    green Bootstrap button) carrying the PLAY_DARK_SMALL icon — square (w = h), matching
    the trigger toggle height, bigger icon. Disabled/idle = dark grey; .armed = yellow. */

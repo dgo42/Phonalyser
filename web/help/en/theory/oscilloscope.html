@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Theory: Oscilloscope</title>
+  <title>Phonalyser.web — Theory: Oscilloscope</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -44,7 +44,7 @@
 
     <rect x="340" y="100" width="120" height="50" rx="6" fill="#eef" stroke="#88a"/>
     <text x="400" y="120" text-anchor="middle" font-weight="bold">trigger</text>
-    <text x="400" y="138" text-anchor="middle" fill="#557">edge + level</text>
+    <text x="400" y="138" text-anchor="middle" fill="#557">edge / glitch</text>
 
     <rect x="500" y="100" width="130" height="50" rx="6" fill="#eef" stroke="#88a"/>
     <text x="565" y="120" text-anchor="middle" font-weight="bold">resampling</text>
@@ -86,12 +86,66 @@
      <em>level</em> crossed in a chosen <em>direction</em> (rising or
      falling edge).  The display is then drawn relative to that point, so a
      stationary tone stands still.</p>
-  <p>Phonalyser triggers on absolute sample positions in the stream: each
+  <p>Phonalyser.web triggers on absolute sample positions in the stream: each
      captured trigger records the absolute index of the crossing, including
      a sub-sample fraction from linear interpolation between the two
      straddling samples. That fraction shifts the rendered trace by less
      than one pixel so the waveform doesn't jitter by a sample even on a
      fast time base.</p>
+
+  <h3 id="glitch">The glitch trigger: firing on damage, not on a level</h3>
+  <p>Some events worth catching are not level crossings at all.  A capture
+     hiccup that swallows samples leaves an amplitude step or a slope splice
+     that can sit <em>anywhere</em> on the wave, in either direction — an
+     edge trigger parked at a fixed level almost never lands on it.  The
+     <b>glitch trigger</b> fires on any waveform discontinuity instead,
+     wherever it occurs; the trigger level, hysteresis and sub-sample
+     refinement do not apply.  (It is available in normal and single modes
+     only: a free-running auto scope would overwrite the caught frame on the
+     very next repaint.)</p>
+  <p>The detector exploits the fact that a sampled sinusoid — at <em>any</em>
+     frequency — obeys an exact three-term
+     recurrence<sup id="cite-1"><a href="#ref-linpred">[1]</a></sup>: each
+     sample is fully predicted by the previous two,</p>
+  <div class="eq"><i>x</i>[<i>i</i>] = 2 cos <i>ω</i> · <i>x</i>[<i>i</i>−1] − <i>x</i>[<i>i</i>−2],&nbsp;&nbsp;
+      <i>ω</i> = 2π <i>f</i> / <i>f</i><sub>s</sub><span class="no">(1)</span></div>
+  <p>so the prediction error</p>
+  <div class="eq"><i>e</i>[<i>i</i>] = <i>x</i>[<i>i</i>] − 2 cos <i>ω</i> · <i>x</i>[<i>i</i>−1] + <i>x</i>[<i>i</i>−2]<span class="no">(2)</span></div>
+  <p>nulls exactly on a clean tone at any frequency, leaving only what the
+     tone does not explain: the noise floor, residual harmonics, a second
+     tone.  When the measured channel is the trigger channel, <i>ω</i> is
+     pinned from the measured fundamental (the millihertz-accurate figure
+     from the measurement pass below); otherwise the coefficient
+     2 cos <i>ω</i> is fitted to the window itself by least squares, clamped
+     to the range a real sinusoid allows.</p>
+  <p>A sample flags as discontinuous when |<i>e</i>| exceeds <b>8× the
+     window's own mean |<i>e</i>|</b> — a threshold that <em>rides the noise
+     floor</em>.  On a clean tone that is about 6.4 standard deviations,
+     which broadband noise essentially never reaches, while a genuine splice
+     breaks the prediction by a large fraction of the signal amplitude —
+     decades above it.  And because the baseline is measured from the same
+     window, harmonics or a second tone raise it proportionally: the rule
+     scales itself.</p>
+  <p>Pinning the frequency is what keeps the detector alive up high.  The
+     plain second difference — (2) with <i>ω</i> = 0 — does not null the
+     tone: it leaves a residual of amplitude 2(1 − cos <i>ω</i>)·<i>A</i>,
+     the tone's own curvature.  For a 20 kHz tone sampled at 384 kHz that
+     residual pushes the 8×-mean threshold to roughly half the signal
+     amplitude (≈ 0.5 <i>A</i>), so every glitch short of a half-scale break
+     would pass unseen; the tuned recurrence keeps the baseline at the noise
+     floor at any frequency.</p>
+  <p>A real dropout has <em>two</em> boundaries — the entry into the gap and
+     the recovery after it (observed USB dropouts run 120–160 µs) — and both
+     break the prediction.  Above-threshold samples closer together than
+     1 ms therefore merge into a single glitch event, and the edge-direction
+     buttons choose the anchor: ↑ places the trigger on the glitch's
+     <em>start</em> (the last sample still on the old trend), ↓ on its
+     <em>end</em> (the first sample the local prediction accepts again).</p>
+  <p>The same detector guards the <a href="fft.html#rejection">FFT
+     analyser's coherent averaging</a>: each captured window is screened
+     with it in the time domain beside the spectral gates, so the scope's
+     trigger and the analyser's block rejection agree on what counts as
+     damaged.</p>
 
   <h2 id="measure">How the numbers are measured</h2>
   <p>The measurement pass works on the conditioned window in normalised
@@ -101,13 +155,32 @@
 
   <h3>Level</h3>
   <p>Over the window of <i>N</i> samples <i>x</i><sub>i</sub>:</p>
-  <div class="eq"><i>V</i><sub>pp</sub> = (max − min) · <i>V</i><sub>peak</sub><span class="no">(1)</span></div>
-  <div class="eq"><i>V</i><sub>mean</sub> = <i>V</i><sub>peak</sub> · (1/<i>N</i>) Σ <i>x</i><sub>i</sub><span class="no">(2)</span></div>
-  <div class="eq"><i>V</i><sub>rms</sub> = <i>V</i><sub>peak</sub> · √( E[<i>x</i>²] − E[<i>x</i>]² )<span class="no">(3)</span></div>
-  <p>The RMS in (3) is the <em>AC</em> RMS — the DC bias is removed first
+  <div class="eq"><i>V</i><sub>pp</sub> = (max − min) · <i>V</i><sub>peak</sub><span class="no">(3)</span></div>
+  <div class="eq"><i>V</i><sub>mean</sub> = <i>V</i><sub>peak</sub> · (1/<i>N</i>) Σ <i>x</i><sub>i</sub><span class="no">(4)</span></div>
+  <div class="eq"><i>V</i><sub>rms</sub> = <i>V</i><sub>peak</sub> · √( E[<i>x</i>²] − E[<i>x</i>]² )<span class="no">(5)</span></div>
+  <p>The RMS in (5) is the <em>AC</em> RMS — the DC bias is removed first
      (the variance form subtracts the mean), because a total RMS that
      collapsed to ≈ <i>V</i><sub>mean</sub> on a DC-biased input is far less
      useful on a scope.</p>
+  <p>On a periodic signal, (4) and (5) are not evaluated over the raw window.
+     A window holding a <em>fractional</em> number of cycles leaves a
+     dangling partial cycle whose contribution to the mean — up to
+     <i>A</i>/(π <i>n</i>) for amplitude <i>A</i> and <i>n</i> cycles in the
+     window — depends on where the window happens to start.  The spread of
+     <i>V</i><sub>mean</sub> then scales with the signal <em>amplitude</em>
+     rather than the noise: millivolts of phase-random wander at full scale,
+     swamping a microvolt noise floor.  The scope therefore integrates
+     <i>V</i><sub>mean</sub> and <i>V</i><sub>rms</sub> only between the
+     first and last rising crossings of the half-amplitude midpoint — an
+     integer number of periods.  At a midpoint crossing the signal sits at
+     its own mean by definition, so the boundary error turns second-order,
+     and <i>V</i><sub>mean</sub> settles to the noise floor: its standard
+     deviation on a full-scale signal drops from millivolts to under a
+     microvolt — the same ≈ 0.6 µV it shows on a 1 mV signal.
+     <i>V</i><sub>pp</sub>, min and max stay full-window (a peak must not be
+     dropped for landing in the partial cycle), and a signal with no two
+     same-direction crossings — DC, or noise alone — falls back to the full
+     window.</p>
 
   <h3 id="freq">Frequency — crossings, then Goertzel refinement</h3>
   <p>Reading frequency off a short buffer accurately is the hard part. A
@@ -119,7 +192,7 @@
         the true fundamental directly, so a narrow-duty rectangle yields the
         right answer rather than locking onto a strong harmonic.</li>
     <li><b>Refine with the Goertzel
-        algorithm<sup id="cite-1"><a href="#ref-goertzel">[1]</a></sup>.</b>
+        algorithm<sup id="cite-2"><a href="#ref-goertzel">[2]</a></sup>.</b>
         The Goertzel algorithm evaluates a single DFT bin at an
         <em>arbitrary</em> frequency in one O(<i>N</i>) pass — a cheap way
         to probe magnitude at any trial frequency without a full FFT. Three
@@ -131,7 +204,7 @@
         pulled off the true frequency by leakage from the
         negative-frequency image — up to a few tenths of a hertz on short
         buffers, which is what once made the scope read low next to the FFT.
-        Re-refining the peak on a Hann-windowed<sup id="cite-2"><a href="#ref-hann">[2]</a></sup>
+        Re-refining the peak on a Hann-windowed<sup id="cite-3"><a href="#ref-hann">[3]</a></sup>
         copy suppresses that image and pins the frequency to &lt; 0.02 Hz
         regardless of buffer length.</li>
   </ol>
@@ -151,7 +224,7 @@
      that such a band-limited signal is <em>completely determined</em>
      between its samples:</p>
   <div class="eq"><i>x</i>(<i>t</i>) = Σ<sub><i>n</i></sub> <i>x</i>[<i>n</i>] · sinc(<i>t</i> − <i>n</i>),&nbsp;&nbsp;
-      sinc <i>u</i> = sin(π<i>u</i>) / (π<i>u</i>)<span class="no">(4)</span></div>
+      sinc <i>u</i> = sin(π<i>u</i>) / (π<i>u</i>)<span class="no">(6)</span></div>
 
   <div class="diagram">
   <svg viewBox="0 0 820 270" width="100%" height="270" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
@@ -189,7 +262,7 @@
   </svg>
   </div>
 
-  <p>The scope evaluates (4) in its practical, windowed form — a
+  <p>The scope evaluates (6) in its practical, windowed form — a
      Lanczos<sup id="cite-5"><a href="#ref-lanczos">[5]</a></sup> kernel
      with 16 sinc lobes each side, precomputed into a phase table —
      producing one true reconstructed value per pixel column when zoomed
@@ -209,10 +282,10 @@
   <h2 id="mains">Mains-hum rejection: the tracked comb</h2>
   <p>Mains interference sits at the line frequency and every integer
      harmonic of it. A single <b>feedback comb
-     filter</b><sup id="cite-3"><a href="#ref-comb">[3]</a></sup> places a
+     filter</b><sup id="cite-6"><a href="#ref-comb">[6]</a></sup> places a
      notch at DC and at every multiple of <i>f</i>₀ at once:</p>
   <div class="eq"><i>H</i>(<i>z</i>) = (1 − <i>z</i><sup>−<i>N</i></sup>) / (1 − α·<i>z</i><sup>−<i>N</i></sup>),&nbsp;&nbsp;
-      <i>N</i> = <i>f</i><sub>s</sub> / <i>f</i>₀<span class="no">(5)</span></div>
+      <i>N</i> = <i>f</i><sub>s</sub> / <i>f</i>₀<span class="no">(7)</span></div>
   <p>where α (just below 1) sets how sharp each notch is. The trick is that
      the comb is <b>frequency-tracked</b>: real mains drifts by a few tenths
      of a hertz, and the <i>k</i>-th harmonic drifts <i>k</i>× as far, so a
@@ -241,21 +314,24 @@
 
   <h2 id="refs">References</h2>
   <ol class="refs">
-    <li id="ref-goertzel"><a href="#cite-1">1.</a>
+    <li id="ref-linpred"><a href="#cite-1">1.</a>
+        The sinusoid recurrence (1) is the order-2 case of linear prediction —
+        <a href="https://en.wikipedia.org/wiki/Linear_prediction">Wikipedia: Linear prediction</a>.</li>
+    <li id="ref-goertzel"><a href="#cite-2">2.</a>
         Goertzel algorithm (single-bin DFT) —
         <a href="https://en.wikipedia.org/wiki/Goertzel_algorithm">Wikipedia: Goertzel algorithm</a>.</li>
-    <li id="ref-hann"><a href="#cite-2">2.</a>
+    <li id="ref-hann"><a href="#cite-3">3.</a>
         Hann window and spectral leakage —
         <a href="https://en.wikipedia.org/wiki/Window_function#Hann_window">Wikipedia: Hann window</a>.</li>
-    <li id="ref-comb"><a href="#cite-3">3.</a>
-        Comb filter (the feedback form of (5)) —
-        <a href="https://en.wikipedia.org/wiki/Comb_filter">Wikipedia: Comb filter</a>.</li>
     <li id="ref-shannon"><a href="#cite-4">4.</a>
-        The sampling theorem and formula (4) —
+        The sampling theorem and formula (6) —
         <a href="https://en.wikipedia.org/wiki/Whittaker%E2%80%93Shannon_interpolation_formula">Wikipedia: Whittaker–Shannon interpolation formula</a>.</li>
     <li id="ref-lanczos"><a href="#cite-5">5.</a>
         The windowed-sinc kernel used in practice —
         <a href="https://en.wikipedia.org/wiki/Lanczos_resampling">Wikipedia: Lanczos resampling</a>.</li>
+    <li id="ref-comb"><a href="#cite-6">6.</a>
+        Comb filter (the feedback form of (7)) —
+        <a href="https://en.wikipedia.org/wiki/Comb_filter">Wikipedia: Comb filter</a>.</li>
   </ol>
 
   <p class="back"><a href="index.html">◀ Theory of operation</a> ·

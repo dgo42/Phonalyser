@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Theory: Frequency response</title>
+  <title>Phonalyser.web — Theory: Frequency response</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -117,8 +117,13 @@
   </ul>
   <p>The output is reported on a logarithmic frequency grid — geometrically
      spaced points from start to stop — so the readout density is even
-     across decades. Both ADC channels are deconvolved in parallel, so a
-     stereo device is characterised in one pass.</p>
+     across decades. The number of points is selectable in powers of two
+     from 8192 up to several million; a named <b>FS/2</b> preset sets the
+     count to half the sample rate (24 000 points for a 48 kHz input,
+     96 000 at 192 kHz), giving the grid as many points as there are hertz
+     up to Nyquist — dense enough that no resolvable feature can fall
+     between two readout points. Both ADC channels are deconvolved in
+     parallel, so a stereo device is characterised in one pass.</p>
 
   <h2 id="cal">Calibration: measuring the measurer</h2>
   <p>A frequency-response sweep measures the <em>whole</em> chain: the DAC,
@@ -137,6 +142,58 @@
      the existing measurement instantly — no re-sweep needed. The same
      calibration files feed the FFT analyser's
      <a href="fft.html#plot">de-embedding</a>.</div>
+
+  <h2 id="notch">The notch-tuning sweep: a live variant</h2>
+  <p>Measuring the distortion of a very clean source calls for a passive
+     <b>twin-T notch filter</b><sup id="cite-4"><a href="#ref-twint">[4]</a></sup>
+     ahead of the ADC: it pulls the fundamental down by tens of dB so the
+     ADC's own non-linearity is never exercised at full scale, while the
+     harmonics pass through untouched. But a twin-T only reaches its
+     theoretical null when its two arms are matched to a fraction of a
+     percent, so in practice it is built with trimmers and <em>tuned</em> —
+     and tuning by repeated one-shot sweeps is hopeless, because each
+     trimmer touch needs immediate feedback. The frequency-response engine
+     therefore offers a live variant: a very short sweep (about a quarter
+     of a second) plays in a continuous loop while the deconvolved curve is
+     redrawn roughly ten times per second. Turning a trimmer moves the null
+     on screen in real time; a readout tracks the deepest point (frequency
+     and depth in dB), and a marker at the chosen target frequency grades
+     from red (−50 dB, shallow) to green (−90 dB, deep) according to the
+     attenuation <em>at the target</em> — because what matters for the
+     distortion measurement is suppression at the fundamental you will
+     actually use, not the depth of a null sitting somewhere nearby.</p>
+  <p>The loop can be analysed at any arbitrary instant because its period
+     is an exact power of two samples: any window of that length contains
+     one complete sweep, merely rotated in time, and the rotation looks to
+     the deconvolution like extra transport delay — which the impulse-peak
+     delay removal described above cancels anyway. The seam of the loop is
+     hidden by a short raised-cosine fade (25 ms per side), and the played
+     band is widened 2.5× beyond the displayed span so that the fades and
+     the band-edge roll-off fall outside what is shown.</p>
+  <p><b>Every probe lands exactly on an FFT bin.</b>  Because the analysed
+     window is exactly one loop period, the sweep is periodic in the window:
+     its spectrum consists of lines sitting precisely on bin centres, and
+     there is no leakage — each bin holds the exact magnitude at that
+     frequency. The live curve is therefore reported directly on the bin
+     grid (a few hertz per point) rather than resampled onto the usual
+     logarithmic grid. Interpolating between bins would be harmless for a
+     broad response, but a good notch null spans only a handful of bins:
+     interpolation blurs it and makes the reported depth jitter from frame
+     to frame.</p>
+  <p><b>Smoothing must be off.</b>  The Savitzky-Golay smoothing that
+     benefits an ordinary sweep is fatal here. Its sliding polynomial fit
+     spans seven grid points — on the bin-aligned grid, a window some
+     15–20 Hz wide. A well-tuned null is far narrower than that, so the
+     fit averages the steep notch walls into the minimum and fills the
+     notch in, under-reporting its depth by roughly 9 dB. The notch sweep
+     therefore uses the raw bin magnitudes, and refines the null's position
+     below the bin spacing by fitting a parabola through the three points
+     around the minimum:</p>
+  <div class="eq">δ = ½ (<i>m</i><sub>−1</sub> − <i>m</i><sub>+1</sub>) / (<i>m</i><sub>−1</sub> − 2<i>m</i><sub>0</sub> + <i>m</i><sub>+1</sub>)<span class="no">(2)</span></div>
+  <p>where <i>m</i><sub>0</sub> is the magnitude at the lowest bin and
+     <i>m</i><sub>±1</sub> its neighbours; δ ∈ (−½, +½) is the fractional-bin
+     offset of the true null, so both its frequency and its depth are read
+     out finer than the grid itself.</p>
 
   <h2 id="who">Where it sits</h2>
   <p>Unlike the scope and FFT, which share one input device, the
@@ -162,6 +219,9 @@
     <li id="ref-sg"><a href="#cite-3">3.</a>
         Savitzky-Golay smoothing filter —
         <a href="https://en.wikipedia.org/wiki/Savitzky%E2%80%93Golay_filter">Wikipedia: Savitzky–Golay filter</a>.</li>
+    <li id="ref-twint"><a href="#cite-4">4.</a>
+        Twin-T notch network —
+        <a href="https://en.wikipedia.org/wiki/Band-stop_filter">Wikipedia: Band-stop filter</a>.</li>
   </ol>
 
   <p class="back"><a href="derotation-accuracy.html">◀ De-rotation accuracy</a> ·

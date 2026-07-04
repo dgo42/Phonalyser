@@ -140,6 +140,10 @@ export class ScopeController {
     // Java reads readEndingAt(viewEndAbs, wanted); for the pure-live tip viewEndAbs is the
     // write head, so readLatest(len) is equivalent (both end at the newest sample).
     const available = reader.readLatest(len, this.scopeBufL, this.scopeBufR);
+    // Absolute index of the window's first sample in the capture stream (Java
+    // bufStartAbs) — the scope's phase-locked mains cancellers advance their
+    // mains phase by its delta across paints.
+    const absStart = reader.getWritePos() - available;
     const t = performance.now();
     this._scopeCount++; if (!this._scopeWinT0) this._scopeWinT0 = t;
     if (t - this._scopeWinT0 >= 1000) { this._scopeFps = this._scopeCount * 1000 / (t - this._scopeWinT0); this._scopeCount = 0; this._scopeWinT0 = t; }
@@ -150,7 +154,7 @@ export class ScopeController {
       // (adcFsVoltageRms·√2) so the scope measurements read in volts.
       this.onScope(this.scopeBufR, {
         scopeFps: this._scopeFps, period: c.inRate / snapped,
-        inRate: c.inRate, snapped, available,
+        inRate: c.inRate, snapped, available, absStart,
         peakVolts: c.adcFsVoltageRms * Math.SQRT2,
         dualTone: isDualTone(c.form), f1Hz: snapped, f2Hz: c.tone2Hz,
         bufL: this.scopeBufL, bufR: this.scopeBufR,
@@ -185,7 +189,10 @@ export class ScopeController {
     }
     const available = reader.readLatest(measN, this._measBufL, this._measBufR);
     if (available < 64) return null;
-    return { bufL: this._measBufL, bufR: this._measBufR, available, inRate: c.inRate };
+    // absStart = writePos − available (Java ScopeMeasurementWorker) — feeds the
+    // measurement pass's phase-locked mains cancellers.
+    return { bufL: this._measBufL, bufR: this._measBufR, available, inRate: c.inRate,
+             absStart: writePos - available };
   }
 
   /** Consumes the CONTIGUOUS run of samples captured since the previous call, through the

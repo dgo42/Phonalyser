@@ -16,6 +16,10 @@ import {
   niceLinearMajors, niceLinearMinors, isSubDecade, isDecadeValue, minSpacing,
   formatFrequency, formatFreqTick, formatFrequencyInteger,
 } from './axis-format.js';
+// Drag-select rectangular zoom + Ctrl+Z undo (Java AbstractMeasurementView's
+// installRectZoom base machinery); this view supplies the log-aware freq / dB
+// pixel↔value mappings through the injected callbacks (Java FftView overrides).
+import { RectZoom } from './rect-zoom.js';
 
 // Plot rect margins (Java MARGIN_LEFT/TOP/BOTTOM, right inset 2).
 const MARGIN_LEFT = 68, MARGIN_TOP = 0, MARGIN_BOTTOM = 28, MARGIN_RIGHT = 2;
@@ -70,6 +74,15 @@ export class FftView {
       canvas.addEventListener('mousemove', (e) => this._onMove(e));
       canvas.addEventListener('mouseleave', () => { this._crossX = this._crossY = -1; this.applyPrefs(); });
       canvas.style.cursor = 'crosshair';
+      // Drag-select zoom + Ctrl+Z undo (Java FftView: installRectZoom(this, true) —
+      // hookMouse, so the machinery wires the drag to the canvas's own mouse events).
+      this._rectZoom = new RectZoom(canvas, {
+        captureState: () => this._captureZoomState(),
+        applyState: (s) => this._applyZoomState(s),
+        stateForRect: (sel) => this._zoomStateForRect(sel),
+        zoomableArea: () => this._zoomableArea(),
+        repaintOverlay: () => this.applyPrefs(),
+      });
       // Immediate repaint on resize (Java FftView: the SWT FormLayout resizes the canvas and
       // fires a paint event). A ResizeObserver re-sizes the backing store to the new client
       // rect and redraws the last result NOW rather than waiting for the next analysis frame.
@@ -283,6 +296,82 @@ export class FftView {
     }
   }
 
+  // ───────────── Rectangular zoom (base machinery in rect-zoom.js) ─────────────
+  // Faithful port of the Java FftView zoom overrides (commit 73f6c1f).
+
+  /** Selections live inside the plot area, between the axis-label margins
+   *  (Java FftView.zoomableArea). */
+  _zoomableArea() {
+    const W = this.cv.clientWidth || 1200, H = this.cv.clientHeight || 440;
+    return { x: MARGIN_LEFT, y: MARGIN_TOP,
+      w: W - MARGIN_LEFT - 1, h: H - MARGIN_TOP - MARGIN_BOTTOM };
+  }
+
+  /** X = displayed frequency window (Hz), Y = the magnitude window in CANONICAL
+   *  dBFS — the unit the range prefs store for every display unit (Java
+   *  FftView.captureZoomState). */
+  _captureZoomState() {
+    const p = this.prefs;
+    if (!p) return null;
+    return { xMin: p.fftFreqMinHz.get(), xMax: p.fftFreqMaxHz.get(),
+      yMin: [p.fftMagBottom.get()], yMax: [p.fftMagTop.get()] };
+  }
+
+  /** Applies through the canonical range-change protocol; the pane's
+   *  onRangeChanged (syncFftPan) clamps to [binSize, Nyquist] × [floor, ceiling]
+   *  and realigns the scrollbars (Java FftView.applyZoomState). */
+  _applyZoomState(s) {
+    const p = this.prefs;
+    if (!p) return false;
+    p.fftFreqMinHz.set(s.xMin);
+    p.fftFreqMaxHz.set(s.xMax);
+    p.fftMagBottom.set(s.yMin[0]);
+    p.fftMagTop.set(s.yMax[0]);
+    if (p.save) p.save();
+    this.applyPrefs();
+    if (this.onRangeChanged) this.onRangeChanged();
+    return true;
+  }
+
+  /** Log-aware on X (the axis flag decides); Y maps the pixel fraction linearly
+   *  onto the dBFS prefs — the wheel-zoom convention, correct for every display
+   *  unit since linear-in-dB equals log-in-V (Java FftView.zoomStateForRect —
+   *  mirrors the paint's axis preparation exactly: floor fMin at 0, stretch
+   *  sub-1-Hz spans to 1 Hz, then the log floor). */
+  _zoomStateForRect(sel) {
+    const p = this.prefs;
+    if (!p) return null;
+    const plot = this._zoomableArea();
+    if (!plot || plot.w <= 0 || plot.h <= 0) return null;
+    const logFreq = p.fftLogFreqAxis.get();
+    let fMin = Math.max(0, p.fftFreqMinHz.get());
+    const fMax = Math.max(fMin + 1, p.fftFreqMaxHz.get());
+    if (logFreq && fMin < 1) fMin = 1;      // the paint floors log fMin at 1 Hz
+    const top = p.fftMagTop.get();
+    const span = top - p.fftMagBottom.get();
+    const newTop = top - (sel.y - plot.y) / plot.h * span;
+    const newBot = top - (sel.y + sel.h - plot.y) / plot.h * span;
+    return {
+      xMin: this._xToFreq(sel.x, plot, fMin, fMax, logFreq),
+      xMax: this._xToFreq(sel.x + sel.w, plot, fMin, fMax, logFreq),
+      yMin: [newBot], yMax: [newTop],
+    };
+  }
+
+  /* Java AbstractFreqDomainView.xToFreq (:218) — exact inverse of _freqToX:
+   * LOG: safeMin = max(1, fMin), safeMax = max(fMax, safeMin·1.0000001),
+   * f = 10^(lo + t·(hi−lo)); LINEAR: f = fMin + t·(fMax−fMin). */
+  _xToFreq(xPx, plot, fMin, fMax, logFreq) {
+    const t = (xPx - plot.x) / plot.w;
+    if (logFreq) {
+      const safeMin = Math.max(1, fMin);
+      const safeMax = Math.max(fMax, safeMin * 1.0000001);
+      const lo = Math.log10(safeMin), hi = Math.log10(safeMax);
+      return Math.pow(10, lo + t * (hi - lo));
+    }
+    return fMin + t * (fMax - fMin);
+  }
+
   /** Java FftView.magUnitLabel — the axis unit caption (i18n unit.mag.*). */
   _magAxisLabel(unit) {
     return unit === 'V' ? 'V' : unit === 'V_SQRT_HZ' ? 'V/√Hz' : unit === 'DBV' ? 'dBV' : 'dBFS';
@@ -416,6 +505,9 @@ export class FftView {
     // the plot, independent of lastResult) — only the trace / dots / table need a result.
     if (!result) {
       this._drawCrosshair({ W, H, plot, margin, logAxis, fMin, fMax, magTop, magBot, magUnit, mag: null, binW, result: null });
+      // Rect-zoom overlay draws LAST, over the empty graticule too (Java onPaint
+      // ends with drawRectZoomOverlay on every paint).
+      if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
       return;
     }
 
@@ -579,6 +671,9 @@ export class FftView {
     // Crosshair + cursor readout — Java drawCrosshair, drawn whenever the cursor is
     // inside the plot (with or without a result; the |m| line is omitted when none).
     this._drawCrosshair({ W, H, plot, margin, logAxis, fMin, fMax, magTop, magBot, magUnit, mag, binW, result });
+    // Rect-zoom rubber band + focused-view accent border — LAST (Java onPaint
+    // calls drawRectZoomOverlay after the crosshair).
+    if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
   }
 
   /** Java FftView.drawCrosshair — dashed grey cross + an f / y / |m| readout box at the

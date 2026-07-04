@@ -6,7 +6,8 @@
 
 // Faithful port of org.edgo.audio.measure.dsp.FreqRespCalHelper#computeFromLogSweep
 // (and the FreqRespCalibration value type from
-// org.edgo.audio.measure.dsp.FreqRespCalibration).
+// org.edgo.audio.measure.dsp.FreqRespCalibration), plus the output-grid helpers
+// FreqRespCalHelper#binAlignedFreqs / #logSpacedFreqs.
 //
 // Reconstructs the per-frequency filter calibration H(f) from a captured
 // recording of a Farina log-sweep by direct frequency-domain deconvolution
@@ -60,6 +61,59 @@ function nextPow2(x) {
 }
 
 /**
+ * Output frequency grid sampled EXACTLY at the deconvolution's FFT bin centres
+ * (k·binHz) across [startHz, stopHz], so {@link computeFromLogSweep} reads each
+ * bin with fractional offset 0 — no phase-sensitive complex interpolation
+ * between bins (which facets the trace into a frame-to-frame comb). binHz must
+ * be sampleRate / nextPow2(captureLength) — the spacing of the FFT
+ * computeFromLogSweep builds.
+ *
+ * When the band spans more than maxPoints bins (a wide band on a fine grid) the
+ * between-bin wiggle is sub-point anyway and a full bin grid would explode the
+ * point count, so it falls back to {@link logSpacedFreqs} capped at maxPoints.
+ * Faithful port of FreqRespCalHelper#binAlignedFreqs.
+ *
+ * @param {number} startHz   band start (Hz)
+ * @param {number} stopHz    band stop (Hz)
+ * @param {number} binHz     deconvolution FFT bin spacing (Hz)
+ * @param {number} maxPoints output-grid point-count ceiling
+ * @returns {Float64Array} ascending frequency grid (Hz)
+ */
+export function binAlignedFreqs(startHz, stopHz, binHz, maxPoints) {
+  const k0 = Math.max(1, Math.ceil(startHz / binHz));
+  const k1 = Math.floor(stopHz / binHz);
+  const n = k1 - k0 + 1;
+  if (n < 2 || n > maxPoints) {
+    return logSpacedFreqs(startHz, stopHz, Math.min(maxPoints, Math.max(2, n)));
+  }
+  const freqs = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    freqs[i] = (k0 + i) * binHz;
+  }
+  return freqs;
+}
+
+/**
+ * Log-spaced (geometric) output grid: {@code points} points from startHz to
+ * stopHz inclusive. Faithful port of FreqRespCalHelper#logSpacedFreqs.
+ *
+ * @param {number} startHz band start (Hz, > 0)
+ * @param {number} stopHz  band stop (Hz, > 0)
+ * @param {number} points  number of grid points (≥ 2)
+ * @returns {Float64Array} ascending frequency grid (Hz)
+ */
+export function logSpacedFreqs(startHz, stopHz, points) {
+  const freqs = new Float64Array(points);
+  const logStart = Math.log(startHz);
+  const logEnd = Math.log(stopHz);
+  for (let i = 0; i < points; i++) {
+    const t = i / (points - 1);
+    freqs[i] = Math.exp(logStart + (logEnd - logStart) * t);
+  }
+  return freqs;
+}
+
+/**
  * Reconstructs H(f) from the captured Farina log-sweep recording by
  * frequency-domain deconvolution H = Y / X, removing the DAC↔ADC transport
  * delay and normalising the passband to ~1.0 (= 0 dB).
@@ -72,11 +126,17 @@ function nextPow2(x) {
  * @param {number} amplitudeVRms          DAC drive level (V RMS)
  * @param {number} adcFsVoltageRms        ADC full-scale level (V RMS); ≤ 0 disables magnitude normalisation
  * @param {number} [fadeSamples=0]        per-side Hann fade length applied to the reference (match the player)
+ * @param {boolean} [applySavGolFilter=true] false skips the final Savitzky-Golay output smoothing.
+ *   Java's applySavGol overload parameter (renamed here so it doesn't shadow the imported
+ *   applySavGol kernel). The Tune-notch wizard disables it: its bin-aligned output grid is
+ *   coarse (a few Hz per point), so the fixed SAVGOL_WINDOW-point SG window spans ~15-20 Hz
+ *   and rounds the bottom off a deep, narrow notch null (it read ≈9 dB shallow). A dense
+ *   main-pane grid keeps SG on, where the window is sub-Hz and harmless.
  * @returns {FreqRespCalibration} the per-point calibration on the {@code freqs} grid
  */
 export function computeFromLogSweep(
   yRec, sweepRef, leadInSamples, sampleRate, freqs,
-  amplitudeVRms, adcFsVoltageRms, fadeSamples = 0,
+  amplitudeVRms, adcFsVoltageRms, fadeSamples = 0, applySavGolFilter = true,
 ) {
   const xLen = leadInSamples + sweepRef.length;
   const needed = Math.max(yRec.length, xLen);
@@ -167,7 +227,7 @@ export function computeFromLogSweep(
   // Savitzky-Golay smoothing of the final arrays. Magnitude smoothed directly;
   // phase smoothed in (sin, cos) space and recombined via atan2 to handle the
   // ±π wraparound at notches. Boundary samples use reflection.
-  if (USE_SAVGOL_FILTER && nPoints >= SAVGOL_WINDOW) {
+  if (USE_SAVGOL_FILTER && applySavGolFilter && nPoints >= SAVGOL_WINDOW) {
     const coeffs = savGolCoefficients(SAVGOL_WINDOW, SAVGOL_ORDER);
     const sinPh = new Float64Array(nPoints);
     const cosPh = new Float64Array(nPoints);

@@ -20,6 +20,8 @@
  * wheel/drag navigation still works in parallel and calls back through view.onRangeChanged.
  */
 import { FlatScrollbar } from '../widgets/flat-scrollbar.js';
+import { MessageBus } from '../bus/message-bus.js';
+import { Events } from '../bus/events.js';
 import { t } from '../i18n/i18n.js';
 
 // Resolution of the FlatScrollbars (Java FftPane.SCROLL_RANGE) — any large integer; slider
@@ -85,6 +87,34 @@ export class FftPane {
     // Debug/e2e hook: nothing else exposes the app's prefs to the page, and the
     // FFT pan/zoom probes must read fftMagTop/Bottom + fftFreqMin/MaxHz live.
     if (typeof window !== 'undefined') window.__fftPane = this;
+
+    // FreqResp measurement lifecycle (Java FftPane freqRespStarted/StoppedListener):
+    // the sweep needs the capture device exclusively — stop an in-flight FFT recording
+    // and gray the Record LED on STARTED, re-enable it on STOPPED.
+    const bus = MessageBus.instance();
+    bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, () => this.onFreqRespMeasurementStarted());
+    bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => this.onFreqRespMeasurementStopped());
+  }
+
+  /** Stops any in-flight FFT recording and grays the Record LED so the user can't kick it
+   *  back on mid-sweep (Java FftPane.onFreqRespMeasurementStarted — the Frequency Response
+   *  analyzer needs exclusive use of the capture device while it runs). */
+  async onFreqRespMeasurementStarted() {
+    $('.fft-pane .led-btn').prop('disabled', true);
+    // Stop the FFT via the ENGINE unconditionally — NOT gated on the shell record flag.
+    // A shell/controller desync (the LED reads off while the controller is still
+    // recording) otherwise left the FFT feeding on the sweep — it collected averages of
+    // the FreqResp sweep and made the measurement ride its still-open capture. setRecording
+    // is a no-op when already off, so this is safe; reconcile the shell flag + LED to the
+    // engine's real state.
+    this._setFftRec(await this.engine.setFftRecording(false));
+    this.syncFftLed();
+  }
+
+  /** Counterpart that re-enables the Record LED once the sweep finishes (or aborts)
+   *  (Java FftPane.onFreqRespMeasurementStopped). */
+  onFreqRespMeasurementStopped() {
+    $('.fft-pane .led-btn').prop('disabled', false);
   }
 
   // =========================================================================

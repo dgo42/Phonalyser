@@ -5,7 +5,7 @@
  */
 
 // Faithful port of org.edgo.audio.measure.enums.{OscSliderId, TriggerEdge,
-// TriggerMode} as frozen constant objects. The string VALUES match the legal
+// TriggerMode, TriggerType} as frozen constant objects. The string VALUES match the legal
 // serialised enum names used elsewhere in the web port (preferences.js stores
 // 'RISE'/'FALL', 'AUTO'/'NORMAL'/'SINGLE'), so these constants interoperate with
 // the persisted state — they just give the nav/trigger code named handles
@@ -30,4 +30,14 @@ export const TriggerMode = Object.freeze({
   AUTO: 'AUTO',
   NORMAL: 'NORMAL',
   SINGLE: 'SINGLE',
+});
+
+/** Trigger event type: EDGE fires on a level crossing (the classic Schmitt
+ *  trigger); GLITCH fires on a dV/dt discontinuity — a per-sample jump far
+ *  beyond the signal's own bounded slew, e.g. a dropped-samples DAC gap.
+ *  The TriggerEdge slope applies to both: crossing direction for EDGE,
+ *  jump sign for GLITCH. */
+export const TriggerType = Object.freeze({
+  EDGE: 'EDGE',
+  GLITCH: 'GLITCH',
 });

@@ -12,9 +12,22 @@
  */
 import { SignalBuffer } from './signal-buffer.js';
 import { SignalBufferReader } from './signal-buffer-reader.js';
+import { MessageBus } from '../bus/message-bus.js';
+import { Events } from '../bus/events.js';
 
 /** Shared capture ring length, seconds — mirrors SharedCapture.BUFFER_SECONDS. */
 export const BUFFER_SECONDS = 22.0;
+
+/** Bounded device-open retry (mirror GeneratorController.startGenerator's
+ *  MAX_ATTEMPTS / RETRY_PAUSE_MS): a measurement takeover (FreqResp / Tune-notch)
+ *  stops the other modules then opens the device itself, but the just-stopped
+ *  AudioContexts release the OS device tens of ms AFTER their close() resolves —
+ *  so the first getUserMedia can lose the race and reject NotReadableError /
+ *  AbortError even though no OTHER app holds it (a SELF-contention). Retry a few
+ *  times with a short pause before reporting a genuine external hold. */
+const OPEN_MAX_ATTEMPTS = 3;
+const OPEN_RETRY_PAUSE_MS = 250;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class SharedCapture {
   /**
@@ -41,6 +54,16 @@ export class SharedCapture {
     this._srcNode = null;
     this.inSampleRate = 0;
     this._lastStartError = '';   // last device-open failure message (for the streaming-save error)
+    // True only while WE are tearing the context down, so the context's own 'closed'/'suspended'
+    // statechange during teardown is not misread as an unexpected device failure.
+    this._closing = false;
+  }
+
+  /** Publishes AUDIO_DEVICE_ERROR (direction = input) so the shell can raise a visible alert.
+   *  Used for BOTH the acquire()-time device-open rejection and the async statechange/onerror that
+   *  fires when a running input device is lost (typically another app grabbed it exclusively). */
+  _reportDeviceError(detail) {
+    MessageBus.instance().publish(Events.AUDIO_DEVICE_ERROR, { direction: 'input', detail });
   }
 
   /** The one shared ring (null when closed). */
@@ -60,6 +83,33 @@ export class SharedCapture {
   get refCount() { return this._refCount; }
   /** True while the device is open (any consumer holds a reference). */
   get isCapturing() { return this._refCount > 0; }
+  /** True while the input AudioContext is still open — including the brief window
+   *  AFTER release() dropped refCount to 0 but teardown()'s inCtx.close() has not
+   *  yet resolved (the OS device is still held). The idle-wait polls this so a
+   *  measurement takeover blocks until the device is genuinely free, not merely
+   *  until the refcount flag flipped. */
+  get contextOpen() { return this.inCtx != null || this._closing; }
+
+  /** One getUserMedia attempt at the requested rate, falling back to the device's
+   *  own rate. Returns the MediaStream or throws (NotReadableError/AbortError on
+   *  an exclusive-hold contention). Split out so acquire() can retry it. */
+  async _openStream(c) {
+    // stereo so ch1 (calibrated) exists
+    const micBase = { deviceId: { exact: c.inDeviceId }, channelCount: { ideal: 2 },
+      echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: { ...micBase, sampleRate: { exact: c.inRate } } });
+    } catch (e) {
+      // A rate the device won't expose is a constraint problem, not a busy device —
+      // retry WITHOUT the rate constraint, but ALWAYS keep deviceId:{exact} so we only
+      // ever capture from the CONFIGURED input. Any error from this second form
+      // (NotReadable/Abort busy, or OverconstrainedError on a cold/unresolvable id)
+      // propagates to acquire()'s retry loop, which retries the SAME device and then
+      // surfaces a visible error — it must NEVER silently substitute the default input.
+      if (e.name === 'NotReadableError' || e.name === 'AbortError') throw e;
+      return await navigator.mediaDevices.getUserMedia({ audio: micBase });
+    }
+  }
 
   /** Opens the input device on the first acquire (refCount 0→1) and creates the one shared
    *  SignalBuffer; otherwise just bumps the refcount. Returns a fresh SignalBufferReader cursor
@@ -77,12 +127,24 @@ export class SharedCapture {
       // rate. A MediaStreamSource whose stream rate ≠ the context rate raises the async "AudioContext
       // encountered an error from the audio device" and silently kills capture. Try the exact rate,
       // then fall back to whatever the device gives if it won't expose it via getUserMedia.
-      const micBase = { deviceId: { exact: c.inDeviceId }, channelCount: { ideal: 2 },   // stereo so ch1 (calibrated) exists
-        echoCancellation: false, noiseSuppression: false, autoGainControl: false };
-      try {
-        this.stream = await navigator.mediaDevices.getUserMedia({ audio: { ...micBase, sampleRate: { exact: c.inRate } } });
-      } catch (_) {
-        this.stream = await navigator.mediaDevices.getUserMedia({ audio: micBase });
+      // Bounded retry on NotReadableError/AbortError (the just-stopped modules may still be
+      // releasing the OS device — a self-contention, not an external grab); pause + retry before
+      // letting the failure fall through to the catch (which raises the visible alert).
+      for (let attempt = 1; ; attempt++) {
+        try {
+          this.stream = await this._openStream(c);
+          break;
+        } catch (e) {
+          // OverconstrainedError included: a cold device (id not yet resolvable,
+          // rate not yet exposed) is a transient constraint miss on takeover, not a
+          // permanent hold — retry the bounded loop before the visible alert, the
+          // same tolerance Java's translateOpenFailure gives format/in-use opens.
+          const retriable = e.name === 'NotReadableError' || e.name === 'AbortError'
+            || e.name === 'OverconstrainedError';
+          if (!retriable || attempt >= OPEN_MAX_ATTEMPTS) throw e;
+          this._status(`input device busy (attempt ${attempt}/${OPEN_MAX_ATTEMPTS}) — retrying…`);
+          await sleep(OPEN_RETRY_PAUSE_MS);
+        }
       }
       const trackRate = this.stream.getAudioTracks()[0].getSettings().sampleRate || c.inRate;
       if (trackRate !== c.inRate) c.inRate = trackRate;   // device gave a different rate → re-pin the analysis to it
@@ -91,6 +153,16 @@ export class SharedCapture {
       // left snapped=undefined → period=NaN → a broken scope trace whenever Scope Record was used alone.
       this._computeAnalysisFreqs();
       this.inCtx = new AudioContext({ sampleRate: trackRate });   // MATCH the stream so it can't rate-mismatch
+      // Surface an unexpected device loss to the user: the async 'AudioContext encountered an error
+      // from the audio device' fires onerror, and losing the device exclusively (another app grabbed
+      // it) drops the context to 'interrupted'/'closed'. Only alert when it wasn't OUR teardown.
+      this._closing = false;
+      this.inCtx.onerror = () => { if (!this._closing) this._reportDeviceError('AudioContext error'); };
+      this.inCtx.addEventListener('statechange', () => {
+        if (this._closing || !this.inCtx) return;
+        const st = this.inCtx.state;
+        if (st === 'interrupted' || st === 'closed') this._reportDeviceError('AudioContext state=' + st);
+      });
       await this.inCtx.audioWorklet.addModule(new URL('./worklets/capture-processor.js', import.meta.url));
       // Keep references so the release path can disconnect the whole capture graph BEFORE closing the
       // context (closing with worklets still wired can crash the renderer).
@@ -110,6 +182,11 @@ export class SharedCapture {
     } catch (e) {
       this._lastStartError = e.name + ' — ' + e.message;
       this._status('capture start failed: ' + this._lastStartError);
+      // Raise a visible alert for a genuine device-open failure (device busy / unplugged / driver
+      // gone). getUserMedia rejects with NotReadableError/AbortError when the input is held by
+      // another app in exclusive mode; NotFoundError when it vanished. NotAllowed/SecurityError is
+      // a permission denial (not a "device in use" case) — status only, no modal.
+      if (e.name !== 'NotAllowedError' && e.name !== 'SecurityError') this._reportDeviceError(this._lastStartError);
       await this.teardown();
       return null;
     }
@@ -128,6 +205,7 @@ export class SharedCapture {
    *  teardown (also used on an acquire failure). */
   async teardown() {
     this._refCount = 0;
+    this._closing = true;   // suppress the statechange/onerror our own close() will fire
     // Silence the capture port so no more batches dispatch into a half-torn ring.
     if (this._capNode) { try { this._capNode.port.onmessage = null; } catch (_) {} }
     for (const n of [this._srcNode, this._capNode, this._silentNode]) {

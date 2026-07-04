@@ -11,6 +11,8 @@
  * through `genFreq` + the FLL trim state held here (the FFT consumer reads/updates them for now).
  */
 import { GenSignalForm, isDualTone } from '../generator/dds-kernel.js';
+import { MessageBus } from '../bus/message-bus.js';
+import { Events } from '../bus/events.js';
 import { debug } from '../util/debug.js';
 
 /** Converts a dBFS amplitude to the DDS kernel's V RMS scale. A full-scale sine has
@@ -24,6 +26,41 @@ function dbfsToVrms(dbFs, dacFsAmpl) {
  *  config.ampDbfs. */
 function ampVrmsOf(c) {
   return (c.ampVrms != null) ? c.ampVrms : dbfsToVrms(c.ampDbfs, c.dacFsVoltageAmpl);
+}
+
+/** Bounded output-device-open retry — faithful to GeneratorController's MAX_ATTEMPTS /
+ *  RETRY_PAUSE_MS: a measurement takeover stops the other modules then opens the DAC itself,
+ *  but a just-stopped output context releases the OS device tens of ms AFTER its close()
+ *  resolved, so the first open can lose the race and reject NotReadableError / AbortError even
+ *  though no OTHER app holds it (a self-contention). Retry with a short pause before reporting. */
+const OPEN_MAX_ATTEMPTS = 3;
+const OPEN_RETRY_PAUSE_MS = 250;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Opens an output AudioContext + applies the selected sink, retrying the open on a
+ *  NotReadableError/AbortError contention (a self-contention while a just-stopped context is
+ *  still releasing the OS DAC). Throws the last error only after the attempts are exhausted
+ *  (a genuine external hold). Shared by startGenerator / openSweepContext / playSweepBuffer. */
+async function openOutputContext(options, sinkId, status) {
+  for (let attempt = 1; ; attempt++) {
+    let ctx = null;
+    try {
+      ctx = new AudioContext(options);
+      if (ctx.setSinkId && sinkId) {
+        try { await ctx.setSinkId(sinkId); } catch (e) { console.warn('setSinkId', e); }
+      }
+      // Force the device to actually engage so a busy DAC surfaces its NotReadable/Abort HERE
+      // (inside the retry) rather than asynchronously after we've reported success.
+      if (ctx.state === 'suspended') await ctx.resume();
+      return ctx;
+    } catch (e) {
+      try { if (ctx) await ctx.close(); } catch (_) { /* ignore */ }
+      const retriable = e.name === 'NotReadableError' || e.name === 'AbortError';
+      if (!retriable || attempt >= OPEN_MAX_ATTEMPTS) throw e;
+      status(`output device busy (attempt ${attempt}/${OPEN_MAX_ATTEMPTS}) — retrying…`);
+      await sleep(OPEN_RETRY_PAUSE_MS);
+    }
+  }
 }
 
 export class GeneratorController {
@@ -45,6 +82,9 @@ export class GeneratorController {
     this.outCtx = null;
     this.genNode = null;
     this.outSampleRate = 0;
+    // True only while WE are stopping the generator, so the context's own 'closed' statechange
+    // during stopGenerator() is not misread as an unexpected output-device failure.
+    this._closing = false;
     // FLL trim state (the FFT consumer drives it off fundamentalHzRefined; reset on each start).
     this.genFreq = 0;
     this.fllErrHz = 0;
@@ -54,11 +94,52 @@ export class GeneratorController {
     // File-player lane (monitoring convenience, NOT the measurement path).
     this._fileSrc = null;
     this._fileCtx = null;
+    // Output context opened by openSweepContext() but not yet handed a buffer — the
+    // freqresp sweep opens it first to learn the granted output rate (so it can cap
+    // the sweep band to the granted Nyquist), then plays into it via playSweepBuffer.
+    this._pendingSweepCtx = null;
     this.onFileEnded = null;   // () => void — fires on natural (non-loop) end
+
+    // The FreqResp sweep needs the DAC exclusively — stop both engines (Java
+    // GeneratorController wireBusListeners: freqRespStarted → stopEngines()). The
+    // pane-side visuals (Play LEDs, ON-AIR banner) ride the panes' OWN subscriptions.
+    MessageBus.instance().subscribe(Events.FREQRESP_MEASUREMENT_STARTED,
+      () => { this.stopEngines(); });
+    // "Is the generator producing a signal — OR still holding an output device?" — polled by
+    // the FreqResp sweep + Tune-notch while they wait for the DAC to go idle (Java
+    // registerResponder GENERATOR_RUNNING → isProducingSignal). Reports true not only while a
+    // tone/file is playing but also while ANY output context is still open, because
+    // stopGenerator()/stopFile() flip their playing flags SYNCHRONOUSLY but the outCtx.close()
+    // that actually releases the OS DAC resolves tens of ms later. Without this the idle-wait
+    // returned as soon as the flags flipped and the takeover opened the DAC while the previous
+    // context was still closing → NotReadableError (a self-contention).
+    MessageBus.instance().registerResponder(Events.GENERATOR_RUNNING,
+      () => this.running || this.filePlaying || this.outputContextOpen);
+  }
+
+  /** Stops BOTH output engines — the DDS tone and the file player (Java
+   *  GeneratorController.stopEngines, the FREQRESP_MEASUREMENT_STARTED reaction). */
+  async stopEngines() {
+    await this.stopGenerator();
+    await this.stopFile();
+  }
+
+  /** Publishes AUDIO_DEVICE_ERROR (direction = output) so the shell can raise a visible alert —
+   *  the output device (generator / freqresp playback) failed to open or was lost mid-play
+   *  (typically another app grabbed it exclusively). */
+  _reportDeviceError(detail) {
+    MessageBus.instance().publish(Events.AUDIO_DEVICE_ERROR, { direction: 'output', detail });
   }
 
   /** True while the generator is producing a signal (DDS tone or the WAV file player). */
   get running() { return this._genOn; }
+
+  /** True while ANY output context is still open — the DDS tone context (outCtx), the file /
+   *  sweep playback lane (_fileCtx), or a sweep context opened but not yet handed a buffer
+   *  (_pendingSweepCtx). Stays true through the brief window AFTER a stop flipped the playing
+   *  flag but BEFORE the context's close() resolved, so the idle-wait blocks until the OS DAC
+   *  is genuinely released, not merely until the flag flipped. */
+  get outputContextOpen() { return this.outCtx != null || this._fileCtx != null || this._pendingSweepCtx != null; }
 
   /** Posts a live message to the DDS worklet (no-op when not running). */
   postGen(msg) {
@@ -68,8 +149,9 @@ export class GeneratorController {
   /** The frequency the generator actually emits for the current form — faithful port of
    *  GeneratorController.emitFrequency: RECTANGLE is sample-period-aligned (fs/round(fs/f))
    *  so its hard +1/-1 edge always lands on a sample (no per-cycle edge jitter); SINE /
-   *  DUAL_TONE take the FFT-bin snap ONLY when snap-to-bin is on; every other form
-   *  (TRIANGLE, noise, SINE_COMP, …) emits the raw entered value. */
+   *  SINE_COMP / DUAL_TONE take the FFT-bin snap ONLY when snap-to-bin is on (Java
+   *  FftBinSnap.snapIfEnabled admits SINE_COMP since 4887ecb); every other form
+   *  (TRIANGLE, noise, …) emits the raw entered value. */
   _genEmitFreq() {
     const c = this.config;
     const raw = c.toneHz;
@@ -78,7 +160,8 @@ export class GeneratorController {
       if (raw <= 0 || outRate <= 0) return raw;
       return outRate / Math.max(2, Math.round(outRate / raw));   // samplePeriodAlignedHz
     }
-    if ((c.form === GenSignalForm.SINE || isDualTone(c.form)) && c.snapToBin) {
+    if ((c.form === GenSignalForm.SINE || c.form === GenSignalForm.SINE_COMP
+        || isDualTone(c.form)) && c.snapToBin) {
       // Java FftBinSnap.snapIfEnabled: binHz = OUTPUT sampleRate / fftLength
       // (the emit grid is the DAC's bin width, not the capture-side binW).
       const outRate = this.outSampleRate || c.outRate;
@@ -115,10 +198,9 @@ export class GeneratorController {
   snapToRate(sampleRate) {
     const c = this.config;
     const raw = c.toneHz;
-    // The FLL target snaps a compensated sine as a SINE: Java FftController.applyFrequencyLock:315
-    // calls snapIfEnabled with GenSignalForm.SINE HARD-CODED, so SINE_COMP locks to the bin even though
-    // FftBinSnap.snapIfEnabled(form) + the generator emit leave SINE_COMP raw. Without SINE_COMP here the
-    // FLL targeted the raw off-bin frequency and never aligned (user: "sine comp doesn't snap/lock").
+    // SINE_COMP snaps like SINE: Java FftBinSnap.snapIfEnabled admits SINE / SINE_COMP / DUAL_TONE
+    // (and FftController.applyFrequencyLock:315 additionally hard-codes GenSignalForm.SINE), so the
+    // FLL target and the generator emit agree on the bin-snapped frequency for a compensated sine.
     if (c.form !== GenSignalForm.SINE && c.form !== GenSignalForm.SINE_COMP && !isDualTone(c.form)) return raw;
     if (!c.snapToBin) return raw;
     const binHz = sampleRate / c.fftSize;
@@ -159,11 +241,21 @@ export class GeneratorController {
     this.rejectedCount = 0;
     this._status('opening output context + device…');
     try {
-      // OUTPUT context (DAC) — generator at the DAC's native rate.
-      this.outCtx = new AudioContext({ sampleRate: c.outRate, latencyHint: 'playback' });
-      if (this.outCtx.setSinkId && c.outDeviceId) {
-        try { await this.outCtx.setSinkId(c.outDeviceId); } catch (e) { console.warn('setSinkId', e); }
-      }
+      // OUTPUT context (DAC) — generator at the DAC's native rate. Opened through the
+      // bounded-retry helper so a NotReadable/Abort contention (a just-stopped context still
+      // releasing the OS DAC) is retried before it surfaces to the user.
+      this._closing = false;
+      this.outCtx = await openOutputContext({ sampleRate: c.outRate, latencyHint: 'playback' },
+        c.outDeviceId, this._status);
+      // Surface an unexpected output-device loss: the async 'AudioContext encountered an error from
+      // the audio device' fires onerror, and losing the device exclusively drops the context to
+      // 'interrupted'/'closed'. Only alert when it wasn't OUR stopGenerator().
+      this.outCtx.onerror = () => { if (!this._closing) this._reportDeviceError('AudioContext error'); };
+      this.outCtx.addEventListener('statechange', () => {
+        if (this._closing || !this.outCtx) return;
+        const st = this.outCtx.state;
+        if (st === 'interrupted' || st === 'closed') this._reportDeviceError('AudioContext state=' + st);
+      });
       // The browser may grant a different rate than requested; re-resolve the emit frequency
       // (esp. the RECTANGLE sample-period alignment) against the ACTUAL context rate.
       this.outSampleRate = this.outCtx.sampleRate;
@@ -197,6 +289,7 @@ export class GeneratorController {
       return null;
     } catch (e) {
       this._status('generator start failed: ' + e.name + ' — ' + e.message);
+      this._reportDeviceError(e.name + ' — ' + e.message);   // visible alert: the output device couldn't be opened
       await this.stopGenerator();
       this.lastStartError = 'generator.error.startUnknown';
       return this.lastStartError;
@@ -207,6 +300,7 @@ export class GeneratorController {
    *  closing a context with a live worklet wired can crash the renderer). */
   async stopGenerator() {
     this._genOn = false;
+    this._closing = true;   // suppress the statechange our own close() will fire
     try { if (this.genNode) this.genNode.disconnect(); } catch (_) {}
     this.genNode = null;
     try { if (this.outCtx) { await this.outCtx.suspend().catch(() => {}); await this.outCtx.close(); } } catch (_) {}
@@ -281,15 +375,99 @@ export class GeneratorController {
     src.start();
   }
 
+  /** Opens the fresh output context the sweep will play into, requesting it AT
+   *  {@code requestedRate} (the capture rate), and returns the rate the browser
+   *  ACTUALLY granted. The caller MUST inspect the returned rate BEFORE authoring
+   *  the sweep and cap the sweep's top frequency to just under grantedRate/2: the
+   *  Windows output device often runs at 48/96 kHz even on a 192 kHz-input box, so
+   *  the granted output Nyquist can sit far below the requested sweep band. Anything
+   *  above the granted Nyquist is discarded by the AudioBufferSourceNode resampler
+   *  before it reaches the DAC, so it is never physically played — yet the reference
+   *  X would still carry full energy there, collapsing H = Y/X to the noise floor
+   *  over the un-played band and blowing it up (÷ near-zero |X|) at the reference's
+   *  own band edge (the reported noise-floor plot + huge near-Nyquist spike). The
+   *  context is stashed for the paired {@link #playSweepBuffer}; call it once per
+   *  measurement, then playSweepBuffer, then stopFile. */
+  async openSweepContext(requestedRate) {
+    await this.stopFile();
+    // Bounded-retry open: the FreqResp takeover stops the other modules then opens the DAC
+    // here, but a just-stopped context can still be releasing the OS device — retry the
+    // NotReadable/Abort contention before it surfaces as an alert (a self-contention).
+    const ctx = await openOutputContext({ sampleRate: requestedRate, latencyHint: 'playback' },
+      this.config.outDeviceId, this._status);
+    this._pendingSweepCtx = ctx;
+    return ctx.sampleRate;
+  }
+
+  /** Plays ONE pre-rendered mono measurement buffer (the exact Farina sweep the
+   *  deconvolution uses as its reference X) through the output context, so what is
+   *  PLAYED equals the reference by construction and shares the reference's clock
+   *  domain — mirroring the desktop, which pre-renders the sweep and hands that same
+   *  buffer to the DAC (FreqRespAnalyzer: gen.getLogSweepBuffer() is both played and
+   *  deconvolved against). Reuses the context opened by {@link #openSweepContext}
+   *  (so the caller could cap the sweep band to the granted output Nyquist); if none
+   *  is pending it opens one AT {@code sampleRate} (legacy path). Uses the file lane
+   *  (_fileSrc/_fileCtx) so stopFile() tears it down; NOT looped. Resolves once
+   *  playback has started; returns the context's granted rate. */
+  async playSweepBuffer(buf, sampleRate) {
+    let ctx = this._pendingSweepCtx;
+    this._pendingSweepCtx = null;
+    if (ctx) {
+      // The pending context already had stopFile() run inside openSweepContext; do
+      // NOT run it again here or it would tear the just-opened context down.
+    } else {
+      await this.stopFile();
+      ctx = await openOutputContext({ sampleRate, latencyHint: 'playback' },
+        this.config.outDeviceId, this._status);
+    }
+    // Tag the AudioBuffer with the rate the sweep was AUTHORED at (the capture
+    // rate), NOT ctx.sampleRate. The browser may grant an output context at a
+    // different rate than requested (a mismatched or capped output device); an
+    // AudioBufferSourceNode resamples buffer.sampleRate → ctx.sampleRate with its
+    // own high-quality resampler, so the sweep still plays over its correct
+    // PHYSICAL duration (buf.length / sampleRate seconds) and its instantaneous-
+    // frequency-vs-time law matches the deconvolution reference (rendered at this
+    // same capture rate). Tagging it with ctx.sampleRate instead told the engine
+    // "these samples are already at the context rate" — so on any rate mismatch the
+    // sweep played at the wrong speed, breaking reference==playback and smearing H
+    // into comb-noise with a huge near-Nyquist spike (division by near-zero
+    // reference energy where the mis-clocked sweep no longer has content).
+    const audioBuf = ctx.createBuffer(1, buf.length, sampleRate);
+    // copyToChannel wants a Float32Array; the sweep is Float64 — narrow it (32-bit
+    // float is the documented web-audio deviation and is what the DAC plays anyway).
+    audioBuf.copyToChannel(buf instanceof Float32Array ? buf : Float32Array.from(buf), 0);
+    const src = ctx.createBufferSource();
+    src.buffer = audioBuf; src.loop = false;
+    src.connect(ctx.destination);
+    src.onended = () => {
+      if (this._fileSrc !== src) return;   // superseded by a newer session
+      this._fileSrc = null; this._fileCtx = null;
+      ctx.close().catch(() => {});
+    };
+    this._fileCtx = ctx; this._fileSrc = src;
+    if (ctx.state === 'suspended') await ctx.resume();
+    src.start();
+    // Report the rate the browser ACTUALLY granted. When it differs from the requested
+    // (capture) rate the output device could not open at that rate and the buffer is
+    // resampled to ctx.sampleRate — everything above ctx.sampleRate/2 is lost before it
+    // ever reaches the DAC, so the deconvolution combs and spikes at HF. The caller
+    // (FreqRespHost) compares this against the capture rate and surfaces it.
+    return ctx.sampleRate;
+  }
+
   /** Live-toggles looping on the running file source (picked up immediately). */
   setFilePlayLoop(loop) { if (this._fileSrc) this._fileSrc.loop = !!loop; }
 
-  /** Stops file playback and tears down its context (idempotent). */
+  /** Stops file playback and tears down its context (idempotent). Also closes any
+   *  sweep context that openSweepContext opened but that never received a buffer
+   *  (an aborted measurement), so the output device is never left held open. */
   async stopFile() {
     const src = this._fileSrc, ctx = this._fileCtx;
-    this._fileSrc = null; this._fileCtx = null;
+    const pending = this._pendingSweepCtx;
+    this._fileSrc = null; this._fileCtx = null; this._pendingSweepCtx = null;
     if (src) { try { src.onended = null; src.stop(); } catch (e) { /* already stopped */ } try { src.disconnect(); } catch (e) { /* ignore */ } }
     if (ctx) { try { await ctx.close(); } catch (e) { /* ignore */ } }
+    if (pending && pending !== ctx) { try { await pending.close(); } catch (e) { /* ignore */ } }
   }
 
   get filePlaying() { return !!this._fileSrc; }

@@ -82,9 +82,9 @@ class UnitFamilyDef {
     }
   }
   defaultUnit(canonical) {
-    // The unit applied to suffix-less input. defaultUnitIndex >= 0: the family's
-    // fixed default (Hz / V / s); -1 (the per-div families): the unit currently
-    // displayed. Mirrors UnitFamily.defaultUnit exactly.
+    // The unit applied to suffix-less input: the family's fixed BASE unit
+    // (Hz / V / s / s/div / V/div); -1 = the unit currently displayed (no
+    // family uses it any more). Mirrors UnitFamily.defaultUnit exactly.
     return this.defaultUnitIndex >= 0 ? this.units[this.defaultUnitIndex] : this.displayUnit(canonical);
   }
   match(typedSuffix) {
@@ -96,9 +96,11 @@ class UnitFamilyDef {
 
 /** UNIT_FAMILIES — mirrors the UnitFamily enum. */
 export const UNIT_FAMILIES = {
+  // Suffix-less (digits-only) input is Hz, the base unit; "k"/"kh" are short
+  // aliases for kHz (UnitFamily.FREQUENCY).
   FREQUENCY: new UnitFamilyDef('FREQUENCY', 0, [
     new Unit('unit.hz', 1.0, false, ['hz']),
-    new Unit('unit.khz', 1e3, false, ['khz']),
+    new Unit('unit.khz', 1e3, false, ['khz', 'kh', 'k']),
   ]),
   AMPLITUDE: new UnitFamilyDef('AMPLITUDE', 3, [
     new Unit('unit.nv', 1e-9, false, ['nv', 'n']),
@@ -111,12 +113,14 @@ export const UNIT_FAMILIES = {
     new Unit('unit.ms', 1e-3, false, ['ms']),
     new Unit('unit.s', 1.0, false, ['s']),
   ]),
-  TIME_PER_DIV: new UnitFamilyDef('TIME_PER_DIV', -1, [
+  // Suffix-less (digits-only) input is s/div, the base unit (UnitFamily.TIME_PER_DIV).
+  TIME_PER_DIV: new UnitFamilyDef('TIME_PER_DIV', 2, [
     new Unit('unit.usdiv', 1e-6, false, ['us/div', 'us', 'µs']),
     new Unit('unit.msdiv', 1e-3, false, ['ms/div', 'ms']),
     new Unit('unit.sdiv', 1.0, false, ['s/div', 's']),
   ]),
-  VOLTS_PER_DIV: new UnitFamilyDef('VOLTS_PER_DIV', -1, [
+  // Suffix-less (digits-only) input is V/div, the base unit (UnitFamily.VOLTS_PER_DIV).
+  VOLTS_PER_DIV: new UnitFamilyDef('VOLTS_PER_DIV', 3, [
     new Unit('unit.nvdiv', 1e-9, false, ['nv/div', 'nv', 'n']),
     new Unit('unit.uvdiv', 1e-6, false, ['uv/div', 'uv', 'µv', 'u', 'µ', 'μ']),
     new Unit('unit.mvdiv', 1e-3, false, ['mv/div', 'mv', 'm']),
@@ -406,6 +410,10 @@ export class NumericStepField {
     this.onChange = opts.onChange || null;
     this.tooltipBase = opts.tooltipBase || '';
     this.disabled = false;
+    // True once the user edits the text; cleared by refresh(). Decides whether
+    // _committed() re-appends the displayed unit (unedited round-trip) or hands
+    // the typed text to the model bare (digits-only → base unit).
+    this._userEdited = false;
 
     const field = input.closest('.numfield');
     this.unitSpan = field ? field.querySelector('.nf-unit') : null;
@@ -420,13 +428,18 @@ export class NumericStepField {
     this.refresh();
   }
 
-  /** The text to commit: keep it as-is if the user typed a unit, else interpret a bare
-   *  number in the DISPLAYED (auto-ranged) unit so a step round-trips ("1" in a kHz field
-   *  → "1 kHz", not "1 Hz"). */
+  /** The text to commit. Java's single Text carries "1 kHz" through an unedited
+   *  round-trip; the web splits number and unit into two elements, so an UNEDITED
+   *  input gets the displayed suffix re-appended (a step must round-trip: "1" in a
+   *  kHz field is still 1 kHz). Text the user actually TYPED is passed to the model
+   *  as-is — an explicit unit is kept, and a digits-only entry stays suffix-less so
+   *  the model applies the family's BASE unit (Hz / s / V / V-div, and it clears a
+   *  sticky dBV), exactly like UnitFamily.defaultUnit / NumericStepModel.commit. */
   _committed() {
     const raw = this.input.value.trim();
     const m = NUMBER_WITH_UNIT.exec(raw);
     if (m && m[2]) return raw;
+    if (this._userEdited) return raw;
     const suffix = this.unitSpan ? this.unitSpan.textContent : '';
     return suffix ? raw + ' ' + suffix : raw;
   }
@@ -460,6 +473,9 @@ export class NumericStepField {
       const next = input.value.slice(0, start) + e.data + input.value.slice(end);
       if (next !== '' && !this.model.acceptsPartial(next)) e.preventDefault();
     });
+
+    // Any actual text mutation (typing, paste, delete) marks the field user-edited.
+    input.addEventListener('input', () => { this._userEdited = true; });
 
     const commitOrRevert = () => {
       const before = this.model.getValue(), logBefore = this.model.isLogDisplay();
@@ -508,6 +524,7 @@ export class NumericStepField {
 
   /** Number in the input; the AUTO-RANGED suffix in the unit box (Java NumericStepField). */
   refresh() {
+    this._userEdited = false;
     const suffix = this.model.currentUnit().suffix();
     const full = this.model.text();
     this.input.value = (suffix && full.endsWith(' ' + suffix)) ? full.slice(0, full.length - suffix.length - 1) : full;

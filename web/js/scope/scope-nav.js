@@ -53,7 +53,7 @@ import {
  * views plus the centre range the nav-slider widget needs. Mirrors the Java
  * `ViewWindow` record.
  * @typedef {Object} ViewWindow
- * @property {number} mainBackOffset
+ * @property {number} mainBackOffset      fractional (double) — carries the sub-sample scroll
  * @property {number} condensedBackOffset
  * @property {number} minCentre
  * @property {number} maxCentre
@@ -121,10 +121,13 @@ export class ScopeNav {
       mainOffset = 0;
     } else {
       clampedCentre = Math.max(minCentre, Math.min(maxCentre, centreFrames));
-      const viewEndAbs = Math.round(clampedCentre + displaySamples / 2.0);
+      // Keep the back-offset FRACTIONAL: a ½-div step is 15.36 samples at 384 kHz,
+      // and rounding to a whole sample would quantise the scroll (→ 41.7 µs, not
+      // 40 µs). The view carries the fraction into a sub-sample render.
+      const viewEndAbs = clampedCentre + displaySamples / 2.0;
       mainOffset = Math.max(0, writePos - viewEndAbs);
     }
-    const mainCentre = writePos - mainOffset - Math.trunc(displaySamples / 2);
+    const mainCentre = writePos - Math.round(mainOffset) - Math.trunc(displaySamples / 2);
     let condEnd = mainCentre + Math.trunc(sampleRate / 2);
     condEnd = Math.min(condEnd, writePos);
     condEnd = Math.max(condEnd, Math.min(writePos, oldest + sampleRate));
@@ -154,24 +157,13 @@ export class ScopeNav {
     return offsetFrac + dir * this.halfDivOffsetStep();
   }
 
-  /**
-   * Clamps a (possibly virtual) trigger offset so the window still overlaps the
-   * captured buffer [oldest, latest) by at least `minOverlap` samples — used on a
-   * STOPPED scope so a pan can roam the whole buffer but not vanish past it.
-   */
-  clampFrozenOffset(offsetFrac, anchorAbs, displaySamples, oldest, latest, minOverlap) {
-    const offMin = (anchorAbs - (latest - minOverlap)) / displaySamples;
-    const offMax = (anchorAbs - (oldest - displaySamples + minOverlap)) / displaySamples;
-    if (offsetFrac < offMin) return offMin;
-    if (offsetFrac > offMax) return offMax;
-    return offsetFrac;
-  }
-
-  /** One ½-division move tick of the file-mode view centre (absolute samples), clamped
-   *  so the full window stays inside the file. `dir` matches the wheel sign. */
-  moveFileCentre(centreAbs, dir, displaySamples, oldest, latest) {
-    const step = displaySamples / (2.0 * this.divisionsX);   // ½ div
-    return this.clampFileCentre(centreAbs - dir * step, displaySamples, oldest, latest);
+  /** Moves the file-mode view centre by `divisions` grid divisions (signed;
+   *  negative = toward older samples), clamped so the full window stays inside the
+   *  file. `samplesPerDiv` is the EXACT double samples-per-division
+   *  (timePerDiv × sampleRate, NOT derived from the int-rounded window width) so
+   *  fractional steps — ⅕ div = 1.764 samples at 44.1 kHz — accumulate unrounded. */
+  moveFileCentre(centreAbs, divisions, samplesPerDiv, displaySamples, oldest, latest) {
+    return this.clampFileCentre(centreAbs + divisions * samplesPerDiv, displaySamples, oldest, latest);
   }
 
   /**

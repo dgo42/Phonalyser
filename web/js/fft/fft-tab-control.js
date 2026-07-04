@@ -22,6 +22,8 @@ import { parabolicBinInterp } from '../dsp/mathutil.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 import * as fileStore from '../io/file-store.js';
+import { putCal, getCal } from '../io/cal-store.js';
+import { CalibrationEntry } from '../store/preferences.js';
 import { registerShotCanvasRenderer, ensureShotRenderCanvas } from '../shell/screenshot.js';
 
 // FftOverlap enum token → display %, for the FFT-settings sub-label.
@@ -216,6 +218,11 @@ export class FftTabControl {
     $('#fftSize').val(String(prefs.fftLength.get()));
     $('#window').val(prefs.fftWindow.get());
     $('#overlap').val(prefs.fftOverlap.get());
+    // Threads (web-only pref): the select only offers 1..min(hardwareConcurrency,16),
+    // so a pref beyond the option list falls back to 1 (jQuery leaves val() null).
+    const $thr = $('#threads');
+    $thr.val(String(prefs.fftThreads.get()));
+    if ($thr.val() == null) $thr.val('1');
     // Averages NumericStepField (Java averagesField) — push the pref (a finite count or ∞) into
     // the field; setValue is silent so it won't re-fire restartFft on a preset recall.
     const fAvg = this._getField('averages');
@@ -333,6 +340,18 @@ export class FftTabControl {
     return shotCv;
   }
 
+  /** The cal-store hashes referenced by the current FFT calibration rows (issue 2.3). Called by
+   *  app.js after startup restore to build the union for pruneCals. Await {@link _calRestore}
+   *  first so the rebuilt rows are in place. */
+  getCalHashes() {
+    const hashes = new Set();
+    $('#fftCalRows .fft-cal-row').each(function () {
+      const h = $(this).data('hash');
+      if (h) hashes.add(h);
+    });
+    return hashes;
+  }
+
   bind() {
     const prefs = this.prefs;
     const engine = this.engine;
@@ -407,7 +426,7 @@ export class FftTabControl {
     // pool size per dispatch message, so the running consumer just re-derives poolSize on the
     // next batch (_syncLiveConfig) — the accumulator is untouched. (This used to restartFft,
     // resetting the average — the #7 vice-versa.)
-    $('#threads').on('change', () => { this.updateTabSub(); if (engine.running) this.host.readConfig(); });
+    $('#threads').on('change', () => { this.prefs.fftThreads.set(parseInt($('#threads').val(), 10) || 1); this.updateTabSub(); if (engine.running) this.host.readConfig(); });
     // OVERLAP: NO reset — Java FftTabControl.java:377-380: "Overlap only changes the hop, not
     // the spectrum/accumulator — refresh the tab tile but DON'T reset the average; the worker
     // adapts next tick." The running consumer re-derives its hop/bufLen on the next batch
@@ -655,39 +674,40 @@ export class FftTabControl {
     // loaded files, and Active/With-noise state all survive a reload. Clearing / removing a row
     // also drops its stored entry.
     //
-    // The store is the ASYNC IndexedDB half of file-store.js: a realistic .frc (a Nyquist/2
-    // sweep ≈ 100k rows ≈ 4-9 MB of text) blew localStorage's ~5M-char per-origin quota, and
-    // put() swallowed the QuotaExceededError — the rows LOOKED persisted but were gone after a
-    // reload (the user's #5 retest; reproduced by _fft-cal-persist-probe.mjs at 192k rows).
-    // All store ops chain on ONE promise so a user persist can never overlap the startup
-    // restore or another persist (the wipe-then-put stays ordered).
-    const CAL_KEY_PREFIX = 'fftcal.';
+    // PERSISTENCE (issue 2.3): the .frc BYTES live in the shared content-addressed cal-store
+    // (cal.<sha256>, gzip-compressed, deduplicated) — the SAME record the FreqResp pane uses
+    // when it loads the same file. Each row's metadata (filename + hash + Active + With-noise)
+    // is kept in prefs.fftCalibrations (a CalibrationEntry list, serialized with the hash), so a
+    // reload rebuilds the rows and re-reads the bytes by hash without a re-pick. Clearing /
+    // removing a row drops its entry from prefs; unreferenced cal-store records are swept later
+    // by pruneCals over the union of BOTH panes' hashes (app.js startup).
+    //
+    // The startup migration + restore ride ONE promise chain so a user persist can never run
+    // before the rows have been rebuilt.
+    const LEGACY_CAL_KEY_PREFIX = 'fftcal.';   // pre-2.3 records (raw .frc text) — migrated once
     let calStoreChain = Promise.resolve();
     const chainCalStoreOp = (op) => {
       calStoreChain = calStoreChain.then(op)
         .catch((e) => console.error('FFT cal-row store failed', e));
       return calStoreChain;
     };
-    // Serialize the CURRENT loaded rows (in DOM order, loaded rows only) to the file-store — one
-    // key per loaded row, its ordinal encoded in the key so restore keeps the cascade order.
-    // Wipe the whole prefix first so a removed/cleared row leaves nothing behind. The DOM state
-    // is snapshotted synchronously; only the store writes ride the chain.
+    // Rebuild prefs.fftCalibrations from the CURRENT loaded rows (DOM order, loaded rows only) so
+    // the row layout + hash + Active/With-noise survive a reload. The bytes are already in the
+    // cal-store (stored at load time), so this only rewrites the lightweight entry list.
     const persistCalRows = () => {
-      const rows = [];
+      prefs.fftCalibrations.length = 0;
       $('#fftCalRows .fft-cal-row').each(function () {
-        const $row = $(this), text = $row.data('frcText');
-        if (text == null) return;   // only loaded rows persist
-        rows.push({
-          name: $row.data('frcName') || '',
-          rec: { active: $row.find('.fcal-active').is(':checked'), noise: $row.find('.fcal-noise').is(':checked'), frc: text },
-        });
+        const $row = $(this);
+        const hash = $row.data('hash');
+        if ($row.data('stereo') == null) return;   // only loaded rows persist
+        const entry = new CalibrationEntry(
+          $row.data('frcName') || null,
+          $row.find('.fcal-active').is(':checked'),
+          $row.find('.fcal-noise').is(':checked'),
+          hash || null);
+        prefs.addFftCalibration(entry);
       });
-      chainCalStoreOp(async () => {
-        for (const k of await fileStore.idbKeys(CAL_KEY_PREFIX)) await fileStore.idbRemove(k);
-        for (let i = 0; i < rows.length; i++) {
-          await fileStore.idbPut(CAL_KEY_PREFIX + i, rows[i].name, JSON.stringify(rows[i].rec));
-        }
-      });
+      prefs.save();
     };
     // #5 layout: NO inline styles — .fft-cal-row (app.css) owns the flex row; the .fcal-path
     // rule (flex:1, max-width:none) lets the path field fill ALL free width (the old inline
@@ -758,23 +778,26 @@ export class FftTabControl {
           const frcText = io.bytesToText(f.bytes);
           const stereo = io.loadFrc(frcText);
           $row.data('stereo', stereo);
-          $row.data('frcText', frcText);  // the raw .frc text — persisted so the row survives a reload (#5)
           $row.data('frcName', f.name);   // for the in-session live-reload match (CALIBRATION_FILE_SAVED)
+          // Store the ORIGINAL bytes in the shared cal-store (dedup by SHA-256; shared with the
+          // FreqResp pane) and keep the hash on the row so it round-trips through persistCalRows.
+          try { $row.data('hash', await putCal(f.bytes, f.name)); }
+          catch (e) { console.warn('FFT: putCal failed (cal not persisted):', e && e.message); }
           $row.find('.fcal-path').val(f.name);
-          $row.find('.fcal-active').prop({ disabled: false, checked: false });   // #17: loaded ≠ activated — enable the toggle but don't auto-apply (Java loadFileIntoRow does not auto-activate)
+          $row.find('.fcal-active').prop('disabled', false);   // loading enables the toggle but leaves its checked state UNCHANGED (Java loadFileIntoFftCalRow never touches activeCheck; it is bound to entry.active())
           syncCalRowEnable($row);
           rebuildCalEntries();
-          persistCalRows();   // #5: remember the loaded file (name + contents + state) across reloads
+          persistCalRows();   // issue 2.3: remember the loaded file (name + hash + state) across reloads
           $('#status').text(`calibration loaded: ${f.name} (${stereo.left.freqs.length} points)`);
         } catch (e) { $('#status').text('calibration load failed: ' + e.message); }
       })
       .on('click', '.fcal-clear', function () {
         const $row = $(this).closest('.fft-cal-row');
-        $row.removeData('stereo'); $row.removeData('frcName'); $row.removeData('frcText');
+        $row.removeData('stereo'); $row.removeData('frcName'); $row.removeData('hash');
         $row.find('.fcal-path').val(t('freqResp.calibration.path.none'));
         $row.find('.fcal-active, .fcal-noise').prop({ checked: false, disabled: true });
         rebuildCalEntries();
-        persistCalRows();   // #5b: clearing a row drops its stored entry
+        persistCalRows();   // issue 2.3: clearing a row drops its entry (bytes swept later by pruneCals)
       })
       .on('click', '.fcal-add', () => appendCalRow())
       .on('click', '.fcal-remove', function () {
@@ -790,43 +813,72 @@ export class FftTabControl {
       });
     appendCalRow();   // row 0 always present (Java buildCalibrationTab)
 
-    // Restore the persisted calibration rows on startup (#5a): re-create a row per stored .frc,
-    // re-parse its text, restore Active / With-noise, and re-apply the cascade. Keys carry an
-    // ordinal (fftcal.0, fftcal.1, …) so the de-embed order matches what was saved. Runs FIRST
-    // on the store chain, so any user persist queues behind it.
-    const restoreCalRows = async () => {
-      // One-time migration: rows the OLD localStorage-backed store managed to hold (small
-      // files under the quota) move over to IndexedDB, then leave localStorage.
-      for (const key of fileStore.keys(CAL_KEY_PREFIX)) {
+    // One-time migration of pre-2.3 records (fftcal.N → { active, noise, frc }): move each row's
+    // .frc TEXT into the shared cal-store (putCal → hash) and rewrite it as a prefs
+    // CalibrationEntry, then delete the legacy key. Also drains the even older localStorage-backed
+    // fftcal.N records into that same path. Runs before the row rebuild below.
+    const migrateLegacyCalRows = async () => {
+      // Drain the oldest localStorage records into IndexedDB so the loop below sees them.
+      for (const key of fileStore.keys(LEGACY_CAL_KEY_PREFIX)) {
         const old = fileStore.get(key);
         if (old && (await fileStore.idbGet(key)) == null) await fileStore.idbPut(key, old.name, old.data);
         fileStore.remove(key);
       }
-      const storedKeys = (await fileStore.idbKeys(CAL_KEY_PREFIX))
-        .sort((a, b) => (parseInt(a.slice(CAL_KEY_PREFIX.length), 10) || 0) - (parseInt(b.slice(CAL_KEY_PREFIX.length), 10) || 0));
-      let idx = 0;
-      for (const key of storedKeys) {
+      const legacyKeys = (await fileStore.idbKeys(LEGACY_CAL_KEY_PREFIX))
+        .sort((a, b) => (parseInt(a.slice(LEGACY_CAL_KEY_PREFIX.length), 10) || 0) - (parseInt(b.slice(LEGACY_CAL_KEY_PREFIX.length), 10) || 0));
+      if (legacyKeys.length === 0) return;
+      const migrated = [];
+      for (const key of legacyKeys) {
         const stored = await fileStore.idbGet(key);
-        if (!stored) continue;
+        if (!stored) { await fileStore.idbRemove(key); continue; }
         let rec;
-        try { rec = JSON.parse(stored.data); } catch (_) { continue; }
-        if (rec == null || rec.frc == null) continue;
+        try { rec = JSON.parse(stored.data); } catch (_) { await fileStore.idbRemove(key); continue; }
+        if (rec == null || rec.frc == null) { await fileStore.idbRemove(key); continue; }
+        let hash = null;
+        // Only drop the legacy record AFTER the bytes are safely in the cal-store, so a
+        // putCal failure leaves it in place for a later retry (no data loss).
+        try { hash = await putCal(new TextEncoder().encode(rec.frc), stored.name); }
+        catch (e) { console.warn('FFT: legacy cal migration putCal failed:', e && e.message); continue; }
+        await fileStore.idbRemove(key);
+        migrated.push(new CalibrationEntry(stored.name || null, !!rec.active, !!rec.noise, hash));
+      }
+      // Replace prefs.fftCalibrations with the migrated set (a legacy install has no 2.3 entries yet).
+      if (migrated.length) {
+        prefs.fftCalibrations.length = 0;
+        for (const e of migrated) prefs.addFftCalibration(e);
+        prefs.save();
+      }
+    };
+
+    // Restore the persisted calibration rows on startup (issue 2.3): rebuild one row per stored
+    // CalibrationEntry, re-read its bytes from the shared cal-store by hash, re-parse + restore
+    // Active / With-noise, and re-apply the cascade. Runs FIRST on the store chain (after the
+    // legacy migration), so any user persist queues behind it.
+    const restoreCalRows = async () => {
+      await migrateLegacyCalRows();
+      const entries = prefs.fftCalibrations.filter((e) => e.hash);
+      let idx = 0;
+      for (const entry of entries) {
+        let stored;
+        try { stored = await getCal(entry.hash); } catch (_) { continue; }
+        if (!stored) continue;   // bytes gone (pruned / cleared elsewhere) — skip
         let stereo;
-        try { stereo = io.loadFrc(rec.frc); } catch (_) { continue; }   // stale/corrupt file — skip
+        try { stereo = io.loadFrc(new TextDecoder().decode(stored.bytes)); } catch (_) { continue; }
+        const name = entry.path || stored.name;
         // Row 0 already exists (appendCalRow above); later rows need appending.
         const $row = idx === 0 ? $('#fftCalRows .fft-cal-row').first() : appendCalRow();
         $row.data('stereo', stereo);
-        $row.data('frcText', rec.frc);
-        $row.data('frcName', stored.name);
-        $row.find('.fcal-path').val(stored.name).attr('title', stored.name);
-        $row.find('.fcal-active').prop({ disabled: false, checked: !!rec.active });
-        $row.find('.fcal-noise').prop('checked', !!rec.noise);
+        $row.data('frcName', name);
+        $row.data('hash', entry.hash);
+        $row.find('.fcal-path').val(name).attr('title', name);
+        $row.find('.fcal-active').prop({ disabled: false, checked: entry.active().get() });
+        $row.find('.fcal-noise').prop('checked', entry.withNoise().get());
         syncCalRowEnable($row);
         idx++;
       }
       if (idx > 0) rebuildCalEntries();
     };
-    chainCalStoreOp(restoreCalRows);
+    this._calRestore = chainCalStoreOp(restoreCalRows);
 
     // In-session .frc save live-reload (Java FftTabControl subscribes CALIBRATION_FILE_SAVED →
     // onCalibrationFileSaved): if any loaded calibration row references the just-saved file,
