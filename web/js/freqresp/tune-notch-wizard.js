@@ -61,7 +61,6 @@ import { makeFreqRespResult, makeStereoResult } from './stereo-result.js';
 import { waitForWorkersIdle } from './worker-idle.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
-import { GenSignalForm } from '../generator/dds-kernel.js';
 import { NumericStepField, NumericStepModel, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
 import {
   NotchSweepEngine, sweepBand, findDeepestNotch, dbAtFrequency,
@@ -214,14 +213,9 @@ export class TuneNotchWizard {
     this._teardownDone = true;
     /** The in-flight sweep loop, awaited on close (Java sweepThread.join). */
     this._loopPromise = null;
-    /** The continuous play+capture session; closed once on dialog close. */
+    /** The continuous play+capture session; closed once on dialog close. It owns the
+     *  measurement capture line, the generator lifecycle, and the DDS-config snapshot. */
     this._notchEngine = null;
-    /** True once the wizard started its OWN generator — the close path stops it
-     *  and restores the pre-session DDS config (the captureAndDeconvolve pattern). */
-    this._genStarted = false;
-    /** Snapshot of the shared DDS config fields the session overwrites, restored
-     *  on close so the user's generator settings survive the notch session. */
-    this._savedGenConfig = null;
   }
 
   /** Wires the Tools-menu launcher, the modal close handler, the four
@@ -427,11 +421,14 @@ export class TuneNotchWizard {
     const loopPeriodMs = Math.round((sweepSamples / sampleRate) * 1000.0);
 
     const notch = new NotchSweepEngine({
-      sharedCapture: {
-        acquire: () => engine.acquireCaptureReader(),
-        release: () => engine.releaseCaptureReader(),
-        getLastStartError: () => engine.getLastStartError(),
+      capture: {
+        acquire: () => engine.acquireMeasurementReader(),
+        release: () => engine.releaseMeasurementReader(),
+        getLastStartError: () => engine.getMeasurementStartError(),
       },
+      config: engine.config,
+      startGenerator: () => engine.startGenerator(),
+      stopGenerator: () => engine.stopGenerator(),
       postGen: (msg) => engine.postGen(msg),
       sampleRate,
     });
@@ -450,30 +447,12 @@ export class TuneNotchWizard {
       }
       if (!this._running) return;
 
-      // Open the session ONCE. The web playback path is the shared dds-processor
-      // worklet, which only exists while the generator runs and postGen no-ops
-      // otherwise — so start OUR OWN generator (silent LOG_SWEEP) before the engine
-      // posts the looping sweep, mirroring FreqRespHost.captureAndDeconvolve. The
-      // pre-session DDS config is snapshotted here and restored on close.
-      const c = engine.config;
-      this._savedGenConfig = {
-        form: c.form, ampVrms: c.ampVrms,
-        sweepStartHz: c.sweepStartHz, sweepEndHz: c.sweepEndHz,
-        sweepDurationSec: c.sweepDurationSec, sweepLoop: c.sweepLoop,
-        sweepFadeInSec: c.sweepFadeInSec, sweepFadeOutSec: c.sweepFadeOutSec,
-      };
+      // NotchSweepEngine owns the whole session: it snapshots the DDS config, points the
+      // generator at a silent looping Farina sweep and starts it, opens its OWN measurement
+      // capture line (device-isolated from scope/FFT), then un-mutes at the real amplitude.
+      // The wizard no longer touches engine.config or engine.startGenerator — Java's engine
+      // owns its own playback line. notch.close() stops the generator + restores the config.
       const band = sweepBand(this._curStartHz, this._curStopHz);
-      c.form = GenSignalForm.LOG_SWEEP;
-      c.ampVrms = 0;   // start silent — notch.start un-mutes with the real amplitude
-      c.sweepStartHz = band[0]; c.sweepEndHz = band[1];
-      c.sweepDurationSec = sweepSamples / sampleRate;
-      c.sweepLoop = true;
-      c.sweepFadeInSec = fadeSamples / sampleRate; c.sweepFadeOutSec = fadeSamples / sampleRate;
-      const startErr = await engine.startGenerator();
-      if (startErr) throw new Error(t(startErr));
-      this._genStarted = true;
-      // Acquire the shared capture + point the now-running DDS at the looping sweep
-      // (posts the real amplitude + loop/fade config); no per-sweep open/close.
       await notch.start(band[0], band[1], this._curAmpVrms, dacFsVrms, sweepSamples, fadeSamples);
       await this._awaitSettle(notch, sweepSamples);
       if (!this._running) return;
@@ -750,23 +729,14 @@ export class TuneNotchWizard {
   async _teardownSession() {
     if (this._teardownDone) return;
     this._teardownDone = true;
-    // Release the shared capture reference held for the whole session.
+    // NotchSweepEngine owns its capture + generator lifecycle + DDS-config snapshot now;
+    // close() releases the measurement capture, stops the generator, and restores the config.
     const notch = this._notchEngine;
     this._notchEngine = null;
     if (notch) {
       try { await notch.close(); } catch (e) { console.error('TuneNotch close failed', e); }
     }
-    // Stop OUR OWN generator + restore the pre-session DDS config (mirror of
-    // FreqRespHost.captureAndDeconvolve's finally).
-    if (this._genStarted) {
-      this._genStarted = false;
-      try { await this.engine.stopGenerator(); } catch (e) { console.error('TuneNotch stopGenerator failed', e); }
-    }
-    if (this._savedGenConfig) {
-      Object.assign(this.engine.config, this._savedGenConfig);
-      this._savedGenConfig = null;
-      this.engine._computeAnalysisFreqs();   // re-derive snapped/binW off the restored form
-    }
+    this.engine._computeAnalysisFreqs();   // re-derive snapped/binW off the restored form
     // FREQRESP_MEASUREMENT_STOPPED: the scope / FFT / generator panes re-enable
     // their LEDs + Play buttons on this event (their own subscriptions).
     MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STOPPED);
