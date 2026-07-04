@@ -405,6 +405,7 @@ public final class Preferences {
     private final Property<Integer> fftStopAfterN        = bound(10);
     private final Property<Boolean> fftFundFromGenerator = bound(false);
     private final Property<Boolean> fftLogFreqAxis       = bound(true);
+    private final Property<Boolean> fftDetectTimeDiscontinuity = bound(true);
     /** {@code WindowType} enum name. */
     private final Property<WindowType> fftWindow = bound(WindowType.HANN);
     /** {@code FftOverlap} enum name. */
@@ -1115,6 +1116,10 @@ public final class Preferences {
     public boolean isFftLogFreqAxis()          { return fftLogFreqAxis.get(); }
     public void setFftLogFreqAxis(boolean v)   { fftLogFreqAxis.set(v); }
     public Property<Boolean> fftLogFreqAxisProperty() { return fftLogFreqAxis; }
+
+    public boolean isFftDetectTimeDiscontinuity()        { return fftDetectTimeDiscontinuity.get(); }
+    public void setFftDetectTimeDiscontinuity(boolean v) { fftDetectTimeDiscontinuity.set(v); }
+    public Property<Boolean> fftDetectTimeDiscontinuityProperty() { return fftDetectTimeDiscontinuity; }
 
     public FftOverlap getFftOverlap()          { return fftOverlap.get(); }
     public void setFftOverlap(FftOverlap v)    { fftOverlap.set(v); }
@@ -1936,6 +1941,7 @@ public final class Preferences {
         root.put("fftStopAfterN",             fftStopAfterN.get());
         root.put("fftFundFromGenerator",      fftFundFromGenerator.get());
         root.put("fftLogFreqAxis",            fftLogFreqAxis.get());
+        root.put("fftDetectTimeDiscontinuity", fftDetectTimeDiscontinuity.get());
         root.put("fftWindow",                 fftWindow.get().name());
         root.put("fftOverlap",                fftOverlap.get().name());
         root.put("fftCoherentAveraging",      fftCoherentAveraging.get());
@@ -2249,6 +2255,7 @@ public final class Preferences {
         if (root.get("fftStopAfterN")             instanceof Number  n) fftStopAfterN.set(n.intValue());
         if (root.get("fftFundFromGenerator")      instanceof Boolean b) fftFundFromGenerator.set(b);
         if (root.get("fftLogFreqAxis")            instanceof Boolean b) fftLogFreqAxis.set(b);
+        if (root.get("fftDetectTimeDiscontinuity") instanceof Boolean b) fftDetectTimeDiscontinuity.set(b);
         if (root.get("fftWindow")                 instanceof String  s) fftWindow.set(enumOr(WindowType.class, s, fftWindow.get()));
         if (root.get("fftOverlap")                instanceof String  s) fftOverlap.set(enumOr(FftOverlap.class, s, fftOverlap.get()));
         if (root.get("fftCoherentAveraging")      instanceof Boolean b) fftCoherentAveraging.set(b);

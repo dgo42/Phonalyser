@@ -376,6 +376,20 @@
      traditional for audio (constant pixel-per-octave); linear is
      useful for spotting evenly-spaced spurs.</p>
 
+  <h4 id="fft-detect-time-discontinuity">Detect time discontinuity</h4>
+  <p>Checkbox, <b>on by default</b>.  While averaging, each capture block is
+     tested in the time domain against the tone's own sinusoid recurrence; a
+     splice, dropped-sample xrun or glitch breaks that prediction, so the block
+     is discarded and the capture re-syncs — the same detector that drives the
+     oscilloscope's glitch trigger (see
+     <a href="theory/fft.html#rejection">Theory ▸ keeping bad blocks out of the
+     average</a>).</p>
+  <p><b>Uncheck it for a small or non-sinusoidal signal.</b>  A weak (low-SNR)
+     or deliberately non-sine waveform breaks the sinusoid-recurrence prediction
+     on <em>every</em> block, so the gate would reject them all and no spectrum
+     would ever appear.  Turning the gate off lets the FFT keep computing; the
+     frequency-domain (spectral) glitch gate stays active either way.</p>
+
   <h3 id="fft-tab-thd">THD settings tab</h3>
   <p><img src="img/FFT - THD settings.png" alt="THD settings tab"/></p>
 
