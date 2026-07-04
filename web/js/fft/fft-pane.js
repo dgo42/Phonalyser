@@ -100,7 +100,7 @@ export class FftPane {
    *  back on mid-sweep (Java FftPane.onFreqRespMeasurementStarted — the Frequency Response
    *  analyzer needs exclusive use of the capture device while it runs). */
   async onFreqRespMeasurementStarted() {
-    $('#fftPane .led-btn').prop('disabled', true);
+    $('.fft-pane .led-btn').prop('disabled', true);
     // Stop the FFT via the ENGINE unconditionally — NOT gated on the shell record flag.
     // A shell/controller desync (the LED reads off while the controller is still
     // recording) otherwise left the FFT feeding on the sweep — it collected averages of
@@ -114,7 +114,7 @@ export class FftPane {
   /** Counterpart that re-enables the Record LED once the sweep finishes (or aborts)
    *  (Java FftPane.onFreqRespMeasurementStopped). */
   onFreqRespMeasurementStopped() {
-    $('#fftPane .led-btn').prop('disabled', false);
+    $('.fft-pane .led-btn').prop('disabled', false);
   }
 
   // =========================================================================
@@ -466,7 +466,7 @@ export class FftPane {
   // can tear down a half-built audio graph (STATUS_BREAKPOINT). Ignore clicks until settled.
   bindRecordLed() {
     const engine = this.engine;
-    $('#fftPane .led-btn').on('click', async () => {
+    $('.fft-pane .led-btn').on('click', async () => {
       if (this._isBusy()) return;
       this._setBusy(true);
       const want = !this._isFftRec();
@@ -477,7 +477,7 @@ export class FftPane {
   }
   syncFftLed() {
     const rec = this._isFftRec();
-    $('#fftPane .led-btn').toggleClass('rec', rec);
+    $('.fft-pane .led-btn').toggleClass('rec', rec);
     // Predistortion-wizard button — live pane only (Java FftPane:246: created only when
     // liveCapture && genController != null). The web always has a generator controller, so
     // gate on live-capturing: enable only while the FFT is recording.
