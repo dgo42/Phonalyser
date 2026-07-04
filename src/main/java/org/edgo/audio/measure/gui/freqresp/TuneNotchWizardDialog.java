@@ -54,6 +54,7 @@ import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.DeviceRef;
 
+import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -70,10 +71,12 @@ import lombok.extern.log4j.Log4j2;
  * into the main FreqResp pane).  The first sweep auto-fits the magnitude axis
  * to the measured band.
  *
- * <p>The embedded view shares the main pane's range / channel-visibility
- * preferences (it has no private window state), so the dialog snapshots those
- * prefs on open and restores them on close — the main pane is therefore
- * unaffected by the notch session.  The worker thread never touches widgets:
+ * <p>The embedded view runs ISOLATED: the dialog hands it a detached
+ * {@link Preferences#copyForDialog()} copy, so every range / channel-visibility
+ * edit (axis anchoring, auto-fit, pan / zoom) stays in the copy and the shared
+ * main-pane view is never touched — no snapshot/restore needed.  Only the
+ * tune-notch parameters (start / stop / amplitude / target) are written back to
+ * the real preferences on close.  The worker thread never touches widgets:
  * it reads the field values through a volatile mirror that the UI-thread
  * listeners keep current, so the close-time {@code join()} can't deadlock
  * against a {@code syncExec}.
@@ -208,33 +211,64 @@ public final class TuneNotchWizardDialog {
     /** Single-thread deconvolution worker so deconv(n) overlaps the capture. */
     private ExecutorService  deconvExecutor;
 
-    // Range / channel prefs snapshot captured at open, restored on close so the
-    // MAIN FreqResp pane's view is unaffected by the notch session.
-    private double  savedFreqMinHz;
-    private double  savedFreqMaxHz;
-    private double  savedMagTopDb;
-    private double  savedMagBotDb;
-    private boolean savedLeftVisible;
-    private boolean savedRightVisible;
+    /** Detached preferences copy driving the embedded (isolated) view for this
+     *  notch session — created in {@link #open()}.  Edits here never reach the
+     *  global preferences except the tune-notch fields written by
+     *  {@link #saveDialogPrefs()} on close. */
+    private Preferences prefs;
+    /** Single composite holding ALL dialog widgets, so the help-screenshot
+     *  automation can render the window via Control.print (a top-level Shell
+     *  prints blank on Windows; a Composite prints its children). */
+    @Getter
+    private Composite content;
 
     public TuneNotchWizardDialog(Shell parent) {
         this.parentShell = parent;
     }
 
-    /** Opens the wizard and blocks until the user closes it. */
+    /** Opens the wizard and blocks until the user closes it: builds + shows the
+     *  dialog, starts the live sweep, then runs the modal event loop. */
     public void open() {
+        buildAndShow();
+        startSweepLoop();
+        Display d = dialog.getDisplay();
+        while (!dialog.isDisposed()) {
+            if (!d.readAndDispatch()) d.sleep();
+        }
+    }
+
+    /** Builds and shows the dialog but does NOT start the live sweep or enter
+     *  the modal loop; returns the shell.  {@link #open()} is the normal entry
+     *  (build + sweep + block).  The help-screenshot automation calls this
+     *  directly to capture the localized dialog without opening an audio device
+     *  (no sweep → deterministic, hardware-free, and nothing to tear down). */
+    public Shell buildAndShow() {
+        // Detached copy: the embedded view + this dialog edit it freely (axis,
+        // auto-fit, channel select) with zero effect on the main pane; only the
+        // tune-notch fields are copied back on close (see saveDialogPrefs).
+        prefs = Preferences.instance().copyForDialog();
+        // The tune-notch view NEVER shows the phase trace, independent of how the main
+        // FreqResp is configured — force it off on the detached copy (the main pane's
+        // freqRespPhaseVisible preference is untouched).
+        prefs.setFreqRespPhaseVisible(false);
         dialog = new Shell(parentShell, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL);
         ShellIcons.apply(dialog);
         dialog.setText(I18n.t("tuneNotch.title"));
+        GridLayout shellLayout = new GridLayout(1, false);
+        shellLayout.marginWidth = 0; shellLayout.marginHeight = 0;
+        dialog.setLayout(shellLayout);
+
+        // All widgets live in ONE content composite so the help-screenshot
+        // automation can render the window itself via Control.print — a
+        // top-level Shell prints blank on Windows, a Composite prints its
+        // children (see getContent()).
+        content = new Composite(dialog, SWT.NONE);
+        content.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         GridLayout outer = new GridLayout(1, false);
         outer.marginWidth = 12; outer.marginHeight = 12; outer.verticalSpacing = 10;
-        dialog.setLayout(outer);
+        content.setLayout(outer);
 
         buildFieldsRow();
-        // Snapshot the shared prefs, then point the view at the notch session
-        // (R channel, [start,stop] axis, wide initial window) BEFORE the view
-        // is built so it paints correctly from the very first frame.
-        snapshotViewPrefs();
         applySessionViewPrefs();
         buildChart();
         buildStatusRow();
@@ -244,13 +278,14 @@ public final class TuneNotchWizardDialog {
         dialog.pack();
         Dialogs.centerOnParent(dialog);
         dialog.open();
+        return dialog;
+    }
 
+    /** Starts the live sweep on an already-built dialog (see {@link #buildAndShow()}).
+     *  The help-screenshot automation calls this after {@code buildAndShow} so the
+     *  chart collects a REAL trace before the capture. */
+    public void startSweep() {
         startSweepLoop();
-
-        Display d = dialog.getDisplay();
-        while (!dialog.isDisposed()) {
-            if (!d.readAndDispatch()) d.sleep();
-        }
     }
 
     // -------------------------------------------------------------------------
@@ -258,7 +293,7 @@ public final class TuneNotchWizardDialog {
     // -------------------------------------------------------------------------
 
     private void buildFieldsRow() {
-        Composite row = new Composite(dialog, SWT.NONE);
+        Composite row = new Composite(content, SWT.NONE);
         row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         // Two rows of label+field pairs: row 1 = start / stop, row 2 = amplitude
         // / target frequency.
@@ -267,7 +302,6 @@ public final class TuneNotchWizardDialog {
         gl.horizontalSpacing = 8; gl.verticalSpacing = 6;
         row.setLayout(gl);
 
-        Preferences prefs = Preferences.instance();
         double nyquist = prefs.current().getInputSampleRate() / 2.0;
 
         addLabel(row, I18n.t("tuneNotch.startHz"));
@@ -300,32 +334,28 @@ public final class TuneNotchWizardDialog {
         startField.addSelectionListener(e -> {
             curStartHz = startField.getValue();
             prefs.setTuneNotchStartHz(curStartHz);
-            prefs.save();
             applyFreqAxis();
             retuneEngineBand();
         });
         stopField.addSelectionListener(e -> {
             curStopHz = stopField.getValue();
             prefs.setTuneNotchStopHz(curStopHz);
-            prefs.save();
             applyFreqAxis();
             retuneEngineBand();
         });
         ampField.addSelectionListener(e -> {
             curAmpVrms = ampField.getValue();
             prefs.setTuneNotchAmplitudeVrms(curAmpVrms);
-            prefs.save();
         });
         targetField.addSelectionListener(e -> {
             curTargetHz = targetField.getValue();
             prefs.setTuneNotchTargetHz(curTargetHz);
-            prefs.save();
             if (view != null && !view.isDisposed()) view.redraw();
         });
     }
 
     private void buildChart() {
-        view = new FreqRespView(dialog, correctionStore);
+        view = new FreqRespView(content, correctionStore, true, prefs);
         view.setHeaderControlsVisible(false);
         GridData gd = new GridData(SWT.CENTER, SWT.CENTER, true, false);
         gd.widthHint  = CHART_WIDTH_PX;
@@ -341,7 +371,7 @@ public final class TuneNotchWizardDialog {
      *  grabs the width; the Close button sits at the right end.  Merging them
      *  into one row (vs two) is what shortens the window. */
     private void buildStatusRow() {
-        Composite row = new Composite(dialog, SWT.NONE);
+        Composite row = new Composite(content, SWT.NONE);
         row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         GridLayout gl = new GridLayout(2, false);
         gl.marginWidth = 0; gl.marginHeight = 0;
@@ -363,50 +393,27 @@ public final class TuneNotchWizardDialog {
     }
 
     // -------------------------------------------------------------------------
-    // View-pref management (shared with the main FreqResp pane)
+    // View-pref management (on the dialog's detached prefs copy — never the
+    // shared main-pane preferences)
     // -------------------------------------------------------------------------
 
-    private void snapshotViewPrefs() {
-        Preferences prefs = Preferences.instance();
-        savedFreqMinHz    = prefs.getFreqRespFreqMinHz();
-        savedFreqMaxHz    = prefs.getFreqRespFreqMaxHz();
-        savedMagTopDb     = prefs.getFreqRespMagTopDb();
-        savedMagBotDb     = prefs.getFreqRespMagBotDb();
-        savedLeftVisible  = prefs.isFreqRespLeftVisible();
-        savedRightVisible = prefs.isFreqRespRightVisible();
-    }
-
-    private void restoreViewPrefs() {
-        Preferences prefs = Preferences.instance();
-        prefs.setFreqRespFreqMinHz(savedFreqMinHz);
-        prefs.setFreqRespFreqMaxHz(savedFreqMaxHz);
-        prefs.setFreqRespMagTopDb(savedMagTopDb);
-        prefs.setFreqRespMagBotDb(savedMagBotDb);
-        prefs.setFreqRespLeftVisible(savedLeftVisible);
-        prefs.setFreqRespRightVisible(savedRightVisible);
-        prefs.save();
-    }
-
-    /** Points the shared FreqResp view prefs at the notch session: show the R
+    /** Points the dialog's detached view prefs at the notch session: show the R
      *  (measurement / ch1) channel, set the frequency axis to [start, stop],
-     *  and a wide initial magnitude window until the first sweep auto-fits it. */
+     *  and a wide initial magnitude window until the first sweep auto-fits it.
+     *  Applied to the copy only, so the main pane's view is untouched. */
     private void applySessionViewPrefs() {
-        Preferences prefs = Preferences.instance();
         prefs.setFreqRespRightVisible(true);
         prefs.setFreqRespLeftVisible(false);
         prefs.setFreqRespFreqMinHz(curStartHz);
         prefs.setFreqRespFreqMaxHz(curStopHz);
         prefs.setFreqRespMagTopDb(INITIAL_MAG_TOP_DB);
         prefs.setFreqRespMagBotDb(INITIAL_MAG_BOT_DB);
-        prefs.save();
     }
 
     /** Re-anchors the chart's frequency axis to the current [start, stop]. */
     private void applyFreqAxis() {
-        Preferences prefs = Preferences.instance();
         prefs.setFreqRespFreqMinHz(curStartHz);
         prefs.setFreqRespFreqMaxHz(curStopHz);
-        prefs.save();
         if (view != null && !view.isDisposed()) view.redraw();
     }
 
@@ -458,7 +465,6 @@ public final class TuneNotchWizardDialog {
         if (!waitForOtherWorkersStopped(DEVICE_RELEASE_TIMEOUT_MS)) {
             log.warn("TuneNotch: timeout waiting for other workers to release the audio device");
         }
-        Preferences prefs = Preferences.instance();
         DeviceRef out = resolveDevice(true,  prefs.current().getOutputDeviceName());
         DeviceRef in  = resolveDevice(false, prefs.current().getInputDeviceName());
         if (out == null || in == null) {
@@ -684,10 +690,8 @@ public final class TuneNotchWizardDialog {
         }
         double avgMin = sumMin / magRingCount;
         double avgMax = sumMax / magRingCount;
-        Preferences prefs = Preferences.instance();
         prefs.setFreqRespMagTopDb(avgMax + AUTO_FIT_PAD_DB);
         prefs.setFreqRespMagBotDb(avgMin - AUTO_FIT_PAD_DB);
-        prefs.save();
     }
 
     // -------------------------------------------------------------------------
@@ -735,7 +739,6 @@ public final class TuneNotchWizardDialog {
     private void onTargetPaint(PaintEvent e) {
         FreqRespResult res = latestResult;
         double target = curTargetHz;
-        Preferences prefs = Preferences.instance();
         double fMin = prefs.getFreqRespFreqMinHz();
         double fMax = prefs.getFreqRespFreqMaxHz();
         if (res == null || target <= 0.0 || fMin <= 0.0 || fMax <= fMin
@@ -823,9 +826,20 @@ public final class TuneNotchWizardDialog {
         engine = null;
         if (e != null) e.close();
         MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STOPPED);
-        restoreViewPrefs();
+        saveDialogPrefs();
     }
 
+    /** Persists ONLY the tune-notch parameters (start / stop / amplitude /
+     *  target) from the detached copy back to the global preferences on close.
+     *  The view's range / channel edits are deliberately dropped with the copy. */
+    private void saveDialogPrefs() {
+        Preferences globPrefs = Preferences.instance();
+        globPrefs.setTuneNotchStartHz(prefs.getTuneNotchStartHz());
+        globPrefs.setTuneNotchStopHz(prefs.getTuneNotchStopHz());
+        globPrefs.setTuneNotchAmplitudeVrms(prefs.getTuneNotchAmplitudeVrms());
+        globPrefs.setTuneNotchTargetHz(prefs.getTuneNotchTargetHz());
+        globPrefs.save();
+    }
     // -------------------------------------------------------------------------
     // Device coordination (mirrors FreqRespAnalyzerWorker)
     // -------------------------------------------------------------------------

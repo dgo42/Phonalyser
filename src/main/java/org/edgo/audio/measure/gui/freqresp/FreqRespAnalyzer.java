@@ -140,16 +140,20 @@ public final class FreqRespAnalyzer {
         // sampleRate, freqs) but compute independently, so they run on
         // separate CompletableFutures.
         double[] sweepRef = gen.getLogSweepBuffer();
+        // Savitzky-Golay output smoothing is OFF for the main sweep (applySavGol
+        // = false), matching the Tune-notch wizard: the bin-aligned grid already
+        // gives a leakage-free trace, and SG would round the bottom off deep,
+        // narrow features (e.g. a notch null read shallow).
         CompletableFuture<FreqRespCalibration> calLFut = CompletableFuture.supplyAsync(
                 () -> FreqRespCalHelper.computeFromLogSweep(
                         rec.left(), sweepRef, leadInSamples,
                         cfg.getSampleRate(), freqs, cfg.getAmplitudeVrms(),
-                        cfg.getAdcFsVoltageRms(), fadeSamples, "L"));
+                        cfg.getAdcFsVoltageRms(), fadeSamples, "L", false));
         CompletableFuture<FreqRespCalibration> calRFut = CompletableFuture.supplyAsync(
                 () -> FreqRespCalHelper.computeFromLogSweep(
                         rec.right(), sweepRef, leadInSamples,
                         cfg.getSampleRate(), freqs, cfg.getAmplitudeVrms(),
-                        cfg.getAdcFsVoltageRms(), fadeSamples, "R"));
+                        cfg.getAdcFsVoltageRms(), fadeSamples, "R", false));
         FreqRespCalibration calL = awaitOrFail(calLFut);
         FreqRespCalibration calR = awaitOrFail(calRFut);
 
