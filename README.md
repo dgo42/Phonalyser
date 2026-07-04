@@ -6,7 +6,7 @@ averaging and bit-exact playback/capture.
 
 **Project site:** <https://phonalyser.github.io/>
 
-![Phonalyser](docs/screenshots/phonalyser.png)
+![Phonalyser](doc/screenshots/phonalyser.png)
 
 ## Highlights
 
@@ -26,7 +26,7 @@ averaging and bit-exact playback/capture.
 - **Multi-backend audio** — WASAPI & WDM-KS (Windows), CoreAudio (macOS),
   JavaSound (Linux); high sample rates and 16/24/32-bit.
 
-![Ultra-low-distortion FFT](docs/screenshots/fft-ultralow-thd.png)
+![Ultra-low-distortion FFT](doc/screenshots/fft-ultralow-thd.png)
 
 ## Download & run
 
@@ -113,7 +113,7 @@ under `help/<lang>/`.
 Wiring the bench so the cabling doesn't inject its own noise — a Faraday cage,
 CAT.8 twisted pair with XLR connectors, single-point grounding, and the
 resulting induced-noise budget — is described in
-[docs/Faradey-Cage-bench.md](docs/Faradey-Cage-bench.md).
+[doc/Faradey-Cage-bench.md](doc/Faradey-Cage-bench.md).
 
 ## Build & run
 
