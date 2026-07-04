@@ -180,6 +180,13 @@ export class FftController {
       this.fllErrHz = 0; this.fllLocked = false; this.fllStable = 0; this.genFreq = this.snapped;
       if (this._fftOn) this._armOutputDrainSkip();
     });
+
+    // Self-feed off the LIVE capture: Java consumers subscribe to CAPTURE_BATCH_AVAILABLE and read
+    // their own cursor — no central dispatcher pumps us. feedFft self-gates on pausedByStopN and a
+    // null reader; only the live capture publishes, so a measurement sweep never triggers it.
+    MessageBus.instance().subscribe(Events.CAPTURE_BATCH_AVAILABLE, () => {
+      if (this._fftOn) this.feedFft();
+    });
   }
 
   /** Arms the one-shot output-drain skip (Java resetStatisticsAfterSignalChange →

@@ -83,7 +83,9 @@ export class AudioEngine {
     this._capture = new SharedCapture({
       getConfig: () => this.config,
       status: (t) => this._status(t),
-      onBatch: (d) => this._dispatchBatch(d),
+      // The live capture publishes CAPTURE_BATCH_AVAILABLE; ScopeController + FftController
+      // subscribe and self-feed off their own cursors (no central _dispatchBatch router).
+      publishBatch: true,
       computeAnalysisFreqs: () => this._gen.computeAnalysisFreqs(),
     });
     // DEDICATED MEASUREMENT capture (Java CaptureWithGenerator / NotchSweepEngine each open
@@ -314,18 +316,6 @@ export class AudioEngine {
     // line (_measCapture) and is modal, so it is never live during a device-selector change.
     if (scopeWas) await this._scope.reattach();
     if (fftWas) await this._fft.reattach();
-  }
-
-  /** Per-batch fan-out for the LIVE (scope/FFT) capture, invoked by SharedCapture after it
-   *  stages new samples: each active consumer reads off its OWN cursor. The loopback recording
-   *  tap lives on the dedicated measurement capture (_dispatchMeasBatch), so this drives only
-   *  the live consumers. No measurement gate is needed: a measurement runs on its OWN device
-   *  line (_measCapture) and the panes stop scope/FFT on FREQRESP_MEASUREMENT_STARTED (they
-   *  release _capture), so this live capture is closed for the measurement's duration — a
-   *  latch that could freeze the live feed can't exist. */
-  _dispatchBatch(d) {
-    if (this._scope.recording) this._scope.feedScope();
-    if (this._fft.recording && !this._fft.pausedByStopN) this._fft.feedFft();
   }
 
   /** Per-batch fan-out for the dedicated MEASUREMENT capture (_measCapture): the FreqResp
