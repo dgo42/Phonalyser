@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+    <!-- RIAA playback equalisation with IEC amendment.
+         X: log10(frequency), 5 Hz at x=4 to 20 kHz at x=44.
+         Y: gain in dB, +18 dB at y=4, 0 dB at y=22, -22 dB at y=44.
+         Curve sampled from
+             H(s) = s*T4 * (1 + s*T2)
+                  / ((1 + s*T4)(1 + s*T1)(1 + s*T3))
+         with T1=3180 us, T2=318 us, T3=75 us, T4=7950 us,
+         normalised so |H(j*2*pi*1000)| = 0 dB. -->
+    <polyline fill="none" stroke="#1976D2" stroke-width="5"
+              stroke-linecap="round" stroke-linejoin="round"
+              points="4.0,14.5 5.6,11.8 7.3,9.3 9.0,7.3 10.7,5.7 12.3,5.0 13.4,5.0 15.1,5.7 16.7,7.1 18.4,9.1 20.1,11.3 21.8,13.8 23.4,16.0 25.1,18.1 26.2,19.4 27.8,20.8 29.6,22.0 31.2,23.1 32.9,24.6 34.5,26.3 37.3,30.2 38.9,32.8 40.7,35.7 42.3,38.6 44.0,41.6"/>
+</svg>
