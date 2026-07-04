@@ -24,7 +24,7 @@ import { saveSpectrum, loadSpectrum } from '../io/fft-spectrum.js';
 import { loadFrc } from '../io/frc.js';
 import { pruneCals } from '../io/cal-store.js';
 import { saveFile, openFile, bytesToText, pickSaveTarget, writeToTarget } from '../io/file-picker.js';
-import { FreqRespHost } from './freqresp-host.js';
+import { FreqRespPane } from '../freqresp/freqresp-pane.js';
 import { TuneNotchWizard } from '../freqresp/tune-notch-wizard.js';
 import { ScreenshotDialog } from './screenshot.js';
 import { clonePaneForShot, preloadCloneIcons, paintCloneToCanvas } from './screenshot.js';
@@ -56,7 +56,7 @@ const engine = new AudioEngine();
 // Render-time FFT spectral corrections (.frc de-embed + mains + IMD) — applied in the VIEW path
 // (engine.onResult below), NOT in the engine; the coherent accumulator stays raw.
 const fftViewCorrection = new FftViewCorrection(engine.config);
-const fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => genRunning });
+const fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => engine.generator.running });
 const scopeView = new ScopeView(document.getElementById('scope'), { prefs });
 let prefsModal, aboutModal, dacCalModal;
 let shotModal;
@@ -83,7 +83,7 @@ let mainTab;   // the main tab (the rAF render-frame driver + the 3-pane collaps
 // the old scale into the displayed spectrum. Reset the accumulator while recording.
 const onCalChange = () => {
   scopeView._clearMeasurementHistory();
-  if (fftRec) engine.resetAnalyses();
+  if (engine.fft.recording) engine.resetAnalyses();
 };
 prefs.adcFsVoltageRms.addListener(onCalChange);
 prefs.dacFsVoltageAmpl.addListener(onCalChange);
@@ -516,6 +516,9 @@ function readConfig() {
   c.stopAfterNEnabled = prefs.fftStopAfterNEnabled.get();
   c.stopAfterN = prefs.fftStopAfterN.get();
   c.mainsSuppression = prefs.fftMainsSuppression.get();
+  // Time-domain discontinuity gate toggle (Java prefs.isFftDetectTimeDiscontinuity), read live
+  // per worker dispatch in FftController; kept in sync on toggle by the FFT settings checkbox.
+  c.fftDetectTimeDiscontinuity = prefs.fftDetectTimeDiscontinuity.get();
   // Which ADC channel the FFT analyzes (Java FftAnalyzerWorker:1535
   // prefs.getFftChannel(); L → ch0, R → ch1) — flows into FftController._wantLeft
   // at setup and is switched live via engine.setFftChannel from the L/R buttons.
@@ -587,9 +590,9 @@ engine.fft.onFftAutoStopped = () => fftPane.onFftAutoStopped();
 // lifecycles (Java: an FFT-length change is FftController's concern, a form change is
 // GeneratorController's, and the scope keeps running throughout).
 async function restartFft() {
-  if (busy || !fftRec) return;
+  if (busy || !engine.fft.recording) return;
   busy = true;
-  try { await engine.fft.setRecording(false); readConfig(); fftRec = await engine.fft.setRecording(true); }
+  try { await engine.fft.setRecording(false); readConfig(); await engine.fft.setRecording(true); }
   finally { fftPane.syncFftLed(); busy = false; }
 }
 
@@ -600,16 +603,6 @@ async function restartFft() {
 // THD/IMD table / render loop) lives in fft/fft-pane.js (Java FftPane); the strip's host
 // composite routes getResult / setResult to that pane (the web FFT pane has no freq/mag
 // FlatScrollbars — those Java scrollbars were never ported; the FftView navigates itself).
-
-// FreqResp tile-tabs — same toggle behavior; owns the Settings / RIAA-IEC / Presets /
-// Utility / Calibration / Save-to / Load-from drop-down panels.
-$('#frTabs .tab').on('click', function () {
-  const panel = $(this).data('panel');
-  const wasOpen = $(this).hasClass('active') && panel && $('#' + panel).hasClass('show');
-  $('#frTabs .tab').removeClass('active'); $(this).addClass('active');
-  $('#frSettings, #frRiaaPanel, #frPresetsPanel, #frUtility, #frCalPanel, #frSavePanel, #frLoadPanel').removeClass('show');
-  if (panel && !wasOpen) $('#' + panel).addClass('show');
-});
 
 // The scope SETTINGS STRIP (tile-tabs, channel / filter / trigger controls,
 // presets, save / load, ADC calibrate) lives in scope/scope-tab-control.js
@@ -676,6 +669,7 @@ $('#fftMaximize').on('click', () => fftView.maximize());
 const fftHost = {
   getResult: () => fftPane.getResult(),                 // the live analyzed spectrum (Save / ADC-calibrate read it) — owned by the FFT pane
   setResult: (r) => fftPane.setResult(r),               // a loaded .fft spectrum → repaint next frame (FFT pane state)
+  showLoadedBanner: (name) => fftPane.showLoadedBanner(name),   // Java FftView.setSourceFilePath — "Loaded: file" blink
   stopFftRecording: () => fftPane.onRecordingStopRequested(),   // Java FFT_RECORDING_STOP_REQUESTED — stop live record before a .fft load clobbers it
   applyPrefsToUi: () => applyPrefsToUi(),               // preset recall re-seeds the main FFT controls
   refreshFreqLabel: () => genPane.refreshFreqLabel(),   // re-snap label after an FFT-length change
@@ -736,15 +730,16 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// ----- shared lifecycle flags (the single source of truth for all three panes) -----
-// Three independent lifecycles now (Java: generator / scope record / FFT record):
-// #genPlay (in GeneratorPane) starts/stops the DDS generator; the per-pane Record LEDs
-// drive setScopeRecording / setFftRecording. `busy` is the shared re-entrancy guard —
-// startGenerator/stopGenerator and the consumer acquire/release are async
-// (open/close AudioContexts); a second click mid-transition races and can tear
-// down a half-built audio graph (STATUS_BREAKPOINT). Ignore clicks until settled.
-// GeneratorPane reads/writes genRunning + busy through the injected closures below.
-let genRunning = false, scopeRec = false, fftRec = false, busy = false;
+// ----- shared re-entrancy guard (web-only; no Java equivalent) -----
+// The three running/recording lifecycles are OWNED BY THE CONTROLLERS and read through their
+// observable getters — engine.generator.running / engine.scope.recording / engine.fft.recording;
+// the shell keeps no copy (Java: GeneratorController.running, ScopeController.isCapturing(),
+// FftController.worker.isRunning()). `busy` alone stays here: startGenerator/stopGenerator and the
+// consumer acquire/release are async (open/close AudioContexts), so a second click mid-transition
+// races and can tear down a half-built audio graph (STATUS_BREAKPOINT). Ignore clicks until
+// settled. Java is synchronous on the UI thread so it needs no such guard. Panes read/write it
+// through the injected closures below.
+let busy = false;
 
 // ----- Language submenu: switch locale, persist, re-render the chrome -----
 $('#langMenu').on('click', '[data-lang]', async (ev) => {
@@ -758,7 +753,7 @@ $('#langMenu').on('click', '[data-lang]', async (ev) => {
   fill($('#signalForm'), Object.values(GenSignalForm), $('#signalForm').val(), formLabel);
   genPane.buildFormCombo();
   for (const f of Object.values(stepFields)) f.refresh();   // re-resolve unit suffixes
-  genPane.refreshFreqLabel(); if (fftTabControl) fftTabControl.refreshFftTiles(); freqRespHost.refreshFftLabel();
+  genPane.refreshFreqLabel(); if (fftTabControl) fftTabControl.refreshFftTiles(); freqRespPane.refreshFftLabel();
 });
 
 // ============================ File I/O wiring ============================
@@ -1183,7 +1178,7 @@ async function renderFreqRespShot(comment, w, h, mime) {
 const frcStore = [];
 
 // ============================ Frequency response ============================
-const freqRespHost = new FreqRespHost(engine, prefs, { saveFile, openFile, bytesToText });
+const freqRespPane = new FreqRespPane(engine, prefs, { saveFile, openFile, bytesToText });
 
 // ============================ Predistortion wizard ============================
 let predistModal;
@@ -1194,13 +1189,12 @@ async function restartPreservingConfig() {
   if (!engine.running) return;
   // Predistortion drives the full pipeline (generator + FFT analysis + FLL). Bounce
   // both via the fused convenience start/stop so configureForRun's coherent/∞-averaging
-  // window takes effect; the engine's internal lifecycles are independent, the app
-  // record flags follow so the FFT view keeps rendering.
+  // window takes effect; the engine's internal lifecycles are independent; the
+  // controllers own the running state so the FFT view keeps rendering.
   await engine.stop();
   await engine.startGenerator();
   await engine.scope.setRecording(true);
   await engine.fft.setRecording(true);
-  genRunning = true; scopeRec = true; fftRec = true;
   $('#genPlay').addClass('playing').attr('title', t('generator.play.stop'));
   $('#onAir').addClass('live');
   scopePane.syncScopeLed(); fftPane.syncFftLed();
@@ -1267,14 +1261,14 @@ async function init() {
   // Generator pane (Java GeneratorPane): the signal-form combo + freq/amp/duty/dual-tone/
   // sweep/dither/snap/.dpd controls + Play/ON-AIR + Save-to + file player. Constructed before
   // applyPrefsToUi so its seedGeneratorControls() runs in the init seed; reaches the SHELL
-  // lifecycle flags (genRunning + busy) + readConfig + the FFT align combo through the injected
+  // state (the busy guard + engine.generator.running) + readConfig + the FFT align combo through the injected
   // closures, and the generator step fields (built later in initStepFields) via getField.
   step('genPane', () => {
     genPane = new GeneratorPane(engine, prefs, {
       getField: (id) => stepFields[id],
       io: { pickSaveTarget, writeToTarget, saveScopeCapture, readWav, readAiff, decodeFlac },
       WAV_TYPE, formLabel, formIcon, sfVal, outRate,
-      isGenRunning: () => genRunning, setGenRunning: (v) => { genRunning = v; },
+      isGenRunning: () => engine.generator.running,
       isBusy: () => busy, setBusy: (v) => { busy = v; },
       readConfig, syncFftAlign: () => { if (fftTabControl) fftTabControl.syncAlign(); },
     });
@@ -1284,21 +1278,21 @@ async function init() {
   step('genPaneBind', () => genPane.bind());   // generator handlers (was the generator part of bindPrefs)
   step('buildFormCombo', () => genPane.buildFormCombo());
   step('applyI18n', applyI18n);
-  step('refreshFftLabel', () => freqRespHost.refreshFftLabel());   // localized after the bundle is loaded
-  step('freqRespSeed', () => freqRespHost.seedTabs());   // builds the cal rows / preset list / RIAA enable (t() needs the bundle)
+  step('refreshFftLabel', () => freqRespPane.refreshFftLabel());   // localized after the bundle is loaded
+  step('freqRespSeed', () => freqRespPane.seedTabs());   // builds the cal rows / preset list / RIAA enable (t() needs the bundle)
   step('initStepFields', initStepFields);   // after applyI18n so unit suffixes resolve
   // Oscilloscope PANE (Java ScopePane): the trace canvas wiring, the two nav scrollbars,
   // the Record LED, the measurement table + pop-out, the file-mode load/scroll, and the
   // scope branch of the rAF loop (render()). Built BEFORE the scope settings strip, since
   // the strip's host IS this pane (Java ScopePane implements ScopeTabControl.Host). Reaches
-  // the SHELL lifecycle flags (scopeRec + busy) + readConfig + the latest scope frame
+  // the shell state (the busy guard + engine.scope.recording) + readConfig + the latest scope frame
   // through the injected closures; the scope V/T/hyst NumericStepFields (from initStepFields)
   // via getField; the ScopeView + tileChips injected too. bind() wires the Record LED +
   // measurement buttons + resize observer.
   step('scopePane', () => {
     scopePane = new ScopePane(engine, prefs, {
       view: scopeView, getField: (id) => stepFields[id], tileChips,
-      isScopeRec: () => scopeRec, setScopeRec: (v) => { scopeRec = v; },
+      isScopeRec: () => engine.scope.recording,
       isBusy: () => busy, setBusy: (v) => { busy = v; },
       getLatestScope: () => latestScope, readConfig,
       syncCalibrateGate: () => { if (scopeTabControl) scopeTabControl.syncCalibrateEnabled(); },
@@ -1323,12 +1317,12 @@ async function init() {
   // FFT PANE (Java FftPane): the spectrum-view wiring, the Record LED, the readout / THD /
   // IMD render, and the FFT branch of the rAF loop (render()). Built BEFORE the FFT settings
   // strip, since the strip's host routes getResult / setResult to this pane (Java
-  // FftTabControl.Host). Reaches the SHELL lifecycle flags (fftRec + busy) + readConfig through
+  // FftTabControl.Host). Reaches the shell state (the busy guard + engine.fft.recording) + readConfig through
   // the injected closures; the FftView + tileChips injected too. bind() wires the Record LED.
   step('fftPane', () => {
     fftPane = new FftPane(engine, prefs, {
       view: fftView, tileChips,
-      isFftRec: () => fftRec, setFftRec: (v) => { fftRec = v; },
+      isFftRec: () => engine.fft.recording,
       isBusy: () => busy, setBusy: (v) => { busy = v; },
       readConfig,
     }).bind();
@@ -1361,8 +1355,8 @@ async function init() {
   // calibration rows, sweep any cal.<hash> record referenced by neither pane. Both panes share
   // one record per hash, so the union of their referenced hashes is exactly what must survive.
   step('pruneCals', () => {
-    Promise.all([freqRespHost._calRestore, fftTabControl._calRestore])
-      .then(() => pruneCals(new Set([...freqRespHost.getCalHashes(), ...fftTabControl.getCalHashes()])))
+    Promise.all([freqRespPane._calRestore, fftTabControl._calRestore])
+      .then(() => pruneCals(new Set([...freqRespPane.getCalHashes(), ...fftTabControl.getCalHashes()])))
       .catch((e) => console.error('pruneCals failed', e));
   });
   step('fftSeed', () => { genPane.refreshFreqLabel(); genPane.syncFormUI(); });   // generator label + form-gated UI follow the seeded FFT controls
@@ -1468,7 +1462,7 @@ async function init() {
     }).bind();
     prefsDialog.applyLookAndFeel();   // main-tab orientation + small icons + UI font from the saved prefs
   });
-  step('freqResp', () => freqRespHost.plot());
+  step('freqResp', () => freqRespPane.plot());
   prefsDialog.scan();       // auto-enumerate audio devices on load (no Preferences dialog needed)
 }
 init().catch(e => console.error('init failed', e));

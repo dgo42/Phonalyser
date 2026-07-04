@@ -5,10 +5,10 @@
  * GNU Affero General Public License v3 or later.
  *
  * Faithful port of gui/generator/GeneratorPane. Owns the generator controls + their bound
- * handlers and the live DDS Play / file-player lifecycle; reaches the SHELL state it does not
- * own (the genRunning lifecycle flag + the shared `busy` re-entrancy guard, the readConfig
- * snapshot, the FFT align combo) only through injected closures — there is ONE source of
- * truth for those flags in app.js. The generator NumericStepFields (freq / amp / duty /
+ * handlers and the live DDS Play / file-player lifecycle; reads engine.generator.running (the
+ * controller owns the running flag) and reaches the SHELL state it does not own (the shared
+ * `busy` re-entrancy guard, the readConfig snapshot, the FFT align combo) through injected
+ * closures. The generator NumericStepFields (freq / amp / duty /
  * sweep / dual-tone) are built in app.js's initStepFields and reached here via the injected
  * getField; the io decode/save helpers + formLabel/formIcon + sfVal/outRate are injected too.
  * Exposes syncFormUI() + restartGenerator() as public methods for the cross-pane callers (the
@@ -27,7 +27,7 @@ export class GeneratorPane {
    * @param engine the AudioEngine (DDS generator + file playback lane; live retune/restart).
    * @param prefs  Preferences.
    * @param deps   {getField, io, WAV_TYPE, formLabel, formIcon, sfVal, outRate,
-   *                isGenRunning, setGenRunning, isBusy, setBusy, readConfig, syncFftAlign}
+   *                isGenRunning, isBusy, setBusy, readConfig, syncFftAlign}
    *   - getField: (id) => the generator NumericStepField (built in app.js initStepFields).
    *   - io: {pickSaveTarget, writeToTarget, saveScopeCapture, readWav, readAiff, decodeFlac} —
    *       the generator Save-to + file-player decode collaborators.
@@ -35,13 +35,13 @@ export class GeneratorPane {
    *   - formLabel / formIcon: (form) => the localized label / waveform pictogram src (combo).
    *   - sfVal: (id, dflt) => the canonical value of a step field by id (shared with readConfig).
    *   - outRate: () => the live output sample rate (the frequency/sweep Nyquist + emit grid).
-   *   - isGenRunning / setGenRunning: the shared generator-running flag accessors (one source of truth).
+   *   - isGenRunning: () => engine.generator.running — the controller owns the running flag; the pane only reads it.
    *   - isBusy / setBusy: the shared async re-entrancy guard accessors (start/stop serialize).
    *   - readConfig: () => snapshot the live UI into engine.config before a (re)start.
    *   - syncFftAlign: () => re-gate the FFT align combo (snap gates it; FftTabControl).
    */
   constructor(engine, prefs, { getField, io, WAV_TYPE, formLabel, formIcon, sfVal, outRate,
-    isGenRunning, setGenRunning, isBusy, setBusy, readConfig, syncFftAlign }) {
+    isGenRunning, isBusy, setBusy, readConfig, syncFftAlign }) {
     this.engine = engine;
     this.prefs = prefs;
     this._getField = getField;
@@ -52,7 +52,6 @@ export class GeneratorPane {
     this._sfVal = sfVal;
     this._outRate = outRate;
     this._isGenRunning = isGenRunning;
-    this._setGenRunning = setGenRunning;
     this._isBusy = isBusy;
     this._setBusy = setBusy;
     this._readConfig = readConfig;
@@ -75,7 +74,6 @@ export class GeneratorPane {
    *  subscription; here only the visuals: dim and gray both Play buttons while the sweep
    *  drives the DAC (Java GeneratorPane.onFreqRespMeasurementStarted). */
   onFreqRespMeasurementStarted() {
-    this._setGenRunning(false);
     $('#genPlay').removeClass('playing').attr('title', t('generator.play.start'));
     this.setGenFileBtn(false);   // also drops the ON-AIR banner (generator flag is off)
     $('#genPlay, #genFilePlay').prop('disabled', true);
@@ -438,7 +436,6 @@ export class GeneratorPane {
       // Dialogs.error(generator.error.restart, getLastStartError)).
       const err = await this.restartGenerator();
       if (wasRunning && err) {
-        this._setGenRunning(false);
         $('#genPlay').removeClass('playing').attr('title', t('generator.play.start'));
         $('#onAir').removeClass('live');
         $('#status').text(t('generator.error.restart') + ': ' + t(err));
@@ -483,14 +480,12 @@ export class GeneratorPane {
         // DDS tone and file playback share the one output device — only one may drive it.
         // Java controller.start() stops the file player first; mirror that + re-sync its LED.
         await engine.stopFile(); this.setGenFileBtn(false);
-        this._setGenRunning(true);
         try {
           // Light the play LED + ON-AIR only AFTER a successful start (Java syncPlayButtonVisuals
           // reads controller.isRunning() AFTER start()); on failure roll the visuals back and
           // surface the specific reason (Java: getLastStartError → Dialogs.error).
           const err = await engine.startGenerator();
           if (err) {
-            this._setGenRunning(false);
             $('#genPlay').removeClass('playing').attr('title', t('generator.play.start'));
             $('#onAir').removeClass('live');
             $('#status').text(t(err));
@@ -501,7 +496,6 @@ export class GeneratorPane {
         } finally { this._setBusy(false); }
       } else {
         this._setBusy(true);
-        this._setGenRunning(false);
         $('#genPlay').removeClass('playing').attr('title', t('generator.play.start'));
         $('#onAir').removeClass('live');
         try { await engine.stopGenerator(); } finally { this._setBusy(false); }
@@ -614,7 +608,6 @@ export class GeneratorPane {
         // Java startFilePlayback() stops the DDS first; mirror that + re-sync the Play button.
         if (this._isGenRunning()) {
           await engine.stopGenerator();
-          this._setGenRunning(false);
           $('#genPlay').removeClass('playing').attr('title', t('generator.play.start'));
         }
         engine.onFileEnded = () => this.setGenFileBtn(false);

@@ -1,0 +1,2 @@
+(()=>{var o=2*Math.PI,n=class extends AudioWorkletProcessor{constructor(){super(),this._ph=0,this._inc=0,this._amp=0,this.port.onmessage=t=>{t.data.inc!=null&&(this._inc=t.data.inc),t.data.amp!=null&&(this._amp=t.data.amp)}}process(t,a){let s=a[0],r=s[0].length;for(let i=0;i<r;i++){let c=this._amp*Math.sin(this._ph);for(let h=0;h<s.length;h++)s[h][i]=c;this._ph+=this._inc,this._ph>=o&&(this._ph-=o)}return!0}};registerProcessor("generator-processor",n);})();
+//# sourceMappingURL=generator-processor.js.map

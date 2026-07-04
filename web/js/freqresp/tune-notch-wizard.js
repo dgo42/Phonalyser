@@ -385,16 +385,9 @@ export class TuneNotchWizard {
     this._sweepCount = 0;
     this._magRingPos = 0;
     this._magRingCount = 0;
-    // Publish FIRST (Java startSweepLoop, line 448): every consumer runs its stop
-    // logic — GeneratorController.stopEngines, Scope/FftPane recorder stop + LED
-    // gray, GeneratorPane Play-button visuals. The subscribers' returns only
-    // guarantee they ASKED their engines to stop; the idle wait in _sweepLoop
-    // below covers the async teardown before we open the device ourselves.
-    MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
-    // The main FreqResp Run buttons have no bus subscriber (a separate host owns
-    // them) — disable them here for the session; re-enabled in _stopSweepLoop.
-    this.$('#frRunStrip, #frRun').prop('disabled', true);
-
+    // STARTED publish + Run-button disable moved INTO _sweepLoop's try (below) so they are
+    // covered by the finally that publishes STOPPED — a throw between here and the loop body can
+    // no longer orphan FREQRESP_MEASUREMENT_STARTED and latch the consumers OFF.
     this._loopPromise = this._sweepLoop();
   }
 
@@ -403,41 +396,52 @@ export class TuneNotchWizard {
    *  TuneNotchWizardDialog#sweepLoop; runs as one async task instead of a
    *  daemon thread. */
   async _sweepLoop() {
-    const engine = this.engine;
-    const prefs = this.prefs;
-    const sampleRate = engine.config.inRate;
-    // Read the DAC/ADC voltage references once: they don't change for the
-    // lifetime of the session. (Java also reads ditherBits for its DAC dither;
-    // the web capture path is float — no dither, intended divergence.)
-    const dacFsVrms = prefs.dacFsVoltageAmpl.get();
-    const adcFsVrms = prefs.adcFsVoltageRms.get();
-
-    // The loop period MUST be a power of two — see powerOfTwoSweepSamples (the
-    // circular-FFT invariant that makes an arbitrary-phase grab safe).
-    const sweepSamples = powerOfTwoSweepSamples(sampleRate);
-    const fadeSamples = notchFadeSamples(sampleRate);
-    // One loop period of the captured stream, in ms — the grab cadence and the
-    // percentage's denominator.
-    const loopPeriodMs = Math.round((sweepSamples / sampleRate) * 1000.0);
-
-    const notch = new NotchSweepEngine({
-      capture: {
-        acquire: () => engine.acquireMeasurementReader(),
-        release: () => engine.releaseMeasurementReader(),
-        getLastStartError: () => engine.getMeasurementStartError(),
-      },
-      config: engine.config,
-      startGenerator: () => engine.startGenerator(),
-      stopGenerator: () => engine.stopGenerator(),
-      postGen: (msg) => engine.postGen(msg),
-      sampleRate,
-    });
-    this._notchEngine = notch;
-    // Match the output grid to the deconvolution's FFT bin spacing for ONE
-    // captured period: a finer grid facets the trace into a kink + comb.
-    const binHz = notch.deconvBinHz(sweepSamples);
-
     try {
+      // Publish FIRST (Java startSweepLoop): every consumer runs its stop logic —
+      // GeneratorController.stopEngines, Scope/FftPane recorder stop + LED gray,
+      // GeneratorPane Play-button visuals. The subscribers' returns only guarantee they ASKED
+      // their engines to stop; the idle wait below covers the async teardown before we open the
+      // device ourselves. INSIDE the try so a throw in the setup below still reaches the finally's
+      // _teardownSession → STOPPED (no orphaned START latching the consumers).
+      MessageBus.instance().publish(Events.FREQRESP_MEASUREMENT_STARTED);
+      // The main FreqResp Run buttons have no bus subscriber (a separate host owns them) —
+      // disable them for the session; _teardownSession re-enables them on every exit.
+      this.$('#frRunStrip, #frRun').prop('disabled', true);
+
+      const engine = this.engine;
+      const prefs = this.prefs;
+      const sampleRate = engine.config.inRate;
+      // Read the DAC/ADC voltage references once: they don't change for the
+      // lifetime of the session. (Java also reads ditherBits for its DAC dither;
+      // the web capture path is float — no dither, intended divergence.)
+      const dacFsVrms = prefs.dacFsVoltageAmpl.get();
+      const adcFsVrms = prefs.adcFsVoltageRms.get();
+
+      // The loop period MUST be a power of two — see powerOfTwoSweepSamples (the
+      // circular-FFT invariant that makes an arbitrary-phase grab safe).
+      const sweepSamples = powerOfTwoSweepSamples(sampleRate);
+      const fadeSamples = notchFadeSamples(sampleRate);
+      // One loop period of the captured stream, in ms — the grab cadence and the
+      // percentage's denominator.
+      const loopPeriodMs = Math.round((sweepSamples / sampleRate) * 1000.0);
+
+      const notch = new NotchSweepEngine({
+        capture: {
+          acquire: () => engine.acquireMeasurementReader(),
+          release: () => engine.releaseMeasurementReader(),
+          getLastStartError: () => engine.getMeasurementStartError(),
+        },
+        config: engine.config,
+        startGenerator: () => engine.startGenerator(),
+        stopGenerator: () => engine.stopGenerator(),
+        postGen: (msg) => engine.postGen(msg),
+        sampleRate,
+      });
+      this._notchEngine = notch;
+      // Match the output grid to the deconvolution's FFT bin spacing for ONE
+      // captured period: a finer grid facets the trace into a kink + comb.
+      const binHz = notch.deconvBinHz(sweepSamples);
+
       // Wait for the OTHER panes' workers to release the capture device + DAC after
       // the STARTED publish (Java sweepLoop's waitForOtherWorkersStopped) before we
       // open them ourselves; the subscribers signal-and-return, the OS release lags.

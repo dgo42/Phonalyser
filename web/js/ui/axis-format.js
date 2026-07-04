@@ -200,6 +200,31 @@ export function niceLinearMinors(min, max, minorStep) {
   return out;
 }
 
+/* ---- AbstractMeasurementView.subDecadeMinors (:1155) -------------------
+ *   majors = niceLinearMajors(min,max,12); majorStep = majors[1]-majors[0];
+ *   pow=10^floor(log10(majorStep)); mant=majorStep/pow;
+ *   minorStep = majorStep / (|mant-2|<0.1 ? 2 : 5);
+ *   first=ceil(min/minorStep)*minorStep; emit v in [min,max] not coinciding a major.
+ * The sub-decade minor ticks for a zoomed (<1 decade) frequency axis — Java hardcodes
+ * the target count 12 inside this method (do NOT thread SUB_DECADE_TICK_TARGET here). */
+export function subDecadeMinors(min, max) {
+  const majors = niceLinearMajors(min, max, 12);
+  if (majors.length < 2) return [];
+  const majorStep = majors[1] - majors[0];
+  const pow = Math.pow(10, Math.floor(Math.log10(majorStep)));
+  const mant = majorStep / pow;
+  const minorStep = majorStep / (Math.abs(mant - 2.0) < 0.1 ? 2 : 5);
+  const first = Math.ceil(min / minorStep) * minorStep;
+  const out = [];
+  for (let v = first; v <= max + minorStep * 1e-9; v += minorStep) {
+    if (v < min || v > max) continue;
+    let isMajor = false;
+    for (const M of majors) { if (Math.abs(v - M) < minorStep * 0.5) { isMajor = true; break; } }
+    if (!isMajor) out.push(v);
+  }
+  return out;
+}
+
 /* ---- AbstractMeasurementView.isSubDecade (:855) -------------------------
  *   lo = max(1e-15,min); hi = max(lo+1e-9,max); return log10(hi/lo) < 1.0;
  */
@@ -230,6 +255,16 @@ export function formatFrequency(f) {
   if (!Number.isFinite(f) || f <= 0) return '—';
   if (f >= 1000) return (f / 1000).toFixed(2) + ' kHz';
   return f.toFixed(2) + ' Hz';
+}
+
+/* ---- AbstractMeasurementView.formatFrequencyFine (:1352) ----------------
+ *   %.4f, kHz only from 10 kHz, Locale.ROOT (period decimal, no thousands sep).
+ * The crosshair frequency readout — full precision, so a zoomed cursor reads e.g.
+ * "1002.5119 Hz" rather than the coarse axis-label "1.003 kHz". */
+export function formatFrequencyFine(f) {
+  if (!Number.isFinite(f) || f <= 0) return '—';
+  if (f >= 10000) return (f / 1000).toFixed(4) + ' kHz';
+  return f.toFixed(4) + ' Hz';
 }
 
 /* ---- AbstractMeasurementView.formatFreqTick (:1048) ---------------------

@@ -432,6 +432,10 @@ export class Preferences {
     this.fftStopAfterN = this._bound(10);
     this.fftFundFromGenerator = this._bound(false);
     this.fftLogFreqAxis = this._bound(true);
+    // Time-domain discontinuity gate toggle (Java Preferences.fftDetectTimeDiscontinuity,
+    // default ON). Uncheck to keep computing the FFT for a small / non-sinusoidal signal the
+    // gate would otherwise reject every block of. The worker reads it live per tick.
+    this.fftDetectTimeDiscontinuity = this._bound(true);
     this.fftWindow = this._bound('HANN');
     this.fftOverlap = this._bound('PCT_0');
     this.fftCoherentAveraging = this._bound(true);
@@ -1004,6 +1008,7 @@ export class Preferences {
     root.fftStopAfterN = this.fftStopAfterN.get();
     root.fftFundFromGenerator = this.fftFundFromGenerator.get();
     root.fftLogFreqAxis = this.fftLogFreqAxis.get();
+    root.fftDetectTimeDiscontinuity = this.fftDetectTimeDiscontinuity.get();
     root.fftWindow = this.fftWindow.get();
     root.fftOverlap = this.fftOverlap.get();
     root.fftCoherentAveraging = this.fftCoherentAveraging.get();
@@ -1315,6 +1320,7 @@ export class Preferences {
     if (isNum(g('fftStopAfterN'))) this.fftStopAfterN.set(trunc(g('fftStopAfterN')));
     if (isBool(g('fftFundFromGenerator'))) this.fftFundFromGenerator.set(g('fftFundFromGenerator'));
     if (isBool(g('fftLogFreqAxis'))) this.fftLogFreqAxis.set(g('fftLogFreqAxis'));
+    if (isBool(g('fftDetectTimeDiscontinuity'))) this.fftDetectTimeDiscontinuity.set(g('fftDetectTimeDiscontinuity'));
     if (isStr(g('fftWindow'))) this.fftWindow.set(enumOr('WindowType', g('fftWindow'), this.fftWindow.get()));
     if (isStr(g('fftOverlap'))) this.fftOverlap.set(enumOr('FftOverlap', g('fftOverlap'), this.fftOverlap.get()));
     if (isBool(g('fftCoherentAveraging'))) this.fftCoherentAveraging.set(g('fftCoherentAveraging'));
