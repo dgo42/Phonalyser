@@ -39,8 +39,6 @@ import { GeneratorController } from './generator-controller.js';
 import { ScopeController } from './scope-controller.js';
 import { FftController } from './fft-controller.js';
 import { scanDevices as scanAudioDevices } from './devices.js';
-import { MessageBus } from '../bus/message-bus.js';
-import { Events } from '../bus/events.js';
 
 const HARMONIC_COUNT = 9;                  // H2..H10 default (overridable via config.harmonicCount)
 /** DAC full-scale PEAK voltage (= FS-sine RMS × √2). Default when no preferences anchor. */
@@ -112,19 +110,6 @@ export class AudioEngine {
     // sweep deconvolves both ADC channels against the same reference (Java FreqRespAnalyzer's
     // single stereo pass: rec.left() / rec.right()).
     this._recChunks = null;
-
-    // While a FreqResp / Tune-notch MEASUREMENT owns the shared capture, the scope + FFT
-    // consumers must NOT also process the sweep batches. They publish
-    // FREQRESP_MEASUREMENT_STARTED to stop themselves, but a stale record flag (a
-    // shell/controller desync) or a takeover that ends up riding an already-open capture
-    // would otherwise leak the sweep into the FFT accumulator — the "FFT collected N
-    // averages during a sweep" bug. This flag gates the consumer fan-out in _dispatchBatch
-    // for the measurement's duration; the measurement's OWN tap (_recChunks) and the
-    // Tune-notch wizard's own reader stay authoritative and are unaffected.
-    this._measurementActive = false;
-    const bus = MessageBus.instance();
-    bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, () => { this._measurementActive = true; });
-    bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => { this._measurementActive = false; });
   }
 
   /** True when the generator is producing a signal OR the shared capture device
@@ -340,12 +325,12 @@ export class AudioEngine {
 
   /** Per-batch fan-out for the LIVE (scope/FFT) capture, invoked by SharedCapture after it
    *  stages new samples: each active consumer reads off its OWN cursor. The loopback recording
-   *  tap moved to the dedicated measurement capture (_dispatchMeasBatch), so this drives only
-   *  the live consumers. (The _measurementActive gate is now redundant — the live capture is
-   *  released while a measurement runs on its own device — and is retired in the batch-event
-   *  refactor.) */
+   *  tap lives on the dedicated measurement capture (_dispatchMeasBatch), so this drives only
+   *  the live consumers. No measurement gate is needed: a measurement runs on its OWN device
+   *  line (_measCapture) and the panes stop scope/FFT on FREQRESP_MEASUREMENT_STARTED (they
+   *  release _capture), so this live capture is closed for the measurement's duration — a
+   *  latch that could freeze the live feed can't exist. */
   _dispatchBatch(d) {
-    if (this._measurementActive) return;
     if (this._scope.recording) this._scope.feedScope();
     if (this._fft.recording && !this._fft.pausedByStopN) this._fft.feedFft();
   }
