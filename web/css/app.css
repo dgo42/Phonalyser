@@ -90,6 +90,10 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .right-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .scope-pane { flex: var(--scope-grow, 1) 1 0; min-height: 0; }
 .fft-pane { flex: var(--fft-grow, 1) 1 0; min-height: 0; }
+/* FreqResp pane: its own specific class (NOT .fft-pane — that would bind the FFT pane's
+   class-scoped event handlers to the FreqResp controls). Shared layout below lists it
+   alongside .fft-pane; truly-common styling stays on .pane. */
+.freqresp-pane { flex: 1 1 0; min-height: 0; }
 
 /* SASH splitters (replace the old static 4px borders); hover/disabled tints
    mirror MultifunctionalTab.tintSash (#808080 → #C8C8C8, default cursor when
@@ -102,7 +106,7 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 
 /* ===== pane ===== */
 .pane { display: flex; flex-direction: column; min-height: 0; background: var(--panel); }
-.scope-pane, .fft-pane { position: relative; }   /* containing block for the canvas-wrap overlays (lr-tools, readout) */
+.scope-pane, .fft-pane, .freqresp-pane { position: relative; }   /* containing block for the canvas-wrap overlays (lr-tools, readout) */
 .pane-header { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px;
   background: var(--panel); font-size: 12.5px; color: #000; flex: 0 0 auto; cursor: pointer; }
 
@@ -486,9 +490,9 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 /* FFT settings grid: match Java FftTabControl.buildSettingsTab density — a tight
    4-column grid (label | control | label | control), left-packed, content-sized
    columns instead of stretching the selects across the full pane width. */
-.fft-pane .settings-grid { grid-template-columns: auto 150px auto 150px; justify-content: start;
+.fft-pane .settings-grid, .freqresp-pane .settings-grid { grid-template-columns: auto 150px auto 150px; justify-content: start;
   gap: 4px 8px; column-gap: 8px; }
-.fft-pane .settings-grid .form-select { width: 100%; height: 24px; padding: 1px 22px 1px 6px; }
+.fft-pane .settings-grid .form-select, .freqresp-pane .settings-grid .form-select { width: 100%; height: 24px; padding: 1px 22px 1px 6px; }
 .fft-pane .settings-grid .form-control { width: 100%; height: 24px; padding: 1px 6px; }
 .fft-pane .settings-grid .form-check label { white-space: nowrap; }
 /* Checkbox knobs span the label+control pair (Java: horizontalSpan = 2). */
@@ -498,9 +502,9 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .fft-pane .settings-grid .grid-span4 .form-select { width: 150px; }
 /* Averages NumericStepField (Java averagesField) — fill the 150px control column and keep the
    uniform 24px field height (item #5), matching the selects on the same rows. */
-.fft-pane .settings-grid > .numfield { width: 150px; max-width: 150px; height: 24px; }
+.fft-pane .settings-grid > .numfield, .freqresp-pane .settings-grid > .numfield { width: 150px; max-width: 150px; height: 24px; }
 /* The FFT-settings .numfield.sm (#averages) fills its 150px control column like the selects. */
-.fft-pane .settings-grid > .numfield.sm { width: 150px; max-width: 150px; height: 24px; }
+.fft-pane .settings-grid > .numfield.sm, .freqresp-pane .settings-grid > .numfield.sm { width: 150px; max-width: 150px; height: 24px; }
 /* #4: THD tab — COMPACT Java field widths instead of the 150px control column, on
    content-sized grid columns (Java GridLayout(4) packs to content). NumericStepField
    width hints: distMin/distMax 90 (FftTabControl.java:570-572/594-596), manualFund 110
