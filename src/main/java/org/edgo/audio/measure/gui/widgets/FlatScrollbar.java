@@ -50,6 +50,13 @@ import lombok.Getter;
  * track click outside the thumb = ±{@code pageIncrement}, thumb drag =
  * continuous, hold-on-arrow = 10 Hz auto-repeat after a 300 ms delay
  * (matching {@code Slider}).
+ *
+ * <p>Like the native widget, each {@code SWT.Selection} event carries the
+ * gesture in {@code event.detail}: {@link SWT#ARROW_UP} (start arrow / wheel
+ * up), {@link SWT#ARROW_DOWN} (end arrow / wheel down), {@link SWT#PAGE_UP} /
+ * {@link SWT#PAGE_DOWN} (track click), {@link SWT#DRAG} (thumb drag),
+ * {@link SWT#NONE} otherwise — so a listener can apply an exact model step
+ * for arrow/page gestures instead of the int-quantised selection delta.
  */
 public final class FlatScrollbar extends Canvas {
 
@@ -275,14 +282,14 @@ public final class FlatScrollbar extends Canvas {
 
         if (axisPx < ARROW_SIZE) {
             // Start arrow → step backward, auto-repeat while held.
-            stepBy(-increment);
-            startAutoRepeat(-increment);
+            stepBy(-increment, SWT.ARROW_UP);
+            startAutoRepeat(-increment, SWT.ARROW_UP);
             return;
         }
         if (axisPx >= trackEnd) {
             // End arrow → step forward, auto-repeat.
-            stepBy(+increment);
-            startAutoRepeat(+increment);
+            stepBy(+increment, SWT.ARROW_DOWN);
+            startAutoRepeat(+increment, SWT.ARROW_DOWN);
             return;
         }
         int[] tr = thumbRect();
@@ -292,11 +299,11 @@ public final class FlatScrollbar extends Canvas {
             dragging  = true;
             dragOffset = axisPx - thumbStart;
         } else if (axisPx < thumbStart) {
-            stepBy(-pageIncrement);
-            startTrackRepeat(-pageIncrement, axisPx);
+            stepBy(-pageIncrement, SWT.PAGE_UP);
+            startTrackRepeat(-pageIncrement, SWT.PAGE_UP, axisPx);
         } else {
-            stepBy(+pageIncrement);
-            startTrackRepeat(+pageIncrement, axisPx);
+            stepBy(+pageIncrement, SWT.PAGE_DOWN);
+            startTrackRepeat(+pageIncrement, SWT.PAGE_DOWN, axisPx);
         }
     }
 
@@ -323,7 +330,7 @@ public final class FlatScrollbar extends Canvas {
         selection = center;
         redraw();
         update();
-        fire();
+        fire(SWT.NONE);
     }
 
     private void onMouseMove(Event e) {
@@ -359,7 +366,7 @@ public final class FlatScrollbar extends Canvas {
             // sees the signal update smoothly (it's a different widget)
             // while the thumb only catches up on MouseUp.
             update();
-            fire();
+            fire(SWT.DRAG);
         }
     }
 
@@ -368,7 +375,7 @@ public final class FlatScrollbar extends Canvas {
         int dir = Integer.signum(e.count);
         // Wheel up = selection decreases (matches the scope canvas mapping
         // for the vertical scrollbar).
-        stepBy(-dir * increment);
+        stepBy(-dir * increment, dir > 0 ? SWT.ARROW_UP : SWT.ARROW_DOWN);
         e.doit = false;
     }
 
@@ -376,12 +383,12 @@ public final class FlatScrollbar extends Canvas {
     // Helpers
     // -------------------------------------------------------------------------
 
-    private void stepBy(int delta) {
+    private void stepBy(int delta, int detail) {
         int clamped = clamp(selection + delta, minimum, maximum - thumb);
         if (clamped == selection) return;
         selection = clamped;
         redraw();
-        fire();
+        fire(detail);
     }
 
     private void clampSelection() {
@@ -396,13 +403,13 @@ public final class FlatScrollbar extends Canvas {
         return v;
     }
 
-    private void startAutoRepeat(int delta) {
+    private void startAutoRepeat(int delta, int detail) {
         stopAutoRepeat();
         Runnable[] holder = new Runnable[1];
         holder[0] = new Runnable() {
             @Override public void run() {
                 if (isDisposed() || autoRepeatTask != holder[0]) return;
-                stepBy(delta);
+                stepBy(delta, detail);
                 getDisplay().timerExec(ARROW_REPEAT_MS, holder[0]);
             }
         };
@@ -415,7 +422,7 @@ public final class FlatScrollbar extends Canvas {
      *  same initial hold delay as the arrows) until the thumb has travelled
      *  under the cursor — so it stops exactly when the thumb reaches the click,
      *  never overshooting — or until it hits an end / the button is released. */
-    private void startTrackRepeat(int delta, int axisPx) {
+    private void startTrackRepeat(int delta, int detail, int axisPx) {
         stopAutoRepeat();
         Runnable[] holder = new Runnable[1];
         holder[0] = new Runnable() {
@@ -423,7 +430,7 @@ public final class FlatScrollbar extends Canvas {
                 if (isDisposed() || autoRepeatTask != holder[0]) return;
                 if (thumbCovers(axisPx)) { stopAutoRepeat(); return; }
                 int before = selection;
-                stepBy(delta);
+                stepBy(delta, detail);
                 if (selection == before) { stopAutoRepeat(); return; }   // hit an end
                 getDisplay().timerExec(TRACK_REPEAT_MS, holder[0]);
             }
@@ -447,9 +454,10 @@ public final class FlatScrollbar extends Canvas {
         autoRepeatTask = null;
     }
 
-    private void fire() {
+    private void fire(int detail) {
         Event ev = new Event();
         ev.widget = this;
+        ev.detail = detail;
         // Use SWT's native listener registry so callers that registered with
         // addListener(SWT.Selection, …) — the standard SWT idiom — get the
         // event.  Also fan out to any addSelectionListener() callers we

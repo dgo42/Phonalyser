@@ -67,6 +67,16 @@ public final class JavaSoundDeviceManager {
         }
     }
 
+    /** Playback buffer scales with the sample rate — {@value #BASE_BUFFER_FRAMES}
+     *  frames per {@value #BASE_SAMPLE_RATE} Hz (so 8192 @ 768 kHz, 16384 @
+     *  1536 kHz) — keeping the underrun margin constant in TIME (a fixed frame
+     *  count would halve it each time the rate doubles: the ~108 µs dropouts seen
+     *  on a scope at 768 kHz).  It is also the floor for rates at/below the base.
+     *  Derived from the line format's sample rate, recomputed on each open so it
+     *  tracks the bidi-bound output-rate changes. */
+    /*private static final int BASE_BUFFER_FRAMES = 8192;
+    private static final int BASE_SAMPLE_RATE   = 384000;*/
+
     /**
      * Cached probe results per mixer name.  Probing actually opens lines
      * (the only reliable way past the {@code isLineSupported} false
@@ -130,10 +140,19 @@ public final class JavaSoundDeviceManager {
         SourceDataLine line = (SourceDataLine) (chosen != null
                 ? AudioSystem.getMixer(chosen).getLine(info)
                 : AudioSystem.getLine(info));
+        // Time-based buffer (see OUTPUT_BUFFER_SEC): a fixed frame count would
+        // halve the underrun margin each time the rate doubles.  fmt carries the
+        // selected output rate, so the buffer tracks it; floored at 4096 frames.
         line.open(fmt);
+        /*int bufferFrames = Math.max(BASE_BUFFER_FRAMES,
+                (int) Math.round(fmt.getSampleRate() * (double) BASE_BUFFER_FRAMES / BASE_SAMPLE_RATE));
+        line.open(fmt, bufferFrames * fmt.getFrameSize());*/
         if (log.isInfoEnabled()) {
             log.info("JavaSound output line opened: format={}, mixer={}",
                     fmt, chosen != null ? chosen.getName() : "<JavaSound default>");
+            /*log.info("JavaSound output line opened: format={}, mixer={}, buffer={} frames ({} ms)",
+                    fmt, chosen != null ? chosen.getName() : "<JavaSound default>",
+                    bufferFrames, bufferFrames * 1000L / (long) fmt.getSampleRate());*/
         }
         return line;
     }

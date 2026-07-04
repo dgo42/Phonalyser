@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Phonalyser — What's new</title>
+  <link rel="icon" type="image/svg+xml" href="img/logo.svg"/>
+  <link rel="stylesheet" href="css/site.css"/>
+</head>
+<body>
+
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <img src="img/logo.svg" alt=""/>
+      <b>Phonalyser</b>
+    </a>
+    <nav class="menu">
+      <a href="index.html">Home</a>
+      <a href="changelog.html" class="active">What's new</a>
+      <a href="screenshots.html">Screenshots</a>
+
+      <details class="submenu" open>
+        <summary>Download <span class="caret">▸</span></summary>
+        <a href="download.html">All downloads</a>
+        <a class="ext" href="https://github.com/dgo42/Phonalyser/releases/latest"
+           target="_blank" rel="noopener">GitHub — latest release</a>
+        <a class="ext" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
+           target="_blank" rel="noopener">Microsoft Store</a>
+        <a class="disabled" title="Reserved — coming soon">macOS <span class="soon">soon</span></a>
+      </details>
+
+      <a href="docs.html">Docs</a>
+      <a href="translation.html">Translation</a>
+      <a href="bench.html">Measurement bench</a>
+      <a href="web/index.html">Web version</a>
+    </nav>
+    <div class="sidebar-foot">
+      AGPL-3.0 ·
+      <a href="https://github.com/dgo42/Phonalyser" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="hero">
+      <img src="img/logo.svg" alt="Phonalyser logo"/>
+      <div>
+        <h1>What's new</h1>
+        <p class="sub">Release history — the full changelog also lives in
+           <a href="https://github.com/dgo42/Phonalyser/blob/main/CHANGELOG.md"
+              target="_blank" rel="noopener">CHANGELOG.md</a>.</p>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <h2>1.0.3 <span class="ver-date">2026-07-04</span></h2>
+      <h3 class="chg">Added</h3>
+      <ul>
+        <li><b>Notch-filter tuning module.</b> Live tuning of a passive twin-T
+            notch: a continuously looping log-sweep tracks the null in real time
+            — its power-of-two period makes the transform shift-invariant, so no
+            trigger is needed — and the notch's own response is then saved as a
+            <code>.frc</code> calibration for de-embedding.</li>
+        <li><b>DAC pre-distortion calibration.</b> A closed-loop wizard that
+            iteratively cancels the converter's own harmonics (and dual-tone
+            IMD), pushing the playback chain's distortion far below what the DAC
+            produces alone.</li>
+        <li><b>Web version.</b> A browser port of the analyzer — FFT,
+            oscilloscope and signal generator — running with no install in the
+            <a href="web/index.html">web version</a>.</li>
+        <li><b>Oscilloscope.</b> Rectangular rubber-band zoom with
+            <code>Ctrl+Z</code> rollback, and a glitch trigger backed by a
+            signal-discontinuity gate.</li>
+        <li><b>Documentation.</b> Expanded Theory of operation (tune-notch
+            measurement, ADC characterisation, adaptive mains cancellers,
+            digital-phosphor persistence) and the <code>ALGORITHMS.md</code>
+            engineering catalogue; this landing site.</li>
+      </ul>
+      <h3 class="chg">Changed</h3>
+      <ul>
+        <li><b>Oscilloscope.</b> Whole-period integration for
+            V<sub>mean</sub>/V<sub>rms</sub> (removes the partial-cycle scatter
+            that grew with amplitude); exact horizontal pan/zoom positioning.</li>
+      </ul>
+
+      <h2>1.0.2 <span class="ver-date">2026-06-29</span></h2>
+      <h3 class="chg">Added</h3>
+      <ul>
+        <li><b>Oscilloscope digital-phosphor persistence</b> (GPU path) with
+            off / fixed / infinite / manual decay modes.</li>
+        <li><b>Scope pan/zoom engine</b> with connected-envelope rendering.</li>
+        <li><b>Microsoft Store (MSIX)</b> packaging and Store listing assets.</li>
+      </ul>
+      <h3 class="chg">Fixed</h3>
+      <ul>
+        <li>Frequency response — restored the FS/2 sweep-points entry.</li>
+        <li>Dropped unused JOGL/GlueGen dependencies (CI build fix).</li>
+      </ul>
+
+      <h2>1.0-RC1 <span class="ver-date">2026-06-19</span></h2>
+      <ul>
+        <li>First public release candidate: FFT analyzer (THD, THD+N, IMD, SNR,
+            SINAD, ENOB, per-harmonic readout, coherent averaging, selectable
+            windows, <code>.frc</code> calibration), oscilloscope, frequency
+            response (Farina log-sweep deconvolution), signal generator (DDS),
+            and multi-backend audio (WASAPI &amp; WDM-KS on Windows, CoreAudio on
+            macOS, JavaSound on Linux).</li>
+      </ul>
+
+    </div>
+  </main>
+
+</body>
+</html>

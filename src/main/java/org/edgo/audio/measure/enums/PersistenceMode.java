@@ -29,11 +29,16 @@ public enum PersistenceMode {
     S_05(0.5),
     S_1(1.0),
     S_2(2.0),
+    S_5(5.0),
+    S_10(10.0),
+    S_15(15.0),
+    S_20(20.0),
     INFINITE(-1.0),
     MANUAL(Double.NaN);
 
     /** Combo labels, index-aligned with {@link #values()}. */
-    public static final String[] LABELS = { "Off", "0.5 s", "1 s", "2 s", "∞", "Manual" };
+    public static final String[] LABELS =
+            { "Off", "0.5 s", "1 s", "2 s", "5 s", "10 s", "15 s", "20 s", "∞", "Manual" };
 
     /** Persistence time in seconds: {@code 0} = off, {@code < 0} = infinite,
      *  {@code > 0} = decay time constant; {@link Double#NaN} = use the manual pref. */

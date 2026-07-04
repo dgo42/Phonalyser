@@ -22,7 +22,34 @@
      <b>Phase</b>) des Prüflings als Funktion der Frequenz dar — mit optionaler RIAA-/IEC-Referenzkurve
      sowie einer Differenzkurve (Messung minus Referenz) für Phono- und Filterarbeiten.</p>
 
-  <p><img src="img/freqresp-pane.png" alt="Frequenzgang-Bereich"/></p>
+  <div class="shot">
+    <img src="img/freqresp-pane.png" alt="Frequenzgang-Bereich"/>
+    <svg class="callouts" viewBox="0 0 1292 696" preserveAspectRatio="none"
+         xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace">
+      <defs><marker id="frca" viewBox="0 0 10 10" refX="9" refY="5"
+          markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/></marker></defs>
+      <line x1="250" y1="46" x2="156" y2="47" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="330" y1="555" x2="340" y2="653" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="382" y1="555" x2="382" y2="653" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="1245" y1="130" x2="1283" y2="130" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="690" y1="555" x2="690" y2="653" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <circle cx="110" cy="95" r="13" fill="#c33"/>
+      <text x="110" y="100" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
+      <circle cx="250" cy="46" r="13" fill="#c33"/>
+      <text x="250" y="51" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
+      <circle cx="330" cy="555" r="13" fill="#c33"/>
+      <text x="330" y="560" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
+      <circle cx="382" cy="555" r="13" fill="#c33"/>
+      <text x="382" y="560" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
+      <circle cx="650" cy="320" r="13" fill="#c33"/>
+      <text x="650" y="325" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
+      <circle cx="1245" cy="130" r="13" fill="#c33"/>
+      <text x="1245" y="135" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
+      <circle cx="690" cy="555" r="13" fill="#c33"/>
+      <text x="690" y="560" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">7</text>
+    </svg>
+  </div>
 
   <h2 id="freqresp-overview">Auf einen Blick</h2>
   <ol class="features">
@@ -42,8 +69,9 @@
     <li><b>Fadenkreuz-Anzeige.</b>  Ein gestricheltes Kreuz folgt dem Mauszeiger mit einem
         schwebenden Kasten, der Frequenz, Betrag und (bei eingeblendeter Phase) Phase sowie
         das Vergleichs-Δ anzeigt.  <a href="#freqresp-crosshair">Fadenkreuz</a>.</li>
-    <li><b>Schwenken &amp; Zoomen (Mausrad).</b>  Dieselbe Rad-Konvention wie in allen
-        Phonalyser-Ansichten — <a href="#freqresp-panzoom">Schwenken &amp;
+    <li><b>Schwenken &amp; Zoomen.</b>  Dieselbe Rad-Konvention wie in allen
+        Phonalyser-Ansichten, dazu ein Rechteck-Zoom durch Ziehen mit
+        Ctrl+Z-Rückschritt — <a href="#freqresp-panzoom">Schwenken &amp;
         Zoomen</a>.</li>
     <li><b>Kalibrierung de-embedding.</b>  Laden Sie eine oder mehrere <code>.frc</code>-/
         CSV-Korrekturdateien, um eine bekannte Schnittstellenantwort von der Messung
@@ -74,7 +102,7 @@
             <a href="#freqresp-measure">Messung durchführen</a>).</td></tr>
   </table>
 
-  <h2 id="freqresp-panzoom">Schwenken &amp; Zoomen (Mausrad)</h2>
+  <h2 id="freqresp-panzoom">Schwenken &amp; Zoomen</h2>
   <p>Im Darstellungsbereich gilt:
      <b>Rad</b>: Betrag-(Vertikal-)Achse schwenken;
      <b>Shift+Rad</b>: Frequenz-(Horizontal-)Achse schwenken;
@@ -88,6 +116,25 @@
      Skalieren).  Klicken Sie auf die leere Leistenbahn, um seitenweise zum Zeiger
      zu scrollen, oder halten Sie die Taste gedrückt, bis der Regler den Cursor
      erreicht.</p>
+  <p><b>Rechteck-Zoom.</b>  Ziehen Sie mit gedrückter linker Maustaste innerhalb der
+     Darstellung ein Gummiband-Rechteck auf; beim Loslassen wird der ausgewählte
+     Bereich auf die volle Ansicht gedehnt — Frequenz und Betrag zoomen in einer
+     einzigen Geste gemeinsam.  Auswahlen kleiner als 8 Pixel in einer der beiden
+     Richtungen werden ignoriert, damit ein versehentlicher Klick nicht zoomt.
+     Das Ziehen muss innerhalb des Darstellungsbereichs beginnen (nicht auf den
+     Achsenbeschriftungen), und das Ergebnis bleibt auf die Grenzen der Darstellung
+     beschränkt (horizontal 1&nbsp;Hz bis zur Nyquist-Grenze).  Dieselbe Geste
+     funktioniert in den Oszilloskop- und FFT-Ansichten.</p>
+  <p><b>Ctrl+Z — Schritt zurück.</b>  Jeder Rechteck-Zoom merkt sich das Fenster,
+     das er ersetzt hat; drücken Sie <b>Ctrl+Z</b> (genau Ctrl — Ctrl+Shift+Z und
+     andere Kombinationen werden ignoriert), um bis zu 32 vorherige Fenster pro
+     Ansicht zurückzugehen.  Schwenken/Zoomen per Rad wird nicht aufgezeichnet —
+     nur Rechteck-Zooms fügen Schritte hinzu.  Ctrl+Z wirkt auf die Ansicht mit
+     Tastaturfokus (klicken Sie in eine Darstellung, um sie zu fokussieren) oder,
+     wenn keine Ansicht fokussiert ist, auf die unter dem Mauszeiger; die
+     angesprochene Ansicht wird durch einen dünnen hellgrünen Rahmen an ihrem Rand
+     markiert.  Solange ein Texteingabefeld den Fokus hat, gehört Ctrl+Z der
+     eigenen Rückgängig-Funktion dieses Feldes.</p>
 
   <h2 id="freqresp-crosshair">Fadenkreuz-Anzeige</h2>
   <p>Wenn der Mauszeiger in den Darstellungsbereich bewegt wird, erscheinen ein
@@ -124,9 +171,12 @@
             auf Kosten einer längeren Sweep-Dauer; die Beschriftung zeigt die
             resultierende Sweep-Dauer.</td></tr>
     <tr><td>Sweep-Punkte</td>
-        <td>Anzahl der Frequenzpunkte des Sweeps (8192 … 10M).  Das Rad wechselt
-            zwischen Zweierpotenzen und einem vom Abtastrate abgeleiteten
-            „Nyquist/2"-Eintrag.</td></tr>
+        <td>Anzahl der logarithmisch verteilten Ausgabepunkte, die die Entfaltung
+            liefert (8192 … 10M).  Das Rad wechselt durch Zweierpotenz-Vorgaben
+            (8192, 16384, 32768, … bis 4194304) sowie einen <b>FS/2</b>-Eintrag,
+            der der halben aktuellen Abtastrate entspricht (24000 bei 48&nbsp;kHz,
+            96000 bei 192&nbsp;kHz — er folgt dem Audioformat); jeder Wert im
+            gültigen Bereich kann auch direkt eingegeben werden.</td></tr>
     <tr><td>Vorlauf, s</td>
         <td>Stille-/Einregelzeit vor dem eigentlichen Sweep, damit der Signalweg
             im eingeschwungenen Zustand ist, wenn die Messung beginnt.</td></tr>

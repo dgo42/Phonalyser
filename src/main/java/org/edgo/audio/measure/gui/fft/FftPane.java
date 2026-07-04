@@ -72,6 +72,9 @@ public final class FftPane extends AbstractPane {
      *  accumulator keeps counting through a language / font change); the
      *  offscreen screenshot clone builds its own idle instance. */
     private final FftController controller;
+    /** The generator controller the predistortion wizard drives — stored so
+     *  {@link #openPredistortionForCapture()} can construct the wizard. */
+    private final GeneratorController genController;
     private FlatScrollbar   freqScrollbar;
     private FlatScrollbar   magScrollbar;
 
@@ -111,6 +114,12 @@ public final class FftPane extends AbstractPane {
     /** Counterpart to {@link #freqRespStartedListener} — re-enables the
      *  Record button once the sweep finishes (or aborts). */
     private Consumer<Void> freqRespStoppedListener;
+    /** Set when an audio-backend switch stops a RUNNING FFT recording, so it is
+     *  restarted on the new backend once that is live (AUDIO_FORMAT_CHANGED)
+     *  instead of being left stopped. */
+    private boolean        fftRecordingBeforeBackendSwitch;
+    private Consumer<Void> backendChangingListener;
+    private Consumer<Void> backendRestartListener;
 
     /**
      * Constructs the live pane around the injected app-lifetime engine —
@@ -130,6 +139,20 @@ public final class FftPane extends AbstractPane {
      */
     public FftPane(Composite parent) {
         this(parent, false, null, null);
+    }
+
+    /** Builds + shows the DAC-predistortion wizard non-modally for a help
+     *  capture and returns it, so an automation script can drive it (set target,
+     *  start, screenshot) without the modal loop.  The live pane owns the
+     *  wizard's collaborators, so it constructs the wizard here rather than
+     *  exposing them.  Returns {@code null} on the offscreen (non-live) pane. */
+    public PredistortionWizardDialog openPredistortionForCapture() {
+        if (genController == null) return null;
+        PredistortionWizardDialog d = new PredistortionWizardDialog(
+                getGroup().getShell(), genController, controller, view,
+                controller.getCorrectionStore());
+        d.buildAndShow();
+        return d;
     }
 
     private FftPane(Composite parent, boolean liveCapture, GeneratorController genController,
@@ -168,6 +191,7 @@ public final class FftPane extends AbstractPane {
             controller = new FftController(new FftAnalyzerWorker(d));
         }
         this.controller = controller;
+        this.genController = genController;
         FreqRespCorrectionStore correctionStore = controller.getCorrectionStore();
         view = new FftView(plotRow, correctionStore, controller);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);
@@ -286,6 +310,24 @@ public final class FftPane extends AbstractPane {
         bus.subscribe(Events.FFT_SCREENSHOT_REQUESTED,      screenshotRequestedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
+        // A backend switch tears down the capture device, so a running FFT
+        // recording always dies.  Stop it cleanly before the teardown and
+        // restart it on the new backend once that is live — the FFT resumes
+        // instead of being left stopped.
+        backendChangingListener = ignored -> {
+            if (recordButton == null || recordButton.isDisposed()) return;
+            fftRecordingBeforeBackendSwitch = isRecording();
+            if (fftRecordingBeforeBackendSwitch) recordOff();
+        };
+        backendRestartListener = ignored -> {
+            if (recordButton == null || recordButton.isDisposed()) return;
+            if (fftRecordingBeforeBackendSwitch) {
+                fftRecordingBeforeBackendSwitch = false;
+                recordOn();
+            }
+        };
+        bus.subscribe(Events.AUDIO_BACKEND_CHANGING,        backendChangingListener);
+        bus.subscribe(Events.AUDIO_FORMAT_CHANGED,          backendRestartListener);
 
         recordButton.addListener(SWT.Selection, e -> {
             if (recordButton.getSelection()) recordOn();
@@ -313,6 +355,8 @@ public final class FftPane extends AbstractPane {
             bus2.unsubscribe(Events.FFT_SCREENSHOT_REQUESTED,      screenshotRequestedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
+            bus2.unsubscribe(Events.AUDIO_BACKEND_CHANGING,        backendChangingListener);
+            bus2.unsubscribe(Events.AUDIO_FORMAT_CHANGED,          backendRestartListener);
         });
 
         // Re-layout once the event loop spins up.  At constructor exit

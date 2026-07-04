@@ -44,6 +44,7 @@ import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.common.Dialogs;
+import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.fft.FftController;
 import org.edgo.audio.measure.gui.fft.FftView;
 import org.edgo.audio.measure.gui.fft.ImdResult;
@@ -54,6 +55,7 @@ import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
 import org.edgo.audio.measure.preferences.Preferences;
 
+import lombok.Getter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -94,6 +96,15 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     private final FreqRespCorrectionStore correctionStore;
 
     private Shell            dialog;
+    /** The margin composite holding every widget — printed for the help
+     *  screenshot (a top-level Shell prints blank on Windows), and the unit
+     *  re-laid-out by {@link #retranslate()}. */
+    @Getter private Composite content;
+    private Label            intro;
+    private Group            fftGroup;
+    private Group            progressGroup;
+    private Label            averagesLabel;
+    private Label            targetLabel;
     private NumericStepField averagesField;
     private NumericStepField targetField;
     private Label            statusLabel;
@@ -106,7 +117,9 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     private Button           cancelBtn;
 
     private PredistortionEngine engine;
-    private boolean running;
+    /** {@code true} while a measurement loop is running (Lombok exposes
+     *  {@code isRunning()} for the automation-capture wait). */
+    @Getter private boolean running;
     private boolean timerArmed;
     private String  savedPath;
     private boolean applied;
@@ -133,21 +146,39 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         this.correctionStore = correctionStore;
     }
 
-    /** Opens the wizard and blocks until it is dismissed. */
+    /** Opens the wizard and blocks until it is dismissed (interactive use). */
     public void open() {
+        buildAndShow();
+        while (!dialog.isDisposed()) {
+            if (!dialog.getDisplay().readAndDispatch()) dialog.getDisplay().sleep();
+        }
+    }
+
+    /** Builds and shows the wizard non-modally (no blocking loop), returning the
+     *  shell — for automation capture, which drives it via {@link #setTargetPct},
+     *  {@link #pressStart}, {@link #isTargetReached}, {@link #retranslate} and
+     *  {@link #getContent}. */
+    public Shell buildAndShow() {
         dialog = new Shell(parentShell, SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.RESIZE);
+        ShellIcons.apply(dialog);
         dialog.setText(I18n.t("predistortion.wizard.title"));
+        GridLayout shellLayout = new GridLayout(1, false);
+        shellLayout.marginWidth = 0; shellLayout.marginHeight = 0;
+        dialog.setLayout(shellLayout);
+
+        content = new Composite(dialog, SWT.NONE);
+        content.setLayoutData(new GridData(SWT.FILL, SWT.FILL, true, true));
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 12; gl.marginHeight = 12; gl.verticalSpacing = 8;
-        dialog.setLayout(gl);
+        content.setLayout(gl);
 
-        Label intro = new Label(dialog, SWT.WRAP);
+        intro = new Label(content, SWT.WRAP);
         intro.setText(I18n.t("predistortion.intro"));
         GridData introGd = new GridData(SWT.FILL, SWT.TOP, true, false);
         introGd.widthHint = 470;
         intro.setLayoutData(introGd);
 
-        statusLabel = new Label(dialog, SWT.NONE);
+        statusLabel = new Label(content, SWT.NONE);
         statusLabel.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
 
         buildFftGroup();
@@ -163,9 +194,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         Dialogs.centerOnParent(dialog);
         dialog.open();
         armTimer();
-        while (!dialog.isDisposed()) {
-            if (!dialog.getDisplay().readAndDispatch()) dialog.getDisplay().sleep();
-        }
+        return dialog;
     }
 
     // -------------------------------------------------------------------------
@@ -173,17 +202,17 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     // -------------------------------------------------------------------------
 
     private void buildFftGroup() {
-        Group g = new Group(dialog, SWT.NONE);
-        g.setText(I18n.t("predistortion.group.fft"));
-        g.setLayout(new GridLayout(1, false));
-        g.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
-        fftSizeLbl   = infoLabel(g);
-        fftRateLbl   = infoLabel(g);
-        fftWindowLbl = infoLabel(g);
+        fftGroup = new Group(content, SWT.NONE);
+        fftGroup.setText(I18n.t("predistortion.group.fft"));
+        fftGroup.setLayout(new GridLayout(1, false));
+        fftGroup.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+        fftSizeLbl   = infoLabel(fftGroup);
+        fftRateLbl   = infoLabel(fftGroup);
+        fftWindowLbl = infoLabel(fftGroup);
     }
 
     private void buildChart() {
-        chart = new Canvas(dialog, SWT.DOUBLE_BUFFERED | SWT.BORDER);
+        chart = new Canvas(content, SWT.DOUBLE_BUFFERED | SWT.BORDER);
         GridData gd = new GridData(SWT.FILL, SWT.FILL, true, true);
         gd.heightHint = 150;
         gd.widthHint  = 470;
@@ -192,20 +221,20 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     }
 
     private void buildProgressGroup() {
-        Group g = new Group(dialog, SWT.NONE);
-        g.setText(I18n.t("predistortion.group.progress"));
-        g.setLayout(new GridLayout(2, true));
-        g.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
-        roundLbl  = infoLabel(g);   // col 0
-        avgLbl    = infoLabel(g);   // col 1
-        curThdLbl = infoLabel(g);   // col 0 — live distortion, directly under Round
-        bestLbl   = infoLabel(g);   // col 1
-        distLbl   = infoLabel(g);   // col 0 — last completed round's distortion
-        snrLbl    = infoLabel(g);   // col 1
-        thdNLbl   = infoLabel(g);   // col 0
-        sinadLbl  = infoLabel(g);   // col 1
-        fundLbl   = infoLabel(g);   // col 0
-        floorLbl  = infoLabel(g);   // col 1
+        progressGroup = new Group(content, SWT.NONE);
+        progressGroup.setText(I18n.t("predistortion.group.progress"));
+        progressGroup.setLayout(new GridLayout(2, true));
+        progressGroup.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+        roundLbl  = infoLabel(progressGroup);   // col 0
+        avgLbl    = infoLabel(progressGroup);   // col 1
+        curThdLbl = infoLabel(progressGroup);   // col 0 — live distortion, directly under Round
+        bestLbl   = infoLabel(progressGroup);   // col 1
+        distLbl   = infoLabel(progressGroup);   // col 0 — last completed round's distortion
+        snrLbl    = infoLabel(progressGroup);   // col 1
+        thdNLbl   = infoLabel(progressGroup);   // col 0
+        sinadLbl  = infoLabel(progressGroup);   // col 1
+        fundLbl   = infoLabel(progressGroup);   // col 0
+        floorLbl  = infoLabel(progressGroup);   // col 1
     }
 
     private Label infoLabel(Composite parent) {
@@ -215,7 +244,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     }
 
     private void buildSettings() {
-        Composite c = new Composite(dialog, SWT.NONE);
+        Composite c = new Composite(content, SWT.NONE);
         c.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         GridLayout gl = new GridLayout(4, false);
         gl.marginWidth = 0; gl.marginHeight = 0; gl.horizontalSpacing = 8;
@@ -226,8 +255,8 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         // by a completed run.
         Preferences prefs = Preferences.instance();
 
-        Label dl = new Label(c, SWT.NONE);
-        dl.setText(I18n.t("predistortion.averages"));
+        averagesLabel = new Label(c, SWT.NONE);
+        averagesLabel.setText(I18n.t("predistortion.averages"));
         // FIXED policy: wheel ±10, arrows ±1, whole frames.
         averagesField = new NumericStepField(c, UnitFamily.NONE,
                 MIN_AVERAGES, MAX_AVERAGES, 10.0, 1.0, 0, 90);
@@ -239,8 +268,8 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         averagesField.addSelectionListener(e ->
                 Preferences.instance().setPredistortionAverages((int) Math.round(averagesField.getValue())));
 
-        Label tl = new Label(c, SWT.NONE);
-        tl.setText(I18n.t("predistortion.targetThd"));
+        targetLabel = new Label(c, SWT.NONE);
+        targetLabel.setText(I18n.t("predistortion.targetThd"));
         // PERCENT policy, like the other % fields; 0 = no target.  8 decimals
         // so a sub-ppm target distortion can be entered.
         targetField = new NumericStepField(c, UnitFamily.PERCENT, 0.0, 100.0, 8, 90);
@@ -251,7 +280,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     }
 
     private void buildButtonBar() {
-        Composite bar = new Composite(dialog, SWT.NONE);
+        Composite bar = new Composite(content, SWT.NONE);
         bar.setLayoutData(new GridData(SWT.END, SWT.CENTER, true, false));
         GridLayout gl = new GridLayout(4, true);
         gl.marginWidth = 0; gl.marginHeight = 0;
@@ -281,6 +310,49 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
         cancelBtn.setText(I18n.t("common.close"));
         cancelBtn.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
         cancelBtn.addListener(SWT.Selection, e -> { if (handleCancel()) dialog.close(); });
+    }
+
+    // -------------------------------------------------------------------------
+    // Automation capture hooks — drive the wizard from a body script with no
+    // modal loop.  An in-place language re-translate leaves the measurement, the
+    // FFT averages and the convergence chart untouched, so ONE collection yields
+    // a screenshot per language.
+    // -------------------------------------------------------------------------
+
+    /** Sets the target-THD field (%). */
+    public void setTargetPct(double pct) {
+        if (targetField != null) targetField.setValue(pct);
+    }
+
+    /** Presses Start if idle (no-op while a run is in progress). */
+    public void pressStart() {
+        if (!running) onStartStop();
+    }
+
+    /** {@code true} once a run stopped because it reached the target THD. */
+    public boolean isTargetReached() {
+        return !running && "predistortion.status.targetReached".equals(terminalStatusKey);
+    }
+
+    /** Re-reads every UI label in the current locale, in place, WITHOUT rebuilding
+     *  the widgets or the panes behind the wizard — so a language switch during a
+     *  capture leaves the measurement, the FFT averages and the convergence chart
+     *  untouched.  The dynamic labels (FFT settings, metrics, status) re-translate
+     *  on the {@link #refresh()} below; this re-sets the static ones. */
+    public void retranslate() {
+        if (dialog == null || dialog.isDisposed()) return;
+        dialog.setText(I18n.t("predistortion.wizard.title"));
+        intro.setText(I18n.t("predistortion.intro"));
+        fftGroup.setText(I18n.t("predistortion.group.fft"));
+        progressGroup.setText(I18n.t("predistortion.group.progress"));
+        averagesLabel.setText(I18n.t("predistortion.averages"));
+        targetLabel.setText(I18n.t("predistortion.targetThd"));
+        startStopBtn.setText(I18n.t(running ? "predistortion.button.stop" : "predistortion.button.start"));
+        stopRoundBtn.setText(I18n.t("predistortion.button.stopRound"));
+        saveBtn.setText(I18n.t(savedPath == null ? "predistortion.button.save" : "predistortion.button.apply"));
+        cancelBtn.setText(I18n.t("common.close"));
+        refresh();
+        content.layout(true, true);
     }
 
     // -------------------------------------------------------------------------

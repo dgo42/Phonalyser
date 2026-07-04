@@ -31,6 +31,7 @@ import java.util.stream.IntStream;
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
+import org.edgo.audio.measure.dsp.TimeDiscontinuityDetector;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenChangeCause;
@@ -388,6 +389,13 @@ public final class FftAnalyzerWorker {
      *  on the freshly computed spectrum before it enters the cross-tick
      *  (vector) average — where one bad block injects a large complex error. */
     private final SpectralDiscontinuityDetector spectralDetector = new SpectralDiscontinuityDetector();
+    /** Time-domain discontinuity gate — the scope's glitch detector run on the
+     *  tick's raw window.  A splice/dropout breaks the sinusoid recurrence
+     *  decades above the noise floor even when its spectral footprint slips
+     *  under the frequency-domain gates (and vice versa), so the scope trigger
+     *  and the FFT rejection agree on what counts as a damaged block. */
+    private static final boolean USE_TIME_DISCONTINUITY = true;
+    private final TimeDiscontinuityDetector timeDetector = new TimeDiscontinuityDetector();
     /** Debug overlay: the last gate-REJECTED block's pre-average spectrum (dBFs),
      *  held so {@code FftView} can show what tripped a gate (rejected blocks never
      *  otherwise reach the display). */
@@ -591,6 +599,13 @@ public final class FftAnalyzerWorker {
         display.wake();
     }
 
+    /** Guard skipped after a discontinuity re-sync, ahead of the first fresh
+     *  window: detection fires on the glitch's START, and the glitch (the
+     *  observed USB gaps run 120–160 µs) plus any settling can still be in
+     *  flight at "latest" — 5 ms of discarded samples puts the rebuild safely
+     *  past its end. */
+    private static final double POST_GLITCH_SKIP_SEC = 0.005;
+
     /** Recovery for a detected in-window signal discontinuity — the same re-sync
      *  as a ring overrun: discard the glitched window, re-anchor to "now" and
      *  rebuild, KEEP the running average (the de-rotation absorbs the coverage
@@ -599,6 +614,10 @@ public final class FftAnalyzerWorker {
     private void onSignalDiscontinuity(SignalBufferReader reader) {
         winValid = false;
         reader.seekToLatest();
+        // Reuses the drain-skip: the next tick consumes + discards this span
+        // before rebuilding the window (max keeps a larger pending drain).
+        drainSkipRemaining = Math.max(drainSkipRemaining,
+                (long) Math.ceil(POST_GLITCH_SKIP_SEC * reader.getSampleRate()));
         kappaSkipNext      = true;   // κ measurement: re-anchor on the jumped frame, don't fold its step
         multiKappaSkipNext = true;   // multi-tone per-tone κ refine: same re-anchor
         gapRecoverPending  = true;   // re-sync: one-shot full realign on the next clean frame, then track
@@ -1551,7 +1570,8 @@ public final class FftAnalyzerWorker {
         // discard the span still carrying the old tone (the DAC buffer
         // keeps it flowing into the ADC after the change) so the first
         // window — and the FLL's first measurement — see only the new
-        // signal.
+        // signal.  Also armed (5 ms) by a discontinuity re-sync, so the
+        // rebuild starts past the glitch's END, not at its detected start.
         if (drainSkipRemaining > 0) {
             long skipAvail = rdr.available();
             if (skipAvail > 0) {
@@ -1791,6 +1811,23 @@ public final class FftAnalyzerWorker {
         // the cross-tick vector average.  Only while accumulating; the
         // detector reconfigures itself on an fftLength change and reuses the
         // existing discontinuity recovery + banner.
+        // Time-domain discontinuity gate first (cheap O(n) pass on the raw
+        // window): the tick's own refined fundamental pins the recurrence
+        // prediction exactly, so the reject threshold rides on the noise
+        // floor at any signal frequency; NaN (no tone) self-estimates.
+        if (USE_TIME_DISCONTINUITY && accumulate && prefs.isFftDetectTimeDiscontinuity()) {
+            double f0 = r.fundamentalHzRefined;
+            double omega = (f0 > 0 && f0 < sampleRate / 2.0)
+                    ? 2.0 * Math.PI * f0 / sampleRate : Double.NaN;
+            if (timeDetector.detect(samples, samples.length, omega)) {
+                if (log.isInfoEnabled()) {
+                    log.info("Time-domain discontinuity in the tick window — re-sync");
+                }
+                onSignalDiscontinuity(rdr);
+                resultPool.release(r);
+                return IDLE_TICK_MS;
+            }
+        }
         if (USE_SPECTRAL_DISCONTINUITY && accumulate) {
             spectralDetector.configure(fftLength / 2);
             // Debug: snapshot this block's pre-average spectrum BEFORE the

@@ -73,7 +73,9 @@
         <b>Ctrl+wheel</b> zooms the magnitude axis and
         <b>Ctrl+Shift+wheel</b> the frequency axis — both zooms anchored at the
         cursor (the magnitude / frequency under the pointer stays fixed).  The
-        same convention as every Phonalyser view.</li>
+        same convention as every Phonalyser view.  Dragging with the left
+        button zooms straight into a selection — see
+        <a href="#fft-rect-zoom">rubber-band zoom</a>.</li>
     <li><b>Settings tabs.</b>  One tab per aspect; read the current set from
         the strip (it shows an overflow <code>»</code> when more exist than
         fit).  At the time of writing:
@@ -171,13 +173,48 @@
      only pans.  Click the empty track to page toward the pointer; hold the
      button down and the page-steps repeat until the thumb reaches the cursor.
      To zoom, use the mouse wheel over the canvas (wheel / Shift+wheel pan,
-     Ctrl+wheel / Ctrl+Shift+wheel zoom).</p>
+     Ctrl+wheel / Ctrl+Shift+wheel zoom), or drag a
+     <a href="#fft-rect-zoom">rubber-band rectangle</a>.</p>
 
   <h3 id="fft-scrollbar-mag">Vertical scrollbar (magnitude)</h3>
   <p>The same, for the magnitude axis: it pans up / down only and its thumb
      tracks the magnitude zoom.  Ctrl+wheel inside the canvas zooms the
      magnitude axis around the cursor and the scrollbar's thumb updates to
      match.</p>
+
+  <h3 id="fft-rect-zoom">Rubber-band zoom &amp; Ctrl+Z</h3>
+  <p>Hold the left mouse button inside the plot and drag: a thin bright-green
+     rectangle follows the pointer, and on release the view zooms so the
+     selection fills the plot — frequency and magnitude together.  A selection
+     smaller than 8 pixels in either direction is ignored (an accidental click
+     never zooms), and the gesture starts only inside the plot area, not on
+     the axis labels.  The same gesture works in the oscilloscope and
+     frequency-response views.</p>
+  <p><b>Ctrl+Z</b> steps back through the previous views, up to 32 deep per
+     view.  Since several views understand this shortcut, the one Ctrl+Z will
+     act on — the view you clicked last, or failing that the one under the
+     pointer — is marked with a thin bright-green border around its edge.
+     While a text field has focus, Ctrl+Z stays with the text field (its own
+     undo); only plain Ctrl+Z is recognised, no other modifiers.</p>
+
+  <h3 id="fft-resync-banner">Capture re-sync banner</h3>
+  <p>While averaging, every capture block is vetted before it may enter the
+     average.  Two independent checks run on each block: a <b>time-domain
+     discontinuity check</b> on the raw samples — the same detector the
+     oscilloscope's glitch trigger uses, so both instruments agree on what
+     counts as a damaged block — and a set of <b>spectral gates</b> that
+     compare the block's spectrum with the statistics of the blocks already
+     accepted.  A hit from either discards the affected window and re-syncs
+     the analyser to the live signal: the banner <b>⚠ Signal discontinuity —
+     re-synced</b> appears on the pane, and the rebuilt window skips the
+     first 5&nbsp;ms after the re-sync so it starts safely past the glitch's
+     end.  The accumulated average survives — averaging continues coherently,
+     only the damaged block is lost.  (A buffer overrun — the analyser
+     falling behind the capture — re-syncs the same way but resets the
+     average.)  For how the detectors work, see
+     <a href="theory/fft.html#rejection">Theory ▸ keeping bad blocks out of
+     the average</a>.  Frequent discontinuity banners mean the source or the
+     capture is glitching under load.</p>
 
   <h2 id="fft-thd-table">THD info table</h2>
   <p>Compact overlay in the top-left of the canvas (or in the
@@ -258,6 +295,14 @@
      Switching unit converts the axis labels and scrollbar bounds in
      place — the visible signal stays at the same screen Y.</p>
 
+  <h3 id="fft-predistortion">DAC pre-distortion wizard (wand)</h3>
+  <p>The wand button, left of the record button, opens the
+     <a href="dac-predistortion.html">DAC pre-distortion wizard</a> — a
+     closed-loop measurement that cancels the DAC's own harmonics so the
+     stimulus is cleaner than the converter can natively produce.  It needs the
+     generator already playing a sine or dual-tone signal, and shows on the live
+     pane only.</p>
+
   <h3 id="fft-record-button">Record button</h3>
   <p>Red round toggle, anchored to the right end of the toolbar row.
      Pressing it acquires a reference on the shared capture device
@@ -330,6 +375,20 @@
   <p>Frequency axis switches between log and linear.  Log is
      traditional for audio (constant pixel-per-octave); linear is
      useful for spotting evenly-spaced spurs.</p>
+
+  <h4 id="fft-detect-time-discontinuity">Detect time discontinuity</h4>
+  <p>Checkbox, <b>on by default</b>.  While averaging, each capture block is
+     tested in the time domain against the tone's own sinusoid recurrence; a
+     splice, dropped-sample xrun or glitch breaks that prediction, so the block
+     is discarded and the capture re-syncs — the same detector that drives the
+     oscilloscope's glitch trigger (see
+     <a href="theory/fft.html#rejection">Theory ▸ keeping bad blocks out of the
+     average</a>).</p>
+  <p><b>Uncheck it for a small or non-sinusoidal signal.</b>  A weak (low-SNR)
+     or deliberately non-sine waveform breaks the sinusoid-recurrence prediction
+     on <em>every</em> block, so the gate would reject them all and no spectrum
+     would ever appear.  Turning the gate off lets the FFT keep computing; the
+     frequency-domain (spectral) glitch gate stays active either way.</p>
 
   <h3 id="fft-tab-thd">THD settings tab</h3>
   <p><img src="img/FFT - THD settings.png" alt="THD settings tab"/></p>

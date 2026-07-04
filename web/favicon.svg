@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Phonalyser app icon — stylised Greek Φ (phi) with a sine wave threaded
+  horizontally through the circle.  Designed for 256×256 base size; reads
+  cleanly down to 16×16 because the phi silhouette is dominant.
+
+  Colours:
+    background  #0c2538  deep navy (scope-screen vibe)
+    phi glyph   #0057b8  teal — primary brand colour
+    sine wave   #ffd700  warm amber — complementary signal accent
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256" width="256" height="256">
+
+  <!-- Rounded-square background.  rx=48 matches macOS / modern Windows icon corner radii. -->
+  <rect width="256" height="256" rx="48" ry="48" fill="#0c2538"/>
+
+
+  <!-- Phi: the circle. -->
+  <circle cx="128" cy="128" r="66"
+          fill="none"
+          stroke="#0057b8"
+          stroke-width="24"/>
+
+  <!-- Phi: the vertical stem.  Extends above and below the circle to
+       give the classic Φ silhouette. -->
+  <line x1="128" y1="26" x2="128" y2="230"
+        stroke="#0057b8"
+        stroke-width="24"
+        stroke-linecap="round"/>
+  <!-- Sine wave drawn FIRST so the phi outline crosses over it at two
+       points (where the circle's stroke covers the wave), giving the
+       "threaded through the circle" effect. -->
+  <path d="M 32 128 Q 56 96, 80 128 T 128 128 T 176 128 T 224 128"
+        fill="none"
+        stroke="#ffd700"
+        stroke-width="20"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+</svg>

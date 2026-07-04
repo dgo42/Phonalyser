@@ -184,6 +184,17 @@ public final class SwtGlChildSurface implements GlScopeSurface {
         renderFrame(ScopePhosphor.Kind.RESET);
     }
 
+    @Override
+    public void renderOverlay() {
+        renderFrame(ScopePhosphor.Kind.COMPOSITE);
+    }
+
+    @Override
+    public void clearPersistence() {
+        ScopePhosphor p = phosphor;
+        if (p != null) p.clearPersistence();
+    }
+
     private void renderFrame(ScopePhosphor.Kind kind) {
         if (window == NULL || placeholder.isDisposed() || renderer == null) return;
         trackPlaceholder();

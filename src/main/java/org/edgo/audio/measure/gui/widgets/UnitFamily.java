@@ -38,14 +38,16 @@ import org.edgo.audio.measure.gui.i18n.I18n;
  */
 public enum UnitFamily {
 
-    /** Hz / kHz; display switches to kHz at 1000 Hz; suffix-less input is Hz. */
+    /** Hz / kHz; display switches to kHz at 1000 Hz; suffix-less (digits-only)
+     *  input is Hz, the base unit.  "k"/"kh" are short aliases for kHz. */
     FREQUENCY(0,
             new Unit("unit.hz",  1.0,   false, List.of("hz")),
-            new Unit("unit.khz", 1e3,   false, List.of("khz"))),
+            new Unit("unit.khz", 1e3,   false, List.of("khz", "kh", "k"))),
 
     /** nV / µV / mV / V / dBV; display switches nV below 1 µV, µV below 1 mV,
      *  mV below 0.5 V, V above.  dBV sticks for display once typed — the only
-     *  unit the range switching can never choose.  Suffix-less input is V. */
+     *  unit the range switching can never choose.  Suffix-less (digits-only)
+     *  input is V, the base unit (and clears a sticky dBV). */
     AMPLITUDE(3,
             new Unit("unit.nv",  1e-9,  false, List.of("nv", "n")),
             new Unit("unit.uv",  1e-6,  false, List.of("uv", "u", "µ", "μ")),
@@ -53,21 +55,22 @@ public enum UnitFamily {
             new Unit("unit.v",   1.0,   false, List.of("v")),
             new Unit("unit.dbv", 1.0,   true,  List.of("dbv"))),
 
-    /** ms / s; display switches to ms below 0.5 s; suffix-less input is s. */
+    /** ms / s; display switches to ms below 0.5 s; suffix-less (digits-only)
+     *  input is s, the base unit. */
     TIME(1,
             new Unit("unit.ms",  1e-3,  false, List.of("ms")),
             new Unit("unit.s",   1.0,   false, List.of("s"))),
 
-    /** µs/div … s/div for the scope's horizontal resolution; suffix-less input
-     *  uses the unit currently displayed. */
-    TIME_PER_DIV(-1,
+    /** µs/div … s/div for the scope's horizontal resolution; suffix-less
+     *  (digits-only) input is s/div, the base unit. */
+    TIME_PER_DIV(2,
             new Unit("unit.usdiv", 1e-6, false, List.of("us/div", "us", "µs")),
             new Unit("unit.msdiv", 1e-3, false, List.of("ms/div", "ms")),
             new Unit("unit.sdiv",  1.0,  false, List.of("s/div", "s"))),
 
-    /** µV/div … V/div for the scope's vertical resolution; suffix-less input
-     *  uses the unit currently displayed. */
-    VOLTS_PER_DIV(-1,
+    /** µV/div … V/div for the scope's vertical resolution; suffix-less
+     *  (digits-only) input is V/div, the base unit. */
+    VOLTS_PER_DIV(3,
             new Unit("unit.nvdiv", 1e-9, false, List.of("nv/div", "nv", "n")),
             new Unit("unit.uvdiv", 1e-6, false, List.of("uv/div", "uv", "µv", "u", "µ", "μ")),
             new Unit("unit.mvdiv", 1e-3, false, List.of("mv/div", "mv", "m")),
@@ -130,7 +133,7 @@ public enum UnitFamily {
 
     private final Unit[] units;
     /** Index of the unit applied to suffix-less input; −1 = use the unit
-     *  currently displayed (the per-div families). */
+     *  currently displayed. */
     private final int defaultUnitIndex;
 
     private UnitFamily(int defaultUnitIndex, Unit... units) {

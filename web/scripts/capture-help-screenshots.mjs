@@ -1,0 +1,256 @@
+/*
+ * Phonalyser web — capture help screenshots from the running WEB app.
+ *
+ * Drives the real app headless in a FIXED 1280×768 window (deviceScaleFactor 1 → exact
+ * pixels, no dpr scaling) and writes web/help/<lang>/img/<file>.png for each spec, so the
+ * help shows the WEB UI (which differs slightly from the desktop app's screenshots).
+ *
+ * Each spec carries a `ready` flag: specs whose web pane/dialog isn't built yet are
+ * SKIPPED and logged, so this can run at any stage — re-run per feature. All panes
+ * (parts 2–5) + the per-tab toolbar strips are captured today.
+ *
+ * Run:  node scripts/capture-help-screenshots.mjs                # every ready spec
+ *       node scripts/capture-help-screenshots.mjs app scope      # only the given ids
+ *       node scripts/capture-help-screenshots.mjs --list         # list specs + readiness
+ * GNU AGPL v3 or later.
+ */
+import http from 'node:http';
+import { createReadStream, existsSync, statSync, mkdirSync } from 'node:fs';
+import { join, normalize, extname, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright';
+
+const WEB = normalize(join(dirname(fileURLToPath(import.meta.url)), '..'));
+const VIEW = { width: 1280, height: 768 };   // FIXED capture window (project requirement)
+const LANGS = ['en', 'de', 'uk'];   // capture EVERY language (app UI switched + reloaded per pass)
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
+  '.css': 'text/css', '.json': 'application/json', '.webmanifest': 'application/manifest+json',
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.wasm': 'application/wasm',
+  '.properties': 'text/plain', '.woff': 'font/woff', '.woff2': 'font/woff2', '.wav': 'audio/wav', '.flac': 'audio/flac' };
+
+function serve() {
+  const s = http.createServer((req, res) => {
+    let p = decodeURIComponent((req.url || '/').split('?')[0]);
+    if (p === '/') p = '/index.html';
+    const fp = normalize(join(WEB, p));
+    if (!fp.startsWith(WEB) || !existsSync(fp) || !statSync(fp).isFile()) { res.writeHead(404); res.end('nf'); return; }
+    res.writeHead(200, { 'Content-Type': (MIME[extname(fp).toLowerCase()] || 'application/octet-stream') + '; charset=utf-8', 'Cache-Control': 'no-store' });
+    createReadStream(fp).pipe(res);
+  });
+  return new Promise((r) => s.listen(0, '127.0.0.1', () => r({ s, port: s.address().port })));
+}
+
+// Switch the generator signal form by driving the hidden #signalForm select (the custom
+// combo syncs from it), exactly as _web-states.mjs / the app do: set value, fire native
+// change → structural restart + per-form row show/hide.
+async function setSignalForm(page, form) {
+  await page.evaluate((f) => {
+    const sel = document.getElementById('signalForm');
+    sel.value = f;
+    sel.dispatchEvent(new Event('change'));
+  }, form);
+  await page.waitForTimeout(500);
+}
+
+// Open the tabbed Preferences modal (app wires #menuPrefs → modal.show()), switch to one
+// panel via its tab strip (preferences-dialog.prefsTab), and return the modal-content to
+// clip. The panel key matches the data-prefs-panel attribute in index.html.
+async function openPrefs(page, panel) {
+  await page.evaluate(() => document.getElementById('menuPrefs').click());
+  await page.waitForSelector('#prefsModal.show', { timeout: 5000 });
+  await page.waitForTimeout(300);
+  await page.click(`#prefsTabs .nav-link[data-prefs-panel="${panel}"]`);
+  await page.waitForTimeout(300);
+  return page.$('#prefsModal .modal-content');
+}
+
+// Close the Preferences modal after a prefs capture (spec `after` hook): a left-open
+// modal + backdrop would sit over — and swallow the clicks of — every later spec.
+async function closePrefs(page) {
+  await page.evaluate(() => {
+    const m = window.bootstrap.Modal.getInstance(document.getElementById('prefsModal'));
+    if (m) m.hide();
+  });
+  await page.waitForTimeout(400);   // fade-out
+}
+
+// New dialog specs (tune-notch, dac-predistortion): show the modal DIRECTLY so its static
+// layout renders in the current locale WITHOUT starting a live sweep/run (open() would); clip
+// the modal-content; hide it after so the backdrop doesn't swallow later specs.
+async function showModal(page, id) {
+  await page.evaluate((mid) => window.bootstrap.Modal.getOrCreateInstance(document.getElementById(mid)).show(), id);
+  await page.waitForSelector(`#${id}.show`, { timeout: 5000 });
+  await page.waitForTimeout(500);
+  return page.$(`#${id} .modal-content`);
+}
+async function hideModal(page, id) {
+  await page.evaluate((mid) => { const m = window.bootstrap.Modal.getInstance(document.getElementById(mid)); if (m) m.hide(); }, id);
+  await page.waitForTimeout(400);
+}
+
+// Per-tab toolbar shot (Oscilloscope - Trigger.png & co): activate one tile-tab so its
+// drop-down .tab-panel expands, then clip the STRIP PLUS the expanded body — the strip
+// and its panels are DOM siblings (no single element wraps exactly the pair), so this
+// returns a {clip} union rect, matching the desktop help's wide short strip framing.
+// mainTab switches the top-level Bootstrap tab first (scope/FFT live in #tab-multi,
+// FreqResp in #tab-fr); expandPane un-collapses a collapsible pane (#fftPane).
+async function tabStripShot(page, { mainTab, stripId, panelId, expandPane }) {
+  const onTab = await page.$eval(`.nav-link[data-bs-target="${mainTab}"]`,
+    (el) => el.classList.contains('active'));
+  if (!onTab) { await page.click(`button[data-bs-target="${mainTab}"]`); await page.waitForTimeout(600); }
+  if (expandPane) {
+    const collapsed = await page.$eval(expandPane, (el) => el.classList.contains('collapsed'));
+    if (collapsed) { await page.click(`${expandPane} .pane-header`); await page.waitForTimeout(300); }
+  }
+  // Click the owning tab only while its panel is closed: the strip handlers TOGGLE
+  // (a click on an active tab with an open panel closes it — scope-tab-control /
+  // fft-tab-control / app.js '#xxTabs .tab' click handlers).
+  await page.evaluate((arg) => {
+    if (!document.getElementById(arg.panelId).classList.contains('show')) {
+      document.querySelector(`#${arg.stripId} .tab[data-panel="${arg.panelId}"]`).click();
+    }
+  }, { stripId, panelId });
+  await page.waitForTimeout(400);   // let the panel show + tiles repaint
+  const strip = await (await page.$(`#${stripId}`)).boundingBox();
+  const panel = await (await page.$(`#${panelId}`)).boundingBox();
+  const x = Math.min(strip.x, panel.x), y = Math.min(strip.y, panel.y);
+  return { clip: { x, y,
+    width: Math.max(strip.x + strip.width, panel.x + panel.width) - x,
+    height: Math.max(strip.y + strip.height, panel.y + panel.height) - y } };
+}
+
+// Spec factories for the three tile-tab strips (same shape as the hand-written specs).
+const scopeTab = (id, file, panelId) => ({ id, file, ready: true,
+  shot: (page) => tabStripShot(page, { mainTab: '#tab-multi', stripId: 'scopeTabs', panelId }) });
+const fftTab = (id, file, panelId) => ({ id, file, ready: true,
+  shot: (page) => tabStripShot(page, { mainTab: '#tab-multi', stripId: 'fftTabs', panelId, expandPane: '#fftPane' }) });
+const frTab = (id, file, panelId) => ({ id, file, ready: true,
+  shot: (page) => tabStripShot(page, { mainTab: '#tab-fr', stripId: 'frTabs', panelId }) });
+
+// id      → CLI selector. file → help/<lang>/img/<file>. ready → capturable now.
+// shot(page) → optional async; returns an ElementHandle to clip, or null for the whole
+// 1280×768 window. Specs without shot() default to a full-window capture.
+const SPECS = [
+  { id: 'app',        file: 'multifunctional.png',  ready: true },
+  { id: 'scope',      file: 'oscilloscope-pane.png', ready: true,
+    async shot(page) { return page.$('#scopePane'); } },
+  { id: 'generator',  file: 'generator-pane.png',    ready: true,
+    async shot(page) { await setSignalForm(page, 'SINE'); return page.$('#genCol'); } },
+
+  // ── generator alternate forms (part 3, landed) ─────────────────────────────────────
+  { id: 'gen-dualtone', file: 'Generator - dual tone.png', ready: true,
+    async shot(page) { await setSignalForm(page, 'DUAL_TONE'); return page.$('#genCol'); } },
+  { id: 'gen-sweep',    file: 'Generator - sweep mode.png', ready: true,
+    async shot(page) { await setSignalForm(page, 'LOG_SWEEP'); return page.$('#genCol'); } },
+
+  // ── FFT pane (part 4, landed): expand it if collapsed, then clip the pane ───────────
+  { id: 'fft', file: 'fft-pane.png', ready: true,
+    async shot(page) {
+      const collapsed = await page.$eval('#fftPane', (el) => el.classList.contains('collapsed'));
+      if (collapsed) { await page.click('#fftPane .pane-header'); await page.waitForTimeout(300); }
+      return page.$('#fftPane');
+    } },
+
+  // ── Frequency-response pane (part 5, landed): switch to its main tab, clip the pane ──
+  { id: 'freqresp', file: 'freqresp-pane.png', ready: true,
+    async shot(page) {
+      await page.click('button[data-bs-target="#tab-fr"]');
+      await page.waitForTimeout(800);
+      return page.$('#tab-fr .fft-pane');
+    } },
+
+  // ── New help pages this sync: the Tune-notch + DAC-predistortion dialogs ─────────────
+  { id: 'tune-notch', file: 'tune-notch.png', ready: true,
+    shot: (page) => showModal(page, 'tuneNotchModal'), after: (page) => hideModal(page, 'tuneNotchModal') },
+  { id: 'dac-predistortion', file: 'dac-predistortion-wizard.png', ready: true,
+    shot: (page) => showModal(page, 'predistModal'), after: (page) => hideModal(page, 'predistModal') },
+
+  // ── Preferences dialog tabs (part 2, landed). Every prefs spec closes the modal
+  //    after its capture (`after`), so later specs never sit under a leftover backdrop.
+  { id: 'prefs-lookfeel', file: 'Preferences Look and Feel.png', ready: true,
+    async shot(page) { return openPrefs(page, 'lookAndFeel'); }, after: closePrefs },
+  { id: 'prefs-audio',    file: 'Preferences Audio.png',         ready: true,
+    async shot(page) { return openPrefs(page, 'audio'); }, after: closePrefs },
+  { id: 'prefs-scope',    file: 'Preferences Oscilloscope.png',  ready: true,
+    async shot(page) { return openPrefs(page, 'oscilloscope'); }, after: closePrefs },
+  { id: 'prefs-fft',      file: 'Preferences FFT.png',           ready: true,
+    async shot(page) { return openPrefs(page, 'fft'); }, after: closePrefs },
+  { id: 'prefs-freqresp', file: 'Preferences Frequency response.png', ready: true,
+    async shot(page) { return openPrefs(page, 'freqResp'); }, after: closePrefs },
+
+  // ── per-tab toolbar shots: the tile-tab strip + the active tab's expanded body ──────
+  scopeTab('scope-tab-left',    'Oscilloscope - Left.png',        'scopeLeft'),
+  scopeTab('scope-tab-right',   'Oscilloscope - Right.png',       'scopeRight'),
+  scopeTab('scope-tab-horiz',   'Oscilloscope - Horizontal.png',  'scopeHoriz'),
+  scopeTab('scope-tab-trigger', 'Oscilloscope - Trigger.png',     'scopeTrig'),
+  scopeTab('scope-tab-presets', 'Oscilloscope - Presets.png',     'scopePresets'),
+  scopeTab('scope-tab-utility', 'Oscilloscope - Utility.png',     'scopeUtility'),
+  scopeTab('scope-tab-save',    'Oscilloscope - Save to.png',     'scopeSavePanel'),
+  scopeTab('scope-tab-load',    'Oscilloscope - Load signal.png', 'scopeLoadPanel'),
+  fftTab('fft-tab-settings', 'FFT - FFT settings.png',     'fftSettings'),
+  fftTab('fft-tab-thd',      'FFT - THD settings.png',     'thdSettings'),
+  fftTab('fft-tab-presets',  'FFT - Presets.png',          'fftPresetsPanel'),
+  fftTab('fft-tab-utility',  'FFT - Utility.png',          'fftUtility'),
+  fftTab('fft-tab-cal',      'FFT - Load calibration.png', 'fftCalPanel'),
+  fftTab('fft-tab-save',     'FFT - Save to.png',          'fftSavePanel'),
+  fftTab('fft-tab-load',     'FFT - Load from.png',        'fftLoadPanel'),
+  frTab('fr-tab-settings', 'FreqResp - Settings.png',         'frSettings'),
+  frTab('fr-tab-riaa',     'FreqResp - RIAA IEC.png',         'frRiaaPanel'),
+  frTab('fr-tab-presets',  'FreqResp - Presets.png',          'frPresetsPanel'),
+  frTab('fr-tab-utility',  'FreqResp - Utility.png',          'frUtility'),
+  frTab('fr-tab-cal',      'FreqResp - Load calibration.png', 'frCalPanel'),
+  frTab('fr-tab-save',     'FreqResp - Save to.png',          'frSavePanel'),
+  frTab('fr-tab-load',     'FreqResp - Load from.png',        'frLoadPanel'),
+];
+
+const argv = process.argv.slice(2);
+if (argv.includes('--list')) {
+  for (const s of SPECS) console.log(`${s.ready ? '✓' : '·'} ${s.id.padEnd(16)} ${s.file}`);
+  process.exit(0);
+}
+const want = argv.filter((a) => !a.startsWith('--'));
+const todo = SPECS.filter((s) => (want.length ? want.includes(s.id) : true));
+
+const { s, port } = await serve();
+const browser = await chromium.launch();
+const ctx = await browser.newContext({ viewport: VIEW, deviceScaleFactor: 1 });
+const page = await ctx.newPage();
+// 'load' + the #scopePane wait below, NOT 'networkidle': the libflac wasm
+// loader leaves its /vendor/libflac/*.wasm response body unconsumed, so the
+// network never idles and a networkidle gate times out (the app itself is up).
+await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
+await page.waitForSelector('#scopePane', { timeout: 10000 }).catch(() => {});
+await page.waitForTimeout(500);   // let layout/fonts settle
+
+let done = 0, skipped = 0;
+for (const lang of LANGS) {
+  // 'en' is the fresh initial load; for the others switch the UI language then RELOAD so each
+  // pass starts from a clean, correctly-localised state (init reads prefs.uiLanguage on load;
+  // the #langMenu handler persists it via the 250ms-debounced save, so wait before reloading).
+  if (lang !== 'en') {
+    await page.evaluate((t) => window.jQuery(`#langMenu [data-lang="${t}"]`).trigger('click'), lang);
+    await page.waitForTimeout(700);
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForSelector('#scopePane', { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(600);   // layout/fonts settle in the new locale
+  }
+  const imgDir = join(WEB, 'help', lang, 'img');
+  mkdirSync(imgDir, { recursive: true });
+  for (const spec of todo) {
+    if (!spec.ready) { if (lang === 'en') { console.log(`skip (web UI not ready): ${spec.id} → ${spec.file}`); skipped++; } continue; }
+    const out = join(imgDir, spec.file);
+    // shot() → ElementHandle, {clip: rect} (a region no single element wraps — the
+    // tab-strip + sibling panel shots), or null for the whole 1280×768 window.
+    const el = spec.shot ? await spec.shot(page) : null;
+    if (el && el.clip) await page.screenshot({ path: out, clip: el.clip });
+    else if (el) await el.screenshot({ path: out });
+    else await page.screenshot({ path: out });
+    if (spec.after) await spec.after(page);   // per-spec cleanup (close the modal)
+    console.log(`captured: ${lang}/${spec.id} → help/${lang}/img/${spec.file}`);
+    done++;
+  }
+}
+
+await browser.close();
+s.close();
+console.log(`\n${done} captured, ${skipped} skipped.`);

@@ -24,7 +24,34 @@
      test versus frequency — with an optional RIAA / IEC reference overlay and
      a measured-minus-reference compare curve for phono and filter work.</p>
 
-  <p><img src="img/freqresp-pane.png" alt="Frequency response pane"/></p>
+  <div class="shot">
+    <img src="img/freqresp-pane.png" alt="Frequency response pane"/>
+    <svg class="callouts" viewBox="0 0 1292 696" preserveAspectRatio="none"
+         xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace">
+      <defs><marker id="frca" viewBox="0 0 10 10" refX="9" refY="5"
+          markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/></marker></defs>
+      <line x1="250" y1="46" x2="156" y2="47" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="330" y1="555" x2="340" y2="653" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="382" y1="555" x2="382" y2="653" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="1245" y1="130" x2="1283" y2="130" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="690" y1="555" x2="690" y2="653" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <circle cx="110" cy="95" r="13" fill="#c33"/>
+      <text x="110" y="100" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
+      <circle cx="250" cy="46" r="13" fill="#c33"/>
+      <text x="250" y="51" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
+      <circle cx="330" cy="555" r="13" fill="#c33"/>
+      <text x="330" y="560" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
+      <circle cx="382" cy="555" r="13" fill="#c33"/>
+      <text x="382" y="560" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
+      <circle cx="650" cy="320" r="13" fill="#c33"/>
+      <text x="650" y="325" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
+      <circle cx="1245" cy="130" r="13" fill="#c33"/>
+      <text x="1245" y="135" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
+      <circle cx="690" cy="555" r="13" fill="#c33"/>
+      <text x="690" y="560" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">7</text>
+    </svg>
+  </div>
 
   <h2 id="freqresp-overview">At a glance</h2>
   <ol class="features">
@@ -44,9 +71,9 @@
     <li><b>Crosshair readout.</b>  A dashed cross follows the pointer with a
         floating box showing frequency, magnitude and (when shown) phase and
         the compare Δ.  <a href="#freqresp-crosshair">Crosshair</a>.</li>
-    <li><b>Pan &amp; zoom (mouse wheel).</b>  The same wheel convention as
-        every Phonalyser view — <a href="#freqresp-panzoom">Pan &amp;
-        zoom</a>.</li>
+    <li><b>Pan &amp; zoom.</b>  The same wheel convention as every Phonalyser
+        view, plus a drag-a-rectangle zoom with Ctrl+Z undo —
+        <a href="#freqresp-panzoom">Pan &amp; zoom</a>.</li>
     <li><b>Calibration de-embedding.</b>  Load one or more <code>.frc</code> /
         CSV correction files to subtract a known interface response from the
         measurement.  <a href="#freqresp-tab-calibration">Load calibration
@@ -77,7 +104,7 @@
             <a href="#freqresp-measure">Running a measurement</a>).</td></tr>
   </table>
 
-  <h2 id="freqresp-panzoom">Pan &amp; zoom (mouse wheel)</h2>
+  <h2 id="freqresp-panzoom">Pan &amp; zoom</h2>
   <p>Over the plot —
      <b>wheel</b>: pan the magnitude (vertical) axis;
      <b>Shift+wheel</b>: pan the frequency (horizontal) axis;
@@ -90,6 +117,23 @@
      view, so it tracks the zoom (it grows / shrinks as you scale).  Click the
      empty track to page toward the pointer, or hold the button down to keep
      paging until the thumb reaches the cursor.</p>
+  <p><b>Rectangle zoom.</b>  Drag with the left mouse button inside the plot to
+     draw a rubber-band rectangle; on release the selected region stretches to
+     fill the view — frequency and magnitude zoom together in one gesture.
+     Selections smaller than 8 pixels in either direction are ignored, so a
+     stray click doesn't zoom.  The drag must start inside the plot area
+     (not on the axis labels), and the result stays clamped to the plot's
+     limits (1&nbsp;Hz up to the Nyquist fraction horizontally).  The same
+     gesture works in the scope and FFT views.</p>
+  <p><b>Ctrl+Z — step back.</b>  Every rectangle zoom remembers the window it
+     replaced; press <b>Ctrl+Z</b> (exactly Ctrl — Ctrl+Shift+Z and other
+     combinations are ignored) to step back through up to 32 previous windows
+     per view.  Wheel pan / zoom is not recorded — only rectangle zooms add
+     steps.  Ctrl+Z acts on the view that has keyboard focus (click a plot to
+     focus it) or, when no view is focused, the one under the pointer; the
+     targeted view is marked by a thin bright-green border around its edge.
+     While a text-entry field has focus, Ctrl+Z belongs to that field's own
+     undo instead.</p>
 
   <h2 id="freqresp-crosshair">Crosshair readout</h2>
   <p>Moving the pointer inside the plot draws a dashed cross and a floating
@@ -125,9 +169,12 @@
             rejection at the cost of a longer sweep; the label shows the
             resulting sweep duration.</td></tr>
     <tr><td>Sweep points</td>
-        <td>Number of frequency points generated for the sweep (8192 …
-            10M).  The wheel jumps power-of-two presets plus a sample-rate
-            derived "Nyquist/2" entry.</td></tr>
+        <td>Number of log-spaced output points the deconvolution emits
+            (8192 … 10M).  The wheel steps through power-of-two presets
+            (8192, 16384, 32768, … up to 4194304) plus an <b>FS/2</b> entry
+            equal to half the current sample rate (24000 at 48&nbsp;kHz,
+            96000 at 192&nbsp;kHz — it tracks the audio format); any value in
+            range can also be typed directly.</td></tr>
     <tr><td>Lead-in, s</td>
         <td>Silent / settle time before the sweep proper, so the chain is in
             steady state when measurement starts.</td></tr>

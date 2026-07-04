@@ -120,6 +120,31 @@ final class SignalMeasurements {
             }
         }
 
+        // Vmean / Vrms over an INTEGER number of periods.  The fixed-length
+        // window holds a fractional cycle count, and that fraction adds an
+        // amplitude-proportional, capture-phase-random residual to the mean
+        // (up to A/(π·cycles) — ~mV at full scale over 0.25 s) that swamps
+        // the noise floor in the Vmean statistics.  The rising mid-threshold
+        // crossings bound whole periods, and the signal sits AT its mean
+        // there, so the whole-sample boundary error is second-order (sub-µV)
+        // — Vmean then moves only with the noise floor.  No crossings (DC /
+        // noise-only) → the full-window figures above stand.
+        if (crossCount >= 2) {
+            int    pn     = lastCross - firstCross;
+            double pSum   = 0;
+            double pSumSq = 0;
+            for (int i = firstCross; i < lastCross; i++) {
+                float v = data[i];
+                pSum   += v;
+                pSumSq += v * v;
+            }
+            mean     = pSum / pn;
+            variance = pSumSq / pn - mean * mean;
+            rms      = Math.sqrt(Math.max(0.0, variance));
+            vmean    = mean * peakVolts;
+            vrms     = rms * peakVolts;
+        }
+
         // Rise/fall time: average over all complete 10 %↔90 % transitions
         // in the buffer.  Bracket-based — track when the signal first
         // crosses the 10 % threshold going up and when it then crosses the

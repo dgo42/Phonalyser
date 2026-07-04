@@ -84,6 +84,17 @@ public final class SwtGlCanvasSurface implements GlScopeSurface {
         renderFrame(ScopePhosphor.Kind.RESET);
     }
 
+    @Override
+    public void renderOverlay() {
+        renderFrame(ScopePhosphor.Kind.COMPOSITE);
+    }
+
+    @Override
+    public void clearPersistence() {
+        ScopePhosphor p = phosphor;
+        if (p != null) p.clearPersistence();
+    }
+
     private void renderFrame(ScopePhosphor.Kind kind) {
         if (canvas.isDisposed() || renderer == null) return;
         canvas.setCurrent();

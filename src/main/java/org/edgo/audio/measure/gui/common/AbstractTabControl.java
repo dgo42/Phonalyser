@@ -28,6 +28,8 @@ import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 
+import lombok.AccessLevel;
+import lombok.Getter;
 import lombok.Setter;
 
 /**
@@ -59,7 +61,9 @@ public abstract class AbstractTabControl extends Composite {
 
     /** The pane that owns this tab strip, set by it via {@code setOwner}.  Its
      *  {@link AbstractPane#onTabCollapse()} re-flows the pane when the tab body
-     *  collapses / expands; {@code null} during the pre-wiring window. */
+     *  collapses / expands, and subclasses reach pane-owned actions (the
+     *  screenshot dialog) through it; {@code null} during the pre-wiring window. */
+    @Getter(AccessLevel.PROTECTED)
     @Setter
     private AbstractPane owner;
 

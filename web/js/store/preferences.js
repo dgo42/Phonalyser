@@ -1,0 +1,1548 @@
+/*
+ * Phonalyser web — precision audio measurement workbench (browser port).
+ * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
+ * GNU Affero General Public License v3 or later.
+ */
+
+// Faithful port of org.edgo.audio.measure.preferences.Preferences (plus its
+// helper POJOs BackendPrefs, OscPreset, FftPreset, FreqRespPreset and
+// CalibrationEntry).
+//
+// Every setting keeps the EXACT default value, the EXACT serialised key, and the
+// EXACT load/save semantics of the Java toMap/fromMap pair — including the
+// conditional omissions (only-when-non-null / only-when-positive), the colour
+// hex round-trip (#RRGGBB), the DAC full-scale ampl↔RMS conversion (× / ÷ √2 at
+// the serialisation boundary), the cached dBV offset and √(bin bandwidth)
+// constants, the migration of the legacy fftAlignGenToFreqDiff checkbox, and the
+// load-time clamps (freqRespFftSize power-of-two snap, freqRespNyquistFraction
+// band, freqRespCompareSmoothWindow range, freqRespNotchBaseHz 50/60 snap).
+//
+// Differences from the desktop original, all behaviour-preserving:
+//   * Persistence target is localStorage (one JSON string under PREFS_KEY)
+//     instead of a YAML file in the working directory. The in-memory shape that
+//     is (de)serialised is identical to the Java root map.
+//   * The desktop audio-backend POJO settings keep their inputDeviceName /
+//     outputDeviceName slots, which on the web map to Web Audio device IDs
+//     (MediaDeviceInfo.deviceId) — same string field, web meaning.
+//   * The single-thread debounced save daemon becomes a setTimeout coalescer
+//     (SAVE_COALESCE_MS) writing to localStorage; flush() forces it out (hook it
+//     to 'pagehide'/'beforeunload' at the call site, mirroring the JVM shutdown
+//     hook).
+//   * Property change listeners use a tiny local observable (mirrors
+//     org.edgo.audio.measure.bind.Property: get/set/addListener, fires only on a
+//     real change).
+
+const SQRT2 = Math.sqrt(2.0);
+
+/** localStorage key the whole JSON document lives under. */
+export const PREFS_KEY = 'phonalyser.preferences';
+
+/** formatVersion stamped into the document (FileVersions.PREFERENCES_YAML). */
+export const PREFERENCES_FORMAT_VERSION = 1;
+
+/** Debounce window for auto-save (Preferences.SAVE_COALESCE_MS). */
+const SAVE_COALESCE_MS = 250;
+
+/** Factory-default ADC full-scale RMS voltage (Preferences.DEFAULT_ADC_FS_VRMS). */
+const DEFAULT_ADC_FS_VRMS = 1.7931;
+
+/** Sentinel "unset" value for the rate-dependent FreqResp defaults
+ *  (stop = Nyquist, points = FS/2). A fresh install with no saved value keeps
+ *  this until _seedRateDependentFreqRespDefaults resolves it from the current
+ *  device sample rate; any saved value is a real number and overrides it
+ *  (Preferences.FREQRESP_RATE_DEFAULT_SENTINEL). */
+const FREQRESP_RATE_DEFAULT_SENTINEL = 0;
+
+/**
+ * Per-OS default UI font as a {@code "family|size|style"} string (faithful port of
+ * Preferences.defaultUiFont): Consolas 9 on Windows, Menlo 11 on macOS, DejaVu Sans
+ * Mono 11 elsewhere (Linux) — each platform's standard monospace face. `sizeBump`
+ * enlarges the channel-button font above the base size.
+ * @param {string} style
+ * @param {number} sizeBump
+ * @returns {string}
+ */
+function defaultUiFont(style, sizeBump) {
+  const uaPlatform = (navigator.userAgentData && navigator.userAgentData.platform) || '';
+  const os = (uaPlatform || navigator.platform || navigator.userAgent || '').toLowerCase();
+  let family, size;
+  if (os.includes('mac')) {
+    family = 'Menlo';            size = 11;
+  } else if (os.includes('win')) {
+    family = 'Consolas';         size = 9;
+  } else {
+    family = 'DejaVu Sans Mono'; size = 11;
+  }
+  return family + '|' + (size + sizeBump) + '|' + style;
+}
+
+// --- enum value sets (the legal serialised names, mirroring the Java enums) ---
+const E = {
+  AudioBackendType: ['WASAPI', 'WDMKS', 'COREAUDIO', 'JAVASOUND'],
+  Channel: ['L', 'R'],
+  TriggerEdge: ['RISE', 'FALL'],
+  TriggerType: ['EDGE', 'GLITCH'],
+  TriggerMode: ['AUTO', 'NORMAL', 'SINGLE'],
+  MainsSuppression: ['NONE', 'IIR_COMB', 'SYNC_SUBTRACT', 'LMS'],
+  LpfMode: ['NONE', 'HZ_80', 'DESPIKE'],
+  GenSignalForm: ['SINE', 'SINE_COMP', 'TRIANGLE', 'RECTANGLE', 'WHITE_NOISE',
+    'PINK_NOISE', 'PINK_NOISE_LINEAR', 'LINEAR_SWEEP', 'LOG_SWEEP',
+    'DUAL_TONE', 'DUAL_TONE_COMP'],
+  WindowType: ['RECT', 'HANN', 'BH4', 'BH7', 'FT', 'HFT144D', 'HFT248D',
+    'KB24', 'KB38', 'DC150', 'DC200', 'DC250', 'DC300'],
+  FftOverlap: ['PCT_0', 'PCT_50', 'PCT_75', 'PCT_87_5', 'PCT_93_75'],
+  MagnitudeUnit: ['V', 'V_SQRT_HZ', 'DBV', 'DBFS'],
+  AlignGenerator: ['NONE', 'FLL'],
+  TabOrientation: ['TOP', 'LEFT'],
+};
+
+/** Forms whose name ends in DUAL_TONE / DUAL_TONE_COMP (GenSignalForm.isDualTone). */
+const DUAL_TONE_FORMS = new Set(['DUAL_TONE', 'DUAL_TONE_COMP']);
+
+/** Enum-name validity check returning the stored value or a fallback
+ *  (mirrors Preferences.enumOr — invalid name keeps the current value). */
+function enumOr(setName, name, fallback) {
+  return E[setName].includes(name) ? name : fallback;
+}
+
+/** Formats a packed 0xRRGGBB int as '#RRGGBB' (Preferences.formatHtmlColor). */
+function formatHtmlColor(rgb) {
+  return '#' + ((rgb & 0xffffff) >>> 0).toString(16).toUpperCase().padStart(6, '0');
+}
+
+/** Parses '#RRGGBB' (or bare 'RRGGBB') into a packed int, else fallback
+ *  (Preferences.parseHtmlColor). */
+function parseHtmlColor(s, fallback) {
+  if (s == null) return fallback;
+  let h = String(s).trim();
+  if (h.startsWith('#')) h = h.substring(1);
+  if (h.length !== 6) return fallback;
+  const v = parseInt(h, 16);
+  return Number.isNaN(v) ? fallback : (v & 0xffffff);
+}
+
+// --- type guards matching the Java `instanceof Number/Boolean/String` gates ---
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const isBool = (v) => typeof v === 'boolean';
+const isStr = (v) => typeof v === 'string';
+const asMap = (v) => (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
+const trunc = Math.trunc;
+
+/**
+ * Minimal observable cell mirroring org.edgo.audio.measure.bind.Property:
+ * holds a value, notifies listeners only on a real change (Object.is compare).
+ *
+ * @template T
+ */
+class Property {
+  /** @param {T} initial */
+  constructor(initial) {
+    this._value = initial;
+    /** @type {Array<(v: T) => void>} */
+    this._listeners = [];
+  }
+
+  /** @returns {T} */
+  get() { return this._value; }
+
+  /** @param {T} v */
+  set(v) {
+    if (Object.is(this._value, v)) return;
+    this._value = v;
+    for (const l of this._listeners) l(v);
+  }
+
+  /** @param {(v: T) => void} fn */
+  addListener(fn) { this._listeners.push(fn); }
+}
+
+/**
+ * Per-backend audio settings (BackendPrefs). Device slots are Web Audio device
+ * IDs on the web (the desktop stored OS device names in the same fields).
+ */
+export class BackendPrefs {
+  constructor() {
+    /** @type {?string} */ this.inputDeviceName = null;
+    /** @type {?string} */ this.outputDeviceName = null;
+    this.inputSampleRate = 384000;
+    this.inputBitDepth = 24;
+    this.outputSampleRate = 384000;
+    this.outputBitDepth = 24;
+  }
+
+  /** Copies every field from {@code src} (BackendPrefs.copyFrom). */
+  copyFrom(src) {
+    this.inputDeviceName = src.inputDeviceName;
+    this.outputDeviceName = src.outputDeviceName;
+    this.inputSampleRate = src.inputSampleRate;
+    this.inputBitDepth = src.inputBitDepth;
+    this.outputSampleRate = src.outputSampleRate;
+    this.outputBitDepth = src.outputBitDepth;
+  }
+
+  /** Returns a restorable snapshot (BackendPrefs.snapshot). */
+  snapshot() {
+    const c = new BackendPrefs();
+    c.copyFrom(this);
+    return c;
+  }
+}
+
+/** Saved oscilloscope preset (OscPreset). Plain mutable POJO. */
+export class OscPreset {
+  constructor() {
+    this.leftChannelEnabled = true;
+    this.rightChannelEnabled = true;
+    this.leftAcMode = false;
+    this.rightAcMode = false;
+    this.leftSincInterpEnabled = true;
+    this.rightSincInterpEnabled = true;
+    this.leftMainsSuppression = 'NONE';
+    this.rightMainsSuppression = 'NONE';
+    this.leftLpf = 'NONE';
+    this.rightLpf = 'NONE';
+    this.leftVoltsPerDiv = 0.1;
+    this.rightVoltsPerDiv = 0.1;
+    this.leftOffsetFrac = 0.5;
+    this.rightOffsetFrac = 0.5;
+    this.timePerDiv = 1e-3;
+    this.triggerPositionFrac = 0.5;
+    this.triggerChannel = 'L';
+    this.triggerEdge = 'RISE';
+    this.triggerType = 'EDGE';
+    this.triggerMode = 'AUTO';
+    this.triggerLevelFrac = 0.5;
+  }
+}
+
+/** Saved FFT-view preset (FftPreset). Plain mutable POJO. */
+export class FftPreset {
+  constructor() {
+    this.channel = 'L';
+    this.magUnit = 'DBV';
+    this.logFreqAxis = true;
+    this.freqMinHz = 20;
+    this.freqMaxHz = 20000;
+    this.magTop = 10;
+    this.magBottom = -150;
+    this.fftLength = 65536;
+    this.averages = 4;
+    this.stopAfterNEnabled = false;
+    this.stopAfterN = 10;
+    this.fundFromGenerator = false;
+    this.window = 'HANN';
+    this.overlap = 'PCT_0';
+    this.coherentAveraging = true;
+    this.distMinHz = 20;
+    this.distMaxHz = 20000;
+    this.distMinEnabled = false;
+    this.distMaxEnabled = false;
+    this.thdMaxHarmonic = 9;
+    this.calcMaxHarmonic = 9;
+    this.manualFundVrms = 1.0;
+    this.manualFundDbvDisplay = false;
+    this.manualFundEnabled = false;
+  }
+}
+
+/** Saved Frequency-Response preset (FreqRespPreset). Plain mutable POJO. */
+export class FreqRespPreset {
+  constructor() {
+    this.startHz = 20.0;
+    this.stopHz = 20000.0;
+    this.amplitudeVrms = 0.5;
+    this.sweepPoints = 65536;
+    this.fftSize = 524288;
+    this.leadInSec = 0.2;
+    this.ditherBits = 0;
+    this.showRiaa = false;
+    this.reverseRiaa = false;
+    this.iecAmendment = false;
+    this.compareMode = false;
+  }
+}
+
+/**
+ * One calibration row (CalibrationEntry): a .frc path plus two observable
+ * toggles. {@code path} is plain mutable state (no change notification); active
+ * and withNoise are observable so the row's checkbox can two-way bind, and so a
+ * toggle persists through the debounced save when the entry is tracked.
+ * {@code hash} is the SHA-256 hex of the original bytes (set by cal-store.js
+ * putCal at load time); null when the file has not yet been stored.
+ */
+export class CalibrationEntry {
+  /**
+   * @param {?string} [path=null]
+   * @param {boolean} [active=false]
+   * @param {boolean} [withNoise=false]
+   * @param {?string} [hash=null]
+   */
+  constructor(path = null, active = false, withNoise = false, hash = null) {
+    /** @type {?string} */
+    this.path = path;
+    /** @type {?string} SHA-256 hex of the original .frc bytes; null until putCal. */
+    this.hash = hash;
+    this._active = new Property(active);
+    this._withNoise = new Property(withNoise);
+  }
+
+  /** @returns {Property<boolean>} */
+  active() { return this._active; }
+
+  /** @returns {Property<boolean>} */
+  withNoise() { return this._withNoise; }
+}
+
+/**
+ * Process-wide GUI preferences (faithful port of
+ * org.edgo.audio.measure.preferences.Preferences). Access the shared instance
+ * via {@link Preferences.instance}; persistence is to localStorage under
+ * {@link PREFS_KEY}.
+ */
+export class Preferences {
+  constructor(detached = false) {
+    // Detached copy (see copyForDialog): never loads from / writes to localStorage,
+    // so a dialog can mutate it freely and drop it on close. Mirrors the Java
+    // private Preferences(boolean detached) constructor.
+    this.transientMode = !!detached;
+    /** @type {Map<string, BackendPrefs>} keyed by AudioBackendType name. */
+    this._perBackend = new Map();
+
+    // ---- top-level scalar/enum properties (bound: a real change auto-saves) ---
+    this.backend = this._bound('WASAPI');
+    this.uiLanguage = this._bound('en');
+    this.tabOrientation = this._bound('TOP');
+    this.activeTabIndex = this._bound(0);
+    this.smallIconsInMainTab = this._bound(false);
+    this.uiFontNormal = this._bound(defaultUiFont('normal', 0));
+    this.uiFontBold = this._bound(defaultUiFont('bold', 0));
+    this.uiFontChannel = this._bound(defaultUiFont('bold', 3));
+    this.checkForUpdatesOnStartup = this._bound(false);
+    this.includeBetaInUpdateChecks = this._bound(false);
+    this.showTipsAtStartup = this._bound(true);
+
+    // ---- oscilloscope toolbar state ----
+    this.oscLeftChannelEnabled = this._bound(true);
+    this.oscRightChannelEnabled = this._bound(true);
+    this.oscLeftAcMode = this._bound(false);
+    this.oscRightAcMode = this._bound(false);
+    this.oscLeftVoltsPerDiv = this._bound(0.1);
+    this.oscRightVoltsPerDiv = this._bound(0.1);
+    this.oscTimePerDiv = this._bound(1e-3);
+    // Per-pane last-used screenshot size (0 = fall back to the pane's native size).
+    // scope*/fft*/freqResp* keep the three panes independent (see fftScreenshotWidth
+    // and freqRespScreenshotWidth below).
+    this.scopeScreenshotWidth = this._bound(0);
+    this.scopeScreenshotHeight = this._bound(0);
+    this.oscTriggerChannel = this._bound('L');
+    this.oscTriggerEdge = this._bound('RISE');
+    // Trigger event type: EDGE = level crossing, GLITCH = dV/dt jump.
+    this.oscTriggerType = this._bound('EDGE');
+    this.oscTriggerMode = this._bound('AUTO');
+    this.oscTriggerHysteresisDiv = this._bound(0.0);
+    this.oscTriggerHysteresisEnabled = this._bound(false);
+    this.oscShowReconstructedBeat = this._bound(false);
+    this.oscLeftSincInterpEnabled = this._bound(true);
+    this.oscRightSincInterpEnabled = this._bound(true);
+    this.oscLeftMainsSuppression = this._bound('NONE');
+    this.oscRightMainsSuppression = this._bound('NONE');
+    this.oscLeftLpf = this._bound('NONE');
+    this.oscRightLpf = this._bound('NONE');
+    this.oscLeftOffsetFrac = this._bound(0.5);
+    this.oscRightOffsetFrac = this._bound(0.5);
+    this.oscTriggerLevelFrac = this._bound(0.5);
+    this.oscTriggerPositionFrac = this._bound(0.5);
+    this.oscMeasurementAverageSeconds = this._bound(5.0);
+    this.oscLineWidth = this._bound(2.0);
+    this.oscDotDiameter = this._bound(5);
+    this.oscLeftChannelColor = this._bound(0x00d7ff);
+    this.oscRightChannelColor = this._bound(0xffd700);
+
+    this.screenshotFolder = this._bound(null);
+    this.screenshotCommentFont = this._bound(null);
+    this.oscMeasurementChannel = this._bound('L');
+    this.oscShowStats = this._bound(true);
+    this.oscShowMeasurementTable = this._bound(true);
+    this.adcFsVoltageRms = this._bound(DEFAULT_ADC_FS_VRMS);
+    // In-memory PEAK amplitude; persisted as RMS (÷√2 on save, ×√2 on load).
+    this.dacFsVoltageAmpl = this._bound(2.79351);
+
+    this.oscSavePath = this._bound(null);
+    this.oscSaveFolder = this._bound(null);
+    this.oscSaveDurationSeconds = this._bound(5.0);
+    this.oscPlayFromPath = this._bound(null);
+    this.oscPlayFromFolder = this._bound(null);
+    this.oscPlayFromLoop = this._bound(false);
+
+    // ---- generator pane ----
+    this.genSignalForm = this._bound('SINE');
+    this.genFrequencyHz = this._bound(1000.0);
+    this.genDualToneFreq1Hz = this._bound(1000.0);
+    this.genDualToneFreq2Hz = this._bound(1300.0);
+    this.genDualToneSplitPct = this._bound(50.0);
+    this.genAmplitudeVrms = this._bound(0.5);
+    this.genAmplitudeDbvDisplay = this._bound(false);
+    this.genDitherBits = this._bound(0);
+    this.genDpd = this._bound(null);
+    this.genDpdDual = this._bound(null);
+    this.genDpdFolder = this._bound(null);
+    // The original .dpd basename per compensated slot, shown in the corrections row after a
+    // reload (the web stores the .dpd TEXT in genDpd/genDpdDual, not an OS path, so without this
+    // there's nothing but a bare checkmark to show — the full OS path stays unavailable).
+    this.genDpdName = this._bound(null);
+    this.genDpdDualName = this._bound(null);
+    this.predistortionAverages = this._bound(64);
+    this.predistortionTargetPct = this._bound(0.000001);
+    this.genRectangleDuty = this._bound(0.5);
+    this.genTriangleDuty = this._bound(0.5);
+    this.genSweepFreqStartHz = this._bound(20.0);
+    this.genSweepFreqEndHz = this._bound(20000.0);
+    this.genSweepDurationSec = this._bound(1.0);
+    this.genSweepLoop = this._bound(true);
+    this.genSweepFadeInSec = this._bound(0.01);
+    this.genSweepFadeOutSec = this._bound(0.01);
+    this.genSnapToFftBin = this._bound(false);
+    this.genWavDurationSeconds = this._bound(5.0);
+    this.genWavPath = this._bound(null);
+    this.genWavFolder = this._bound(null);
+    this.genPlayFromPath = this._bound(null);
+    this.genPlayFromFolder = this._bound(null);
+    this.genPlayFromLoop = this._bound(false);
+
+    // ---- window geometry / multifunctional layout ----
+    this.windowWidth = this._bound(0);
+    this.windowHeight = this._bound(0);
+    this.genPaneWidth = this._bound(0);
+    /** @type {?number[]} plain mutable (not bound); see toMap/fromMap. */
+    this.multiVSplitWeights = null;
+    this.genPaneCollapsed = this._bound(false);
+    this.oscPaneCollapsed = this._bound(false);
+    this.fftPaneCollapsed = this._bound(true);
+
+    /** @type {Map<string, OscPreset>} insertion-ordered. */
+    this.oscPresets = new Map();
+
+    // ---- FFT pane ----
+    this.fftLength = this._bound(65536);
+    this.fftAverages = this._bound(4.0);
+    // Web-only: FFT worker-pool size (#threads select). No Java counterpart —
+    // the desktop parallelises automatically.
+    this.fftThreads = this._bound(1);
+    this.fftStopAfterNEnabled = this._bound(false);
+    this.fftStopAfterN = this._bound(10);
+    this.fftFundFromGenerator = this._bound(false);
+    this.fftLogFreqAxis = this._bound(true);
+    // Time-domain discontinuity gate toggle (Java Preferences.fftDetectTimeDiscontinuity,
+    // default ON). Uncheck to keep computing the FFT for a small / non-sinusoidal signal the
+    // gate would otherwise reject every block of. The worker reads it live per tick.
+    this.fftDetectTimeDiscontinuity = this._bound(true);
+    this.fftWindow = this._bound('HANN');
+    this.fftOverlap = this._bound('PCT_0');
+    this.fftCoherentAveraging = this._bound(true);
+    this.fftMainsSuppression = this._bound('NONE');
+    this.fftAlignGenerator = this._bound('NONE');
+    this.fftDistMinHz = this._bound(20.0);
+    this.fftDistMaxHz = this._bound(20000.0);
+    this.fftDistMinEnabled = this._bound(false);
+    this.fftDistMaxEnabled = this._bound(false);
+    this.fftThdMaxHarmonic = this._bound(9);
+    this.fftCalcMaxHarmonic = this._bound(9);
+    this.fftStrongToneRelDb = this._bound(100.0);
+    this.fftManualFundVrms = this._bound(1.0);
+    this.fftManualFundDbvDisplay = this._bound(false);
+    this.fftManualFundEnabled = this._bound(false);
+    this.fftChannel = this._bound('L');
+    this.fftMagUnit = this._bound('DBV');
+    // Per-pane last-used screenshot size (0 = fall back to the pane's native size); mirrors
+    // scopeScreenshotWidth/Height so the FFT shot remembers its OWN size independently.
+    this.fftScreenshotWidth = this._bound(0);
+    this.fftScreenshotHeight = this._bound(0);
+    this.fftDistortionTableVisible = this._bound(true);
+    this.fftFreqMinHz = this._bound(20.0);
+    this.fftFreqMaxHz = this._bound(20000.0);
+    this.fftMagTop = this._bound(10.0);
+    this.fftMagBottom = this._bound(-150.0);
+    this.fftSavePath = this._bound(null);
+    this.fftSaveFolder = this._bound(null);
+    this.fftLoadPath = this._bound(null);
+    this.fftLoadFolder = this._bound(null);
+    /** @type {CalibrationEntry[]} */
+    this.fftCalibrations = [];
+    this.fftBeforeCalDotColor = this._bound(0x000080);
+    this.fftCalOverlayColor = this._bound(0x009600);
+    this.fftLineWidth = this._bound(1.0);
+    this.fftHarmonicDotDiameter = this._bound(9);
+    this.fftLineColor = this._bound(0x0064c8);
+    this.fftChartBackgroundColor = this._bound(0xffffff);
+    this.fftHarmonicDotColor = this._bound(0xff0000);
+    this.fftFreqRespColor = this._bound(0x009600);
+
+    /** @type {Map<string, FftPreset>} */
+    this.fftPresets = new Map();
+    /** @type {Map<string, FreqRespPreset>} */
+    this.freqRespPresets = new Map();
+
+    // ---- Frequency Response pane ----
+    this.freqRespStartHz = this._bound(1.0);
+    // Sentinel 0 = "unset": resolved to the device Nyquist (rate/2) on a fresh
+    // install by _seedRateDependentFreqRespDefaults; a saved value overrides.
+    this.freqRespStopHz = this._bound(FREQRESP_RATE_DEFAULT_SENTINEL);
+    this.freqRespAmplitudeVrms = this._bound(1.0);
+    this.freqRespAmplitudeDbvDisplay = this._bound(false);
+    // Sentinel 0 = "unset": resolved to the FS/2 point count (rate/2) on a fresh
+    // install by _seedRateDependentFreqRespDefaults; a saved value overrides.
+    this.freqRespSweepPoints = this._bound(FREQRESP_RATE_DEFAULT_SENTINEL);
+    this.freqRespDurationSec = this._bound(5.5);
+    this.freqRespFftSize = this._bound(4194304);
+    this.freqRespDitherBits = this._bound(0);
+    this.freqRespLeadInSec = this._bound(0.05);
+    // Tune-notch wizard fields, persisted independently of the main FreqResp pane.
+    this.tuneNotchStartHz = this._bound(900.0);
+    this.tuneNotchStopHz = this._bound(1100.0);
+    this.tuneNotchAmplitudeVrms = this._bound(1.0);
+    this.tuneNotchTargetHz = this._bound(1000.0);
+    this.freqRespLeftVisible = this._bound(true);
+    this.freqRespRightVisible = this._bound(false);
+    this.freqRespPhaseVisible = this._bound(false);
+    this.freqRespFreqMinHz = this._bound(20.0);
+    this.freqRespFreqMaxHz = this._bound(20000.0);
+    this.freqRespMagTopDb = this._bound(20.0);
+    this.freqRespMagBotDb = this._bound(-140.0);
+    this.freqRespNyquistFraction = this._bound(1.0);
+    this.freqRespCompareSmoothWindow = this._bound(6);
+    this.freqRespNotchEnabled = this._bound(false);
+    this.freqRespNotchBaseHz = this._bound(50);
+    this.freqRespSignalColor = this._bound(0x0064c8);
+    this.freqRespLineWidth = this._bound(2.0);
+    this.freqRespPhaseColor = this._bound(0xff0000);
+    this.freqRespReferenceColor = this._bound(0x009600);
+    this.freqRespBackgroundColor = this._bound(0xffffff);
+    this.freqRespShowRiaa = this._bound(false);   // never persisted (see toMap/fromMap)
+    this.freqRespReverseRiaa = this._bound(false);
+    this.freqRespIecAmendment = this._bound(false);
+    this.freqRespCompareMode = this._bound(false);
+    this.freqRespApplyCalibration = this._bound(true);
+    /** @type {CalibrationEntry[]} */
+    this.freqRespCalibrations = [];
+    this.freqRespSaveFolder = this._bound(null);
+    this.freqRespSavePath = this._bound(null);
+    this.freqRespLoadFolder = this._bound(null);
+    this.freqRespLoadPath = this._bound(null);
+    this.freqRespActiveTabIndex = this._bound(0);
+    // Per-pane last-used screenshot size (0 = fall back to the pane's native size); mirrors
+    // scopeScreenshotWidth/Height so the FreqResp shot remembers its OWN size independently.
+    this.freqRespScreenshotWidth = this._bound(0);
+    this.freqRespScreenshotHeight = this._bound(0);
+
+    // ---- cached constants (recomputed on the relevant changes / on load) ----
+    /** dBV = dBFS + dbvOffsetDb (= 20·log10(adcFsVoltageRms)). */
+    this.dbvOffsetDb = 20.0 * Math.log10(DEFAULT_ADC_FS_VRMS);
+    /** √(bin bandwidth) = √(inputSampleRate / fftLength); the V→V/√Hz divisor. */
+    this.binBwSqrt = 1.0;
+    // transientMode was already set from the `detached` ctor arg at the top of the
+    // constructor. When true, save() is a no-op and load()/seed are skipped, so a
+    // dialog copy (copyForDialog) never touches localStorage. Do NOT reset it here —
+    // an unconditional `= false` clobbered the detached flag, making the wizard's copy
+    // non-transient so its save() overwrote the main pane's persisted range/channel.
+
+    // ---- save coalescing / load-suppression flags ----
+    this._loading = false;
+    this._pendingSaveTimer = null;
+
+    // fftLength / backend changes invalidate the bin-bandwidth cache, exactly
+    // as the desktop listeners do (bidi-bound edits bypass the setters).
+    this.fftLength.addListener(() => this._recomputeBinBw());
+    this.backend.addListener(() => this._recomputeBinBw());
+
+    if (!this.transientMode) this.load();
+    // Covers the no-document case AND the per-backend sample rate, a plain POJO
+    // write the listeners cannot observe.
+    this._recomputeBinBw();
+    // Resolve the rate-dependent FreqResp defaults (stop = Nyquist,
+    // points = FS/2) on a fresh install where load() left the sentinels.
+    // Only the live (non-detached) instance seeds; a detached copy receives the
+    // already-resolved values through copyForDialog's _fromMap.
+    if (!this.transientMode) this._seedRateDependentFreqRespDefaults();
+  }
+
+  /** Resolves the rate-dependent FreqResp defaults left as sentinels after
+   *  load(): on a fresh install the stop frequency becomes the current device
+   *  Nyquist (rate/2) and the sweep-points count becomes the FS/2 point count
+   *  (rate/2). A user with a stored value never hits the sentinel, so their
+   *  choice is preserved (Preferences.seedRateDependentFreqRespDefaults). */
+  _seedRateDependentFreqRespDefaults() {
+    const rate = this.current().inputSampleRate;
+    if (!(rate > 0)) return;
+    const nyquist = rate / 2.0;
+    if (this.freqRespStopHz.get() === FREQRESP_RATE_DEFAULT_SENTINEL) {
+      this.freqRespStopHz.set(nyquist);
+    }
+    if (this.freqRespSweepPoints.get() === FREQRESP_RATE_DEFAULT_SENTINEL) {
+      this.freqRespSweepPoints.set(trunc(nyquist));
+    }
+  }
+
+  /** Faithful port of Preferences.copyForDialog(): a DETACHED copy seeded with the
+   *  current values that never loads from / writes to localStorage. The tune-notch
+   *  wizard hands this to its embedded FreqRespView so every range / auto-fit /
+   *  zoom edit stays in the copy and the shared main-pane view is never touched. */
+  copyForDialog() {
+    const c = new Preferences(true);
+    c._loading = true;
+    try { c._fromMap(this._toMap()); } finally { c._loading = false; }
+    c._recomputeBinBw();
+    return c;
+  }
+
+  /** Shared singleton (Preferences.instance). */
+  static instance() {
+    if (!Preferences._instance) Preferences._instance = new Preferences();
+    return Preferences._instance;
+  }
+
+  // -------------------------------------------------------------------------
+  // observable-property plumbing
+  // -------------------------------------------------------------------------
+
+  /**
+   * Creates an observable, auto-saving property: a real change requests a save.
+   * @template T
+   * @param {T} initial
+   * @returns {Property<T>}
+   */
+  _bound(initial) {
+    const p = new Property(initial);
+    p.addListener(() => this._requestSave());
+    return p;
+  }
+
+  /** Wires a calibration entry's toggles to the debounced save (trackCalibration). */
+  _trackCalibration(entry) {
+    entry.active().addListener(() => this._requestSave());
+    entry.withNoise().addListener(() => this._requestSave());
+  }
+
+  /** Per-backend prefs, lazily created on first access (prefsFor). */
+  prefsFor(type) {
+    let p = this._perBackend.get(type);
+    if (!p) {
+      p = new BackendPrefs();
+      this._perBackend.set(type, p);
+    }
+    return p;
+  }
+
+  /** Shorthand for prefsFor(getBackend()) (current). */
+  current() {
+    return this.prefsFor(this.backend.get());
+  }
+
+  // -------------------------------------------------------------------------
+  // calibration-list mutators (each requests a save)
+  // -------------------------------------------------------------------------
+
+  /** Appends an FFT calibration row and wires + persists it (addFftCalibration). */
+  addFftCalibration(entry) {
+    this.fftCalibrations.push(entry);
+    this._trackCalibration(entry);
+    this._requestSave();
+  }
+
+  /** Removes an FFT calibration row (removeFftCalibration). */
+  removeFftCalibration(entry) {
+    const i = this.fftCalibrations.indexOf(entry);
+    if (i >= 0) {
+      this.fftCalibrations.splice(i, 1);
+      this._requestSave();
+    }
+  }
+
+  /** Appends a FreqResp calibration row (addFreqRespCalibration). */
+  addFreqRespCalibration(entry) {
+    this.freqRespCalibrations.push(entry);
+    this._trackCalibration(entry);
+    this._requestSave();
+  }
+
+  /** Removes a FreqResp calibration row (removeFreqRespCalibration). */
+  removeFreqRespCalibration(entry) {
+    const i = this.freqRespCalibrations.indexOf(entry);
+    if (i >= 0) {
+      this.freqRespCalibrations.splice(i, 1);
+      this._requestSave();
+    }
+  }
+
+  /** Sets entry-0's FreqResp calibration path, creating row 0 if absent
+   *  (setFreqRespPrimaryCalibrationPath). */
+  setFreqRespPrimaryCalibrationPath(path) {
+    if (this.freqRespCalibrations.length === 0) {
+      this.addFreqRespCalibration(new CalibrationEntry());
+    }
+    this.freqRespCalibrations[0].path = path;
+    this._requestSave();
+  }
+
+  // -------------------------------------------------------------------------
+  // preset mutators (immediate save)
+  // -------------------------------------------------------------------------
+
+  /** Inserts/replaces an osc preset and persists (putOscPreset). */
+  putOscPreset(name, preset) {
+    if (!name || !preset) return;
+    this.oscPresets.set(name, preset);
+    this.save();
+  }
+
+  /** Removes the named osc preset and persists (removeOscPreset). */
+  removeOscPreset(name) {
+    if (name == null) return;
+    if (this.oscPresets.delete(name)) this.save();
+  }
+
+  /** Inserts/replaces an FFT preset and persists (putFftPreset). */
+  putFftPreset(name, preset) {
+    if (!name || !preset) return;
+    this.fftPresets.set(name, preset);
+    this.save();
+  }
+
+  /** Removes the named FFT preset and persists (removeFftPreset). */
+  removeFftPreset(name) {
+    if (name == null) return;
+    if (this.fftPresets.delete(name)) this.save();
+  }
+
+  /** Inserts/replaces a FreqResp preset and persists (putFreqRespPreset). */
+  putFreqRespPreset(name, preset) {
+    if (!name || !preset) return;
+    this.freqRespPresets.set(name, preset);
+    this.save();
+  }
+
+  /** Removes the named FreqResp preset and persists (removeFreqRespPreset). */
+  removeFreqRespPreset(name) {
+    if (name == null) return;
+    if (this.freqRespPresets.delete(name)) this.save();
+  }
+
+  // -------------------------------------------------------------------------
+  // validated setters that have side effects in the Java original
+  // -------------------------------------------------------------------------
+
+  /** Sets ADC full-scale Vrms; rejects ≤0 and recomputes the dBV offset
+   *  (setAdcFsVoltageRms). */
+  setAdcFsVoltageRms(v) {
+    if (!(v > 0.0)) return;
+    this.adcFsVoltageRms.set(v);
+    this._recomputeDbvOffset(v);
+  }
+
+  /** Sets DAC full-scale peak amplitude; rejects ≤0 (setDacFsVoltageAmpl). */
+  setDacFsVoltageAmpl(v) {
+    if (!(v > 0.0)) return;
+    this.dacFsVoltageAmpl.set(v);
+  }
+
+  /** The .dpd path matching {@code form} (getGenDpd(form)). */
+  getGenDpd(form) {
+    return DUAL_TONE_FORMS.has(form) ? this.genDpdDual.get() : this.genDpd.get();
+  }
+
+  /** Stores {@code path} under the .dpd slot matching {@code form} (setGenDpd). */
+  setGenDpd(form, path) {
+    if (DUAL_TONE_FORMS.has(form)) this.genDpdDual.set(path);
+    else this.genDpd.set(path);
+  }
+
+  /** The original .dpd basename matching {@code form} (shown in the corrections row). */
+  getGenDpdName(form) {
+    return DUAL_TONE_FORMS.has(form) ? this.genDpdDualName.get() : this.genDpdName.get();
+  }
+
+  /** Stores the original .dpd basename under the slot matching {@code form}. */
+  setGenDpdName(form, name) {
+    if (DUAL_TONE_FORMS.has(form)) this.genDpdDualName.set(name);
+    else this.genDpdName.set(name);
+  }
+
+  // -------------------------------------------------------------------------
+  // cached-constant recompute + dBFS conversion
+  // -------------------------------------------------------------------------
+
+  /** Recomputes dbvOffsetDb; non-positive full-scale falls back to 0 dB
+   *  (recomputeDbvOffset). */
+  _recomputeDbvOffset(fsVrms) {
+    this.dbvOffsetDb = (fsVrms > 0.0) ? 20.0 * Math.log10(fsVrms) : 0.0;
+  }
+
+  /** Recomputes binBwSqrt from the live capture config (recomputeBinBw). */
+  _recomputeBinBw() {
+    const rate = this.current().inputSampleRate;
+    const len = this.fftLength.get();
+    this.binBwSqrt = (rate > 0 && len > 0) ? Math.sqrt(rate / len) : 1.0;
+  }
+
+  /**
+   * Converts an analyser dBFS magnitude into {@code unit} for display
+   * (convertFromDbFs). dBV is a constant offset from dBFS; V reads that value
+   * linearly; V/√Hz additionally divides by √(bin bandwidth).
+   *
+   * @param {number} dbFs
+   * @param {string} unit  MagnitudeUnit name (V | V_SQRT_HZ | DBV | DBFS).
+   * @param {?number} [binBwSqrt=null]  √(bin bandwidth) of the spectrum being
+   *        converted; null uses the cached live config.
+   * @returns {number}
+   */
+  convertFromDbFs(dbFs, unit, binBwSqrt = null) {
+    switch (unit) {
+      case 'DBFS': return dbFs;
+      case 'DBV': return dbFs + this.dbvOffsetDb;
+      case 'V': return Math.pow(10.0, (dbFs + this.dbvOffsetDb) / 20.0);
+      case 'V_SQRT_HZ':
+        return Math.pow(10.0, (dbFs + this.dbvOffsetDb) / 20.0)
+          / (binBwSqrt != null ? binBwSqrt : this.binBwSqrt);
+      default: return dbFs;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // persistence
+  // -------------------------------------------------------------------------
+
+  /** Persists after a bound change — no-op while loading; debounced into a
+   *  single write SAVE_COALESCE_MS after the last change (requestSave). */
+  _requestSave() {
+    if (this.transientMode || this._loading) return;
+    if (this._pendingSaveTimer != null) clearTimeout(this._pendingSaveTimer);
+    this._pendingSaveTimer = setTimeout(() => {
+      this._pendingSaveTimer = null;
+      this.save();
+    }, SAVE_COALESCE_MS);
+  }
+
+  /** Flushes a still-pending debounced save immediately (flush). Hook this to
+   *  'pagehide'/'beforeunload' so a last-instant change is not lost. */
+  flush() {
+    if (this._pendingSaveTimer != null) {
+      clearTimeout(this._pendingSaveTimer);
+      this._pendingSaveTimer = null;
+      this.save();
+    }
+  }
+
+  /** Writes the current preferences to localStorage. No-op in transient mode
+   *  (save). */
+  save() {
+    if (this.transientMode) return;
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify(this._toMap()));
+    } catch (e) {
+      // Quota / disabled storage — match the desktop "log and continue".
+      console.warn('Failed to save preferences:', e && e.message);
+    }
+  }
+
+  /** Loads preferences from localStorage if present; no-op if missing/unreadable
+   *  (load). */
+  load() {
+    let raw;
+    try {
+      raw = localStorage.getItem(PREFS_KEY);
+    } catch (e) {
+      return;
+    }
+    if (raw == null) return;
+    let root;
+    try {
+      root = JSON.parse(raw);
+    } catch (e) {
+      console.warn('Failed to load preferences:', e && e.message);
+      return;
+    }
+    if (!asMap(root)) return;
+    this._loading = true;
+    try {
+      this._fromMap(root);
+    } finally {
+      this._loading = false;
+    }
+  }
+
+  /** Builds the serialisable document, mirroring Preferences.toMap key-for-key
+   *  (including the conditional omissions and colour-hex formatting). */
+  _toMap() {
+    const root = {};
+    root.formatVersion = PREFERENCES_FORMAT_VERSION;
+    root.backend = this.backend.get();
+    if (this.uiLanguage.get() != null) root.uiLanguage = this.uiLanguage.get();
+    root.tabOrientation = this.tabOrientation.get();
+    root.uiFontNormal = this.uiFontNormal.get();
+    root.uiFontBold = this.uiFontBold.get();
+    root.uiFontChannel = this.uiFontChannel.get();
+    root.activeTabIndex = this.activeTabIndex.get();
+    root.smallIconsInMainTab = this.smallIconsInMainTab.get();
+    root.checkForUpdatesOnStartup = this.checkForUpdatesOnStartup.get();
+    root.includeBetaInUpdateChecks = this.includeBetaInUpdateChecks.get();
+    root.showTipsAtStartup = this.showTipsAtStartup.get();
+    root.windowWidth = this.windowWidth.get();
+    root.windowHeight = this.windowHeight.get();
+    if (this.genPaneWidth.get() > 0) root.genPaneWidth = this.genPaneWidth.get();
+    if (this.multiVSplitWeights != null) {
+      root.multiVSplitWeights = Array.from(this.multiVSplitWeights);
+    }
+    root.genPaneCollapsed = this.genPaneCollapsed.get();
+    root.oscPaneCollapsed = this.oscPaneCollapsed.get();
+    root.fftPaneCollapsed = this.fftPaneCollapsed.get();
+    root.oscLeftChannelEnabled = this.oscLeftChannelEnabled.get();
+    root.oscRightChannelEnabled = this.oscRightChannelEnabled.get();
+    root.oscLeftAcMode = this.oscLeftAcMode.get();
+    root.oscRightAcMode = this.oscRightAcMode.get();
+    root.oscLeftVoltsPerDiv = this.oscLeftVoltsPerDiv.get();
+    root.oscRightVoltsPerDiv = this.oscRightVoltsPerDiv.get();
+    root.oscTimePerDiv = this.oscTimePerDiv.get();
+    root.scopeScreenshotWidth = this.scopeScreenshotWidth.get();
+    root.scopeScreenshotHeight = this.scopeScreenshotHeight.get();
+    root.oscTriggerChannel = this.oscTriggerChannel.get();
+    root.oscTriggerEdge = this.oscTriggerEdge.get();
+    root.oscTriggerType = this.oscTriggerType.get();
+    root.oscTriggerMode = this.oscTriggerMode.get();
+    root.oscTriggerHysteresisDiv = this.oscTriggerHysteresisDiv.get();
+    root.oscTriggerHysteresisEnabled = this.oscTriggerHysteresisEnabled.get();
+    root.oscShowReconstructedBeat = this.oscShowReconstructedBeat.get();
+    root.oscLeftSincInterpEnabled = this.oscLeftSincInterpEnabled.get();
+    root.oscRightSincInterpEnabled = this.oscRightSincInterpEnabled.get();
+    root.oscLeftMainsSuppression = this.oscLeftMainsSuppression.get();
+    root.oscRightMainsSuppression = this.oscRightMainsSuppression.get();
+    root.oscLeftLpf = this.oscLeftLpf.get();
+    root.oscRightLpf = this.oscRightLpf.get();
+    root.oscLeftOffsetFrac = this.oscLeftOffsetFrac.get();
+    root.oscRightOffsetFrac = this.oscRightOffsetFrac.get();
+    root.oscTriggerLevelFrac = this.oscTriggerLevelFrac.get();
+    root.oscTriggerPositionFrac = this.oscTriggerPositionFrac.get();
+    root.oscMeasurementAverageSeconds = this.oscMeasurementAverageSeconds.get();
+    root.oscMeasurementChannel = this.oscMeasurementChannel.get();
+    root.oscShowStats = this.oscShowStats.get();
+    root.oscShowMeasurementTable = this.oscShowMeasurementTable.get();
+    root.adcFsVoltageRms = this.adcFsVoltageRms.get();
+    // Persist as RMS (ampl ÷ √2); the in-memory value is peak amplitude.
+    root.dacFsVoltageRms = this.dacFsVoltageAmpl.get() / SQRT2;
+    root.genSignalForm = this.genSignalForm.get();
+    root.genFrequencyHz = this.genFrequencyHz.get();
+    root.genDualToneFreq1Hz = this.genDualToneFreq1Hz.get();
+    root.genDualToneFreq2Hz = this.genDualToneFreq2Hz.get();
+    root.genDualToneSplitPct = this.genDualToneSplitPct.get();
+    root.genAmplitudeVrms = this.genAmplitudeVrms.get();
+    root.genAmplitudeDbvDisplay = this.genAmplitudeDbvDisplay.get();
+    root.genDitherBits = this.genDitherBits.get();
+    if (this.genDpd.get() != null) root.genDpd = this.genDpd.get();
+    if (this.genDpdDual.get() != null) root.genDpdDual = this.genDpdDual.get();
+    if (this.genDpdFolder.get() != null) root.genDpdFolder = this.genDpdFolder.get();
+    if (this.genDpdName.get() != null) root.genDpdName = this.genDpdName.get();
+    if (this.genDpdDualName.get() != null) root.genDpdDualName = this.genDpdDualName.get();
+    root.predistortionAverages = this.predistortionAverages.get();
+    root.predistortionTargetPct = this.predistortionTargetPct.get();
+    root.genRectangleDuty = this.genRectangleDuty.get();
+    root.genTriangleDuty = this.genTriangleDuty.get();
+    root.genSweepFreqStartHz = this.genSweepFreqStartHz.get();
+    root.genSweepFreqEndHz = this.genSweepFreqEndHz.get();
+    root.genSweepDurationSec = this.genSweepDurationSec.get();
+    root.genSweepLoop = this.genSweepLoop.get();
+    root.genSweepFadeInSec = this.genSweepFadeInSec.get();
+    root.genSweepFadeOutSec = this.genSweepFadeOutSec.get();
+    root.genSnapToFftBin = this.genSnapToFftBin.get();
+    root.genWavDurationSeconds = this.genWavDurationSeconds.get();
+    if (this.genWavPath.get() != null) root.genWavPath = this.genWavPath.get();
+    if (this.genWavFolder.get() != null) root.genWavFolder = this.genWavFolder.get();
+    if (this.genPlayFromPath.get() != null) root.genPlayFromPath = this.genPlayFromPath.get();
+    if (this.genPlayFromFolder.get() != null) root.genPlayFromFolder = this.genPlayFromFolder.get();
+    root.genPlayFromLoop = this.genPlayFromLoop.get();
+    if (this.oscSavePath.get() != null) root.oscSavePath = this.oscSavePath.get();
+    if (this.oscSaveFolder.get() != null) root.oscSaveFolder = this.oscSaveFolder.get();
+    root.oscSaveDurationSeconds = this.oscSaveDurationSeconds.get();
+    if (this.oscPlayFromPath.get() != null) root.oscPlayFromPath = this.oscPlayFromPath.get();
+    if (this.oscPlayFromFolder.get() != null) root.oscPlayFromFolder = this.oscPlayFromFolder.get();
+    root.oscPlayFromLoop = this.oscPlayFromLoop.get();
+    root.oscLineWidth = this.oscLineWidth.get();
+    root.oscDotDiameter = this.oscDotDiameter.get();
+    root.oscLeftChannelColor = formatHtmlColor(this.oscLeftChannelColor.get());
+    root.oscRightChannelColor = formatHtmlColor(this.oscRightChannelColor.get());
+    if (this.screenshotFolder.get() != null) root.screenshotFolder = this.screenshotFolder.get();
+    if (this.screenshotCommentFont.get() != null) root.screenshotCommentFont = this.screenshotCommentFont.get();
+
+    if (this.oscPresets.size > 0) {
+      const presetsMap = {};
+      for (const [key, p] of this.oscPresets) {
+        presetsMap[key] = {
+          leftChannelEnabled: p.leftChannelEnabled,
+          rightChannelEnabled: p.rightChannelEnabled,
+          leftAcMode: p.leftAcMode,
+          rightAcMode: p.rightAcMode,
+          leftSincInterpEnabled: p.leftSincInterpEnabled,
+          rightSincInterpEnabled: p.rightSincInterpEnabled,
+          leftMainsSuppression: p.leftMainsSuppression,
+          rightMainsSuppression: p.rightMainsSuppression,
+          leftLpf: p.leftLpf,
+          rightLpf: p.rightLpf,
+          leftVoltsPerDiv: p.leftVoltsPerDiv,
+          rightVoltsPerDiv: p.rightVoltsPerDiv,
+          leftOffsetFrac: p.leftOffsetFrac,
+          rightOffsetFrac: p.rightOffsetFrac,
+          timePerDiv: p.timePerDiv,
+          triggerPositionFrac: p.triggerPositionFrac,
+          triggerChannel: p.triggerChannel,
+          triggerEdge: p.triggerEdge,
+          triggerType: p.triggerType,
+          triggerMode: p.triggerMode,
+          triggerLevelFrac: p.triggerLevelFrac,
+        };
+      }
+      root.oscPresets = presetsMap;
+    }
+
+    // ---- FFT pane state ----
+    root.fftLength = this.fftLength.get();
+    root.fftAverages = this.fftAverages.get();
+    root.fftThreads = this.fftThreads.get();
+    root.fftStopAfterNEnabled = this.fftStopAfterNEnabled.get();
+    root.fftStopAfterN = this.fftStopAfterN.get();
+    root.fftFundFromGenerator = this.fftFundFromGenerator.get();
+    root.fftLogFreqAxis = this.fftLogFreqAxis.get();
+    root.fftDetectTimeDiscontinuity = this.fftDetectTimeDiscontinuity.get();
+    root.fftWindow = this.fftWindow.get();
+    root.fftOverlap = this.fftOverlap.get();
+    root.fftCoherentAveraging = this.fftCoherentAveraging.get();
+    root.fftMainsSuppression = this.fftMainsSuppression.get();
+    root.fftAlignGenerator = this.fftAlignGenerator.get();
+    root.fftDistMinHz = this.fftDistMinHz.get();
+    root.fftDistMaxHz = this.fftDistMaxHz.get();
+    root.fftDistMinEnabled = this.fftDistMinEnabled.get();
+    root.fftDistMaxEnabled = this.fftDistMaxEnabled.get();
+    root.fftThdMaxHarmonic = this.fftThdMaxHarmonic.get();
+    root.fftCalcMaxHarmonic = this.fftCalcMaxHarmonic.get();
+    root.fftStrongToneRelDb = this.fftStrongToneRelDb.get();
+    root.fftManualFundVrms = this.fftManualFundVrms.get();
+    root.fftManualFundDbvDisplay = this.fftManualFundDbvDisplay.get();
+    root.fftManualFundEnabled = this.fftManualFundEnabled.get();
+    root.fftChannel = this.fftChannel.get();
+    root.fftMagUnit = this.fftMagUnit.get();
+    if (this.fftScreenshotWidth.get() > 0) root.fftScreenshotWidth = this.fftScreenshotWidth.get();
+    if (this.fftScreenshotHeight.get() > 0) root.fftScreenshotHeight = this.fftScreenshotHeight.get();
+    root.fftDistortionTableVisible = this.fftDistortionTableVisible.get();
+    root.fftFreqMinHz = this.fftFreqMinHz.get();
+    root.fftFreqMaxHz = this.fftFreqMaxHz.get();
+    root.fftMagTop = this.fftMagTop.get();
+    root.fftMagBottom = this.fftMagBottom.get();
+    if (this.fftSavePath.get() != null) root.fftSavePath = this.fftSavePath.get();
+    if (this.fftSaveFolder.get() != null) root.fftSaveFolder = this.fftSaveFolder.get();
+    if (this.fftLoadPath.get() != null) root.fftLoadPath = this.fftLoadPath.get();
+    if (this.fftLoadFolder.get() != null) root.fftLoadFolder = this.fftLoadFolder.get();
+    if (this.fftCalibrations.length > 0) {
+      root.fftCalibrations = this.fftCalibrations.map((e) => {
+        const m = {};
+        if (e.path != null) m.path = e.path;
+        if (e.hash != null) m.hash = e.hash;
+        m.active = e.active().get();
+        m.withNoise = e.withNoise().get();
+        return m;
+      });
+    }
+    root.fftBeforeCalDotColor = this.fftBeforeCalDotColor.get();
+    root.fftCalOverlayColor = this.fftCalOverlayColor.get();
+    root.fftLineWidth = this.fftLineWidth.get();
+    root.freqRespLineWidth = this.freqRespLineWidth.get();
+    root.fftHarmonicDotDiameter = this.fftHarmonicDotDiameter.get();
+    root.fftLineColor = formatHtmlColor(this.fftLineColor.get());
+    root.fftChartBackgroundColor = formatHtmlColor(this.fftChartBackgroundColor.get());
+    root.fftHarmonicDotColor = formatHtmlColor(this.fftHarmonicDotColor.get());
+    root.fftFreqRespColor = formatHtmlColor(this.fftFreqRespColor.get());
+
+    // ---- Frequency Response pane ----
+    root.freqRespStartHz = this.freqRespStartHz.get();
+    root.freqRespStopHz = this.freqRespStopHz.get();
+    root.freqRespAmplitudeVrms = this.freqRespAmplitudeVrms.get();
+    root.freqRespAmplitudeDbvDisplay = this.freqRespAmplitudeDbvDisplay.get();
+    root.freqRespSweepPoints = this.freqRespSweepPoints.get();
+    root.freqRespDurationSec = this.freqRespDurationSec.get();
+    root.freqRespFftSize = this.freqRespFftSize.get();
+    root.freqRespDitherBits = this.freqRespDitherBits.get();
+    root.freqRespLeadInSec = this.freqRespLeadInSec.get();
+    root.tuneNotchStartHz = this.tuneNotchStartHz.get();
+    root.tuneNotchStopHz = this.tuneNotchStopHz.get();
+    root.tuneNotchAmplitudeVrms = this.tuneNotchAmplitudeVrms.get();
+    root.tuneNotchTargetHz = this.tuneNotchTargetHz.get();
+    root.freqRespLeftVisible = this.freqRespLeftVisible.get();
+    root.freqRespRightVisible = this.freqRespRightVisible.get();
+    root.freqRespPhaseVisible = this.freqRespPhaseVisible.get();
+    root.freqRespFreqMinHz = this.freqRespFreqMinHz.get();
+    root.freqRespFreqMaxHz = this.freqRespFreqMaxHz.get();
+    root.freqRespMagTopDb = this.freqRespMagTopDb.get();
+    root.freqRespMagBotDb = this.freqRespMagBotDb.get();
+    root.freqRespNyquistFraction = this.freqRespNyquistFraction.get();
+    root.freqRespCompareSmoothWindow = this.freqRespCompareSmoothWindow.get();
+    root.freqRespNotchEnabled = this.freqRespNotchEnabled.get();
+    root.freqRespNotchBaseHz = this.freqRespNotchBaseHz.get();
+    root.freqRespSignalColor = this.freqRespSignalColor.get();
+    root.freqRespPhaseColor = this.freqRespPhaseColor.get();
+    root.freqRespReferenceColor = this.freqRespReferenceColor.get();
+    root.freqRespBackgroundColor = this.freqRespBackgroundColor.get();
+    // freqRespShowRiaa is intentionally NOT persisted (fresh-session default).
+    root.freqRespReverseRiaa = this.freqRespReverseRiaa.get();
+    root.freqRespIecAmendment = this.freqRespIecAmendment.get();
+    root.freqRespCompareMode = this.freqRespCompareMode.get();
+    root.freqRespApplyCalibration = this.freqRespApplyCalibration.get();
+    if (this.freqRespCalibrations.length > 0) {
+      root.freqRespCalibrations = this.freqRespCalibrations.map((e) => {
+        const m = {};
+        if (e.path != null) m.path = e.path;
+        if (e.hash != null) m.hash = e.hash;
+        m.active = e.active().get();
+        return m;
+      });
+    }
+    if (this.freqRespSaveFolder.get() != null) root.freqRespSaveFolder = this.freqRespSaveFolder.get();
+    if (this.freqRespSavePath.get() != null) root.freqRespSavePath = this.freqRespSavePath.get();
+    if (this.freqRespLoadFolder.get() != null) root.freqRespLoadFolder = this.freqRespLoadFolder.get();
+    if (this.freqRespLoadPath.get() != null) root.freqRespLoadPath = this.freqRespLoadPath.get();
+    root.freqRespActiveTabIndex = this.freqRespActiveTabIndex.get();
+    if (this.freqRespScreenshotWidth.get() > 0) root.freqRespScreenshotWidth = this.freqRespScreenshotWidth.get();
+    if (this.freqRespScreenshotHeight.get() > 0) root.freqRespScreenshotHeight = this.freqRespScreenshotHeight.get();
+
+    if (this.fftPresets.size > 0) {
+      const fpMap = {};
+      for (const [key, p] of this.fftPresets) {
+        fpMap[key] = {
+          channel: p.channel,
+          magUnit: p.magUnit,
+          logFreqAxis: p.logFreqAxis,
+          freqMinHz: p.freqMinHz,
+          freqMaxHz: p.freqMaxHz,
+          magTop: p.magTop,
+          magBottom: p.magBottom,
+          fftLength: p.fftLength,
+          averages: p.averages,
+          stopAfterNEnabled: p.stopAfterNEnabled,
+          stopAfterN: p.stopAfterN,
+          fundFromGenerator: p.fundFromGenerator,
+          window: p.window,
+          overlap: p.overlap,
+          coherentAveraging: p.coherentAveraging,
+          distMinHz: p.distMinHz,
+          distMaxHz: p.distMaxHz,
+          distMinEnabled: p.distMinEnabled,
+          distMaxEnabled: p.distMaxEnabled,
+          thdMaxHarmonic: p.thdMaxHarmonic,
+          calcMaxHarmonic: p.calcMaxHarmonic,
+          manualFundVrms: p.manualFundVrms,
+          manualFundDbvDisplay: p.manualFundDbvDisplay,
+          manualFundEnabled: p.manualFundEnabled,
+        };
+      }
+      root.fftPresets = fpMap;
+    }
+
+    if (this.freqRespPresets.size > 0) {
+      const frMap = {};
+      for (const [key, p] of this.freqRespPresets) {
+        frMap[key] = {
+          startHz: p.startHz,
+          stopHz: p.stopHz,
+          amplitudeVrms: p.amplitudeVrms,
+          sweepPoints: p.sweepPoints,
+          fftSize: p.fftSize,
+          leadInSec: p.leadInSec,
+          ditherBits: p.ditherBits,
+          showRiaa: p.showRiaa,
+          reverseRiaa: p.reverseRiaa,
+          iecAmendment: p.iecAmendment,
+          compareMode: p.compareMode,
+        };
+      }
+      root.freqRespPresets = frMap;
+    }
+
+    const perBackendMap = {};
+    for (const [type, v] of this._perBackend) {
+      perBackendMap[type] = {
+        inputDeviceName: v.inputDeviceName,
+        outputDeviceName: v.outputDeviceName,
+        inputSampleRate: v.inputSampleRate,
+        inputBitDepth: v.inputBitDepth,
+        outputSampleRate: v.outputSampleRate,
+        outputBitDepth: v.outputBitDepth,
+      };
+    }
+    root.perBackend = perBackendMap;
+    return root;
+  }
+
+  /** Applies a loaded document, mirroring Preferences.fromMap field-for-field
+   *  (same type gates, same clamps/migrations, same colour parsing). */
+  _fromMap(root) {
+    const g = (k) => root[k];
+
+    if (isStr(g('uiLanguage'))) this.uiLanguage.set(g('uiLanguage'));
+    if (isStr(g('tabOrientation'))) this.tabOrientation.set(enumOr('TabOrientation', g('tabOrientation'), this.tabOrientation.get()));
+    if (isStr(g('uiFontNormal'))) this.uiFontNormal.set(g('uiFontNormal'));
+    if (isStr(g('uiFontBold'))) this.uiFontBold.set(g('uiFontBold'));
+    if (isStr(g('uiFontChannel'))) this.uiFontChannel.set(g('uiFontChannel'));
+    if (isNum(g('activeTabIndex'))) this.activeTabIndex.set(trunc(g('activeTabIndex')));
+    if (isBool(g('smallIconsInMainTab'))) this.smallIconsInMainTab.set(g('smallIconsInMainTab'));
+    if (isBool(g('checkForUpdatesOnStartup'))) this.checkForUpdatesOnStartup.set(g('checkForUpdatesOnStartup'));
+    if (isBool(g('includeBetaInUpdateChecks'))) this.includeBetaInUpdateChecks.set(g('includeBetaInUpdateChecks'));
+    if (isBool(g('showTipsAtStartup'))) this.showTipsAtStartup.set(g('showTipsAtStartup'));
+    if (isStr(g('backend'))) this.backend.set(enumOr('AudioBackendType', g('backend'), this.backend.get()));
+    if (isNum(g('windowWidth'))) this.windowWidth.set(trunc(g('windowWidth')));
+    if (isNum(g('windowHeight'))) this.windowHeight.set(trunc(g('windowHeight')));
+    if (isNum(g('genPaneWidth'))) this.genPaneWidth.set(trunc(g('genPaneWidth')));
+    if (Array.isArray(g('multiVSplitWeights'))) this.multiVSplitWeights = this._listToIntArray(g('multiVSplitWeights'));
+    if (isBool(g('genPaneCollapsed'))) this.genPaneCollapsed.set(g('genPaneCollapsed'));
+    if (isBool(g('oscPaneCollapsed'))) this.oscPaneCollapsed.set(g('oscPaneCollapsed'));
+    if (isBool(g('fftPaneCollapsed'))) this.fftPaneCollapsed.set(g('fftPaneCollapsed'));
+    if (isBool(g('oscLeftChannelEnabled'))) this.oscLeftChannelEnabled.set(g('oscLeftChannelEnabled'));
+    if (isBool(g('oscLeftAcMode'))) this.oscLeftAcMode.set(g('oscLeftAcMode'));
+    if (isBool(g('oscRightAcMode'))) this.oscRightAcMode.set(g('oscRightAcMode'));
+    if (isBool(g('oscRightChannelEnabled'))) this.oscRightChannelEnabled.set(g('oscRightChannelEnabled'));
+    if (isNum(g('oscLeftVoltsPerDiv'))) this.oscLeftVoltsPerDiv.set(g('oscLeftVoltsPerDiv'));
+    if (isNum(g('oscRightVoltsPerDiv'))) this.oscRightVoltsPerDiv.set(g('oscRightVoltsPerDiv'));
+    if (isNum(g('oscTimePerDiv'))) this.oscTimePerDiv.set(g('oscTimePerDiv'));
+    // Scope screenshot size: new scope* key, migrating the legacy osc* and the even
+    // older shared screenshot* keys so saved prefs still restore the scope's size.
+    if (isNum(g('scopeScreenshotWidth'))) this.scopeScreenshotWidth.set(trunc(g('scopeScreenshotWidth')));
+    else if (isNum(g('oscScreenshotWidth'))) this.scopeScreenshotWidth.set(trunc(g('oscScreenshotWidth')));
+    else if (isNum(g('screenshotWidth'))) this.scopeScreenshotWidth.set(trunc(g('screenshotWidth')));
+    if (isNum(g('scopeScreenshotHeight'))) this.scopeScreenshotHeight.set(trunc(g('scopeScreenshotHeight')));
+    else if (isNum(g('oscScreenshotHeight'))) this.scopeScreenshotHeight.set(trunc(g('oscScreenshotHeight')));
+    else if (isNum(g('screenshotHeight'))) this.scopeScreenshotHeight.set(trunc(g('screenshotHeight')));
+    if (isStr(g('oscTriggerChannel'))) this.oscTriggerChannel.set(enumOr('Channel', g('oscTriggerChannel'), this.oscTriggerChannel.get()));
+    if (isStr(g('oscTriggerEdge'))) this.oscTriggerEdge.set(enumOr('TriggerEdge', g('oscTriggerEdge'), this.oscTriggerEdge.get()));
+    if (isStr(g('oscTriggerType'))) this.oscTriggerType.set(enumOr('TriggerType', g('oscTriggerType'), this.oscTriggerType.get()));
+    if (isStr(g('oscTriggerMode'))) this.oscTriggerMode.set(enumOr('TriggerMode', g('oscTriggerMode'), this.oscTriggerMode.get()));
+    if (isNum(g('oscTriggerHysteresisDiv'))) this.oscTriggerHysteresisDiv.set(g('oscTriggerHysteresisDiv'));
+    if (isBool(g('oscTriggerHysteresisEnabled'))) this.oscTriggerHysteresisEnabled.set(g('oscTriggerHysteresisEnabled'));
+    if (isBool(g('oscShowReconstructedBeat'))) this.oscShowReconstructedBeat.set(g('oscShowReconstructedBeat'));
+    if (isBool(g('oscLeftSincInterpEnabled'))) this.oscLeftSincInterpEnabled.set(g('oscLeftSincInterpEnabled'));
+    if (isBool(g('oscRightSincInterpEnabled'))) this.oscRightSincInterpEnabled.set(g('oscRightSincInterpEnabled'));
+    if (isStr(g('oscLeftMainsSuppression'))) this.oscLeftMainsSuppression.set(enumOr('MainsSuppression', g('oscLeftMainsSuppression'), this.oscLeftMainsSuppression.get()));
+    if (isStr(g('oscRightMainsSuppression'))) this.oscRightMainsSuppression.set(enumOr('MainsSuppression', g('oscRightMainsSuppression'), this.oscRightMainsSuppression.get()));
+    if (isStr(g('oscLeftLpf'))) this.oscLeftLpf.set(enumOr('LpfMode', g('oscLeftLpf'), this.oscLeftLpf.get()));
+    if (isStr(g('oscRightLpf'))) this.oscRightLpf.set(enumOr('LpfMode', g('oscRightLpf'), this.oscRightLpf.get()));
+    if (isNum(g('oscLeftOffsetFrac'))) this.oscLeftOffsetFrac.set(g('oscLeftOffsetFrac'));
+    if (isNum(g('oscRightOffsetFrac'))) this.oscRightOffsetFrac.set(g('oscRightOffsetFrac'));
+    if (isNum(g('oscTriggerLevelFrac'))) this.oscTriggerLevelFrac.set(g('oscTriggerLevelFrac'));
+    if (isNum(g('oscTriggerPositionFrac'))) this.oscTriggerPositionFrac.set(g('oscTriggerPositionFrac'));
+    if (isNum(g('oscMeasurementAverageSeconds'))) this.oscMeasurementAverageSeconds.set(g('oscMeasurementAverageSeconds'));
+    if (isStr(g('oscMeasurementChannel'))) this.oscMeasurementChannel.set(enumOr('Channel', g('oscMeasurementChannel'), this.oscMeasurementChannel.get()));
+    if (isBool(g('oscShowStats'))) this.oscShowStats.set(g('oscShowStats'));
+    if (isBool(g('oscShowMeasurementTable'))) this.oscShowMeasurementTable.set(g('oscShowMeasurementTable'));
+    if (isNum(g('adcFsVoltageRms')) && g('adcFsVoltageRms') > 0.0) this.adcFsVoltageRms.set(g('adcFsVoltageRms'));
+    this._recomputeDbvOffset(this.adcFsVoltageRms.get());
+    // Stored as RMS; convert to the in-memory peak amplitude (× √2).
+    if (isNum(g('dacFsVoltageRms')) && g('dacFsVoltageRms') > 0.0) this.dacFsVoltageAmpl.set(g('dacFsVoltageRms') * SQRT2);
+    if (isStr(g('genSignalForm'))) this.genSignalForm.set(enumOr('GenSignalForm', g('genSignalForm'), this.genSignalForm.get()));
+    if (isNum(g('genFrequencyHz'))) this.genFrequencyHz.set(g('genFrequencyHz'));
+    if (isNum(g('genDualToneFreq1Hz'))) this.genDualToneFreq1Hz.set(g('genDualToneFreq1Hz'));
+    if (isNum(g('genDualToneFreq2Hz'))) this.genDualToneFreq2Hz.set(g('genDualToneFreq2Hz'));
+    if (isNum(g('genDualToneSplitPct'))) this.genDualToneSplitPct.set(g('genDualToneSplitPct'));
+    if (isNum(g('genAmplitudeVrms'))) this.genAmplitudeVrms.set(g('genAmplitudeVrms'));
+    if (isBool(g('genAmplitudeDbvDisplay'))) this.genAmplitudeDbvDisplay.set(g('genAmplitudeDbvDisplay'));
+    if (isNum(g('genDitherBits'))) this.genDitherBits.set(trunc(g('genDitherBits')));
+    if (isStr(g('genDpd'))) this.genDpd.set(g('genDpd'));
+    if (isStr(g('genDpdDual'))) this.genDpdDual.set(g('genDpdDual'));
+    if (isStr(g('genDpdFolder'))) this.genDpdFolder.set(g('genDpdFolder'));
+    if (isStr(g('genDpdName'))) this.genDpdName.set(g('genDpdName'));
+    if (isStr(g('genDpdDualName'))) this.genDpdDualName.set(g('genDpdDualName'));
+    if (isNum(g('predistortionAverages'))) this.predistortionAverages.set(trunc(g('predistortionAverages')));
+    if (isNum(g('predistortionTargetPct'))) this.predistortionTargetPct.set(g('predistortionTargetPct'));
+    if (isNum(g('genRectangleDuty'))) this.genRectangleDuty.set(g('genRectangleDuty'));
+    if (isNum(g('genTriangleDuty'))) this.genTriangleDuty.set(g('genTriangleDuty'));
+    if (isNum(g('genSweepFreqStartHz'))) this.genSweepFreqStartHz.set(g('genSweepFreqStartHz'));
+    if (isNum(g('genSweepFreqEndHz'))) this.genSweepFreqEndHz.set(g('genSweepFreqEndHz'));
+    if (isNum(g('genSweepDurationSec'))) this.genSweepDurationSec.set(g('genSweepDurationSec'));
+    if (isBool(g('genSweepLoop'))) this.genSweepLoop.set(g('genSweepLoop'));
+    if (isNum(g('genSweepFadeInSec'))) this.genSweepFadeInSec.set(g('genSweepFadeInSec'));
+    if (isNum(g('genSweepFadeOutSec'))) this.genSweepFadeOutSec.set(g('genSweepFadeOutSec'));
+    if (isBool(g('genSnapToFftBin'))) this.genSnapToFftBin.set(g('genSnapToFftBin'));
+    if (isNum(g('genWavDurationSeconds'))) this.genWavDurationSeconds.set(g('genWavDurationSeconds'));
+    if (isStr(g('genWavPath'))) this.genWavPath.set(g('genWavPath'));
+    if (isStr(g('genWavFolder'))) this.genWavFolder.set(g('genWavFolder'));
+    if (isStr(g('genPlayFromPath'))) this.genPlayFromPath.set(g('genPlayFromPath'));
+    if (isStr(g('genPlayFromFolder'))) this.genPlayFromFolder.set(g('genPlayFromFolder'));
+    if (isBool(g('genPlayFromLoop'))) this.genPlayFromLoop.set(g('genPlayFromLoop'));
+    if (isStr(g('oscSavePath'))) this.oscSavePath.set(g('oscSavePath'));
+    if (isStr(g('oscSaveFolder'))) this.oscSaveFolder.set(g('oscSaveFolder'));
+    if (isNum(g('oscSaveDurationSeconds'))) this.oscSaveDurationSeconds.set(g('oscSaveDurationSeconds'));
+    if (isStr(g('oscPlayFromPath'))) this.oscPlayFromPath.set(g('oscPlayFromPath'));
+    if (isStr(g('oscPlayFromFolder'))) this.oscPlayFromFolder.set(g('oscPlayFromFolder'));
+    if (isBool(g('oscPlayFromLoop'))) this.oscPlayFromLoop.set(g('oscPlayFromLoop'));
+    if (isNum(g('oscLineWidth'))) this.oscLineWidth.set(g('oscLineWidth'));
+    if (isNum(g('oscDotDiameter'))) this.oscDotDiameter.set(trunc(g('oscDotDiameter')));
+    this._loadColor(g('oscLeftChannelColor'), this.oscLeftChannelColor);
+    this._loadColor(g('oscRightChannelColor'), this.oscRightChannelColor);
+    if (isStr(g('screenshotFolder'))) this.screenshotFolder.set(g('screenshotFolder'));
+    if (isStr(g('screenshotCommentFont'))) this.screenshotCommentFont.set(g('screenshotCommentFont'));
+
+    if (asMap(g('oscPresets'))) {
+      this.oscPresets.clear();
+      for (const [key, pm] of Object.entries(g('oscPresets'))) {
+        if (!isStr(key) || !asMap(pm)) continue;
+        const p = new OscPreset();
+        if (isBool(pm.leftChannelEnabled)) p.leftChannelEnabled = pm.leftChannelEnabled;
+        if (isBool(pm.rightChannelEnabled)) p.rightChannelEnabled = pm.rightChannelEnabled;
+        if (isBool(pm.leftAcMode)) p.leftAcMode = pm.leftAcMode;
+        if (isBool(pm.rightAcMode)) p.rightAcMode = pm.rightAcMode;
+        if (isBool(pm.leftSincInterpEnabled)) p.leftSincInterpEnabled = pm.leftSincInterpEnabled;
+        if (isBool(pm.rightSincInterpEnabled)) p.rightSincInterpEnabled = pm.rightSincInterpEnabled;
+        if (isStr(pm.leftMainsSuppression)) p.leftMainsSuppression = enumOr('MainsSuppression', pm.leftMainsSuppression, p.leftMainsSuppression);
+        if (isStr(pm.rightMainsSuppression)) p.rightMainsSuppression = enumOr('MainsSuppression', pm.rightMainsSuppression, p.rightMainsSuppression);
+        if (isStr(pm.leftLpf)) p.leftLpf = enumOr('LpfMode', pm.leftLpf, p.leftLpf);
+        if (isStr(pm.rightLpf)) p.rightLpf = enumOr('LpfMode', pm.rightLpf, p.rightLpf);
+        if (isNum(pm.leftVoltsPerDiv)) p.leftVoltsPerDiv = pm.leftVoltsPerDiv;
+        if (isNum(pm.rightVoltsPerDiv)) p.rightVoltsPerDiv = pm.rightVoltsPerDiv;
+        if (isNum(pm.leftOffsetFrac)) p.leftOffsetFrac = pm.leftOffsetFrac;
+        if (isNum(pm.rightOffsetFrac)) p.rightOffsetFrac = pm.rightOffsetFrac;
+        if (isNum(pm.timePerDiv)) p.timePerDiv = pm.timePerDiv;
+        if (isNum(pm.triggerPositionFrac)) p.triggerPositionFrac = pm.triggerPositionFrac;
+        if (isStr(pm.triggerChannel)) p.triggerChannel = enumOr('Channel', pm.triggerChannel, p.triggerChannel);
+        if (isStr(pm.triggerEdge)) p.triggerEdge = enumOr('TriggerEdge', pm.triggerEdge, p.triggerEdge);
+        if (isStr(pm.triggerType)) p.triggerType = enumOr('TriggerType', pm.triggerType, p.triggerType);
+        if (isStr(pm.triggerMode)) p.triggerMode = enumOr('TriggerMode', pm.triggerMode, p.triggerMode);
+        if (isNum(pm.triggerLevelFrac)) p.triggerLevelFrac = pm.triggerLevelFrac;
+        this.oscPresets.set(key, p);
+      }
+    }
+
+    // ---- FFT pane state ----
+    if (isNum(g('fftLength'))) this.fftLength.set(trunc(g('fftLength')));
+    if (isNum(g('fftAverages'))) this.fftAverages.set(g('fftAverages'));
+    if (isNum(g('fftThreads'))) this.fftThreads.set(Math.max(1, Math.min(16, trunc(g('fftThreads')))));
+    if (isBool(g('fftStopAfterNEnabled'))) this.fftStopAfterNEnabled.set(g('fftStopAfterNEnabled'));
+    if (isNum(g('fftStopAfterN'))) this.fftStopAfterN.set(trunc(g('fftStopAfterN')));
+    if (isBool(g('fftFundFromGenerator'))) this.fftFundFromGenerator.set(g('fftFundFromGenerator'));
+    if (isBool(g('fftLogFreqAxis'))) this.fftLogFreqAxis.set(g('fftLogFreqAxis'));
+    if (isBool(g('fftDetectTimeDiscontinuity'))) this.fftDetectTimeDiscontinuity.set(g('fftDetectTimeDiscontinuity'));
+    if (isStr(g('fftWindow'))) this.fftWindow.set(enumOr('WindowType', g('fftWindow'), this.fftWindow.get()));
+    if (isStr(g('fftOverlap'))) this.fftOverlap.set(enumOr('FftOverlap', g('fftOverlap'), this.fftOverlap.get()));
+    if (isBool(g('fftCoherentAveraging'))) this.fftCoherentAveraging.set(g('fftCoherentAveraging'));
+    if (isStr(g('fftMainsSuppression'))) this.fftMainsSuppression.set(enumOr('MainsSuppression', g('fftMainsSuppression'), this.fftMainsSuppression.get()));
+    if (isStr(g('fftAlignGenerator'))) {
+      this.fftAlignGenerator.set(enumOr('AlignGenerator', String(g('fftAlignGenerator')).trim().toUpperCase(), 'NONE'));
+    } else if (isBool(g('fftAlignGenToFreqDiff'))) {
+      // Migrate the legacy checkbox.
+      this.fftAlignGenerator.set(g('fftAlignGenToFreqDiff') ? 'FLL' : 'NONE');
+    }
+    if (isNum(g('fftDistMinHz'))) this.fftDistMinHz.set(g('fftDistMinHz'));
+    if (isNum(g('fftDistMaxHz'))) this.fftDistMaxHz.set(g('fftDistMaxHz'));
+    if (isBool(g('fftDistMinEnabled'))) this.fftDistMinEnabled.set(g('fftDistMinEnabled'));
+    if (isBool(g('fftDistMaxEnabled'))) this.fftDistMaxEnabled.set(g('fftDistMaxEnabled'));
+    if (isNum(g('fftThdMaxHarmonic'))) this.fftThdMaxHarmonic.set(trunc(g('fftThdMaxHarmonic')));
+    if (isNum(g('fftCalcMaxHarmonic'))) this.fftCalcMaxHarmonic.set(trunc(g('fftCalcMaxHarmonic')));
+    if (isNum(g('fftStrongToneRelDb'))) this.fftStrongToneRelDb.set(g('fftStrongToneRelDb'));
+    if (isNum(g('fftManualFundVrms'))) this.fftManualFundVrms.set(g('fftManualFundVrms'));
+    if (isBool(g('fftManualFundDbvDisplay'))) this.fftManualFundDbvDisplay.set(g('fftManualFundDbvDisplay'));
+    if (isBool(g('fftManualFundEnabled'))) this.fftManualFundEnabled.set(g('fftManualFundEnabled'));
+    if (isStr(g('fftChannel'))) this.fftChannel.set(enumOr('Channel', g('fftChannel'), this.fftChannel.get()));
+    if (isStr(g('fftMagUnit'))) this.fftMagUnit.set(enumOr('MagnitudeUnit', g('fftMagUnit'), this.fftMagUnit.get()));
+    if (isNum(g('fftScreenshotWidth'))) this.fftScreenshotWidth.set(g('fftScreenshotWidth'));
+    if (isNum(g('fftScreenshotHeight'))) this.fftScreenshotHeight.set(g('fftScreenshotHeight'));
+    if (isBool(g('fftDistortionTableVisible'))) this.fftDistortionTableVisible.set(g('fftDistortionTableVisible'));
+    if (isNum(g('fftFreqMinHz'))) this.fftFreqMinHz.set(g('fftFreqMinHz'));
+    if (isNum(g('fftFreqMaxHz'))) this.fftFreqMaxHz.set(g('fftFreqMaxHz'));
+    if (isNum(g('fftMagTop'))) this.fftMagTop.set(g('fftMagTop'));
+    if (isNum(g('fftMagBottom'))) this.fftMagBottom.set(g('fftMagBottom'));
+    if (isStr(g('fftSavePath'))) this.fftSavePath.set(g('fftSavePath'));
+    if (isStr(g('fftSaveFolder'))) this.fftSaveFolder.set(g('fftSaveFolder'));
+    if (isStr(g('fftLoadPath'))) this.fftLoadPath.set(g('fftLoadPath'));
+
+    // ---- Frequency Response pane ----
+    if (isNum(g('freqRespStartHz'))) this.freqRespStartHz.set(g('freqRespStartHz'));
+    if (isNum(g('freqRespStopHz'))) this.freqRespStopHz.set(g('freqRespStopHz'));
+    if (isNum(g('freqRespAmplitudeVrms'))) this.freqRespAmplitudeVrms.set(g('freqRespAmplitudeVrms'));
+    if (isBool(g('freqRespAmplitudeDbvDisplay'))) this.freqRespAmplitudeDbvDisplay.set(g('freqRespAmplitudeDbvDisplay'));
+    if (isNum(g('freqRespSweepPoints'))) this.freqRespSweepPoints.set(trunc(g('freqRespSweepPoints')));
+    if (isNum(g('freqRespDurationSec'))) this.freqRespDurationSec.set(g('freqRespDurationSec'));
+    if (isNum(g('freqRespFftSize'))) {
+      // Snap to the nearest legal power of two between 64k and 16M.
+      let v = trunc(g('freqRespFftSize'));
+      v = Math.max(1 << 16, Math.min(1 << 24, v));
+      let p = 1 << 16;
+      while (p < v) p <<= 1;
+      this.freqRespFftSize.set(p);
+    }
+    if (isNum(g('freqRespDitherBits'))) this.freqRespDitherBits.set(trunc(g('freqRespDitherBits')));
+    if (isNum(g('freqRespLeadInSec'))) this.freqRespLeadInSec.set(g('freqRespLeadInSec'));
+    if (isNum(g('tuneNotchStartHz'))) this.tuneNotchStartHz.set(g('tuneNotchStartHz'));
+    if (isNum(g('tuneNotchStopHz'))) this.tuneNotchStopHz.set(g('tuneNotchStopHz'));
+    if (isNum(g('tuneNotchAmplitudeVrms'))) this.tuneNotchAmplitudeVrms.set(g('tuneNotchAmplitudeVrms'));
+    if (isNum(g('tuneNotchTargetHz'))) this.tuneNotchTargetHz.set(g('tuneNotchTargetHz'));
+    if (isBool(g('freqRespLeftVisible'))) this.freqRespLeftVisible.set(g('freqRespLeftVisible'));
+    if (isBool(g('freqRespRightVisible'))) this.freqRespRightVisible.set(g('freqRespRightVisible'));
+    if (isBool(g('freqRespPhaseVisible'))) this.freqRespPhaseVisible.set(g('freqRespPhaseVisible'));
+    if (isNum(g('freqRespFreqMinHz'))) this.freqRespFreqMinHz.set(g('freqRespFreqMinHz'));
+    if (isNum(g('freqRespFreqMaxHz'))) this.freqRespFreqMaxHz.set(g('freqRespFreqMaxHz'));
+    if (isNum(g('freqRespMagTopDb'))) this.freqRespMagTopDb.set(g('freqRespMagTopDb'));
+    if (isNum(g('freqRespMagBotDb'))) this.freqRespMagBotDb.set(g('freqRespMagBotDb'));
+    if (isNum(g('freqRespNyquistFraction'))) {
+      const v = g('freqRespNyquistFraction');
+      this.freqRespNyquistFraction.set(Math.max(0.83, Math.min(1.0, v < 0.83 ? 1.0 : v)));
+    }
+    if (isNum(g('freqRespCompareSmoothWindow'))) {
+      this.freqRespCompareSmoothWindow.set(Math.max(0, Math.min(100, trunc(g('freqRespCompareSmoothWindow')))));
+    }
+    if (isBool(g('freqRespNotchEnabled'))) this.freqRespNotchEnabled.set(g('freqRespNotchEnabled'));
+    if (isNum(g('freqRespNotchBaseHz'))) {
+      const v = trunc(g('freqRespNotchBaseHz'));
+      this.freqRespNotchBaseHz.set(v === 60 ? 60 : 50);
+    }
+    this._loadColor(g('freqRespSignalColor'), this.freqRespSignalColor);
+    this._loadColor(g('freqRespPhaseColor'), this.freqRespPhaseColor);
+    this._loadColor(g('freqRespReferenceColor'), this.freqRespReferenceColor);
+    this._loadColor(g('freqRespBackgroundColor'), this.freqRespBackgroundColor);
+    // freqRespShowRiaa is intentionally not loaded (fresh-session default).
+    if (isBool(g('freqRespReverseRiaa'))) this.freqRespReverseRiaa.set(g('freqRespReverseRiaa'));
+    if (isBool(g('freqRespIecAmendment'))) this.freqRespIecAmendment.set(g('freqRespIecAmendment'));
+    if (isBool(g('freqRespCompareMode'))) this.freqRespCompareMode.set(g('freqRespCompareMode'));
+    if (isBool(g('freqRespApplyCalibration'))) this.freqRespApplyCalibration.set(g('freqRespApplyCalibration'));
+    if (Array.isArray(g('freqRespCalibrations'))) {
+      this.freqRespCalibrations.length = 0;
+      for (const o of g('freqRespCalibrations')) {
+        if (!asMap(o)) continue;
+        const path = isStr(o.path) ? o.path : null;
+        const active = isBool(o.active) && o.active;
+        const hash = isStr(o.hash) ? o.hash : null;
+        const e = new CalibrationEntry(path, active, false, hash);
+        this.freqRespCalibrations.push(e);
+        this._trackCalibration(e);
+      }
+    }
+    if (isStr(g('freqRespSaveFolder'))) this.freqRespSaveFolder.set(g('freqRespSaveFolder'));
+    if (isStr(g('freqRespSavePath'))) this.freqRespSavePath.set(g('freqRespSavePath'));
+    if (isStr(g('freqRespLoadFolder'))) this.freqRespLoadFolder.set(g('freqRespLoadFolder'));
+    if (isStr(g('freqRespLoadPath'))) this.freqRespLoadPath.set(g('freqRespLoadPath'));
+    if (isNum(g('freqRespActiveTabIndex'))) this.freqRespActiveTabIndex.set(trunc(g('freqRespActiveTabIndex')));
+    if (isNum(g('freqRespScreenshotWidth'))) this.freqRespScreenshotWidth.set(g('freqRespScreenshotWidth'));
+    if (isNum(g('freqRespScreenshotHeight'))) this.freqRespScreenshotHeight.set(g('freqRespScreenshotHeight'));
+    if (isStr(g('fftLoadFolder'))) this.fftLoadFolder.set(g('fftLoadFolder'));
+    if (Array.isArray(g('fftCalibrations'))) {
+      this.fftCalibrations.length = 0;
+      for (const o of g('fftCalibrations')) {
+        if (!asMap(o)) continue;
+        const path = isStr(o.path) ? o.path : null;
+        const active = isBool(o.active) && o.active;
+        const withNoise = isBool(o.withNoise) && o.withNoise;
+        const hash = isStr(o.hash) ? o.hash : null;
+        const e = new CalibrationEntry(path, active, withNoise, hash);
+        this.fftCalibrations.push(e);
+        this._trackCalibration(e);
+      }
+    }
+    this._loadColor(g('fftBeforeCalDotColor'), this.fftBeforeCalDotColor);
+    this._loadColor(g('fftCalOverlayColor'), this.fftCalOverlayColor);
+    if (isNum(g('fftLineWidth'))) this.fftLineWidth.set(g('fftLineWidth'));
+    if (isNum(g('fftStrongToneRelDb'))) this.fftStrongToneRelDb.set(g('fftStrongToneRelDb'));
+    if (isNum(g('freqRespLineWidth'))) this.freqRespLineWidth.set(g('freqRespLineWidth'));
+    if (isNum(g('fftHarmonicDotDiameter'))) this.fftHarmonicDotDiameter.set(trunc(g('fftHarmonicDotDiameter')));
+    this._loadColor(g('fftLineColor'), this.fftLineColor);
+    this._loadColor(g('fftChartBackgroundColor'), this.fftChartBackgroundColor);
+    this._loadColor(g('fftHarmonicDotColor'), this.fftHarmonicDotColor);
+    this._loadColor(g('fftFreqRespColor'), this.fftFreqRespColor);
+
+    if (asMap(g('fftPresets'))) {
+      this.fftPresets.clear();
+      for (const [key, pm] of Object.entries(g('fftPresets'))) {
+        if (!isStr(key) || !asMap(pm)) continue;
+        const p = new FftPreset();
+        if (isStr(pm.channel)) p.channel = enumOr('Channel', pm.channel, p.channel);
+        if (isStr(pm.magUnit)) p.magUnit = enumOr('MagnitudeUnit', pm.magUnit, p.magUnit);
+        if (isBool(pm.logFreqAxis)) p.logFreqAxis = pm.logFreqAxis;
+        if (isNum(pm.freqMinHz)) p.freqMinHz = pm.freqMinHz;
+        if (isNum(pm.freqMaxHz)) p.freqMaxHz = pm.freqMaxHz;
+        if (isNum(pm.magTop)) p.magTop = pm.magTop;
+        if (isNum(pm.magBottom)) p.magBottom = pm.magBottom;
+        if (isNum(pm.fftLength)) p.fftLength = trunc(pm.fftLength);
+        if (isNum(pm.averages)) p.averages = pm.averages;
+        if (isBool(pm.stopAfterNEnabled)) p.stopAfterNEnabled = pm.stopAfterNEnabled;
+        if (isNum(pm.stopAfterN)) p.stopAfterN = trunc(pm.stopAfterN);
+        if (isBool(pm.fundFromGenerator)) p.fundFromGenerator = pm.fundFromGenerator;
+        if (isStr(pm.window)) p.window = enumOr('WindowType', pm.window, p.window);
+        if (isStr(pm.overlap)) p.overlap = enumOr('FftOverlap', pm.overlap, p.overlap);
+        if (isBool(pm.coherentAveraging)) p.coherentAveraging = pm.coherentAveraging;
+        if (isNum(pm.distMinHz)) p.distMinHz = pm.distMinHz;
+        if (isNum(pm.distMaxHz)) p.distMaxHz = pm.distMaxHz;
+        if (isBool(pm.distMinEnabled)) p.distMinEnabled = pm.distMinEnabled;
+        if (isBool(pm.distMaxEnabled)) p.distMaxEnabled = pm.distMaxEnabled;
+        if (isNum(pm.thdMaxHarmonic)) p.thdMaxHarmonic = trunc(pm.thdMaxHarmonic);
+        if (isNum(pm.calcMaxHarmonic)) p.calcMaxHarmonic = trunc(pm.calcMaxHarmonic);
+        if (isNum(pm.manualFundVrms)) p.manualFundVrms = pm.manualFundVrms;
+        if (isBool(pm.manualFundDbvDisplay)) p.manualFundDbvDisplay = pm.manualFundDbvDisplay;
+        if (isBool(pm.manualFundEnabled)) p.manualFundEnabled = pm.manualFundEnabled;
+        this.fftPresets.set(key, p);
+      }
+    }
+
+    if (asMap(g('freqRespPresets'))) {
+      this.freqRespPresets.clear();
+      for (const [key, pm] of Object.entries(g('freqRespPresets'))) {
+        if (!isStr(key) || !asMap(pm)) continue;
+        const p = new FreqRespPreset();
+        if (isNum(pm.startHz)) p.startHz = pm.startHz;
+        if (isNum(pm.stopHz)) p.stopHz = pm.stopHz;
+        if (isNum(pm.amplitudeVrms)) p.amplitudeVrms = pm.amplitudeVrms;
+        if (isNum(pm.sweepPoints)) p.sweepPoints = trunc(pm.sweepPoints);
+        if (isNum(pm.fftSize)) p.fftSize = trunc(pm.fftSize);
+        if (isNum(pm.leadInSec)) p.leadInSec = pm.leadInSec;
+        if (isNum(pm.ditherBits)) p.ditherBits = trunc(pm.ditherBits);
+        if (isBool(pm.showRiaa)) p.showRiaa = pm.showRiaa;
+        if (isBool(pm.reverseRiaa)) p.reverseRiaa = pm.reverseRiaa;
+        if (isBool(pm.iecAmendment)) p.iecAmendment = pm.iecAmendment;
+        if (isBool(pm.compareMode)) p.compareMode = pm.compareMode;
+        this.freqRespPresets.set(key, p);
+      }
+    }
+
+    if (asMap(g('perBackend'))) {
+      for (const [key, bpMap] of Object.entries(g('perBackend'))) {
+        if (!isStr(key)) continue;
+        const type = enumOr('AudioBackendType', key, null);
+        if (type == null) continue;
+        const bp = this.prefsFor(type);
+        if (asMap(bpMap)) {
+          if (isStr(bpMap.inputDeviceName)) bp.inputDeviceName = bpMap.inputDeviceName;
+          if (isStr(bpMap.outputDeviceName)) bp.outputDeviceName = bpMap.outputDeviceName;
+          if (this._isInt(bpMap.inputSampleRate)) bp.inputSampleRate = bpMap.inputSampleRate;
+          if (this._isInt(bpMap.inputBitDepth)) bp.inputBitDepth = bpMap.inputBitDepth;
+          if (this._isInt(bpMap.outputSampleRate)) bp.outputSampleRate = bpMap.outputSampleRate;
+          if (this._isInt(bpMap.outputBitDepth)) bp.outputBitDepth = bpMap.outputBitDepth;
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // small load helpers
+  // -------------------------------------------------------------------------
+
+  /** Applies a colour value to {@code prop}: '#RRGGBB' string or a packed int,
+   *  else leaves the current value (mirrors the fromMap colour branches). */
+  _loadColor(obj, prop) {
+    if (isStr(obj)) prop.set(parseHtmlColor(obj, prop.get()));
+    else if (isNum(obj)) prop.set(trunc(obj));
+  }
+
+  /** SnakeYAML's per-backend ints arrived as Integer in Java; here we accept any
+   *  integer-valued number (matches the `instanceof Integer` gate). */
+  _isInt(v) {
+    return isNum(v) && Number.isInteger(v);
+  }
+
+  /** Copies a loaded numeric list into an int array, dropping non-numbers
+   *  (listToIntArray); returns null for an empty/unusable list. */
+  _listToIntArray(list) {
+    if (!list || list.length === 0) return null;
+    const out = new Array(list.length).fill(0);
+    for (let i = 0; i < list.length; i++) {
+      if (isNum(list[i])) out[i] = trunc(list[i]);
+    }
+    return out;
+  }
+}

@@ -42,9 +42,12 @@ import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.gui.MainWindow;
 import org.edgo.audio.measure.gui.fft.FftPane;
+import org.edgo.audio.measure.gui.fft.predistortion.PredistortionWizardDialog;
 import org.edgo.audio.measure.gui.generator.GeneratorPane;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
+import org.edgo.audio.measure.gui.freqresp.FreqRespPane;
+import org.edgo.audio.measure.gui.freqresp.TuneNotchWizardDialog;
 import org.edgo.audio.measure.gui.registry.UiNode;
 import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.scope.ScopePane;
@@ -92,6 +95,16 @@ public abstract class AbstractAutomationScript {
     /** Shell of the Preferences dialog while {@link #openPreferences()} keeps
      *  it up, so {@link #closePreferences()} can dispose it; null otherwise. */
     private Shell preferencesShell;
+    /** Shell of the Tune-notch wizard while {@link #openTuneNotch()} keeps it
+     *  up; disposed by {@link #closeTuneNotch()}; null otherwise. */
+    private Shell tuneNotchShell;
+    /** The wizard's content composite — printed by {@link #screenshotTuneNotch}
+     *  (Control.print renders a Composite's children; a Shell prints blank). */
+    private Control tuneNotchContent;
+    /** The DAC-predistortion wizard while {@link #openPredistortion()} keeps it
+     *  up; driven by the set-target / start / wait / re-translate / screenshot
+     *  hooks; closed by {@link #closePredistortion()}. */
+    private PredistortionWizardDialog predistortionDialog;
 
     protected AbstractAutomationScript(Display display, MainWindow window) {
         this.display = display;
@@ -369,6 +382,110 @@ public abstract class AbstractAutomationScript {
         });
     }
 
+    /** Opens the Tune-notch wizard for capture: built + shown, but with NO live
+     *  sweep and no modal loop, so it opens no audio device and is fully
+     *  deterministic.  Leaves it up; pair with {@link #closeTuneNotch()}.
+     *  Call {@link #language} first to capture it in a given language. */
+    protected final void openTuneNotch() {
+        ui(() -> {
+            TuneNotchWizardDialog d = new TuneNotchWizardDialog(genPane().getGroup().getShell());
+            tuneNotchShell = d.buildAndShow();
+            tuneNotchContent = d.getContent();
+            d.startSweep();
+        });
+    }
+
+    /** Snapshots the wizard opened by {@link #openTuneNotch()} to {@code pngPath}
+     *  at its on-screen size (no-op if not open). */
+    protected final void screenshotTuneNotch(String pngPath) {
+        if (tuneNotchContent != null && !tuneNotchContent.isDisposed()) {
+            snapshot(tuneNotchContent, pngPath);
+        }
+    }
+
+    /** Closes the wizard opened by {@link #openTuneNotch()} (no-op if none).
+     *  Uses {@code close()} (not {@code dispose()}) so the shell's SWT.Close
+     *  listener runs — that's what tears down the sweep and RELEASES the audio
+     *  device; dispose() skips it, leaving the exclusive device held. */
+    protected final void closeTuneNotch() {
+        ui(() -> {
+            if (tuneNotchShell != null && !tuneNotchShell.isDisposed()) {
+                tuneNotchShell.close();
+            }
+            tuneNotchShell = null;
+            tuneNotchContent = null;
+        });
+    }
+
+    /** Opens the DAC-predistortion wizard non-modally for capture — the
+     *  generator must already be playing a sine / dual-tone and the FFT
+     *  recording, so the closed loop has live data.  Leaves it up; drive it with
+     *  {@link #setPredistortionTarget}, {@link #startPredistortion},
+     *  {@link #waitPredistortionTarget}; pair with {@link #closePredistortion}. */
+    protected final void openPredistortion() {
+        ui(() -> predistortionDialog = fftPane().openPredistortionForCapture());
+    }
+
+    /** Sets the wizard's Target-THD field (%). */
+    protected final void setPredistortionTarget(double pct) {
+        ui(() -> { if (predistortionDialog != null) predistortionDialog.setTargetPct(pct); });
+    }
+
+    /** Presses the wizard's Start button (begins the closed-loop run). */
+    protected final void startPredistortion() {
+        ui(() -> { if (predistortionDialog != null) predistortionDialog.pressStart(); });
+    }
+
+    /** Blocks (up to {@code maxSeconds}) until the run reaches the target THD or
+     *  stops (stalled) — polling the wizard once a second. */
+    protected final void waitPredistortionTarget(int maxSeconds) throws InterruptedException {
+        for (int i = 0; i < maxSeconds; i++) {
+            boolean[] running = new boolean[1];
+            boolean[] target  = new boolean[1];
+            ui(() -> {
+                running[0] = predistortionDialog != null && predistortionDialog.isRunning();
+                target[0]  = predistortionDialog != null && predistortionDialog.isTargetReached();
+            });
+            if (target[0]) return;
+            if (i > 3 && !running[0]) return;   // stopped after startup (stalled / done)
+            waitSeconds(1);
+        }
+    }
+
+    /** Switches the UI language for the wizard ONLY — re-translates its labels in
+     *  place, with no main-window rebuild — so the measurement, the FFT averages
+     *  and the convergence chart stay untouched and one run yields a per-language
+     *  shot. */
+    protected final void retranslatePredistortion(String tag) {
+        ui(() -> {
+            I18n.setLocale(Locale.forLanguageTag(tag));
+            if (predistortionDialog != null) predistortionDialog.retranslate();
+        });
+    }
+
+    /** Snapshots the open predistortion wizard to {@code pngPath} (no-op if not
+     *  open). */
+    protected final void screenshotPredistortion(String pngPath) {
+        if (predistortionDialog != null) {
+            Control content = predistortionDialog.getContent();
+            if (content != null && !content.isDisposed()) {
+                snapshot(content, pngPath);
+            }
+        }
+    }
+
+    /** Closes the predistortion wizard — via {@code close()} so its SWT.Close
+     *  listener reverts the generator and resets the FFT statistics. */
+    protected final void closePredistortion() {
+        ui(() -> {
+            if (predistortionDialog != null && predistortionDialog.getContent() != null
+                    && !predistortionDialog.getContent().isDisposed()) {
+                predistortionDialog.getContent().getShell().close();
+            }
+            predistortionDialog = null;
+        });
+    }
+
     // -------------------------------------------------------------------------
     // Window framing and composite capture (used by the help-screenshot
     // scripts; kept here so a body-only script can drive them without
@@ -407,6 +524,18 @@ public abstract class AbstractAutomationScript {
             oscPane().setTabsCollapsed(true);
             fftPane().setTabsCollapsed(true);
         });
+    }
+
+    /** Collapses the Frequency-response settings-tab body to its strip so the
+     *  live hero print is the trace, not an expanded settings panel. */
+    protected final void collapseFreqRespTabs() {
+        ui(() -> freqRespPane().setTabsCollapsed(true));
+    }
+
+    /** Re-expands the Frequency-response settings-tab body (undoes
+     *  {@link #collapseFreqRespTabs()}) so the per-tab shots show tab content. */
+    protected final void expandFreqRespTabs() {
+        ui(() -> freqRespPane().setTabsCollapsed(false));
     }
 
     /** Captures the whole multifunctional tab (generator | scope / fft) — the
@@ -534,5 +663,9 @@ public abstract class AbstractAutomationScript {
 
     protected final FftPane fftPane() {
         return window.getMainTab().getFftPane();
+    }
+
+    protected final FreqRespPane freqRespPane() {
+        return window.getMainTab().getFreqRespPane();
     }
 }

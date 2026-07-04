@@ -211,17 +211,17 @@ jobs:
           # upload-artifact@v4 creates when multiple paths share a parent
           # (target/) — without ** the .exe/.deb/.dmg get skipped and
           # only the top-level fat JAR makes it onto the release.
-          # The dist/* launcher scripts + per-OS run guides are attached from
+          # The src/main/packaging/dist/* launcher scripts + per-OS run guides are attached from
           # the checkout (identical for every release).
           files: |
             artifacts/phonalyser-windows/**
             artifacts/phonalyser-linux/**
             artifacts/phonalyser-macos-x64/**
             artifacts/phonalyser-macos-arm64/**
-            dist/Phonalyser-windows.bat
-            dist/Phonalyser-linux.sh
-            dist/Phonalyser-macos.sh
-            dist/README-windows.txt
-            dist/README-linux.txt
-            dist/README-macos.txt
+            src/main/packaging/dist/Phonalyser-windows.bat
+            src/main/packaging/dist/Phonalyser-linux.sh
+            src/main/packaging/dist/Phonalyser-macos.sh
+            src/main/packaging/dist/README-windows.txt
+            src/main/packaging/dist/README-linux.txt
+            src/main/packaging/dist/README-macos.txt
           draft: true

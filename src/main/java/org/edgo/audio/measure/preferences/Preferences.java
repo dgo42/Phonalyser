@@ -50,6 +50,7 @@ import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.PersistenceMode;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
+import org.edgo.audio.measure.enums.TriggerType;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
 import org.edgo.audio.measure.bind.Property;
@@ -94,6 +95,14 @@ public final class Preferences {
 
     /** Factory-default ADC full-scale RMS voltage, used until the user calibrates. */
     private static final double DEFAULT_ADC_FS_VRMS = 1.7931;
+
+    /** Sentinel "unset" value for the rate-dependent FreqResp defaults
+     *  (stop = Nyquist, points = FS/2).  A fresh install with no saved value
+     *  keeps this until {@link #seedRateDependentFreqRespDefaults()} resolves it
+     *  from the current device sample rate; any saved value is a real number and
+     *  overrides it. */
+    private static final double FREQRESP_RATE_DEFAULT_SENTINEL = 0.0;
+    private static final int    FREQRESP_RATE_DEFAULT_SENTINEL_INT = 0;
 
     private static volatile Preferences instance;
 
@@ -170,6 +179,8 @@ public final class Preferences {
     private final Property<Double>  oscTimePerDiv       = bound(1e-3);
     private final Property<Channel> oscTriggerChannel = bound(Channel.L);
     private final Property<TriggerEdge>    oscTriggerEdge    = bound(TriggerEdge.RISE);
+    /** Trigger event type: EDGE = level crossing, GLITCH = dV/dt jump. */
+    private final Property<TriggerType>    oscTriggerType    = bound(TriggerType.EDGE);
     private final Property<TriggerMode>    oscTriggerMode    = bound(TriggerMode.AUTO);
     /** Trigger hysteresis in oscilloscope divisions; 0 disables hysteresis. */
     private final Property<Double>         oscTriggerHysteresisDiv = bound(0.0);
@@ -317,9 +328,9 @@ public final class Preferences {
     private final Property<String> genDpdFolder = bound(null);
     /** DAC predistortion wizard: FFT averages per round.  Persisted so the
      *  user's choice survives reopening the wizard and restarting the app. */
-    private final Property<Integer> predistortionAverages    = bound(100);
+    private final Property<Integer> predistortionAverages    = bound(64);
     /** DAC predistortion wizard: target distortion to stop at (%); 0 = run to stall. */
-    private final Property<Double>  predistortionTargetPct   = bound(0.0);
+    private final Property<Double>  predistortionTargetPct   = bound(0.000001);
     /** Rectangle / pulse duty cycle as a fraction in [0.001, 0.999].  Default 50 %. */
     private final Property<Double>  genRectangleDuty = bound(0.5);
     /** Triangle duty cycle (rise-portion fraction) in [0.001, 0.999].  Default 50 %
@@ -394,6 +405,7 @@ public final class Preferences {
     private final Property<Integer> fftStopAfterN        = bound(10);
     private final Property<Boolean> fftFundFromGenerator = bound(false);
     private final Property<Boolean> fftLogFreqAxis       = bound(true);
+    private final Property<Boolean> fftDetectTimeDiscontinuity = bound(true);
     /** {@code WindowType} enum name. */
     private final Property<WindowType> fftWindow = bound(WindowType.HANN);
     /** {@code FftOverlap} enum name. */
@@ -482,18 +494,21 @@ public final class Preferences {
     // Frequency Response pane — sweep settings, view state, RIAA + calibration
     // -------------------------------------------------------------------------
 
-    /** Sweep start frequency in Hz.  Default 20 Hz (audible bottom). */
-    private final Property<Double>  freqRespStartHz          = bound(20.0);
-    /** Sweep stop  frequency in Hz.  Default 20 kHz (audible top). */
-    private final Property<Double>  freqRespStopHz           = bound(20000.0);
+    /** Sweep start frequency in Hz.  Default 1 Hz (bottom of the usable band). */
+    private final Property<Double>  freqRespStartHz          = bound(1.0);
+    /** Sweep stop  frequency in Hz.  Sentinel {@code 0} = "unset" — resolved to
+     *  the current device Nyquist ({@code rate/2}) at first use (see
+     *  {@link #seedRateDependentFreqRespDefaults()}).  A saved value overrides. */
+    private final Property<Double>  freqRespStopHz           = bound(FREQRESP_RATE_DEFAULT_SENTINEL);
     /** Generator drive amplitude at the DAC, V RMS. */
-    private final Property<Double>  freqRespAmplitudeVrms    = bound(0.5);
+    private final Property<Double>  freqRespAmplitudeVrms    = bound(1.0);
     /** True = the sweep amplitude field displays in dBV; persisted. */
     private final Property<Boolean> freqRespAmplitudeDbvDisplay = bound(false);
     /** Number of log-spaced output frequency points the deconvolution emits.
-     *  Default 65536 (64 k) is a safe trade-off between resolution and
-     *  memory for a single sweep. */
-    private final Property<Integer> freqRespSweepPoints      = bound(65536);
+     *  Sentinel {@code 0} = "unset" — resolved to the FS/2 point count
+     *  ({@code rate/2}) at first use (see
+     *  {@link #seedRateDependentFreqRespDefaults()}).  A saved value overrides. */
+    private final Property<Integer> freqRespSweepPoints      = bound(FREQRESP_RATE_DEFAULT_SENTINEL_INT);
     /** Sweep duration in seconds, excluding lead-in.  Derived from
      *  {@link #freqRespFftSize} + {@link #freqRespLeadInSec} + the half-
      *  second tail; the Settings tab keeps the two in sync.  The
@@ -504,13 +519,24 @@ public final class Preferences {
      *  in the Settings tab — the sweep duration is derived from this so
      *  the analyzer's {@code nextPow2(leadIn + sweep + tail)} lands
      *  exactly on the chosen length (no wasted bins). */
-    private final Property<Integer> freqRespFftSize          = bound(524288);
+    private final Property<Integer> freqRespFftSize          = bound(4194304);
     /** TPDF dither bits applied to the generator before quantisation;
      *  0 disables.  Same convention as the generator pane. */
     private final Property<Integer> freqRespDitherBits       = bound(0);
     /** Silent lead-in prepended to the sweep, in seconds.  Lets the DAC →
      *  ADC chain settle before the first sweep sample lands. */
-    private final Property<Double>  freqRespLeadInSec        = bound(0.2);
+    private final Property<Double>  freqRespLeadInSec        = bound(0.05);
+
+    /** Tune-notch wizard sweep start frequency in Hz; persisted independently
+     *  of the main FreqResp pane so the dialog remembers its own fields. */
+    private final Property<Double>  tuneNotchStartHz         = bound(900.0);
+    /** Tune-notch wizard sweep stop frequency in Hz. */
+    private final Property<Double>  tuneNotchStopHz          = bound(1100.0);
+    /** Tune-notch wizard generator drive amplitude at the DAC, V RMS. */
+    private final Property<Double>  tuneNotchAmplitudeVrms   = bound(1.0);
+    /** Tune-notch wizard target (desired) notch frequency in Hz — the dashed
+     *  marker the live readout is tuned onto. */
+    private final Property<Double>  tuneNotchTargetHz        = bound(1000.0);
 
     /** Whether the left-channel trace is visible on the view (toggle on the
      *  view's header).  L + R are independent toggles, not single-choice. */
@@ -618,6 +644,9 @@ public final class Preferences {
         // Covers the no-file / partial-file case AND the per-backend sample
         // rate, which is a plain POJO field the listeners can't observe.
         recomputeBinBw();
+        // Resolve the rate-dependent FreqResp defaults (stop = Nyquist,
+        // points = FS/2) on a fresh install where load() left the sentinels.
+        seedRateDependentFreqRespDefaults();
         // Flush any debounced save on JVM exit — saveScheduler is a daemon
         // thread the runtime abandons at shutdown, so a change made within the
         // coalesce window before close would otherwise be lost.
@@ -630,6 +659,23 @@ public final class Preferences {
     private Preferences(boolean detached) {
         this.detached = detached;
         recomputeBinBw();
+    }
+
+    /** Resolves the rate-dependent FreqResp defaults left as sentinels after
+     *  {@link #load()}: on a fresh install (no saved value) the stop frequency
+     *  becomes the current device Nyquist ({@code rate/2}) and the sweep-points
+     *  count becomes the FS/2 point count ({@code rate/2}).  A user with a
+     *  stored value never hits the sentinel, so their choice is preserved. */
+    private void seedRateDependentFreqRespDefaults() {
+        int rate = current().getInputSampleRate();
+        if (rate <= 0) return;
+        double nyquist = rate / 2.0;
+        if (freqRespStopHz.get() == FREQRESP_RATE_DEFAULT_SENTINEL) {
+            freqRespStopHz.set(nyquist);
+        }
+        if (freqRespSweepPoints.get() == FREQRESP_RATE_DEFAULT_SENTINEL_INT) {
+            freqRespSweepPoints.set((int) nyquist);
+        }
     }
 
     public static Preferences instance() {
@@ -711,6 +757,12 @@ public final class Preferences {
         c.freqRespPhaseColor.set(freqRespPhaseColor.get());
         c.freqRespReferenceColor.set(freqRespReferenceColor.get());
         c.freqRespBackgroundColor.set(freqRespBackgroundColor.get());
+
+        // used for isolated FreqRespView
+        c.setTuneNotchStartHz(tuneNotchStartHz.get());
+        c.setTuneNotchStopHz(tuneNotchStopHz.get());
+        c.setTuneNotchAmplitudeVrms(tuneNotchAmplitudeVrms.get());
+        c.setTuneNotchTargetHz(tuneNotchTargetHz.get());
 
         c.backend.set(backend.get());
         for (AudioBackendType t : AudioBackendType.values()) {
@@ -1065,6 +1117,10 @@ public final class Preferences {
     public void setFftLogFreqAxis(boolean v)   { fftLogFreqAxis.set(v); }
     public Property<Boolean> fftLogFreqAxisProperty() { return fftLogFreqAxis; }
 
+    public boolean isFftDetectTimeDiscontinuity()        { return fftDetectTimeDiscontinuity.get(); }
+    public void setFftDetectTimeDiscontinuity(boolean v) { fftDetectTimeDiscontinuity.set(v); }
+    public Property<Boolean> fftDetectTimeDiscontinuityProperty() { return fftDetectTimeDiscontinuity; }
+
     public FftOverlap getFftOverlap()          { return fftOverlap.get(); }
     public void setFftOverlap(FftOverlap v)    { fftOverlap.set(v); }
     public Property<FftOverlap> fftOverlapProperty() { return fftOverlap; }
@@ -1236,6 +1292,10 @@ public final class Preferences {
     public TriggerEdge getOscTriggerEdge()     { return oscTriggerEdge.get(); }
     public void setOscTriggerEdge(TriggerEdge v) { oscTriggerEdge.set(v); }
     public Property<TriggerEdge> oscTriggerEdgeProperty() { return oscTriggerEdge; }
+
+    public TriggerType getOscTriggerType()     { return oscTriggerType.get(); }
+    public void setOscTriggerType(TriggerType v) { oscTriggerType.set(v); }
+    public Property<TriggerType> oscTriggerTypeProperty() { return oscTriggerType; }
 
     public TriggerMode getOscTriggerMode()     { return oscTriggerMode.get(); }
     public void setOscTriggerMode(TriggerMode v) { oscTriggerMode.set(v); }
@@ -1602,6 +1662,22 @@ public final class Preferences {
     public void setFreqRespLeadInSec(double v) { freqRespLeadInSec.set(v); }
     public Property<Double> freqRespLeadInSecProperty() { return freqRespLeadInSec; }
 
+    public double getTuneNotchStartHz()        { return tuneNotchStartHz.get(); }
+    public void setTuneNotchStartHz(double v)  { tuneNotchStartHz.set(v); }
+    public Property<Double> tuneNotchStartHzProperty() { return tuneNotchStartHz; }
+
+    public double getTuneNotchStopHz()         { return tuneNotchStopHz.get(); }
+    public void setTuneNotchStopHz(double v)   { tuneNotchStopHz.set(v); }
+    public Property<Double> tuneNotchStopHzProperty() { return tuneNotchStopHz; }
+
+    public double getTuneNotchAmplitudeVrms()  { return tuneNotchAmplitudeVrms.get(); }
+    public void setTuneNotchAmplitudeVrms(double v) { tuneNotchAmplitudeVrms.set(v); }
+    public Property<Double> tuneNotchAmplitudeVrmsProperty() { return tuneNotchAmplitudeVrms; }
+
+    public double getTuneNotchTargetHz()       { return tuneNotchTargetHz.get(); }
+    public void setTuneNotchTargetHz(double v) { tuneNotchTargetHz.set(v); }
+    public Property<Double> tuneNotchTargetHzProperty() { return tuneNotchTargetHz; }
+
     public double getFreqRespNyquistFraction() { return freqRespNyquistFraction.get(); }
     public void setFreqRespNyquistFraction(double v) { freqRespNyquistFraction.set(v); }
     public Property<Double> freqRespNyquistFractionProperty() { return freqRespNyquistFraction; }
@@ -1761,6 +1837,7 @@ public final class Preferences {
         root.put("oscTimePerDiv",       oscTimePerDiv.get());
         root.put("oscTriggerChannel",      oscTriggerChannel.get().name());
         root.put("oscTriggerEdge",         oscTriggerEdge.get().name());
+        root.put("oscTriggerType",         oscTriggerType.get().name());
         root.put("oscTriggerMode",         oscTriggerMode.get().name());
         root.put("oscTriggerHysteresisDiv",     oscTriggerHysteresisDiv.get());
         root.put("oscTriggerHysteresisEnabled", oscTriggerHysteresisEnabled.get());
@@ -1864,6 +1941,7 @@ public final class Preferences {
         root.put("fftStopAfterN",             fftStopAfterN.get());
         root.put("fftFundFromGenerator",      fftFundFromGenerator.get());
         root.put("fftLogFreqAxis",            fftLogFreqAxis.get());
+        root.put("fftDetectTimeDiscontinuity", fftDetectTimeDiscontinuity.get());
         root.put("fftWindow",                 fftWindow.get().name());
         root.put("fftOverlap",                fftOverlap.get().name());
         root.put("fftCoherentAveraging",      fftCoherentAveraging.get());
@@ -1921,6 +1999,10 @@ public final class Preferences {
         root.put("freqRespFftSize",           freqRespFftSize.get());
         root.put("freqRespDitherBits",        freqRespDitherBits.get());
         root.put("freqRespLeadInSec",         freqRespLeadInSec.get());
+        root.put("tuneNotchStartHz",          tuneNotchStartHz.get());
+        root.put("tuneNotchStopHz",           tuneNotchStopHz.get());
+        root.put("tuneNotchAmplitudeVrms",    tuneNotchAmplitudeVrms.get());
+        root.put("tuneNotchTargetHz",         tuneNotchTargetHz.get());
         root.put("freqRespLeftVisible",       freqRespLeftVisible.get());
         root.put("freqRespRightVisible",      freqRespRightVisible.get());
         root.put("freqRespPhaseVisible",      freqRespPhaseVisible.get());
@@ -2064,6 +2146,7 @@ public final class Preferences {
         if (root.get("oscTimePerDiv")          instanceof Number n) oscTimePerDiv.set(n.doubleValue());
         if (root.get("oscTriggerChannel")      instanceof String  s) oscTriggerChannel.set(enumOr(Channel.class, s, oscTriggerChannel.get()));
         if (root.get("oscTriggerEdge")         instanceof String  s) oscTriggerEdge.set(enumOr(TriggerEdge.class,    s, oscTriggerEdge.get()));
+        if (root.get("oscTriggerType")         instanceof String  s) oscTriggerType.set(enumOr(TriggerType.class,    s, oscTriggerType.get()));
         if (root.get("oscTriggerMode")         instanceof String  s) oscTriggerMode.set(enumOr(TriggerMode.class,    s, oscTriggerMode.get()));
         if (root.get("oscTriggerHysteresisDiv")     instanceof Number  n) oscTriggerHysteresisDiv.set(n.doubleValue());
         if (root.get("oscTriggerHysteresisEnabled") instanceof Boolean b) oscTriggerHysteresisEnabled.set(b);
@@ -2172,6 +2255,7 @@ public final class Preferences {
         if (root.get("fftStopAfterN")             instanceof Number  n) fftStopAfterN.set(n.intValue());
         if (root.get("fftFundFromGenerator")      instanceof Boolean b) fftFundFromGenerator.set(b);
         if (root.get("fftLogFreqAxis")            instanceof Boolean b) fftLogFreqAxis.set(b);
+        if (root.get("fftDetectTimeDiscontinuity") instanceof Boolean b) fftDetectTimeDiscontinuity.set(b);
         if (root.get("fftWindow")                 instanceof String  s) fftWindow.set(enumOr(WindowType.class, s, fftWindow.get()));
         if (root.get("fftOverlap")                instanceof String  s) fftOverlap.set(enumOr(FftOverlap.class, s, fftOverlap.get()));
         if (root.get("fftCoherentAveraging")      instanceof Boolean b) fftCoherentAveraging.set(b);
@@ -2220,6 +2304,10 @@ public final class Preferences {
         }
         if (root.get("freqRespDitherBits")        instanceof Number  n) freqRespDitherBits.set(n.intValue());
         if (root.get("freqRespLeadInSec")         instanceof Number  n) freqRespLeadInSec.set(n.doubleValue());
+        if (root.get("tuneNotchStartHz")          instanceof Number  n) tuneNotchStartHz.set(n.doubleValue());
+        if (root.get("tuneNotchStopHz")           instanceof Number  n) tuneNotchStopHz.set(n.doubleValue());
+        if (root.get("tuneNotchAmplitudeVrms")    instanceof Number  n) tuneNotchAmplitudeVrms.set(n.doubleValue());
+        if (root.get("tuneNotchTargetHz")         instanceof Number  n) tuneNotchTargetHz.set(n.doubleValue());
         if (root.get("freqRespLeftVisible")       instanceof Boolean b) freqRespLeftVisible.set(b);
         if (root.get("freqRespRightVisible")      instanceof Boolean b) freqRespRightVisible.set(b);
         if (root.get("freqRespPhaseVisible")      instanceof Boolean b) freqRespPhaseVisible.set(b);

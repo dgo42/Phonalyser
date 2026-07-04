@@ -72,9 +72,15 @@
       <li><a href="generator.html#generator-amplitude">Амплітуда (RMS)</a> <span class="small">(Генератор)</span> — <span class="small">Рівень виходу, що зберігається внутрішньо як вольти RMS. Одиниці: µV , mV , V та dBV (без урахування регістру); число без суфікса</span></li>
       <li><a href="preferences.html#prefs-audio">Аудіо</a> <span class="small">(Налаштування)</span> — <span class="small">Вибір аудіо-бекенду, вхідних / вихідних пристроїв і форматів — параметри, що визначають побітову точність вимірювання (див.…</span></li>
     </ul>
+    <h3>Б</h3>
+    <ul>
+      <li><a href="fft.html#fft-resync-banner">Банер повторної синхронізації захоплення</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Під час усереднення кожен блок захоплення перевіряється, перш ніж він потрапить у середнє. На кожному блоці виконуються дві…</span></li>
+    </ul>
     <h3>В</h3>
     <ul>
       <li><a href="fft.html#fft-scrollbar-mag">Вертикальна смуга прокрутки (величина)</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Те саме, але для осі величини: прокручує лише вгору / вниз, а бігунок відстежує масштабування величини. Ctrl+колесо всередині…</span></li>
+      <li><a href="oscilloscope.html#scope-zoom-v">Вертикальне масштабування</a> <span class="small">(Осцилограф)</span> — <span class="small">Елемент V/div каналу (його поле — введення, стрілки, ↑↓ або колесо над полем) масштабує лише цей канал , навколо середини екрана.</span></li>
+      <li><a href="oscilloscope.html#scope-move-v">Вертикальне переміщення</a> <span class="small">(Осцилограф)</span> — <span class="small">Просте колесо або перетягування маніпулятора зсуву на будь-якому бічному краї переміщує обидва активні канали разом , зберігаючи…</span></li>
       <li><a href="fft.html#fft-toolbar">Верхня панель інструментів (над смугою вкладок)</a> <span class="small">(FFT аналізатор)</span></li>
       <li><a href="fft.html#fft-channel-pick">Вибір каналу L / R</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Кнопки-перемикачі, що визначають, який канал подається на аналізатор. Кнопка вибраного каналу отримує кольоровий фон. Перемикання</span></li>
       <li><a href="oscilloscope.html#scope-channel-pick">Вибір каналу L / R</a> <span class="small">(Осцилограф)</span> — <span class="small">Вибір каналу, що керує таблицею вимірювань та маніпулятором зсуву каналу — вони не перемикають вкладки налаштувань. Фон кнопки…</span></li>
@@ -112,6 +118,8 @@
     <h3>Г</h3>
     <ul>
       <li><a href="fft.html#fft-scrollbar-freq">Горизонтальна смуга прокрутки (частота)</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Прокручує видимий діапазон частот — лише вліво / вправо. Смуга прокрутки ніколи не масштабує; бігунок розмірюється відповідно до…</span></li>
+      <li><a href="oscilloscope.html#scope-zoom-h">Горизонтальне масштабування</a> <span class="small">(Осцилограф)</span> — <span class="small">Елемент горизонтального розділення (поле s/div) — масштабує навколо зсуву тригера : тригер стоїть на місці, а траса розтягується…</span></li>
+      <li><a href="oscilloscope.html#scope-move-h">Горизонтальне переміщення</a> <span class="small">(Осцилограф)</span> — <span class="small">Зсув тригера (наживо та зупинено) — перетягніть трикутник на нижньому краї або скористайтеся сусідами плитки s/div. Це зсуває…</span></li>
       <li><a href="fft.html#fft-spectrum-trace">Графік спектра</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Полілінія амплітуди FFT у видимому діапазоні частот. Колір графіка, товщина лінії та фон діаграми налаштовуються у Налаштуваннях…</span></li>
       <li><a href="oscilloscope.html#scope-trigger-hysteresis">Гістерезис</a> <span class="small">(Осцилограф)</span> — <span class="small">Прапорець + крокове поле в одиницях поділів (0.0 .. 5.0 з кроком 0.1). Тригерний гістерезис за типом Шмітта: тригер наростаючого…</span></li>
     </ul>
@@ -178,12 +186,15 @@
     </ul>
     <h3>М</h3>
     <ul>
+      <li><a href="freqresp.html#freqresp-tune-notch">Майстер налаштування режектора</a> <span class="small">(Частотна характеристика)</span> — <span class="small">Пасивний режекторний фільтр (зазвичай двійний Т-подібний) перед входом — класичний спосіб виміряти спотворення нижче власного…</span></li>
       <li><a href="fft.html#fft-max-harmonic-thd">Максимальна гармоніка для THD</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Числове поле (2 .. 9). Верхня межа гармонік, що підсумовуються у коефіцієнт THD. THD H2..N використовує гармоніки від 2 до цього…</span></li>
       <li><a href="fft.html#fft-max-harmonic-calc">Максимальна гармоніка для розрахунку</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Числове поле (≥ Максимальна гармоніка для THD ). Скільки гармонік виявляти та виводити у рядках гармонік — незалежно від того,…</span></li>
       <li><a href="fft.html#fft-maximize">Максимізувати</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Зворотна операція до Автоналаштування: встановлює найширший розумний вигляд — частота від 0 до Найквіста. Діапазон величини не…</span></li>
       <li><a href="oscilloscope.html#scope-position-handle">Маркер зсуву тригера</a> <span class="small">(Осцилограф)</span> — <span class="small">Вертикальна лінія маркера, трикутний маніпулятор якої знаходиться на нижньому краї . Задає розміщення моменту спрацьовування…</span></li>
       <li><a href="oscilloscope.html#scope-trigger-handle">Маркер рівня тригера</a> <span class="small">(Осцилограф)</span> — <span class="small">Горизонтальна лінія маркера, трикутний маніпулятор якої знаходиться на правому краї . Маркер можна переміщувати лише…</span></li>
       <li><a href="oscilloscope.html#scope-offset-sliders">Маркери зсуву каналів</a> <span class="small">(Осцилограф)</span> — <span class="small">Кожен увімкнений канал має власний маркер вертикального зсуву (пунктирна нульова лінія + трикутний маніпулятор), і обидва…</span></li>
+      <li><a href="fft.html#fft-rect-zoom">Масштабування рамкою та Ctrl+Z</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Утримуйте ліву кнопку миші всередині графіка й перетягуйте: тонкий яскраво-зелений прямокутник слідує за покажчиком, і після…</span></li>
+      <li><a href="oscilloscope.html#scope-zoom-rect">Масштабування рамкою та Ctrl+Z</a> <span class="small">(Осцилограф)</span> — <span class="small">Потягніть лівою кнопкою по трасі, щоб накреслити прямокутник; відпустіть — і виділення розтягнеться на весь вид: єдиний жест, що…</span></li>
       <li><a href="theory/oscilloscope.html#measure">Методика вимірювань</a> <span class="small">(Theory ▸ Теорія: Осцилограф)</span> — <span class="small">Прохід вимірювань обробляє підготовлене вікно в нормалізованих одиницях, перетворюючи у вольти лише за калібровкою повної шкали…</span></li>
       <li><a href="theory/fft.html#metrics">Метрики спотворень і шуму</a> <span class="small">(Theory ▸ Теорія: FFT-аналізатор)</span> — <span class="small">З усередненого спектра, з рівнем основного тону A 1 та рівнями гармонік A h : THD = √( Σ h ≥2 A h ² ) / A 1 (4) SNR порівнює…</span></li>
       <li><a href="theory/oscilloscope.html#who">Місце в системі</a> <span class="small">(Theory ▸ Теорія: Осцилограф)</span> — <span class="small">Осцилограф спільно використовує пристрій захоплення та кільцевий буфер із FFT аналізатором через загальну сесію захоплення , тому</span></li>
@@ -209,7 +220,7 @@
     </ul>
     <h3>П</h3>
     <ul>
-      <li><a href="freqresp.html#freqresp-panzoom">Панорамування &amp; масштабування (колесо миші)</a> <span class="small">(Частотна характеристика)</span> — <span class="small">Над графіком — колесо : панорамування по осі амплітуди (вертикальна); Shift+колесо : панорамування по осі частоти…</span></li>
+      <li><a href="freqresp.html#freqresp-panzoom">Панорамування &amp; масштабування</a> <span class="small">(Частотна характеристика)</span> — <span class="small">Над графіком — колесо : панорамування по осі амплітуди (вертикальна); Shift+колесо : панорамування по осі частоти…</span></li>
       <li><a href="freqresp.html#freqresp-tab-settings">Параметри</a> <span class="small">(Частотна характеристика)</span> — <span class="small">Елемент керування Примітки Початкова частота, Гц Нижня межа свіпу. ≥ 1 Гц. Кінцева частота, Гц Верхня межа свіпу, до частки…</span></li>
       <li><a href="theory/ring-buffer.html#overrun">Перевантаження: споживач відстає</a> <span class="small">(Theory ▸ Теорія: Кільцевий буфер та споживачі)</span> — <span class="small">Споживач із курсором може відставати — через дуже великий FFT або перевантажену машину. Записувач нікого не чекає (найсвіжіші…</span></li>
       <li><a href="fft.html#fft-overlap">Перекриття</a> <span class="small">(FFT аналізатор)</span> — <span class="small">0 %, 50 %, 75 %, 87.5 %, 93.75 %. Послідовні вікна аналізу мають спільну таку частку відліків. Перекриття виконує дві функції:…</span></li>
@@ -217,6 +228,7 @@
       <li><a href="fft.html#fft-external">Перемикач зовнішнього вікна</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Виносить таблицю THD в окреме інструментальне вікно, щоб вона могла розміщуватися поруч зі спектром, не займаючи місця на…</span></li>
       <li><a href="oscilloscope.html#scope-external">Перемикач зовнішнього вікна</a> <span class="small">(Осцилограф)</span> — <span class="small">Виносить таблицю вимірювань в окреме службове вікно, яке можна розмістити поруч із головним вікном програми. Відображається лише…</span></li>
       <li><a href="oscilloscope.html#scope-stats-toggle">Перемикач стовпців статистики</a> <span class="small">(Осцилограф)</span> — <span class="small">Показує / приховує стовпці avg / min / max / σ таблиці вимірювань. Обчислення тривають незалежно від перемикача; він впливає лише</span></li>
+      <li><a href="oscilloscope.html#scope-move-zoom">Переміщення та масштабування сигналу</a> <span class="small">(Осцилограф)</span> — <span class="small">Трасу можна переміщувати та масштабувати по обох осях. Усе описане нижче працює однаково незалежно від того, чи осцилограф працює</span></li>
       <li><a href="fft.html#fft-crosshair">Перехрестя</a> <span class="small">(FFT аналізатор)</span> — <span class="small">При наведенні курсора відображається пунктирний сірий хрест у точці покажчика. Плаваючий рядок біля курсора показує частоту ( f =</span></li>
       <li><a href="theory/dac-predistortion.html#purpose">Питання, на яке відповідає ця сторінка</a> <span class="small">(Theory ▸ Теорія: попереднє спотворення DAC)</span> — <span class="small">Кожен DAC додає власні гармонічні спотворення. Коли ви вимірюєте пристрій, що випробовується, ви хочете, щоб стимул був чистішим,</span></li>
       <li><a href="oscilloscope.html#scope-tile-acdc">Плитка AC/DC</a> <span class="small">(Осцилограф)</span> — <span class="small">ac або dc — зв&#x27;язок…</span></li>
@@ -231,8 +243,9 @@
       <li><a href="fft.html#fft-tile-overlap">Плитка перекриття</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Відсоток ( 87.5%…</span></li>
       <li><a href="oscilloscope.html#scope-tile-trigger-mode">Плитка режиму тригера</a> <span class="small">(Осцилограф)</span> — <span class="small">A , N або S — Авто, Нормальний,…</span></li>
       <li><a href="fft.html#fft-tile-manfund">Плитка ручного основного тону</a> <span class="small">(FFT аналізатор)</span> — <span class="small">manF . Видима лише коли увімкнено перевизначення ручного основного тону. ◀ Назад до…</span></li>
+      <li><a href="oscilloscope.html#scope-tile-trigger-type">Плитка типу тригера</a> <span class="small">(Осцилограф)</span> — <span class="small">G — відображається лише поки вибрано тригер за глічем . Відсутність цієї плитки означає тип…</span></li>
       <li><a href="fft.html#fft-tile-averages">Плитка усереднень</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Число з суфіксом × ( 32× ) або ∞ у режимі…</span></li>
-      <li><a href="oscilloscope.html#scope-tile-trigger-edge">Плитка фронту тригера</a> <span class="small">(Осцилограф)</span> — <span class="small">↑ для наростаючого, ↓ для…</span></li>
+      <li><a href="oscilloscope.html#scope-tile-trigger-edge">Плитка фронту тригера</a> <span class="small">(Осцилограф)</span> — <span class="small">↑ для наростаючого, ↓ для спадаючого. З типом «гліч»: прив&#x27;язка до початку гліча (↑) або до його кінця…</span></li>
       <li><a href="oscilloscope.html#scope-tile-tdiv">Плитка Час/поділ</a> <span class="small">(Осцилограф)</span> — <span class="small">Горизонтальне розділення, скорочена форма — напр. 200u , 1m , 20m…</span></li>
       <li><a href="oscilloscope.html#scope-tile-interp">Плитка інтерполяції</a> <span class="small">(Осцилограф)</span> — <span class="small">sin коли sinc-інтерполяція увімкнена, lin коли…</span></li>
       <li><a href="fft.html#fft-tiles">Плитки вкладок</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Лише три вкладки мають плитки — Параметри FFT , Параметри THD та Завантажити калібрування ; вони показують маленькі значки у…</span></li>
@@ -241,12 +254,13 @@
       <li><a href="generator.html#generator-dualtone">Подвійний тон (IMD)</a> <span class="small">(Генератор)</span> — <span class="small">Видимий лише при виборі Dual tone . До єдиного поля частоти додаються друга частота та баланс амплітуд між двома тонами (кожний у</span></li>
       <li><a href="generator.html#generator-dualtone-compensated">Подвійний тон (компенсований)</a> <span class="small">(Генератор)</span> — <span class="small">Варіант Dual tone із корекцією інтермодуляції — двотоновий аналог Sine compensated . Кожен продукт спотворення двотонового…</span></li>
       <li><a href="freqresp.html#freqresp-crosshair">Показання перехрестя</a> <span class="small">(Частотна характеристика)</span> — <span class="small">Переміщення покажчика всередині графіка малює пунктирний хрест і плаваюче віконце, що показує частоту під курсором (обмежену…</span></li>
+      <li><a href="oscilloscope.html#scope-caps">Показник частоти захоплення (cap/s)</a> <span class="small">(Осцилограф)</span> — <span class="small">Бліда сіра цифра у верхньому правому куті області траси. З тригером за фронтом вона показує, скільки нових кадрів за секунду…</span></li>
       <li><a href="theory/fft.html#refs">Посилання</a> <span class="small">(Theory ▸ Теорія: FFT-аналізатор)</span> — <span class="small">1. Віконні функції та розтікання — Wikipedia: Window function ; родина HFT (flat-top): G. Heinzel et al., &quot;Spectrum and spectral…</span></li>
       <li><a href="theory/audio-backend.html#refs">Посилання</a> <span class="small">(Theory ▸ Теорія: Аудіо-бекенд)</span> — <span class="small">What exclusive-mode streams bypass and guarantee — Microsoft Learn: Exclusive-Mode Streams . The kernel-streaming layer beneath…</span></li>
       <li><a href="theory/generator.html#refs">Посилання</a> <span class="small">(Theory ▸ Теорія: Генератор сигналів)</span> — <span class="small">Direct digital synthesis — Wikipedia: Direct digital synthesis ; in depth: Analog Devices tutorial MT-085, &quot;Fundamentals of…</span></li>
       <li><a href="theory/algorithms.html#refs">Посилання</a> <span class="small">(Theory ▸ Теорія: Довідник алгоритмів)</span> — <span class="small">1. Phonalyser ALGORITHMS.md — повний інженерний каталог, який стисло представлено на цій сторінці (математика алгоритмів,…</span></li>
       <li><a href="theory/ring-buffer.html#refs">Посилання</a> <span class="small">(Theory ▸ Теорія: Кільцевий буфер та споживачі)</span> — <span class="small">Circular (ring) buffers in general — Wikipedia: Circular buffer . The underlying coordination pattern — Wikipedia:…</span></li>
-      <li><a href="theory/oscilloscope.html#refs">Посилання</a> <span class="small">(Theory ▸ Теорія: Осцилограф)</span> — <span class="small">1. Goertzel algorithm (single-bin DFT) — Wikipedia: Goertzel algorithm . 2. Hann window and spectral leakage — Wikipedia: Hann…</span></li>
+      <li><a href="theory/oscilloscope.html#refs">Посилання</a> <span class="small">(Theory ▸ Теорія: Осцилограф)</span> — <span class="small">1. The sinusoid recurrence (1) is the order-2 case of linear prediction — Wikipedia: Linear prediction . 2. Goertzel algorithm…</span></li>
       <li><a href="theory/freq-resp.html#refs">Посилання</a> <span class="small">(Theory ▸ Теорія: Частотна характеристика)</span> — <span class="small">1. A. Farina, &quot;Simultaneous measurement of impulse response and distortion with a swept-sine technique&quot; , 108th AES Convention,…</span></li>
       <li><a href="theory/dac-predistortion.html#refs">Посилання</a> <span class="small">(Theory ▸ Теорія: попереднє спотворення DAC)</span> — <span class="small">1. Twin-T notch network and its transmission zero — Wikipedia: Twin-T filter . 2. Resistor temperature coefficient (TCR) ranges…</span></li>
       <li><a href="theory/derotation-accuracy.html#refs">Посилання</a> <span class="small">(Theory ▸ Теорія: точність де-ротації)</span> — <span class="small">1. Похибка оцінки фази 1/√(2ρ) тону в шумі — це межа Крамера–Рао за високого SNR — Wikipedia: Cramér–Rao bound . 2. Еквівалентна…</span></li>
@@ -254,7 +268,7 @@
       <li><a href="freqresp.html#freqresp-tab-presets">Пресети</a> <span class="small">(Частотна характеристика)</span> — <span class="small">Збереження та відновлення повних конфігурацій Параметри + RIAA. Елемент керування Примітки Поле імені Введіть нове ім&#x27;я пресету…</span></li>
       <li><a href="generator.html#generator-snap-fft-bin">Прив&#x27;язати частоту до найближчого</a> <span class="small">(Генератор)</span> — <span class="small">Прапорець. Якщо увімкнено, випромінювана частота прив&#x27;язується до найближчого бін FFT для поточної довжини FFT-аналізатора.…</span></li>
       <li><a href="theory/derotation-accuracy.html#reference">Прив&#x27;язка до плинного середнього — без самоотруєння</a> <span class="small">(Theory ▸ Теорія: точність де-ротації)</span> — <span class="small">Як насправді формується де-ротація основного тону: Абсолютна модель, прив&#x27;язана до першого блока. Кожен блок повертається на кут,</span></li>
-      <li><a href="theory/oscilloscope.html#mains">Придушення мережевого фону: відстежуваний гребінчастий фільтр</a> <span class="small">(Theory ▸ Теорія: Осцилограф)</span> — <span class="small">Мережева завада знаходиться на частоті мережі та всіх її цілих гармоніках. Один зворотній гребінчастий фільтр [3] одночасно…</span></li>
+      <li><a href="theory/oscilloscope.html#mains">Придушення мережевого фону: відстежуваний гребінчастий фільтр</a> <span class="small">(Theory ▸ Теорія: Осцилограф)</span> — <span class="small">Мережева завада знаходиться на частоті мережі та всіх її цілих гармоніках. Один зворотній гребінчастий фільтр [6] одночасно…</span></li>
       <li><a href="fft.html#fft-mains-suppression">Придушення мережі</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Комбобокс — Немає або IIR-гребінчастий фільтр . Гребінчастий фільтр попередньо фільтрує захоплений сигнал до усереднення за…</span></li>
       <li><a href="theory/audio-backend.html#purpose">Призначення</a> <span class="small">(Theory ▸ Теорія: Аудіо-бекенд)</span> — <span class="small">Аудіо-бекенд — це міст між Phonalyser і звуковим обладнанням. Його єдине завдання — переміщати відліки між програмою і…</span></li>
       <li><a href="theory/oscilloscope.html#purpose">Призначення</a> <span class="small">(Theory ▸ Теорія: Осцилограф)</span> — <span class="small">Осцилограф — це вигляд у часовій області, і саме з нього слід починати. Перш ніж довіряти будь-якому спектральному значенню,…</span></li>
@@ -266,6 +280,7 @@
       <li><a href="theory/oscilloscope.html#conditioning">Підготовка сигналу</a> <span class="small">(Theory ▸ Теорія: Осцилограф)</span> — <span class="small">Перед відображенням можуть виконуватися два необов&#x27;язкових фільтри — і ті самі фільтри запускаються перед вимірюванням, тому…</span></li>
       <li><a href="theory/dac-predistortion.html#bottom">Підсумок</a> <span class="small">(Theory ▸ Теорія: попереднє спотворення DAC)</span> — <span class="small">Пасивний twin-T режекторний фільтр обов&#x27;язковий — він знімає 40–80 dB основного тону, щоб ADC оцифровував гармоніки, а не тон.…</span></li>
       <li><a href="theory/derotation-accuracy.html#bottom">Підсумок</a> <span class="small">(Theory ▸ Теорія: точність де-ротації)</span> — <span class="small">Кут де-ротації відомий з точністю σ θ ≈ 0.023° на блок (з домінуванням основного тону). Він не накопичується, а його відбиток на…</span></li>
+      <li><a href="oscilloscope.html#scope-persistence">Післясвічення дисплея</a> <span class="small">(Осцилограф)</span> — <span class="small">Коли Параметри ▸ Осцилограф ▸ Післясвічення дисплея встановлено на будь-що, крім Вимк. , кожна розгорнута траса затримується і…</span></li>
     </ul>
     <h3>Р</h3>
     <ul>
@@ -281,6 +296,7 @@
     <h3>С</h3>
     <ul>
       <li><a href="generator.html#generator-sweep">Свіп / чірп</a> <span class="small">(Генератор)</span> — <span class="small">Видимий лише при виборі Linear sweep або Log sweep . Замінює єдине поле частоти блоком параметрів…</span></li>
+      <li><a href="theory/freq-resp.html#notch">Свіп налаштування режекторного фільтра: живий варіант</a> <span class="small">(Theory ▸ Теорія: Частотна характеристика)</span> — <span class="small">Вимірювання спотворень дуже чистого джерела потребує пасивного подвійного Т-подібного режекторного фільтра (twin-T) [4] перед…</span></li>
       <li><a href="theory/generator.html#sweeps">Свіпи</a> <span class="small">(Theory ▸ Теорія: Генератор сигналів)</span> — <span class="small">Миттєва частота свіпу є функцією часу, тому фаза інтегрується явно замість використання фіксованого приросту (1): Лінійний свіп:…</span></li>
       <li><a href="theory/ring-buffer.html#sharedcapture">Сесія захоплення: хто є власником пристрою</a> <span class="small">(Theory ▸ Теорія: Кільцевий буфер та споживачі)</span> — <span class="small">Вхідний пристрій і живе кільце мають рівно одного власника — сесію захоплення . Види ніколи не відкривають пристрій самостійно;…</span></li>
       <li><a href="theory/algorithms.html#synth">Синтез сигналу та квантування</a> <span class="small">(Theory ▸ Теорія: Довідник алгоритмів)</span> — <span class="small">Алгоритм Що він тут робить У цій довідці Direct digital synthesis (DDS) 64-бітний генератор із фазовим акумулятором; точна фаза…</span></li>
@@ -303,11 +319,13 @@
       <li><a href="fft.html#fft-thd-table">Таблиця THD</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Компактна накладка у верхньому лівому куті полотна (або в зовнішньому інструментальному вікні, коли винесена туди). Усі значення…</span></li>
       <li><a href="oscilloscope.html#scope-meas-table">Таблиця вимірювань</a> <span class="small">(Осцилограф)</span> — <span class="small">Компактна сітка у верхньому лівому куті області траси. Вісім рядків, до п&#x27;яти стовпців значень ( cur + чотири стовпці…</span></li>
       <li><a href="fft.html#fft-distortion-toggle">Таблиця спотворень</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Показує / приховує накладку таблиці THD у верхньому лівому куті полотна. Кнопка з&#x27;являється лише після публікації першого аналізу</span></li>
+      <li><a href="oscilloscope.html#scope-trigger-type">Тип (E / G)</a> <span class="small">(Осцилограф)</span> — <span class="small">Пара E / G, що вибирає, на що реагує тригер. E — фронт : класичний компаратор, описаний вище — спрацьовує, коли сигнал каналу…</span></li>
       <li><a href="fft.html#fft-harmonic-dots">Точки гармонік</a> <span class="small">(FFT аналізатор)</span> — <span class="small">Червоні точки, нанесені на виявлених частотах основного тону та гармонік. Їхній діаметр налаштовується. Коли увімкнено ручне…</span></li>
       <li><a href="theory/ring-buffer.html#readers-api">Три способи читання</a> <span class="small">(Theory ▸ Теорія: Кільцевий буфер та споживачі)</span> — <span class="small">Режим читання Семантика Останнє вікно Найновіші N відліків, що закінчуються на поточному w — «покажи зараз». Принципово…</span></li>
       <li><a href="theory/audio-backend.html#paths">Три шляхи драйверів</a> <span class="small">(Theory ▸ Теорія: Аудіо-бекенд)</span> — <span class="small">До звукового обладнання можна звертатись через кілька драйверних інтерфейсів. Phonalyser реалізує три і дозволяє вибрати один у…</span></li>
       <li><a href="generator.html#generator-sweep-duration">Тривалість</a> <span class="small">(Генератор)</span> — <span class="small">Загальна довжина чірпу в…</span></li>
       <li><a href="generator.html#generator-duration">Тривалість</a> <span class="small">(Генератор)</span> — <span class="small">Секунди. Довжина аудіо для запису при використанні Save to . Незалежна від живого випромінювання — файл рендериться за один…</span></li>
+      <li><a href="theory/oscilloscope.html#glitch">Тригер за глічем: спрацьовування на пошкодження, а не на рівень</a> <span class="small">(Theory ▸ Теорія: Осцилограф)</span> — <span class="small">Деякі події, які варто ловити, взагалі не є перетинами рівня. Збій захоплення, що «ковтає» відліки, залишає стрибок амплітуди або</span></li>
       <li><a href="theory/oscilloscope.html#trigger">Тригерування</a> <span class="small">(Theory ▸ Теорія: Осцилограф)</span> — <span class="small">Осцилограф без тригера перемальовував би форму сигналу кожного разу з випадковою фазою, і синусоїдальний сигнал здавався б…</span></li>
     </ul>
     <h3>У</h3>
@@ -324,7 +342,7 @@
       <li><a href="theory/generator.html#dds">Фазовий акумулятор</a> <span class="small">(Theory ▸ Теорія: Генератор сигналів)</span> — <span class="small">Всі periodичні форми хвилі керуються 64-бітним фазовим акумулятором φₐ: беззнаковим цілим числом, що представляє фазу як дробову…</span></li>
       <li><a href="generator.html#generator-form">Форма сигналу</a> <span class="small">(Генератор)</span> — <span class="small">Випадаюче комбо з одинадцятьма формами хвилі. Кожен запис має маленьку піктограму, що показує форму хвилі. Зміна форми…</span></li>
       <li><a href="theory/generator.html#kernels">Форми хвиль</a> <span class="small">(Theory ▸ Теорія: Генератор сигналів)</span></li>
-      <li><a href="oscilloscope.html#scope-trigger-edge">Фронт</a> <span class="small">(Осцилограф)</span> — <span class="small">Пара ↑ / ↓. Наростаючий фронт спрацьовує, коли сигнал перетинає рівень тригера знизу вгору; спадаючий — зверху…</span></li>
+      <li><a href="oscilloscope.html#scope-trigger-edge">Фронт</a> <span class="small">(Осцилограф)</span> — <span class="small">Пара ↑ / ↓. Наростаючий фронт спрацьовує, коли сигнал перетинає рівень тригера знизу вгору; спадаючий — зверху вниз. З типом…</span></li>
       <li><a href="theory/dac-predistortion.html#drift">Фільтр дрейфує — тож основний тон потрібно визначати вручну</a> <span class="small">(Theory ▸ Теорія: попереднє спотворення DAC)</span> — <span class="small">twin-T режекторний фільтр утворює западину на f 0 = 1 / (2π RC ) (1) тож його частота западини відстежує добуток RC . Резистори й</span></li>
       <li><a href="theory/algorithms.html#filtering">Фільтрація та оцінювання</a> <span class="small">(Theory ▸ Теорія: Довідник алгоритмів)</span> — <span class="small">Алгоритм Що він тут робить У цій довідці Lanczos (windowed-sinc) interpolation Смугообмежена реконструкція трасування між…</span></li>
     </ul>
@@ -398,6 +416,7 @@
       <li><b>CSV</b> — <a href="freqresp.html#freqresp-overview">Частотна характеристика ▸ Короткий огляд</a>, <a href="freqresp.html#freqresp-tab-calibration">Частотна характеристика ▸ Завантажити калібрування…</a>, <a href="freqresp.html#freqresp-tab-saveto">Частотна характеристика ▸ Зберегти як…</a>, <a href="freqresp.html#freqresp-tab-loadfrom">Частотна характеристика ▸ Завантажити з…</a></li>
       <li><b>Ctrl +колесо</b> — <a href="oscilloscope.html#">Осцилограф</a></li>
       <li><b>Ctrl+Shift+колесо</b> — <a href="fft.html#">FFT аналізатор</a>, <a href="freqresp.html#">Частотна характеристика</a>, <a href="tips.html#">Поради</a></li>
+      <li><b>Ctrl+Z</b> — <a href="fft.html#">FFT аналізатор</a>, <a href="freqresp.html#">Частотна характеристика</a></li>
       <li><b>Ctrl+колесо</b> — <a href="fft.html#">FFT аналізатор</a>, <a href="freqresp.html#">Частотна характеристика</a>, <a href="tips.html#">Поради</a></li>
     </ul>
     <h3>D</h3>
@@ -422,6 +441,7 @@
     </ul>
     <h3>E</h3>
     <ul>
+      <li><b>E — фронт</b> — <a href="oscilloscope.html#">Осцилограф</a></li>
       <li><b>E1DA</b> — <a href="credits.html#credits-hardware">Подяки ▸ Вимірювальне обладнання</a>, <a href="credits.html#">Подяки</a></li>
       <li><b>ELF</b> — <a href="bench.html#refs">Вимірювальний стенд і проводка ▸ Джерела</a></li>
       <li><b>EMF</b> — <a href="bench.html#refs">Вимірювальний стенд і проводка ▸ Джерела</a></li>
@@ -439,10 +459,13 @@
       <li><b>FFT-аналізатором</b> — <a href="index.html#">Довідка</a></li>
       <li><b>FLAC</b> — <a href="generator.html#">Генератор ▸ Генератор</a>, <a href="generator.html#generator-load-from">Генератор ▸ Завантажити з… + В циклі</a>, <a href="oscilloscope.html#scope-tab-play">Осцилограф ▸ Вкладка «Завантажити аудіо»</a></li>
       <li><b>FLL</b> — <a href="howto.html#">Найкоротший у світі HOW-TO ▸ 3 · Захоплення тону</a>, <a href="theory/algorithms.html#filtering">Theory ▸ Теорія: Довідник алгоритмів ▸ Фільтрація та оцінювання</a>, <a href="theory/dac-predistortion.html#bigpicture">Theory ▸ Теорія: попереднє спотворення DAC ▸ Загальна картина: дрейф зсуває основний тон, ледь торкається гармонік</a>, <a href="theory/fft.html#ongrid">Theory ▸ Теорія: FFT-аналізатор ▸ Утримання тону на сітці: прив&#x27;язка та FLL</a>, <a href="theory/index.html#">Theory ▸ Принцип роботи ▸ Наскрізні принципи проектування</a></li>
+      <li><b>FS</b> — <a href="freqresp.html#freqresp-tab-settings">Частотна характеристика ▸ Параметри</a>, <a href="oscilloscope.html#scope-move-v">Осцилограф ▸ Вертикальне переміщення</a>, <a href="oscilloscope.html#scope-zoom-v">Осцилограф ▸ Вертикальне масштабування</a>, <a href="theory/freq-resp.html#deconv">Theory ▸ Теорія: Частотна характеристика ▸ Очищення сирого ділення</a></li>
+      <li><b>FS/2</b> — <a href="freqresp.html#">Частотна характеристика</a>, <a href="theory/freq-resp.html#">Theory ▸ Теорія: Частотна характеристика</a></li>
       <li><b>FT</b> — <a href="fft.html#fft-tile-window">FFT аналізатор ▸ Плитка віконної функції</a></li>
     </ul>
     <h3>G</h3>
     <ul>
+      <li><b>G — гліч</b> — <a href="oscilloscope.html#">Осцилограф</a></li>
       <li><b>Goertzel</b> — <a href="theory/algorithms.html#spectral">Theory ▸ Теорія: Довідник алгоритмів ▸ Спектральний аналіз</a>, <a href="theory/oscilloscope.html#freq">Theory ▸ Теорія: Осцилограф ▸ Частота — перетини нуля, а потім уточнення Goertzel</a>, <a href="theory/oscilloscope.html#refs">Theory ▸ Теорія: Осцилограф ▸ Посилання</a></li>
       <li><b>GUI</b> — <a href="theory/audio-backend.html#who">Theory ▸ Теорія: Аудіо-бекенд ▸ Хто використовує бекенд</a></li>
     </ul>
@@ -526,7 +549,7 @@
       <li><b>RECT</b> — <a href="fft.html#fft-tile-window">FFT аналізатор ▸ Плитка віконної функції</a></li>
       <li><b>REW</b> — <a href="credits.html#credits-inspiration">Подяки ▸ Натхнення</a>, <a href="theory/index.html#">Theory ▸ Принцип роботи ▸ Принцип роботи</a></li>
       <li><b>RIAA</b> — <a href="bench.html#">Вимірювальний стенд і проводка ▸ Приклади DUT</a>, <a href="freqresp.html#">Частотна характеристика ▸ Частотна характеристика</a>, <a href="freqresp.html#freqresp-overview">Частотна характеристика ▸ Короткий огляд</a>, <a href="freqresp.html#freqresp-tabs">Частотна характеристика ▸ Вкладки налаштувань</a>, <a href="freqresp.html#freqresp-tab-riaa">Частотна характеристика ▸ RIAA &amp; IEC</a>, <a href="freqresp.html#freqresp-tab-presets">Частотна характеристика ▸ Пресети</a></li>
-      <li><b>RMS</b> — <a href="external/fft-analysis.html#">Further reading ▸ Додаткове читання: основи FFT-аналізу ▸ Усереднення та перекриття</a>, <a href="freqresp.html#freqresp-tab-settings">Частотна характеристика ▸ Параметри</a>, <a href="freqresp.html#freqresp-tab-utility">Частотна характеристика ▸ Утиліти</a>, <a href="freqresp.html#freqresp-measure">Частотна характеристика ▸ Проведення вимірювання</a>, <a href="generator.html#">Генератор ▸ Генератор</a>, <a href="generator.html#generator-dualtone">Генератор ▸ Подвійний тон (IMD)</a></li>
+      <li><b>RMS</b> — <a href="external/fft-analysis.html#">Further reading ▸ Додаткове читання: основи FFT-аналізу ▸ Усереднення та перекриття</a>, <a href="freqresp.html#freqresp-tab-settings">Частотна характеристика ▸ Параметри</a>, <a href="freqresp.html#freqresp-tab-utility">Частотна характеристика ▸ Утиліти</a>, <a href="freqresp.html#freqresp-measure">Частотна характеристика ▸ Проведення вимірювання</a>, <a href="freqresp.html#freqresp-tune-notch">Частотна характеристика ▸ Майстер налаштування режектора</a>, <a href="generator.html#">Генератор ▸ Генератор</a></li>
     </ul>
     <h3>S</h3>
     <ul>
@@ -549,7 +572,7 @@
     </ul>
     <h3>U</h3>
     <ul>
-      <li><b>USB</b> — <a href="credits.html#credits-hardware">Подяки ▸ Вимірювальне обладнання</a></li>
+      <li><b>USB</b> — <a href="credits.html#credits-hardware">Подяки ▸ Вимірювальне обладнання</a>, <a href="oscilloscope.html#scope-trigger-type">Осцилограф ▸ Тип (E / G)</a>, <a href="theory/fft.html#">Theory ▸ Теорія: FFT-аналізатор ▸ Розрив сигналу — спійманий у сирій хвилі</a>, <a href="theory/oscilloscope.html#glitch">Theory ▸ Теорія: Осцилограф ▸ Тригер за глічем: спрацьовування на пошкодження, а не на рівень</a></li>
     </ul>
     <h3>V</h3>
     <ul>
@@ -604,6 +627,7 @@
     <ul>
       <li><b>Екран</b> — <a href="bench.html#">Вимірювальний стенд і проводка</a></li>
       <li><b>Електричні поля</b> — <a href="bench.html#">Вимірювальний стенд і проводка</a></li>
+      <li><b>Елемент V/div</b> — <a href="oscilloscope.html#">Осцилограф</a></li>
     </ul>
     <h3>З</h3>
     <ul>
@@ -616,6 +640,9 @@
       <li><b>Зберегти</b> — <a href="fft.html#">FFT аналізатор</a>, <a href="oscilloscope.html#">Осцилограф</a></li>
       <li><b>Зберегти до…</b> — <a href="tips.html#">Поради</a></li>
       <li><b>Згенеруйте два тони</b> — <a href="theory/dac-predistortion.html#">Theory ▸ Теорія: попереднє спотворення DAC</a></li>
+      <li><b>Зміна налаштування тригера</b> — <a href="oscilloscope.html#">Осцилограф</a></li>
+      <li><b>Зміна сигналу генератора</b> — <a href="oscilloscope.html#">Осцилограф</a></li>
+      <li><b>Зсув тригера</b> — <a href="oscilloscope.html#">Осцилограф</a></li>
     </ul>
     <h3>К</h3>
     <ul>
@@ -632,6 +659,7 @@
     <h3>М</h3>
     <ul>
       <li><b>Магнітні поля</b> — <a href="bench.html#">Вимірювальний стенд і проводка</a></li>
+      <li><b>Маркер цілі</b> — <a href="freqresp.html#">Частотна характеристика</a></li>
     </ul>
     <h3>Н</h3>
     <ul>
@@ -656,9 +684,11 @@
       <li><b>Параметри THD</b> — <a href="fft.html#">FFT аналізатор</a></li>
       <li><b>Перевірте осцилограф</b> — <a href="howto.html#">Найкоротший у світі HOW-TO</a></li>
       <li><b>Перекриття</b> — <a href="theory/derotation-accuracy.html#">Theory ▸ Теорія: точність де-ротації</a>, <a href="theory/fft.html#">Theory ▸ Теорія: FFT-аналізатор</a></li>
+      <li><b>Переміщення чи масштабування</b> — <a href="oscilloscope.html#">Осцилограф</a></li>
       <li><b>Перехрестя</b> — <a href="index.html#">Довідка</a></li>
       <li><b>Плитки вкладок</b> — <a href="index.html#">Довідка</a></li>
       <li><b>Подяки та визнання</b> — <a href="index.html#">Довідка</a></li>
+      <li><b>Показання режектора</b> — <a href="freqresp.html#">Частотна характеристика</a></li>
       <li><b>Поле тривалості</b> — <a href="oscilloscope.html#">Осцилограф</a></li>
       <li><b>Попередня корекція DAC</b> — <a href="theory/index.html#">Theory ▸ Принцип роботи</a></li>
       <li><b>Попереднє спотворення</b> — <a href="theory/dac-predistortion.html#">Theory ▸ Теорія: попереднє спотворення DAC</a></li>
@@ -678,6 +708,7 @@
       <li><b>Реконструйоване биття</b> — <a href="tips.html#">Поради</a></li>
       <li><b>Рожевий</b> — <a href="theory/generator.html#">Theory ▸ Теорія: Генератор сигналів</a></li>
       <li><b>Ручна фундаментальна</b> — <a href="tips.html#">Поради</a></li>
+      <li><b>Рядок стану</b> — <a href="freqresp.html#">Частотна характеристика</a></li>
     </ul>
     <h3>С</h3>
     <ul>
@@ -693,6 +724,7 @@
       <li><b>Точність амплітуди</b> — <a href="theory/derotation-accuracy.html#">Theory ▸ Теорія: точність де-ротації</a></li>
       <li><b>Точність де-ротації</b> — <a href="theory/index.html#">Theory ▸ Принцип роботи</a></li>
       <li><b>Тригер</b> — <a href="oscilloscope.html#">Осцилограф</a></li>
+      <li><b>Тригер за глічем</b> — <a href="theory/oscilloscope.html#">Theory ▸ Теорія: Осцилограф</a></li>
       <li><b>Тригерування</b> — <a href="theory/oscilloscope.html#">Theory ▸ Теорія: Осцилограф</a></li>
       <li><b>Трикутник</b> — <a href="theory/generator.html#">Theory ▸ Теорія: Генератор сигналів</a></li>
     </ul>

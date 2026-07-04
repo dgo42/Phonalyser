@@ -38,13 +38,18 @@
   <ol start="5">
     <li><b>Увімкніть пасивний twin-T режекторний фільтр (notch) на 1 kHz</b> між DAC та ADC
         (<a href="theory/dac-predistortion.html#notch">навіщо потрібен notch</a>).</li>
+    <li><b>Налаштуйте notch на тон</b> за допомогою
+        <a href="freqresp.html#freqresp-tune-notch">майстра налаштування режектора</a>
+        (Інструменти → Налаштувати режектор): встановіть ціль на вашу частоту
+        вимірювання та підлаштовуйте потенціометри, поки живий свіп показує глибину
+        notch-фільтра й те, наскільки його нуль відхиляється від цілі.</li>
     <li><b>Виміряйте частотну характеристику notch-фільтра</b>
         <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
         та збережіть її в <em>окремий</em> файл (її ви теж де-вбудуєте).</li>
   </ol>
 
   <h2>3 · Захоплення тону</h2>
-  <ol start="7">
+  <ol start="8">
     <li><b>Запустіть синусоїду 1003 Hz</b>
         <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><polygon points="7,3.5 7,11.5 14,7.5" fill="#1ba01b"/></svg>
         — на кілька герців осторонь від 1 kHz, щоб відійти від гармонік мережі — з
@@ -64,7 +69,7 @@
   </ol>
 
   <h2>4 · Передспотворення, а потім вимірювання</h2>
-  <ol start="12">
+  <ol start="13">
     <li><b>Відкрийте майстер передспотворення DAC</b> — кнопка
         <a href="theory/dac-predistortion.html">майстра</a>
         <svg width="20" height="15" viewBox="0 0 20 15" style="vertical-align:middle"><rect x="0.5" y="0.5" width="19" height="14" rx="2.5" fill="#eef0ee" stroke="#7a7a7a"/><line x1="5" y1="12.5" x2="11.5" y2="5.5" stroke="#444" stroke-width="2" stroke-linecap="round"/><polygon points="13,1.8 13.7,3.6 15.5,4.2 13.7,4.8 13,6.6 12.3,4.8 10.5,4.2 12.3,3.6" fill="#f0a800"/><circle cx="16.5" cy="9.5" r="0.9" fill="#f0a800"/></svg>.</li>

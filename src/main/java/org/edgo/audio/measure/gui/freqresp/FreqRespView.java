@@ -147,10 +147,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private Consumer<Void> calibrationChangedListener;
     /** Bus-handler reference kept so we can unsubscribe symmetrically. */
     private Consumer<Void> compareParamsChangedListener;
-    /** Clears the chart when a sweep starts (UI thread). */
-    private Consumer<Void> measurementStartedListener;
-    /** Receives the finished stereo sweep from the worker thread. */
-    private Consumer<StereoFreqRespResult> resultAvailableListener;
 
     private int    mouseX = -1;
     private int    mouseY = -1;
@@ -215,6 +211,18 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private boolean        compareDiffCacheIec;
     private int            compareDiffCacheWindow;
 
+    /** When {@code true} this is a detached instance (the Tune-notch wizard's
+     *  embedded chart): it reads/writes only its injected {@link #prefs} and
+     *  never persists to disk nor publishes {@link Events#FREQRESP_RANGE_CHANGED},
+     *  so its channel select / pan / zoom / auto-fit can't disturb the shared
+     *  main-pane view. */
+    private boolean isolated = false;
+    /** Preference source for ALL of this view's state — range, channel
+     *  visibility, colours, line width.  The main pane passes the global
+     *  {@link Preferences#instance()}; an isolated instance gets a detached
+     *  {@link Preferences#copyForDialog()} copy so its edits stay local. */
+    private Preferences prefs;
+
     // --- Header buttons (migrated from canvas-draw to widgets) ---------------
     private Toolbar    headerBar;
     private ToolButton leftBtn;
@@ -227,7 +235,19 @@ public final class FreqRespView extends AbstractFreqDomainView {
     // lives in AbstractFreqDomainView.  Call paintCachedStatic(...) from
     // onPaint; the base owns disposal via disposeTraceBuffer().
 
+    /** Connected view for the main FreqResp pane: bound to the global
+     *  {@link Preferences#instance()}, persisting + publishing range changes
+     *  like any other pane. */
     public FreqRespView(Composite parent, FreqRespCorrectionStore correctionStore) {
+        this(parent, correctionStore, false, Preferences.instance());
+    }
+
+    /** Full constructor.  {@code isolated == true} with a detached {@code prefs}
+     *  (a {@link Preferences#copyForDialog()} copy) makes this a self-contained
+     *  embedded chart — the Tune-notch wizard's use: it drives only its own copy,
+     *  never saves to disk, and never publishes {@link Events#FREQRESP_RANGE_CHANGED},
+     *  so nothing it does touches the shared main-pane view. */
+    public FreqRespView(Composite parent, FreqRespCorrectionStore correctionStore, boolean isolated, Preferences prefs) {
         // Push prefs-driven entries (background, L/R trace, phase, RIAA)
         // through the super override map so the base allocates each
         // colour exactly once.  Common entries (grid, axis, text,
@@ -244,6 +264,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 ColorRole.LEFT_BTN_CHAN,  Preferences.instance().getOscLeftChannelColor(),
                 ColorRole.RIGHT_BTN_CHAN, Preferences.instance().getOscRightChannelColor()));
         this.correctionStore = correctionStore;
+        this.isolated = isolated;
+        this.prefs = prefs;
 
         axisFont    = Fonts.instance().normal(getDisplay());
         readoutFont = Fonts.instance().normal(getDisplay());
@@ -269,11 +291,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // might have carried in.
         // Normalise on construction: if the persisted state is both true or both false,
         // snap to L-only so the radio invariant holds from the very first paint.
-        Preferences prefs = Preferences.instance();
         if (prefs.isFreqRespLeftVisible() == prefs.isFreqRespRightVisible()) {
             prefs.setFreqRespLeftVisible(true);
             prefs.setFreqRespRightVisible(false);
-            prefs.save();
+            if (!isolated) prefs.save();
         }
         // Header buttons — ToolButton widgets in a Toolbar.  L/R is a radio (channel
         // select); phase keeps its own coloured icon; auto-setup/max are icon pushes.
@@ -296,21 +317,25 @@ public final class FreqRespView extends AbstractFreqDomainView {
         headerBar.layout();
         leftBtn.addListener(SWT.Selection, e -> {
             if (leftBtn.isToggled()) {
-                Preferences p = Preferences.instance();
-                p.setFreqRespLeftVisible(true); p.setFreqRespRightVisible(false); p.save(); redraw();
+                prefs.setFreqRespLeftVisible(true); 
+                prefs.setFreqRespRightVisible(false); 
+                if (!isolated) prefs.save(); 
+                redraw();
             }
         });
         rightBtn.addListener(SWT.Selection, e -> {
             if (rightBtn.isToggled()) {
-                Preferences p = Preferences.instance();
-                p.setFreqRespRightVisible(true); p.setFreqRespLeftVisible(false); p.save(); redraw();
+                prefs.setFreqRespRightVisible(true); 
+                prefs.setFreqRespLeftVisible(false); 
+                if (!isolated) prefs.save(); 
+                redraw();
             }
         });
         // Recolour the L/R buttons immediately when the channel colours change.
         bindChannelButtonFills(leftBtn, rightBtn);
         phaseBtn.addListener(SWT.Selection, e -> {
-            Preferences p = Preferences.instance();
-            p.setFreqRespPhaseVisible(phaseBtn.isToggled()); p.save();
+            prefs.setFreqRespPhaseVisible(phaseBtn.isToggled()); 
+            if (!isolated) prefs.save();
             repositionBanners();   // the right margin (phase axis) moved
             redraw();
         });
@@ -324,6 +349,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         addListener(SWT.MouseWheel, this::onMouseWheel);
         addListener(SWT.MouseMove,  this::onMouseMove);
         addListener(SWT.MouseExit,  e -> { mouseInPlot = false; redraw(); });
+        installRectZoom(this, true);   // drag-select zoom + Ctrl+Z undo (base machinery)
 
         // Re-trace whenever the active calibration changes (load, clear, or
         // wizard Apply).  The view divides the raw result by the new
@@ -338,20 +364,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         compareParamsChangedListener = ignored -> onCompareParamsChanged();
         bus.subscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED,
                 compareParamsChangedListener);
-        // Measurement lifecycle: clear the previous traces when a sweep
-        // starts (STARTED is published on the UI thread, so the user sees
-        // an empty chart while it runs — no confusion about whether the
-        // displayed trace is the current or previous measurement) and show
-        // both channels when the worker delivers them (worker thread —
-        // marshal before touching the canvas).
-        measurementStartedListener = ignored -> clearResults();
-        bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, measurementStartedListener);
-        resultAvailableListener = stereo -> getDisplay().asyncExec(() -> {
-            if (isDisposed() || stereo == null) return;
-            setLeftResult(stereo.left());
-            setRightResult(stereo.right());
-        });
-        bus.subscribe(Events.FREQRESP_RESULT_AVAILABLE, resultAvailableListener);
 
         // RIAA overlay prefs (Show / Reverse / IEC) are bound to their tab
         // checkboxes in the pane; the view simply subscribes to repaint when
@@ -383,14 +395,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 bus.unsubscribe(Events.FREQRESP_COMPARE_PARAMS_CHANGED,
                         compareParamsChangedListener);
             }
-            if (measurementStartedListener != null) {
-                bus.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,
-                        measurementStartedListener);
-            }
-            if (resultAvailableListener != null) {
-                bus.unsubscribe(Events.FREQRESP_RESULT_AVAILABLE,
-                        resultAvailableListener);
-            }
             disposePalette();
             // chanButtonFont / axisFont / readoutFont are shared instances
             // owned by Fonts — never disposed here.
@@ -411,7 +415,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  with the radio-style L/R toggle, only one channel is ever shown
      *  at a time so a single user-chosen colour covers both. */
     private void syncColors() {
-        Preferences prefs = Preferences.instance();
         int sig = prefs.getFreqRespSignalColor();
         setColor(ColorRole.BACKGROUND,  prefs.getFreqRespBackgroundColor());
         setColor(ColorRole.LEFT_TRACE,  sig);
@@ -463,7 +466,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  newly-smoothed trace appears even when the anchor doesn't
      *  meaningfully move. */
     public void onCompareParamsChanged() {
-        Preferences prefs = Preferences.instance();
         if (prefs.isFreqRespCompareMode()
                 && prefs.isFreqRespShowRiaa()
                 && hasAnyResult()) {
@@ -482,7 +484,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // actions (auto-setup button, compare-mode toggle on, Show RIAA
         // toggled on while compare is already on).  Saving Preferences
         // must never re-zoom the view.
-        Preferences prefs = Preferences.instance();
         if (prefs.isFreqRespCompareMode()
                 && prefs.isFreqRespShowRiaa()
                 && hasAnyResult()) {
@@ -496,7 +497,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // Loaded files already carry the calibration division baked in
         // at save time — applying it again here would double-correct.
         if (raw.isCalibrationApplied()) return raw;
-        Preferences prefs = Preferences.instance();
         List<FreqRespCorrectionStore.Entry> entries = correctionStore.getEntries();
         StereoFreqRespCalibration direct = correctionStore.getDirect();
         boolean wantCal   = prefs.isFreqRespApplyCalibration()
@@ -671,14 +671,13 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  (1 Hz → Nyquist horizontal, +20 → −150 dB vertical) and persists
      *  to {@link Preferences}.  Called from the maximize header button. */
     public void resetToDefaultView() {
-        Preferences prefs = Preferences.instance();
         prefs.setFreqRespFreqMinHz(FREQ_MIN_FLOOR_HZ);
         prefs.setFreqRespFreqMaxHz(nyquistHz());
         // Default +20 dB ceiling, but never below the corrected signal — a notch
         // un-notched well above 0 dB must still fit with headroom, not clip.
         prefs.setFreqRespMagTopDb(softMagTopDb(MAG_TOP_MAX_DB, FREQ_MIN_FLOOR_HZ, nyquistHz()));
         prefs.setFreqRespMagBotDb(MAG_DEFAULT_BOT_DB);
-        prefs.save();
+        if (!isolated) prefs.save();
         publishRangeChanged();
         redraw();
     }
@@ -696,7 +695,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  auto-setup button always fits whichever curve the user is
      *  currently looking at. */
     public void autoSetupMagnitudeRange() {
-        Preferences prefs = Preferences.instance();
         if (prefs.isFreqRespCompareMode()
                 && prefs.isFreqRespShowRiaa()
                 && hasAnyResult()) {
@@ -740,7 +738,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // is one of the two fit actions allowed to set it; scroll/zoom stay free above it.
         prefs.setFreqRespMagTopDb(softMagTopDb(newTop, FREQ_MIN_FLOOR_HZ, fHi));
         prefs.setFreqRespMagBotDb(newBot);
-        prefs.save();
+        if (!isolated) prefs.save();
         publishRangeChanged();
         redraw();
     }
@@ -777,7 +775,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  {@code setFreqRespMagTopDb}; only {@link #magCeilingDb()} uses it as a
      *  transient scrollbar bound. */
     private double softMagTopDb(double topPref, double fLo, double fHi) {
-        Preferences prefs = Preferences.instance();
         // Compare mode draws the diff curve, not the raw traces — keep the headroom
         // above the compared-signal peak (compareSmoothedMax), not leftResult/right.
         if (prefs.isFreqRespCompareMode()) {
@@ -803,6 +800,15 @@ public final class FreqRespView extends AbstractFreqDomainView {
         return softMagTopDb(MAG_TOP_MAX_DB, FREQ_MIN_FLOOR_HZ, nyquistHz());
     }
 
+    /** Shows / hides the header button row (L / R / phase / auto-setup / max).
+     *  The Tune-notch wizard embeds this view as a bare chart and hides the
+     *  controls. */
+    public void setHeaderControlsVisible(boolean v) {
+        if (headerBar != null) {
+            headerBar.setVisible(v);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Paint
     // -------------------------------------------------------------------------
@@ -811,7 +817,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         GC gc = e.gc;
         Rectangle area = getClientArea();
 
-        Preferences prefs = Preferences.instance();
         // Pick up any colour edits the user committed via OK in the
         // Preferences dialog (also fingerprinted into the static-layer
         // cache below so the trace buffer rebuilds when a colour moves).
@@ -848,7 +853,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
                     .withFormat(LabelFormat.FREQ);
             AxisSpec yLeftSpec = AxisSpec.linearNice(magBot, magTop, 10, 5.0)
                     .withFormat(LabelFormat.DB)
-                    .withUnit("dB");
+                    .withUnit(I18n.t("unit.db"));
             AxisSpec yRightSpec = phaseVisible
                     ? AxisSpec.linear(-180, 180, 8)
                             .withFormat(LabelFormat.PHASE_DEG)
@@ -879,6 +884,78 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (mouseInPlot) {
             drawCrosshair(gc, plot, freqMin, freqMax, magTop, magBot, phaseVisible);
         }
+        Rectangle canvas = getClientArea();
+        drawRectZoomOverlay(gc, canvas.width, canvas.height);
+    }
+
+    // -------------------------------------------------------------------------
+    // Rectangular zoom (base machinery in AbstractMeasurementView)
+    // -------------------------------------------------------------------------
+
+    /** X = displayed frequency window (always log), Y = the magnitude-dB
+     *  window.  The fixed ±180° phase axis is not zoom state. */
+    @Override
+    protected ZoomState captureZoomState() {
+        return new ZoomState(prefs.getFreqRespFreqMinHz(), prefs.getFreqRespFreqMaxHz(),
+                new double[] { prefs.getFreqRespMagBotDb() },
+                new double[] { prefs.getFreqRespMagTopDb() });
+    }
+
+    /** Applies through the canonical range-change protocol, clamped like the
+     *  wheel zoom; the pane's FREQRESP_RANGE_CHANGED subscriber re-syncs the
+     *  scrollbars. */
+    @Override
+    protected boolean applyZoomState(ZoomState s) {
+        double fMin = Math.max(FREQ_MIN_FLOOR_HZ, s.xMin());
+        double fMax = Math.min(nyquistHz(), s.xMax());
+        double top  = Math.min(MAG_TOP_ZOOM_MAX_DB, s.yMax()[0]);
+        double bot  = Math.max(MAG_BOT_MIN_DB, s.yMin()[0]);
+        if (fMax <= fMin || top <= bot) return false;   // degenerate after clamping
+        prefs.setFreqRespFreqMinHz(fMin);
+        prefs.setFreqRespFreqMaxHz(fMax);
+        prefs.setFreqRespMagTopDb(top);
+        prefs.setFreqRespMagBotDb(bot);
+        if (!isolated) prefs.save();
+        publishRangeChanged();
+        redraw();
+        return true;
+    }
+
+    /** Log-domain on X, linear-dB on Y — the crosshair / wheel-zoom mappings.
+     *  Returns {@code null} for a selection that clamps to a degenerate range
+     *  (e.g. the Nyquist ceiling dropped below the displayed window), so the
+     *  base cancels the zoom instead of pushing a no-op undo entry. */
+    @Override
+    protected ZoomState zoomStateForRect(Rectangle sel) {
+        Rectangle plot = zoomableArea();
+        if (plot == null) return null;
+        double fMin = Math.max(1.0, prefs.getFreqRespFreqMinHz());
+        double fMax = prefs.getFreqRespFreqMaxHz();
+        double top  = prefs.getFreqRespMagTopDb();
+        double span = top - prefs.getFreqRespMagBotDb();
+        double newTop  = Math.min(MAG_TOP_ZOOM_MAX_DB,
+                top - (sel.y - plot.y) / (double) plot.height * span);
+        double newBot  = Math.max(MAG_BOT_MIN_DB,
+                top - (sel.y + sel.height - plot.y) / (double) plot.height * span);
+        double newFMin = Math.max(FREQ_MIN_FLOOR_HZ, xToFreq(sel.x, plot, fMin, fMax, true));
+        double newFMax = Math.min(nyquistHz(), xToFreq(sel.x + sel.width, plot, fMin, fMax, true));
+        if (newFMax <= newFMin || newTop <= newBot) return null;
+        return new ZoomState(newFMin, newFMax,
+                new double[] { newBot }, new double[] { newTop });
+    }
+
+    /** Selections live inside the plot area (between the axis-label margins). */
+    @Override
+    protected Rectangle zoomableArea() {
+        Rectangle area = getClientArea();
+        if (area.width < 10 || area.height < 10) return null;
+        int rightMargin = prefs.isFreqRespPhaseVisible() ? MARGIN_RIGHT_PHASE : MARGIN_RIGHT_NO_PHASE;
+        return new Rectangle(
+                MARGIN_LEFT,
+                MARGIN_TOP,
+                Math.max(1, area.width  - MARGIN_LEFT - rightMargin),
+                Math.max(1, area.height - MARGIN_TOP  - MARGIN_BOTTOM));
+
     }
 
     /** Static-trace-layer cache key.  Lombok {@code @EqualsAndHashCode} derives
@@ -1038,7 +1115,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  so all four read identical numbers by construction. */
     private CompareDiff getCompareDiff(FreqRespResult src, boolean reverse, boolean iec) {
         int W = Math.max(0, Math.min(100,
-                Preferences.instance().getFreqRespCompareSmoothWindow()));
+                prefs.getFreqRespCompareSmoothWindow()));
         if (compareDiffCache != null
                 && compareDiffCacheSrc == src
                 && compareDiffCacheReverse == reverse
@@ -1162,8 +1239,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
         prefs.setFreqRespFreqMaxHz(25000.0);
         prefs.setFreqRespMagTopDb(newTop);
         prefs.setFreqRespMagBotDb(newBot);
-        prefs.save();
-        MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
+        if (!isolated) prefs.save();
+        publishRangeChanged();
         redraw();
     }
 
@@ -1254,7 +1331,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  active over a measurement + RIAA overlay, else hides it.  Banner only;
      *  the caller repaints the canvas for the compare trace / table. */
     private void updateCompareBanner() {
-        Preferences prefs = Preferences.instance();
         boolean show = prefs.isFreqRespCompareMode() && hasAnyResult()
                 && prefs.isFreqRespShowRiaa();
         if (!show) {
@@ -1279,7 +1355,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (!sourceBanner.getVisible() && !compareBanner.getVisible()) {
             return;
         }
-        Rectangle plot = plotRect(Preferences.instance());
+        Rectangle plot = zoomableArea();
         if (plot == null) {
             return;
         }
@@ -1300,8 +1376,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
 
     private void drawTraces(GC gc, Rectangle plot, double freqMin, double freqMax,
                             double magTop, double magBot) {
-        Preferences prefs = Preferences.instance();
-
         if (prefs.isFreqRespLeftVisible() && leftResult != null) {
             paintTrace(gc, leftResult, plot, freqMin, freqMax, magTop, magBot,
                     color(ColorRole.LEFT_TRACE));
@@ -1375,7 +1449,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
                                 DoubleUnaryOperator toY) {
         double scale = lanczosScale(freqs, freqMin, freqMax, plot.width);
         int n = freqs.length;
-        float lw = (float) Preferences.instance().getFreqRespLineWidth();
+        float lw = (float) prefs.getFreqRespLineWidth();
         if (scale > 0) {
             paintPolyline(gc, plot, color, lineStyle, lw, plot.width,
                     i -> plot.x + i,
@@ -1404,7 +1478,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         double[] phaseRad = result.getPhaseRad();
         if (freqs == null || phaseRad == null) return;
         double scale = lanczosScale(freqs, freqMin, freqMax, plot.width);
-        float lw = (float) Preferences.instance().getFreqRespLineWidth();
+        float lw = (float) prefs.getFreqRespLineWidth();
         if (scale <= 0) {
             paintPolyline(gc, plot, color, SWT.LINE_DOT, lw, freqs.length,
                     i -> freqToX(freqs[i], plot, freqMin, freqMax, true),
@@ -1448,7 +1522,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (mouseX < plot.x || mouseX > plot.x + plot.width) return;
         if (mouseY < plot.y || mouseY > plot.y + plot.height) return;
 
-        Preferences prefs = Preferences.instance();
         double frac = (mouseX - plot.x) / (double) plot.width;
         double cursorFreq = FreqRespFormat.xFractionToFreq(frac, freqMin, freqMax);
         int    sr      = lastResultSampleRate > 0 ? lastResultSampleRate
@@ -1583,7 +1656,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
         mouseX = e.x;
         mouseY = e.y;
         Rectangle area = getClientArea();
-        Preferences prefs = Preferences.instance();
         int rightMargin = prefs.isFreqRespPhaseVisible() ? MARGIN_RIGHT_PHASE : MARGIN_RIGHT_NO_PHASE;
         mouseInPlot = e.x >= MARGIN_LEFT && e.x <= area.width - rightMargin
                   && e.y >= MARGIN_TOP   && e.y <= area.height - MARGIN_BOTTOM;
@@ -1644,7 +1716,6 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  at this fraction of Nyquist instead of going right up to Fs/2
      *  (where the deconvolution kernel's energy rolls off). */
     private double nyquistHz() {
-        Preferences prefs = Preferences.instance();
         int sr = lastResultSampleRate > 0 ? lastResultSampleRate
                 : prefs.current().getInputSampleRate();
         double frac = prefs.getFreqRespNyquistFraction();
@@ -1653,11 +1724,10 @@ public final class FreqRespView extends AbstractFreqDomainView {
     }
 
     private void zoomFrequencyAroundCursor(int dir) {
-        Preferences prefs = Preferences.instance();
         double fMin = prefs.getFreqRespFreqMinHz();
         double fMax = prefs.getFreqRespFreqMaxHz();
         if (fMin <= 0) fMin = 1.0;
-        Rectangle plot = plotRect(prefs);
+        Rectangle plot = zoomableArea();
         if (plot == null) return;
         double frac = (mouseX - plot.x) / (double) plot.width;
         double cursorF = FreqRespFormat.xFractionToFreq(frac, fMin, fMax);
@@ -1673,16 +1743,15 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (newMin >= newMax) return;
         prefs.setFreqRespFreqMinHz(newMin);
         prefs.setFreqRespFreqMaxHz(newMax);
-        prefs.save();
+        if (!isolated) prefs.save();
         publishRangeChanged();
         redraw();
     }
 
     private void zoomMagnitudeAroundCursor(int dir) {
-        Preferences prefs = Preferences.instance();
         double magTop = prefs.getFreqRespMagTopDb();
         double magBot = prefs.getFreqRespMagBotDb();
-        Rectangle plot = plotRect(prefs);
+        Rectangle plot = zoomableArea();
         if (plot == null) return;
         double frac = (mouseY - plot.y) / (double) plot.height;
         double cursorDb = magTop - frac * (magTop - magBot);
@@ -1700,13 +1769,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (newTop <= newBot) return;
         prefs.setFreqRespMagTopDb(newTop);
         prefs.setFreqRespMagBotDb(newBot);
-        prefs.save();
+        if (!isolated) prefs.save();
         publishRangeChanged();
         redraw();
     }
 
     private void panFrequency(int dir) {
-        Preferences prefs = Preferences.instance();
         double fMin = prefs.getFreqRespFreqMinHz();
         double fMax = prefs.getFreqRespFreqMaxHz();
         if (fMin <= 0) fMin = 1.0;
@@ -1727,13 +1795,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
         }
         prefs.setFreqRespFreqMinHz(newMin);
         prefs.setFreqRespFreqMaxHz(newMax);
-        prefs.save();
+        if (!isolated) prefs.save();
         publishRangeChanged();
         redraw();
     }
 
     private void panMagnitude(int dir) {
-        Preferences prefs = Preferences.instance();
         double magTop = prefs.getFreqRespMagTopDb();
         double magBot = prefs.getFreqRespMagBotDb();
         double span = magTop - magBot;
@@ -1750,24 +1817,13 @@ public final class FreqRespView extends AbstractFreqDomainView {
         }
         prefs.setFreqRespMagTopDb(newTop);
         prefs.setFreqRespMagBotDb(newBot);
-        prefs.save();
+        if (!isolated) prefs.save();
         publishRangeChanged();
         redraw();
     }
 
-    private Rectangle plotRect(Preferences prefs) {
-        Rectangle area = getClientArea();
-        if (area.width < 10 || area.height < 10) return null;
-        int rightMargin = prefs.isFreqRespPhaseVisible() ? MARGIN_RIGHT_PHASE : MARGIN_RIGHT_NO_PHASE;
-        return new Rectangle(
-                MARGIN_LEFT,
-                MARGIN_TOP,
-                Math.max(1, area.width  - MARGIN_LEFT - rightMargin),
-                Math.max(1, area.height - MARGIN_TOP  - MARGIN_BOTTOM));
-    }
-
     private void publishRangeChanged() {
-        MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
+        if (!isolated) MessageBus.instance().publish(Events.FREQRESP_RANGE_CHANGED);
     }
 
     // -------------------------------------------------------------------------

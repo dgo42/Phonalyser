@@ -55,24 +55,22 @@ class ScopeNavTest {
     }
 
     @Test
-    void clampFrozenOffset_keepsSliverOverlappingBuffer() {
-        double anchor = 500;
-        int    disp   = 100;
-        // a big POSITIVE offset drives the window far left → clamped so the oldest
-        // sliver sits at the right edge
-        double hi = NAV.clampFrozenOffset(10.0, anchor, disp, 0, 1000, 2.0);
-        assertEquals(-98.0, NAV.viewLeftAbs(anchor, hi, disp), 1e-6);   // oldest-disp+2
-        // a big NEGATIVE offset drives it far right → newest sliver at the left edge
-        double lo = NAV.clampFrozenOffset(-10.0, anchor, disp, 0, 1000, 2.0);
-        assertEquals(998.0, NAV.viewLeftAbs(anchor, lo, disp), 1e-6);   // latest-2
-        // in-range value passes through
-        assertEquals(0.5, NAV.clampFrozenOffset(0.5, anchor, disp, 0, 1000, 2.0), 1e-9);
+    void moveFileCentre_divisionsAndClamp() {
+        // wheel tick = −½ div × 10 samples/div = −5 samples
+        assertEquals(495.0, NAV.moveFileCentre(500, -0.5, 10.0, 100, 0, 1000), 1e-9);
+        assertEquals(950.0, NAV.moveFileCentre(950, +0.5, 10.0, 100, 0, 1000), 1e-9);   // clamped at maxC
     }
 
     @Test
-    void moveFileCentre_halfDivAndClamp() {
-        assertEquals(495.0, NAV.moveFileCentre(500, +1, 100, 0, 1000), 1e-9);   // ½ div = 5
-        assertEquals(950.0, NAV.moveFileCentre(950, -1, 100, 0, 1000), 1e-9);   // clamped at maxC
+    void moveFileCentre_fractionalStepsAccumulateExactly() {
+        // ⅕-div arrow steps at 200 µs/div, 44.1 kHz: samplesPerDiv = 8.82 → 1.764
+        // samples per step, carried as an exact double (never rounded to whole
+        // samples or scrollbar units).
+        double c = 500;
+        for (int i = 0; i < 3; i++) {
+            c = NAV.moveFileCentre(c, 0.2, 8.82, 100, 0, 1000);
+        }
+        assertEquals(500 + 3 * 0.2 * 8.82, c, 1e-9);
     }
 
     @Test

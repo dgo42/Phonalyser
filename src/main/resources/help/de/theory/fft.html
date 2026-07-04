@@ -364,9 +364,10 @@
 
   <h3>Signaldiskontinuität — im Spektrum erkannt</h3>
   <p>Subtilere Brüche — der pausierende Generator (das Signal wird abgestanden),
-     ein Erfassungsschluckauf, der eine Spanne verschluckt, ein Phasensprung — sind
-     im Zeitbereich schwer zu überwachen, wenn das Signal schwach ist. Die Erkennung
-     erfolgt daher im Frequenzbereich, wo jeder neue Block mit der laufenden
+     ein Erfassungsschluckauf, der eine Spanne verschluckt, ein Phasensprung —
+     hinterlassen kein gemeldetes Loch im Strom: Sie müssen im Signal selbst
+     gefunden werden. Die Erkennung läuft an zwei komplementären Fronten. Die
+     erste ist der Frequenzbereich, wo jeder neue Block mit der laufenden
      Statistik der bereits akzeptierten Blöcke verglichen wird. Pro Block:</p>
   <ol>
     <li>Das Spektrum wird auf eine Menge <b>logarithmisch beabstandeter
@@ -400,8 +401,51 @@
      sodass ein früher Glitch weder die Referenz vergiften noch später falsche
      Verwerfungen verursachen kann.</p>
 
+  <h3>Signaldiskontinuität — in der rohen Wellenform erwischt</h3>
+  <p>Die spektralen Gates beurteilen einen Block nach seiner Statistik, und
+     Statistik lässt sich verdünnen: Ein Schnitt von gut hundert Mikrosekunden
+     — die beobachteten USB-Erfassungsausfälle liegen bei 120–160 µs — sitzt in
+     einem Block, der Sekunden umspannen kann, und seine verspritzte Energie,
+     über das gesamte Spektrum verteilt, kann unter Schwellen bleiben, die
+     großzügig genug sein müssen, um nicht auf gewöhnliches Leck-Atmen
+     anzuschlagen. Deshalb werden auch die rohen Abtastwerte jedes Blocks
+     durchleuchtet, und zwar vom <b>selben Diskontinuitätsdetektor, der den
+     Glitch-Trigger des Oszilloskops antreibt</b>: einem Sinus-Rekurrenz-
+     Prädiktor, dessen Fehler-Basislinie das Grundrauschen selbst ist — nicht
+     die eigene Krümmung des Signals —, sodass eine Amplitudenstufe oder ein
+     Steigungsbruch Dekaden darüber herausragt, überall auf der Wellenform und
+     bei jeder Frequenz. (Die Herleitung des Prädiktors — und warum die naive
+     zweite Differenz bei hohen Frequenzen taub wird — steht im
+     <a href="oscilloscope.html#trigger">Trigger-Abschnitt des
+     Oszilloskop-Kapitels</a>.) Der Prädiktor wird auf den gemessenen Grundton
+     festgelegt, wenn einer bekannt ist, und schätzt seinen Koeffizienten sonst
+     selbst, sodass die Durchleuchtung auch bei externen Signalen funktioniert.
+     Schlägt er an, wird der Block ausgeschlossen und der Strom synchronisiert
+     sich neu, genau wie bei einer spektralen Verwerfung.</p>
+  <p>Die beiden Durchleuchtungen decken gegenseitig ihre blinden Flecken ab.
+     Die Zeitbereichs-Prüfung fängt den scharfen, lokalen Bruch ein, dessen
+     spektraler Fußabdruck schwach ist — verlorene Abtastwerte, ein
+     Wandler-Abriss, ein Phasenschnitt; die spektralen Gates fangen Schäden ein,
+     bei denen jeder einzelne Abtastwert plausibel bleibt — eine gleichmäßige
+     Bodenanhebung oder ein stehengebliebener Generator, dessen Ausgang perfekt
+     glatt, aber abgestanden ist. Und weil sich der Analysator und das
+     Oszilloskop einen Detektor teilen, sind sich die beiden Instrumente einig,
+     was als beschädigte Erfassung zählt: Ein Glitch, auf den das Oszilloskop
+     triggert, ist ein Block, den die Mittelung verweigert.</p>
+  <p>Eine Timing-Feinheit betrifft die Neusynchronisation selbst. Der Detektor
+     schlägt an der <em>Eintritts</em>kante des Glitches an — aber der Ausfall,
+     der den Alarm ausgelöst hat, kann noch im Gange sein, wenn sich der
+     Lese-Cursor am neuesten Abtastwert neu verankert, sodass ein sofortiger
+     Neuaufbau das neue Fenster <em>innerhalb</em> des Glitches beginnen und den
+     Detektor am selben Ereignis erneut auslösen könnte. Nach einer
+     Diskontinuitäts-Neusynchronisation liest der Analysator daher die ersten
+     <b>5 ms</b> frischer Abtastwerte und <b>verwirft sie</b> — etwa das 30- bis
+     40-Fache der beobachteten Ausfalllänge —, bevor er neu aufbaut, sodass der
+     erste Block nach einer Neusynchronisation nachweislich hinter dem Ende des
+     Glitches beginnt und sauber in die Mittelung eingeht.</p>
+
   <div class="note"><b>Was eine Neusynchronisation kostet — und was nicht.</b>  In
-     beiden Fällen wird das störende Fenster verworfen und der Strom verankert sich
+     jedem Fall wird das störende Fenster verworfen und der Strom verankert sich
      neu, aber die <em>akkumulierte Mittelung überlebt</em>: Die De-Rotation
      absorbiert die Abdeckungslücke, und die laufende Phasenverriegelung wendet beim
      nächsten sauberen Block eine einmalige vollständige Neuausrichtung an (ein neu
