@@ -268,16 +268,9 @@ export class AudioEngine {
   get outSampleRate() { return this._gen.outSampleRate; }
   get genNode() { return this._gen.genNode; }
   get _genOn() { return this._gen.running; }
-  get genFreq() { return this._gen.genFreq; }
-  set genFreq(v) { this._gen.genFreq = v; }
-  get fllErrHz() { return this._gen.fllErrHz; }
-  set fllErrHz(v) { this._gen.fllErrHz = v; }
-  get fllLocked() { return this._gen.fllLocked; }
-  set fllLocked(v) { this._gen.fllLocked = v; }
-  get fllStable() { return this._gen.fllStable; }
-  set fllStable(v) { this._gen.fllStable = v; }
-  get rejectedCount() { return this._gen.rejectedCount; }
-  set rejectedCount(v) { this._gen.rejectedCount = v; }
+  // FLL state (genFreq/fllErrHz/fllLocked/fllStable/rejectedCount) now lives on FftController;
+  // the FFT loop publishes GENERATOR_FREQ_TRIM and the generator applies it. Not exposed here —
+  // the display reads it off the emitted FftResult.fll.
 
   async startGenerator() { return this._gen.startGenerator(); }
 
