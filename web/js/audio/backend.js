@@ -88,6 +88,17 @@ export class AudioEngine {
       onBatch: (d) => this._dispatchBatch(d),
       computeAnalysisFreqs: () => this._gen.computeAnalysisFreqs(),
     });
+    // DEDICATED MEASUREMENT capture (Java CaptureWithGenerator / NotchSweepEngine each open
+    // their OWN device line): the FreqResp sweep + Tune-notch wizard acquire/release THIS
+    // instance — a SEPARATE input device line from the scope/FFT _capture above — so a
+    // measurement never rides the live consumers' ring. Its batch fan-out is the FreqResp
+    // loopback recording tap only (the Tune-notch wizard reads this ring via its own cursor).
+    this._measCapture = new SharedCapture({
+      getConfig: () => this.config,
+      status: (t) => this._status(t),
+      onBatch: (d) => this._dispatchMeasBatch(d),
+      computeAnalysisFreqs: () => this._gen.computeAnalysisFreqs(),
+    });
     // Scope consumer (gui/scope/ScopeController): a latest-window reader of the shared capture.
     this._scope = new ScopeController(this._capture, this.config, { getSnapped: () => this._gen.snapped });
     // FFT consumer (gui/fft/FftController): the worker pool + cross-frame coherent accumulator +
@@ -120,7 +131,7 @@ export class AudioEngine {
    *  is open (any consumer holds a reference). Mirrors SharedCapture.isCapturing
    *  ORed with the generator-running state; freqresp/predistortion gate on it. */
   get running() {
-    return this._genOn || this._capture.refCount > 0;
+    return this._genOn || this._capture.refCount > 0 || this._measCapture.refCount > 0;
   }
 
   /** True when BOTH the input and output devices are genuinely free — no consumer holds the
@@ -132,6 +143,7 @@ export class AudioEngine {
    *  NotReadableError (a self-contention). Composed from the two controllers' context state. */
   get deviceIdle() {
     return this._capture.refCount === 0 && !this._capture.contextOpen
+      && this._measCapture.refCount === 0 && !this._measCapture.contextOpen
       && !this._gen.running && !this._gen.filePlaying && !this._gen.outputContextOpen;
   }
 
@@ -149,8 +161,10 @@ export class AudioEngine {
   async startCaptureRecording() {
     this._recChunks = { l: [], r: [] };
     this._recOwnsCapture = false;
-    if (this._capture.refCount === 0) {
-      const reader = await this._capture.acquire();
+    // Open our OWN measurement device line (device-isolated from scope/FFT). A measurement is
+    // modal, so _measCapture.refCount is 0 here and we always acquire our own reference.
+    if (this._measCapture.refCount === 0) {
+      const reader = await this._measCapture.acquire();
       this._recOwnsCapture = (reader != null);
     }
   }
@@ -183,7 +197,7 @@ export class AudioEngine {
     };
     const left = concat(rec.l);
     const right = concat(rec.r);
-    if (this._recOwnsCapture) { this._recOwnsCapture = false; await this._capture.release(); }
+    if (this._recOwnsCapture) { this._recOwnsCapture = false; await this._measCapture.release(); }
     return { left, right };
   }
 
@@ -315,33 +329,36 @@ export class AudioEngine {
   async reopenCaptureDevice() {
     if (this._capture.refCount === 0) return;   // closed → next start picks up the new id
     // Remember which consumers were attached; teardown drops the refcount to 0.
-    const scopeWas = this._scope.recording, fftWas = this._fft.recording, recWas = (this._recChunks != null);
+    const scopeWas = this._scope.recording, fftWas = this._fft.recording;
     await this._capture.teardown();
     // Re-acquire once per previously-attached consumer so the refcount is restored.
+    // Only the LIVE scope/FFT capture is reopened here; a measurement runs on its own device
+    // line (_measCapture) and is modal, so it is never live during a device-selector change.
     if (scopeWas) await this._scope.reattach();
     if (fftWas) await this._fft.reattach();
-    if (recWas && this._recOwnsCapture) {
-      const r = await this._capture.acquire();
-      this._recOwnsCapture = (r != null);
-    }
   }
 
-  /** Per-batch consumer fan-out, invoked by SharedCapture after it stages the new samples into the
-   *  shared ring: the loopback recording tap keeps BOTH ADC channels (the stereo sweep), then each
-   *  active consumer reads off its OWN cursor. */
+  /** Per-batch fan-out for the LIVE (scope/FFT) capture, invoked by SharedCapture after it
+   *  stages new samples: each active consumer reads off its OWN cursor. The loopback recording
+   *  tap moved to the dedicated measurement capture (_dispatchMeasBatch), so this drives only
+   *  the live consumers. (The _measurementActive gate is now redundant — the live capture is
+   *  released while a measurement runs on its own device — and is retired in the batch-event
+   *  refactor.) */
   _dispatchBatch(d) {
-    // Loopback recording tap: keep BOTH ADC channels (L = ch0, R = ch1 = measured signal) so
-    // the stereo sweep can deconvolve each side against the same reference.
+    if (this._measurementActive) return;
+    if (this._scope.recording) this._scope.feedScope();
+    if (this._fft.recording && !this._fft.pausedByStopN) this._fft.feedFft();
+  }
+
+  /** Per-batch fan-out for the dedicated MEASUREMENT capture (_measCapture): the FreqResp
+   *  stereo loopback recording tap — keep BOTH ADC channels (L = ch0, R = ch1) for the
+   *  deconvolution. The Tune-notch wizard reads the measurement ring through its own cursor,
+   *  so it needs nothing here. */
+  _dispatchMeasBatch(d) {
     if (this._recChunks) {
       this._recChunks.l.push(Float64Array.from(d.l.subarray(0, d.n)));
       this._recChunks.r.push(Float64Array.from(d.r.subarray(0, d.n)));
     }
-    // A measurement (main FreqResp loopback or the Tune-notch wizard) owns the capture
-    // exclusively — do NOT also drive the scope / FFT consumers off the sweep batches,
-    // even if a consumer's record flag is stale. The recording tap above still runs.
-    if (this._measurementActive) return;
-    if (this._scope.recording) this._scope.feedScope();
-    if (this._fft.recording && !this._fft.pausedByStopN) this._fft.feedFft();
   }
 
   // -------------------------------------------------------------------------
@@ -361,6 +378,18 @@ export class AudioEngine {
   /** Releases one capture reference taken by {@link #acquireCaptureReader}
    *  (mirror MessageBus.publish(CAPTURE_RELEASE)). */
   async releaseCaptureReader() { return this._capture.release(); }
+
+  /** Acquires a cursor over the DEDICATED MEASUREMENT capture ring (the Tune-notch wizard's
+   *  live sweep loop) — its OWN device line, isolated from the scope/FFT capture above.
+   *  Returns the SignalBufferReader or null; pair with {@link #releaseMeasurementReader}. */
+  async acquireMeasurementReader() { return this._measCapture.acquire(); }
+
+  /** Releases one reference on the measurement capture ({@link #acquireMeasurementReader}). */
+  async releaseMeasurementReader() { return this._measCapture.release(); }
+
+  /** The last MEASUREMENT-device open failure message (surfaced when a FreqResp / Tune-notch
+   *  capture fails to open) — the measurement capture's error, not the scope/FFT one. */
+  getMeasurementStartError() { return this._measCapture.getLastStartError(); }
 
   /** The shared ring capacity in frames (BUFFER_SECONDS · inRate) — the streaming
    *  dispatch routes a request longer than this to the forward-record path. */

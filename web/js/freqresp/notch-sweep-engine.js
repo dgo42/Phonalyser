@@ -28,19 +28,21 @@
 // Intended web adaptations (the Java engine owns JavaSound lines + its own
 // ring + a MAX_PRIORITY generator thread; the web has neither raw lines nor
 // threads):
-//   - Playback goes through the shared dds-processor worklet via an injected
-//     postGen(msg) (the same message shape FreqRespHost.runSweep uses); the
-//     kernel's looping logSweepNext IS the port of the Java generator's, so
-//     the seam-fade semantics are identical. The caller (wizard UI) owns
-//     commandeering/restoring the DDS form around the session, mirroring
-//     runSweep's pattern.
-//   - Capture rides the injected SharedCapture (acquire/release refcount) and
-//     its 22 s SignalBuffer ring instead of a private RING_PERIODS-sized ring;
-//     latestPeriod() maps onto readLatest() with a session-start anchor so
-//     pre-session audio can never be served. The capture worklet already
-//     delivers normalised [-1, +1] floats, so Java's raw-ADC-code/halfRange
-//     conversion (bitDepth/ditherBits) does not exist here — an intended web
-//     divergence (no bit-depth selector).
+//   - Playback goes through the shared dds-processor worklet, but THIS engine owns the
+//     generator lifecycle for the session (like Java, whose NotchSweepEngine owns its own
+//     playback line): start() snapshots the DDS config, points the generator at a silent
+//     looping Farina sweep and starts it (injected startGenerator), drives it via postGen(msg),
+//     then un-mutes at the real amplitude; close() stops the generator and restores the config.
+//     The kernel's looping logSweepNext IS the port of the Java generator's, so the seam-fade
+//     semantics are identical. The wizard UI no longer commandeers the DDS.
+//   - Capture uses an injected DEDICATED measurement capture (acquire/release) — a SEPARATE
+//     input device line from the live scope/FFT capture, so a measurement never rides the live
+//     consumers' ring (Java opens its own device line per measurement: "no device-line reuse
+//     across captures"). Its 22 s SignalBuffer ring stands in for Java's private RING_PERIODS
+//     ring; latestPeriod() maps onto readLatest() with a session-start anchor so pre-session
+//     audio can never be served. The capture worklet delivers normalised [-1, +1] floats, so
+//     Java's raw-ADC-code/halfRange conversion (bitDepth/ditherBits) does not exist here — an
+//     intended web divergence (no bit-depth selector).
 //   - sweepRef() re-renders the reference locally (renderLogSweep, the port of
 //     SignalGenerator#renderLogSweep the kernel itself uses) instead of taking
 //     the generator thread's live buffer back; on setBand() it re-renders so
@@ -206,16 +208,21 @@ export class NotchSweepEngine {
    * @param {number} deps.sampleRate capture sample rate (Hz) the deconvolution
    *   runs at
    */
-  constructor({ sharedCapture, postGen, sampleRate }) {
-    this._capture = sharedCapture;
+  constructor({ capture, config, startGenerator, stopGenerator, postGen, sampleRate }) {
+    this._capture = capture;                 // the dedicated MEASUREMENT capture (own device line)
+    this._config = config;                   // shared DDS config — snapshot/set/restore within
+    this._startGenerator = startGenerator;   // () => start the DDS generator (returns error key|null)
+    this._stopGenerator = stopGenerator;     // () => stop the DDS generator
     this._postGen = postGen;
     this._sampleRate = sampleRate;
     // Session state, set up in start() and torn down in close().
-    this._reader = null;         // SignalBufferReader over the shared ring
+    this._reader = null;         // SignalBufferReader over the measurement ring
     this._startWritePos = 0;     // ring write position at start() — the anchor
     this._sweepSamples = 0;
     this._fadeSamples = 0;
     this._sweepRefBuf = null;    // cached one-period reference X(t)
+    this._savedGenConfig = null; // pre-session DDS config, restored on close()
+    this._genStarted = false;
     this._running = false;
   }
 
@@ -270,12 +277,37 @@ export class NotchSweepEngine {
     this._fadeSamples = fadeSamples;
     this._sweepRefBuf = renderLogSweep(f0, f1, sweepSamples, this._sampleRate);
 
+    // Snapshot the shared DDS config, then point the generator at a SILENT looping Farina
+    // sweep and start it — this engine owns the generator lifecycle (the wizard no longer
+    // touches engine.config or startGenerator; Java NotchSweepEngine owns its own playback).
+    const c = this._config;
+    this._savedGenConfig = {
+      form: c.form, ampVrms: c.ampVrms,
+      sweepStartHz: c.sweepStartHz, sweepEndHz: c.sweepEndHz,
+      sweepDurationSec: c.sweepDurationSec, sweepLoop: c.sweepLoop,
+      sweepFadeInSec: c.sweepFadeInSec, sweepFadeOutSec: c.sweepFadeOutSec,
+    };
+    c.form = GenSignalForm.LOG_SWEEP;
+    c.ampVrms = 0;   // start silent — the postGen below un-mutes with the real amplitude
+    c.sweepStartHz = f0; c.sweepEndHz = f1;
+    c.sweepDurationSec = sweepSamples / this._sampleRate;
+    c.sweepLoop = true;
+    c.sweepFadeInSec = fadeSamples / this._sampleRate;
+    c.sweepFadeOutSec = fadeSamples / this._sampleRate;
+    const startErr = await this._startGenerator();
+    if (startErr) { this._restoreGenConfig(); throw new Error(startErr); }
+    this._genStarted = true;
+
+    // Open OUR OWN measurement capture line (device-isolated from scope/FFT).
     this._reader = await this._capture.acquire();
     if (!this._reader) {
-      throw new Error(this._capture.getLastStartError() || 'capture start failed');
+      const err = this._capture.getLastStartError() || 'capture start failed';
+      await this._stopGeneratorAndRestore();
+      throw new Error(err);
     }
     this._startWritePos = this._reader.getWritePos();
 
+    // Point the now-running DDS at the looping sweep at the real amplitude.
     this._postGen({
       amplitudeVRms: ampVrms,
       dacFsVoltageAmpl: dacFsVrms,
@@ -285,6 +317,23 @@ export class NotchSweepEngine {
     });
     this._postGen({ form: GenSignalForm.LOG_SWEEP });
     this._running = true;
+  }
+
+  /** Restores the pre-session DDS config snapshot (no generator action). */
+  _restoreGenConfig() {
+    if (this._savedGenConfig) {
+      Object.assign(this._config, this._savedGenConfig);
+      this._savedGenConfig = null;
+    }
+  }
+
+  /** Stops the generator (if started) and restores the pre-session DDS config. */
+  async _stopGeneratorAndRestore() {
+    if (this._genStarted) {
+      this._genStarted = false;
+      try { await this._stopGenerator(); } catch (_) { /* ignore */ }
+    }
+    this._restoreGenConfig();
   }
 
   /**
@@ -341,11 +390,12 @@ export class NotchSweepEngine {
    * setBand() after close is a no-op.
    */
   async close() {
-    if (!this._running && !this._reader) return;
+    if (!this._running && !this._reader && !this._genStarted) return;
     this._running = false;
     const reader = this._reader;
     this._reader = null;
     this._sweepRefBuf = null;
     if (reader) await this._capture.release();
+    await this._stopGeneratorAndRestore();
   }
 }

@@ -638,9 +638,9 @@ $('#frTabs .tab').on('click', function () {
 // accumulator (Java FftView:511/514 buttons → setFftChannel → fftChannelProperty
 // subscription → resetStatistics). The .frc de-embed then picks the matching
 // channel off r.channelLeft (fft-view-correction.js), already done.
-$('.fft-pane .lr.l, .fft-pane .lr.r').on('click', function () {
+$('#fftPane .lr.l, #fftPane .lr.r').on('click', function () {
   const isLeft = $(this).hasClass('l');
-  $('.fft-pane .lr.l, .fft-pane .lr.r').removeClass('on'); $(this).addClass('on');
+  $('#fftPane .lr.l, #fftPane .lr.r').removeClass('on'); $(this).addClass('on');
   prefs.fftChannel.set(isLeft ? 'L' : 'R');
   engine.setFftChannel(isLeft ? 'L' : 'R');
 });
