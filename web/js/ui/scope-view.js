@@ -1352,31 +1352,58 @@ export class ScopeView {
     // levelLineStartX / offsetLineRightEnd). Kept as a FIXED px inset in the DOM so
     // the clip tracks the on-screen handle size, not the stretched canvas.
     const HANDLE_INSET = SLIDER_TRI_LONG + 4;
+    const LABEL_GAP = 4;   // Java's +4 between a value label and where the dashed line resumes.
+    const measCh = p ? p.oscMeasurementChannel.get() : 'L';
+    const activeDesc = descByName[measCh] || descByName.L || descByName.R;
+    const trigCh = p ? p.oscTriggerChannel.get() : 'L';
+    const trigD = descByName[trigCh] || descByName.L || descByName.R;
 
-    // ----- Trigger level: dashed horizontal line + LEFT-pointing handle on the
-    // RIGHT edge (always bright yellow). The line stops short of the LEFT edge so it
-    // clears the offset-channel handles there (Java levelLineStartX). Hidden in file
-    // mode. The hit-box is still set in CANVAS px so dragging is unchanged.
+    // ----- PASS 1: set the VALUE labels first so their measured widths can clip the dashed
+    // lines short of them (Java measures textExtent, then stops each line before BOTH its own
+    // label and the opposite side's — levelLineStartX / offsetLineRightEnd). All label writes
+    // happen before the width reads so there is a single forced reflow per paint, not thrash.
+    let trigW = 0; const offW = { L: 0, R: 0 };
+    if (o) {
+      if (!this.fileMode && trigD) {
+        // Trigger-level voltage: UNCLAMPED level + trigger channel's UNCLAMPED offset, so a
+        // virtual (off-screen) level still states its real threshold. Yellow, at the right handle.
+        const levelFracRaw = p ? p.oscTriggerLevelFrac.get() : levelFrac;
+        const levelVolts = (trigD.offsetFrac - levelFracRaw) * DIVISIONS_Y * trigD.vDiv;
+        this._setOverlayLabel(o.trigLevelVal, this._fmtVolts(levelVolts, trigD.vDiv), '#ffff00', '',
+          { right: (SLIDER_TRI_LONG + 6) + 'px', top: (levelFrac * 100) + '%', transform: 'translateY(-50%)' });
+      } else { o.trigLevelVal.style.display = 'none'; }
+      o.offsetVal.L.style.display = 'none'; o.offsetVal.R.style.display = 'none';
+      if (activeDesc) {
+        for (const ch of ['L', 'R']) {
+          const d = descByName[ch];
+          if (!d) continue;
+          // Offset voltage = (0.5 − rawOffsetFrac)·Ydiv·vDiv. FULL channel colour even when
+          // inactive (Java drawOffsetTrack dims only the triangle). At the left handle.
+          const offsetVolts = (0.5 - d.offsetFrac) * DIVISIONS_Y * d.vDiv;
+          this._setOverlayLabel(o.offsetVal[ch], this._fmtVolts(offsetVolts, d.vDiv), d.hex, '',
+            { left: (SLIDER_TRI_LONG + 6) + 'px', top: (clamp01(d.offsetFrac) * 100) + '%', transform: 'translateY(-50%)' });
+        }
+      }
+      // Batched width reads (one reflow, after all the writes above).
+      if (o.trigLevelVal.style.display !== 'none') trigW = o.trigLevelVal.offsetWidth;
+      if (o.offsetVal.L.style.display !== 'none') offW.L = o.offsetVal.L.offsetWidth;
+      if (o.offsetVal.R.style.display !== 'none') offW.R = o.offsetVal.R.offsetWidth;
+    }
+    const maxOffW = Math.max(offW.L, offW.R);
+    // A dashed line stops this far from the RIGHT edge to clear the trigger value label.
+    const trigRightClip = HANDLE_INSET + trigW + LABEL_GAP;
+
+    // ----- PASS 2: position the dashed lines + handles. Trigger level: LEFT end clears the
+    // offset labels (maxOffW), RIGHT end clears its OWN value label (trigW). Always yellow.
+    // Hidden in file mode. Hit-box in CANVAS px so dragging is unchanged.
     if (!this.fileMode) {
       const levelY = Math.round(levelFrac * H);
-      if (o) {
-        this._positionSlider(o.trigLevel, 'h', levelFrac, '#ffff00', HANDLE_INSET, 0);
-        // Trigger-level VOLTAGE label (Java drawSliders levelVolts): uses the UNCLAMPED level
-        // + the trigger channel's UNCLAMPED offset so a virtual (off-screen) level still states
-        // its real threshold. Yellow, right edge, left of the handle, centred on the line.
-        const trigCh = p ? p.oscTriggerChannel.get() : 'L';
-        const trigD = descByName[trigCh] || descByName.L || descByName.R;
-        if (trigD) {
-          const levelFracRaw = p ? p.oscTriggerLevelFrac.get() : levelFrac;
-          const levelVolts = (trigD.offsetFrac - levelFracRaw) * DIVISIONS_Y * trigD.vDiv;
-          this._setOverlayLabel(o.trigLevelVal, this._fmtVolts(levelVolts, trigD.vDiv), '#ffff00', '',
-            { right: (SLIDER_TRI_LONG + 6) + 'px', top: (levelFrac * 100) + '%', transform: 'translateY(-50%)' });
-        } else { o.trigLevelVal.style.display = 'none'; }
-      }
+      if (o) this._positionSlider(o.trigLevel, 'h', levelFrac, '#ffff00',
+        HANDLE_INSET + maxOffW + LABEL_GAP, trigRightClip);
       this._triggerLevelBounds = { x: W - SLIDER_TRI_LONG - 2, y: levelY - SLIDER_GRAB_HALF,
         w: SLIDER_TRI_LONG + 4, h: 2 * SLIDER_GRAB_HALF };
     } else {
-      if (o) { this._hideSlider(o.trigLevel); o.trigLevelVal.style.display = 'none'; }
+      if (o) this._hideSlider(o.trigLevel);
       this._triggerLevelBounds = { x: -1, y: -1, w: 0, h: 0 };
     }
 
@@ -1392,41 +1419,27 @@ export class ScopeView {
       this._triggerPosBounds = { x: -1, y: -1, w: 0, h: 0 };
     }
 
-    // ----- Channel offsets: each enabled channel's zero-line + RIGHT-pointing handle
-    // on the LEFT edge (Java drawSliders: drawOffsetTrack per channel). The ACTIVE
-    // (measurement) channel's line is its full trace colour and its handle is
-    // draggable (registers the hit-box); every OTHER channel's line is a darker
-    // (~0.5 attenuated) variant of its trace colour. The line is clipped at BOTH ends
-    // so it clears its own left handle and the trigger-level handle on the right
-    // (Java offsetLineRightEnd / C36 clip).
-    const measCh = p ? p.oscMeasurementChannel.get() : 'L';
-    const activeDesc = descByName[measCh] || descByName.L || descByName.R;
+    // ----- Channel offset lines: LEFT end clears the offset's OWN value label (offW[ch]),
+    // RIGHT end clears the trigger-level label (trigRightClip) — Java drawOffsetTrack lineStartX
+    // / offsetLineRightEnd. The ACTIVE (measurement) channel's line is its full trace colour and
+    // its handle is draggable (registers the hit-box); every OTHER channel's line is a darker
+    // (~0.5 attenuated) variant. The value labels were already set in PASS 1.
     const placeOffset = (ch, d, hex, isActive) => {
       const offsetY = Math.round(clamp01(d.offsetFrac) * H);
       if (o) {
         const s = o.offset[ch];
-        this._positionSlider(s, 'h', clamp01(d.offsetFrac), hex, HANDLE_INSET, HANDLE_INSET);
+        this._positionSlider(s, 'h', clamp01(d.offsetFrac), hex, HANDLE_INSET + offW[ch] + LABEL_GAP, trigRightClip);
         // Active channel paints above the inactive one on exact-overlap (Java draws
         // inactive first, active last): lift the active line/handle a stacking level.
         const z = isActive ? '1' : '';
         s.core.style.zIndex = z; s.handle.style.zIndex = z;
-        // Offset VOLTAGE label (Java drawOffsetTrack): (0.5 − rawOffsetFrac)·Ydiv·vDiv, in the
-        // channel colour, left edge, right of the handle, centred on the zero-line.
-        const offsetVolts = (0.5 - d.offsetFrac) * DIVISIONS_Y * d.vDiv;
-        // Label stays FULL channel colour even for the inactive channel (Java drawOffsetTrack:
-        // only the triangle dims); d.hex is the un-attenuated trace colour.
-        this._setOverlayLabel(o.offsetVal[ch], this._fmtVolts(offsetVolts, d.vDiv), d.hex, '',
-          { left: (SLIDER_TRI_LONG + 6) + 'px', top: (clamp01(d.offsetFrac) * 100) + '%', transform: 'translateY(-50%)' });
       }
       if (isActive) {
         this._offsetBounds = { x: 0, y: offsetY - SLIDER_GRAB_HALF,
           w: SLIDER_TRI_LONG + 4, h: 2 * SLIDER_GRAB_HALF };
       }
     };
-    if (o) {
-      this._hideSlider(o.offset.L); this._hideSlider(o.offset.R);
-      o.offsetVal.L.style.display = 'none'; o.offsetVal.R.style.display = 'none';
-    }
+    if (o) { this._hideSlider(o.offset.L); this._hideSlider(o.offset.R); }
     if (activeDesc) {
       for (const ch of ['L', 'R']) {
         const d = descByName[ch];
