@@ -683,9 +683,9 @@
                                     <mainClass>org.edgo.build.pdf.MarkdownToPdf</mainClass>
                                     <arguments>
                                         <argument>${project.basedir}/src/pdf-tool/fonts</argument>
-                                        <argument>${project.basedir}/docs</argument>
-                                        <argument>${project.basedir}/docs/ALGORITHMS.md</argument>
-                                        <argument>${project.basedir}/docs/ALGORITHMS.uk.md</argument>
+                                        <argument>${project.basedir}/doc</argument>
+                                        <argument>${project.basedir}/doc/ALGORITHMS.md</argument>
+                                        <argument>${project.basedir}/doc/ALGORITHMS.uk.md</argument>
                                     </arguments>
                                 </configuration>
                             </execution>

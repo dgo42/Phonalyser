@@ -37,7 +37,7 @@ translation as you scroll.
      a keyboard shortcut (the author uses `Ctrl`+`Shift`+`F1`).
 6. Run the same command again to turn the lock off.
 
-![The "View: Toggle Locked Scrolling Across Editors" command in the VS Code command palette, with the gear to assign a shortcut](docs/screenshots/vscode-locked-scrolling.png)
+![The "View: Toggle Locked Scrolling Across Editors" command in the VS Code command palette, with the gear to assign a shortcut](doc/screenshots/vscode-locked-scrolling.png)
 
 While locked, edit the value on the **right** (the translation) using the
 **left** (English) as the reference — and never add or remove a line on one side

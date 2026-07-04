@@ -68,7 +68,7 @@ every OS — the launcher file is named `Phonalyser` on Linux,
 
 # Generate documentation PDF (Markdown → PDF)
 
-Selected docs (currently `docs/ALGORITHMS.md`) can be rendered to PDF — with the
+Selected docs (currently `doc/ALGORITHMS.md`) can be rendered to PDF — with the
 internal `§`/anchor links kept clickable and the maths glyphs embedded — via the
 opt-in `pdf` profile:
 
