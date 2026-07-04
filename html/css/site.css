@@ -1,0 +1,209 @@
+/* Phonalyser project site — two-column landing layout.
+   Brand palette taken from the app icon (web/favicon.svg):
+     navy #0c2538 (scope-screen background), blue #0057b8 (phi glyph),
+     amber #ffd700 (sine-wave accent). */
+
+:root {
+  --navy:    #0c2538;
+  --navy2:   #16324c;
+  --sidebar: #2a4560;
+  --blue:    #0057b8;
+  --blue-hi: #0068d8;
+  --amber:   #ffd700;
+  --ink:     #17222e;
+  --muted:   #5c6b79;
+  --line:    #e2e8ee;
+  --bg:      #f5f7f9;
+  --card:    #ffffff;
+  --sidebar-w: 200px;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.62;
+  font-size: 16px;
+}
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ============================ left sidebar / menu ======================= */
+.sidebar {
+  position: fixed; top: 0; left: 0;
+  width: var(--sidebar-w); height: 100vh;
+  background: var(--sidebar);
+  color: #d2dde7;
+  overflow-y: auto;
+  display: flex; flex-direction: column;
+  border-right: 1px solid #1c3a55;
+}
+.brand {
+  display: flex; align-items: center; gap: 9px;
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.brand:hover { text-decoration: none; }
+.brand img { width: 26px; height: 26px; }
+.brand b { color: #fff; font-size: 16px; letter-spacing: .2px; }
+
+nav.menu { padding: 8px 0; flex: 1; }
+nav.menu a {
+  display: block; color: #c6d3df;
+  padding: 9px 16px; font-size: 14px;
+  border-left: 3px solid transparent;
+}
+nav.menu a:hover { background: rgba(255,255,255,.06); color: #fff; text-decoration: none; }
+nav.menu a.active { border-left-color: var(--amber); color: #fff; background: rgba(255,255,255,.05); }
+
+/* Download disclosure "submenu" (native <details>, no JS). */
+details.submenu {
+  border-top: 1px solid rgba(255,255,255,.06);
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+details.submenu > summary {
+  list-style: none; cursor: pointer;
+  padding: 9px 16px; font-size: 14px; color: #c6d3df;
+  display: flex; justify-content: space-between; align-items: center;
+}
+details.submenu > summary::-webkit-details-marker { display: none; }
+details.submenu > summary:hover { background: rgba(255,255,255,.06); color: #fff; }
+details.submenu[open] > summary { color: #fff; }
+details.submenu .caret { transition: transform .15s ease; color: #7c8da0; font-size: 12px; }
+details.submenu[open] .caret { transform: rotate(90deg); }
+details.submenu a { padding-left: 30px; font-size: 13.5px; }
+
+.ext::after { content: " ↗"; color: #7c8da0; font-size: .85em; }
+a.disabled { color: #5f7183; cursor: default; pointer-events: none; }
+a.disabled .soon {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+  background: rgba(255,215,0,.15); color: var(--amber);
+  border-radius: 3px; padding: 1px 5px; margin-left: 6px;
+}
+.sidebar-foot {
+  padding: 12px 16px; font-size: 11px; color: #5f7183;
+  border-top: 1px solid rgba(255,255,255,.06);
+}
+.sidebar-foot a { color: #7c8da0; }
+
+/* =============================== right column ========================== */
+.main { margin-left: var(--sidebar-w); min-height: 100vh; }
+
+.hero {
+  background: var(--bg); /* same background as the page content */
+  color: var(--ink); padding: 34px 40px;
+  display: flex; align-items: center; gap: 22px;
+  border-bottom: 3px solid var(--amber);
+}
+.hero img { width: 72px; height: 72px; flex: none; }
+.hero h1 { margin: 0; font-size: 34px; color: var(--navy); letter-spacing: .3px; }
+.hero h1 .version {
+  font-size: 14px; font-weight: 600; color: #8a6d00;
+  background: #fff6d6; border: 1px solid #ecd9a0; border-radius: 20px;
+  padding: 3px 11px; vertical-align: 6px; margin-left: 8px; white-space: nowrap;
+}
+.hero p { margin: 7px 0 0; color: var(--muted); font-size: 15px; max-width: 660px; }
+.hero p.ukraine {
+  display: inline-flex; align-items: center; gap: 8px; max-width: none;
+  margin-top: 13px; font-size: 14px; font-weight: 600; color: var(--navy2);
+}
+.flag { border-radius: 2px; border: 1px solid rgba(0,0,0,.12); flex: none; }
+
+.content { max-width: 860px; padding: 30px 40px 64px; }
+.content h2 {
+  font-size: 22px; margin: 36px 0 12px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--line); color: var(--navy);
+}
+.content h2:first-of-type { margin-top: 8px; }
+.content h3 { font-size: 17px; margin: 22px 0 8px; color: var(--navy2); }
+.content p { margin: 10px 0; }
+.content ul { margin: 10px 0; padding-left: 22px; }
+.content li { margin: 5px 0; }
+
+.content img {
+  max-width: 100%; height: auto; border-radius: 8px;
+  border: 1px solid var(--line); box-shadow: 0 2px 12px rgba(12,37,56,.10);
+  margin: 16px 0; display: block;
+}
+
+.content table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 14.5px; }
+.content th, .content td { border: 1px solid var(--line); padding: 8px 11px; text-align: left; vertical-align: top; }
+.content th { background: #eef3f8; color: var(--navy); font-weight: 600; }
+.content tr:nth-child(even) td { background: #fafbfd; }
+
+.content code {
+  background: #eef2f6; border: 1px solid #e0e7ee; border-radius: 4px;
+  padding: .5px 5px; font-family: Consolas, Menlo, monospace; font-size: .9em; color: #0b3d66;
+}
+
+/* download call-to-action */
+.dl-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0 6px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 11px 18px; border-radius: 8px; font-weight: 600; font-size: 14.5px;
+  border: 1px solid transparent; text-decoration: none !important;
+}
+.btn svg { width: 18px; height: 18px; }
+.btn-primary { background: var(--blue); color: #fff; }
+.btn-primary:hover { background: var(--blue-hi); }
+.btn-store { background: var(--navy); color: #fff; }
+.btn-store:hover { background: #16324c; }
+.btn.disabled { background: #e8edf2; color: #8595a4; border-color: var(--line); cursor: default; pointer-events: none; }
+.btn .soon { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; opacity: .8; }
+
+.note {
+  background: #fffbe8; border: 1px solid #ecd9a0; border-left: 4px solid var(--amber);
+  border-radius: 6px; padding: 12px 16px; margin: 18px 0; font-size: 14.5px;
+}
+.lede { font-size: 17px; color: var(--muted); margin: 4px 0 8px; }
+
+/* subpage hero subtitle */
+.hero .sub { margin: 6px 0 0; color: var(--muted); font-size: 15px; max-width: 660px; }
+
+/* screenshots gallery */
+figure.shot { margin: 26px 0; }
+figure.shot img { margin: 0 0 10px; }
+figure.shot figcaption { font-size: 14px; color: var(--muted); }
+figure.shot figcaption b { color: var(--navy2); font-weight: 600; }
+
+/* monospace formula block */
+.formula {
+  font-family: Consolas, Menlo, monospace; font-size: 14px;
+  background: #f0f4f8; border: 1px solid var(--line); border-radius: 6px;
+  padding: 10px 14px; margin: 12px 0; overflow-x: auto;
+}
+
+/* two-up photo row (e.g. bench DUTs) */
+.photo-row { display: flex; flex-wrap: wrap; gap: 16px; margin: 16px 0; }
+.photo-row figure { flex: 1 1 300px; margin: 0; }
+.photo-row figure img { margin: 0 0 6px; }
+.photo-row figcaption { font-size: 14px; color: var(--muted); }
+
+/* changelog / what's new */
+.content h2 .ver-tag {
+  font-size: 12px; font-weight: 600; color: #8a6d00;
+  background: #fff6d6; border: 1px solid #ecd9a0; border-radius: 20px;
+  padding: 2px 10px; vertical-align: 3px; margin-left: 8px;
+}
+.content h2 .ver-date { font-size: 14px; font-weight: 400; color: var(--muted); margin-left: 10px; }
+.content h3.chg { font-size: 15px; margin: 16px 0 6px; color: var(--navy2); }
+
+/* standalone centered page (404) */
+.center-page {
+  min-height: 100vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center; padding: 40px;
+}
+.center-page img { width: 72px; height: 72px; margin-bottom: 18px; }
+.center-page h1 { color: var(--navy); font-size: 34px; margin: 0 0 8px; }
+.center-page p { color: var(--muted); margin: 0 0 20px; }
+
+/* =============================== responsive ============================= */
+@media (max-width: 760px) {
+  .sidebar { position: static; width: 100%; height: auto; flex-direction: column; }
+  .main { margin-left: 0; }
+  .hero { padding: 24px; }
+  .hero h1 { font-size: 28px; }
+  .content { padding: 22px; }
+}

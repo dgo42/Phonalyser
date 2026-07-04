@@ -52,6 +52,7 @@ import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.enums.TriggerType;
 import org.edgo.audio.measure.enums.WindowType;
+import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
 import org.edgo.audio.measure.bind.Property;
 import org.edgo.audio.measure.enums.TabOrientation;
 import org.yaml.snakeyaml.DumperOptions;
@@ -94,6 +95,14 @@ public final class Preferences {
 
     /** Factory-default ADC full-scale RMS voltage, used until the user calibrates. */
     private static final double DEFAULT_ADC_FS_VRMS = 1.7931;
+
+    /** Sentinel "unset" value for the rate-dependent FreqResp defaults
+     *  (stop = Nyquist, points = FS/2).  A fresh install with no saved value
+     *  keeps this until {@link #seedRateDependentFreqRespDefaults()} resolves it
+     *  from the current device sample rate; any saved value is a real number and
+     *  overrides it. */
+    private static final double FREQRESP_RATE_DEFAULT_SENTINEL = 0.0;
+    private static final int    FREQRESP_RATE_DEFAULT_SENTINEL_INT = 0;
 
     private static volatile Preferences instance;
 
@@ -484,18 +493,21 @@ public final class Preferences {
     // Frequency Response pane — sweep settings, view state, RIAA + calibration
     // -------------------------------------------------------------------------
 
-    /** Sweep start frequency in Hz.  Default 20 Hz (audible bottom). */
-    private final Property<Double>  freqRespStartHz          = bound(20.0);
-    /** Sweep stop  frequency in Hz.  Default 20 kHz (audible top). */
-    private final Property<Double>  freqRespStopHz           = bound(20000.0);
+    /** Sweep start frequency in Hz.  Default 1 Hz (bottom of the usable band). */
+    private final Property<Double>  freqRespStartHz          = bound(1.0);
+    /** Sweep stop  frequency in Hz.  Sentinel {@code 0} = "unset" — resolved to
+     *  the current device Nyquist ({@code rate/2}) at first use (see
+     *  {@link #seedRateDependentFreqRespDefaults()}).  A saved value overrides. */
+    private final Property<Double>  freqRespStopHz           = bound(FREQRESP_RATE_DEFAULT_SENTINEL);
     /** Generator drive amplitude at the DAC, V RMS. */
-    private final Property<Double>  freqRespAmplitudeVrms    = bound(0.5);
+    private final Property<Double>  freqRespAmplitudeVrms    = bound(1.0);
     /** True = the sweep amplitude field displays in dBV; persisted. */
     private final Property<Boolean> freqRespAmplitudeDbvDisplay = bound(false);
     /** Number of log-spaced output frequency points the deconvolution emits.
-     *  Default 65536 (64 k) is a safe trade-off between resolution and
-     *  memory for a single sweep. */
-    private final Property<Integer> freqRespSweepPoints      = bound(65536);
+     *  Sentinel {@code 0} = "unset" — resolved to the FS/2 point count
+     *  ({@code rate/2}) at first use (see
+     *  {@link #seedRateDependentFreqRespDefaults()}).  A saved value overrides. */
+    private final Property<Integer> freqRespSweepPoints      = bound(FREQRESP_RATE_DEFAULT_SENTINEL_INT);
     /** Sweep duration in seconds, excluding lead-in.  Derived from
      *  {@link #freqRespFftSize} + {@link #freqRespLeadInSec} + the half-
      *  second tail; the Settings tab keeps the two in sync.  The
@@ -506,13 +518,13 @@ public final class Preferences {
      *  in the Settings tab — the sweep duration is derived from this so
      *  the analyzer's {@code nextPow2(leadIn + sweep + tail)} lands
      *  exactly on the chosen length (no wasted bins). */
-    private final Property<Integer> freqRespFftSize          = bound(524288);
+    private final Property<Integer> freqRespFftSize          = bound(4194304);
     /** TPDF dither bits applied to the generator before quantisation;
      *  0 disables.  Same convention as the generator pane. */
     private final Property<Integer> freqRespDitherBits       = bound(0);
     /** Silent lead-in prepended to the sweep, in seconds.  Lets the DAC →
      *  ADC chain settle before the first sweep sample lands. */
-    private final Property<Double>  freqRespLeadInSec        = bound(0.2);
+    private final Property<Double>  freqRespLeadInSec        = bound(0.05);
 
     /** Tune-notch wizard sweep start frequency in Hz; persisted independently
      *  of the main FreqResp pane so the dialog remembers its own fields. */
@@ -631,6 +643,9 @@ public final class Preferences {
         // Covers the no-file / partial-file case AND the per-backend sample
         // rate, which is a plain POJO field the listeners can't observe.
         recomputeBinBw();
+        // Resolve the rate-dependent FreqResp defaults (stop = Nyquist,
+        // points = FS/2) on a fresh install where load() left the sentinels.
+        seedRateDependentFreqRespDefaults();
         // Flush any debounced save on JVM exit — saveScheduler is a daemon
         // thread the runtime abandons at shutdown, so a change made within the
         // coalesce window before close would otherwise be lost.
@@ -643,6 +658,23 @@ public final class Preferences {
     private Preferences(boolean detached) {
         this.detached = detached;
         recomputeBinBw();
+    }
+
+    /** Resolves the rate-dependent FreqResp defaults left as sentinels after
+     *  {@link #load()}: on a fresh install (no saved value) the stop frequency
+     *  becomes the current device Nyquist ({@code rate/2}) and the sweep-points
+     *  count becomes the FS/2 point count ({@code rate/2}).  A user with a
+     *  stored value never hits the sentinel, so their choice is preserved. */
+    private void seedRateDependentFreqRespDefaults() {
+        int rate = current().getInputSampleRate();
+        if (rate <= 0) return;
+        double nyquist = rate / 2.0;
+        if (freqRespStopHz.get() == FREQRESP_RATE_DEFAULT_SENTINEL) {
+            freqRespStopHz.set(nyquist);
+        }
+        if (freqRespSweepPoints.get() == FREQRESP_RATE_DEFAULT_SENTINEL_INT) {
+            freqRespSweepPoints.set((int) nyquist);
+        }
     }
 
     public static Preferences instance() {
@@ -724,6 +756,12 @@ public final class Preferences {
         c.freqRespPhaseColor.set(freqRespPhaseColor.get());
         c.freqRespReferenceColor.set(freqRespReferenceColor.get());
         c.freqRespBackgroundColor.set(freqRespBackgroundColor.get());
+
+        // used for isolated FreqRespView
+        c.setTuneNotchStartHz(tuneNotchStartHz.get());
+        c.setTuneNotchStopHz(tuneNotchStopHz.get());
+        c.setTuneNotchAmplitudeVrms(tuneNotchAmplitudeVrms.get());
+        c.setTuneNotchTargetHz(tuneNotchTargetHz.get());
 
         c.backend.set(backend.get());
         for (AudioBackendType t : AudioBackendType.values()) {

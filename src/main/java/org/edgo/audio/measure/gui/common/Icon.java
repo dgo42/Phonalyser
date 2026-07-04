@@ -62,6 +62,8 @@ public enum Icon {
     PLUS("plus.png"),
     MINUS("minus.png"),
     RECTANGLE_XMARK("rectangle-xmark.png"),
+    NOTCH_FILTER("notch_filter_icon.png"),
+    GEAR("gear.png"),
 
     DROPDOWN("dropdown.png"),
     UP_BIG("up-big.png"),

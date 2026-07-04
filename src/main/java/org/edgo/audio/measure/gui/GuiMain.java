@@ -23,6 +23,7 @@ import java.util.Locale;
 
 import com.sun.jna.Library;
 import com.sun.jna.Native;
+import com.sun.jna.Pointer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.core.LoggerContext;
@@ -222,11 +223,48 @@ public final class GuiMain {
             }
         }
         display.dispose();
+        // Force an immediate process exit.  Letting main() return would run the
+        // JVM's GRACEFUL shutdown, which executes every registered shutdown hook
+        // to completion — including the native audio hooks (PortAudio
+        // Pa_Terminate / WASAPI COM release) that can block for seconds tearing
+        // down a stream held open continuously by e.g. a Tune-notch session.
+        // The OS reclaims those audio/driver handles on process death anyway;
+        // the only hook that carries data is the preferences flush.  So run that
+        // one explicitly, then halt(0) — which skips all hooks and non-daemon
+        // waits — so the process quits at once instead of waiting on driver
+        // teardown.
+        Preferences.instance().flush();
+        // On Windows, skip the C-runtime exit teardown entirely.  halt(0) still
+        // runs atexit / static destructors / DLL detach, which fires Chromium's
+        // WindowImpl::UnregisterClassesAtExit (registered via base::AtExitManager
+        // by the embedded Edge/WebView2 browser).  That unregister fails — a
+        // WebView2 window still exists — and Chromium logs "Failed to unregister
+        // class Chrome_WidgetWin_0. Error = 1411" to stderr.  TerminateProcess
+        // ends the process without running any of that teardown, so the handler
+        // never fires; the OS reclaims every handle regardless.  Falls back to
+        // halt on non-Windows / if the native call is unavailable.
+        if (osName.contains("win")) {
+            try {
+                Kernel32 k32 = Native.load("kernel32", Kernel32.class);
+                k32.TerminateProcess(k32.GetCurrentProcess(), 0);
+            } catch (Throwable ignored) {
+                // fall through to halt(0)
+            }
+        }
+        Runtime.getRuntime().halt(0);
     }
 
     /** Minimal libc binding (JNA) for {@code setenv}, used to force GDK_BACKEND=x11
      *  before GTK initialises (see {@link #main}).  Linux only. */
     public interface LibC extends Library {
         int setenv(String name, String value, int overwrite);
+    }
+
+    /** Minimal kernel32 binding (JNA) for {@code TerminateProcess} — ends the
+     *  process without the C-runtime exit teardown that would otherwise fire
+     *  Chromium's window-class unregister (see {@link #main}).  Windows only. */
+    public interface Kernel32 extends Library {
+        Pointer GetCurrentProcess();
+        boolean TerminateProcess(Pointer hProcess, int uExitCode);
     }
 }
