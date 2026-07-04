@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Phonalyser — Translation</title>
+  <link rel="icon" type="image/svg+xml" href="img/logo.svg"/>
+  <link rel="stylesheet" href="css/site.css"/>
+</head>
+<body>
+
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <img src="img/logo.svg" alt=""/>
+      <b>Phonalyser</b>
+    </a>
+    <nav class="menu">
+      <a href="index.html">Home</a>
+      <a href="changelog.html">What's new</a>
+      <a href="screenshots.html">Screenshots</a>
+
+      <details class="submenu" open>
+        <summary>Download <span class="caret">▸</span></summary>
+        <a href="download.html">All downloads</a>
+        <a class="ext" href="https://github.com/dgo42/Phonalyser/releases/latest"
+           target="_blank" rel="noopener">GitHub — latest release</a>
+        <a class="ext" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
+           target="_blank" rel="noopener">Microsoft Store</a>
+        <a class="disabled" title="Reserved — coming soon">macOS <span class="soon">soon</span></a>
+      </details>
+
+      <a href="docs.html">Docs</a>
+      <a href="translation.html" class="active">Translation</a>
+      <a href="bench.html">Measurement bench</a>
+      <a href="web/index.html">Web version</a>
+    </nav>
+    <div class="sidebar-foot">
+      AGPL-3.0 ·
+      <a href="https://github.com/dgo42/Phonalyser" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="hero">
+      <img src="img/logo.svg" alt="Phonalyser logo"/>
+      <div>
+        <h1>Translation</h1>
+        <p class="sub">Phonalyser ships in English, German and Ukrainian — and
+           the UI strings and help pages are yours to edit.</p>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <h2>Translating the UI &amp; help</h2>
+      <p>On first run the packaged app seeds editable copies of the UI strings
+         and the help pages into the per-user data dir; edit them there and
+         relaunch. The bundled copies stay as a fallback, so a missing or
+         incomplete file never loses the built-in text. After an app upgrade,
+         delete the dir to re-seed the new version.</p>
+      <table>
+        <tr><th>OS</th><th>UI strings (i18n)</th><th>Help pages</th></tr>
+        <tr><td><b>Windows</b></td><td><code>%APPDATA%\Phonalyser\i18n\</code></td><td><code>%APPDATA%\Phonalyser\help\</code></td></tr>
+        <tr><td><b>macOS</b></td><td><code>~/Library/Application Support/Phonalyser/i18n/</code></td><td><code>~/Library/Application Support/Phonalyser/help/</code></td></tr>
+        <tr><td><b>Linux</b></td><td><code>$XDG_CONFIG_HOME/Phonalyser/i18n</code></td><td><code>$XDG_CONFIG_HOME/Phonalyser/help</code></td></tr>
+      </table>
+      <p>UI strings are <code>messages_&lt;lang&gt;.properties</code> (e.g.
+         <code>messages_de.properties</code>); help pages live under
+         <code>help/&lt;lang&gt;/</code>.</p>
+
+      <div class="note"><b>Contributing a language.</b> A new translation is a
+         copy of <code>messages.properties</code> (and, optionally, the
+         <code>help/&lt;lang&gt;/</code> pages) with the values translated —
+         pull requests welcome on
+         <a href="https://github.com/dgo42/Phonalyser" target="_blank" rel="noopener">GitHub</a>.</div>
+
+    </div>
+  </main>
+
+</body>
+</html>

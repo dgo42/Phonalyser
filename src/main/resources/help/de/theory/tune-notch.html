@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser — Theorie: Kerbfilter-Abgleich</title>
+  <link rel="stylesheet" href="../style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zur Theorie des Betriebs</a></p>
+
+  <h1>Kerbfilter-Abgleich</h1>
+
+  <p>Ein Twin-T-Kerbfilter ist ein passives RC-Netzwerk, das bei einer
+     Frequenz eine tiefe Nullstelle erzeugt.  Phonalyser nutzt eines als
+     Vorfilter für seine verzerrungsärmsten Messungen: auf die Grundfrequenz
+     gesetzt, entfernt es den großen Ton, sodass der ADC allein auf den
+     Oberwellen voll ausgesteuert werden kann
+     (<a href="dac-predistortion.html">DAC-Vorverzerrung</a> erklärt, warum
+     dieses Kerbfilter zwingend ist).  Doch die Nullstelle eines Twin-T ist nur
+     dann tief, wenn seine drei abgeglichenen Bauteile <em>exakt</em>
+     ausbalanciert sind — und die Balance driftet mit der Temperatur.  Das
+     Werkzeug <b>Kerbfilter-Abgleich</b> ist die Live-Anzeige, die man beim
+     Drehen des Trimmers beobachtet: es zeigt den eigenen Betragsgang des
+     Kerbfilters, der sich mehrmals pro Sekunde aktualisiert, sodass man die
+     Nullstelle auf die Zielfrequenz führen und sehen kann, wie tief sie
+     wirklich reicht.</p>
+
+  <p>Es misst eine Übertragungsfunktion genauso wie das
+     <a href="freq-resp.html">Frequenzgang</a>-Modul — ein logarithmischer
+     Sweep hinein, eine Division heraus — ist aber für eine kontinuierlich
+     aktualisierende Live-Ansicht gebaut statt für eine einzelne sorgfältige
+     Erfassung, und das ändert, wie der Sweep abläuft.</p>
+
+  <h2 id="why">Warum eine Live-Anzeige statt eines einzelnen Sweeps</h2>
+  <p>Der Abgleich ist ein geschlossener Regelkreis mit einem Menschen darin:
+     den Trimmer eine Winzigkeit drehen, die Nullstelle sich bewegen und
+     vertiefen sehen, wieder drehen.  Ein Einzelsweep, der das Gerät öffnet,
+     abspielt, erfasst und schließt, hat in der Größenordnung von anderthalb
+     Sekunden Totzeit zwischen den Bildern — viel zu langsam zum Abgleichen.
+     Also hält das Werkzeug das Audiogerät offen und den Sweep am
+     <em>Laufen</em> und wirft einfach einen frischen Blick auf die jüngste
+     Periode, sobald es kann.  Der Lohn ist eine Anzeige, die fast so schnell
+     reagiert wie die Hand; die Herausforderung ist, dass jeder Blick zu einem
+     beliebigen Zeitpunkt der Schleife entnommen wird, ohne Startmarke zur
+     Ausrichtung.  Der Trick weiter unten sorgt dafür, dass das keine Rolle
+     spielt.</p>
+
+  <h2 id="how">Wie es funktioniert</h2>
+  <p>Der Generator spielt einen kurzen logarithmischen Sweep in einer endlosen
+     nahtlosen Schleife in das Kerbfilter unter Test; das zurückkehrende Signal
+     wird in einem kleinen rollenden Puffer gesammelt, der stets die letzten
+     paar Sweep-Perioden enthält.  Mehrmals pro Sekunde greift das Werkzeug
+     genau eine Periode an Samples heraus, transformiert sie, dividiert das
+     zurückkehrende Spektrum durch das bekannte Sweep-Spektrum, um den Betrag
+     des Kerbfilters zu erhalten, und verfolgt den tiefsten Punkt.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 300" width="100%" height="300" preserveAspectRatio="xMinYMid meet"
+       xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="tn-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+
+    <rect x="10"  y="34" width="160" height="52" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="90"  y="56" text-anchor="middle" font-weight="bold">Schleifen-Sweep</text>
+    <text x="90"  y="74" text-anchor="middle" fill="#557">nahtlos, Hann-Nähte</text>
+
+    <rect x="220" y="34" width="150" height="52" rx="6" fill="#ffe9d6" stroke="#c96"/>
+    <text x="295" y="56" text-anchor="middle" font-weight="bold">Twin-T-Kerbe</text>
+    <text x="295" y="74" text-anchor="middle" fill="#965">im Abgleich</text>
+
+    <rect x="420" y="34" width="90" height="52" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="465" y="56" text-anchor="middle" font-weight="bold">ADC</text>
+    <text x="465" y="74" text-anchor="middle" fill="#575">Eingang</text>
+
+    <rect x="560" y="34" width="170" height="52" rx="6" fill="#cdf" stroke="#88a"/>
+    <text x="645" y="56" text-anchor="middle" font-weight="bold">Rollender Puffer</text>
+    <text x="645" y="74" text-anchor="middle" fill="#557">letzte Perioden</text>
+
+    <line x1="170" y1="60" x2="218" y2="60" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+    <line x1="370" y1="60" x2="418" y2="60" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+    <line x1="510" y1="60" x2="558" y2="60" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+
+    <path d="M 90 34 L 90 16 L 645 16 L 645 32" fill="none" stroke="#88a" stroke-width="1.2"
+          stroke-dasharray="4 3" marker-end="url(#tn-arr)"/>
+
+    <rect x="10"  y="160" width="160" height="56" rx="6" fill="#eef" stroke="#c33"/>
+    <text x="90"  y="182" text-anchor="middle" font-weight="bold">Eine Periode</text>
+    <text x="90"  y="200" text-anchor="middle" fill="#a33">bei bel. Phase</text>
+
+    <rect x="220" y="160" width="150" height="56" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="295" y="182" text-anchor="middle" font-weight="bold">Zirkuläre FFT</text>
+    <text x="295" y="200" text-anchor="middle" fill="#557">Periode = 2ᵏ</text>
+
+    <rect x="420" y="160" width="130" height="56" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="485" y="182" text-anchor="middle" font-weight="bold">Division</text>
+    <text x="485" y="200" text-anchor="middle" fill="#557">H = Y ⁄ X</text>
+
+    <rect x="600" y="160" width="130" height="56" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="665" y="178" text-anchor="middle" font-weight="bold">Nullstelle</text>
+    <text x="665" y="196" text-anchor="middle" fill="#557">Frequenz,</text>
+    <text x="665" y="210" text-anchor="middle" fill="#557">Tiefe</text>
+
+    <path d="M 645 86 L 645 120 L 90 120 L 90 158" fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+    <line x1="170" y1="188" x2="218" y2="188" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+    <line x1="370" y1="188" x2="418" y2="188" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+    <line x1="550" y1="188" x2="598" y2="188" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+
+    <text x="360" y="138" fill="#557">jeder Durchlauf ≈ 0,2 – 0,34 s — mehrmals pro Sekunde</text>
+
+    <text x="10" y="250" fill="#557">Ergebnis: der Betrag des Kerbfilters, ein tiefes V an der Nullstelle —</text>
+    <path d="M 470 268 L 560 268 L 605 236 L 615 285 L 625 244 L 660 258 L 740 258"
+          fill="none" stroke="#33a" stroke-width="1.5"/>
+    <line x1="615" y1="232" x2="615" y2="290" stroke="#c33" stroke-width="1" stroke-dasharray="3 2"/>
+    <text x="615" y="300" text-anchor="middle" fill="#a33">f₀</text>
+  </svg>
+  </div>
+
+  <h2 id="circular">Warum kein Trigger nötig ist</h2>
+  <p>Der Sweep wird in einer Schleife abgespielt, deren Länge bewusst auf eine
+     Zweierpotenz an Samples gerundet ist,</p>
+
+  <div class="eq"><i>N</i> = nächste Zweierpotenz zu <i>T</i><sub>Sweep</sub> ·
+     <i>f</i><sub>s</sub>&nbsp;&nbsp;(<i>T</i><sub>Sweep</sub> ≈ 0,26 s)<span class="no">(1)</span></div>
+
+  <p>sodass die Transformation einer herausgegriffenen Periode eine
+     <em>zirkuläre</em> ist — der Puffer schließt sich lückenlos an sich
+     selbst.  Ein bei einer beliebigen Schleifenphase entnommenes Fenster ist
+     dann nichts weiter als derselbe periodische Sweep, um wenige Samples
+     gedreht, und der Verschiebungssatz der Transformation besagt, dass eine
+     Drehung nur die Phase jedes Bins ändert, nie seinen Betrag:</p>
+
+  <div class="eq">|&#8202;DFT{ <i>x</i>[(<i>n</i>−<i>d</i>) mod <i>N</i>] }&#8202;|
+     = |&#8202;DFT{ <i>x</i>[<i>n</i>] }&#8202;|<span class="no">(2)</span></div>
+
+  <p>Da der Abgleich nur den Betrag liest, fällt die beliebige Greifphase völlig
+     heraus — keine Startmarke, kein Trigger, keine Ausrichtung.  Das ist der
+     ganze Grund, warum die Live-Schleife sorglos sein darf, <em>wann</em> sie
+     hinsieht.  (Rundet man die Periode auf etwas anderes als eine
+     Zweierpotenz, ist die Transformation nicht mehr zirkulär: ein
+     nicht ausgerichtetes Fenster schlägt dann über die Naht um und schmiert
+     jeden Bin zu einer Spitze — genau das Artefakt, das dies
+     vermeidet.)<sup id="cite-2"><a href="#ref-dft">[2]</a></sup>  Die eine Naht,
+     die es gibt — wo die Schleife an ihren eigenen Anfang wieder anschließt —
+     wird durch eine kurze Raised-Cosine-Ausblendung geglättet, die identisch
+     auf den abgespielten Sweep und auf die Referenz angewandt wird, durch die
+     dividiert wird, sodass beide sich aufheben.</p>
+
+  <h2 id="null">Die Nullstelle finden</h2>
+  <p>Jede Periode wird in den Betragsgang des Kerbfilters umgewandelt, indem
+     das zurückkehrende Spektrum durch das Sweep-Referenzspektrum dividiert
+     wird, <i>H</i>(<i>f</i>) = <i>Y</i>(<i>f</i>) ⁄ <i>X</i>(<i>f</i>) —
+     dieselbe Farina-Entfaltung, die das
+     <a href="freq-resp.html#how">Frequenzgang</a>-Kapitel
+     beschreibt<sup id="cite-1"><a href="#ref-farina">[1]</a></sup>.  Der
+     tiefste Punkt dieser Kurve wird auf einen Bruchteil eines Bins genau
+     lokalisiert, indem eine Parabel durch den niedrigsten Wert und seine beiden
+     Nachbarn gelegt wird — im linearen Betrag (wo eine glatte Senke nahe ihrem
+     Boden tatsächlich parabolisch ist, anders als in Dezibel):</p>
+
+  <div class="eq">δ = ½ · (<i>y</i><sub>−1</sub> − <i>y</i><sub>+1</sub>) ⁄
+     (<i>y</i><sub>−1</sub> − 2<i>y</i><sub>0</sub> + <i>y</i><sub>+1</sub>)&nbsp;,&nbsp;&nbsp;
+     <i>f</i><sub>Null</sub> = <i>f</i><sub>i</sub> + δ · Δ<i>f</i><span class="no">(3)</span></div>
+
+  <p>Die verfeinerte Nullstellenfrequenz und -tiefe sind das, was man beim
+     Abgleichen von der Anzeige abliest.  Ein bewusster Unterschied zu einer
+     gewöhnlichen Sweep-Messung: die übliche Glättung, die eine
+     Frequenzgangkurve aufräumt, ist hier <em>abgeschaltet</em>.  Auf dem
+     groben Raster dieser schnellen Live-Ansicht würde ein Glättungsfenster
+     viele Hertz überspannen und mehrere Dezibel vom Boden einer scharfen
+     Nullstelle abrunden — und damit genau die Tiefe verbergen, die man
+     maximieren will.  Eine rohe, ungeglättete Kurve zeigt die wahre
+     Nullstelle.</p>
+
+  <div class="note"><b>Nach dem Abgleich den eigenen Gang des Kerbfilters
+     erfassen.</b>  Ein abgeglichenes Twin-T ist abseits seiner Nullstelle
+     nicht perfekt flach, und diese Form würde sonst die durch es gemessenen
+     Oberwellen verfälschen.  Der korrekte Ablauf ist daher: die Nullstelle
+     hier auf die Grundfrequenz abgleichen, dann einen normalen
+     Frequenzgang-Sweep des Kerbfilters fahren und ihn <em>als Kalibrierdatei
+     speichern</em>.  Der <a href="fft.html">FFT-Analysator</a> rechnet diese
+     Datei später heraus, sodass nur die Verzerrung des Prüflings übrig
+     bleibt.  Zuerst den Gang des Kerbfilters messen, dann die Verzerrung durch
+     es hindurch.</div>
+
+  <h2 id="refs">Referenzen</h2>
+  <ol class="refs">
+    <li id="ref-farina"><a href="#cite-1">1.</a>
+        A. Farina, <a href="http://pcfarina.eng.unipr.it/Public/Papers/226-AES00.PDF"><i>Simultaneous
+        measurement of impulse response and distortion with a swept-sine
+        technique</i></a>, AES 108th Convention, 2000 — der exponentielle Sweep
+        und seine Entfaltungsreferenz.</li>
+    <li id="ref-dft"><a href="#cite-2">2.</a>
+        <a href="https://en.wikipedia.org/wiki/Circular_convolution">Zirkuläre
+        Faltung und der DFT-Verschiebungssatz</a> (Wikipedia) — warum eine
+        zirkuläre Transformation im Betrag verschiebungsinvariant ist.</li>
+  </ol>
+
+  <p class="back"><a href="freq-resp.html">◀ Frequenzgang</a> ·
+     <a href="index.html">Theorie des Betriebs</a> ·
+     weiter: <a href="algorithms.html">Algorithmen-Referenz ▶</a></p>
+
+</body>
+</html>
