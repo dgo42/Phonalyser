@@ -37,6 +37,12 @@ const MIN_SCROLLBAR_THUMB = Math.round(NAV_RANGE / 33);
 // zoomed view walks ~1 s of audio per paint, so update it at a fraction of the
 // main trace's cap/s.
 const SCOPE_ZOOM_DECIMATION = 10;
+// Delay before a USER generator change drops the held trigger anchor (Java
+// ScopeTabControl.GEN_CLEAR_DELAY_MS) — covers the DAC → loopback → ADC →
+// capture-buffer latency so the reset lands after the OLD signal has flushed out
+// of the display path. (Java also wipes the GPU phosphor afterglow here; the web
+// Canvas2D scope has no persistence — that part is skipped.)
+const GEN_CLEAR_DELAY_MS = 250;
 
 export class ScopePane {
   /**
@@ -102,6 +108,32 @@ export class ScopePane {
 
     // Auto-fit-once-measured latch for the live scope (set false each frame in render()).
     this.scopeAutoPending = false;
+
+    // FreqResp measurement lifecycle (Java ScopePane freqRespStarted/StoppedListener):
+    // the sweep needs the capture device exclusively — stop a running capture and gray
+    // the Record LED on STARTED, re-enable it on STOPPED.
+    const bus = MessageBus.instance();
+    bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, () => this.onFreqRespMeasurementStarted());
+    bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => this.onFreqRespMeasurementStopped());
+  }
+
+  /** Stops a running capture and grays the Record LED — fired by the Frequency Response
+   *  pane via FREQRESP_MEASUREMENT_STARTED so the sweep can take exclusive control of the
+   *  device (Java ScopePane.onFreqRespMeasurementStarted). */
+  async onFreqRespMeasurementStarted() {
+    $('.scope-pane .led-btn').prop('disabled', true);
+    // Stop the scope via the ENGINE unconditionally — NOT gated on the shell record flag
+    // (see FftPane.onFreqRespMeasurementStarted): a shell/controller desync must not leave
+    // the scope consuming the sweep. setRecording is a no-op when already off; reconcile
+    // the shell flag + LED to the engine's real state.
+    this._setScopeRec(await this.engine.setScopeRecording(false));
+    this.syncScopeLed();
+  }
+
+  /** Counterpart that re-enables the Record LED after the sweep finishes (or aborts)
+   *  (Java ScopePane.onFreqRespMeasurementStopped). */
+  onFreqRespMeasurementStopped() {
+    $('.scope-pane .led-btn').prop('disabled', false);
   }
 
   // ----- scope tiles: each tab's KEY SETTINGS (Java ScopeTabControl.scopeTabTiles),
@@ -155,7 +187,9 @@ export class ScopePane {
     const td = prefs.oscTimePerDiv.get();
     $tiles.eq(2).html(this.titledChips(
       [this.shortTimePerDiv(td), t('scope.tile.time', this.shortTimePerDiv(td) + 's')]));
-    // Trigger: channel / edge / mode / hysteresis (only when enabled).
+    // Trigger: channel / edge / (G when glitch type) / mode / hysteresis (only when
+    // enabled). The "G" tile mirrors Java scopeTabTiles: shown only when the trigger
+    // type is GLITCH (EDGE is the default and gets no tile).
     const edge = prefs.oscTriggerEdge.get() === 'FALL' ? '↓' : '↑';
     const modeMap = { AUTO: 'A', NORMAL: 'N', SINGLE: 'S' };
     const mode = modeMap[prefs.oscTriggerMode.get()] || '?';
@@ -163,9 +197,11 @@ export class ScopePane {
     const modeKeyMap = { AUTO: 'scope.tile.trigger.mode.auto', NORMAL: 'scope.tile.trigger.mode.normal', SINGLE: 'scope.tile.trigger.mode.single' };
     const modeKey = modeKeyMap[prefs.oscTriggerMode.get()];
     const hystOn = prefs.oscTriggerHysteresisEnabled.get();
+    const glitch = prefs.oscTriggerType.get() === 'GLITCH';
     $tiles.eq(3).html(this.titledChips(
       [prefs.oscTriggerChannel.get(), t('scope.tile.trigger.channel', trigCh)],
       [edge, t(prefs.oscTriggerEdge.get() === 'FALL' ? 'scope.tile.trigger.edge.fall' : 'scope.tile.trigger.edge.rise')],
+      glitch ? ['G', t('scope.tile.trigger.type.glitch')] : null,
       [mode, modeKey ? t(modeKey) : null],
       hystOn ? ['H ' + prefs.oscTriggerHysteresisDiv.get().toFixed(1), t('scope.trigger.hysteresis.tooltip')] : null));
     // Presets: "N saved" tile only when there are saved presets (Java ScopeTabControl
@@ -314,6 +350,7 @@ export class ScopePane {
             latestScope.info.measBufL = mw.bufL;
             latestScope.info.measBufR = mw.bufR;
             latestScope.info.measAvailable = mw.available;
+            latestScope.info.measAbsStart = mw.absStart;
           }
           // Contiguous gap since last paint → the measurement pool (Vmean/Vrms/Vpp over the
           // measurement-average window, every sample once). On cursor overrun drop the pool.
@@ -578,6 +615,9 @@ export class ScopePane {
         this.setScopeTriggerControlsEnabled(true);
         $('#scopeLoadedPath').val('').attr('title', '');   // #15 readonly last-loaded-file field
         this.setScopeFileBanner(null);
+        // Record (re)start: restart the glitch-mode cap/s collection so the stopped
+        // gap isn't folded into the cumulative rate (Java rateSawFrozen restart).
+        scopeView.restartGlitchRate();
       }
       try { this._setScopeRec(await engine.setScopeRecording(want)); }   // reconcile: false if the device failed to open
       finally { this.syncScopeLed(); this._setBusy(false); }
@@ -586,8 +626,14 @@ export class ScopePane {
   syncScopeLed() { $('.scope-pane .led-btn').toggleClass('rec', this._isScopeRec()); }
 
   // ----- the scope SETTINGS strip (ScopeTabControl) host seam -----
-  // Java ScopePane.requestRedraw (repaints a frozen / file-mode view).
-  requestRedraw() { this.refreshScopeFileMode(); }
+  // Java ScopeController.redrawViews: repaint a FROZEN (stopped) or file-mode view —
+  // the live render loop repaints every frame anyway, so nothing to do there. Required
+  // so a setting change (trigger type/edge/channel, V/div, …) shows on an idle view;
+  // in particular a resetTriggerHold followed by this blanks the stale held trace.
+  requestRedraw() {
+    if (this.view.fileMode) { this.refreshScopeFileMode(); return; }
+    if (!this._isScopeRec()) this.redrawScopeOnResize();
+  }
   // Java toolbarTabs.refreshTab.
   refreshTiles() { this.refreshScopeTiles(); }
   // re-sync V/T fields after a canvas zoom / auto-setup.
@@ -597,26 +643,44 @@ export class ScopePane {
   // Open-signal and Record share the scope buffer: stop the live capture before
   // swapping the buffer out (Java host.stopCaptureForFileLoad). No-op if not recording.
   async stopCaptureForFileLoad() {
-    if (this._isScopeRec()) { try { await this.engine.setScopeRecording(false); } catch (e) { /* ignore */ } this._setScopeRec(false); this.syncScopeLed(); }
+    if (this._isScopeRec()) {
+      try { await this.engine.setScopeRecording(false); } catch (e) { /* ignore */ }
+      this._setScopeRec(false); this.syncScopeLed();
+      // Java ScopeController.openSignalFile publishes this after a programmatic stop
+      // so the pane pops its Record toggle; the web LED is synced inline above, the
+      // event is published for any other listener (parity with the Java bus contract).
+      MessageBus.instance().publish(Events.SCOPE_RECORDING_STOPPED);
+    }
   }
 
   /** Enables / disables the whole trigger group (Java setSubtreeEnabled(triggerGroup))
    *  — used to lock the trigger controls in file mode (a static signal has no trigger). */
   setScopeTriggerControlsEnabled(on) {
     const prefs = this.prefs;
-    // Channel/Edge/Mode are now toggle button GROUPS — disable their inner buttons,
+    // Channel/Edge/Type/Mode are toggle button GROUPS — disable their inner buttons,
     // not the wrapping <div>.
-    $('#scopeTrigCh .sq-toggle, #scopeTrigEdge .sq-toggle, #scopeTrigMode .sq-toggle, '
+    $('#scopeTrigCh .sq-toggle, #scopeTrigEdge .sq-toggle, #scopeTrigType .sq-toggle, '
+      + '#scopeTrigMode .sq-toggle, '
       + '#scopeTrigHyst, #scopeTrigHystEn, #scopeTrigBeat, #scopeTrigStart').prop('disabled', !on);
     // Re-apply the per-control gates the blanket enable clobbered: Start only in
-    // Single mode, Reconstructed beat only in dual-tone, and the hysteresis selector
-    // only when hysteresis is on (Java setTriggerControlsEnabled).
+    // Single mode, Reconstructed beat only in dual-tone, the hysteresis selector
+    // only when hysteresis is on, and G only outside AUTO mode (Java
+    // setTriggerControlsEnabled + the typeGlitch AUTO gate).
     if (on) {
       this.syncTriggerStart();
+      this.syncGlitchTypeEnabled();
       $('#scopeTrigBeat').prop('disabled', !isDualTone($('#signalForm').val()));
       const fTH = this._getField('scopeTrigHyst');
       if (fTH) fTH.setDisabled(!prefs.oscTriggerHysteresisEnabled.get());
     }
+  }
+
+  /** G stays disabled while the trigger mode is AUTO (Java: glitch in AUTO makes no
+   *  sense — free-run repaints at the render rate, so a caught glitch frame would be
+   *  overwritten immediately). */
+  syncGlitchTypeEnabled() {
+    $('#scopeTrigType .sq-toggle[data-value="GLITCH"]')
+      .prop('disabled', this.prefs.oscTriggerMode.get() === 'AUTO');
   }
   // ScopeTabControl.Host.setTriggerControlsEnabled(on).
   setTriggerControlsEnabled(on) { this.setScopeTriggerControlsEnabled(on); }
@@ -763,6 +827,16 @@ export class ScopePane {
       if (cause === GenChangeCause.USER_INPUT) {
         this.view._clearMeasurementHistory();
         this.renderMeasurementTable();
+        // A real generator change also invalidates the held trigger anchor: the signal
+        // transition itself is a discontinuity — the glitch trigger fires on it and
+        // NORMAL would hold that transition frame forever. The reset is DELAYED so it
+        // lands after the change has flushed through the DAC → loopback → ADC path
+        // (Java genChangeListener → timerExec(GEN_CLEAR_DELAY_MS) → resetTriggerHold;
+        // the GPU-phosphor clearPersistence half is skipped — no persistence on Canvas2D).
+        setTimeout(() => {
+          this.view.resetTriggerHold();
+          this.requestRedraw();
+        }, GEN_CLEAR_DELAY_MS);
       }
     });
     return this;

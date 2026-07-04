@@ -186,13 +186,13 @@ export function compute(data, n, sampleRate, peakVolts, broadband = true) {
     if (v < min) min = v;
     if (v > max) max = v;
   }
-  const mean = sum / n;
+  let mean = sum / n;
   // AC RMS (= signal RMS after removing the DC bias). variance = E[X²] − E[X]².
-  const variance = sumSq / n - mean * mean;
-  const rms = Math.sqrt(Math.max(0.0, variance));
+  let variance = sumSq / n - mean * mean;
+  let rms = Math.sqrt(Math.max(0.0, variance));
   const vpp = (max - min) * peakVolts;
-  const vmean = mean * peakVolts;
-  const vrms = rms * peakVolts;
+  let vmean = mean * peakVolts;
+  let vrms = rms * peakVolts;
 
   // Half-amplitude midpoint — crossing threshold for both period detection and
   // duty cycle. Independent of any DC bias on the input.
@@ -210,6 +210,30 @@ export function compute(data, n, sampleRate, peakVolts, broadband = true) {
       lastCross = i;
       crossCount++;
     }
+  }
+
+  // Vmean / Vrms over an INTEGER number of periods. The fixed-length window
+  // holds a fractional cycle count, and that fraction adds an amplitude-
+  // proportional, capture-phase-random residual to the mean (up to A/(π·cycles)
+  // — ~mV at full scale over 0.25 s) that swamps the noise floor in the Vmean
+  // statistics. The rising mid-threshold crossings bound whole periods, and the
+  // signal sits AT its mean there, so the whole-sample boundary error is
+  // second-order (sub-µV) — Vmean then moves only with the noise floor. No
+  // crossings (DC / noise-only) → the full-window figures above stand.
+  if (crossCount >= 2) {
+    const pn = lastCross - firstCross;
+    let pSum = 0;
+    let pSumSq = 0;
+    for (let i = firstCross; i < lastCross; i++) {
+      const v = data[i];
+      pSum += v;
+      pSumSq += v * v;
+    }
+    mean = pSum / pn;
+    variance = pSumSq / pn - mean * mean;
+    rms = Math.sqrt(Math.max(0.0, variance));
+    vmean = mean * peakVolts;
+    vrms = rms * peakVolts;
   }
 
   // Rise/fall time: average over all complete 10%↔90% transitions, bracket-based

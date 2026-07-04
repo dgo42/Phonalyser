@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Frequenzgang</title>
+  <title>Phonalyser.web — Frequenzgang</title>
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
@@ -42,12 +42,16 @@
     <li><b>Fadenkreuz-Anzeige.</b>  Ein gestricheltes Kreuz folgt dem Mauszeiger mit einem
         schwebenden Kasten, der Frequenz, Betrag und (bei eingeblendeter Phase) Phase sowie
         das Vergleichs-Δ anzeigt.  <a href="#freqresp-crosshair">Fadenkreuz</a>.</li>
-    <li><b>Schwenken &amp; Zoomen (Mausrad).</b>  Dieselbe Rad-Konvention wie in allen
-        Phonalyser-Ansichten — <a href="#freqresp-panzoom">Schwenken &amp;
+    <li><b>Schwenken &amp; Zoomen.</b>  Dieselbe Rad-Konvention wie in allen
+        Phonalyser.web-Ansichten, dazu ein Rechteck-Zoom durch Ziehen mit
+        Ctrl+Z-Rückschritt — <a href="#freqresp-panzoom">Schwenken &amp;
         Zoomen</a>.</li>
     <li><b>Kalibrierung de-embedding.</b>  Laden Sie eine oder mehrere <code>.frc</code>-/
         CSV-Korrekturdateien, um eine bekannte Schnittstellenantwort von der Messung
         abzuziehen.  <a href="#freqresp-tab-calibration">Reiter Kalibrierung laden</a>.</li>
+    <li><b>Kerbfilter-Abgleichassistent.</b>  Eine live, kontinuierlich aktualisierte
+        Frequenzgang-Anzeige zum Abgleichen eines Doppel-T-Kerbfilters auf eine
+        Zielfrequenz — <a href="#freqresp-tune-notch">Kerbfilter-Abgleichassistent</a>.</li>
   </ol>
 
   <h2 id="freqresp-buttons">Kopfbereich-Schaltflächen</h2>
@@ -74,7 +78,7 @@
             <a href="#freqresp-measure">Messung durchführen</a>).</td></tr>
   </table>
 
-  <h2 id="freqresp-panzoom">Schwenken &amp; Zoomen (Mausrad)</h2>
+  <h2 id="freqresp-panzoom">Schwenken &amp; Zoomen</h2>
   <p>Im Darstellungsbereich gilt:
      <b>Rad</b>: Betrag-(Vertikal-)Achse schwenken;
      <b>Shift+Rad</b>: Frequenz-(Horizontal-)Achse schwenken;
@@ -88,6 +92,25 @@
      Skalieren).  Klicken Sie auf die leere Leistenbahn, um seitenweise zum Zeiger
      zu scrollen, oder halten Sie die Taste gedrückt, bis der Regler den Cursor
      erreicht.</p>
+  <p><b>Rechteck-Zoom.</b>  Ziehen Sie mit gedrückter linker Maustaste innerhalb der
+     Darstellung ein Gummiband-Rechteck auf; beim Loslassen wird der ausgewählte
+     Bereich auf die volle Ansicht gedehnt — Frequenz und Betrag zoomen in einer
+     einzigen Geste gemeinsam.  Auswahlen kleiner als 8 Pixel in einer der beiden
+     Richtungen werden ignoriert, damit ein versehentlicher Klick nicht zoomt.
+     Das Ziehen muss innerhalb des Darstellungsbereichs beginnen (nicht auf den
+     Achsenbeschriftungen), und das Ergebnis bleibt auf die Grenzen der Darstellung
+     beschränkt (horizontal 1&nbsp;Hz bis zur Nyquist-Grenze).  Dieselbe Geste
+     funktioniert in den Oszilloskop- und FFT-Ansichten.</p>
+  <p><b>Ctrl+Z — Schritt zurück.</b>  Jeder Rechteck-Zoom merkt sich das Fenster,
+     das er ersetzt hat; drücken Sie <b>Ctrl+Z</b> (genau Ctrl — Ctrl+Shift+Z und
+     andere Kombinationen werden ignoriert), um bis zu 32 vorherige Fenster pro
+     Ansicht zurückzugehen.  Schwenken/Zoomen per Rad wird nicht aufgezeichnet —
+     nur Rechteck-Zooms fügen Schritte hinzu.  Ctrl+Z wirkt auf die Ansicht mit
+     Tastaturfokus (klicken Sie in eine Darstellung, um sie zu fokussieren) oder,
+     wenn keine Ansicht fokussiert ist, auf die unter dem Mauszeiger; die
+     angesprochene Ansicht wird durch einen dünnen hellgrünen Rahmen an ihrem Rand
+     markiert.  Solange ein Texteingabefeld den Fokus hat, gehört Ctrl+Z der
+     eigenen Rückgängig-Funktion dieses Feldes.</p>
 
   <h2 id="freqresp-crosshair">Fadenkreuz-Anzeige</h2>
   <p>Wenn der Mauszeiger in den Darstellungsbereich bewegt wird, erscheinen ein
@@ -124,9 +147,12 @@
             auf Kosten einer längeren Sweep-Dauer; die Beschriftung zeigt die
             resultierende Sweep-Dauer.</td></tr>
     <tr><td>Sweep-Punkte</td>
-        <td>Anzahl der Frequenzpunkte des Sweeps (8192 … 10M).  Das Rad wechselt
-            zwischen Zweierpotenzen und einem vom Abtastrate abgeleiteten
-            „Nyquist/2"-Eintrag.</td></tr>
+        <td>Anzahl der logarithmisch verteilten Ausgabepunkte, die die Entfaltung
+            liefert (8192 … 10M).  Das Rad wechselt durch Zweierpotenz-Vorgaben
+            (8192, 16384, 32768, … bis 4194304) sowie einen <b>FS/2</b>-Eintrag,
+            der der halben aktuellen Abtastrate entspricht (24000 bei 48&nbsp;kHz,
+            96000 bei 192&nbsp;kHz — er folgt dem Audioformat); jeder Wert im
+            gültigen Bereich kann auch direkt eingegeben werden.</td></tr>
     <tr><td>Vorlauf, s</td>
         <td>Stille-/Einregelzeit vor dem eigentlichen Sweep, damit der Signalweg
             im eingeschwungenen Zustand ist, wenn die Messung beginnt.</td></tr>
@@ -241,6 +267,80 @@
      der durch FFT-Größe und Abtastrate bestimmten Sweep-Dauer.  Da die Referenz der exakt
      vorgerenderte Sweep ist, der abgespielt wurde, ergibt sich die wahre Übertragungsfunktion
      des Prüflings, keine Schätzung — siehe
+     <a href="theory/freq-resp.html">Funktionsprinzip ▸ Frequenzgang</a>.</p>
+
+  <h2 id="freqresp-tune-notch">Kerbfilter-Abgleichassistent</h2>
+  <p>Ein passives Kerbfilter (typischerweise ein Doppel-T-Filter) vor dem Eingang
+     ist der klassische Weg, Verzerrungen unterhalb des Eigenrauschens des
+     Analysators zu messen: Es entfernt die Grundschwingung vor dem ADC, sodass
+     die FFT die Oberwellen ohne die eigenen Verzerrungsprodukte des Wandlers
+     sieht.  Das Kerbfilter funktioniert aber nur, wenn seine Kerbe exakt auf der
+     Testfrequenz liegt — und bei einem Doppel-T-Filter wandern Mittenfrequenz
+     und Tiefe beim Drehen der Trimmer gemeinsam.  Der Assistent liefert ein
+     <b>live, kontinuierlich aktualisiertes</b> Bild der Kerbe, sodass Sie die
+     Kerbe beim Justieren des Filters mit dem Schraubendreher in der Hand
+     wandern sehen.</p>
+  <p>Öffnen Sie ihn über das Hauptmenü: <b>Extras ▸ Kerbfilter abgleichen…</b>.
+     Solange der Dialog geöffnet ist, übernimmt er Wiedergabe und Aufnahme —
+     Generator, Oszilloskop, FFT und ein laufender Frequenzgang-Sweep werden für
+     die Dauer angehalten.  Verdrahten Sie den Signalweg wie für die spätere
+     Verzerrungsmessung: Ausgang ▸ Kerbfilter ▸ Eingang.</p>
+  <table class="controls">
+    <tr><th>Steuerelement</th><th>Hinweise</th></tr>
+    <tr><td>Startfrequenz, Hz</td>
+        <td>Untere Grenze des angezeigten Bandes.  Akzeptiert kHz-Kurzschreibweise —
+            die Eingabe <code>1.5k</code> bedeutet 1500&nbsp;Hz; reine Ziffern
+            werden als Hz gelesen.</td></tr>
+    <tr><td>Endfrequenz, Hz</td>
+        <td>Obere Grenze des angezeigten Bandes, bis zur Nyquist-Frequenz.</td></tr>
+    <tr><td>Amplitude (RMS)</td>
+        <td>Ausgangspegel des Abgleich-Sweeps in Volt RMS; akzeptiert
+            µV / mV / V / dBV.</td></tr>
+    <tr><td>Zielfrequenz, Hz</td>
+        <td>Die Frequenz, auf die Sie das Kerbfilter abgleichen — als
+            gestrichelte vertikale Markierung in der Darstellung gezeichnet
+            (siehe unten).</td></tr>
+    <tr><td>Schließen</td>
+        <td>Stoppt die Abgleichschleife, gibt das Audiogerät frei und stellt die
+            normale Frequenzgang-Ansicht wieder her.</td></tr>
+  </table>
+  <p>Alle vier Werte werden zwischen Sitzungen gespeichert.  Das Bearbeiten der
+     Start-/Endfelder skaliert die Frequenzachse sofort neu.</p>
+  <p><b>Was Sie sehen.</b>  Die Darstellung zeigt den Frequenzgang des gemessenen
+     (Eingangs-)Kanals, neu aufgebaut etwa <b>zehnmal pro Sekunde</b> aus einem
+     kurzen, in Schleife laufenden Sweep (rund eine Viertelsekunde pro Durchlauf) —
+     jede Trimmerdrehung wird innerhalb eines Sekundenbruchteils sichtbar.  Die
+     vertikale Achse passt sich automatisch an die Kurve an.  Drei Live-Elemente
+     liegen auf der Darstellung:</p>
+  <ol class="features">
+    <li><b>Kerben-Anzeige</b> (oben links): die Frequenz der tiefsten im aktuellen
+        Sweep gefundenen Kerbe und ihre Tiefe in dB.  Die Kerbenposition wird
+        zwischen den Sweep-Punkten interpoliert und liest sich daher feiner als
+        das Sweep-Raster.</li>
+    <li><b>Zielmarkierung</b>: eine gestrichelte vertikale Linie bei der
+        Zielfrequenz.  Ihre Farbe stuft sich von <b>rot</b> (50&nbsp;dB oder
+        weniger Dämpfung an der Zielfrequenz) bis <b>grün</b> (90&nbsp;dB oder
+        tiefer) ab.  Die Farbe gibt die Dämpfung <em>an der Zielfrequenz</em>
+        wieder, nicht dort, wo die Kerbe gerade liegt — eine tiefe Kerbe an der
+        falschen Frequenz zeigt weiterhin rot.</li>
+    <li><b>Statuszeile</b>: die laufende Sweep-Zählung und der Fortschritt bis
+        zum nächsten Ergebnis.</li>
+  </ol>
+  <div class="note">Die andernorts in diesem Bereich verwendete Glättung des
+     Frequenzgangs ist im Assistenten <b>abgeschaltet</b>: Das Glätten einer
+     scharfen Kerbe würde sie um mehrere dB flacher erscheinen lassen, als sie
+     wirklich ist — hier liest sich die Kerbentiefe also unverfälscht.</div>
+  <p><b>Abgleich-Vorgehen.</b>  Stellen Sie die Zielfrequenz auf Ihre
+     Verzerrungs-Testfrequenz ein und rahmen Sie sie mit dem Start-/Endband ein.
+     Drehen Sie den Frequenz-Trimmer des Kerbfilters, bis die Kerbenfrequenz der
+     Anzeige auf der Zielfrequenz landet und die Markierung grün wird; justieren
+     Sie dann den Abgleich-/Tiefen-Trimmer auf maximale Tiefe — bei einem
+     Doppel-T-Filter beeinflussen sich beide gegenseitig, iterieren Sie also
+     einige Male.  Sitzt die Kerbe mit voller Tiefe auf der Zielfrequenz,
+     schließen Sie den Assistenten und führen die Verzerrungsmessung im
+     <a href="fft.html">FFT</a>-Bereich durch.  Die Messung hinter der Anzeige
+     ist dieselbe Entfaltung des abgespielten Sweeps wie bei einem normalen
+     Frequenzgang-Lauf — siehe
      <a href="theory/freq-resp.html">Funktionsprinzip ▸ Frequenzgang</a>.</p>
 
 <script src="help-viewer.js"></script>

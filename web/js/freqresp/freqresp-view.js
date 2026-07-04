@@ -20,6 +20,17 @@
 import { FlatScrollbar } from '../widgets/flat-scrollbar.js';
 import { interpolate } from './deconvolve.js';
 import { evalDb } from '../dsp/riaa.js';
+// Lanczos (windowed-sinc) trace reconstruction — one band-limited sample per
+// pixel column instead of joining the data points with straight segments, so a
+// sparse span (e.g. the few bins across a deep narrow notch null) renders as the
+// smooth ROUNDED dip the underlying response actually is, not a straight-segment
+// V. Faithful port of FreqRespView's LANCZOS_TRACES path (uses the NaN-aware
+// double[] overload — invalid points are treated as missing, not gaps).
+import { lanczosNaN, LANCZOS_A, MAX_LANCZOS_DOWNSAMPLE } from '../dsp/lanczos.js';
+// Drag-select rectangular zoom + Ctrl+Z undo (Java AbstractMeasurementView's
+// installRectZoom base machinery); this view supplies the log-freq / dB
+// pixel↔value mappings + clamps (Java FreqRespView zoom overrides).
+import { RectZoom } from '../ui/rect-zoom.js';
 
 // ----- packed-int colour → CSS hex (matches the fft-view helper) -----
 const colorHex = (c) => '#' + (c & 0xffffff).toString(16).padStart(6, '0');
@@ -33,6 +44,13 @@ const MARGIN_RIGHT_PHASE = 52;
 // Axis tick length (Java AbstractMeasurementView.MAJOR_TICK_LEN) — used to inset the
 // left-Y unit caption from the plot's left edge, mirroring drawAxisCaptions.
 const MAJOR_TICK_LEN = 6;
+
+// ----- Lanczos trace smoothing (FreqRespView.LANCZOS_TRACES path) -----
+/** Master on/off for sinc (Lanczos) trace smoothing. Off = linear segments. */
+const LANCZOS_TRACES = true;
+/** Linear-amplitude floor that keeps a Lanczos overshoot from driving the
+ *  reconstructed magnitude negative (→ log10 of a negative number). */
+const LANCZOS_MAG_FLOOR_LIN = 1e-15;
 
 // ----- zoom / pan factors + window limits (FreqRespView constants) -----
 const FREQ_ZOOM_FACTOR = 1.25;
@@ -54,15 +72,16 @@ export class FreqRespView {
    * @param {HTMLCanvasElement} canvas  the #frPlot canvas
    * @param {import('../store/preferences.js').Preferences} prefs Preferences.instance()
    * @param {import('./correction-store.js').FreqRespCorrectionStore} correctionStore loaded .frc store
-   * @param {{engine:object, freqScroll?:HTMLCanvasElement, magScroll?:HTMLCanvasElement,
-   *          onRangeChanged?:Function}} deps
+   * @param {{freqScroll?:HTMLCanvasElement, magScroll?:HTMLCanvasElement,
+   *          onRangeChanged?:Function}} deps  (callers may also pass an unused
+   *          {@code engine} key — the view now reads the input rate from prefs,
+   *          mirroring the desktop, so it no longer stores the engine)
    */
   constructor(canvas, prefs, correctionStore, deps = {}) {
     this.cv = canvas;
     this.g = canvas.getContext('2d');
     this.prefs = prefs;
     this.correctionStore = correctionStore;
-    this.engine = deps.engine || null;
     this._onRangeChanged = deps.onRangeChanged || null;
 
     // RAW captured/loaded results (before calibration) and the display copies with the
@@ -74,7 +93,8 @@ export class FreqRespView {
     this.sourceFilePath = null;
 
     // Sample rate of the most recent result; clips the crosshair readout at
-    // nyquistFraction × sampleRate (falls back to the engine input rate).
+    // nyquistFraction × sampleRate (falls back to the input-rate pref when no
+    // result is loaded — see _inputSampleRate).
     this.lastResultSampleRate = 0;
 
     // Crosshair cursor state.
@@ -98,6 +118,15 @@ export class FreqRespView {
     canvas.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
     canvas.addEventListener('mousemove', (e) => this._onMouseMove(e));
     canvas.addEventListener('mouseleave', () => { this._mouseInPlot = false; this.render(); });
+    // Drag-select zoom + Ctrl+Z undo (Java FreqRespView: installRectZoom(this, true)
+    // — hookMouse, so the machinery wires the drag to the canvas's own mouse events).
+    this._rectZoom = new RectZoom(canvas, {
+      captureState: () => this._captureZoomState(),
+      applyState: (s) => this._applyZoomState(s),
+      stateForRect: (sel) => this._zoomStateForRect(sel),
+      zoomableArea: () => this._plotRect(),
+      repaintOverlay: () => this.render(),
+    });
 
     // Two navigation FlatScrollbars (optional — wired only when the host provides the
     // gutter canvases): freq (log) horizontal + mag (linear) vertical.
@@ -311,9 +340,15 @@ export class FreqRespView {
     return Math.max(1.0, sr * 0.5 * frac);
   }
 
+  /** Fallback sample rate for the Nyquist ceiling / crosshair clip when no result is
+   *  loaded yet — the user's REQUESTED input-rate pref (Java nyquistHz + drawCrosshair
+   *  both read {@code prefs.current().getInputSampleRate()}). Must NOT read
+   *  {@code engine.config.inRate}: SharedCapture re-pins that to the rate Web Audio
+   *  actually negotiated (often the OS-capped 48 kHz), which would shrink the zoom-out
+   *  ceiling below the rate the user set — diverging from the desktop, which clamps to
+   *  the requested rate. */
   _inputSampleRate() {
-    return (this.engine && this.engine.config && this.engine.config.inRate)
-      || this.prefs.current().inputSampleRate || 48000;
+    return this.prefs.current().inputSampleRate || 48000;
   }
 
   // ===========================================================================
@@ -359,6 +394,9 @@ export class FreqRespView {
     if (this._mouseInPlot) {
       this._drawCrosshair(g, plot, freqMin, freqMax, magTop, magBot, phaseVisible);
     }
+    // Rect-zoom rubber band + focused-view accent border — LAST, over the whole
+    // canvas (Java onPaint ends with drawRectZoomOverlay(gc, canvas.width, canvas.height)).
+    if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
   }
 
   // ----- grid + axes (AxisSpec.log freq / linearNice dB / linear ±180° phase) -----
@@ -442,19 +480,12 @@ export class FreqRespView {
   _paintMag(g, result, plot, freqMin, freqMax, magTop, magBot, color, lw) {
     const freqs = result.freqs, mag = result.magLin;
     if (!freqs || !mag) return;
-    const xOf = (f) => plot.x + this._freqToXFraction(f, freqMin, freqMax) * plot.w;
     const clampY = (d) => plot.y + (magTop - Math.max(magBot, Math.min(magTop, d))) / (magTop - magBot) * plot.h;
-    g.strokeStyle = color; g.lineWidth = lw; g.setLineDash([]);
-    g.beginPath();
-    let started = false;
-    for (let i = 0; i < freqs.length; i++) {
-      const f = freqs[i];
-      if (f < freqMin || f > freqMax) continue;
-      const db = mag[i] > 0 ? 20 * Math.log10(mag[i]) : magBot;
-      const xx = xOf(f), yy = clampY(db);
-      started ? g.lineTo(xx, yy) : (g.moveTo(xx, yy), started = true);
-    }
-    g.stroke();
+    // toDb reconstructs in LINEAR magnitude (matching Java paintTrace: Lanczos runs
+    // on magLin, then linToDb with a floor so overshoot can't log a negative), so a
+    // deep narrow null recovers its smooth rounded shape rather than a straight V.
+    const toY = (v) => clampY(20 * Math.log10(Math.max(LANCZOS_MAG_FLOOR_LIN, v)));
+    this._paintDataTrace(g, plot, freqMin, freqMax, color, lw, [], freqs, mag, toY);
   }
 
   _paintPhase(g, result, plot, freqMin, freqMax, color, lw) {
@@ -462,18 +493,121 @@ export class FreqRespView {
     if (!freqs || !phaseRad) return;
     const xOf = (f) => plot.x + this._freqToXFraction(f, freqMin, freqMax) * plot.w;
     const yOf = (deg) => plot.y + (180 - Math.max(-180, Math.min(180, deg))) / 360 * plot.h;
-    g.strokeStyle = color; g.lineWidth = lw; g.setLineDash([1, 2]);
+    const dash = [1, 2];
+    const scale = this._lanczosScale(freqs, freqMin, freqMax, plot.w);
+    if (scale <= 0) {
+      // Sparse-fallback / smoothing-off: straight segments through the data points.
+      g.strokeStyle = color; g.lineWidth = lw; g.setLineDash(dash);
+      g.beginPath();
+      let started = false;
+      for (let i = 0; i < freqs.length; i++) {
+        const f = freqs[i];
+        if (f < freqMin || f > freqMax) continue;
+        const deg = phaseRad[i] * 180 / Math.PI;
+        const xx = xOf(f), yy = yOf(deg);
+        started ? g.lineTo(xx, yy) : (g.moveTo(xx, yy), started = true);
+      }
+      g.stroke();
+      g.setLineDash([]);
+      return;
+    }
+    // Lanczos with a LOCAL phase unwrap so the kernel never rings across a ±180°
+    // wrap; re-wrapped at draw time so the wrap still shows as a clean vertical
+    // jump with smooth curves either side. Only the visible span (+ kernel
+    // padding) is unwrapped (Java FreqRespView.paintPhase).
+    const pad = Math.ceil(LANCZOS_A * scale) + 1;
+    const from = Math.max(0, this._indexBelow(freqs, freqMin) - pad);
+    const to = Math.min(freqs.length - 1, this._indexBelow(freqs, freqMax) + pad);
+    const len = to - from + 1;
+    const uw = new Float64Array(len);
+    uw[0] = phaseRad[from];
+    for (let k = 1; k < len; k++) {
+      uw[k] = uw[k - 1] + wrapToPi(phaseRad[from + k] - phaseRad[from + k - 1]);
+    }
+    this._paintPolyline(g, plot, color, lw, dash, plot.w,
+      (i) => plot.x + i,
+      (i) => {
+        const f = this._xFractionToFreq(i / plot.w, freqMin, freqMax);
+        const rad = wrapToPi(lanczosNaN(uw, len, this._fracIndex(freqs, f) - from, scale));
+        return yOf(rad * 180 / Math.PI);
+      });
+  }
+
+  // ----- Lanczos trace reconstruction (FreqRespView LANCZOS_TRACES path) -----
+
+  /** Lanczos downsample factor for the visible data span, or 0 to fall back to the
+   *  linear per-point feed (smoothing off, or the span carries more than
+   *  MAX_LANCZOS_DOWNSAMPLE samples per pixel — too dense to upsample).
+   *  Mirrors FreqRespView.lanczosScale. */
+  _lanczosScale(freqs, freqMin, freqMax, width) {
+    if (!LANCZOS_TRACES || !freqs || freqs.length < 2 || width < 2) return 0;
+    const lo = this._indexBelow(freqs, freqMin);
+    const hi = this._indexBelow(freqs, freqMax);
+    const samplesPerPx = Math.max(1, hi - lo) / width;
+    return samplesPerPx <= MAX_LANCZOS_DOWNSAMPLE ? Math.max(1.0, samplesPerPx) : 0;
+  }
+
+  /** Largest index i with freqs[i] <= f (binary search), clamped to range
+   *  (FreqRespView.indexBelow). */
+  _indexBelow(freqs, f) {
+    let lo = 0, hi = freqs.length - 1;
+    if (f <= freqs[0]) return 0;
+    if (f >= freqs[hi]) return hi;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >>> 1;
+      if (freqs[mid] <= f) lo = mid; else hi = mid;
+    }
+    return lo;
+  }
+
+  /** Fractional data index for frequency f, interpolated in log-freq so the index
+   *  advances uniformly along the log axis the kernel reconstructs against
+   *  (FreqRespView.fracIndex). */
+  _fracIndex(freqs, f) {
+    const lo = this._indexBelow(freqs, f);
+    if (lo >= freqs.length - 1) return freqs.length - 1;
+    const f0 = freqs[lo], f1 = freqs[lo + 1];
+    if (f1 <= f0 || f <= f0) return lo;
+    return lo + (Math.log(f) - Math.log(f0)) / (Math.log(f1) - Math.log(f0));
+  }
+
+  /** Draws one data-driven magnitude trace: a per-pixel Lanczos reconstruction of
+   *  `data` (aligned with `freqs`) when smoothing is on and the span is sparse
+   *  enough, else the linear per-point feed. `toY` maps a reconstructed-or-raw
+   *  sample value to its Y (Java FreqRespView.paintDataTrace). */
+  _paintDataTrace(g, plot, freqMin, freqMax, color, lw, dash, freqs, data, toY) {
+    const scale = this._lanczosScale(freqs, freqMin, freqMax, plot.w);
+    const n = freqs.length;
+    if (scale > 0) {
+      this._paintPolyline(g, plot, color, lw, dash, plot.w,
+        (i) => plot.x + i,
+        (i) => toY(lanczosNaN(data, n,
+          this._fracIndex(freqs, this._xFractionToFreq(i / plot.w, freqMin, freqMax)), scale)));
+    } else {
+      const xOf = (f) => plot.x + this._freqToXFraction(f, freqMin, freqMax) * plot.w;
+      this._paintPolyline(g, plot, color, lw, dash, n,
+        (i) => xOf(freqs[i]),
+        (i) => toY(data[i]));
+    }
+  }
+
+  /** Strokes a polyline of `count` points (x = xAt(i), y = yAt(i)); a NaN y breaks
+   *  the path into a gap (Java AbstractMeasurementView.paintPolylineImpl gap rule).
+   *  The web strokes every point directly — the desktop's per-column bucketing is a
+   *  fill-rate optimisation, not a visual difference at these point counts. */
+  _paintPolyline(g, plot, color, lw, dash, count, xAt, yAt) {
+    if (count < 2) return;
+    g.strokeStyle = color; g.lineWidth = lw; g.setLineDash(dash || []);
     g.beginPath();
     let started = false;
-    for (let i = 0; i < freqs.length; i++) {
-      const f = freqs[i];
-      if (f < freqMin || f > freqMax) continue;
-      const deg = phaseRad[i] * 180 / Math.PI;
-      const xx = xOf(f), yy = yOf(deg);
-      started ? g.lineTo(xx, yy) : (g.moveTo(xx, yy), started = true);
+    for (let i = 0; i < count; i++) {
+      const y = yAt(i);
+      if (Number.isNaN(y)) { started = false; continue; }   // genuine gap
+      const x = xAt(i);
+      started ? g.lineTo(x, y) : (g.moveTo(x, y), started = true);
     }
     g.stroke();
-    g.setLineDash([]);
+    if (dash && dash.length) g.setLineDash([]);
   }
 
   // ----- RIAA reference overlay (FreqRespView.drawRiaaOverlay) -----
@@ -793,6 +927,63 @@ export class FreqRespView {
     return { x: MARGIN_LEFT, y: MARGIN_TOP, w: Math.max(1, W - MARGIN_LEFT - rightMargin), h: Math.max(1, H - MARGIN_TOP - MARGIN_BOTTOM) };
   }
 
+  // ───────────── Rectangular zoom (base machinery in rect-zoom.js) ─────────────
+  // Faithful port of the Java FreqRespView zoom overrides (commit 73f6c1f).
+  // Selections live inside the plot area — zoomableArea = _plotRect().
+
+  /** X = displayed frequency window (always log), Y = the magnitude-dB window.
+   *  The fixed ±180° phase axis is not zoom state (Java FreqRespView.captureZoomState). */
+  _captureZoomState() {
+    const p = this.prefs;
+    return { xMin: p.freqRespFreqMinHz.get(), xMax: p.freqRespFreqMaxHz.get(),
+      yMin: [p.freqRespMagBotDb.get()], yMax: [p.freqRespMagTopDb.get()] };
+  }
+
+  /** Applies through the canonical range-change protocol, clamped like the wheel
+   *  zoom; a restore that clamps degenerate (e.g. the Nyquist ceiling dropped
+   *  below the stored window) returns false so undo skips the dead entry
+   *  (Java FreqRespView.applyZoomState). */
+  _applyZoomState(s) {
+    const p = this.prefs;
+    const fMin = Math.max(FREQ_MIN_FLOOR_HZ, s.xMin);
+    const fMax = Math.min(this._nyquistHz(), s.xMax);
+    const top = Math.min(MAG_TOP_ZOOM_MAX_DB, s.yMax[0]);
+    const bot = Math.max(MAG_BOT_MIN_DB, s.yMin[0]);
+    if (fMax <= fMin || top <= bot) return false;   // degenerate after clamping
+    p.freqRespFreqMinHz.set(fMin);
+    p.freqRespFreqMaxHz.set(fMax);
+    p.freqRespMagTopDb.set(top);
+    p.freqRespMagBotDb.set(bot);
+    p.save();
+    this._publishRangeChanged();
+    this.render();
+    return true;
+  }
+
+  /** Log-domain on X, linear-dB on Y — the crosshair / wheel-zoom mappings.
+   *  Returns null for a selection that clamps to a degenerate range, so the
+   *  base cancels the zoom instead of pushing a no-op undo entry
+   *  (Java FreqRespView.zoomStateForRect). */
+  _zoomStateForRect(sel) {
+    const p = this.prefs;
+    const plot = this._plotRect();
+    if (!plot) return null;
+    const fMin = Math.max(1.0, p.freqRespFreqMinHz.get());
+    const fMax = p.freqRespFreqMaxHz.get();
+    const top = p.freqRespMagTopDb.get();
+    const span = top - p.freqRespMagBotDb.get();
+    const newTop = Math.min(MAG_TOP_ZOOM_MAX_DB,
+      top - (sel.y - plot.y) / plot.h * span);
+    const newBot = Math.max(MAG_BOT_MIN_DB,
+      top - (sel.y + sel.h - plot.y) / plot.h * span);
+    const newFMin = Math.max(FREQ_MIN_FLOOR_HZ,
+      this._xFractionToFreq((sel.x - plot.x) / plot.w, fMin, fMax));
+    const newFMax = Math.min(this._nyquistHz(),
+      this._xFractionToFreq((sel.x + sel.w - plot.x) / plot.w, fMin, fMax));
+    if (newFMax <= newFMin || newTop <= newBot) return null;
+    return { xMin: newFMin, xMax: newFMax, yMin: [newBot], yMax: [newTop] };
+  }
+
   _zoomFrequencyAroundCursor(dir) {
     const prefs = this.prefs;
     let fMin = prefs.freqRespFreqMinHz.get(), fMax = prefs.freqRespFreqMaxHz.get();
@@ -1030,6 +1221,13 @@ export class FreqRespView {
 }
 
 // ----- module-private formatters (FreqRespFormat) -----
+
+/** Wraps a radian angle to (−π, π] — used to unwrap the phase before Lanczos and
+ *  to re-wrap the reconstructed value for display (FreqRespView.wrapToPi). */
+function wrapToPi(r) {
+  const twoPi = 2.0 * Math.PI;
+  return r - twoPi * Math.floor((r + Math.PI) / twoPi);
+}
 
 /** Smallest power of two ≥ x (≥ 1). Mirrors fft.MathUtil.nextPow2. */
 function nextPow2(x) {

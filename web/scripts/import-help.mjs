@@ -39,20 +39,27 @@ for (const lang of langs) {
     await cp(s, d, { recursive: true });
   }
 }
-// Bake the ?hl= search-term highlighter into each language: copy the script in and add a
-// <script src> to every page (the desktop HelpViewer injected it; static pages can't).
+// Per-page rewrites: (a) the web product name — the help renders the app as
+// "Phonalyser.web" (an intended divergence, sync-java-to-web skill rule 8); the
+// negative lookbehind keeps URLs (github.com/dgo42/Phonalyser) intact and the
+// lookahead makes the rename idempotent. (b) Bake the ?hl= search-term
+// highlighter into each language: copy the script in and add a <script src> to
+// every page (the desktop HelpViewer injected it; static pages can't).
 const VIEWER = path.join(here, 'help-viewer.js');
+const PRODUCT_RENAME = /(?<!\/)\bPhonalyser\b(?!\.web)/g;
 async function injectViewer(dir, langRoot) {
   for (const e of await readdir(dir, { withFileTypes: true })) {
     const full = path.join(dir, e.name);
     if (e.isDirectory()) { await injectViewer(full, langRoot); continue; }
     if (!e.name.endsWith('.html')) continue;
-    let html = await readFile(full, 'utf8');
-    if (html.includes('help-viewer.js')) continue;   // already injected
-    const rel = path.relative(path.dirname(full), langRoot).replace(/\\/g, '/');
-    const tag = `<script src="${rel ? rel + '/' : ''}help-viewer.js"></script>\n`;
-    html = html.includes('</body>') ? html.replace('</body>', tag + '</body>') : html + tag;
-    await writeFile(full, html);
+    const orig = await readFile(full, 'utf8');
+    let html = orig.replace(PRODUCT_RENAME, 'Phonalyser.web');
+    if (!html.includes('help-viewer.js')) {
+      const rel = path.relative(path.dirname(full), langRoot).replace(/\\/g, '/');
+      const tag = `<script src="${rel ? rel + '/' : ''}help-viewer.js"></script>\n`;
+      html = html.includes('</body>') ? html.replace('</body>', tag + '</body>') : html + tag;
+    }
+    if (html !== orig) await writeFile(full, html);
   }
 }
 for (const lang of langs) {

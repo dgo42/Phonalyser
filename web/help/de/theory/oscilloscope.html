@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Theorie: Oszilloskop</title>
+  <title>Phonalyser.web — Theorie: Oszilloskop</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -45,7 +45,7 @@
 
     <rect x="340" y="100" width="120" height="50" rx="6" fill="#eef" stroke="#88a"/>
     <text x="400" y="120" text-anchor="middle" font-weight="bold">trigger</text>
-    <text x="400" y="138" text-anchor="middle" fill="#557">edge + level</text>
+    <text x="400" y="138" text-anchor="middle" fill="#557">edge / glitch</text>
 
     <rect x="500" y="100" width="130" height="50" rx="6" fill="#eef" stroke="#88a"/>
     <text x="565" y="120" text-anchor="middle" font-weight="bold">resampling</text>
@@ -89,12 +89,74 @@
      gewählten <em>Richtung</em> überschritten wird (steigende oder fallende
      Flanke).  Die Darstellung erfolgt dann relativ zu diesem Punkt, sodass ein
      stationärer Ton stillsteht.</p>
-  <p>Phonalyser triggert auf absolute Abtastpositionen im Datenstrom: Jeder
+  <p>Phonalyser.web triggert auf absolute Abtastpositionen im Datenstrom: Jeder
      erfasste Triggerpunkt speichert den absoluten Index des Nulldurchgangs,
      einschließlich eines Sub-Sample-Bruchteils aus linearer Interpolation
      zwischen den beiden benachbarten Abtastwerten. Dieser Bruchteil
      verschiebt die gerenderte Kurve um weniger als einen Pixel, sodass das
      Signal selbst auf einer schnellen Zeitbasis um keinen Abtastwert jittert.</p>
+
+  <h3 id="glitch">Der Glitch-Trigger: Auslösen auf Beschädigung, nicht auf einen Pegel</h3>
+  <p>Manche Ereignisse, die man fangen möchte, sind gar keine
+     Pegelüberschreitungen.  Ein Aufnahmeaussetzer, der Abtastwerte
+     verschluckt, hinterlässt einen Amplitudensprung oder einen
+     Steigungsknick, der <em>irgendwo</em> auf der Welle sitzen kann, in
+     beliebiger Richtung — ein auf einen festen Pegel gestellter
+     Flankentrigger trifft ihn fast nie.  Der <b>Glitch-Trigger</b> löst
+     stattdessen bei jeder Unstetigkeit der Wellenform aus, wo immer sie
+     auftritt; Triggerpegel, Hysterese und Sub-Sample-Verfeinerung gelten
+     hier nicht.  (Er ist nur im Normal- und Single-Modus verfügbar: Ein
+     freilaufendes Auto-Oszilloskop würde den gefangenen Frame gleich bei der
+     nächsten Neuzeichnung überschreiben.)</p>
+  <p>Der Detektor nutzt die Tatsache, dass ein abgetasteter Sinus — bei
+     <em>jeder</em> Frequenz — einer exakten dreigliedrigen
+     Rekurrenz<sup id="cite-1"><a href="#ref-linpred">[1]</a></sup> gehorcht:
+     Jeder Abtastwert ist durch die beiden vorherigen vollständig
+     vorhergesagt,</p>
+  <div class="eq"><i>x</i>[<i>i</i>] = 2 cos <i>ω</i> · <i>x</i>[<i>i</i>−1] − <i>x</i>[<i>i</i>−2],&nbsp;&nbsp;
+      <i>ω</i> = 2π <i>f</i> / <i>f</i><sub>s</sub><span class="no">(1)</span></div>
+  <p>sodass der Vorhersagefehler</p>
+  <div class="eq"><i>e</i>[<i>i</i>] = <i>x</i>[<i>i</i>] − 2 cos <i>ω</i> · <i>x</i>[<i>i</i>−1] + <i>x</i>[<i>i</i>−2]<span class="no">(2)</span></div>
+  <p>auf einem sauberen Ton bei jeder Frequenz exakt verschwindet und nur
+     übrig lässt, was der Ton nicht erklärt: den Rauschteppich,
+     Restoberwellen, einen zweiten Ton.  Wenn der gemessene Kanal der
+     Triggerkanal ist, wird <i>ω</i> aus dem gemessenen Grundton fixiert (der
+     millihertzgenaue Wert aus dem Messpass unten); andernfalls wird der
+     Koeffizient 2 cos <i>ω</i> per Kleinste-Quadrate-Anpassung an das
+     Fenster selbst geschätzt, begrenzt auf den Bereich, den ein echter Sinus
+     zulässt.</p>
+  <p>Ein Abtastwert wird als unstetig markiert, wenn |<i>e</i>| das
+     <b>8-Fache des mittleren |<i>e</i>| des eigenen Fensters</b>
+     überschreitet — ein Schwellenwert, der <em>auf dem Rauschteppich
+     mitfährt</em>.  Auf einem sauberen Ton sind das etwa
+     6,4 Standardabweichungen, die breitbandiges Rauschen praktisch nie
+     erreicht, während ein echter Knick die Vorhersage um einen großen
+     Bruchteil der Signalamplitude bricht — Dekaden darüber.  Und weil die
+     Basislinie aus demselben Fenster gemessen wird, heben Oberwellen oder
+     ein zweiter Ton sie proportional an: Die Regel skaliert sich selbst.</p>
+  <p>Das Fixieren der Frequenz hält den Detektor auch oben am Leben.  Die
+     einfache zweite Differenz — (2) mit <i>ω</i> = 0 — löscht den Ton nicht
+     aus: Sie hinterlässt einen Rest der Amplitude
+     2(1 − cos <i>ω</i>)·<i>A</i>, die eigene Krümmung des Tons.  Bei einem
+     20-kHz-Ton, abgetastet mit 384 kHz, treibt dieser Rest den
+     8×-Mittelwert-Schwellenwert auf etwa die halbe Signalamplitude
+     (≈ 0,5 <i>A</i>), sodass jeder Glitch unterhalb eines Halbskalen-Bruchs
+     unbemerkt bliebe; die abgestimmte Rekurrenz hält die Basislinie bei
+     jeder Frequenz auf dem Rauschteppich.</p>
+  <p>Ein echter Aussetzer hat <em>zwei</em> Grenzen — den Eintritt in die
+     Lücke und die Erholung danach (beobachtete USB-Aussetzer dauern
+     120–160 µs) — und beide brechen die Vorhersage.  Überschwellige
+     Abtastwerte, die näher als 1 ms beieinanderliegen, verschmelzen daher zu
+     einem einzigen Glitch-Ereignis, und die Flankenrichtungs-Buttons wählen
+     den Ankerpunkt: ↑ setzt den Trigger auf den <em>Anfang</em> des
+     Glitches (den letzten Abtastwert, der noch dem alten Verlauf folgt),
+     ↓ auf sein <em>Ende</em> (den ersten Abtastwert, den die lokale
+     Vorhersage wieder akzeptiert).</p>
+  <p>Derselbe Detektor bewacht die <a href="fft.html#rejection">kohärente
+     Mittelung des FFT-Analysators</a>: Jedes erfasste Fenster wird damit im
+     Zeitbereich neben den spektralen Toren geprüft, sodass der Trigger des
+     Oszilloskops und die Blockverwerfung des Analysators darin
+     übereinstimmen, was als beschädigt gilt.</p>
 
   <h2 id="measure">Wie die Messwerte berechnet werden</h2>
   <p>Der Messpass arbeitet im aufbereiteten Fenster in normierten Einheiten
@@ -105,13 +167,35 @@
 
   <h3>Pegel</h3>
   <p>Über das Fenster von <i>N</i> Abtastwerten <i>x</i><sub>i</sub>:</p>
-  <div class="eq"><i>V</i><sub>pp</sub> = (max − min) · <i>V</i><sub>peak</sub><span class="no">(1)</span></div>
-  <div class="eq"><i>V</i><sub>mean</sub> = <i>V</i><sub>peak</sub> · (1/<i>N</i>) Σ <i>x</i><sub>i</sub><span class="no">(2)</span></div>
-  <div class="eq"><i>V</i><sub>rms</sub> = <i>V</i><sub>peak</sub> · √( E[<i>x</i>²] − E[<i>x</i>]² )<span class="no">(3)</span></div>
-  <p>Der Effektivwert in (3) ist der <em>AC</em>-Effektivwert — der DC-Anteil
+  <div class="eq"><i>V</i><sub>pp</sub> = (max − min) · <i>V</i><sub>peak</sub><span class="no">(3)</span></div>
+  <div class="eq"><i>V</i><sub>mean</sub> = <i>V</i><sub>peak</sub> · (1/<i>N</i>) Σ <i>x</i><sub>i</sub><span class="no">(4)</span></div>
+  <div class="eq"><i>V</i><sub>rms</sub> = <i>V</i><sub>peak</sub> · √( E[<i>x</i>²] − E[<i>x</i>]² )<span class="no">(5)</span></div>
+  <p>Der Effektivwert in (5) ist der <em>AC</em>-Effektivwert — der DC-Anteil
      wird zuerst entfernt (die Varianzform subtrahiert den Mittelwert), da ein
      Gesamt-Effektivwert, der bei DC-belastetem Eingang auf ≈ <i>V</i><sub>mean</sub>
      zusammenbricht, auf einem Oszilloskop weit weniger aussagekräftig ist.</p>
+  <p>Bei einem periodischen Signal werden (4) und (5) nicht über das rohe
+     Fenster ausgewertet.  Ein Fenster mit einer <em>gebrochenen</em> Zahl
+     von Zyklen lässt einen hängenden Teilzyklus übrig, dessen Beitrag zum
+     Mittelwert — bis zu <i>A</i>/(π <i>n</i>) bei Amplitude <i>A</i> und
+     <i>n</i> Zyklen im Fenster — davon abhängt, wo das Fenster zufällig
+     beginnt.  Die Streuung von <i>V</i><sub>mean</sub> skaliert dann mit der
+     Signal-<em>Amplitude</em> statt mit dem Rauschen: Millivolt an
+     phasenzufälligem Wandern bei Vollaussteuerung, das einen
+     Mikrovolt-Rauschteppich völlig überdeckt.  Das Oszilloskop integriert
+     <i>V</i><sub>mean</sub> und <i>V</i><sub>rms</sub> daher nur zwischen
+     der ersten und der letzten steigenden Überschreitung des
+     Halbamplituden-Mittelpunkts — eine ganze Zahl von Perioden.  An einer
+     Mittelpunktsüberschreitung liegt das Signal per Definition auf seinem
+     eigenen Mittelwert, sodass der Randfehler zweiter Ordnung wird und
+     <i>V</i><sub>mean</sub> sich auf den Rauschteppich einschwingt: Seine
+     Standardabweichung bei einem vollausgesteuerten Signal fällt von
+     Millivolt auf unter ein Mikrovolt — dieselben ≈ 0,6 µV, die es bei
+     einem 1-mV-Signal zeigt.  <i>V</i><sub>pp</sub>, min und max bleiben
+     auf dem vollen Fenster (ein Peak darf nicht wegfallen, nur weil er im
+     Teilzyklus liegt), und ein Signal ohne zwei gleichgerichtete
+     Überschreitungen — DC oder reines Rauschen — fällt auf das volle
+     Fenster zurück.</p>
 
   <h3 id="freq">Frequenz — Nulldurchgänge, dann Goertzel-Verfeinerung</h3>
   <p>Aus einem kurzen Puffer eine genaue Frequenz abzulesen ist der
@@ -124,7 +208,7 @@
         Periodenschätzung. Nulldurchgänge folgen direkt dem tatsächlichen
         Grundton, sodass ein Rechteck mit engem Tastverhältnis das richtige
         Ergebnis liefert, anstatt sich auf eine starke Oberwelle zu sperren.</li>
-    <li><b>Verfeinerung mit dem Goertzel-Algorithmus<sup id="cite-1"><a href="#ref-goertzel">[1]</a></sup>.</b>
+    <li><b>Verfeinerung mit dem Goertzel-Algorithmus<sup id="cite-2"><a href="#ref-goertzel">[2]</a></sup>.</b>
         Der Goertzel-Algorithmus berechnet einen einzelnen DFT-Bin bei einer
         <em>beliebigen</em> Frequenz in einem O(<i>N</i>)-Durchlauf — ein
         günstiger Weg, den Betrag bei einer beliebigen Prüffrequenz ohne
@@ -136,7 +220,7 @@
         durch Leckage vom negativfrequenten Spiegelbild von der wahren Frequenz
         abgezogen — bis zu einige Zehntel Hertz bei kurzen Puffern, was früher
         dazu führte, dass das Oszilloskop neben der FFT zu niedrig anzeigte.
-        Erneutes Verfeinern des Peaks an einer Hann-gefensterten<sup id="cite-2"><a href="#ref-hann">[2]</a></sup>
+        Erneutes Verfeinern des Peaks an einer Hann-gefensterten<sup id="cite-3"><a href="#ref-hann">[3]</a></sup>
         Kopie unterdrückt dieses Spiegelbild und fixiert die Frequenz auf
         &lt; 0,02 Hz unabhängig von der Pufferlänge.</li>
   </ol>
@@ -157,7 +241,7 @@
      dass ein solches bandbegrenztes Signal zwischen seinen Abtastwerten
      <em>vollständig bestimmt</em> ist:</p>
   <div class="eq"><i>x</i>(<i>t</i>) = Σ<sub><i>n</i></sub> <i>x</i>[<i>n</i>] · sinc(<i>t</i> − <i>n</i>),&nbsp;&nbsp;
-      sinc <i>u</i> = sin(π<i>u</i>) / (π<i>u</i>)<span class="no">(4)</span></div>
+      sinc <i>u</i> = sin(π<i>u</i>) / (π<i>u</i>)<span class="no">(6)</span></div>
 
   <div class="diagram">
   <svg viewBox="0 0 820 270" width="100%" height="270" preserveAspectRatio="xMinYMid meet" xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
@@ -195,7 +279,7 @@
   </svg>
   </div>
 
-  <p>Das Oszilloskop berechnet (4) in seiner praktischen, gefensterten Form —
+  <p>Das Oszilloskop berechnet (6) in seiner praktischen, gefensterten Form —
      einen Lanczos<sup id="cite-5"><a href="#ref-lanczos">[5]</a></sup>-Kern
      mit 16 sinc-Keulen auf jeder Seite, vorberechnet in einer Phasentabelle —
      und erzeugt beim Hineinzoomen einen echten rekonstruierten Wert pro
@@ -215,11 +299,11 @@
 
   <h2 id="mains">Netzbrummen-Unterdrückung: der nachgeführte Kammfilter</h2>
   <p>Netzstörungen liegen bei der Netzfrequenz und bei jeder ganzzahligen
-     Oberwelle davon. Ein einzelner <b>Rückkopplungs-Kammfilter</b><sup id="cite-3"><a href="#ref-comb">[3]</a></sup>
+     Oberwelle davon. Ein einzelner <b>Rückkopplungs-Kammfilter</b><sup id="cite-6"><a href="#ref-comb">[6]</a></sup>
      setzt gleichzeitig eine Kerbe bei DC und bei jedem Vielfachen von
      <i>f</i>₀:</p>
   <div class="eq"><i>H</i>(<i>z</i>) = (1 − <i>z</i><sup>−<i>N</i></sup>) / (1 − α·<i>z</i><sup>−<i>N</i></sup>),&nbsp;&nbsp;
-      <i>N</i> = <i>f</i><sub>s</sub> / <i>f</i>₀<span class="no">(5)</span></div>
+      <i>N</i> = <i>f</i><sub>s</sub> / <i>f</i>₀<span class="no">(7)</span></div>
   <p>wobei α (knapp unter 1) die Schärfe jeder Kerbe bestimmt. Der Trick
      besteht darin, dass der Kammfilter <b>frequenznachgeführt</b> ist: Echte
      Netzfrequenz driftet um einige Zehntel Hertz, und die <i>k</i>-te
@@ -251,21 +335,24 @@
 
   <h2 id="refs">Literatur</h2>
   <ol class="refs">
-    <li id="ref-goertzel"><a href="#cite-1">1.</a>
-        Goertzel algorithm (single-bin DFT) —
+    <li id="ref-linpred"><a href="#cite-1">1.</a>
+        Die Sinus-Rekurrenz (1) ist der Fall zweiter Ordnung der linearen Prädiktion —
+        <a href="https://en.wikipedia.org/wiki/Linear_prediction">Wikipedia: Linear prediction</a>.</li>
+    <li id="ref-goertzel"><a href="#cite-2">2.</a>
+        Goertzel-Algorithmus (Einzel-Bin-DFT) —
         <a href="https://en.wikipedia.org/wiki/Goertzel_algorithm">Wikipedia: Goertzel algorithm</a>.</li>
-    <li id="ref-hann"><a href="#cite-2">2.</a>
-        Hann window and spectral leakage —
+    <li id="ref-hann"><a href="#cite-3">3.</a>
+        Hann-Fenster und spektrale Leckage —
         <a href="https://en.wikipedia.org/wiki/Window_function#Hann_window">Wikipedia: Hann window</a>.</li>
-    <li id="ref-comb"><a href="#cite-3">3.</a>
-        Comb filter (the feedback form of (5)) —
-        <a href="https://en.wikipedia.org/wiki/Comb_filter">Wikipedia: Comb filter</a>.</li>
     <li id="ref-shannon"><a href="#cite-4">4.</a>
-        The sampling theorem and formula (4) —
+        Das Abtasttheorem und Formel (6) —
         <a href="https://en.wikipedia.org/wiki/Whittaker%E2%80%93Shannon_interpolation_formula">Wikipedia: Whittaker–Shannon interpolation formula</a>.</li>
     <li id="ref-lanczos"><a href="#cite-5">5.</a>
-        The windowed-sinc kernel used in practice —
+        Der in der Praxis verwendete Fenster-sinc-Kern —
         <a href="https://en.wikipedia.org/wiki/Lanczos_resampling">Wikipedia: Lanczos resampling</a>.</li>
+    <li id="ref-comb"><a href="#cite-6">6.</a>
+        Kammfilter (die Rückkopplungsform von (7)) —
+        <a href="https://en.wikipedia.org/wiki/Comb_filter">Wikipedia: Comb filter</a>.</li>
   </ol>
 
   <p class="back"><a href="index.html">◀ Funktionsweise</a> ·

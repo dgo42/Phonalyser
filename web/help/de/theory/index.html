@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Funktionsprinzip</title>
+  <title>Phonalyser.web — Funktionsprinzip</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -10,7 +10,7 @@
   <p class="back"><a href="../index.html">◀ Zurück zum Inhaltsverzeichnis</a></p>
 
   <h1>Funktionsprinzip</h1>
-  <p>Dieses Kapitel erklärt, wie Phonalyser <em>intern</em> arbeitet — was
+  <p>Dieses Kapitel erklärt, wie Phonalyser.web <em>intern</em> arbeitet — was
      mit dem Signal tatsächlich passiert, vom Zeitpunkt der Synthese bis zu dem
      Moment, in dem eine THD-Zahl auf dem Bildschirm erscheint.  Es richtet
      sich an den Messanwender: Kenntnisse in der Softwareentwicklung sind nicht
@@ -19,7 +19,7 @@
      <a href="../oscilloscope.html">Oszilloskop</a>,
      <a href="../fft.html">FFT-Analysator</a>).</p>
 
-  <div class="note"><b>Ein Dankeschön.</b>  Phonalyser verdankt seine Existenz
+  <div class="note"><b>Ein Dankeschön.</b>  Phonalyser.web verdankt seine Existenz
      <a href="https://www.roomeqwizard.com/">REW (Room EQ Wizard)</a> —
      die Arbeit mit diesem hervorragenden Werkzeug hat den Autor inspiriert, eine
      eigene Messapplikation zu entwickeln, die auf eine noch umfassendere und
@@ -28,7 +28,7 @@
      bedeutet).</div>
 
   <h2>Der Signalpfad</h2>
-  <p>Alles in Phonalyser hängt an einem einzigen Kreislauf: Synthetisierte Samples
+  <p>Alles in Phonalyser.web hängt an einem einzigen Kreislauf: Synthetisierte Samples
      verlassen das System über den DAC, durchlaufen das Messobjekt, kehren über den
      ADC zurück und werden über einen gemeinsamen Ringpuffer an die Analyseansichten
      verteilt.</p>
@@ -146,7 +146,7 @@
   <h2>Kapitel</h2>
   <div class="toc">
     <a href="audio-backend.html"><b>Audio-Backend</b> — die bitgenaue Brücke
-       zwischen Phonalyser und der Sound-Hardware: Garantien, Funktionsweise einer
+       zwischen Phonalyser.web und der Sound-Hardware: Garantien, Funktionsweise einer
        Aufnahme- und Wiedergabesitzung, gemeinsam genutzte Geräte</a>
     <a href="ring-buffer.html"><b>Ringpuffer &amp; Konsumenten</b> — der gemeinsame
        22-Sekunden-Aufnahmespeicher, unabhängige Lesecursor und was passiert,

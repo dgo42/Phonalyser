@@ -33,7 +33,8 @@
   <div class="dropdown">
     <span class="menu-item" data-bs-toggle="dropdown" aria-expanded="false" data-i18n="menu.tools">Tools</span>
     <ul class="dropdown-menu">
-      <li><button class="dropdown-item" id="menuPrefs" type="button"><i class="bi bi-gear"></i> <span data-i18n="menu.tools.preferences">Preferences…</span></button></li>
+      <li><button class="dropdown-item" id="menuTuneNotch" type="button"><img src="assets/icons/notch-filter.svg" class="menu-icon" alt=""> <span data-i18n="menu.tools.tuneNotch">Tune notch…</span></button></li>
+      <li><button class="dropdown-item" id="menuPrefs" type="button"><img src="assets/icons/gear.svg" class="menu-icon" alt=""> <span data-i18n="menu.tools.preferences">Preferences…</span></button></li>
     </ul>
   </div>
   <div class="dropdown">
@@ -308,6 +309,14 @@
               <div id="scopeTrigEdge" class="btn-group trig-toggle-group" role="group">
                 <button type="button" class="sq-toggle" data-value="RISE" data-i18n-title="scope.trigger.edge.rise.tooltip">&#8593;</button>
                 <button type="button" class="sq-toggle" data-value="FALL" data-i18n-title="scope.trigger.edge.fall.tooltip">&#8595;</button>
+              </div>
+              <!-- Trigger event type (Java ScopeTabControl typeSet): E = level-crossing edge
+                   trigger, G = dV/dt glitch trigger (waveform discontinuities). The ↑/↓ edge
+                   selection applies to both — crossing direction vs. glitch start/end anchor.
+                   G is disabled in AUTO mode (free-run would overwrite a caught frame). -->
+              <div id="scopeTrigType" class="btn-group trig-toggle-group" role="group">
+                <button type="button" class="sq-toggle" data-value="EDGE" data-i18n-title="scope.trigger.type.edge.tooltip">E</button>
+                <button type="button" class="sq-toggle" data-value="GLITCH" data-i18n-title="scope.trigger.type.glitch.tooltip">G</button>
               </div>
               <div id="scopeTrigMode" class="btn-group trig-toggle-group" role="group">
                 <button type="button" class="sq-toggle" data-value="AUTO" data-i18n-title="scope.trigger.auto">A</button>
@@ -602,7 +611,7 @@
   <div class="tab-pane fade" id="tab-fr" role="tabpanel">
     <div class="workspace">
       <div class="right-col">
-        <section class="pane fft-pane">
+        <section class="pane fft-pane" id="freqRespPane">
           <header class="pane-header"><span class="pane-caret">▼</span> <span data-i18n="tab.frequencyResponse">Frequency response</span></header>
           <!-- Main view row (Java FreqRespView: trace canvas + a right-gutter vertical
                magnitude FlatScrollbar + a bottom horizontal log-frequency one), mirroring
@@ -631,10 +640,8 @@
             <div class="tab" data-panel="frSavePanel"><div class="t-title" data-i18n="freqResp.tab.saveTo">Save to…</div></div>
             <div class="tab" data-panel="frLoadPanel"><div class="t-title" data-i18n="freqResp.tab.loadFrom">Load from…</div></div>
             <div class="tab-spacer"></div>
-            <div class="fr-actions">
-              <button class="fr-wizard" data-i18n-title="freqResp.button.wizard.tooltip"><img src="assets/icons/wand.svg" class="tool-svg" alt=""></button>
-              <button class="fr-play" id="frRunStrip" data-i18n-title="freqResp.button.play.start"><i class="bi bi-play-fill"></i></button>
-            </div>
+            <button class="fft-tool-btn" data-i18n-title="freqResp.button.wizard.tooltip"><img src="assets/icons/wand.svg" class="tool-svg" alt=""></button>
+            <button class="led-btn fr-run-btn" id="frRunStrip" data-i18n-title="freqResp.button.play.start"><i class="bi bi-play-fill"></i></button>
           </div>
 
           <!-- Settings drop-down panel -->
@@ -904,6 +911,34 @@
   </div></div>
 </div>
 
+<!-- ===== Tune-notch wizard (Java TuneNotchWizardDialog) =====
+     Layout mirrors the Java dialog: fields row (start / stop on row 1,
+     amplitude / target on row 2) → fixed 600×400 embedded live chart → one
+     bottom row shared by the status line and the Close button. -->
+<div class="modal fade" id="tuneNotchModal" tabindex="-1">
+  <div class="modal-dialog tn-dialog"><div class="modal-content prefs">
+    <div class="modal-header py-2"><h6 class="modal-title" data-i18n="tuneNotch.title">Tune notch filter</h6>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body">
+      <div class="tn-fields mb-2">
+        <label class="col-form-label col-form-label-sm" data-i18n="tuneNotch.startHz">Start frequency, Hz</label>
+        <div class="numfield sm"><input id="tnStart" class="nf-input" type="text"/><span class="nf-unit">Hz</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+        <label class="col-form-label col-form-label-sm" data-i18n="tuneNotch.stopHz">Stop frequency, Hz</label>
+        <div class="numfield sm"><input id="tnStop" class="nf-input" type="text"/><span class="nf-unit">Hz</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+        <label class="col-form-label col-form-label-sm" data-i18n="tuneNotch.amplitude">Amplitude (RMS)</label>
+        <div class="numfield sm"><input id="tnAmp" class="nf-input" type="text"/><span class="nf-unit">V</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+        <label class="col-form-label col-form-label-sm" data-i18n="tuneNotch.targetHz">Target frequency, Hz</label>
+        <div class="numfield sm"><input id="tnTarget" class="nf-input" type="text"/><span class="nf-unit">Hz</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+      </div>
+      <canvas id="tnPlot" width="600" height="400"></canvas>
+    </div>
+    <div class="modal-footer py-2">
+      <span id="tnStatus" class="small me-auto"></span>
+      <button id="tnClose" type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal" data-i18n="tuneNotch.close">Close</button>
+    </div>
+  </div></div>
+</div>
+
 <!-- ===== DAC calibration dialog (Java DacCalibrationDialog) ===== -->
 <div class="modal fade" id="dacCalModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered modal-sm"><div class="modal-content">
@@ -1019,10 +1054,28 @@
   </div></div>
 </div>
 
-<!-- ===== FreqResp sweep busy modal (Java FreqRespPane busy shell): the live level
-     meter shown while a sweep runs (replaces the text-only status). ===== -->
+<!-- ===== Reusable one-button alert dialog (informational; e.g. audio-device failure) ===== -->
+<div class="modal fade" id="alertModal" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content prefs">
+    <div class="modal-header py-2"><h6 class="modal-title" id="alertTitle">Alert</h6>
+      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+    <div class="modal-body"><p id="alertMessage" class="mb-0"></p></div>
+    <div class="modal-footer py-2">
+      <button class="btn btn-sm btn-primary" data-bs-dismiss="modal" data-i18n="common.close">Close</button>
+    </div>
+  </div></div>
+</div>
+
+<!-- ===== FreqResp sweep busy modal — mirror of the desktop busy shell
+     (FreqRespPane.openBusyShell): a SMALL, content-sized window with a title, one centered
+     status line and the fixed 520×100 live level meter, and NOTHING else — no buttons (the
+     desktop offers no cancel during collection). Dialog width = 520 meter + 2×16 body
+     padding + 2 px border = 554, so the fixed-size #frMeter is never squeezed and the box
+     wraps tightly to the content instead of Bootstrap's default 500 px empty dialog. The
+     meter is built after 'shown.bs.modal' so it sizes off the laid-out box; the shared
+     finally in captureAndDeconvolve guarantees the modal always closes on finish/error. ===== -->
 <div class="modal fade" id="frBusyModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
-  <div class="modal-dialog modal-dialog-centered"><div class="modal-content prefs">
+  <div class="modal-dialog modal-dialog-centered" style="max-width: 554px;"><div class="modal-content prefs">
     <div class="modal-header py-2"><h6 class="modal-title" data-i18n="freqResp.busy.title">Frequency Response Measurement</h6></div>
     <div class="modal-body">
       <p class="mb-2 small text-center" data-i18n="freqResp.busy.message">Collecting / processing frequency response, please wait…</p>

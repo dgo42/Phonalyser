@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Theorie: Audio-Backend</title>
+  <title>Phonalyser.web — Theorie: Audio-Backend</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -12,7 +12,7 @@
   <h1>Audio-Backend</h1>
 
   <h2 id="purpose">Wofür es da ist</h2>
-  <p>Das Audio-Backend ist die Brücke zwischen Phonalyser und der
+  <p>Das Audio-Backend ist die Brücke zwischen Phonalyser.web und der
      Soundhardware.  Seine einzige Aufgabe ist es, Samples <b>bitgenau</b>
      zwischen der Anwendung und den Wandlern zu bewegen: Was der Generator
      berechnet, wandelt der DAC, und was der ADC wandelt, sehen die Analysatoren —
@@ -24,11 +24,11 @@
      für eine Messung.  Ein Resampler allein erzeugt Verzerrungsprodukte weit
      oberhalb dessen, was ein guter ADC auflösen kann.  Das Backend öffnet die
      Geräte daher im <b>Exklusivmodus</b><sup><a href="#ref-excl">[1]</a></sup>:
-     Phonalyser spricht direkt mit dem Wandler, bei der exakten Abtastrate und
+     Phonalyser.web spricht direkt mit dem Wandler, bei der exakten Abtastrate und
      Bittiefe, die Sie gewählt haben, und die Verarbeitungskette des
      Betriebssystems wird vollständig umgangen.</p>
 
-  <div class="note"><b>Konsequenz der Exklusivität:</b> Während Phonalyser
+  <div class="note"><b>Konsequenz der Exklusivität:</b> Während Phonalyser.web
      aufnimmt oder wiedergibt, kann keine andere Anwendung dieses Gerät
      verwenden — und umgekehrt.  Eine Meldung „Gerät wird verwendet" beim
      Starten einer Aufnahme bedeutet meist, dass ein Browser oder
@@ -36,7 +36,7 @@
 
   <h2 id="paths">Die drei Treiberpfade</h2>
   <p>Soundhardware ist über verschiedene Treiberinterfaces erreichbar.
-     Phonalyser implementiert drei davon und lässt Sie in den Einstellungen
+     Phonalyser.web implementiert drei davon und lässt Sie in den Einstellungen
      einen auswählen; alle Module arbeiten identisch, unabhängig davon,
      welcher aktiv ist.</p>
   <table class="controls">
@@ -152,7 +152,7 @@
   </ul>
 
   <div class="note"><b>Ein praktischer Hinweis zur WASAPI-Wiedergabe.</b>
-     Phonalyser steuerte die exklusive WASAPI-Wiedergabe ursprünglich direkt;
+     Phonalyser.web steuerte die exklusive WASAPI-Wiedergabe ursprünglich direkt;
      bei manchen Interfaces erzeugte der Treiber dabei einen kurzen periodischen
      Aussetzer — eine Signalperiode Stille in regelmäßigen Abständen, sichtbar
      als spektrales Rauschen.  Der Wiedergabepfad des Datei-Players auf

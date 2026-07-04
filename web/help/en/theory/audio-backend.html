@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Theory: Audio backend</title>
+  <title>Phonalyser.web — Theory: Audio backend</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -12,7 +12,7 @@
   <h1>Audio backend</h1>
 
   <h2 id="purpose">What it is for</h2>
-  <p>The audio backend is the bridge between Phonalyser and the sound
+  <p>The audio backend is the bridge between Phonalyser.web and the sound
      hardware.  Its one job is to move samples between the application and
      the converters <b>bit-exactly</b>: what the generator computes is what
      the DAC converts, and what the ADC converts is what the analysers see —
@@ -23,18 +23,18 @@
      music, each one fatal for a measurement.  A resampler alone adds
      distortion products far above what a good ADC can resolve.  The backend
      therefore opens the devices in <b>exclusive
-     mode</b><sup><a href="#ref-excl">[1]</a></sup>: Phonalyser talks to
+     mode</b><sup><a href="#ref-excl">[1]</a></sup>: Phonalyser.web talks to
      the converter directly, at the exact sample rate and bit depth you chose,
      and the operating system's processing chain is bypassed completely.</p>
 
-  <div class="note"><b>Consequence of exclusivity:</b> while Phonalyser is
+  <div class="note"><b>Consequence of exclusivity:</b> while Phonalyser.web is
      recording or playing, no other application can use that device — and the
      other way around.  A "device is in use" message when starting a capture
      usually means a browser or media player still holds the input.</div>
 
   <h2 id="paths">The three driver paths</h2>
   <p>Sound hardware can be reached through several driver interfaces.
-     Phonalyser implements three and lets you pick one in Preferences; all
+     Phonalyser.web implements three and lets you pick one in Preferences; all
      modules work identically on top of whichever is active.</p>
   <table class="controls">
     <tr><th>Path</th><th>What it is</th><th>When to use it</th></tr>
@@ -147,7 +147,7 @@
         gap-free even when the rest of the machine is busy.</li>
   </ul>
 
-  <div class="note"><b>A practical note on WASAPI playback.</b>  Phonalyser
+  <div class="note"><b>A practical note on WASAPI playback.</b>  Phonalyser.web
      originally drove WASAPI exclusive playback directly, and on some
      interfaces the driver produced a short periodic gap — one signal period
      of silence, at regular intervals, visible as spectral garbage.  The

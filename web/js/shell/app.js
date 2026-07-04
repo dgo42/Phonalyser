@@ -22,8 +22,10 @@ import { saveScopeCapture, saveStreaming, findFullPeriodWindow, formatForName } 
 import { encodeFlac, decodeFlac } from '../io/flac.js';
 import { saveSpectrum, loadSpectrum } from '../io/fft-spectrum.js';
 import { loadFrc } from '../io/frc.js';
+import { pruneCals } from '../io/cal-store.js';
 import { saveFile, openFile, bytesToText, pickSaveTarget, writeToTarget } from '../io/file-picker.js';
 import { FreqRespHost } from './freqresp-host.js';
+import { TuneNotchWizard } from '../freqresp/tune-notch-wizard.js';
 import { ScreenshotDialog } from './screenshot.js';
 import { clonePaneForShot, preloadCloneIcons, paintCloneToCanvas } from './screenshot.js';
 import { PredistortionHost } from './predistortion-host.js';
@@ -39,6 +41,8 @@ import { GeneratorPane } from '../generator/generator-pane.js';
 import { PredistortionEngine } from '../predistortion/engine.js';
 import { writeHarmonicDpd, writeIntermodDpd } from '../io/dpd.js';
 import { NumericStepField, NumericStepModel, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
+import { MessageBus } from '../bus/message-bus.js';
+import { Events } from '../bus/events.js';
 
 const $ = window.jQuery;
 const prefs = Preferences.instance();  // load() runs in the constructor
@@ -57,6 +61,7 @@ const scopeView = new ScopeView(document.getElementById('scope'), { prefs });
 let prefsModal, aboutModal, dacCalModal;
 let shotModal;
 let confirmModal;
+let alertModal;   // the shared one-button alert modal (device-error surface; constructed in init's modals step)
 let prefsDialog;   // the Preferences dialog (constructed in init's modals step)
 let scopeTabControl;   // the oscilloscope settings strip (constructed in init's modals step)
 let fftTabControl;   // the FFT settings strip (constructed in init's modals step)
@@ -231,7 +236,14 @@ function initStepFields() {
   // Sweep fields (LINEAR_SWEEP / LOG_SWEEP) — NumericStepField like the scope's, faithful to
   // Java sweep*Field: Start/Stop FREQUENCY [0.01 .. Nyquist] 9 dec; Duration/Fade-in/Fade-out
   // TIME (min 0.001 / 0, 3 dec). Wheel/arrow/keyboard stepping + unit auto-ranging come free.
-  const sweepOnChange = (pref, cfgKey) => (v) => { pref.set(v); engine.config[cfgKey] = v; engine.retuneGenerator(); };
+  // Java GeneratorController sweep-pref bindings (4887ecb): a running Farina (LOG) sweep
+  // can't live-edit its pre-rendered buffer, so a param change does a full restart (the
+  // restart's readConfig picks the new value up) and skips the live setter + retune.
+  const sweepOnChange = (pref, cfgKey) => async (v) => {
+    pref.set(v);
+    if (await genPane.restartFarinaOnParamChange()) return;
+    engine.config[cfgKey] = v; engine.retuneGenerator();
+  };
   const fSwStart = mk('sweepStart', new NumericStepModel({ family: F.FREQUENCY, min: GEN_FREQ_MIN_HZ, max: outRate() / 2, maxDecimals: 9 }),
     sweepOnChange(prefs.genSweepFreqStartHz, 'sweepStartHz'));
   if (fSwStart) fSwStart.setValue(prefs.genSweepFreqStartHz.get());
@@ -800,6 +812,36 @@ function showConfirm(title, message) {
   });
 }
 
+// The one alert currently on screen, so a device that fires several statechange/onerror events in
+// a row (an exclusive grab typically bursts them) raises exactly one modal, not a stack.
+let alertShowing = false;
+/** Shows the shared one-button alert modal (title + message + Close). No return value —
+ *  informational only. Coalesces repeats while one is already open. */
+function showAlert(title, message) {
+  if (!alertModal) { console.error(title, message); return; }   // fired before the modals step wired up
+  if (alertShowing) return;
+  alertShowing = true;
+  $('#alertTitle').text(title || t('common.ok'));
+  $('#alertMessage').text(message || '');
+  const el = document.getElementById('alertModal');
+  const onHidden = () => { el.removeEventListener('hidden.bs.modal', onHidden); alertShowing = false; };
+  el.addEventListener('hidden.bs.modal', onHidden);
+  alertModal.show();
+}
+
+// Device-failure surface (Task A): the AudioContext lives in shared-capture.js (input) and
+// generator-controller.js (output); both publish AUDIO_DEVICE_ERROR on a getUserMedia/open
+// rejection or an unexpected 'interrupted'/'closed'/onerror while running. Turn it into a visible,
+// actionable alert naming the failed direction (output = generator/freqresp playback; input =
+// scope/FFT/freqresp capture) — the usual cause is the device being held exclusively by another app.
+MessageBus.instance().subscribe(Events.AUDIO_DEVICE_ERROR, (p) => {
+  const dir = p && p.direction;
+  const key = dir === 'input' ? 'web.audio.deviceError.input'
+            : dir === 'output' ? 'web.audio.deviceError.output'
+            : 'web.audio.deviceError.unknown';
+  showAlert(t('web.audio.deviceError.title'), t(key));
+});
+
 // ----- Scope Utility: screenshot + ADC calibrate (Java buildScreenshotGroup +
 // ScreenshotDialog) -----
 // The camera button opens the screenshot dialog (Java ScreenshotDialog) with the
@@ -904,12 +946,12 @@ function shotNativeSize() {
 }
 
 /** Persists the chosen screenshot size to this pane's prefs so the dialog re-seeds it
- *  next time (Save + Copy both call it). Scope uses oscScreenshotWidth/Height; the FFT /
- *  FreqResp screenshots will use their own keys with the same pattern. */
+ *  next time (Save + Copy both call it). Scope uses scopeScreenshotWidth/Height; the FFT /
+ *  FreqResp screenshots use their own keys with the same pattern. */
 function persistShotSize(w, h) {
   if (!(w > 0) || !(h > 0)) return;
-  prefs.oscScreenshotWidth.set(w);
-  prefs.oscScreenshotHeight.set(h);
+  prefs.scopeScreenshotWidth.set(w);
+  prefs.scopeScreenshotHeight.set(h);
   prefs.save();
 }
 
@@ -1036,6 +1078,85 @@ async function renderFftShot(comment, w, h, mime) {
   const text = (comment || '').trim();
   if (text) {
     const native = liveFftPaneSize();
+    const sy = h / native.h;
+    const pt = Math.max(12, Math.round(16 * sy));
+    ctx.font = pt + 'px Consolas, monospace';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+    const x = out.width - 30, y = Math.round(SCOPE_SCREENSHOT_COMMENT_TOP_PX * sy);
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = '#F0F0F0'; ctx.fillText(text, x, y);
+  }
+  return new Promise((resolve) => out.toBlob(resolve, mime || 'image/png'));
+}
+
+// ----- FreqResp screenshot via the SAME cloned-DOM + canvas composite (Java
+// FreqRespTabControl → screenshotPane.openScreenshotDialog). Reuses the generic
+// clonePaneForShot + paintCloneToCanvas pair; frPrep is the FreqResp-specific prep, the
+// live #frPlot canvas is mapped by id. Replaces the old raw-#frPlot-PNG download so the
+// FreqResp camera opens the composited dialog exactly like the scope / FFT panes. -----
+function liveFreqRespPaneSize() {
+  const pane = document.getElementById('freqRespPane');
+  const w = (pane && pane.clientWidth) || SHOT_SCOPE_W;
+  const h = (pane && pane.clientHeight) || SHOT_SCOPE_H;
+  return { w, h };
+}
+
+/** FreqResp-specific prep for clonePaneForShot (mirror of fftPrep): collapse the expanded
+ *  settings tab and drop the pane header. #frPlot is KEPT and mapped to its live bitmap by
+ *  id; the frFreqScroll / frMagScroll gutter canvases stay as on screen. */
+function frPrep(clone) {
+  clone.querySelectorAll('.tab-panel.show').forEach((p) => p.classList.remove('show'));
+  const hdr = clone.querySelector('.pane-header'); if (hdr) hdr.remove();
+}
+
+/** Thin FreqResp wrapper over the GENERIC clonePaneForShot + paintCloneToCanvas (mirror of
+ *  composeFftPaneShot): composes the FreqResp pane at EXACTLY outW×outH, mapping every clone
+ *  canvas (#frPlot + scrollbars) to its live source by id. */
+async function composeFreqRespPaneShot(outW, outH) {
+  const live = liveFreqRespPaneSize();
+  const w = outW > 0 ? outW : live.w;
+  const h = outH > 0 ? outH : live.h;
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.max(1, Math.round(w / dpr));
+  const ch = Math.max(1, Math.round(h / dpr));
+  const clone = clonePaneForShot(document.getElementById('freqRespPane'), cw, ch, frPrep);
+  const icons = await preloadCloneIcons(clone);
+  const liveCanvasFor = (cloneCanvas) => document.getElementById(cloneCanvas.id);
+  return paintCloneToCanvas(clone, w, h, liveCanvasFor, icons);
+}
+
+/** Native (on-screen) size of the FreqResp pane, seeded into the dialog's W/H fields. */
+function freqRespNativeSize() {
+  const s = liveFreqRespPaneSize();
+  return { w: s.w, h: s.h };
+}
+
+/** Renders the FULL FreqResp pane (collapsed tabs) at w×h via the clone-DOM composite,
+ *  stamping the brand watermark + caption (mirror of renderFftShot). Returns Promise<Blob>. */
+async function renderFreqRespShot(comment, w, h, mime) {
+  const out = await composeFreqRespPaneShot(w, h);
+  const ctx = out.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  {
+    const WM = 'Phonalyser.web';
+    const sr = out.scopeRect;
+    const wcx = sr ? sr.left + sr.width / 2 : out.width / 2;
+    const wcy = sr ? sr.top + sr.height / 2 : out.height / 2;
+    ctx.save();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    let wmPt = 200;
+    ctx.font = `700 ${wmPt}px "Segoe UI", system-ui, sans-serif`;
+    const measured = ctx.measureText(WM).width || 1;
+    wmPt = Math.max(1, Math.round(wmPt * (out.width * 0.35) / measured));
+    ctx.font = `700 ${wmPt}px "Segoe UI", system-ui, sans-serif`;
+    ctx.fillStyle = 'rgba(160,160,160,0.243)';
+    ctx.fillText(WM, wcx, wcy);
+    ctx.restore();
+  }
+  const text = (comment || '').trim();
+  if (text) {
+    const native = liveFreqRespPaneSize();
     const sy = h / native.h;
     const pt = Math.max(12, Math.round(16 * sy));
     ctx.font = pt + 'px Consolas, monospace';
@@ -1236,6 +1357,14 @@ async function init() {
   });
   step('seedFftControls', () => fftTabControl.seedFftControls());
   step('refreshFftPresetList', () => fftTabControl.refreshFftPresetList());
+  // Shared calibration store cleanup (issue 2.3): once BOTH panes have finished restoring their
+  // calibration rows, sweep any cal.<hash> record referenced by neither pane. Both panes share
+  // one record per hash, so the union of their referenced hashes is exactly what must survive.
+  step('pruneCals', () => {
+    Promise.all([freqRespHost._calRestore, fftTabControl._calRestore])
+      .then(() => pruneCals(new Set([...freqRespHost.getCalHashes(), ...fftTabControl.getCalHashes()])))
+      .catch((e) => console.error('pruneCals failed', e));
+  });
   step('fftSeed', () => { genPane.refreshFreqLabel(); genPane.syncFormUI(); });   // generator label + form-gated UI follow the seeded FFT controls
   step('modals', () => {
     prefsModal = new window.bootstrap.Modal(document.getElementById('prefsModal'));
@@ -1275,29 +1404,43 @@ async function init() {
     dacCalModal = new window.bootstrap.Modal(document.getElementById('dacCalModal'));
     shotModal = new window.bootstrap.Modal(document.getElementById('shotModal'));
     confirmModal = new window.bootstrap.Modal(document.getElementById('confirmModal'));
+    alertModal = new window.bootstrap.Modal(document.getElementById('alertModal'));
     // Wire the shared screenshot dialog to the scope pane: the generic compositor + dialog
     // live in screenshot.js; this injects the scope-specific render / native-size / persisted
     // size so the SAME dialog will later serve the FFT + FreqResp panes. Constructed here (not
     // at module top) so the shotModal instance above is already live.
     const shotDialog = new ScreenshotDialog({
       modal: shotModal, openBtn: '#scopeShot', renderShot: renderScopeShot, nativeSize: shotNativeSize,
-      seedSize: () => ({ w: prefs.oscScreenshotWidth.get(), h: prefs.oscScreenshotHeight.get() }),
+      seedSize: () => ({ w: prefs.scopeScreenshotWidth.get(), h: prefs.scopeScreenshotHeight.get() }),
       persistSize: persistShotSize, saveFile, status: (m) => $('#status').text(m),
     });
     shotDialog.bind();
     // FFT pane shares the SAME dialog (#28): its own renderShot + native-size seed. The chosen
-    // size persists PER VIEW (#28 follow-up): the FFT uses the Java-parity screenshotWidth/Height
-    // prefs (the scope has its own oscScreenshotWidth/Height above); seeds from the live pane
-    // size until a size was chosen once.
+    // size persists PER VIEW independently: the FFT has its own fftScreenshotWidth/Height prefs
+    // (the scope has scopeScreenshotWidth/Height, FreqResp freqRespScreenshotWidth/Height); seeds
+    // from the live pane size until a size was chosen once.
     shotDialog.addPane({
       openBtn: '#fftShot', renderShot: renderFftShot, nativeSize: fftNativeSize,
       seedSize: () => {
-        const w = prefs.screenshotWidth.get(), h = prefs.screenshotHeight.get();
+        const w = prefs.fftScreenshotWidth.get(), h = prefs.fftScreenshotHeight.get();
         return (w > 0 && h > 0) ? { w, h } : fftNativeSize();
       },
       persistSize: (w, h) => {
         if (!(w > 0) || !(h > 0)) return;
-        prefs.screenshotWidth.set(w); prefs.screenshotHeight.set(h); prefs.save();
+        prefs.fftScreenshotWidth.set(w); prefs.fftScreenshotHeight.set(h); prefs.save();
+      },
+    });
+    // FreqResp pane shares the SAME dialog (Java FreqRespTabControl → openScreenshotDialog):
+    // its own renderShot + native-size seed, with its OWN freqRespScreenshotWidth/Height keys.
+    shotDialog.addPane({
+      openBtn: '#frShot', renderShot: renderFreqRespShot, nativeSize: freqRespNativeSize,
+      seedSize: () => {
+        const w = prefs.freqRespScreenshotWidth.get(), h = prefs.freqRespScreenshotHeight.get();
+        return (w > 0 && h > 0) ? { w, h } : freqRespNativeSize();
+      },
+      persistSize: (w, h) => {
+        if (!(w > 0) || !(h > 0)) return;
+        prefs.freqRespScreenshotWidth.set(w); prefs.freqRespScreenshotHeight.set(h); prefs.save();
       },
     });
     // Predistortion wizard (Java PredistortionWizardDialog): the live UI half. The host wiring +
@@ -1311,6 +1454,13 @@ async function init() {
     }).bind();
     // DAC full-scale calibration dialog (Java DacCalibrationDialog).
     new DacCalibrationDialog(engine, prefs, { modal: dacCalModal, getField: () => stepFields.dacCalValue }).bind();
+    // Tune-notch wizard (Java MainWindow Tools → Tune notch… → TuneNotchWizardDialog).
+    // Static backdrop like the predistortion wizard: a live streaming session must not be
+    // torn down by a stray click-away. The wizard is autonomous — it publishes
+    // FREQRESP_MEASUREMENT_STARTED and drives its OWN generator + capture, so it needs no
+    // generator-running gate (see tune-notch-wizard.js module header).
+    const tuneNotchModal = new window.bootstrap.Modal(document.getElementById('tuneNotchModal'), { backdrop: 'static', keyboard: false });
+    new TuneNotchWizard(engine, prefs, { modal: tuneNotchModal }).bind();
     // Preferences dialog (Java PreferencesDialog): staged audio/L&F/Osc/FFT/FR prefs, commit on OK.
     prefsDialog = new PreferencesDialog(engine, prefs, {
       modal: prefsModal, RATES, stepFields, inRate, outRate, restartGenerator: () => genPane.restartGenerator(),

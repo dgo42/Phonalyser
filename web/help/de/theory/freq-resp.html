@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8"/>
-  <title>Phonalyser — Theorie: Frequenzgang</title>
+  <title>Phonalyser.web — Theorie: Frequenzgang</title>
   <link rel="stylesheet" href="../style.css"/>
 </head>
 <body>
@@ -121,7 +121,13 @@
   </ul>
   <p>Die Ausgabe erfolgt auf einem logarithmischen Frequenzraster —
      geometrisch gleichmäßig verteilte Punkte von Start bis Stop — sodass die
-     Ableseauflösung über alle Dekaden gleichmäßig ist. Beide ADC-Kanäle
+     Ableseauflösung über alle Dekaden gleichmäßig ist. Die Punktezahl ist in
+     Zweierpotenzen von 8192 bis zu mehreren Millionen wählbar; eine benannte
+     Voreinstellung <b>FS/2</b> setzt die Anzahl auf die halbe Abtastrate
+     (24 000 Punkte bei einem 48-kHz-Eingang, 96 000 bei 192 kHz) — das
+     Raster erhält damit so viele Punkte, wie es Hertz bis Nyquist gibt,
+     dicht genug, dass kein auflösbares Merkmal zwischen zwei Ablesepunkte
+     fallen kann. Beide ADC-Kanäle
      werden parallel entfaltet, sodass ein Stereogerät in einem einzigen
      Durchlauf charakterisiert wird.</p>
 
@@ -144,6 +150,64 @@
      Messung sofort neu darstellen — ohne erneuten Sweep. Dieselben
      Kalibrierungsdateien versorgen den FFT-Analyser mit seinem
      <a href="fft.html#plot">De-Embedding</a>.</div>
+
+  <h2 id="notch">Der Notch-Abgleich-Sweep: eine Live-Variante</h2>
+  <p>Die Verzerrungsmessung an einer sehr sauberen Quelle verlangt ein
+     passives <b>Doppel-T-Kerbfilter</b><sup id="cite-4"><a href="#ref-twint">[4]</a></sup>
+     vor dem ADC: es senkt die Grundwelle um Dutzende von dB ab, sodass die
+     Nichtlinearität des ADC nie bei Vollaussteuerung angeregt wird, während
+     die Harmonischen ungehindert passieren. Ein Doppel-T erreicht seine
+     theoretische Nullstelle aber nur, wenn seine beiden Zweige auf Bruchteile
+     eines Prozents aufeinander abgestimmt sind — in der Praxis wird es daher
+     mit Trimmern aufgebaut und <em>abgeglichen</em>. Ein Abgleich über
+     wiederholte Einzel-Sweeps ist aussichtslos, weil jede Trimmerdrehung
+     sofortige Rückmeldung braucht. Das Frequenzgang-Modul bietet deshalb
+     eine Live-Variante: ein sehr kurzer Sweep (etwa eine Viertelsekunde)
+     läuft in einer Endlosschleife, während die entfaltete Kurve rund zehnmal
+     pro Sekunde neu gezeichnet wird. Eine Trimmerdrehung verschiebt die
+     Nullstelle in Echtzeit auf dem Bildschirm; eine Anzeige verfolgt den
+     tiefsten Punkt (Frequenz und Tiefe in dB), und eine Markierung an der
+     gewählten Zielfrequenz wechselt stufenlos von Rot (−50 dB, flach) nach
+     Grün (−90 dB, tief) entsprechend der Dämpfung <em>an der
+     Zielfrequenz</em> — denn für die Verzerrungsmessung zählt die
+     Unterdrückung bei der tatsächlich verwendeten Grundwelle, nicht die
+     Tiefe einer Nullstelle irgendwo in der Nähe.</p>
+  <p>Die Schleife lässt sich zu jedem beliebigen Zeitpunkt analysieren, weil
+     ihre Periode exakt eine Zweierpotenz von Samples ist: jedes Fenster
+     dieser Länge enthält genau einen vollständigen Sweep, lediglich zeitlich
+     rotiert, und die Rotation erscheint der Entfaltung wie zusätzliche
+     Laufzeit — die die oben beschriebene Laufzeitkompensation über den
+     Impulsspitzenwert ohnehin entfernt. Die Nahtstelle der Schleife wird
+     durch eine kurze Raised-Cosine-Ausblendung (25 ms pro Seite) verdeckt,
+     und das abgespielte Band ist 2,5-mal breiter als der dargestellte
+     Bereich, sodass die Ausblendungen und der Bandkanten-Abfall außerhalb
+     des Angezeigten liegen.</p>
+  <p><b>Jeder Messpunkt liegt exakt auf einem FFT-Bin.</b>  Weil das
+     analysierte Fenster genau eine Schleifenperiode lang ist, ist der Sweep
+     im Fenster periodisch: sein Spektrum besteht aus Linien, die exakt auf
+     den Bin-Mitten sitzen, und es gibt kein Leck — jedes Bin enthält den
+     exakten Betrag bei dieser Frequenz. Die Live-Kurve wird daher direkt auf
+     dem Bin-Raster ausgegeben (wenige Hertz pro Punkt) statt auf das übliche
+     logarithmische Raster umgerechnet. Eine Interpolation zwischen den Bins
+     wäre bei einem breiten Frequenzgang harmlos, doch eine gut abgeglichene
+     Kerb-Nullstelle erstreckt sich nur über eine Handvoll Bins: Interpolation
+     verschmiert sie und lässt die angezeigte Tiefe von Frame zu Frame
+     zittern.</p>
+  <p><b>Die Glättung muss aus sein.</b>  Die Savitzky-Golay-Glättung, die
+     einem gewöhnlichen Sweep nützt, ist hier fatal. Ihre gleitende
+     Polynomanpassung erstreckt sich über sieben Rasterpunkte — auf dem
+     bin-ausgerichteten Raster ein Fenster von etwa 15–20 Hz Breite. Eine
+     gut abgeglichene Nullstelle ist weit schmaler, sodass die Anpassung die
+     steilen Kerbflanken in das Minimum hineinmittelt und die Kerbe auffüllt
+     — die Tiefe wird um rund 9 dB zu gering ausgewiesen. Der Notch-Sweep
+     verwendet daher die rohen Bin-Beträge und verfeinert die Position der
+     Nullstelle unterhalb des Bin-Abstands, indem eine Parabel durch die drei
+     Punkte um das Minimum gelegt wird:</p>
+  <div class="eq">δ = ½ (<i>m</i><sub>−1</sub> − <i>m</i><sub>+1</sub>) / (<i>m</i><sub>−1</sub> − 2<i>m</i><sub>0</sub> + <i>m</i><sub>+1</sub>)<span class="no">(2)</span></div>
+  <p>wobei <i>m</i><sub>0</sub> der Betrag im tiefsten Bin und
+     <i>m</i><sub>±1</sub> seine Nachbarn sind; δ ∈ (−½, +½) ist der
+     Bin-Bruchteil-Versatz der wahren Nullstelle, sodass sowohl ihre Frequenz
+     als auch ihre Tiefe feiner als das Raster selbst abgelesen werden.</p>
 
   <h2 id="who">Einbindung in das System</h2>
   <p>Anders als Oszilloskop und FFT, die sich ein Eingangsgerät teilen,
@@ -170,6 +234,9 @@
     <li id="ref-sg"><a href="#cite-3">3.</a>
         Savitzky-Golay smoothing filter —
         <a href="https://en.wikipedia.org/wiki/Savitzky%E2%80%93Golay_filter">Wikipedia: Savitzky–Golay filter</a>.</li>
+    <li id="ref-twint"><a href="#cite-4">4.</a>
+        Doppel-T-Kerbfilter —
+        <a href="https://en.wikipedia.org/wiki/Band-stop_filter">Wikipedia: Band-stop filter</a>.</li>
   </ol>
 
   <p class="back"><a href="derotation-accuracy.html">◀ De-rotation accuracy</a> ·
