@@ -435,7 +435,7 @@ export class FreqRespHost {
       if (!rec.left || rec.left.length === 0) {
         // Device never delivered a sample (open failure / permission denied) — surface
         // the capture layer's reason; the shared finally closes the modal either way.
-        throw new Error(engine.getLastStartError() || t('freqResp.error.noInputDevice'));
+        throw new Error(engine.getMeasurementStartError() || t('freqResp.error.noInputDevice'));
       }
 
       // The live meter was already filled block-by-block during the capture wait loop
