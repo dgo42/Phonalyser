@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cancels the converter's own harmonics (and dual-tone IMD), pushing the playback
   chain's distortion far below what the DAC produces alone.
 - **Web version.** A browser port of the analyzer — FFT, oscilloscope and signal
-  generator — running with no install at <https://phonalyser.github.io/web/>.
+  generator — running with no install at <https://dgo42.github.io/Phonalyser/web/>.
 - **Oscilloscope.** Rectangular rubber-band zoom with `Ctrl+Z` rollback, and a
   glitch trigger backed by a signal-discontinuity gate.
 - **Documentation.** Expanded Theory of operation (tune-notch measurement, ADC
