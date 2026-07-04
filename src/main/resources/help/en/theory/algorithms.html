@@ -88,6 +88,13 @@
             spectral glitch gates — learned from the data, immune to
             outliers.</td>
         <td><a href="fft.html#rejection">FFT — glitch rejection</a></td></tr>
+    <tr><td>Tone-lobe stretch (ToneLobeLift)</td>
+        <td>Rescales a tone's main lobe as a vertical stretch pinned to the
+            noise floor — a smooth dome, never a flat-topped uniform lift —
+            for <code>.frc</code> calibration and manual-fundamental
+            levelling.</td>
+        <td>— (spectral rendering; see the full
+            document<sup><a href="#ref-doc">[1]</a></sup>)</td></tr>
   </table>
 
   <h2 id="filtering">Filtering &amp; estimation</h2>
@@ -121,6 +128,13 @@
             re-tuned as the line drifts; applied in the time domain on the
             scope, as a plot-time spectral correction in the FFT.</td>
         <td><a href="oscilloscope.html#mains">Oscilloscope — mains comb</a></td></tr>
+    <tr><td>Adaptive mains cancellers (LMS, synchronous subtraction)</td>
+        <td>Two selectable alternatives to the comb: an LMS line canceller
+            with per-harmonic quadrature weights, and a period-locked 512-bin
+            template subtractor — both learn the hum and leave non-periodic
+            test tones untouched. A shared Goertzel tracker auto-detects
+            50 vs 60 Hz.</td>
+        <td><a href="oscilloscope.html#mains">Oscilloscope — mains rejection</a></td></tr>
     <tr><td>Synchronous I/Q (lock-in) detection</td>
         <td>Recovers the dual-tone beat envelope's phase so the trigger
             locks once per beat.</td>
@@ -129,6 +143,12 @@
         <td>The whole transfer function — magnitude and phase — from one
             sweep.</td>
         <td><a href="freq-resp.html#how">Frequency response</a></td></tr>
+    <tr><td>Looping circular-transform deconvolution</td>
+        <td>Forces the sweep period to a power of two so the FFT is
+            circular — a window grabbed at any phase is a shift, and a shift
+            preserves |H| — giving trigger-free live notch tracking, a few
+            times a second, in the tune-notch wizard.</td>
+        <td><a href="tune-notch.html">Tune-notch measurement</a></td></tr>
     <tr><td>Linear-phase delay rotation</td>
         <td>Removes the DAC↔ADC round-trip delay so only the device's own
             phase remains.</td>
@@ -176,6 +196,36 @@
             bars for dense data.</td>
         <td>— (rendering internals; see the full
             document<sup id="cite-1b"><a href="#ref-doc">[1]</a></sup>)</td></tr>
+    <tr><td>Digital-phosphor persistence</td>
+        <td>Oscilloscope-style afterglow on the GPU trace path: an RGBA16F
+            framebuffer decayed by exp(−dt/τ) on each new frame, with
+            off / fixed / infinite / manual time constants.</td>
+        <td>— (GPU rendering; see the full
+            document<sup><a href="#ref-doc">[1]</a></sup>)</td></tr>
+  </table>
+
+  <h2 id="adc">ADC characterisation</h2>
+  <table class="controls">
+    <tr><th>Algorithm</th><th>What it does here</th><th>In this help</th></tr>
+    <tr><td>Code-density histogram</td>
+        <td>Bins every captured sample by its ADC code (2<sup>bits</sup>
+            bins) and compares the counts against an ideal density — a
+            moving-average/FIR reference, or the arcsine law of a known
+            sine — to expose converter linearity.</td>
+        <td>— (command-line mode; see the full
+            document<sup><a href="#ref-doc">[1]</a></sup>)</td></tr>
+    <tr><td>DNL / INL (code-density test)</td>
+        <td>Differential nonlinearity DNL = weight − 1 and its running
+            integral INL, in LSB, straight from the histogram counts.</td>
+        <td>— (command-line mode; see the full
+            document<sup><a href="#ref-doc">[1]</a></sup>)</td></tr>
+    <tr><td>Least-squares sine-fit calibration</td>
+        <td>Recovers amplitude, phase, DC and a per-code error curve directly
+            from the raw samples via a golden-section frequency search and a
+            3×3 normal-equation sine fit — for when histogram binning is too
+            noisy.</td>
+        <td>— (command-line mode; see the full
+            document<sup><a href="#ref-doc">[1]</a></sup>)</td></tr>
   </table>
 
   <div class="note"><b>Going deeper.</b>  Every entry above is treated in

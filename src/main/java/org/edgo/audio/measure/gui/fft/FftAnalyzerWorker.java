@@ -1815,7 +1815,7 @@ public final class FftAnalyzerWorker {
         // window): the tick's own refined fundamental pins the recurrence
         // prediction exactly, so the reject threshold rides on the noise
         // floor at any signal frequency; NaN (no tone) self-estimates.
-        if (USE_TIME_DISCONTINUITY && accumulate) {
+        if (USE_TIME_DISCONTINUITY && accumulate && prefs.isFftDetectTimeDiscontinuity()) {
             double f0 = r.fundamentalHzRefined;
             double omega = (f0 > 0 && f0 < sampleRate / 2.0)
                     ? 2.0 * Math.PI * f0 / sampleRate : Double.NaN;

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Phonalyser — Download</title>
+  <link rel="icon" type="image/svg+xml" href="img/logo.svg"/>
+  <link rel="stylesheet" href="css/site.css"/>
+</head>
+<body>
+
+  <!-- ============================ left menu ============================ -->
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <img src="img/logo.svg" alt=""/>
+      <b>Phonalyser</b>
+    </a>
+    <nav class="menu">
+      <a href="index.html">Home</a>
+      <a href="changelog.html">What's new</a>
+      <a href="screenshots.html">Screenshots</a>
+
+      <details class="submenu" open>
+        <summary>Download <span class="caret">▸</span></summary>
+        <a href="download.html" class="active">All downloads</a>
+        <a class="ext" href="https://github.com/dgo42/Phonalyser/releases/latest"
+           target="_blank" rel="noopener">GitHub — latest release</a>
+        <a class="ext" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
+           target="_blank" rel="noopener">Microsoft Store</a>
+        <a class="disabled" title="Reserved — coming soon">macOS <span class="soon">soon</span></a>
+      </details>
+
+      <a href="docs.html">Docs</a>
+      <a href="translation.html">Translation</a>
+      <a href="bench.html">Measurement bench</a>
+      <a href="web/index.html">Web version</a>
+    </nav>
+    <div class="sidebar-foot">
+      AGPL-3.0 ·
+      <a href="https://github.com/dgo42/Phonalyser" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </aside>
+
+  <!-- ============================ right column ========================= -->
+  <main class="main">
+    <header class="hero">
+      <img src="img/logo.svg" alt="Phonalyser logo"/>
+      <div>
+        <h1>Download</h1>
+        <p class="sub">Native installers with a bundled Java runtime, platform
+           JARs for your own JDK, or run it in the browser — nothing to install.</p>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <div class="dl-row">
+        <a class="btn btn-primary" href="https://github.com/dgo42/Phonalyser/releases/latest"
+           target="_blank" rel="noopener">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          GitHub — latest release
+        </a>
+        <a class="btn btn-store" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
+           target="_blank" rel="noopener">Microsoft Store</a>
+        <span class="btn disabled">macOS <span class="soon">soon</span></span>
+      </div>
+      <p class="lede">No install at all? The full analyzer also runs in a modern
+         browser — try the <a href="web/index.html">web version</a>.</p>
+
+      <div class="note"><b>Requirements.</b> Windows 10/11, a recent Linux, or
+         macOS; a sound device. For distortion work, a capable ADC/DAC (e.g.
+         E1DA&nbsp;Cosmos) unlocks the sub-ppm measurements. The platform JARs
+         additionally need <b>Java&nbsp;17+</b>; the native installers bundle
+         their own runtime.</div>
+
+      <h2>Native installers (recommended)</h2>
+      <p>They bundle their own Java runtime, so nothing else is needed. Grab the
+         one for your OS from the
+         <a href="https://github.com/dgo42/Phonalyser/releases/latest"
+            target="_blank" rel="noopener">latest release</a>:</p>
+      <table>
+        <tr><th>OS</th><th>Installer</th></tr>
+        <tr><td>Windows</td><td><code>Phonalyser-&lt;version&gt;.exe</code> · or the <a href="https://apps.microsoft.com/detail/9nr1w5dkw71m" target="_blank" rel="noopener">Microsoft Store</a></td></tr>
+        <tr><td>Linux</td><td><code>Phonalyser-&lt;version&gt;.deb</code></td></tr>
+        <tr><td>macOS (Apple Silicon)</td><td><code>Phonalyser-&lt;version&gt;-arm64.dmg</code></td></tr>
+        <tr><td>macOS (Intel)</td><td><code>Phonalyser-&lt;version&gt;-x64.dmg</code></td></tr>
+      </table>
+
+      <h2>Platform JARs</h2>
+      <p>Run on your own <b>Java 17+</b> runtime (no bundled JRE). Download the
+         JAR for your OS plus the matching launcher script, keep them in the same
+         folder, and run the script:</p>
+      <table>
+        <tr><th>OS</th><th>JAR</th><th>Launcher</th><th>Run guide</th></tr>
+        <tr><td>Windows</td><td><code>phonalyser-&lt;version&gt;-windows.jar</code></td><td><code>Phonalyser-windows.bat</code></td><td><code>README-windows.txt</code></td></tr>
+        <tr><td>Linux</td><td><code>phonalyser-&lt;version&gt;-linux.jar</code></td><td><code>Phonalyser-linux.sh</code></td><td><code>README-linux.txt</code></td></tr>
+        <tr><td>macOS</td><td><code>phonalyser-&lt;version&gt;-macos.jar</code> (Intel: <code>…-macos-x64.jar</code>)</td><td><code>Phonalyser-macos.sh</code></td><td><code>README-macos.txt</code></td></tr>
+      </table>
+      <p>The JARs are platform-specific because each bundles the SWT native for
+         that OS/arch. macOS additionally needs <code>-XstartOnFirstThread</code>
+         (the launcher adds it). To run without the script:
+         <code>java -jar phonalyser-&lt;version&gt;-&lt;os&gt;.jar</code> — on
+         macOS, <code>java -XstartOnFirstThread -jar …</code>.</p>
+
+      <h2>Code signing</h2>
+      <p>The installers and JARs are currently distributed <b>unsigned</b>, so
+         the OS may warn on first run — this is expected:</p>
+      <ul>
+        <li><b>Windows</b> — SmartScreen "unknown publisher": click
+            <b>More info → Run anyway</b>. (The Microsoft Store build is signed
+            at publish time.)</li>
+        <li><b>macOS</b> — Gatekeeper may block it: <b>right-click → Open</b>,
+            or clear the quarantine flag:
+            <code>xattr -dr com.apple.quarantine &lt;file&gt;</code>.</li>
+      </ul>
+
+      <p class="lede">Building from source instead? See
+         <a href="https://github.com/dgo42/Phonalyser/blob/main/BUILD.md"
+            target="_blank" rel="noopener">BUILD.md</a> and
+         <a href="https://github.com/dgo42/Phonalyser/blob/main/PACKAGING.md"
+            target="_blank" rel="noopener">PACKAGING.md</a>.</p>
+
+    </div>
+  </main>
+
+</body>
+</html>

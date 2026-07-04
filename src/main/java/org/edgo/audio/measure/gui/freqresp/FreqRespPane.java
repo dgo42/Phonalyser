@@ -129,8 +129,10 @@ public final class FreqRespPane extends AbstractPane {
         // into it, firing FREQRESP_CALIBRATION_CHANGED — which the view handles
         // by re-deriving from the store it already holds.
         correctionStore = new FreqRespCorrectionStore("FreqResp", Events.FREQRESP_CALIBRATION_CHANGED);
-        controller = new FreqRespController(d::asyncExec);
+        // Build the view first so it can be injected into the controller, which
+        // owns it and drives clear/populate on each finished deconvolution.
         buildPlotRow();
+        controller = new FreqRespController(d::asyncExec, view);
         buildFreqScrollbarRow();
         buildToolbarRow(wandIcon, playIcon);
 
