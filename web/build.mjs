@@ -1,6 +1,6 @@
 /*
  * Phonalyser web — production build. Bundles the app's ES modules with esbuild
- * into the fewest files (cut HTTP requests) under html/web/, copies the static
+ * into the fewest files (cut HTTP requests) under docs/web/, copies the static
  * assets + npm-vendored libs, and rewrites index.html / sw.js with the version
  * from package.json (the single source of truth). That version is also synced back
  * into the SOURCE index.html / sw.js, so the unbundled web/ served in dev shows the
@@ -20,10 +20,10 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-// Compiled app output: <repo>/html/web (was web/dist). All emitted files (app.js, workers,
+// Compiled app output: <repo>/docs/web (was web/dist). All emitted files (app.js, workers,
 // worklets, vendor.js, index.html, sw.js, version.json, copied static assets, help) live here
 // together, so the `new URL('./x', import.meta.url)` sibling resolution below is unaffected.
-const outDir = path.join(root, '..', 'html', 'web');
+const outDir = path.join(root, '..', 'docs', 'web');
 
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const VERSION = pkg.version;
@@ -131,7 +131,7 @@ async function emitServiceWorker() {
 
 // Sync the version literal in the SOURCE index.html (menu-bar chip) and sw.js (cache key)
 // from package.json, IN PLACE — so the unbundled web/ served in dev shows the same version
-// a built html/web/ would, leaving package.json as the only hand-edited copy. Guarded: writes
+// a built docs/web/ would, leaving package.json as the only hand-edited copy. Guarded: writes
 // only when the value actually changed, so a same-version rebuild touches nothing.
 async function syncSourceVersion() {
   const htmlPath = path.join(root, 'index.html');
@@ -148,7 +148,7 @@ async function syncSourceVersion() {
 async function report() {
   const outs = [...ESM, ...IIFE].map(([, o]) => o)
     .concat(['vendor.js', 'index.html', 'sw.js', 'version.json']);
-  console.log(`\nbuilt phonalyser-web v${VERSION} → html/web/${DEBUG ? '  (DEBUG: unminified + inline source maps)' : ''}`);
+  console.log(`\nbuilt phonalyser-web v${VERSION} → docs/web/${DEBUG ? '  (DEBUG: unminified + inline source maps)' : ''}`);
   for (const o of outs) {
     const { size } = await stat(path.join(outDir, o));
     console.log(`  ${o.padEnd(34)} ${(size / 1024).toFixed(1)} kB`);
