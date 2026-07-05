@@ -2,9 +2,9 @@
  * Phonalyser web — help build target (SEPARATE from the regular app build).
  *
  * Regenerates the lunr search index (window.HELP_DOCS per language) and copies
- * web/help → html/web/help. The regular `node build.mjs` deliberately does NOT touch help, so
+ * web/help → docs/web/help. The regular `node build.mjs` deliberately does NOT touch help, so
  * a normal build stays fast; run this only when the help changed. It writes INTO an
- * existing html/web/ (the app build wipes it), so run it AFTER `node build.mjs`.
+ * existing docs/web/ (the app build wipes it), so run it AFTER `node build.mjs`.
  *
  * Run:  npm run build:copy-help      (= node scripts/build-help.mjs)
  * GNU AGPL v3 or later.
@@ -16,7 +16,7 @@ import { buildHelpIndex } from './build-help-index.mjs';
 
 const web = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const helpSrc = path.join(web, 'help');
-const helpDst = path.join(web, '..', 'html', 'web', 'help');
+const helpDst = path.join(web, '..', 'docs', 'web', 'help');
 const exists = async (p) => { try { await access(p); return true; } catch { return false; } };
 
 if (!(await exists(helpSrc))) {
@@ -27,4 +27,4 @@ const counts = await buildHelpIndex();
 console.log('help index: ' + Object.entries(counts).map(([l, n]) => `${l}=${n}`).join(' '));
 await mkdir(path.dirname(helpDst), { recursive: true });
 await cp(helpSrc, helpDst, { recursive: true });
-console.log('copied help → html/web/help');
+console.log('copied help → docs/web/help');

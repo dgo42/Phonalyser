@@ -90,7 +90,7 @@ is the web's own copy that diverges only in screenshots + the build-time-regener
 - `scripts/build-help-index.mjs` — regenerate `window.HELP_DOCS` (one lunr doc per page intro +
   per anchored h2/h3) by parsing the HTML; **236 docs/lang**.
 - `scripts/build-help.mjs` (`npm run build:copy-help`) — **separate** build target: regenerate
-  index + copy `web/help` → `html/web/help`. A regular `npm run build` does NOT touch help. See
+  index + copy `web/help` → `docs/web/help`. A regular `npm run build` does NOT touch help. See
   `HOWTO-BUILD.md`.
 - `scripts/capture-help-screenshots.mjs` (`npm run capture-help`) — capture screenshots from the
   running WEB app at a fixed **1280×768** window. **All 12 specs ready and capturing**
