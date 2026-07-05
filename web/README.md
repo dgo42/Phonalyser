@@ -29,23 +29,23 @@ Implemented and wired end‑to‑end (the **Multifunctional** tab):
 ```
 cd web
 npm install        # installs deps and auto-vendors the libs into vendor/ (postinstall)
-npm run build      # bundles the app with esbuild → html/web/ (the production build)
+npm run build      # bundles the app with esbuild → docs/web/ (the production build)
 ```
 
 `npm install` copies the version-pinned npm libs (Bootstrap, jQuery, libFLAC) into
 `vendor/` via the `vendor` script (run on `postinstall`, or on demand with
 `npm run vendor`). `npm run build` then bundles the ES modules into the fewest files
-(worker + worklets inlined) under **`html/web/`** and copies the static assets + `vendor/`
+(worker + worklets inlined) under **`docs/web/`** and copies the static assets + `vendor/`
 alongside, injecting the `package.json` version into `index.html`, `sw.js`, and
 `version.json`.
 
-In **production** serve `html/web/` (the bundled build — fewer HTTP requests). For
+In **production** serve `docs/web/` (the bundled build — fewer HTTP requests). For
 **development** you can still serve `web/` directly: it runs unbundled as plain ES
 modules with no build step, so edits are live on reload.
 
 ## Run it
 
-Web Audio needs a **secure context**. Serve `web/` (dev) or `html/web/` (prod) over
+Web Audio needs a **secure context**. Serve `web/` (dev) or `docs/web/` (prod) over
 `https://` or `http://localhost` (opening `index.html` from `file://` will not get
 microphone access). For example:
 
