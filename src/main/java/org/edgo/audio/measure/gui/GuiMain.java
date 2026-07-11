@@ -18,6 +18,10 @@
 
 package org.edgo.audio.measure.gui;
 
+import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Locale;
 
@@ -91,6 +95,71 @@ public final class GuiMain {
             } catch (RuntimeException e) {
                 log.warn("Could not set GDK_BACKEND=x11; GPU scope stays on CPU under Wayland: {}",
                         e.toString());
+            }
+        }
+
+        // A daemon-backed GTK input-method module (ibus / fcitx) whose daemon
+        // is NOT running is dysfunctional — and is exactly the configuration
+        // that hangs or segfaults GTK in-process (field report: only
+        // GTK_IM_MODULE=xim helped).  Pre-flight the configured IM before the
+        // Display (the first GTK touch): daemon missing → force the legacy
+        // X11 IM via libc setenv, which costs the user nothing (their IME
+        // wasn't functional anyway).  A LIVE daemon is left untouched so
+        // working CJK input keeps its IME; unset / xim / the built-in simple
+        // context need nothing.
+        String imModule = System.getenv("GTK_IM_MODULE");
+        if (!osName.contains("win") && !osName.contains("mac")
+                && ("ibus".equals(imModule) || "fcitx".equals(imModule)
+                        || "fcitx5".equals(imModule))) {
+            boolean alive = false;
+            try (DirectoryStream<Path> procs =
+                    Files.newDirectoryStream(Paths.get("/proc"), "[0-9]*")) {
+                for (Path proc : procs) {
+                    String comm;
+                    try {
+                        comm = Files.readString(proc.resolve("comm")).trim();
+                    } catch (IOException processExitedMeanwhile) {
+                        continue;
+                    }
+                    if ("ibus".equals(imModule) ? "ibus-daemon".equals(comm)
+                                                : comm.startsWith("fcitx")) {
+                        alive = true;
+                        break;
+                    }
+                }
+            } catch (IOException e) {
+                // /proc unreadable — can't judge, so don't touch a possibly
+                // working IM.
+                alive = true;
+            }
+            if (alive && "ibus".equals(imModule)) {
+                // ibus additionally needs its session bus socket; an empty /
+                // missing socket dir means the running daemon is unreachable.
+                String xdg = System.getenv("XDG_CONFIG_HOME");
+                Path busDir = (xdg != null && !xdg.isEmpty())
+                        ? Paths.get(xdg, "ibus", "bus")
+                        : Paths.get(System.getProperty("user.home"), ".config", "ibus", "bus");
+                try (DirectoryStream<Path> sockets = Files.newDirectoryStream(busDir)) {
+                    alive = sockets.iterator().hasNext();
+                } catch (IOException noBusDir) {
+                    alive = false;
+                }
+            }
+            if (!alive) {
+                try {
+                    Native.load("c", LibC.class).setenv("GTK_IM_MODULE", "xim", 1);
+                    if (log.isInfoEnabled()) {
+                        log.info("GTK_IM_MODULE={} has no running daemon - forced xim"
+                                + " to avoid the GTK input-method crash.", imModule);
+                    }
+                } catch (RuntimeException e) {
+                    if (log.isWarnEnabled()) {
+                        log.warn("GTK_IM_MODULE={} daemon missing, but setenv failed: {}",
+                                imModule, e.toString());
+                    }
+                }
+            } else if (log.isInfoEnabled()) {
+                log.info("GTK_IM_MODULE={} daemon is running - IM left untouched.", imModule);
             }
         }
 

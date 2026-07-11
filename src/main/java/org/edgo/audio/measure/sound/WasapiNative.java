@@ -205,7 +205,10 @@ public class WasapiNative {
         Object[] callArgs = new Object[args.length + 1];
         callArgs[0] = iface;
         System.arraycopy(args, 0, callArgs, 1, args.length);
-        return Function.getFunction(method).invokeInt(callArgs);
+        // COM methods are __stdcall; ALT_CONVENTION selects stdcall on 32-bit
+        // Windows (on x64 there is only one calling convention, so this is
+        // identical to the default there).
+        return Function.getFunction(method, Function.ALT_CONVENTION).invokeInt(callArgs);
     }
 
     /** Convenience: invoke {@code IUnknown::Release} on a COM pointer. */

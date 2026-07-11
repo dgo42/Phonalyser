@@ -255,8 +255,9 @@
   <h3 id="scope-tab-left">Left tab</h3>
   <p><img src="img/Oscilloscope - Left.png" alt="Left channel tab"/></p>
   <p>Controls for the left channel.  Contains the channel toggle,
-     V/div selector, AC/DC button, and Sin/Lin checkbox.  Same
-     layout for the <a href="#scope-tab-right">Right</a> tab.</p>
+     V/div selector, AC/DC button, Sin/Lin checkbox, and Residual
+     checkbox.  Same layout for the <a href="#scope-tab-right">Right</a>
+     tab.</p>
 
   <h4 id="scope-channel-toggle">L (channel enable)</h4>
   <p>Square toggle that enables / disables the channel.  When off,
@@ -285,10 +286,28 @@
      least ~2&nbsp;px apart on screen (i.e. zoomed in on the time axis);
      closer than that, the two look identical and sinc just costs more CPU.</p>
 
+  <h4 id="scope-residual">Residual</h4>
+  <p>Per-channel checkbox.  When checked, the channel's trace is replaced by the
+     <b>residual</b>: the captured signal minus a best-fit single tone.  The
+     tone's frequency comes from the scope's frequency measurement, and its
+     amplitude and phase are fitted over the displayed window — so the
+     synthesized tone is phase-aligned with the triggered display, and what
+     remains on screen is the <b>distortion, noise, hum and glitches</b> that
+     hide under the fundamental.  Only the sine is removed: the DC level stays
+     (use <a href="#scope-acdc">AC</a> to remove it).</p>
+  <p>Triggering and the frequency / period readouts still work on the captured
+     signal, and the Vpp / Vrms readouts also still describe the captured
+     signal — only the trace changes.  With <a href="#scope-autosetup">Auto-Setup</a>,
+     a channel showing its residual takes its vertical scale from the
+     <b>residual's</b> peak-to-peak value, while the time base and trigger are
+     still derived from the captured signal.  When the settings-tab strip is
+     collapsed, the channel's tile shows a <b>residual</b> marker while the mode
+     is on.</p>
+
   <h3 id="scope-tab-right">Right tab</h3>
   <p><img src="img/Oscilloscope - Right.png" alt="Right channel tab"/></p>
   <p>Identical layout to the Left tab — channel toggle, V/div,
-     AC/DC and Sin/Lin, but for the right channel.</p>
+     AC/DC, Sin/Lin and Residual, but for the right channel.</p>
 
   <h3 id="scope-tab-horizontal">Horizontal tab</h3>
   <p><img src="img/Oscilloscope - Horizontal.png" alt="Horizontal tab"/></p>

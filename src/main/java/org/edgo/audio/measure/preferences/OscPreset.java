@@ -42,6 +42,8 @@ public class OscPreset {
     private boolean rightAcMode              = false;
     private boolean leftSincInterpEnabled    = true;
     private boolean rightSincInterpEnabled   = true;
+    private boolean leftResidualEnabled      = false;
+    private boolean rightResidualEnabled     = false;
     private MainsSuppression leftMainsSuppression  = MainsSuppression.NONE;
     private MainsSuppression rightMainsSuppression = MainsSuppression.NONE;
     private LpfMode          leftLpf               = LpfMode.NONE;
