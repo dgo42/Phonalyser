@@ -28,6 +28,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.Locale;
 
+import org.edgo.audio.measure.dsp.SineFit;
 import org.edgo.audio.measure.fft.FftAnalyzer;
 import org.edgo.audio.measure.fft.FftResult;
 import org.jfree.chart.ChartFactory;
@@ -287,57 +288,8 @@ public class RegressionCalibrator {
      * @return [a, b, c]
      */
     double[] fitSine(double[] samples, int sampleRate, double freqHz) {
-        double omega    = 2.0 * Math.PI * freqHz / sampleRate;
-        double cosOmega = Math.cos(omega), sinOmega = Math.sin(omega);
-        double curSin = 0.0, curCos = 1.0;
-        int N = samples.length;
-
-        // Accumulate normal-equation matrix entries
-        double ss = 0, sc = 0, s1 = 0, cc = 0, c1 = 0;
-        double ys = 0, yc = 0, y1 = 0;
-        for (int n = 0; n < N; n++) {
-            double sn = curSin, cn = curCos, yn = samples[n];
-            ss += sn * sn;  sc += sn * cn;  s1 += sn;
-            cc += cn * cn;  c1 += cn;
-            ys += yn * sn;  yc += yn * cn;  y1 += yn;
-            double nextSin = sn * cosOmega + cn * sinOmega;
-            curCos = cn * cosOmega - sn * sinOmega;
-            curSin = nextSin;
-        }
-        // [ss sc s1] [a]   [ys]
-        // [sc cc c1] [b] = [yc]
-        // [s1 c1  N] [c]   [y1]
-        return solve3x3(new double[][]{{ss, sc, s1}, {sc, cc, c1}, {s1, c1, N}},
-                        new double[]{ys, yc, y1});
-    }
-
-    /** Gaussian elimination with partial pivoting for a 3×3 system. */
-    private double[] solve3x3(double[][] A, double[] rhs) {
-        double[][] aug = new double[3][4];
-        for (int i = 0; i < 3; i++) {
-            System.arraycopy(A[i], 0, aug[i], 0, 3);
-            aug[i][3] = rhs[i];
-        }
-        for (int col = 0; col < 3; col++) {
-            int maxRow = col;
-            for (int row = col + 1; row < 3; row++) {
-                if (Math.abs(aug[row][col]) > Math.abs(aug[maxRow][col])) maxRow = row;
-            }
-            double[] tmp = aug[col]; aug[col] = aug[maxRow]; aug[maxRow] = tmp;
-            double diag = aug[col][col];
-            if (Math.abs(diag) < 1e-15) continue;
-            for (int row = col + 1; row < 3; row++) {
-                double f = aug[row][col] / diag;
-                for (int j = col; j <= 3; j++) aug[row][j] -= f * aug[col][j];
-            }
-        }
-        double[] x = new double[3];
-        for (int i = 2; i >= 0; i--) {
-            x[i] = aug[i][3];
-            for (int j = i + 1; j < 3; j++) x[i] -= aug[i][j] * x[j];
-            x[i] /= aug[i][i];
-        }
-        return x;
+        SineFit fit = SineFit.of(samples, sampleRate, freqHz);
+        return new double[]{fit.getA(), fit.getB(), fit.getC()};
     }
 
     // =========================================================================

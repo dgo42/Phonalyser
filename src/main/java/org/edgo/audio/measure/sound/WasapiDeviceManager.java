@@ -19,7 +19,6 @@
 package org.edgo.audio.measure.sound;
 
 import com.sun.jna.Memory;
-import com.sun.jna.Native;
 import com.sun.jna.Pointer;
 import com.sun.jna.WString;
 import com.sun.jna.ptr.IntByReference;
@@ -64,16 +63,6 @@ public class WasapiDeviceManager {
         @Override
         public String toString() {
             return displayName();
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Suppress unused-warnings for fields/helpers Native needs but the IDE
-    // can't see through reflective JNA wiring.
-    // -------------------------------------------------------------------------
-    static {
-        if (Native.POINTER_SIZE != 8) {
-            throw new IllegalStateException("WASAPI binding assumes 64-bit JVM");
         }
     }
 

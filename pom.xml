@@ -382,6 +382,56 @@
             </build>
         </profile>
 
+        <!-- ==================== Windows x86 (32-bit) — LEGACY fat jar only ==================== -->
+        <!-- Manual, never auto-activated:  mvn package -P "windows-x86,!windows-x64"
+             Produces ONLY the platform fat jar (phonalyser-<version>-windows-x86.jar) for
+             32-bit Windows — no EXE, no installer.  Pinned to SWT 3.108.0 (Sept 2018), the
+             LAST SWT ever published for win32 x86; Eclipse removed 32-bit from the SWT
+             sources afterwards, so this profile is frozen legacy by construction.
+             Run it on a 32-bit Java 17 JVM (e.g. Azul Zulu win_i686). -->
+        <profile>
+            <id>windows-x86</id>
+            <properties>
+                <platform.id>windows-x86</platform.id>
+                <swt.version>3.108.0</swt.version>
+                <lwjgl.natives>natives-windows-x86</lwjgl.natives>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>org.eclipse.platform</groupId>
+                    <artifactId>org.eclipse.swt.win32.win32.x86</artifactId>
+                    <version>${swt.version}</version>
+                    <exclusions>
+                        <exclusion>
+                            <groupId>*</groupId>
+                            <artifactId>*</artifactId>
+                        </exclusion>
+                    </exclusions>
+                </dependency>
+                <!-- Same csjsound provider jar as x64; the matching 32-bit native is
+                     lib/windows/csjsound_x86.dll (already vendored). -->
+                <dependency>
+                    <groupId>cz.pavhofman</groupId>
+                    <artifactId>csjsound-provider</artifactId>
+                    <version>1.0</version>
+                    <scope>system</scope>
+                    <systemPath>${project.basedir}/lib/windows/csjsound-provider.jar</systemPath>
+                </dependency>
+            </dependencies>
+            <build>
+                <plugins>
+                    <!-- Legacy = fat jar ONLY: no EXE, no installer. -->
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <configuration>
+                            <skip>true</skip>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
         <!-- =============================== Linux x86_64 ================================ -->
         <profile>
             <id>linux-x64</id>

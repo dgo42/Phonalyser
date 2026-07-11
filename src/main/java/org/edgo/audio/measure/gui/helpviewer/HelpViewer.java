@@ -76,6 +76,13 @@ public final class HelpViewer {
     /** Sub-directory name inside the resolved help root that holds the
      *  per-language bundles. */
     private static final String FALLBACK_LANG = "en";
+
+    /** Browser style requesting the Edge (WebView2) engine — the value of
+     *  {@code SWT.EDGE}, inlined because the legacy 32-bit build (Maven profile
+     *  {@code windows-x86}) compiles against SWT 3.108, which predates the
+     *  constant.  On engines without Edge support the unknown style bit is
+     *  ignored and {@link #createBrowser} falls back to the platform default. */
+    private static final int BROWSER_STYLE_EDGE = 1 << 18;
     /** Filename of the entry-point help document inside each language
      *  directory. */
     private static final String INDEX_FILE = "index.html";
@@ -442,7 +449,7 @@ public final class HelpViewer {
      *  EDGE style is meaningless and WebKit is used either way. */
     private Browser createBrowser(Shell s) {
         try {
-            return new Browser(s, SWT.EDGE);
+            return new Browser(s, BROWSER_STYLE_EDGE);
         } catch (SWTError edgeUnavailable) {
             log.info("Help: WebView2 unavailable ({}) — using the platform default browser",
                     edgeUnavailable.getMessage());

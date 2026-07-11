@@ -274,8 +274,9 @@
   <h3 id="scope-tab-left">Tab „Links"</h3>
   <p><img src="img/Oscilloscope - Left.png" alt="Tab für den linken Kanal"/></p>
   <p>Bedienelemente für den linken Kanal.  Enthält den Kanal-Umschalter,
-     V/div-Selektor, AC/DC-Schaltfläche und Sin/Lin-Kontrollkästchen.  Gleicher
-     Aufbau wie der Tab <a href="#scope-tab-right">Rechts</a>.</p>
+     V/div-Selektor, AC/DC-Schaltfläche, Sin/Lin-Kontrollkästchen und
+     Residuum-Kontrollkästchen.  Gleicher Aufbau wie der Tab
+     <a href="#scope-tab-right">Rechts</a>.</p>
 
   <h4 id="scope-channel-toggle">L (Kanal aktivieren)</h4>
   <p>Quadratischer Umschalter zum Aktivieren / Deaktivieren des Kanals.  Wenn
@@ -305,10 +306,31 @@
      bei geringerem Abstand sehen beide identisch aus, und Sinc kostet nur
      mehr CPU.</p>
 
+  <h4 id="scope-residual">Residuum</h4>
+  <p>Kanalspezifisches Kontrollkästchen.  Wenn aktiviert, wird das Signal des
+     Kanals durch das <b>Residuum</b> ersetzt: das erfasste Signal minus einem
+     bestangepassten Einzelton.  Die Frequenz des Tons stammt aus der
+     Frequenzmessung des Oszilloskops, und seine Amplitude und Phase werden über
+     das dargestellte Fenster angepasst — der synthetisierte Ton ist somit
+     phasengleich mit der getriggerten Darstellung, und auf dem Bildschirm
+     bleiben die <b>Verzerrung, das Rauschen, der Brumm und die Glitches</b>
+     übrig, die sich unter der Grundschwingung verbergen.  Nur der Sinus wird
+     entfernt: der DC-Mittelwert bleibt (mit <a href="#scope-acdc">AC</a>
+     entfernen).</p>
+  <p>Triggerung und die Frequenz- / Perioden-Anzeigen arbeiten weiterhin am
+     erfassten Signal, und auch die Vpp- / Vrms-Anzeigen beschreiben weiterhin
+     das erfasste Signal — nur das dargestellte Signal ändert sich.  Bei
+     <a href="#scope-autosetup">Auto-Setup</a> übernimmt ein Kanal, der sein
+     Residuum zeigt, seine vertikale Skalierung aus dem Spitze-Spitze-Wert des
+     <b>Residuums</b>, während Zeitbasis und Trigger weiterhin aus dem erfassten
+     Signal abgeleitet werden.  Wenn die Einstellungs-Tab-Leiste eingeklappt
+     ist, zeigt die Kachel des Kanals einen <b>residual</b>-Marker an, solange
+     der Modus aktiv ist.</p>
+
   <h3 id="scope-tab-right">Tab „Rechts"</h3>
   <p><img src="img/Oscilloscope - Right.png" alt="Tab für den rechten Kanal"/></p>
   <p>Identischer Aufbau wie der Tab „Links" — Kanal-Umschalter, V/div,
-     AC/DC und Sin/Lin, jedoch für den rechten Kanal.</p>
+     AC/DC, Sin/Lin und Residuum, jedoch für den rechten Kanal.</p>
 
   <h3 id="scope-tab-horizontal">Tab „Horizontal"</h3>
   <p><img src="img/Oscilloscope - Horizontal.png" alt="Tab Horizontal"/></p>
