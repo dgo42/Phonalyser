@@ -199,6 +199,11 @@ public final class Preferences {
      *  against a linearly-interpolated one side-by-side. */
     private final Property<Boolean>        oscLeftSincInterpEnabled  = bound(true);
     private final Property<Boolean>        oscRightSincInterpEnabled = bound(true);
+    /** Per-channel residual toggle.  When on, the scope paints the residual
+     *  (displayed trace minus its best-fit single tone) instead of the
+     *  captured trace; DC stays in the trace (the AC toggle handles DC). */
+    private final Property<Boolean>        oscLeftResidualEnabled    = bound(false);
+    private final Property<Boolean>        oscRightResidualEnabled   = bound(false);
     /** Per-channel mains-hum suppression mode (MainsSuppression enum name);
      *  filters the captured signal before scope display / trigger /
      *  measurement.  DC-preserving (removes only 50/60 Hz + harmonics). */
@@ -1321,6 +1326,14 @@ public final class Preferences {
     public void setOscRightSincInterpEnabled(boolean v) { oscRightSincInterpEnabled.set(v); }
     public Property<Boolean> oscRightSincInterpEnabledProperty() { return oscRightSincInterpEnabled; }
 
+    public boolean isOscLeftResidualEnabled() { return oscLeftResidualEnabled.get(); }
+    public void setOscLeftResidualEnabled(boolean v) { oscLeftResidualEnabled.set(v); }
+    public Property<Boolean> oscLeftResidualEnabledProperty() { return oscLeftResidualEnabled; }
+
+    public boolean isOscRightResidualEnabled() { return oscRightResidualEnabled.get(); }
+    public void setOscRightResidualEnabled(boolean v) { oscRightResidualEnabled.set(v); }
+    public Property<Boolean> oscRightResidualEnabledProperty() { return oscRightResidualEnabled; }
+
     public MainsSuppression getOscLeftMainsSuppression() { return oscLeftMainsSuppression.get(); }
     public void setOscLeftMainsSuppression(MainsSuppression v) { oscLeftMainsSuppression.set(v); }
     public Property<MainsSuppression> oscLeftMainsSuppressionProperty() { return oscLeftMainsSuppression; }
@@ -1844,6 +1857,8 @@ public final class Preferences {
         root.put("oscShowReconstructedBeat",    oscShowReconstructedBeat.get());
         root.put("oscLeftSincInterpEnabled",  oscLeftSincInterpEnabled.get());
         root.put("oscRightSincInterpEnabled", oscRightSincInterpEnabled.get());
+        root.put("oscLeftResidualEnabled",  oscLeftResidualEnabled.get());
+        root.put("oscRightResidualEnabled", oscRightResidualEnabled.get());
         root.put("oscLeftMainsSuppression",  oscLeftMainsSuppression.get().name());
         root.put("oscRightMainsSuppression", oscRightMainsSuppression.get().name());
         root.put("oscLeftLpf",  oscLeftLpf.get().name());
@@ -1915,6 +1930,8 @@ public final class Preferences {
                 pm.put("rightAcMode",            p.isRightAcMode());
                 pm.put("leftSincInterpEnabled",  p.isLeftSincInterpEnabled());
                 pm.put("rightSincInterpEnabled", p.isRightSincInterpEnabled());
+                pm.put("leftResidualEnabled",    p.isLeftResidualEnabled());
+                pm.put("rightResidualEnabled",   p.isRightResidualEnabled());
                 pm.put("leftMainsSuppression",   p.getLeftMainsSuppression().name());
                 pm.put("rightMainsSuppression",  p.getRightMainsSuppression().name());
                 pm.put("leftLpf",                p.getLeftLpf().name());
@@ -2153,6 +2170,8 @@ public final class Preferences {
         if (root.get("oscShowReconstructedBeat")    instanceof Boolean b) oscShowReconstructedBeat.set(b);
         if (root.get("oscLeftSincInterpEnabled")  instanceof Boolean b) oscLeftSincInterpEnabled.set(b);
         if (root.get("oscRightSincInterpEnabled") instanceof Boolean b) oscRightSincInterpEnabled.set(b);
+        if (root.get("oscLeftResidualEnabled")  instanceof Boolean b) oscLeftResidualEnabled.set(b);
+        if (root.get("oscRightResidualEnabled") instanceof Boolean b) oscRightResidualEnabled.set(b);
         if (root.get("oscLeftMainsSuppression")  instanceof String s) oscLeftMainsSuppression.set(enumOr(MainsSuppression.class, s, oscLeftMainsSuppression.get()));
         if (root.get("oscRightMainsSuppression") instanceof String s) oscRightMainsSuppression.set(enumOr(MainsSuppression.class, s, oscRightMainsSuppression.get()));
         if (root.get("oscLeftLpf")  instanceof String s) oscLeftLpf.set(enumOr(LpfMode.class, s, oscLeftLpf.get()));
@@ -2230,6 +2249,8 @@ public final class Preferences {
                 if (pm.get("rightAcMode")            instanceof Boolean b) p.setRightAcMode(b);
                 if (pm.get("leftSincInterpEnabled")  instanceof Boolean b) p.setLeftSincInterpEnabled(b);
                 if (pm.get("rightSincInterpEnabled") instanceof Boolean b) p.setRightSincInterpEnabled(b);
+                if (pm.get("leftResidualEnabled")    instanceof Boolean b) p.setLeftResidualEnabled(b);
+                if (pm.get("rightResidualEnabled")   instanceof Boolean b) p.setRightResidualEnabled(b);
                 if (pm.get("leftMainsSuppression")   instanceof String  s) p.setLeftMainsSuppression(enumOr(MainsSuppression.class, s, p.getLeftMainsSuppression()));
                 if (pm.get("rightMainsSuppression")  instanceof String  s) p.setRightMainsSuppression(enumOr(MainsSuppression.class, s, p.getRightMainsSuppression()));
                 if (pm.get("leftLpf")                instanceof String  s) p.setLeftLpf(enumOr(LpfMode.class, s, p.getLeftLpf()));

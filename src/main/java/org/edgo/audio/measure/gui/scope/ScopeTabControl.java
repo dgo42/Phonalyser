@@ -171,6 +171,7 @@ public final class ScopeTabControl extends AbstractTabControl {
     private Button leftToggle, rightToggle;
     private Button leftAc, rightAc;
     private Button leftSinc, rightSinc;
+    private Button leftResidual, rightResidual;
     private Combo  leftMains, rightMains;
     private Combo  leftLpf, rightLpf;
     private Button chL, chR;
@@ -395,6 +396,8 @@ public final class ScopeTabControl extends AbstractTabControl {
         if (rightAc         != null) rightAc        .setData("helpAnchor", "oscilloscope.html#scope-acdc");
         if (leftSinc        != null) leftSinc       .setData("helpAnchor", "oscilloscope.html#scope-sinc-interp");
         if (rightSinc       != null) rightSinc      .setData("helpAnchor", "oscilloscope.html#scope-sinc-interp");
+        if (leftResidual    != null) leftResidual   .setData("helpAnchor", "oscilloscope.html#scope-residual");
+        if (rightResidual   != null) rightResidual  .setData("helpAnchor", "oscilloscope.html#scope-residual");
         if (timeScale       != null) timeScale      .setData("helpAnchor", "oscilloscope.html#scope-tdiv");
         if (chL             != null) chL            .setData("helpAnchor", "oscilloscope.html#scope-trigger-channel");
         if (chR             != null) chR            .setData("helpAnchor", "oscilloscope.html#scope-trigger-channel");
@@ -429,6 +432,8 @@ public final class ScopeTabControl extends AbstractTabControl {
                 boolean acMode  = isLeft ? prefs.isOscLeftAcMode()         : prefs.isOscRightAcMode();
                 boolean sinc    = isLeft ? prefs.isOscLeftSincInterpEnabled()
                                          : prefs.isOscRightSincInterpEnabled();
+                boolean residual = isLeft ? prefs.isOscLeftResidualEnabled()
+                                          : prefs.isOscRightResidualEnabled();
                 String chName = I18n.t(isLeft ? "scope.tab.left" : "scope.tab.right");
                 if (enabled) {
                     tiles.add(TileTabFolder.Tile.led(I18n.t("scope.tile.led.active", chName)));
@@ -439,6 +444,10 @@ public final class ScopeTabControl extends AbstractTabControl {
                         I18n.t(acMode ? "scope.tile.coupling.ac" : "scope.tile.coupling.dc", chName)));
                 tiles.add(TileTabFolder.Tile.text(sinc ? "sin" : "lin",
                         I18n.t(sinc ? "scope.tile.interp.sin" : "scope.tile.interp.lin", chName)));
+                if (residual) {
+                    tiles.add(TileTabFolder.Tile.text("res",
+                            I18n.t("scope.tile.residual", chName)));
+                }
                 break;
             }
             case TAB_HORIZONTAL:
@@ -608,6 +617,15 @@ public final class ScopeTabControl extends AbstractTabControl {
         });
         leftSinc.addDisposeListener(e -> sincImg.dispose());
 
+        leftResidual = new Button(g, SWT.CHECK);
+        leftResidual.setText(I18n.t("scope.residual.label"));
+        leftResidual.setToolTipText(I18n.t("scope.left.residual.tooltip"));
+        Bindings.check(leftResidual, prefs.oscLeftResidualEnabledProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscLeftResidualEnabledProperty(), v -> {
+            controller.redrawViews();
+            toolbarTabs.refreshTab(TAB_LEFT);
+        });
+
         new Label(g, SWT.NONE).setText(I18n.t("scope.mains.label"));
         leftMains = new Combo(g, SWT.READ_ONLY);
         leftMains.setItems(MainsSuppression.LABELS);
@@ -685,6 +703,15 @@ public final class ScopeTabControl extends AbstractTabControl {
             toolbarTabs.refreshTab(TAB_RIGHT);
         });
         rightSinc.addDisposeListener(e -> sincImg.dispose());
+
+        rightResidual = new Button(g, SWT.CHECK);
+        rightResidual.setText(I18n.t("scope.residual.label"));
+        rightResidual.setToolTipText(I18n.t("scope.right.residual.tooltip"));
+        Bindings.check(rightResidual, prefs.oscRightResidualEnabledProperty());
+        Bindings.onChange(toolbarTabs, prefs.oscRightResidualEnabledProperty(), v -> {
+            controller.redrawViews();
+            toolbarTabs.refreshTab(TAB_RIGHT);
+        });
 
         new Label(g, SWT.NONE).setText(I18n.t("scope.mains.label"));
         rightMains = new Combo(g, SWT.READ_ONLY);
@@ -942,6 +969,8 @@ public final class ScopeTabControl extends AbstractTabControl {
         p.setRightAcMode(prefs.isOscRightAcMode());
         p.setLeftSincInterpEnabled(prefs.isOscLeftSincInterpEnabled());
         p.setRightSincInterpEnabled(prefs.isOscRightSincInterpEnabled());
+        p.setLeftResidualEnabled(prefs.isOscLeftResidualEnabled());
+        p.setRightResidualEnabled(prefs.isOscRightResidualEnabled());
         p.setLeftMainsSuppression(prefs.getOscLeftMainsSuppression());
         p.setRightMainsSuppression(prefs.getOscRightMainsSuppression());
         p.setLeftLpf(prefs.getOscLeftLpf());
@@ -985,6 +1014,8 @@ public final class ScopeTabControl extends AbstractTabControl {
         prefs.setOscRightAcMode (p.isRightAcMode());
         prefs.setOscLeftSincInterpEnabled (p.isLeftSincInterpEnabled());
         prefs.setOscRightSincInterpEnabled(p.isRightSincInterpEnabled());
+        prefs.setOscLeftResidualEnabled (p.isLeftResidualEnabled());
+        prefs.setOscRightResidualEnabled(p.isRightResidualEnabled());
         prefs.setOscLeftMainsSuppression (p.getLeftMainsSuppression());
         prefs.setOscRightMainsSuppression(p.getRightMainsSuppression());
         prefs.setOscLeftLpf (p.getLeftLpf());

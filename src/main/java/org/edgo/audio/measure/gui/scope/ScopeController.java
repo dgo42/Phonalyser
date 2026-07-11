@@ -425,7 +425,6 @@ public final class ScopeController {
         boolean frozen = view != null && !view.isDisposed() && view.isFrozen();
         if (view == null || view.isDisposed() || (!capturing && !view.isFileMode() && !frozen)) return;
         Preferences prefs = Preferences.instance();
-        double vpp  = view.getLastVpp();
         // Horizontal scale + trigger reset only when live / file — a stopped scope
         // keeps the user's current time base and trigger; auto-setup then fixes ONLY
         // the vertical (V/div + offset) off the frozen frame.
@@ -450,11 +449,19 @@ public final class ScopeController {
                 tabControl.setTimePerDiv(newTDiv);
             }
         }
-        if (Double.isFinite(vpp) && vpp > 0) {
-            double targetVDiv = vpp / (ScopeView.DIVISIONS_Y * 0.75);
-            double newVDiv    = ScopeFormat.ceilToStep(targetVDiv, OscParse.voltsPerDivTargets());
-            tabControl.setLeftVoltsPerDiv(newVDiv);
-            tabControl.setRightVoltsPerDiv(newVDiv);
+        // Per-channel V/div: scale each side off its own residual Vpp when its
+        // residual is on, else off the captured Vpp.  When both residuals are off
+        // autoSetupVpp returns getLastVpp() for both, so both get the SAME V/div —
+        // today's behaviour preserved.
+        double vppL = view.autoSetupVpp(true);
+        double vppR = view.autoSetupVpp(false);
+        if (Double.isFinite(vppL) && vppL > 0) {
+            double targetVDiv = vppL / (ScopeView.DIVISIONS_Y * 0.75);
+            tabControl.setLeftVoltsPerDiv(ScopeFormat.ceilToStep(targetVDiv, OscParse.voltsPerDivTargets()));
+        }
+        if (Double.isFinite(vppR) && vppR > 0) {
+            double targetVDiv = vppR / (ScopeView.DIVISIONS_Y * 0.75);
+            tabControl.setRightVoltsPerDiv(ScopeFormat.ceilToStep(targetVDiv, OscParse.voltsPerDivTargets()));
         }
         // Centre each channel: a DC-coupled channel on its DC mean (so a
         // DC-biased signal lands mid-screen instead of clipped off the top/
