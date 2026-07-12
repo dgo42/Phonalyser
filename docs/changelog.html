@@ -6,9 +6,14 @@
   <title>Phonalyser — What's new</title>
   <link rel="icon" type="image/svg+xml" href="img/logo.svg"/>
   <link rel="stylesheet" href="css/site.css"/>
+  <script src="js/site.js" defer></script>
 </head>
 <body>
 
+  <button class="menu-toggle" aria-label="Open menu" aria-expanded="false">&#8942;</button>
+  <div class="menu-backdrop"></div>
+
+  <!-- ============================ left menu ============================ -->
   <aside class="sidebar">
     <a class="brand" href="index.html">
       <img src="img/logo.svg" alt=""/>
@@ -16,10 +21,10 @@
     </a>
     <nav class="menu">
       <a href="index.html">Home</a>
-      <a href="changelog.html" class="active">What's new</a>
+      <a href="changelog.html">What's new</a>
       <a href="screenshots.html">Screenshots</a>
 
-      <details class="submenu" open>
+      <details class="submenu">
         <summary>Download <span class="caret">▸</span></summary>
         <a href="download.html">All downloads</a>
         <a class="ext" href="https://github.com/dgo42/Phonalyser/releases/latest"
@@ -29,9 +34,15 @@
         <a class="disabled" title="Reserved — coming soon">macOS <span class="soon">soon</span></a>
       </details>
 
-      <a href="docs.html">Docs</a>
-      <a href="translation.html">Translation</a>
-      <a href="bench.html">Measurement bench</a>
+      <details class="submenu">
+        <summary>Documentation <span class="caret">▸</span></summary>
+        <a href="prefs.html">Preferences &amp; log location</a>
+        <a href="translation.html">Translation</a>
+        <a href="bench.html">Measurement bench</a>
+        <a href="theory.html">Theory of operation</a>
+      </details>
+
+      <a href="privacy.html">Privacy</a>
       <a href="web/index.html">Web version</a>
     </nav>
     <div class="sidebar-foot">
@@ -40,6 +51,7 @@
     </div>
   </aside>
 
+  <!-- ============================ right column ========================= -->
   <main class="main">
     <header class="hero">
       <img src="img/logo.svg" alt="Phonalyser logo"/>
@@ -53,41 +65,44 @@
 
     <div class="content">
 
-      <h2>1.0.3 <span class="ver-date">2026-07-04</span></h2>
+      <h2>1.0.4 <span class="ver-tag">upcoming</span></h2>
       <h3 class="chg">Added</h3>
       <ul>
-        <li><b>Notch-filter tuning module.</b> Live tuning of a passive twin-T
-            notch: a continuously looping log-sweep tracks the null in real time
-            — its power-of-two period makes the transform shift-invariant, so no
-            trigger is needed — and the notch's own response is then saved as a
-            <code>.frc</code> calibration for de-embedding.</li>
-        <li><b>DAC pre-distortion calibration.</b> A closed-loop wizard that
-            iteratively cancels the converter's own harmonics (and dual-tone
-            IMD), pushing the playback chain's distortion far below what the DAC
-            produces alone.</li>
-        <li><b>Web version.</b> A browser port of the analyzer — FFT,
-            oscilloscope and signal generator — running with no install in the
-            <a href="web/index.html">web version</a>.</li>
-        <li><b>Oscilloscope.</b> Rectangular rubber-band zoom with
-            <code>Ctrl+Z</code> rollback, and a glitch trigger backed by a
-            signal-discontinuity gate.</li>
-        <li><b>Documentation.</b> Expanded Theory of operation (tune-notch
-            measurement, ADC characterisation, adaptive mains cancellers,
-            digital-phosphor persistence) and the <code>ALGORITHMS.md</code>
-            engineering catalogue; this landing site.</li>
+        <li><b>Frequency-response ideal-filter overlay &amp; compare.</b> Overlay an ideal low-pass / high-pass / band-pass / notch response (Butterworth, Chebyshev, inverse Chebyshev, elliptic, Bessel; designed by spec or by order) on the measured curve, anchored to it per type, and compare measured vs ideal the same way as against RIAA. Each filter type remembers its own parameters; presets carry them.</li>
+        <li><b>Frequency-response flatness readout.</b> New Unevenness modes: band edges where the response first leaves a ±X dB corridor from its peak (or, with the explicit Notch switch, from its minimum), or the ± deviation over a chosen range — with on-plot annotation lines and a detachable measurements window.</li>
+        <li><b>Oscilloscope residual view.</b> Per-channel captured-minus-best-fit-tone display that exposes distortion, noise and glitches hidden under the fundamental; works for single and dual tone, with both dual-tone frequencies measured from the capture itself, so independent DAC/ADC clocks (no FLL) cannot smear the subtraction.</li>
+        <li><b>Documentation.</b> Help chapters for the new Filters / Unevenness tabs and the residual view, plus the scope's per-channel mains-rejection and low-pass controls — in English, German and Ukrainian.</li>
       </ul>
       <h3 class="chg">Changed</h3>
       <ul>
-        <li><b>Oscilloscope.</b> Whole-period integration for
-            V<sub>mean</sub>/V<sub>rms</sub> (removes the partial-cycle scatter
-            that grew with amplitude); exact horizontal pan/zoom positioning.</li>
+        <li><b>Loaded <code>.frc</code> measurements</b> now take their analysis bandwidth from the file's own recorded sample rate (the live device rate only for legacy, header-less files).</li>
+        <li><b>Compare auto-zoom</b> fits the difference curve with a symmetric 2 dB margin, and switching compare off re-fits the view to the measured curve.</li>
+      </ul>
+      <h3 class="chg">Fixed</h3>
+      <ul>
+        <li>Dual-tone residual crash at time bases above ~20 ms/div.</li>
+        <li><b>Linux: GTK input-method startup crash.</b> A configured ibus / fcitx input module whose daemon is dead or missing crashed the app at launch; the input method is now pre-flighted and falls back to XIM only when actually broken — working IME setups keep their input method.</li>
+        <li><b>Linux: GPU scope under Wayland.</b> The GL trace canvas could not obtain a context on a Wayland session; with GPU rendering enabled the GTK backend now switches to X11 (XWayland) automatically.</li>
+      </ul>
+
+      <h2>1.0.3 <span class="ver-date">2026-07-04</span></h2>
+      <h3 class="chg">Added</h3>
+      <ul>
+        <li><b>Notch-filter tuning module.</b> Live tuning of a passive twin-T notch: a continuously looping log-sweep tracks the null in real time — its power-of-two period makes the transform shift-invariant, so no trigger or alignment is needed — and the notch's own response is then saved as a <code>.frc</code> calibration for de-embedding.</li>
+        <li><b>DAC pre-distortion calibration.</b> A closed-loop wizard that iteratively cancels the converter's own harmonics (and dual-tone IMD), pushing the playback chain's distortion far below what the DAC produces alone.</li>
+        <li><b>Web version.</b> A browser port of the analyzer — FFT, oscilloscope and signal generator — running with no install in the <a href="web/index.html">web version</a>.</li>
+        <li><b>Oscilloscope.</b> Rectangular rubber-band zoom with <code>Ctrl+Z</code> rollback, and a glitch trigger backed by a signal-discontinuity gate.</li>
+        <li><b>Documentation.</b> Expanded Theory of operation (tune-notch measurement, ADC characterisation, adaptive mains cancellers, digital-phosphor persistence) and the <code>ALGORITHMS.md</code> engineering catalogue; the project landing site.</li>
+      </ul>
+      <h3 class="chg">Changed</h3>
+      <ul>
+        <li><b>Oscilloscope.</b> Whole-period integration for V<sub>mean</sub>/V<sub>rms</sub> (removes the partial-cycle scatter that grew with amplitude); exact horizontal pan/zoom positioning.</li>
       </ul>
 
       <h2>1.0.2 <span class="ver-date">2026-06-29</span></h2>
       <h3 class="chg">Added</h3>
       <ul>
-        <li><b>Oscilloscope digital-phosphor persistence</b> (GPU path) with
-            off / fixed / infinite / manual decay modes.</li>
+        <li><b>Oscilloscope digital-phosphor persistence</b> (GPU path) with off / fixed / infinite / manual decay modes.</li>
         <li><b>Scope pan/zoom engine</b> with connected-envelope rendering.</li>
         <li><b>Microsoft Store (MSIX)</b> packaging and Store listing assets.</li>
       </ul>
@@ -99,12 +114,7 @@
 
       <h2>1.0-RC1 <span class="ver-date">2026-06-19</span></h2>
       <ul>
-        <li>First public release candidate: FFT analyzer (THD, THD+N, IMD, SNR,
-            SINAD, ENOB, per-harmonic readout, coherent averaging, selectable
-            windows, <code>.frc</code> calibration), oscilloscope, frequency
-            response (Farina log-sweep deconvolution), signal generator (DDS),
-            and multi-backend audio (WASAPI &amp; WDM-KS on Windows, CoreAudio on
-            macOS, JavaSound on Linux).</li>
+        <li>First public release candidate: FFT analyzer (THD, THD+N, IMD, SNR, SINAD, ENOB, per-harmonic readout, coherent averaging, selectable windows, <code>.frc</code> calibration), oscilloscope, frequency response (Farina log-sweep deconvolution), signal generator (DDS), and multi-backend audio (WASAPI &amp; WDM-KS on Windows, CoreAudio on macOS, JavaSound on Linux).</li>
       </ul>
 
     </div>

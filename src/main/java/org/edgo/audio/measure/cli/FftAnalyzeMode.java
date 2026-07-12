@@ -213,7 +213,7 @@ public class FftAnalyzeMode {
             // FreqResp files are stereo since v6; the FFT compensation
             // path is single-channel, so apply the left side (matches the
             // primary capture channel both modes assume).
-            FreqRespCalibration cal = FreqRespCalHelper.loadCsv(freqRespCalArg).left();
+            FreqRespCalibration cal = FreqRespCalHelper.loadFrc(freqRespCalArg).left();
             double[][] overlay  = FreqRespCalHelper.computeOverlay(cal, result);
             double[][] prePeaks = FreqRespCalHelper.capturePreCorrectionPeaks(result);
             if (overlay != null) {

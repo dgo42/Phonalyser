@@ -89,11 +89,11 @@ import lombok.extern.log4j.Log4j2;
 @Log4j2
 public final class MainWindow {
 
-    /** Minimum shell footprint — a standard 1280×720 (720p) window.  The
+    /** Minimum shell footprint — a standard 1024×720 window.  The
      *  content's computed natural layout is wider but shorter than this, so the
-     *  minimum is clamped to let the window shrink to 1280 wide while keeping at
+     *  minimum is clamped to let the window shrink to 1024 wide while keeping at
      *  least 720 tall (and never below the content's own natural height). */
-    private static final int MIN_SHELL_WIDTH  = 1280;
+    private static final int MIN_SHELL_WIDTH  = 1024;
     private static final int MIN_SHELL_HEIGHT = 720;
 
     /** Top-level "please wait" shell shown while a language switch is in

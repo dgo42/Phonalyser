@@ -42,6 +42,8 @@ import org.edgo.audio.measure.common.FileVersions;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.FilterResponse;
+import org.edgo.audio.measure.enums.FilterType;
 import org.edgo.audio.measure.enums.MagnitudeUnit;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenSignalForm;
@@ -51,6 +53,7 @@ import org.edgo.audio.measure.enums.PersistenceMode;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.enums.TriggerType;
+import org.edgo.audio.measure.enums.UnevenMode;
 import org.edgo.audio.measure.enums.WindowType;
 import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
 import org.edgo.audio.measure.bind.Property;
@@ -494,6 +497,14 @@ public final class Preferences {
      *  semantics as the FFT / Scope preset maps so the dropdown shows
      *  entries in the order they were created. */
     @Getter private final Map<String, FreqRespPreset> freqRespPresets = new LinkedHashMap<>();
+    /** Per-filter-type filter parameters — the SINGLE source of truth for the
+     *  FreqResp filter overlay's Mode/ripple/atten/edge/order/Q scalars.  The
+     *  tab control binds its widgets directly to {@code map[currentType]}: a
+     *  field edit writes {@link #putFreqRespFilterParams} (write-through +
+     *  save), a Filter-type change loads {@link #getFreqRespFilterParams} for
+     *  the new type.  A missing entry falls back to
+     *  {@link FreqRespFilterTypeParams#fromType} defaults. */
+    private final Map<FilterType, FreqRespFilterTypeParams> freqRespFilterParamsByType = new EnumMap<>(FilterType.class);
 
     // -------------------------------------------------------------------------
     // Frequency Response pane — sweep settings, view state, RIAA + calibration
@@ -610,6 +621,34 @@ public final class Preferences {
      *  place of the live measurement; auto-zoom to 2 Hz–25 kHz, ±2 dB
      *  over min/max.  Only enabled when a measured result exists. */
     private final Property<Boolean> freqRespCompareMode      = bound(false);
+
+    /** Show the ideal filter reference curve overlaid on the trace.  Like
+     *  {@link #freqRespShowRiaa} this is deliberately NOT persisted top-level
+     *  (always starts unchecked on a fresh session) but IS captured in a
+     *  {@link FreqRespPreset}. */
+    private final Property<Boolean> freqRespShowFilter        = bound(false);
+    /** Filter compare (diff) mode: show measured − filter subtraction trace,
+     *  like {@link #freqRespCompareMode} but against the ideal filter curve.
+     *  Mutually exclusive with {@link #freqRespCompareMode} (tab-side). */
+    private final Property<Boolean> freqRespFilterCompare     = bound(false);
+    /** Passband shape of the ideal filter overlay (combo order = enum order). */
+    private final Property<FilterType> freqRespFilterType     = bound(FilterType.LOW_PASS);
+    /** Approximation family used to synthesise the filter magnitude response. */
+    private final Property<FilterResponse> freqRespFilterResponse = bound(FilterResponse.BUTTERWORTH);
+
+    /** Unevenness table mode: {@code OFF} = no readout computed or drawn,
+     *  {@code LEVEL} = row 1 (±dB given → report the frequency span within
+     *  that tolerance), {@code RANGE} = row 2 (frequency range given → report
+     *  the ±dB spread over that range). */
+    private final Property<UnevenMode> freqRespUnevenMode     = bound(UnevenMode.OFF);
+    /** Treat the measured curve as a notch in LEVEL mode (explicit — no automatic shape detection). */
+    private final Property<Boolean> freqRespUnevenNotch       = bound(false);
+    /** Row-1 unevenness tolerance in dB.  Clamped to [0.001, 20] on load. */
+    private final Property<Double>  freqRespUnevenDb          = bound(3.0);
+    /** Row-2 start frequency in Hz for the range-given unevenness mode. */
+    private final Property<Double>  freqRespUnevenStartHz     = bound(20.0);
+    /** Row-2 stop frequency in Hz for the range-given unevenness mode. */
+    private final Property<Double>  freqRespUnevenStopHz      = bound(20_000.0);
 
     /** When {@code true}, fresh measurements get divided by the loaded
      *  calibration before being shown.  No effect if no calibration is
@@ -1739,6 +1778,42 @@ public final class Preferences {
     public void setFreqRespCompareMode(boolean v) { freqRespCompareMode.set(v); }
     public Property<Boolean> freqRespCompareModeProperty() { return freqRespCompareMode; }
 
+    public boolean isFreqRespShowFilter()      { return freqRespShowFilter.get(); }
+    public void setFreqRespShowFilter(boolean v) { freqRespShowFilter.set(v); }
+    public Property<Boolean> freqRespShowFilterProperty() { return freqRespShowFilter; }
+
+    public boolean isFreqRespFilterCompare()   { return freqRespFilterCompare.get(); }
+    public void setFreqRespFilterCompare(boolean v) { freqRespFilterCompare.set(v); }
+    public Property<Boolean> freqRespFilterCompareProperty() { return freqRespFilterCompare; }
+
+    public FilterType getFreqRespFilterType()  { return freqRespFilterType.get(); }
+    public void setFreqRespFilterType(FilterType v) { freqRespFilterType.set(v); }
+    public Property<FilterType> freqRespFilterTypeProperty() { return freqRespFilterType; }
+
+    public FilterResponse getFreqRespFilterResponse() { return freqRespFilterResponse.get(); }
+    public void setFreqRespFilterResponse(FilterResponse v) { freqRespFilterResponse.set(v); }
+    public Property<FilterResponse> freqRespFilterResponseProperty() { return freqRespFilterResponse; }
+
+    public UnevenMode getFreqRespUnevenMode()  { return freqRespUnevenMode.get(); }
+    public void setFreqRespUnevenMode(UnevenMode v) { freqRespUnevenMode.set(v); }
+    public Property<UnevenMode> freqRespUnevenModeProperty() { return freqRespUnevenMode; }
+
+    public boolean isFreqRespUnevenNotch()     { return freqRespUnevenNotch.get(); }
+    public void setFreqRespUnevenNotch(boolean v) { freqRespUnevenNotch.set(v); }
+    public Property<Boolean> freqRespUnevenNotchProperty() { return freqRespUnevenNotch; }
+
+    public double getFreqRespUnevenDb()        { return freqRespUnevenDb.get(); }
+    public void setFreqRespUnevenDb(double v)  { freqRespUnevenDb.set(v); }
+    public Property<Double> freqRespUnevenDbProperty() { return freqRespUnevenDb; }
+
+    public double getFreqRespUnevenStartHz()   { return freqRespUnevenStartHz.get(); }
+    public void setFreqRespUnevenStartHz(double v) { freqRespUnevenStartHz.set(v); }
+    public Property<Double> freqRespUnevenStartHzProperty() { return freqRespUnevenStartHz; }
+
+    public double getFreqRespUnevenStopHz()    { return freqRespUnevenStopHz.get(); }
+    public void setFreqRespUnevenStopHz(double v) { freqRespUnevenStopHz.set(v); }
+    public Property<Double> freqRespUnevenStopHzProperty() { return freqRespUnevenStopHz; }
+
     public double getFreqRespDurationSec()     { return freqRespDurationSec.get(); }
     public void setFreqRespDurationSec(double v) { freqRespDurationSec.set(v); }
     public Property<Double> freqRespDurationSecProperty() { return freqRespDurationSec; }
@@ -2040,6 +2115,16 @@ public final class Preferences {
         root.put("freqRespReverseRiaa",       freqRespReverseRiaa.get());
         root.put("freqRespIecAmendment",      freqRespIecAmendment.get());
         root.put("freqRespCompareMode",       freqRespCompareMode.get());
+        // Note: freqRespShowFilter is intentionally NOT persisted — it always
+        // starts unchecked on a fresh session (mirrors freqRespShowRiaa).
+        root.put("freqRespFilterCompare",     freqRespFilterCompare.get());
+        root.put("freqRespFilterType",        freqRespFilterType.get().name());
+        root.put("freqRespFilterResponse",    freqRespFilterResponse.get().name());
+        root.put("freqRespUnevenMode",        freqRespUnevenMode.get().name());
+        root.put("freqRespUnevenNotch",       freqRespUnevenNotch.get());
+        root.put("freqRespUnevenDb",          freqRespUnevenDb.get());
+        root.put("freqRespUnevenStartHz",     freqRespUnevenStartHz.get());
+        root.put("freqRespUnevenStopHz",      freqRespUnevenStopHz.get());
         root.put("freqRespApplyCalibration",  freqRespApplyCalibration.get());
         if (!freqRespCalibrations.isEmpty()) {
             List<Map<String, Object>> cals = new ArrayList<>();
@@ -2107,9 +2192,27 @@ public final class Preferences {
                 pm.put("reverseRiaa",    p.isReverseRiaa());
                 pm.put("iecAmendment",   p.isIecAmendment());
                 pm.put("compareMode",    p.isCompareMode());
+                pm.put("showFilter",          p.isShowFilter());
+                pm.put("filterCompare",       p.isFilterCompare());
+                pm.put("filterType",          p.getFilterType().name());
+                pm.put("filterResponse",      p.getFilterResponse().name());
+                pm.put("filterParams",        writeFilterParams(p.getFilterParams()));
+                pm.put("unevenMode",          p.getUnevenMode().name());
+                pm.put("unevenNotch",         p.isUnevenNotch());
+                pm.put("unevenDb",            p.getUnevenDb());
+                pm.put("unevenStartHz",       p.getUnevenStartHz());
+                pm.put("unevenStopHz",        p.getUnevenStopHz());
                 frMap.put(e.getKey(), pm);
             }
             root.put("freqRespPresets", frMap);
+        }
+
+        if (!freqRespFilterParamsByType.isEmpty()) {
+            Map<String, Object> fptMap = new LinkedHashMap<>();
+            for (Map.Entry<FilterType, FreqRespFilterTypeParams> e : freqRespFilterParamsByType.entrySet()) {
+                fptMap.put(e.getKey().name(), writeFilterParams(e.getValue()));
+            }
+            root.put("freqRespFilterParamsByType", fptMap);
         }
 
         Map<String, Object> perBackendMap = new LinkedHashMap<>();
@@ -2368,6 +2471,23 @@ public final class Preferences {
         if (root.get("freqRespReverseRiaa")       instanceof Boolean b) freqRespReverseRiaa.set(b);
         if (root.get("freqRespIecAmendment")      instanceof Boolean b) freqRespIecAmendment.set(b);
         if (root.get("freqRespCompareMode")       instanceof Boolean b) freqRespCompareMode.set(b);
+        // freqRespShowFilter is intentionally not loaded from disk — it
+        // always starts unchecked on a fresh session (mirrors freqRespShowRiaa).
+        if (root.get("freqRespFilterCompare")     instanceof Boolean b) freqRespFilterCompare.set(b);
+        if (root.get("freqRespFilterType")        instanceof String  s) freqRespFilterType.set(enumOr(FilterType.class, s, freqRespFilterType.get()));
+        if (root.get("freqRespFilterResponse")    instanceof String  s) freqRespFilterResponse.set(enumOr(FilterResponse.class, s, freqRespFilterResponse.get()));
+        if (root.get("freqRespUnevenMode")        instanceof String  s) freqRespUnevenMode.set(enumOr(UnevenMode.class, s, freqRespUnevenMode.get()));
+        if (root.get("freqRespUnevenNotch")       instanceof Boolean b) freqRespUnevenNotch.set(b);
+        if (root.get("freqRespUnevenDb")          instanceof Number  n) {
+            freqRespUnevenDb.set(Math.max(0.001, Math.min(20.0, n.doubleValue())));
+        }
+        if (root.get("freqRespUnevenStartHz")     instanceof Number  n) freqRespUnevenStartHz.set(n.doubleValue());
+        if (root.get("freqRespUnevenStopHz")      instanceof Number  n) freqRespUnevenStopHz.set(n.doubleValue());
+        // Sanity: start must sit below stop — otherwise reset both to defaults.
+        if (freqRespUnevenStartHz.get() >= freqRespUnevenStopHz.get()) {
+            freqRespUnevenStartHz.set(20.0);
+            freqRespUnevenStopHz.set(20_000.0);
+        }
         if (root.get("freqRespApplyCalibration")  instanceof Boolean b) freqRespApplyCalibration.set(b);
         if (root.get("freqRespCalibrations") instanceof List<?> raw) {
             freqRespCalibrations.clear();
@@ -2471,7 +2591,28 @@ public final class Preferences {
                 if (pm.get("reverseRiaa")    instanceof Boolean b) p.setReverseRiaa(b);
                 if (pm.get("iecAmendment")   instanceof Boolean b) p.setIecAmendment(b);
                 if (pm.get("compareMode")    instanceof Boolean b) p.setCompareMode(b);
+                if (pm.get("showFilter")          instanceof Boolean b) p.setShowFilter(b);
+                if (pm.get("filterCompare")       instanceof Boolean b) p.setFilterCompare(b);
+                if (pm.get("filterType")          instanceof String  s) p.setFilterType(enumOr(FilterType.class, s, p.getFilterType()));
+                if (pm.get("filterResponse")      instanceof String  s) p.setFilterResponse(enumOr(FilterResponse.class, s, p.getFilterResponse()));
+                if (pm.get("filterParams")        instanceof Map<?, ?> fpm) p.setFilterParams(readFilterParams(p.getFilterType(), fpm));
+                if (pm.get("unevenMode")          instanceof String  s) p.setUnevenMode(enumOr(UnevenMode.class, s, p.getUnevenMode()));
+                if (pm.get("unevenNotch")         instanceof Boolean b) p.setUnevenNotch(b);
+                if (pm.get("unevenDb")            instanceof Number  n) p.setUnevenDb(n.doubleValue());
+                if (pm.get("unevenStartHz")       instanceof Number  n) p.setUnevenStartHz(n.doubleValue());
+                if (pm.get("unevenStopHz")        instanceof Number  n) p.setUnevenStopHz(n.doubleValue());
                 freqRespPresets.put(key, p);
+            }
+        }
+
+        if (root.get("freqRespFilterParamsByType") instanceof Map<?, ?> fptMap) {
+            freqRespFilterParamsByType.clear();
+            for (Map.Entry<?, ?> e : fptMap.entrySet()) {
+                if (!(e.getKey() instanceof String key)) continue;
+                FilterType type = enumOr(FilterType.class, key, null);
+                if (type == null) continue;
+                if (!(e.getValue() instanceof Map<?, ?> pm)) continue;
+                freqRespFilterParamsByType.put(type, readFilterParams(type, pm));
             }
         }
 
@@ -2577,6 +2718,61 @@ public final class Preferences {
     public synchronized void removeFreqRespPreset(String name) {
         if (name == null) return;
         if (freqRespPresets.remove(name) != null) save();
+    }
+
+    /** The filter parameters for {@code type}, or that type's pinned
+     *  {@link FreqRespFilterTypeParams#fromType} defaults when nothing is
+     *  stored yet.  Never mutates the map — the caller edits the returned
+     *  snapshot and writes it back via {@link #putFreqRespFilterParams}. */
+    public synchronized FreqRespFilterTypeParams getFreqRespFilterParams(FilterType type) {
+        if (type == null) return FreqRespFilterTypeParams.fromType(FilterType.LOW_PASS);
+        FreqRespFilterTypeParams p = freqRespFilterParamsByType.get(type);
+        return p != null ? p : FreqRespFilterTypeParams.fromType(type);
+    }
+
+    /** Stores {@code params} under {@code type} and persists. */
+    public synchronized void putFreqRespFilterParams(FilterType type, FreqRespFilterTypeParams params) {
+        if (type == null || params == null) return;
+        freqRespFilterParamsByType.put(type, params);
+        save();
+    }
+
+    /** Serialises one {@link FreqRespFilterTypeParams} to its YAML map — the
+     *  ONE place that lists the filter-param field names for writing.  Shared
+     *  by the per-type {@code freqRespFilterParamsByType} block and every
+     *  {@link FreqRespPreset}'s embedded {@code filterParams}. */
+    private Map<String, Object> writeFilterParams(FreqRespFilterTypeParams p) {
+        Map<String, Object> pm = new LinkedHashMap<>();
+        pm.put("modeOrder",     p.isModeOrder());
+        pm.put("rippleDb",      p.getRippleDb());
+        pm.put("stopAttenDb",   p.getStopAttenDb());
+        pm.put("centerHz",      p.getCenterHz());
+        pm.put("passHz",        p.getPassHz());
+        pm.put("stopHz",        p.getStopHz());
+        pm.put("orderPassHz",   p.getOrderPassHz());
+        pm.put("orderRippleDb", p.getOrderRippleDb());
+        pm.put("order",         p.getOrder());
+        pm.put("q",             p.getQ());
+        return pm;
+    }
+
+    /** Deserialises one {@link FreqRespFilterTypeParams} from its YAML map,
+     *  seeded with {@code type}'s pinned defaults and clamped to the valid
+     *  ranges — the ONE place that lists the field names for reading.  Shared
+     *  by the per-type block and every preset's embedded {@code filterParams}. */
+    private FreqRespFilterTypeParams readFilterParams(FilterType type, Map<?, ?> pm) {
+        FreqRespFilterTypeParams p = FreqRespFilterTypeParams.fromType(type);
+        if (pm.get("modeOrder")     instanceof Boolean b) p.setModeOrder(b);
+        if (pm.get("rippleDb")      instanceof Number  n) p.setRippleDb(Math.max(0.001, Math.min(20.0, n.doubleValue())));
+        if (pm.get("stopAttenDb")   instanceof Number  n) p.setStopAttenDb(Math.max(0.0, Math.min(200.0, n.doubleValue())));
+        if (pm.get("centerHz")      instanceof Number  n) p.setCenterHz(Math.max(0.0, n.doubleValue()));
+        if (pm.get("passHz")        instanceof Number  n) p.setPassHz(Math.max(0.0, n.doubleValue()));
+        if (pm.get("stopHz")        instanceof Number  n) p.setStopHz(Math.max(0.0, n.doubleValue()));
+        if (pm.get("orderPassHz")   instanceof Number  n) p.setOrderPassHz(Math.max(0.0, n.doubleValue()));
+        if (pm.get("orderRippleDb") instanceof Number  n) p.setOrderRippleDb(Math.max(0.001, Math.min(20.0, n.doubleValue())));
+        if (pm.get("order")         instanceof Number  n) p.setOrder(Math.max(1, Math.min(32, n.intValue())));
+        if (pm.get("q")             instanceof Number  n) p.setQ(Math.max(0.1, Math.min(100.0, n.doubleValue())));
+        return p;
     }
 
 }

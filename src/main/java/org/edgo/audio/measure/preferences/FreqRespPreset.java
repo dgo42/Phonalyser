@@ -18,6 +18,10 @@
 
 package org.edgo.audio.measure.preferences;
 
+import org.edgo.audio.measure.enums.FilterResponse;
+import org.edgo.audio.measure.enums.FilterType;
+import org.edgo.audio.measure.enums.UnevenMode;
+
 import lombok.Data;
 
 /**
@@ -44,4 +48,20 @@ public class FreqRespPreset {
     private boolean reverseRiaa   = false;
     private boolean iecAmendment  = false;
     private boolean compareMode   = false;
+    // Filter overlay
+    private boolean        showFilter          = false;
+    private boolean        filterCompare       = false;
+    private FilterType     filterType          = FilterType.LOW_PASS;
+    private FilterResponse filterResponse      = FilterResponse.BUTTERWORTH;
+    /** Mode/ripple/atten/edge/order/Q for {@link #filterType}, captured from
+     *  the {@code freqRespFilterParamsByType} entry for that type and written
+     *  back into it on apply.  Serialised via the same field round-trip as the
+     *  map entry (one serialization shape in the whole codebase). */
+    private FreqRespFilterTypeParams filterParams = FreqRespFilterTypeParams.fromType(FilterType.LOW_PASS);
+    // Unevenness
+    private UnevenMode unevenMode = UnevenMode.OFF;
+    private boolean unevenNotch   = false;
+    private double  unevenDb      = 3.0;
+    private double  unevenStartHz = 20.0;
+    private double  unevenStopHz  = 20_000.0;
 }

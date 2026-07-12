@@ -31,9 +31,11 @@ import org.edgo.audio.measure.dsp.LowPassFilter;
 import org.edgo.audio.measure.dsp.MainsFilters;
 import org.edgo.audio.measure.dsp.MainsTimeFilter;
 import org.edgo.audio.measure.dsp.MedianFilter;
+import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.gui.common.FftBinSnap;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 
 /**
@@ -526,9 +528,13 @@ public final class ScopeMeasurementWorker {
             if (!Double.isNaN(async)) result = result.withFrequency(async);
             submitFrequencyScan(left, data, measLen, sampleRate, peakVolts);
         }
-        if (raw != null && Double.isFinite(result.getFrequency())) {
+        boolean dual = prefs.getGenSignalForm().isDualTone();
+        if (!dual && raw != null && Double.isFinite(result.getFrequency())) {
             // Re-pin the comb-located tone on the raw signal, free of the
-            // comb's notch bias, with a narrow band around the seed.
+            // comb's notch bias, with a narrow band around the seed.  Skipped
+            // in dual-tone mode: the single-value frequency is cleared by
+            // withoutTimes() below, so re-pinning it would be wasted work — the
+            // two dual-tone frequencies are measured separately just after.
             double precise = SignalMeasurements.refineFrequencyAround(
                     raw, avail, sampleRate, result.getFrequency(), FREQ_REFINE_HALF_HZ);
             if (Double.isFinite(precise)) result = result.withFrequency(precise);
@@ -540,8 +546,42 @@ public final class ScopeMeasurementWorker {
         // happened to win the Goertzel search on this tick.  Vpp /
         // Vrms / Vmean stay intact since they're well-defined for
         // any signal mode.
-        if (prefs.getGenSignalForm().isDualTone()) {
+        if (dual) {
             result = result.withoutTimes();
+            // Measure BOTH tones as-captured for the scope's residual fit.  DAC
+            // and ADC run on independent clocks with no FLL, so the generator's
+            // commanded (FFT-bin-snapped) frequencies are exact only in the DAC
+            // domain; in the ADC capture they are off by the clock ratio (ppm).
+            // Over a fit window up to 65536 samples that error accrues phase the
+            // least-squares fit can't absorb, leaving fundamental leakage.  So
+            // seed from what the generator emits (mirroring ScopeView's source
+            // exactly) and refine each seed on the raw signal to the AS-CAPTURED
+            // frequency — the pre-comb copy when mains suppression is on (the
+            // comb's notches would bias the tones), the channel buffer itself
+            // otherwise (with suppression off it IS the raw signal, so the pair
+            // is measurable in every configuration).  ±FREQ_REFINE_HALF_HZ
+            // (2 Hz) covers ~100 ppm at 20 kHz, far above any real crystal
+            // offset; the Hann window keeps the other tone — always tens of Hz
+            // or more away — out of the narrow band.
+            float[] src = raw != null ? raw : buf;
+            int sr = (int) Math.round(sampleRate);
+            double seed1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
+                    prefs.getGenDualToneFreq1Hz());
+            double seed2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
+                    prefs.getGenDualToneFreq2Hz());
+            double r1 = Double.NaN;
+            double r2 = Double.NaN;
+            if (seed1 > 0) {
+                double refined = SignalMeasurements.refineFrequencyAround(
+                        src, avail, sampleRate, seed1, FREQ_REFINE_HALF_HZ);
+                if (Double.isFinite(refined)) r1 = refined;
+            }
+            if (seed2 > 0) {
+                double refined = SignalMeasurements.refineFrequencyAround(
+                        src, avail, sampleRate, seed2, FREQ_REFINE_HALF_HZ);
+                if (Double.isFinite(refined)) r2 = refined;
+            }
+            result = result.withDualTones(r1, r2);
         }
         return result;
     }

@@ -56,6 +56,12 @@ public class FreqRespCalHelper {
      *  display so both rescale a tone the same way. */
     private static final ToneLobeLift LOBE = new ToneLobeLift();
 
+    /** {@code .frc} header key for the capture sample rate, as written into
+     *  the leading {@code #} comment block by {@link #saveCsv} and read back
+     *  by {@link #readSampleRateHz} so a loaded file's Nyquist comes from the
+     *  file itself, not from the live device. */
+    private static final String SAMPLE_RATE_HEADER_KEY = "sample_rate_hz";
+
     /** Compile-time switch for IR-domain time gating after delay
      *  correction.  When on, the deconvolved impulse response is
      *  windowed to {@link #IR_GATE_LENGTH_SEC} around the main peak
@@ -539,9 +545,11 @@ public class FreqRespCalHelper {
      * before the measurement; nothing in the file depends on them.
      *
      * <p>Header lines (prefixed by {@code #}) record measurement params
-     * for round-trip fidelity but the loader only needs the data rows.
+     * for round-trip fidelity; {@link #loadFrc} only needs the data rows,
+     * while {@link #readSampleRateHz} reads the capture rate back from the
+     * header block.
      */
-    public void saveCsv(StereoFreqRespCalibration stereo, String path,
+    public void saveFrc(StereoFreqRespCalibration stereo, String path,
                         int sampleRate,
                         double sweepStart, double sweepEnd,
                         int sweepPoints,
@@ -580,13 +588,13 @@ public class FreqRespCalHelper {
     }
 
     /**
-     * Reads a stereo filter calibration file written by {@link #saveCsv}.
+     * Reads a stereo filter calibration file written by {@link #saveFrc}.
      * Expects the 5-column format defined there; throws when the file is
      * empty or rows fewer than 5 columns.  Field separator is comma, but
      * legacy semicolon-separated files (older format) are also accepted
      * so old in-flight measurements still round-trip while migrating.
      */
-    public StereoFreqRespCalibration loadCsv(String path) throws IOException {
+    public StereoFreqRespCalibration loadFrc(String path) throws IOException {
         List<double[]> rows = new ArrayList<>();
         try (BufferedReader br = new BufferedReader(new FileReader(path))) {
             String line;
@@ -626,6 +634,33 @@ public class FreqRespCalHelper {
         return new StereoFreqRespCalibration(
                 new FreqRespCalibration(freqs, magL, phaseL),
                 new FreqRespCalibration(freqs, magR, phaseR));
+    }
+
+    /**
+     * Reads the capture sample rate recorded in a {@code .frc} file's leading
+     * {@code # sample_rate_hz=} header comment (written by {@link #saveFrc}).
+     * Only the header block is scanned — the scan stops at the first
+     * non-comment line.  Returns {@code 0} when the header is absent or
+     * unparseable (legacy files), so callers can fall back.
+     */
+    public int readSampleRateHz(String path) throws IOException {
+        try (BufferedReader br = new BufferedReader(new FileReader(path))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                if (!line.startsWith("#")) break;   // header block ended
+                int eq = line.indexOf('=');
+                if (eq > 0 && SAMPLE_RATE_HEADER_KEY.equals(line.substring(1, eq).trim())) {
+                    try {
+                        return Integer.parseInt(line.substring(eq + 1).trim());
+                    } catch (NumberFormatException e) {
+                        return 0;   // garbled header — treat as absent
+                    }
+                }
+            }
+        }
+        return 0;
     }
 
     /**
