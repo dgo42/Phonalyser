@@ -6,8 +6,12 @@
   <title>Phonalyser — Measurement bench</title>
   <link rel="icon" type="image/svg+xml" href="img/logo.svg"/>
   <link rel="stylesheet" href="css/site.css"/>
+  <script src="js/site.js" defer></script>
 </head>
 <body>
+
+  <button class="menu-toggle" aria-label="Open menu" aria-expanded="false">&#8942;</button>
+  <div class="menu-backdrop"></div>
 
   <aside class="sidebar">
     <a class="brand" href="index.html">
@@ -19,7 +23,7 @@
       <a href="changelog.html">What's new</a>
       <a href="screenshots.html">Screenshots</a>
 
-      <details class="submenu" open>
+      <details class="submenu">
         <summary>Download <span class="caret">▸</span></summary>
         <a href="download.html">All downloads</a>
         <a class="ext" href="https://github.com/dgo42/Phonalyser/releases/latest"
@@ -29,9 +33,15 @@
         <a class="disabled" title="Reserved — coming soon">macOS <span class="soon">soon</span></a>
       </details>
 
-      <a href="docs.html">Docs</a>
-      <a href="translation.html">Translation</a>
-      <a href="bench.html" class="active">Measurement bench</a>
+      <details class="submenu">
+        <summary>Documentation <span class="caret">▸</span></summary>
+        <a href="prefs.html">Preferences &amp; log location</a>
+        <a href="translation.html">Translation</a>
+        <a href="bench.html">Measurement bench</a>
+        <a href="theory.html">Theory of operation</a>
+      </details>
+
+      <a href="privacy.html">Privacy</a>
       <a href="web/index.html">Web version</a>
     </nav>
     <div class="sidebar-foot">
