@@ -66,12 +66,13 @@ details.submenu {
 details.submenu > summary {
   list-style: none; cursor: pointer;
   padding: 9px 16px; font-size: 14px; color: #c6d3df;
+  border-left: 3px solid transparent;          /* align text with the plain <a> items */
   display: flex; justify-content: space-between; align-items: center;
 }
 details.submenu > summary::-webkit-details-marker { display: none; }
 details.submenu > summary:hover { background: rgba(255,255,255,.06); color: #fff; }
 details.submenu[open] > summary { color: #fff; }
-details.submenu .caret { transition: transform .15s ease; color: #7c8da0; font-size: 12px; }
+details.submenu .caret { transition: transform .15s ease; color: #7c8da0; font-size: 20px; line-height: 1; }
 details.submenu[open] .caret { transform: rotate(90deg); }
 details.submenu a { padding-left: 30px; font-size: 13.5px; }
 
@@ -175,6 +176,58 @@ figure.shot figcaption b { color: var(--navy2); font-weight: 600; }
   padding: 10px 14px; margin: 12px 0; overflow-x: auto;
 }
 
+/* inline SVG signal-path diagram (theory page) */
+.diagram {
+  margin: 18px 0; padding: 14px; background: var(--card);
+  border: 1px solid var(--line); border-radius: 8px; overflow-x: auto;
+}
+.diagram svg { display: block; }
+
+/* ---- theory-of-operation chapters (copied from the in-app help) ---- */
+.content .back { font-size: 13px; color: var(--muted); margin: 2px 0; }
+.content .eq {
+  margin: 12px 0 12px 32px; max-width: 640px;
+  font-family: Georgia, "Times New Roman", serif; font-size: 16px;
+}
+.content .eq .no { float: right; color: var(--muted); font-size: 13px; font-family: Consolas, Menlo, monospace; }
+.content ol.refs { font-size: 13px; color: var(--muted); padding-left: 24px; list-style: none; }
+.content ol.refs li { margin: 5px 0; text-indent: -16px; }
+.content ol.refs li > a:first-child { font-weight: 700; margin-right: 4px; }
+.content sup a { text-decoration: none; }
+
+/* ---- image / diagram lightbox (self-contained, in js/site.js) ---- */
+.content img, .content .diagram svg { cursor: zoom-in; }
+.lightbox {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(8,16,24,.88); padding: 5vh 6vw;
+}
+.lightbox[hidden] { display: none; }
+.lb-stage {
+  margin: 0; max-width: 92vw; max-height: 88vh;
+  display: flex; align-items: center; justify-content: center;
+}
+.lb-stage img, .lb-stage svg {
+  max-width: 92vw; max-height: 88vh; width: auto; height: auto;
+  background: #fff; border-radius: 6px; box-shadow: 0 12px 48px rgba(0,0,0,.55);
+}
+.lb-stage svg { padding: 14px; }
+.lb-close, .lb-prev, .lb-next {
+  position: fixed; z-index: 101; cursor: pointer; padding: 0;
+  background: rgba(255,255,255,.12); color: #fff; border: 1px solid rgba(255,255,255,.28);
+  border-radius: 50%; width: 46px; height: 46px; font-size: 26px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+.lb-close:hover, .lb-prev:hover, .lb-next:hover { background: rgba(255,255,255,.26); }
+.lb-close { top: 18px; right: 18px; }
+.lb-prev { left: 20px; top: 50%; transform: translateY(-50%); }
+.lb-next { right: 20px; top: 50%; transform: translateY(-50%); }
+.lb-caption {
+  position: fixed; bottom: 16px; left: 0; right: 0; text-align: center;
+  color: #dfe7ef; font-size: 14px; padding: 0 70px; pointer-events: none;
+}
+.lb-count { position: fixed; top: 22px; left: 22px; color: #aeb9c4; font-size: 13px; }
+
 /* two-up photo row (e.g. bench DUTs) */
 .photo-row { display: flex; flex-wrap: wrap; gap: 16px; margin: 16px 0; }
 .photo-row figure { flex: 1 1 300px; margin: 0; }
@@ -199,11 +252,34 @@ figure.shot figcaption b { color: var(--navy2); font-weight: 600; }
 .center-page h1 { color: var(--navy); font-size: 34px; margin: 0 0 8px; }
 .center-page p { color: var(--muted); margin: 0 0 20px; }
 
+/* kebab (three-dots) menu button + drawer backdrop — visible only < 760px (below). */
+.menu-toggle {
+  display: none; position: fixed; top: 10px; left: 10px; z-index: 50;
+  width: 40px; height: 40px; padding: 0; cursor: pointer;
+  border: 1px solid #1c3a55; border-radius: 8px;
+  background: var(--sidebar); color: #fff; font-size: 22px; line-height: 1;
+  align-items: center; justify-content: center;
+}
+.menu-backdrop { display: none; }
+
 /* =============================== responsive ============================= */
 @media (max-width: 760px) {
-  .sidebar { position: static; width: 100%; height: auto; flex-direction: column; }
+  /* The left menu becomes an off-canvas drawer opened by the kebab button (site.js). */
+  .menu-toggle { display: inline-flex; }
+  .sidebar {
+    width: 250px; z-index: 60;                 /* keeps position:fixed from the base rule */
+    transform: translateX(-100%); transition: transform .2s ease;
+    box-shadow: 2px 0 18px rgba(0,0,0,.35);
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  .menu-backdrop { position: fixed; inset: 0; z-index: 55; background: rgba(0,0,0,.45); }
+  body.nav-open .menu-backdrop { display: block; }
   .main { margin-left: 0; }
-  .hero { padding: 24px; }
+  .hero { padding: 24px 24px 24px 62px; }      /* leave room for the fixed kebab */
   .hero h1 { font-size: 28px; }
   .content { padding: 22px; }
+  .lb-close, .lb-prev, .lb-next { width: 40px; height: 40px; font-size: 22px; }
+  .lb-prev { left: 6px; }
+  .lb-next { right: 6px; }
+  .lb-caption { padding: 0 52px; font-size: 13px; }
 }
