@@ -223,7 +223,7 @@ public class IterativeCompensateMode {
         if (freqRespCalArg != null) log.info("Frequency response cal : {}", freqRespCalArg);
 
         FreqRespCalibration freqRespCal = freqRespCalArg != null
-                ? FreqRespCalHelper.loadCsv(freqRespCalArg).left()
+                ? FreqRespCalHelper.loadFrc(freqRespCalArg).left()
                 : null;
 
         // Same de-embed the GUI wizard does: the correction reads the RAW

@@ -232,6 +232,8 @@ public final class HelpViewer {
             "img/freqresp-pane.png",
             "img/FreqResp - Settings.png",
             "img/FreqResp - RIAA IEC.png",
+            "img/FreqResp - Filters.png",
+            "img/FreqResp - Unevenness.png",
             "img/FreqResp - Presets.png",
             "img/FreqResp - Utility.png",
             "img/FreqResp - Load calibration.png",
