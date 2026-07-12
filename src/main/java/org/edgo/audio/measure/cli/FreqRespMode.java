@@ -224,7 +224,7 @@ public class FreqRespMode {
         String csvPath = outputArg != null
                 ? outputArg
                 : new File("results", "filter_cal_" + ts + ".csv").getPath();
-        FreqRespCalHelper.saveCsv(stereo, csvPath, sampleRate, fStart, fEnd, nPoints, amp);
+        FreqRespCalHelper.saveFrc(stereo, csvPath, sampleRate, fStart, fEnd, nPoints, amp);
         log.info("Filter cal CSV saved: {}", csvPath);
 
         String chartPath = csvPath.replaceFirst("\\.csv$", "") + ".png";

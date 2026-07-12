@@ -396,7 +396,7 @@ public final class FreqRespWizardDialog {
                 FreqRespCalHelper.divideInPlace(stereoCal.right(), direct.right());
             }
             FreqRespSweepParams p = dutResult.left().getSweepParams();
-            FreqRespCalHelper.saveCsv(stereoCal,
+            FreqRespCalHelper.saveFrc(stereoCal,
                     picked, dutResult.left().getSampleRate(),
                     p.getStartHz(), p.getStopHz(), p.getSweepPoints(),
                     p.getAmplitudeVrms());
@@ -419,7 +419,7 @@ public final class FreqRespWizardDialog {
     private void doApplyCalibration() {
         if (savedCalPath == null) return;
         try {
-            StereoFreqRespCalibration cal = FreqRespCalHelper.loadCsv(savedCalPath);
+            StereoFreqRespCalibration cal = FreqRespCalHelper.loadFrc(savedCalPath);
             hostView.getCorrectionStore().setCurrent(cal, savedCalPath);
             Preferences prefs = Preferences.instance();
             prefs.setFreqRespPrimaryCalibrationPath(savedCalPath);

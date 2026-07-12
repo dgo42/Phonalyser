@@ -43,7 +43,7 @@ import lombok.Getter;
  * <ul>
  *   <li>Windows: {@code %APPDATA%\Phonalyser}</li>
  *   <li>macOS:   {@code ~/Library/Application Support/Phonalyser}</li>
- *   <li>Linux:   {@code $XDG_CONFIG_HOME/Phonalyser} (or {@code ~/.config/Phonalyser})</li>
+ *   <li>Linux:   {@code ~/.config/Phonalyser}</li>
  * </ul>
  * Logs go under a {@code logs/} child.  The base can be overridden with
  * {@code -Dapp.data.dir=<path>} (used by the automation tests).  Singleton —
@@ -159,11 +159,7 @@ public final class AppPaths {
         if (os.contains("mac")) {
             return Paths.get(home, "Library", "Application Support", APP_DIR_NAME);
         }
-        String xdg = System.getenv("XDG_CONFIG_HOME");
-        Path base = (xdg != null && !xdg.isBlank())
-                ? Paths.get(xdg)
-                : Paths.get(home, ".config");
-        return base.resolve(APP_DIR_NAME);
+        return Paths.get(home, ".config", APP_DIR_NAME);
     }
 
     private Path resolveLogsDir(Path base) {

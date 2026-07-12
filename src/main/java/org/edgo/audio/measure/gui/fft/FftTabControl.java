@@ -1322,7 +1322,7 @@ public final class FftTabControl extends AbstractTabControl {
 
     private boolean loadFileIntoFftCalRow(FftCalRow r, String picked, boolean showErrors) {
         try {
-            StereoFreqRespCalibration cal = FreqRespCalHelper.loadCsv(picked);
+            StereoFreqRespCalibration cal = FreqRespCalHelper.loadFrc(picked);
             r.calibration = cal;
             r.entry.setPath(picked);
             r.pathField.setText(picked);

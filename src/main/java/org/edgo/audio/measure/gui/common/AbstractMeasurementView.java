@@ -148,6 +148,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         /** Phase trace (prefs-driven, FreqResp only). */                  PHASE_TRACE,
         /** RIAA / reference curve trace (FreqResp only). */               RIAA_TRACE,
         /** Compare-mode trace — dark green (FreqResp only). */            COMPARE_TRACE,
+        /** Ideal-filter curve trace (FreqResp only). */                   FILTER_TRACE,
         /** Active state fill of FreqResp toggle buttons. */               BUTTON_ACTIVE,
         /** Rect-zoom rubber band + the focused-view 1-px edge border. */  ACCENT,
     }
@@ -176,6 +177,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         m.put(ColorRole.WARNING_LIT,     0xF00000);
         m.put(ColorRole.WARNING_DIM,     0x202020);
         m.put(ColorRole.COMPARE_TRACE,   0x1B5E20);
+        m.put(ColorRole.FILTER_TRACE,    0x8E24AA);
         m.put(ColorRole.BUTTON_ACTIVE,   0xC0D8F0);
         m.put(ColorRole.ACCENT,          0x8CFF00);   // bright green — visible on light AND dark plots #8Cff00
         DEFAULT_RGB = m;

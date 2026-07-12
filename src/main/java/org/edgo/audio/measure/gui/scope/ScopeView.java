@@ -3400,10 +3400,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                                     double peakVolts) {
         // 1. Tone frequencies.  Single tone: seed from THIS channel's measured
         //    fundamental (the worker measures both channels).  Dual tone: the
-        //    measured f is deliberately cleared (two fundamentals), so take the
-        //    two frequencies the generator actually EMITS (FFT-bin-snapped,
-        //    same source as the beat reconstruction) — exact, so no polish is
-        //    needed.  Bail (paint captured) when nothing usable.
+        //    single-value measured f is deliberately cleared (two fundamentals),
+        //    so prefer the worker's per-channel measured PAIR — read off the raw
+        //    capture, so immune to the DAC/ADC clock offset (the commanded,
+        //    FFT-bin-snapped generator values are exact only in the DAC domain;
+        //    with independent clocks and no FLL they are ppm-off in the ADC
+        //    capture, and over a long fit window that phase drift leaks the
+        //    fundamentals into the residual).  Fall back to the generator-snapped
+        //    values when the worker hasn't published a valid pair yet (cold
+        //    start / worker lag) so the residual doesn't go dark waiting.  Bail
+        //    (paint captured) when nothing usable.
         Preferences prefs = Preferences.instance();
         boolean dual = prefs.getGenSignalForm().isDualTone();
         double f1 = Double.NaN;
@@ -3411,10 +3417,18 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         double seed;
         if (dual) {
             int sr = (int) Math.round(sampleRate);
-            f1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
-                    prefs.getGenDualToneFreq1Hz());
-            f2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
-                    prefs.getGenDualToneFreq2Hz());
+            SignalMeasurements m = measWorker.getLastMeasResult(leftChannel);
+            if (m != null && Double.isFinite(m.getDualF1()) && Double.isFinite(m.getDualF2())
+                    && m.getDualF1() > 0 && m.getDualF2() > 0
+                    && Math.abs(m.getDualF2() - m.getDualF1()) > 0) {
+                f1 = m.getDualF1();
+                f2 = m.getDualF2();
+            } else {
+                f1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
+                        prefs.getGenDualToneFreq1Hz());
+                f2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
+                        prefs.getGenDualToneFreq2Hz());
+            }
             if (!(f1 > 0) || !(f2 > 0) || !(Math.abs(f2 - f1) > 0)) {
                 recordResidualVpp(leftChannel, Double.NaN);
                 return null;
@@ -3539,9 +3553,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 fitA.subtractSineInto(data, fitFrom, fitLen, 0, fs, 0);   // fs = data − A
                 fitB = SineFit.of(fs, 0, fitLen, sampleRate, f2);
             }
-            // fs still holds data − A after the last round; remove B fully.
-            fitB.subtractFullInto(fs, 0, fitLen, 0, dcStable, fs, 0);
-            System.arraycopy(fs, sliceFrom - fitFrom, scratch, 0, sliceLen);
+            // Final subtraction over the DISPLAY SLICE, evaluated analytically
+            // from data exactly like the single-tone path — NOT copied out of
+            // the fit scratch: the fit window is capped at
+            // RESIDUAL_FIT_MAX_SAMPLES, so at large time/div the slice extends
+            // beyond it (bench: 67 200-sample slice vs a 65 536 fit window →
+            // arraycopy out of bounds).  The fitted sines extrapolate exactly
+            // at any k, so the slice tail beyond the fit window subtracts just
+            // as cleanly.
+            fitA.subtractSineInto(data, sliceFrom, sliceLen, sliceFrom - fitFrom, scratch, 0);
+            fitB.subtractFullInto(scratch, 0, sliceLen, sliceFrom - fitFrom, dcStable, scratch, 0);
         } else {
             fit.subtractFullInto(data, sliceFrom, sliceLen, sliceFrom - fitFrom, dcStable, scratch, 0);
         }

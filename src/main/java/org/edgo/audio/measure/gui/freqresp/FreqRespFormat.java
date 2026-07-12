@@ -81,6 +81,23 @@ public class FreqRespFormat {
         return formatSignificant(db, 4);
     }
 
+    /** Compact frequency label for the unevenness readout: sub-kHz values
+     *  read in whole Hz ("20 Hz"), ≥ 1 kHz values switch to kHz with up to
+     *  three significant fraction digits and no trailing zeros
+     *  ("20 kHz", "1.5 kHz", "22.05 kHz"). */
+    public String formatHzReadout(double hz) {
+        if (!Double.isFinite(hz) || hz < 0.0) return "—";
+        if (hz < 1000.0) {
+            return String.format(Locale.ROOT, "%.0f Hz", hz);
+        }
+        double khz = hz / 1000.0;
+        String s = String.format(Locale.ROOT, "%.3f", khz);
+        if (s.indexOf('.') >= 0) {
+            s = s.replaceAll("0+$", "").replaceAll("\\.$", "");
+        }
+        return s + " kHz";
+    }
+
     /** Phase label in degrees, wrapped to {@code [-180, +180]}. */
     public String formatPhase(double deg) {
         if (!Double.isFinite(deg)) return "—";

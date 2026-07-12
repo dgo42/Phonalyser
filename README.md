@@ -14,9 +14,17 @@ averaging and bit-exact playback/capture.
   averaging, selectable windows, and live calibration (`.frc`).
 - **Ultra-low-distortion measurements** — sub-ppm THD with a capable ADC/DAC
   (e.g. E1DA Cosmos), coherent averaging to pull the noise floor down.
-- **Oscilloscope** — triggered time-domain view with Vpp/Vrms/period/frequency stats.
-- **Frequency response** — log-sweep / multitone with deconvolution and calibration.
-- **Signal generator** — sine, dual-tone (IMD), sweep, DDS.
+- **Oscilloscope** — triggered time-domain view with Vpp/Vrms/period/frequency
+  stats, digital-phosphor persistence, glitch trigger, and a **residual view**
+  (captured signal minus a best-fit tone — single or dual — exposing the
+  distortion, noise and glitches hidden under the fundamental).
+- **Frequency response** — Farina log-sweep deconvolution with `.frc`
+  calibration, **RIAA/IEC and ideal-filter overlays** (low/high/band-pass,
+  notch × Butterworth, Chebyshev, inverse Chebyshev, elliptic, Bessel) with
+  measured-vs-ideal compare, and a **band-flatness readout** (−X dB corners
+  or ± deviation over a range).
+- **Signal generator** — sine, dual-tone (IMD), rectangle / triangle, noise,
+  sweeps — all DDS-generated.
 - **DAC pre-distortion calibration** — a closed-loop wizard that iteratively
   cancels the converter's own harmonics (and dual-tone IMD), pushing the
   playback chain's distortion far below what the DAC produces alone.
@@ -87,7 +95,7 @@ the per-user location for each OS:
 |----|-------------|------|
 | **Windows** | `%APPDATA%\Phonalyser\` | `%APPDATA%\Phonalyser\logs\` |
 | **macOS** | `~/Library/Application Support/Phonalyser/` | `~/Library/Application Support/Phonalyser/logs/` |
-| **Linux** | `$XDG_CONFIG_HOME/Phonalyser` (or `~/.config/Phonalyser`) | `/var/log/phonalyser` when writable, otherwise `…/Phonalyser/logs` |
+| **Linux** | `~/.config/Phonalyser` | `/var/log/phonalyser` when writable, otherwise `~/.config/Phonalyser/logs` |
 
 Override the base directory with `-Dapp.data.dir=<path>`.
 
@@ -102,9 +110,9 @@ built-in text. After an app upgrade, delete the dir to re-seed the new version.
 |----|-------------------|------------|
 | **Windows** | `%APPDATA%\Phonalyser\i18n\` | `%APPDATA%\Phonalyser\help\` |
 | **macOS** | `~/Library/Application Support/Phonalyser/i18n/` | `~/Library/Application Support/Phonalyser/help/` |
-| **Linux** | `$XDG_CONFIG_HOME/Phonalyser/i18n` | `$XDG_CONFIG_HOME/Phonalyser/help` |
+| **Linux** | `~/.config/Phonalyser/i18n` | `~/.config/Phonalyser/help` |
 
-(On Linux `$XDG_CONFIG_HOME` defaults to `~/.config`.) UI strings are
+UI strings are
 `messages_<lang>.properties` (e.g. `messages_de.properties`); help pages live
 under `help/<lang>/`.
 
