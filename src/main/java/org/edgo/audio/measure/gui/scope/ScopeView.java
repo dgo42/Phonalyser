@@ -2107,18 +2107,22 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // Visible only at V/div settings where ±FS lands within the canvas
         // (typically ≥ 1 V/div); off-screen lines are naturally clipped.
         // Drawn before the offset track so the brighter offset zero-line
-        // and triangle stay on top when they overlap.
+        // and triangle stay on top when they overlap.  Anchored to the RAW
+        // (virtual-capable) offset — NOT clamp01 — so at fine V/div, where
+        // the offset scroll bound exceeds the canvas (offsetMoveHalfRange),
+        // the FS line keeps tracking and reaches the vertical middle at the
+        // clamp ("a channel moves until ±FS/2 reaches the vertical middle").
         double peakVolts = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
         final int[] FS_DASH = { 2, 6 };
         if (showL) {
             drawFullScaleLines(gc, h, w, FS_DASH,
-                    ScopeFormat.clamp01(prefs.getOscLeftOffsetFrac()), leftVDiv,
+                    prefs.getOscLeftOffsetFrac(), leftVDiv,
                     peakVolts, pixelsPerDivY, color(ColorRole.LEFT_CHANNEL_MID));
         }
         if (showR) {
             drawFullScaleLines(gc, h, w, FS_DASH,
-                    ScopeFormat.clamp01(prefs.getOscRightOffsetFrac()), rightVDiv,
+                    prefs.getOscRightOffsetFrac(), rightVDiv,
                     peakVolts, pixelsPerDivY, color(ColorRole.RIGHT_CHANNEL_MID));
         }
 
@@ -3163,7 +3167,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // own samples, in that channel's darkened colour.  Gated on
         // DUAL_TONE form AND the user's "Reconstructed beat" checkbox
         // inside drawBeatOverlays.
-        drawBeatOverlays(gc, w, h, dispStart, subSampleOffset, dispCount,
+        drawBeatOverlays(gc, w, h, leftBuf, rightBuf, dispStart, subSampleOffset, dispCount,
                 available, showL, showR, leftVDiv, rightVDiv, b.getSampleRate());
     }
 
@@ -3176,6 +3180,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  tab.  Channels are reconstructed-then-drawn sequentially because
      *  {@link #reconstructBeatSignal} reuses one scratch buffer. */
     private void drawBeatOverlays(MeasurementPainter gc, int w, int h,
+                                  float[] dataLeft, float[] dataRight,
                                   int dispStart, double subSampleOffset, int dispCount,
                                   int dataLen, boolean showL, boolean showR,
                                   double leftVDiv, double rightVDiv, int sampleRate) {
@@ -3199,16 +3204,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // A channel showing its RESIDUAL gets no beat overlay — the envelope
         // belongs to the tones the residual just removed, and at residual
         // zoom levels it would dwarf the trace.
-        if (showL && !prefs.isOscLeftResidualEnabled()) {
-            float[] beat = reconstructBeatSignal(leftBuf, dataLen, sampleRate, f1, f2);
+        if (showL && dataLeft != null && !prefs.isOscLeftResidualEnabled()) {
+            float[] beat = reconstructBeatSignal(dataLeft, dataLen, sampleRate, f1, f2);
             drawTrace(gc, beat, dataLen, dispStart, subSampleOffset, dispCount,
                     w, h, h * prefs.getOscLeftOffsetFrac(),
                     peakVolts / leftVDiv * pixelsPerDivY, lineWidth,
                     color(ColorRole.LEFT_BEAT),
                     /* sincEnabled = */ false, /* dcOffset = */ 0.0, /* dotDiameter = */ 0);
         }
-        if (showR && !prefs.isOscRightResidualEnabled()) {
-            float[] beat = reconstructBeatSignal(rightBuf, dataLen, sampleRate, f1, f2);
+        if (showR && dataRight != null && !prefs.isOscRightResidualEnabled()) {
+            float[] beat = reconstructBeatSignal(dataRight, dataLen, sampleRate, f1, f2);
             drawTrace(gc, beat, dataLen, dispStart, subSampleOffset, dispCount,
                     w, h, h * prefs.getOscRightOffsetFrac(),
                     peakVolts / rightVDiv * pixelsPerDivY, lineWidth,
@@ -3470,7 +3475,24 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             fitTo += growRight;
         }
         int fitLen = fitTo - fitFrom;
-        if (fitLen > RESIDUAL_FIT_MAX_SAMPLES) fitLen = RESIDUAL_FIT_MAX_SAMPLES;
+        if (fitLen > RESIDUAL_FIT_MAX_SAMPLES) {
+            // The display slice is longer than the fit cap. Anchoring the capped
+            // fit window at the slice's LEFT edge makes the fitted model
+            // extrapolate one-directionally across the whole (up to 10 s) slice,
+            // so the residual is clean at the left and its amplitude grows
+            // monotonically RIGHTWARD by 2·A·pi·df·t — where df is the
+            // unavoidable sub-Hz frequency error (finite refine precision in the
+            // dual path, which has no phase-slope polish; single-tone leftovers
+            // in the polish). CENTRE the fit window on the display slice instead
+            // so that error is split symmetrically about the middle: the residual
+            // is smallest at the centre and grows equally toward BOTH edges,
+            // halving the peak and removing the "cleaned only at the start"
+            // asymmetry seen at >100 ms/div.
+            fitFrom = sliceFrom + (sliceTo - sliceFrom - RESIDUAL_FIT_MAX_SAMPLES) / 2;
+            if (fitFrom < 0) fitFrom = 0;
+            if (fitFrom > dataLen - RESIDUAL_FIT_MAX_SAMPLES) fitFrom = dataLen - RESIDUAL_FIT_MAX_SAMPLES;
+            fitLen = RESIDUAL_FIT_MAX_SAMPLES;
+        }
         if (fitLen < RESIDUAL_MIN_FIT_SAMPLES) { recordResidualVpp(leftChannel, Double.NaN); return null; }
 
         // 3. Cheap phase-slope frequency polish (single tone only — in dual
@@ -3681,6 +3703,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         renderTraces(gc, w, h, capturedLeft, capturedRight, capturedLen,
                      dispStart, subSampleOffset, dispCount,
                      showL, showR, leftVDiv, rightVDiv, sincL, sincR, dcL, dcR, capturedSampleRate);
+        // Overlay the reconstructed |F1-F2| beat on the HELD frame from the
+        // CAPTURED samples (not live reads), gated identically to the live path
+        // (DUAL_TONE + "Reconstructed beat" checkbox, inside drawBeatOverlays),
+        // so a frozen SINGLE/NORMAL dual-tone shot carries its beat envelope too.
+        drawBeatOverlays(gc, w, h, capturedLeft, capturedRight,
+                dispStart, subSampleOffset, dispCount,
+                capturedLen, showL, showR, leftVDiv, rightVDiv, capturedSampleRate);
         blankBeyondData = false;
     }
 
