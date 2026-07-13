@@ -95,8 +95,12 @@ export function applyCompensationInPlace(r, cal, correctAllBins, analyzer) {
       //   dnL = (n−1)·f1 − (n−2)·f2,   dnH = (n−1)·f2 − (n−2)·f1  (n ≥ 3)
       // correctToneLobe skips non-positive, out-of-cal-range or Nyquist-exceeding
       // tones (same guards ImdAnalyzer.readBinVrms applies).
-      const f1 = r.fundamentalHzRefined;
-      const f2 = r.fundamental2HzRefined;
+      // Sort the refined pair so f1 = lower / f2 = higher: the refined values
+      // may arrive in analyzer-slot order (slot 1 = the HIGHER tone when tones
+      // were entered high-first), and the unsorted pair would flip dnL/dnH so
+      // the real f2−f1 difference product goes negative and gets skipped.
+      const f1 = Math.min(r.fundamentalHzRefined, r.fundamental2HzRefined);
+      const f2 = Math.max(r.fundamentalHzRefined, r.fundamental2HzRefined);
       for (let k = 2; k <= MAX_IMD_ORDER; k++) {
         let fL, fH;
         if (k === 2) {
