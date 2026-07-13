@@ -160,8 +160,10 @@ const SPECS = [
     } },
 
   // ── New help pages this sync: the Tune-notch + DAC-predistortion dialogs ─────────────
-  { id: 'tune-notch', file: 'tune-notch.png', ready: true,
-    shot: (page) => showModal(page, 'tuneNotchModal'), after: (page) => hideModal(page, 'tuneNotchModal') },
+  // tune-notch.png is NOT captured here: the Java help ships a LIVE-capture shot
+  // (a real measured notch response in the plot) that the static modal render can't
+  // match — the web help uses the Java image verbatim (copied by sync-help; per the
+  // maintainer, 2026-07-12). Re-enable only if a live web capture is ever scripted.
   { id: 'dac-predistortion', file: 'dac-predistortion-wizard.png', ready: true,
     shot: (page) => showModal(page, 'predistModal'), after: (page) => hideModal(page, 'predistModal') },
 
@@ -196,6 +198,8 @@ const SPECS = [
   fftTab('fft-tab-load',     'FFT - Load from.png',        'fftLoadPanel'),
   frTab('fr-tab-settings', 'FreqResp - Settings.png',         'frSettings'),
   frTab('fr-tab-riaa',     'FreqResp - RIAA IEC.png',         'frRiaaPanel'),
+  frTab('fr-tab-filters',  'FreqResp - Filters.png',          'frFilterPanel'),
+  frTab('fr-tab-uneven',   'FreqResp - Unevenness.png',       'frUnevenPanel'),
   frTab('fr-tab-presets',  'FreqResp - Presets.png',          'frPresetsPanel'),
   frTab('fr-tab-utility',  'FreqResp - Utility.png',          'frUtility'),
   frTab('fr-tab-cal',      'FreqResp - Load calibration.png', 'frCalPanel'),

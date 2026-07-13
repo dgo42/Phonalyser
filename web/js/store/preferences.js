@@ -76,6 +76,9 @@ function defaultUiFont(style, sizeBump) {
   return family + '|' + (size + sizeBump) + '|' + style;
 }
 
+import { FreqRespFilterTypeParams } from './freqresp-filter-type-params.js';
+import { fromNameOr as persistenceFromNameOr } from '../scope/scope-enums.js';
+
 // --- enum value sets (the legal serialised names, mirroring the Java enums) ---
 const E = {
   AudioBackendType: ['WASAPI', 'WDMKS', 'COREAUDIO', 'JAVASOUND'],
@@ -94,6 +97,9 @@ const E = {
   MagnitudeUnit: ['V', 'V_SQRT_HZ', 'DBV', 'DBFS'],
   AlignGenerator: ['NONE', 'FLL'],
   TabOrientation: ['TOP', 'LEFT'],
+  FilterType: ['LOW_PASS', 'HIGH_PASS', 'BAND_PASS', 'NOTCH'],
+  FilterResponse: ['BESSEL', 'BUTTERWORTH', 'CHEBYSHEV', 'ELLIPTIC', 'INV_CHEBYSHEV'],
+  UnevenMode: ['OFF', 'LEVEL', 'RANGE'],
 };
 
 /** Forms whose name ends in DUAL_TONE / DUAL_TONE_COMP (GenSignalForm.isDualTone). */
@@ -197,6 +203,8 @@ export class OscPreset {
     this.rightAcMode = false;
     this.leftSincInterpEnabled = true;
     this.rightSincInterpEnabled = true;
+    this.leftResidualEnabled = false;
+    this.rightResidualEnabled = false;
     this.leftMainsSuppression = 'NONE';
     this.rightMainsSuppression = 'NONE';
     this.leftLpf = 'NONE';
@@ -259,6 +267,18 @@ export class FreqRespPreset {
     this.reverseRiaa = false;
     this.iecAmendment = false;
     this.compareMode = false;
+    // Filter overlay
+    this.showFilter = false;
+    this.filterCompare = false;
+    this.filterType = 'LOW_PASS';
+    this.filterResponse = 'BUTTERWORTH';
+    this.filterParams = FreqRespFilterTypeParams.fromType('LOW_PASS');
+    // Unevenness
+    this.unevenMode = 'OFF';
+    this.unevenNotch = false;
+    this.unevenDb = 3.0;
+    this.unevenStartHz = 20.0;
+    this.unevenStopHz = 20000.0;
   }
 }
 
@@ -344,6 +364,8 @@ export class Preferences {
     this.oscShowReconstructedBeat = this._bound(false);
     this.oscLeftSincInterpEnabled = this._bound(true);
     this.oscRightSincInterpEnabled = this._bound(true);
+    this.oscLeftResidualEnabled = this._bound(false);
+    this.oscRightResidualEnabled = this._bound(false);
     this.oscLeftMainsSuppression = this._bound('NONE');
     this.oscRightMainsSuppression = this._bound('NONE');
     this.oscLeftLpf = this._bound('NONE');
@@ -355,6 +377,10 @@ export class Preferences {
     this.oscMeasurementAverageSeconds = this._bound(5.0);
     this.oscLineWidth = this._bound(2.0);
     this.oscDotDiameter = this._bound(5);
+    // Display persistence ("digital phosphor") — GPU path only. Mode stored by enum name
+    // (PersistenceMode), manual-seconds used only when mode == MANUAL.
+    this.oscPersistenceMode = this._bound('OFF');
+    this.oscPersistenceManualSeconds = this._bound(1.0);
     this.oscLeftChannelColor = this._bound(0x00d7ff);
     this.oscRightChannelColor = this._bound(0xffd700);
 
@@ -521,6 +547,17 @@ export class Preferences {
     this.freqRespReverseRiaa = this._bound(false);
     this.freqRespIecAmendment = this._bound(false);
     this.freqRespCompareMode = this._bound(false);
+    this.freqRespShowFilter = this._bound(false);   // never persisted (see toMap/fromMap)
+    this.freqRespFilterCompare = this._bound(false);
+    this.freqRespFilterType = this._bound('LOW_PASS');
+    this.freqRespFilterResponse = this._bound('BUTTERWORTH');
+    this.freqRespUnevenMode = this._bound('OFF');
+    this.freqRespUnevenNotch = this._bound(false);
+    this.freqRespUnevenDb = this._bound(3.0);
+    this.freqRespUnevenStartHz = this._bound(20.0);
+    this.freqRespUnevenStopHz = this._bound(20000.0);
+    /** @type {Map<string, FreqRespFilterTypeParams>} keyed by FilterType name (freqRespFilterParamsByType). */
+    this.freqRespFilterParamsByType = new Map();
     this.freqRespApplyCalibration = this._bound(true);
     /** @type {CalibrationEntry[]} */
     this.freqRespCalibrations = [];
@@ -726,6 +763,53 @@ export class Preferences {
     if (this.freqRespPresets.delete(name)) this.save();
   }
 
+  /** Current filter scalars for a type (getFreqRespFilterParams); fromType defaults if none. */
+  getFreqRespFilterParams(type) {
+    if (type == null) return FreqRespFilterTypeParams.fromType('LOW_PASS');
+    const p = this.freqRespFilterParamsByType.get(type);
+    return p != null ? p : FreqRespFilterTypeParams.fromType(type);
+  }
+
+  /** Writes back a type's filter scalars and persists (putFreqRespFilterParams). */
+  putFreqRespFilterParams(type, params) {
+    if (type == null || params == null) return;
+    this.freqRespFilterParamsByType.set(type, params);
+    this.save();
+  }
+
+  /** Serialises one FreqRespFilterTypeParams to its map — the one serialization
+   *  shape, shared by the per-type map and every preset's filterParams. */
+  _writeFilterParams(p) {
+    return {
+      modeOrder: p.modeOrder,
+      rippleDb: p.rippleDb,
+      stopAttenDb: p.stopAttenDb,
+      centerHz: p.centerHz,
+      passHz: p.passHz,
+      stopHz: p.stopHz,
+      orderPassHz: p.orderPassHz,
+      orderRippleDb: p.orderRippleDb,
+      order: p.order,
+      q: p.q,
+    };
+  }
+
+  /** Deserialises one FreqRespFilterTypeParams, seeded by type's defaults and clamped. */
+  _readFilterParams(type, pm) {
+    const p = FreqRespFilterTypeParams.fromType(type);
+    if (isBool(pm.modeOrder)) p.modeOrder = pm.modeOrder;
+    if (isNum(pm.rippleDb)) p.rippleDb = Math.max(0.001, Math.min(20.0, pm.rippleDb));
+    if (isNum(pm.stopAttenDb)) p.stopAttenDb = Math.max(0.0, Math.min(200.0, pm.stopAttenDb));
+    if (isNum(pm.centerHz)) p.centerHz = Math.max(0.0, pm.centerHz);
+    if (isNum(pm.passHz)) p.passHz = Math.max(0.0, pm.passHz);
+    if (isNum(pm.stopHz)) p.stopHz = Math.max(0.0, pm.stopHz);
+    if (isNum(pm.orderPassHz)) p.orderPassHz = Math.max(0.0, pm.orderPassHz);
+    if (isNum(pm.orderRippleDb)) p.orderRippleDb = Math.max(0.001, Math.min(20.0, pm.orderRippleDb));
+    if (isNum(pm.order)) p.order = Math.max(1, Math.min(32, trunc(pm.order)));
+    if (isNum(pm.q)) p.q = Math.max(0.1, Math.min(100.0, pm.q));
+    return p;
+  }
+
   // -------------------------------------------------------------------------
   // validated setters that have side effects in the Java original
   // -------------------------------------------------------------------------
@@ -912,6 +996,8 @@ export class Preferences {
     root.oscShowReconstructedBeat = this.oscShowReconstructedBeat.get();
     root.oscLeftSincInterpEnabled = this.oscLeftSincInterpEnabled.get();
     root.oscRightSincInterpEnabled = this.oscRightSincInterpEnabled.get();
+    root.oscLeftResidualEnabled = this.oscLeftResidualEnabled.get();
+    root.oscRightResidualEnabled = this.oscRightResidualEnabled.get();
     root.oscLeftMainsSuppression = this.oscLeftMainsSuppression.get();
     root.oscRightMainsSuppression = this.oscRightMainsSuppression.get();
     root.oscLeftLpf = this.oscLeftLpf.get();
@@ -965,6 +1051,8 @@ export class Preferences {
     root.oscPlayFromLoop = this.oscPlayFromLoop.get();
     root.oscLineWidth = this.oscLineWidth.get();
     root.oscDotDiameter = this.oscDotDiameter.get();
+    root.oscPersistenceMode = this.oscPersistenceMode.get();
+    root.oscPersistenceManualSeconds = this.oscPersistenceManualSeconds.get();
     root.oscLeftChannelColor = formatHtmlColor(this.oscLeftChannelColor.get());
     root.oscRightChannelColor = formatHtmlColor(this.oscRightChannelColor.get());
     if (this.screenshotFolder.get() != null) root.screenshotFolder = this.screenshotFolder.get();
@@ -980,6 +1068,8 @@ export class Preferences {
           rightAcMode: p.rightAcMode,
           leftSincInterpEnabled: p.leftSincInterpEnabled,
           rightSincInterpEnabled: p.rightSincInterpEnabled,
+          leftResidualEnabled: p.leftResidualEnabled,
+          rightResidualEnabled: p.rightResidualEnabled,
           leftMainsSuppression: p.leftMainsSuppression,
           rightMainsSuppression: p.rightMainsSuppression,
           leftLpf: p.leftLpf,
@@ -1090,6 +1180,15 @@ export class Preferences {
     root.freqRespReverseRiaa = this.freqRespReverseRiaa.get();
     root.freqRespIecAmendment = this.freqRespIecAmendment.get();
     root.freqRespCompareMode = this.freqRespCompareMode.get();
+    // freqRespShowFilter is intentionally NOT persisted (fresh-session default).
+    root.freqRespFilterCompare = this.freqRespFilterCompare.get();
+    root.freqRespFilterType = this.freqRespFilterType.get();
+    root.freqRespFilterResponse = this.freqRespFilterResponse.get();
+    root.freqRespUnevenMode = this.freqRespUnevenMode.get();
+    root.freqRespUnevenNotch = this.freqRespUnevenNotch.get();
+    root.freqRespUnevenDb = this.freqRespUnevenDb.get();
+    root.freqRespUnevenStartHz = this.freqRespUnevenStartHz.get();
+    root.freqRespUnevenStopHz = this.freqRespUnevenStopHz.get();
     root.freqRespApplyCalibration = this.freqRespApplyCalibration.get();
     if (this.freqRespCalibrations.length > 0) {
       root.freqRespCalibrations = this.freqRespCalibrations.map((e) => {
@@ -1156,9 +1255,27 @@ export class Preferences {
           reverseRiaa: p.reverseRiaa,
           iecAmendment: p.iecAmendment,
           compareMode: p.compareMode,
+          showFilter: p.showFilter,
+          filterCompare: p.filterCompare,
+          filterType: p.filterType,
+          filterResponse: p.filterResponse,
+          filterParams: this._writeFilterParams(p.filterParams),
+          unevenMode: p.unevenMode,
+          unevenNotch: p.unevenNotch,
+          unevenDb: p.unevenDb,
+          unevenStartHz: p.unevenStartHz,
+          unevenStopHz: p.unevenStopHz,
         };
       }
       root.freqRespPresets = frMap;
+    }
+
+    if (this.freqRespFilterParamsByType.size > 0) {
+      const fptMap = {};
+      for (const [type, v] of this.freqRespFilterParamsByType) {
+        fptMap[type] = this._writeFilterParams(v);
+      }
+      root.freqRespFilterParamsByType = fptMap;
     }
 
     const perBackendMap = {};
@@ -1223,6 +1340,8 @@ export class Preferences {
     if (isBool(g('oscShowReconstructedBeat'))) this.oscShowReconstructedBeat.set(g('oscShowReconstructedBeat'));
     if (isBool(g('oscLeftSincInterpEnabled'))) this.oscLeftSincInterpEnabled.set(g('oscLeftSincInterpEnabled'));
     if (isBool(g('oscRightSincInterpEnabled'))) this.oscRightSincInterpEnabled.set(g('oscRightSincInterpEnabled'));
+    if (isBool(g('oscLeftResidualEnabled'))) this.oscLeftResidualEnabled.set(g('oscLeftResidualEnabled'));
+    if (isBool(g('oscRightResidualEnabled'))) this.oscRightResidualEnabled.set(g('oscRightResidualEnabled'));
     if (isStr(g('oscLeftMainsSuppression'))) this.oscLeftMainsSuppression.set(enumOr('MainsSuppression', g('oscLeftMainsSuppression'), this.oscLeftMainsSuppression.get()));
     if (isStr(g('oscRightMainsSuppression'))) this.oscRightMainsSuppression.set(enumOr('MainsSuppression', g('oscRightMainsSuppression'), this.oscRightMainsSuppression.get()));
     if (isStr(g('oscLeftLpf'))) this.oscLeftLpf.set(enumOr('LpfMode', g('oscLeftLpf'), this.oscLeftLpf.get()));
@@ -1277,6 +1396,8 @@ export class Preferences {
     if (isBool(g('oscPlayFromLoop'))) this.oscPlayFromLoop.set(g('oscPlayFromLoop'));
     if (isNum(g('oscLineWidth'))) this.oscLineWidth.set(g('oscLineWidth'));
     if (isNum(g('oscDotDiameter'))) this.oscDotDiameter.set(trunc(g('oscDotDiameter')));
+    if (isStr(g('oscPersistenceMode'))) this.oscPersistenceMode.set(persistenceFromNameOr(g('oscPersistenceMode'), this.oscPersistenceMode.get()));
+    if (isNum(g('oscPersistenceManualSeconds'))) this.oscPersistenceManualSeconds.set(g('oscPersistenceManualSeconds'));
     this._loadColor(g('oscLeftChannelColor'), this.oscLeftChannelColor);
     this._loadColor(g('oscRightChannelColor'), this.oscRightChannelColor);
     if (isStr(g('screenshotFolder'))) this.screenshotFolder.set(g('screenshotFolder'));
@@ -1293,6 +1414,8 @@ export class Preferences {
         if (isBool(pm.rightAcMode)) p.rightAcMode = pm.rightAcMode;
         if (isBool(pm.leftSincInterpEnabled)) p.leftSincInterpEnabled = pm.leftSincInterpEnabled;
         if (isBool(pm.rightSincInterpEnabled)) p.rightSincInterpEnabled = pm.rightSincInterpEnabled;
+        if (isBool(pm.leftResidualEnabled)) p.leftResidualEnabled = pm.leftResidualEnabled;
+        if (isBool(pm.rightResidualEnabled)) p.rightResidualEnabled = pm.rightResidualEnabled;
         if (isStr(pm.leftMainsSuppression)) p.leftMainsSuppression = enumOr('MainsSuppression', pm.leftMainsSuppression, p.leftMainsSuppression);
         if (isStr(pm.rightMainsSuppression)) p.rightMainsSuppression = enumOr('MainsSuppression', pm.rightMainsSuppression, p.rightMainsSuppression);
         if (isStr(pm.leftLpf)) p.leftLpf = enumOr('LpfMode', pm.leftLpf, p.leftLpf);
@@ -1402,6 +1525,19 @@ export class Preferences {
     if (isBool(g('freqRespReverseRiaa'))) this.freqRespReverseRiaa.set(g('freqRespReverseRiaa'));
     if (isBool(g('freqRespIecAmendment'))) this.freqRespIecAmendment.set(g('freqRespIecAmendment'));
     if (isBool(g('freqRespCompareMode'))) this.freqRespCompareMode.set(g('freqRespCompareMode'));
+    // freqRespShowFilter is intentionally not loaded (fresh-session default).
+    if (isBool(g('freqRespFilterCompare'))) this.freqRespFilterCompare.set(g('freqRespFilterCompare'));
+    if (isStr(g('freqRespFilterType'))) this.freqRespFilterType.set(enumOr('FilterType', g('freqRespFilterType'), this.freqRespFilterType.get()));
+    if (isStr(g('freqRespFilterResponse'))) this.freqRespFilterResponse.set(enumOr('FilterResponse', g('freqRespFilterResponse'), this.freqRespFilterResponse.get()));
+    if (isStr(g('freqRespUnevenMode'))) this.freqRespUnevenMode.set(enumOr('UnevenMode', g('freqRespUnevenMode'), this.freqRespUnevenMode.get()));
+    if (isBool(g('freqRespUnevenNotch'))) this.freqRespUnevenNotch.set(g('freqRespUnevenNotch'));
+    if (isNum(g('freqRespUnevenDb'))) this.freqRespUnevenDb.set(Math.max(0.001, Math.min(20.0, g('freqRespUnevenDb'))));
+    if (isNum(g('freqRespUnevenStartHz'))) this.freqRespUnevenStartHz.set(g('freqRespUnevenStartHz'));
+    if (isNum(g('freqRespUnevenStopHz'))) this.freqRespUnevenStopHz.set(g('freqRespUnevenStopHz'));
+    if (this.freqRespUnevenStartHz.get() >= this.freqRespUnevenStopHz.get()) {
+      this.freqRespUnevenStartHz.set(20.0);
+      this.freqRespUnevenStopHz.set(20000.0);
+    }
     if (isBool(g('freqRespApplyCalibration'))) this.freqRespApplyCalibration.set(g('freqRespApplyCalibration'));
     if (Array.isArray(g('freqRespCalibrations'))) {
       this.freqRespCalibrations.length = 0;
@@ -1496,7 +1632,26 @@ export class Preferences {
         if (isBool(pm.reverseRiaa)) p.reverseRiaa = pm.reverseRiaa;
         if (isBool(pm.iecAmendment)) p.iecAmendment = pm.iecAmendment;
         if (isBool(pm.compareMode)) p.compareMode = pm.compareMode;
+        if (isBool(pm.showFilter)) p.showFilter = pm.showFilter;
+        if (isBool(pm.filterCompare)) p.filterCompare = pm.filterCompare;
+        if (isStr(pm.filterType)) p.filterType = enumOr('FilterType', pm.filterType, p.filterType);
+        if (isStr(pm.filterResponse)) p.filterResponse = enumOr('FilterResponse', pm.filterResponse, p.filterResponse);
+        if (asMap(pm.filterParams)) p.filterParams = this._readFilterParams(p.filterType, pm.filterParams);
+        if (isStr(pm.unevenMode)) p.unevenMode = enumOr('UnevenMode', pm.unevenMode, p.unevenMode);
+        if (isBool(pm.unevenNotch)) p.unevenNotch = pm.unevenNotch;
+        if (isNum(pm.unevenDb)) p.unevenDb = pm.unevenDb;
+        if (isNum(pm.unevenStartHz)) p.unevenStartHz = pm.unevenStartHz;
+        if (isNum(pm.unevenStopHz)) p.unevenStopHz = pm.unevenStopHz;
         this.freqRespPresets.set(key, p);
+      }
+    }
+
+    if (asMap(g('freqRespFilterParamsByType'))) {
+      this.freqRespFilterParamsByType.clear();
+      for (const [key, pm] of Object.entries(g('freqRespFilterParamsByType'))) {
+        const type = enumOr('FilterType', key, null);
+        if (type == null || !asMap(pm)) continue;
+        this.freqRespFilterParamsByType.set(type, this._readFilterParams(type, pm));
       }
     }
 

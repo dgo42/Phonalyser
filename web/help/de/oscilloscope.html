@@ -274,8 +274,10 @@
   <h3 id="scope-tab-left">Tab „Links"</h3>
   <p><img src="img/Oscilloscope - Left.png" alt="Tab für den linken Kanal"/></p>
   <p>Bedienelemente für den linken Kanal.  Enthält den Kanal-Umschalter,
-     V/div-Selektor, AC/DC-Schaltfläche und Sin/Lin-Kontrollkästchen.  Gleicher
-     Aufbau wie der Tab <a href="#scope-tab-right">Rechts</a>.</p>
+     V/div-Selektor, AC/DC-Schaltfläche, Sin/Lin-Kontrollkästchen,
+     Residuum-Kontrollkästchen sowie die kanalspezifischen Auswahllisten
+     <b>Netz</b> und <b>LPF</b>.  Gleicher Aufbau wie der Tab
+     <a href="#scope-tab-right">Rechts</a>.</p>
 
   <h4 id="scope-channel-toggle">L (Kanal aktivieren)</h4>
   <p>Quadratischer Umschalter zum Aktivieren / Deaktivieren des Kanals.  Wenn
@@ -305,10 +307,81 @@
      bei geringerem Abstand sehen beide identisch aus, und Sinc kostet nur
      mehr CPU.</p>
 
+  <h4 id="scope-residual">Residuum</h4>
+  <p>Kanalspezifisches Kontrollkästchen.  Wenn aktiviert, wird das Signal des
+     Kanals durch das <b>Residuum</b> ersetzt: das erfasste Signal minus einem
+     bestangepassten Einzelton.  Die Frequenz des Tons stammt aus der
+     Frequenzmessung des Oszilloskops, und seine Amplitude und Phase werden über
+     das dargestellte Fenster angepasst — der synthetisierte Ton ist somit
+     phasengleich mit der getriggerten Darstellung, und auf dem Bildschirm
+     bleiben die <b>Verzerrung, das Rauschen, der Brumm und die Glitches</b>
+     übrig, die sich unter der Grundschwingung verbergen.  Der <b>DC-Pegel
+     bleibt erhalten</b> — nur der Ton wird entfernt — daher <a href="#scope-acdc">AC</a>
+     verwenden, wenn das Residuum auf null zentriert werden soll.</p>
+  <p>Das Residuum funktioniert auch mit einem <b>Zweiton</b>-Signal.  Bei zwei
+     Grundschwingungen benennt die Frequenzmessung keinen einzelnen Ton mehr,
+     daher werden die beiden Frequenzen <b>aus dem erfassten Signal selbst
+     gemessen</b> (ausgehend von den Werten des Generators und anschließend am
+     erfassten Signal verfeinert) — dadurch ist die Subtraktion unempfindlich
+     dagegen, dass DAC und ADC mit unterschiedlichen Takten laufen; die Werte des
+     Generators werden nur verwendet, bis eine Messung vorliegt.  <b>Beide Töne
+     werden angepasst</b> — die beiden Fits werden abwechselnd nachgeführt, damit
+     keiner in den anderen leckt — und beide
+     abgezogen; auf dem Bildschirm bleiben die
+     <b>Intermodulationsprodukte</b>, das Rauschen und die Glitches unter dem
+     Tonpaar.  Das Fit-Fenster wird automatisch so bemessen, dass es mindestens
+     zwei Schwebungszyklen von |F1&nbsp;−&nbsp;F2| umfasst; sind beide
+     Frequenzen gleich (keine Schwebung), wird das erfasste Signal unverändert
+     dargestellt.</p>
+  <p>Triggerung und die Frequenz- / Perioden-Anzeigen arbeiten weiterhin am
+     erfassten Signal, und auch die Vpp- / Vrms-Anzeigen beschreiben weiterhin
+     das erfasste Signal — nur das dargestellte Signal ändert sich.  Bei
+     <a href="#scope-autosetup">Auto-Setup</a> übernimmt ein Kanal, der sein
+     Residuum zeigt, seine vertikale Skalierung aus dem Spitze-Spitze-Wert des
+     <b>Residuums</b>, während Zeitbasis und Trigger weiterhin aus dem erfassten
+     Signal abgeleitet werden.  Wenn die Einstellungs-Tab-Leiste eingeklappt
+     ist, zeigt die Kachel des Kanals einen <b>residual</b>-Marker an, solange
+     der Modus aktiv ist.</p>
+  <p>Ein Kanal im Residuum-Modus erhält keine
+     <a href="#scope-trigger-beat">rekonstruierte Schwebungs</a>-Überlagerung —
+     die Schwebungshüllkurve gehört zu genau den Tönen, die das Residuum gerade
+     entfernt hat.</p>
+
+  <h4 id="scope-mains">Netz</h4>
+  <p>Auswahlliste, die einen kanalspezifischen Filter zur
+     <b>Netzbrumm-Unterdrückung</b> anwendet, live bei der Netzfrequenz
+     nachgeführt (50 / 60&nbsp;Hz und deren Oberwellen).  Sie filtert das
+     dargestellte Signal sowie das, worauf Trigger und Messungen wirken, während
+     der <b>DC-Pegel erhalten bleibt</b>.  Vier Optionen:</p>
+  <ul>
+    <li><b>None</b> — Durchlass, keine Unterdrückung.</li>
+    <li><b>IIR comb</b> — ein frequenznachgeführtes Rückkopplungs-Kammfilter,
+        das die Netzgrundschwingung und jede Oberwelle auskerbt.</li>
+    <li><b>Sync subtract</b> — periodensynchrone Subtraktion der sich
+        wiederholenden Brummwellenform.</li>
+    <li><b>LMS canceller</b> — ein adaptiver Least-Mean-Squares-Netzstörungs-Kompensator.</li>
+  </ul>
+  <p>Wie das nachgeführte Kammfilter arbeitet, ist in der
+     <a href="theory/oscilloscope.html#mains">Funktionsweise</a> beschrieben.</p>
+
+  <h4 id="scope-lpf">LPF</h4>
+  <p>Auswahlliste, die eine kanalspezifische <b>Hochfrequenz-Bereinigung</b> auf
+     das dargestellte Signal anwendet.  Drei Optionen:</p>
+  <ul>
+    <li><b>None</b> — aus.</li>
+    <li><b>80kHz</b> — ein 80&nbsp;kHz-Tschebyscheff-Tiefpass, der kontinuierliche
+        Hochfrequenzanteile oberhalb der Grenzfrequenz entfernt.  Er hat <b>keine
+        Wirkung, wenn 80&nbsp;kHz über der Nyquist-Frequenz der Erfassung liegt</b>
+        (bei niedrigen Abtastraten gibt es oberhalb von 80&nbsp;kHz nichts zu
+        entfernen).</li>
+    <li><b>Despike</b> — ein Medianfilter, das impulsartige Störspitzen ohne das
+        Überschwingen entfernt, das ein lineares Filter hinzufügen würde.</li>
+  </ul>
+
   <h3 id="scope-tab-right">Tab „Rechts"</h3>
   <p><img src="img/Oscilloscope - Right.png" alt="Tab für den rechten Kanal"/></p>
   <p>Identischer Aufbau wie der Tab „Links" — Kanal-Umschalter, V/div,
-     AC/DC und Sin/Lin, jedoch für den rechten Kanal.</p>
+     AC/DC, Sin/Lin und Residuum, jedoch für den rechten Kanal.</p>
 
   <h3 id="scope-tab-horizontal">Tab „Horizontal"</h3>
   <p><img src="img/Oscilloscope - Horizontal.png" alt="Tab Horizontal"/></p>
@@ -407,10 +480,18 @@
      <a href="generator.html#generator-dualtone">Zwei&nbsp;Töne</a> eingestellt
      ist</b> (für jede andere Wellenform ausgegraut).  Wenn aktiviert, überlagert
      das Oszilloskop die <b>abgedimmte |f₁−f₂|-Schwebungshüllkurve</b> der
-     beiden Töne über das Live-Signal, in der Farbe des Trigger-Kanals —
-     so kann die langsame Schwebung, die die beiden nah beieinander liegenden
-     Töne erzeugen, sichtbar gemacht und der Trigger darauf stabilisiert
-     werden.</p>
+     beiden Töne über das Live-Signal — so kann die langsame Schwebung, die die
+     beiden nah beieinander liegenden Töne erzeugen, sichtbar gemacht und der
+     Trigger darauf stabilisiert werden.  Die Überlagerung wird <b>pro
+     angezeigtem Kanal</b> gezeichnet, jeweils in einem <b>abgedimmten Ton der
+     eigenen Signalfarbe dieses Kanals</b>, sodass jedes Zwei-Töne-Signal seine
+     eigene, visuell zugeordnete Hüllkurve trägt.</p>
+  <p>Sie ist in zwei
+     Fällen <b>ausgeblendet</b>: solange der <b>Generator gestoppt ist</b>
+     (ohne Töne gibt es keine Schwebung, und die Rekonstruktion würde nur
+     Rauschen nachzeichnen) sowie auf jedem Kanal, der sein
+     <a href="#scope-residual">Residuum</a> zeigt (die Hüllkurve gehört zu den
+     Tönen, die dieser Kanal gerade entfernt hat).</p>
 
   <h3 id="scope-tab-presets">Tab „Voreinstellungen"</h3>
   <p><img src="img/Oscilloscope - Presets.png" alt="Tab Voreinstellungen"/></p>

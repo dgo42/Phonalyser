@@ -50,10 +50,14 @@ const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const colorHex = (c) => '#' + (c & 0xffffff).toString(16).padStart(6, '0');
 
 export class FftView {
-  constructor(canvas, { prefs = null, topDb = 0, botDb = -200, genActive = () => false } = {}) {
+  constructor(canvas, { prefs = null, topDb = 0, botDb = -200, genActive = () => false, correction = null } = {}) {
     this.cv = canvas; this.g = canvas.getContext('2d');
     this.prefs = prefs;
     this.topDb = topDb; this.botDb = botDb;
+    // Java FftView.correctionStore — the loaded .frc de-embed cascade (FftViewCorrection), injected
+    // so the IMD path can draw the blue "before-cal" dots at dbFs + sumCalDbAt (drawImdDots:1952-1962).
+    // Null in tests that construct FftView without it (the blue IMD pass is then skipped).
+    this.correction = correction;
     // Java FftView.isGeneratorActive() — true while the generator is producing a
     // signal. Gates the clock-drift (ΔF / Δf1 / Δf2) rows of the distortion tables.
     this._genActive = genActive;
@@ -632,24 +636,109 @@ export class FftView {
     if (imd) {
       // Dual-tone: F1/F2 + per-order lower/upper intermod products d2L..dnH (Java drawImdDots).
       // Product levels are dBV → de-reference to the dBFS axis with the dBV offset. Drop dots
-      // outside the freq/mag window (no clamping, matching Java).
+      // outside the freq/mag window (no clamping, matching Java). Same marker styling as the
+      // single-tone path — HARMONIC_DOT colour + harmonicDotDiameter for every dot (Java
+      // drawImdDots:1965 / plotDotAt:2088-2090).
       const refDbV = p ? p.dbvOffsetDb : 0;
-      g.fillStyle = '#c01c28'; g.strokeStyle = '#c01c28'; g.lineWidth = 1;
-      const imdDot = (fHz, dbfs, label) => {
+      const dotColor = p ? colorHex(p.fftHarmonicDotColor.get()) : '#ff0000';
+      const dotR = Math.max(2, (p ? p.fftHarmonicDotDiameter.get() : 9) / 2);
+      // Java plotDotAt: fill the dot in HARMONIC_DOT; the fill colour is set immediately
+      // before each arc (like the single-tone dotAt) so _dotLabel's halo strokeStyle /
+      // fillStyle can't clobber later dots. No vertical stem — Java draws none.
+      const imdDot = (fHz, dbfs) => {
         if (!(fHz >= fMin && fHz <= fMax) || !Number.isFinite(dbfs)) return;
         const v = cv(dbfs), t = this._magToYFraction(v, magTop, magBot, magUnit);
         if (t < 0 || t > 1) return;
-        const mx = x(fHz), my = y(v);
-        g.beginPath(); g.arc(mx, my, 3, 0, 2 * Math.PI); g.fill();
-        g.beginPath(); g.moveTo(mx, my); g.lineTo(mx, plot.y + plot.height); g.stroke();
-        if (label) this._dotLabel(g, label, mx, my - 7);
+        g.fillStyle = dotColor; g.beginPath(); g.arc(x(fHz), y(v), dotR, 0, 2 * Math.PI); g.fill();
       };
-      imdDot(imd.f1Hz, imd.f1DbFs, 'F1');
-      imdDot(imd.f2Hz, imd.f2DbFs, 'F2');
+      // Blue "before-cal" dots FIRST, under the red post-cal dots, so the .frc correction gap is
+      // visible — one per IMD dot position (F1, F2, dnL[2..5], dnH[2..5]) at dbFs + sumCalDbAt,
+      // only when a calibration file is loaded (Java drawImdDots:1948-1962). Same freq/finite/mag
+      // gates as imdDot; channel pick off result.channelLeft (matching the de-embed, apply()).
+      if (this.correction && this.correction.frcEntries.length) {
+        const wantLeft = result.channelLeft;
+        g.fillStyle = p ? colorHex(p.fftBeforeCalDotColor.get()) : '#000080';
+        const preDot = (fHz, dbfs) => {
+          if (!(fHz >= fMin && fHz <= fMax) || !Number.isFinite(dbfs)) return;
+          const preDbFs = dbfs + this.correction.sumCalDbAt(wantLeft, fHz);
+          const v = cv(preDbFs), t = this._magToYFraction(v, magTop, magBot, magUnit);
+          if (t < 0 || t > 1) return;
+          g.beginPath(); g.arc(x(fHz), y(v), dotR, 0, 2 * Math.PI); g.fill();
+        };
+        preDot(imd.f1Hz, imd.f1DbFs);
+        preDot(imd.f2Hz, imd.f2DbFs);
+        if (imd.dnLHz) {
+          for (let k = 2; k < imd.dnLHz.length; k++) {
+            preDot(imd.dnLHz[k], imd.dnLDbV[k] - refDbV);
+            preDot(imd.dnHHz[k], imd.dnHDbV[k] - refDbV);
+          }
+        }
+      }
+      imdDot(imd.f1Hz, imd.f1DbFs);
+      imdDot(imd.f2Hz, imd.f2DbFs);
       if (imd.dnLHz) {
         for (let k = 2; k < imd.dnLHz.length; k++) {
-          imdDot(imd.dnLHz[k], imd.dnLDbV[k] - refDbV, 'd' + k + 'L');
-          imdDot(imd.dnHHz[k], imd.dnHDbV[k] - refDbV, 'd' + k + 'H');
+          imdDot(imd.dnLHz[k], imd.dnLDbV[k] - refDbV);
+          imdDot(imd.dnHHz[k], imd.dnHDbV[k] - refDbV);
+        }
+      }
+      // F1 / F2 labels — "F1 <freq>" / "F2 <freq>" with overlap avoidance (Java
+      // drawImdDots:1976-2031). Each label is anchored just above its own dot; when the two
+      // label boxes overlap the lower dot's label slides into the gap between the higher
+      // label's bottom and the lower dot if it fits, else stacks one line above the higher
+      // label. Both labels stay strictly above their own dots and clamp into the plot
+      // horizontally. _dotLabel draws the halo text (baseline bottom, centred on cx).
+      const dotPos = (fHz, dbfs) => {
+        if (!(fHz >= fMin && fHz <= fMax) || !Number.isFinite(dbfs)) return null;
+        const v = cv(dbfs), t = this._magToYFraction(v, magTop, magBot, magUnit);
+        if (t < 0 || t > 1) return null;
+        return { x: x(fHz), y: y(v) };
+      };
+      const pos1 = dotPos(imd.f1Hz, imd.f1DbFs);
+      const pos2 = dotPos(imd.f2Hz, imd.f2DbFs);
+      if (pos1 || pos2) {
+        const t1 = 'F1 ' + this._fmtFreq(imd.f1Hz);
+        const t2 = 'F2 ' + this._fmtFreq(imd.f2Hz);
+        // Match _dotLabel's font so measureText widths align with the rendered text.
+        g.font = '10px "Segoe UI", sans-serif';
+        const w1 = g.measureText(t1).width, w2 = g.measureText(t2).width;
+        const LBL_H = 12;         // Java ext.y — 10px label height (font + descent)
+        const margin = 4;         // dot-to-label vertical gap (Java)
+        const gap = 2;            // label-to-label vertical gap (Java)
+        let ly1 = pos1 ? pos1.y - margin - LBL_H : 0;   // label TOP y
+        let ly2 = pos2 ? pos2.y - margin - LBL_H : 0;
+        if (pos1 && pos2) {
+          const bot1 = ly1 + LBL_H, bot2 = ly2 + LBL_H;
+          const overlap = !(bot1 + gap <= ly2 || bot2 + gap <= ly1);
+          if (overlap) {
+            if (pos1.y <= pos2.y) {
+              const candTop = bot1 + gap;
+              ly2 = (candTop + LBL_H + margin <= pos2.y) ? candTop : ly1 - gap - LBL_H;
+            } else {
+              const candTop = bot2 + gap;
+              ly1 = (candTop + LBL_H + margin <= pos1.y) ? candTop : ly2 - gap - LBL_H;
+            }
+          }
+        }
+        const pR = plot.x + plot.width;
+        // Java clamps the label's LEFT edge into [plot.x, plot.x+width-ext.x]; _dotLabel
+        // centres on cx, so pass the clamped box centre. It also clamps the top to plot.y.
+        if (pos1) {
+          const lx = Math.max(plot.x, Math.min(pR - w1, pos1.x - w1 / 2));
+          this._dotLabel(g, t1, lx + w1 / 2, Math.max(plot.y, ly1) + LBL_H);
+        }
+        if (pos2) {
+          const lx = Math.max(plot.x, Math.min(pR - w2, pos2.x - w2 / 2));
+          this._dotLabel(g, t2, lx + w2 / 2, Math.max(plot.y, ly2) + LBL_H);
+        }
+      }
+      // dnL / dnH labels keep the simple above-dot placement (Java drawHarmonicLabel).
+      if (imd.dnLHz) {
+        for (let k = 2; k < imd.dnLHz.length; k++) {
+          const lp = dotPos(imd.dnLHz[k], imd.dnLDbV[k] - refDbV);
+          if (lp) this._dotLabel(g, 'd' + k + 'L', lp.x, lp.y - dotR - 4);
+          const hp = dotPos(imd.dnHHz[k], imd.dnHDbV[k] - refDbV);
+          if (hp) this._dotLabel(g, 'd' + k + 'H', hp.x, hp.y - dotR - 4);
         }
       }
     }

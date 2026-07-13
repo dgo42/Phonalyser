@@ -119,6 +119,12 @@ export class GeneratorController {
     // subscribers (the scope reconstructed-beat gate, the FFT drain-skip).
     MessageBus.instance().subscribe(Events.GENERATOR_FREQ_TRIM,
       (freqHz) => this._applyFllTrim(freqHz));
+    // Second-tone FLL trim (Java FftController publishes GENERATOR_FREQ_TRIM_2 for the dual-tone
+    // fll2 loop): the FFT consumer steers tone 2 independently; the generator applies it to the
+    // SAME running worklet as a phase-continuous second-tone retune. Only fires in dual-tone mode
+    // (nobody publishes it otherwise), so no form guard is needed here.
+    MessageBus.instance().subscribe(Events.GENERATOR_FREQ_TRIM_2,
+      (freqHz) => this._applyFllTrim2(freqHz));
   }
 
   /** Stops BOTH output engines — the DDS tone and the file player (Java
@@ -154,6 +160,13 @@ export class GeneratorController {
    *  DDS worklet. No-op when the generator isn't running (dropped, like postGen). */
   _applyFllTrim(freqHz) {
     if (this._genOn && this.genNode) this.genNode.port.postMessage({ frequency: freqHz });
+  }
+
+  /** Applies a SECOND-tone FLL trim (GENERATOR_FREQ_TRIM_2) to the running DDS worklet. Posts
+   *  { frequency2 } so the dds-processor kernel retunes tone 2 phase-continuously
+   *  (setDualToneFrequency2), like {@link #_applyFllTrim} does tone 1. No-op when not running. */
+  _applyFllTrim2(freqHz) {
+    if (this._genOn && this.genNode) this.genNode.port.postMessage({ frequency2: freqHz });
   }
 
   /** The frequency the generator actually emits for the current form — faithful port of
@@ -218,6 +231,21 @@ export class GeneratorController {
     return Math.round(raw / binHz) * binHz;
   }
 
+  /** {@link #snapToRate} for the SECOND dual-tone tone (config.tone2Hz). Mirrors Java
+   *  FftController.applyFrequencyLock:273-274, which snaps t2 with FftBinSnap.snapIfEnabled
+   *  (DUAL_TONE) at slot.sampleRate. Same gates as snapToRate but only ever active for a
+   *  dual-tone form (there is no tone 2 otherwise), and parameterised on the CAPTURE rate for
+   *  the same two-independent-clocks reason the FLL targets the capture-rate bin, not the DAC's. */
+  snapToRate2(sampleRate) {
+    const c = this.config;
+    const raw = c.tone2Hz;
+    if (!isDualTone(c.form)) return raw;
+    if (!c.snapToBin) return raw;
+    const binHz = sampleRate / c.fftSize;
+    if (c.fftSize < 8 || sampleRate <= 0 || binHz <= 0) return raw;
+    return Math.round(raw / binHz) * binHz;
+  }
+
   /** Derives binW + the generator emit frequency (`snapped`) + its analysis bin (`fundBin`).
    *  `snapped` is the form-appropriate emit frequency and drives BOTH the DDS and the FFT/scope
    *  geometry, so what is played, measured and shown stay consistent. */
@@ -247,6 +275,19 @@ export class GeneratorController {
     this.computeAnalysisFreqs();
     this._status('opening output context + device…');
     try {
+      // Probe the OS/default-device preferred rate BEFORE opening the real context. A context
+      // created WITHOUT an explicit sampleRate reports the platform's native output rate, whereas
+      // one created WITH `sampleRate: c.outRate` is granted that rate exactly (or the constructor
+      // throws) and then the browser SILENTLY resamples the rendered stream down to whatever the
+      // Windows shared-mode mix rate of the device is — an invisible stage the native Java
+      // generator has no equivalent of. Comparing the two rates lets us surface that hidden
+      // resampling. Cheap: opened and closed immediately, never wired to anything.
+      let probeRate = 0;
+      try {
+        const probe = new AudioContext({ latencyHint: 'playback' });
+        probeRate = probe.sampleRate;
+        await probe.close();
+      } catch (_) { probeRate = 0; /* rate unknown — continue silently */ }
       // OUTPUT context (DAC) — generator at the DAC's native rate. Opened through the
       // bounded-retry helper so a NotReadable/Abort contention (a just-stopped context still
       // releasing the OS DAC) is retried before it surfaces to the user.
@@ -262,12 +303,25 @@ export class GeneratorController {
         const st = this.outCtx.state;
         if (st === 'interrupted' || st === 'closed') this._reportDeviceError('AudioContext state=' + st);
       });
-      // The browser may grant a different rate than requested; re-resolve the emit frequency
-      // (esp. the RECTANGLE sample-period alignment) against the ACTUAL context rate.
+      // The context is granted c.outRate exactly (see the probe comment above); re-resolve the
+      // emit frequency (esp. the RECTANGLE sample-period alignment) against the ACTUAL rate.
       this.outSampleRate = this.outCtx.sampleRate;
       this.computeAnalysisFreqs();
-      if (this.outCtx.sampleRate !== c.outRate) {
-        debug(`[generator] output rate is ${this.outCtx.sampleRate} Hz (requested ${c.outRate}) — browser/OS capped it; set the Windows output device to ${c.outRate} Hz to avoid resampling/slowdown`);
+      // Surface the hidden browser+Windows resampling. The probe rate describes the DEFAULT output
+      // device only, so a hard "device runs at X Hz" claim is honest ONLY when we're on the default
+      // sink. With a specific sink selected (c.outDeviceId set, non-'default'), the probe may not
+      // describe THAT device — so we drop to a softer debug-only "cannot verify" hint rather than
+      // risk asserting a wrong rate on the status line.
+      const ctxRate = this.outCtx.sampleRate;
+      const defaultSink = !c.outDeviceId || c.outDeviceId === 'default';
+      if (probeRate > 0 && probeRate !== ctxRate && defaultSink) {
+        const msg = `WARNING: output device runs at ${probeRate} Hz — the browser silently resamples ${ctxRate} Hz to it; set the Windows output device format to ${ctxRate} Hz for a clean signal`;
+        this._status(msg);
+        debug(`[generator] ${msg}`);
+      } else if (probeRate > 0 && probeRate !== ctxRate) {
+        debug(`[generator] default device runs at ${probeRate} Hz but the selected sink's rate cannot be verified from a rate-unspecified probe; if it isn't ${ctxRate} Hz the browser silently resamples ${ctxRate} Hz to it — set the Windows output device format to ${ctxRate} Hz for a clean signal`);
+      } else if (probeRate === 0) {
+        debug(`[generator] could not probe the output device rate; if it isn't ${ctxRate} Hz the browser silently resamples ${ctxRate} Hz to it — set the Windows output device format to ${ctxRate} Hz for a clean signal`);
       }
       await this.outCtx.audioWorklet.addModule(new URL('./worklets/dds-processor.js', import.meta.url));
       this.genNode = new AudioWorkletNode(this.outCtx, 'dds-processor', {

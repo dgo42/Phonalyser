@@ -25,6 +25,22 @@ const DST = path.resolve(here, '../help');                       // web/help (we
 
 const exists = async (p) => { try { await access(p); return true; } catch { return false; } };
 
+// Web-ONLY help pages: they live only under web/help/<lang>/, have no Java source, and
+// document a browser-specific concern the desktop app doesn't have. The copy loop above
+// never touches them (it only mirrors Java entries — web-only files simply survive), but
+// the Java-sourced index.html is OVERWRITTEN every import and therefore carries no link to
+// them, so we re-inject a TOC entry here. `after` is the anchor href (a language-invariant
+// link already in the Modules TOC) to insert AFTER; `title` is the per-language link text.
+const WEB_ONLY_PAGES = [{
+  file: 'web-input-device.html',
+  after: 'preferences.html',
+  title: {
+    en: '<b>Windows input device</b> — set the capture (and playback) sample rate the browser can\'t choose',
+    de: '<b>Windows-Eingabegerät</b> — die Abtastrate für Aufnahme (und Wiedergabe) setzen, die der Browser nicht wählen kann',
+    uk: '<b>Вхідний пристрій Windows</b> — задати частоту дискретизації захоплення (та відтворення), яку браузер не обирає',
+  },
+}];
+
 const langs = (await readdir(SRC, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
 for (const lang of langs) {
   const srcLang = path.join(SRC, lang);
@@ -67,6 +83,29 @@ for (const lang of langs) {
   await cp(VIEWER, path.join(langDir, 'help-viewer.js'));
   await injectViewer(langDir, langDir);
 }
+
+// Re-inject the TOC link(s) for every web-only page into each language's (freshly
+// overwritten) index.html, idempotently: skip a page whose href already appears, else insert
+// its <a> line immediately after the anchor link, matching that link's indentation.
+async function injectTocLinks() {
+  for (const lang of langs) {
+    const idx = path.join(DST, lang, 'index.html');
+    if (!await exists(idx)) continue;
+    let html = await readFile(idx, 'utf8');
+    const orig = html;
+    for (const page of WEB_ONLY_PAGES) {
+      if (html.includes(`href="${page.file}"`)) continue;   // already linked — idempotent
+      const anchorRe = new RegExp(`([ \\t]*)(<a href="${page.after}">[\\s\\S]*?</a>)`);
+      const m = anchorRe.exec(html);
+      if (!m) { console.warn(`  ! ${lang}/index.html: anchor '${page.after}' not found; ${page.file} link not injected`); continue; }
+      const indent = m[1];
+      const link = `\n${indent}<a href="${page.file}">${page.title[lang] ?? page.title.en}</a>`;
+      html = html.slice(0, m.index + m[0].length) + link + html.slice(m.index + m[0].length);
+    }
+    if (html !== orig) await writeFile(idx, html);
+  }
+}
+await injectTocLinks();
 
 console.log(`imported help: ${SRC} -> ${DST}`);
 console.log(`  languages: ${langs.join(', ')}  (img/ preserved, ?hl highlighter injected)`);

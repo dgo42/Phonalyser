@@ -5,7 +5,7 @@
  */
 
 // Faithful port of the .frc store: org.edgo.audio.measure.dsp.FreqRespCalHelper
-// saveCsv / loadCsv (the on-disk filter-calibration format) plus the in-memory
+// saveFrc / loadFrc (the on-disk filter-calibration format) plus the in-memory
 // shapes from FreqRespCalibration / StereoFreqRespCalibration.
 //
 // The .frc file is a comma-separated, dot-decimal text file: header comment
@@ -18,6 +18,10 @@
 
 /** .frc format version stamped in the header (FileVersions.FRC_CALIBRATION). */
 export const FRC_FORMAT_VERSION = 1;
+
+/** Header key for the capture sample rate, written by {@link saveFrc} and read
+ *  back by {@link readSampleRateHz} (FreqRespCalHelper.SAMPLE_RATE_HEADER_KEY). */
+const SAMPLE_RATE_HEADER_KEY = 'sample_rate_hz';
 
 /**
  * One channel's filter calibration on a common frequency grid. Mirrors
@@ -53,7 +57,7 @@ export const FRC_FORMAT_VERSION = 1;
 
 /**
  * Serialises a stereo filter calibration to .frc text. Faithful port of
- * FreqRespCalHelper.saveCsv: writes the '#'-prefixed header block then the
+ * FreqRespCalHelper.saveFrc: writes the '#'-prefixed header block then the
  * 5-column data rows (Locale.US formatting: dot decimal, %.6f freq/mag, %.4f
  * phase). Magnitudes ≤ 0 are written as -300 dB.
  *
@@ -76,7 +80,7 @@ export function saveFrc(stereo, meta = {}) {
   const lines = [];
   lines.push('# kind=filter_calibration');
   lines.push('# format_version=' + FRC_FORMAT_VERSION);
-  lines.push('# sample_rate_hz=' + Math.trunc(sampleRate));
+  lines.push('# ' + SAMPLE_RATE_HEADER_KEY + '=' + Math.trunc(sampleRate));
   lines.push('# sweep_start_hz=' + sweepStart.toFixed(6));
   lines.push('# sweep_end_hz=' + sweepEnd.toFixed(6));
   lines.push('# sweep_points=' + Math.trunc(sweepPoints));
@@ -97,7 +101,7 @@ export function saveFrc(stereo, meta = {}) {
 
 /**
  * Parses a .frc file written by {@link saveFrc}. Faithful port of
- * FreqRespCalHelper.loadCsv: skips '#' comments and the column header, accepts
+ * FreqRespCalHelper.loadFrc: skips '#' comments and the column header, accepts
  * comma- or legacy semicolon-separated rows, tolerates a comma decimal mark per
  * field, and converts dB → linear and degrees → radians.
  *
@@ -138,4 +142,29 @@ export function loadFrc(text) {
     left: { freqs, magLin: magL, phaseRad: phaseL },
     right: { freqs, magLin: magR, phaseRad: phaseR },
   };
+}
+
+/**
+ * Reads the capture sample rate recorded in a .frc file's leading
+ * '# sample_rate_hz=' header comment (written by {@link saveFrc}). Only the
+ * header block is scanned — the scan stops at the first non-comment line.
+ * Returns 0 when the header is absent or unparseable (legacy files), so callers
+ * can fall back. Faithful port of FreqRespCalHelper.readSampleRateHz — the web
+ * takes the already-decoded file TEXT (no OS paths in the browser).
+ *
+ * @param {string} text  Raw file contents.
+ * @returns {number} The header sample rate, or 0 when absent / garbled.
+ */
+export function readSampleRateHz(text) {
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === '') continue;
+    if (!line.startsWith('#')) break;   // header block ended
+    const eq = line.indexOf('=');
+    if (eq > 0 && line.substring(1, eq).trim() === SAMPLE_RATE_HEADER_KEY) {
+      const v = parseInt(line.substring(eq + 1).trim(), 10);
+      return Number.isNaN(v) ? 0 : v;   // garbled header — treat as absent
+    }
+  }
+  return 0;
 }

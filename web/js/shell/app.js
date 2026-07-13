@@ -31,6 +31,7 @@ import { clonePaneForShot, preloadCloneIcons, paintCloneToCanvas } from './scree
 import { PredistortionHost } from './predistortion-host.js';
 import { PredistortionWizard } from './predistortion-wizard.js';
 import { PreferencesDialog } from './preferences-dialog.js';
+import { StartupSplash } from './startup-splash.js';
 import { MainTab } from './main-tab.js';
 import { ScopePane } from '../scope/scope-pane.js';
 import { ScopeTabControl } from '../scope/scope-tab-control.js';
@@ -56,7 +57,7 @@ const engine = new AudioEngine();
 // Render-time FFT spectral corrections (.frc de-embed + mains + IMD) — applied in the VIEW path
 // (engine.onResult below), NOT in the engine; the coherent accumulator stays raw.
 const fftViewCorrection = new FftViewCorrection(engine.config);
-const fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => engine.generator.running });
+const fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => engine.generator.running, correction: fftViewCorrection });
 const scopeView = new ScopeView(document.getElementById('scope'), { prefs });
 let prefsModal, aboutModal, dacCalModal;
 let shotModal;
@@ -127,9 +128,12 @@ function ladder125(min, max) {
 }
 
 // Scope V/div + t/div 1-2-5 ladders (Java ScopeTabControl LIST policy): V/div
-// 1 µV … 500 V, t/div 1 µs … 1 s. Shared by the step fields AND the scope view's
-// Ctrl-wheel zoom, so the wheel snaps to the SAME series the field arrows walk.
-const SCOPE_VDIV_SERIES = ladder125(1e-6, 500);
+// 1 nV … 500 V, t/div 1 µs … 1 s — the exact OscParse.VOLT_PER_DIV / TIME_PER_DIV
+// step lists (voltsPerDivTargets/timePerDivTargets). Shared by the step fields AND
+// the scope view's Ctrl-wheel zoom, so the wheel snaps to the SAME series the field
+// arrows walk. (V/div starts at 1 nV to match Java, which the model min already
+// permits — V_PER_DIV_MIN = 1e-9.)
+const SCOPE_VDIV_SERIES = ladder125(1e-9, 500);
 const SCOPE_TDIV_SERIES = ladder125(1e-6, 1);
 // The Ctrl-wheel V/div + Ctrl+Shift-wheel t/div zoom step along the same ladders.
 scopeView.vDivSeries = SCOPE_VDIV_SERIES;
@@ -177,10 +181,13 @@ function initStepFields() {
   // Track DAC full-scale → amplitude ceiling (Bindings.onChange(... ampField::setMax)).
   prefs.dacFsVoltageAmpl.addListener((fs) => fAmp.setMax(fs));
 
-  // DAC-calibration dialog: the measured-amplitude field is a unit-aware AMPLITUDE step field
-  // (V / mV / µV / dBV + short forms), like the generator amplitude — replaces the old plain
-  // input + unit <select>. Seeded on open, read on Calibrate.
+  // Calibration dialogs (DAC full-scale, scope ADC, FFT ADC): the measured/actual-amplitude
+  // field is a unit-aware AMPLITUDE step field (V / mV / µV / dBV + short forms), like the
+  // generator amplitude — replaces the old plain input + unit <select>. All three share the
+  // same config shape; each is seeded on open and read (canonical Vrms) on Calibrate.
   mk('dacCalValue', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 1000, maxDecimals: 5 }), () => {});
+  mk('adcCalValue', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 1000, maxDecimals: 5 }), () => {});
+  mk('fftAdcCalValue', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 1000, maxDecimals: 5 }), () => {});
 
   // FFT THD "Manual fundamental" reference level — unit-aware AMPLITUDE field (accepts dBV), g28.
   // onChange placeholder — FftTabControl.bind() rebinds it to the THD-settings commit path
@@ -210,6 +217,14 @@ function initStepFields() {
   const fAverages = mk('averages', new NumericStepModel({ family: F.NONE, min: FFT_AVERAGES_SERIES[0],
     max: Infinity, series: FFT_AVERAGES_SERIES, maxDecimals: 0 }), () => {});
   if (fAverages) fAverages.setValue(prefs.fftAverages.get());
+
+  // FFT "Stop after N averages" count — Java stopAfterNField: NumericStepField(UnitFamily.NONE,
+  // STOP_AFTER_MIN=2, STOP_AFTER_MAX=1_000_000, STOP_AFTER_WHEEL_STEP=100, arrowStep 1, 0 dec).
+  // FIXED policy: the wheel jumps in hundreds (the count ranges to a million), arrows step by 1.
+  // onChange placeholder — FftTabControl.bind() rebinds it to the pref-write + live readConfig.
+  const fStopAfterN = mk('fftStopAfterN', new NumericStepModel({ family: F.NONE, min: 2, max: 1000000,
+    wheelStep: 100, arrowStep: 1, decimals: 0 }), () => {});
+  if (fStopAfterN) fStopAfterN.setValue(prefs.fftStopAfterN.get());
 
   // Duty / dual-tone amplitude split: PERCENT family + PERCENT policy.
   const fDuty = mk('duty', new NumericStepModel({ family: F.PERCENT, min: 0.001, max: 99.999, maxDecimals: 3 }),
@@ -717,8 +732,17 @@ function helpContextPage() {
 $('#helpShow').on('click', () => openHelp());
 $('#helpShowActive').on('click', () => openHelp(helpContextPage()));
 $('#helpReport').on('click', () => window.open('https://github.com/dgo42/Phonalyser/issues/new', '_blank', 'noopener'));
+// About dialog: paint the SAME branded artwork the startup splash draws (Java
+// MainWindow.showAboutDialog → StartupSplash.showAsAbout) — version/tagline/
+// copyright/license/URL are all on the canvas, and the repo URL is clickable.
+// Painted on show (fonts + version + locale are all resolved by then), and
+// re-painted whenever the modal opens so a locale switch re-localizes the tagline.
+const aboutSplash = new StartupSplash({
+  version: () => ($('.menu-ver').text() || '').replace(/·.*$/, '').trim(),
+  t,
+});
 $('#helpAbout').on('click', () => {
-  $('#aboutVersion').text(($('.menu-ver').text() || '').replace(/·.*$/, '').trim());
+  aboutSplash.showAsAbout(document.getElementById('aboutCanvas'));
   aboutModal.show();
 });
 // F1 → help contents; Ctrl+F1 → contextual help for the active pane / tab. preventDefault
@@ -1255,8 +1279,17 @@ async function init() {
   const step = (name, fn) => { try { return fn(); } catch (e) { console.error('init step failed:', name, e); } };
   await initBase();
   try { await setLocale(prefs.uiLanguage.get()); } catch (e) { console.error('init step failed: setLocale', e); }
+  // Branded launch splash (Java StartupSplash): the static overlay div is already
+  // covering the viewport with the backdrop colour from first paint; draw the full
+  // artwork now that the locale is set (so the tagline is localized). Version comes
+  // from the SAME source the About dialog reads (the .menu-ver span), '· web' stripped.
+  const splash = new StartupSplash({
+    version: () => ($('.menu-ver').text() || '').replace(/·.*$/, '').trim(),
+    t,
+  });
+  splash.show();
   // Refuse to run on a non-Chromium engine: show the warning and stop before any device/UI setup.
-  if (!isChromium()) { showUnsupportedBrowserOverlay(); return; }
+  if (!isChromium()) { splash.dismiss(); showUnsupportedBrowserOverlay(); return; }
   step('initSelects', initSelects);
   // Generator pane (Java GeneratorPane): the signal-form combo + freq/amp/duty/dual-tone/
   // sweep/dither/snap/.dpd controls + Play/ON-AIR + Save-to + file player. Constructed before
@@ -1463,7 +1496,10 @@ async function init() {
     prefsDialog.applyLookAndFeel();   // main-tab orientation + small icons + UI font from the saved prefs
   });
   step('freqResp', () => freqRespPane.plot());
-  prefsDialog.scan();       // auto-enumerate audio devices on load (no Preferences dialog needed)
+  // Auto-enumerate audio devices on load (no Preferences dialog needed) — and dismiss the
+  // startup splash once that scan settles (SAFETY: startup-splash also self-dismisses on a
+  // 20 s timeout, so a hung permission prompt can never brick the app behind the overlay).
+  splash.dismissOnScan(prefsDialog.scan());
 }
 init().catch(e => console.error('init failed', e));
  

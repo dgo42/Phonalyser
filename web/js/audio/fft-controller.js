@@ -21,6 +21,7 @@ import { mainsFilterOf } from '../dsp/mains/factory.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events, GenChangeCause } from '../bus/events.js';
 import { FrequencyFll } from '../dsp/fll.js';
+import { refinePeak, TONE_SEARCH_BINS } from '../fft/imd-analyzer.js';
 
 /** Output-pipeline drain to skip after a generator/form/frequency change, in seconds
  *  (Java OUTPUT_DRAIN_SKIP_SEC). The DAC's hardware buffer (~480 ms on the render path)
@@ -134,6 +135,10 @@ export class FftController {
     // integrator. The published generator frequency is snapped + correction. Reset on
     // Record start and on a user signal change (both invalidate the lock).
     this._fll = new FrequencyFll();
+    // Second, INDEPENDENT deadbeat loop for the DUAL_TONE second tone (Java FftController's
+    // fll2). Constructed + reset in lockstep with _fll; only exercised on a dual-tone form
+    // where the second-tone steer publishes GENERATOR_FREQ_TRIM_2. Single-tone forms leave it idle.
+    this._fll2 = new FrequencyFll();
     // FLL display + steer state — OWNED here now (moved off GeneratorController): the corrected
     // generator frequency + lock status this loop computes and _emit reports. The steer publishes
     // GENERATOR_FREQ_TRIM; the generator applies it to its worklet.
@@ -191,6 +196,7 @@ export class FftController {
       // FftController.resetFrequencyLock), else its stale correction overshoots the
       // first measurement of the new signal.
       this._fll.reset();
+      this._fll2.reset();               // dual-tone second loop resets in lockstep
       this.fllErrHz = 0; this.fllLocked = false; this.fllStable = 0; this.genFreq = this.snapped;
       if (this._fftOn) this._armOutputDrainSkip();
     });
@@ -355,6 +361,7 @@ export class FftController {
       this._fftReader.seekToLatest();   // contiguous stream anchors at "now"
       this._absNextSample = this._fftReader.getReadPos();
       this._fll.reset();                // fresh Record session → converge alignment from zero
+      this._fll2.reset();               // …and its dual-tone second loop
       this._fftOn = true;
     } else {
       this._fftOn = false;
@@ -520,7 +527,7 @@ export class FftController {
       this._accum.onResync();   // re-anchor κ slope + PLL; the collected DEPTH survives
       this._workerResyncPending = true;
     }
-    if (c.fllOn && !this._lastFllOn) this._fll.reset();
+    if (c.fllOn && !this._lastFllOn) { this._fll.reset(); this._fll2.reset(); }
     this._lastFllOn = !!c.fllOn;
   }
 
@@ -911,78 +918,28 @@ export class FftController {
     r = FftResult.adopt(r);
     r.captureRawPeaks();
 
-    // FLL — steer the generator off the sub-bin refined fundamental so the captured
-    // tone returns to the exact target bin (nulls the DAC↔ADC clock offset). Driven
-    // from fundamentalHzRefined through the Java FrequencyFll deadbeat loop: ONE
-    // bounded correction per fully-observed transport round trip, NOT a per-frame
-    // proportional integrator. The published generator frequency is snapped +
-    // correction. Only steers when the generator is actually running.
-    if (this.config.fllOn && this._genOn && this.genNode && r.fundamentalHzRefined > 0) {
-      // Plausibility gate (Java plausibleFllMeasurement): clock drift is ppm-scale, so a
-      // measurement farther than max(5 bins, 500 ppm) from the target is a mis-measurement
-      // (a window still draining the OLD signal after a form/freq switch, a harmonic
-      // mis-lock, a capture glitch) — skip steering so it can't trim the live generator off.
-      // Gate only the STEER (not the display emit below — that still publishes the spectrum).
-      // FLL TARGET = the entered tone snapped to the CAPTURE-rate FFT bin grid (r.sampleRate),
-      // identical to what the Δosc readout (fft-view.js expected) and the coherent FFT use.
-      // Java FftController.applyFrequencyLock:315 snaps to slot.sampleRate (the FFT/capture rate);
-      // in Java the DAC and ADC share one exclusive-mode clock so that equals the output rate and
-      // the loop naturally lands on the FFT bin. The web's generator (outCtx) and capture (inCtx)
-      // are two INDEPENDENT AudioContext clocks (~80 ppm apart), so targeting this.snapped (the
-      // OUTPUT-rate bin) locks the tone to the wrong grid and Δosc stays ≈80 ppm. Targeting the
-      // capture-rate bin steers the CAPTURED tone onto the actual FFT bin → Δosc nulls. The
-      // published base stays this.snapped (what the DAC plays); fll.correction bridges the gap.
-      const fllTarget = this._gen.snapToRate(r.sampleRate);
-      const maxErrHz = Math.max(FLL_MAX_ERROR_BINS * this.binW, fllTarget * FLL_MAX_ERROR_PPM * 1e-6);
-      if (Math.abs(r.fundamentalHzRefined - fllTarget) <= maxErrHz) {
-        this.fllErrHz = r.fundamentalHzRefined - fllTarget;
-        // Java FftController.applyFrequencyLock (FftController.java:322-324): fll.update folds this
-        // measurement into the deadbeat + transport gate, then it publishes `target + correction`
-        // where target is the CAPTURE-rate snap (slot.sampleRate) — NOT the output-rate base. We had
-        // wrongly published this.snapped (output grid) + correction, so the DAC was still commanded
-        // on the output grid. Publish fllTarget + correction, exactly like Java.
-        const gateBefore = this._fll.correctionVisibleFrom;
-        this._fll.update(fllTarget, r.fundamentalHzRefined,
-          this._tickAbsCapStart, this._tickWritePos, this.config.inRate, this.N);
-        this.genFreq = fllTarget + this._fll.correction;
-        // Publish the trim; GeneratorController applies it to its own worklet (was a direct post).
-        MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM, this.genFreq);
-        if (traceFll()) {
-          // Java log.warn("FLL t1: target=… meas=… corr=… pub=…"), plus the transport
-          // timebase + gate so an inert loop is diagnosable (gate held forever ⇒ winStart
-          // never reaches visibleFrom; corr stuck at 0 ⇒ lock-band/plausibility hold).
-          const held = this._fll.correctionVisibleFrom >= 0
-            && this._tickAbsCapStart < this._fll.correctionVisibleFrom;
-          console.warn(`FLL: target=${fllTarget.toFixed(6)} meas=${r.fundamentalHzRefined.toFixed(6)}`
-            + ` corr=${this._fll.correction >= 0 ? '+' : ''}${this._fll.correction.toFixed(6)}`
-            + ` pub=${this.genFreq.toFixed(6)} winStart=${this._tickAbsCapStart} writePos=${this._tickWritePos}`
-            + ` gate[${gateBefore}→${this._fll.correctionVisibleFrom}] ${held ? 'HELD' : 'open'}`);
-        }
-        // Status-display lock latch ONLY (Java ALIGN_DONE_PPM aligned flag): lights the
-        // "locked" readout once the measured error sits within tolerance. It does NOT
-        // gate the steering — the deadbeat loop's own transport gate provides the
-        // damping, and the loop keeps correcting ongoing DAC↔ADC clock drift.
-        const errBins = this.fllErrHz / this.binW;
-        if (Math.abs(errBins) < 5e-4) {
-          if (++this.fllStable >= 2) this.fllLocked = true;
-        } else {
-          this.fllStable = 0;
-          this.fllLocked = false;
-        }
-        // Web limitation (Java runs a second FrequencyAligner, fll2, off imd.f2):
-        // in dual-tone mode only tone 1 is steered here. This controller
-        // models a single FLL state (genFreq / fllErrHz / fllLocked), not Java's twin
-        // independent FrequencyAligner loops, so a faithful second-tone trim would need
-        // its own loop + lock state. Accepted as a web limitation.
+    // FLL — steer the generator so each captured tone returns to its exact target bin
+    // (nulls the DAC↔ADC clock offset). Driven through the Java FrequencyFll deadbeat loop:
+    // ONE bounded correction per fully-observed transport round trip, NOT a per-frame
+    // proportional integrator. The published generator frequency is snapped + correction.
+    // Only steers when the generator is actually running. Java FftController.applyFrequencyLock
+    // branches on the form: single-tone runs one loop off slot.fundamentalHzRefined; DUAL_TONE
+    // runs TWO independent loops (fll / fll2) off the per-tone detected frequencies imd.f1Hz /
+    // imd.f2Hz and publishes GENERATOR_FREQ_TRIM / _2. This controller mirrors that with
+    // _fll / _fll2, refining the two tones here (the CONTROLLER holds no per-tone estimate — the
+    // IMD table runs in the view — so the steer refines them itself off r.amplitudeDbFs).
+    if (this.config.fllOn && this._genOn && this.genNode) {
+      if (isDualTone(this.config.form)) {
+        this._steerDualTone(r);
+      } else if (r.fundamentalHzRefined > 0) {
+        this._steerSingleTone(r);
       } else if (traceFll()) {
-        // Java log.warn("FLL t1 GATED: target=… meas=…") — the plausibility gate rejected
-        // this measurement (|meas − target| beyond max(5 bins, 500 ppm)); no steer this frame.
-        console.warn(`FLL GATED: target=${fllTarget.toFixed(6)} meas=${r.fundamentalHzRefined.toFixed(6)}`
-          + ` errHz=${(r.fundamentalHzRefined - fllTarget).toFixed(6)} maxErrHz=${maxErrHz.toFixed(6)}`);
+        console.warn(`FLL SKIP: fllOn=${!!this.config.fllOn} genOn=${this._genOn}`
+          + ` genNode=${!!this.genNode} fundRefined=${r.fundamentalHzRefined}`);
       }
     } else if (traceFll()) {
       // Steering skipped entirely: report which precondition failed (fllOn / generator
-      // running / generator node / a usable refined fundamental) — the classic "inert" path.
+      // running / generator node) — the classic "inert" path.
       console.warn(`FLL SKIP: fllOn=${!!this.config.fllOn} genOn=${this._genOn}`
         + ` genNode=${!!this.genNode} fundRefined=${r.fundamentalHzRefined}`);
     }
@@ -994,6 +951,157 @@ export class FftController {
     r._mainsF0 = this._fftMainsF0;
 
     this._emit(r);
+  }
+
+  /** Single-tone FLL steer (Java FftController.applyFrequencyLock else-branch, :313-327):
+   *  drives the ONE loop off the refined fundamental. FLL TARGET = the entered tone snapped to
+   *  the CAPTURE-rate FFT bin grid (r.sampleRate). Java snaps to slot.sampleRate (the FFT/capture
+   *  rate); its DAC and ADC share one exclusive-mode clock so that equals the output rate and the
+   *  loop lands on the FFT bin. The web's generator (outCtx) and capture (inCtx) are two INDEPENDENT
+   *  AudioContext clocks (~80 ppm apart), so targeting this.snapped (the OUTPUT-rate bin) locks the
+   *  tone to the wrong grid and Δosc stays ≈80 ppm. Targeting the capture-rate bin steers the
+   *  CAPTURED tone onto the actual FFT bin → Δosc nulls. The DAC still plays this.snapped;
+   *  fll.correction bridges the gap. */
+  _steerSingleTone(r) {
+    // Plausibility gate (Java plausibleFllMeasurement): clock drift is ppm-scale, so a
+    // measurement farther than max(5 bins, 500 ppm) from the target is a mis-measurement
+    // (a window still draining the OLD signal after a form/freq switch, a harmonic mis-lock,
+    // a capture glitch) — skip steering so it can't trim the live generator off.
+    const fllTarget = this._gen.snapToRate(r.sampleRate);
+    const maxErrHz = Math.max(FLL_MAX_ERROR_BINS * this.binW, fllTarget * FLL_MAX_ERROR_PPM * 1e-6);
+    if (Math.abs(r.fundamentalHzRefined - fllTarget) <= maxErrHz) {
+      this.fllErrHz = r.fundamentalHzRefined - fllTarget;
+      // Java FftController.applyFrequencyLock (:322-324): fll.update folds this measurement into
+      // the deadbeat + transport gate, then publishes `target + correction` where target is the
+      // CAPTURE-rate snap (slot.sampleRate) — NOT the output-rate base.
+      const gateBefore = this._fll.correctionVisibleFrom;
+      this._fll.update(fllTarget, r.fundamentalHzRefined,
+        this._tickAbsCapStart, this._tickWritePos, this.config.inRate, this.N);
+      this.genFreq = fllTarget + this._fll.correction;
+      // Publish the trim; GeneratorController applies it to its own worklet (was a direct post).
+      MessageBus.instance().publish(Events.GENERATOR_FREQ_TRIM, this.genFreq);
+      if (traceFll()) {
+        // Java log.warn("FLL t1: target=… meas=… corr=… pub=…"), plus the transport timebase +
+        // gate so an inert loop is diagnosable (gate held forever ⇒ winStart never reaches
+        // visibleFrom; corr stuck at 0 ⇒ lock-band/plausibility hold).
+        const held = this._fll.correctionVisibleFrom >= 0
+          && this._tickAbsCapStart < this._fll.correctionVisibleFrom;
+        console.warn(`FLL t1: target=${fllTarget.toFixed(6)} meas=${r.fundamentalHzRefined.toFixed(6)}`
+          + ` corr=${this._fll.correction >= 0 ? '+' : ''}${this._fll.correction.toFixed(6)}`
+          + ` pub=${this.genFreq.toFixed(6)} winStart=${this._tickAbsCapStart} writePos=${this._tickWritePos}`
+          + ` gate[${gateBefore}→${this._fll.correctionVisibleFrom}] ${held ? 'HELD' : 'open'}`);
+      }
+      // Status-display lock latch ONLY (Java ALIGN_DONE_PPM aligned flag): lights the "locked"
+      // readout once the measured error sits within tolerance. It does NOT gate the steering —
+      // the deadbeat loop's own transport gate provides the damping, and the loop keeps
+      // correcting ongoing DAC↔ADC clock drift.
+      this._updateLockLatch(Math.abs(this.fllErrHz / this.binW) < 5e-4);
+    } else if (traceFll()) {
+      // Java log.warn("FLL t1 GATED: target=… meas=…") — the plausibility gate rejected this
+      // measurement (|meas − target| beyond max(5 bins, 500 ppm)); no steer this frame.
+      console.warn(`FLL t1 GATED: target=${fllTarget.toFixed(6)} meas=${r.fundamentalHzRefined.toFixed(6)}`
+        + ` errHz=${(r.fundamentalHzRefined - fllTarget).toFixed(6)} maxErrHz=${maxErrHz.toFixed(6)}`);
+    }
+  }
+
+  /** Dual-tone FLL steer (Java FftController.applyFrequencyLock dual branch, :263-312): TWO
+   *  independent deadbeat loops (_fll / _fll2) steer tone 1 and tone 2 to their own capture-rate
+   *  bin targets and publish GENERATOR_FREQ_TRIM / GENERATOR_FREQ_TRIM_2. Java reads the per-tone
+   *  frequencies from imd.f1Hz / imd.f2Hz; the web controller holds no IMD result (the table runs
+   *  in the view), so it refines the two tones HERE off the current spectrum r.amplitudeDbFs with
+   *  the same quadratic peak refinement ImdAnalyzer uses (refinePeak over ±TONE_SEARCH_BINS around
+   *  each capture-rate-snapped target). Refining only the two tones — NOT the full IMD product
+   *  table — is deliberate: the FLL only needs the fundamentals, and tone frequencies are
+   *  calibration-independent, so the RAW controller-side (pre-.frc-de-embed) spectrum is the
+   *  correct input here (the .frc de-embed alters magnitudes, not peak positions). The tone-1 loop
+   *  keeps feeding the shared fllErrHz / fllLocked / genFreq readout; the locked latch requires
+   *  BOTH tones in tolerance (Java aligned :309-311). */
+  _steerDualTone(r) {
+    const amp = r.amplitudeDbFs;
+    const binBw = r.freqResolution;
+    if (amp == null || !(binBw > 0)) {
+      if (traceFll()) console.warn('FLL dual SKIP: no spectrum (amplitudeDbFs/freqResolution)');
+      return;
+    }
+    // Targets: each entered tone snapped to the CAPTURE-rate bin grid (Java t1 / t2,
+    // FftBinSnap.snapIfEnabled(DUAL_TONE, slot.sampleRate, …)).
+    const t1 = this._gen.snapToRate(r.sampleRate);
+    const t2 = this._gen.snapToRate2(r.sampleRate);
+    // Per-tone measured frequency: the analyzer's COHERENTLY-REFINED clean-frame sub-bin
+    // estimates (r.fundamentalHzRefined for fLow, r.fundamental2HzRefined for fHigh — the same
+    // honest per-tone values ImdAnalyzer.f1Hz/f2Hz carry), with the quadratic refinePeak of the
+    // collapsed spectrum ONLY as the fallback when the refined estimate is unavailable. This is a
+    // 1:1 mirror of Java ImdAnalyzer (:99-102): steering from the argmax+quadratic estimate left F2
+    // with a static ppm error and made the loop wobble/diverge; the refined value nulls it.
+    // p1/p2 are keyed to fLow/fHigh (ImdAnalyzer's ordering) so they remain the matching fallback.
+    const p1 = refinePeak(amp, binBw, Math.min(t1, t2), TONE_SEARCH_BINS);
+    const p2 = refinePeak(amp, binBw, Math.max(t1, t2), TONE_SEARCH_BINS);
+    const fLowHz = (r.fundamentalHzRefined > 0.0)
+      ? r.fundamentalHzRefined : (p1 != null ? p1.freqHz : NaN);
+    const fHighHz = (Number.isFinite(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0)
+      ? r.fundamental2HzRefined : (p2 != null ? p2.freqHz : NaN);
+    const f1Hz = (t1 <= t2 ? fLowHz : fHighHz);
+    const f2Hz = (t1 <= t2 ? fHighHz : fLowHz);
+
+    const ok1 = this._steerOneDualLoop(this._fll, Events.GENERATOR_FREQ_TRIM, t1, f1Hz, 't1');
+    const ok2 = this._steerOneDualLoop(this._fll2, Events.GENERATOR_FREQ_TRIM_2, t2, f2Hz, 't2');
+
+    // Tone-1-based readout stays the shared display state (genFreq / fllErrHz), so the existing
+    // Δosc / ppm columns keep reading tone 1; only the locked LATCH couples both loops.
+    if (ok1) {
+      this.fllErrHz = f1Hz - t1;
+      this.genFreq = t1 + this._fll.correction;
+    }
+    // Locked latch: BOTH tones within tolerance (Java aligned :309-311, ALIGN_DONE_PPM ≈ the
+    // 5e-4-bin band the single-tone latch uses). A steer that was plausibility-gated this frame
+    // counts as not-in-tolerance so the latch can't light on a stale reading.
+    const tol1 = ok1 && Math.abs((f1Hz - t1) / this.binW) < 5e-4;
+    const tol2 = ok2 && Math.abs((f2Hz - t2) / this.binW) < 5e-4;
+    this._updateLockLatch(tol1 && tol2);
+  }
+
+  /** Runs ONE dual-tone deadbeat loop for a single tone: plausibility-gate the measurement,
+   *  update the loop, publish `target + correction` on `trimEvent`. Returns true when the
+   *  measurement passed the gate and steered (so the caller can fold it into the locked latch).
+   *  Mirrors one half of Java's dual branch (:275-308) including the GATED trace line. */
+  _steerOneDualLoop(fll, trimEvent, target, measuredHz, tag) {
+    if (!(target > 0) || !Number.isFinite(measuredHz)) {
+      if (traceFll()) console.warn(`FLL ${tag} GATED: target=${target} meas=${measuredHz}`);
+      return false;
+    }
+    const maxErrHz = Math.max(FLL_MAX_ERROR_BINS * this.binW, target * FLL_MAX_ERROR_PPM * 1e-6);
+    if (Math.abs(measuredHz - target) > maxErrHz) {
+      if (traceFll()) {
+        console.warn(`FLL ${tag} GATED: target=${target.toFixed(6)} meas=${measuredHz.toFixed(6)}`
+          + ` errHz=${(measuredHz - target).toFixed(6)} maxErrHz=${maxErrHz.toFixed(6)}`);
+      }
+      return false;
+    }
+    const gateBefore = fll.correctionVisibleFrom;
+    fll.update(target, measuredHz,
+      this._tickAbsCapStart, this._tickWritePos, this.config.inRate, this.N);
+    const pub = target + fll.correction;
+    MessageBus.instance().publish(trimEvent, pub);
+    if (traceFll()) {
+      const held = fll.correctionVisibleFrom >= 0 && this._tickAbsCapStart < fll.correctionVisibleFrom;
+      console.warn(`FLL ${tag}: target=${target.toFixed(6)} meas=${measuredHz.toFixed(6)}`
+        + ` corr=${fll.correction >= 0 ? '+' : ''}${fll.correction.toFixed(6)}`
+        + ` pub=${pub.toFixed(6)} winStart=${this._tickAbsCapStart} writePos=${this._tickWritePos}`
+        + ` gate[${gateBefore}→${fll.correctionVisibleFrom}] ${held ? 'HELD' : 'open'}`);
+    }
+    return true;
+  }
+
+  /** Advances the display-only lock latch (Java ALIGN_DONE_PPM aligned flag): two consecutive
+   *  in-tolerance frames light `fllLocked`, any out-of-tolerance frame drops it. Shared by the
+   *  single- and dual-tone steer (dual requires BOTH loops in tolerance before it calls this true). */
+  _updateLockLatch(inTolerance) {
+    if (inTolerance) {
+      if (++this.fllStable >= 2) this.fllLocked = true;
+    } else {
+      this.fllStable = 0;
+      this.fllLocked = false;
+    }
   }
 
   _emit(r) {

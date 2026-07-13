@@ -35,6 +35,24 @@ body {
   display: flex; flex-direction: column; overflow: hidden;
 }
 
+/* ===== startup splash =====
+   Full-viewport dimmed backdrop shown from first paint (the div is in the
+   initial HTML) until the boot device scan resolves, with the 560×340 artwork
+   panel (drawn by startup-splash.js) centred on it. The backdrop colour is the
+   Java bgTop rgb(10,14,26) so something branded shows even before JS runs. */
+#startupSplash { position: fixed; inset: 0; z-index: 4000; display: flex;
+  align-items: center; justify-content: center; background: rgb(10,14,26); }
+#startupSplash canvas { max-width: 100%; box-shadow: 0 12px 40px rgba(0,0,0,.55); }
+
+/* ===== About dialog =====
+   Reuses the startup-splash artwork (StartupSplash.showAsAbout). The modal is
+   sized to the 0.75× artwork box; the canvas carries all the text, so the
+   dialog is just the picture with a thin border. The canvas element sets its
+   own width/height (px) from startup-splash.js. */
+.modal .about-modal { width: max-content; max-width: 100%; }
+.modal .about-content { background: rgb(10,14,26); border: 1px solid rgb(46,74,107); }
+#aboutCanvas { display: block; }
+
 /* ===== menu bar ===== */
 .menubar { display: flex; align-items: center; gap: 2px; height: 28px; padding: 0 8px;
   background: var(--win-bg); border-bottom: 1px solid var(--hdr-border); flex: 0 0 auto; }
@@ -153,11 +171,12 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
   flex: 1; min-width: 0; border: 1px solid var(--field-border); background: #fff; text-align: right;
   padding: 2px 6px; font-size: 12.5px; outline: none; }
 .filefield .nf-input { text-align: left; }
-.numfield .nf-unit { display: flex; align-items: center; padding: 0 7px; border: 1px solid var(--field-border); border-left: none;
-  background: #f4f4f4; color: #444; font-size: 12px; }
 .numfield .nf-step { display: flex; flex-direction: column; border: 1px solid var(--field-border); border-left: none; border-radius: 0 2px 2px 0; overflow: hidden; }
 /* Match the scope numeric fields: rounded outer corners + accent focus border (no square box). */
 .numfield .nf-input { border-radius: 2px 0 0 2px; border-right: none; padding: 1px 6px; }
+/* A lone input (no .nf-step steppers after it, e.g. the calibrate field) keeps its
+   full box now that the unit label no longer supplied the right border. */
+.numfield .nf-input:last-child { border-right: 1px solid var(--field-border); border-radius: 2px; }
 .numfield .nf-input:focus { border-color: var(--accent); }
 /* Spinner caret glyphs use the original SVG icons (caret-up / caret-down) instead of
    the ▲▼ text; font-size:0 hides the literal glyph, the icon is a centred background. */
@@ -167,7 +186,7 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .numfield .nf-step button:last-child { background-image: url(../assets/icons/caret-down.svg); }
 .numfield .nf-step button + button { border-top: 1px solid var(--field-border); }
 .numfield .nf-step button:hover { background-color: #e0e0e0; }
-.numfield.disabled .nf-input, .numfield.disabled .nf-unit { color: var(--muted); background: #f5f5f5; }
+.numfield.disabled .nf-input { color: var(--muted); background: #f5f5f5; }
 .numfield.sm { height: 24px; max-width: 130px; }
 .combo .combo-ico { display: flex; align-items: center; padding: 0 6px; border: 1px solid var(--field-border); border-right: none; background: #f4f4f4; color: #555; }
 .combo .form-select { border-radius: 0; border-color: var(--field-border); font-size: 12.5px; }
@@ -400,16 +419,19 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
   animation: scope-banner-blink 1s steps(1, end) infinite; }
 @keyframes scope-banner-blink { 0% { color: #ffffff; } 50% { color: #aaaaaa; } 100% { color: #ffffff; } }
 /* FFT discontinuity / overrun warning (Java FftView.onCaptureResync → BlinkBanner): a self-
-   blinking warning centred at the top of the (white) FFT plot while the analyser re-syncs past a
-   glitch; the pane hides it on the next fresh result. Dark red ↔ light red every 500 ms. */
-.fft-warn-banner { position: absolute; top: 26px; left: 50%; transform: translateX(-50%); z-index: 5;
+   blinking warning RIGHT-anchored under the %/averages control row — Java pins the banner
+   right = canvas edge −6, top = below averagesCountLabel (FftView.java:630-637), text-width
+   only, next to the vertical scrollbar. The pane hides it on the next fresh result.
+   Dark red ↔ light red every 500 ms. */
+.fft-warn-banner { position: absolute; top: 26px; right: 6px; z-index: 5;
   font-size: 12px; font-weight: 700; white-space: nowrap; pointer-events: auto; cursor: help;
   animation: fft-warn-blink 1s steps(1, end) infinite; }
 @keyframes fft-warn-blink { 0% { color: #c0392b; } 50% { color: #e8b0a8; } 100% { color: #c0392b; } }
 /* FFT loaded-spectrum indicator (Java FftView.setSourceFilePath → BlinkBanner): "Loaded: file"
-   blinking at the TOP of the plot while a static .fft is shown; cleared when live recording
-   resumes. Dark grey ↔ light grey on the white chart (distinct from the red re-sync warning). */
-.fft-loaded-banner { position: absolute; top: 6px; left: 50%; transform: translateX(-50%); z-index: 5;
+   blinking while a static .fft is shown; cleared when live recording resumes. Same right-anchored
+   BlinkBanner slot as the warning in Java — kept one line higher here so both stay readable when
+   they overlap in time. Dark grey ↔ light grey (distinct from the red re-sync warning). */
+.fft-loaded-banner { position: absolute; top: 6px; right: 6px; z-index: 5;
   font-size: 12px; font-weight: 700; max-width: 60%; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; pointer-events: none;
   animation: fft-loaded-blink 1s steps(1, end) infinite; }
@@ -440,6 +462,15 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
    1.5px dashed TOP border; vertical lines a 1.5px dashed LEFT border. */
 .scope-ovl-hline { height: 0; border-top: 1.5px dashed transparent; }
 .scope-ovl-vline { width: 0; border-left: 1.5px dashed transparent; }
+
+/* Full-scale boundary lines — two dashed horizontals per enabled channel at ±FS
+   volts around its offset (Java ScopeView.drawFullScaleLines). Structural siblings
+   of the offset zero-line, so DOM overlays too (fixed on-screen px under a stretched
+   screenshot). Java's FS_DASH {2,6} (2px on, 6px gap) can't be a CSS dashed border,
+   so the dashes are a repeating-linear-gradient background set inline (colour rides
+   with it). Only the static geometry lives here; colour + top set inline by JS. */
+.scope-ovl-fsline { position: absolute; left: 0; right: 0; height: 1.5px;
+  pointer-events: none; margin-top: -0.75px; }
 /* Centre the border on the fraction line (the border renders OUTSIDE the top/left
    edge, so pull back by half the border width). */
 .scope-ovl-slidercore.scope-ovl-hline { border-top-color: var(--slider-color, #fff); margin-top: -0.75px; }
@@ -583,7 +614,7 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
    save row stays on one line and the panel height matches the other scope tabs. */
 .scope-row .scope-save-name { flex: 0 1 auto; width: 130px; min-width: 92px; max-width: 160px;
   height: 24px; padding: 1px 6px; font-size: 12.5px; }
-/* Scope numeric fields now use the SAME generalized .numfield / .nf-input / .nf-unit / .nf-step
+/* Scope numeric fields now use the SAME generalized .numfield / .nf-input / .nf-step
    classes as the generator / FFT / FreqResp (no Bootstrap input-group / form-control), so every
    NumericStepField across the app renders identically; only the compact width comes from
    .scope-row .numfield.sm above. */
@@ -680,6 +711,37 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .fr-riaa-checks { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; }
 .fr-riaa-checks .form-check-sm { margin: 2px 0; }
 
+/* FreqResp Filters tab (Java buildFiltersTab): controls column + per-type picture to the
+   right. The By-spec / By-order field rows are mutually exclusive — the .mode-spec /
+   .mode-order class on the body shows exactly one (Java StackLayout mode swap, behaviour only). */
+.fr-filter-body { display: flex; align-items: flex-start; gap: 12px; padding: 0 6px; } /* vertical padding comes from .tab-panel */
+.fr-filter-controls { display: flex; flex-direction: column; gap: 5px; }
+.fr-filter-checks { display: flex; flex-direction: row; align-items: center; gap: 24px; } /* Java header row 1: Show | Compare */
+.fr-filter-checks .form-check-sm { margin: 1px 0; }
+.fr-filter-combos { display: grid; grid-template-columns: auto 130px auto 130px; gap: 4px 6px;
+  align-items: center; width: max-content; }
+.fr-filter-combos label { font-size: 12.5px; }
+.fr-filter-combos .form-select { height: 24px; padding: 1px 22px 1px 6px; }
+.fr-filter-spec { border: 1px solid var(--border, #ccc); border-radius: 4px; padding: 4px 6px; }
+.fr-filter-mode { display: flex; gap: 12px; margin-bottom: 4px; }
+.fr-filter-mode .form-check-sm { margin: 0; }
+.fr-filter-grid { display: grid; grid-template-columns: auto 130px auto 130px auto 130px;
+  gap: 4px 6px; align-items: center; width: max-content; }
+.fr-filter-grid label { font-size: 12.5px; }
+.fr-filter-grid .numfield { width: 130px; max-width: 130px; height: 24px; }
+/* Mode toggle: show exactly one field row (Java applyModeVisibility). */
+.fr-filter-body .fr-mode-order { display: none; }
+.fr-filter-body.mode-order .fr-mode-spec { display: none; }
+.fr-filter-body.mode-order .fr-mode-order { display: grid; }
+.fr-filter-pic { width: auto; height: auto; max-height: 96px; align-self: flex-start; }
+
+/* FreqResp Unevenness tab (Java buildUnevennessTab): Off / ±dB / Range radio rows. */
+.fr-uneven-body { display: flex; flex-direction: column; gap: 6px; padding: 4px 6px; }
+.fr-uneven-row { display: flex; align-items: center; gap: 10px; }
+.fr-uneven-row .form-check-sm { margin: 0; }
+.fr-uneven-row label { font-size: 12.5px; }
+.fr-uneven-row .numfield { width: 130px; max-width: 130px; height: 24px; }
+
 /* FreqResp play button: reuses led-btn shape/size; suppress the LED ::before and show play icon */
 .fr-run-btn::before { display: none; }
 .fr-run-btn i { font-size: 28px; color: var(--green); line-height: 1; }
@@ -690,9 +752,9 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 #tab-fr .pane-header .pane-caret { display: none; }
 /* FreqResp tab bodies reserve the height of the tallest FreqResp tab (Settings, ~4 rows) so
    every tab (Settings, RIAA, Presets, Utility, Calibration, Save, Load) is the SAME height —
-   switching a tab no longer resizes the pane. Tuned to FreqResp's OWN content (NOT the FFT
-   pane's taller 152px, which left an empty row under Settings). */
-#tab-fr .tab-panel { background: var(--panel); box-shadow: none; min-height: 130px; box-sizing: border-box; }
+   switching a tab no longer resizes the pane. Tuned to FreqResp's OWN maximal panel — the
+   Filters tab (header + by-spec group), measured 156px after its body padding trim. */
+#tab-fr .tab-panel { background: var(--panel); box-shadow: none; min-height: 156px; box-sizing: border-box; }
 
 /* FreqResp Calibration tab: one row per loaded .frc (path · Active · load/clear/add/remove). */
 .fr-cal-rows { display: flex; flex-direction: column; gap: 4px; max-height: 110px; overflow-y: auto; }   /* scroll when many .frc rows are added (kept within the 130px tab body) */
@@ -766,7 +828,7 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
    .modal-dialog (500px) squeezed the two-column preference rows; match Java's width so the
    label|field rows lay out fully. Scoped to #prefsModal (the other .prefs modals size to
    their own content). */
-#prefsModal .modal-dialog { max-width: 640px; }
+#prefsModal .modal-dialog { max-width: 600px; }
 .prefs .prefs-tabs { border-bottom: 1px solid var(--field-border); gap: 0; background: var(--win-bg); padding: 0; }
 .prefs .prefs-tabs .nav-link { font-size: 13px; padding: 4px 12px; color: #333; font-weight: 400;
   border: 1px solid transparent; border-bottom: none; border-radius: 3px 3px 0 0; margin-bottom: -1px; background: transparent; }
@@ -774,14 +836,44 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .prefs .prefs-tabs .nav-link.active { color: #c8643c; font-weight: 400;
   background: #fff; border-color: var(--field-border); border-bottom-color: #fff; }
 .prefs .prefs-tabs .nav-link:disabled { color: #333; opacity: 1; }
-.prefs .form-select, .prefs .form-control { border: 1px solid var(--field-border); border-radius: 2px; font-size: 13px; max-width: 360px; }
+.prefs .form-select, .prefs .form-control { border: 1px solid var(--field-border); border-radius: 2px; font-size: 13px; max-width: 360px; padding-top: .0625rem; padding-bottom: .0625rem; min-height: calc(1.em + .5rem + calc(var(--bs-border-width) * 2));}
 .prefs .prefs-group .row > .col { flex: 0 1 auto; }
 .prefs-group { border: 1px solid var(--field-border); border-radius: 3px; padding: 8px 10px 10px; background: #f7f7f7; }
 .prefs-group legend { float: none; width: auto; font-size: 12px; padding: 0 5px; margin: 0 0 0 6px; color: #1b1b1b; }
-/* Java PreferencesDialog GridLayout(2): label (natural width, left) | field (fills), inline. */
-.prefs-grid { display: grid; grid-template-columns: max-content 1fr; gap: 7px 10px; align-items: center; }
+.prefs-panel .scan-devices { margin-bottom: 0.25rem !important; }
+/* Java PreferencesDialog GridLayout(2) via comboData()/gridLabel(): the LABEL column grabs the
+   horizontal slack (gridLabel = GridData(LEFT, …, true)) while the VALUE column is a FIXED
+   FIELD_WIDTH_PX=180 cell (comboData = widthHint 180, no grab), so every value widget hugs the
+   dialog's right edge at 180px on every tab. Mirror that: label 1fr (left), value 180px. */
+.prefs-grid { display: grid; grid-template-columns: 1fr 180px; gap: 5px 10px; align-items: center; }
 .prefs-grid label { text-align: left; font-size: 12.5px; white-space: nowrap; margin: 0; }
+/* Every value-column widget fills the fixed 180px cell. */
+.prefs-grid > .form-select, .prefs-grid > .form-control,
+.prefs-grid > .numfield, .prefs-grid > .pref-color, .prefs-grid > .pref-font-row { width: 180px; max-width: 180px; padding-top: .0625rem; padding-bottom: .0625rem; }
 .prefs-grid .form-select, .prefs-grid .form-control { border-radius: 0; }
+/* Long device names in the audio combos ellipsize inside the 180px cell (Java uses 180 too and
+   lets the combo clip the name), so the value column stays uniform across every tab. */
+.prefs-grid > .form-select { text-overflow: ellipsis; }
+/* Bare right-aligned checkbox in the value cell (Java buildCheckRow: label left grabbing, a bare
+   SWT.CHECK right-aligned in column 2 — no floating label beside the box). */
+.prefs-grid > .pref-check { justify-self: end; width: auto; margin: 0; }
+
+/* Colour value cell = a 180px button whose background IS the picked colour and whose text is the
+   "#RRGGBB" hex (Java applyButtonColor: setBackground(colour) + setText("#%06X"), foreground left
+   at the SWT default black — there is NO contrast rule). The native <input type=color> is hidden
+   inside the label so a click still opens the OS picker; app.js repaints bg + hex on input. */
+.prefs-grid > .pref-color { position: relative; display: inline-flex; align-items: center; justify-content: center; height: 24px;
+  border: 1px solid var(--field-border); border-radius: 2px; cursor: pointer; overflow: hidden; margin: 0; }
+.prefs-grid > .pref-color .pref-color-hex { font-size: 12px; font-family: Consolas, monospace; color: #000;
+  pointer-events: none; text-shadow: 0 0 2px rgba(255,255,255,.6); }
+.prefs-grid > .pref-color input[type=color] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+/* Look&Feel font editor (family + size + B/I) fitted into the 180px value cell — the faithful web
+   analog of Java's OS FontDialog row (comboData()). Kept compact so it fills the column. */
+.prefs-grid > .pref-font-row { display: flex; gap: 4px; align-items: center; }
+.prefs-grid > .pref-font-row .form-select { flex: 1 1 auto; min-width: 0; width: auto; }
+.prefs-grid > .pref-font-row input[type=number] { width: 42px; flex: 0 0 auto; }
+.prefs-grid > .pref-font-row .form-check { flex: 0 0 auto; margin: 0; padding-left: 1.2em; }
 
 /* DAC-predistortion wizard live UI (Java convergence chart + metric panel): g38/g49. */
 .dpd-chart { display: block; width: 100%; height: 150px; border: 1px solid #ddd; border-radius: 3px; background: #fff; }

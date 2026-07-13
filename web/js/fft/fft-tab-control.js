@@ -67,6 +67,9 @@ export class FftTabControl {
     this._setStatus = setStatus;
     this._tileChips = tileChips;
     this.fftAnalyzer = new FftAnalyzer();
+    // Fundamental Vrms snapshotted when the ADC-cal dialog OPENS — the OK rescale uses THIS
+    // (the value the dialog displayed / seeded), not a possibly-drifted fresh getLastVrms().
+    this._fftAdcCalOpenVrms = NaN;
   }
 
   // Effective FFT averages: the averages NumericStepField's canonical value (Java averagesField —
@@ -148,7 +151,8 @@ export class FftTabControl {
   refreshStopAfterEnable() {
     const forever = !Number.isFinite(this.fftAveragesValue());
     $('#fftStopAfterNEn').prop('disabled', !forever);
-    $('#fftStopAfterN').prop('disabled', !(forever && $('#fftStopAfterNEn').is(':checked')));
+    const f = this._getField('fftStopAfterN');
+    if (f) f.setDisabled(!(forever && $('#fftStopAfterNEn').is(':checked')));
   }
 
   syncAlign() {
@@ -233,7 +237,11 @@ export class FftTabControl {
     $('#align').val(prefs.fftAlignGenerator.get() === 'FLL' ? 'fll' : 'off');
     // Stop-after-N (enable + count) and mains-suppression combo (FftTabControl).
     $('#fftStopAfterNEn').prop('checked', prefs.fftStopAfterNEnabled.get());
-    $('#fftStopAfterN').val(prefs.fftStopAfterN.get()).prop('disabled', !prefs.fftStopAfterNEnabled.get());
+    // Stop-after-N NumericStepField (Java stopAfterNField) — push the pref count into the field
+    // (setValue is silent) and grey it when the toggle is off; the full forever-AND-checked gate
+    // is recomputed by refreshStopAfterEnable() off the averages/checkbox flow.
+    const fStopN = this._getField('fftStopAfterN');
+    if (fStopN) { fStopN.setValue(prefs.fftStopAfterN.get()); fStopN.setDisabled(!prefs.fftStopAfterNEnabled.get()); }
     $('#fftMains').val(prefs.fftMainsSuppression.get());
 
     $('.fft-pane .lr.l, .fft-pane .lr.r').removeClass('on');
@@ -343,6 +351,7 @@ export class FftTabControl {
     const prefs = this.prefs;
     const engine = this.engine;
     const io = this.io;
+    const getField = (id) => this._getField(id);
     const restartFft = () => this._restartFft();
     const showConfirm = (title, message) => this._showConfirm(title, message);
 
@@ -354,31 +363,19 @@ export class FftTabControl {
     // writes prefs.fftAverages, refreshes the stop-after gate + tab tile, and restarts the FFT — so
     // there is no plain jQuery change handler here, and no ∞ checkbox (∞ is the top of the series).
     $('#coherent').on('change', () => prefs.fftCoherentAveraging.set($('#coherent').is(':checked')));
-    // Stop-after-N (enable gates the count field) and mains-suppression combo —
+    // Stop-after-N enable (gates the count field) and mains-suppression combo —
     // persisted to prefs (FftTabControl bindings); no engine restart / accumulator reset
     // (Java FftView never wires these to resetStatistics). BUT the running FftController reads
     // config.stopAfterNEnabled / config.stopAfterN every tick (fft-controller _onWorkerResult),
     // so a live toggle MUST push into engine.config — else enabling stop-after mid-run had no
     // effect until a restart (#9): the ∞-target run kept going past N because config was stale.
     // host.readConfig() refreshes the whole config snapshot from the live UI (incl. these two).
+    // The count itself is a NumericStepField (Java stopAfterNField): its model clamps to 2..1e6,
+    // the wheel jumps by 100 and arrows by 1 — its onChange is rebound below (like averages).
     $('#fftStopAfterNEn').on('change', () => {
       prefs.fftStopAfterNEnabled.set($('#fftStopAfterNEn').is(':checked'));
       this.refreshStopAfterEnable();
       if (engine.running) this.host.readConfig();
-    });
-    $('#fftStopAfterN').on('change', () => {
-      prefs.fftStopAfterN.set(Math.max(2, Math.min(1000000, parseInt($('#fftStopAfterN').val(), 10) || 10)));
-      if (engine.running) this.host.readConfig();
-    });
-    // Coarse wheel step of 100 (Java STOP_AFTER_WHEEL_STEP) — arrows still step by 1, the
-    // wheel jumps in hundreds since the count ranges up to 1,000,000.
-    $('#fftStopAfterN').on('wheel', function (ev) {
-      if ($(this).prop('disabled')) return;
-      ev.preventDefault();
-      const dir = ev.originalEvent.deltaY < 0 ? 1 : -1;
-      const cur = parseInt($(this).val(), 10) || 10;
-      const next = Math.max(2, Math.min(1000000, cur + dir * 100));
-      $(this).val(next).trigger('change');
     });
     $('#fftMains').on('change', () => prefs.fftMainsSuppression.set($('#fftMains').val()));
 
@@ -492,6 +489,17 @@ export class FftTabControl {
         if (engine.running) this.host.readConfig();
       };
     }
+    // Stop-after-N COUNT (Java stopAfterNField): NO reset — write the pref and push the live
+    // config so the running consumer sees the new N next tick (like the enable toggle above).
+    // The field model clamps to 2..1e6 (Java STOP_AFTER_MIN/MAX), so no re-clamp here. Rebind
+    // its onChange here (bind() runs after initStepFields, where it was a placeholder).
+    const fStopN = this._getField('fftStopAfterN');
+    if (fStopN) {
+      fStopN.onChange = (v) => {
+        prefs.fftStopAfterN.set(v);
+        if (engine.running) this.host.readConfig();
+      };
+    }
     // THD "Manual fundamental" VALUE (Java fftManualFundVrmsProperty → onThdSettingChanged,
     // FftView.java:478): a THD setting — never a restart/reset. The app.js-built field's
     // onChange restartFft()'d when enabled (an over-reset mid-run, and a no-op while stopped
@@ -554,14 +562,24 @@ export class FftTabControl {
         this._showConfirm(t('calibrate.title'), t('calibrate.error.noVrms'));
         return;
       }
+      // Snapshot the OPEN-time fundamental Vrms (Java AdcCalibrationDialog receives currentVrms
+      // at construction; the owner rescales against the DISPLAYED value). getLastVrms() can move
+      // while the dialog is open, so the OK ratio must use THIS number — not a fresh read.
+      this._fftAdcCalOpenVrms = measured;
       $('#fftAdcCalCurrent').text(t('calibrate.current', measured.toFixed(6) + ' V'));
-      $('#fftAdcCalValue').val(measured.toFixed(6));   // seed with the live reading
+      // Seed the AMPLITUDE step field with the live reading (unit lives in the input text).
+      const field = getField('fftAdcCalValue');
+      if (field) field.setValue(measured);
       $('#fftAdcCalError').addClass('d-none');
       window.bootstrap.Modal.getOrCreateInstance(document.getElementById('fftAdcCalModal')).show();
     });
     $('#fftAdcCalOk').on('click', () => {
-      const measured = this.fftView.getLastVrms();
-      const actual = parseFloat(String($('#fftAdcCalValue').val()).replace(',', '.'));
+      const measured = this._fftAdcCalOpenVrms;   // open-time reading the dialog displayed
+      // The actual amplitude is the AMPLITUDE step field's canonical Vrms (V / mV / µV / dBV
+      // in the input text — no <select>). Commit any pending typed text, then read canonical.
+      const field = getField('fftAdcCalValue');
+      if (field) field.model.commit(field.input.value.trim());
+      const actual = field ? field.getValue() : NaN;
       // Mirror AdcCalibrationDialog: inline error on a non-positive / unparsable value, keep
       // the dialog open; else rescale the ADC full-scale and reflect it in the prefs field.
       if (!(measured > 0) || !(actual > 0) || !Number.isFinite(actual)) {

@@ -100,7 +100,17 @@ export class AudioEngine {
       computeAnalysisFreqs: () => this._gen.computeAnalysisFreqs(),
     });
     // Scope consumer (gui/scope/ScopeController): a latest-window reader of the shared capture.
-    this._scope = new ScopeController(this._capture, this.config, { getSnapped: () => this._gen.snapped });
+    // Both dual-tone refine seeds read LIVE per access — tone 1 via _genEmitFreq(), tone 2 via
+    // _genEmitFreq2() — never the cached gen.snapped field (which computeAnalysisFreqs only
+    // repopulates at capture/generator start). The seeds must track the live, bound generator
+    // settings (user rule: bidi-binding semantics, no caching), closing the stale-seed window
+    // that a stopped/edited generator would otherwise leave in gen.snapped. Mirrors Java
+    // ScopeMeasurementWorker re-reading the generator prefs live each measurement pass. The
+    // cached gen.snapped stays as-is for the FFT/scope geometry consumers.
+    this._scope = new ScopeController(this._capture, this.config, {
+      getSnapped: () => this._gen._genEmitFreq(),
+      getSnapped2: () => this._gen._genEmitFreq2(),
+    });
     // FFT consumer (gui/fft/FftController): the worker pool + cross-frame coherent accumulator +
     // FLL steer + stop-after-N + the render-time .frc/mains de-embed. Reads/steers the generator.
     this._fft = new FftController(this._capture, this._gen, this.config, { status: (t) => this._status(t) });
@@ -367,8 +377,6 @@ export class AudioEngine {
    *  surface when acquireCaptureReader returns null). */
   getLastStartError() { return this._capture.getLastStartError(); }
 
-  readMeasurementWindow() { return this._scope.readMeasurementWindow(); }
-  readMeasurementGap() { return this._scope.readMeasurementGap(); }
   readZoomedWindow() { return this._scope.readZoomedWindow(); }
 
 
