@@ -42,18 +42,6 @@ function fmtCalVoltage(v) {
   return `${v.toPrecision(3)} V`;
 }
 
-// Parses the entered value + unit to volts RMS (Java AdcCalibrationDialog.parseAsVrms):
-// mV → /1000, dBV → 10^(v/20), V → as-is. Accepts decimal point or comma. NaN on failure.
-function parseAsVrms(valueStr, unit) {
-  const v = parseFloat(String(valueStr).trim().replace(',', '.'));
-  if (!Number.isFinite(v)) return NaN;
-  switch (unit) {
-    case 'mV':  return v / 1000;
-    case 'dBV': return Math.pow(10, v / 20);
-    default:    return v;
-  }
-}
-
 export class ScopeTabControl {
   /**
    * @param engine the AudioEngine (record state via host; ADC-cal reads the live scope view).
@@ -96,6 +84,9 @@ export class ScopeTabControl {
     // longer than the capture ring records FORWARD to disk in real time
     // (startStreamingSave); a request within the ring dumps it instantly.
     this.pendingScopeSaveTarget = null;   // {name, handle} from pickSaveTarget, or null
+    // Measured Vrms snapshotted when the ADC-cal dialog OPENS — the OK rescale uses THIS
+    // (the value the dialog displayed / seeded), not a possibly-drifted fresh reading.
+    this._adcCalOpenVrms = NaN;
   }
 
   // Channel / Edge / Mode are single-select toggle button groups (Java
@@ -131,6 +122,8 @@ export class ScopeTabControl {
     $('#scopeRightAc').toggleClass('active', prefs.oscRightAcMode.get());
     $('#scopeLeftSinc').prop('checked', prefs.oscLeftSincInterpEnabled.get());
     $('#scopeRightSinc').prop('checked', prefs.oscRightSincInterpEnabled.get());
+    $('#scopeLeftResidual').prop('checked', prefs.oscLeftResidualEnabled.get());
+    $('#scopeRightResidual').prop('checked', prefs.oscRightResidualEnabled.get());
     $('#scopeLeftMains').val(prefs.oscLeftMainsSuppression.get());
     $('#scopeRightMains').val(prefs.oscRightMainsSuppression.get());
     $('#scopeLeftLpf').val(prefs.oscLeftLpf.get());
@@ -307,6 +300,8 @@ export class ScopeTabControl {
     p.rightAcMode = prefs.oscRightAcMode.get();
     p.leftSincInterpEnabled = prefs.oscLeftSincInterpEnabled.get();
     p.rightSincInterpEnabled = prefs.oscRightSincInterpEnabled.get();
+    p.leftResidualEnabled = prefs.oscLeftResidualEnabled.get();
+    p.rightResidualEnabled = prefs.oscRightResidualEnabled.get();
     p.leftMainsSuppression = prefs.oscLeftMainsSuppression.get();
     p.rightMainsSuppression = prefs.oscRightMainsSuppression.get();
     p.leftLpf = prefs.oscLeftLpf.get();
@@ -339,6 +334,8 @@ export class ScopeTabControl {
     prefs.oscRightAcMode.set(p.rightAcMode);
     prefs.oscLeftSincInterpEnabled.set(p.leftSincInterpEnabled);
     prefs.oscRightSincInterpEnabled.set(p.rightSincInterpEnabled);
+    prefs.oscLeftResidualEnabled.set(p.leftResidualEnabled);
+    prefs.oscRightResidualEnabled.set(p.rightResidualEnabled);
     prefs.oscLeftMainsSuppression.set(p.leftMainsSuppression);
     prefs.oscRightMainsSuppression.set(p.rightMainsSuppression);
     prefs.oscLeftLpf.set(p.leftLpf);
@@ -398,6 +395,10 @@ export class ScopeTabControl {
     $('#scopeRightAc').on('click', function () { const on = !$(this).hasClass('active'); $(this).toggleClass('active', on); prefs.oscRightAcMode.set(on); host.refreshTiles(); host.requestRedraw(); });
     $('#scopeLeftSinc').on('change', () => { prefs.oscLeftSincInterpEnabled.set($('#scopeLeftSinc').is(':checked')); host.refreshTiles(); host.requestRedraw(); });
     $('#scopeRightSinc').on('change', () => { prefs.oscRightSincInterpEnabled.set($('#scopeRightSinc').is(':checked')); host.refreshTiles(); host.requestRedraw(); });
+    // Residual view (Java oscLeft/RightResidualEnabled onChange → controller.redrawViews +
+    // toolbarTabs.refreshTab): subtract the best-fit tone and draw only the residual.
+    $('#scopeLeftResidual').on('change', () => { prefs.oscLeftResidualEnabled.set($('#scopeLeftResidual').is(':checked')); host.refreshTiles(); host.requestRedraw(); });
+    $('#scopeRightResidual').on('change', () => { prefs.oscRightResidualEnabled.set($('#scopeRightResidual').is(':checked')); host.refreshTiles(); host.requestRedraw(); });
     // Per-channel mains-suppression + LPF combos (Java oscLeft/RightMainsSuppression /
     // oscLeft/RightLpf) — the scope view applies them to the active channel's buffer
     // before the trigger search + trace.
@@ -633,22 +634,32 @@ export class ScopeTabControl {
       const m = view.latest;
       // Gated on a live signal (Java AdcCalibrationDialog only opens with a measured Vrms).
       if (!m || !(m.vrms > 0)) { setStatus(t('calibrate.error.noVrms')); return; }
+      // Snapshot the OPEN-time reading (Java AdcCalibrationDialog receives currentVrms at
+      // construction; the owner rescales against the value the dialog DISPLAYED). The live
+      // reading can drift while the dialog is open, so the OK ratio must use THIS number —
+      // not a fresh view.latest — or it wouldn't match what the user was shown/seeded with.
+      this._adcCalOpenVrms = m.vrms;
       $('#adcCalCurrent').text(t('calibrate.current', fmtCalVoltage(m.vrms)));
-      $('#adcCalValue').val(m.vrms.toFixed(6));   // seed with the current reading
+      // Seed the AMPLITUDE step field with the current reading (unit lives in the input text).
+      const field = getField('adcCalValue');
+      if (field) field.setValue(m.vrms);
       $('#adcCalError').addClass('d-none');
       window.bootstrap.Modal.getOrCreateInstance(document.getElementById('adcCalModal')).show();
     });
     $('#adcCalOk').on('click', () => {
-      const m = view.latest;
-      // Read the V / mV / dBV unit and convert to Vrms (Java AdcCalibrationDialog.parseAsVrms).
-      const actual = parseAsVrms($('#adcCalValue').val(), $('#adcCalUnit').val());
+      const measuredVrms = this._adcCalOpenVrms;   // open-time reading the dialog displayed
+      // The actual amplitude is the AMPLITUDE step field's canonical Vrms (V / mV / µV / dBV
+      // in the input text — no <select>). Commit any pending typed text, then read canonical.
+      const field = getField('adcCalValue');
+      if (field) field.model.commit(field.input.value.trim());
+      const actual = field ? field.getValue() : NaN;
       // Java pops an error dialog and keeps the dialog open on a non-positive / unparsable value;
       // surface it inline instead of silently hiding (mirror of DacCalibrationDialog).
-      if (!m || !(m.vrms > 0) || !(actual > 0) || !Number.isFinite(actual)) {
+      if (!(measuredVrms > 0) || !(actual > 0) || !Number.isFinite(actual)) {
         $('#adcCalError').removeClass('d-none');
         return;
       }
-      prefs.setAdcFsVoltageRms(prefs.adcFsVoltageRms.get() * (actual / m.vrms));
+      prefs.setAdcFsVoltageRms(prefs.adcFsVoltageRms.get() * (actual / measuredVrms));
       prefs.save();
       $('#adcFsVrms').val(prefs.adcFsVoltageRms.get().toFixed(6));
       setStatus(`ADC calibrated: full-scale = ${prefs.adcFsVoltageRms.get().toFixed(4)} V RMS`);

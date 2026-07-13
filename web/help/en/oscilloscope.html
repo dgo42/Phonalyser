@@ -255,8 +255,10 @@
   <h3 id="scope-tab-left">Left tab</h3>
   <p><img src="img/Oscilloscope - Left.png" alt="Left channel tab"/></p>
   <p>Controls for the left channel.  Contains the channel toggle,
-     V/div selector, AC/DC button, and Sin/Lin checkbox.  Same
-     layout for the <a href="#scope-tab-right">Right</a> tab.</p>
+     V/div selector, AC/DC button, Sin/Lin checkbox, Residual
+     checkbox, and the per-channel <b>Mains</b> and <b>LPF</b>
+     drop-downs.  Same layout for the <a href="#scope-tab-right">Right</a>
+     tab.</p>
 
   <h4 id="scope-channel-toggle">L (channel enable)</h4>
   <p>Square toggle that enables / disables the channel.  When off,
@@ -285,10 +287,74 @@
      least ~2&nbsp;px apart on screen (i.e. zoomed in on the time axis);
      closer than that, the two look identical and sinc just costs more CPU.</p>
 
+  <h4 id="scope-residual">Residual</h4>
+  <p>Per-channel checkbox.  When checked, the channel's trace is replaced by the
+     <b>residual</b>: the captured signal minus a best-fit single tone.  The
+     tone's frequency comes from the scope's frequency measurement, and its
+     amplitude and phase are fitted over the displayed window — so the
+     synthesized tone is phase-aligned with the triggered display, and what
+     remains on screen is the <b>distortion, noise, hum and glitches</b> that
+     hide under the fundamental.  The <b>DC level is preserved</b> — only the
+     tone is taken out — so use <a href="#scope-acdc">AC</a> if you want the
+     residual centred on zero.</p>
+  <p>The residual works with a <b>dual-tone</b> signal too.  With two
+     fundamentals the frequency measurement no longer names a single tone, so
+     the two frequencies are <b>measured from the captured signal itself</b>
+     (seeded from the generator's values, then refined on the capture) — which
+     makes the subtraction immune to the DAC and the ADC running on different
+     clocks; the generator's values are used only until a measurement is
+     available.  <b>Both tones are fitted</b> — the two fits refined alternately
+     so neither leaks into the other — and both are subtracted, leaving the
+     <b>intermodulation
+     products</b>, noise and glitches under the tone pair on screen.  The fit
+     window is automatically sized to span at least two beat cycles of
+     |F1&nbsp;−&nbsp;F2|; if both frequencies are equal (no beat), the captured
+     trace is shown unchanged.</p>
+  <p>Triggering and the frequency / period readouts still work on the captured
+     signal, and the Vpp / Vrms readouts also still describe the captured
+     signal — only the trace changes.  With <a href="#scope-autosetup">Auto-Setup</a>,
+     a channel showing its residual takes its vertical scale from the
+     <b>residual's</b> peak-to-peak value, while the time base and trigger are
+     still derived from the captured signal.  When the settings-tab strip is
+     collapsed, the channel's tile shows a <b>residual</b> marker while the mode
+     is on.</p>
+  <p>A channel in residual mode gets no
+     <a href="#scope-trigger-beat">reconstructed-beat</a> overlay — the beat
+     envelope belongs to the very tones the residual has just taken out.</p>
+
+  <h4 id="scope-mains">Mains</h4>
+  <p>Drop-down that applies a per-channel <b>mains-hum rejection</b> filter,
+     tracked live at the line frequency (50 / 60&nbsp;Hz and its harmonics).  It
+     filters what the trace shows and what the trigger and the measurements act
+     on, while the <b>DC level is preserved</b>.  Four options:</p>
+  <ul>
+    <li><b>None</b> — pass-through, no rejection.</li>
+    <li><b>IIR comb</b> — a frequency-tracked feedback comb filter that notches
+        the line fundamental and every harmonic.</li>
+    <li><b>Sync subtract</b> — period-locked synchronous subtraction of the
+        repeating hum waveform.</li>
+    <li><b>LMS canceller</b> — an adaptive least-mean-squares line canceller.</li>
+  </ul>
+  <p>How the tracked comb works is covered in the
+     <a href="theory/oscilloscope.html#mains">Theory of operation</a>.</p>
+
+  <h4 id="scope-lpf">LPF</h4>
+  <p>Drop-down that applies a per-channel <b>high-frequency cleanup</b> to the
+     displayed trace.  Three options:</p>
+  <ul>
+    <li><b>None</b> — off.</li>
+    <li><b>80kHz</b> — an 80&nbsp;kHz Chebyshev low-pass that removes continuous
+        high-frequency content above the cut-off.  It has <b>no effect when
+        80&nbsp;kHz sits above the capture's Nyquist frequency</b> (i.e. at low
+        sample rates there is nothing above 80&nbsp;kHz to remove).</li>
+    <li><b>Despike</b> — a median filter that removes impulsive glitches without
+        the ringing a linear filter would add.</li>
+  </ul>
+
   <h3 id="scope-tab-right">Right tab</h3>
   <p><img src="img/Oscilloscope - Right.png" alt="Right channel tab"/></p>
   <p>Identical layout to the Left tab — channel toggle, V/div,
-     AC/DC and Sin/Lin, but for the right channel.</p>
+     AC/DC, Sin/Lin and Residual, but for the right channel.</p>
 
   <h3 id="scope-tab-horizontal">Horizontal tab</h3>
   <p><img src="img/Oscilloscope - Horizontal.png" alt="Horizontal tab"/></p>
@@ -379,8 +445,15 @@
      <a href="generator.html#generator-dualtone">Dual&nbsp;tone</a> form</b>
      (greyed out for every other waveform).  When on, the scope overlays the
      <b>dimmed |f₁−f₂| beat envelope</b> of the two tones on top of the live
-     trace, in the trigger channel's colour — so you can see the slow beat the
-     two close tones produce and stabilise the trigger on it.</p>
+     trace, so you can see the slow beat the two close tones produce and
+     stabilise the trigger on it.  The overlay is drawn <b>per shown channel</b>,
+     each in a <b>dimmed shade of that channel's own trace colour</b>, so every
+     dual-tone trace carries its own visually paired envelope.</p>
+  <p>It is <b>hidden</b> in two
+     cases: while the <b>generator is stopped</b> (with no tones playing there is
+     no beat, and the reconstruction would only trace noise), and on any channel
+     that is showing its <a href="#scope-residual">residual</a> (the envelope
+     belongs to the tones that channel has just removed).</p>
 
   <h3 id="scope-tab-presets">Presets tab</h3>
   <p><img src="img/Oscilloscope - Presets.png" alt="Presets tab"/></p>

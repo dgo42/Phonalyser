@@ -42,6 +42,7 @@ const ESM = [
   ['js/audio/fft-worker.js', 'fft-worker.js'],
   ['js/audio/fft-pool-worker.js', 'fft-pool-worker.js'],
   ['js/scope/osc-freq-worker.js', 'osc-freq-worker.js'],
+  ['js/scope/osc-meas-worker.js', 'osc-meas-worker.js'],
 ];
 const IIFE = [
   ['js/audio/worklets/capture-processor.js', 'worklets/capture-processor.js'],

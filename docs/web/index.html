@@ -13,6 +13,16 @@
 </head>
 <body>
 
+<!-- ===== startup splash =====
+     Branded launch splash (Java gui/StartupSplash port). This static overlay is
+     in the initial HTML so the dark backdrop shows the INSTANT the page paints,
+     before the app module runs; startup-splash.js then draws the 560×340 artwork
+     panel into the canvas and dismisses the whole overlay once the boot audio-
+     device scan resolves. Backdrop colour = the Java bgTop rgb(10,14,26). -->
+<div id="startupSplash">
+  <canvas width="560" height="340" aria-label="Phonalyser"></canvas>
+</div>
+
 <!-- Status sink: target for $('#status').text(...) progress/echo messages
      (loaded-file echo, decode failures, etc.). Kept visually hidden — the web
      UI surfaces state via banners/tiles, but the message text is still written
@@ -85,13 +95,13 @@
 
           <label class="field-label" id="freqLabel" for="toneHz">Frequency</label>
           <div class="numfield"><input id="toneHz" class="nf-input" type="text" value="1000" data-i18n-title="generator.frequency.tooltip"/>
-            <span class="nf-unit">Hz</span><span class="nf-step"><button>▲</button><button>▼</button></span></div>
+            <span class="nf-step"><button>▲</button><button>▼</button></span></div>
 
           <!-- second tone (DUAL_TONE only); Frequency 1 above is the dual-tone tone 1 -->
           <div id="tone2Wrap" style="display:none">
             <label class="field-label" id="tone2Label" for="tone2Hz" data-i18n="generator.dualTone.freq2">Frequency 2</label>
             <div class="numfield"><input id="tone2Hz" class="nf-input" type="text" value="1100" data-i18n-title="generator.dualTone.freq2.tooltip"/>
-              <span class="nf-unit">Hz</span><span class="nf-step"><button>▲</button><button>▼</button></span></div>
+              <span class="nf-step"><button>▲</button><button>▼</button></span></div>
           </div>
 
           <!-- snap sits BELOW the frequency block (single OR dual) so it keeps its slot -->
@@ -104,15 +114,15 @@
           <div id="sweepWrap" style="display:none">
             <label class="field-label" data-i18n="generator.sweep">Sweep</label>
             <label class="field-label" for="sweepStart" data-i18n="generator.sweep.startFreq">Start freq</label>
-            <div class="numfield"><input id="sweepStart" class="nf-input" type="text" data-i18n-title="generator.sweep.startFreq.tooltip"/><span class="nf-unit">Hz</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+            <div class="numfield"><input id="sweepStart" class="nf-input" type="text" data-i18n-title="generator.sweep.startFreq.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
             <label class="field-label" for="sweepStop" data-i18n="generator.sweep.stopFreq">Stop freq</label>
-            <div class="numfield"><input id="sweepStop" class="nf-input" type="text" data-i18n-title="generator.sweep.stopFreq.tooltip"/><span class="nf-unit">Hz</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+            <div class="numfield"><input id="sweepStop" class="nf-input" type="text" data-i18n-title="generator.sweep.stopFreq.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
             <label class="field-label" for="sweepDur" data-i18n="generator.sweep.duration">Duration</label>
-            <div class="numfield"><input id="sweepDur" class="nf-input" type="text" data-i18n-title="generator.sweep.duration.tooltip"/><span class="nf-unit">s</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+            <div class="numfield"><input id="sweepDur" class="nf-input" type="text" data-i18n-title="generator.sweep.duration.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
             <label class="field-label" for="sweepFadeIn" data-i18n="generator.sweep.fadeIn">Fade in</label>
-            <div class="numfield"><input id="sweepFadeIn" class="nf-input" type="text" data-i18n-title="generator.sweep.fadeIn.tooltip"/><span class="nf-unit">s</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+            <div class="numfield"><input id="sweepFadeIn" class="nf-input" type="text" data-i18n-title="generator.sweep.fadeIn.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
             <label class="field-label" for="sweepFadeOut" data-i18n="generator.sweep.fadeOut">Fade out</label>
-            <div class="numfield"><input id="sweepFadeOut" class="nf-input" type="text" data-i18n-title="generator.sweep.fadeOut.tooltip"/><span class="nf-unit">s</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+            <div class="numfield"><input id="sweepFadeOut" class="nf-input" type="text" data-i18n-title="generator.sweep.fadeOut.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
             <div class="form-check form-check-sm"><input id="sweepLoop" class="form-check-input" type="checkbox" data-i18n-title="generator.sweep.loop.tooltip"/><label class="form-check-label" for="sweepLoop" data-i18n="generator.sweep.loop">Loop</label></div>
           </div>
 
@@ -120,20 +130,20 @@
           <div id="amp2Wrap" style="display:none">
             <label class="field-label" for="amp1Pct" data-i18n="generator.dualTone.amp1">Frequency 1 amplitude %</label>
             <div class="numfield"><input id="amp1Pct" class="nf-input" type="text" value="50" data-i18n-title="generator.dualTone.amp1.tooltip"/>
-              <span class="nf-unit">%</span><span class="nf-step"><button>▲</button><button>▼</button></span></div>
+              <span class="nf-step"><button>▲</button><button>▼</button></span></div>
             <label class="field-label" for="amp2Pct" data-i18n="generator.dualTone.amp2">Frequency 2 amplitude %</label>
             <div class="numfield"><input id="amp2Pct" class="nf-input" type="text" value="50" data-i18n-title="generator.dualTone.amp2.tooltip"/>
-              <span class="nf-unit">%</span><span class="nf-step"><button>▲</button><button>▼</button></span></div>
+              <span class="nf-step"><button>▲</button><button>▼</button></span></div>
           </div>
 
           <!-- id "ampDbfs" kept (app.js references it) but now holds canonical V RMS, not dBFS. -->
           <label class="field-label" for="ampDbfs" data-i18n="generator.amplitudeRms">Amplitude (RMS)</label>
           <div class="numfield"><input id="ampDbfs" class="nf-input" type="text" value="0.5" data-i18n-title="generator.amplitudeRms.tooltip"/>
-            <span class="nf-unit">V</span><span class="nf-step"><button>▲</button><button>▼</button></span></div>
+            <span class="nf-step"><button>▲</button><button>▼</button></span></div>
 
           <label class="field-label" id="dutyLabel" for="duty" data-i18n="generator.dutyCycle">Duty cycle</label>
           <div class="numfield" id="dutyWrap"><input id="duty" class="nf-input" type="text" value="50" data-i18n-title="generator.dutyCycle.tooltip"/>
-            <span class="nf-unit">%</span><span class="nf-step"><button>▲</button><button>▼</button></span></div>
+            <span class="nf-step"><button>▲</button><button>▼</button></span></div>
 
           <label class="field-label" for="dither" data-i18n="generator.dither">Dither</label>
           <!-- Neutral seed only; rebuildDitherCombo() regenerates the full 0..depth Off/n-bits list on init/open. -->
@@ -145,7 +155,7 @@
 
           <label class="field-label" for="genDuration" data-i18n="generator.duration">Duration</label>
           <div class="numfield"><input id="genDuration" class="nf-input" type="text" value="5" data-i18n-title="generator.duration.tooltip"/>
-            <span class="nf-unit">s</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+            <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
 
           <label class="field-label" for="genSaveName" data-i18n="generator.saveTo">Save to…</label>
           <div class="filefield"><input id="genSaveName" class="nf-input" type="text" value="" readonly data-i18n-title="generator.saveTo.tooltip"/><button id="genSaveBtn" class="icon-btn" data-i18n-title="generator.saveTo.tooltip"><img src="assets/icons/floppy-disk.svg" class="ff-svg" alt=""></button></div>
@@ -274,9 +284,10 @@
           <div class="tab-panel" id="scopeLeft">
             <div class="scope-row">
               <button id="scopeLeftEnable" class="sq-toggle" data-i18n-title="scope.left.toggle.tooltip">L</button>
-              <div class="numfield sm"><input id="scopeLeftVdiv" class="nf-input" type="text" value="0.1" data-i18n-title="scope.left.scale.tooltip"/><span class="nf-unit">V/div</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+              <div class="numfield sm"><input id="scopeLeftVdiv" class="nf-input" type="text" value="0.1" data-i18n-title="scope.left.scale.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
               <button id="scopeLeftAc" class="sq-toggle" data-i18n-title="scope.left.ac.tooltip">AC</button>
               <label class="sinc-check" for="scopeLeftSinc" data-i18n-title="scope.sinc.tooltip"><input id="scopeLeftSinc" class="form-check-input" type="checkbox" checked/><span class="sinc-frac"><span class="sinc-num">sin x</span><span class="sinc-den">x</span></span></label>
+              <label class="sinc-check" for="scopeLeftResidual" data-i18n-title="scope.left.residual.tooltip"><input id="scopeLeftResidual" class="form-check-input" type="checkbox"/><span data-i18n="scope.residual.label">Residual</span></label>
               <label class="scope-inline-label" for="scopeLeftMains" data-i18n="scope.mains.label">Mains:</label>
               <select id="scopeLeftMains" class="form-select form-select-sm scope-combo-sm" data-i18n-title="scope.mains.tooltip"><option value="NONE">None</option><option value="IIR_COMB">IIR comb</option><option value="SYNC_SUBTRACT">Sync subtract</option><option value="LMS">LMS canceller</option></select>
               <label class="scope-inline-label" for="scopeLeftLpf" data-i18n="scope.lpf.label">LPF:</label>
@@ -286,9 +297,10 @@
           <div class="tab-panel" id="scopeRight">
             <div class="scope-row">
               <button id="scopeRightEnable" class="sq-toggle" data-i18n-title="scope.right.toggle.tooltip">R</button>
-              <div class="numfield sm"><input id="scopeRightVdiv" class="nf-input" type="text" value="0.1" data-i18n-title="scope.right.scale.tooltip"/><span class="nf-unit">V/div</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+              <div class="numfield sm"><input id="scopeRightVdiv" class="nf-input" type="text" value="0.1" data-i18n-title="scope.right.scale.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
               <button id="scopeRightAc" class="sq-toggle" data-i18n-title="scope.right.ac.tooltip">AC</button>
               <label class="sinc-check" for="scopeRightSinc" data-i18n-title="scope.sinc.tooltip"><input id="scopeRightSinc" class="form-check-input" type="checkbox" checked/><span class="sinc-frac"><span class="sinc-num">sin x</span><span class="sinc-den">x</span></span></label>
+              <label class="sinc-check" for="scopeRightResidual" data-i18n-title="scope.right.residual.tooltip"><input id="scopeRightResidual" class="form-check-input" type="checkbox"/><span data-i18n="scope.residual.label">Residual</span></label>
               <label class="scope-inline-label" for="scopeRightMains" data-i18n="scope.mains.label">Mains:</label>
               <select id="scopeRightMains" class="form-select form-select-sm scope-combo-sm" data-i18n-title="scope.mains.tooltip"><option value="NONE">None</option><option value="IIR_COMB">IIR comb</option><option value="SYNC_SUBTRACT">Sync subtract</option><option value="LMS">LMS canceller</option></select>
               <label class="scope-inline-label" for="scopeRightLpf" data-i18n="scope.lpf.label">LPF:</label>
@@ -297,7 +309,7 @@
           </div>
           <div class="tab-panel" id="scopeHoriz">
             <div class="scope-row">
-              <div class="numfield sm"><input id="scopeTdiv" class="nf-input" type="text" value="0.001" data-i18n-title="scope.time.scale.tooltip"/><span class="nf-unit">s/div</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+              <div class="numfield sm"><input id="scopeTdiv" class="nf-input" type="text" value="0.001" data-i18n-title="scope.time.scale.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
             </div>
           </div>
           <div class="tab-panel" id="scopeTrig">
@@ -325,7 +337,7 @@
               </div>
               <button id="scopeTrigStart" class="sq-toggle" disabled data-i18n-title="scope.trigger.start.tooltip"><i class="bi bi-play-fill"></i></button>
               <label class="sinc-check" for="scopeTrigHystEn" data-i18n-title="scope.trigger.hysteresis.tooltip"><input id="scopeTrigHystEn" class="form-check-input" type="checkbox"/><span data-i18n="scope.trigger.hysteresis">Hysteresis</span></label>
-              <div class="numfield sm"><input id="scopeTrigHyst" class="nf-input" type="text" value="0.4" data-i18n-title="scope.trigger.hysteresis.tooltip"/><span class="nf-unit">div</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+              <div class="numfield sm"><input id="scopeTrigHyst" class="nf-input" type="text" value="0.4" data-i18n-title="scope.trigger.hysteresis.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
               <label class="sinc-check" for="scopeTrigBeat" data-i18n-title="scope.trigger.reconstructedBeat.tooltip"><input id="scopeTrigBeat" class="form-check-input" type="checkbox"/><span data-i18n="scope.trigger.reconstructedBeat">Reconstructed beat</span></label>
             </div>
           </div>
@@ -367,7 +379,7 @@
                 <input id="scopeSaveName" class="nf-input" type="text" value="scope.wav" readonly data-i18n-title="scope.save.browse.tooltip"/>
                 <button id="scopeSaveBrowse" class="icon-btn" type="button" data-i18n-title="scope.save.browse.tooltip"><img src="assets/icons/folder-open.svg" class="ff-svg" alt=""></button>
               </div>
-              <div class="numfield sm"><input id="scopeSaveDur" class="nf-input" type="text" value="5" data-i18n-title="scope.save.duration.tooltip"/><span class="nf-unit">s</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+              <div class="numfield sm"><input id="scopeSaveDur" class="nf-input" type="text" value="5" data-i18n-title="scope.save.duration.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
               <button id="scopeSaveGo" class="btn btn-sm btn-outline-primary icon-btn" data-i18n-title="scope.save.tooltip"><img src="assets/icons/floppy-disk.svg" class="ff-svg" alt=""></button>
             </div>
           </div>
@@ -473,13 +485,13 @@
                  (:640/:654). Built + bound in app.js initStepFields / FftTabControl.bind(). -->
             <div class="settings-grid thd-grid">
               <label class="mb-0" style="white-space:nowrap"><input id="thdDistMinEn" class="form-check-input me-1" type="checkbox" data-i18n-title="fft.thd.distMin.tooltip"/><span data-i18n="fft.thd.distMin">Enable distortion HP</span></label>
-              <div class="numfield sm"><input id="thdDistMin" class="nf-input" type="text" value="20" data-i18n-title="fft.thd.distMin.tooltip"/><span class="nf-unit">Hz</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+              <div class="numfield sm"><input id="thdDistMin" class="nf-input" type="text" value="20" data-i18n-title="fft.thd.distMin.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
               <span></span><span></span>
               <label class="mb-0" style="white-space:nowrap"><input id="thdDistMaxEn" class="form-check-input me-1" type="checkbox" data-i18n-title="fft.thd.distMax.tooltip"/><span data-i18n="fft.thd.distMax">Enable distortion LP</span></label>
-              <div class="numfield sm"><input id="thdDistMax" class="nf-input" type="text" value="20000" data-i18n-title="fft.thd.distMax.tooltip"/><span class="nf-unit">Hz</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+              <div class="numfield sm"><input id="thdDistMax" class="nf-input" type="text" value="20000" data-i18n-title="fft.thd.distMax.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
               <span></span><span></span>
               <label class="mb-0" style="white-space:nowrap"><input id="fftManualFundEn" class="form-check-input me-1" type="checkbox" data-i18n-title="fft.thd.manualFund.tooltip"/><span data-i18n="fft.thd.manualFund">Manual fundamental</span></label>
-              <div class="numfield sm"><input id="fftManualFund" class="nf-input" type="text" data-i18n-title="fft.thd.manualFund.tooltip"/><span class="nf-unit">V</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+              <div class="numfield sm"><input id="fftManualFund" class="nf-input" type="text" data-i18n-title="fft.thd.manualFund.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
               <span></span><span></span>
               <label data-i18n="fft.thd.maxThd">Max harmonic for THD:</label>
               <div class="numfield sm"><input id="thdMaxH" class="nf-input" type="text" value="9" data-i18n-title="fft.thd.maxThd.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
@@ -529,14 +541,14 @@
               <!-- Java averagesField: NumericStepField(UnitFamily.NONE, min 2, max ∞, AVERAGES_SERIES
                    {2,4,8,16,32,64,128,∞}, 0 decimals). The ∞ is the top of the stepper series — typed
                    as "∞"/"inf"; there is NO separate infinity checkbox (Java has none). -->
-              <div class="numfield sm"><input id="averages" class="nf-input" type="text" data-i18n-title="fft.settings.averages.tooltip"/><span class="nf-unit"></span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+              <div class="numfield sm"><input id="averages" class="nf-input" type="text" data-i18n-title="fft.settings.averages.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
 
               <!-- Stop-after-N + Mains-suppression share ONE full-width row (Java stopRow:
                    a RowLayout carrying the stop-after checkbox + field, then the Mains
                    label + combo). Spans all 4 grid columns so it stays left-packed. -->
               <div class="stopafter-cell grid-span4">
                 <div class="form-check form-check-sm mb-0"><input id="fftStopAfterNEn" class="form-check-input" type="checkbox" data-i18n-title="fft.settings.stopAfterN.tooltip"/><label class="form-check-label" for="fftStopAfterNEn" data-i18n="fft.settings.stopAfterN" data-i18n-title="fft.settings.stopAfterN.tooltip">Stop after N averages</label></div>
-                <div class="numfield sm"><input id="fftStopAfterN" class="nf-input" type="number" value="10" min="2" max="1000000" step="1" data-i18n-title="fft.settings.stopAfterN.tooltip"/></div>
+                <div class="numfield sm"><input id="fftStopAfterN" class="nf-input" type="text" value="10" data-i18n-title="fft.settings.stopAfterN.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
                 <label class="mb-0" data-i18n="fft.settings.mainsSuppression">Mains suppression:</label>
                 <select id="fftMains" class="form-select form-select-sm" data-i18n-title="fft.settings.mainsSuppression.tooltip">
                   <option value="NONE">None</option><option value="IIR_COMB">IIR comb</option>
@@ -643,6 +655,8 @@
           <div class="tiletabs" id="frTabs">
             <div class="tab active" data-panel="frSettings"><div class="t-title" data-i18n="freqResp.tab.settings">Settings</div><div class="t-sub" id="frTabSub"><span class="tile">1–192k</span><span class="tile">1.00V</span><span class="tile">192k pts</span><span class="tile">2M</span></div></div>
             <div class="tab" data-panel="frRiaaPanel"><div class="t-title" data-i18n="freqResp.tab.riaa">RIAA &amp; IEC</div><div class="t-sub" id="frRiaaTabSub"></div></div>
+            <div class="tab" data-panel="frFilterPanel"><div class="t-title" data-i18n="freqResp.tab.filters">Filters</div><div class="t-sub" id="frFiltersTabSub"></div></div>
+            <div class="tab" data-panel="frUnevenPanel"><div class="t-title" data-i18n="freqResp.tab.unevenness">Unevenness</div><div class="t-sub" id="frUnevenTabSub"></div></div>
             <div class="tab" data-panel="frPresetsPanel"><div class="t-title" data-i18n="freqResp.tab.presets">Presets</div><div class="t-sub" id="frPresetTabSub"></div></div>
             <div class="tab" data-panel="frUtility"><div class="t-title" data-i18n="freqResp.tab.utility">Utility</div></div>
             <div class="tab" data-panel="frCalPanel"><div class="t-title" data-i18n="freqResp.tab.calibration">Load calibration…</div><div class="t-sub" id="frCalTabSub"></div></div>
@@ -656,19 +670,19 @@
           <!-- Settings drop-down panel -->
           <div class="tab-panel" id="frSettings">
             <div class="settings-grid fr-settings-grid">
-              <!-- Full generator-style numfield DOM (.nf-unit + .nf-step) so the
+              <!-- Full generator-style numfield DOM (.nf-input + .nf-step) so the
                    app.js NumericStepField builder binds steppers / auto-ranged unit
                    identically to the generator #toneHz field. -->
               <label data-i18n="freqResp.settings.start">Start frequency, Hz</label>
               <div class="numfield sm"><input id="frStart" class="nf-input" type="text" value="1" data-i18n-title="freqResp.settings.start.tooltip"/>
-                <span class="nf-unit">Hz</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
               <label data-i18n="freqResp.settings.stop">Stop frequency, Hz</label>
               <div class="numfield sm"><input id="frStop" class="nf-input" type="text" value="192000" data-i18n-title="freqResp.settings.stop.tooltip"/>
-                <span class="nf-unit">Hz</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
 
               <label data-i18n="freqResp.settings.amplitude">Amplitude (RMS)</label>
               <div class="numfield sm"><input id="frAmp" class="nf-input" type="text" value="0.5" data-i18n-title="freqResp.settings.amplitude.tooltip"/>
-                <span class="nf-unit">V</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
               <label id="frFftLabel">FFT size (4.9s)</label>
               <select id="frFft" class="form-select form-select-sm" data-i18n-title="freqResp.settings.fftSize.tooltip"><option value="65536">64k</option><option value="131072">128k</option><option value="262144">256k</option><option value="524288">512k</option><option value="1048576">1M</option><option value="2097152" selected>2M</option><option value="4194304">4M</option><option value="8388608">8M</option><option value="16777216">16M</option></select>
 
@@ -677,7 +691,7 @@
                 <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
               <label data-i18n="freqResp.settings.leadIn">Lead-in, s</label>
               <div class="numfield sm"><input id="frLeadIn" class="nf-input" type="text" value="0.2" data-i18n-title="freqResp.settings.leadIn.tooltip"/>
-                <span class="nf-unit">s</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
 
               <label data-i18n="freqResp.settings.dither">Dither</label>
               <select id="frDither" class="form-select form-select-sm" data-i18n-title="freqResp.settings.dither.tooltip"></select>
@@ -694,6 +708,106 @@
               <div class="form-check form-check-sm"><input id="frRiaaRev" class="form-check-input" type="checkbox" data-i18n-title="freqResp.riaa.reverse.tooltip"/><label class="form-check-label" for="frRiaaRev" data-i18n="freqResp.riaa.reverse" data-i18n-title="freqResp.riaa.reverse.tooltip">Reverse RIAA</label></div>
               <div class="form-check form-check-sm"><input id="frRiaaIec" class="form-check-input" type="checkbox" data-i18n-title="freqResp.riaa.iec.tooltip"/><label class="form-check-label" for="frRiaaIec" data-i18n="freqResp.riaa.iec" data-i18n-title="freqResp.riaa.iec.tooltip">IEC amendment</label></div>
               <div class="form-check form-check-sm"><input id="frRiaaCompare" class="form-check-input" type="checkbox" disabled data-i18n-title="freqResp.riaa.compare.tooltip"/><label class="form-check-label" for="frRiaaCompare" data-i18n="freqResp.riaa.compare" data-i18n-title="freqResp.riaa.compare.tooltip">Compare (measured − reference)</label></div>
+            </div>
+          </div>
+
+          <!-- Filters tile-tab (Java FreqRespTabControl.buildFiltersTab): ideal filter
+               overlay vs measured response. Show / Compare + type & response combos +
+               By-spec / By-order radios gate the two field rows; the per-type picture sits
+               to the right and shows in By-spec mode only. -->
+          <div class="tab-panel" id="frFilterPanel">
+            <div class="fr-filter-body mode-spec">
+              <div class="fr-filter-controls">
+                <div class="fr-filter-checks">
+                  <div class="form-check form-check-sm"><input id="frFilterShow" class="form-check-input" type="checkbox" data-i18n-title="freqResp.filter.show.tooltip"/><label class="form-check-label" for="frFilterShow" data-i18n="freqResp.filter.show" data-i18n-title="freqResp.filter.show.tooltip">Show filter curve</label></div>
+                  <div class="form-check form-check-sm"><input id="frFilterCompare" class="form-check-input" type="checkbox" disabled data-i18n-title="freqResp.filter.compare.tooltip"/><label class="form-check-label" for="frFilterCompare" data-i18n="freqResp.filter.compare" data-i18n-title="freqResp.filter.compare.tooltip">Compare (measured − filter)</label></div>
+                </div>
+                <div class="fr-filter-combos">
+                  <label data-i18n="freqResp.filter.type">Filter type</label>
+                  <select id="frFilterType" class="form-select form-select-sm" data-i18n-title="freqResp.filter.type.tooltip">
+                    <option value="LOW_PASS" data-i18n="freqResp.filter.type.lowpass">Low pass</option>
+                    <option value="HIGH_PASS" data-i18n="freqResp.filter.type.highpass">High pass</option>
+                    <option value="BAND_PASS" data-i18n="freqResp.filter.type.bandpass">Band pass</option>
+                    <option value="NOTCH" data-i18n="freqResp.filter.type.notch">Notch</option>
+                  </select>
+                  <label data-i18n="freqResp.filter.response">Filter response</label>
+                  <select id="frFilterResponse" class="form-select form-select-sm" data-i18n-title="freqResp.filter.response.tooltip">
+                    <option value="BESSEL" data-i18n="freqResp.filter.response.bessel">Bessel</option>
+                    <option value="BUTTERWORTH" data-i18n="freqResp.filter.response.butterworth">Butterworth</option>
+                    <option value="CHEBYSHEV" data-i18n="freqResp.filter.response.chebyshev">Chebyshev</option>
+                    <option value="ELLIPTIC" data-i18n="freqResp.filter.response.elliptic">Elliptic</option>
+                    <option value="INV_CHEBYSHEV" data-i18n="freqResp.filter.response.invchebyshev">Inverse Chebyshev</option>
+                  </select>
+                </div>
+                <div class="fr-filter-spec">
+                  <div class="fr-filter-mode">
+                    <div class="form-check form-check-sm form-check-inline"><input id="frFilterMode1" class="form-check-input" type="radio" name="frFilterMode" data-i18n-title="freqResp.filter.mode1.tooltip"/><label class="form-check-label" for="frFilterMode1" data-i18n="freqResp.filter.mode1" data-i18n-title="freqResp.filter.mode1.tooltip">By specification</label></div>
+                    <div class="form-check form-check-sm form-check-inline"><input id="frFilterMode2" class="form-check-input" type="radio" name="frFilterMode" data-i18n-title="freqResp.filter.mode2.tooltip"/><label class="form-check-label" for="frFilterMode2" data-i18n="freqResp.filter.mode2" data-i18n-title="freqResp.filter.mode2.tooltip">By order</label></div>
+                  </div>
+                  <!-- By-specification fields (Mode 1) -->
+                  <div class="fr-filter-grid fr-mode-spec">
+                    <label id="frFilterRippleLbl" data-i18n="freqResp.filter.ripple">Passband ripple (R)</label>
+                    <div class="numfield sm"><input id="frFilterRipple" class="nf-input" type="text" data-i18n-title="freqResp.filter.ripple.tooltip"/>
+                      <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                    <label id="frFilterStopAttenLbl" data-i18n="freqResp.filter.stopatten">Stopband atten. (A)</label>
+                    <div class="numfield sm"><input id="frFilterStopAtten" class="nf-input" type="text" data-i18n-title="freqResp.filter.stopatten.tooltip"/>
+                      <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                    <!-- empty third slot on the dB row (Java registerCell null pair):
+                         the frequency triplet starts on its own row, Center first. -->
+                    <span></span><span></span>
+                    <label id="frFilterCenterLbl" data-i18n="freqResp.filter.center">Center Freq. (Fc)</label>
+                    <div class="numfield sm"><input id="frFilterCenter" class="nf-input" type="text" data-i18n-title="freqResp.filter.center.tooltip"/>
+                      <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                    <label id="frFilterPassLbl" data-i18n="freqResp.filter.passband">Passband (Fc)</label>
+                    <div class="numfield sm"><input id="frFilterPass" class="nf-input" type="text" data-i18n-title="freqResp.filter.passband.tooltip"/>
+                      <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                    <label id="frFilterStopLbl" data-i18n="freqResp.filter.stopband">Stopband (Fs)</label>
+                    <div class="numfield sm"><input id="frFilterStop" class="nf-input" type="text" data-i18n-title="freqResp.filter.stopband.tooltip"/>
+                      <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                  </div>
+                  <!-- By-order fields (Mode 2) -->
+                  <div class="fr-filter-grid fr-mode-order">
+                    <label data-i18n="freqResp.filter.mode2.passfreq">Passband freq</label>
+                    <div class="numfield sm"><input id="frFilterOrderPass" class="nf-input" type="text" data-i18n-title="freqResp.filter.mode2.passfreq.tooltip"/>
+                      <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                    <label id="frFilterOrderRippleLbl" data-i18n="freqResp.filter.mode2.ripple">Ripple</label>
+                    <div class="numfield sm"><input id="frFilterOrderRipple" class="nf-input" type="text" data-i18n-title="freqResp.filter.mode2.ripple.tooltip"/>
+                      <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                    <label data-i18n="freqResp.filter.order">Order</label>
+                    <div class="numfield sm"><input id="frFilterOrder" class="nf-input" type="text" data-i18n-title="freqResp.filter.order.tooltip"/>
+                      <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                    <label id="frFilterQLbl" data-i18n="freqResp.filter.q">Q</label>
+                    <div class="numfield sm"><input id="frFilterQ" class="nf-input" type="text" data-i18n-title="freqResp.filter.q.tooltip"/>
+                      <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                  </div>
+                </div>
+              </div>
+              <img id="frFilterPic" class="fr-filter-pic" src="assets/img/LPF.png" alt=""/>
+            </div>
+          </div>
+
+          <!-- Unevenness tile-tab (Java FreqRespTabControl.buildUnevennessTab): response
+               flatness readout mode + parameters. Off / ±dB / Range radios drive UnevenMode;
+               the Notch checkbox and the dB / start-stop fields gate on the active mode. -->
+          <div class="tab-panel" id="frUnevenPanel">
+            <div class="fr-uneven-body">
+              <div class="fr-uneven-row">
+                <div class="form-check form-check-sm form-check-inline"><input id="frUnevenOff" class="form-check-input" type="radio" name="frUnevenMode" data-i18n-title="freqResp.uneven.off.tooltip"/><label class="form-check-label" for="frUnevenOff" data-i18n="freqResp.uneven.off" data-i18n-title="freqResp.uneven.off.tooltip">Off</label></div>
+                <div class="form-check form-check-sm form-check-inline"><input id="frUnevenNotch" class="form-check-input" type="checkbox" data-i18n-title="freqResp.uneven.notch.tooltip"/><label class="form-check-label" for="frUnevenNotch" data-i18n="freqResp.uneven.notch" data-i18n-title="freqResp.uneven.notch.tooltip">Notch</label></div>
+              </div>
+              <div class="fr-uneven-row">
+                <div class="form-check form-check-sm form-check-inline"><input id="frUnevenPm" class="form-check-input" type="radio" name="frUnevenMode" data-i18n-title="freqResp.uneven.db.tooltip"/><label class="form-check-label" for="frUnevenPm" data-i18n="freqResp.uneven.db" data-i18n-title="freqResp.uneven.db.tooltip">Unevenness</label></div>
+                <div class="numfield sm"><input id="frUnevenDb" class="nf-input" type="text" data-i18n-title="freqResp.uneven.db.tooltip"/>
+                  <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+              </div>
+              <div class="fr-uneven-row">
+                <div class="form-check form-check-sm form-check-inline"><input id="frUnevenRange" class="form-check-input" type="radio" name="frUnevenMode" data-i18n-title="freqResp.uneven.start.tooltip"/><label class="form-check-label" for="frUnevenRange" data-i18n="freqResp.uneven.start" data-i18n-title="freqResp.uneven.start.tooltip">Start freq</label></div>
+                <div class="numfield sm"><input id="frUnevenStart" class="nf-input" type="text" data-i18n-title="freqResp.uneven.start.tooltip"/>
+                  <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+                <label data-i18n="freqResp.uneven.stop">Stop freq</label>
+                <div class="numfield sm"><input id="frUnevenStop" class="nf-input" type="text" data-i18n-title="freqResp.uneven.stop.tooltip"/>
+                  <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+              </div>
             </div>
           </div>
 
@@ -756,19 +870,15 @@
   </div>
 </div>
 
-<!-- ===== Preferences modal (Audio tab) ===== -->
+<!-- ===== About modal =====
+     Mirrors the Java About presentation (StartupSplash.showAsAbout): the SAME
+     branded artwork the startup splash draws — version, tagline, copyright,
+     license and clickable repo URL are all painted ON the canvas — with the
+     repo URL hit-testable to open the browser. Bootstrap gives the Esc /
+     click-away dismiss that the SWT About shell wires by hand. -->
 <div class="modal fade" id="aboutModal" tabindex="-1">
-  <div class="modal-dialog modal-dialog-centered modal-sm"><div class="modal-content prefs">
-    <div class="modal-header py-2"><h6 class="modal-title" data-i18n="menu.help.about">About Phonalyser.web</h6>
-      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-    <div class="modal-body">
-      <p class="mb-1"><b>Phonalyser.web</b> <span id="aboutVersion"></span></p>
-      <p class="mb-1 small" data-i18n="splash.tagline">Precision audio measurement workbench</p>
-      <p class="mb-1 small">© 2026 Dimitrij Goldstein</p>
-      <p class="mb-1 small"><a href="https://github.com/dgo42/Phonalyser" target="_blank" rel="noopener">github.com/dgo42/Phonalyser</a></p>
-      <p class="mb-0 small">GNU AGPL v3 or later.</p>
-    </div>
-    <div class="modal-footer py-2"><button class="btn btn-sm btn-primary" data-bs-dismiss="modal" data-i18n="common.ok">OK</button></div>
+  <div class="modal-dialog modal-dialog-centered about-modal"><div class="modal-content about-content">
+    <div class="modal-body p-0"><canvas id="aboutCanvas" aria-label="About Phonalyser.web"></canvas></div>
   </div></div>
 </div>
 
@@ -792,21 +902,19 @@
             <option value="TOP" data-i18n="preferences.lookAndFeel.tabOrientation.top">Top</option>
             <option value="LEFT" data-i18n="preferences.lookAndFeel.tabOrientation.left">Left</option>
           </select>
-          <span></span>
-          <div class="form-check"><input id="prefSmallIcons" class="form-check-input" type="checkbox"/>
-            <label class="form-check-label" for="prefSmallIcons" data-i18n="preferences.lookAndFeel.smallIcons">Small icons in main tab</label></div>
-          <span></span>
-          <div class="form-check"><input id="prefShowTips" class="form-check-input" type="checkbox" data-i18n-title="preferences.lookAndFeel.showTipsAtStartup.tooltip"/>
-            <label class="form-check-label" for="prefShowTips" data-i18n="preferences.lookAndFeel.showTipsAtStartup">Show tips at startup</label></div>
+          <label for="prefSmallIcons" data-i18n="preferences.lookAndFeel.smallIcons">Small icons in main tab</label>
+          <input id="prefSmallIcons" class="pref-check" type="checkbox"/>
+          <label for="prefShowTips" data-i18n="preferences.lookAndFeel.showTipsAtStartup" data-i18n-title="preferences.lookAndFeel.showTipsAtStartup.tooltip">Show tips at startup</label>
+          <input id="prefShowTips" class="pref-check" type="checkbox" data-i18n-title="preferences.lookAndFeel.showTipsAtStartup.tooltip"/>
           <label data-i18n="preferences.lookAndFeel.fontNormal">UI font</label>
-          <div class="d-flex gap-2 align-items-center" data-i18n-title="preferences.lookAndFeel.fontNormal.tooltip">
+          <div class="pref-font-row" data-i18n-title="preferences.lookAndFeel.fontNormal.tooltip">
             <select id="prefUiFontFamily" class="form-select form-select-sm"></select>
             <input id="prefUiFontSize" class="form-control form-control-sm" type="number" min="6" max="48" step="1" style="max-width:58px"/>
             <div class="form-check mb-0" title="Bold"><input id="prefUiFontWBold" class="form-check-input" type="checkbox"/><label class="form-check-label fw-bold" for="prefUiFontWBold">B</label></div>
             <div class="form-check mb-0" title="Italic"><input id="prefUiFontWItalic" class="form-check-input" type="checkbox"/><label class="form-check-label fst-italic" for="prefUiFontWItalic">I</label></div>
           </div>
           <label data-i18n="preferences.lookAndFeel.fontBold">UI font (bold)</label>
-          <div class="d-flex gap-2 align-items-center" data-i18n-title="preferences.lookAndFeel.fontBold.tooltip">
+          <div class="pref-font-row" data-i18n-title="preferences.lookAndFeel.fontBold.tooltip">
             <select id="prefUiFontBoldFamily" class="form-select form-select-sm"></select>
             <input id="prefUiFontBoldSize" class="form-control form-control-sm" type="number" min="6" max="48" step="1" style="max-width:58px"/>
             <div class="form-check mb-0" title="Bold"><input id="prefUiFontBoldWBold" class="form-check-input" type="checkbox"/><label class="form-check-label fw-bold" for="prefUiFontBoldWBold">B</label></div>
@@ -816,7 +924,7 @@
       </div>
 
       <div class="prefs-panel d-none" data-prefs-panel="audio">
-        <div class="row g-2 align-items-center mb-3 justify-content-end">
+        <div class="row g-2 align-items-center mb-3 justify-content-end scan-devices">
           <div class="col-auto"><button id="scan" class="btn btn-sm btn-outline-secondary" data-i18n="web.preferences.scanDevices">Scan devices</button></div>
         </div>
         <fieldset class="prefs-group mb-3"><legend data-i18n="preferences.input">Input</legend>
@@ -837,44 +945,79 @@
 
       <div class="prefs-panel d-none" data-prefs-panel="oscilloscope">
         <div class="prefs-grid">
-          <label data-i18n="preferences.measAvg">Measurement average, s:</label><input id="prefOscMeasAvg" class="form-control form-control-sm" type="number" step="0.5" min="0.5" max="100" data-i18n-title="preferences.measAvg.tooltip"/>
-          <label data-i18n="preferences.lineWidth">Trace line width, px:</label><input id="prefOscLineWidth" class="form-control form-control-sm" type="number" step="0.5" min="1" max="5" data-i18n-title="preferences.lineWidth.tooltip"/>
-          <label data-i18n="preferences.dotDiameter">Sample dot diameter, px:</label><input id="prefOscDotDia" class="form-control form-control-sm" type="number" step="1" min="3" max="12" data-i18n-title="preferences.dotDiameter.tooltip"/>
-          <label data-i18n="preferences.leftColor">Left channel colour:</label><input id="prefOscLeftColor" class="form-control form-control-color form-control-sm" type="color"/>
-          <label data-i18n="preferences.rightColor">Right channel colour:</label><input id="prefOscRightColor" class="form-control form-control-color form-control-sm" type="color"/>
+          <label data-i18n="preferences.measAvg">Measurement average, s:</label>
+          <div class="numfield"><input id="prefOscMeasAvg" class="nf-input" type="text" data-i18n-title="preferences.measAvg.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+          <label data-i18n="preferences.lineWidth">Trace line width, px:</label>
+          <div class="numfield"><input id="prefOscLineWidth" class="nf-input" type="text" data-i18n-title="preferences.lineWidth.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+          <label data-i18n="preferences.dotDiameter">Sample dot diameter, px:</label>
+          <div class="numfield"><input id="prefOscDotDia" class="nf-input" type="text" data-i18n-title="preferences.dotDiameter.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+          <label data-i18n="preferences.persistence">Display persistence:</label>
+          <select id="prefOscPersistence" class="form-select form-select-sm" data-i18n-title="preferences.persistence.tooltip">
+            <option value="OFF">Off</option>
+            <option value="S_05">0.5 s</option>
+            <option value="S_1">1 s</option>
+            <option value="S_2">2 s</option>
+            <option value="S_5">5 s</option>
+            <option value="S_10">10 s</option>
+            <option value="S_15">15 s</option>
+            <option value="S_20">20 s</option>
+            <option value="INFINITE">∞</option>
+            <option value="MANUAL">Manual</option>
+          </select>
+          <label data-i18n="preferences.persistence.manual">Manual persistence, s:</label>
+          <div class="numfield"><input id="prefOscPersistManual" class="nf-input" type="text" data-i18n-title="preferences.persistence.manual.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+          <label data-i18n="preferences.leftColor">Left channel colour:</label>
+          <label class="pref-color"><span class="pref-color-hex"></span><input id="prefOscLeftColor" type="color"/></label>
+          <label data-i18n="preferences.rightColor">Right channel colour:</label>
+          <label class="pref-color"><span class="pref-color-hex"></span><input id="prefOscRightColor" type="color"/></label>
         </div>
       </div>
 
       <div class="prefs-panel d-none" data-prefs-panel="fft">
         <div class="prefs-grid">
-          <label data-i18n="preferences.fft.lineWidth">Trace line width, px:</label><input id="prefFftLineWidth" class="form-control form-control-sm" type="number" step="0.5" min="1" max="5" data-i18n-title="preferences.fft.lineWidth.tooltip"/>
-          <label data-i18n="preferences.fft.dotDiameter">Harmonic dot diameter, px:</label><input id="prefFftDotDia" class="form-control form-control-sm" type="number" step="1" min="3" max="12" data-i18n-title="preferences.fft.dotDiameter.tooltip"/>
-          <label data-i18n="preferences.fft.strongToneRelDb">Multi-tone detect threshold:</label><input id="prefFftStrongTone" class="form-control form-control-sm" type="number" step="1" min="10" max="140" data-i18n-title="preferences.fft.strongToneRelDb.tooltip"/>
-          <label data-i18n="preferences.fft.lineColor">Line colour:</label><input id="prefFftLineColor" class="form-control form-control-color form-control-sm" type="color"/>
-          <label data-i18n="preferences.fft.bgColor">Chart background colour:</label><input id="prefFftBgColor" class="form-control form-control-color form-control-sm" type="color"/>
-          <label data-i18n="preferences.fft.dotColor">Harmonic dot colour:</label><input id="prefFftDotColor" class="form-control form-control-color form-control-sm" type="color"/>
-          <label data-i18n="preferences.fft.filterColor">Filter response line colour:</label><input id="prefFftFilterColor" class="form-control form-control-color form-control-sm" type="color"/>
-          <label data-i18n="preferences.fft.beforeCalDotColor">Before-calibration dot colour:</label><input id="prefFftBeforeCalColor" class="form-control form-control-color form-control-sm" type="color"/>
-          <label data-i18n="preferences.fft.calOverlayColor">Calibration overlay colour:</label><input id="prefFftCalColor" class="form-control form-control-color form-control-sm" type="color"/>
+          <label data-i18n="preferences.fft.lineWidth">Trace line width, px:</label>
+          <div class="numfield"><input id="prefFftLineWidth" class="nf-input" type="text" data-i18n-title="preferences.fft.lineWidth.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+          <label data-i18n="preferences.fft.dotDiameter">Harmonic dot diameter, px:</label>
+          <div class="numfield"><input id="prefFftDotDia" class="nf-input" type="text" data-i18n-title="preferences.fft.dotDiameter.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+          <label data-i18n="preferences.fft.strongToneRelDb">Multi-tone detect threshold:</label>
+          <div class="numfield"><input id="prefFftStrongTone" class="nf-input" type="text" data-i18n-title="preferences.fft.strongToneRelDb.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+          <label data-i18n="preferences.fft.lineColor">Line colour:</label>
+          <label class="pref-color"><span class="pref-color-hex"></span><input id="prefFftLineColor" type="color"/></label>
+          <label data-i18n="preferences.fft.bgColor">Chart background colour:</label>
+          <label class="pref-color"><span class="pref-color-hex"></span><input id="prefFftBgColor" type="color"/></label>
+          <label data-i18n="preferences.fft.dotColor">Harmonic dot colour:</label>
+          <label class="pref-color"><span class="pref-color-hex"></span><input id="prefFftDotColor" type="color"/></label>
+          <label data-i18n="preferences.fft.filterColor">Filter response line colour:</label>
+          <label class="pref-color"><span class="pref-color-hex"></span><input id="prefFftFilterColor" type="color"/></label>
+          <label data-i18n="preferences.fft.beforeCalDotColor">Before-calibration dot colour:</label>
+          <label class="pref-color"><span class="pref-color-hex"></span><input id="prefFftBeforeCalColor" type="color"/></label>
+          <label data-i18n="preferences.fft.calOverlayColor">Calibration overlay colour:</label>
+          <label class="pref-color"><span class="pref-color-hex"></span><input id="prefFftCalColor" type="color"/></label>
         </div>
       </div>
 
       <div class="prefs-panel d-none" data-prefs-panel="freqResp">
         <div class="prefs-grid">
-          <label data-i18n="preferences.freqResp.lineWidth">Trace line width, px:</label><input id="prefFrLineWidth" class="form-control form-control-sm" type="number" step="0.5" min="1" max="5" data-i18n-title="preferences.freqResp.lineWidth.tooltip"/>
-          <span><span data-i18n="preferences.freqResp.maxFreqPctNyquist">Maximal analysed frequency, % Nyquist</span> <span id="prefFrMaxNyqHz" class="text-secondary"></span></span><input id="prefFrMaxNyq" class="form-control form-control-sm" type="number" step="0.5" min="83" max="100" data-i18n-title="preferences.freqResp.maxFreqPctNyquist.tooltip"/>
-          <label data-i18n="preferences.freqResp.compareSmoothWindow">Compare smoothing window, 1/N octave</label><input id="prefFrSmooth" class="form-control form-control-sm" type="number" step="1" min="0" max="100" data-i18n-title="preferences.freqResp.compareSmoothWindow.tooltip"/>
-          <span></span>
-          <div class="form-check"><input id="prefFrNotch" class="form-check-input" type="checkbox"/>
-            <label class="form-check-label" for="prefFrNotch" data-i18n="preferences.freqResp.notch.enable">Allow notch filter for industrial noise</label></div>
+          <label data-i18n="preferences.freqResp.lineWidth">Trace line width, px:</label>
+          <div class="numfield"><input id="prefFrLineWidth" class="nf-input" type="text" data-i18n-title="preferences.freqResp.lineWidth.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+          <span><span data-i18n="preferences.freqResp.maxFreqPctNyquist">Maximal analysed frequency, % Nyquist</span> <span id="prefFrMaxNyqHz" class="text-secondary"></span></span>
+          <div class="numfield"><input id="prefFrMaxNyq" class="nf-input" type="text" data-i18n-title="preferences.freqResp.maxFreqPctNyquist.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+          <label data-i18n="preferences.freqResp.compareSmoothWindow">Compare smoothing window, 1/N octave</label>
+          <div class="numfield"><input id="prefFrSmooth" class="nf-input" type="text" data-i18n-title="preferences.freqResp.compareSmoothWindow.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+          <label for="prefFrNotch" data-i18n="preferences.freqResp.notch.enable" data-i18n-title="preferences.freqResp.notch.enable.tooltip">Allow notch filter for industrial noise</label>
+          <input id="prefFrNotch" class="pref-check" type="checkbox" data-i18n-title="preferences.freqResp.notch.enable.tooltip"/>
           <label data-i18n="preferences.freqResp.notch.baseHz">Industrial frequency</label>
           <select id="prefFrNotchHz" class="form-select form-select-sm" data-i18n-title="preferences.freqResp.notch.baseHz.tooltip">
             <option value="50">50 Hz</option><option value="60">60 Hz</option>
           </select>
-          <label data-i18n="preferences.freqResp.signalColor">Signal colour</label><input id="prefFrSignalColor" class="form-control form-control-color form-control-sm" type="color"/>
-          <label data-i18n="preferences.freqResp.phaseColor">Phase colour</label><input id="prefFrPhaseColor" class="form-control form-control-color form-control-sm" type="color"/>
-          <label data-i18n="preferences.freqResp.referenceColor">Reference (RIAA) colour</label><input id="prefFrRefColor" class="form-control form-control-color form-control-sm" type="color"/>
-          <label data-i18n="preferences.freqResp.backgroundColor">Chart background colour</label><input id="prefFrBgColor" class="form-control form-control-color form-control-sm" type="color"/>
+          <label data-i18n="preferences.freqResp.signalColor">Signal colour</label>
+          <label class="pref-color"><span class="pref-color-hex"></span><input id="prefFrSignalColor" type="color"/></label>
+          <label data-i18n="preferences.freqResp.phaseColor">Phase colour</label>
+          <label class="pref-color"><span class="pref-color-hex"></span><input id="prefFrPhaseColor" type="color"/></label>
+          <label data-i18n="preferences.freqResp.referenceColor">Reference (RIAA) colour</label>
+          <label class="pref-color"><span class="pref-color-hex"></span><input id="prefFrRefColor" type="color"/></label>
+          <label data-i18n="preferences.freqResp.backgroundColor">Chart background colour</label>
+          <label class="pref-color"><span class="pref-color-hex"></span><input id="prefFrBgColor" type="color"/></label>
         </div>
       </div>
     </div>
@@ -931,13 +1074,13 @@
     <div class="modal-body">
       <div class="tn-fields mb-2">
         <label class="col-form-label col-form-label-sm" data-i18n="tuneNotch.startHz">Start frequency, Hz</label>
-        <div class="numfield sm"><input id="tnStart" class="nf-input" type="text"/><span class="nf-unit">Hz</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+        <div class="numfield sm"><input id="tnStart" class="nf-input" type="text"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
         <label class="col-form-label col-form-label-sm" data-i18n="tuneNotch.stopHz">Stop frequency, Hz</label>
-        <div class="numfield sm"><input id="tnStop" class="nf-input" type="text"/><span class="nf-unit">Hz</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+        <div class="numfield sm"><input id="tnStop" class="nf-input" type="text"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
         <label class="col-form-label col-form-label-sm" data-i18n="tuneNotch.amplitude">Amplitude (RMS)</label>
-        <div class="numfield sm"><input id="tnAmp" class="nf-input" type="text"/><span class="nf-unit">V</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+        <div class="numfield sm"><input id="tnAmp" class="nf-input" type="text"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
         <label class="col-form-label col-form-label-sm" data-i18n="tuneNotch.targetHz">Target frequency, Hz</label>
-        <div class="numfield sm"><input id="tnTarget" class="nf-input" type="text"/><span class="nf-unit">Hz</span><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+        <div class="numfield sm"><input id="tnTarget" class="nf-input" type="text"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
       </div>
       <canvas id="tnPlot" width="600" height="400"></canvas>
     </div>
@@ -956,7 +1099,7 @@
     <div class="modal-body">
       <div id="dacCalConfigured" class="mb-2 small text-secondary"></div>
       <label class="form-label small mb-1" for="dacCalValue" data-i18n="calibrate.dac.input">Measured signal amplitude (Vrms):</label>
-      <div class="numfield"><input id="dacCalValue" class="nf-input" type="text" data-i18n-title="calibrate.dac.input.tooltip"/><select id="dacCalUnit" class="form-select form-select-sm unit-sel" data-i18n-title="calibrate.unit.tooltip"><option value="V" selected>V</option><option value="mV">mV</option><option value="dBV">dBV</option></select></div>
+      <div class="numfield"><input id="dacCalValue" class="nf-input" type="text" data-i18n-title="calibrate.dac.input.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
       <div id="dacCalError" class="small text-danger mt-2 d-none" data-i18n="calibrate.error.message">Enter a positive number.</div>
     </div>
     <div class="modal-footer py-2">
@@ -974,7 +1117,7 @@
     <div class="modal-body">
       <div id="adcCalCurrent" class="mb-2 small text-secondary"></div>
       <label class="form-label small mb-1" for="adcCalValue" data-i18n="calibrate.input">Actual signal amplitude (Vrms):</label>
-      <div class="numfield"><input id="adcCalValue" class="nf-input" type="text" data-i18n-title="calibrate.input.tooltip"/><select id="adcCalUnit" class="form-select form-select-sm unit-sel"><option value="V" selected>V</option><option value="mV">mV</option><option value="dBV">dBV</option></select></div>
+      <div class="numfield"><input id="adcCalValue" class="nf-input" type="text" data-i18n-title="calibrate.input.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
       <div id="adcCalError" class="small text-danger mt-2 d-none" data-i18n="calibrate.error.message">Enter a positive number.</div>
     </div>
     <div class="modal-footer py-2">
@@ -992,7 +1135,7 @@
     <div class="modal-body">
       <div id="fftAdcCalCurrent" class="mb-2 small text-secondary"></div>
       <label class="form-label small mb-1" for="fftAdcCalValue" data-i18n="calibrate.input">Actual signal amplitude (Vrms):</label>
-      <div class="numfield"><input id="fftAdcCalValue" class="nf-input" type="text" data-i18n-title="calibrate.input.tooltip"/><span class="nf-unit">V</span></div>
+      <div class="numfield"><input id="fftAdcCalValue" class="nf-input" type="text" data-i18n-title="calibrate.input.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
       <div id="fftAdcCalError" class="small text-danger mt-2 d-none" data-i18n="calibrate.error.message">Enter a positive number.</div>
     </div>
     <div class="modal-footer py-2">

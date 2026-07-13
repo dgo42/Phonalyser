@@ -9,28 +9,23 @@
  * measurement window/gap reads + the 1 s zoomed-overview read. The generator's `snapped`
  * fundamental comes in via an injected getter (it reads the generator without owning it). No DOM.
  */
-import { SignalBufferReader, OVERRUN } from './signal-buffer-reader.js';
 import { isDualTone } from '../generator/dds-kernel.js';
 import { BUFFER_SECONDS } from './shared-capture.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
+import { OscMeasClient } from '../scope/osc-meas-client.js';
 
 // Scope window sizing (faithful to Java ScopeView.drawWaveforms line ~2007):
 //   wanted = 2·displaySamples + 2·LANCZOS_PADDING + extraLookback
 // so the CAPTURED span is ~3× the DISPLAYED window — the trigger-position slider can
 // sweep edge-to-edge and the trace never runs out before the window's far edge.
 const LANCZOS_PADDING = 80;                // dsp/lanczos LANCZOS_A·MAX_LANCZOS_DOWNSAMPLE
-// Java's MEAS_MAX_SAMPLES is 96000, but Java runs the measurement in a BACKGROUND WORKER.
-// The web computes inline in the render loop AND this value also sets the scope window's
-// extraLookback (so _applyChannelFilters' HF-LPF + mains comb ran over ~97k samples ×2 each
-// paint) — together that froze the main thread (~1 s/frame → 0.9 fps + 3 s click lag). 8192
-// is still many periods (≈21 of 1 kHz @384k) so stats stay stable, with a cheap per-frame
-// cost. (TODO: a measurement worker to restore the full 96000 window off-thread.)
+// The scope DISPLAY window's extra lookback (samples) beyond 2·displaySamples so the
+// trigger-position slider can sweep edge-to-edge. The long-window Vpp/Vrms/Vmean/Tp/f/Duty
+// measurement no longer reads a window from here — it runs in the osc-meas Web Worker off
+// its OWN gapless ring reader (the measurement stream, owned by this controller's
+// OscMeasClient), integrating oscMeasurementAverageSeconds of samples off the render thread.
 const SCOPE_MEAS_MAX_SAMPLES = 8192;
-// AC-warmup exclusion (Java ScopeMeasurementWorker.AC_WARMUP_NANOS): the first stretch of
-// captured samples carries the ADC startup transient and would bias the published DC mean
-// (Vmean). Drop sampleRate·AC_WARMUP_NANOS/1e9 samples from the write head before clamping.
-const AC_WARMUP_NANOS = 500_000;
 const SCOPE_DIVISIONS_X = 10;              // Java ScopeView.DIVISIONS_X
 const SCOPE_MIN_LEN = 1 << 15;            // floor for the scope window (Java leftBuf grow-only)
 // Ceiling for the scope window: feedScope runs PER CAPTURE BATCH (far more often than
@@ -46,23 +41,35 @@ export class ScopeController {
   /**
    * @param capture the SharedCapture instance.
    * @param config  the SHARED engine config object.
-   * @param deps    {getSnapped} — getSnapped: () => the generator's snapped fundamental (Hz).
+   * @param deps    {getSnapped, getSnapped2} — getSnapped: () => the generator's snapped tone-1
+   *                fundamental (Hz); getSnapped2: () => its snapped dual-tone second frequency (Hz).
+   *                Both must reflect the SAME snap-state the generator emits — Java ScopeView snaps
+   *                BOTH tones via FftBinSnap.snapIfEnabled(DUAL_TONE) before reconstructing the beat.
    */
-  constructor(capture, config, { getSnapped } = {}) {
+  constructor(capture, config, { getSnapped, getSnapped2 } = {}) {
     this._capture = capture;
     this.config = config;
     this._getSnapped = getSnapped || (() => 0);
+    this._getSnapped2 = getSnapped2 || (() => 0);
     this._scopeOn = false;
     this._scopeReader = null;
-    this._measPoolReader = null;
     this.scopeBufL = null;
     this.scopeBufR = null;
     this._scopeFps = 0; this._scopeCount = 0; this._scopeWinT0 = 0;
-    this._scopeFrozen = null;
-    this._measBufL = null; this._measBufR = null;
-    this._measGapL = null; this._measGapR = null;
     this._zoomBufL = null; this._zoomBufR = null;
     this.onScope = null;   // (buf, info) => void — per capture batch
+    // The scope MEASUREMENT stream (gui/scope/ScopeMeasurementWorker): its OWN gapless
+    // forward-reader consumer of the shared ring, running the per-channel filter + whole-
+    // period pipeline OFF the render thread in a Web Worker. Owned here so its reader lives
+    // exactly as long as the scope recording; the pane injects the prefs->params provider +
+    // the result sink (setMeasParamsProvider / setMeasResultSink) — the controller has the
+    // capture, the pane has the prefs.
+    this._measClient = new OscMeasClient(
+      this._capture,
+      () => (this._measParamsProvider ? this._measParamsProvider() : null),
+      (r) => { if (this._measResultSink) this._measResultSink(r); });
+    this._measParamsProvider = null;
+    this._measResultSink = null;
     // Self-feed off the LIVE capture: Java consumers subscribe to CAPTURE_BATCH_AVAILABLE and read
     // their own cursor — no central dispatcher pumps us. Fires only for the live capture (the
     // measurement capture doesn't publish), and only feeds while this scope is recording.
@@ -74,6 +81,12 @@ export class ScopeController {
   /** True while the scope is recording. */
   get recording() { return this._scopeOn; }
 
+  /** The generator's snapped tone-1 / dual-tone tone-2 fundamentals (Hz) — the same
+   *  snap-state feedScope stamps into info.f1Hz/f2Hz, exposed so the measurement params
+   *  provider (owned by the pane, which has the prefs) can seed the dual-tone refine. */
+  get snapped() { return this._getSnapped(); }
+  get snapped2() { return this._getSnapped2(); }
+
   /** Turns the scope's Record state on/off: acquires/releases the shared capture
    *  and, while on, drives onScope off its own latest-window cursor. Returns the
    *  resulting on-state (false if the acquire failed) so the caller can reconcile
@@ -84,23 +97,18 @@ export class ScopeController {
       const reader = await this._capture.acquire();
       if (!reader) return false;
       this._scopeReader = reader;
-      // The measurement pool consumes the SAME ring through its OWN contiguous cursor
-      // (one SignalBufferReader per consumer, exactly like the FFT) so every captured
-      // sample is folded into Vmean/Vrms/Vpp once — see readMeasurementGap.
-      this._measPoolReader = new SignalBufferReader(this._capture.buffer);
-      this._measPoolReader.seekToLatest();
       const len = this._windowLen();
       this.scopeBufL = new Float32Array(len);
       this.scopeBufR = new Float32Array(len);
       this._scopeFps = 0; this._scopeCount = 0; this._scopeWinT0 = 0;
       this._scopeOn = true;
+      // Start the measurement stream alongside the scope (its own forward reader + worker).
+      await this._measClient.start();
     } else {
       this._scopeOn = false;
-      // Frozen last frame: a standalone snapshot the view keeps showing while the
-      // device may stay open for the FFT consumer (mirror ScopeController.release).
-      this._scopeFrozen = (this._scopeReader != null) ? this._scopeReader.frozenSnapshot() : null;
+      // Stop the measurement stream first (releases its own capture reference).
+      await this._measClient.stop();
       this._scopeReader = null;
-      this._measPoolReader = null;
       await this._capture.release();
     }
     return this._scopeOn;
@@ -164,67 +172,10 @@ export class ScopeController {
         scopeFps: this._scopeFps, period: c.inRate / snapped,
         inRate: c.inRate, snapped, available, absStart,
         peakVolts: c.adcFsVoltageRms * Math.SQRT2,
-        dualTone: isDualTone(c.form), f1Hz: snapped, f2Hz: c.tone2Hz,
+        dualTone: isDualTone(c.form), f1Hz: snapped, f2Hz: this._getSnapped2(),
         bufL: this.scopeBufL, bufR: this.scopeBufR,
       });
     }
-  }
-
-  /** Reads a FIXED, long latest-window of both channels from the shared ring for
-   *  the scope's Vpp/Vrms/Vmean/Tp/f/Duty measurements (faithful to Java
-   *  ScopeMeasurementWorker: measN = min(writePos, MEAS_MAX_SAMPLES), read via
-   *  readLatest). The span is independent of the main scope's t/div, so at small
-   *  t/div (few displayed periods) the stats still see many periods and stay
-   *  stable — only Vpp is robust over a short window, the rest are not. Returns
-   *  null when the scope isn't recording or too few samples are captured;
-   *  otherwise {bufL, bufR, available, inRate}. readLatest is cursor-stateless. */
-  readMeasurementWindow() {
-    const reader = this._scopeReader;
-    if (!reader) return null;
-    const c = this.config;
-    const writePos = reader.getWritePos();
-    // Drop the ADC startup transient (Java: postWarmupCount = writePos − warmupSamples)
-    // before clamping, so it doesn't bias Vmean/DC. Keep the 8192 cap (perf divergence).
-    const rate = c.inRate > 0 ? c.inRate : 384000;
-    const warmupSamples = Math.trunc(rate * AC_WARMUP_NANOS / 1_000_000_000);
-    const postWarmupCount = writePos - warmupSamples;
-    if (postWarmupCount < 64) return null;
-    const measN = Math.min(postWarmupCount, SCOPE_MEAS_MAX_SAMPLES);
-    if (measN < 64) return null;
-    if (!this._measBufL || this._measBufL.length < measN) {
-      this._measBufL = new Float32Array(measN);
-      this._measBufR = new Float32Array(measN);
-    }
-    const available = reader.readLatest(measN, this._measBufL, this._measBufR);
-    if (available < 64) return null;
-    // absStart = writePos − available (Java ScopeMeasurementWorker) — feeds the
-    // measurement pass's phase-locked mains cancellers.
-    return { bufL: this._measBufL, bufR: this._measBufR, available, inRate: c.inRate,
-             absStart: writePos - available };
-  }
-
-  /** Consumes the CONTIGUOUS run of samples captured since the previous call, through the
-   *  measurement pool's OWN forward cursor (mirrors the FFT feed) so the scope's Vmean/Vrms/Vpp
-   *  pool folds in every captured sample exactly once — the fractional-cycle DC residual
-   *  then cancels within the long averaging window instead of swinging per short snapshot.
-   *  Returns {bufL, bufR, count, inRate}, null (nothing new / not recording), or
-   *  {overrun:true} when the cursor was lapped (a stall longer than the ring) — the caller
-   *  drops its pool and the cursor re-anchors at the latest sample. */
-  readMeasurementGap() {
-    const reader = this._measPoolReader;
-    if (!reader) return null;
-    const avail = reader.available();
-    if (avail === OVERRUN) { reader.seekToLatest(); return { overrun: true }; }
-    if (avail <= 0) return null;
-    // Cap catch-up per call so a long stall can't iterate the whole ring in one paint.
-    const n = Math.min(avail, this.config.inRate);   // ≤ 1 s of samples
-    if (!this._measGapL || this._measGapL.length < n) {
-      this._measGapL = new Float32Array(n);
-      this._measGapR = new Float32Array(n);
-    }
-    const got = reader.read(n, this._measGapL, this._measGapR);
-    if (got === OVERRUN) { reader.seekToLatest(); return { overrun: true }; }
-    return { bufL: this._measGapL, bufR: this._measGapR, count: got, inRate: this.config.inRate };
   }
 
   /** Reads exactly the latest ONE SECOND of both channels from the shared ring
@@ -257,10 +208,23 @@ export class ScopeController {
   async reattach() {
     const r = await this._capture.acquire();
     this._scopeReader = r;
-    this._measPoolReader = (r && this._capture.buffer) ? new SignalBufferReader(this._capture.buffer) : null;
-    if (this._measPoolReader) this._measPoolReader.seekToLatest();
     if (r) { const len = this._windowLen(); this.scopeBufL = new Float32Array(len); this.scopeBufR = new Float32Array(len); }
     else this._scopeOn = false;
+    // Re-anchor the measurement stream onto the fresh ring too (mirror the SignalBufferReader
+    // re-attach; the client re-acquires its own reference + resets the worker's stream state).
+    await this._measClient.reattach();
     return r != null;
   }
+
+  /** Injects the prefs->publish-params provider the measurement client polls each batch
+   *  (the pane owns the prefs; the controller owns the client). Returns null to skip a batch. */
+  setMeasParamsProvider(fn) { this._measParamsProvider = fn; }
+
+  /** Injects the sink for each worker publish {resultL,resultR,leftMeanNorm,rightMeanNorm}
+   *  (the pane wires it to the view's publishMeasurement). */
+  setMeasResultSink(fn) { this._measResultSink = fn; }
+
+  /** Re-anchors the measurement stream + drops the worker's collection / filter state
+   *  (measurement-channel switch, stats reset). */
+  resetMeasurement() { this._measClient.reset(); }
 }

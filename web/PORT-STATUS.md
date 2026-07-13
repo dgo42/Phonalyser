@@ -33,7 +33,9 @@ dsp/   fft.js window.js fll.js discontinuity.js                       (wired)
 fft/   imd-analyzer.js fft-result.js fft-analyzer.js fft-compensation.js
        fft-view-correction.js fft-tab-control.js                      (ported, wired)
 generator/ dds-kernel.js generator-pane.js                            (ported, wired)
-scope/ scope-trigger.js signal-measurements.js scope-tab-control.js scope-pane.js  (ported, wired)
+scope/ scope-trigger.js signal-measurements.js measurement-stats.js scope-tab-control.js scope-pane.js  (ported, wired)
+       osc-meas-client.js osc-meas-worker.js osc-meas-compute.js osc-freq-worker.js  (continuous meas engine, wired)
+       scope-phosphor.js scope-nav.js scope-format.js scope-enums.js               (ported, wired)
 freqresp/ farina-sweep.js deconvolve.js                               (ported, wired)
 predistortion/ harmonic-compensation.js intermod-compensation.js engine.js  (ported, wired)
 io/    wav.js frc.js fft-spectrum.js dpd.js scope-capture.js file-picker.js flac.js  (ported, wired)
@@ -44,6 +46,11 @@ audio/ backend.js fft-controller.js generator-controller.js scope-controller.js
 shell/ app.js freqresp-host.js predistortion-host.js predistortion-wizard.js
        preferences-dialog.js  ui/fft-view.js ui/scope-view.js         (wired)
 ```
+
+**Testing.** `npm test` runs the node test suite **serially**
+(`node --test --test-concurrency=1 test/*.test.mjs`). The serial flag is
+required: the parallel runner produces false JSDOM-timing failures under CPU
+load, so the suite must not fan out.
 
 ---
 
@@ -240,7 +247,9 @@ registers `dds-processor` — the ONLY output worklet the app loads.
 ---
 
 ## 4. Oscilloscope DSP — `web/js/scope/scope-trigger.js` + `scope/signal-measurements.js`  ✅ PORTED, ✅ WIRED
-Supporting: `dsp/lanczos.js`.
+Supporting: `dsp/lanczos.js`; the off-thread measurement pipeline
+`scope/{osc-meas-client,osc-meas-worker,osc-meas-compute,osc-freq-worker}.js`;
+GPU display persistence `scope/scope-phosphor.js`.
 
 ### Exports — `scope-trigger.js`
 - `find(data, n, from, to, level, rising, sincRefine, hysteresis, minSpacingSamples=0) -> number` (rightmost crossing, −1 if none).
@@ -249,11 +258,13 @@ Supporting: `dsp/lanczos.js`.
 - `linear(prev, curr, prevIdx, level) -> number`.
 
 ### Exports — `signal-measurements.js`
-- `compute(data, n, sampleRate, peakVolts) -> {vpp,vrms,vmean,period,riseTime,fallTime,frequency,dutyCycle}`.
+- `compute(data, n, sampleRate, peakVolts, broadband=true) -> {vpp,vrms,vmean,period,riseTime,fallTime,frequency,dutyCycle}`.
 - `refineFrequencyAround(data, n, sampleRate, seedHz, halfHz) -> number`.
-- `withFrequency(m, freq) -> m'`, `withoutTimes(m) -> m'`.
+- `withFrequency(m, freq) -> m'`, `withoutTimes(m) -> m'`, `withDualTones(m, f1, f2) -> m'`,
+  `withBeatPeriodMeanRms(m, data, n, sampleRate, beatHz, peakVolts) -> m'`.
 - `reconstructBeatSignal(data, available, sampleRate, f1Hz, f2Hz, scratch?) -> Float32Array`.
-- `MeasurementStats`, `WindowedSignalAccumulator` + formatters `forVolts/forTime/forFreq/forPct`.
+- `MeasurementStats` (Welford avg/min/max/σ; also available standalone as
+  `scope/measurement-stats.js`) + formatters `fmt{Volts,Time,Freq,Pct}` / `for{Volts,Time,Freq,Pct}`.
 
 ### Exports — `lanczos.js`
 - `lanczos(data,n,t,scale) -> number`, `lanczosNaN(data,n,t,scale) -> number`, `sinc(x) -> number`;
@@ -263,18 +274,39 @@ Supporting: `dsp/lanczos.js`.
 1. Trigger — `ui/scope-view.js` uses `find()`/`findGlitch()` with
    `LANCZOS_PADDING`-bounded search windows, hysteresis, `minSpacing` beat
    holdoff; band-limited sinc dots via `lanczos()`.
-2. Measurements — `compute()` + persistent `WindowedSignalAccumulator` pool
-   (streaming HF-LPF + mains comb), 8-row table (Vpp/Vrms/Vmean/Tp/Tr/Tf/f/Duty)
-   throttled at READOUT_THROTTLE_MS.
+2. Measurements — moved OFF the render thread into the continuous measurement
+   engine (Java `ScopeMeasurementWorker`): `audio/scope-controller.js` owns an
+   `scope/osc-meas-client.js`, which holds its OWN gapless forward ring reader and,
+   per `CAPTURE_BATCH_AVAILABLE`, posts the contiguous both-channel gap to the
+   `scope/osc-meas-worker.js` Web Worker. The worker carries the per-channel
+   HF-LPF/despike + mains-comb STREAMING state batch to batch, rolls a
+   `oscMeasurementAverageSeconds` collection window, and on its OWN ~100 ms
+   cadence runs the DOM-free `scope/osc-meas-compute.js` pipeline (`compute()`)
+   and posts back `{resultL,resultR,leftMeanNorm,rightMeanNorm}` — the pane wires
+   the result into the 8-row table (Vpp/Vrms/Vmean/Tp/Tr/Tf/f/Duty). A weak
+   single tone whose crossing search returns NaN triggers a nested Goertzel
+   scan worker (`scope/osc-freq-worker.js`, coalesced per channel) that folds
+   back via `setAsyncFreq`. On OVERRUN the client re-seeks and resets the stream.
 3. DUAL_TONE beat view — `reconstructBeatSignal()` feeds the trigger with
    half-beat-cycle holdoff; measurements use
-   `withFrequency(withoutTimes(m), refineFrequencyAround(...))`.
+   `withFrequency(withoutTimes(m), refineFrequencyAround(...))` and
+   `withDualTones`/`withBeatPeriodMeanRms`. The refine seeds (`f1Hz`/`f2Hz`)
+   read LIVE from the bound generator each pass (`_genEmitFreq`/`_genEmitFreq2`
+   via `backend.js`), never the cached `gen.snapped` — Java `ScopeMeasurementWorker`
+   re-reads the generator prefs live each pass.
 4. Mains suppression — all three `MainsSuppression` modes (IIR_COMB /
    SYNC_SUBTRACT / LMS) wired per channel into the display path, the live
-   measurement pass (settled tail for the comb + raw-window ±2 Hz frequency
-   re-pin — never derive frequency from the comb output) and the streaming
-   amplitude pool; windows carry `absStart`/`measAbsStart` so the phase-locked
-   cancellers stay aligned. See §8.
+   measurement pass in the worker (settled tail for the comb + raw-window ±2 Hz
+   frequency re-pin — never derive frequency from the comb output) and the
+   worker's streaming filter state; windows carry `absStart`/`measAbsStart` so
+   the phase-locked cancellers stay aligned. See §8.
+5. Display persistence — `scope/scope-phosphor.js` (Java `gl.ScopePhosphor`):
+   GPU "digital phosphor" afterglow driven by `ui/scope-view.js`. Requires
+   **WebGL2 + EXT_color_buffer_float** (RGBA16F): Canvas2D's 8-bit accumulation
+   has an integer decay floor that leaves a permanent ghost, so when WebGL2, the
+   float-colour extension, or FBO completeness is unavailable the engine reports
+   unsupported and each render falls back to a direct (non-persisting) trace —
+   the web mirror of Java's `release() -> false`.
 
 ---
 

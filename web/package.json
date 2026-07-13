@@ -16,6 +16,7 @@
     "dev": "node scripts/serve.mjs",
     "audit": "npm audit",
     "outdated": "npm outdated",
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
     "e2e": "node test/e2e/scope-smoke.mjs"
   },
   "dependencies": {
