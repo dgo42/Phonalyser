@@ -8,6 +8,27 @@
 
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
+import { NumericStepField, NumericStepModel, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
+
+// The ten NumericStepField rows across the Osc / FFT / FreqResp tabs — min/max/wheelStep/
+// arrowStep/decimals lifted verbatim from PreferencesDialog.java (constants at :100-133, field
+// ctors at :316-596). All FIXED policy (family, min, max, wheelStep, arrowStep, decimals).
+const F = UNIT_FAMILIES;
+const PREF_FIELD_SPECS = {
+  // Oscilloscope tab
+  prefOscMeasAvg:   { model: { family: F.SECONDS, min: 0.5, max: 100, wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
+  prefOscLineWidth: { model: { family: F.PIXEL,   min: 1,   max: 5,   wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
+  prefOscDotDia:    { model: { family: F.PIXEL,   min: 3,   max: 12,  wheelStep: 1,   arrowStep: 1,   decimals: 0 } },
+  prefOscPersistManual: { model: { family: F.SECONDS, min: 0.1, max: 60, wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
+  // FFT tab
+  prefFftLineWidth: { model: { family: F.PIXEL,   min: 1,   max: 5,   wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
+  prefFftDotDia:    { model: { family: F.PIXEL,   min: 3,   max: 12,  wheelStep: 1,   arrowStep: 1,   decimals: 0 } },
+  prefFftStrongTone:{ model: { family: F.DECIBEL, min: 10,  max: 140, wheelStep: 10,  arrowStep: 1,   decimals: 1 } },
+  // FreqResp tab (prefFrMaxNyq: `pct` → its onChange keeps the live (Hz) readout in sync)
+  prefFrLineWidth:  { model: { family: F.PIXEL,   min: 1,   max: 5,   wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
+  prefFrMaxNyq:     { pct: true, model: { family: F.PERCENT, min: 83, max: 100, wheelStep: 0.5, arrowStep: 1, decimals: 1 } },
+  prefFrSmooth:     { model: { family: F.NONE,    min: 0,   max: 100, wheelStep: 1,   arrowStep: 1,   decimals: 0 } },
+};
 
 // Staged exactly like the audio controls: seeded from the live prefs on open, written to
 // prefs + applied ONLY on OK (Cancel/Esc/X leave the prefs untouched — the next open
@@ -178,32 +199,48 @@ export class PreferencesDialog {
     seedFont(prefs.uiFontNormal.get(), '#prefUiFontFamily', '#prefUiFontSize', '#prefUiFontWBold', '#prefUiFontWItalic');
     seedFont(prefs.uiFontBold.get(), '#prefUiFontBoldFamily', '#prefUiFontBoldSize', '#prefUiFontBoldWBold', '#prefUiFontBoldWItalic');
 
-    $('#prefOscMeasAvg').val(prefs.oscMeasurementAverageSeconds.get());
-    $('#prefOscLineWidth').val(prefs.oscLineWidth.get());
-    $('#prefOscDotDia').val(prefs.oscDotDiameter.get());
-    $('#prefOscLeftColor').val(intToHex(prefs.oscLeftChannelColor.get()));
-    $('#prefOscRightColor').val(intToHex(prefs.oscRightChannelColor.get()));
-
-    $('#prefFftLineWidth').val(prefs.fftLineWidth.get());
-    $('#prefFftDotDia').val(prefs.fftHarmonicDotDiameter.get());
-    $('#prefFftStrongTone').val(prefs.fftStrongToneRelDb.get());
-    $('#prefFftLineColor').val(intToHex(prefs.fftLineColor.get()));
-    $('#prefFftBgColor').val(intToHex(prefs.fftChartBackgroundColor.get()));
-    $('#prefFftDotColor').val(intToHex(prefs.fftHarmonicDotColor.get()));
-    $('#prefFftFilterColor').val(intToHex(prefs.fftFreqRespColor.get()));
-    $('#prefFftBeforeCalColor').val(intToHex(prefs.fftBeforeCalDotColor.get()));
-    $('#prefFftCalColor').val(intToHex(prefs.fftCalOverlayColor.get()));
-
-    $('#prefFrLineWidth').val(prefs.freqRespLineWidth.get());
-    $('#prefFrMaxNyq').val((prefs.freqRespNyquistFraction.get() * 100).toFixed(1));
+    // NumericStepField rows: seed the model (auto-formats the unit-in-text). prefFrMaxNyq holds a
+    // percent (fraction × 100); the others hold their canonical pref value directly.
+    this.prefFields.prefOscMeasAvg.setValue(prefs.oscMeasurementAverageSeconds.get());
+    this.prefFields.prefOscLineWidth.setValue(prefs.oscLineWidth.get());
+    this.prefFields.prefOscDotDia.setValue(prefs.oscDotDiameter.get());
+    // Persistence mode combo + manual-seconds field (enabled only when mode == MANUAL,
+    // re-gated live on combo change; see the #prefOscPersistence handler in bind()).
+    $('#prefOscPersistence').val(prefs.oscPersistenceMode.get());
+    this.prefFields.prefOscPersistManual.setValue(prefs.oscPersistenceManualSeconds.get());
+    this.gateOscPersistManual();
+    this.prefFields.prefFftLineWidth.setValue(prefs.fftLineWidth.get());
+    this.prefFields.prefFftDotDia.setValue(prefs.fftHarmonicDotDiameter.get());
+    this.prefFields.prefFftStrongTone.setValue(prefs.fftStrongToneRelDb.get());
+    this.prefFields.prefFrLineWidth.setValue(prefs.freqRespLineWidth.get());
+    this.prefFields.prefFrMaxNyq.setValue(prefs.freqRespNyquistFraction.get() * 100);
+    this.prefFields.prefFrSmooth.setValue(prefs.freqRespCompareSmoothWindow.get());
     this.updateFrMaxNyqHz();
-    $('#prefFrSmooth').val(prefs.freqRespCompareSmoothWindow.get());
+
+    // Colour buttons: seed the native picker value, then paint the swatch + hex text.
+    this.seedColor('#prefOscLeftColor', prefs.oscLeftChannelColor.get());
+    this.seedColor('#prefOscRightColor', prefs.oscRightChannelColor.get());
+    this.seedColor('#prefFftLineColor', prefs.fftLineColor.get());
+    this.seedColor('#prefFftBgColor', prefs.fftChartBackgroundColor.get());
+    this.seedColor('#prefFftDotColor', prefs.fftHarmonicDotColor.get());
+    this.seedColor('#prefFftFilterColor', prefs.fftFreqRespColor.get());
+    this.seedColor('#prefFftBeforeCalColor', prefs.fftBeforeCalDotColor.get());
+    this.seedColor('#prefFftCalColor', prefs.fftCalOverlayColor.get());
+    this.seedColor('#prefFrSignalColor', prefs.freqRespSignalColor.get());
+    this.seedColor('#prefFrPhaseColor', prefs.freqRespPhaseColor.get());
+    this.seedColor('#prefFrRefColor', prefs.freqRespReferenceColor.get());
+    this.seedColor('#prefFrBgColor', prefs.freqRespBackgroundColor.get());
+
     $('#prefFrNotch').prop('checked', prefs.freqRespNotchEnabled.get());
     $('#prefFrNotchHz').val(String(prefs.freqRespNotchBaseHz.get()));
-    $('#prefFrSignalColor').val(intToHex(prefs.freqRespSignalColor.get()));
-    $('#prefFrPhaseColor').val(intToHex(prefs.freqRespPhaseColor.get()));
-    $('#prefFrRefColor').val(intToHex(prefs.freqRespReferenceColor.get()));
-    $('#prefFrBgColor').val(intToHex(prefs.freqRespBackgroundColor.get()));
+  }
+
+  /** Seeds one colour picker from a 0xRRGGBB int and paints its swatch + hex text. */
+  seedColor(sel, rgbInt) {
+    const inp = $(sel)[0];
+    if (!inp) return;
+    inp.value = intToHex(rgbInt);
+    this.paintColorButton(inp);
   }
 
   /** Live "(… Hz/kHz)" readout next to the Max-analysed-frequency field — mirrors
@@ -213,17 +250,37 @@ export class PreferencesDialog {
     const sr = this.inRate();
     let hz = '— Hz';
     if (sr > 0) {
-      const pct = Math.max(83, Math.min(100, parseFloat($('#prefFrMaxNyq').val()) || 100));
+      // Parse the leading number of the input text so the (Hz) readout tracks live typing
+      // (before commit) as well as stepper/commit changes — the committed "95.0 %" also leads
+      // with the number, so one parse serves both (Java nyqField selectionListener reads the value).
+      const raw = parseFloat($('#prefFrMaxNyq').val());
+      const pct = Math.max(83, Math.min(100, Number.isFinite(raw) ? raw : 100));
       const f = sr * 0.5 * (pct / 100);
       hz = (f >= 1000) ? `${(f / 1000).toFixed(2)} kHz` : `${f.toFixed(0)} Hz`;
     }
     $('#prefFrMaxNyqHz').text(`(${hz})`);
   }
 
+  /** Enables the manual-persistence field only when the combo is on "Manual" — mirrors
+   *  PreferencesDialog.java:355-357 (setEnabled + onChange re-gate). Called from seed and
+   *  from the #prefOscPersistence change handler. */
+  gateOscPersistManual() {
+    const f = this.prefFields.prefOscPersistManual;
+    if (f) f.setDisabled($('#prefOscPersistence').val() !== 'MANUAL');
+  }
+
   /** Commit all four tabs' controls to the live prefs and apply (the OK path). */
   applyPrefsTabs() {
     const prefs = this.prefs;
-    const num = (sel, fb) => { const v = parseFloat($(sel).val()); return Number.isFinite(v) ? v : fb; };
+    // Commit any pending text in each NumericStepField (Java NumericStepField commits on focus-out;
+    // on OK the user may not have blurred), then read the already-clamped canonical value — exactly
+    // the DacCalibrationDialog OK path (field.model.commit(input.value); field.getValue()).
+    const fv = (id) => {
+      const f = this.prefFields[id];
+      if (!f) return NaN;
+      f.model.commit(f.input.value.trim());
+      return f.getValue();
+    };
 
     prefs.tabOrientation.set($('#prefTabOrientation').val());
     prefs.smallIconsInMainTab.set($('#prefSmallIcons').is(':checked'));
@@ -231,15 +288,17 @@ export class PreferencesDialog {
     prefs.uiFontNormal.set(buildFont('#prefUiFontFamily', '#prefUiFontSize', '#prefUiFontWBold', '#prefUiFontWItalic'));
     prefs.uiFontBold.set(buildFont('#prefUiFontBoldFamily', '#prefUiFontBoldSize', '#prefUiFontBoldWBold', '#prefUiFontBoldWItalic'));
 
-    prefs.oscMeasurementAverageSeconds.set(Math.max(0.5, Math.min(100, num('#prefOscMeasAvg', 5))));
-    prefs.oscLineWidth.set(Math.max(1, Math.min(5, num('#prefOscLineWidth', 2))));
-    prefs.oscDotDiameter.set(Math.max(3, Math.min(12, Math.round(num('#prefOscDotDia', 5)))));
+    prefs.oscMeasurementAverageSeconds.set(fv('prefOscMeasAvg'));
+    prefs.oscLineWidth.set(fv('prefOscLineWidth'));
+    prefs.oscDotDiameter.set(Math.round(fv('prefOscDotDia')));
+    prefs.oscPersistenceMode.set($('#prefOscPersistence').val());
+    prefs.oscPersistenceManualSeconds.set(fv('prefOscPersistManual'));
     prefs.oscLeftChannelColor.set(hexToInt($('#prefOscLeftColor').val()));
     prefs.oscRightChannelColor.set(hexToInt($('#prefOscRightColor').val()));
 
-    prefs.fftLineWidth.set(Math.max(1, Math.min(5, num('#prefFftLineWidth', 1))));
-    prefs.fftHarmonicDotDiameter.set(Math.max(3, Math.min(12, Math.round(num('#prefFftDotDia', 9)))));
-    prefs.fftStrongToneRelDb.set(Math.max(10, Math.min(140, num('#prefFftStrongTone', 100))));
+    prefs.fftLineWidth.set(fv('prefFftLineWidth'));
+    prefs.fftHarmonicDotDiameter.set(Math.round(fv('prefFftDotDia')));
+    prefs.fftStrongToneRelDb.set(fv('prefFftStrongTone'));
     prefs.fftLineColor.set(hexToInt($('#prefFftLineColor').val()));
     prefs.fftChartBackgroundColor.set(hexToInt($('#prefFftBgColor').val()));
     prefs.fftHarmonicDotColor.set(hexToInt($('#prefFftDotColor').val()));
@@ -247,8 +306,8 @@ export class PreferencesDialog {
     prefs.fftBeforeCalDotColor.set(hexToInt($('#prefFftBeforeCalColor').val()));
     prefs.fftCalOverlayColor.set(hexToInt($('#prefFftCalColor').val()));
 
-    prefs.freqRespLineWidth.set(Math.max(1, Math.min(5, num('#prefFrLineWidth', 2))));
-    prefs.freqRespNyquistFraction.set(Math.max(0.83, Math.min(1, num('#prefFrMaxNyq', 100) / 100)));
+    prefs.freqRespLineWidth.set(fv('prefFrLineWidth'));
+    prefs.freqRespNyquistFraction.set(fv('prefFrMaxNyq') / 100);
     // FreqResp Nyquist fraction → freq-window clamp (Java Preferences.applyFromDialog,
     // Preferences.java:797-805): if the new max-band drops below the current right edge,
     // pull freqMaxHz (and freqMinHz if needed) in so the view re-clamps to the new ceiling.
@@ -260,7 +319,7 @@ export class PreferencesDialog {
         if (prefs.freqRespFreqMinHz.get() > maxBand) prefs.freqRespFreqMinHz.set(Math.max(1.0, maxBand * 0.5));
       }
     }
-    prefs.freqRespCompareSmoothWindow.set(Math.max(0, Math.min(100, Math.round(num('#prefFrSmooth', 6)))));
+    prefs.freqRespCompareSmoothWindow.set(Math.round(fv('prefFrSmooth')));
     prefs.freqRespNotchEnabled.set($('#prefFrNotch').is(':checked'));
     prefs.freqRespNotchBaseHz.set(parseInt($('#prefFrNotchHz').val(), 10) || 50);
     prefs.freqRespSignalColor.set(hexToInt($('#prefFrSignalColor').val()));
@@ -359,9 +418,47 @@ export class PreferencesDialog {
     }
   }
 
+  /** Builds the ten Osc/FFT/FreqResp NumericStepFields over their `.numfield` chrome and the
+   *  twelve colour buttons' live repaint, once (the DOM is static). Mirrors PreferencesDialog's
+   *  per-field NumericStepField ctors + applyButtonColor. Values are staged/committed by
+   *  seedPrefsTabs()/applyPrefsTabs(); this only owns the widget construction + chrome. */
+  buildPrefFields() {
+    this.prefFields = {};
+    for (const [id, spec] of Object.entries(PREF_FIELD_SPECS)) {
+      const input = document.getElementById(id);
+      if (!input) continue;
+      const onChange = spec.pct ? () => this.updateFrMaxNyqHz() : null;
+      this.prefFields[id] = new NumericStepField(input, new NumericStepModel(spec.model),
+        { onChange, tooltipBase: input.title || '' });
+    }
+    // Colour buttons: repaint background + hex text live as the native picker changes, and open
+    // the picker on a click anywhere on the button (the label already forwards to its input, but
+    // the hidden 1px input isn't the click target, so trigger it explicitly).
+    $('.pref-color').each((_, el) => {
+      const inp = el.querySelector('input[type=color]');
+      $(inp).on('input change', () => this.paintColorButton(inp));
+      // The <label> natively forwards a click to its inner input; cancel that default and open
+      // the picker once ourselves so the OS colour dialog can't double-open (open→close→reopen).
+      $(el).on('click', (ev) => { if (ev.target === inp) return; ev.preventDefault(); inp.click(); });
+    });
+  }
+
+  /** Paints one colour button's swatch: background = the picked colour, centred "#RRGGBB" text
+   *  (PreferencesDialog.applyButtonColor — foreground left black, no contrast rule). */
+  paintColorButton(inp) {
+    const hex = String(inp.value || '#000000').toLowerCase();
+    const btn = inp.closest('.pref-color');
+    if (!btn) return;
+    btn.style.background = hex;
+    const span = btn.querySelector('.pref-color-hex');
+    if (span) span.textContent = hex.toUpperCase();
+  }
+
   /** Wires #menuPrefs/#prefsOk + the staged audio device/rate handlers + the tab strip. */
   bind() {
     const engine = this.engine, prefs = this.prefs;
+
+    this.buildPrefFields();
 
     $('#menuPrefs').on('click', () => this.modal.show());
 
@@ -426,6 +523,7 @@ export class PreferencesDialog {
 
     $('#prefsTabs').on('click', '.nav-link', (ev) => this.prefsTab(ev.currentTarget.dataset.prefsPanel));
     $('#prefFrMaxNyq').on('input', () => this.updateFrMaxNyqHz());
+    $('#prefOscPersistence').on('change', () => this.gateOscPersistManual());
 
     $('#prefsModal').on('show.bs.modal', () => {
       this._staging = true;

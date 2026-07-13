@@ -14,10 +14,12 @@
 import { find, findGlitch } from '../scope/scope-trigger.js';
 import { TimeDiscontinuityDetector } from '../dsp/time-discontinuity.js';
 import { lanczos, LANCZOS_PADDING, MAX_LANCZOS_DOWNSAMPLE } from '../dsp/lanczos.js';
-import { compute, withFrequency, withoutTimes, refineFrequencyAround, reconstructBeatSignal,
-         MeasurementStats, WindowedSignalAccumulator, forVolts, forTime, forFreq, forPct }
+import { compute, withoutTimes,
+         reconstructBeatSignal,
+         MeasurementStats, forVolts, forTime, forFreq, forPct }
   from '../scope/signal-measurements.js';
-import { FreqScanClient } from '../scope/freq-scan.js';
+import { OscMeasCompute } from '../scope/osc-meas-compute.js';
+import { SineFit } from '../dsp/sine-fit.js';
 import { LowPassFilter, MedianFilter } from '../dsp/lpf.js';
 import { mainsFilterOf } from '../dsp/mains/factory.js';
 // Pan/zoom engine + the pure nav-math helpers + the trigger-slider enum — the single
@@ -26,7 +28,14 @@ import { mainsFilterOf } from '../dsp/mains/factory.js';
 // instead of re-deriving the math inline.
 import { ScopeNav, DIVISIONS_X as NAV_DIVISIONS_X, DIVISIONS_Y as NAV_DIVISIONS_Y } from '../scope/scope-nav.js';
 import { clamp01 as navClamp01 } from '../scope/scope-format.js';
-import { OscSliderId, TriggerMode, TriggerEdge, TriggerType } from '../scope/scope-enums.js';
+import { OscSliderId, TriggerMode, TriggerEdge, TriggerType,
+         effectiveSeconds as persistenceSeconds } from '../scope/scope-enums.js';
+// GPU display persistence ("digital phosphor") — faithful port of
+// org.edgo.audio.measure.gui.scope.gl.ScopePhosphor (engine) + the kind-decision
+// state machine PhosphorGate. The view owns one of each and, per live frame with
+// persistence active, routes the TRACE phase through the decayed WebGL accumulation
+// buffer and composites BACKDROP + phosphor + OVERLAY (Java compositeToScreen).
+import { ScopePhosphor, PhosphorGate } from '../scope/scope-phosphor.js';
 // Drag-select rectangular zoom + Ctrl+Z undo (Java AbstractMeasurementView's
 // installRectZoom base machinery); the scope supplies the time/volts mappings +
 // trigger preservation (Java ScopeView zoom overrides) and forwards its own
@@ -36,6 +45,8 @@ import { RectZoom } from './rect-zoom.js';
 // Grid divisions (the ½-div wheel step + the V/div ladder math now live in ScopeNav).
 const DIVISIONS_X = NAV_DIVISIONS_X;
 const DIVISIONS_Y = NAV_DIVISIONS_Y;
+// One horizontal wheel tick = ½ division (Java ScopeController.HALF_DIV).
+const HALF_DIV = 0.5;
 const REL_EPS = 1e-9;
 const clamp01 = navClamp01;
 
@@ -45,6 +56,17 @@ const SCOPE_HF_LPF_ORDER = 8;        // LowPassFilter order for LpfMode.HZ_80
 // ScopeView.RECON_REFINE_STEP).
 const RECON_REFINE_STEP = 0.1;
 const MAINS_NOTCH_BW_HZ = 2.0;       // −3 dB notch width for the scope mains comb
+// Residual-view fit constants (Java ScopeView RESIDUAL_*). The best-fit tone is
+// subtracted from the displayed slice; these bound the least-squares fit window,
+// the phase-slope frequency polish, and the dual-tone beat/refit requirements.
+const RESIDUAL_MIN_CYCLES = 8;
+const RESIDUAL_FIT_MAX_SAMPLES = 65536;
+const RESIDUAL_MIN_FIT_SAMPLES = 256;
+const RESIDUAL_POLISH_MAX_HZ = 1.0;
+const RESIDUAL_POLISH_ITERS = 2;
+const RESIDUAL_POLISH_MIN_STEP_HZ = 1e-6;
+const RESIDUAL_MIN_BEAT_CYCLES = 2;
+const RESIDUAL_DUAL_REFIT_ROUNDS = 2;
 // Half-width (Hz) of the raw-signal band used to re-pin the comb-located tone's
 // frequency (Java ScopeMeasurementWorker.FREQ_REFINE_HALF_HZ): wide enough to
 // cover the comb's frequency pull, far narrower than the ≥ ~50 Hz spacing of
@@ -58,7 +80,18 @@ const TICK_HALF_LEN = 4;
 const TRACE_EDGE_OVERHANG_PX = 4;
 // Measurement-table rebuild throttle (Java READOUT_THROTTLE_NS = 200 ms).
 const READOUT_THROTTLE_MS = 200;
+// How recently the osc-meas worker must have published for the render thread to REUSE its
+// result (this.latest) instead of recomputing the synchronous fallback. Generous vs the
+// worker's ~100 ms publish cadence so a couple of missed ticks don't drop the table to the
+// short displayed-span compute; long enough that a stopped/absent worker stream (headless
+// render, node tests) times out and the injected-window fallback engages instead.
+const LIVE_MEAS_FRESH_MS = 500;
 const NS_PER_MS = 1e6;
+// Depth of the whole-period Vmean history ring (Java ScopeMeasurementWorker.MEAS_HISTORY_CAP).
+const MEAS_HISTORY_CAP = 1024;
+// Minimum averaging window for AC DC removal — never average less than this even
+// when the measurement-average pref is shorter (Java ScopeView.AC_DC_MIN_AVG_NANOS).
+const AC_DC_MIN_AVG_SEC = 0.5;
 // Minimum glitch-mode collection time before the cumulative rate is shown — below
 // this, count ÷ elapsed is dominated by start-up jitter, so read 0 (Java
 // ScopeView.GLITCH_RATE_MIN_SECONDS).
@@ -142,7 +175,14 @@ export class ScopeView {
     this._lastTriggerMode = null;
     this._normalFrame = null;   // truthy = a NORMAL frame is held; points at this._frame
     this._frame = null;         // captured snapshot used by _drawHeldFrame
+    // Freeze-on-stop (Java ScopeView.freezeBuffer): when the recording stops the
+    // last live frame is kept on screen and replayed through _drawHeldFrame for
+    // EVERY trigger mode (not just SINGLE/NORMAL) — Java swaps in the frozen snapshot
+    // and renders it through the same held path. renderFrozen() below is the
+    // standalone entry the pane calls after a stop / on a resize.
+    this._frozen = false;
     this._snapBufs = [];        // grow-only reused snapshot buffers (one per chan + beat)
+    this._snapBeatBufs = {};    // grow-only reused per-channel HELD beat-overlay snapshots (keyed by 'L'/'R')
     // Per-channel HF-cleanup + mains filters, lazily (re)built for the live
     // sample rate; reset/applied each render over each channel's copied buffer.
     // Keyed by channel name ('Left'/'Right') so L and R don't clobber each
@@ -173,14 +213,40 @@ export class ScopeView {
       period: new MeasurementStats(), riseTime: new MeasurementStats(), fallTime: new MeasurementStats(),
       frequency: new MeasurementStats(), dutyCycle: new MeasurementStats(),
     };
-    // Raw-sample pool feeding Vmean/Vrms/Vpp over a long EFFECTIVE window (=
-    // oscMeasurementAverageSeconds), assembled across capture buffers so their σ stops
-    // tracking the per-buffer fractional-cycle DC swing. See WindowedSignalAccumulator.
-    this._ampPool = new WindowedSignalAccumulator();
-    this._poolFilt = {};        // persistent (no-reset) streaming HF-LPF + comb per channel
-    this._poolScratch = null;   // reused Float32 copy of the gap (engine buffer not mutated)
+    // Per-channel latest measurement snapshots (Java ScopeMeasurementWorker.lastMeasLeft /
+    // lastMeasRight): the worker measures both channels; the TABLE + this.latest show the
+    // selected one, but the residual + AC-DC + glitch paths read whichever channel they need.
+    this._lastMeas = { L: null, R: null };
+    // Whole-period Vmean history ring (Java ScopeMeasurementWorker meanHistoryLeftNorm /
+    // meanHistoryRightNorm + measHistoryTime): every measurement tick publishes each
+    // channel's WHOLE-PERIOD Vmean normalized by peak volts ("identical to the table
+    // readout"); _acDcMean averages this ring for the AC-coupling DC block, the residual
+    // baseline and auto-setup centring.
+    this._meanHist = {
+      L: { t: new Float64Array(MEAS_HISTORY_CAP), v: new Float64Array(MEAS_HISTORY_CAP), write: 0, size: 0 },
+      R: { t: new Float64Array(MEAS_HISTORY_CAP), v: new Float64Array(MEAS_HISTORY_CAP), write: 0, size: 0 },
+    };
+    this._lastMeanNorm = { L: NaN, R: NaN };   // Java lastLeftMeanNormalized / lastRightMeanNormalized
+    // The LIVE measurement stream runs in the osc-meas Web Worker (fed off its own gapless
+    // ring reader by OscMeasClient); its publishes arrive via publishMeasurement(). For the
+    // SYNCHRONOUS fallback path — a directly-injected measurement window (info.measBufL/R)
+    // with no live worker stream (headless render, the node tests) — the same DOM-free
+    // compute engine runs the one-shot pipeline right here. wall-clock of the last live
+    // publish gates whether render() reuses this.latest or recomputes the fallback.
+    this._measEngine = new OscMeasCompute();
+    this._lastMeasPublishMs = 0;
+    this._measDual = false;   // last render's dual-tone form (publishMeasurement has no info)
     this._lastMeasBuildMs = 0;
     this._lastLiveMeasMs = 0;   // throttle for the decoupled live-window measurement (C24)
+    // Residual-view scratch (Java ScopeView.residualScratchL/R + residualFitScratch) +
+    // the shared slice geometry the last _computeResidual produced (residualDispStart /
+    // residualSliceLen) + per-channel VISIBLE-window residual Vpp for auto-setup.
+    this._residualScratchL = null;
+    this._residualScratchR = null;
+    this._residualFitScratch = null;
+    this._residualDispStart = 0;
+    this._residualSliceLen = 0;
+    this._lastResidualVpp = { L: NaN, R: NaN };
     this.measurementRows = null;
     // cap/s readout string cache (Java drawCaptureRate throttles the
     // String.format to READOUT_THROTTLE_NS = 200 ms; drawText still runs every paint).
@@ -243,6 +309,30 @@ export class ScopeView {
       window.addEventListener('mousemove', (e) => this._onSliderMouseMove(e));
       window.addEventListener('mouseup', () => this._onSliderMouseUp());
     }
+
+    // ----- display persistence ("digital phosphor") -----
+    // The engine (WebGL2 RGBA16F accumulation) + the kind-decision gate are the web
+    // mirror of Java SwtGlCanvasSurface owning a ScopePhosphor + the kind-override block
+    // of ScopePhosphor.render() (:151-187). Both are LAZILY created on the first
+    // persistence-active frame (_ensurePhosphor), so an OFF scope — the default — and the
+    // headless node tests never touch WebGL. lastFrameWasNew is the web's
+    // ScopeView.isLastFrameNew(): true only when a render path drew a genuinely new
+    // captured trace (a fresh trigger / AUTO free-run), so REALTIME only accumulates then.
+    this._phosphor = null;         // ScopePhosphor (WebGL2 engine); null until first active frame
+    this._phosphorGate = null;     // PhosphorGate (pure kind decision); created with the engine
+    this._traceScratch = null;     // transparent 2D canvas the TRACE phase draws into
+    this._overlayScratch = null;   // transparent 2D canvas the OVERLAY phase draws into
+    // Redirect hooks: while a persisted frame is being painted these point the TRACE and
+    // OVERLAY draw calls at the scratch canvases instead of the main context, so the
+    // backdrop stays on screen, the trace accumulates in the phosphor buffer and the
+    // overlay is composited fresh on top (Java's Phase split). null on the OFF path, so
+    // every draw hits this.g exactly as before — byte-identical to the pre-phosphor code.
+    this._traceG = null;
+    this._overlayG = null;
+    // Java ScopeView.lastFrameWasNew (:421): defaults false each paint, flipped true by the
+    // one render path that drew a genuinely new captured frame. Read by _withPhosphor to
+    // gate REALTIME accumulation, and exposed for parity as isLastFrameNew().
+    this._lastFrameWasNew = false;
   }
 
   /** File-load mode accessor (Java ScopeView.setFileMode): a mode switch
@@ -290,6 +380,23 @@ export class ScopeView {
       layer.appendChild(handle);
       return { under, core, handle };
     };
+    // Full-scale boundary lines (Java ScopeView.drawFullScaleLines, 2105-2123 /
+    // 2162-2175): two dashed horizontals per channel at ±FS volts around its offset.
+    // Appended FIRST — before the offset sliders below — so DOM paint order keeps the
+    // brighter offset zero-line + triangle ON TOP where they overlap (Java draws the
+    // FS lines before the offset track for exactly this reason). Java's FS_DASH {2,6}
+    // (2px on, 6px gap) rides a repeating-linear-gradient background set inline.
+    const makeFsLine = () => {
+      const el = document.createElement('div');
+      el.className = 'scope-ovl-fsline';
+      el.style.display = 'none';
+      layer.appendChild(el);
+      return el;
+    };
+    const fsLine = {
+      L: { top: makeFsLine(), bot: makeFsLine() },
+      R: { top: makeFsLine(), bot: makeFsLine() },
+    };
     // cap/s readout (top-right), the two time edge labels (left/right of the
     // horizontal centre), and the four per-channel V edge labels (top/bottom of the
     // vertical centre, one pair per channel). Each is created once and repositioned
@@ -298,6 +405,7 @@ export class ScopeView {
     // are FIXED-size DOM overlays too — the canvas keeps only trace + grid + ticks.
     const ovl = {
       layer,
+      fsLine,
       caps: make('scope-ovl-caps'),
       timeLeft: make('scope-ovl-time'),
       timeRight: make('scope-ovl-time'),
@@ -307,6 +415,10 @@ export class ScopeView {
       // (right edge, yellow) and each channel's offset voltage (left edge, channel colour),
       // shown next to their handles.
       trigLevelVal: make('scope-ovl-volt'),
+      // Trigger-position time-offset label (Java drawSliders posStr = formatSeconds(
+      // (posReal − 0.5)·windowTime)): the REAL (virtual-capable) offset time, above the
+      // bottom-edge handle, bright white like the handle.
+      trigPosVal: make('scope-ovl-time'),
       offsetVal: { L: make('scope-ovl-volt'), R: make('scope-ovl-volt') },
       trigLevel: makeSlider('scope-ovl-hline', 'scope-ovl-tri-left'),
       trigPos: makeSlider('scope-ovl-vline', 'scope-ovl-tri-up'),
@@ -377,13 +489,19 @@ export class ScopeView {
     const o = this._overlay;
     if (!o) return;
     for (const el of [o.caps, o.timeLeft, o.timeRight, o.vTop.L, o.vTop.R, o.vBot.L, o.vBot.R,
-      o.trigLevelVal, o.offsetVal.L, o.offsetVal.R]) {
+      o.trigLevelVal, o.trigPosVal, o.offsetVal.L, o.offsetVal.R]) {
       el.style.display = 'none';
     }
     this._hideSlider(o.trigLevel);
     this._hideSlider(o.trigPos);
     this._hideSlider(o.offset.L);
     this._hideSlider(o.offset.R);
+    // Full-scale boundary lines are structural siblings of the offset sliders — hide
+    // them on the same blank-return paths (Java skips drawFullScaleLines here too).
+    for (const ch of ['L', 'R']) {
+      o.fsLine[ch].top.style.display = 'none';
+      o.fsLine[ch].bot.style.display = 'none';
+    }
   }
 
   /** Positions one edge label: sets its text, colour, tooltip and edge anchor from
@@ -452,9 +570,49 @@ export class ScopeView {
 
   /** Restarts the glitch-mode cap/s collection (Java rateSawFrozen: a stop/restart
    *  boundary must not fold the stopped gap into the cumulative rate). Called by the
-   *  pane on record start. */
+   *  pane on record start — which is also where the frozen-on-stop hold is dropped so
+   *  the fresh live trace takes over. */
   restartGlitchRate() {
     this._glitchCountStartMs = 0;
+    this._frozen = false;
+  }
+
+  /** Freeze-on-stop (Java ScopeView.freezeBuffer): the recording stopped, so keep the
+   *  LAST live frame on screen and replay it through the held-frame path for EVERY
+   *  trigger mode. The live paint already snapshotted that frame into this._frame
+   *  (_snapshotFrame runs on every non-returning live paint, AUTO free-run included),
+   *  carrying its drawn per-channel buffers AND the reconstructed-beat overlays — so
+   *  the frozen replay draws the beat exactly as the last live frame did (the beat
+   *  gate — dual + Reconstructed-beat — was evaluated at CAPTURE time). No-op when no
+   *  live frame was ever captured (nothing to hold; the pane keeps the idle grid). */
+  freeze() {
+    this._frozen = !!this._frame;
+  }
+
+  /** Standalone repaint of the frozen (stopped) frame — the pane calls this after a
+   *  record stop and on a resize while stopped, since there is no live render loop to
+   *  drive _drawHeldFrame. Sizes + clears the canvas (the live render() does this
+   *  before delegating to _drawHeldFrame; here we own that step), then replays the
+   *  held frame. No-op when not frozen or nothing was captured — the pane falls back
+   *  to renderIdle. Returns whether it painted a frame. */
+  renderFrozen() {
+    if (!this._frozen || !this._frame) return false;
+    const W = this.cv.clientWidth || this.cv.width || 1200;
+    const H = this.cv.clientHeight || this.cv.height || 240;
+    if (this.cv.width !== W) this.cv.width = W;
+    if (this.cv.height !== H) this.cv.height = H;
+    // A stopped-scope re-render is a COMPOSITE (Java SwtGlCanvasSurface expose/resize
+    // path → ScopePhosphor.Kind.COMPOSITE): the phosphor is frozen, so the wrapper
+    // re-composites it (no decay, no accumulate) between the fresh backdrop + overlay.
+    // _drawHeldFrame draws the backdrop (fillRect + graticule) on this.g and the trace +
+    // overlay through the redirect hooks. OFF path: exactly the direct held render.
+    this._withPhosphor(ScopePhosphor.Kind.COMPOSITE, W, H, () => {
+      const g = this.g;
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+      this._drawHeldFrame(g, W, H);
+    });
+    return true;
   }
 
   /** The wheel-zoom anchors the next held-frame t/div change around the cursor; a
@@ -515,18 +673,59 @@ export class ScopeView {
     p.oscRightOffsetFrac.set(off[1]);
   }
 
+  /** Bridges the web's file back-offset model to the Java `viewCenterFrames` nav
+   *  engine. The web positions the file window by `back` = frames the window is
+   *  scrolled back from the latest-window right-edge anchor; Java positions it by
+   *  the absolute centre frame `viewCenterFrames`. They map linearly:
+   *    maxCentre = frames − displaySamples/2   (back = 0 ⇒ centre = maxCentre)
+   *    centre    = maxCentre − back            (back grows ⇒ centre decreases)
+   *  so `back = maxCentre − centre`. Returns { centre, maxCentre, displaySamples,
+   *  frames, sampleRate } or null when the file geometry isn't available yet. */
+  _fileNavState() {
+    const geom = this._fileGeom, p = this.prefs;
+    if (!geom || !this.onFileBack || !p) return null;
+    const sr = (this._lastInfo && this._lastInfo.inRate) || 0;
+    if (sr <= 0) return null;
+    const frames = geom.available;
+    const displaySamples = geom.windowSamples;
+    const maxCentre = frames - displaySamples / 2;
+    return { centre: maxCentre - geom.back, maxCentre, displaySamples, frames, sampleRate: sr,
+             samplesPerDiv: p.oscTimePerDiv.get() * sr };
+  }
+
   _panHorizontal(dir) {
     const p = this.prefs;
     // File mode: Shift+wheel scrolls the read window THROUGH the loaded buffer by
-    // changing the view back-offset (Java ScopePane.stepHorizontalOffset file branch:
-    // stepFrames = displaySamples/5, wheel up = move backward in time → back grows).
-    // The displayed signal + time marks + measured values all come from the moved
-    // window, not just a relabelled axis.
+    // ½ DIVISION per tick, fractional-exact (Java ScopePane.stepHorizontalOffset file
+    // branch → ScopeController.scrollFileByWheel → ScopeNav.moveFileCentre with
+    // samplesPerDiv = timePerDiv·sampleRate as an EXACT double). Wheel up (dir=+1)
+    // scrolls toward OLDER samples: Java moves viewCenterFrames by −dir·½ div, which
+    // (centre = maxCentre − back) grows `back`. The step accumulates unrounded so a
+    // fine time base (⅕-div-scale ½-div steps of 8.82 samples at 44.1 kHz) never
+    // quantises. The displayed signal + time marks + measured values all come from the
+    // moved window, not just a relabelled axis.
     if (this.fileMode) {
-      const geom = this._fileGeom;
-      if (!geom || !this.onFileBack) return;
-      const stepFrames = Math.max(1, Math.round(geom.windowSamples / 5));
-      this.onFileBack(geom.back + dir * stepFrames);
+      const st = this._fileNavState();
+      if (!st) return;
+      const next = this.nav().moveFileCentre(
+        st.centre, -dir * HALF_DIV, st.samplesPerDiv, st.displaySamples, 0, st.frames);
+      if (next === st.centre) return;
+      this.onFileBack(st.maxCentre - next);   // fractional — onFileBack keeps the sub-sample scroll
+      return;
+    }
+    // Frozen (a SINGLE/NORMAL frame is held): pan the STOPPED trace ½ div per tick via
+    // the (virtual-capable) trigger offset — the same engine step as live, but only
+    // when a trigger was actually captured (f.triggerLocal finite), so _drawHeldFrame's
+    // capturedTriggerLocal branch re-derives the held window from p and scrolls the whole
+    // captured buffer (Java ScopePane.stepHorizontalOffset FROZEN branch →
+    // ScopeView.panFrozenOffset, guarded on frozen && lastTriggerAbsPos >= 0). A
+    // trigger-less (AUTO free-run) held frame has no offset to pan, so it's a no-op.
+    if (this._singleHeld || this._normalFrame) {
+      if (!this._frame || !Number.isFinite(this._frame.triggerLocal)) return;
+      const curF = p.oscTriggerPositionFrac.get();
+      const nextF = this.nav().moveTriggerOffset(curF, dir);
+      if (nextF === curF) return;
+      p.oscTriggerPositionFrac.set(nextF);
       return;
     }
     // Live: ½-div trigger-offset move via the engine; UNCLAMPED so it may go VIRTUAL
@@ -590,19 +789,30 @@ export class ScopeView {
     const mouseFrac = mouseX / W;
     p.oscTimePerDiv.set(tDivNew);
     // File mode: the displayed window is positioned by the view back-offset (not by
-    // triggerPositionFrac), so mirror the live zoom-around-cursor by re-anchoring the
-    // back-offset to keep the SAME loaded-buffer frame under the mouse after the zoom.
-    // bufFrameAtMouse = startSample + mouseFrac·windowSamples; solve for the new
-    // back so startSample' = bufFrameAtMouse − mouseFrac·windowSamples'.
+    // triggerPositionFrac). Route through the nav engine exactly like Java
+    // ScopeController.zoomFileAroundMouse → ScopeNav.zoomFileCentre + clampFileCentre:
+    // the sample under the pointer stays put as the window resizes dispOld→dispNew, then
+    // the centre is clamped into the file — the clamp re-centres once the whole file
+    // fills the width (the spec's file zoom-out limit). Work in the absolute-centre
+    // model (centre = startSample + displaySamples/2), then convert the clamped centre
+    // back to a FRACTIONAL back-offset against the new right-edge anchor.
     if (this.fileMode) {
       const geom = this._fileGeom;
-      if (geom && this.onFileBack) {
-        const wsNew = geom.windowSamples * (tDivNew / tDivOld);
-        const rightPad = Math.min(LANCZOS_PADDING, Math.max(0, geom.available - wsNew));
-        const rightEdgeAnchorNew = Math.max(0, geom.available - rightPad - wsNew);
-        const bufFrameAtMouse = geom.startSample + mouseFrac * geom.windowSamples;
-        const startNew = bufFrameAtMouse - mouseFrac * wsNew;
-        this.onFileBack(Math.round(rightEdgeAnchorNew - startNew));
+      const sr = (this._lastInfo && this._lastInfo.inRate) || 0;
+      if (geom && this.onFileBack && sr > 0) {
+        const dispOld = geom.windowSamples;
+        const dispNew = Math.round(tDivNew * DIVISIONS_X * sr);
+        const frames = geom.available;
+        const centreOld = geom.startSample + dispOld / 2;
+        const nav = this.nav();
+        const next = nav.zoomFileCentre(centreOld, mouseFrac, dispOld, dispNew);
+        const centreNew = nav.clampFileCentre(next, dispNew, 0, frames);
+        // back = 0 pins the RIGHT edge at `frames` (viewLeft = frames − dispNew), the same
+        // no-rightPad anchor the render + _fileNavState + fileMaxBack all use (Java file
+        // window right edge = writePos − viewBackOffset). back = rightEdgeAnchor − startNew.
+        const rightEdgeAnchorNew = Math.max(0, frames - dispNew);
+        const startNew = centreNew - dispNew / 2;
+        this.onFileBack(rightEdgeAnchorNew - startNew);   // fractional
       }
       return;
     }
@@ -623,8 +833,10 @@ export class ScopeView {
   }
 
   /** Java ScopeController.performAutoSetup: t/div ≈ ceil₁₂₅(period·1.5/DIVISIONS_X),
-   *  V/div ≈ ceil₁₂₅(Vpp/(DIVISIONS_Y·0.75)), both channels centred, trigger to mid.
-   *  Reads the last measurement (this.latest) — call once a frame is available. */
+   *  V/div ≈ ceil₁₂₅(Vpp/(DIVISIONS_Y·0.75)) PER CHANNEL (each side off its own residual
+   *  Vpp when its residual is on, else its captured Vpp — _autoSetupVpp), each channel
+   *  centred on its own DC mean, trigger to mid. Reads the last measurement (this.latest)
+   *  for t/div — call once a frame is available. */
   autoSetup() {
     const p = this.prefs, m = this.latest;
     if (!p || !m) return;
@@ -633,23 +845,197 @@ export class ScopeView {
       const dec = Math.pow(10, Math.floor(Math.log10(t))), mm = t / dec;
       return (mm <= 1 ? 1 : mm <= 2 ? 2 : mm <= 5 ? 5 : 10) * dec;
     };
-    if (Number.isFinite(m.frequency) && m.frequency > 0) {
-      p.oscTimePerDiv.set(ceil125((1 / m.frequency) * 1.5 / DIVISIONS_X));
+    // Horizontal scale: fit ~1.5 periods across the width. In dual-tone mode the
+    // carrier crosses 0 many times per beat envelope cycle and m.frequency is NaN
+    // (cleared by withoutTimes), so pick the LOWER of the carrier and the |F1−F2|
+    // BEAT so the time base covers at least one full beat envelope — the carrier
+    // alone would render a packed wall of cycles with no visible envelope (Java
+    // ScopeController.performAutoSetup dual branch: scaleHz = min(carrier, beat)).
+    const info = this._lastInfo;
+    const dual = !!(info && info.dualTone && info.f1Hz > 0 && info.f2Hz > 0 && info.f1Hz !== info.f2Hz);
+    let scaleHz = m.frequency;
+    if (dual) {
+      const beatHz = Math.abs(info.f2Hz - info.f1Hz);
+      if (beatHz > 0 && (!Number.isFinite(scaleHz) || beatHz < scaleHz)) scaleHz = beatHz;
     }
-    if (Number.isFinite(m.vpp) && m.vpp > 0) {
-      const vDiv = ceil125(m.vpp / (DIVISIONS_Y * 0.75));
-      p.oscLeftVoltsPerDiv.set(vDiv); p.oscRightVoltsPerDiv.set(vDiv);
+    if (Number.isFinite(scaleHz) && scaleHz > 0) {
+      p.oscTimePerDiv.set(ceil125((1 / scaleHz) * 1.5 / DIVISIONS_X));
     }
-    // Recenter each DC-coupled channel on its DC mean so a small AC signal on a large
-    // DC pedestal lands mid-screen instead of off an edge (Java ScopeController.
-    // autoSetupOffsetFrac, ScopeView.java:1220-1228): DC-coupled → 0.5 + meanV/(DIVISIONS_Y·vDiv);
-    // AC-coupled → 0.5 (DC already removed from the trace). Vpp is max−min so the pedestal
-    // already cancelled in the V/div above — only the offset needs the mean.
-    const meanV = Number.isFinite(m.vmean) ? m.vmean : 0;   // measured DC mean, volts
-    const offFor = (ac, vd) => (ac || !(vd > 0)) ? 0.5 : 0.5 + meanV / (DIVISIONS_Y * vd);
-    p.oscLeftOffsetFrac.set(offFor(p.oscLeftAcMode.get(), p.oscLeftVoltsPerDiv.get()));
-    p.oscRightOffsetFrac.set(offFor(p.oscRightAcMode.get(), p.oscRightVoltsPerDiv.get()));
+    // Per-channel V/div: scale each side off its own residual Vpp when its residual is on,
+    // else off the captured Vpp (Java performAutoSetup vppL/vppR — INDEPENDENT). When both
+    // residuals are off _autoSetupVpp returns each channel's captured Vpp.
+    const vppL = this._autoSetupVpp(true);
+    const vppR = this._autoSetupVpp(false);
+    if (Number.isFinite(vppL) && vppL > 0) p.oscLeftVoltsPerDiv.set(ceil125(vppL / (DIVISIONS_Y * 0.75)));
+    if (Number.isFinite(vppR) && vppR > 0) p.oscRightVoltsPerDiv.set(ceil125(vppR / (DIVISIONS_Y * 0.75)));
+    // Recenter each DC-coupled channel on its OWN long-averaged DC mean so a small AC
+    // signal on a large DC pedestal lands mid-screen instead of off an edge (Java
+    // autoSetupOffsetFrac): DC-coupled → 0.5 + meanV/(DIVISIONS_Y·vDiv); AC-coupled → 0.5.
+    const peakVolts = p.adcFsVoltageRms.get() * Math.SQRT2;
+    const offFor = (left, ac, vd) => {
+      if (ac || !(vd > 0)) return 0.5;
+      const meanV = this._acDcMean(left) * peakVolts;
+      return Number.isFinite(meanV) ? 0.5 + meanV / (DIVISIONS_Y * vd) : 0.5;
+    };
+    p.oscLeftOffsetFrac.set(offFor(true, p.oscLeftAcMode.get(), p.oscLeftVoltsPerDiv.get()));
+    p.oscRightOffsetFrac.set(offFor(false, p.oscRightAcMode.get(), p.oscRightVoltsPerDiv.get()));
     p.oscTriggerPositionFrac.set(0.5); p.oscTriggerLevelFrac.set(0.5);
+  }
+
+  // -------------------------------------------------------------------------
+  // display persistence ("digital phosphor") — the web mirror of the Java
+  // SwtGlCanvasSurface.renderFrame → ScopePhosphor.render split (:98-126, :144-222)
+  // -------------------------------------------------------------------------
+
+  /** Resolved persistence from preferences: 0 = off, < 0 = infinite, > 0 = decay
+   *  seconds (Java ScopePhosphor.persistenceSeconds :410-413). 0 when there are no
+   *  prefs (the no-prefs autoscale-fallback render never persists). */
+  _persistSeconds() {
+    const p = this.prefs;
+    if (!p) return 0;
+    return persistenceSeconds(p.oscPersistenceMode.get(), p.oscPersistenceManualSeconds.get());
+  }
+
+  /** Snapshots the trigger + geometry settings the {@link PhosphorGate} watches
+   *  (Java ScopePhosphor.render :158-167). Trigger-source changes wipe the afterglow
+   *  (CLEAR), geometry changes reset it (RESET). */
+  _gateInputs() {
+    const p = this.prefs;
+    return {
+      triggerMode: p.oscTriggerMode.get(),
+      triggerType: p.oscTriggerType.get(),
+      triggerEdge: p.oscTriggerEdge.get(),
+      triggerChannel: p.oscTriggerChannel.get(),
+      timePerDiv: p.oscTimePerDiv.get(),
+      leftVdiv: p.oscLeftVoltsPerDiv.get(),
+      rightVdiv: p.oscRightVoltsPerDiv.get(),
+      leftOff: p.oscLeftOffsetFrac.get(),
+      rightOff: p.oscRightOffsetFrac.get(),
+      triggerPos: p.oscTriggerPositionFrac.get(),
+      extClearRequested: false,   // the external CLEAR flag lives in the engine (clearPersistence)
+    };
+  }
+
+  /** Lazily creates the phosphor engine + kind gate on the first persistence-active
+   *  frame, so an OFF scope (the default) and the headless node tests never construct
+   *  a WebGL context. Returns the engine (its own attach() reports unsupported). */
+  _ensurePhosphor() {
+    if (!this._phosphor) {
+      this._phosphor = new ScopePhosphor();
+      this._phosphorGate = new PhosphorGate();
+    }
+    return this._phosphor;
+  }
+
+  /** Ensures a transparent W×H scratch 2D canvas exists on `key`, (re)sizing + clearing
+   *  it. Used for the TRACE and OVERLAY phases the phosphor compositor draws separately. */
+  _scratchCanvas(key, W, H) {
+    let c = this[key];
+    if (!c) {
+      c = (typeof document !== 'undefined' && document.createElement)
+        ? document.createElement('canvas') : null;
+      this[key] = c;
+    }
+    if (!c) return null;
+    if (c.width !== W) c.width = W;
+    if (c.height !== H) c.height = H;
+    const g = c.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, W, H);
+    return { canvas: c, g };
+  }
+
+  /**
+   * Runs one frame body under display persistence when it is active + supported,
+   * else runs it straight onto the main canvas (byte-identical to the pre-phosphor
+   * path). Faithful to Java SwtGlCanvasSurface.renderFrame (:98-126): resolve the
+   * persistence seconds, gate the Kind (PhosphorGate — CLEAR on a trigger-source /
+   * external change, RESET on a geometry change), route the TRACE + OVERLAY draws to
+   * scratch canvases via the redirect hooks, then composite BACKDROP + phosphor +
+   * OVERLAY (Java compositeToScreen :313-324). When persistence is off, unsupported,
+   * or the engine's render() returns false, the body has already drawn the whole
+   * frame directly onto this.g — nothing more to do (Java's renderWhole fallback).
+   *
+   * @param {string} kind the caller's requested ScopePhosphor.Kind
+   * @param {number} W canvas width in CSS px
+   * @param {number} H canvas height in CSS px
+   * @param {() => void} paint draws one frame body through the redirect hooks
+   */
+  _withPhosphor(kind, W, H, paint) {
+    const persistSeconds = this._persistSeconds();
+    // OFF (or no prefs): the fast path, unchanged. No engine, no redirects, no scratch —
+    // the body draws the entire frame onto this.g exactly as it always has.
+    if (persistSeconds === 0 || W <= 0 || H <= 0) { paint(); return; }
+
+    const engine = this._ensurePhosphor();
+    // attach() decides support up-front (WebGL2 + float colour + complete FBOs). Only when
+    // it succeeds do we redirect; a failure keeps the byte-identical direct path so an
+    // unsupported browser regresses to exactly today's behaviour.
+    if (!engine.attach(W, H)) { paint(); return; }
+
+    const trace = this._scratchCanvas('_traceScratch', W, H);
+    const overlay = this._scratchCanvas('_overlayScratch', W, H);
+    if (!trace || !overlay) { paint(); return; }   // no 2D scratch (headless) → direct path
+
+    // Redirect the TRACE + OVERLAY draws to the scratch canvases; the backdrop stays on
+    // this.g. The body's early returns (held / blank branches) still leave the trace on
+    // the scratch and the backdrop on screen — exactly what a COMPOSITE / CLEAR needs.
+    this._traceG = trace.g;
+    this._overlayG = overlay.g;
+    try {
+      paint();
+    } finally {
+      this._traceG = null;
+      this._overlayG = null;
+    }
+
+    // Decide the effective Kind from the caller's kind + the watched settings (Java
+    // render :168-187). The gate reads the SAME prefs Java watches; the external CLEAR
+    // flag is held inside the engine (set by clearPersistence()), so extClearRequested
+    // stays false here.
+    const decided = this._phosphorGate.decide(kind, this._gateInputs(), persistSeconds);
+    const rendered = engine.render(
+      decided.kind, trace.canvas, decided.persistSeconds,
+      this._lastFrameWasNew, (typeof performance !== 'undefined' ? performance.now() : Date.now()));
+
+    const g = this.g;
+    if (rendered) {
+      // Composite over the fresh backdrop already on this.g: phosphor trace, then the
+      // fresh overlay (Java compositeToScreen: BACKDROP + phosphor + OVERLAY).
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.drawImage(engine.canvas, 0, 0, W, H);
+      g.drawImage(overlay.canvas, 0, 0, W, H);
+    } else {
+      // Post-attach engine failure (should not happen): the backdrop is on this.g but the
+      // trace + overlay went to scratch — flatten them straight through so nothing is lost.
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.drawImage(trace.canvas, 0, 0, W, H);
+      g.drawImage(overlay.canvas, 0, 0, W, H);
+    }
+  }
+
+  /** Requests a persistence CLEAR on the next rendered frame WITHOUT re-stamping the
+   *  current trace — for signal-affecting changes (a USER generator change) where the
+   *  on-screen trace is still anchored on the pre-change event. Java
+   *  ScopeController.clearPersistence → GlScopeSurface.clearPersistence (:238-243,
+   *  SwtGlCanvasSurface :92-96). No-op until the engine exists (persistence never used). */
+  clearPersistence() {
+    if (this._phosphor) this._phosphor.clearPersistence();
+  }
+
+  /** Whether the most recent render body drew a genuinely new captured frame (a fresh
+   *  trigger / AUTO free-run) rather than a held / re-composited one — Java
+   *  ScopeView.isLastFrameNew (:1116). The phosphor wrapper consults it to gate REALTIME
+   *  accumulation. */
+  isLastFrameNew() { return this._lastFrameWasNew; }
+
+  /** Releases the phosphor engine's GL resources (Java ScopePhosphor.release via
+   *  SwtGlCanvasSurface.dispose). The web scope pane has no teardown today (it lives for
+   *  the app's lifetime), so nothing calls this yet — provided for parity + a future
+   *  teardown. */
+  dispose() {
+    if (this._phosphor) { this._phosphor.release(); this._phosphor = null; }
+    this._phosphorGate = null;
   }
 
   /** @param buf  the R channel (ch1, the measured/primary channel) as a
@@ -658,7 +1044,6 @@ export class ScopeView {
    *  channels (Float32Array) per the scope DATA CONTRACT; when absent (file
    *  load) `buf` is drawn for both channels. */
   render(buf, info) {
-    const g = this.g;
     this._lastBuf = buf; this._lastInfo = info;   // remembered so the ResizeObserver can repaint a loaded/frozen view at the new size
     // CSS box drives the size for an attached canvas; a DETACHED canvas (the
     // offscreen screenshot clone) reports clientWidth/Height = 0, so fall back to
@@ -672,6 +1057,22 @@ export class ScopeView {
     // one consistent pixel space.
     if (this.cv.width !== W) this.cv.width = W;
     if (this.cv.height !== H) this.cv.height = H;
+    // REALTIME persistence frame (Java SwtGlCanvasSurface.render → ScopePhosphor.Kind.REALTIME):
+    // the wrapper routes the TRACE phase through the decayed phosphor buffer when persistence
+    // is active and supported, and otherwise runs the body straight onto the main canvas —
+    // byte-identical to the pre-phosphor path. _renderBody draws the backdrop on this.g and,
+    // via the _traceG / _overlayG redirects, the trace + overlay onto the scratch canvases.
+    this._withPhosphor(ScopePhosphor.Kind.REALTIME, W, H, () => this._renderBody(buf, info, W, H));
+  }
+
+  /** The scope's per-frame body (formerly the tail of {@link render}): backdrop +
+   *  trigger-mode frame selection + trace + overlays, drawn through the current
+   *  redirect hooks. Sizing and the persistence wrapper live in {@link render}. */
+  _renderBody(buf, info, W, H) {
+    const g = this.g;
+    // A new paint defaults to "held content" (Java ScopeView.lastFrameWasNew reset,
+    // :2798); the genuinely-new-frame branch below flips it true.
+    this._lastFrameWasNew = false;
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
     this._drawGraticule(g, W, H);
@@ -696,7 +1097,7 @@ export class ScopeView {
     const showR = !p || p.oscRightChannelEnabled.get();
     if (p && !showL && !showR) {
       this.latest = null; this.measurementRows = null; this._clearOverlayLabels();
-      if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);   // Java paints the zoom layer on every paint
+      if (this._rectZoom) this._rectZoom.drawOverlay(this._overlayG || g, W, H);   // Java paints the zoom layer on every paint
       return;
     }
 
@@ -716,13 +1117,18 @@ export class ScopeView {
       for (let i = searchFrom; i < searchTo; i++) sum += procBuf[i];
       const dcMean = sum / Math.max(1, searchTo - searchFrom);
       const ac = p ? p['osc' + lc + 'AcMode'].get() : false;
+      // AC-coupling DC block: the long-averaged WHOLE-PERIOD Vmean from the
+      // measurement ring (Java acDcMean → averagedChannelMean) — stable across
+      // partial cycles. The per-frame window mean is only the pre-first-publish
+      // fallback (Java ScopeView falls back to sampleMean the same way).
+      const acdc = ac ? this._acDcMean(lc === 'Left') : 0;
       const d = {
         name: lc,
         ch: lc === 'Left' ? 'L' : 'R',
         raw, procBuf,
         vDiv: (p ? p['osc' + lc + 'VoltsPerDiv'].get() : 0.1) || 0.1,
         offsetFrac: p ? p['osc' + lc + 'OffsetFrac'].get() : 0.5,
-        ac, dcMean, dcOff: ac ? dcMean : 0,
+        ac, dcMean, dcOff: ac ? (Number.isFinite(acdc) ? acdc : dcMean) : 0,
         sinc: p ? p['osc' + lc + 'SincInterpEnabled'].get() : true,
         colorInt, hex: colorHex(colorInt),
       };
@@ -779,10 +1185,6 @@ export class ScopeView {
     // READOUT_THROTTLE_MS so the full-window compute cost stays bounded. The
     // displayed-span fallback (file mode / no live window) stays in the trace
     // path below, where `trig`/`show` are known.
-    // Fold the contiguous capture gap into the amplitude pool EVERY paint (not throttled)
-    // so Vmean/Vrms/Vpp see every captured sample once; the throttled readout below reads
-    // the pooled long-window value.
-    this._feedMeasurementPool(info, sampleRate);
     const liveMeas = this._measureLiveWindow(info, descByName, descriptors, sampleRate, peakVolts, dual);
 
     const tDiv = p ? p.oscTimePerDiv.get() : info.period / sampleRate;
@@ -793,7 +1195,7 @@ export class ScopeView {
     const windowSamples = Math.round(tDiv * DIVISIONS_X * sampleRate);
     if (windowSamples < 2) {
       this.latest = null; this.measurementRows = null;
-      if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
+      if (this._rectZoom) this._rectZoom.drawOverlay(this._overlayG || g, W, H);
       return;
     }
 
@@ -813,7 +1215,15 @@ export class ScopeView {
     const tVDiv = trigDesc.vDiv, tOffsetFrac = trigDesc.offsetFrac;
     const tAc = trigDesc.ac, tDcOff = trigDesc.dcOff;
     const baseLevel = (tOffsetFrac - levelFracRaw) * tVDiv * DIVISIONS_Y / peakV;
-    const level = dual ? 0.0 : baseLevel + (tAc ? tDcOff : 0);
+    // Dual-tone triggers on the reconstructed |F1−F2| beat envelope (trigBuf) but at the
+    // USER's trigger level in the same normalised units as the raw trace (Java drawWaveforms:
+    // effectiveData = beat, effectiveTriggerLevel = the user level unchanged). The beat is a
+    // signed modulator rawPeak·cos(...) spanning [−rawPeak, +rawPeak]; searching it at the
+    // user level means an out-of-range level (above the envelope peak / below its trough)
+    // finds NO crossing, so NORMAL holds the last frame instead of re-arming — the D3 gate.
+    // Forcing level = 0 (old behaviour) always crossed the zero-centred beat and re-triggered
+    // regardless of where the user parked the level.
+    const level = baseLevel + (tAc ? tDcOff : 0);
     const hysteresis = (p && p.oscTriggerHysteresisEnabled.get())
       ? p.oscTriggerHysteresisDiv.get() * tVDiv / peakV : 0.0;
     const beatHz = dual ? Math.abs(info.f2Hz - info.f1Hz) : 0;
@@ -843,8 +1253,12 @@ export class ScopeView {
     let foundFrac = -1;
     if (!this.fileMode && trigTo > trigFrom) {
       if (glitchMode) {
-        const m = this.latest;
-        const measHz = (m && p.oscMeasurementChannel.get() === trigCh) ? m.frequency : NaN;
+        // The TRIGGER channel's own measured frequency pins the recurrence exactly — read
+        // it unconditionally (the worker measures both channels; Java drawWaveforms GLITCH
+        // branch now reads getLastMeasResult(triggerCh == L) regardless of the measurement
+        // channel selection). Falls back to the detector's self-estimate when absent.
+        const m = this._getLastMeas(trigCh === 'L');
+        const measHz = m ? m.frequency : NaN;
         const omega = (measHz > 0 && measHz < sampleRate / 2.0)
           ? 2.0 * Math.PI * measHz / sampleRate : NaN;
         foundFrac = findGlitch(trigBuf, trigFrom, trigTo, rising,
@@ -856,53 +1270,68 @@ export class ScopeView {
     }
     const foundTrigger = foundFrac >= 0;
 
-    // Java navigation/file-mode bypass (drawWaveforms ~2052-2065): a static
-    // loaded signal (and, in the desktop, a scrolled-back view) bypasses the
-    // trigger and right-edge-anchors the latest displaySamples window, with
-    // subSampleOffset = 0. Right-edge anchoring is stable across t/div changes.
-    const rightEdgeAnchor = () => {
+    // ── Unified positioning (Java drawWaveforms ~3062-3160): pick the absolute
+    // anchor + screen offsetFrac for THIS mode, then map with ONE nav.viewport call —
+    // the SAME transform for live, frozen(scrolled-back) and file. The window left edge
+    // is  viewLeftAbs = anchorAbs − displaySamples·offsetFrac  (ScopeNav.viewLeftAbs);
+    // dispStart/subSampleOffset are viewLeft − bufStartAbs floored/fractioned. The web's
+    // read buffer starts at absolute sample `absStart` (= Java bufStartAbs = writePos −
+    // available), so `absStart` is the bufStartAbs handed to nav.viewport, and the
+    // local start `startSample` (= dispStart + subSampleOffset, what _drawTrace splits)
+    // is `vp.viewLeftAbs − absStart`. dispCount stays the full windowSamples — the
+    // renderer blanks any column the buffer can't fill (Java: off-buffer columns not
+    // drawn, the anchor never moves to compensate).
+    //
+    // offsetFrac is the (virtual-capable) trigger-position fraction posFracReal — NOT
+    // the clamped posFrac used for the trigger search — so a Shift+wheel pan can carry
+    // the offset off-screen and scroll the trace to the true buffer edge (Java sets
+    // offsetFrac = triggerPosFracReal on every live/frozen/trigger path, clamps only the
+    // search leftHalf/rightHalf and the DRAWN handle position).
+    const posFracReal = p ? p.oscTriggerPositionFrac.get() : 0.5;
+    const bufStartAbs = info.absStart || 0;
+    const latestAbs = bufStartAbs + available;   // Java writePos for the live tip
+    // Java AUTO free-run right-anchor (~3092-3099): rightPad past the newest so the sinc
+    // kernel keeps context; anchorAbs = latestAbs − rightPad, offsetFrac = 1.0.
+    const autoFreeRunAnchor = () => {
       const rightPad = Math.min(LANCZOS_PADDING, Math.max(0, available - windowSamples));
-      const dispEnd = available - rightPad;
-      return Math.max(0, dispEnd - windowSamples);   // dispStart; subSampleOffset = 0
+      return latestAbs - rightPad;   // offsetFrac = 1.0 places this at the right edge
     };
 
     // ----- trigger-mode frame selection (Java drawWaveforms steps 1-3) -----
-    // dispCount is the drawn window length. It equals windowSamples for the live
-    // trigger paths; FILE MODE clamps it to the part of the loaded buffer actually
-    // on screen (Java drawWaveforms file branch dispCountN = dispEndN − dispStartN),
-    // so a buffer SHORTER than the requested window keeps samplesPerPx small enough
-    // to stay on the band-limited Lanczos branch instead of falling onto the
-    // per-column min/max bars (which staircases a smooth sine).
-    let trig, capture = false, startSample, dispCount = windowSamples;
+    // Sets (anchorAbs, offsetFrac) — or returns early for a hold/blank branch — then the
+    // single nav.viewport call below maps them to (startSample, dispCount).
+    let trig, capture = false, anchorAbs, offsetFrac, dispCount = windowSamples;
     if (!p) {
       // No-prefs file-load autoscale fallback: free-run from trigFrom, startSample = trig.
       trig = foundTrigger ? foundFrac : trigFrom;
-      startSample = trig;
+      anchorAbs = bufStartAbs + trig; offsetFrac = 0.0;   // viewLeft = trig (local)
     } else if (this.fileMode) {
-      // File mode bypass: right-edge anchor, no trigger, no capture. A non-zero
-      // info.viewBackOffsetFrames scrolls the anchored window backwards from the
-      // latest sample (Java ScopePane navSlider in file mode), clamped to [0, start].
-      const back = Math.max(0, Math.round(info.viewBackOffsetFrames || 0));
-      startSample = Math.max(0, rightEdgeAnchor() - back);
-      // Clamp the drawn span to the buffer's right edge (Java dispEndN), so when the
-      // loaded signal is shorter than the requested window the trace is reconstructed
-      // at full resolution over the real samples instead of decimating into min/max
-      // bars (the staircase). available ≥ windowSamples → dispCount == windowSamples.
-      const rightPad = Math.min(LANCZOS_PADDING, Math.max(0, available - windowSamples));
-      dispCount = Math.max(0, Math.min(windowSamples, (available - rightPad) - startSample));
-      trig = startSample + posFrac * windowSamples;   // for the measurement span below
+      // File / scrolled-back bypass (Java drawWaveforms ~2937-2953): the window is placed
+      // ABSOLUTELY — its right edge sits at scrollViewEndAbs (= writePos − viewBackOffset),
+      // exactly where the edge time marks point, so every scroll step moves the trace 1:1
+      // (sub-sample included). anchor = scrollViewEndAbs, offsetFrac = 1.0 (anchor pins the
+      // RIGHT edge). No trigger, no capture. The back-offset is FRACTIONAL (Java
+      // ScopeNav.fileViewWindow keeps mainOffset a double so a ½-div wheel step carries a
+      // sub-sample scroll into _drawTrace's dispStart/subSampleOffset split). dispCount stays
+      // the full windowSamples — the renderer blanks columns the buffer can't fill.
+      const back = Math.max(0, info.viewBackOffsetFrames || 0);
+      const scrollViewEndAbs = latestAbs - back;   // writePos − viewBackOffsetFrames
+      anchorAbs = scrollViewEndAbs; offsetFrac = 1.0;
+      // startSample (local viewLeft) for the geometry stash + measurement span below.
+      const startSampleFile = (scrollViewEndAbs - windowSamples) - bufStartAbs;
+      trig = startSampleFile + posFrac * windowSamples;   // for the measurement span below
       // Stash the window geometry so the wheel handlers (file-mode horizontal pan +
-      // t/div zoom-around-cursor) and the rect zoom can re-anchor the back-offset
-      // against the loaded buffer without re-deriving it (C34). dispCount is the
-      // span actually mapped across the canvas (short files clamp it), so the rect
-      // zoom's pixel↔frame mapping matches the drawn trace exactly.
-      this._fileGeom = { available, windowSamples, startSample, back, dispCount };
+      // t/div zoom-around-cursor) and the rect zoom can re-anchor the back-offset against
+      // the loaded buffer without re-deriving it (C34). `back` is the FRACTIONAL accumulator
+      // so repeated ½-div steps sum exactly; dispCount is the full window (blanked past the
+      // buffer, matching Java), so the rect zoom's pixel↔frame mapping matches the drawn trace.
+      this._fileGeom = { available, windowSamples, startSample: startSampleFile, back, dispCount };
     } else if (mode === TriggerMode.SINGLE) {
       if (this._singleArmed && foundTrigger) {
         trig = foundFrac; capture = true;
         this._singleArmed = false;
         if (this.onSingleDisarmed) this.onSingleDisarmed();   // pop the Start toggle
-        startSample = trig - posFrac * windowSamples;
+        anchorAbs = bufStartAbs + trig; offsetFrac = posFracReal;   // virtual-capable
       } else if (this._singleHeld) {
         // Armed-waiting (or disarmed-held): keep the LAST captured frame + ALL its
         // overlays (Java drawWaveforms: armed+no-trigger → renderHeldCapturedFrame).
@@ -921,30 +1350,50 @@ export class ScopeView {
         // and the DOM table keep working while we wait for the first trigger.
         // The cap/s readout stays visible on the blank pane (Java paintCanvas draws
         // it every paint) — in glitch mode it IS the glitches/s counter.
+        // Java draws the sliders AFTER drawWaveforms UNCONDITIONALLY (paintCanvas:
+        // drawWaveforms → drawSliders), so a blank-trace paint still registers the
+        // three handle hit-boxes — the offset / trigger-level / trigger-position
+        // handles stay draggable while a rare (e.g. glitch) trigger hasn't fired.
+        if (p) this._drawSliders(g, W, H, levelFrac, posFrac, descByName);
         this._updateCaptureRate(false);
         this._drawCaptureRate();
-        if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
+        if (this._rectZoom) this._rectZoom.drawOverlay(this._overlayG || g, W, H);
         return;
       }
     } else if (mode === TriggerMode.NORMAL) {
-      if (foundTrigger) { trig = foundFrac; capture = true; startSample = trig - posFrac * windowSamples; }
+      if (foundTrigger) { trig = foundFrac; capture = true; anchorAbs = bufStartAbs + trig; offsetFrac = posFracReal; }
       else if (this._normalFrame) { this._drawHeldFrame(g, W, H); return; }   // hold last
       // Never triggered AND no seeded frame → blank the TRACE only. Do NOT wipe
       // the measured state: _measureLiveWindow already refreshed this.latest /
       // measurementRows this paint, and the table must keep updating (C24). The
       // cap/s readout stays visible on the blank pane (whole-record visibility).
+      // Java draws the sliders after drawWaveforms unconditionally, so the offset /
+      // trigger-level / trigger-position handles stay draggable in NORMAL (incl.
+      // glitch NORMAL) even before / between triggers.
       else {
+        if (p) this._drawSliders(g, W, H, levelFrac, posFrac, descByName);
         this._updateCaptureRate(false); this._drawCaptureRate();
-        if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
+        if (this._rectZoom) this._rectZoom.drawOverlay(this._overlayG || g, W, H);
         return;
       }
     } else {
-      // AUTO: anchor on the trigger when found (centred via posFrac); otherwise
-      // free-run on the latest samples — Java step 3 right-edge-anchors (NOT
-      // trigFrom), with subSampleOffset = 0.
-      if (foundTrigger) { trig = foundFrac; startSample = trig - posFrac * windowSamples; }
-      else { startSample = rightEdgeAnchor(); trig = startSample + posFrac * windowSamples; }
+      // AUTO: anchor on the trigger when found (virtual-capable offset like NORMAL);
+      // otherwise free-run right-anchored on the newest sample — Java step 3 sets
+      // anchorAbs = latestAbs − rightPad, offsetFrac = 1.0 (NOT trigFrom, NOT posFrac):
+      // this view isn't pannable, the newest sample fills to the right edge.
+      if (foundTrigger) { trig = foundFrac; anchorAbs = bufStartAbs + trig; offsetFrac = posFracReal; }
+      else {
+        anchorAbs = autoFreeRunAnchor(); offsetFrac = 1.0;
+        trig = (anchorAbs - windowSamples) - bufStartAbs + posFrac * windowSamples;   // measurement span
+      }
     }
+
+    // ── ONE viewport mapping for every mode (Java: nav.viewport(anchorAbs, offsetFrac,
+    // displaySamples, bufStartAbs)). startSample is the LOCAL fractional viewLeft the rest
+    // of render()/_drawTrace consumes (= vp.dispStart + vp.subSampleOffset = viewLeftAbs −
+    // bufStartAbs). dispCount is left at the full windowSamples (blanked past the buffer).
+    const vp = this.nav().viewport(anchorAbs, offsetFrac, windowSamples, bufStartAbs);
+    let startSample = vp.viewLeftAbs - bufStartAbs;
 
     const period = info.period;
     const show = Math.max(8, Math.min(available - Math.ceil(trig) - LANCZOS_PADDING, Math.round(period * 4)));   // measurement span
@@ -955,34 +1404,114 @@ export class ScopeView {
     const samplesPerPx = dispCount / cols;
     const pxPerSample = cols / dispCount;
 
-    // Each channel: its own colour / V/div / offset / AC / sinc. In dual-tone
-    // the trigger channel draws the beat-modulated `trigBuf`; the other channel
-    // draws its own filtered signal. (No-prefs autoscale fallback per channel.)
+    // ----- Residual mode (Java renderTraces frozenFrame == null branch): subtract the
+    // best-fit tone(s) from the DISPLAYED slice, per channel, on LIVE frames only (a held
+    // frame replays its already-substituted snapshot, so no re-fit). Both channels share
+    // the SAME slice geometry [sliceFrom, sliceFrom+sliceLen) (it depends only on
+    // dispStart/dispCount/pad/available, equal for L and R), so a residual channel and a
+    // re-based raw copy of the other channel fit a single (available, startSample) tuple —
+    // which the snapshot (_snapshotFrame) can only carry once. Substituting the scratch
+    // for BOTH the snapshot and drawTrace bakes the residual into the snapshot; the frozen-
+    // replay path then paints it verbatim (residual NOT re-run there), subtracted once.
+    // `drawBufs[ch]` overrides each descriptor's draw buffer; when a residual is active the
+    // whole draw window re-bases onto (drawAvailable, drawStartSample).
+    const drawBufs = {};
+    let drawAvailable = available;
+    let drawStartSample = startSample;
+    let residualSliceFrom = 0;   // procBuf index of drawn-window sample 0 (0 unless residual re-based it)
+    if (p && !this.fileMode) {
+      const leftResidual = p.oscLeftResidualEnabled.get();
+      const rightResidual = p.oscRightResidualEnabled.get();
+      if (!leftResidual) this._lastResidualVpp.L = NaN;
+      if (!rightResidual) this._lastResidualVpp.R = NaN;
+      const dispStartI = Math.floor(startSample);
+      const subSampleOffset = startSample - dispStartI;
+      const lDesc = descByName.L, rDesc = descByName.R;
+      let resL = null, dispL = 0, lenL = 0, resR = null, dispR = 0, lenR = 0;
+      if (showL && leftResidual && lDesc) {
+        resL = this._computeResidual(lDesc.procBuf, available, dispStartI, dispCount,
+          LANCZOS_PADDING, sampleRate, true, peakVolts, info);
+        dispL = this._residualDispStart; lenL = this._residualSliceLen;
+      }
+      if (showR && rightResidual && rDesc) {
+        resR = this._computeResidual(rDesc.procBuf, available, dispStartI, dispCount,
+          LANCZOS_PADDING, sampleRate, false, peakVolts, info);
+        dispR = this._residualDispStart; lenR = this._residualSliceLen;
+      }
+      // At least one residual succeeded → both channels render off the shared slice: the
+      // residual channel from its scratch, the other (shown, raw) channel from a plain copy
+      // of the same slice so the single (drawAvailable, drawStartSample) tuple is valid for
+      // both traces AND the snapshot. (dispL==dispR and lenL==lenR whenever both present.)
+      if (resL || resR) {
+        const shared = resL ? dispL : dispR;   // dispStart − sliceFrom (equal for both)
+        const sliceLen = resL ? lenL : lenR;
+        const sliceFrom = dispStartI - shared;
+        residualSliceFrom = sliceFrom;
+        drawAvailable = sliceLen;
+        drawStartSample = shared + subSampleOffset;
+        if (showL && lDesc) {
+          drawBufs.L = resL ? resL
+            : this._copyResidualSlice(lDesc.procBuf, sliceFrom, sliceLen, true);
+        }
+        if (showR && rDesc) {
+          drawBufs.R = resR ? resR
+            : this._copyResidualSlice(rDesc.procBuf, sliceFrom, sliceLen, false);
+        }
+      }
+    }
+
+    // Each channel: its own colour / V/div / offset / AC / sinc. EVERY channel
+    // draws its own filtered CAPTURED signal — in dual-tone the reconstructed
+    // beat is only the TRIGGER source (trigBuf) and the dimmed overlay below,
+    // never the trace (Java renderTraces draws leftBuf/rightBuf; drawBeatOverlays
+    // draws the envelope on top). Residual mode substitutes the residual buffer
+    // (and shared slice geometry) for BOTH channels. (No-prefs autoscale fallback.)
     let autoMm = 0;
     if (!p) {
       autoMm = 1e-9;
       for (let i = 0; i < show; i++) { const idx = Math.floor(trig) + i; if (idx >= 0 && idx < available) autoMm = Math.max(autoMm, Math.abs(buf[idx])); }
     }
     for (const d of descriptors) {
-      const drawBuf = (dual && d === trigDesc) ? trigBuf : d.procBuf;
+      const drawBuf = (drawBufs[d.ch] !== undefined) ? drawBufs[d.ch] : d.procBuf;
       const sampleToY = p
         ? (s) => H * (d.offsetFrac - ((s - d.dcOff) * peakV) / (d.vDiv * DIVISIONS_Y))
         : (s) => H / 2 - s / autoMm * (H * 0.45);
-      this._drawTrace(g, W, H, drawBuf, available, startSample, dispCount,
+      this._drawTrace(g, W, H, drawBuf, drawAvailable, drawStartSample, dispCount,
                       cols, samplesPerPx, pxPerSample, sampleToY, d.sinc, d.hex);
     }
 
-    // Reconstructed-beat overlay — gated on dual-tone AND the user's checkbox
-    // (Java drawBeatOverlay). Drawn in the trigger channel's colour at 0.45
-    // brightness (Java attenuate(triggerColour, 0.45)), in the trigger channel's
-    // vertical mapping.
-    if (dual && p && p.oscShowReconstructedBeat.get()) {
-      const beatHex = attenuateHex(trigDesc.colorInt, 0.45);
-      // Java drawBeatOverlay: dcOffset = 0.0 (beat is already zero-centred),
-      // sincEnabled = false, dotDiameter = 0.
-      const sampleToY = (s) => H * (trigDesc.offsetFrac - (s * peakV) / (trigDesc.vDiv * DIVISIONS_Y));
-      this._drawTrace(g, W, H, trigBuf, available, startSample, dispCount,
-                      cols, samplesPerPx, pxPerSample, sampleToY, false, beatHex, 0);
+    // ----- Reconstructed-beat overlays (Java drawBeatOverlays): one per VISIBLE channel
+    // whose residual pref is OFF, reconstructed from THAT channel's own samples, in its own
+    // darkened trace colour at its own V/div + offset. Gated on dual-tone AND the user's
+    // "Reconstructed beat" checkbox AND the generator actually running (silent → no |F1−F2|
+    // beat, the reconstruction would trace noise). A channel showing its residual gets none.
+    const beatBufs = {};   // per-channel beat aligned to the DRAWN window, for _snapshotFrame (held replay)
+    if (dual && p && p.oscShowReconstructedBeat.get() && info.generatorRunning
+        && info.f1Hz > 0 && info.f2Hz > 0 && Math.abs(info.f2Hz - info.f1Hz) > 0) {
+      for (const d of descriptors) {
+        const resOff = d.ch === 'L' ? !p.oscLeftResidualEnabled.get() : !p.oscRightResidualEnabled.get();
+        if (!resOff) continue;
+        const beat = reconstructBeatSignal(d.procBuf, available, sampleRate, info.f1Hz, info.f2Hz, this._beatScratch);
+        const beatHex = attenuateHex(d.colorInt, 0.45);
+        // Java: dcOffset = 0.0 (beat is already zero-centred), sincEnabled = false, dotDiameter = 0.
+        const sampleToY = (s) => H * (d.offsetFrac - (s * peakV) / (d.vDiv * DIVISIONS_Y));
+        this._drawTrace(g, W, H, beat, available, startSample, dispCount,
+                        cols, samplesPerPx, pxPerSample, sampleToY, false, beatHex, 0);
+        // Snapshot this channel's beat NOW, into a per-channel grow-only buffer — the
+        // shared _beatScratch is reused for the NEXT channel (and every later paint),
+        // so a straight reference would alias. Re-base into the DRAWN window
+        // (residualSliceFrom, drawAvailable) so it lines up with the snapshotted trace,
+        // which _copyResidualSlice re-based the same way when the OTHER channel is a
+        // residual. (Java re-reconstructs from raw captured samples in the held path;
+        // the web bakes the drawn window into the snapshot, so the beat is baked too.)
+        let dst = this._snapBeatBufs[d.ch];
+        if (!dst || dst.length < drawAvailable) { dst = new Float32Array(drawAvailable); this._snapBeatBufs[d.ch] = dst; }
+        for (let i = 0; i < drawAvailable; i++) {
+          const src = residualSliceFrom + i;
+          dst[i] = (src >= 0 && src < available) ? beat[src] : 0;
+        }
+        beatBufs[d.ch] = { ch: d.ch, snap: dst, offsetFrac: d.offsetFrac, vDiv: d.vDiv, hex: beatHex };
+      }
     }
 
     // ----- on-canvas sliders (Java drawSliders): dashed trigger-level line +
@@ -1019,10 +1548,12 @@ export class ScopeView {
       const span = measDesc.procBuf.subarray(mStart, mStart + mLen);
       meas = compute(span, mLen, sampleRate, peakVolts);
       if (dual) {
-        // Beat view: single-value period/freq/duty are meaningless. Re-measure the
-        // (real) tone frequency off the span and drop the time-domain fields.
-        const f = refineFrequencyAround(span, mLen, sampleRate, info.f1Hz, info.f1Hz * 0.25);
-        meas = (f > 0) ? withFrequency(withoutTimes(meas), f) : withoutTimes(meas);
+        // Dual-tone has two simultaneous fundamentals — a single period/freq/duty
+        // has no physical meaning, so the f row reads '---'. Drop the time-domain
+        // fields only (Java ScopeMeasurementWorker.measure dual branch: withoutTimes();
+        // it never re-adds a single refined frequency — that was a legacy beat-view
+        // divergence that latched an intermittent ~19 kHz onto the f row).
+        meas = withoutTimes(meas);
       }
       this._accumulateMeasurements(meas, dual);
     }
@@ -1032,6 +1563,9 @@ export class ScopeView {
     // canvas — those live in the DOM measurement table (Java drawMeasurements).
     // Reaching here means this paint produced a genuinely-new frame (every
     // held-frame branch returned earlier), so advance the rate as "new".
+    // This is the web ScopeView.lastFrameWasNew = true (Java :3089/:3103): the
+    // phosphor wrapper accumulates the trace into the afterglow only on such frames.
+    this._lastFrameWasNew = true;
     this._updateCaptureRate(true);
     this._drawCaptureRate();
     this._drawStaticFilePath(g, W);
@@ -1042,15 +1576,21 @@ export class ScopeView {
     // allocation churn) so a held frame is always available: a SINGLE/NORMAL
     // trigger freezes it (capture=true), AND an Auto→SINGLE switch can seed the
     // held frame from the last live Auto frame (C19) instead of blanking.
-    this._snapshotFrame(descriptors, trigDesc, trigBuf, dual, p, available,
-                        startSample, dispCount, cols, samplesPerPx, pxPerSample, peakV, meas);
+    // The captured trigger's position in the DRAWN-slice coordinates (residual mode
+    // re-bases the slice by startSample − drawStartSample). Only meaningful when a
+    // trigger was actually found this paint; a free-running AUTO frame stores NaN so
+    // the held view uses the t/div-zoom-around-cursor branch (Java: NaN triggerLocal).
+    const capturedTriggerLocal = foundTrigger ? (trig - (startSample - drawStartSample)) : NaN;
+    this._snapshotFrame(descriptors, trigDesc, p, drawAvailable,
+                        drawStartSample, dispCount, cols, samplesPerPx, pxPerSample, peakV, meas,
+                        drawBufs, capturedTriggerLocal, beatBufs);
     if (capture) {
       if (mode === TriggerMode.SINGLE) this._singleHeld = true; else this._normalFrame = this._frame;
     }
 
     // Rect-zoom rubber band + focused-view accent border — LAST (Java paintCanvas
     // ends with drawRectZoomOverlay).
-    if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
+    if (this._rectZoom) this._rectZoom.drawOverlay(this._overlayG || g, W, H);
 
     // expose the latest (measurement-channel) measurement so the shell can fill
     // the scope tiles / autoSetup / calibrate.
@@ -1097,6 +1637,11 @@ export class ScopeView {
    *  `blankBeyondData` (Java field, true only on the held-frame magnify path) blanks
    *  any envelope column whose data runs past the buffer instead of clamping it. */
   _drawTrace(g, W, H, buf, n, startSample, windowSamples, cols, samplesPerPx, pxPerSample, sampleToY, sinc, hex, dotDiameterOverride, blankBeyondData = false) {
+    // TRACE phase: when persistence is painting, every waveform (main + held + beat)
+    // is drawn into the transparent scratch canvas the phosphor buffer accumulates,
+    // NOT the main canvas (Java renderTraceToScratch). _traceG is null otherwise, so
+    // the trace draws straight onto the passed context exactly as before.
+    if (this._traceG) g = this._traceG;
     // Java drawTrace works in (dispStart, subSampleOffset, dispCount). The web
     // carries a single float startSample (= windowLeftT = dispStart+subSample);
     // split it back exactly as Java's caller did (floor / fraction).
@@ -1117,28 +1662,23 @@ export class ScopeView {
       g.lineWidth = this.prefs ? this.prefs.oscLineWidth.get() : 2.0;
       g.lineCap = 'round'; g.lineJoin = 'round';
       g.beginPath();
-      if (sinc) {
-        // Java sinc: scale = max(1, samplesPerPx); one reconstructed point per
-        // pixel column + an anchor TRACE_EDGE_OVERHANG_PX outside each edge.
-        const scale = Math.max(1.0, samplesPerPx);
-        for (let i = 0; i <= width + 1; i++) {
-          const x = this._sincTraceX(i, width);
-          const v = lanczos(buf, n, dispStart + subSampleOffset + this._sincTraceX(i, width) * samplesPerPx, scale);
-          const y = sampleToY(v);
-          i === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
-        }
-      } else {
-        // Java linear (sin x/x off): ONE linearly-interpolated point per pixel
-        // column — the same per-column structure as the sinc branch (sincTraceX),
-        // straight-line interpolation (lerpAt) instead of Lanczos. A shallow ramp
-        // renders as a smooth sub-pixel polyline instead of one-point-per-sample
-        // stair-steps. (Java drawTrace lerpAt branch.)
-        for (let i = 0; i <= width + 1; i++) {
-          const x = this._sincTraceX(i, width);
-          const v = lerpAt(buf, n, dispStart + subSampleOffset + this._sincTraceX(i, width) * samplesPerPx);
-          const y = sampleToY(v);
-          i === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
-        }
+      // One point per pixel column; sinc reconstructs BETWEEN samples, linear interpolates.
+      // A column whose sample position lies OUTSIDE the buffer (pos < 0 || pos > n-1) has no
+      // data — LIFT the pen there so the trace draws NOTHING past the captured data end
+      // (Java drawTrace: the point provider returns Double.NaN for pos<0||pos>n-1, breaking
+      // the SWT Path). Unconditional across every mode — the display window may extend past
+      // `available` on a live/frozen/held/file frame, and those columns stay blank. Re-entry
+      // starts a fresh subpath with moveTo.
+      const scale = sinc ? Math.max(1.0, samplesPerPx) : 0;
+      let pen = false;   // true once the current subpath has a point
+      for (let i = 0; i <= width + 1; i++) {
+        const sx = this._sincTraceX(i, width);
+        const pos = dispStart + subSampleOffset + sx * samplesPerPx;
+        if (pos < 0 || pos > n - 1) { pen = false; continue; }   // no sample there → blank
+        const v = sinc ? lanczos(buf, n, pos, scale) : lerpAt(buf, n, pos);
+        const y = sampleToY(v);
+        pen ? g.lineTo(sx, y) : g.moveTo(sx, y);
+        pen = true;
       }
       g.stroke();
       // High-zoom per-sample dots (Java pxPerSample > 10).
@@ -1343,6 +1883,10 @@ export class ScopeView {
    *  handlers consult; the trigger sliders are hidden (and their hit-boxes cleared)
    *  in file mode, exactly as the Java does. */
   _drawSliders(g, W, H, levelFrac, posFrac, descByName) {
+    // OVERLAY phase: composited fresh on top of the persisted trace, so while a
+    // persisted frame is painting the sliders draw into the overlay scratch canvas,
+    // not the main context (Java Phase.OVERLAY). _overlayG is null otherwise.
+    if (this._overlayG) g = this._overlayG;
     const p = this.prefs;
     const o = this._overlay;
 
@@ -1414,9 +1958,61 @@ export class ScopeView {
       if (o) this._positionSlider(o.trigPos, 'v', posFrac, '#ffffff', 0, 0);
       this._triggerPosBounds = { x: posX - SLIDER_GRAB_HALF, y: H - SLIDER_TRI_LONG - 2,
         w: 2 * SLIDER_GRAB_HALF, h: SLIDER_TRI_LONG + 4 };
+      // Time-offset mark ABOVE the bottom-edge handle (Java drawSliders posStr): the REAL,
+      // virtual-capable offset time (posReal, NOT the clamped posFrac the line/handle pin to),
+      // so it keeps counting when a pan/zoom carries the trigger off-screen. Centred on the
+      // clamped handle x, lifted above the triangle.
+      if (o) {
+        const posReal = p ? p.oscTriggerPositionFrac.get() : posFrac;
+        const windowTime = (p ? p.oscTimePerDiv.get() : 0) * DIVISIONS_X;
+        const posSeconds = (posReal - 0.5) * windowTime;
+        const fmtS = (s) => Math.abs(s) >= 1 ? s.toFixed(3) + ' s'
+          : Math.abs(s) >= 1e-3 ? (s * 1e3).toFixed(3) + ' ms' : (s * 1e6).toFixed(3) + ' µs';
+        this._setOverlayLabel(o.trigPosVal, fmtS(posSeconds), '#ffffff',
+          'Trigger position offset (relative to the window centre)',
+          { left: (posFrac * 100) + '%', bottom: (SLIDER_TRI_LONG + 6) + 'px',
+            transform: 'translateX(-50%)' });
+      }
     } else {
-      if (o) this._hideSlider(o.trigPos);
+      if (o) { this._hideSlider(o.trigPos); o.trigPosVal.style.display = 'none'; }
       this._triggerPosBounds = { x: -1, y: -1, w: 0, h: 0 };
+    }
+
+    // ----- Full-scale boundary lines (Java ScopeView.drawFullScaleLines, 2105-2123 /
+    // 2162-2175): two dashed horizontals per enabled channel at ±FS volts around its
+    // offset. peakVolts = adcFsVoltageRms·√2 (live prefs); vScale = peakVolts/vDiv·
+    // (H/DIVISIONS_Y); yTop/yBot = centerY ∓ vScale. A y outside [0,H) is hidden —
+    // Java's natural clip. Drawn BEFORE the offset track below (via DOM paint order,
+    // see _buildOverlayLayer) so the offset zero-line + triangle win on overlap. NOT
+    // gated on fileMode (Java draws these in file mode too). The colour-dependent {2,6}
+    // dash rides an inline repeating-linear-gradient (2px on, 6px gap); the mid colour
+    // matches the offset track (attenuateHex(colorInt, 0.5) = Java *_CHANNEL_MID).
+    // The anchor deliberately uses the RAW, virtual-capable offsetFrac (NOT clamp01) so
+    // the FS line can reach the canvas middle at the scroll clamp — the nav spec's
+    // "±FS/2 reaches the vertical middle" limit, which the offset's wheel/scrollbar bound
+    // (0.5 + max(0.5, peakVolts/(DIVISIONS_Y·vDiv))) exceeds 1.0 for at fine V/div. This
+    // diverges from Java ScopeView.java:2116, which still clamps (Java-side twin bug,
+    // reported to the maintainer). The offset track/slider below stays clamp01 (its
+    // on-screen clamping to [0,1] is correct per spec).
+    if (o) {
+      const peakVolts = (p ? p.adcFsVoltageRms.get() : 1.0) * Math.SQRT2;
+      const pxPerDivY = H / DIVISIONS_Y;
+      for (const ch of ['L', 'R']) {
+        const fs = o.fsLine[ch];
+        const d = descByName[ch];
+        if (!d) { fs.top.style.display = 'none'; fs.bot.style.display = 'none'; continue; }
+        const mid = attenuateHex(d.colorInt, 0.5);
+        const centerY = d.offsetFrac * H;
+        const vScale = peakVolts / d.vDiv * pxPerDivY;
+        const place = (el, y) => {
+          if (y < 0 || y >= H) { el.style.display = 'none'; return; }
+          el.style.display = '';
+          el.style.top = (y / H * 100) + '%';
+          el.style.background = `repeating-linear-gradient(90deg, ${mid} 0 2px, transparent 2px 8px)`;
+        };
+        place(fs.top, centerY - vScale);
+        place(fs.bot, centerY + vScale);
+      }
     }
 
     // ----- Channel offset lines: LEFT end clears the offset's OWN value label (offW[ch]),
@@ -1670,8 +2266,9 @@ export class ScopeView {
           const tDivNew = Math.max(T_PER_DIV_MIN, span / sr / DIVISIONS_X);
           p.oscTimePerDiv.set(tDivNew);   // BEFORE onFileBack — the pane's clamp reads the new t/div
           const wsNew = Math.round(tDivNew * DIVISIONS_X * sr);
-          const rightPad = Math.min(LANCZOS_PADDING, Math.max(0, geom.available - wsNew));
-          const rightEdgeAnchorNew = Math.max(0, geom.available - rightPad - wsNew);
+          // back = 0 pins the right edge at `available` (no rightPad), matching render +
+          // _fileNavState + fileMaxBack (Java file window right edge = writePos − back).
+          const rightEdgeAnchorNew = Math.max(0, geom.available - wsNew);
           const startNew = (s.xMin + s.xMax) / 2 - wsNew / 2;
           this.onFileBack(Math.round(rightEdgeAnchorNew - startNew));
         }
@@ -1775,8 +2372,15 @@ export class ScopeView {
     // Time labels straddle the horizontal centre line (top:50% lifted 4px above the
     // line via translateY(-100%-4px)). Left edge = left-anchored, right edge =
     // right-anchored. Pale grey, like the old #bbb canvas text.
-    const leftStr = fmtS(-posFrac * windowTime);
-    const rightStr = fmtS((1 - posFrac) * windowTime);
+    // Live/frozen: use the REAL (virtual-capable, UNCLAMPED) trigger offset so the
+    // marks keep counting when a pan/zoom carried the trigger off-screen — Java
+    // drawEdgeLabels reads prefs.getOscTriggerPositionFrac() (posReal), NOT the
+    // clamped posFrac the handle/line are pinned to (drawSliders). File mode has no
+    // trigger, so it keeps the passed (clamped) posFrac.
+    const p = this.prefs;
+    const posReal = (!this.fileMode && p) ? p.oscTriggerPositionFrac.get() : posFrac;
+    const leftStr = fmtS(-posReal * windowTime);
+    const rightStr = fmtS((1 - posReal) * windowTime);
     const timeY = { top: '50%', transform: 'translateY(calc(-100% - 4px))' };
     this._setOverlayLabel(o.timeLeft, leftStr, '#bbb', this._timeTip(leftStr, true),
       { left: '4px', ...timeY });
@@ -1814,96 +2418,375 @@ export class ScopeView {
     return chName + ' channel ' + (isTop ? 'top-of-grid' : 'bottom-of-grid') + ' voltage';
   }
 
-  /** Measures the long fixed live measurement window (info.measBufL/R, Java
-   *  ScopeMeasurementWorker's MEAS_MAX_SAMPLES ring read) CONTINUOUSLY, decoupled
-   *  from the trigger/display (C24): called every render BEFORE any trigger-mode
-   *  hold/blank branch, so the measurement table keeps updating in NORMAL-hold and
-   *  SINGLE-armed even while the TRACE is frozen — exactly like Java's worker
-   *  measures the ring independent of the display. Resolves the measurement channel
-   *  (auto-flip if disabled), measures the FILTERED span, accumulates the rolling
-   *  stats, and sets this.latest. The full-window compute is throttled to
-   *  READOUT_THROTTLE_MS so per-paint cost stays bounded (the 8192-sample window is
-   *  not recomputed every paint); between computes this.latest / measurementRows are
-   *  left intact. Returns the measurement (so the live-render path can snapshot it
-   *  into the held frame), or null when no live window is available (file mode) so
-   *  the caller falls back to the displayed-span measurement.
+  /** Resolves the measurement channel (auto-flip + persist when the selected one is
+   *  disabled) and keeps the current dual-tone form for publishMeasurement, then EITHER
+   *  reuses the live osc-meas worker's most-recent publish (this.latest, already published
+   *  via publishMeasurement) when it is fresh, OR — when a measurement window is injected
+   *  directly with no live worker stream (headless render / node tests) — runs the same
+   *  DOM-free compute pipeline SYNCHRONOUSLY over info.measBufL/R and publishes it through
+   *  the same contract. Returns the selected-channel measurement (so the live-render path
+   *  can snapshot it), or null when neither a fresh live publish nor an injected window is
+   *  available (file mode) so the caller falls back to the displayed-span measurement.
    *  @returns {object|null} */
   _measureLiveWindow(info, descByName, descriptors, sampleRate, peakVolts, dual) {
     const p = this.prefs;
+    this._measDual = dual;   // publishMeasurement (worker-driven) has no info; snapshot the form
     let measCh = p ? p.oscMeasurementChannel.get() : (descriptors[0] && descriptors[0].ch);
     let measDesc = descByName[measCh];
-    if (p && !measDesc && descriptors.length) {   // selected channel disabled → flip + persist + clear history
+    if (p && !measDesc && descriptors.length) {   // selected channel disabled → flip + persist
+      // The measurement-channel auto-flip no longer clears history (Java dropped
+      // clearHistory on the switch — the worker measures BOTH channels every tick, so
+      // the newly-selected channel already has a live history / pool to read).
       measDesc = descriptors[0];
       p.oscMeasurementChannel.set(measDesc.ch);
       if (p.save) p.save();   // Java prepareMeasurementRows persists the flip
-      this._clearMeasurementHistory();
     }
     if (!measDesc) measDesc = descriptors[0];
     if (!measDesc) return null;
     measCh = measDesc.ch;
-    const measRaw = (measCh === 'R') ? info.measBufR : info.measBufL;
-    if (!measRaw || !(info.measAvailable >= 64)) return null;   // no live window (file mode) → caller falls back
-    // Throttle the full-window compute: between ticks keep the last result so the
-    // table stays current without recomputing 8192 samples every paint.
+
+    // Live path: the osc-meas worker publishes both channels off its own gapless ring
+    // reader on its ~100 ms cadence (publishMeasurement below). While those publishes are
+    // fresh, reuse this.latest — the render thread must NOT recompute (it would overwrite
+    // the worker's long-window result with a short displayed-span one).
     const nowMs = performance.now();
+    if ((nowMs - this._lastMeasPublishMs) < LIVE_MEAS_FRESH_MS && this.latest) return this.latest;
+
+    // Synchronous fallback: a directly-injected measurement window with no live worker
+    // stream. Run the SAME per-channel pipeline the worker runs (OscMeasCompute.measureWindow)
+    // over info.measBufL/R and publish it through the same contract, throttled so the
+    // full-window compute cost stays bounded (the window isn't recomputed every paint).
+    if (!(info.measBufL || info.measBufR) || !(info.measAvailable >= 64)) return null;   // no window → file-mode fallback
     if (this.latest && (nowMs - this._lastLiveMeasMs) < READOUT_THROTTLE_MS) return this.latest;
     this._lastLiveMeasMs = nowMs;
+    const nowNs = nowMs * NS_PER_MS;
     const mLen = info.measAvailable;
-    if (!this._measScratch || this._measScratch.length < mLen) this._measScratch = new Float32Array(mLen);
-    const span = this._applyChannelFilters(measRaw, mLen, sampleRate, measDesc.name, this._measScratch,
-      info.measAbsStart || 0, measDesc.name + 'Meas');
-    const mainsMode = p ? p['osc' + measDesc.name + 'MainsSuppression'].get() : 'NONE';
-    // The comb's delay lines start zeroed each pass, so its head is an
-    // un-suppressed pass-through that would skew Vpp/Vrms: measure the settled
-    // TAIL instead — ≈3 time-constants in, capped so at least half the window
-    // remains (Java ScopeMeasurementWorker computeMeasurementOnce).
-    let mData = span, mN = mLen;
-    if (mainsMode === 'IIR_COMB') {
-      const settle = Math.trunc(3.0 * sampleRate / (Math.PI * MAINS_NOTCH_BW_HZ));
-      const from = Math.min(settle, Math.trunc(mLen / 2));
-      if (from > 0) { mData = span.subarray(from); mN = mLen - from; }
+    const absStart = info.measAbsStart || 0;
+    for (const d of descriptors) {
+      const raw = (d.ch === 'R') ? info.measBufR : info.measBufL;
+      if (!raw) continue;
+      const opts = {
+        lpfMode: p ? p['osc' + d.name + 'Lpf'].get() : 'NONE',
+        mainsMode: p ? p['osc' + d.name + 'MainsSuppression'].get() : 'NONE',
+        dual, f1Hz: info.f1Hz, f2Hz: info.f2Hz,
+      };
+      const m = this._measEngine.measureWindow(d.ch, raw, mLen, sampleRate, peakVolts, absStart, opts);
+      if (!m) continue;
+      this._pushMeanHist(d.ch, nowNs, m.vmean / peakVolts);
+      this._lastMeas[d.ch] = m;
     }
-    let meas = compute(mData, mN, sampleRate, peakVolts, false);   // fast: broad-band scan runs off-thread
-    if (dual) {
-      // Beat view: single-value period/freq/duty are meaningless. Re-measure the
-      // (real) tone frequency off the span and drop the time-domain fields.
-      let f = refineFrequencyAround(span, mLen, sampleRate, info.f1Hz, info.f1Hz * 0.25);
-      // Never derive frequency from the mains-canceller output: re-pin the
-      // filtered-signal seed on the RAW window in a narrow ±2 Hz band (the
-      // canceller notches can sit within a few Hz of the tone and pull it).
-      if (mainsMode !== 'NONE' && f > 0) {
-        const precise = refineFrequencyAround(measRaw, mLen, sampleRate, f, FREQ_REFINE_HALF_HZ);
-        if (precise > 0) f = precise;
-      }
-      meas = (f > 0) ? withFrequency(withoutTimes(meas), f) : withoutTimes(meas);
-    } else {
-      if (Number.isNaN(meas.frequency)) {
-        // Weak / noisy single tone: the cheap crossing-based search returned no frequency.
-        // Fold in the latest off-thread broad-band scan and kick a fresh one (Java
-        // ScopeMeasurementWorker) — only f / period lag, every other readout stays live.
-        if (Number.isFinite(this._asyncFreq)) meas = withFrequency(meas, this._asyncFreq);
-        if (!this._freqScan) this._freqScan = new FreqScanClient((hz) => { this._asyncFreq = hz; });
-        this._freqScan.submit(mData, mN, sampleRate, peakVolts);
-      }
-      if (mainsMode !== 'NONE' && Number.isFinite(meas.frequency)) {
-        // Re-pin the canceller-located tone on the RAW signal, free of the comb's
-        // notch bias, in a narrow band around the seed (Java ScopeMeasurementWorker
-        // two-step: the canceller only finds WHICH peak is the fundamental; the
-        // precise frequency always comes from the raw window).
-        const precise = refineFrequencyAround(measRaw, mLen, sampleRate, meas.frequency, FREQ_REFINE_HALF_HZ);
-        if (Number.isFinite(precise)) meas = withFrequency(meas, precise);
-      }
-    }
-    // Override the short-window amplitude with the POOLED long-window value. The pool is
-    // fed the CONTIGUOUS capture gap every paint (_feedMeasurementPool), so Vmean/Vrms/Vpp
-    // here are over the measurement-average window — every sample once — and their σ no
-    // longer tracks the per-buffer fractional-cycle DC swing. Time-domain fields keep
-    // their per-buffer estimate (already stable).
-    const pooled = this._ampPool.pool(nowMs * NS_PER_MS, p ? p.oscMeasurementAverageSeconds.get() : 0, peakVolts);
-    if (pooled) { meas.vpp = pooled.vpp; meas.vrms = pooled.vrms; meas.vmean = pooled.vmean; }
+    const meas = this._lastMeas[measCh];
+    if (!meas) return null;
     this._accumulateMeasurements(meas, dual);
     this.latest = meas;
     return meas;
+  }
+
+  /** Consumes one publish from the osc-meas Web Worker (the live measurement stream):
+   *  {resultL, resultR, leftMeanNorm, rightMeanNorm}. Reproduces the exact publication
+   *  contract the inline path had — stores each channel's snapshot (_lastMeas), pushes each
+   *  channel's whole-period normalized Vmean into the mean-history ring (_pushMeanHist), and
+   *  for the SELECTED channel accumulates the rolling table stats (_accumulateMeasurements)
+   *  + sets this.latest. Stamps the publish wall-clock so _measureLiveWindow reuses this
+   *  result instead of recomputing on the render thread. */
+  publishMeasurement(r) {
+    if (!r) return;
+    const p = this.prefs;
+    const nowMs = performance.now();
+    const nowNs = nowMs * NS_PER_MS;
+    if (r.resultL) { this._lastMeas.L = r.resultL; this._pushMeanHist('L', nowNs, r.leftMeanNorm); }
+    if (r.resultR) { this._lastMeas.R = r.resultR; this._pushMeanHist('R', nowNs, r.rightMeanNorm); }
+    const measCh = p ? p.oscMeasurementChannel.get() : 'L';
+    const meas = this._lastMeas[measCh] || this._lastMeas.L || this._lastMeas.R;
+    if (!meas) return;
+    this._accumulateMeasurements(meas, this._measDual);
+    this.latest = meas;
+    this._lastMeasPublishMs = nowMs;
+  }
+
+  /** The latest per-channel measurement snapshot (Java
+   *  ScopeMeasurementWorker.getLastMeasResult(boolean left)). */
+  _getLastMeas(left) {
+    return this._lastMeas[left ? 'L' : 'R'];
+  }
+
+  /** Publishes one measurement tick's WHOLE-PERIOD Vmean (normalized) into the
+   *  channel's mean-history ring (Java ScopeMeasurementWorker: meanHistory*Norm[write]
+   *  + measHistoryTime[write], write/size ring bookkeeping, lastMeanNormalized). */
+  _pushMeanHist(ch, tNs, meanNorm) {
+    const h = this._meanHist[ch];
+    h.t[h.write] = tNs;
+    h.v[h.write] = meanNorm;
+    h.write = (h.write + 1) % MEAS_HISTORY_CAP;
+    if (h.size < MEAS_HISTORY_CAP) h.size++;
+    this._lastMeanNorm[ch] = meanNorm;
+  }
+
+  /** Long-averaged normalised DC mean of one channel for the AC-coupling DC block,
+   *  the residual baseline and auto-setup centring — faithful port of Java
+   *  ScopeView.acDcMean → ScopeMeasurementWorker.averagedChannelMean: the mean of
+   *  the per-tick WHOLE-PERIOD Vmeans (the ring) whose timestamps fall inside
+   *  max(AC_DC_MIN_AVG_SEC, measurement-average pref); when the history doesn't
+   *  span the window yet, the latest tick's mean ("rather than 0 so AC removal
+   *  isn't suddenly off-zero"). NaN before the first publish — the caller falls
+   *  back to a per-frame window mean (Java ScopeView via sampleMean). */
+  _acDcMean(left) {
+    const ch = left ? 'L' : 'R';
+    const p = this.prefs;
+    const avgSec = Math.max(AC_DC_MIN_AVG_SEC, p ? p.oscMeasurementAverageSeconds.get() : 0);
+    const cutoff = performance.now() * NS_PER_MS - avgSec * 1e9;
+    const h = this._meanHist[ch];
+    let sum = 0, count = 0;
+    for (let i = 0; i < h.size; i++) {
+      const idx = (h.write - 1 - i + MEAS_HISTORY_CAP) % MEAS_HISTORY_CAP;
+      if (h.t[idx] < cutoff) break;
+      sum += h.v[idx];
+      count++;
+    }
+    if (count > 0) return sum / count;
+    return this._lastMeanNorm[ch];
+  }
+
+  /** Vpp (volts) auto-setup should scale the given channel's vertical to (Java
+   *  ScopeView.autoSetupVpp): the RESIDUAL Vpp recorded at the last paint when that
+   *  channel's residual pref is on and finite, else the channel's captured Vpp. Lets a
+   *  channel showing its residual scale to fill the screen off the (small) residual
+   *  amplitude instead of the (large) tone. */
+  _autoSetupVpp(left) {
+    const p = this.prefs;
+    const ch = left ? 'L' : 'R';
+    const on = p ? (left ? p.oscLeftResidualEnabled.get() : p.oscRightResidualEnabled.get()) : false;
+    const vpp = this._lastResidualVpp[ch];
+    if (on && Number.isFinite(vpp)) return vpp;
+    const m = this._lastMeas[ch];
+    return m ? m.vpp : NaN;
+  }
+
+  /**
+   * Residual view (faithful port of Java ScopeView.computeResidual): subtracts the
+   * best-fit single tone (dual-tone: two tones) from the displayed slice of one channel,
+   * writing the residual into that channel's scratch. Returns the scratch (whose length
+   * may exceed the slice) together with the slice geometry via this._residualDispStart
+   * (index of dispStart inside the scratch) / this._residualSliceLen (valid length), or
+   * null when the residual can't be computed (no valid frequency, fit window too short,
+   * degenerate fit) — the caller then paints the captured trace. Also records
+   * this._lastResidualVpp[ch] from the min/max over the VISIBLE window for auto-setup.
+   * @returns {Float32Array|null}
+   */
+  _computeResidual(data, dataLen, dispStart, dispCount, pad, sampleRate, leftChannel, peakVolts, info) {
+    const p = this.prefs;
+    const ch = leftChannel ? 'L' : 'R';
+    // 1. Tone frequencies. Single tone: seed from THIS channel's measured fundamental
+    //    (the worker measures both channels). Dual tone: the single-value measured f is
+    //    deliberately cleared (two fundamentals), so prefer the worker's per-channel
+    //    measured PAIR (dualF1/dualF2) — read off the raw capture, so immune to the
+    //    DAC/ADC clock offset (the commanded, FFT-bin-snapped generator values are exact
+    //    only in the DAC domain; with independent clocks and no FLL they are ppm-off in
+    //    the ADC capture, and over a long fit window that phase drift leaks the
+    //    fundamentals into the residual). Fall back to the generator-snapped values
+    //    (info.f1Hz/f2Hz) when the worker hasn't published a valid pair yet (cold start /
+    //    worker lag) so the residual doesn't go dark waiting. Bail (paint captured) when
+    //    nothing usable.
+    const dual = !!(info && info.dualTone);
+    let f1 = NaN, f2 = NaN, seed;
+    if (dual) {
+      const m = this._getLastMeas(leftChannel);
+      if (m && Number.isFinite(m.dualF1) && Number.isFinite(m.dualF2)
+        && m.dualF1 > 0 && m.dualF2 > 0
+        && Math.abs(m.dualF2 - m.dualF1) > 0) {
+        f1 = m.dualF1;
+        f2 = m.dualF2;
+      } else {
+        f1 = info.f1Hz; f2 = info.f2Hz;
+      }
+      if (!(f1 > 0) || !(f2 > 0) || !(Math.abs(f2 - f1) > 0)) {
+        this._recordResidualVpp(ch, NaN);
+        return null;
+      }
+      seed = Math.min(f1, f2);
+    } else {
+      const seedMeas = this._getLastMeas(leftChannel);
+      seed = seedMeas ? seedMeas.frequency : NaN;
+    }
+    if (!(seed > 0) || !Number.isFinite(seed) || !(sampleRate > 0)) {
+      this._recordResidualVpp(ch, NaN);
+      return null;
+    }
+
+    // 2. Fit window: start from the padded display slice, grow to cover at least
+    //    RESIDUAL_MIN_CYCLES cycles / RESIDUAL_MIN_FIT_SAMPLES — LEFT first (older
+    //    lookback samples exist), then right — clamped to the buffer, capped at
+    //    RESIDUAL_FIT_MAX_SAMPLES.
+    const sliceFrom = Math.max(0, dispStart - pad);
+    const sliceTo = Math.min(dataLen, dispStart + dispCount + pad);
+    if (sliceTo - sliceFrom < 2) { this._recordResidualVpp(ch, NaN); return null; }
+    let needCycles = Math.ceil(RESIDUAL_MIN_CYCLES * sampleRate / seed);
+    if (dual) {
+      // The two tones are only separable when the window spans several beat cycles —
+      // below that the fits leak into each other.
+      const needBeat = Math.ceil(RESIDUAL_MIN_BEAT_CYCLES * sampleRate / Math.abs(f2 - f1));
+      needCycles = Math.max(needCycles, needBeat);
+    }
+    const wantFit = Math.min(RESIDUAL_FIT_MAX_SAMPLES,
+      Math.max(RESIDUAL_MIN_FIT_SAMPLES, needCycles));
+    let fitFrom = sliceFrom;
+    let fitTo = sliceTo;
+    const deficit = wantFit - (fitTo - fitFrom);
+    if (deficit > 0) {
+      const growLeft = Math.min(deficit, fitFrom);
+      fitFrom -= growLeft;
+      const growRight = Math.min(deficit - growLeft, dataLen - fitTo);
+      fitTo += growRight;
+    }
+    let fitLen = fitTo - fitFrom;
+    if (fitLen > RESIDUAL_FIT_MAX_SAMPLES) {
+      // The display slice is longer than the fit cap. Anchoring the capped fit
+      // window at the slice's LEFT edge makes the fitted model extrapolate one-
+      // directionally across the whole (up to 10 s) slice, so the residual is clean
+      // at the left and its amplitude grows monotonically RIGHTWARD by 2·A·π·δf·t —
+      // where δf is the unavoidable sub-Hz frequency error (finite refine precision
+      // in the dual path, which has no phase-slope polish; single-tone leftovers in
+      // the polish). CENTRE the fit window on the display slice instead so that error
+      // is split symmetrically about the middle: the residual is now smallest at the
+      // centre and grows equally toward BOTH edges, halving the peak and removing the
+      // "cleaned only at the start" asymmetry the user sees at >100 ms/div.
+      fitFrom = sliceFrom + Math.trunc((sliceTo - sliceFrom - RESIDUAL_FIT_MAX_SAMPLES) / 2);
+      if (fitFrom < 0) fitFrom = 0;
+      if (fitFrom > dataLen - RESIDUAL_FIT_MAX_SAMPLES) fitFrom = dataLen - RESIDUAL_FIT_MAX_SAMPLES;
+      fitLen = RESIDUAL_FIT_MAX_SAMPLES;
+    }
+    if (fitLen < RESIDUAL_MIN_FIT_SAMPLES) { this._recordResidualVpp(ch, NaN); return null; }
+
+    // 3. Cheap phase-slope frequency polish (single tone only — in dual mode the
+    //    generator frequencies are exact and a second tone breaks the single-sinusoid
+    //    phase model): fit each half of the window and read off the extra phase advance
+    //    the seed frequency missed. A step larger than the sanity cap means the estimate
+    //    is unreliable → keep f.
+    let f = seed;
+    for (let iter = 0; !dual && iter < RESIDUAL_POLISH_ITERS; iter++) {
+      const half = Math.trunc(fitLen / 2);
+      if (half < 2) break;
+      const fitA = SineFit.of(data, fitFrom, half, sampleRate, f);
+      const fitB = SineFit.of(data, fitFrom + half, half, sampleRate, f);
+      const omega = 2.0 * Math.PI * f / sampleRate;
+      const deltaPhi = this._wrapToPi(fitB.phaseRadians() - fitA.phaseRadians()
+        - this._wrapToPi(omega * half));
+      const deltaF = deltaPhi * sampleRate / (2.0 * Math.PI * half);
+      const cap = Math.min(RESIDUAL_POLISH_MAX_HZ, sampleRate / (4.0 * half));
+      if (Math.abs(deltaF) > cap) break;
+      f += deltaF;
+      if (Math.abs(deltaF) < RESIDUAL_POLISH_MIN_STEP_HZ) break;
+    }
+
+    // 4. Final exact fit at the polished frequency (single tone; the dual branch below
+    //    fits its two tones itself).
+    let fit = null;
+    if (!dual) {
+      fit = SineFit.of(data, fitFrom, fitLen, sampleRate, f);
+      if (!Number.isFinite(fit.a) || !Number.isFinite(fit.b)) {
+        this._recordResidualVpp(ch, NaN);
+        return null;
+      }
+    }
+
+    // 5. Subtract the WHOLE fitted model — tone AND the fit's own DC c — over the display
+    //    slice into the scratch, indexed from sliceFrom (kOffset = sliceFrom − fitFrom),
+    //    and add back the stable, long-averaged DC (the SAME acDcMean the AC display
+    //    offset uses) so the residual baseline is pinned to the Vmean-stable source.
+    const sliceLen = sliceTo - sliceFrom;
+    let scratch = leftChannel ? this._residualScratchL : this._residualScratchR;
+    if (!scratch || scratch.length < sliceLen) {
+      scratch = new Float32Array(sliceLen);
+      if (leftChannel) this._residualScratchL = scratch; else this._residualScratchR = scratch;
+    }
+    const dcAvg = this._acDcMean(leftChannel);
+    const dcStable = Number.isFinite(dcAvg) ? dcAvg : 0;   // Java lastMeanNormalized defaults 0
+    if (dual) {
+      // Two tones: alternating Gauss–Seidel refits over the FULL fit window. Each round
+      // refits one tone on data with the OTHER tone's latest estimate removed, squaring
+      // the remaining cross-leakage — after RESIDUAL_DUAL_REFIT_ROUNDS the remnant is
+      // below the noise regardless of how few beat cycles the window holds. The last
+      // subtraction removes the whole model + pins the baseline to dcStable exactly like
+      // the single-tone path.
+      let fs = this._residualFitScratch;
+      if (!fs || fs.length < fitLen) { fs = new Float32Array(fitLen); this._residualFitScratch = fs; }
+      let fitA = SineFit.of(data, fitFrom, fitLen, sampleRate, f1);
+      fitA.subtractSineInto(data, fitFrom, fitLen, 0, fs, 0);   // fs = data − A₀
+      let fitB = SineFit.of(fs, 0, fitLen, sampleRate, f2);
+      if (!Number.isFinite(fitA.a) || !Number.isFinite(fitA.b)
+        || !Number.isFinite(fitB.a) || !Number.isFinite(fitB.b)) {
+        this._recordResidualVpp(ch, NaN);
+        return null;
+      }
+      for (let round = 0; round < RESIDUAL_DUAL_REFIT_ROUNDS; round++) {
+        fitB.subtractSineInto(data, fitFrom, fitLen, 0, fs, 0);   // fs = data − B
+        fitA = SineFit.of(fs, 0, fitLen, sampleRate, f1);
+        fitA.subtractSineInto(data, fitFrom, fitLen, 0, fs, 0);   // fs = data − A
+        fitB = SineFit.of(fs, 0, fitLen, sampleRate, f2);
+      }
+      // Final subtraction over the DISPLAY SLICE, evaluated analytically from data
+      // exactly like the single-tone path — NOT copied out of the fit scratch: the fit
+      // window is capped at RESIDUAL_FIT_MAX_SAMPLES, so at large time/div the slice
+      // extends beyond it (bench: 67 200-sample slice vs a 65 536 fit window → out-of-
+      // bounds copy). The fitted sines extrapolate exactly at any k, so the slice tail
+      // beyond the fit window subtracts just as cleanly (Java ScopeView.computeResidual).
+      fitA.subtractSineInto(data, sliceFrom, sliceLen, sliceFrom - fitFrom, scratch, 0);
+      fitB.subtractFullInto(scratch, 0, sliceLen, sliceFrom - fitFrom, dcStable, scratch, 0);
+    } else {
+      fit.subtractFullInto(data, sliceFrom, sliceLen, sliceFrom - fitFrom, dcStable, scratch, 0);
+    }
+
+    // 6. Vpp over the VISIBLE part only (dispStart .. dispStart+dispCount), in volts, for
+    //    auto-setup's per-channel vertical scaling.
+    const visFrom = Math.max(0, dispStart - sliceFrom);
+    const visTo = Math.min(sliceLen, dispStart - sliceFrom + dispCount);
+    let vpp = NaN;
+    if (visTo > visFrom) {
+      let min = scratch[visFrom], max = scratch[visFrom];
+      for (let i = visFrom + 1; i < visTo; i++) {
+        const v = scratch[i];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      vpp = (max - min) * peakVolts;
+    }
+    this._recordResidualVpp(ch, vpp);
+
+    // 7. Report where dispStart landed inside the scratch + the valid length, and return
+    //    the scratch (whose .length may exceed sliceLen).
+    this._residualDispStart = dispStart - sliceFrom;
+    this._residualSliceLen = sliceLen;
+    return scratch;
+  }
+
+  /** Stores the residual Vpp for the given channel (see _computeResidual). */
+  _recordResidualVpp(ch, vpp) {
+    this._lastResidualVpp[ch] = vpp;
+  }
+
+  /** Copies data[sliceFrom .. sliceFrom+sliceLen) into the given channel's residual
+   *  scratch (grown as needed) so a shown-but-non-residual channel renders off the SAME
+   *  slice geometry as the residual channel (Java ScopeView.copyResidualSlice). Out-of-
+   *  range samples are left as zeros (drawTrace blanks columns the buffer can't fill). */
+  _copyResidualSlice(data, sliceFrom, sliceLen, leftChannel) {
+    let scratch = leftChannel ? this._residualScratchL : this._residualScratchR;
+    if (!scratch || scratch.length < sliceLen) {
+      scratch = new Float32Array(sliceLen);
+      if (leftChannel) this._residualScratchL = scratch; else this._residualScratchR = scratch;
+    }
+    const from = Math.max(0, sliceFrom);
+    const to = Math.min(data.length, sliceFrom + sliceLen);
+    const off = from - sliceFrom;
+    if (off > 0) scratch.fill(0, 0, Math.min(off, sliceLen));
+    if (to > from) scratch.set(data.subarray(from, to), off);
+    if (off + (to - from) < sliceLen) scratch.fill(0, off + Math.max(0, to - from), sliceLen);
+    return scratch;
+  }
+
+  /** Wraps a radian angle into (−π, π] (Java ScopeView.wrapToPi). */
+  _wrapToPi(r) {
+    const twoPi = 2.0 * Math.PI;
+    return r - twoPi * Math.floor((r + Math.PI) / twoPi);
   }
 
   /** Pushes the measurement channel's per-frame measurement into the rolling
@@ -1953,75 +2836,21 @@ export class ScopeView {
   _clearMeasurementHistory() {
     const s = this._measStats;
     for (const k in s) s[k].clear();
-    this.resetMeasurementPool();   // drop pool + streaming filters so a channel switch restarts clean
+    // Reset the whole-period Vmean ring + latest means (Java clearHistory resets the
+    // meas/mean history ring) so the AC DC block restarts clean with the capture.
+    this._meanHist.L.write = 0; this._meanHist.L.size = 0;
+    this._meanHist.R.write = 0; this._meanHist.R.size = 0;
+    this._lastMeanNorm = { L: NaN, R: NaN };
     this._lastMeasBuildMs = 0;
     this._lastLiveMeasMs = 0;
-    this._asyncFreq = NaN;         // drop the stale off-thread frequency (Java asyncFrequency reset)
-  }
-
-  /** Drops the amplitude pool + its streaming filter state (cursor overrun / channel
-   *  switch / reset) so accumulation restarts clean from the next contiguous gap. */
-  resetMeasurementPool() {
-    this._ampPool.clear();
-    this._poolFilt = {};
-  }
-
-  /** Folds the contiguous capture gap (every sample since the last paint, from the engine's
-   *  measurement cursor) into the amplitude pool, streaming-filtered with PERSISTENT (never
-   *  reset) HF-LPF + mains comb — so Vmean/Vrms/Vpp are taken over a long EFFECTIVE window
-   *  (= oscMeasurementAverageSeconds) and their σ stops tracking the per-buffer DC swing.
-   *  Runs every paint (contiguous), independent of the throttled readout. */
-  _feedMeasurementPool(info, sampleRate) {
-    const p = this.prefs;
-    if (!p || !p.oscShowMeasurementTable.get()) return;
-    const len = info.measGapLen | 0;
-    if (len <= 0) return;
-    const right = p.oscMeasurementChannel.get() === 'R';
-    const gap = right ? info.measGapR : info.measGapL;
-    if (!gap) return;
-    // Filter prefs + state are keyed by the channel NAME ('Left'/'Right'), matching
-    // _applyChannelFilters; only the gap buffers are keyed L/R.
-    const filtered = this._streamFilterGap(gap, len, sampleRate, right ? 'Right' : 'Left');
-    this._ampPool.add(performance.now() * NS_PER_MS, filtered, len);
-  }
-
-  /** Streaming HF-LPF + mains comb over the pool's contiguous gap with PERSISTENT state
-   *  (no per-call reset — the gaps are contiguous so filter state carries across paints,
-   *  unlike the display path which reprocesses overlapping windows and resets each time).
-   *  Mirrors _applyChannelFilters' mode selection. Returns the filtered gap (reused scratch);
-   *  the engine's gap buffer is never mutated. */
-  _streamFilterGap(gap, len, sampleRate, ch) {
-    const p = this.prefs;
-    let out = this._poolScratch;
-    if (!out || out.length < len) { out = new Float32Array(len); this._poolScratch = out; }
-    out.set(gap.subarray(0, len));
-    const lpfMode = p['osc' + ch + 'Lpf'].get();
-    const mainsMode = p['osc' + ch + 'MainsSuppression'].get();
-    if (lpfMode === 'NONE' && mainsMode === 'NONE') return out;
-    const st = this._poolFilt[ch] || (this._poolFilt[ch] = {});
-    if (lpfMode === 'HZ_80') {
-      if (!st.lpf || st.lpfMode !== 'HZ_80' || st.lpfRate !== sampleRate) {
-        st.lpf = new LowPassFilter(sampleRate, 80000.0, SCOPE_HF_LPF_ORDER);
-        st.lpfMode = 'HZ_80'; st.lpfRate = sampleRate;
-      }
-      if (st.lpf.isActive()) st.lpf.process(out, len);   // NO reset → continuous stream
-    } else if (lpfMode === 'DESPIKE') {
-      if (!st.lpf || st.lpfMode !== 'DESPIKE') { st.lpf = new MedianFilter(7); st.lpfMode = 'DESPIKE'; }
-      st.lpf.process(out, len);
-    } else { st.lpf = null; st.lpfMode = null; }
-    if (mainsMode !== 'NONE') {
-      if (!st.mains || st.mainsRate !== sampleRate || st.mainsMode !== mainsMode) {
-        st.mains = mainsFilterOf(mainsMode, sampleRate, MAINS_NOTCH_BW_HZ);
-        st.mainsRate = sampleRate; st.mainsMode = mainsMode; st.trackT0 = 0; st.absPos = 0;
-      }
-      const now = performance.now();
-      if ((now - st.trackT0) >= 200 || !st.mains.isTuned()) { st.mains.track(out, len); st.trackT0 = now; }
-      // NO reset → continuous canceller. The gaps are contiguous, so a running
-      // sample counter gives the phase-locked cancellers their absStart deltas.
-      st.mains.processPreservingDc(out, len, st.absPos);
-      st.absPos += len;
-    } else { st.mains = null; st.mainsMode = null; }
-    return out;
+    this._lastMeasPublishMs = 0;   // force the next render to recompute / re-read a fresh publish
+    // Drop the synchronous-fallback engine's stream state (filters + collection + stale
+    // async frequencies) so the injected-window path restarts clean.
+    this._measEngine.resetStream();
+    // Reset the LIVE osc-meas worker's stream too (spec §5): a stats reset / channel switch
+    // restarts its collection window + adaptive filters clean. Injected by the pane, which
+    // owns the controller-side client (the view can't reach the engine).
+    if (this.onClearMeasurement) this.onClearMeasurement();
   }
 
   /** Advances the actual capture rate from genuinely-new-frame timestamps (Java
@@ -2110,6 +2939,7 @@ export class ScopeView {
    *  outline so it reads over the trace; left-truncated with a "…" prefix when
    *  it doesn't fit. */
   _drawStaticFilePath(g, W) {
+    if (this._overlayG) g = this._overlayG;   // OVERLAY phase → scratch (see _drawSliders)
     const path = this.screenshotFilePath;
     if (!path || !this.fileMode) return;
     g.save();
@@ -2141,27 +2971,47 @@ export class ScopeView {
    *  cost is a single bounded memcpy per channel. Called every live render so a
    *  held frame is always available to freeze (SINGLE/NORMAL trigger) or to seed
    *  on an Auto→SINGLE switch (C19). */
-  _snapshotFrame(descriptors, trigDesc, trigBuf, dual, p, available,
-                 startSample, windowSamples, cols, samplesPerPx, pxPerSample, peakV, meas) {
+  _snapshotFrame(descriptors, trigDesc, p, available,
+                 startSample, windowSamples, cols, samplesPerPx, pxPerSample, peakV, meas,
+                 drawBufs, triggerLocal = NaN, beatBufs = null) {
+    // `available` is the DRAWN window length (= the residual slice length when residual is
+    // active, else the full capture). Each channel snapshots the SUBSTITUTED buffer it was
+    // drawn from — the residual scratch when residual is active — so the frozen replay path
+    // paints the residual verbatim (no re-fit), exactly like Java moving captureFrame after
+    // the residual substitution in renderTraces.
     const copyInto = (slot, src) => {
       let dst = this._snapBufs[slot];
       if (!dst || dst.length < available) { dst = new Float32Array(available); this._snapBufs[slot] = dst; }
       dst.set(src.subarray(0, available));
       return dst;
     };
+    // Snapshot what was DRAWN: the residual substitution when active, else the
+    // channel's own captured signal — never trigBuf (the beat is trigger-only).
+    const drawnBuf = (d) => (drawBufs && drawBufs[d.ch] !== undefined) ? drawBufs[d.ch] : d.procBuf;
     const chans = descriptors.map((d, i) => ({
       ch: d.ch,
-      snap: copyInto(i, (dual && d === trigDesc) ? trigBuf : d.procBuf),
+      snap: copyInto(i, drawnBuf(d)),
       offsetFrac: d.offsetFrac, vDiv: d.vDiv, dcOff: d.dcOff, sinc: d.sinc, hex: d.hex,
     }));
-    const beat = (dual && p && p.oscShowReconstructedBeat.get())
-      ? { snap: copyInto(descriptors.length, trigBuf), offsetFrac: trigDesc.offsetFrac,
-          vDiv: trigDesc.vDiv, dcOff: 0.0, sinc: false, beat: true,
-          hex: attenuateHex(trigDesc.colorInt, 0.45) }
-      : null;
-    this._frame = { chans, beat, available, startSample, windowSamples, cols,
+    // Held frames DO carry the reconstructed-beat overlay (Java renderHeldCapturedFrame
+    // now runs drawBeatOverlays on the captured samples, gated identically to the live
+    // path). The live overlay loop already copied each residual-off channel's beat OUT of
+    // the shared _beatScratch into its own _snapBeatBufs slot (re-based to the drawn
+    // window), so these references stay valid for the frozen replay exactly like the
+    // per-channel trace snapshots. `beats` is the per-channel list drawn in _drawHeldFrame.
+    const beats = beatBufs
+      ? descriptors.map((d) => beatBufs[d.ch]).filter((b) => b)
+      : [];
+    this._frame = { chans, beats, available, startSample, windowSamples, cols,
                     samplesPerPx, pxPerSample, peakV, meas,
-                    tDivAtFreeze: p ? p.oscTimePerDiv.get() : 0 };
+                    tDivAtFreeze: p ? p.oscTimePerDiv.get() : 0,
+                    // Captured trigger position in the frame's own sample coordinates
+                    // (Java captureSingleFrame capturedTriggerLocal); NaN for a
+                    // trigger-less (AUTO free-run) entry snapshot. When finite,
+                    // _drawHeldFrame positions the held window via the LIVE trigger
+                    // offset so Shift+wheel scrolls the frozen trace (Java
+                    // renderHeldCapturedFrame capturedTriggerLocal branch).
+                    triggerLocal };
   }
 
   /** Repaints the frozen NORMAL/SINGLE frame from its captured snapshot (the live
@@ -2180,6 +3030,9 @@ export class ScopeView {
    *  frame (Java ScopeView always paints the empty grid). Sizes the backing store to
    *  the CSS box (live/virtual px) so the canvas is never left blank/default-sized. */
   renderIdle() {
+    // Idle = nothing ever captured, so there is no afterglow to persist — the idle grid
+    // is drawn straight (no phosphor wrapper); the first live render() seeds the buffer.
+    this._lastFrameWasNew = false;
     const g = this.g;
     const W = this.cv.clientWidth || this.cv.width || 1200;
     const H = this.cv.clientHeight || this.cv.height || 240;
@@ -2209,7 +3062,7 @@ export class ScopeView {
     }
     this._updateCaptureRate(false);
     this._drawCaptureRate(false);   // no capture ever ran → hidden (Java reader == null)
-    if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);   // zoom layer LAST, on the idle grid too
+    if (this._rectZoom) this._rectZoom.drawOverlay(this._overlayG || g, W, H);   // zoom layer LAST, on the idle grid too
     this._lastBuf = null; this._lastInfo = null;   // mark idle so the ResizeObserver repaints via renderIdle
   }
 
@@ -2239,6 +3092,9 @@ export class ScopeView {
   }
 
   _drawHeldFrame(g, W, H) {
+    // A held frame is never a genuinely new capture (Java lastFrameWasNew stays false),
+    // so the phosphor wrapper re-composites the afterglow rather than accumulating.
+    this._lastFrameWasNew = false;
     const f = this._frame;
     if (!f) { this.latest = null; return; }
     this._drawGraticule(g, W, H);
@@ -2264,7 +3120,16 @@ export class ScopeView {
     const tDivLive = p ? p.oscTimePerDiv.get() : f.tDivAtFreeze;
     const scale = (f.tDivAtFreeze > 0 && tDivLive > 0) ? tDivLive / f.tDivAtFreeze : 1;
     const winSamples = Math.max(2, Math.round(f.windowSamples * scale));
-    if (!(f.heldTDiv > 0)) {                                  // entry frame, not yet anchored
+    if (p && Number.isFinite(f.triggerLocal)) {
+      // A trigger was captured → position the held window via the (virtual-capable)
+      // LIVE trigger offset, exactly like the live trigger-offset model (Java
+      // renderHeldCapturedFrame capturedTriggerLocal branch): a Shift+wheel PAN moves
+      // p and scrolls the frozen trace; a t/div FIELD zoom (p unchanged) zooms around
+      // the trigger; Ctrl+Shift+wheel updates p to keep the sample under the cursor.
+      // NOT clamped here — off-buffer edges blank (blankBeyondData); only a MOVE clamps.
+      const posFrac = p.oscTriggerPositionFrac.get();
+      f.heldStart = f.triggerLocal - posFrac * winSamples;
+    } else if (!(f.heldTDiv > 0)) {                           // entry frame, not yet anchored
       f.heldStart = f.startSample;
     } else if (tDivLive !== f.heldTDiv && f.heldWin > 0) {
       const frac = (this._heldZoomAnchorX >= 0 && W > 0)
@@ -2279,15 +3144,23 @@ export class ScopeView {
     const sPerPx = winSamples / f.cols;
     const pxPerS = f.cols / winSamples;
     const drawSnap = (c) => {
-      const vDiv = (!c.beat && c.ch && p) ? liveVDiv(c.ch) : c.vDiv;
-      const offsetFrac = (!c.beat && c.ch && p) ? liveOff(c.ch) : c.offsetFrac;
-      const sampleToY = (s) => H * (offsetFrac - ((s - c.dcOff) * f.peakV) / (vDiv * DIVISIONS_Y));
+      const vDiv = (c.ch && p) ? liveVDiv(c.ch) : c.vDiv;
+      const offsetFrac = (c.ch && p) ? liveOff(c.ch) : c.offsetFrac;
+      const dcOff = c.dcOff || 0;
+      const sampleToY = (s) => H * (offsetFrac - ((s - dcOff) * f.peakV) / (vDiv * DIVISIONS_Y));
       this._drawTrace(g, W, H, c.snap, f.available, startS, winSamples,
                       f.cols, sPerPx, pxPerS, sampleToY, c.sinc, c.hex,
-                      c.beat ? 0 : undefined, true);   // held magnify → blankBeyondData (Java renderHeldCapturedFrame)
+                      c.dotOverride, true);   // held magnify → blankBeyondData (Java renderHeldCapturedFrame)
     };
     for (const c of f.chans) drawSnap(c);
-    if (f.beat) drawSnap(f.beat);
+    // Reconstructed-beat overlays on the held frame — one per residual-off channel,
+    // in that channel's dimmed colour at its LIVE V/div + offset (so it stays paired
+    // with the re-scaled trace), zero dcOff + no sinc (Java drawBeatOverlays: dcOffset
+    // 0.0, sincEnabled false, dotDiameter 0), matching the live per-channel beat draw.
+    for (const b of (f.beats || [])) {
+      drawSnap({ ch: b.ch, snap: b.snap, offsetFrac: b.offsetFrac, vDiv: b.vDiv,
+                 dcOff: 0, sinc: false, hex: b.hex, dotOverride: 0 });
+    }
     // Overlays — driven by LIVE prefs (Java drawSliders / drawEdgeLabels read
     // Preferences, not the snapshot), so dragging a handle on a frozen trace updates
     // the prefs and re-triggers the next live frame, and the edge markers track the
@@ -2319,7 +3192,7 @@ export class ScopeView {
     this._drawCaptureRate();
     this._drawStaticFilePath(g, W);
     // Rect-zoom rubber band + focused-view accent border — LAST (Java paint order).
-    if (this._rectZoom) this._rectZoom.drawOverlay(g, W, H);
+    if (this._rectZoom) this._rectZoom.drawOverlay(this._overlayG || g, W, H);
     // Do NOT overwrite this.latest with the stale snapshot meas: _measureLiveWindow
     // refreshed it (and the measurement table) THIS paint, decoupled from the held
     // trace (C24). Fall back to the snapshot's meas only if no live measurement

@@ -10,18 +10,6 @@
  */
 import { t } from '../i18n/i18n.js';
 
-// Parses the entered value + unit to volts RMS (Java DacCalibrationDialog.parseAsVrms):
-// mV → /1000, dBV → 10^(v/20), V → as-is. Accepts decimal point or comma. NaN on failure.
-function parseAsVrms(valueStr, unit) {
-  const v = parseFloat(String(valueStr).trim().replace(',', '.'));
-  if (!Number.isFinite(v)) return NaN;
-  switch (unit) {
-    case 'mV':  return v / 1000;
-    case 'dBV': return Math.pow(10, v / 20);
-    default:    return v;
-  }
-}
-
 /** Formats a voltage with adaptive units (V / mV / µV) for the calibration readout. */
 function fmtCalVoltage(v) {
   const a = Math.abs(v);
@@ -62,9 +50,12 @@ export class DacCalibrationDialog {
     });
 
     $('#dacCalOk').on('click', () => {
-      // Read the V / mV / dBV unit and convert to Vrms (Java DacCalibrationDialog.parseAsVrms),
-      // mirroring the ADC calibration dialog.
-      const measured = parseAsVrms($('#dacCalValue').val(), $('#dacCalUnit').val());
+      // The measured amplitude is the AMPLITUDE step field's canonical Vrms (unit lives in
+      // the input text — V / mV / µV / dBV — no separate <select>). Commit any pending typed
+      // text first, then read the canonical value (mirrors the field's own commit-on-blur).
+      const field = this._getField();
+      if (field) field.model.commit(field.input.value.trim());
+      const measured = field ? field.getValue() : NaN;
       const configured = this.prefs.genAmplitudeVrms.get();
       // Java pops an error dialog on a non-positive / unparsable value and keeps the dialog
       // open (DacCalibrationDialog:112-117); the web surfaces it inline instead of silently hiding.

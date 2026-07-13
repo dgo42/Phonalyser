@@ -25,8 +25,9 @@ export const MAX_ORDER = 5;
 
 /** Half-width of the bin window scanned around each commanded frequency. Small
  *  enough that we never latch onto an IMD product as a fundamental, large
- *  enough to cover sample-rate / FFT-length rounding when snap is off. */
-const TONE_SEARCH_BINS = 8;
+ *  enough to cover sample-rate / FFT-length rounding when snap is off. Exported
+ *  so the FLL dual-tone steer refines each tone over the SAME window. */
+export const TONE_SEARCH_BINS = 8;
 
 /**
  * One slot of intermodulation-distortion measurements computed from a dual-tone
@@ -211,8 +212,10 @@ function newImdResult() {
 /** Picks the highest bin within ±searchBins of centreHz and refines its
  *  position via the standard 3-point quadratic peak-interpolation formula.
  *  Works on the raw dBFS spectrum. Returns null when centreHz falls outside
- *  the representable bin range. */
-function refinePeak(amplitudeDbFs, binBw, centreHz, searchBins) {
+ *  the representable bin range. Exported so the FLL dual-tone steer can refine
+ *  each tone off the controller-side spectrum (see fft-controller.js) without
+ *  running the full IMD product table. */
+export function refinePeak(amplitudeDbFs, binBw, centreHz, searchBins) {
   const n = amplitudeDbFs.length;
   const centre = Math.round(centreHz / binBw);
   if (centre < 1 || centre >= n - 1) return null;

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser.web — Windows input device (sample rate)</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Back to contents</a></p>
+
+  <h1>Configuring the Windows input device (sample rate)</h1>
+  <p>The desktop app opens the capture device itself, at the exact
+     sample rate and bit depth you pick in
+     <a href="preferences.html#prefs-audio">Preferences ▸ Audio</a>.
+     <b>Phonalyser.web cannot.</b>  A browser tab captures through the
+     microphone/line-in permission, and the browser hands it whatever the
+     device is already running at — its <em>Windows shared-mode format</em>.
+     The app can <em>read</em> that rate but not <em>set</em> it.  So to
+     measure at your card's full bandwidth you must raise the rate in Windows
+     first; do it once and it sticks.</p>
+
+  <div class="note">If the device is left at its default 44.1 or 48&nbsp;kHz
+     you are analysing a band that stops at ~22 or 24&nbsp;kHz, no matter what
+     FFT length you choose — the samples above simply do not exist.  Set the
+     highest rate the hardware offers before you rely on a measurement.</div>
+
+  <h2 id="set-input">Set the input rate in Windows</h2>
+  <p><img src="img/input-dev-samplerate.png" alt="Windows Sound control panel — recording device Advanced tab, default format set to 24 bit, 192000 Hz"/></p>
+  <ol>
+    <li>Open <b>Settings</b> (or the classic <b>Control Panel</b>) and go to
+        <b>Sound</b>.</li>
+    <li>Select the <b>Recording</b> devices tab and pick the capture device
+        you use for measurement (the ADC / line-in), then open its
+        <b>Properties</b>.</li>
+    <li>On the <b>Advanced</b> tab, under <b>Default Format</b>, choose the
+        highest format the device lists — for example
+        <code>24 bit, 192000 Hz</code> (or <code>384000 Hz</code> if the
+        hardware offers it).</li>
+    <li>Click <b>Apply</b>, then <b>OK</b>.  Reload the Phonalyser.web tab (or
+        re-grant the microphone permission) so it re-opens the device and reads
+        the new rate.</li>
+  </ol>
+  <p>After the reload the FFT and frequency-response views can work up to half
+     the new rate.  The rate the app actually received is shown in the status
+     line when capture starts.</p>
+
+  <h2 id="set-output">The output device works the same way</h2>
+  <p>The generator and the frequency-response sweep play through the browser's
+     audio output, and the browser renders at the <em>output</em> device's
+     Windows shared-mode rate.  If the app's internal rate does not match the
+     device rate the browser <b>silently resamples</b> the signal down to the
+     device — an invisible stage that colours a supposedly clean tone.  When it
+     detects this the generator prints a warning such as:</p>
+  <p><code>WARNING: output device runs at 48000 Hz — the browser silently
+     resamples 192000 Hz to it; set the Windows output device format to
+     192000 Hz for a clean signal</code></p>
+  <p>The fix is identical: in <b>Sound</b> open the <b>Playback</b> devices
+     tab, open the device's <b>Properties ▸ Advanced</b> tab and set its
+     <b>Default Format</b> to the same high rate (e.g.
+     <code>24 bit, 192000 Hz</code>), then <b>Apply</b>.  With input and output
+     both at the card's native rate the whole signal path stays bit-clean, with
+     no hidden conversion at either end.</p>
+
+<script src="help-viewer.js"></script>
+</body>
+</html>

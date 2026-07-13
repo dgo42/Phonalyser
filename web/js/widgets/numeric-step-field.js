@@ -8,8 +8,11 @@
 //   - org.edgo.audio.measure.gui.widgets.UnitFamily   (units / families / switching)
 //   - org.edgo.audio.measure.gui.widgets.NumericStepModel (the three step policies)
 // plus a thin DOM controller (NumericStepField) that wires the existing
-// `.numfield` chrome (input.nf-input + span.nf-unit + the two `.nf-step button`s)
-// to wheel / arrow / keyboard / commit-or-revert exactly like the SWT field.
+// `.numfield` chrome (input.nf-input + the two `.nf-step button`s) to wheel /
+// arrow / keyboard / commit-or-revert exactly like the SWT field.  Like Java's
+// single SWT Text, the input carries the WHOLE "1 kHz" string (number + unit),
+// so an ordinary edit ("1" → "1.5") keeps its unit and reparses in-unit; there
+// is no separate unit label.
 
 import { t } from '../i18n/i18n.js';
 
@@ -30,14 +33,13 @@ const SERIES_HINT_MAX = 7;
 // Number + optional trailing unit suffix; both micro code points (µ U+00B5,
 // μ U+03BC) accepted.
 const NUMBER_WITH_UNIT = /^([+-]?[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?)\s*([%µμ\w./]*)$/;
-// Lenient mid-edit grammar for the Verify filter — any prefix of a valid entry.
-const PARTIAL_INPUT = /^[+-]?[0-9]*[.,]?[0-9]*(?:[eE][+-]?[0-9]*)?[\sa-zA-Z0-9µμ%/∞]*$/;
-// Bare SI prefixes accepted in place of a full unit ("1k" → kilo, "1u" → micro, "1m" → milli, …):
-// the entry value is number × prefix factor in canonical (10^0 base) units, so "1k" in a Hz field
-// is 1000 Hz, "1u" in a seconds field is 1 µs, "1m" in a volts field is 1 mV. Lowercased before
-// lookup (so 'm' is milli, not Mega) — adequate for the audio units (kHz / mV / µs / nV).
-const SI_PREFIXES = { k: 1e3, m: 1e-3, u: 1e-6, 'µ': 1e-6, 'μ': 1e-6, n: 1e-9, p: 1e-12 };
-
+// Lenient mid-edit alphabet for the Verify filter: any characters a valid entry can
+// contain, in ANY order — NOT a positional grammar. A positional prefix-grammar
+// silently swallowed every letter typed with the caret inside/before the number
+// ("19|.002 kHz" + m → "19m.002 kHz" has digits/dot AFTER the letter and failed),
+// making units untypeable during in-place edits. Ordering is enforced by commit(),
+// the strict gate. Mirrors Java NumericStepModel.PARTIAL_INPUT (same relaxation).
+const PARTIAL_INPUT = /^[\s+\-.,0-9a-zA-Zµμ%/∞]*$/;
 // ----------------------------------------------------------------------------
 // Unit / UnitFamily (port of UnitFamily.java)
 // ----------------------------------------------------------------------------
@@ -345,14 +347,11 @@ export class NumericStepModel {
       this.stickyUnit = null;
     } else {
       unit = this.family.match(suffix);
-      if (unit == null) {
-        // Bare SI prefix (e.g. "1k", "1u", "1m") → number × prefix factor in canonical base units.
-        const pf = SI_PREFIXES[suffix.toLowerCase()];
-        if (pf == null) return false;
-        this.stickyUnit = null;
-        this.value = this._clamp(this._roundSig(num * pf));
-        return true;
-      }
+      // Unknown suffix → reject, value unchanged (Java NumericStepModel.commit).
+      // Aliases are FAMILY-scoped ("k"/"kh" are kHz only in FREQUENCY, "m"/"u"
+      // are mV/µV only in AMPLITUDE) — there is deliberately no generic SI-prefix
+      // fallback, so a frequency alias can't parse in a voltage field.
+      if (unit == null) return false;
       this.stickyUnit = unit.log ? unit : null;
     }
     this.value = this._clamp(this._roundSig(unit.toCanonical(num)));
@@ -396,10 +395,10 @@ export class NumericStepField {
    * DOM controller over the `.numfield` chrome — faithful to the Java NumericStepField:
    * the value AUTO-RANGES its unit (1000 → "1 kHz", 1e-4 V → "100 µV"), the ▲▼ buttons +
    * wheel + arrow keys step along the model's 1-2-5 / log ladder, and free-text entry
-   * parses units ("1.5k", "-3 dBV", "2 kHz"). The number shows in the input and the
-   * auto-ranged unit in the `.nf-unit` box; on every step/commit the displayed unit is
-   * re-appended so the round-trip is exact (the separate-unit-box dropping the suffix on
-   * commit — collapsing "1 kHz" to "1 Hz" — was the real stepping bug, not the widget).
+   * parses units ("1.5k", "-3 dBV", "2 kHz"). Exactly like Java's single SWT Text, the
+   * FULL composed string ("1 kHz") lives in the input — number and unit together — so an
+   * ordinary edit ("1" → "1.5") keeps its unit ("1.5 kHz" → 1500 Hz) and an untouched
+   * commit round-trips the value verbatim. There is no separate unit label.
    * @param {HTMLInputElement} input  the `.nf-input` element (id kept).
    * @param {NumericStepModel} model
    * @param {{onChange?:(value:number)=>void, tooltipBase?:string}} [opts]
@@ -410,13 +409,8 @@ export class NumericStepField {
     this.onChange = opts.onChange || null;
     this.tooltipBase = opts.tooltipBase || '';
     this.disabled = false;
-    // True once the user edits the text; cleared by refresh(). Decides whether
-    // _committed() re-appends the displayed unit (unedited round-trip) or hands
-    // the typed text to the model bare (digits-only → base unit).
-    this._userEdited = false;
 
     const field = input.closest('.numfield');
-    this.unitSpan = field ? field.querySelector('.nf-unit') : null;
     const stepBtns = field ? field.querySelectorAll('.nf-step button') : [];
     this.upBtn = stepBtns[0] || null;
     this.downBtn = stepBtns[1] || null;
@@ -428,20 +422,13 @@ export class NumericStepField {
     this.refresh();
   }
 
-  /** The text to commit. Java's single Text carries "1 kHz" through an unedited
-   *  round-trip; the web splits number and unit into two elements, so an UNEDITED
-   *  input gets the displayed suffix re-appended (a step must round-trip: "1" in a
-   *  kHz field is still 1 kHz). Text the user actually TYPED is passed to the model
-   *  as-is — an explicit unit is kept, and a digits-only entry stays suffix-less so
-   *  the model applies the family's BASE unit (Hz / s / V / V-div, and it clears a
-   *  sticky dBV), exactly like UnitFamily.defaultUnit / NumericStepModel.commit. */
+  /** The text to commit — the whole input, verbatim, exactly like Java's
+   *  {@code field.getText()}. The input already carries "1 kHz" (number + unit),
+   *  so an untouched commit round-trips the value and a digits-only edit stays
+   *  suffix-less (the model then applies the family's BASE unit / clears a sticky
+   *  dBV, per UnitFamily.defaultUnit / NumericStepModel.commit). */
   _committed() {
-    const raw = this.input.value.trim();
-    const m = NUMBER_WITH_UNIT.exec(raw);
-    if (m && m[2]) return raw;
-    if (this._userEdited) return raw;
-    const suffix = this.unitSpan ? this.unitSpan.textContent : '';
-    return suffix ? raw + ' ' + suffix : raw;
+    return this.input.value.trim();
   }
 
   _wire() {
@@ -464,18 +451,11 @@ export class NumericStepField {
       }
     });
 
-    // Verify filter: swallow keystrokes that would make the text un-prefixable.
-    input.addEventListener('beforeinput', (e) => {
-      if (e.inputType && e.inputType.startsWith('delete')) return;
-      if (e.data == null) return;
-      const start = input.selectionStart ?? input.value.length;
-      const end = input.selectionEnd ?? input.value.length;
-      const next = input.value.slice(0, start) + e.data + input.value.slice(end);
-      if (next !== '' && !this.model.acceptsPartial(next)) e.preventDefault();
-    });
-
-    // Any actual text mutation (typing, paste, delete) marks the field user-edited.
-    input.addEventListener('input', () => { this._userEdited = true; });
+    // NO per-keystroke filtering (deliberate divergence from Java's SWT Verify,
+    // by explicit user order): the browser's beforeinput gating swallowed keys
+    // during legitimate edits (e.g. typing "7k Hz" then deleting "Hz"), and web
+    // input events / IME make keystroke-level gating unreliable. Free typing;
+    // commit on Enter / blur remains the ONLY gate — invalid text reverts there.
 
     const commitOrRevert = () => {
       const before = this.model.getValue(), logBefore = this.model.isLogDisplay();
@@ -522,13 +502,10 @@ export class NumericStepField {
     }
   }
 
-  /** Number in the input; the AUTO-RANGED suffix in the unit box (Java NumericStepField). */
+  /** Writes the whole composed string ("1 kHz", "100 µV", or a bare number for
+   *  the NONE family) into the input — exactly Java's {@code field.setText(model.text())}. */
   refresh() {
-    this._userEdited = false;
-    const suffix = this.model.currentUnit().suffix();
-    const full = this.model.text();
-    this.input.value = (suffix && full.endsWith(' ' + suffix)) ? full.slice(0, full.length - suffix.length - 1) : full;
-    if (this.unitSpan) this.unitSpan.textContent = suffix;
+    this.input.value = this.model.text();
     const hint = this.model.stepHint();
     this.input.title = this.tooltipBase ? `${this.tooltipBase} (${hint})` : hint;
   }

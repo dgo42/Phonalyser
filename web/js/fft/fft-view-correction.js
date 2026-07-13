@@ -14,6 +14,7 @@ import { FftAnalyzer } from './fft-analyzer.js';
 import { applyCompensationInPlace } from './fft-compensation.js';
 import { analyzeImd } from './imd-analyzer.js';
 import { isDualTone } from '../generator/dds-kernel.js';
+import { interpolate } from '../dsp/frc.js';
 
 export class FftViewCorrection {
   /** @param config the shared engine config (read for the IMD tone params + dual-tone form). */
@@ -64,5 +65,20 @@ export class FftViewCorrection {
       r._mainsComb.applySpectrumCorrection(r.amplitudeDbFs, null, r.freqResolution, r._mainsF0);
     }
     r.imd = isDualTone(c.form) ? analyzeImd(r, c.toneHz, c.tone2Hz, c.dbvOffsetDb) : null;
+  }
+
+  /** Cumulative calibration dB lift at {@code freqHz} across the active de-embed cascade — how
+   *  many dB the correction adds at this freq going raw → corrected. Adding it back to a post-cal
+   *  level recovers the pre-cal (BLUE-dot) level. Empty cascade / non-positive freq ⇒ 0 dB. Picks
+   *  each entry's left/right cal by {@code wantLeft} (Java FftView.sumCalDbAt:2058-2070). */
+  sumCalDbAt(wantLeft, freqHz) {
+    if (!(freqHz > 0.0)) return 0.0;
+    let sum = 0.0;
+    for (const e of this.frcEntries) {
+      const cal = wantLeft ? e.left : e.right;
+      const m = interpolate(cal, freqHz)[0];
+      sum += (m > 0.0) ? 20.0 * Math.log10(m) : -300.0;
+    }
+    return sum;
   }
 }
