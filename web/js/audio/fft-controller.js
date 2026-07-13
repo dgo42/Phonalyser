@@ -1036,10 +1036,26 @@ export class FftController {
     // p1/p2 are keyed to fLow/fHigh (ImdAnalyzer's ordering) so they remain the matching fallback.
     const p1 = refinePeak(amp, binBw, Math.min(t1, t2), TONE_SEARCH_BINS);
     const p2 = refinePeak(amp, binBw, Math.max(t1, t2), TONE_SEARCH_BINS);
-    const fLowHz = (r.fundamentalHzRefined > 0.0)
-      ? r.fundamentalHzRefined : (p1 != null ? p1.freqHz : NaN);
-    const fHighHz = (Number.isFinite(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0)
-      ? r.fundamental2HzRefined : (p2 != null ? p2.freqHz : NaN);
+    // The refined pair arrives in ANALYZER-SLOT order (slot 1 = the detector's primary,
+    // which is the HIGHER tone when the user enters tones high-first) — sort it onto the
+    // fLow/fHigh roles before pairing with the targets, or each loop steers against the
+    // OTHER tone's measurement (verified with F1=7 kHz / F2=1.3 kHz; same re-pairing as
+    // imd-analyzer.js analyzeImd).
+    const ref1 = (r.fundamentalHzRefined > 0.0) ? r.fundamentalHzRefined : NaN;
+    const ref2 = (Number.isFinite(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0)
+      ? r.fundamental2HzRefined : NaN;
+    const pLow = p1 != null ? p1.freqHz : NaN;
+    const pHigh = p2 != null ? p2.freqHz : NaN;
+    let fLowHz, fHighHz;
+    if (Number.isFinite(ref1) && Number.isFinite(ref2)) {
+      fLowHz = Math.min(ref1, ref2);
+      fHighHz = Math.max(ref1, ref2);
+    } else {
+      const ref = Number.isFinite(ref1) ? ref1 : ref2;   // at most one refined estimate
+      if (!Number.isFinite(ref)) { fLowHz = pLow; fHighHz = pHigh; }
+      else if (Math.abs(ref - pLow) <= Math.abs(ref - pHigh)) { fLowHz = ref; fHighHz = pHigh; }
+      else { fLowHz = pLow; fHighHz = ref; }
+    }
     const f1Hz = (t1 <= t2 ? fLowHz : fHighHz);
     const f2Hz = (t1 <= t2 ? fHighHz : fLowHz);
 

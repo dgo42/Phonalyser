@@ -29,6 +29,12 @@ export const MAX_ORDER = 5;
  *  so the FLL dual-tone steer refines each tone over the SAME window. */
 export const TONE_SEARCH_BINS = 8;
 
+/** Display floor for an absent / unmeasurable product magnitude: 1e-15 V_rms
+ *  = −300 dBV (user-specified; a deliberate divergence from Java
+ *  ImdAnalyzer.java:166-167, whose 1e-30 floor rendered as a physically
+ *  meaningless −600 dBV). */
+const MIN_PRODUCT_VRMS = 1e-15;
+
 /**
  * One slot of intermodulation-distortion measurements computed from a dual-tone
  * FFT spectrum. Mirrors the Java ImdResult field-for-field. Arrays are sized
@@ -81,6 +87,7 @@ export function analyzeImd(r, f1Cmd, f2Cmd, dbvOffsetDb) {
 
   // The smaller-index ("lower") fundamental is always F1 even if the user typed
   // them in the other order, so dnL (below F1) / dnH (above F2) stay meaningful.
+  // p1@fLow / p2@fHigh therefore carry the LOW / HIGH tone's level respectively.
   const fLow = Math.min(f1Cmd, f2Cmd);
   const fHigh = Math.max(f1Cmd, f2Cmd);
 
@@ -92,11 +99,34 @@ export function analyzeImd(r, f1Cmd, f2Cmd, dbvOffsetDb) {
   const out = newImdResult();
 
   // Frequencies come from the analyzer's clean-frame sub-bin estimate; fall
-  // back to the local peak when the estimate is unavailable.
-  out.f1Hz = (r.fundamentalHzRefined > 0.0)
-    ? r.fundamentalHzRefined : p1.freqHz;
-  out.f2Hz = (!Number.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0)
-    ? r.fundamental2HzRefined : p2.freqHz;
+  // back to the local peak when the estimate is unavailable. The refined pair
+  // arrives in ANALYZER-SLOT order (slot 1 = the detector's primary), which is
+  // the HIGHER tone when the user enters tones high-first (verified 7000/1300
+  // case). Since p1 is always the LOW tone and p2 the HIGH tone, re-pair the
+  // refined values to the sorted slots so f1Hz keeps F1 = lower and stays paired
+  // with the low tone's level. (Java ImdAnalyzer.java:99-102 substitutes in slot
+  // order too, but its Java-side inputs happen to arrive already ordered.)
+  const ref1 = r.fundamentalHzRefined;
+  const ref2 = r.fundamental2HzRefined;
+  const ref1Ok = ref1 > 0.0;
+  const ref2Ok = !Number.isNaN(ref2) && ref2 > 0.0;
+  if (ref1Ok && ref2Ok) {
+    out.f1Hz = Math.min(ref1, ref2);   // pairs with p1@fLow
+    out.f2Hz = Math.max(ref1, ref2);   // pairs with p2@fHigh
+  } else if (ref1Ok || ref2Ok) {
+    // Exactly one refined value — assign it to the slot whose peak is closer.
+    const ref = ref1Ok ? ref1 : ref2;
+    if (Math.abs(ref - p1.freqHz) <= Math.abs(ref - p2.freqHz)) {
+      out.f1Hz = ref;
+      out.f2Hz = p2.freqHz;
+    } else {
+      out.f1Hz = p1.freqHz;
+      out.f2Hz = ref;
+    }
+  } else {
+    out.f1Hz = p1.freqHz;
+    out.f2Hz = p2.freqHz;
+  }
 
   // Manual fundamental override: split the TRUE COMBINED level across the two
   // tones by their measured ratio. Only absolute dBV / V_rms outputs are
@@ -152,8 +182,8 @@ export function analyzeImd(r, f1Cmd, f2Cmd, dbvOffsetDb) {
     out.dnHHz[k] = fH;
     out.dnLPct[k] = 100.0 * magL / refMag;
     out.dnHPct[k] = 100.0 * magH / refMag;
-    out.dnLDbV[k] = 20.0 * Math.log10(Math.max(1e-30, magL));
-    out.dnHDbV[k] = 20.0 * Math.log10(Math.max(1e-30, magH));
+    out.dnLDbV[k] = 20.0 * Math.log10(Math.max(MIN_PRODUCT_VRMS, magL));
+    out.dnHDbV[k] = 20.0 * Math.log10(Math.max(MIN_PRODUCT_VRMS, magH));
     imdPwrSq += magL * magL + magH * magH;
   }
   // Include DFD2 / DFD3 components in the combined IMD power.
