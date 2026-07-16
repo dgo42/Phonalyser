@@ -20,6 +20,7 @@ package org.edgo.audio.measure.gui.freqresp;
 
 import lombok.Builder;
 import lombok.Getter;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.cli.util.StereoSamples;
 import org.edgo.audio.measure.sound.DeviceRef;
@@ -68,6 +69,14 @@ public final class FreqRespAnalyzerConfig {
     /** ADC full-scale RMS voltage normalising the deconvolved magnitude to a
      *  physical transfer function (1.0 = 0 dB at unity loopback). */
     private final double adcFsVoltageRms;
+
+    /** Which output lane(s) the sweep drives — the encoder gate applied to the
+     *  played sweep ({@code BOTH} by default, which is the only behaviour before
+     *  per-channel output existed).  {@code LEFT} / {@code RIGHT} write digital
+     *  silence to the un-driven lane; both channels are still deconvolved (the
+     *  user hides the un-driven trace with the view's L/R toolbar buttons). */
+    @Builder.Default
+    private final OutputChannels outputChannels = OutputChannels.BOTH;
 
     /** When {@code true} and {@code FreqRespCorrectionStore.getCurrent()}
      *  is non-null, the analyzer divides each measured channel by the

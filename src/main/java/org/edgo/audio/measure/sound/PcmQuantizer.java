@@ -21,6 +21,8 @@ package org.edgo.audio.measure.sound;
 import java.util.SplittableRandom;
 
 import lombok.Getter;
+import lombok.Setter;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
 
 /**
@@ -33,11 +35,24 @@ import org.edgo.audio.measure.generator.SignalGenerator;
  * encoding; the synthesis layer stays dither-free so exports and the
  * deconvolution reference X(t) remain the ideal waveform.
  *
+ * <h2>Per-channel output</h2>
+ * <p>This is the sole stereo-interleave seam for the live path, so it also
+ * owns the per-lane full-scale scale ({@link #setChannelScale}) and the
+ * Left/Right/Both output gate ({@link #setOutputChannels}).  A LINKED stereo
+ * card whose two DAC full-scales differ needs the same tone emitted at a
+ * different digital level per lane; the mono {@link SignalGenerator} cannot do
+ * that, so the right lane is multiplied by {@code fsLeft/fsRight} here.  The
+ * gate silences the un-selected lane(s).  With both scales at {@code 1.0} and
+ * the gate at {@link OutputChannels#BOTH} the output is byte-identical to the
+ * pre-per-channel encoder.
+ *
  * <h2>Threading</h2>
  * <p>{@link #encode} is called from a single render thread at a time (the
  * backend's play thread or PortAudio's callback thread) and allocates
- * nothing.  {@link #setDitherBits} is the one live-tunable: volatile, read
- * once per sample.
+ * nothing.  {@link #setDitherBits}, {@link #setChannelScale} and
+ * {@link #setOutputChannels} are the live-tunables: volatile.  The dither
+ * bits are read once per sample; the scale/gate once per {@link #encode}
+ * call, so a live change lands on the next audio block.
  */
 public final class PcmQuantizer {
 
@@ -50,6 +65,16 @@ public final class PcmQuantizer {
     /** TPDF dither depth in bits; 0 = off.  Live-tunable from the UI. */
     @Getter
     private volatile int ditherBits;
+    /** Per-lane full-scale scale factors: left is normally {@code 1.0}, right is
+     *  {@code fsLeft/fsRight} so a LINKED card with distinct DAC full-scales
+     *  emits the same physical level on both lanes; both {@code 1.0} when the
+     *  full-scales are equal or the card is mono.  Live-tunable. */
+    private volatile double scaleL = 1.0;
+    private volatile double scaleR = 1.0;
+    /** Output-lane gate; the un-selected lane(s) are written as digital silence.
+     *  {@link OutputChannels#BOTH} is the default / pre-feature behaviour. */
+    @Setter
+    private volatile OutputChannels outputChannels = OutputChannels.BOTH;
     /** {@link SplittableRandom}, not {@code Random}: render-thread-confined,
      *  and Random's CAS-looped nextDouble() costs ~2 CAS per call at up to
      *  1.5 M calls/s with dither on. */
@@ -67,32 +92,48 @@ public final class PcmQuantizer {
         this.ditherBits = Math.max(0, bits);
     }
 
+    /** Live-applies the per-lane full-scale scale factors (left, right). */
+    public void setChannelScale(double left, double right) {
+        this.scaleL = left;
+        this.scaleR = right;
+    }
+
     /**
      * Pulls {@code frames} samples from {@code gen} and encodes them as
-     * stereo (same signal both channels) signed little-endian PCM into
-     * {@code buf}.  No allocation — safe on the audio hot path.
+     * stereo signed little-endian PCM into {@code buf}, honouring the per-lane
+     * scale and the output gate.  No allocation — safe on the audio hot path.
+     * With both scales {@code 1.0} and the gate {@link OutputChannels#BOTH}
+     * (the default) both lanes get the identical quantised sample — byte-for-byte
+     * the pre-per-channel encoding.  Silence for a gated-off lane is mid-code 0
+     * (signed PCM).
      */
     public void encode(SignalGenerator gen, byte[] buf, int frames) {
+        // Hoist the volatile scale/gate once per block — a live change lands on
+        // the next call.  ditherBits stays a per-sample read inside tpdfNoise().
+        OutputChannels gate  = outputChannels;
+        double         sl    = scaleL;
+        double         sr    = scaleR;
+        boolean        wantL = gate != OutputChannels.RIGHT;
+        boolean        wantR = gate != OutputChannels.LEFT;
         if (bitDepth == 8) {
             // Signed 8-bit PCM [−128, +127] — all three backends open their
             // lines/streams in signed formats.
             for (int i = 0; i < frames; i++) {
                 double sample = clamp(gen.nextSample() + tpdfNoise());
-                byte   val    = (byte) Math.round(sample * 127.0);
                 int    offset = i * bytesPerFrame;
-                buf[offset]     = val; // left
-                buf[offset + 1] = val; // right
+                buf[offset]     = wantL ? (byte) Math.round(clamp(sample * sl) * 127.0) : 0; // left
+                buf[offset + 1] = wantR ? (byte) Math.round(clamp(sample * sr) * 127.0) : 0; // right
             }
         } else {
             long maxVal = (1L << (bitDepth - 1)) - 1;
             for (int i = 0; i < frames; i++) {
                 double sample = clamp(gen.nextSample() + tpdfNoise());
-                long   pcm    = (long) Math.round(sample * maxVal);
+                long   pcmL   = wantL ? (long) Math.round(clamp(sample * sl) * maxVal) : 0L;
+                long   pcmR   = wantR ? (long) Math.round(clamp(sample * sr) * maxVal) : 0L;
                 int    offset = i * bytesPerFrame;
                 for (int b = 0; b < bytesPerSample; b++) {
-                    byte byteVal = (byte) (pcm >> (8 * b));
-                    buf[offset + b]                  = byteVal; // left
-                    buf[offset + bytesPerSample + b] = byteVal; // right
+                    buf[offset + b]                  = (byte) (pcmL >> (8 * b)); // left
+                    buf[offset + bytesPerSample + b] = (byte) (pcmR >> (8 * b)); // right
                 }
             }
         }

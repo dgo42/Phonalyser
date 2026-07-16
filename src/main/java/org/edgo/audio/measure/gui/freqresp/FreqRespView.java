@@ -935,6 +935,25 @@ public final class FreqRespView extends AbstractFreqDomainView {
         }
     }
 
+    /** Keeps the header bar visible but exposes ONLY the L / R channel-select
+     *  buttons, excluding phase / auto-setup / maximize / external.  The
+     *  Tune-notch wizard uses this so the user can toggle which measured
+     *  channel (default R) the embedded chart shows via the same radio buttons
+     *  the main pane has, without the rest of the pane's controls. */
+    public void showChannelButtonsOnly() {
+        if (headerBar == null) return;
+        phaseBtn.setExcluded(true);
+        autoSetupBtn.setExcluded(true);
+        maxBtn.setExcluded(true);
+        externalBtn.setExcluded(true);
+        headerBar.setVisible(true);
+        headerBar.reflow();
+        // The bar's preferred width shrank to just the two channel buttons —
+        // re-fit its absolute bounds so no empty band captures clicks.
+        Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
+        headerBar.setBounds(MARGIN_LEFT + HEADER_BTN_INSET, BTN_TOP, hbSize.x, hbSize.y);
+    }
+
     // -------------------------------------------------------------------------
     // Paint
     // -------------------------------------------------------------------------

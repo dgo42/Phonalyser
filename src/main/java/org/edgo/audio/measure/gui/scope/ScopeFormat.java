@@ -235,13 +235,29 @@ public class ScopeFormat {
      */
     public double[] coupleVoltsPerDivZoom(double leftV, double rightV, int dir,
                                           double[] rule, double vDivMax) {
+        return coupleVoltsPerDivZoom(leftV, rightV, dir, rule, vDivMax, vDivMax);
+    }
+
+    /**
+     * Per-channel-ceiling twin of {@link #coupleVoltsPerDivZoom(double, double, int,
+     * double[], double)}: identical coupling, but each channel's zoom-out is capped at
+     * its OWN FS-fills-height rung.  Mirrors how the couple already treats each channel's
+     * V/div independently — the ceiling (which is {@code 2·peak/Ydiv}, so purely a
+     * function of that channel's full-scale) simply stops being shared.  A per-channel
+     * FS enters exactly here, the same way per-channel V/div already does; with equal
+     * L/R full-scales ({@code leftMax == rightMax}, the LINKED case) this is byte-for-byte
+     * the single-ceiling behaviour.  The block stays coupled: if EITHER channel would
+     * overshoot its own ceiling on zoom-out, neither moves.
+     */
+    public double[] coupleVoltsPerDivZoom(double leftV, double rightV, int dir,
+                                          double[] rule, double leftMax, double rightMax) {
         boolean leftOn  = leftV  > 0;
         boolean rightOn = rightV > 0;
         if (!leftOn && !rightOn) return new double[] { leftV, rightV };
         if (leftOn ^ rightOn) {                       // single active channel
             double cur  = leftOn ? leftV : rightV;
             double next = nextVoltsPerDivRung(cur, dir, rule);
-            if (exceedsCeil(dir, next, vDivMax)) next = cur;
+            if (exceedsCeil(dir, next, leftOn ? leftMax : rightMax)) next = cur;
             return new double[] { leftOn ? next : leftV, rightOn ? next : rightV };
         }
         boolean lRule = onVoltsPerDivRule(leftV, rule);
@@ -277,7 +293,7 @@ public class ScopeFormat {
             newL = refLeft ? refNext        : leftV  * ratio;
             newR = refLeft ? rightV * ratio : refNext;
         }
-        if (exceedsCeil(dir, newL, vDivMax) || exceedsCeil(dir, newR, vDivMax)) {
+        if (exceedsCeil(dir, newL, leftMax) || exceedsCeil(dir, newR, rightMax)) {
             return new double[] { leftV, rightV };    // zoom-out blocked at FS-fills-height
         }
         return new double[] { newL, newR };

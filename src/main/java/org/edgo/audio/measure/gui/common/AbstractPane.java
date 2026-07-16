@@ -24,6 +24,7 @@ import java.util.List;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
 import org.eclipse.swt.layout.GridData;
@@ -243,6 +244,11 @@ public abstract class AbstractPane {
             GC outGc = new GC(output);
             try {
                 clone.group.print(outGc);
+                // Control.print routes through the print HDC, which drops GDI+
+                // fractional pen widths — every stroked trace prints 1 px
+                // regardless of the width preference.  A GC(Image) render keeps
+                // them, so panes overpaint their trace canvases with one.
+                clone.printTraceOverlays(outGc);
             } finally {
                 outGc.dispose();
             }
@@ -263,6 +269,26 @@ public abstract class AbstractPane {
     protected AbstractPane createSnapshotClone(Composite parent) {
         throw new UnsupportedOperationException(
                 getClass().getSimpleName() + " has no screenshot renderer");
+    }
+
+    /** Overpaints the trace canvases whose stroked content {@code Control.print}
+     *  degrades (the print HDC drops GDI+ fractional pen widths — traces print
+     *  1&nbsp;px whatever the preference).  Called on the CLONE right after the
+     *  print; subclasses re-render each trace canvas into a {@code GC(Image)}
+     *  (where the widths survive) and blit it via {@link #overpaintCanvas}.
+     *  Default: no trace canvas, nothing to overpaint. */
+    protected void printTraceOverlays(GC outGc) { }
+
+    /** Blits {@code rendered} over the printed area of {@code canvas} (bounds
+     *  mapped into this pane's root coordinates) and disposes it. */
+    protected final void overpaintCanvas(GC outGc, Control canvas, Image rendered) {
+        try {
+            Rectangle b = canvas.getBounds();
+            Point at = canvas.getDisplay().map(canvas.getParent(), group, b.x, b.y);
+            outGc.drawImage(rendered, at.x, at.y);
+        } finally {
+            rendered.dispose();
+        }
     }
 
     /** The pane's settings tab strip, or {@code null} for panes without one.

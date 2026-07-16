@@ -48,6 +48,8 @@ import org.edgo.audio.measure.common.FreqRespCorrectionStore;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.AlignGenerator;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.MainsSuppression;
@@ -57,15 +59,16 @@ import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
+import org.edgo.audio.measure.gui.common.CalibrationDialog;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.scope.AdcCalibrationDialog;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.PresetBar;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FftPreset;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -128,6 +131,10 @@ public final class FftTabControl extends AbstractTabControl {
     private static final double MANUAL_FUND_MAX_VRMS  = 200.0;
     /** Amplitude floor (Vrms) — keeps log-unit (dBV) entry finite. */
     private static final double AMP_MIN_VRMS          = 1e-9;
+    /** Representative measured amplitude (Vrms) prefilled into the analyzed-channel
+     *  row when the ADC calibration dialog is opened for a help screenshot, so the
+     *  two-row form renders fully without a live measurement. */
+    private static final double CAPTURE_ADC_VRMS      = 1.0;
     /** Harmonic-count bounds: THD measures H2…H9; the calc ceiling feeds the
      *  compensation workflows. */
     private static final double THD_HARM_MIN  = 2;
@@ -812,7 +819,15 @@ public final class FftTabControl extends AbstractTabControl {
 
     /** Opens the ADC-calibration dialog using this pane's fundamental
      *  Vrms (no fallback — the scope pane has its own calibrate button).
-     *  Aborts with an info MessageBox when no live Vrms is available. */
+     *  Aborts with an info MessageBox when no live Vrms is available.
+     *
+     *  <p>Always the two-row (Left / Right) form, seeded analyzed-channel-only:
+     *  the FFT measures one channel ({@link Preferences#getFftChannel()}), so
+     *  only that row carries a measured Vrms; the other row is disabled and
+     *  blank.  On OK the entered actual Vrms rescales that channel's ADC
+     *  full-scale — a bound stereo card writes only that channel (per-channel,
+     *  leaving the other untouched), a MONO card or an unbound device writes the
+     *  shared both-channels full-scale. */
     private void openCalibrationDialog() {
         if (isDisposed()) return;
         Shell parent = getShell();
@@ -822,13 +837,55 @@ public final class FftTabControl extends AbstractTabControl {
             return;
         }
         final double measuredVrms = currentVrms;
-        new AdcCalibrationDialog(parent, measuredVrms, actualVrms -> {
-            Preferences prefs = Preferences.instance();
+        Preferences prefs = Preferences.instance();
+        final boolean stereo = isInputBoundStereo(prefs);
+        final Channel measCh = prefs.getFftChannel();
+        Double seedL = measCh == Channel.L ? measuredVrms : null;
+        Double seedR = measCh == Channel.R ? measuredVrms : null;
+        new CalibrationDialog(parent, adcTexts(), seedL, seedR, (ch, actualVrms) -> {
             double scale = actualVrms / measuredVrms;
-            double newFs = prefs.getAdcFsVoltageRms() * scale;
-            prefs.setAdcFsVoltageRms(newFs);
-            prefs.save();
+            if (stereo) {
+                double newFs = prefs.getAdcFsVoltageRms(ch) * scale;
+                prefs.storeAdcCalibration(ch, newFs);
+            } else {
+                // MONO / unbound: shared both-channels full-scale (auto-creates the
+                // profile on first calibrate); also sets the FS scalar and persists.
+                double newFs = prefs.getAdcFsVoltageRms() * scale;
+                prefs.storeAdcCalibration(newFs);
+            }
         }).open();
+    }
+
+    /** The ADC-calibration wording (title, prompt keys, log tag) for the shared
+     *  {@link CalibrationDialog}. */
+    private CalibrationDialog.Texts adcTexts() {
+        return new CalibrationDialog.Texts("calibrate.title",
+                "calibrate.input", "calibrate.input.tooltip", "ADC");
+    }
+
+    /** Capture support (help screenshots): builds the ADC calibration dialog in the
+     *  two-row form seeded analyzed-channel-only — the {@link Preferences#getFftChannel()}
+     *  row carries a representative Vrms, the other stays blank/disabled — and shows it
+     *  non-modally (no live measurement needed), returning it so the automation can
+     *  snapshot and dispose it.  Mirrors {@link #openCalibrationDialog}. */
+    public CalibrationDialog openAdcCalibrationForCapture() {
+        if (isDisposed()) return null;
+        Channel measCh = Preferences.instance().getFftChannel();
+        Double seedL = measCh == Channel.L ? CAPTURE_ADC_VRMS : null;
+        Double seedR = measCh == Channel.R ? CAPTURE_ADC_VRMS : null;
+        CalibrationDialog dlg = new CalibrationDialog(getShell(), adcTexts(), seedL, seedR, (ch, v) -> { });
+        dlg.showForCapture();
+        return dlg;
+    }
+
+    /** True when the current backend's input device resolves to a bound card whose
+     *  input endpoint calibrates its two channels separately — any mode except
+     *  {@link DeviceChannelMode#MONO} — the trigger for the two-row per-channel
+     *  calibration dialog (still seeded analyzed-channel-only for the FFT).  A MONO
+     *  card or an unbound device (no profile) keeps the single-row legacy flow. */
+    private boolean isInputBoundStereo(Preferences prefs) {
+        AudioDeviceProfile p = prefs.resolveDeviceProfile(prefs.current().getInputDeviceName());
+        return p != null && p.getInput() != null && p.getInput().getChannels() != DeviceChannelMode.MONO;
     }
 
     // =========================================================================

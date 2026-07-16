@@ -26,6 +26,7 @@ import org.edgo.audio.measure.chart.ChartStyle;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.DeviceRef;
@@ -191,7 +192,7 @@ public class FreqRespMode {
         // L and R deconvolved from the same sweep.
         StereoSamples rec = CaptureWithGenerator.runStereo(
                 gen, outDevice, inDevice, sampleRate, bitDepth, ditherBits,
-                durationSec, null, 0, null, null);
+                OutputChannels.BOTH, durationSec, null, 0, null, null);
         log.info("Captured    : {} samples per channel ({} s)", rec.left().length,
                 String.format(Locale.US, "%.4f", rec.left().length / (double) sampleRate));
 

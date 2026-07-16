@@ -117,7 +117,11 @@ public final class MultifunctionalTab {
         // device / bit-depth change the user just made is silently
         // ignored (the existing buffer keeps running at the OLD rate).
         if (oscWasRunning) oscPane.startCapture();
-        if (fftPane != null) fftPane.pauseForDialog();
+        // pauseForDialog() stops the FFT and RETURNS its resume hook — run it
+        // now so a live recording restarts on the new device (mirroring the
+        // scope above and the generator below); dropping the hook left the FFT
+        // dead after every committed audio-config change.
+        if (fftPane != null) fftPane.pauseForDialog().run();
         // pauseAroundDialog() stops the generator and RETURNS its resume hook —
         // run it now so a tone that was playing restarts on the new device.
         if (genPane != null) genPane.pauseAroundDialog().run();

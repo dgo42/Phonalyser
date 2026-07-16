@@ -19,8 +19,10 @@
 package org.edgo.audio.measure.gui.common;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.swt.SWT;
@@ -98,6 +100,18 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
     private GC   measureGc;       // lazily created GC for textExtent / rasterising
     private Font measureGcFont;   // font currently set on measureGc
 
+    // --- Pooled digital-phosphor coverage images (drawAlphaImage) -------------
+    // A POOL of RGBA textures, one per drawAlphaImage call within a frame (cursor reset
+    // in reset()): NanoVG defers all draw commands to endFrame but nvgUpdateImage uploads
+    // IMMEDIATELY, so two blits sharing one texture in a frame (left + right channel, or
+    // the trace + the reconstructed-beat overlay) would both render the LAST upload — the
+    // first trace vanished.  Entries are recreated only when the plot size changes, so
+    // steady-state frames allocate no GL texture.
+    private record PhosphorImg(int img, int w, int h) { }
+    private final List<PhosphorImg> phosphorImgs = new ArrayList<>();
+    private int        phosphorImgCursor;
+    private ByteBuffer phosphorBuf;    // native RGBA staging buffer (grown on demand)
+
     // --- Tracked pen state ---------------------------------------------------
     @Getter @Setter private Color foreground;
     @Getter @Setter private Color background;
@@ -131,6 +145,7 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
         clip.x = 0; clip.y = 0; clip.width = width; clip.height = height;
         nvgResetScissor(vg);
         nvgShapeAntiAlias(vg, true);
+        phosphorImgCursor = 0;   // each frame hands out pooled coverage textures afresh
     }
 
     /** Frees the rasterising GC (the cached NanoVG images go with the context's
@@ -138,6 +153,11 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
     public void dispose() {
         if (measureGc != null && !measureGc.isDisposed()) measureGc.dispose();
         measureGc = null;
+        for (PhosphorImg p : phosphorImgs) {
+            if (p.img() != 0) nvgDeleteImage(vg, p.img());
+        }
+        phosphorImgs.clear();
+        if (phosphorBuf != null) { MemoryUtil.memFree(phosphorBuf); phosphorBuf = null; }
     }
 
     // --- Pen / device state (non-trivial; simple ones are Lombok above) -------
@@ -267,6 +287,49 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
         int tex = nvgCreateImageRGBA(vg, w, h, 0, buf);
         MemoryUtil.memFree(buf);
         return tex;
+    }
+
+    @Override public void drawAlphaImage(byte[] alpha, int w, int h, int destX, int destY, Color tint) {
+        if (w <= 0 || h <= 0) return;
+        int pixels = w * h;
+        if (phosphorBuf == null || phosphorBuf.capacity() < pixels * 4) {
+            if (phosphorBuf != null) MemoryUtil.memFree(phosphorBuf);
+            phosphorBuf = MemoryUtil.memAlloc(pixels * 4);
+        }
+        ByteBuffer buf = phosphorBuf;
+        buf.clear();
+        byte r = (byte) (tint != null ? tint.getRed()   : 0);
+        byte g = (byte) (tint != null ? tint.getGreen() : 0);
+        byte b = (byte) (tint != null ? tint.getBlue()  : 0);
+        // Straight-alpha RGBA (no premultiply flag) — matches rasterise() above, which
+        // NanoVG source-over composites correctly; the coverage rides in the A channel.
+        for (int i = 0; i < pixels; i++) {
+            buf.put(r).put(g).put(b).put(alpha[i]);
+        }
+        buf.flip();
+        // One pooled texture PER CALL within the frame (cursor reset in reset()): the draw
+        // is deferred to endFrame but the upload is immediate, so reusing one texture for a
+        // second blit (other channel / beat overlay) would erase the first trace.
+        PhosphorImg slot = phosphorImgCursor < phosphorImgs.size()
+                ? phosphorImgs.get(phosphorImgCursor) : null;
+        if (slot == null || slot.img() == 0 || slot.w() != w || slot.h() != h) {
+            if (slot != null && slot.img() != 0) nvgDeleteImage(vg, slot.img());
+            slot = new PhosphorImg(nvgCreateImageRGBA(vg, w, h, 0, buf), w, h);
+            if (phosphorImgCursor < phosphorImgs.size()) {
+                phosphorImgs.set(phosphorImgCursor, slot);
+            } else {
+                phosphorImgs.add(slot);
+            }
+        } else {
+            nvgUpdateImage(vg, slot.img(), buf);
+        }
+        phosphorImgCursor++;
+        if (slot.img() == 0) return;
+        nvgImagePattern(vg, destX, destY, w, h, 0f, slot.img(), 1f, textPaint);
+        nvgBeginPath(vg);
+        nvgRect(vg, destX, destY, w, h);
+        nvgFillPaint(vg, textPaint);
+        nvgFill(vg);
     }
 
     @Override public void drawText(String s, int x, int y, boolean transparent) {

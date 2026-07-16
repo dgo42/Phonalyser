@@ -24,9 +24,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fundamental; works for single and dual tone, with both dual-tone
   frequencies measured from the capture itself, so independent DAC/ADC
   clocks (no FLL) cannot smear the subtraction.
+- **Per-card calibration profiles.** Full-scale calibration now belongs to the
+  physical card, not the app: each card carries a device-name match list — so it
+  is recognised across every backend — and a range table with one row per
+  attenuator / DIP position (e.g. both settings of a Cosmos ADC); the crosshair
+  calibrations write into the card's active range — creating the profile
+  automatically on first calibrate — and switching devices or backends never
+  mixes calibrations up. Cards without a profile keep using the previous shared
+  values.
+- **Per-channel (left / right) calibration.** A stereo card calibrates each
+  channel into its own full-scale: the calibration dialog — now one unified form
+  for the ADC and the DAC, with values entered directly in nV / µV / mV / V —
+  shows a Left row and a Right row (during an FFT calibration the row for the
+  channel it is not analyzing is disabled). Every scope trace then uses its own
+  channel's full-scale and the FFT dBV axis follows the analyzed channel. This
+  now applies to range-linked stereo cards as well — shared range switching, but
+  separate left / right values per row — not only cards whose channels switch
+  range independently; the latter (the E1DA Cosmos ADC's independent left / right
+  DIP) additionally get Left / Right active columns in the ranges table.
+- **Card editor & automatic recognition.** A dialog in Preferences creates and
+  edits cards — name, the device-name match list, mono / stereo, per-direction
+  range coupling (linked or independent), and a flag for cards whose full-scale
+  is supplied by the device itself. Selecting a device with no matching card
+  offers to create one, pre-filled from that device; a device that does match a
+  card selects it automatically.
+- **Known-card catalog.** Cards the app already knows (E1DA Cosmos ADC,
+  JLsounds I2SoverUSB) are recognised by device name and offered
+  pre-configured with their nominal ranges; your own crosshair calibration
+  then refines each unit's values. All card profiles live in `devices.yaml`
+  next to the preferences file — seeded on first run, editable through the
+  Preferences dialog or by hand in a compact, documented format (one line per
+  range, per-channel value pairs; the help's Preferences chapter describes it).
+  An upgrade adds newly known cards and ranges and refreshes the nominals of
+  ranges you have not calibrated, while never altering a row you calibrated, a
+  card you created, or your active-range selections — so no calibration you made
+  is ever lost.
+- **Output-channel selection.** The signal generator, the frequency-response
+  sweep and the notch tuner each gain a Left / Right / Both output selector that
+  gates the driven lane live.
+- **DSO-grade dense trace rendering.** Above one sample per pixel the scope now
+  rasterises the whole capture window the way a digital-phosphor oscilloscope
+  does — a per-pixel dwell histogram plus a round coverage pen of exactly the
+  configured trace width, swept along the band-limited (sin x/x) crest and
+  trough of every column — instead of decimating to one point per column.
+  Narrow pulses, noise bands and dual-tone beat envelopes keep their true
+  peak-to-peak at any zoom; steep flanks anti-alias with proper per-row edge
+  ramps (Xiaolin-Wu style) on both sides; and because the result is a single
+  blitted intensity image rather than a stroke of every period, a one-second
+  window renders at full capture rate where brute-force drawing dropped to
+  ~1.5 captures/s. The rasterisation runs on a half-pixel grid and the trace
+  keeps the same brightness and AA fringe as the sparse sin x/x stroke, so
+  nothing changes visually when zooming across the one-sample-per-pixel
+  boundary.
 - **Documentation.** Help chapters for the new Filters / Unevenness tabs and
-  the residual view, plus the scope's per-channel mains-rejection and
-  low-pass controls — in English, German and Ukrainian.
+  the residual view, the scope's per-channel mains-rejection and low-pass
+  controls, and the per-card calibration setup with a worked two-card
+  example — in English, German and Ukrainian.
+- **Web version catch-up.** The browser port gains scope display persistence
+  (digital phosphor, WebGL2), dual-tone FFT marker dots with F1/F2 labels
+  and pre-calibration dots, a startup splash, Java-parity preferences
+  layout with free numeric entry, an output-sample-rate probe with an
+  honest resampling warning, scope V/div down to 1 nV/div, and a web-only
+  help page on input-device sample rates (en/de/uk).
 
 ### Changed
 
@@ -35,10 +94,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   header-less files).
 - **Compare auto-zoom** fits the difference curve with a symmetric 2 dB
   margin, and switching compare off re-fits the view to the measured curve.
+- **Notch tuning** now measures both channels on every pass and lets you choose
+  which channel the embedded view shows (Left / Right), with the null readout
+  repositioned clear of the display controls.
 
 ### Fixed
 
-- Dual-tone residual crash at time bases above ~20 ms/div.
 - **Linux: GTK input-method startup crash.** A configured ibus / fcitx input
   module whose daemon is dead or missing crashed the app at launch; the input
   method is now pre-flighted and falls back to XIM only when actually broken —
@@ -46,6 +107,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Linux: GPU scope under Wayland.** The GL trace canvas could not obtain a
   context on a Wayland session; with GPU rendering enabled the GTK backend now
   switches to X11 (XWayland) automatically.
+- **Glitch / discontinuity rejection.** The time-domain discontinuity guard
+  behind the scope's glitch trigger and the FFT's frame rejection now references
+  its threshold to the signal amplitude, so it no longer false-triggers on clean
+  tones as their frequency rises — detection is flat across frequency and
+  independent of level, while still catching the real sample-loss splices it is
+  meant to reject.
+- **FFT restart after audio changes.** Changing the backend, device, sample rate
+  or bit depth in Preferences now restarts the FFT analyzer instead of leaving it
+  stopped.
+- **Scope channel guards.** The measurements table and the trigger source can no
+  longer be pointed at a disabled channel — selecting one auto-switches to a live
+  channel, and the choice survives starting a capture and applying a preset.
+- **Scope screenshots.** The built-in screenshot now includes the
+  digital-phosphor persistence trails and draws the traces — main view and
+  condensed overview alike — at the configured trace width (they always came
+  out 1 px before, whatever the preference).
+- **Held-trace horizontal pan.** After switching the trigger mode from Auto to
+  Normal or Single with no trigger event yet, the held trace ignored horizontal
+  moves (vertical worked); the held frame now pans and zooms exactly like a
+  triggered one.
+- **Web.** `.frc` de-embedding now corrects dual-tone IMD product lobes too
+  (readout table, marker dots and IMD power / DFD all read the corrected
+  bins), and the frequency-lock loop steers both dual tones instead of one.
+- **IMD readout.** Intermod products whose frequency falls outside the
+  measurable range — SMPTE-style pairs put 2f1 − f2 below DC, high orders
+  can land beyond the spectrum — no longer show a physically impossible
+  −600 dBV: they read "---", a one-sided DFD3 still reports its measurable
+  sideband, and the combined IMD power skips them. Fixed in the desktop
+  app and the web version alike.
 
 ## [1.0.3] — 2026-07-04
 

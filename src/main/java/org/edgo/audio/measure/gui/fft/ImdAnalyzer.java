@@ -136,7 +136,15 @@ public final class ImdAnalyzer {
         double dfd2Mag     = readBinVrms(amplitudeDbFs, binBw, out.f2Hz - out.f1Hz, dbvOffsetDb);
         double dfd3LowMag  = readBinVrms(amplitudeDbFs, binBw, 2.0 * out.f1Hz - out.f2Hz, dbvOffsetDb);
         double dfd3HighMag = readBinVrms(amplitudeDbFs, binBw, 2.0 * out.f2Hz - out.f1Hz, dbvOffsetDb);
-        double dfd3Mag     = Math.sqrt(dfd3LowMag * dfd3LowMag + dfd3HighMag * dfd3HighMag);
+        // DFD3 is the RMS of its two sidebands; a sideband outside the
+        // measurable range (NaN) is skipped so the other still reports —
+        // SMPTE-style tone pairs routinely put 2f1 − f2 below DC.  Both
+        // absent → NaN (readout shows "---").
+        double dfd3Sq = 0.0;
+        int    dfd3N  = 0;
+        if (Double.isFinite(dfd3LowMag))  { dfd3Sq += dfd3LowMag  * dfd3LowMag;  dfd3N++; }
+        if (Double.isFinite(dfd3HighMag)) { dfd3Sq += dfd3HighMag * dfd3HighMag; dfd3N++; }
+        double dfd3Mag = dfd3N > 0 ? Math.sqrt(dfd3Sq) : Double.NaN;
         out.dfd2Pct = 100.0 * dfd2Mag / refMag;
         out.dfd3Pct = 100.0 * dfd3Mag / refMag;
 
@@ -163,12 +171,17 @@ public final class ImdAnalyzer {
             out.dnHHz[k]  = fH;
             out.dnLPct[k] = 100.0 * magL / refMag;
             out.dnHPct[k] = 100.0 * magH / refMag;
-            out.dnLDbV[k] = 20.0 * Math.log10(Math.max(1e-30, magL));
-            out.dnHDbV[k] = 20.0 * Math.log10(Math.max(1e-30, magH));
-            imdPwrSq += magL * magL + magH * magH;
+            // A product outside the measurable range is NaN, not a voltage;
+            // the power sum counts only measurable products.
+            out.dnLDbV[k] = magL > 0 ? 20.0 * Math.log10(magL) : Double.NaN;
+            out.dnHDbV[k] = magH > 0 ? 20.0 * Math.log10(magH) : Double.NaN;
+            if (Double.isFinite(magL)) imdPwrSq += magL * magL;
+            if (Double.isFinite(magH)) imdPwrSq += magH * magH;
         }
-        // Include DFD2 / DFD3 components in the combined IMD power.
-        imdPwrSq += dfd2Mag * dfd2Mag + dfd3LowMag * dfd3LowMag + dfd3HighMag * dfd3HighMag;
+        // Include DFD2 / DFD3 components in the combined IMD power (finite
+        // sidebands only; dfd3Sq already holds just the measurable ones).
+        if (Double.isFinite(dfd2Mag)) imdPwrSq += dfd2Mag * dfd2Mag;
+        imdPwrSq += dfd3Sq;
         out.imdPwrPct = 100.0 * Math.sqrt(imdPwrSq) / refMag;
 
         // --- TD+N as the scalar drop from total RMS to the
@@ -258,13 +271,15 @@ public final class ImdAnalyzer {
 
     /** Returns the V_rms voltage at the bin nearest {@code freqHz}:
      *  the dBFS bin lifted to dBV via {@code dbvOffsetDb}, then to volts.
-     *  Out-of-range frequencies return 0. */
+     *  Frequencies outside the representable bin range (at or below DC,
+     *  or beyond the spectrum) return {@code NaN} — the product is not
+     *  measurable at this sample rate. */
     private double readBinVrms(double[] amplitudeDbFs, double binBw, double freqHz,
                                double dbvOffsetDb) {
-        if (!(freqHz > 0)) return 0.0;
+        if (!(freqHz > 0)) return Double.NaN;
         int n = amplitudeDbFs.length;
         int b = (int) Math.round(freqHz / binBw);
-        if (b < 1 || b >= n) return 0.0;
+        if (b < 1 || b >= n) return Double.NaN;
         return Math.pow(10.0, (amplitudeDbFs[b] + dbvOffsetDb) / 20.0);
     }
 

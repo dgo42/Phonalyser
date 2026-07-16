@@ -113,7 +113,7 @@ class FreqRespAnalyzerSmokeTest {
     void cancelTokenAbortsBeforeCapture() {
         AtomicInteger captureCalls = new AtomicInteger();
         FreqRespAnalyzerConfig cfg = baseConfig()
-                .stereoCaptureProvider((g, o, i, sr, bd, d, dur, c) -> {
+                .stereoCaptureProvider((g, o, i, sr, bd, d, oc, dur, c) -> {
                     captureCalls.incrementAndGet();
                     return new StereoSamples(new double[sr * dur], new double[sr * dur]);
                 })
@@ -185,7 +185,7 @@ class FreqRespAnalyzerSmokeTest {
      *  response on both channels.  Both deconvolutions should recover a
      *  flat unity magnitude across the band. */
     private StereoCaptureProvider delayLineProvider(int delaySamples) {
-        return (gen, outDev, inDev, sr, bd, dither, durationSec, cancel) -> {
+        return (gen, outDev, inDev, sr, bd, dither, oc, durationSec, cancel) -> {
             double[] sweep = gen.getLogSweepBuffer();
             assertNotNull(sweep, "generator must expose log-sweep buffer");
             int leadIn = (int) Math.round(LEAD_IN_SEC * sr);

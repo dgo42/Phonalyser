@@ -251,6 +251,20 @@ public final class NumericStepField extends Composite {
         afterMutation(before, model.isLogDisplay());
     }
 
+    /** Renders the field empty and holding no value — the disabled,
+     *  never-measured channel row in the calibration dialog.  {@link #isBlank}
+     *  stays true until the user (or {@link #setValue}) enters a value. */
+    public void setBlank() {
+        model.setBlank();
+        refresh();
+    }
+
+    /** True while the field is blank (empty, no value) — callers skip a blank
+     *  row instead of reading its clamped-to-min value. */
+    public boolean isBlank() {
+        return model.isBlank();
+    }
+
     /** Advances one step in {@code direction} (+1 up, −1 down) from the current
      *  value — the programmatic equivalent of one mouse-wheel notch over the
      *  field, so callers that want to step the field (e.g. the scope's

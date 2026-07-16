@@ -32,6 +32,10 @@ public class FileVersions {
     /** {@code preferences.yaml} ({@code formatVersion} key). */
     public final int PREFERENCES_YAML = 1;
 
+    // devices.yaml carries NO constant here: its formatVersion's single source of
+    // truth is the bundled seed resource — the store writer copies it from the
+    // seed fresh at write time (Preferences.devicesFormatVersion).
+
     /** Saved {@code .fft} spectrum files ({@code # format_version=} header). */
     public final int FFT_SPECTRUM = 1;
 

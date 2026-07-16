@@ -57,6 +57,7 @@ import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.FilterResponse;
 import org.edgo.audio.measure.enums.FilterType;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.enums.UnevenMode;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
@@ -654,7 +655,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
         Combo fftSizeCombo = new Combo(g, SWT.READ_ONLY);
         for (String s : FFT_SIZE_LABELS) fftSizeCombo.add(s);
         fftSizeCombo.setToolTipText(I18n.t("freqResp.settings.fftSize.tooltip"));
-        fftSizeCombo.setLayoutData(comboGd());
+        fftSizeCombo.setLayoutData(comboFillGd());
         // Index-mapped combo (selection index → FFT_SIZE_VALUES[idx] sample
         // count), so it can't use the ordinal-based Bindings.combo — the
         // hand-wired helper mirrors that contract over the int value array.
@@ -703,13 +704,27 @@ public final class FreqRespTabControl extends AbstractTabControl {
         addLabel(g, I18n.t("freqResp.settings.dither"));
         Combo ditherCombo = new Combo(g, SWT.READ_ONLY);
         for (int i = 0; i <= 31; i++) ditherCombo.add(i == 0 ? "Off" : String.valueOf(i));
-        ditherCombo.setLayoutData(comboGd());
+        ditherCombo.setLayoutData(comboFillGd());
         ditherCombo.setToolTipText(I18n.t("freqResp.settings.dither.tooltip"));
         // Index-mapped combo where the selection index IS the bit count, so
         // it can't use the ordinal-based Bindings.combo (no enum) but needs no
         // value-array indirection either.  No side-effects beyond the pref
         // write, so no onChange.
         bindDitherCombo(ditherCombo, prefs.freqRespDitherBitsProperty());
+
+        // Output-lane gate: which DAC channel(s) the sweep drives.  Both capture
+        // channels are still deconvolved; the view's L/R buttons pick which
+        // trace shows.  Ordinal-bound to OutputChannels {BOTH, LEFT, RIGHT},
+        // mirroring the generator pane's combo.
+        addLabel(g, I18n.t("freqResp.settings.outputChannel"));
+        Combo outputChannelCombo = new Combo(g, SWT.READ_ONLY);
+        outputChannelCombo.add(I18n.t("common.channel.both"));
+        outputChannelCombo.add(I18n.t("common.channel.left"));
+        outputChannelCombo.add(I18n.t("common.channel.right"));
+        outputChannelCombo.setToolTipText(I18n.t("freqResp.settings.outputChannel.tooltip"));
+        outputChannelCombo.setLayoutData(comboFillGd());
+        Bindings.combo(outputChannelCombo, prefs.freqRespOutputChannelsProperty(),
+                OutputChannels.values());
 
         // Audio-format edits (Preferences OK, UI thread) move the Nyquist
         // ceiling of the sweep band edges and the sample-rate/2 entry of the
@@ -2180,6 +2195,17 @@ public final class FreqRespTabControl extends AbstractTabControl {
         GridData gd = new GridData(SWT.LEFT, SWT.CENTER, false, false);
         gd.widthHint = 120;
         return gd;
+    }
+
+    /** Grid data for a Settings-tab {@link Combo} so it renders the SAME width
+     *  as the {@link NumericStepField}s that share its grid column.  A READ_ONLY
+     *  Combo adds its drop-down button ON TOP of a {@code widthHint} (unlike the
+     *  bordered step-field composite, which treats the hint as its total width),
+     *  so a matching {@code widthHint} makes the combo ~one button wider.
+     *  Instead FILL the column with no hint: the step-field hints pin the column
+     *  to {@link #comboGd}'s width and the combo stretches to exactly that. */
+    private GridData comboFillGd() {
+        return new GridData(SWT.FILL, SWT.CENTER, false, false);
     }
 
     private Label addLabel(Composite parent, String text) {

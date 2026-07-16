@@ -22,7 +22,9 @@ import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.LineAttributes;
+import org.eclipse.swt.graphics.PaletteData;
 import org.eclipse.swt.graphics.Path;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
@@ -87,6 +89,29 @@ public final class GcMeasurementPainter implements MeasurementPainter {
     @Override public void drawPolygon(int[] pointArray)                 { gc.drawPolygon(pointArray); }
     @Override public void drawImage(Image image, int x, int y)          { gc.drawImage(image, x, y); }
     @Override public void drawText(String s, int x, int y, boolean t)   { gc.drawText(s, x, y, t); }
+
+    /** Builds a 24-bit {@code ImageData} with a per-pixel alpha channel (the same
+     *  {@code ImageData} + {@code alphaData} shape {@code ScopePhosphor.readback}
+     *  produces for the screenshot), all pixels solid {@code tint}, and draws it —
+     *  {@code drawImage} then alpha-composites the coverage.  One-shot allocation: this
+     *  backend serves the (throttled) screenshot / print path, never the realtime loop. */
+    @Override public void drawAlphaImage(byte[] alpha, int w, int h, int destX, int destY, Color tint) {
+        if (w <= 0 || h <= 0) return;
+        ImageData data = new ImageData(w, h, 24, new PaletteData(0xFF0000, 0x00FF00, 0x0000FF));
+        int rgb = (tint.getRed() << 16) | (tint.getGreen() << 8) | tint.getBlue();
+        int pixels = w * h;
+        byte[] alphaData = new byte[pixels];
+        System.arraycopy(alpha, 0, alphaData, 0, pixels);
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                data.setPixel(x, y, rgb);
+            }
+        }
+        data.alphaData = alphaData;
+        Image img = new Image(gc.getDevice(), data);
+        gc.drawImage(img, destX, destY);
+        img.dispose();
+    }
 
     // --- Stroked path --------------------------------------------------------
 

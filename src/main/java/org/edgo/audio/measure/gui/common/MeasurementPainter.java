@@ -91,6 +91,15 @@ public interface MeasurementPainter {
     void drawPolygon(int[] pointArray);
     void drawImage(Image image, int x, int y);
 
+    /** Blits a single-channel COVERAGE image: pixel ({@code px}, {@code py}) takes
+     *  {@code tint}'s RGB with per-pixel alpha {@code alpha[py*w + px]} (0..255), its
+     *  top-left placed at ({@code destX}, {@code destY}).  {@code alpha} may be longer
+     *  than {@code w*h} (a pooled scratch buffer); only the first {@code w*h} bytes are
+     *  read.  Used by the oscilloscope's digital-phosphor rasteriser to stamp its
+     *  intensity buffer as one tinted image instead of stroking a polyline; the GPU
+     *  backend uploads it as a NanoVG image, the GC backend as an {@code ImageData}. */
+    void drawAlphaImage(byte[] alpha, int w, int h, int destX, int destY, Color tint);
+
     /** Draws {@code s} at ({@code x}, {@code y}); {@code transparent} leaves the
      *  glyph background unfilled (the GC {@code isTransparent} flag). */
     void drawText(String s, int x, int y, boolean transparent);

@@ -30,6 +30,7 @@ import lombok.extern.log4j.Log4j2;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
 
 import static org.edgo.audio.measure.sound.WasapiNative.*;
@@ -408,6 +409,16 @@ public class WasapiGenerator implements AudioPlayback {
     @Override
     public void setDitherBits(int bits) {
         quantizer.setDitherBits(bits);
+    }
+
+    @Override
+    public void setChannelScale(double left, double right) {
+        quantizer.setChannelScale(left, right);
+    }
+
+    @Override
+    public void setOutputChannels(OutputChannels channels) {
+        quantizer.setOutputChannels(channels);
     }
 
     @Override

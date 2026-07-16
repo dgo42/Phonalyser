@@ -130,7 +130,14 @@ public final class GeneratorController {
             setAmplitudeVrms(v);
             publishSignalChanged();
         });
-        onPref(prefs.dacFsVoltageAmplProperty(), this::setDacFsVoltageAmpl);
+        onPref(prefs.dacFsVoltageAmplProperty(), v -> {
+            // Left full-scale drives the generator's mono amplitude AND the
+            // per-lane ratio (scaleR = fsLeft/fsRight), so re-push both.
+            setDacFsVoltageAmpl(v);
+            pushOutputRoutingToPlayback();
+        });
+        onPref(prefs.dacFsVoltageAmplRightProperty(), v -> pushOutputRoutingToPlayback());
+        onPref(prefs.genOutputChannelsProperty(),     v -> pushOutputRoutingToPlayback());
         onPref(prefs.genRectangleDutyProperty(), v -> {
             setRectangleDuty(v);
             publishSignalChanged();
@@ -274,6 +281,9 @@ public final class GeneratorController {
             lastStartError = I18n.t("generator.error.deviceUnavailable", deviceName);
             return;
         }
+        // Per-card FS resolution: push the selected card's active-range DAC
+        // full-scale through setDacFsVoltageAmpl; legacy scalar when unbound.
+        prefs.applyOutputDeviceProfile(device.name());
 
         final int    sampleRate    = bp.getOutputSampleRate();
         final int    bitDepth      = bp.getOutputBitDepth();
@@ -405,6 +415,9 @@ public final class GeneratorController {
             return I18n.t("generator.error.openDeviceFailed", ex.getMessage());
         }
         this.playback = ag;
+        // Push the per-lane scale (scaleR = fsLeft/fsRight) and the output gate
+        // before the render thread starts — the quantizer reads them per block.
+        pushOutputRoutingToPlayback();
         final AtomicBoolean sessionStop = new AtomicBoolean(false);
         this.stopFlag = sessionStop;
 
@@ -590,6 +603,17 @@ public final class GeneratorController {
     public void setDacFsVoltageAmpl(double v) {
         SignalGenerator g = generator;
         if (g != null) g.setDacFsVoltageAmpl(v);
+    }
+
+    /** Pushes the current per-lane scale + output gate to the running playback.
+     *  No-op if nothing is playing — the values ride the quantizer's defaults
+     *  (both scales 1.0, gate BOTH) until a session opens and re-pushes them. */
+    private void pushOutputRoutingToPlayback() {
+        AudioPlayback ag = playback;
+        if (ag == null) return;
+        Preferences prefs = Preferences.instance();
+        ag.setChannelScale(1.0, prefs.dacRightLaneScale());
+        ag.setOutputChannels(prefs.getGenOutputChannels());
     }
 
     /** Live-applies sweep start frequency (Hz). */
@@ -886,8 +910,11 @@ public final class GeneratorController {
             // and sweeps use 0 (raw) — a sweep's length is already fixed above
             // (one sweep, or whole sweeps when looped).
             double freqForTruncation = (form.isPeriodic() && !isSweep) ? frequency : 0.0;
+            // Mirror the live encoder: left lane scales by 1.0, right by
+            // fsLeft/fsRight, and the output gate silences the un-selected lane.
             long bytes = SignalFileExporter.export(gen, new File(path),
-                    sampleRate, bitDepth, duration, ditherBits, freqForTruncation);
+                    sampleRate, bitDepth, duration, ditherBits, freqForTruncation,
+                    1.0, prefs.dacRightLaneScale(), prefs.getGenOutputChannels());
             log.info("File saved: {} ({} bytes)", path, bytes);
             return null;
         } catch (Exception ex) {
