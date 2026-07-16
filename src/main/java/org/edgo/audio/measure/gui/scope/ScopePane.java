@@ -825,9 +825,10 @@ public final class ScopePane extends AbstractPane {
             if (ctrl && shift) {
                 // Shift + Ctrl + wheel: t/div zoom around the mouse X
                 // (wheel up → step DOWN in t/div since smaller t/div is
-                // finer time resolution).  Anchor a frozen-frame re-centre on
-                // the cursor (a t/div FIELD change leaves it centred — see #5.1).
-                if (view.isFrozen()) view.setHeldZoomAnchorForNextScale(e.x);
+                // finer time resolution).  A frozen frame rides the same
+                // trigger-offset model as live — stepTimePerDivAround updates
+                // the trigger-position fraction to keep the sample under the
+                // cursor put, so no separate frozen-frame anchor is needed.
                 tabControl.stepTimePerDivAround(-dir, e.x, area.width);
             } else if (ctrl) {
                 // Ctrl + wheel: V/div zoom around the mouse Y (wheel up →

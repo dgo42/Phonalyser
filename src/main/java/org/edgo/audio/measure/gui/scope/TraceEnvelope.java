@@ -142,7 +142,11 @@ public class TraceEnvelope {
      * <p>Samples arrive in monotonic column order, so the pass streams: when the column
      * advances it prefix-sums the touched rows of {@code diff} into crossing counts, hands
      * each non-zero {@code (x, y, count)} to {@code sink}, then zeroes just the touched range
-     * (never the whole array) so the next column starts clean.  {@code diff} is caller-pooled
+     * (never the whole array) so the next column starts clean.  When {@code counts} is false the
+     * entire count pass is skipped — no {@code diff} writes, no prefix-sum flush, no {@code sink}
+     * calls (so {@code diff} may be {@code null}); only the sin&nbsp;x/x band export runs.  The
+     * renderer sets it false at the full-brightness floor, where the sink was already a no-op and
+     * the pen alone draws the trace.  {@code diff} is caller-pooled
      * and must be at least {@code height + 2} long (the {@code diff[hi+1]--} at {@code hi ==
      * height−1} writes index {@code height}); it must be all-zero on entry and is left
      * all-zero on exit.  {@code bandTop}/{@code bandBot} are caller-pooled row-space band outputs
@@ -152,7 +156,7 @@ public class TraceEnvelope {
     public void columnCrossings(float[] data, int n, int dispStart, int dispCount,
                                 int width, int height, double subSampleOffset,
                                 double centerY, double vScale, double dcOffset,
-                                boolean sinc, int[] diff, float[] bandTop, float[] bandBot,
+                                boolean sinc, boolean counts, int[] diff, float[] bandTop, float[] bandBot,
                                 float[] bandXLo, float[] bandXHi, float[] bandEntryX,
                                 float[] bandEntryY, float[] bandExitX, float[] bandExitY,
                                 CrossingSink sink) {
@@ -211,7 +215,7 @@ public class TraceEnvelope {
                     float sxR = (float) Math.max(c, Math.min(c + 1.0, xf1));
                     if (c != curCol) {                           // column advanced → flush the last
                         if (curCol >= 0) {
-                            flushColumn(curCol, curLo, curHi, diff, sink);
+                            if (counts) flushColumn(curCol, curLo, curHi, diff, sink);
                             if (sinc) flushRails(curCol, curHasSample, curIdxMin, curIdxMax,
                                     curValMin, curValMax,
                                     curXLo, curXHi, curEntryX, curEntryY, curExitX, curExitY,
@@ -265,15 +269,17 @@ public class TraceEnvelope {
                             if (data[k] > data[curIdxMax]) curIdxMax = k;
                         }
                     }
-                    diff[lo]++;
-                    diff[hi + 1]--;
+                    if (counts) {
+                        diff[lo]++;
+                        diff[hi + 1]--;
+                    }
                 }
             }
             prevOk = ok;
             prevRow = row;
         }
         if (curCol >= 0) {
-            flushColumn(curCol, curLo, curHi, diff, sink);
+            if (counts) flushColumn(curCol, curLo, curHi, diff, sink);
             if (sinc) flushRails(curCol, curHasSample, curIdxMin, curIdxMax,
                     curValMin, curValMax,
                     curXLo, curXHi, curEntryX, curEntryY, curExitX, curExitY,
@@ -438,16 +444,28 @@ public class TraceEnvelope {
      * the drifting x.  A truly vertical stroke ({@code entryX == exitX}) keeps a constant fringe; a
      * {@link Float#NaN} entry/exit (no capsule geometry recorded — full-column stadium fixtures) or
      * a non-steep / multi-crossing column falls through to the four-subsample stadium unchanged.
+     *
+     * <p><b>Column bounds.</b>  {@code bandColLo}/{@code bandColHi} are the first/last non-NaN band
+     * columns (an empty band is {@code bandColLo &gt; bandColHi} — nothing is stroked).  A source
+     * column with a band lives only in {@code [bandColLo, bandColHi]}, and a source {@code c}
+     * reaches output {@code x} only when {@code |c − x| ≤ reach}, so an output column outside
+     * {@code [bandColLo − reach, bandColHi + reach]} sees none but NaN sources and stays 0.  The
+     * outer loop is bounded to that range — identical output to sweeping every column (the interior
+     * already {@code continue}s on NaN sources), just without the wasted NaN scans.
      */
     void penRasterize(float[] bandTop, float[] bandBot, float[] bandXLo, float[] bandXHi,
                       float[] bandEntryX, float[] bandEntryY, float[] bandExitX, float[] bandExitY,
-                      int width, int height, float lineWidth, int alpha255, byte[] out) {
+                      int width, int height, float lineWidth, int alpha255,
+                      int bandColLo, int bandColHi, byte[] out) {
         if (width <= 0 || height <= 0) return;
+        if (bandColLo > bandColHi) return;    // no non-NaN band this frame — nothing to stroke
         double h = lineWidth * 0.5;
         double hSq = h * h;
         int reach = (int) Math.ceil(h) + 1;   // source columns each side that can reach out[x] (|c−x| ≤ ⌈h⌉+1)
         int maxRow = height - 1;
-        for (int x = 0; x < width; x++) {
+        int xStart = Math.max(0, bandColLo - reach);
+        int xEnd   = Math.min(width - 1, bandColHi + reach);
+        for (int x = xStart; x <= xEnd; x++) {
             for (int dx = -reach; dx <= reach; dx++) {
                 int c = x + dx;
                 if (c < 0 || c >= width) continue;
@@ -577,12 +595,26 @@ public class TraceEnvelope {
      *  energy-conserving blur (a tent convolution dims a 1-px stroke's core to ~75% and smears
      *  it — bench-rejected).  Runs on the sub-cell grid before the box downsample, radius {@code
      *  ss} sub-cells = 1 px of ramp; {@code scratch} is a caller-pooled buffer at least
-     *  {@code w·h} (holds the horizontal pass).  Pure. */
-    void fringeDilate(byte[] grid, int w, int h, int radius, byte[] scratch) {
+     *  {@code w·h} (holds the horizontal pass).  Pure.
+     *
+     *  <p>{@code x0,x1,y0,y1} bound the WRITTEN region (inclusive, clamped): the caller passes the
+     *  content bounding box already grown by {@code radius}, so every cell the cone can light lies
+     *  inside it and everything outside is 0 in the (cleared) grid.  The horizontal pass fills
+     *  {@code radius} extra rows each side (the vertical pass reads them); reads reach {@code radius}
+     *  past the box into cells the caller guarantees are 0.  Passing the whole grid
+     *  ({@code 0,w−1,0,h−1}) reproduces the full-grid pass byte-for-byte. */
+    void fringeDilate(byte[] grid, int w, int h, int radius, byte[] scratch,
+                      int x0, int x1, int y0, int y1) {
         int denom = radius + 1;
-        for (int y = 0; y < h; y++) {              // horizontal max-plus cone pass
+        int cx0 = Math.max(0, x0);
+        int cx1 = Math.min(w - 1, x1);
+        int cy0 = Math.max(0, y0);
+        int cy1 = Math.min(h - 1, y1);
+        int hy0 = Math.max(0, cy0 - radius);       // horizontal pass feeds the ±radius rows the
+        int hy1 = Math.min(h - 1, cy1 + radius);   // vertical pass reads back
+        for (int y = hy0; y <= hy1; y++) {         // horizontal max-plus cone pass over [cx0, cx1]
             int base = y * w;
-            for (int x = 0; x < w; x++) {
+            for (int x = cx0; x <= cx1; x++) {
                 int best = 0;
                 for (int d = -radius; d <= radius; d++) {
                     int sx = x + d;
@@ -593,8 +625,8 @@ public class TraceEnvelope {
                 scratch[base + x] = (byte) best;
             }
         }
-        for (int x = 0; x < w; x++) {              // vertical pass, back into the grid
-            for (int y = 0; y < h; y++) {
+        for (int x = cx0; x <= cx1; x++) {         // vertical pass, back into the grid
+            for (int y = cy0; y <= cy1; y++) {
                 int best = 0;
                 for (int d = -radius; d <= radius; d++) {
                     int sy = y + d;
@@ -611,13 +643,23 @@ public class TraceEnvelope {
      *  {@code (x, y)} of {@code dst} ({@code dstW×dstH}, packed {@code y·dstW + x}) becomes the
      *  rounded mean of its {@code ss×ss} sub-cell block in {@code src} ({@code srcW == ss·dstW}
      *  cells per row, unsigned 0..255) — exact area coverage, run AFTER {@link #fringeDilate}
-     *  so edges carry the appended ramp at every grid alignment.  Pure, allocation-free. */
-    void downsampleBox(byte[] src, int srcW, int ss, byte[] dst, int dstW, int dstH) {
+     *  so edges carry the appended ramp at every grid alignment.  Pure, allocation-free.
+     *
+     *  <p>{@code ox0,ox1,oy0,oy1} bound the WRITTEN output pixels (inclusive, clamped): only pixels
+     *  whose {@code ss×ss} source block can overlap the fringe content are recomputed; every other
+     *  output pixel reads an all-zero block (→ 0) and is left as the caller's cleared 0, so passing
+     *  the whole image ({@code 0,dstW−1,0,dstH−1}) reproduces the full downsample byte-for-byte. */
+    void downsampleBox(byte[] src, int srcW, int ss, byte[] dst, int dstW, int dstH,
+                       int ox0, int ox1, int oy0, int oy1) {
         int cells = ss * ss;
         int half  = cells / 2;
-        for (int y = 0; y < dstH; y++) {
+        int cy0 = Math.max(0, oy0);
+        int cy1 = Math.min(dstH - 1, oy1);
+        int cx0 = Math.max(0, ox0);
+        int cx1 = Math.min(dstW - 1, ox1);
+        for (int y = cy0; y <= cy1; y++) {
             int srcRow0 = y * ss;
-            for (int x = 0; x < dstW; x++) {
+            for (int x = cx0; x <= cx1; x++) {
                 int srcCol0 = x * ss;
                 int sum = 0;
                 for (int sy = 0; sy < ss; sy++) {

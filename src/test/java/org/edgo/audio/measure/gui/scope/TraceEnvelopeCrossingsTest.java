@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.scope;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.util.Arrays;
 
@@ -60,7 +61,7 @@ class TraceEnvelopeCrossingsTest {
         float[] exitY   = new float[width];
         int[][] grid    = new int[height][width];
         TraceEnvelope.columnCrossings(data, data.length, dispStart, dispCount, width, height,
-                subSampleOffset, CENTER_Y, V_SCALE, DC, false, diff, bandTop, bandBot,
+                subSampleOffset, CENTER_Y, V_SCALE, DC, false, true, diff, bandTop, bandBot,
                 bandXLo, bandXHi, entryX, entryY, exitX, exitY, (x, y, count) -> grid[y][x] = count);
         return grid;
     }
@@ -91,7 +92,7 @@ class TraceEnvelopeCrossingsTest {
                         int width, int height, float lineWidth, int alpha255) {
         byte[]  out  = new byte[width * height];
         TraceEnvelope.penRasterize(bandTop, bandBot, bandXLo, bandXHi, bandEntryX, bandEntryY,
-                bandExitX, bandExitY, width, height, lineWidth, alpha255, out);
+                bandExitX, bandExitY, width, height, lineWidth, alpha255, 0, width - 1, out);
         int[][] grid = new int[height][width];
         for (int y = 0; y < height; y++)
             for (int x = 0; x < width; x++) grid[y][x] = out[y * width + x] & 0xFF;
@@ -181,7 +182,7 @@ class TraceEnvelopeCrossingsTest {
         float[] exitX   = new float[1];
         float[] exitY   = new float[1];
         TraceEnvelope.columnCrossings(data, n, 0, n - 1, 1, 40, 0.0, CENTER_Y, V_SCALE, DC,
-                true, diff, bandTop, bandBot, bandXLo, bandXHi, entryX, entryY, exitX, exitY,
+                true, true, diff, bandTop, bandBot, bandXLo, bandXHi, entryX, entryY, exitX, exitY,
                 (x, y, count) -> { });
         assertTrue(bandTop[0] > 27.5f);   // refined crest lifted past the sampled rail (row 27)
         assertTrue(bandBot[0] < 11f);     // refined trough at the arch floor (value 10)
@@ -201,7 +202,7 @@ class TraceEnvelopeCrossingsTest {
         float[] exitY   = new float[width];
         int[][] grid    = new int[height][width];
         TraceEnvelope.columnCrossings(data, data.length, dispStart, dispCount, width, height,
-                subSampleOffset, CENTER_Y, V_SCALE, DC, true, diff, bandTop, bandBot,
+                subSampleOffset, CENTER_Y, V_SCALE, DC, true, true, diff, bandTop, bandBot,
                 bandXLo, bandXHi, entryX, entryY, exitX, exitY, (x, y, count) -> grid[y][x] = count);
         return grid;
     }
@@ -291,6 +292,48 @@ class TraceEnvelopeCrossingsTest {
         crossingsSinc(new float[] {30f, 20f}, -1, 5, 4, 36, 0.0, bandTop, bandBot);
         assertEquals(27.5f, bandBot[0], 1e-4f);   // the interpolated crossing, unrefined
         assertTrue(bandBot[0] > 21f);              // decisively NOT pulled to the neighbour trough (20)
+    }
+
+    @Test
+    void columnCrossings_countsOffMatchesCountsOnForBandXExtentEntryExit() {
+        // Item 1 (count-skip at flat fill).  At the full-brightness floor the renderer runs the
+        // accumulation with counts == false — NO diff writes, NO prefix-sum flush, NO sink calls —
+        // because the sink was already a no-op there.  Everything the pen consumes (band ends,
+        // x-extent, entry/exit geometry) is computed OUTSIDE the count path, so it must be
+        // byte-identical to the counts == true pass.  A multi-tone fixture across several columns
+        // exercises splitting, rails and the capsule geometry — not a degenerate single column.
+        int n = 200;
+        float[] data = new float[n];
+        for (int i = 0; i < n; i++) {
+            data[i] = (float) (12.0 * Math.sin(i * 0.37) + 3.0 * Math.sin(i * 0.09));
+        }
+        int width = 12, height = 48, dispStart = 5, dispCount = 180;
+        double sso = 0.3;
+
+        float[] onTop = new float[width], onBot = new float[width];
+        float[] onXLo = new float[width], onXHi = new float[width];
+        float[] onEX = new float[width], onEY = new float[width], onXX = new float[width], onXY = new float[width];
+        int[] diff = new int[height + 2];
+        TraceEnvelope.columnCrossings(data, n, dispStart, dispCount, width, height, sso,
+                CENTER_Y, V_SCALE, DC, true, true, diff, onTop, onBot, onXLo, onXHi,
+                onEX, onEY, onXX, onXY, (x, y, c) -> { });
+
+        float[] offTop = new float[width], offBot = new float[width];
+        float[] offXLo = new float[width], offXHi = new float[width];
+        float[] offEX = new float[width], offEY = new float[width], offXX = new float[width], offXY = new float[width];
+        // counts == false → diff is never touched (pass null to prove it), and the sink must never fire.
+        TraceEnvelope.columnCrossings(data, n, dispStart, dispCount, width, height, sso,
+                CENTER_Y, V_SCALE, DC, true, false, null, offTop, offBot, offXLo, offXHi,
+                offEX, offEY, offXX, offXY, (x, y, c) -> fail("sink must not fire when counts == false"));
+
+        assertArrayEquals(onTop, offTop, 0f, "band top");
+        assertArrayEquals(onBot, offBot, 0f, "band bottom");
+        assertArrayEquals(onXLo, offXLo, 0f, "x-extent lo");
+        assertArrayEquals(onXHi, offXHi, 0f, "x-extent hi");
+        assertArrayEquals(onEX, offEX, 0f, "entry x");
+        assertArrayEquals(onEY, offEY, 0f, "entry y");
+        assertArrayEquals(onXX, offXX, 0f, "exit x");
+        assertArrayEquals(onXY, offXY, 0f, "exit y");
     }
 
     @Test
@@ -510,7 +553,7 @@ class TraceEnvelopeCrossingsTest {
                 (byte) 64,  (byte) 64,    0,          0,
         };
         byte[] dst = new byte[4];
-        TraceEnvelope.downsampleBox(src, 4, 2, dst, 2, 2);
+        TraceEnvelope.downsampleBox(src, 4, 2, dst, 2, 2, 0, 1, 0, 1);
         assertEquals(255, dst[0] & 0xFF);
         assertEquals(64,  dst[1] & 0xFF);
         assertEquals(96,  dst[2] & 0xFF);
@@ -529,7 +572,7 @@ class TraceEnvelopeCrossingsTest {
         byte[] grid = new byte[w * h];
         for (int y = 0; y < h; y++) { grid[y * w + 4] = (byte) 255; grid[y * w + 5] = (byte) 255; }
         byte[] scratch = new byte[w * h];
-        TraceEnvelope.fringeDilate(grid, w, h, 2, scratch);
+        TraceEnvelope.fringeDilate(grid, w, h, 2, scratch, 0, w - 1, 0, h - 1);
         assertEquals(255, grid[2 * w + 4] & 0xFF);   // interior untouched
         assertEquals(255, grid[2 * w + 5] & 0xFF);
         assertEquals(170, grid[2 * w + 3] & 0xFF);   // one cell out: 2/3
@@ -537,7 +580,7 @@ class TraceEnvelopeCrossingsTest {
         assertEquals(170, grid[2 * w + 6] & 0xFF);   // symmetric right side
         assertEquals(85,  grid[2 * w + 7] & 0xFF);
         byte[] dst = new byte[(w / 2) * (h / 2)];
-        TraceEnvelope.downsampleBox(grid, w, 2, dst, w / 2, h / 2);
+        TraceEnvelope.downsampleBox(grid, w, 2, dst, w / 2, h / 2, 0, w / 2 - 1, 0, h / 2 - 1);
         assertEquals(128, dst[1 * (w / 2) + 1] & 0xFF);   // (85+170)/2 — left fringe pixel
         assertEquals(255, dst[1 * (w / 2) + 2] & 0xFF);   // aligned core stays full brightness
         assertEquals(128, dst[1 * (w / 2) + 3] & 0xFF);   // right fringe pixel — both sides ramp

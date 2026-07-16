@@ -122,8 +122,10 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
             new LineAttributes(1f, SWT.CAP_FLAT, SWT.JOIN_MITER);
     @Getter @Setter private Font font;
     private final Rectangle clip = new Rectangle(0, 0, 0, 0);
-    /** Device pixels per point (2 on Retina / HiDPI); text rasterises at this zoom. */
-    private float pixelScale = 1f;
+    /** Device pixels per point (2 on Retina / HiDPI); text rasterises at this zoom, and
+     *  the phosphor rasteriser sizes its coverage buffer by it so the HiDPI framebuffer
+     *  gets crisp 1:1 device texels.  Exposed as {@code getPixelScale()} (Lombok). */
+    @Getter private float pixelScale = 1f;
 
     public NvgMeasurementPainter(long vg, Display display) {
         this.vg = vg;
@@ -289,9 +291,12 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
         return tex;
     }
 
-    @Override public void drawAlphaImage(byte[] alpha, int w, int h, int destX, int destY, Color tint) {
-        if (w <= 0 || h <= 0) return;
-        int pixels = w * h;
+    @Override public void drawAlphaImage(byte[] alpha, int imgW, int imgH, int destX, int destY,
+                                         int drawW, int drawH, Color tint, AlphaImageScratch scratch) {
+        // scratch is the GC backend's reuse buffer; NanoVG stages into its own native
+        // phosphorBuf, so it is ignored here.
+        if (imgW <= 0 || imgH <= 0) return;
+        int pixels = imgW * imgH;
         if (phosphorBuf == null || phosphorBuf.capacity() < pixels * 4) {
             if (phosphorBuf != null) MemoryUtil.memFree(phosphorBuf);
             phosphorBuf = MemoryUtil.memAlloc(pixels * 4);
@@ -312,9 +317,9 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
         // second blit (other channel / beat overlay) would erase the first trace.
         PhosphorImg slot = phosphorImgCursor < phosphorImgs.size()
                 ? phosphorImgs.get(phosphorImgCursor) : null;
-        if (slot == null || slot.img() == 0 || slot.w() != w || slot.h() != h) {
+        if (slot == null || slot.img() == 0 || slot.w() != imgW || slot.h() != imgH) {
             if (slot != null && slot.img() != 0) nvgDeleteImage(vg, slot.img());
-            slot = new PhosphorImg(nvgCreateImageRGBA(vg, w, h, 0, buf), w, h);
+            slot = new PhosphorImg(nvgCreateImageRGBA(vg, imgW, imgH, 0, buf), imgW, imgH);
             if (phosphorImgCursor < phosphorImgs.size()) {
                 phosphorImgs.set(phosphorImgCursor, slot);
             } else {
@@ -325,9 +330,12 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
         }
         phosphorImgCursor++;
         if (slot.img() == 0) return;
-        nvgImagePattern(vg, destX, destY, w, h, 0f, slot.img(), 1f, textPaint);
+        // The texture is DEVICE-res (imgW×imgH); draw it into the LOGICAL drawW×drawH rect
+        // so its device texels land 1:1 on the HiDPI framebuffer (crisp).  At pixelScale 1
+        // imgW==drawW and the pattern is 1:1, identical to before.
+        nvgImagePattern(vg, destX, destY, drawW, drawH, 0f, slot.img(), 1f, textPaint);
         nvgBeginPath(vg);
-        nvgRect(vg, destX, destY, w, h);
+        nvgRect(vg, destX, destY, drawW, drawH);
         nvgFillPaint(vg, textPaint);
         nvgFill(vg);
     }
@@ -387,7 +395,7 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
     private String textKey(String s) {
         int rgb = (foreground != null)
                 ? (foreground.getRed() << 16) | (foreground.getGreen() << 8) | foreground.getBlue() : 0;
-        return s + ' ' + System.identityHashCode(font) + ' ' + rgb + ' ' + Math.round(pixelScale * 100f);
+        return s + ' ' + System.identityHashCode(font) + ' ' + rgb + ' ' + Math.round(pixelScale * 100f);
     }
 
     /** Renders {@code s} with the SWT font as white-on-black, then builds an RGBA

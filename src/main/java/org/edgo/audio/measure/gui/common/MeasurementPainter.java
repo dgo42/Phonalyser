@@ -73,6 +73,13 @@ public interface MeasurementPainter {
     void  setTextAntialias(int mode);
     void  setAdvanced(boolean advanced);
 
+    /** Device pixels per LOGICAL pixel this surface renders at — the factor the
+     *  digital-phosphor rasteriser scales its coverage buffer up by so a HiDPI GPU
+     *  surface gets crisp 1:1 device texels instead of a soft logical-res upscale.
+     *  {@code 1} on a normal display and on the {@link GcMeasurementPainter} CPU path
+     *  (SWT maps its {@code GC} logically); {@code >1} on a HiDPI NanoVG surface. */
+    default float getPixelScale() { return 1f; }
+
     Font  getFont();
     void  setFont(Font font);
 
@@ -91,14 +98,22 @@ public interface MeasurementPainter {
     void drawPolygon(int[] pointArray);
     void drawImage(Image image, int x, int y);
 
-    /** Blits a single-channel COVERAGE image: pixel ({@code px}, {@code py}) takes
-     *  {@code tint}'s RGB with per-pixel alpha {@code alpha[py*w + px]} (0..255), its
-     *  top-left placed at ({@code destX}, {@code destY}).  {@code alpha} may be longer
-     *  than {@code w*h} (a pooled scratch buffer); only the first {@code w*h} bytes are
+    /** Blits a single-channel COVERAGE image: source pixel ({@code px}, {@code py}) of
+     *  the {@code imgW×imgH} buffer takes {@code tint}'s RGB with per-pixel alpha
+     *  {@code alpha[py*imgW + px]} (0..255), and the whole buffer is drawn into the
+     *  LOGICAL destination rectangle ({@code destX}, {@code destY}, {@code drawW},
+     *  {@code drawH}).  The image buffer is at DEVICE resolution ({@code imgW =
+     *  round(drawW·pixelScale)}), so on a HiDPI surface {@code imgW > drawW} and the
+     *  device texels land 1:1 on the framebuffer (crisp); at {@code pixelScale == 1}
+     *  the two sizes match and the blit is 1:1.  {@code alpha} may be longer than
+     *  {@code imgW*imgH} (a pooled buffer); only the first {@code imgW*imgH} bytes are
      *  read.  Used by the oscilloscope's digital-phosphor rasteriser to stamp its
      *  intensity buffer as one tinted image instead of stroking a polyline; the GPU
-     *  backend uploads it as a NanoVG image, the GC backend as an {@code ImageData}. */
-    void drawAlphaImage(byte[] alpha, int w, int h, int destX, int destY, Color tint);
+     *  backend uploads it as a NanoVG image, the GC backend builds an {@code ImageData}
+     *  around {@code scratch}'s pooled arrays.  {@code scratch} is the caller-owned
+     *  reuse buffer for the GC backend (the GPU backend ignores it). */
+    void drawAlphaImage(byte[] alpha, int imgW, int imgH, int destX, int destY,
+                        int drawW, int drawH, Color tint, AlphaImageScratch scratch);
 
     /** Draws {@code s} at ({@code x}, {@code y}); {@code transparent} leaves the
      *  glyph background unfilled (the GC {@code isTransparent} flag). */
