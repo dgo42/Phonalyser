@@ -152,33 +152,54 @@ class DeviceStoreTest {
     // ── Seed-if-absent ───────────────────────────────────────────────────────
 
     @Test
-    void loadDevices_seedsBundle_whenFileAbsent(@TempDir Path dir) {
-        Path store = dir.resolve("devices.yaml");
+    void loadDevices_seedsBundle_whenFileAbsent(@TempDir Path dir) throws Exception {
+        Path store  = dir.resolve("devices.yaml");
+        Path bundle = dir.resolve("bundle.yaml");
+        // ISOLATED fixture seed — the SHIPPED bundle carries the maintainer's live
+        // calibration data and changes between releases; tests assert only against
+        // their own stable fixture so runs are repeatable on any machine.
+        writeBundle(bundle, 1,
+                "  - name: Fixture ADC\n"
+              + "    match: [\"Fixture ADC\"]\n"
+              + "    input:\n"
+              + "      channels: INDEPENDENT\n"
+              + "      ranges:\n"
+              + "        - { label: \"1.7V\", fsVrms: { left: 1.7, right: 1.7 } }\n"
+              + "        - { label: \"43V\",  fsVrms: { left: 43.0, right: 43.0 } }\n"
+              + "      activeRange: { left: \"1.7V\", right: \"1.7V\" }\n"
+              + "  - name: Fixture DAC\n"
+              + "    match: [\"Fixture DAC\", \"FixtureAlias\"]\n"
+              + "    output:\n"
+              + "      channels: LINKED\n"
+              + "      ranges:\n"
+              + "        - { label: \"default\", fsVrms: { left: 2.0, right: 2.0 } }\n"
+              + "      activeRange: \"default\"\n");
         assertFalse(Files.exists(store), "precondition: no store on disk yet");
 
         Preferences p = detached();
+        p.setSeedPathOverride(bundle);
         loadDevicesFrom(p, store);
 
         assertTrue(Files.exists(store), "an absent store is seeded from the bundle");
 
-        // The two bundled cards land as ordinary profiles carrying match patterns.
-        AudioDeviceProfile cosmos = p.findAudioDeviceProfile("E1DA Cosmos ADC");
-        assertNotNull(cosmos, "the ADC seed lands as a profile");
-        assertEquals(List.of("E1DA Cosmos ADC"), cosmos.getMatch());
-        assertEquals(DeviceChannelMode.INDEPENDENT, cosmos.getInput().getChannels());
-        assertEquals("1.7V", cosmos.getInput().getActiveRange());
-        assertEquals("1.7V", cosmos.getInput().getActiveRangeRight());
-        assertEquals(9, cosmos.getInput().getRanges().size());
-        assertEquals(1.7, cosmos.getInput().getRanges().get(0).getFsLeft(), EPS);
-        assertEquals(1.7, cosmos.getInput().getRanges().get(0).getFsRight(), EPS);
-        assertEquals(43.0, cosmos.getInput().getRanges().get(8).getFsLeft(), EPS);
-        assertEquals(43.0, cosmos.getInput().getRanges().get(8).getFsRight(), EPS);
+        // Both fixture cards land as ordinary profiles carrying match patterns.
+        AudioDeviceProfile adc = p.findAudioDeviceProfile("Fixture ADC");
+        assertNotNull(adc, "the ADC seed lands as a profile");
+        assertEquals(List.of("Fixture ADC"), adc.getMatch());
+        assertEquals(DeviceChannelMode.INDEPENDENT, adc.getInput().getChannels());
+        assertEquals("1.7V", adc.getInput().getActiveRange());
+        assertEquals("1.7V", adc.getInput().getActiveRangeRight());
+        assertEquals(2, adc.getInput().getRanges().size());
+        assertEquals(1.7,  adc.getInput().getRanges().get(0).getFsLeft(),  EPS);
+        assertEquals(1.7,  adc.getInput().getRanges().get(0).getFsRight(), EPS);
+        assertEquals(43.0, adc.getInput().getRanges().get(1).getFsLeft(),  EPS);
+        assertEquals(43.0, adc.getInput().getRanges().get(1).getFsRight(), EPS);
 
-        AudioDeviceProfile i2s = p.findAudioDeviceProfile("I2SoverUSB");
-        assertNotNull(i2s, "the DAC seed lands as a profile");
-        assertEquals(List.of("I2SoverUSB", "JLsounds"), i2s.getMatch());
-        assertEquals(2.0, i2s.getOutput().getRanges().get(0).getFsLeft(), EPS);
-        assertEquals(2.0, i2s.getOutput().getRanges().get(0).getFsRight(), EPS);
+        AudioDeviceProfile dac = p.findAudioDeviceProfile("Fixture DAC");
+        assertNotNull(dac, "the DAC seed lands as a profile");
+        assertEquals(List.of("Fixture DAC", "FixtureAlias"), dac.getMatch());
+        assertEquals(2.0, dac.getOutput().getRanges().get(0).getFsLeft(),  EPS);
+        assertEquals(2.0, dac.getOutput().getRanges().get(0).getFsRight(), EPS);
     }
 
     @Test
@@ -375,13 +396,17 @@ class DeviceStoreTest {
                 "preferences.yaml must no longer carry the profile store");
     }
 
-    // ── Legacy global full-scale scalars are never written to preferences.yaml ─
+    // ── Legacy global full-scale scalars in preferences.yaml ─────────────────
+    // The two RELEASED scalars (adcFsVoltageRms / dacFsVoltageRms) are the
+    // DEPRECATED fallback for devices with no card — kept written and read for
+    // backwards compatibility until the release AFTER the next one (the help's
+    // Preferences chapter documents this).  The RIGHT-channel siblings were
+    // never released and must stay out — per-channel values live in the card
+    // store only.
 
-    /** The four legacy full-scale keys toMap must never write — the per-card store
-     *  (devices.yaml) is the sole calibration carrier. */
-    private static final String[] LEGACY_FS_KEYS = {
-            "adcFsVoltageRms", "adcFsVoltageRmsRight",
-            "dacFsVoltageRms", "dacFsVoltageRmsRight" };
+    /** The two never-released per-channel keys toMap must never write. */
+    private static final String[] UNRELEASED_FS_KEYS = {
+            "adcFsVoltageRmsRight", "dacFsVoltageRmsRight" };
 
     /** A LINKED input card whose single active row carries a real (calibrated)
      *  full-scale. */
@@ -401,17 +426,20 @@ class DeviceStoreTest {
     }
 
     @Test
-    void toMap_neverWritesLegacyFsKeys() {
-        // The per-card store (devices.yaml) is the sole calibration carrier; the
-        // in-memory full-scale scalars are a runtime fallback only and are never
-        // persisted to preferences.yaml — all four keys stay out of toMap.
+    void toMap_writesDeprecatedFallbackScalars_neverTheRightSiblings() {
+        // The deprecated shared fallback stays in the yaml until the release
+        // after the next one; the never-released Right siblings stay out.
         Preferences p = detached();
         p.putAudioDeviceProfile(calibratedCard("Cosmos", "Line In (Cosmos)", 1.79));
 
         Map<?, ?> root = toMap(p);
-        for (String key : LEGACY_FS_KEYS) {
+        assertTrue(root.containsKey("adcFsVoltageRms"),
+                "the deprecated ADC fallback scalar stays in preferences.yaml");
+        assertTrue(root.containsKey("dacFsVoltageRms"),
+                "the deprecated DAC fallback scalar stays in preferences.yaml");
+        for (String key : UNRELEASED_FS_KEYS) {
             assertFalse(root.containsKey(key),
-                    "toMap must never write legacy full-scale key " + key);
+                    "toMap must never write never-released full-scale key " + key);
         }
     }
 
