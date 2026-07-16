@@ -2147,8 +2147,12 @@ public final class Preferences {
         root.put("oscMeasurementChannel",        oscMeasurementChannel.get().name());
         root.put("oscShowStats",                 oscShowStats.get());
         root.put("oscShowMeasurementTable",      oscShowMeasurementTable.get());
-        // Full-scale calibration lives in the per-card store (devices.yaml); the
-        // in-memory scalars are a runtime fallback only and are never written here.
+        // DEPRECATED shared full-scale calibration — the FALLBACK for devices with no
+        // card in devices.yaml (per-card calibration owns everything else).  Kept
+        // read AND written for backwards compatibility, per the help's Preferences
+        // chapter; scheduled for removal in the release AFTER the next one.
+        root.put("adcFsVoltageRms", adcFsVoltageRms.get());
+        root.put("dacFsVoltageRms", dacFsVoltageAmpl.get() / Constants.SQRT2);
         root.put("genSignalForm",                genSignalForm.get().name());
         root.put("genFrequencyHz",               genFrequencyHz.get());
         root.put("genDualToneFreq1Hz",           genDualToneFreq1Hz.get());
@@ -2493,6 +2497,11 @@ public final class Preferences {
         if (root.get("oscMeasurementChannel")        instanceof String s) oscMeasurementChannel.set(enumOr(Channel.class, s, oscMeasurementChannel.get()));
         if (root.get("oscShowStats")                 instanceof Boolean b) oscShowStats.set(b);
         if (root.get("oscShowMeasurementTable")      instanceof Boolean b) oscShowMeasurementTable.set(b);
+        // DEPRECATED shared full-scale fallback (unbound devices) — see toMap();
+        // honoured so a pre-card preferences.yaml keeps its calibration.  The
+        // setters validate and refresh the cached dBV offsets.
+        if (root.get("adcFsVoltageRms") instanceof Number n) setAdcFsVoltageRms(n.doubleValue());
+        if (root.get("dacFsVoltageRms") instanceof Number n) setDacFsVoltageAmpl(n.doubleValue() * Constants.SQRT2);
         if (root.get("genSignalForm")                instanceof String s) genSignalForm.set(enumOr(GenSignalForm.class, s, genSignalForm.get()));
         if (root.get("genFrequencyHz")               instanceof Number n) genFrequencyHz.set(n.doubleValue());
         if (root.get("genDualToneFreq1Hz")           instanceof Number n) genDualToneFreq1Hz.set(n.doubleValue());
