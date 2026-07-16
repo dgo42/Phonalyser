@@ -191,6 +191,7 @@ public final class FreqRespAnalyzerWorker {
                     .amplitudeVrms(prefs.getFreqRespAmplitudeVrms())
                     .dacFsVoltageRms(prefs.getDacFsVoltageAmpl())
                     .adcFsVoltageRms(prefs.getAdcFsVoltageRms())
+                    .outputChannels(prefs.getFreqRespOutputChannels())
                     .applyCalibration(prefs.isFreqRespApplyCalibration())
                     .captureProgress(activeProgress)
                     .build();

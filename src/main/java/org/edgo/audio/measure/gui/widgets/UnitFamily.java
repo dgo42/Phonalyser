@@ -55,6 +55,15 @@ public enum UnitFamily {
             new Unit("unit.v",   1.0,   false, List.of("v")),
             new Unit("unit.dbv", 1.0,   true,  List.of("dbv"))),
 
+    /** nV / µV / mV / V — {@link #AMPLITUDE} without the logarithmic dBV unit,
+     *  for calibration-value entry where a dB reference makes no sense.  Same
+     *  linear switching thresholds and V default as AMPLITUDE. */
+    VOLTAGE(3,
+            new Unit("unit.nv",  1e-9,  false, List.of("nv", "n")),
+            new Unit("unit.uv",  1e-6,  false, List.of("uv", "u", "µ", "μ")),
+            new Unit("unit.mv",  1e-3,  false, List.of("mv", "m")),
+            new Unit("unit.v",   1.0,   false, List.of("v"))),
+
     /** ms / s; display switches to ms below 0.5 s; suffix-less (digits-only)
      *  input is s, the base unit. */
     TIME(1,
@@ -147,7 +156,8 @@ public enum UnitFamily {
     public Unit displayUnit(double canonical) {
         switch (this) {
             case FREQUENCY:     return canonical < KILO_SWITCH_HZ   ? units[0] : units[1];
-            case AMPLITUDE:     return canonical < MICRO_SWITCH ? units[0]
+            case AMPLITUDE:
+            case VOLTAGE:       return canonical < MICRO_SWITCH ? units[0]
                                      : canonical < MILLI_SWITCH ? units[1]
                                      : (canonical < HALF_UNIT_SWITCH ? units[2] : units[3]);
             case TIME:          return canonical < HALF_UNIT_SWITCH ? units[0] : units[1];

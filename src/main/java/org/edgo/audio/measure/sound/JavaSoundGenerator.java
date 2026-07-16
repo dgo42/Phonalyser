@@ -27,6 +27,7 @@ import javax.sound.sampled.Mixer;
 import javax.sound.sampled.SourceDataLine;
 
 import lombok.extern.log4j.Log4j2;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
 
 /**
@@ -151,6 +152,16 @@ public class JavaSoundGenerator implements AudioPlayback {
     @Override
     public void setDitherBits(int bits) {
         quantizer.setDitherBits(bits);
+    }
+
+    @Override
+    public void setChannelScale(double left, double right) {
+        quantizer.setChannelScale(left, right);
+    }
+
+    @Override
+    public void setOutputChannels(OutputChannels channels) {
+        quantizer.setOutputChannels(channels);
     }
 
     @Override

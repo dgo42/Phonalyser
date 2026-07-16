@@ -31,6 +31,7 @@ import org.edgo.audio.measure.dsp.LowPassFilter;
 import org.edgo.audio.measure.dsp.MainsFilters;
 import org.edgo.audio.measure.dsp.MainsTimeFilter;
 import org.edgo.audio.measure.dsp.MedianFilter;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
@@ -441,16 +442,20 @@ public final class ScopeMeasurementWorker {
         // means, the comb, and Vpp/Vrms all see the de-spiked signal.  No-op
         // below the LPF's Nyquist gate.
         applyHfLowPass(sampleRate, avail);
-        double peakVolts = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        // Each channel scales by its OWN ADC full-scale (LINKED cards give equal L/R
+        // peaks), so the RIGHT channel's Vpp/Vrms/Vmean no longer inherit the LEFT
+        // full-scale; the back-conversion below divides each mean by its own peak.
+        double peakVoltsL = prefs.getAdcPeakVolts(Channel.L);
+        double peakVoltsR = prefs.getAdcPeakVolts(Channel.R);
         // Both channels run the SAME measurement pipeline; the view shows the
         // channel the table's L/R selector points at.  The per-channel DC
         // means (AC-coupling offset, residual baseline) are the channels' own
         // whole-period Vmean values — identical to the table readout.
         long absStart = b.getWritePos() - avail;
-        SignalMeasurements resultLeft  = measureChannel(true,  avail, sampleRate, peakVolts, absStart, prefs);
-        SignalMeasurements resultRight = measureChannel(false, avail, sampleRate, peakVolts, absStart, prefs);
-        double leftMean  = resultLeft.getVmean()  / peakVolts;
-        double rightMean = resultRight.getVmean() / peakVolts;
+        SignalMeasurements resultLeft  = measureChannel(true,  avail, sampleRate, peakVoltsL, absStart, prefs);
+        SignalMeasurements resultRight = measureChannel(false, avail, sampleRate, peakVoltsR, absStart, prefs);
+        double leftMean  = resultLeft.getVmean()  / peakVoltsL;
+        double rightMean = resultRight.getVmean() / peakVoltsR;
         long now = System.nanoTime();
         synchronized (measHistoryLock) {
             measHistoryLeft [measHistoryWrite] = resultLeft;

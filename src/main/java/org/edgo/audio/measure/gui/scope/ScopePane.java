@@ -24,7 +24,9 @@ import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.ControlListener;
 import org.eclipse.swt.events.MouseAdapter;
 import org.eclipse.swt.events.MouseEvent;
+import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -314,6 +316,10 @@ public final class ScopePane extends AbstractPane {
         // channel's V/div when the measurement channel is disabled.
         Bindings.onChange(vertSlider, vsPrefs.oscLeftChannelEnabledProperty(),  v -> syncVertSliderFromPrefs());
         Bindings.onChange(vertSlider, vsPrefs.oscRightChannelEnabledProperty(), v -> syncVertSliderFromPrefs());
+        // Per-channel ADC full-scale sizes offsetFracBounds' range, so a recal must
+        // resize the scrollbar immediately (the 250 ms timer would otherwise mask it).
+        Bindings.onChange(vertSlider, vsPrefs.adcFsVoltageRmsProperty(),        v -> syncVertSliderFromPrefs());
+        Bindings.onChange(vertSlider, vsPrefs.adcFsVoltageRmsRightProperty(),   v -> syncVertSliderFromPrefs());
 
         // Navigation slider between the main view and the condensed
         // strip.  Selection = how far back from the live writePos the
@@ -672,9 +678,40 @@ public final class ScopePane extends AbstractPane {
             }
             // copyMeasurementsFrom AFTER setBuffer (which clears latest).
             clone.getView().copyMeasurementsFrom(view);
+            // Persistence lives only in the GPU phosphor buffer; the clone renders on the
+            // CPU/GC path and can't see it, so read the live afterglow back and hand it over
+            // to composite beneath the overlay.  Null on the CPU/no-GPU path or with
+            // persistence off — the clone then draws the plain trace, byte-identical to today.
+            if (glSurface != null) {
+                ImageData afterglow = glSurface.persistenceSnapshot();
+                if (afterglow != null) clone.getView().setPersistenceSnapshot(afterglow);
+            }
         }
         clone.setRecordingState(isCapturing());
         return clone;
+    }
+
+    /** Overpaints the printed scope view and condensed overview strip with
+     *  {@code GC(Image)} renders: {@code Control.print} drops GDI+ fractional pen
+     *  widths (traces printed 1&nbsp;px whatever the preference), while the image
+     *  render keeps them — and carries the digital-phosphor blit and the
+     *  persistence snapshot exactly like the live paint. */
+    @Override
+    protected void printTraceOverlays(GC outGc) {
+        if (view != null && !view.isDisposed() && view.isVisible()) {
+            Rectangle b = view.getBounds();
+            if (b.width > 0 && b.height > 0) {
+                overpaintCanvas(outGc, view,
+                        view.renderToImage(view.getDisplay(), b.width, b.height));
+            }
+        }
+        if (condensed != null && !condensed.isDisposed() && condensed.isVisible()) {
+            Rectangle b = condensed.getBounds();
+            if (b.width > 0 && b.height > 0) {
+                overpaintCanvas(outGc, condensed,
+                        condensed.renderToImage(condensed.getDisplay(), b.width, b.height));
+            }
+        }
     }
 
     /**
@@ -950,8 +987,11 @@ public final class ScopePane extends AbstractPane {
         boolean fileMode = view.isFileMode();
         boolean enable = running && !fileMode;
         if (enable) {
+            Preferences prefs = Preferences.instance();
             double vpp = view.getLastVpp();
-            double fsVpp = 2.0 * Preferences.instance().getAdcFsVoltageRms() * Math.sqrt(2.0);
+            // Pair the full-scale with getLastVpp's channel (the measurement channel)
+            // so the gate compares like against like on an INDEPENDENT card.
+            double fsVpp = 2.0 * prefs.getAdcPeakVolts(prefs.getOscMeasurementChannel());
             enable = !Double.isNaN(vpp) && fsVpp > 0.0
                   && (vpp / fsVpp) >= CALIBRATE_MIN_VPP_FRACTION;
         }
@@ -1009,6 +1049,11 @@ public final class ScopePane extends AbstractPane {
      *  logged (no modal dialog in an unattended run); callers can check
      *  {@link #isCapturing()}. */
     public void engageRecord() {
+        // Automation no-audio gate: a help-screenshot run started with
+        // -Dphonalyser.automation.noAudio=true must never open an audio device,
+        // so this script-driven Record is a no-op.  A user Record-button click
+        // uses wireRecordButton()/startCapture() and is unaffected.
+        if (Boolean.getBoolean("phonalyser.automation.noAudio")) return;
         if (isCapturing()) return;
         startCapture();
         setRecordingState(isCapturing());

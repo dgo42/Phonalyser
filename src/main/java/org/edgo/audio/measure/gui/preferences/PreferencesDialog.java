@@ -20,7 +20,9 @@ package org.edgo.audio.measure.gui.preferences;
 
 import lombok.extern.log4j.Log4j2;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.graphics.Color;
+import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.RGB;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
@@ -38,18 +40,25 @@ import org.eclipse.swt.widgets.Text;
 import org.eclipse.swt.widgets.FontDialog;
 import org.eclipse.swt.graphics.FontData;
 
+import org.edgo.audio.measure.common.Constants;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.PersistenceMode;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.scope.gl.GpuSupport;
 import org.edgo.audio.measure.bind.Property;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.BackendPrefs;
+import org.edgo.audio.measure.preferences.DeviceEndpointConfig;
+import org.edgo.audio.measure.preferences.DeviceRange;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Fonts;
+import org.edgo.audio.measure.gui.common.Icon;
+import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.common.ShellIcons;
 import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
@@ -127,6 +136,13 @@ public final class PreferencesDialog {
      *  size in every language (a longer translation no longer makes it wider).  Generous
      *  enough that the current languages all fit; a longer future one just stays a touch wider. */
     private static final int    DIALOG_WIDTH_PX = 700;
+    /** Total dialog height (px), OUTER — title bar + border included.  The shell
+     *  is forced to exactly this after pack(), so the window is the same compact
+     *  height in every language.  With the FS field gone and the ranges packing
+     *  to their actual row count, the typical one-card Audio tab fits inside it;
+     *  a taller state scrolls inside the Audio tab's own V-scroll (see
+     *  {@link #audioScroll}) instead of growing the window. */
+    private static final int    SHELL_OUTER_HEIGHT_PX = 480;
     /** Multi-tone detect threshold (dB): wheel ±10 dB, arrows ±1 dB. */
     private static final double STRONG_TONE_MIN_DB   = 10;
     private static final double STRONG_TONE_MAX_DB   = 140;
@@ -147,6 +163,14 @@ public final class PreferencesDialog {
     private Combo outputDepthCombo;
     private DeviceListState devices;
     private Property<Double> nyqWork;
+    private CardSection inputCard;
+    private CardSection outputCard;
+    /** Outer V-scroll wrapping the Audio tab's content, so the tallest tab
+     *  scrolls instead of growing the dialog past {@link #SHELL_OUTER_HEIGHT_PX}.
+     *  Its min size tracks the audio content (refreshed on every card/range
+     *  rebuild); the other tabs stay unwrapped. */
+    private ScrolledComposite audioScroll;
+    private Composite audioTab;
 
     public PreferencesDialog(Shell parent) {
         this.parent = parent;
@@ -186,7 +210,7 @@ public final class PreferencesDialog {
         // and shorter ones simply leave more room between label and field.
         TabFolder tabs = new TabFolder(dialog, SWT.TOP);
         GridData tabsData = new GridData(SWT.FILL, SWT.FILL, true, true);
-        tabsData.widthHint = DIALOG_WIDTH_PX;
+        tabsData.widthHint  = DIALOG_WIDTH_PX;
         tabs.setLayoutData(tabsData);
 
         // --- Look & Feel tab (first) ---------------------------------------
@@ -238,13 +262,25 @@ public final class PreferencesDialog {
 
         TabItem audioTabItem = new TabItem(tabs, SWT.NONE);
         audioTabItem.setText(I18n.t("preferences.tab.audio"));
-        Composite audioTab = new Composite(tabs, SWT.NONE);
+        // The Audio tab is the tallest (two device groups, each with a card
+        // combo + range table).  Wrap ONLY it in a V-scroll so the folder's
+        // height cap makes IT scroll while the other tabs still fit unwrapped.
+        audioScroll = new ScrolledComposite(tabs, SWT.V_SCROLL);
+        audioScroll.setExpandHorizontal(true);
+        audioScroll.setExpandVertical(true);
+        // On-demand vertical scrollbar: shown ONLY when the content is taller
+        // than the viewport.  With the FS field gone and the ranges packing to
+        // their actual row count, the typical one-card state fits 480 px with
+        // no scrollbar; a taller state (many ranges) scrolls here.
+        audioScroll.setAlwaysShowScrollBars(false);
+        audioTabItem.setControl(audioScroll);
+        audioTab = new Composite(audioScroll, SWT.NONE);
+        audioScroll.setContent(audioTab);
         GridLayout audioLayout = new GridLayout(1, false);
         audioLayout.marginWidth  = 8;
         audioLayout.marginHeight = 8;
         audioLayout.verticalSpacing = 8;
         audioTab.setLayout(audioLayout);
-        audioTabItem.setControl(audioTab);
 
         // --- Backend row ---------------------------------------------------
         Composite backendRow = new Composite(audioTab, SWT.NONE);
@@ -283,6 +319,7 @@ public final class PreferencesDialog {
         gridLabel(inputGroup,I18n.t("preferences.bitDepth"));
         inputDepthCombo = new Combo(inputGroup, SWT.READ_ONLY);
         inputDepthCombo.setLayoutData(comboData());
+        inputCard = buildCardSection(inputGroup, true);
 
         // --- Output group --------------------------------------------------
         Group outputGroup = new Group(audioTab, SWT.NONE);
@@ -298,6 +335,7 @@ public final class PreferencesDialog {
         gridLabel(outputGroup,I18n.t("preferences.bitDepth"));
         outputDepthCombo = new Combo(outputGroup, SWT.READ_ONLY);
         outputDepthCombo.setLayoutData(comboData());
+        outputCard = buildCardSection(outputGroup, false);
 
         // --- Oscilloscope tab ----------------------------------------------
         TabItem oscTabItem = new TabItem(tabs, SWT.NONE);
@@ -711,6 +749,10 @@ public final class PreferencesDialog {
         devices = new DeviceListState();
 
         refreshDevices();
+        // The Audio tab is now fully built and populated — set the V-scroll's
+        // min size from its content so the scrollbar appears under the height
+        // cap.  (Subsequent card/range rebuilds refresh it again.)
+        refreshAudioScrollMinSize();
         backendCombo.addListener(SWT.Selection, e -> {
             // Persist the outgoing backend's UI state into the working copy
             // before switching, so toggling back later restores what the user
@@ -720,8 +762,12 @@ public final class PreferencesDialog {
             edit.setBackend(availableBackends.get(backendCombo.getSelectionIndex()));
             refreshDevices();
         });
-        inputCombo.addListener (SWT.Selection, e -> refreshInputRatesAndDepths());
-        outputCombo.addListener(SWT.Selection, e -> refreshOutputRatesAndDepths());
+        // A device pick must land in the working copy BEFORE the card section
+        // re-resolves — CardSection.refresh() reads the device name off `edit`,
+        // so without this capture it would re-resolve against the OLD device and
+        // keep the previous card selected.
+        inputCombo.addListener (SWT.Selection, e -> { refreshInputRatesAndDepths();  captureUiToActive(); inputCard.onDeviceChanged();  });
+        outputCombo.addListener(SWT.Selection, e -> { refreshOutputRatesAndDepths(); captureUiToActive(); outputCard.onDeviceChanged(); });
 
         // --- OK / Cancel ----------------------------------------------------
         Composite buttonBar = new Composite(dialog, SWT.NONE);
@@ -774,6 +820,13 @@ public final class PreferencesDialog {
             // Single hand-off: commit the whole working copy to the live
             // singleton (which also persists once).
             Preferences.instance().applyFromDialog(edit);
+            // Resolve per-card FS for the just-committed selection so the dBV
+            // axis and generator scale update immediately on OK (legacy scalars
+            // when the device is unbound).
+            Preferences committed = Preferences.instance();
+            BackendPrefs committedBp = committed.current();
+            committed.applyInputDeviceProfile(committedBp.getInputDeviceName());
+            committed.applyOutputDeviceProfile(committedBp.getOutputDeviceName());
             // Activate the chosen backend on the live AudioBackend — kept in the
             // dialog so Preferences stays free of the sound/hardware layer.
             AudioBackend.instance().setActive(edit.getBackend());
@@ -796,10 +849,26 @@ public final class PreferencesDialog {
             dialog.close();
         });
 
+        // pack() sizes the shell to its content width (driven by the tab
+        // folder's 700 px width hint); force the OUTER height to the fixed
+        // 480 px so the window is the same compact height in every language,
+        // authoritative over whatever the tallest tab's content would ask for.
         dialog.pack();
+        dialog.setSize(dialog.getSize().x, SHELL_OUTER_HEIGHT_PX);
         Dialogs.centerOnParent(dialog);
         dialog.open();
         return dialog;
+    }
+
+    /** Capture support (help screenshots): builds the card editor on the Audio
+     *  tab's INPUT card (resolved from the seeded {@code devices.yaml}) and shows
+     *  it non-modally, returning it so the automation can snapshot + dispose it.
+     *  Requires the dialog to be open; null when no input card is selected.
+     *  Mirrors the pencil button's edit flow without committing a result. */
+    public CardEditorDialog openInputCardEditorForCapture() {
+        CardEditorDialog dlg = inputCard.editorForSelected();
+        if (dlg != null) dlg.showForCapture();
+        return dlg;
     }
 
     // The percent → fraction conversion + freq-window clamp run on OK,
@@ -877,6 +946,23 @@ public final class PreferencesDialog {
         populateDeviceCombo(outputCombo, devices.outputs, bp.getOutputDeviceName());
         refreshInputRatesAndDepths();
         refreshOutputRatesAndDepths();
+        // Repopulate the card combo + range table for the (possibly new)
+        // backend / device — the sections are built before refreshDevices()
+        // first runs, so they are already present here.
+        if (inputCard  != null) inputCard.refresh();
+        if (outputCard != null) outputCard.refresh();
+    }
+
+    /** Re-derives the Audio tab's V-scroll min size from its content's
+     *  preferred size, so the scrollbar appears exactly when the content
+     *  (which grows/shrinks as a card is selected → its range table shows /
+     *  hides) exceeds the tab viewport at the fixed
+     *  {@link #SHELL_OUTER_HEIGHT_PX} window height.  Called after the initial
+     *  device refresh and from every card/range rebuild. */
+    private void refreshAudioScrollMinSize() {
+        if (audioScroll == null || audioScroll.isDisposed() || audioTab == null || audioTab.isDisposed()) return;
+        audioTab.layout(true, true);
+        audioScroll.setMinSize(audioTab.computeSize(SWT.DEFAULT, SWT.DEFAULT));
     }
 
     /** Layout for a value field (combo / numeric / colour / font row): a fixed width so every
@@ -1074,6 +1160,580 @@ public final class PreferencesDialog {
         int end = 0;
         while (end < label.length() && Character.isDigit(label.charAt(end))) end++;
         return end > 0 ? Integer.parseInt(label.substring(0, end)) : 0;
+    }
+
+    // === Per-card calibration profile section ==============================
+    // Appended inside each direction Group (input / output): a "Card" combo
+    // that binds the direction's device to a physical-card profile, plus a
+    // range table editing that card's per-attenuator/gain full-scale voltages.
+    // EVERYTHING here mutates the detached `edit` working copy (never the live
+    // singleton, never save()): edit.putAudioDeviceProfile() replaces by name
+    // on the copy, whose save() is inert while detached.  OK commits the whole
+    // copy via applyFromDialog(); the resolved FS is pushed by the sibling
+    // resolution call there through setAdcFsVoltageRms / setDacFsVoltageAmpl.
+
+    /** Full-scale voltage floor used to seed a freshly added range when the
+     *  endpoint has no prior range to copy from: a small positive value so the
+     *  dBV display stays finite (mirrors {@code AMP_MIN_VRMS} in FftTabControl).
+     *  The value is never edited in this dialog — the crosshair Calibrate flows
+     *  own the real full-scale voltage. */
+    private static final double RANGE_FS_MIN_V = 1e-9;
+
+    /** One editable range-table row: the label text + backing model.  The
+     *  full-scale value is NOT edited here — it is produced solely by the
+     *  crosshair Calibrate flows and persists on {@link DeviceRange}. */
+    private static final class RangeRow {
+        Composite        composite;
+        /** The LEFT-channel "active range" radio (drives {@code activeRange}).  In
+         *  LINKED mode this is the sole radio.  Each row sits in its own Composite,
+         *  so the radios do NOT auto-exclude — {@link CardSection#userSetActive}
+         *  clears the siblings by hand. */
+        Button           activeRadio;
+        /** The RIGHT-channel active-range radio (drives {@code activeRangeRight}),
+         *  present only in INDEPENDENT mode; {@code null} in LINKED mode. */
+        Button           activeRadioRight;
+        Text             labelField;
+        /** INDEPENDENT-mode mirror of {@link #labelField} in the Right group —
+         *  both show/edit the SAME range label (synced on rename); {@code null}
+         *  in LINKED / MONO mode. */
+        Text             labelFieldRight;
+        /** Source of truth for label + FS — an element of the endpoint's range list. */
+        DeviceRange      range;
+
+        private RangeRow() {
+        }
+    }
+
+    /** The card-profile UI + behaviour for ONE direction (input or output).
+     *  Holds the direction's widgets and the working-copy edits its handlers
+     *  make; {@link #refresh()} re-derives the whole section from `edit` and
+     *  the currently selected device on every backend / device change. */
+    private final class CardSection {
+        private final boolean input;
+        private final Combo cardCombo;
+        private final Button editBtn;
+        private final Label rangesLabel;
+        private final Composite rangesContainer;
+        private final List<RangeRow> rows = new ArrayList<>();
+        /** Combo index → profile; {@code null} only at the last index (New card…).
+         *  Rebuilt with the combo in {@link #refresh()}. */
+        private final List<AudioDeviceProfile> comboProfiles = new ArrayList<>();
+        /** Logical name of the card the combo currently shows, or null when no
+         *  card is selected — the value a cancelled "New card…" reverts to. */
+        private String selectedName;
+        /** Device name the "no card assigned" prompt was last shown for, so a
+         *  passive refresh / rebuild never re-asks for the same device within
+         *  this dialog session. */
+        private String lastPromptedDevice;
+
+        private CardSection(Combo cardCombo, Button editBtn, Label rangesLabel,
+                            Composite rangesContainer, boolean input) {
+            this.cardCombo       = cardCombo;
+            this.editBtn         = editBtn;
+            this.rangesLabel     = rangesLabel;
+            this.rangesContainer = rangesContainer;
+            this.input           = input;
+            cardCombo.addListener(SWT.Selection, e -> onCardSelected());
+            editBtn.addListener(SWT.Selection, e -> editSelectedCard());
+        }
+
+        /** Current device name for this direction, straight off the working copy. */
+        private String deviceName() {
+            BackendPrefs bp = edit.current();
+            return input ? bp.getInputDeviceName() : bp.getOutputDeviceName();
+        }
+
+        private DeviceEndpointConfig endpointOf(AudioDeviceProfile p) {
+            return input ? p.getInput() : p.getOutput();
+        }
+
+        /** Re-derives the combo, its preselection, and the range table from the
+         *  working copy + the selected device.  The combo lists only profiles whose
+         *  endpoint for THIS direction has at least one range (the seeded known cards
+         *  included) — an output-only card never clutters the input combo and vice
+         *  versa.  The preselection is the unified lookup
+         *  ({@link Preferences#resolveDeviceProfile}): the card whose {@code match}
+         *  list has the longest entry that is a substring of the device name, or no
+         *  selection (empty combo, no range table) when none matches.  A device with
+         *  no correlated card therefore never keeps showing the previous card — the
+         *  combo VISIBLY clears; the offer-to-create prompt lives in
+         *  {@link #onDeviceChanged}, not here, so a passive refresh / rebuild never
+         *  pops a dialog.  A matched card is pre-selected and its ranges show, but its
+         *  device name is bound onto {@code match} only when the user confirms it
+         *  (selecting the combo entry → {@link #onCardSelected} → {@link #bindAlias});
+         *  the user sees it and can change it first. */
+        private AudioDeviceProfile refresh() {
+            if (cardCombo.isDisposed()) return null;
+            String dev = deviceName();
+
+            cardCombo.removeAll();
+            comboProfiles.clear();
+            for (AudioDeviceProfile p : edit.getAudioDeviceProfiles()) {
+                if (endpointOf(p).getRanges().isEmpty()) continue;   // no range this direction — hide
+                cardCombo.add(p.getName());
+                comboProfiles.add(p);
+            }
+
+            AudioDeviceProfile pick = dev != null ? edit.resolveDeviceProfile(dev) : null;
+            cardCombo.add(I18n.t("preferences.audio.card.new"));
+            comboProfiles.add(null);                                  // last = New card…
+
+            // A resolved / suggested card is selected; anything else (unknown
+            // device, or no device) leaves the combo empty with no range table.
+            selectByProfile(pick);
+            rebuildTable();
+            return pick;
+        }
+
+        /** A user-driven device change on this direction's device combo:
+         *  re-resolve the card (visibly switching to the correlated one, or
+         *  clearing when there is none) and, when resolve AND suggest both fail
+         *  for a real device, offer to create a card via the house confirm dialog.
+         *  The offer fires once per device name per dialog session (guarded by
+         *  {@link #lastPromptedDevice}) so it never spams on repeated switches. */
+        private void onDeviceChanged() {
+            AudioDeviceProfile pick = refresh();
+            String dev = deviceName();
+            if (dev == null || pick != null) return;       // unbound, or a card correlated
+            if (dev.equals(lastPromptedDevice)) return;    // already offered for this device
+            lastPromptedDevice = dev;
+            int answer = Dialogs.confirm(parent,
+                    I18n.t("preferences.audio.card.noCardAssigned.title"),
+                    I18n.t("preferences.audio.card.noCardAssigned.message", dev));
+            if (answer == SWT.YES) createNewCard(dev);
+            // NO — leave the section unbound (refresh() already cleared it).
+        }
+
+        /** Selects the combo entry for {@code p} without firing the
+         *  user-selection handler ({@code combo.select} is silent).  A null
+         *  profile — or one absent from the combo — leaves the combo with no
+         *  selection (empty text). */
+        private void selectByProfile(AudioDeviceProfile p) {
+            int idx = -1;
+            if (p != null) {
+                for (int i = 0; i < comboProfiles.size() - 1; i++) {
+                    if (comboProfiles.get(i) != null && comboProfiles.get(i).getName().equals(p.getName())) {
+                        idx = i;
+                        break;
+                    }
+                }
+            }
+            if (idx < 0) {
+                cardCombo.deselectAll();
+                selectedName = null;
+            } else {
+                cardCombo.select(idx);
+                selectedName = comboProfiles.get(idx).getName();
+            }
+        }
+
+        /** The card combo's user-selection handler — the ask-flow. */
+        private void onCardSelected() {
+            int idx = cardCombo.getSelectionIndex();
+            if (idx < 0) return;
+            String dev = deviceName();
+            if (idx == comboProfiles.size() - 1) {          // New card…
+                createNewCard(dev);
+                return;
+            }
+            AudioDeviceProfile p = comboProfiles.get(idx);   // always an existing card
+            bindAlias(p, dev);
+            selectedName = p.getName();
+            rebuildTable();
+        }
+
+        /** "New card…" — open the card create dialog prefilled with the
+         *  normalized device name and the triggering device name as the first
+         *  {@code match} entry, then create the returned profile in `edit` (the
+         *  dialog seeds a "default" range per chosen direction from the current
+         *  global scalar).  The dialog's editable match list already carries the
+         *  device name, so no separate bind step is needed. */
+        private void createNewCard(String dev) {
+            AudioDeviceProfile seed = new AudioDeviceProfile();
+            seed.setName(dev != null ? edit.normalizeDeviceName(dev) : "");
+            if (dev != null) seed.getMatch().add(dev);
+            CardEditorDialog dlg = new CardEditorDialog(parent, seed,
+                    input ? CardEditorDialog.Capability.INPUT_ONLY : CardEditorDialog.Capability.OUTPUT_ONLY,
+                    currentCardNames(), null, inputSeedFs(), outputSeedFs());
+            AudioDeviceProfile p = dlg.open();
+            if (p == null) {
+                refresh();                                 // cancelled — restore the pre-dialog state
+                return;
+            }
+            edit.putAudioDeviceProfile(p);
+            String name = p.getName();
+            // Rebuild the combo to list the new card, then select it explicitly
+            // (a match-based resolve would also find it when its list carries the
+            //  device name, but a device-less create has nothing to resolve by —
+            //  pin the selection either way).
+            refresh();
+            selectByProfile(edit.findAudioDeviceProfile(name));
+            rebuildTable();
+        }
+
+        /** Opens the card edit dialog on the currently selected card and replaces
+         *  it in the working copy on OK, re-keying cleanly on a rename (remove the
+         *  old name, put under the new). */
+        /** Builds (but does not open) the card editor on the currently selected
+         *  card, or null when nothing is selected — shared by the interactive
+         *  {@link #editSelectedCard()} and the help-capture hook
+         *  {@link PreferencesDialog#openInputCardEditorForCapture()}. */
+        private CardEditorDialog editorForSelected() {
+            if (selectedName == null) return null;
+            AudioDeviceProfile live = edit.findAudioDeviceProfile(selectedName);
+            if (live == null) return null;
+            return new CardEditorDialog(parent, live,
+                    CardEditorDialog.Capability.of(live),
+                    currentCardNames(), live.getName(), inputSeedFs(), outputSeedFs());
+        }
+
+        private void editSelectedCard() {
+            CardEditorDialog dlg = editorForSelected();
+            if (dlg == null) return;
+            AudioDeviceProfile p = dlg.open();
+            if (p == null) return;                         // cancelled — nothing changed
+            if (!p.getName().equalsIgnoreCase(selectedName)) {
+                edit.removeAudioDeviceProfile(selectedName);   // rename — drop the old key
+            }
+            edit.putAudioDeviceProfile(p);
+            refresh();
+            selectByProfile(edit.findAudioDeviceProfile(p.getName()));
+            rebuildTable();
+        }
+
+        /** The logical names of every card currently in the working copy — the
+         *  card-editor's name-uniqueness check. */
+        private List<String> currentCardNames() {
+            List<String> names = new ArrayList<>();
+            for (AudioDeviceProfile p : edit.getAudioDeviceProfiles()) names.add(p.getName());
+            return names;
+        }
+
+        /** Full-scale (V RMS) a freshly enabled input range is seeded with. */
+        private double inputSeedFs() {
+            return edit.getAdcFsVoltageRms();
+        }
+
+        /** Full-scale (V RMS) a freshly enabled output range is seeded with — the
+         *  DAC's global amplitude scalar converted to RMS (the on-disk convention). */
+        private double outputSeedFs() {
+            return edit.getDacFsVoltageAmpl() / Constants.SQRT2;
+        }
+
+        /** Binds card {@code p} to the current device name by APPENDING it to the
+         *  card's {@code match} list — only when no existing entry already matches
+         *  it ({@link AudioDeviceProfile#bindDeviceName}).  Overlaps between cards
+         *  now resolve by longest-match, so no exclusive unbind of the name from
+         *  other cards is done; the card-editor list is where the user prunes. */
+        private void bindAlias(AudioDeviceProfile p, String dev) {
+            if (dev == null) return;
+            AudioDeviceProfile live = edit.findAudioDeviceProfile(p.getName());
+            if (live == null) return;
+            if (live.bindDeviceName(dev)) {
+                edit.putAudioDeviceProfile(live);
+            }
+        }
+
+        /** Rebuilds the range table from the selected card's endpoint (hidden
+         *  when no card is selected). */
+        private void rebuildTable() {
+            for (RangeRow r : rows) {
+                if (!r.composite.isDisposed()) r.composite.dispose();
+            }
+            rows.clear();
+            AudioDeviceProfile p = selectedName != null ? edit.findAudioDeviceProfile(selectedName) : null;
+            boolean show = p != null;
+            if (!editBtn.isDisposed()) editBtn.setEnabled(show);   // edit only a real, selected card
+            rangesLabel.setVisible(show);
+            ((GridData) rangesLabel.getLayoutData()).exclude = !show;
+            rangesContainer.setVisible(show);
+            ((GridData) rangesContainer.getLayoutData()).exclude = !show;
+            if (show) {
+                DeviceEndpointConfig ep = endpointOf(p);
+                for (DeviceRange range : ep.getRanges()) {
+                    createRangeRowUi(ep, range);
+                }
+            }
+            // relayoutTable() re-lays the shell and refreshes the Audio tab's
+            // V-scroll min size, so the ranges label + table showing / hiding
+            // (exclude toggled) tracks the new content height.
+            relayoutTable();
+        }
+
+        /** Builds one range row: active radio(s), editable unique label, and
+         *  add / remove icon buttons (row 0's remove is hidden, matching the
+         *  FftCalRow convention so columns line up).  In INDEPENDENT mode the row
+         *  is TWO mirrored groups sharing one range label — [Left] radio + label
+         *  field, [Right] radio + mirrored label field — with the "Left"/"Right"
+         *  captions carried by every row but visible only on row 0 (an invisible
+         *  widget still reserves its cell, so the columns line up across rows
+         *  even though each row is its own Composite).  The full-scale value is
+         *  deliberately NOT editable here — the crosshair Calibrate flows own it;
+         *  the row only names the range and marks the active one(s). */
+        private void createRangeRowUi(DeviceEndpointConfig ep, DeviceRange range) {
+            boolean isRow0 = rows.isEmpty();
+            boolean independent = ep.getChannels() == DeviceChannelMode.INDEPENDENT;
+            // A device-provided endpoint (QA40x) owns its labels + range set: the
+            // label fields are read-only and the add / remove buttons are hidden,
+            // but the active-range radios stay usable (the ranges are switchable).
+            boolean deviceProvided = ep.isCalibrationFromDevice();
+
+            Composite row = new Composite(rangesContainer, SWT.NONE);
+            row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+            GridLayout rl = new GridLayout(independent ? 8 : 4, false);
+            rl.marginWidth = 0; rl.marginHeight = 0; rl.horizontalSpacing = 6;
+            row.setLayout(rl);
+
+            if (independent) createSideCaption(row, "scope.tab.left", isRow0);
+
+            Button activeRadio = new Button(row, SWT.RADIO);
+            activeRadio.setToolTipText(I18n.t("preferences.audio.range.active.tooltip"));
+            activeRadio.setSelection(range.getLabel().equals(ep.getActiveRange()));
+            activeRadio.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, false, false));
+
+            Text labelField = new Text(row, SWT.BORDER);
+            // The freed FS column now falls to the label — let it grab the slack.
+            labelField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+            labelField.setText(range.getLabel());
+            labelField.setToolTipText(I18n.t("preferences.audio.range.label.tooltip"));
+            labelField.setEditable(!deviceProvided);
+
+            Button activeRadioRight = null;
+            Text labelFieldRight = null;
+            if (independent) {
+                createSideCaption(row, "scope.tab.right", isRow0);
+
+                activeRadioRight = new Button(row, SWT.RADIO);
+                activeRadioRight.setToolTipText(I18n.t("preferences.audio.range.active.tooltip"));
+                activeRadioRight.setSelection(range.getLabel().equals(ep.getActiveRangeRight()));
+                activeRadioRight.setLayoutData(new GridData(SWT.CENTER, SWT.CENTER, false, false));
+
+                labelFieldRight = new Text(row, SWT.BORDER);
+                labelFieldRight.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+                labelFieldRight.setText(range.getLabel());
+                labelFieldRight.setToolTipText(I18n.t("preferences.audio.range.label.tooltip"));
+                labelFieldRight.setEditable(!deviceProvided);
+            }
+
+            Image plus = IconUtils.icon(row.getDisplay(), Icon.PLUS);
+            Button addBtn = new Button(row, SWT.PUSH);
+            if (plus != null) addBtn.setImage(plus);
+            GridData addGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+            addGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+            addBtn.setLayoutData(addGd);
+            addBtn.setToolTipText(I18n.t("preferences.audio.range.add.tooltip"));
+            if (deviceProvided) addBtn.setVisible(false);
+
+            Image minus = IconUtils.icon(row.getDisplay(), Icon.MINUS);
+            Button removeBtn = new Button(row, SWT.PUSH);
+            if (minus != null) removeBtn.setImage(minus);
+            GridData remGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+            remGd.heightHint = IconUtils.FILE_BUTTON_HEIGHT;
+            removeBtn.setLayoutData(remGd);
+            removeBtn.setToolTipText(I18n.t("preferences.audio.range.remove.tooltip"));
+            if (isRow0 || deviceProvided) removeBtn.setVisible(false);
+
+            RangeRow r = new RangeRow();
+            r.composite        = row;
+            r.activeRadio      = activeRadio;
+            r.activeRadioRight = activeRadioRight;
+            r.labelField       = labelField;
+            r.labelFieldRight  = labelFieldRight;
+            r.range            = range;
+            rows.add(r);
+
+            activeRadio.addListener(SWT.Selection, e -> { if (activeRadio.getSelection()) userSetActive(ep, r); });
+            if (activeRadioRight != null) {
+                Button rr = activeRadioRight;
+                rr.addListener(SWT.Selection, e -> { if (rr.getSelection()) userSetActiveRight(ep, r); });
+            }
+            // A device-provided endpoint owns its labels + range set — only the
+            // active-range radios above stay live; rename / add / remove are off.
+            if (!deviceProvided) {
+                labelField.addListener(SWT.FocusOut,   e -> userRenameRange(ep, r, labelField));
+                if (labelFieldRight != null) {
+                    Text lfr = labelFieldRight;
+                    lfr.addListener(SWT.FocusOut, e -> userRenameRange(ep, r, lfr));
+                }
+                addBtn.addListener(SWT.Selection,    e -> userAddRange(ep));
+                if (!isRow0) removeBtn.addListener(SWT.Selection, e -> userRemoveRange(ep, r));
+            }
+        }
+
+        /** One "Left"/"Right" group caption cell of an INDEPENDENT range row.
+         *  Every row carries both captions so the cell always occupies its
+         *  column, but only row 0 shows the text (mock: captions appear once,
+         *  above-less, at the start of each group). */
+        private void createSideCaption(Composite row, String i18nKey, boolean isRow0) {
+            Label caption = new Label(row, SWT.NONE);
+            caption.setText(I18n.t(i18nKey));
+            caption.setLayoutData(new GridData(SWT.LEAD, SWT.CENTER, false, false));
+            caption.setVisible(isRow0);
+        }
+
+        private void userSetActive(DeviceEndpointConfig ep, RangeRow r) {
+            ep.setActiveRange(r.range.getLabel());
+            // Each row is its own Composite, so the radios don't auto-exclude —
+            // clear the siblings by hand.
+            for (RangeRow other : rows) {
+                if (other != r && !other.activeRadio.isDisposed()) other.activeRadio.setSelection(false);
+            }
+            commit();
+        }
+
+        /** RIGHT-column counterpart of {@link #userSetActive} (INDEPENDENT mode):
+         *  drives {@code activeRangeRight} and clears the sibling right radios. */
+        private void userSetActiveRight(DeviceEndpointConfig ep, RangeRow r) {
+            ep.setActiveRangeRight(r.range.getLabel());
+            for (RangeRow other : rows) {
+                if (other != r && other.activeRadioRight != null && !other.activeRadioRight.isDisposed()) {
+                    other.activeRadioRight.setSelection(false);
+                }
+            }
+            commit();
+        }
+
+        /** Commits an edited label into the model, keeping labels unique per
+         *  endpoint (a collision gets a numeric suffix) and following the active
+         *  selection if this row was active.  {@code edited} is the field the
+         *  user typed in; the row's OTHER label field (the INDEPENDENT-mode
+         *  mirror) is synced to the committed label. */
+        private void userRenameRange(DeviceEndpointConfig ep, RangeRow r, Text edited) {
+            String wanted = edited.getText().trim();
+            if (wanted.isEmpty()) { syncLabelFields(r, r.range.getLabel()); return; }
+            String unique = uniqueLabel(ep, wanted, r.range);
+            boolean wasActive      = r.range.getLabel().equals(ep.getActiveRange());
+            boolean wasActiveRight = r.range.getLabel().equals(ep.getActiveRangeRight());
+            r.range.setLabel(unique);
+            syncLabelFields(r, unique);
+            if (wasActive)      ep.setActiveRange(unique);
+            if (wasActiveRight) ep.setActiveRangeRight(unique);
+            commit();
+        }
+
+        /** Shows {@code label} in both of the row's label fields (they mirror
+         *  one range label; no-op on the missing mirror in LINKED / MONO mode). */
+        private void syncLabelFields(RangeRow r, String label) {
+            if (!r.labelField.isDisposed() && !r.labelField.getText().equals(label)) {
+                r.labelField.setText(label);
+            }
+            if (r.labelFieldRight != null && !r.labelFieldRight.isDisposed()
+                    && !r.labelFieldRight.getText().equals(label)) {
+                r.labelFieldRight.setText(label);
+            }
+        }
+
+        private void userAddRange(DeviceEndpointConfig ep) {
+            DeviceRange range = new DeviceRange();
+            range.setLabel(uniqueLabel(ep, I18n.t("preferences.audio.range.default"), null));
+            double last = ep.getRanges().isEmpty()
+                    ? RANGE_FS_MIN_V
+                    : ep.getRanges().get(ep.getRanges().size() - 1).getFsLeft();
+            range.setFsLeft(last);
+            range.setFsRight(last);
+            ep.getRanges().add(range);
+            createRangeRowUi(ep, range);
+            relayoutTable();
+            commit();
+        }
+
+        private void userRemoveRange(DeviceEndpointConfig ep, RangeRow r) {
+            if (rows.size() <= 1) return;
+            int idx = rows.indexOf(r);
+            if (idx <= 0) return;
+            rows.remove(idx);
+            ep.getRanges().remove(r.range);
+            if (r.range.getLabel().equals(ep.getActiveRange()) && !ep.getRanges().isEmpty()) {
+                ep.setActiveRange(ep.getRanges().get(0).getLabel());
+            }
+            if (r.range.getLabel().equals(ep.getActiveRangeRight()) && !ep.getRanges().isEmpty()) {
+                ep.setActiveRangeRight(ep.getRanges().get(0).getLabel());
+            }
+            r.composite.dispose();
+            relayoutTable();
+            commit();
+            rebuildTable();      // re-sync the active radios to the new active row
+        }
+
+        /** Writes the selected card back into the working copy (replace-by-name;
+         *  its save() is inert while detached). */
+        private void commit() {
+            if (selectedName == null) return;
+            AudioDeviceProfile p = edit.findAudioDeviceProfile(selectedName);
+            if (p != null) edit.putAudioDeviceProfile(p);
+        }
+
+        /** Returns {@code wanted} or a suffixed variant unique among the
+         *  endpoint's range labels (excluding {@code self}). */
+        private String uniqueLabel(DeviceEndpointConfig ep, String wanted, DeviceRange self) {
+            String candidate = wanted;
+            int n = 2;
+            while (labelTaken(ep, candidate, self)) {
+                candidate = wanted + " " + n++;
+            }
+            return candidate;
+        }
+
+        private boolean labelTaken(DeviceEndpointConfig ep, String label, DeviceRange self) {
+            for (DeviceRange dr : ep.getRanges()) {
+                if (dr != self && label.equals(dr.getLabel())) return true;
+            }
+            return false;
+        }
+
+        private void relayoutTable() {
+            if (!rangesContainer.isDisposed()) rangesContainer.layout(true, true);
+            // A row was added / removed → the Audio tab's preferred height moved;
+            // re-lay the shell and refresh the tab's V-scroll min size so its
+            // on-demand scrollbar tracks the new content.
+            if (!rangesContainer.isDisposed()) rangesContainer.getShell().layout(true, true);
+            refreshAudioScrollMinSize();
+        }
+    }
+
+    /** Builds the per-card profile section inside a direction Group: a "Card"
+     *  combo row (combo + edit-card pencil button) and a range table, both
+     *  spanning the group's two columns. */
+    private CardSection buildCardSection(Group group, boolean input) {
+        gridLabel(group, I18n.t("preferences.audio.card"));
+        // The combo shares the field column with a small pencil button that opens
+        // the card create / edit dialog on the selected card.
+        Composite cardRow = new Composite(group, SWT.NONE);
+        cardRow.setLayoutData(comboData());
+        GridLayout crl = new GridLayout(2, false);
+        crl.marginWidth = 0; crl.marginHeight = 0; crl.horizontalSpacing = 4;
+        cardRow.setLayout(crl);
+        Combo cardCombo = new Combo(cardRow, SWT.READ_ONLY);
+        cardCombo.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
+        cardCombo.setToolTipText(I18n.t("preferences.audio.card.tooltip"));
+        Button editBtn = new Button(cardRow, SWT.PUSH);
+        Image pencil = IconUtils.icon(cardRow.getDisplay(), Icon.PENCIL);
+        if (pencil != null) editBtn.setImage(pencil);
+        GridData editGd = new GridData(SWT.CENTER, SWT.CENTER, false, false);
+        editGd.heightHint = cardCombo.computeSize(SWT.DEFAULT, SWT.DEFAULT).y;
+        editBtn.setLayoutData(editGd);
+        editBtn.setToolTipText(I18n.t("preferences.audio.card.edit.tooltip"));
+
+        Label rangesLabel = new Label(group, SWT.NONE);
+        rangesLabel.setText(I18n.t("preferences.audio.ranges"));
+        GridData rlgd = new GridData(SWT.LEFT, SWT.CENTER, true, false);
+        rlgd.horizontalSpan = 2;
+        rangesLabel.setLayoutData(rlgd);
+
+        // The range rows live in a plain container that packs to its actual row
+        // count — NO fixed-height viewport and NO multi-row reservation, so
+        // there is never reserved empty space under the rows.  When the whole
+        // Audio tab overflows 480 px it scrolls in the tab's own V-scroll
+        // (see {@link #audioScroll}), so this section needs no scroll of its own.
+        Composite rangesContainer = new Composite(group, SWT.NONE);
+        GridData sgd = new GridData(SWT.FILL, SWT.TOP, true, false);
+        sgd.horizontalSpan = 2;
+        rangesContainer.setLayoutData(sgd);
+        GridLayout gl = new GridLayout(1, false);
+        gl.marginWidth = 4; gl.marginHeight = 4; gl.verticalSpacing = 4;
+        rangesContainer.setLayout(gl);
+
+        return new CardSection(cardCombo, editBtn, rangesLabel, rangesContainer, input);
     }
 
     private static final class DeviceListState {

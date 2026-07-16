@@ -20,6 +20,7 @@ package org.edgo.audio.measure.gui.scope.gl;
 
 import java.util.Locale;
 
+import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -88,6 +89,13 @@ public interface GlScopeSurface {
      *  where the on-screen trace is still anchored on the pre-change event.  Safe from
      *  any thread; no-op without persistence. */
     default void clearPersistence() { }
+
+    /** The accumulated persistence afterglow read back as an off-screen image (top-down,
+     *  straight alpha, on a transparent background), or {@code null} when persistence is
+     *  off / unsupported / no frame has rendered.  The built-in screenshot renders through
+     *  the CPU/GC path, which can't see this GPU buffer, so it composites this snapshot to
+     *  match the live phosphor.  UI thread only. */
+    default ImageData persistenceSnapshot() { return null; }
 
     /** Shows or hides the surface when the scope pane expands / collapses.  The
      *  Win/Linux {@code GLCanvas} is a real child that SWT hides with its parent, so
