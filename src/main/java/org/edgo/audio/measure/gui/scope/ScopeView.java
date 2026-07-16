@@ -257,9 +257,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private int     capturedDispCount;
     private double  capturedSubSampleOffset;
     /** Trigger position within the captured copy (captured-buffer samples, sub-sample
-     *  accurate), or NaN for a trigger-less entry-frame snapshot.  Lets a held frame
-     *  position via the (virtual-capable) trigger offset — pan + zoom exactly like the
-     *  live trigger-offset model — instead of a separate magnify anchor. */
+     *  accurate).  The trigger-less entry-frame snapshot supplies a SYNTHETIC anchor
+     *  (the sample under the trigger-position fraction), so EVERY held frame — real
+     *  trigger or entry — positions via the (virtual-capable) trigger offset, pan +
+     *  zoom exactly like the live trigger-offset model, instead of a separate magnify
+     *  anchor. */
     private double  capturedTriggerLocal = Double.NaN;
     /** Per-channel DC (normalised) of the captured frame, cached at freeze so
      *  AC-mode held renders subtract a STABLE bias instead of the live, still-
@@ -306,21 +308,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  goes through its {@code viewCenterFrames} + {@code applyViewState}. */
     private ScopeController controller;
     public void attachController(ScopeController controller) { this.controller = controller; }
-    /** Frozen-frame magnify state.  {@code heldViewStart} is the captured-buffer
-     *  sample shown at the LEFT edge of the held view (may be negative or past the
-     *  data; a window past the captured samples blanks there through the renderer's
-     *  own in-bounds check).  When the horizontal scale changes
-     *  ({@code lastHeldTimePerDiv} differs), the start is recomputed so the sample
-     *  under {@code hoverX} stays put; {@code lastHeldDispCount} is the previous
-     *  span used for that. */
+    /** Frozen-frame view position: the captured-buffer sample shown at the LEFT edge
+     *  of the held view (may be negative or past the data; a window past the captured
+     *  samples blanks there through the renderer's own in-bounds check).  Derived each
+     *  held render from the captured trigger offset and the live trigger-position
+     *  fraction — see {@link #renderHeldCapturedFrame}. */
     private double  heldViewStart;
-    private double  lastHeldTimePerDiv;
-    private int     lastHeldDispCount;
-    /** Canvas X to anchor the next frozen-frame t/div change around, or -1 to
-     *  anchor on the screen centre.  The wheel-zoom sets it (cursor); a t/div
-     *  FIELD change leaves it -1 so the trace stays centred instead of jumping
-     *  to the stale cursor position.  Consumed by {@link #renderHeldCapturedFrame}. */
-    private int     heldZoomAnchorX = -1;
 
     /**
      * Last trigger mode seen by {@link #drawWaveforms} — used to detect
@@ -405,41 +398,10 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  independent of the time/div-driven window length. */
     private static final int    RESIDUAL_DUAL_REFIT_ROUNDS = 2;
 
-    /** Digital-phosphor scratch ({@link #drawDigitalPhosphor}), pooled and grown on demand
-     *  (single-threaded paint): the per-column span DIFFERENCE accumulator ({@code int[height+2]})
-     *  and the {@code width×height} coverage/alpha buffer the crossing counts are stamped into.
-     *  No per-frame allocation. */
-    private int[]     phosphorDiff;
-    private byte[]    phosphorAlpha;
-    /** Supersampled sibling of {@code phosphorAlpha} ({@link #DPO_SUPERSAMPLE} &gt; 1): the
-     *  histogram/pen rasterise into this {@code (ss·width)×(ss·height)} grid of sub-pixel
-     *  cells, box-averaged down into {@code phosphorAlpha} for the blit. */
-    private byte[]    phosphorAlphaSs;
-    /** Scratch for {@link TraceEnvelope#fringeDilate}'s horizontal pass, pooled beside
-     *  {@code phosphorAlphaSs} (same sub-cell dimensions). */
-    private byte[]    phosphorFringe;
-    /** Per-column band ends exported by {@link TraceEnvelope#columnCrossings} in UNROUNDED row
-     *  space (the refined crest/trough), consumed by {@link TraceEnvelope#penRasterize} as the
-     *  round coverage pen's centreline.  Pooled {@code float[width]}, grown in lockstep with the
-     *  other phosphor scratch; a blank column is {@link Float#NaN}. */
-    private float[]   phosphorBandTop;
-    private float[]   phosphorBandBot;
-    /** The path's true fractional x-extent within each column ({@code ⊂ [col, col+1]}), recorded
-     *  by the accumulation's boundary splitting — the pen sweeps {@code [xLo, xHi]} instead of the
-     *  whole column, so vertical flanks stroke at their exact sub-column x.  Pooled like the band. */
-    private float[]   phosphorBandXLo;
-    private float[]   phosphorBandXHi;
-    /** The path's entry/exit points per column (unrounded row space), recorded by the accumulation
-     *  — the tilted-capsule endpoints {@link TraceEnvelope#penRasterize} sweeps for a steep
-     *  single-traversal column so a near-vertical flank's neighbour fringe ramps with y.  Pooled
-     *  like the band; a column with no capsule geometry is {@link Float#NaN}. */
-    private float[]   phosphorBandEntryX;
-    private float[]   phosphorBandEntryY;
-    private float[]   phosphorBandExitX;
-    private float[]   phosphorBandExitY;
-    /** Count→alpha LUT for {@link #drawDigitalPhosphor}, built once by {@link #phosphorLut()}
-     *  from the (compile-time) intensity constants. */
-    private byte[]    phosphorLut;
+    /** Dense-trace (more than one sample/pixel) digital-phosphor renderer — owns all the
+     *  rasterisation pools + count→alpha LUT + CPU-blit reuse arrays, and adapts to the
+     *  surface's device pixel scale.  {@link #drawDigitalPhosphor} delegates to it. */
+    private final PhosphorRenderer phosphor = new PhosphorRenderer();
     /**
      * Cached {@code textExtent} of the static {@link #HEADERS} strings.
      * Populated lazily on first paint with the GC already wearing {@code
@@ -2527,13 +2489,6 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
     }
 
-    /** The wheel-zoom anchors the next frozen-frame t/div change around the
-     *  cursor; a t/div field change leaves it unset so the trace stays centred.
-     *  See {@link #heldZoomAnchorX}. */
-    public void setHeldZoomAnchorForNextScale(int canvasX) {
-        heldZoomAnchorX = canvasX;
-    }
-
     // -------------------------------------------------------------------------
     // Rectangular zoom (base machinery in AbstractMeasurementView)
     // -------------------------------------------------------------------------
@@ -2620,7 +2575,6 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                     // follow-latest, which is what the screen actually shows.
                     controller.setViewCenterFrames(-1.0);
                 }
-                seedHeldZoomAnchor(s, tDiv, prefs);
                 prefs.setOscTimePerDiv(tDiv);
                 prefs.setOscTriggerPositionFrac(-s.xMin() / (tDiv * DIVISIONS_X));   // virtual-capable
             }
@@ -2628,25 +2582,6 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         prefs.save();
         redraw();
         return true;
-    }
-
-    /** Trigger-less held frame (entry snapshot): its renderer ignores the
-     *  trigger-position pref and anchors a t/div change at {@link
-     *  #heldZoomAnchorX} — seed it with the fixed point of the window change,
-     *  {@code anchor/width = (newXMin - curXMin) / (curSpan - newSpan)}, so
-     *  both a committed selection and its Ctrl+Z inverse land exactly (a
-     *  linear map and its inverse share the fixed point).  Skipped when the
-     *  t/div pref won't change (nothing would consume the anchor). */
-    private void seedHeldZoomAnchor(ZoomState s, double tDiv, Preferences prefs) {
-        if (!singleHeld || !Double.isNaN(capturedTriggerLocal)) return;
-        if (tDiv == prefs.getOscTimePerDiv()) return;
-        ZoomState cur = captureZoomState();
-        Rectangle area = zoomableArea();
-        if (cur == null || area == null || area.width <= 0) return;
-        double denom = (cur.xMax() - cur.xMin()) - tDiv * DIVISIONS_X;
-        if (denom == 0) return;
-        int anchor = (int) Math.round(area.width * (s.xMin() - cur.xMin()) / denom);
-        heldZoomAnchorX = Math.max(0, Math.min(area.width, anchor));
     }
 
     /** Whether the render places the time window ABSOLUTELY (right edge =
@@ -3774,28 +3709,15 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         double curTDiv = Preferences.instance().getOscTimePerDiv();
         double scale   = (capturedTimePerDiv > 0 && curTDiv > 0) ? curTDiv / capturedTimePerDiv : 1.0;
         int dispCount  = Math.max(2, (int) Math.round(capturedDispCount * scale));
-        if (!Double.isNaN(capturedTriggerLocal)) {
-            // Trigger captured → position via the (virtual-capable) trigger offset,
-            // exactly like the live trigger-offset model: a pan (p) scrolls the held
-            // trace; a t/div FIELD zoom (p unchanged) zooms around the trigger; and
-            // ctrl+shift+wheel updates p to keep the sample under the mouse put.  NOT
-            // clamped here — off-buffer edges blank; only a MOVE clamps (panLiveOffset).
-            double p = Preferences.instance().getOscTriggerPositionFrac();
-            heldViewStart = capturedTriggerLocal - p * dispCount;
-        } else if (lastHeldTimePerDiv <= 0) {                    // entry frame, not yet anchored
-            heldViewStart = capturedDispStart + capturedSubSampleOffset;
-        } else if (curTDiv != lastHeldTimePerDiv && lastHeldDispCount > 0) {
-            // Trigger-less entry snapshot: wheel zoom keeps the sample under the cursor
-            // put; a t/div FIELD change (anchor unset) keeps the SCREEN CENTRE put so
-            // the trace doesn't jump off-centre onto the stale cursor position.
-            double frac         = (heldZoomAnchorX >= 0 && w > 0)
-                    ? ScopeFormat.clamp01((double) heldZoomAnchorX / w) : 0.5;
-            heldZoomAnchorX     = -1;                                         // consumed
-            double cursorSample = heldViewStart + frac * lastHeldDispCount;   // sample under anchor before zoom
-            heldViewStart       = cursorSample - frac * dispCount;            // keep it under the anchor
-        }
-        lastHeldTimePerDiv = curTDiv;
-        lastHeldDispCount  = dispCount;
+        // Position via the (virtual-capable) trigger offset, exactly like the live
+        // trigger-offset model: a pan (p) scrolls the held trace; a t/div FIELD zoom
+        // (p unchanged) zooms around the trigger; and ctrl+shift+wheel updates p to keep
+        // the sample under the mouse put.  The entry-frame snapshot carries a synthetic
+        // anchor (see {@link #capturedTriggerLocal}), so it rides the SAME branch — no
+        // separate magnify anchor.  NOT clamped here — off-buffer edges blank; only a
+        // MOVE clamps (panLiveOffset).
+        double p = Preferences.instance().getOscTriggerPositionFrac();
+        heldViewStart = capturedTriggerLocal - p * dispCount;
         int    dispStart       = (int) Math.floor(heldViewStart);
         double subSampleOffset = heldViewStart - dispStart;
         // The held copy may render after Stop with the live reader already gone,
@@ -3836,7 +3758,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         capturedDispCount       = displaySamples;
         capturedSubSampleOffset = subSampleOffset;
         // srcStart == 0, so the read-buffer-local trigger position IS the captured-copy
-        // position.  NaN for a trigger-less entry snapshot.
+        // position (the entry snapshot passes a synthetic anchor, so this is never NaN).
         capturedTriggerLocal    = triggerLocal;
         // Cache each channel's own DC now so AC-mode held renders subtract a
         // stable bias — the live worker mean keeps averaging after the freeze
@@ -3846,8 +3768,6 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         capturedTimePerDiv      = Preferences.instance().getOscTimePerDiv();
         capturedSampleRate      = reader != null ? reader.getSampleRate() : 0;
         heldViewStart           = capturedDispStart + capturedSubSampleOffset;
-        lastHeldTimePerDiv      = capturedTimePerDiv;
-        lastHeldDispCount       = capturedDispCount;
         singleHeld              = true;
     }
 
@@ -4075,171 +3995,20 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
     }
 
-    /** Digital-phosphor: alpha floor for a hit pixel
-     *  (crossing count &ge; 1).  {@code 1.0} (the default) makes EVERY hit pixel full trace
-     *  brightness, so the phosphor image matches the sparse anti-aliased sin&nbsp;x/x stroke
-     *  across the {@code spp == 1} boundary — no brightness drop when the renderer flips regimes.
-     *  A value {@code < 1.0} re-enables true phosphor grading (this floor plus the log knee up to
-     *  {@link #DPO_SATURATION_COUNT}) so a one-shot glitch reads fainter than a saturated tone;
-     *  {@link #phosphorLut()} short-circuits the log when the floor is 1.0.  Bench knob — parsed
-     *  (not a compile-time literal) so the grading branch stays live for the {@code < 1.0} knob. */
-    private static final double DPO_SINGLE_HIT_ALPHA = Double.parseDouble("1.0");
-    /** Digital-phosphor: dwell (crossing) count that saturates a pixel to full intensity;
-     *  a count at or above it maps to alpha 255, so the count→alpha LUT is this many
-     *  entries long ({@code +1} for count 0).  Bench-tunable. */
-    private static final int    DPO_SATURATION_COUNT = 64;
-    /** 8-bit alpha for a fully saturated phosphor pixel. */
-    private static final double DPO_ALPHA_MAX = 255.0;
-    /** Digital-phosphor supersampling factor: the histogram, band export and coverage pen are
-     *  rasterised on a grid of {@code 1/this} px cells ({@code 2} = the maintainer's 0.5 px
-     *  histogram) and box-averaged down, so every final pixel carries a true decimal coverage —
-     *  REAL anti-aliasing in both axes, including the sub-column X the 1-px band model loses
-     *  (halves the diagonal steps and the vertical-segment widening).  {@code 1} = rasterise at
-     *  pixel resolution (no supersampling).  Bench knob — parsed so both branches stay live. */
-    private static final int DPO_SUPERSAMPLE = Integer.parseInt("2");
-
     /**
-     * Dense renderer (more than one
-     * sample per pixel): rasterises the whole displayed window as a DSO-style DIGITAL
-     * PHOSPHOR — a {@code width×height} coverage image where each pixel's brightness is
-     * its dwell time (how many consecutive-sample spans cross it) — and blits it as one
-     * channel-colour-tinted image, replacing the vector polyline entirely.  By default every
-     * hit pixel is full trace brightness ({@link #DPO_SINGLE_HIT_ALPHA} = 1.0), so the image
-     * matches the sparse anti-aliased sin&nbsp;x/x stroke across the {@code spp == 1} boundary;
-     * lowering the floor re-enables phosphor dwell grading (a one-shot glitch then reads fainter
-     * than a saturated tone).
-     *
-     * <p>The pure accumulation is {@link TraceEnvelope#columnCrossings}: it inverts the
-     * per-column bucket mapping for X and applies the same {@code centerY − (value −
-     * dcOffset)·vScale} value→pixel transform for Y as every other trace path, streaming
-     * one {@code (x, y, count)} per touched pixel.  At the full-brightness floor
-     * ({@link #DPO_SINGLE_HIT_ALPHA} &ge; 1.0) the accumulation runs only for its band export and
-     * the sink is a NO-OP — the pen alone rasterises the trace, since packing hard-255 interior
-     * rows would erase the pen's anti-aliased fringes; under phosphor grading ({@code < 1.0}) the
-     * sink writes each pixel's alpha through the precomputed count→alpha LUT into the pooled
-     * {@code phosphorAlpha} buffer and the pen lays its dimmer outline over it.  The finished
-     * buffer is blitted via {@link MeasurementPainter#drawAlphaImage} so the GL persistence
-     * (phosphor FBO) and the GC screenshot path inherit it automatically.  {@code columnCrossings}
-     * runs with sin&nbsp;x/x rails ON, so each column also
-     * exports its band-limited crest/trough as unrounded row-space floats.  The configured pref
-     * trace width is then stroked by {@link TraceEnvelope#penRasterize}: a true round coverage pen
-     * of EXACTLY the fractional {@code lineWidth}, swept along the exported band and composited
-     * OVER the count interior via max — continuous width (hairline band + pen = {@code lineWidth}
-     * px), anti-aliasing in both axes, and round caps into blank columns, in place of the old
-     * integer dilation pen.  The whole rasterisation runs on a {@link #DPO_SUPERSAMPLE}× grid of
-     * sub-pixel cells (0.5 px at the default 2) and is box-averaged down
-     * ({@link TraceEnvelope#downsampleBox}) so every blitted pixel carries a true decimal
-     * coverage.  Pooled scratch only — {@code phosphorDiff}, {@code phosphorAlpha} and its
-     * supersampled sibling, and the {@code phosphorBandTop}/{@code phosphorBandBot} band, all
-     * grown on demand — so the hot path allocates
-     * nothing.
+     * Dense renderer (more than one sample per pixel): delegates to the shared
+     * {@link PhosphorRenderer}, which rasterises the displayed window as a DSO-style
+     * digital-phosphor coverage image at the surface's DEVICE resolution and blits it
+     * once through the painter, replacing the vector polyline.  All the rasterisation
+     * pools, the count→alpha LUT and the {@code DPO_*} tuning constants live there now —
+     * see {@link PhosphorRenderer#render}.
      */
     private void drawDigitalPhosphor(MeasurementPainter gc, float[] data, int n,
                                      int dispStart, double subSampleOffset, int dispCount,
                                      int width, int height, double centerY, double vScale,
                                      float lineWidth, Color color, double dcOffset) {
-        if (width <= 0 || height <= 0) return;
-        // Rasterise on a supersampled grid of 1/ss px cells (the maintainer's 0.5 px histogram at
-        // ss = 2): the accumulation, band export and pen are resolution-agnostic, so they simply run
-        // at ss× dimensions with the transform and pen width scaled, and the box-average down to the
-        // final buffer turns sub-cell coverage into a true decimal per-pixel brightness — real AA,
-        // including the sub-column X a 1-px band cannot carry.
-        int ss  = Math.max(1, DPO_SUPERSAMPLE);
-        int wSs = width * ss;
-        int hSs = height * ss;
-        if (phosphorDiff == null || phosphorDiff.length < hSs + 2) {
-            phosphorDiff = new int[hSs + 2];
-        }
-        if (phosphorBandTop == null || phosphorBandTop.length < wSs) {
-            phosphorBandTop = new float[wSs];
-            phosphorBandBot = new float[wSs];
-            phosphorBandXLo = new float[wSs];
-            phosphorBandXHi = new float[wSs];
-            phosphorBandEntryX = new float[wSs];
-            phosphorBandEntryY = new float[wSs];
-            phosphorBandExitX = new float[wSs];
-            phosphorBandExitY = new float[wSs];
-        }
-        int pixels = width * height;
-        if (phosphorAlpha == null || phosphorAlpha.length < pixels) {
-            phosphorAlpha = new byte[pixels];
-        } else {
-            Arrays.fill(phosphorAlpha, 0, pixels, (byte) 0);   // reused → clear the used region
-        }
-        byte[] alpha = phosphorAlpha;
-        if (ss > 1) {
-            int cells = wSs * hSs;
-            if (phosphorAlphaSs == null || phosphorAlphaSs.length < cells) {
-                phosphorAlphaSs = new byte[cells];
-            } else {
-                Arrays.fill(phosphorAlphaSs, 0, cells, (byte) 0);
-            }
-            alpha = phosphorAlphaSs;
-        }
-        byte[] grid  = alpha;
-        byte[] lut   = phosphorLut();
-        int lutMax   = lut.length - 1;
-        int w        = wSs;
-        // sin x/x rails ON (the maintainer's standing order): each column exports its band-limited
-        // crest/trough as unrounded row-space floats for the coverage pen.  The accumulation ALWAYS
-        // runs — the band export needs the pass — but at the full-brightness floor the interior count
-        // pack is REDUNDANT AND DESTRUCTIVE: DPO_SINGLE_HIT_ALPHA ≥ 1.0 packs every hit row hard 255,
-        // and the pen's stadium already covers the whole band there, so max(hard 255, AA fringe) = 255
-        // would erase the pen's side/edge anti-aliasing.  So at the flat floor we pass a NO-OP sink
-        // and let the pen alone rasterise the trace.  Only under phosphor grading (< 1.0), where the
-        // graded interior IS the dwell image, do we pack counts→LUT and lay the (dimmer) pen outline
-        // over it via max — that order is unchanged.
-        TraceEnvelope.CrossingSink sink = DPO_SINGLE_HIT_ALPHA >= 1.0
-                ? (x, y, count) -> { }                                       // pen-only at flat fill
-                : (x, y, count) -> grid[y * w + x] = lut[Math.min(count, lutMax)];
-        TraceEnvelope.columnCrossings(data, n, dispStart, dispCount, wSs, hSs,
-                subSampleOffset, centerY * ss, vScale * ss, dcOffset, true, phosphorDiff,
-                phosphorBandTop, phosphorBandBot, phosphorBandXLo, phosphorBandXHi,
-                phosphorBandEntryX, phosphorBandEntryY, phosphorBandExitX, phosphorBandExitY, sink);
-        // Stroke the trace width as a true round swept-stadium coverage pen of EXACTLY the fractional
-        // pref lineWidth (scaled to the supersampled grid) over the exported band, composited via max
-        // — continuous width + AA in both axes + round caps.  Outline alpha is the single-hit floor
-        // (255 at the 1.0 floor, scaled down when phosphor grading is on).
-        int outlineAlpha = (int) Math.round(DPO_SINGLE_HIT_ALPHA * DPO_ALPHA_MAX);
-        TraceEnvelope.penRasterize(phosphorBandTop, phosphorBandBot, phosphorBandXLo,
-                phosphorBandXHi, phosphorBandEntryX, phosphorBandEntryY, phosphorBandExitX,
-                phosphorBandExitY, wSs, hSs, lineWidth * ss, outlineAlpha, grid);
-        if (ss > 1) {
-            // The vector stroke's AA fringe, appended on the sub-cell grid (interior stays full
-            // brightness — a tent convolution dimmed thin strokes, bench-rejected), then exact
-            // box area coverage down to pixels.
-            int cells = wSs * hSs;
-            if (phosphorFringe == null || phosphorFringe.length < cells) {
-                phosphorFringe = new byte[cells];
-            }
-            TraceEnvelope.fringeDilate(grid, wSs, hSs, ss, phosphorFringe);
-            TraceEnvelope.downsampleBox(grid, wSs, ss, phosphorAlpha, width, height);
-        }
-        gc.drawAlphaImage(phosphorAlpha, width, height, 0, 0, color);
-    }
-
-    /** Lazily builds the digital-phosphor count→alpha LUT once from the (compile-time)
-     *  intensity constants, indexed by {@code min(count, }{@link #DPO_SATURATION_COUNT}{@code )}:
-     *  {@code alpha(0) = 0}; else {@link #DPO_SINGLE_HIT_ALPHA} {@code + (1 −
-     *  DPO_SINGLE_HIT_ALPHA)·min(1, ln(1+count)/ln(1+DPO_SATURATION_COUNT))}, scaled to
-     *  8-bit.  Precomputed so the hot loop never evaluates {@code ln()}. */
-    private byte[] phosphorLut() {
-        if (phosphorLut == null) {
-            byte[] lut = new byte[DPO_SATURATION_COUNT + 1];
-            if (DPO_SINGLE_HIT_ALPHA >= 1.0) {
-                // Floor at full brightness → every hit is full alpha; no log grading needed.
-                Arrays.fill(lut, 1, lut.length, (byte) Math.round(DPO_ALPHA_MAX));
-            } else {
-                double denom = Math.log(1.0 + DPO_SATURATION_COUNT);
-                for (int c = 1; c <= DPO_SATURATION_COUNT; c++) {
-                    double norm = Math.min(1.0, Math.log(1.0 + c) / denom);
-                    double a = DPO_SINGLE_HIT_ALPHA + (1.0 - DPO_SINGLE_HIT_ALPHA) * norm;
-                    lut[c] = (byte) Math.round(a * DPO_ALPHA_MAX);
-                }
-            }
-            phosphorLut = lut;   // lut[0] left 0 → count 0 fully transparent
-        }
-        return phosphorLut;
+        phosphor.render(gc, data, n, dispStart, subSampleOffset, dispCount,
+                width, height, centerY, vScale, dcOffset, lineWidth, color);
     }
 
     @Override

@@ -51,14 +51,14 @@
 #                   { left: …, right: … } map (each channel's own label).
 
 formatVersion: 1
-contentVersion: 2
+contentVersion: 1
 audioDevices:
   - name: E1DA Cosmos ADC
     match: [ "E1DA Cosmos ADC" ]
     input:
       channels: INDEPENDENT
       ranges:
-        - { label: "1.7V", fsVrms: { left: 1.7, right: 1.7 } }
+        - { label: "1.7V", fsVrms: { left: 1.7910482002478434, right: 1.7910482002478434 } }
         - { label: "2.7V", fsVrms: { left: 2.7, right: 2.7 } }
         - { label: "3.5V", fsVrms: { left: 3.5, right: 3.5 } }
         - { label: "4.5V", fsVrms: { left: 4.5, right: 4.5 } }
@@ -74,7 +74,7 @@ audioDevices:
     output:
       channels: LINKED
       ranges:
-        - { label: "default", fsVrms: { left: 2, right: 2 } }
+        - { label: "default", fsVrms: { left: 1.9702745870816782, right: 1.9702745870816782 } }
       activeRange: "default"
 
   - name: CUBILUX CB5
@@ -82,10 +82,10 @@ audioDevices:
     input:
       channels: LINKED
       ranges:
-        - { label: "default", fsVrms: { left: 1.15, right: 1.15 } }
+        - { label: "default", fsVrms: { left: 1.920615915248692, right: 1.920615915248692 } }
       activeRange: "default"
     output:
       channels: LINKED
       ranges:
-        - { label: "default", fsVrms: { left: 1.15, right: 1.15 } }
+        - { label: "default", fsVrms: { left: 4.629020031592054, right: 4.629020031592054 } }
       activeRange: "default"
