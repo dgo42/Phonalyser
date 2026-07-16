@@ -135,7 +135,7 @@ public final class PreferencesDialog {
     /** Uniform dialog width (px): the dialog is forced to at least this, so it is the same
      *  size in every language (a longer translation no longer makes it wider).  Generous
      *  enough that the current languages all fit; a longer future one just stays a touch wider. */
-    private static final int    DIALOG_WIDTH_PX = 700;
+    private static final int    DIALOG_WIDTH_PX = 640;
     /** Total dialog height (px), OUTER — title bar + border included.  The shell
      *  is forced to exactly this after pack(), so the window is the same compact
      *  height in every language.  With the FS field gone and the ranges packing
@@ -811,12 +811,6 @@ public final class PreferencesDialog {
                     bp.getInputSampleRate(),  bp.getInputBitDepth(),
                     bp.getOutputDeviceName() != null ? bp.getOutputDeviceName() : "<none>",
                     bp.getOutputSampleRate(), bp.getOutputBitDepth());
-            // A real backend switch tears down the active devices; stop the
-            // generator cleanly FIRST so its DDS thread isn't racing the
-            // teardown (capture stops via the teardown either way).
-            if (edit.getBackend() != Preferences.instance().getBackend()) {
-                MessageBus.instance().publish(Events.AUDIO_BACKEND_CHANGING);
-            }
             // Single hand-off: commit the whole working copy to the live
             // singleton (which also persists once).
             Preferences.instance().applyFromDialog(edit);
