@@ -19,6 +19,7 @@
 package org.edgo.audio.measure.gui.scope.gl;
 
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.opengl.GLCanvas;
 import org.eclipse.swt.opengl.GLData;
@@ -93,6 +94,13 @@ public final class SwtGlCanvasSurface implements GlScopeSurface {
     public void clearPersistence() {
         ScopePhosphor p = phosphor;
         if (p != null) p.clearPersistence();
+    }
+
+    @Override
+    public ImageData persistenceSnapshot() {
+        if (canvas.isDisposed() || phosphor == null || vg == 0L) return null;
+        canvas.setCurrent();
+        return phosphor.readback();
     }
 
     private void renderFrame(ScopePhosphor.Kind kind) {

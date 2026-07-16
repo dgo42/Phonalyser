@@ -1,6 +1,7 @@
 .claude
 Claude.md
 preferences.yaml
+/devices.yaml
 .vscode
 download/
 logs/
@@ -13,4 +14,4 @@ release.properties
 dependency-reduced-pom.xml
 buildNumber.properties
 HOWTO-RELEASE.md
-docs/store-description.txt
+doc/store-description.txt

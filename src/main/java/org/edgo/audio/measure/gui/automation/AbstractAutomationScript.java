@@ -41,10 +41,12 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.gui.MainWindow;
+import org.edgo.audio.measure.gui.common.CalibrationDialog;
 import org.edgo.audio.measure.gui.fft.FftPane;
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionWizardDialog;
 import org.edgo.audio.measure.gui.generator.GeneratorPane;
 import org.edgo.audio.measure.gui.i18n.I18n;
+import org.edgo.audio.measure.gui.preferences.CardEditorDialog;
 import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
 import org.edgo.audio.measure.gui.freqresp.FreqRespPane;
 import org.edgo.audio.measure.gui.freqresp.TuneNotchWizardDialog;
@@ -95,6 +97,17 @@ public abstract class AbstractAutomationScript {
     /** Shell of the Preferences dialog while {@link #openPreferences()} keeps
      *  it up, so {@link #closePreferences()} can dispose it; null otherwise. */
     private Shell preferencesShell;
+    /** The Preferences dialog instance behind {@link #preferencesShell}, so
+     *  {@link #openInputCardEditor()} can drive its card sections; null otherwise. */
+    private PreferencesDialog preferencesDialog;
+    /** The card editor opened for capture by {@link #openInputCardEditor()};
+     *  snapshotted via its content composite and disposed by
+     *  {@link #closeInputCardEditor()}; null otherwise. */
+    private CardEditorDialog cardEditorDialog;
+    /** The shared voltage-calibration dialog opened for capture (DAC or ADC form);
+     *  snapshotted via its content composite and disposed by
+     *  {@link #closeCalibration()}; null otherwise. */
+    private CalibrationDialog calibrationDialog;
     /** Shell of the Tune-notch wizard while {@link #openTuneNotch()} keeps it
      *  up; disposed by {@link #closeTuneNotch()}; null otherwise. */
     private Shell tuneNotchShell;
@@ -368,8 +381,10 @@ public abstract class AbstractAutomationScript {
      *  tab and {@link #screenshot}{@code ("preferences", …)} snapshots the
      *  dialog.  Pair with {@link #closePreferences()}. */
     protected final void openPreferences() {
-        ui(() -> preferencesShell =
-                new PreferencesDialog(genPane().getGroup().getShell()).open());
+        ui(() -> {
+            preferencesDialog = new PreferencesDialog(genPane().getGroup().getShell());
+            preferencesShell  = preferencesDialog.open();
+        });
     }
 
     /** Closes the dialog opened by {@link #openPreferences()} (no-op if none). */
@@ -378,7 +393,92 @@ public abstract class AbstractAutomationScript {
             if (preferencesShell != null && !preferencesShell.isDisposed()) {
                 preferencesShell.dispose();
             }
-            preferencesShell = null;
+            preferencesShell  = null;
+            preferencesDialog = null;
+        });
+    }
+
+    /** Opens the CARD editor on the Preferences Audio tab's INPUT card (resolved
+     *  from the seeded {@code devices.yaml}) for capture — requires an open
+     *  {@link #openPreferences()} first.  Non-modal: it shows the fully populated
+     *  dialog without its blocking loop, so {@link #screenshotCardEditor} can
+     *  snapshot it.  Pair with {@link #closeInputCardEditor()}. */
+    protected final void openInputCardEditor() {
+        ui(() -> cardEditorDialog =
+                (preferencesDialog != null) ? preferencesDialog.openInputCardEditorForCapture() : null);
+    }
+
+    /** Snapshots the card editor opened by {@link #openInputCardEditor()} to
+     *  {@code pngPath} at its on-screen size (no-op if not open). */
+    protected final void screenshotCardEditor(String pngPath) {
+        if (cardEditorDialog != null) {
+            Control content = cardEditorDialog.getContent();
+            if (content != null && !content.isDisposed()) {
+                snapshot(content, pngPath);
+            }
+        }
+    }
+
+    /** Closes the card editor opened by {@link #openInputCardEditor()} (no-op if
+     *  none) — via {@code close()} so the shell's listeners run. */
+    protected final void closeInputCardEditor() {
+        ui(() -> {
+            if (cardEditorDialog != null && cardEditorDialog.getContent() != null
+                    && !cardEditorDialog.getContent().isDisposed()) {
+                cardEditorDialog.getContent().getShell().close();
+            }
+            cardEditorDialog = null;
+        });
+    }
+
+    /** Opens the shared voltage-calibration dialog in its DAC two-row form (both
+     *  channels prefilled at the configured amplitude) for capture — no signal, no
+     *  modal loop.  Pair with {@link #closeCalibration()}. */
+    protected final void openDacCalibration() {
+        ui(() -> calibrationDialog = genPane().openDacCalibrationForCapture());
+    }
+
+    /** Opens the shared voltage-calibration dialog in its ADC two-row form (the
+     *  analyzed channel prefilled, the other blank/disabled) for capture — no live
+     *  measurement, no modal loop.  Pair with {@link #closeCalibration()}. */
+    protected final void openAdcCalibration() {
+        ui(() -> calibrationDialog = fftPane().openAdcCalibrationForCapture());
+    }
+
+    /** Snapshots the calibration dialog opened by {@link #openDacCalibration()} /
+     *  {@link #openAdcCalibration()} to {@code pngPath} (no-op if not open). */
+    protected final void screenshotCalibration(String pngPath) {
+        if (calibrationDialog != null) {
+            Control content = calibrationDialog.getContent();
+            if (content != null && !content.isDisposed()) {
+                snapshot(content, pngPath);
+            }
+        }
+    }
+
+    /** Closes the calibration dialog opened by {@link #openDacCalibration()} /
+     *  {@link #openAdcCalibration()} (no-op if none). */
+    protected final void closeCalibration() {
+        ui(() -> {
+            if (calibrationDialog != null && calibrationDialog.getContent() != null
+                    && !calibrationDialog.getContent().isDisposed()) {
+                calibrationDialog.getContent().getShell().close();
+            }
+            calibrationDialog = null;
+        });
+    }
+
+    /** Resizes the open Preferences dialog to an exact pixel size and re-lays it
+     *  out (no-op if not open).  The dialog is normally height-capped so its
+     *  tallest tab (Audio, with two device cards) scrolls; a capture wants the
+     *  full pane, so this grows the shell to let the scroll viewport show
+     *  everything before {@link #screenshot} prints the tab folder. */
+    protected final void resizePreferences(int width, int height) {
+        ui(() -> {
+            if (preferencesShell != null && !preferencesShell.isDisposed()) {
+                preferencesShell.setSize(width, height);
+                preferencesShell.layout(true, true);
+            }
         });
     }
 

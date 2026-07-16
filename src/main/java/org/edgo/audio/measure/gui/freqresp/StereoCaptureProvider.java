@@ -21,6 +21,7 @@ package org.edgo.audio.measure.gui.freqresp;
 import org.edgo.audio.measure.cli.util.CaptureWithGenerator;
 import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.cli.util.StereoSamples;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.sound.DeviceRef;
 
@@ -36,7 +37,7 @@ import java.util.function.BooleanSupplier;
  * {@link CaptureWithGenerator#runStereo}; unit tests inject a stub
  * returning synthetic {@link StereoSamples} without opening any audio
  * device.  Tests only need to implement the SAM
- * {@link #capture(SignalGenerator, DeviceRef, DeviceRef, int, int, int, int, BooleanSupplier)};
+ * {@link #capture(SignalGenerator, DeviceRef, DeviceRef, int, int, int, OutputChannels, int, BooleanSupplier)};
  * the variant with progress falls through to the SAM by default so a
  * lambda-style stub doesn't need to know about progress at all.
  */
@@ -48,11 +49,15 @@ public interface StereoCaptureProvider {
      * channels of {@code inDevice} for {@code durationSec} seconds,
      * returning the captured samples normalised to {@code [-1, +1]}.
      *
+     * @param outputChannels which DAC lane(s) carry the sweep — {@code LEFT} /
+     *                       {@code RIGHT} write digital silence to the other
+     *                       lane; {@code BOTH} drives both (legacy)
      * @param cancelToken polled during the capture wait; non-null tokens
      *                    allow the call to return early
      */
     StereoSamples capture(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
                           int sampleRate, int bitDepth, int ditherBits,
+                          OutputChannels outputChannels,
                           int durationSec,
                           BooleanSupplier cancelToken) throws Exception;
 
@@ -65,11 +70,12 @@ public interface StereoCaptureProvider {
      */
     default StereoSamples captureWithProgress(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
                                               int sampleRate, int bitDepth, int ditherBits,
+                                              OutputChannels outputChannels,
                                               int durationSec,
                                               BooleanSupplier cancelToken,
                                               StereoCaptureProgress progress) throws Exception {
         return capture(gen, outDevice, inDevice, sampleRate, bitDepth, ditherBits,
-                       durationSec, cancelToken);
+                       outputChannels, durationSec, cancelToken);
     }
 
     /** Returns the production capture strategy that drives real audio
@@ -81,20 +87,22 @@ public interface StereoCaptureProvider {
             @Override
             public StereoSamples capture(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
                                          int sampleRate, int bitDepth, int ditherBits,
+                                         OutputChannels outputChannels,
                                          int durationSec,
                                          BooleanSupplier cancelToken) throws Exception {
                 return CaptureWithGenerator.runStereo(gen, outDevice, inDevice,
-                        sampleRate, bitDepth, ditherBits,
+                        sampleRate, bitDepth, ditherBits, outputChannels,
                         durationSec, null, 0, cancelToken, null);
             }
             @Override
             public StereoSamples captureWithProgress(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
                                                      int sampleRate, int bitDepth, int ditherBits,
+                                                     OutputChannels outputChannels,
                                                      int durationSec,
                                                      BooleanSupplier cancelToken,
                                                      StereoCaptureProgress progress) throws Exception {
                 return CaptureWithGenerator.runStereo(gen, outDevice, inDevice,
-                        sampleRate, bitDepth, ditherBits,
+                        sampleRate, bitDepth, ditherBits, outputChannels,
                         durationSec, null, 0, cancelToken, progress);
             }
         };

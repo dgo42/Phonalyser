@@ -234,7 +234,7 @@ public final class FftController {
         return imdAnalyzer.analyze(slot,
                 prefs.getGenDualToneFreq1Hz(),
                 prefs.getGenDualToneFreq2Hz(),
-                prefs.getDbvOffsetDb());
+                prefs.getDbvOffsetDb(prefs.getFftChannel()));
     }
 
     /** Feeds the latest FFT result into the closed-loop integrator and

@@ -113,6 +113,10 @@
         <li><b>Multi-backend audio</b> — WASAPI &amp; WDM-KS (Windows),
             CoreAudio (macOS), JavaSound (Linux); high sample rates and
             16/24/32-bit.</li>
+        <li><b>Per-card calibration</b> — full-scale calibration follows the
+            physical card across backends via name aliases, with a range table
+            per attenuator / DIP position; the crosshair calibrations write
+            straight into the card's active range.</li>
       </ul>
 
       <p><img src="img/fft-ultralow-thd.png" alt="Ultra-low-distortion FFT measurement"/></p>

@@ -318,6 +318,23 @@ class NumericStepModelTest {
     }
 
     @Test
+    void voltage_parsesLinearUnits_rejectsDbv() {
+        // VOLTAGE is AMPLITUDE without the log unit — calibration entry where a
+        // dB reference makes no sense.  Same nV/µV/mV/V parsing and switching.
+        NumericStepModel m = new NumericStepModel(UnitFamily.VOLTAGE, 1e-9, 1000, 6);
+        assertTrue(m.commit("499 mV"));
+        assertEquals(0.499, m.getValue(), EPS);
+        assertTrue(m.commit("250 uV"));   // ASCII alias for µV
+        assertEquals(2.5e-4, m.getValue(), EPS);
+        m.setValue(2.5e-4);
+        assertTrue(m.text().endsWith("µV"), "µV display below 1 mV: " + m.text());
+        m.setValue(2.5);
+        assertTrue(m.text().endsWith("V") && !m.text().endsWith("mV"), m.text());
+        assertFalse(m.commit("-3.5 dBV"), "dBV is not a VOLTAGE unit");
+        assertEquals(2.5, m.getValue(), EPS, "rejected entry leaves the value unchanged");
+    }
+
+    @Test
     void time_switchesToMillisecondsBelowHalfSecond() {
         NumericStepModel m = new NumericStepModel(UnitFamily.TIME, 1e-3, 1_000_000, 3);
         m.setValue(0.4);

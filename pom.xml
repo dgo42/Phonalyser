@@ -798,6 +798,14 @@
                          build.  Property-driven so it can be overridden on demand:
                            mvn -o test -Dsurefire.excludedGroups= -Dtest=FftHarmonicStabilityTest#kappaRefitAB -->
                     <excludedGroups>${surefire.excludedGroups}</excludedGroups>
+                    <!-- Isolate the app data dir under target/ during tests so
+                         the Preferences singleton (which seeds devices.yaml and
+                         may read/write preferences.yaml at first touch) never
+                         reads or pollutes the developer's real %APPDATA%
+                         (or ~/.config) Phonalyser directory. -->
+                    <systemPropertyVariables>
+                        <app.data.dir>${project.build.directory}/test-app-data</app.data.dir>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
             <plugin>

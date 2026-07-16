@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.edgo.audio.measure.cli.util.StereoSamples;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -138,7 +139,8 @@ public final class NotchSweepEngine implements AutoCloseable {
      * recording has started.
      */
     public void start(double f0, double f1, double ampVrms, double dacFsVrms,
-                      int sweepSamples, int fadeSamples) throws Exception {
+                      int sweepSamples, int fadeSamples,
+                      OutputChannels outputChannels, double rightLaneScale) throws Exception {
         gen = new SignalGenerator(f0, f1, sweepSamples, 0, sampleRate, ampVrms, dacFsVrms);
         // Loop ON with Hann fades at each cycle boundary: logSweepNext() replays
         // the buffer back-to-back and the per-side fades smooth the loop seam.
@@ -155,6 +157,12 @@ public final class NotchSweepEngine implements AutoCloseable {
 
         playback = AudioBackend.instance().openPlayback(out, sampleRate, bitDepth, ditherBits);
         playback.open();
+        // Match the RIGHT lane's physical level to the LEFT-referenced digital
+        // amplitude (the generator was built with the LEFT DAC full-scale), then
+        // gate the looping sweep to the selected DAC lane(s) — both before
+        // streaming.  rightLaneScale is 1.0 on a symmetric card (no-op).
+        playback.setChannelScale(1.0, rightLaneScale);
+        playback.setOutputChannels(outputChannels);
         capture = AudioBackend.instance().openCapture(in, sampleRate, bitDepth);
         installListener(capture);
         capture.open();
@@ -173,6 +181,14 @@ public final class NotchSweepEngine implements AutoCloseable {
         if (g == null) return;
         g.setSweepFreqStart(f0);
         g.setSweepFreqEnd(f1);
+    }
+
+    /** Live output-lane change WITHOUT restart: pushes the gate straight to the
+     *  running playback (honoured by the in-process backends).  No-op after
+     *  {@link #close} cleared the reference. */
+    public void setOutputChannels(OutputChannels outputChannels) {
+        AudioPlayback pb = playback;
+        if (pb != null) pb.setOutputChannels(outputChannels);
     }
 
     /** Total samples captured so far — drives the settle / fill percentage. */

@@ -114,6 +114,11 @@ public final class NumericStepModel {
     private String namedValueLabel;
     @Getter
     private double value;
+    /** When set, the field renders empty and holds no value — the disabled,
+     *  never-measured channel row in the calibration dialog (avoids the
+     *  clamp-to-min "1 nV" artifact).  Cleared by any value mutation. */
+    @Getter
+    private boolean blank;
 
     /** FIXED policy: wheel adds {@code wheelStep}, arrows add
      *  {@code arrowStep}, values render with exactly {@code decimals}
@@ -173,7 +178,15 @@ public final class NumericStepModel {
      *  ignored — a poisoned value could never be stepped or committed away. */
     public void setValue(double v) {
         if (Double.isNaN(v)) return;
+        blank = false;
         value = clamp(roundSig(v));
+    }
+
+    /** Puts the model into the blank state: no value, an empty rendered text.
+     *  The next {@link #setValue}, {@link #wheel}, {@link #arrow} or a
+     *  successful {@link #commit} leaves it. */
+    public void setBlank() {
+        blank = true;
     }
 
     /** Updates the lower bound (e.g. a config-driven floor) and re-clamps. */
@@ -359,6 +372,7 @@ public final class NumericStepModel {
      *  for FIXED policy, up-to-{@code maxDecimals} with trailing-zero trim
      *  otherwise.  Infinity renders as {@code ∞}. */
     public String text() {
+        if (blank) return "";
         if (Double.isInfinite(value)) return "∞";
         if (isNamedValue(value)) return namedValueLabel;
         return formatIn(value, currentUnit());
@@ -462,11 +476,13 @@ public final class NumericStepModel {
         if (Double.isInfinite(max)
                 && (t.equals("∞") || t.equalsIgnoreCase("inf") || t.equalsIgnoreCase("infinity"))) {
             stickyUnit = null;
+            blank = false;
             value = Double.POSITIVE_INFINITY;
             return true;
         }
         if (namedValueLabel != null && t.equalsIgnoreCase(namedValueLabel.trim())) {
             stickyUnit = null;
+            blank = false;
             value = clamp(roundSig(namedValue));
             return true;
         }
@@ -492,6 +508,7 @@ public final class NumericStepModel {
             // typing "499 mV" and stepping past 0.5 V must show volts.
             stickyUnit = unit.log() ? unit : null;
         }
+        blank = false;
         value = clamp(roundSig(unit.toCanonical(num)));
         return true;
     }

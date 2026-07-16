@@ -39,11 +39,14 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
+import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
+import org.edgo.audio.measure.gui.common.CalibrationDialog;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
 import org.edgo.audio.measure.gui.common.Icon;
@@ -53,6 +56,7 @@ import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.gui.widgets.SignalFormCombo;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.Getter;
@@ -140,6 +144,11 @@ public final class GeneratorPane extends AbstractPane {
     private Label                 dualToneFreq1Label;
     private Label                 dualToneFreq2Label;
     private final Combo           ditherCombo;
+    /** Output-channel selector (Both / Left / Right) in the header row — gates
+     *  which DAC lane carries the generated signal.  READ_ONLY enum combo bound
+     *  to {@code Preferences#genOutputChannelsProperty()} in the dither-combo
+     *  style; the controller pushes the selection to the live encoder. */
+    private final Combo           outputChannelCombo;
     private final Text            correctionsField;
     private Button                corrBrowseBtn;
     private Button                corrClearBtn;
@@ -247,7 +256,7 @@ public final class GeneratorPane extends AbstractPane {
         // output device; both fade to grey when nothing is playing.
         // See {@link #startOnAirBlink} / {@link #stopOnAirBlink}.
         Composite formAndAirRow = new Composite(group, SWT.NONE);
-        GridLayout farGl = new GridLayout(3, false);  // label | LED | "ON AIR"
+        GridLayout farGl = new GridLayout(4, false);  // label | output-channel combo | LED | "ON AIR"
         farGl.marginWidth  = 0;
         farGl.marginHeight = 0;
         farGl.horizontalSpacing = 6;
@@ -257,6 +266,18 @@ public final class GeneratorPane extends AbstractPane {
         Label formLabel = new Label(formAndAirRow, SWT.NONE);
         formLabel.setText(I18n.t("generator.signalForm"));
         formLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, true, false));
+
+        // Output-channel selector (Both / Left / Right).  READ_ONLY enum combo in
+        // the dither-combo style, sat between the form caption and the ON-AIR
+        // status so it reads as "which lane is on air".  Item order matches the
+        // OutputChannels ordinals {BOTH, LEFT, RIGHT} for the ordinal bind.
+        outputChannelCombo = new Combo(formAndAirRow, SWT.READ_ONLY);
+        outputChannelCombo.add(I18n.t("common.channel.both"));
+        outputChannelCombo.add(I18n.t("common.channel.left"));
+        outputChannelCombo.add(I18n.t("common.channel.right"));
+        outputChannelCombo.setToolTipText(I18n.t("generator.outputChannel.tooltip"));
+        outputChannelCombo.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false));
+        Bindings.combo(outputChannelCombo, prefs.genOutputChannelsProperty(), OutputChannels.values());
 
         onAirRedColor    = new Color(group.getDisplay(), 0xFF, 0x00, 0x00);
         onAirRedDimColor = new Color(group.getDisplay(), 0xAA, 0x00, 0x00);
@@ -897,6 +918,11 @@ public final class GeneratorPane extends AbstractPane {
      *  dialog would hang an unattended run.  Callers can check
      *  {@link #isToneRunning()}. */
     public void startTone() {
+        // Automation no-audio gate: a help-screenshot run started with
+        // -Dphonalyser.automation.noAudio=true must never open an audio device,
+        // so this script-driven Play is a no-op.  A user Play-button click uses
+        // its own SWT.Selection handler and is unaffected.
+        if (Boolean.getBoolean("phonalyser.automation.noAudio")) return;
         controller.start();
         syncPlayButtonVisuals();
         syncFilePlayVisuals();
@@ -1020,18 +1046,61 @@ public final class GeneratorPane extends AbstractPane {
         if (parent == null) return;
         Preferences prefs = Preferences.instance();
         final double configuredVrms = prefs.getGenAmplitudeVrms();
-        final double oldFs          = prefs.getDacFsVoltageAmpl();
-        new DacCalibrationDialog(parent, configuredVrms, measuredVrms -> {
-            // The DAC was commanded to output `configuredVrms` (computed
-            // against the OLD DAC full-scale) and the user measured `measuredVrms`
-            // at the output.  Output RMS scales linearly with FS, so the
-            // true FS satisfies measured/configured = FS_true/FS_old.
-            double newFs = oldFs * (measuredVrms / configuredVrms);
-            prefs.setDacFsVoltageAmpl(newFs);
-            // Writing the pref fires the dacFsVoltageRms binding, which recomputes
-            // the running generator's amplitude against the new full-scale — so the
+        final boolean stereo = isOutputBoundStereo(prefs);
+        // A stereo (LINKED / INDEPENDENT) card gets both rows, each prefilled with
+        // the single commanded amplitude (the generator drives both lanes from one
+        // amplitude), so each channel's measured output rescales its OWN DAC
+        // full-scale.  A MONO card or an unbound device is single-row (Left only) —
+        // the shared both-channels full-scale.  Output RMS scales linearly with FS,
+        // so the true FS satisfies measured/configured = FS_true/FS_old.
+        Double seedRight = stereo ? configuredVrms : null;
+        new CalibrationDialog(parent, dacTexts(), configuredVrms, seedRight, (ch, measuredVrms) -> {
+            if (stereo) {
+                double oldFs = prefs.getDacFsVoltageAmpl(ch);
+                double newFs = oldFs * (measuredVrms / configuredVrms);
+                prefs.storeDacCalibration(ch, newFs);
+            } else {
+                // MONO / unbound: shared both-channels full-scale (auto-creates the
+                // profile on first calibrate); also sets the FS scalar and persists.
+                double oldFs = prefs.getDacFsVoltageAmpl();
+                double newFs = oldFs * (measuredVrms / configuredVrms);
+                prefs.storeDacCalibration(newFs);
+            }
+            // The store fires the dacFsVoltageRms binding, which recomputes the
+            // running generator's amplitude against the new full-scale — so the
             // calibration takes effect immediately, without a restart.
         }).open();
+    }
+
+    /** The DAC-calibration wording (title, prompt keys, log tag) for the shared
+     *  {@link CalibrationDialog}. */
+    private CalibrationDialog.Texts dacTexts() {
+        return new CalibrationDialog.Texts("calibrate.dac.title",
+                "calibrate.dac.input", "calibrate.dac.input.tooltip", "DAC");
+    }
+
+    /** Capture support (help screenshots): builds the DAC calibration dialog in its
+     *  two-row (stereo) form with both channels prefilled at the configured amplitude
+     *  and shows it non-modally — no live measurement, no modal loop — returning it so
+     *  the automation can snapshot and dispose it.  The commit callback is a no-op:
+     *  the shot never presses Calibrate.  Mirrors {@link #openDacCalibrationDialog}. */
+    public CalibrationDialog openDacCalibrationForCapture() {
+        Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
+        if (parent == null) return null;
+        double vrms = Preferences.instance().getGenAmplitudeVrms();
+        CalibrationDialog dlg = new CalibrationDialog(parent, dacTexts(), vrms, vrms, (ch, v) -> { });
+        dlg.showForCapture();
+        return dlg;
+    }
+
+    /** True when the current backend's output device resolves to a bound card whose
+     *  output endpoint calibrates its two channels separately — every mode except
+     *  {@link DeviceChannelMode#MONO}.  A MONO card (one physical channel) or an
+     *  unbound device (no profile) keeps the single-row legacy flow. */
+    private boolean isOutputBoundStereo(Preferences prefs) {
+        AudioDeviceProfile p = prefs.resolveDeviceProfile(prefs.current().getOutputDeviceName());
+        return p != null && p.getOutput() != null
+                && p.getOutput().getChannels() != DeviceChannelMode.MONO;
     }
 
     // -------------------------------------------------------------------------

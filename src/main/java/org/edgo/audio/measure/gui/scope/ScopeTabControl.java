@@ -44,12 +44,14 @@ import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
+import org.eclipse.swt.widgets.Event;
 import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.ProgressBar;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
@@ -61,6 +63,7 @@ import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
+import org.edgo.audio.measure.gui.common.CalibrationDialog;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
@@ -72,6 +75,7 @@ import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.PresetBar;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.OscPreset;
 import org.edgo.audio.measure.preferences.Preferences;
 
@@ -352,13 +356,17 @@ public final class ScopeTabControl extends AbstractTabControl {
     /** Enables / disables the whole trigger tab (record vs file mode).  When
      *  enabling, the blanket subtree-enable above turns ON every control, so
      *  re-apply the per-control gates it clobbered: Start only in Single mode,
-     *  the hysteresis selector only when hysteresis is on, and Reconstructed
-     *  beat only when the generator is in dual-tone form. */
+     *  the hysteresis selector only when hysteresis is on, Reconstructed beat
+     *  only when the generator is in dual-tone form, and the trigger-source
+     *  buttons only for a channel whose display is on (the blanket enable would
+     *  otherwise re-open a hidden channel's button — and this re-corrects a
+     *  stale persisted selection the moment recording resumes). */
     public void setTriggerControlsEnabled(boolean enabled) {
         setSubtreeEnabled(triggerGroup, enabled);
         if (enabled) {
             syncTriggerStart();
             syncReconstructedBeatEnabled();
+            syncTriggerChannelButtons();
             if (hysteresisSel != null && !hysteresisSel.isDisposed()) {
                 hysteresisSel.setEnabled(Preferences.instance().isOscTriggerHysteresisEnabled());
             }
@@ -785,6 +793,12 @@ public final class ScopeTabControl extends AbstractTabControl {
             view.resetTriggerHold();   // other channel's anchor is stale — see the type listener
             controller.redrawViews();
         });
+        // Grey the trigger-source button whose channel display is off (a hidden
+        // channel can't be the trigger), and auto-switch off it when it's the live
+        // selection — the same two channel-enable prefs the L/R V-groups above and
+        // the measurements-table selector subscribe to.
+        Bindings.onChange(toolbarTabs, prefs.oscLeftChannelEnabledProperty(),  en -> syncTriggerChannelButtons());
+        Bindings.onChange(toolbarTabs, prefs.oscRightChannelEnabledProperty(), en -> syncTriggerChannelButtons());
 
         Composite edgeSet = new Composite(g, SWT.NONE);
         edgeSet.setLayout(flushRowLayoutHorizontal(2));
@@ -920,6 +934,8 @@ public final class ScopeTabControl extends AbstractTabControl {
         reconstructedBeatBtn.setEnabled(isGeneratorDualTone());
         Bindings.check(reconstructedBeatBtn, prefs.oscShowReconstructedBeatProperty());
         Bindings.onChange(toolbarTabs, prefs.oscShowReconstructedBeatProperty(), v -> controller.redrawViews());
+
+        syncTriggerChannelButtons();   // grey a channel that starts off; correct a stale selection
     }
 
     /** True when the generator is currently in {@code DUAL_TONE} form
@@ -1025,6 +1041,11 @@ public final class ScopeTabControl extends AbstractTabControl {
         prefs.setOscTriggerType   (p.getTriggerType());
         prefs.setOscTriggerMode   (p.getTriggerMode());
         syncTriggerStart();
+        // A preset can name a display-disabled channel as the trigger source
+        // (and a no-op enable-pref write skips the oscLeft/RightChannelEnabled
+        // subscribers that normally run the gate), so re-apply it explicitly:
+        // a hidden channel auto-switches to the visible one before save().
+        syncTriggerChannelButtons();
         // Fractions — overwrite the values the scale listeners would have
         // clobbered.  Goes last so the preset wins.
         prefs.setOscLeftOffsetFrac     (p.getLeftOffsetFrac());
@@ -1050,6 +1071,35 @@ public final class ScopeTabControl extends AbstractTabControl {
         if (!single && triggerStartBtn.getSelection()) {
             triggerStartBtn.setSelection(false);
             view.setSingleArmed(false);
+        }
+    }
+
+    /** Greys the trigger-source button whose channel display is switched off (a
+     *  hidden channel can't be the trigger), and — when that channel is the live
+     *  trigger selection while the other is on — auto-switches to the remaining
+     *  channel through the button's own {@link SWT#Selection} path: the same route
+     *  a user click takes (dependent-group exclusion + the radio binding's
+     *  {@code oscTriggerChannel} write, whose onChange resets the trigger hold and
+     *  repaints), rather than a bare pref write.  Both channels off leaves the
+     *  selection untouched; it is corrected when a channel returns.  Mirrors
+     *  {@code ScopeView.syncMeasurementChannelButtons} + its paint-time switch. */
+    private void syncTriggerChannelButtons() {
+        if (chL == null || chL.isDisposed() || chR == null || chR.isDisposed()) return;
+        Preferences prefs = Preferences.instance();
+        boolean showL = prefs.isOscLeftChannelEnabled();
+        boolean showR = prefs.isOscRightChannelEnabled();
+        chL.setEnabled(showL);
+        chR.setEnabled(showR);
+        Channel selected = prefs.getOscTriggerChannel();
+        Button switchTo = null;
+        if (selected == Channel.L && !showL && showR) {
+            switchTo = chR;
+        } else if (selected == Channel.R && !showR && showL) {
+            switchTo = chL;
+        }
+        if (switchTo != null) {
+            switchTo.setSelection(true);
+            switchTo.notifyListeners(SWT.Selection, new Event());
         }
     }
 
@@ -1082,28 +1132,67 @@ public final class ScopeTabControl extends AbstractTabControl {
         calibrateButton.addListener(SWT.Selection, e -> openCalibrationDialog());
     }
 
-    /** Opens the ADC-calibration dialog.  Reads the current Vrms from
-     *  the pane's own scope view (no cross-pane fallback — the FFT pane
-     *  has its own calibrate button on the FFT side); aborts with an
-     *  info MessageBox when no live Vrms is available.  Rescales
-     *  {@code Preferences#getAdcFsVoltageRms()} so the displayed Vrms
-     *  matches the entered value, and persists the new calibration. */
+    /** Opens the ADC-calibration dialog — always the two-row (Left / Right)
+     *  form.  Only the scope's measurement channel
+     *  ({@link Preferences#getOscMeasurementChannel()}) carries a measured Vrms
+     *  and is seeded; the other row is disabled and blank (the scope shows one
+     *  channel's measurement at a time).  Reads that channel's Vrms from the
+     *  pane's own scope view (no cross-pane fallback — the FFT pane has its own
+     *  calibrate button); aborts with an info MessageBox when no live Vrms is
+     *  available.  On OK the entered actual Vrms rescales that channel's ADC
+     *  full-scale so the displayed Vrms matches, and persists the calibration:
+     *  a bound stereo card writes only that channel's full-scale (per-channel),
+     *  a MONO card or an unbound device writes the shared both-channels
+     *  full-scale. */
     private void openCalibrationDialog() {
         if (isDisposed()) return;
         Shell parent = getShell();
-        Double currentVrms = (view == null) ? null : view.getLastVrms();
+        if (view == null) {
+            Dialogs.info(parent, I18n.t("calibrate.title"), I18n.t("calibrate.error.noVrms"));
+            return;
+        }
+        Preferences prefs = Preferences.instance();
+        final Channel measCh = prefs.getOscMeasurementChannel();
+        Double currentVrms = view.getLastVrms(measCh);
         if (currentVrms == null || currentVrms <= 0 || Double.isNaN(currentVrms)) {
             Dialogs.info(parent, I18n.t("calibrate.title"), I18n.t("calibrate.error.noVrms"));
             return;
         }
         final double measuredVrms = currentVrms;
-        new AdcCalibrationDialog(parent, measuredVrms, actualVrms -> {
-            Preferences prefs = Preferences.instance();
+        final boolean stereo = isInputBoundStereo(prefs);
+        Double seedL = measCh == Channel.L ? measuredVrms : null;
+        Double seedR = measCh == Channel.R ? measuredVrms : null;
+        new CalibrationDialog(parent, adcTexts(), seedL, seedR, (ch, actualVrms) -> {
             double scale = actualVrms / measuredVrms;
-            double newFs = prefs.getAdcFsVoltageRms() * scale;
-            prefs.setAdcFsVoltageRms(newFs);
-            prefs.save();
+            if (stereo) {
+                double newFs = prefs.getAdcFsVoltageRms(ch) * scale;
+                prefs.storeAdcCalibration(ch, newFs);
+            } else {
+                // MONO / unbound: shared both-channels full-scale (auto-creates the
+                // profile on first calibrate); also sets the FS scalar and persists.
+                double newFs = prefs.getAdcFsVoltageRms() * scale;
+                prefs.storeAdcCalibration(newFs);
+            }
         }).open();
+    }
+
+    /** The ADC-calibration wording (title, prompt keys, log tag) for the shared
+     *  {@link CalibrationDialog}. */
+    private CalibrationDialog.Texts adcTexts() {
+        return new CalibrationDialog.Texts("calibrate.title",
+                "calibrate.input", "calibrate.input.tooltip", "ADC");
+    }
+
+    /** Whether the current backend's bound input card calibrates its two channels
+     *  separately — a bound card in any mode except {@link DeviceChannelMode#MONO}
+     *  (LINKED writes the shared active row's per-channel fields, INDEPENDENT each
+     *  channel's own row).  Resolves the profile exactly as the calibrate WRITE does
+     *  ({@link Preferences#resolveDeviceProfile}); a MONO card or an unbound device
+     *  (no profile) keeps the single-row legacy flow. */
+    private boolean isInputBoundStereo(Preferences prefs) {
+        AudioDeviceProfile p = prefs.resolveDeviceProfile(prefs.current().getInputDeviceName());
+        return p != null && p.getInput() != null
+                && p.getInput().getChannels() != DeviceChannelMode.MONO;
     }
 
     /**
@@ -1414,11 +1503,15 @@ public final class ScopeTabControl extends AbstractTabControl {
         // field control passes height<=0).  The engine couples both channels' V/div
         // and re-anchors each offset; we push its results into the fields + prefs.
         double anchorFrac = (height > 0) ? (double) mouseY / height : 0.5;
-        double peak = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        // Mirrors the coupled zoom's existing per-channel V/div handling: each channel's
+        // FS-fills-height zoom-out ceiling comes from its OWN full-scale (LINKED cards
+        // pass equal L/R peaks), same coupling — either channel's ceiling blocks both.
+        double peakL = prefs.getAdcPeakVolts(Channel.L);
+        double peakR = prefs.getAdcPeakVolts(Channel.R);
         double[] r = view.getNav().zoomVertical(
                 leftOld,  prefs.getOscLeftOffsetFrac(),  leftEn,
                 rightOld, prefs.getOscRightOffsetFrac(), rightEn,
-                delta, anchorFrac, peak);
+                delta, anchorFrac, peakL, peakR);
         boolean changed = false;
         if (leftEn && r[0] != leftOld) {
             leftScale.setValue(r[0]);                  // listener centre-anchors; override below

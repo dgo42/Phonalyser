@@ -30,6 +30,7 @@ import org.eclipse.swt.graphics.Cursor;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.LineAttributes;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
@@ -73,6 +74,7 @@ import org.edgo.audio.measure.gui.widgets.TransparentComposite;
 import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 
 /**
@@ -174,6 +176,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     /** When non-null this view renders {@code frozenFrame} verbatim and
      *  ignores the live buffer — used by the offscreen screenshot view. */
     private RenderedFrame frozenFrame;
+    /** When non-null the CPU paint composites this GPU-phosphor afterglow (current
+     *  trace + decayed history, read back from the live pane at screenshot time) in
+     *  place of {@link #drawWaveforms}'s single frozen trace, so the built-in
+     *  screenshot shows the same persistence the GL canvas does.  Set only on the
+     *  offscreen screenshot clone; {@code null} everywhere else (live CPU paint, GPU
+     *  render, persistence off) — then the trace draws unchanged. */
+    @Setter
+    private ImageData persistenceSnapshot;
 
     /** Per-channel mains-hum combs (lazily built for the capture rate),
      *  used when a channel's mains-suppression mode is IIR_COMB.  Re-tuned
@@ -298,15 +308,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     public void attachController(ScopeController controller) { this.controller = controller; }
     /** Frozen-frame magnify state.  {@code heldViewStart} is the captured-buffer
      *  sample shown at the LEFT edge of the held view (may be negative or past the
-     *  data — where it is, {@code blankBeyondData} makes {@link #drawTrace} draw
-     *  nothing rather than clamp/shift).  When the horizontal scale changes
+     *  data; a window past the captured samples blanks there through the renderer's
+     *  own in-bounds check).  When the horizontal scale changes
      *  ({@code lastHeldTimePerDiv} differs), the start is recomputed so the sample
      *  under {@code hoverX} stays put; {@code lastHeldDispCount} is the previous
      *  span used for that. */
     private double  heldViewStart;
     private double  lastHeldTimePerDiv;
     private int     lastHeldDispCount;
-    private boolean blankBeyondData;
     /** Canvas X to anchor the next frozen-frame t/div change around, or -1 to
      *  anchor on the screen centre.  The wheel-zoom sets it (cursor); a t/div
      *  FIELD change leaves it -1 so the trace stays centred instead of jumping
@@ -367,12 +376,6 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      */
     private final LineAttributes lineAttrsTrace = new LineAttributes(1.0f,
             SWT.CAP_ROUND, SWT.JOIN_ROUND);
-    private final LineAttributes lineAttrsBars  = new LineAttributes(1.0f,
-            SWT.CAP_FLAT,  SWT.JOIN_BEVEL);
-
-    /** Sub-sample step for the sin(x)/x peak refinement in {@link #drawEnvelope}
-     *  (curve reconstructed within ±1 sample of each column's extreme samples). */
-    private static final double RECON_REFINE_STEP = 0.1;
 
     /** Residual mode: minimum number of tone cycles the least-squares fit window
      *  must span, so amplitude/phase are well-conditioned even at a narrow t/div. */
@@ -402,12 +405,41 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  independent of the time/div-driven window length. */
     private static final int    RESIDUAL_DUAL_REFIT_ROUNDS = 2;
 
-    /** Per-pixel-column min/max + connector-attach scratch for {@link #drawEnvelope},
-     *  grown on demand and reused across both channels (paint is single-threaded). */
-    private float[] envMin;
-    private float[] envMax;
-    private float[] envEntry;
-    private float[] envExit;
+    /** Digital-phosphor scratch ({@link #drawDigitalPhosphor}), pooled and grown on demand
+     *  (single-threaded paint): the per-column span DIFFERENCE accumulator ({@code int[height+2]})
+     *  and the {@code width×height} coverage/alpha buffer the crossing counts are stamped into.
+     *  No per-frame allocation. */
+    private int[]     phosphorDiff;
+    private byte[]    phosphorAlpha;
+    /** Supersampled sibling of {@code phosphorAlpha} ({@link #DPO_SUPERSAMPLE} &gt; 1): the
+     *  histogram/pen rasterise into this {@code (ss·width)×(ss·height)} grid of sub-pixel
+     *  cells, box-averaged down into {@code phosphorAlpha} for the blit. */
+    private byte[]    phosphorAlphaSs;
+    /** Scratch for {@link TraceEnvelope#fringeDilate}'s horizontal pass, pooled beside
+     *  {@code phosphorAlphaSs} (same sub-cell dimensions). */
+    private byte[]    phosphorFringe;
+    /** Per-column band ends exported by {@link TraceEnvelope#columnCrossings} in UNROUNDED row
+     *  space (the refined crest/trough), consumed by {@link TraceEnvelope#penRasterize} as the
+     *  round coverage pen's centreline.  Pooled {@code float[width]}, grown in lockstep with the
+     *  other phosphor scratch; a blank column is {@link Float#NaN}. */
+    private float[]   phosphorBandTop;
+    private float[]   phosphorBandBot;
+    /** The path's true fractional x-extent within each column ({@code ⊂ [col, col+1]}), recorded
+     *  by the accumulation's boundary splitting — the pen sweeps {@code [xLo, xHi]} instead of the
+     *  whole column, so vertical flanks stroke at their exact sub-column x.  Pooled like the band. */
+    private float[]   phosphorBandXLo;
+    private float[]   phosphorBandXHi;
+    /** The path's entry/exit points per column (unrounded row space), recorded by the accumulation
+     *  — the tilted-capsule endpoints {@link TraceEnvelope#penRasterize} sweeps for a steep
+     *  single-traversal column so a near-vertical flank's neighbour fringe ramps with y.  Pooled
+     *  like the band; a column with no capsule geometry is {@link Float#NaN}. */
+    private float[]   phosphorBandEntryX;
+    private float[]   phosphorBandEntryY;
+    private float[]   phosphorBandExitX;
+    private float[]   phosphorBandExitY;
+    /** Count→alpha LUT for {@link #drawDigitalPhosphor}, built once by {@link #phosphorLut()}
+     *  from the (compile-time) intensity constants. */
+    private byte[]    phosphorLut;
     /**
      * Cached {@code textExtent} of the static {@link #HEADERS} strings.
      * Populated lazily on first paint with the GC already wearing {@code
@@ -657,6 +689,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             clearMeasurementHistory();
             redraw();
         });
+        // Grey out + block the measurement-channel button whose channel is switched
+        // off, so a disabled channel can't be picked — the same enable prefs the
+        // V-group and vertical slider subscribe to.  The table's auto-switch off a
+        // just-disabled channel already lives in prepareMeasurementRows (not repeated).
+        Bindings.onChange(this, prefs.oscLeftChannelEnabledProperty(),  en -> syncMeasurementChannelButtons());
+        Bindings.onChange(this, prefs.oscRightChannelEnabledProperty(), en -> syncMeasurementChannelButtons());
         autoSetupBtn.addListener(SWT.Selection, e -> MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP));
         tableToggleBtn.addListener(SWT.Selection, e ->
                 prefs.setOscShowMeasurementTable(tableToggleBtn.isToggled()));
@@ -683,8 +721,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // changes the generated (loopback) level — either makes the accumulated
         // running statistics inconsistent, so clear them on a calibration change.
         Bindings.onChange(this, prefs.adcFsVoltageRmsProperty(), v -> { clearMeasurementHistory(); redraw(); });
+        // Right-channel ADC full-scale rescales the RIGHT measured voltages the same way
+        // — same clear+redraw so its running stats never go stale after a per-channel recal.
+        Bindings.onChange(this, prefs.adcFsVoltageRmsRightProperty(), v -> { clearMeasurementHistory(); redraw(); });
         Bindings.onChange(this, prefs.dacFsVoltageAmplProperty(), v -> { clearMeasurementHistory(); redraw(); });
         syncScopeButtons();       // apply the initial signal-gated visibility
+        syncMeasurementChannelButtons();   // grey the L/R selector for any channel that starts off
 
         setBackground(color(ColorRole.BACKGROUND));
         addPaintListener(this::onPaint);
@@ -821,13 +863,17 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  caller (pane) only re-syncs its slider + repaints on a real change. */
     public boolean moveVerticalOffset(int dir) {
         Preferences p = Preferences.instance();
-        double peak = p.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        // Mirrors the coupled move's existing per-channel V/div handling: the shared
+        // delta is clamped against each channel's own ±FS/2-at-middle limit, so each
+        // channel supplies its OWN full-scale (LINKED cards pass equal L/R peaks).
+        double peakL = p.getAdcPeakVolts(Channel.L);
+        double peakR = p.getAdcPeakVolts(Channel.R);
         double oldL = p.getOscLeftOffsetFrac();
         double oldR = p.getOscRightOffsetFrac();
         double[] off = nav.moveVertical(
                 oldL, p.getOscLeftVoltsPerDiv(),  p.isOscLeftChannelEnabled(),
                 oldR, p.getOscRightVoltsPerDiv(), p.isOscRightChannelEnabled(),
-                dir, peak);
+                dir, peakL, peakR);
         if (off[0] == oldL && off[1] == oldR) return false;
         p.setOscLeftOffsetFrac(off[0]);
         p.setOscRightOffsetFrac(off[1]);
@@ -863,7 +909,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * actual amplitude.
      */
     public Double getLastVrms() {
-        SignalMeasurements m = measWorker.getLastMeasResult(measChannelIsLeft());
+        return getLastVrms(Preferences.instance().getOscMeasurementChannel());
+    }
+
+    /** Latest Vrms (volts) of a specific channel, or {@code null} if that channel
+     *  has no measurement yet.  Used by the per-channel calibrate flow to feed each
+     *  row of the two-channel ADC calibration dialog on an INDEPENDENT card. */
+    public Double getLastVrms(Channel ch) {
+        SignalMeasurements m = measWorker.getLastMeasResult(ch == Channel.L);
         return (m == null) ? null : m.getVrms();
     }
 
@@ -1031,7 +1084,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         long _tSetup = System.nanoTime();
         drawScopeGrid(gc, w, h);
         long _tGrid = System.nanoTime();
-        drawWaveforms(gc, w, h);
+        drawTraceLayer(gc, w, h);
         long _tWave = System.nanoTime();
         drawSliders(gc, w, h);
         long _tSlid = System.nanoTime();
@@ -1519,6 +1572,16 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         headerBar.reflow();
     }
 
+    /** Greys + blocks the measurement-channel button whose channel is switched off,
+     *  so a disabled channel can't be selected.  Driven by the channel-enable pref
+     *  subscribers; the table's auto-switch off a just-disabled channel is handled at
+     *  paint time in {@link #prepareMeasurementRows}, not duplicated here. */
+    private void syncMeasurementChannelButtons() {
+        Preferences p = Preferences.instance();
+        leftBtn.setEnabled(p.isOscLeftChannelEnabled());
+        rightBtn.setEnabled(p.isOscRightChannelEnabled());
+    }
+
     /** Brings the {@link #measurementWindow} into sync with the current
      *  {@code tableExtracted} ∧ {@code oscShowMeasurementTable} state:
      *  creates + opens it when both are true, disposes it otherwise. */
@@ -1672,23 +1735,33 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         Preferences prefs = Preferences.instance();
         boolean acMode = left ? prefs.isOscLeftAcMode() : prefs.isOscRightAcMode();
         if (acMode || !(vDiv > 0)) return 0.5;
-        double peakVolts = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double peakVolts = prefs.getAdcPeakVolts(left ? Channel.L : Channel.R);
         double meanV = acDcMean(left) * peakVolts;
         if (!Double.isFinite(meanV)) return 0.5;
         return 0.5 + meanV / (DIVISIONS_Y * vDiv);
+    }
+
+    /** The channel the vertical scrollbar references: the measurement channel,
+     *  falling back to the only-visible channel when the measurement channel is
+     *  disabled (mirrors {@link #measurementChannelVPDiv}'s fallback so the V/div
+     *  and full-scale the scrollbar sizes against always name the same channel). */
+    private Channel measurementReferenceChannel() {
+        Preferences prefs = Preferences.instance();
+        Channel selected = prefs.getOscMeasurementChannel();
+        boolean showL = prefs.isOscLeftChannelEnabled();
+        boolean showR = prefs.isOscRightChannelEnabled();
+        if (selected == Channel.R && showR) return Channel.R;
+        if (selected == Channel.L && showL) return Channel.L;
+        if (showR)                          return Channel.R;
+        return Channel.L;
     }
 
     /** V/div of the measurement channel, falling back to the only-visible
      *  channel if the measurement channel is disabled. */
     private double measurementChannelVPDiv() {
         Preferences prefs = Preferences.instance();
-        Channel selected = prefs.getOscMeasurementChannel();
-        boolean showL = prefs.isOscLeftChannelEnabled();
-        boolean showR = prefs.isOscRightChannelEnabled();
-        if (selected == Channel.R && showR) return prefs.getOscRightVoltsPerDiv();
-        if (selected == Channel.L && showL) return prefs.getOscLeftVoltsPerDiv();
-        if (showR)                          return prefs.getOscRightVoltsPerDiv();
-        return prefs.getOscLeftVoltsPerDiv();
+        return (measurementReferenceChannel() == Channel.R)
+                ? prefs.getOscRightVoltsPerDiv() : prefs.getOscLeftVoltsPerDiv();
     }
 
     /** Returns the {@code [minOffsetFrac, maxOffsetFrac]} the vertical scrollbar
@@ -1698,7 +1771,10 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  {@code [0, 1]} — there's nothing to scroll. */
     public double[] offsetFracBounds() {
         double vpdiv = measurementChannelVPDiv();
-        double fs    = Preferences.instance().getAdcFsVoltageRms() * Math.sqrt(2.0);
+        // Pair the full-scale with the SAME reference channel measurementChannelVPDiv
+        // resolves, so the scrollbar range is exact for the reference channel (the
+        // scrollbar moves both together, so the other channel may clip a hair earlier).
+        double fs    = Preferences.instance().getAdcPeakVolts(measurementReferenceChannel());
         double half  = ScopeFormat.offsetMoveHalfRange(vpdiv, fs, DIVISIONS_Y);
         return new double[] { 0.5 - half, 0.5 + half };
     }
@@ -2112,18 +2188,17 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // the offset scroll bound exceeds the canvas (offsetMoveHalfRange),
         // the FS line keeps tracking and reaches the vertical middle at the
         // clamp ("a channel moves until ±FS/2 reaches the vertical middle").
-        double peakVolts = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
         final int[] FS_DASH = { 2, 6 };
         if (showL) {
             drawFullScaleLines(gc, h, w, FS_DASH,
                     prefs.getOscLeftOffsetFrac(), leftVDiv,
-                    peakVolts, pixelsPerDivY, color(ColorRole.LEFT_CHANNEL_MID));
+                    prefs.getAdcPeakVolts(Channel.L), pixelsPerDivY, color(ColorRole.LEFT_CHANNEL_MID));
         }
         if (showR) {
             drawFullScaleLines(gc, h, w, FS_DASH,
                     prefs.getOscRightOffsetFrac(), rightVDiv,
-                    peakVolts, pixelsPerDivY, color(ColorRole.RIGHT_CHANNEL_MID));
+                    prefs.getAdcPeakVolts(Channel.R), pixelsPerDivY, color(ColorRole.RIGHT_CHANNEL_MID));
         }
 
         boolean activeIsL = (measCh == Channel.L);
@@ -2755,13 +2830,34 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             && left + displaySamples + Lanczos.LANCZOS_PADDING <= available;
     }
 
+    /** The trace layer for one CPU paint: normally {@link #drawWaveforms}, but a
+     *  screenshot carrying a {@link #persistenceSnapshot GPU afterglow} composites that
+     *  instead — the phosphor already holds the current trace plus its decayed history, so
+     *  it reproduces the live GL canvas exactly (scaled to this paint's size).  Without a
+     *  snapshot (every non-screenshot paint, and any persistence-off capture) the trace
+     *  draws unchanged, keeping a persistence-off screenshot byte-identical. */
+    private void drawTraceLayer(MeasurementPainter gc, int w, int h) {
+        ImageData snap = persistenceSnapshot;
+        if (snap == null) {
+            drawWaveforms(gc, w, h);
+            return;
+        }
+        ImageData sized = (snap.width == w && snap.height == h) ? snap : snap.scaledTo(w, h);
+        Image img = new Image(getDisplay(), sized);
+        try {
+            gc.drawImage(img, 0, 0);
+        } finally {
+            img.dispose();
+        }
+    }
+
     private void drawWaveforms(MeasurementPainter gc, int w, int h) {
         // Screenshot view: render the captured frame verbatim (a carbon copy
         // of the live trace), never re-reading the buffer.
         if (frozenFrame != null) {
             RenderedFrame f = frozenFrame;
             // The residual (if any) is already baked into the snapshot arrays, so
-            // renderTraces skips the fit on this path — sample rate is unused here.
+            // renderTraces skips the fit on this path — the sample rate is unused here.
             renderTraces(gc, w, h, f.left, f.right, f.len, f.dispStart, f.subSampleOffset,
                          f.dispCount, f.showL, f.showR, f.leftVDiv, f.rightVDiv,
                          f.sincL, f.sincR, f.dcL, f.dcR, 0.0);
@@ -2920,8 +3016,14 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 entryStart = available - entryPad - displaySamples;
             }
             entryStart = Math.max(0, Math.min(entryStart, available - displaySamples));
-            captureSingleFrame(entryStart, displaySamples, available,
-                    lastLiveDispStartAbs >= 0 ? lastLiveSubSampleOffset : 0.0, Double.NaN);
+            double entrySub = lastLiveDispStartAbs >= 0 ? lastLiveSubSampleOffset : 0.0;
+            // Anchor the trigger-less entry snapshot at the sample under the
+            // (virtual-capable) trigger-position fraction, so the held frame
+            // pans/zooms through the SAME trigger-offset branch as a real
+            // trigger — identical nav model across modes; identity at capture
+            // (heldViewStart = entryStart + entrySub), p then moves it.
+            captureSingleFrame(entryStart, displaySamples, available, entrySub,
+                    entryStart + entrySub + triggerPosFracReal * displaySamples);
             if (singleHeld) {
                 renderHeldCapturedFrame(gc, w, h, showL, showR,
                         leftVDiv, rightVDiv, sincL, sincR, acL, acR);
@@ -2980,7 +3082,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // channel's V/div and its current vertical offset (the channel's
         // zero-line lives at offsetFrac × h on screen).
         double triggerVDiv = (triggerCh == Channel.L) ? leftVDiv : rightVDiv;
-        double triggerPeakVolts = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double triggerPeakVolts = prefs.getAdcPeakVolts(triggerCh);
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
         double vScaleTrig = triggerPeakVolts / triggerVDiv * pixelsPerDivY;
         double triggerCenterY = h * ((triggerCh == Channel.L)
@@ -3199,7 +3301,6 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                 prefs.getGenDualToneFreq2Hz());
         if (!(f1 > 0) || !(f2 > 0) || Math.abs(f2 - f1) <= 0) return;
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
-        double peakVolts     = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
         float  lineWidth     = (float) prefs.getOscLineWidth();
         // A channel showing its RESIDUAL gets no beat overlay — the envelope
         // belongs to the tones the residual just removed, and at residual
@@ -3208,7 +3309,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             float[] beat = reconstructBeatSignal(dataLeft, dataLen, sampleRate, f1, f2);
             drawTrace(gc, beat, dataLen, dispStart, subSampleOffset, dispCount,
                     w, h, h * prefs.getOscLeftOffsetFrac(),
-                    peakVolts / leftVDiv * pixelsPerDivY, lineWidth,
+                    prefs.getAdcPeakVolts(Channel.L) / leftVDiv * pixelsPerDivY, lineWidth,
                     color(ColorRole.LEFT_BEAT),
                     /* sincEnabled = */ false, /* dcOffset = */ 0.0, /* dotDiameter = */ 0);
         }
@@ -3216,7 +3317,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             float[] beat = reconstructBeatSignal(dataRight, dataLen, sampleRate, f1, f2);
             drawTrace(gc, beat, dataLen, dispStart, subSampleOffset, dispCount,
                     w, h, h * prefs.getOscRightOffsetFrac(),
-                    peakVolts / rightVDiv * pixelsPerDivY, lineWidth,
+                    prefs.getAdcPeakVolts(Channel.R) / rightVDiv * pixelsPerDivY, lineWidth,
                     color(ColorRole.RIGHT_BEAT),
                     /* sincEnabled = */ false, /* dcOffset = */ 0.0, /* dotDiameter = */ 0);
         }
@@ -3697,7 +3798,6 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         lastHeldDispCount  = dispCount;
         int    dispStart       = (int) Math.floor(heldViewStart);
         double subSampleOffset = heldViewStart - dispStart;
-        blankBeyondData = true;
         // The held copy may render after Stop with the live reader already gone,
         // so the residual fit reads its rate from the rate captured at freeze.
         renderTraces(gc, w, h, capturedLeft, capturedRight, capturedLen,
@@ -3710,7 +3810,6 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         drawBeatOverlays(gc, w, h, capturedLeft, capturedRight,
                 dispStart, subSampleOffset, dispCount,
                 capturedLen, showL, showR, leftVDiv, rightVDiv, capturedSampleRate);
-        blankBeyondData = false;
     }
 
     private void captureSingleFrame(int dispStart, int displaySamples,
@@ -3784,7 +3883,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         double leftCenterY  = h * prefs.getOscLeftOffsetFrac();
         double rightCenterY = h * prefs.getOscRightOffsetFrac();
         double pixelsPerDivY = (double) h / DIVISIONS_Y;
-        double peakVolts     = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
+        double peakVoltsL    = prefs.getAdcPeakVolts(Channel.L);
+        double peakVoltsR    = prefs.getAdcPeakVolts(Channel.R);
         float  lineWidth     = (float) prefs.getOscLineWidth();
         int    dotDiameter   = prefs.getOscDotDiameter();
 
@@ -3809,12 +3909,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             if (!rightResidual) lastResidualVppR = Double.NaN;
             float[] resL = (showL && leftResidual && dataLeft != null)
                     ? computeResidual(dataLeft, dataLen, dispStart, dispCount,
-                            Lanczos.LANCZOS_PADDING, sampleRate, true, peakVolts) : null;
+                            Lanczos.LANCZOS_PADDING, sampleRate, true, peakVoltsL) : null;
             int     dispL = residualDispStart;
             int     lenL  = residualSliceLen;
             float[] resR = (showR && rightResidual && dataRight != null)
                     ? computeResidual(dataRight, dataLen, dispStart, dispCount,
-                            Lanczos.LANCZOS_PADDING, sampleRate, false, peakVolts) : null;
+                            Lanczos.LANCZOS_PADDING, sampleRate, false, peakVoltsR) : null;
             int     dispR = residualDispStart;
             int     lenR  = residualSliceLen;
             // At least one residual succeeded → both channels render off the shared
@@ -3847,12 +3947,12 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         lineAttrsTrace.width = lineWidth;
         gc.setLineAttributes(lineAttrsTrace);
         if (showL) {
-            double vScale = peakVolts / leftVDiv * pixelsPerDivY;
+            double vScale = peakVoltsL / leftVDiv * pixelsPerDivY;
             drawTrace(gc, drawLeft,  drawLen, drawDisp, subSampleOffset, dispCount,
                       w, h, leftCenterY, vScale, lineWidth, color(ColorRole.LEFT_TRACE), sincEnabledL, dcOffsetL, dotDiameter);
         }
         if (showR) {
-            double vScale = peakVolts / rightVDiv * pixelsPerDivY;
+            double vScale = peakVoltsR / rightVDiv * pixelsPerDivY;
             drawTrace(gc, drawRight, drawLen, drawDisp, subSampleOffset, dispCount,
                       w, h, rightCenterY, vScale, lineWidth, color(ColorRole.RIGHT_TRACE), sincEnabledR, dcOffsetR, dotDiameter);
         }
@@ -3882,13 +3982,18 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     }
 
     /**
-     * Draws a waveform.  With sin(x)/x enabled the signal is always
-     * band-limit-reconstructed via a Lanczos-windowed sinc kernel scaled to the
-     * output rate (no aliasing into beat envelopes), at every time base.  With it
-     * off, a linearly-interpolated per-column stroke is used while
-     * {@code samplesPerPx ≤ Lanczos.MAX_LANCZOS_DOWNSAMPLE} and per-column min/max
-     * bars take over above that.  A 5-px filled dot is overlaid at each sample when
-     * sample spacing exceeds 10 px.
+     * Draws a waveform in one of two regimes keyed off {@code samplesPerPx}
+     * ({@code dispCount / width}):
+     * <ul>
+     *   <li><b>&le; 1 sample/px</b> — one reconstructed point per pixel column:
+     *       sin(x)/x (Lanczos band-limited, {@code scale == 1}) when the channel's
+     *       sinc toggle is on, otherwise linear interpolation.  A 5-px filled dot is
+     *       overlaid at each sample when sample spacing exceeds 10 px.
+     *   <li><b>&gt; 1 sample/px</b> — the dense renderer: {@link #drawDigitalPhosphor}
+     *       rasterises the displayed window as a DSO-style digital-phosphor coverage
+     *       image (each pixel's dwell time is its brightness), blitted once instead of
+     *       stroking every period.
+     * </ul>
      *
      * <p>{@code subSampleOffset} (range [0, 1)) shifts the rendered signal by
      * a fraction of a sample in the input-sample direction — used by the
@@ -3904,142 +4009,238 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         gc.setForeground(color);
         double samplesPerPx = (double) dispCount / width;
         double pxPerSample = (double) width / dispCount;
-        // One smooth point per pixel column while there is at most one sample per
-        // pixel — sin(x)/x reconstructs BETWEEN samples, linear interpolates.  Above
-        // one sample per pixel a single point per column would either stair-step
-        // (linear) or, with the downsampling-scaled sinc kernel, low-pass narrow
-        // pulses and the noise band away, so a CONNECTED per-column min/max envelope
-        // takes over (drawEnvelope) — sin(x)/x feeds it a dense scale-1 reconstruction
-        // so the band-limited pulse overshoot and noise survive the decimation.
-        boolean envelope = sincEnabled ? samplesPerPx > 1.0
-                                       : samplesPerPx > Lanczos.MAX_LANCZOS_DOWNSAMPLE;
-        if (!envelope) {
-            // One smooth point per pixel column — this branch is at most ~one sample per
-            // pixel (sin x/x) or <= MAX_LANCZOS_DOWNSAMPLE (linear).  Stroke through the
-            // shared paintPolyline — the same clipped-Path renderer as the FFT / FreqResp
-            // traces.  Sin x/x reconstructs band-limited values BETWEEN samples at scale
-            // max(1, spp) (so spp <= 1 here is true Whittaker-Shannon) and still reads its
-            // own LANCZOS_PADDING samples, so edge values are accurate; linear interpolates
-            // (lerpAt) one point per column.
-            Rectangle plot = new Rectangle(0, 0, width, height);
-            if (sincEnabled) {
-                double scale = Math.max(1.0, samplesPerPx);
-                // One reconstructed point per pixel column, plus one anchor point
-                // TRACE_EDGE_OVERHANG_PX outside each edge so the stroke caps
-                // render beyond the clip (full edge intensity).
-                paintPolyline(gc, plot, color, SWT.LINE_SOLID, lineWidth, width + 2,
-                        i -> sincTraceX(i, width),
-                        i -> {
-                            double pos = dispStart + subSampleOffset + sincTraceX(i, width) * samplesPerPx;
-                            if (pos < 0 || pos > n - 1) return Double.NaN;   // no sample there → blank the edge overhang
-                            return centerY - (Lanczos.lanczos(data, n, pos, scale) - dcOffset) * vScale;
-                        });
-            } else {
-                // Linear (sin x/x off): one linearly-interpolated point per pixel column —
-                // the same per-column stroke as the sinc branch, so the trace is a smooth
-                // sub-pixel polyline at >1 sample/pixel instead of the per-column min/max
-                // bars (one point per SAMPLE, column-bucketed) that stair-step a shallow
-                // ramp.  Straight-line interpolation, no band-limiting.
-                paintPolyline(gc, plot, color, SWT.LINE_SOLID, lineWidth, width + 2,
-                        i -> sincTraceX(i, width),
-                        i -> {
-                            double pos = dispStart + subSampleOffset + sincTraceX(i, width) * samplesPerPx;
-                            if (pos < 0 || pos > n - 1) return Double.NaN;   // no sample there → blank the edge overhang
-                            return centerY - (lerpAt(data, n, pos) - dcOffset) * vScale;
-                        });
-            }
-            if (pxPerSample > 10.0) {
-                gc.setBackground(color);
-                double dotShift = subSampleOffset * pxPerSample;
-                int half = dotDiameter / 2;
-                // Iterate over every sample index whose pixel position lands
-                // inside the canvas — including ones outside the original
-                // display window (the trace's sinc curve already extends past
-                // it).  Stops at buffer bounds; otherwise the sub-sample
-                // shift could leave an obvious sample-dot gap at the edges.
-                int iStart = (int) Math.floor(dotShift / pxPerSample);
-                int iEnd   = (int) Math.ceil((width + dotShift) / pxPerSample);
-                for (int i = iStart; i <= iEnd; i++) {
-                    int dataIdx = dispStart + i;
-                    if (dataIdx < 0 || dataIdx >= n) continue;
-                    int sx = (int) Math.round(i * pxPerSample - dotShift);
-                    if (sx < 0 || sx >= width) continue;
-                    int sy = (int) Math.round(centerY - (data[dataIdx] - dcOffset) * vScale);
-                    gc.fillOval(sx - half, sy - half, dotDiameter, dotDiameter);
-                }
-            }
+        // Above one sample per pixel the displayed window rasterises as a DSO-style
+        // digital-phosphor image — a width×height coverage image where each pixel's dwell
+        // time is its brightness, blitted once instead of stroking every period.  This IS
+        // the dense renderer (not an experiment); the <= 1 spp sparse sin(x)/x path below is
+        // the untouched anti-aliased reference.
+        if (samplesPerPx > 1.0) {
+            drawDigitalPhosphor(gc, data, n, dispStart, subSampleOffset, dispCount,
+                    width, height, centerY, vScale, lineWidth, color, dcOffset);
+            return;
+        }
+        // Reached only at <= 1 sample per pixel (the > 1 spp regime rasterised the
+        // digital-phosphor image and returned above).  One smooth point per pixel column,
+        // stroked through the shared paintPolyline — the same clipped-Path renderer as the
+        // FFT / FreqResp traces.  Sin x/x reconstructs band-limited values BETWEEN samples at
+        // scale 1 (true Whittaker-Shannon) and still reads its own LANCZOS_PADDING samples, so
+        // edge values are accurate; otherwise linear interpolates (lerpAt) one point per column.
+        Rectangle plot = new Rectangle(0, 0, width, height);
+        // Invariant: samplesPerPx <= 1.0 here (the > 1 spp branch returned above), so the
+        // historical `sincEnabled && samplesPerPx <= 1.0` gate simplifies to sincEnabled.
+        boolean sinc = sincEnabled;
+        if (sinc) {
+            double scale = Math.max(1.0, samplesPerPx);
+            // One reconstructed point per pixel column, plus one anchor point
+            // TRACE_EDGE_OVERHANG_PX outside each edge so the stroke caps
+            // render beyond the clip (full edge intensity).
+            paintPolyline(gc, plot, color, SWT.LINE_SOLID, lineWidth, width + 2,
+                    i -> sincTraceX(i, width),
+                    i -> {
+                        double pos = dispStart + subSampleOffset + sincTraceX(i, width) * samplesPerPx;
+                        if (pos < 0 || pos > n - 1) return Double.NaN;   // no sample there → blank the edge overhang
+                        return centerY - (Lanczos.lanczos(data, n, pos, scale) - dcOffset) * vScale;
+                    });
         } else {
-            drawEnvelope(gc, data, n, dispStart, subSampleOffset, dispCount,
-                    width, centerY, vScale, color, sincEnabled, dcOffset);
+            // Linear (sin x/x off): one linearly-interpolated point per pixel column — the
+            // same per-column stroke as the sinc branch.  Straight-line interpolation, no
+            // band-limiting.
+            paintPolyline(gc, plot, color, SWT.LINE_SOLID, lineWidth, width + 2,
+                    i -> sincTraceX(i, width),
+                    i -> {
+                        double pos = dispStart + subSampleOffset + sincTraceX(i, width) * samplesPerPx;
+                        if (pos < 0 || pos > n - 1) return Double.NaN;   // no sample there → blank the edge overhang
+                        return centerY - (lerpAt(data, n, pos) - dcOffset) * vScale;
+                    });
+        }
+        if (pxPerSample > 10.0) {
+            gc.setBackground(color);
+            double dotShift = subSampleOffset * pxPerSample;
+            int half = dotDiameter / 2;
+            // Iterate over every sample index whose pixel position lands
+            // inside the canvas — including ones outside the original
+            // display window (the trace's sinc curve already extends past
+            // it).  Stops at buffer bounds; otherwise the sub-sample
+            // shift could leave an obvious sample-dot gap at the edges.
+            int iStart = (int) Math.floor(dotShift / pxPerSample);
+            int iEnd   = (int) Math.ceil((width + dotShift) / pxPerSample);
+            for (int i = iStart; i <= iEnd; i++) {
+                int dataIdx = dispStart + i;
+                if (dataIdx < 0 || dataIdx >= n) continue;
+                int sx = (int) Math.round(i * pxPerSample - dotShift);
+                if (sx < 0 || sx >= width) continue;
+                int sy = (int) Math.round(centerY - (data[dataIdx] - dcOffset) * vScale);
+                gc.fillOval(sx - half, sy - half, dotDiameter, dotDiameter);
+            }
         }
     }
+
+    /** Digital-phosphor: alpha floor for a hit pixel
+     *  (crossing count &ge; 1).  {@code 1.0} (the default) makes EVERY hit pixel full trace
+     *  brightness, so the phosphor image matches the sparse anti-aliased sin&nbsp;x/x stroke
+     *  across the {@code spp == 1} boundary — no brightness drop when the renderer flips regimes.
+     *  A value {@code < 1.0} re-enables true phosphor grading (this floor plus the log knee up to
+     *  {@link #DPO_SATURATION_COUNT}) so a one-shot glitch reads fainter than a saturated tone;
+     *  {@link #phosphorLut()} short-circuits the log when the floor is 1.0.  Bench knob — parsed
+     *  (not a compile-time literal) so the grading branch stays live for the {@code < 1.0} knob. */
+    private static final double DPO_SINGLE_HIT_ALPHA = Double.parseDouble("1.0");
+    /** Digital-phosphor: dwell (crossing) count that saturates a pixel to full intensity;
+     *  a count at or above it maps to alpha 255, so the count→alpha LUT is this many
+     *  entries long ({@code +1} for count 0).  Bench-tunable. */
+    private static final int    DPO_SATURATION_COUNT = 64;
+    /** 8-bit alpha for a fully saturated phosphor pixel. */
+    private static final double DPO_ALPHA_MAX = 255.0;
+    /** Digital-phosphor supersampling factor: the histogram, band export and coverage pen are
+     *  rasterised on a grid of {@code 1/this} px cells ({@code 2} = the maintainer's 0.5 px
+     *  histogram) and box-averaged down, so every final pixel carries a true decimal coverage —
+     *  REAL anti-aliasing in both axes, including the sub-column X the 1-px band model loses
+     *  (halves the diagonal steps and the vertical-segment widening).  {@code 1} = rasterise at
+     *  pixel resolution (no supersampling).  Bench knob — parsed so both branches stay live. */
+    private static final int DPO_SUPERSAMPLE = Integer.parseInt("2");
 
     /**
-     * Draws a CONNECTED per-column min/max envelope (more than one sample per
-     * pixel) — each column is a {@code [min, max]} vertical bar with a bridging
-     * connector across disjoint adjacent columns ({@link TraceEnvelope#connectorAttach})
-     * so the trace stays continuous instead of floating as the old disconnected bars
-     * did.  Linear takes the raw-sample min/max; sin(x)/x additionally reconstructs
-     * the band-limited curve around each column's extreme samples
-     * ({@link TraceEnvelope#reconstructedColumns}) to recover a peak that the
-     * (clock-drifting) samples missed.
+     * Dense renderer (more than one
+     * sample per pixel): rasterises the whole displayed window as a DSO-style DIGITAL
+     * PHOSPHOR — a {@code width×height} coverage image where each pixel's brightness is
+     * its dwell time (how many consecutive-sample spans cross it) — and blits it as one
+     * channel-colour-tinted image, replacing the vector polyline entirely.  By default every
+     * hit pixel is full trace brightness ({@link #DPO_SINGLE_HIT_ALPHA} = 1.0), so the image
+     * matches the sparse anti-aliased sin&nbsp;x/x stroke across the {@code spp == 1} boundary;
+     * lowering the floor re-enables phosphor dwell grading (a one-shot glitch then reads fainter
+     * than a saturated tone).
      *
-     * <p>Vertical 1-px bars + connectors don't benefit from AA or the thick
-     * round-cap stroke, and the per-segment GDI overhead dominates otherwise, so
-     * the caller's AA + line-attributes are saved, the fast {@link #lineAttrsBars}
-     * defaults set, and restored after — else the next channel's Lanczos curve
-     * inherits the 1-px flat-cap stroke and looks thinner.
+     * <p>The pure accumulation is {@link TraceEnvelope#columnCrossings}: it inverts the
+     * per-column bucket mapping for X and applies the same {@code centerY − (value −
+     * dcOffset)·vScale} value→pixel transform for Y as every other trace path, streaming
+     * one {@code (x, y, count)} per touched pixel.  At the full-brightness floor
+     * ({@link #DPO_SINGLE_HIT_ALPHA} &ge; 1.0) the accumulation runs only for its band export and
+     * the sink is a NO-OP — the pen alone rasterises the trace, since packing hard-255 interior
+     * rows would erase the pen's anti-aliased fringes; under phosphor grading ({@code < 1.0}) the
+     * sink writes each pixel's alpha through the precomputed count→alpha LUT into the pooled
+     * {@code phosphorAlpha} buffer and the pen lays its dimmer outline over it.  The finished
+     * buffer is blitted via {@link MeasurementPainter#drawAlphaImage} so the GL persistence
+     * (phosphor FBO) and the GC screenshot path inherit it automatically.  {@code columnCrossings}
+     * runs with sin&nbsp;x/x rails ON, so each column also
+     * exports its band-limited crest/trough as unrounded row-space floats.  The configured pref
+     * trace width is then stroked by {@link TraceEnvelope#penRasterize}: a true round coverage pen
+     * of EXACTLY the fractional {@code lineWidth}, swept along the exported band and composited
+     * OVER the count interior via max — continuous width (hairline band + pen = {@code lineWidth}
+     * px), anti-aliasing in both axes, and round caps into blank columns, in place of the old
+     * integer dilation pen.  The whole rasterisation runs on a {@link #DPO_SUPERSAMPLE}× grid of
+     * sub-pixel cells (0.5 px at the default 2) and is box-averaged down
+     * ({@link TraceEnvelope#downsampleBox}) so every blitted pixel carries a true decimal
+     * coverage.  Pooled scratch only — {@code phosphorDiff}, {@code phosphorAlpha} and its
+     * supersampled sibling, and the {@code phosphorBandTop}/{@code phosphorBandBot} band, all
+     * grown on demand — so the hot path allocates
+     * nothing.
      */
-    private void drawEnvelope(MeasurementPainter gc, float[] data, int n,
-                              int dispStart, double subSampleOffset, int dispCount,
-                              int width, double centerY, double vScale, Color color,
-                              boolean sincEnabled, double dcOffset) {
-        double samplesPerPx = (double) dispCount / width;
-        int dispLimit = Math.min(dispStart + dispCount, n);
-        if (envMin == null || envMin.length < width) {
-            envMin   = new float[width];
-            envMax   = new float[width];
-            envEntry = new float[width];
-            envExit  = new float[width];
+    private void drawDigitalPhosphor(MeasurementPainter gc, float[] data, int n,
+                                     int dispStart, double subSampleOffset, int dispCount,
+                                     int width, int height, double centerY, double vScale,
+                                     float lineWidth, Color color, double dcOffset) {
+        if (width <= 0 || height <= 0) return;
+        // Rasterise on a supersampled grid of 1/ss px cells (the maintainer's 0.5 px histogram at
+        // ss = 2): the accumulation, band export and pen are resolution-agnostic, so they simply run
+        // at ss× dimensions with the transform and pen width scaled, and the box-average down to the
+        // final buffer turns sub-cell coverage into a true decimal per-pixel brightness — real AA,
+        // including the sub-column X a 1-px band cannot carry.
+        int ss  = Math.max(1, DPO_SUPERSAMPLE);
+        int wSs = width * ss;
+        int hSs = height * ss;
+        if (phosphorDiff == null || phosphorDiff.length < hSs + 2) {
+            phosphorDiff = new int[hSs + 2];
         }
-        if (sincEnabled) {
-            TraceEnvelope.reconstructedColumns(data, n, dispStart, subSampleOffset, width,
-                    samplesPerPx, RECON_REFINE_STEP, blankBeyondData, dispLimit, envMin, envMax);
+        if (phosphorBandTop == null || phosphorBandTop.length < wSs) {
+            phosphorBandTop = new float[wSs];
+            phosphorBandBot = new float[wSs];
+            phosphorBandXLo = new float[wSs];
+            phosphorBandXHi = new float[wSs];
+            phosphorBandEntryX = new float[wSs];
+            phosphorBandEntryY = new float[wSs];
+            phosphorBandExitX = new float[wSs];
+            phosphorBandExitY = new float[wSs];
+        }
+        int pixels = width * height;
+        if (phosphorAlpha == null || phosphorAlpha.length < pixels) {
+            phosphorAlpha = new byte[pixels];
         } else {
-            TraceEnvelope.rawColumns(data, n, dispStart, subSampleOffset, width,
-                    samplesPerPx, blankBeyondData, dispLimit, envMin, envMax);
+            Arrays.fill(phosphorAlpha, 0, pixels, (byte) 0);   // reused → clear the used region
         }
-        // Where each column's connector attaches to its bar — peak/trough-aware,
-        // so an isolated spike is traced to its tip (see TraceEnvelope#connectorAttach).
-        TraceEnvelope.connectorAttach(envMin, envMax, width, envEntry, envExit);
-        gc.setForeground(color);
-        int prevAntialias = gc.getAntialias();
-        LineAttributes prevLineAttributes = gc.getLineAttributes();
-        gc.setAntialias(SWT.OFF);
-        gc.setLineAttributes(lineAttrsBars);
-        try {
-            for (int x = 0; x < width; x++) {
-                float cMin = envMin[x];
-                if (Float.isNaN(cMin)) continue;
-                float cMax = envMax[x];
-                int yOfMin = (int) Math.round(centerY - (cMin - dcOffset) * vScale);   // bottom (larger y)
-                int yOfMax = (int) Math.round(centerY - (cMax - dcOffset) * vScale);   // top (smaller y)
-                gc.drawLine(x, yOfMax, x, yOfMin);   // the bar
-                // Connector from the previous column (drawn iff both ends are set —
-                // the boundary is disjoint and neither column is blank).
-                float exitPrev = x > 0 ? envExit[x - 1] : Float.NaN;
-                if (!Float.isNaN(exitPrev) && !Float.isNaN(envEntry[x])) {
-                    int yExit  = (int) Math.round(centerY - (exitPrev    - dcOffset) * vScale);
-                    int yEntry = (int) Math.round(centerY - (envEntry[x] - dcOffset) * vScale);
-                    gc.drawLine(x - 1, yExit, x, yEntry);
-                }
+        byte[] alpha = phosphorAlpha;
+        if (ss > 1) {
+            int cells = wSs * hSs;
+            if (phosphorAlphaSs == null || phosphorAlphaSs.length < cells) {
+                phosphorAlphaSs = new byte[cells];
+            } else {
+                Arrays.fill(phosphorAlphaSs, 0, cells, (byte) 0);
             }
-        } finally {
-            gc.setAntialias(prevAntialias);
-            gc.setLineAttributes(prevLineAttributes);
+            alpha = phosphorAlphaSs;
         }
+        byte[] grid  = alpha;
+        byte[] lut   = phosphorLut();
+        int lutMax   = lut.length - 1;
+        int w        = wSs;
+        // sin x/x rails ON (the maintainer's standing order): each column exports its band-limited
+        // crest/trough as unrounded row-space floats for the coverage pen.  The accumulation ALWAYS
+        // runs — the band export needs the pass — but at the full-brightness floor the interior count
+        // pack is REDUNDANT AND DESTRUCTIVE: DPO_SINGLE_HIT_ALPHA ≥ 1.0 packs every hit row hard 255,
+        // and the pen's stadium already covers the whole band there, so max(hard 255, AA fringe) = 255
+        // would erase the pen's side/edge anti-aliasing.  So at the flat floor we pass a NO-OP sink
+        // and let the pen alone rasterise the trace.  Only under phosphor grading (< 1.0), where the
+        // graded interior IS the dwell image, do we pack counts→LUT and lay the (dimmer) pen outline
+        // over it via max — that order is unchanged.
+        TraceEnvelope.CrossingSink sink = DPO_SINGLE_HIT_ALPHA >= 1.0
+                ? (x, y, count) -> { }                                       // pen-only at flat fill
+                : (x, y, count) -> grid[y * w + x] = lut[Math.min(count, lutMax)];
+        TraceEnvelope.columnCrossings(data, n, dispStart, dispCount, wSs, hSs,
+                subSampleOffset, centerY * ss, vScale * ss, dcOffset, true, phosphorDiff,
+                phosphorBandTop, phosphorBandBot, phosphorBandXLo, phosphorBandXHi,
+                phosphorBandEntryX, phosphorBandEntryY, phosphorBandExitX, phosphorBandExitY, sink);
+        // Stroke the trace width as a true round swept-stadium coverage pen of EXACTLY the fractional
+        // pref lineWidth (scaled to the supersampled grid) over the exported band, composited via max
+        // — continuous width + AA in both axes + round caps.  Outline alpha is the single-hit floor
+        // (255 at the 1.0 floor, scaled down when phosphor grading is on).
+        int outlineAlpha = (int) Math.round(DPO_SINGLE_HIT_ALPHA * DPO_ALPHA_MAX);
+        TraceEnvelope.penRasterize(phosphorBandTop, phosphorBandBot, phosphorBandXLo,
+                phosphorBandXHi, phosphorBandEntryX, phosphorBandEntryY, phosphorBandExitX,
+                phosphorBandExitY, wSs, hSs, lineWidth * ss, outlineAlpha, grid);
+        if (ss > 1) {
+            // The vector stroke's AA fringe, appended on the sub-cell grid (interior stays full
+            // brightness — a tent convolution dimmed thin strokes, bench-rejected), then exact
+            // box area coverage down to pixels.
+            int cells = wSs * hSs;
+            if (phosphorFringe == null || phosphorFringe.length < cells) {
+                phosphorFringe = new byte[cells];
+            }
+            TraceEnvelope.fringeDilate(grid, wSs, hSs, ss, phosphorFringe);
+            TraceEnvelope.downsampleBox(grid, wSs, ss, phosphorAlpha, width, height);
+        }
+        gc.drawAlphaImage(phosphorAlpha, width, height, 0, 0, color);
     }
 
+    /** Lazily builds the digital-phosphor count→alpha LUT once from the (compile-time)
+     *  intensity constants, indexed by {@code min(count, }{@link #DPO_SATURATION_COUNT}{@code )}:
+     *  {@code alpha(0) = 0}; else {@link #DPO_SINGLE_HIT_ALPHA} {@code + (1 −
+     *  DPO_SINGLE_HIT_ALPHA)·min(1, ln(1+count)/ln(1+DPO_SATURATION_COUNT))}, scaled to
+     *  8-bit.  Precomputed so the hot loop never evaluates {@code ln()}. */
+    private byte[] phosphorLut() {
+        if (phosphorLut == null) {
+            byte[] lut = new byte[DPO_SATURATION_COUNT + 1];
+            if (DPO_SINGLE_HIT_ALPHA >= 1.0) {
+                // Floor at full brightness → every hit is full alpha; no log grading needed.
+                Arrays.fill(lut, 1, lut.length, (byte) Math.round(DPO_ALPHA_MAX));
+            } else {
+                double denom = Math.log(1.0 + DPO_SATURATION_COUNT);
+                for (int c = 1; c <= DPO_SATURATION_COUNT; c++) {
+                    double norm = Math.min(1.0, Math.log(1.0 + c) / denom);
+                    double a = DPO_SINGLE_HIT_ALPHA + (1.0 - DPO_SINGLE_HIT_ALPHA) * norm;
+                    lut[c] = (byte) Math.round(a * DPO_ALPHA_MAX);
+                }
+            }
+            phosphorLut = lut;   // lut[0] left 0 → count 0 fully transparent
+        }
+        return phosphorLut;
+    }
 
     @Override
     protected void checkSubclass() {

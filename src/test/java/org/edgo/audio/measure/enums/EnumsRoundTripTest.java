@@ -38,11 +38,15 @@ class EnumsRoundTripTest {
     @Test
     void channel_valuesRoundTrip()             { check(Channel.values()); }
     @Test
+    void deviceChannelMode_valuesRoundTrip()   { check(DeviceChannelMode.values()); }
+    @Test
     void magnitudeUnit_valuesRoundTrip()       { check(MagnitudeUnit.values()); }
     @Test
     void fftOverlap_valuesRoundTrip()          { check(FftOverlap.values()); }
     @Test
     void genSignalForm_valuesRoundTrip()       { check(GenSignalForm.values()); }
+    @Test
+    void outputChannels_valuesRoundTrip()      { check(OutputChannels.values()); }
     @Test
     void oscSliderId_valuesRoundTrip()         { check(OscSliderId.values()); }
     @Test

@@ -139,6 +139,9 @@ public final class SharedCapture {
             log.warn("Capture: {}", lastStartError);
             return null;
         }
+        // Per-card FS resolution: push the selected card's active-range ADC
+        // full-scale through setAdcFsVoltageRms; legacy scalar when unbound.
+        prefs.applyInputDeviceProfile(device.name());
         final int sampleRate = bp.getInputSampleRate();
         final int bitDepth   = bp.getInputBitDepth();
 
