@@ -749,16 +749,18 @@ public final class GeneratorController {
     }
 
     /** The exact frequency the DDS must be driven at for {@code form}.
-     *  A RECTANGLE can only place its hard +1/−1 edge ON a sample, so it
-     *  has to run at an integer-sample-period frequency {@code fs/N} —
-     *  otherwise the edge jitters ±1 sample between cycles and the tone
-     *  smears (the scope reads the raw, off-grid value).  Every other form
-     *  is exact at any frequency: SINE / DUAL_TONE take the optional
-     *  FFT-bin snap, and TRIANGLE rides the continuous ramp sub-sample, so
-     *  both stay on their raw entered frequency. */
+     *  A RECTANGLE can only place its hard +1/−1 edge ON a sample, and a
+     *  TRIANGLE's duty corner is a derivative discontinuity with the same
+     *  problem — off an integer-sample period the edge/corner drifts
+     *  against the sample grid cycle to cycle and the tone smears.  Both
+     *  therefore run at the integer-sample-period frequency {@code fs/N},
+     *  and both duty brackets in the pane quantise against that N.  Every
+     *  other form is exact at any frequency: SINE / DUAL_TONE take the
+     *  optional FFT-bin snap and stay on their raw entered frequency
+     *  otherwise. */
     private double emitFrequency(Preferences prefs, GenSignalForm form,
                                  int sampleRate, double raw) {
-        if (form == GenSignalForm.RECTANGLE) {
+        if (form == GenSignalForm.RECTANGLE || form == GenSignalForm.TRIANGLE) {
             return samplePeriodAlignedHz(raw, sampleRate);
         }
         return FftBinSnap.snapIfEnabled(prefs, form, sampleRate, raw);
@@ -783,11 +785,12 @@ public final class GeneratorController {
         return Math.max(2, (int) Math.round(sr / f));
     }
 
-    /** Closest frequency the DDS rectangle can produce with an
-     *  integer-sample period — the pane's Frequency bracket label.  This
-     *  is the SAME value {@link #emitFrequency} drives the rectangle at,
-     *  so the displayed bracket and the emitted tone can never diverge. */
-    public double correctedRectangleHz() {
+    /** Closest frequency the period-aligned forms (RECTANGLE, TRIANGLE)
+     *  can produce with an integer-sample period — the pane's Frequency
+     *  bracket label.  This is the SAME value {@link #emitFrequency}
+     *  drives them at, so the displayed bracket and the emitted tone can
+     *  never diverge. */
+    public double correctedPeriodAlignedHz() {
         Preferences prefs = Preferences.instance();
         return samplePeriodAlignedHz(prefs.getGenFrequencyHz(),
                 prefs.current().getOutputSampleRate());
@@ -858,12 +861,12 @@ public final class GeneratorController {
         int    sampleRate    = prefs.current().getOutputSampleRate();
         int    bitDepth      = prefs.current().getOutputBitDepth();
         int    ditherBits    = prefs.getGenDitherBits();
-        // RECTANGLE exports at the SAME integer-sample-period frequency the
-        // live generator emits (fs/N) — so the file matches what is heard,
-        // a looped WAV has no off-grid edge seam, and the integer-period
-        // truncation below lands exactly on N samples.  Every other form is
-        // exact at any frequency and is exported as entered.
-        double frequency     = (form == GenSignalForm.RECTANGLE)
+        // RECTANGLE and TRIANGLE export at the SAME integer-sample-period
+        // frequency the live generator emits (fs/N) — so the file matches what
+        // is heard, a looped WAV has no off-grid edge/corner seam, and the
+        // integer-period truncation below lands exactly on N samples.  Every
+        // other form is exact at any frequency and is exported as entered.
+        double frequency     = (form == GenSignalForm.RECTANGLE || form == GenSignalForm.TRIANGLE)
                 ? samplePeriodAlignedHz(prefs.getGenFrequencyHz(), sampleRate)
                 : prefs.getGenFrequencyHz();
         double amplitudeVRms = prefs.getGenAmplitudeVrms();
