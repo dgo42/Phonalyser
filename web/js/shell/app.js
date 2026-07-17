@@ -35,6 +35,7 @@ import { PredistortionHost } from './predistortion-host.js';
 import { PredistortionWizard } from './predistortion-wizard.js';
 import { PreferencesDialog } from './preferences-dialog.js';
 import { StartupSplash } from './startup-splash.js';
+import { TipDialog } from './tip-dialog.js';
 import { MainTab } from './main-tab.js';
 import { ScopePane } from '../scope/scope-pane.js';
 import { ScopeTabControl } from '../scope/scope-tab-control.js';
@@ -755,11 +756,16 @@ function helpContextPage() {
 }
 
 // Help submenu (#menuHelp is the dropdown toggle). Desktop-only items (check-for-update,
-// startup checks, rebuild index, tip-of-day) are omitted: the web auto-updates via the
+// startup checks, rebuild index) are omitted: the web auto-updates via the
 // service worker and the search index is built at build time.
 $('#helpShow').on('click', () => openHelp());
 $('#helpShowActive').on('click', () => openHelp(helpContextPage()));
 $('#helpReport').on('click', () => window.open('https://github.com/dgo42/Phonalyser/issues/new', '_blank', 'noopener'));
+// Tip of the day (Java MainWindow Help → Tip of the day → new TipOfTheDayDialog(shell).open()):
+// a small non-modal popup docked bottom-left. The Help entry opens it unconditionally; the
+// startup path (init, after the splash dismisses) opens it only when showTipsAtStartup is set.
+const tipDialog = new TipDialog({ prefs, t });
+$('#helpTip').on('click', () => tipDialog.open());
 // About dialog: paint the SAME branded artwork the startup splash draws (Java
 // MainWindow.showAboutDialog → StartupSplash.showAsAbout) — version/tagline/
 // copyright/license/URL are all on the canvas, and the repo URL is clickable.
@@ -1549,7 +1555,15 @@ async function init() {
   // Auto-enumerate audio devices on load (no Preferences dialog needed) — and dismiss the
   // startup splash once that scan settles (SAFETY: startup-splash also self-dismisses on a
   // 20 s timeout, so a hung permission prompt can never brick the app behind the overlay).
-  splash.dismissOnScan(prefsDialog.scan());
+  const scanPromise = prefsDialog.scan();
+  splash.dismissOnScan(scanPromise);
+  // Tip of the day at startup (Java MainWindow.open: shown once the window is up when
+  // Preferences.isShowTipsAtStartup()). Web equivalent boot moment: after the branded splash
+  // dismisses — the scan settling is what dismisses it — so the popup never overlaps the splash.
+  if (prefs.showTipsAtStartup.get()) {
+    const openTip = () => setTimeout(() => tipDialog.open(), 300);
+    Promise.resolve(scanPromise).then(openTip, openTip);
+  }
 }
 init().catch(e => console.error('init failed', e));
  
