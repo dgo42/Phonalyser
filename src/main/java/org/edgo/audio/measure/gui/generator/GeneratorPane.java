@@ -1109,7 +1109,7 @@ public final class GeneratorPane extends AbstractPane {
 
     /**
      * Refreshes the "Frequency" label text.  Appends a bracketed
-     * correction for forms that have one: RECTANGLE shows the
+     * correction for forms that have one: RECTANGLE and TRIANGLE show the
      * integer-sample-period frequency, SINE / compensated sine (when
      * "snap to FFT bin" is checked) show the FFT-bin-snapped frequency.
      * All other forms show plain "Frequency".
@@ -1117,8 +1117,8 @@ public final class GeneratorPane extends AbstractPane {
     private void updateFreqLabel() {
         GenSignalForm form = formCombo.getSelectedForm();
         String corrected = null;
-        if (form == GenSignalForm.RECTANGLE) {
-            corrected = formatLabelHz(controller.correctedRectangleHz());
+        if (form == GenSignalForm.RECTANGLE || form == GenSignalForm.TRIANGLE) {
+            corrected = formatLabelHz(controller.correctedPeriodAlignedHz());
         } else if ((form == GenSignalForm.SINE || form == GenSignalForm.SINE_COMP)
                    && fftSnapBtn.getSelection()) {
             corrected = formatLabelHz(controller.effectiveFrequency());
@@ -1129,18 +1129,17 @@ public final class GeneratorPane extends AbstractPane {
     }
 
     /**
-     * Refreshes the "Duty cycle" label text.  For RECTANGLE shows the
-     * one-sample-quantised duty the DDS will actually output; other
-     * forms hide the bracket (the field is also disabled in that case).
+     * Refreshes the "Duty cycle" label text.  For RECTANGLE and TRIANGLE
+     * shows the one-sample-quantised duty on the integer-sample period the
+     * DDS is driven at; other forms hide the bracket (the field is also
+     * disabled in that case).
      */
     private void updateDutyLabel() {
         GenSignalForm form = formCombo.getSelectedForm();
-        // Only RECTANGLE is sample-quantised: its +1/−1 step edge can land only
-        // ON a sample, so the emitted duty snaps to whole samples and the
-        // bracket shows the adapted value.  TRIANGLE uses real continuous-phase
-        // DDS (the samples ride the exact ramps, so the corner is sub-sample) —
-        // its duty is exact and gets the plain label, like the non-duty forms.
-        if (form != GenSignalForm.RECTANGLE) {
+        // RECTANGLE's +1/−1 step edge and TRIANGLE's duty corner both have to
+        // land ON a sample of the period-aligned grid (fs/N), so the emitted
+        // duty snaps to whole samples and the bracket shows the adapted value.
+        if (form != GenSignalForm.RECTANGLE && form != GenSignalForm.TRIANGLE) {
             dutyLabel.setText(I18n.t("generator.dutyCycle"));
             dutyLabel.getParent().layout();
             return;
