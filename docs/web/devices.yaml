@@ -1,0 +1,91 @@
+# Phonalyser bundled well-known device profiles.
+#
+# Seeded to <user data dir>/devices.yaml on first run (when that file is
+# absent), then loaded as ordinary per-card calibration profiles.  A seeded
+# entry differs from a user-created card only in that it arrives with `match`
+# recognition patterns and no aliases: it becomes the pre-selected card
+# suggestion the first time a device whose name matches a pattern is seen, and
+# binding it just adds the alias.
+#
+# The fsVrms values below are NOMINAL — the user still calibrates to measure
+# their own card's exact full-scale; the seed only supplies the card name,
+# recognition patterns, channel mode and range labels so the profile starts
+# life shaped right.
+#
+# UPGRADE BEHAVIOUR — what happens to your devices.yaml when a new release
+# ships an updated copy of this file.  The merge is gated on `contentVersion`
+# below: it runs once whenever this file's contentVersion is higher than the one
+# your store recorded, then records the new number.  For each card below your
+# store is matched by name OR by a shared recognition entry (so a card you
+# renamed is still found), and only the RANGE table is reconciled: a range the
+# release added appears in your store, and a range you both have is refreshed to
+# the release's nominal value — EXCEPT a range you actually CALIBRATED, which
+# keeps its measured full-scale (and calibrated flag).  Everything else you own
+# is left exactly as-is: your channel mode, your recognition/alias list, your
+# active-range selection, and any range you added by hand all survive.  A card
+# that is new in the release is added whole.  Cards YOU created (names/patterns
+# not listed below) are never touched.
+#
+# VERSIONING — bump `contentVersion` (an integer) whenever the CATALOG content
+# here changes: a new card, a new range, or a changed nominal value that existing
+# stores should reconcile against once.  `formatVersion` is separate — bump it
+# only when the FILE FORMAT / schema changes, not the catalog data.
+#
+# Each entry uses the same profile YAML vocabulary Preferences writes:
+#   name        — the logical profile name shown to the user
+#   match       — device-name substrings (case-insensitive) that identify this card
+#   input       / output — per-direction blocks:
+#     channels    — MONO (one physical channel, one full-scale for both sides),
+#                   LINKED (both channels share one range but keep per-channel
+#                   values) or INDEPENDENT
+#     calibrationFromDevice — true ONLY for a card whose full-scale is reported by
+#                   the device itself (a QA40x): the app never writes calibration
+#                   into these ranges and the upgrade takes them wholesale from the
+#                   seed (omit the key for an ordinary user-calibrated card)
+#     ranges      — one row per attenuator / gain position; fsVrms in volts RMS,
+#                   either one number for both channels or { left: …, right: … }
+#                   for per-channel values (each channel calibrates its own side);
+#                   the app always saves the { left, right } pair form
+#     activeRange — the selected range row: LINKED / MONO endpoints use the row
+#                   label as a scalar, INDEPENDENT endpoints use one
+#                   { left: …, right: … } map (each channel's own label).
+
+formatVersion: 1
+contentVersion: 1
+audioDevices:
+  - name: E1DA Cosmos ADC
+    match: [ "E1DA Cosmos ADC" ]
+    input:
+      channels: INDEPENDENT
+      ranges:
+        - { label: "1.7V", fsVrms: { left: 1.7910482002478434, right: 1.7910482002478434 } }
+        - { label: "2.7V", fsVrms: { left: 2.7, right: 2.7 } }
+        - { label: "3.5V", fsVrms: { left: 3.5, right: 3.5 } }
+        - { label: "4.5V", fsVrms: { left: 4.5, right: 4.5 } }
+        - { label: "6.7V", fsVrms: { left: 6.7, right: 6.7 } }
+        - { label: "7.6V", fsVrms: { left: 7.6, right: 7.6 } }
+        - { label: "8.5V", fsVrms: { left: 8.5, right: 8.5 } }
+        - { label: "10V", fsVrms: { left: 10, right: 10 } }
+        - { label: "43V", fsVrms: { left: 43, right: 43 } }
+      activeRange: { left: "1.7V", right: "1.7V" }
+
+  - name: I2SoverUSB
+    match: [ "I2SoverUSB", "JLsounds" ]
+    output:
+      channels: LINKED
+      ranges:
+        - { label: "default", fsVrms: { left: 1.9702745870816782, right: 1.9702745870816782 } }
+      activeRange: "default"
+
+  - name: CUBILUX CB5
+    match: [ "CUBILUX CB5", "CB5" ]
+    input:
+      channels: LINKED
+      ranges:
+        - { label: "default", fsVrms: { left: 1.920615915248692, right: 1.920615915248692 } }
+      activeRange: "default"
+    output:
+      channels: LINKED
+      ranges:
+        - { label: "default", fsVrms: { left: 4.629020031592054, right: 4.629020031592054 } }
+      activeRange: "default"

@@ -152,7 +152,11 @@ export class ScopePane {
     });
     return {
       sampleRate: c.inRate,
-      peakVolts: p.adcFsVoltageRms.get() * Math.SQRT2,
+      // Each channel scales by its OWN ADC full-scale (Java ScopeMeasurementWorker.java:448-9
+      // getAdcPeakVolts(Channel.L)/(Channel.R)); LINKED cards give equal L/R peaks. Read
+      // LIVE (getAdcPeakVolts reads the pref Property) so an ADC calibration rescales mid-
+      // capture without the stale-snapshot double-calibration bug.
+      peakVoltsL: p.getAdcPeakVolts('L'), peakVoltsR: p.getAdcPeakVolts('R'),
       avgSeconds: p.oscMeasurementAverageSeconds.get(),
       L: per('Left'), R: per('Right'),
     };
@@ -611,7 +615,9 @@ export class ScopePane {
     const prefs = this.prefs;
     const leftActive = prefs.oscLeftChannelEnabled.get() || !prefs.oscRightChannelEnabled.get();
     const vDiv = leftActive ? prefs.oscLeftVoltsPerDiv.get() : prefs.oscRightVoltsPerDiv.get();
-    const fs = prefs.adcFsVoltageRms.get() * Math.SQRT2;
+    // Full-scale pairs with the SAME channel whose V/div is used (Java ScopeView.offsetFracBounds
+    // getAdcPeakVolts(measurementReferenceChannel())).
+    const fs = prefs.getAdcPeakVolts(leftActive ? 'L' : 'R');
     // Half-range = Vfs/(DIVISIONS_Y·V/div), floored at 0.5 (ScopeFormat.offsetMoveHalfRange):
     // small V/div → wide scroll range, large V/div → clamped to [0,1].
     const half = offsetMoveHalfRange(vDiv, fs, DIVISIONS_Y);

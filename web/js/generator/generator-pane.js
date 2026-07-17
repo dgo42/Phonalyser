@@ -18,7 +18,7 @@
 import { t } from '../i18n/i18n.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events, GenChangeCause } from '../bus/events.js';
-import { GenSignalForm, isDualTone, isPeriodic, DdsKernel, quantizePcm,
+import { GenSignalForm, isDualTone, isPeriodic, DdsKernel, quantizePcm, outputLaneGate,
   loadHarmonics, loadIntermod, isDualToneCorrectionFile } from './dds-kernel.js';
 import * as fileStore from '../io/file-store.js';
 
@@ -96,6 +96,7 @@ export class GeneratorPane {
     // NumericStepField controllers (seeded in initStepFields); nothing to set here.
     this.rebuildDitherCombo();
     $('#dither').val(String(prefs.genDitherBits.get()));
+    $('#outputChannel').val(prefs.genOutputChannels.get());
     $('#snap').prop('checked', prefs.genSnapToFftBin.get());
     $('#genFileLoop').prop('checked', prefs.genPlayFromLoop.get());   // Java playFromLoopBtn is two-way bound
     this.seedSweepFields();   // sweep params (engine.config + loop) from prefs (numeric fields are stepfields)
@@ -105,10 +106,10 @@ export class GeneratorPane {
 
   // ----- generator: frequency label (bracketed snapped Hz when snap is on) -----
   // Mirrors Java updateFreqLabel: SINE-with-snap shows the bin-snapped frequency.
-  // Frequency label (Java GeneratorPane.updateFreqLabel): brackets for RECTANGLE
+  // Frequency label (Java GeneratorPane.updateFreqLabel): brackets for RECTANGLE and TRIANGLE
   // (sample-period-aligned Hz, fs/round(fs/f)), or SINE / SINE_COMP with snap-to-FFT-bin on
   // (bin-snapped Hz — SINE_COMP is FLL-aligned to the bin here, see below); every other form
-  // (TRIANGLE, noise, …) shows the plain "Frequency".
+  // (noise, …) shows the plain "Frequency".
   refreshFreqLabel() {
     const engine = this.engine;
     const sfVal = (id, dflt) => this._sfVal(id, dflt);
@@ -137,7 +138,7 @@ export class GeneratorPane {
       return;
     }
     let corrected = null;
-    if (form === GenSignalForm.RECTANGLE) {
+    if (form === GenSignalForm.RECTANGLE || form === GenSignalForm.TRIANGLE) {
       corrected = (raw > 0 && fs > 0) ? fs / Math.max(2, Math.round(fs / raw)) : raw;
     } else if ((form === GenSignalForm.SINE || form === GenSignalForm.SINE_COMP) && snap && binW > 0) {
       // SINE_COMP included: Java updateFreqLabel brackets SINE and SINE_COMP alike, and
@@ -150,14 +151,15 @@ export class GeneratorPane {
       : t('generator.frequency.bracket', `${corrected.toFixed(3)} Hz`));
   }
 
-  // Duty label: only RECTANGLE shows the real (sample-grid achievable) duty in brackets — k whole
-  // samples of n per period, clamped to [1, n-1] — so the user sees the duty actually emitted, not
-  // just the typed value (Java GeneratorPane). TRIANGLE is continuous-phase DDS (exact), so it
-  // keeps the plain "Duty cycle" label like every other form.
+  // Duty label: RECTANGLE and TRIANGLE show the real (sample-grid achievable) duty in brackets — k
+  // whole samples of n per period, clamped to [1, n-1] — so the user sees the duty actually emitted,
+  // not just the typed value (Java GeneratorPane). Both are driven at the period-aligned grid (fs/N),
+  // so RECTANGLE's +1/-1 step edge and TRIANGLE's duty corner land on whole samples; every other form
+  // keeps the plain "Duty cycle" label.
   updateDutyLabel() {
     const sfVal = (id, dflt) => this._sfVal(id, dflt);
     const form = $('#signalForm').val();
-    if (form !== GenSignalForm.RECTANGLE) {
+    if (form !== GenSignalForm.RECTANGLE && form !== GenSignalForm.TRIANGLE) {
       $('#dutyLabel').text(t('generator.dutyCycle'));
       return;
     }
@@ -282,8 +284,8 @@ export class GeneratorPane {
     // The scope's Reconstructed-beat checkbox is re-gated by the SCOPE layer on
     // GENERATOR_SIGNAL_CHANGED (Java ScopeTabControl.syncReconstructedBeatEnabled) — the
     // generator does NOT reach across panes to mutate #scopeTrigBeat.
-    this.refreshFreqLabel();   // bracket annotation is form-dependent (RECTANGLE / SINE+snap / dual)
-    this.updateDutyLabel();    // RECTANGLE shows the sample-quantised duty; others plain
+    this.refreshFreqLabel();   // bracket annotation is form-dependent (RECTANGLE / TRIANGLE / SINE+snap / dual)
+    this.updateDutyLabel();    // RECTANGLE / TRIANGLE show the sample-quantised duty; others plain
     this.refreshCorrectionsRow();   // .dpd slot enabled + shown only for compensated forms
     this.syncFormCombo();
   }
@@ -447,6 +449,15 @@ export class GeneratorPane {
     // toneHz / ampDbfs prefs are written by their NumericStepField onChange handlers.
     $('#dither').on('change', () => prefs.genDitherBits.set(parseInt($('#dither').val(), 10) || 0));
     $('#dither').on('focus mousedown', () => this.rebuildDitherCombo());   // re-cap to output bit depth on open
+    // Output-lane gate: persist + push the routing to the running worklet (Java
+    // GeneratorController.pushOutputRoutingToPlayback on genOutputChannels change). rightLaneScale
+    // is recomputed fresh (= fsLeft/fsRight); retuneGenerator is a no-op when nothing is playing.
+    $('#outputChannel').on('change', () => {
+      prefs.genOutputChannels.set($('#outputChannel').val());
+      engine.config.outputChannels = prefs.genOutputChannels.get();
+      engine.config.rightLaneScale = prefs.dacRightLaneScale();
+      engine.retuneGenerator();
+    });
     $('#snap').on('change', () => {
       prefs.genSnapToFftBin.set($('#snap').is(':checked'));
       // Snapshot the LIVE UI into engine.config BEFORE retuning — Java reapplySnap() resolves
@@ -522,9 +533,11 @@ export class GeneratorPane {
       // (prefs.current().getOutputBitDepth()) — so a "..._16bit.wav" name truly carries 16-bit PCM.
       const bitDepth = Math.max(8, prefs.current().outputBitDepth || 24);
       const dither = parseInt($('#dither').val(), 10) || 0;
-      // RECTANGLE exports at the same sample-period-aligned frequency it plays at (Java exportSignal).
+      // RECTANGLE and TRIANGLE export at the same sample-period-aligned frequency they play at, so a
+      // looped file has no edge/corner seam and the whole-period truncation lands on N samples (Java exportSignal).
       const rawHz = sfVal('toneHz', 1000);
-      const emitHz = c.form === GenSignalForm.RECTANGLE ? rate / Math.max(2, Math.round(rate / rawHz)) : rawHz;
+      const emitHz = (c.form === GenSignalForm.RECTANGLE || c.form === GenSignalForm.TRIANGLE)
+        ? rate / Math.max(2, Math.round(rate / rawHz)) : rawHz;
       try {
         const kernel = new DdsKernel({
           form: c.form, frequency: emitHz, sampleRate: rate,
@@ -570,10 +583,22 @@ export class GeneratorPane {
         // Float64 (not Float32) so a 32-bit quantised value survives the normalise→re-quantise round
         // trip — Float32's 24-bit mantissa would drop the low 8 bits of a 32-bit sample.
         const maxVal = Math.pow(2, bitDepth - 1) - 1;
-        const ch = new Float64Array(total);
-        for (let i = 0; i < total; i++) ch[i] = quantizePcm(kernel.nextSample(), bitDepth, dither) / maxVal;
+        // Interleave seam (Java SignalFileExporter.fillBuffer): render the mono sample ONCE — a
+        // single dithered value feeds BOTH lanes, so their dither stays correlated exactly as
+        // Java's shared `sample` does — then apply the output-lane gate + right-lane scale. Left is
+        // the amplitude reference (scale 1.0) and drives the whole-period truncation; the right lane
+        // scales by fsLeft/fsRight; a gated-off lane is digital zero. With gate BOTH + scale 1.0 both
+        // lanes carry the identical quantised sample (byte-identical to the pre-feature stereo export).
+        const { wantL, wantR } = outputLaneGate(prefs.genOutputChannels.get());
+        const scaleR = prefs.dacRightLaneScale();
+        const chL = new Float64Array(total), chR = new Float64Array(total);
+        for (let i = 0; i < total; i++) {
+          const q = quantizePcm(kernel.nextSample(), bitDepth, dither) / maxVal;
+          chL[i] = wantL ? q : 0;
+          chR[i] = wantR ? q * scaleR : 0;
+        }
         const truncHz = (isPeriodic(c.form) && !isSweep) ? emitHz : 0;
-        const bytes = io.saveScopeCapture(ch, ch, total, name, rate, bitDepth, truncHz);
+        const bytes = io.saveScopeCapture(chL, chR, total, name, rate, bitDepth, truncHz);
         const res = await io.writeToTarget(target, bytes, 'audio/wav');
         if (res.saved) $('#status').text('saved ' + res.name);
       } catch (e) { $('#status').text('save failed: ' + e.message); }

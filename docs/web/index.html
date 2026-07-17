@@ -81,6 +81,14 @@
           <!-- Signal-form caption shares its row with the right-anchored ON-AIR banner (Java GeneratorPane.formAndAirRow). -->
           <div class="form-air-row">
             <label class="field-label mb-0" data-i18n="generator.signalForm">Signal form</label>
+            <!-- Output-lane gate (Java GeneratorPane outputChannelCombo, sat between the form
+                 caption and the ON-AIR status): which DAC lane(s) carry the signal. Option
+                 values are the OutputChannels enum names so they round-trip through the pref. -->
+            <select id="outputChannel" class="form-select form-select-sm output-channel-combo" data-i18n-title="generator.outputChannel.tooltip" title="Which output channel(s) carry the generated signal">
+              <option value="BOTH" data-i18n="common.channel.both">Both</option>
+              <option value="LEFT" data-i18n="common.channel.left">Left</option>
+              <option value="RIGHT" data-i18n="common.channel.right">Right</option>
+            </select>
             <span class="on-air" id="onAir"><span class="dot"></span> <span data-i18n="generator.onair">ON AIR</span></span>
           </div>
           <div class="combo form-combo dropdown" id="signalFormCombo" data-i18n-title="generator.signalForm.tooltip">
@@ -695,6 +703,17 @@
 
               <label data-i18n="freqResp.settings.dither">Dither</label>
               <select id="frDither" class="form-select form-select-sm" data-i18n-title="freqResp.settings.dither.tooltip"></select>
+
+              <!-- Output-lane gate (Java FreqRespTabControl outputChannelCombo, after the dither
+                   row): which DAC lane(s) the sweep drives. Both capture channels are still
+                   deconvolved; the view's L/R buttons pick which trace shows. Option values are
+                   the OutputChannels enum names so they round-trip through the pref. -->
+              <label data-i18n="freqResp.settings.outputChannel">Output channel</label>
+              <select id="frOutputChannel" class="form-select form-select-sm" data-i18n-title="freqResp.settings.outputChannel.tooltip">
+                <option value="BOTH" data-i18n="common.channel.both">Both</option>
+                <option value="LEFT" data-i18n="common.channel.left">Left</option>
+                <option value="RIGHT" data-i18n="common.channel.right">Right</option>
+              </select>
             </div>
             <!-- retained for app.js; no Java Settings-tab counterpart -->
             <input type="hidden" id="frDur" value="4.9"/>
@@ -782,7 +801,7 @@
                   </div>
                 </div>
               </div>
-              <img id="frFilterPic" class="fr-filter-pic" src="assets/img/LPF.png" alt=""/>
+              <img id="frFilterPic" class="fr-filter-pic" src="assets/img/LPF.svg" alt=""/>
             </div>
           </div>
 
@@ -895,7 +914,7 @@
         <li class="nav-item"><button class="nav-link" data-prefs-panel="freqResp" data-i18n="preferences.tab.freqResp">Frequency response</button></li>
       </ul>
 
-      <div class="prefs-panel" data-prefs-panel="lookAndFeel">
+      <div class="prefs-panel prefs-padding" data-prefs-panel="lookAndFeel">
         <div class="prefs-grid">
           <label data-i18n="preferences.lookAndFeel.tabOrientation">Main tab orientation:</label>
           <select id="prefTabOrientation" class="form-select form-select-sm" data-i18n-title="preferences.lookAndFeel.tabOrientation.tooltip">
@@ -909,16 +928,16 @@
           <label data-i18n="preferences.lookAndFeel.fontNormal">UI font</label>
           <div class="pref-font-row" data-i18n-title="preferences.lookAndFeel.fontNormal.tooltip">
             <select id="prefUiFontFamily" class="form-select form-select-sm"></select>
-            <input id="prefUiFontSize" class="form-control form-control-sm" type="number" min="6" max="48" step="1" style="max-width:58px"/>
+            <input id="prefUiFontSize" class="form-control form-control-sm" type="number" min="6" max="48" step="1" style="max-width:52px"/>
             <div class="form-check mb-0" title="Bold"><input id="prefUiFontWBold" class="form-check-input" type="checkbox"/><label class="form-check-label fw-bold" for="prefUiFontWBold">B</label></div>
-            <div class="form-check mb-0" title="Italic"><input id="prefUiFontWItalic" class="form-check-input" type="checkbox"/><label class="form-check-label fst-italic" for="prefUiFontWItalic">I</label></div>
+            <div class="form-check mb-0" title="Italic"><input id="prefUiFontWItalic" class="form-check-input" type="checkbox"/><label class="form-check-label fw-bold fst-italic" for="prefUiFontWItalic">I</label></div>
           </div>
           <label data-i18n="preferences.lookAndFeel.fontBold">UI font (bold)</label>
           <div class="pref-font-row" data-i18n-title="preferences.lookAndFeel.fontBold.tooltip">
             <select id="prefUiFontBoldFamily" class="form-select form-select-sm"></select>
-            <input id="prefUiFontBoldSize" class="form-control form-control-sm" type="number" min="6" max="48" step="1" style="max-width:58px"/>
+            <input id="prefUiFontBoldSize" class="form-control form-control-sm" type="number" min="6" max="48" step="1" style="max-width:52px"/>
             <div class="form-check mb-0" title="Bold"><input id="prefUiFontBoldWBold" class="form-check-input" type="checkbox"/><label class="form-check-label fw-bold" for="prefUiFontBoldWBold">B</label></div>
-            <div class="form-check mb-0" title="Italic"><input id="prefUiFontBoldWItalic" class="form-check-input" type="checkbox"/><label class="form-check-label fst-italic" for="prefUiFontBoldWItalic">I</label></div>
+            <div class="form-check mb-0" title="Italic"><input id="prefUiFontBoldWItalic" class="form-check-input" type="checkbox"/><label class="form-check-label fw-bold fst-italic" for="prefUiFontBoldWItalic">I</label></div>
           </div>
         </div>
       </div>
@@ -931,19 +950,35 @@
           <div class="prefs-grid">
             <label data-i18n="preferences.device">Device:</label><select id="inSel" class="form-select form-select-sm"></select>
             <label data-i18n="preferences.sampleRate">Sample rate:</label><select id="inRate" class="form-select form-select-sm"></select>
-            <label data-i18n="web.preferences.adcFullScale">ADC full-scale (V RMS):</label><input id="adcFsVrms" class="form-control form-control-sm" type="number" readonly data-i18n-title="web.preferences.adcFullScale.tooltip"/>
+            <label data-i18n="preferences.audio.card">Card:</label>
+            <div class="d-flex gap-1">
+              <select id="inCardSel" class="form-select form-select-sm flex-grow-1" data-i18n-title="preferences.audio.card.tooltip"></select>
+              <button id="inCardEdit" class="btn btn-sm btn-outline-secondary" type="button" data-i18n-title="preferences.audio.card.edit.tooltip"><img src="assets/icons/pencil.svg" class="util-svg" alt=""></button>
+            </div>
+            <label data-i18n="web.preferences.adcFullScale">ADC full-scale (V RMS):</label>
+            <div class="cal-fs-readout small" data-i18n-title="web.preferences.adcFullScale.tooltip"><span id="adcFsVrms">—</span> / <span id="adcFsVrmsRight">—</span></div>
+            <label id="inRangesLabel" class="card-ranges-label" data-i18n="preferences.audio.ranges">Ranges</label>
+            <div id="inRanges" class="card-ranges"></div>
           </div>
         </fieldset>
         <fieldset class="prefs-group"><legend data-i18n="preferences.output">Output</legend>
           <div class="prefs-grid">
             <label data-i18n="preferences.device">Device:</label><select id="outSel" class="form-select form-select-sm"></select>
             <label data-i18n="preferences.sampleRate">Sample rate:</label><select id="outRate" class="form-select form-select-sm"></select>
-            <label data-i18n="web.preferences.dacFullScale">DAC full-scale (V peak):</label><input id="dacFsAmpl" class="form-control form-control-sm" type="number" readonly data-i18n-title="web.preferences.dacFullScale.tooltip"/>
+            <label data-i18n="preferences.audio.card">Card:</label>
+            <div class="d-flex gap-1">
+              <select id="outCardSel" class="form-select form-select-sm flex-grow-1" data-i18n-title="preferences.audio.card.tooltip"></select>
+              <button id="outCardEdit" class="btn btn-sm btn-outline-secondary" type="button" data-i18n-title="preferences.audio.card.edit.tooltip"><img src="assets/icons/pencil.svg" class="util-svg" alt=""></button>
+            </div>
+            <label data-i18n="web.preferences.dacFullScale">DAC full-scale (V peak):</label>
+            <div class="cal-fs-readout small" data-i18n-title="web.preferences.dacFullScale.tooltip"><span id="dacFsAmpl">—</span> / <span id="dacFsAmplRight">—</span></div>
+            <label id="outRangesLabel" class="card-ranges-label" data-i18n="preferences.audio.ranges">Ranges</label>
+            <div id="outRanges" class="card-ranges"></div>
           </div>
         </fieldset>
       </div>
 
-      <div class="prefs-panel d-none" data-prefs-panel="oscilloscope">
+      <div class="prefs-panel prefs-padding d-none" data-prefs-panel="oscilloscope">
         <div class="prefs-grid">
           <label data-i18n="preferences.measAvg">Measurement average, s:</label>
           <div class="numfield"><input id="prefOscMeasAvg" class="nf-input" type="text" data-i18n-title="preferences.measAvg.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
@@ -973,7 +1008,7 @@
         </div>
       </div>
 
-      <div class="prefs-panel d-none" data-prefs-panel="fft">
+      <div class="prefs-panel prefs-padding d-none" data-prefs-panel="fft">
         <div class="prefs-grid">
           <label data-i18n="preferences.fft.lineWidth">Trace line width, px:</label>
           <div class="numfield"><input id="prefFftLineWidth" class="nf-input" type="text" data-i18n-title="preferences.fft.lineWidth.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
@@ -996,7 +1031,7 @@
         </div>
       </div>
 
-      <div class="prefs-panel d-none" data-prefs-panel="freqResp">
+      <div class="prefs-panel prefs-padding d-none" data-prefs-panel="freqResp">
         <div class="prefs-grid">
           <label data-i18n="preferences.freqResp.lineWidth">Trace line width, px:</label>
           <div class="numfield"><input id="prefFrLineWidth" class="nf-input" type="text" data-i18n-title="preferences.freqResp.lineWidth.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
@@ -1081,8 +1116,25 @@
         <div class="numfield sm"><input id="tnAmp" class="nf-input" type="text"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
         <label class="col-form-label col-form-label-sm" data-i18n="tuneNotch.targetHz">Target frequency, Hz</label>
         <div class="numfield sm"><input id="tnTarget" class="nf-input" type="text"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+        <!-- Output-lane gate (Java TuneNotchWizardDialog outputChannelCombo): which DAC lane(s)
+             the notch sweep drives. Both capture channels are still deconvolved; the L/R
+             buttons on the chart pick which trace shows. -->
+        <label class="col-form-label col-form-label-sm" data-i18n="tuneNotch.outputChannel">Output channel</label>
+        <select id="tnOutputChannel" class="form-select form-select-sm" data-i18n-title="tuneNotch.outputChannel.tooltip">
+          <option value="BOTH" data-i18n="common.channel.both">Both</option>
+          <option value="LEFT" data-i18n="common.channel.left">Left</option>
+          <option value="RIGHT" data-i18n="common.channel.right">Right</option>
+        </select>
       </div>
-      <canvas id="tnPlot" width="600" height="400"></canvas>
+      <!-- Chart + the L/R channel-select buttons (Java FreqRespView.showChannelButtonsOnly):
+           both channels are measured; the buttons toggle which trace the chart shows
+           (default R). The .lr-tools overlay mirrors the main FreqResp pane's header. -->
+      <div class="canvas-wrap">
+        <div class="lr-tools">
+          <button id="tnLeft" class="lr l" data-i18n-title="freqResp.button.left.tooltip">L</button><button id="tnRight" class="lr r on" data-i18n-title="freqResp.button.right.tooltip">R</button>
+        </div>
+        <canvas id="tnPlot" width="600" height="400"></canvas>
+      </div>
     </div>
     <div class="modal-footer py-2">
       <span id="tnStatus" class="small me-auto"></span>
@@ -1091,56 +1143,81 @@
   </div></div>
 </div>
 
-<!-- ===== DAC calibration dialog (Java DacCalibrationDialog) ===== -->
-<div class="modal fade" id="dacCalModal" tabindex="-1">
+<!-- ===== Unified ADC/DAC calibration dialog (Java CalibrationDialog) — one modal,
+         two rows (Left / Right), opened from the scope, the FFT pane and the generator ===== -->
+<div class="modal fade" id="calibrationModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered modal-sm"><div class="modal-content">
-    <div class="modal-header py-2"><h6 class="modal-title" data-i18n="calibrate.dac.title">DAC calibration</h6>
+    <div class="modal-header py-2"><h6 class="modal-title" id="calTitle" data-i18n="calibrate.title">ADC calibration</h6>
       <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
     <div class="modal-body">
-      <div id="dacCalConfigured" class="mb-2 small text-secondary"></div>
-      <label class="form-label small mb-1" for="dacCalValue" data-i18n="calibrate.dac.input">Measured signal amplitude (Vrms):</label>
-      <div class="numfield"><input id="dacCalValue" class="nf-input" type="text" data-i18n-title="calibrate.dac.input.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
-      <div id="dacCalError" class="small text-danger mt-2 d-none" data-i18n="calibrate.error.message">Enter a positive number.</div>
+      <div id="calPrompt" class="mb-2 small" data-i18n="calibrate.input">Actual signal amplitude (Vrms):</div>
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <span class="small" style="min-width:3.5em" data-i18n="common.channel.left">Left</span>
+        <div class="numfield flex-grow-1"><input id="calLeftValue" class="nf-input" type="text"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+      </div>
+      <div class="d-flex align-items-center gap-2">
+        <span class="small" style="min-width:3.5em" data-i18n="common.channel.right">Right</span>
+        <div class="numfield flex-grow-1"><input id="calRightValue" class="nf-input" type="text"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+      </div>
+      <div id="calError" class="small text-danger mt-2 d-none" data-i18n="calibrate.error.message">Enter a positive number.</div>
     </div>
     <div class="modal-footer py-2">
       <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal" data-i18n="common.cancel">Cancel</button>
-      <button id="dacCalOk" type="button" class="btn btn-sm btn-primary" data-i18n="calibrate.ok">Calibrate</button>
+      <button id="calOk" type="button" class="btn btn-sm btn-primary" data-i18n="calibrate.ok">Calibrate</button>
     </div>
   </div></div>
 </div>
 
-<!-- ===== ADC calibration dialog (Java AdcCalibrationDialog) ===== -->
-<div class="modal fade" id="adcCalModal" tabindex="-1">
-  <div class="modal-dialog modal-dialog-centered modal-sm"><div class="modal-content">
-    <div class="modal-header py-2"><h6 class="modal-title" data-i18n="calibrate.title">ADC calibration</h6>
+<!-- ===== Card create / edit dialog (Java CardEditorDialog) ===== -->
+<div class="modal fade" id="cardEditorModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered"><div class="modal-content prefs">
+    <div class="modal-header py-2"><h6 class="modal-title" id="cardEditorTitle" data-i18n="preferences.audio.card.new">New card…</h6>
       <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
     <div class="modal-body">
-      <div id="adcCalCurrent" class="mb-2 small text-secondary"></div>
-      <label class="form-label small mb-1" for="adcCalValue" data-i18n="calibrate.input">Actual signal amplitude (Vrms):</label>
-      <div class="numfield"><input id="adcCalValue" class="nf-input" type="text" data-i18n-title="calibrate.input.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
-      <div id="adcCalError" class="small text-danger mt-2 d-none" data-i18n="calibrate.error.message">Enter a positive number.</div>
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <label class="small mb-0" for="cardName" data-i18n="preferences.audio.card.name">Card name:</label>
+        <input id="cardName" class="form-control form-control-sm flex-grow-1" type="text"/>
+      </div>
+      <fieldset class="prefs-group mb-2"><legend class="small float-none w-auto px-1 mb-0" data-i18n="preferences.audio.card.direction">Provides:</legend>
+        <div class="d-flex gap-3" data-i18n-title="preferences.audio.card.direction.tooltip">
+          <label class="small mb-0"><input type="radio" name="cardDir" id="cardDirInput" value="INPUT_ONLY"> <span data-i18n="preferences.audio.card.direction.input">Input only</span></label>
+          <label class="small mb-0"><input type="radio" name="cardDir" id="cardDirOutput" value="OUTPUT_ONLY"> <span data-i18n="preferences.audio.card.direction.output">Output only</span></label>
+          <label class="small mb-0"><input type="radio" name="cardDir" id="cardDirBoth" value="BOTH"> <span data-i18n="preferences.audio.card.direction.both">Both</span></label>
+        </div>
+      </fieldset>
+      <fieldset class="prefs-group mb-2"><legend class="small float-none w-auto px-1 mb-0" data-i18n="preferences.audio.card.channelMode">Channels:</legend>
+        <div class="d-flex gap-3" data-i18n-title="preferences.audio.card.channelMode.tooltip">
+          <label class="small mb-0"><input type="radio" name="cardCh" id="cardChMono" value="MONO"> <span data-i18n="preferences.audio.card.channelMode.mono">Mono</span></label>
+          <label class="small mb-0"><input type="radio" name="cardCh" id="cardChStereo" value="STEREO"> <span data-i18n="preferences.audio.card.channelMode.stereo">Stereo</span></label>
+        </div>
+      </fieldset>
+      <div class="mb-2">
+        <label class="small mb-1" for="cardMatch" data-i18n="preferences.audio.card.match">Recognized device names:</label>
+        <textarea id="cardMatch" class="form-control form-control-sm" rows="4" data-i18n-title="preferences.audio.card.match.tooltip"></textarea>
+      </div>
+      <fieldset class="prefs-group mb-2" id="cardInputDetail"><legend class="small float-none w-auto px-1 mb-0" data-i18n="preferences.input">Input</legend>
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <label class="small mb-0" for="cardInputCoupling" data-i18n="preferences.audio.card.coupling">Coupling:</label>
+          <select id="cardInputCoupling" class="form-select form-select-sm flex-grow-1">
+            <option value="LINKED" data-i18n="preferences.audio.card.channelMode.linked">Linked</option>
+            <option value="INDEPENDENT" data-i18n="preferences.audio.card.channelMode.independent">Independent</option>
+          </select>
+        </div>
+      </fieldset>
+      <fieldset class="prefs-group mb-2" id="cardOutputDetail"><legend class="small float-none w-auto px-1 mb-0" data-i18n="preferences.output">Output</legend>
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <label class="small mb-0" for="cardOutputCoupling" data-i18n="preferences.audio.card.coupling">Coupling:</label>
+          <select id="cardOutputCoupling" class="form-select form-select-sm flex-grow-1">
+            <option value="LINKED" data-i18n="preferences.audio.card.channelMode.linked">Linked</option>
+            <option value="INDEPENDENT" data-i18n="preferences.audio.card.channelMode.independent">Independent</option>
+          </select>
+        </div>
+      </fieldset>
+      <div id="cardEditorError" class="small text-danger d-none"></div>
     </div>
     <div class="modal-footer py-2">
       <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal" data-i18n="common.cancel">Cancel</button>
-      <button id="adcCalOk" type="button" class="btn btn-sm btn-primary" data-i18n="calibrate.ok">Calibrate</button>
-    </div>
-  </div></div>
-</div>
-
-<!-- ===== FFT ADC calibration dialog (Java AdcCalibrationDialog, FFT pane) ===== -->
-<div class="modal fade" id="fftAdcCalModal" tabindex="-1">
-  <div class="modal-dialog modal-dialog-centered modal-sm"><div class="modal-content">
-    <div class="modal-header py-2"><h6 class="modal-title" data-i18n="calibrate.title">ADC calibration</h6>
-      <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-    <div class="modal-body">
-      <div id="fftAdcCalCurrent" class="mb-2 small text-secondary"></div>
-      <label class="form-label small mb-1" for="fftAdcCalValue" data-i18n="calibrate.input">Actual signal amplitude (Vrms):</label>
-      <div class="numfield"><input id="fftAdcCalValue" class="nf-input" type="text" data-i18n-title="calibrate.input.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
-      <div id="fftAdcCalError" class="small text-danger mt-2 d-none" data-i18n="calibrate.error.message">Enter a positive number.</div>
-    </div>
-    <div class="modal-footer py-2">
-      <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-dismiss="modal" data-i18n="common.cancel">Cancel</button>
-      <button id="fftAdcCalOk" type="button" class="btn btn-sm btn-primary" data-i18n="calibrate.ok">Calibrate</button>
+      <button id="cardEditorOk" type="button" class="btn btn-sm btn-primary" data-i18n="common.ok">OK</button>
     </div>
   </div></div>
 </div>

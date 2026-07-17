@@ -33,14 +33,30 @@
 // any float-vs-double rounding difference).
 
 /**
- * Threshold = this factor × the window's mean |prediction error|. For a
- * clean tone the error is noise-limited, where 8× ≈ 6.4 σ — broadband
- * noise never fires; a splice breaks the prediction by a large fraction
- * of the amplitude, decades above. Residual harmonics / a second tone
- * raise the baseline (they don't fit a single-tone recurrence), and the
- * threshold self-scales with them.
+ * Relative (noise-referenced) term of the detection threshold: this factor ×
+ * the window's mean |prediction error|. For a clean tone the error is
+ * noise-limited, where 8× ≈ 6.4 σ — broadband noise never fires; a splice
+ * breaks the prediction by a large fraction of the amplitude, decades above.
+ * Residual harmonics / a second tone raise the baseline (they don't fit a
+ * single-tone recurrence), and the threshold self-scales with them. This term
+ * governs on signal-free / noise data, where the amplitude floor
+ * ({@link EVENT_FLOOR_FRACTION}) collapses to the noise scale.
  */
-const THRESHOLD_FACTOR = 8.0;
+const REL_FACTOR = 8.0;
+
+/**
+ * Amplitude (event-floor) term of the detection threshold: a floor at this
+ * fraction of the span's tone amplitude A = √2·RMS, applied as
+ * threshold = max(REL_FACTOR·meanAbs, EVENT_FLOOR_FRACTION·A). It stops the
+ * relative term from over-firing on a high tone, where sub-sample capture-
+ * timing slips leak a residual prediction error e ≈ A·2πf·δt that grows with
+ * frequency and — referenced only to the noise floor — crosses REL_FACTOR·meanAbs
+ * above a few kHz. Placement (maintainer's physical spec, 384 kHz rig): a real
+ * event is ≥ 0.2·A within 2–4 samples, so 0.05 sits ~12 dB below the smallest
+ * real event and ~12 dB above the worst legitimate timing-slip spur — centered
+ * between the two. (Java TimeDiscontinuityDetector.EVENT_FLOOR_FRACTION.)
+ */
+const EVENT_FLOOR_FRACTION = 0.05;
 
 /**
  * Time-domain waveform-discontinuity detector (pure math, stateless).
@@ -96,12 +112,17 @@ export class TimeDiscontinuityDetector {
       a = 2.0 * Math.cos(omega);
     }
     let sumAbs = 0;
+    let sumSq = 0;
     for (let i = start; i < to; i++) {
       sumAbs += Math.abs(data[i] - a * data[i - 1] + data[i - 2]);
+      sumSq += data[i] * data[i];
     }
     const meanAbs = sumAbs / (to - start);
     if (meanAbs <= 0) return -1.0;
-    const threshold = THRESHOLD_FACTOR * meanAbs;
+    // √2·RMS over the span ≈ the tone amplitude A (tone-dominated data); with no
+    // dominant tone it collapses toward the noise scale and REL_FACTOR wins.
+    const amplitude = Math.sqrt(2.0 * sumSq / (to - start));
+    const threshold = Math.max(REL_FACTOR * meanAbs, EVENT_FLOOR_FRACTION * amplitude);
     // Track only the rightmost glitch: a burst either extends it (within the
     // merge window) or starts a new one that replaces it.
     let glitchStart = -1;   // first burst's first error index

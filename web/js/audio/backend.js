@@ -296,7 +296,7 @@ export class AudioEngine {
 
   async playFileBuffer(channels, sampleRate, loop) { return this._gen.playFileBuffer(channels, sampleRate, loop); }
   async openSweepContext(requestedRate) { return this._gen.openSweepContext(requestedRate); }
-  async playSweepBuffer(buf, sampleRate) { return this._gen.playSweepBuffer(buf, sampleRate); }
+  async playSweepBuffer(buf, sampleRate, opts) { return this._gen.playSweepBuffer(buf, sampleRate, opts); }
   setFilePlayLoop(loop) { this._gen.setFilePlayLoop(loop); }
   async stopFile() { return this._gen.stopFile(); }
   get filePlaying() { return this._gen.filePlaying; }

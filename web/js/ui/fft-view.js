@@ -148,7 +148,8 @@ export class FftView {
   getLastVrms() {
     const r = this._last;
     if (!r || !Number.isFinite(r.fundamentalLinear)) return null;
-    const fs = this.prefs ? this.prefs.adcFsVoltageRms.get() : 0;
+    // The ANALYZED channel's own ADC full-scale (Java FftView:1168 getAdcFsVoltageRms(getFftChannel())).
+    const fs = this.prefs ? this.prefs.getAdcFsVoltageRms(this.prefs.fftChannel.get()) : 0;
     return fs > 0 ? r.fundamentalLinear * fs : null;
   }
 
@@ -468,11 +469,15 @@ export class FftView {
     if (logAxis && fMin < 1) fMin = 1;
     const magUnit = p ? p.fftMagUnit.get() : 'DBFS';
     const magLog = unitIsLog(magUnit);
+    // The ANALYZED channel — every dBFS→display conversion below de-references with THIS
+    // channel's ADC dBV offset (Java FftView threads prefs.getFftChannel() through every
+    // convertFromDbFs / getDbvOffsetDb call site).
+    const ch = p ? p.fftChannel.get() : 'L';
     // Java FftView (:1197-1198): magBot/magTop = prefs.convertFromDbFs(getFftMag*, unit)
     // — the 2-arity form, so V/√Hz uses the cached binBwSqrt. The per-bin TRACE uses the
     // result's binBwSqrt (convertFromDbFs(dbFs, unit, r.binBwSqrt), :2290). The axis is
     // LOG-VOLTAGE for V/V√Hz (magToYFraction maps log(v)). Dots/crosshair use cv() too.
-    const cv = (dbFs) => p ? p.convertFromDbFs(dbFs, magUnit) : dbFs;
+    const cv = (dbFs) => p ? p.convertFromDbFs(dbFs, magUnit, null, ch) : dbFs;
     const magBot = cv(p ? p.fftMagBottom.get() : this.botDb);
     const magTop = cv(p ? p.fftMagTop.get() : this.topDb);
     // Java plot rect: x=MARGIN_LEFT, y=MARGIN_TOP, width=W-MARGIN_LEFT-rightMargin(1),
@@ -525,7 +530,7 @@ export class FftView {
     // are compared in raw dBFS (every unit conversion is monotonic in dBFS), then the
     // two column extremes converted + Y-mapped — Java ColumnBucketPainter envelope.
     const binYTrace = (dbFs) => this._magToYTrace(
-      p ? p.convertFromDbFs(dbFs, magUnit, result.binBwSqrt) : dbFs, plot, magTop, magBot, magUnit);
+      p ? p.convertFromDbFs(dbFs, magUnit, result.binBwSqrt, ch) : dbFs, plot, magTop, magBot, magUnit);
     const yClip = (yPx) => Math.max(plot.y, Math.min(plot.y + plot.height, yPx));
     const bars = [];
     const mids = [];
@@ -639,7 +644,9 @@ export class FftView {
       // outside the freq/mag window (no clamping, matching Java). Same marker styling as the
       // single-tone path — HARMONIC_DOT colour + harmonicDotDiameter for every dot (Java
       // drawImdDots:1965 / plotDotAt:2088-2090).
-      const refDbV = p ? p.dbvOffsetDb : 0;
+      // IMD dBV products de-reference to dBFS with the ANALYZED channel's ADC offset
+      // (Java FftController:237 imdAnalyzer.analyze(..., getDbvOffsetDb(getFftChannel()))).
+      const refDbV = p ? p.getDbvOffsetDb(p.fftChannel.get()) : 0;
       const dotColor = p ? colorHex(p.fftHarmonicDotColor.get()) : '#ff0000';
       const dotR = Math.max(2, (p ? p.fftHarmonicDotDiameter.get() : 9) / 2);
       // Java plotDotAt: fill the dot in HARMONIC_DOT; the fill colour is set immediately
@@ -809,7 +816,7 @@ export class FftView {
             && bin === Math.round(result.fundamentalHzRefined / binW)) {
           dbFs = man;
         }
-        const v = this.prefs ? this.prefs.convertFromDbFs(dbFs, magUnit, result.binBwSqrt) : dbFs;
+        const v = this.prefs ? this.prefs.convertFromDbFs(dbFs, magUnit, result.binBwSqrt, this.prefs.fftChannel.get()) : dbFs;
         lines.push('|m| = ' + formatMagnitudeWithUnit(v, magUnit));
       }
     }
@@ -1015,10 +1022,24 @@ export class FftView {
     return Number.isFinite(v) ? `${v.toFixed(2)} dBV` : '—';
   }
 
+  /** Java FftView.imdPctText — IMD-table percent cell; "---" when the figure is
+   *  NaN (product outside the measurable range). */
+  _imdPctText(pct) {
+    return Number.isFinite(pct) ? `${pct.toFixed(8)} %` : '---';
+  }
+
+  /** Java FftView.imdRowText — IMD-table dnL/dnH cell (dBV + percent); "---" for
+   *  a product whose frequency lies outside the measurable range at this sample
+   *  rate. */
+  _imdRowText(dbv, pct) {
+    return Number.isFinite(dbv) ? `${dbv.toFixed(2)} dBV  ${pct.toFixed(8)} %` : '     ---';
+  }
+
   /** Java FftView.noiseDb — 10·log10(noisePower) + dbvOffset; NaN when noisePower<=0. */
   _noiseDb(r) {
     if (!(r.noisePower > 0)) return NaN;
-    return 10 * Math.log10(r.noisePower) + this.prefs.dbvOffsetDb;
+    // Analyzed channel's ADC offset (Java FftView:2877 getDbvOffsetDb(getFftChannel())).
+    return 10 * Math.log10(r.noisePower) + this.prefs.getDbvOffsetDb(this.prefs.fftChannel.get());
   }
 
   /** Java FftView.thdNPct — THD+N % from the N+D ratio in dB. */
@@ -1110,10 +1131,11 @@ export class FftView {
     const tableW = 64 * charW, centreX = xLeft + tableW / 2;
 
     const thdMaxH = p.fftThdMaxHarmonic.get();
-    const dbvOff = p.dbvOffsetDb;
+    // Analyzed channel's ADC offset (Java FftView:2807 getDbvOffsetDb(getFftChannel())).
+    const dbvOff = p.getDbvOffsetDb(p.fftChannel.get());
     // dBV header column (Java drawDistortionTable :2627): the manual fundamental
     // (fundamentalTrueDbFs) when set, else the measured fundamental, both lifted by
-    // the global ADC offset. _manualFundDbFs re-gates on the live manual on/off pref.
+    // the analyzed channel's ADC offset. _manualFundDbFs re-gates on the live manual on/off pref.
     const man = this._manualFundDbFs(r);
     const fundDbV = (Number.isFinite(man) ? man : r.fundamentalDbFs) + dbvOff;
     this._monoMetrics(g, true);
@@ -1205,19 +1227,19 @@ export class FftView {
     const colGap = 2 * charW;
     const mKeyL = 8 * charW, mValL = 14 * charW, mKeyR = 7 * charW;
     const mRight = xLeft + mKeyL + mValL + colGap;
-    this.drawKv(g, xLeft, y, mKeyL, 'IMDpwr:', `${imd.imdPwrPct.toFixed(8)} %`,
-        mRight, mKeyR, 'TD+N:', `${imd.tdnPct.toFixed(8)} %`, plain);
+    this.drawKv(g, xLeft, y, mKeyL, 'IMDpwr:', this._imdPctText(imd.imdPwrPct),
+        mRight, mKeyR, 'TD+N:', this._imdPctText(imd.tdnPct), plain);
     y += lineH;
-    this.drawKv(g, xLeft, y, mKeyL, 'DFD2:', `${imd.dfd2Pct.toFixed(8)} %`,
-        mRight, mKeyR, 'DFD3:', `${imd.dfd3Pct.toFixed(8)} %`, plain);
+    this.drawKv(g, xLeft, y, mKeyL, 'DFD2:', this._imdPctText(imd.dfd2Pct),
+        mRight, mKeyR, 'DFD3:', this._imdPctText(imd.dfd3Pct), plain);
     y += lineH + 2;
 
     // ── dnL / dnH sidebands, two per row. ───────────────────────────────────
     const dKey = 5 * charW, dVal = 26 * charW;
     const dRight = xLeft + dKey + dVal + colGap;
     for (let k = 2; k <= IMD_MAX_ORDER; k++) {
-      const lKey = `d${k}L:`, lVal = `${imd.dnLDbV[k].toFixed(2)} dBV  ${imd.dnLPct[k].toFixed(8)} %`;
-      const rKey = `d${k}H:`, rVal = `${imd.dnHDbV[k].toFixed(2)} dBV  ${imd.dnHPct[k].toFixed(8)} %`;
+      const lKey = `d${k}L:`, lVal = this._imdRowText(imd.dnLDbV[k], imd.dnLPct[k]);
+      const rKey = `d${k}H:`, rVal = this._imdRowText(imd.dnHDbV[k], imd.dnHPct[k]);
       this.drawKv(g, xLeft, y, dKey, lKey, lVal, dRight, dKey, rKey, rVal, plain);
       y += lineH;
     }

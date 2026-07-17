@@ -146,6 +146,9 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .pane-caret { font-size: 12px; color: #000; }
 /* Signal-form caption row: label left, ON-AIR banner right-anchored (Java formAndAirRow). */
 .form-air-row { display: flex; align-items: center; gap: 6px; }
+/* Output-lane combo: content-sized, pushed to the right of the caption (Java GridData SWT.RIGHT);
+   the ON-AIR banner keeps its own margin-left:auto and stays at the far right. */
+.output-channel-combo { margin-left: auto; width: auto; height: 24px; font-size: 12.5px; padding: 0 22px 0 6px; }
 .on-air { margin-left: auto; color: var(--onair-grey); font-weight: 700; font-size: 11px; letter-spacing: .5px; display: flex; align-items: center; gap: 5px; }
 .on-air .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--onair-grey); }
 .on-air.live .dot { background: var(--led-on); }   /* LED stays solid red while on air */
@@ -482,7 +485,14 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
    6px perpendicular half-extent), the SAME size as the old canvas grips. Only the one
    solid border carries --slider-color; the other three stay transparent so the grip
    is a triangle, not a box. Each sits at its line edge, centred on the line. */
-.scope-ovl-sliderhandle { width: 0; height: 0; }
+/* 1-px chart-background outline around the border-triangle (Java
+   AbstractMeasurementView.drawOutlinedFilledPolygon: fill + drawPolygon in
+   ColorRole.BACKGROUND = the scope's black chart bg) so the grip stays visible
+   on top of any trace colour. drop-shadow follows the triangle's alpha shape —
+   a plain `border`/`outline` would box the 0×0 element instead. */
+.scope-ovl-sliderhandle { width: 0; height: 0;
+  filter: drop-shadow(1px 0 0 #000) drop-shadow(-1px 0 0 #000)
+          drop-shadow(0 1px 0 #000) drop-shadow(0 -1px 0 #000); }
 .scope-ovl-tri-right { left: 0; transform: translateY(-50%);
   border-top: 6px solid transparent; border-bottom: 6px solid transparent;
   border-left: 10px solid var(--slider-color, #fff); }
@@ -733,7 +743,7 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .fr-filter-body .fr-mode-order { display: none; }
 .fr-filter-body.mode-order .fr-mode-spec { display: none; }
 .fr-filter-body.mode-order .fr-mode-order { display: grid; }
-.fr-filter-pic { width: auto; height: auto; max-height: 96px; align-self: flex-start; }
+.fr-filter-pic { width: auto; height: auto; max-height: 140px; align-self: flex-start; }
 
 /* FreqResp Unevenness tab (Java buildUnevennessTab): Off / ±dB / Range radio rows. */
 .fr-uneven-body { display: flex; flex-direction: column; gap: 6px; padding: 4px 6px; }
@@ -785,10 +795,10 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
    CLEAR(×) + REMOVE(−) red, open-folder (load) neutral/default. The .frc rows are built
    in fft-tab-control.js with a plain btn-outline-secondary look; tint the black SVG glyphs
    here (green = --green, red = the same filter as .lr.ico.reset / .svg-red). */
-.fft-cal-row .fcal-add img, .fr-cal-row .fcal-add img {
+.fft-cal-row .fcal-add img, .fr-cal-row .fcal-add img, .card-range-row .fcal-add img {
   filter: invert(46%) sepia(72%) saturate(560%) hue-rotate(74deg) brightness(93%) contrast(90%); }
 .fft-cal-row .fcal-clear img, .fft-cal-row .fcal-remove img,
-.fr-cal-row .fcal-clear img, .fr-cal-row .fcal-remove img {
+.fr-cal-row .fcal-clear img, .fr-cal-row .fcal-remove img, .card-range-row .fcal-remove img {
   filter: invert(18%) sepia(96%) saturate(5000%) hue-rotate(353deg) brightness(78%) contrast(98%); }
 
 /* FreqResp Save-to / Load-from tabs share the .scope-row layout; the path field grows. */
@@ -815,20 +825,34 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 /* ===== preferences modal ===== */
 .prefs.modal-content { background: var(--win-bg); }
 .prefs .modal-header, .prefs .modal-footer { background: var(--win-bg); border-color: var(--hdr-border); }
-.prefs .modal-body { background: var(--win-bg); min-height: 360px; }   /* fixed height = tallest tab (FFT), so switching tabs doesn't resize the dialog */
+.prefs .modal-body { background: var(--win-bg); max-height: 381px; }   /* fixed height = tallest tab (FFT), so switching tabs doesn't resize the dialog */
 /* The shared one-button alert + the confirm dialog reuse .prefs for the window theming (bg /
    header / footer borders) but hold only a short message — they must NOT inherit the
-   Preferences body's fixed 360px min-height (that left a huge empty area, the "2×2km" modal).
+   Preferences body's fixed 381px max-height (that left a huge empty area, the "2×2km" modal).
    Size them to their content and keep them small, matching the app's other simple dialogs.
    #frBusyModal is the same case: it reuses .prefs only for the window theming but holds just a
-   status line + the fixed 520×100 meter, so it too must drop the 360px floor and wrap tight. */
+   status line + the fixed 520×100 meter, so it too must drop the 381px floor and wrap tight. */
 #alertModal .modal-body, #confirmModal .modal-body, #frBusyModal .modal-body { min-height: 0; }
 #alertModal .modal-dialog, #confirmModal .modal-dialog { max-width: 460px; }
-/* Preferences dialog (Java PreferencesDialog DIALOG_WIDTH_PX = 700). Bootstrap's default
-   .modal-dialog (500px) squeezed the two-column preference rows; match Java's width so the
-   label|field rows lay out fully. Scoped to #prefsModal (the other .prefs modals size to
+/* Preferences dialog OUTER box is FIXED at 640×480 (Java PreferencesDialog forces
+   DIALOG_WIDTH_PX = 640 and one shell height after pack). Pin the dialog width (max-width AND
+   width so Bootstrap's 500px cap can't shrink it) and the content height; box-sizing:border-box
+   keeps the 1px border inside the 480. Scoped to #prefsModal (the other .prefs modals size to
    their own content). */
-#prefsModal .modal-dialog { max-width: 600px; }
+#prefsModal .modal-dialog { width: 640px; max-width: 640px; }
+#prefsModal .modal-content { height: 480px; box-sizing: border-box; }
+/* modal-body flex-fills the leftover height (480 − header − footer) and lays out the tab strip +
+   active panel as a column; min-height:0 lets it shrink so the PANEL — not the dialog — owns the
+   overflow (overrides the shared .prefs 381px floor, which existed only to keep the height constant
+   and is now redundant against the fixed 480). The tab strip keeps its natural height. */
+#prefsModal .modal-body { display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 0; }
+#prefsModal .prefs-padding { padding: var(--bs-modal-padding); }
+#prefsModal .prefs-tabs { flex: 0 0 auto; }
+/* The active tab panel fills the leftover height inside modal-body and scrolls vertically when its
+   content is taller (the Audio tab's ScrolledComposite equivalent); the shorter tabs fit with slack
+   and gain no scrollbar. Width just follows the 640-wide body minus padding — no fixed panel width
+   (that fixed 640px width is what forced the old ~680 dialog). */
+.prefs-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .prefs .prefs-tabs { border-bottom: 1px solid var(--field-border); gap: 0; background: var(--win-bg); padding: 0; }
 .prefs .prefs-tabs .nav-link { font-size: 13px; padding: 4px 12px; color: #333; font-weight: 400;
   border: 1px solid transparent; border-bottom: none; border-radius: 3px 3px 0 0; margin-bottom: -1px; background: transparent; }
@@ -836,11 +860,11 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .prefs .prefs-tabs .nav-link.active { color: #c8643c; font-weight: 400;
   background: #fff; border-color: var(--field-border); border-bottom-color: #fff; }
 .prefs .prefs-tabs .nav-link:disabled { color: #333; opacity: 1; }
-.prefs .form-select, .prefs .form-control { border: 1px solid var(--field-border); border-radius: 2px; font-size: 13px; max-width: 360px; padding-top: .0625rem; padding-bottom: .0625rem; min-height: calc(1.em + .5rem + calc(var(--bs-border-width) * 2));}
+.prefs .form-select, .prefs .form-control { border: 1px solid var(--field-border); border-radius: 2px; font-size: 13px; max-width: 381px; padding-top: .0625rem; padding-bottom: .0625rem; min-height: calc(1.em + .5rem + calc(var(--bs-border-width) * 2));}
 .prefs .prefs-group .row > .col { flex: 0 1 auto; }
 .prefs-group { border: 1px solid var(--field-border); border-radius: 3px; padding: 8px 10px 10px; background: #f7f7f7; }
 .prefs-group legend { float: none; width: auto; font-size: 12px; padding: 0 5px; margin: 0 0 0 6px; color: #1b1b1b; }
-.prefs-panel .scan-devices { margin-bottom: 0.25rem !important; }
+.prefs-panel .scan-devices { margin-bottom: 0.25rem !important; padding-right: 16px; }
 /* Java PreferencesDialog GridLayout(2) via comboData()/gridLabel(): the LABEL column grabs the
    horizontal slack (gridLabel = GridData(LEFT, …, true)) while the VALUE column is a FIXED
    FIELD_WIDTH_PX=180 cell (comboData = widthHint 180, no grab), so every value widget hugs the
@@ -872,8 +896,23 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
    analog of Java's OS FontDialog row (comboData()). Kept compact so it fills the column. */
 .prefs-grid > .pref-font-row { display: flex; gap: 4px; align-items: center; }
 .prefs-grid > .pref-font-row .form-select { flex: 1 1 auto; min-width: 0; width: auto; }
-.prefs-grid > .pref-font-row input[type=number] { width: 42px; flex: 0 0 auto; }
-.prefs-grid > .pref-font-row .form-check { flex: 0 0 auto; margin: 0; padding-left: 1.2em; }
+.prefs-grid > .pref-font-row input[type=number] { width: 42px; flex: 0 0 auto; padding-left: 4px; padding-right: 0px; }
+.prefs-grid > .pref-font-row .form-check { flex: 0 0 auto; margin: 0; padding-left: 1.2em; padding-right: 2px; }
+
+/* Per-card ranges (Java CardSection.createRangeRowUi). The "Ranges" caption and the rows list each
+   span the full width of the two-column prefs-grid — the caption on its OWN line, left-aligned,
+   above the rows. */
+.prefs-grid > .card-ranges-label { grid-column: 1 / -1; text-align: left; margin-top: 2px; }
+.prefs-grid > .card-ranges { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; }
+/* Each row is its own grid; a SHARED column template lines the columns up across rows even though
+   the rows are separate elements. INDEPENDENT = 8 cells (Left caption | radio | label | Right
+   caption | radio | mirrored label | + | −); LINKED / MONO = 4 (radio | label | + | −). Both label
+   fields grab equal slack (1fr each). */
+.card-range-row { display: grid; grid-template-columns: auto 1fr auto auto; gap: 6px; align-items: center; }
+.card-range-row.independent { grid-template-columns: auto auto 1fr auto auto 1fr auto auto; }
+.card-range-row .range-caption { white-space: nowrap; }
+.card-range-row .range-label { min-width: 0; width: 100%; max-width: none; }
+.card-range-row .btn-sm { height: 24px; padding: 1px 6px; display: inline-flex; align-items: center; justify-content: center; }
 
 /* DAC-predistortion wizard live UI (Java convergence chart + metric panel): g38/g49. */
 .dpd-chart { display: block; width: 100%; height: 150px; border: 1px solid #ddd; border-radius: 3px; background: #fff; }
@@ -931,7 +970,7 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
    buttons (.util-btn camera/crosshair, .fft-tool-btn wand, canvas-overlay .lr) keep
    their own sizes. Button padding trimmed so the rows stay compact. */
 .filefield .icon-btn img, .scope-row .icon-btn img,
-.fft-cal-row .btn-sm img, .fr-cal-row .btn-sm img,
+.fft-cal-row .btn-sm img, .fr-cal-row .btn-sm img, .card-range-row .btn-sm img,
 #fftSavePanel .btn-sm img, #fftLoadPanel .btn-sm img,
 #frSavePanel .btn-sm img, #frLoadPanel .btn-sm img {
   height: 20px; width: auto; }

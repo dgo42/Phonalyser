@@ -9,6 +9,7 @@
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 import { NumericStepField, NumericStepModel, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
+import { CardSection } from './card-section.js';
 
 // The ten NumericStepField rows across the Osc / FFT / FreqResp tabs — min/max/wheelStep/
 // arrowStep/decimals lifted verbatim from PreferencesDialog.java (constants at :100-133, field
@@ -78,8 +79,11 @@ export class PreferencesDialog {
    *               - restartGenerator: () => Promise — restart the DDS after an output-device change
    *               - isBusy / setBusy: the shared re-entrancy guard accessors (capture-reopen serialize)
    *               - fftView: the FFT view (applyPrefs() on OK so it re-reads its colour/line prefs)
+   *               - deviceStore: the DeviceProfileStore — apply the resolved card's per-channel
+   *                 full-scale on a device selection (Java SharedCapture / GeneratorController /
+   *                 PreferencesDialog applyInput|OutputDeviceProfile)
    */
-  constructor(engine, prefs, { modal, RATES, stepFields, inRate, outRate, restartGenerator, isBusy, setBusy, fftView }) {
+  constructor(engine, prefs, { modal, RATES, stepFields, inRate, outRate, restartGenerator, isBusy, setBusy, fftView, deviceStore, cardEditorDialog, showConfirm }) {
     this.engine = engine;
     this.prefs = prefs;
     this.modal = modal;
@@ -91,6 +95,18 @@ export class PreferencesDialog {
     this.isBusy = isBusy;
     this.setBusy = setBusy;
     this.fftView = fftView;
+    this.deviceStore = deviceStore;
+    // The Audio-tab per-card profile sections (Java PreferencesDialog.CardSection) — the card
+    // combo + edit button + ranges table for each direction. Built only when the device store +
+    // card editor are injected (they always are in the live app).
+    this.inputCard = (deviceStore && cardEditorDialog) ? new CardSection(prefs, deviceStore, cardEditorDialog, {
+      input: true, comboSel: '#inCardSel', editSel: '#inCardEdit', rangesSel: '#inRanges',
+      deviceLabel: () => this.inputDeviceLabel(), showConfirm, onChanged: () => this.refreshFsReadouts(),
+    }) : null;
+    this.outputCard = (deviceStore && cardEditorDialog) ? new CardSection(prefs, deviceStore, cardEditorDialog, {
+      input: false, comboSel: '#outCardSel', editSel: '#outCardEdit', rangesSel: '#outRanges',
+      deviceLabel: () => this.outputDeviceLabel(), showConfirm, onChanged: () => this.refreshFsReadouts(),
+    }) : null;
     // True while the Preferences dialog is open: its device/rate controls STAGE
     // edits (Java PreferencesDialog edits a detached copy) and apply only on OK.
     this._staging = false;
@@ -157,6 +173,10 @@ export class PreferencesDialog {
     if (outR) bp.outputSampleRate = outR;
     this.prefs.save();
     this._audioSnapshot = null;
+
+    // Apply the committed devices' per-card per-channel full-scale (Java
+    // PreferencesDialog OK path: applyInput/OutputDeviceProfile on commit).
+    this._applyDeviceProfiles();
 
     // Re-pin the Nyquist-derived field bounds from the committed input/output rates.
     const inNyq = this.inRate() / 2;
@@ -378,6 +398,11 @@ export class PreferencesDialog {
       if (inDev && inputs.some(d => d.id === inDev)) $('#inSel').val(inDev);
       if (outDev && outputs.some(d => d.id === outDev)) $('#outSel').val(outDev);
       this.applyInputDeviceRate();   // #inRate shows ONLY the selected device's native rate
+      // A rescan repopulates the device selects (no change event) — re-derive the card combos +
+      // range tables + FS readouts for the restored selection.
+      if (this.inputCard) this.inputCard.refresh();
+      if (this.outputCard) this.outputCard.refresh();
+      this.refreshFsReadouts();
       // Seed the live engine config from the freshly-selected devices. The pane Record
       // paths call readConfig() before opening the device, but the FreqResp sweep and the
       // Tune-notch wizard read engine.config DIRECTLY — so on a cold page (before any
@@ -391,6 +416,11 @@ export class PreferencesDialog {
         this.engine.config.outDeviceId = $('#outSel').val();
         this.engine.config.inRate = parseInt($('#inRate').val(), 10) || this.engine.config.inRate;
         this.engine.config.outRate = parseInt($('#outRate').val(), 10) || this.engine.config.outRate;
+        // Apply the resolved card's per-channel full-scale for the selected devices
+        // (Java: applyInput/OutputDeviceProfile on the initial capture / generator open).
+        // resolveDeviceProfile matches the human LABEL (substring), not the deviceId the
+        // <select> value carries — so pass the option text.
+        this._applyDeviceProfiles();
       }
       $('#status').text(`${inputs.length} input(s), ${outputs.length} output(s) found — pick devices and press ▶.`);
     } catch (e) { $('#status').text('scan failed: ' + e.message); }
@@ -416,6 +446,34 @@ export class PreferencesDialog {
       this.RATES.forEach((r) => $('#inRate').append(`<option value="${r}">${r} Hz</option>`));
       $('#inRate').val(String(saved));
     }
+  }
+
+  /** Applies the resolved per-card per-channel full-scale for the currently-selected
+   *  input + output devices (Java applyInput/OutputDeviceProfile). resolveDeviceProfile
+   *  matches the human device LABEL (the option text) as a substring — the <select>
+   *  value carries the Web Audio deviceId, which the recognition patterns do not match.
+   *  A no-op when the device resolves to no card (the legacy scalars stand). */
+  _applyDeviceProfiles() {
+    if (!this.deviceStore) return;
+    this.deviceStore.applyInputDeviceProfile(this.inputDeviceLabel());
+    this.deviceStore.applyOutputDeviceProfile(this.outputDeviceLabel());
+  }
+
+  /** The human LABEL of the currently selected input / output device — the <option> text the
+   *  recognition patterns match (NOT the Web Audio deviceId the <select> value carries). The
+   *  small accessor the calibration dialog + card sections resolve the current card by. */
+  inputDeviceLabel() { return $('#inSel option:selected').text(); }
+
+  outputDeviceLabel() { return $('#outSel option:selected').text(); }
+
+  /** Re-renders the per-channel ADC/DAC full-scale readouts from the live prefs (after a card
+   *  edit / calibrate, and on dialog open). '—' for a non-positive value. */
+  refreshFsReadouts() {
+    const fmt = (v) => ((v > 0 && Number.isFinite(v)) ? v.toFixed(6) : '—');
+    $('#adcFsVrms').text(fmt(this.prefs.getAdcFsVoltageRms('L')));
+    $('#adcFsVrmsRight').text(fmt(this.prefs.getAdcFsVoltageRms('R')));
+    $('#dacFsAmpl').text(fmt(this.prefs.getDacFsVoltageAmpl('L')));
+    $('#dacFsAmplRight').text(fmt(this.prefs.getDacFsVoltageAmpl('R')));
   }
 
   /** Builds the ten Osc/FFT/FreqResp NumericStepFields over their `.numfield` chrome and the
@@ -459,6 +517,8 @@ export class PreferencesDialog {
     const engine = this.engine, prefs = this.prefs;
 
     this.buildPrefFields();
+    if (this.inputCard) this.inputCard.bind();
+    if (this.outputCard) this.outputCard.bind();
 
     $('#menuPrefs').on('click', () => this.modal.show());
 
@@ -466,6 +526,10 @@ export class PreferencesDialog {
     // capture-reopen handler below so applyInputDeviceRate runs first — the reopen handler then
     // reads the freshly-set #inRate). Pairs with the Scan button.
     $('#inSel').on('change', () => this.applyInputDeviceRate());
+    // A device change re-resolves the direction's card (visibly switching / clearing to "New
+    // card…", offering to create one for an unrecognised device) — Java CardSection.onDeviceChanged.
+    $('#inSel').on('change', () => { if (this.inputCard) this.inputCard.onDeviceChanged(); });
+    $('#outSel').on('change', () => { if (this.outputCard) this.outputCard.onDeviceChanged(); });
     $('#scan').on('click', () => this.scan());
 
     // Device / rate → the active backend's BackendPrefs (Web Audio deviceId in the
@@ -480,6 +544,8 @@ export class PreferencesDialog {
     $('#inSel').on('change', async () => {
       if (this._staging) return;
       prefs.current().inputDeviceName = $('#inSel').val(); prefs.save();
+      // Java SharedCapture: apply the input card's per-channel full-scale on device open.
+      if (this.deviceStore) this.deviceStore.applyInputDeviceProfile($('#inSel option:selected').text());
       if (this.isBusy()) return;
       this.setBusy(true);
       try {
@@ -496,6 +562,8 @@ export class PreferencesDialog {
     $('#outSel').on('change', async () => {
       if (this._staging) return;
       prefs.current().outputDeviceName = $('#outSel').val(); prefs.save();
+      // Java GeneratorController: apply the output card's per-channel full-scale on device open.
+      if (this.deviceStore) this.deviceStore.applyOutputDeviceProfile($('#outSel option:selected').text());
       engine.config.outDeviceId = $('#outSel').val();
       await this.restartGenerator();
     });
@@ -530,6 +598,10 @@ export class PreferencesDialog {
       this._okClicked = false;
       this.snapshotAudioPrefs();
       this.seedPrefsTabs();
+      // Re-derive the per-card combo + range table for the current devices, and the FS readouts.
+      if (this.inputCard) this.inputCard.refresh();
+      if (this.outputCard) this.outputCard.refresh();
+      this.refreshFsReadouts();
     });
     $('#prefsOk').on('click', () => { this._okClicked = true; });
     $('#prefsModal').on('hidden.bs.modal', async () => {
