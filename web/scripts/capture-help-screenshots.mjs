@@ -61,52 +61,13 @@ async function openPrefs(page, panel) {
   await page.waitForTimeout(300);
   await page.click(`#prefsTabs .nav-link[data-prefs-panel="${panel}"]`);
   await page.waitForTimeout(300);
-  await drawClassicScrollbar(page);
   return page.$('#prefsModal .modal-content');
-}
-
-/** CAPTURE-ONLY classic scrollbar. Headless Chromium hard-forces OVERLAY
- *  scrollbars (they hide when idle and ignore ::-webkit-scrollbar /
- *  scrollbar-color styling — verified empirically), so a scrolling pane would
- *  screenshot WITHOUT the scrollbar a real desktop Chrome on Windows shows.
- *  When the active prefs panel genuinely overflows, overlay a DOM strip drawn
- *  like the Windows classic bar — 17px track, arrow buttons, thumb sized and
- *  positioned from the panel's REAL scroll metrics — and remove it after the
- *  shot (closePrefs). The shipped app markup/CSS is untouched. */
-async function drawClassicScrollbar(page) {
-  await page.evaluate(() => {
-    document.getElementById('sbCapture')?.remove();
-    const panel = document.querySelector('#prefsModal .prefs-panel:not(.d-none)');
-    if (!panel || panel.scrollHeight <= panel.clientHeight + 2) return;
-    const host = panel.closest('.modal-content');
-    const hr = host.getBoundingClientRect();
-    const pr = panel.getBoundingClientRect();
-    const W = 17, BTN = 17;
-    const bar = document.createElement('div');
-    bar.id = 'sbCapture';
-    bar.style.cssText = `position:absolute; z-index: 3000; background:#f1f1f1;
-      left:${pr.right - hr.left - W}px; top:${pr.top - hr.top}px; width:${W}px; height:${pr.height}px;`;
-    const arrow = (up) => `<div style="height:${BTN}px; display:flex; align-items:center; justify-content:center;">
-      <svg width="9" height="9" viewBox="0 0 9 9"><path d="${up ? 'M4.5 2 L8 7 L1 7 Z' : 'M1 2 L8 2 L4.5 7 Z'}" fill="#505050"/></svg></div>`;
-    const travel = pr.height - 2 * BTN;
-    const thumbH = Math.max(20, Math.round(travel * panel.clientHeight / panel.scrollHeight));
-    const thumbY = BTN + Math.round((travel - thumbH) * (panel.scrollTop / (panel.scrollHeight - panel.clientHeight)));
-    bar.innerHTML = arrow(true) + arrow(false)
-      + `<div style="position:absolute; left:1px; right:1px; top:${thumbY}px; height:${thumbH}px; background:#c1c1c1;"></div>`;
-    bar.children[1].style.position = 'absolute';
-    bar.children[1].style.bottom = '0';
-    bar.children[1].style.left = '0';
-    bar.children[1].style.right = '0';
-    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
-    host.appendChild(bar);
-  });
 }
 
 // Close the Preferences modal after a prefs capture (spec `after` hook): a left-open
 // modal + backdrop would sit over — and swallow the clicks of — every later spec.
 async function closePrefs(page) {
   await page.evaluate(() => {
-    document.getElementById('sbCapture')?.remove();   // the capture-only scrollbar strip
     const m = window.bootstrap.Modal.getInstance(document.getElementById('prefsModal'));
     if (m) m.hide();
   });
@@ -268,7 +229,34 @@ const SPECS = [
   { id: 'prefs-lookfeel', file: 'Preferences Look and Feel.png', ready: true,
     async shot(page) { return openPrefs(page, 'lookAndFeel'); }, after: closePrefs },
   { id: 'prefs-audio',    file: 'Preferences Audio.png',         ready: true,
-    async shot(page) { return openPrefs(page, 'audio'); }, after: closePrefs },
+    async shot(page) {
+      await openPrefs(page, 'audio');
+      // Stage the REAL bench pairing for the shot (headless enumerates only a
+      // bare "Default" device): bind the I2SoverUSB card on the output side
+      // (the input side is bound to the E1DA card by the card-editor spec),
+      // then relabel the two device combos with the hardware names the
+      // maintainer's live machine shows. Values/FS readouts stay the true
+      // seeded card values; only the device LABEL text is staged.
+      await page.evaluate(() => {
+        const out = document.getElementById('outCardSel');
+        const opt = [...out.options].find((o) => o.textContent.trim() === 'I2SoverUSB');
+        if (opt) { out.value = opt.value; out.dispatchEvent(new Event('change')); }
+      });
+      await page.waitForTimeout(400);
+      await page.evaluate(() => {
+        const label = (sel, text) => {
+          const o = sel.selectedOptions[0] || sel.options[0];
+          if (o) { o.textContent = text; o.selected = true; }
+        };
+        label(document.getElementById('inSel'), 'Line In (E1DA Cosmos ADC)');
+        label(document.getElementById('outSel'), 'Speakers (I2SoverUSB)');
+        // The rate combos show the (fake) capture device's native rate — stage the
+        // bench hardware's 384 kHz like the device labels.
+        label(document.getElementById('inRate'), '384000 Hz');
+        label(document.getElementById('outRate'), '384000 Hz');
+      });
+      return page.$('#prefsModal .modal-content');
+    }, after: closePrefs },
   { id: 'prefs-scope',    file: 'Preferences Oscilloscope.png',  ready: true,
     async shot(page) { return openPrefs(page, 'oscilloscope'); }, after: closePrefs },
   { id: 'prefs-fft',      file: 'Preferences FFT.png',           ready: true,
@@ -322,10 +310,19 @@ const { s, port } = await serve();
 // overlay scrollbars (crbug), so a shot that must show a classic scrollbar (the
 // scrolling Audio tab) needs a real headed window.
 const headed = argv.includes('--headed');
+// Headed also gets FAKE media devices: a headed browser without mic permission
+// enumerates devices with EMPTY labels, so the app's device combo comes up blank
+// and no card can bind. The fake devices give the whole pipeline something real
+// to resolve against (the audio spec re-labels the visible combo text afterwards).
+const headedArgs = ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'];
 let browser = null;
 for (const channel of ['chrome', 'msedge', undefined]) {
   try {
-    browser = await chromium.launch({ ...(channel ? { channel } : {}), headless: !headed });
+    browser = await chromium.launch({
+      ...(channel ? { channel } : {}),
+      headless: !headed,
+      args: headed ? headedArgs : [],
+    });
     break;
   } catch { /* channel not installed — try the next */ }
 }

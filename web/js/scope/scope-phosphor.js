@@ -500,21 +500,28 @@ export class ScopePhosphor {
     gl.bindVertexArray(null);
   }
 
-  /** Composites the scratch texture into the bound buffer with premultiplied
-   *  source-over: blendFunc(ONE, ONE_MINUS_SRC_ALPHA). Java blitImage() over the
-   *  scratch image after decay (ScopePhosphor.java:266, :342-352). The target FBO
-   *  must already be bound. */
+  /** Merges the scratch texture into the bound buffer BRIGHTEST-WINS (per-component
+   *  max, blendEquation(MAX) — core in WebGL2; the blend factors are ignored under
+   *  MAX). Source-over re-composited the trace's anti-aliased fringe pixels over
+   *  themselves on every new frame, converging them to full opacity — the persisted
+   *  trace turned solid-edged and fat. Under max a fringe pixel can never exceed its
+   *  single-frame coverage, so the persisted trace keeps exactly the anti-aliasing
+   *  of a persistence-off frame while decayed history fades underneath. Java
+   *  accumulate()'s GL_MAX-bracketed deposit blit (ScopePhosphor.java). The target
+   *  FBO must already be bound; the equation is restored to FUNC_ADD for the decay
+   *  quad and every later pass. */
   _compositeScratch() {
     const gl = this._gl;
     gl.useProgram(this._quadProg);
     gl.uniform1i(gl.getUniformLocation(this._quadProg, 'u_tex'), 0);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this._scratchTex);
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.blendEquation(gl.MAX);
     gl.bindVertexArray(this._quadVao);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     gl.bindVertexArray(null);
     gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.blendEquation(gl.FUNC_ADD);
   }
 
   /** Signal-affecting change: wipe the afterglow to transparent WITHOUT stamping
