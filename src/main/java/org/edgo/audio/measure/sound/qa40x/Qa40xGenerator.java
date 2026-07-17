@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.sound.qa40x;
 
+import java.util.SplittableRandom;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -45,9 +46,13 @@ import org.edgo.audio.measure.sound.AudioPlayback;
  * engine does the L/R swap and little-endian packing (doc §5).
  *
  * <h2>Live tunables</h2>
- * {@link #setChannelScale} and {@link #setOutputChannels} are honoured live inside
- * the sample source.  {@link #setDitherBits} is a documented no-op — dither is
- * meaningless at 32-bit (there is no quantisation headroom worth dithering).
+ * {@link #setChannelScale}, {@link #setOutputChannels} and {@link #setDitherBits}
+ * are honoured live inside the sample source.  TPDF dither is added to the mono
+ * sample before the per-lane scale, mirroring {@code PcmQuantizer} (the byte-PCM
+ * backends' encoder).  Its ±1 LSB amplitude is set by the <em>selected</em> target
+ * bit depth, not the 32-bit wire container — so 8-bit dither raises the floor to
+ * ~&minus;42&nbsp;dBFS, while 24-bit dither lands in the DAC's dropped low byte.
+ * 0 = off.
  */
 @Log4j2
 public final class Qa40xGenerator implements AudioPlayback {
@@ -66,12 +71,17 @@ public final class Qa40xGenerator implements AudioPlayback {
     /** Output-lane gate, honoured live in {@link #nextFrames} (default BOTH). */
     @Setter
     private volatile OutputChannels outputChannels = OutputChannels.BOTH;
+    /** TPDF dither depth in bits; 0 = off.  Honoured live in {@link #nextFrames}. */
+    private volatile int ditherBits;
     private volatile boolean attached;
+    /** {@link SplittableRandom}, USB-event-thread-confined (mirrors PcmQuantizer's
+     *  render-thread rng); one shared across threads would be a data race. */
+    private final SplittableRandom rng = new SplittableRandom();
 
     Qa40xGenerator(Qa40xDeviceManager manager, int sampleRate, int ditherBits) {
         this.manager    = manager;
         this.sampleRate = sampleRate;
-        // ditherBits is accepted for API symmetry but is a no-op at 32-bit — see setDitherBits.
+        this.ditherBits = Math.max(0, ditherBits);
     }
 
     @Override
@@ -116,6 +126,11 @@ public final class Qa40xGenerator implements AudioPlayback {
     }
 
     @Override
+    public void setDitherBits(int bits) {
+        this.ditherBits = Math.max(0, bits);
+    }
+
+    @Override
     public void close() {
         stopLane();
     }
@@ -153,7 +168,7 @@ public final class Qa40xGenerator implements AudioPlayback {
         boolean wantL = gate != OutputChannels.RIGHT;
         boolean wantR = gate != OutputChannels.LEFT;
         for (int f = 0; f < frames; f++) {
-            double sample = (gen != null) ? clamp(gen.nextSample()) : 0.0;
+            double sample = (gen != null) ? clamp(gen.nextSample() + tpdfNoise()) : 0.0;
             destination[CHANNELS * f]     = wantL ? toInt32(sample * sl) : 0;
             destination[CHANNELS * f + 1] = wantR ? toInt32(sample * sr) : 0;
         }
@@ -169,6 +184,17 @@ public final class Qa40xGenerator implements AudioPlayback {
             return -MAXINT;
         }
         return (int) scaled;
+    }
+
+    /**
+     * TPDF dither at the selected target bit depth — mirrors {@code
+     * PcmQuantizer.tpdfNoise}, the dither the byte-PCM backends apply.  ±1 LSB
+     * at {@code ditherBits} resolution; 0 = off.
+     */
+    private double tpdfNoise() {
+        int bits = ditherBits;   // single read — a live change can't shift by (0 − 1)
+        if (bits == 0) return 0.0;
+        return (rng.nextDouble() - rng.nextDouble()) / (1L << (bits - 1));
     }
 
     private double clamp(double v) {
