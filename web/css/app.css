@@ -857,6 +857,14 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
    and gain no scrollbar. Width just follows the 640-wide body minus padding — no fixed panel width
    (that fixed 640px width is what forced the old ~680 dialog). */
 .prefs-panel { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+/* CSS-styled scrollbar for the scrolled pane (Java's ScrolledComposite look): a custom
+   ::-webkit-scrollbar is ALWAYS rendered and takes layout space in every Chromium mode —
+   the native overlay bar hides when idle and never appears in headless help captures.
+   Colours follow the Windows-11 Fluent bar (near-white track, slim rounded grey thumb). */
+.prefs-panel::-webkit-scrollbar { width: 14px; }
+.prefs-panel::-webkit-scrollbar-track { background: #f9f9f9; }
+.prefs-panel::-webkit-scrollbar-thumb { background: #8a8a8a; border: 4px solid #f9f9f9; border-radius: 7px; }
+.prefs-panel::-webkit-scrollbar-thumb:hover { background: #6b6b6b; }
 .prefs .prefs-tabs { border-bottom: 1px solid var(--field-border); gap: 0; background: var(--win-bg); padding: 0; }
 .prefs .prefs-tabs .nav-link { font-size: 13px; padding: 4px 12px; color: #333; font-weight: 400;
   border: 1px solid transparent; border-bottom: none; border-radius: 3px 3px 0 0; margin-bottom: -1px; background: transparent; }
@@ -986,4 +994,24 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
   padding: 22px 26px; color: #222; font-size: 14px; line-height: 1.55; box-shadow: 0 10px 50px rgba(0, 0, 0, .6); }
 #unsupportedBrowser .ub-title { font-size: 18px; font-weight: 700; color: #c01c28; margin-bottom: 10px; }
 #unsupportedBrowser p { margin: 8px 0 0; }
+
+/* ===== Tip of the day popup (Java gui/tips/TipOfTheDayDialog) =====
+   A small, title-less, NON-MODAL info popup docked over the viewport's bottom-left
+   corner (12px margins — TipOfTheDayDialog.MARGIN). Styled like the OS tooltip surface
+   the SWT dialog used (COLOR_INFO_BACKGROUND / _FOREGROUND): pale-yellow body, thin
+   shadow-grey border. Floats above the app content but never blocks it — the user keeps
+   working. The text column is ~360px (TEXT_WIDTH); the box widens to the footer
+   (checkbox + Next + Close) when the footer needs more room. */
+.tip-popup { position: fixed; left: 12px; bottom: 12px; z-index: 3000;
+  min-width: 360px; max-width: 92vw; width: max-content;
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
+  background: #ffffe1; color: var(--ink); border: 1px solid #8a8a8a;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, .28);
+  font-size: 13px; line-height: 1.4; cursor: default; }
+.tip-popup .tip-heading, .tip-popup .tip-title { font-weight: 700; }
+.tip-popup .tip-title, .tip-popup .tip-body { max-width: 360px; overflow-wrap: break-word; }
+.tip-popup .tip-footer { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+.tip-popup .tip-dontshow { display: flex; align-items: center; gap: 5px;
+  flex: 1 1 auto; margin: 0; font-weight: 400; cursor: pointer; }
+.tip-popup .tip-dontshow input { margin: 0; }
 
