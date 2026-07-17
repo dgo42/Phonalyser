@@ -53,8 +53,10 @@ import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.DeviceEndpointConfig;
 import org.edgo.audio.measure.preferences.DeviceRange;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.gui.bus.ActiveRangeChange;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.bus.SampleRateChange;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Fonts;
 import org.edgo.audio.measure.gui.common.Icon;
@@ -72,6 +74,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.TreeSet;
+import java.util.function.Consumer;
 
 /**
  * Modal "Preferences" dialog: lets the user pick the audio backend plus a
@@ -748,6 +751,24 @@ public final class PreferencesDialog {
         // --- Device list state + refresh logic -----------------------------
         devices = new DeviceListState();
 
+        // A backend with ONE shared sample-rate clock (QA40x: reg 9, doc §10) needs
+        // its two rate combos kept equal.  The coupling is a MessageBus round-trip:
+        // each rate combo announces its pick with PREFS_SAMPLE_RATE_CHANGED (wired
+        // below and re-emitted at the end of refreshDevices), the owning subscriber
+        // compares the pair and answers with PREFS_SAMPLE_RATE_SET, and here we align
+        // the OTHER combo to it.  A programmatic Combo.select fires no SWT.Selection,
+        // so this correction never re-announces — the round-trip ends.  Subscribed
+        // BEFORE the first refreshDevices() so an entry sync lands, and dropped on
+        // dispose so the bus retains no widgets.
+        MessageBus rateBus = MessageBus.instance();
+        Consumer<SampleRateChange> rateSetListener = set -> {
+            if (set == null || dialog.isDisposed()) return;
+            if (edit.getBackend() != set.backend()) return;
+            selectRateItem(set.input() ? inputRateCombo : outputRateCombo, set.sampleRateHz());
+        };
+        rateBus.subscribe(Events.PREFS_SAMPLE_RATE_SET, rateSetListener);
+        dialog.addDisposeListener(e -> rateBus.unsubscribe(Events.PREFS_SAMPLE_RATE_SET, rateSetListener));
+
         refreshDevices();
         // The Audio tab is now fully built and populated — set the V-scroll's
         // min size from its content so the scrollbar appears under the height
@@ -768,6 +789,12 @@ public final class PreferencesDialog {
         // keep the previous card selected.
         inputCombo.addListener (SWT.Selection, e -> { refreshInputRatesAndDepths();  captureUiToActive(); inputCard.onDeviceChanged();  });
         outputCombo.addListener(SWT.Selection, e -> { refreshOutputRatesAndDepths(); captureUiToActive(); outputCard.onDeviceChanged(); });
+        // Announce each rate pick on the bus so a rate-constraint subscriber can
+        // mirror it onto the other direction (see the PREFS_SAMPLE_RATE_SET
+        // subscription above).  Unguarded by backend — a backend with no such
+        // subscriber simply gets no answer back.
+        inputRateCombo.addListener (SWT.Selection, e -> publishRateChange(true,  inputRateCombo));
+        outputRateCombo.addListener(SWT.Selection, e -> publishRateChange(false, outputRateCombo));
 
         // --- OK / Cancel ----------------------------------------------------
         Composite buttonBar = new Composite(dialog, SWT.NONE);
@@ -805,6 +832,12 @@ public final class PreferencesDialog {
             //  window, notch enable + base Hz already live on `edit` via their
             //  two-way binds.)
             BackendPrefs bp = edit.current();
+            // Active-range diffs, one per direction: working copy vs the still-
+            // uncommitted live store.  Computed BEFORE the commit (afterwards the
+            // two are identical), published AFTER it so subscribers read committed
+            // state — ranges reach the device only on OK (maintainer order).
+            ActiveRangeChange inRangeChange  = activeRangeChange(bp, true);
+            ActiveRangeChange outRangeChange = activeRangeChange(bp, false);
             log.info("Preferences saved: backend={}, in={} @ {} Hz / {} bits, out={} @ {} Hz / {} bits",
                     edit.getBackend(),
                     bp.getInputDeviceName()  != null ? bp.getInputDeviceName()  : "<none>",
@@ -834,6 +867,8 @@ public final class PreferencesDialog {
             // Backend / device / rate edits move the Nyquist-derived field
             // bounds — let the panes re-pull them from the committed prefs.
             bus.publish(Events.AUDIO_FORMAT_CHANGED);
+            if (inRangeChange  != null) bus.publish(Events.DEVICE_ACTIVE_RANGE_CHANGED, inRangeChange);
+            if (outRangeChange != null) bus.publish(Events.DEVICE_ACTIVE_RANGE_CHANGED, outRangeChange);
             dialog.close();
         });
 
@@ -852,6 +887,29 @@ public final class PreferencesDialog {
         Dialogs.centerOnParent(dialog);
         dialog.open();
         return dialog;
+    }
+
+    /**
+     * The active-range change the pending OK would commit for one direction, or
+     * {@code null} when nothing changes.  Compares the working copy's resolved
+     * card for the direction's selected device against the live (not yet
+     * committed) store — so it must run BEFORE {@code applyFromDialog()}; the
+     * matching publish happens after the commit.  The payload is generic on
+     * purpose: direction + new label only, no card identity — the subscriber
+     * consults committed state itself.
+     */
+    private ActiveRangeChange activeRangeChange(BackendPrefs bp, boolean input) {
+        String dev = input ? bp.getInputDeviceName() : bp.getOutputDeviceName();
+        if (dev == null) return null;
+        AudioDeviceProfile edited = edit.resolveDeviceProfile(dev);
+        if (edited == null) return null;
+        DeviceEndpointConfig editedEp = input ? edited.getInput() : edited.getOutput();
+        String newLabel = editedEp == null ? null : editedEp.getActiveRange();
+        if (newLabel == null) return null;
+        AudioDeviceProfile live = Preferences.instance().resolveDeviceProfile(dev);
+        DeviceEndpointConfig liveEp = live == null ? null : (input ? live.getInput() : live.getOutput());
+        String oldLabel = liveEp == null ? null : liveEp.getActiveRange();
+        return newLabel.equals(oldLabel) ? null : new ActiveRangeChange(input, newLabel);
     }
 
     /** Capture support (help screenshots): builds the card editor on the Audio
@@ -940,11 +998,55 @@ public final class PreferencesDialog {
         populateDeviceCombo(outputCombo, devices.outputs, bp.getOutputDeviceName());
         refreshInputRatesAndDepths();
         refreshOutputRatesAndDepths();
+        // Announce the input rate after a (re)populate so a rate-constraint
+        // subscriber can mirror it onto the output combo — a backend switch (or
+        // dialog open) lands already-coupled.  Sent UNCONDITIONALLY (total
+        // decoupling): the dialog holds no device knowledge; the payload carries
+        // the edited backend and a subscriber that doesn't constrain it simply
+        // ignores the event.  The PREFS_SAMPLE_RATE_SET subscription in open()
+        // applies any answer.
+        publishRateChange(true, inputRateCombo);
         // Repopulate the card combo + range table for the (possibly new)
         // backend / device — the sections are built before refreshDevices()
         // first runs, so they are already present here.
         if (inputCard  != null) inputCard.refresh();
         if (outputCard != null) outputCard.refresh();
+    }
+
+    /** Announces one direction's chosen sample rate on the bus so a rate-constraint
+     *  subscriber (today {@code Qa40xRateConstraint}) can mirror it onto the other
+     *  direction.  Device-agnostic — it carries the edited backend AND the resolved
+     *  card name so a subscriber can key off whichever it constrains; a no-op when
+     *  the combo has no selection. */
+    private void publishRateChange(boolean input, Combo rateCombo) {
+        int idx = rateCombo.getSelectionIndex();
+        if (idx < 0) return;
+        MessageBus.instance().publish(Events.PREFS_SAMPLE_RATE_CHANGED,
+                new SampleRateChange(input, parseLeadingInt(rateCombo.getItem(idx)),
+                        edit.getBackend(), cardNameFor(input)));
+    }
+
+    /** The resolved card name for a direction's selected device, or {@code null}
+     *  when the device maps to no card — carried on the rate-change payload so a
+     *  card-scoped constraint can match it. */
+    private String cardNameFor(boolean input) {
+        BackendPrefs bp = edit.current();
+        String dev = input ? bp.getInputDeviceName() : bp.getOutputDeviceName();
+        if (dev == null) return null;
+        AudioDeviceProfile card = edit.resolveDeviceProfile(dev);
+        return card == null ? null : card.getName();
+    }
+
+    /** Programmatically selects {@code combo}'s item whose leading integer equals
+     *  {@code hz} (a no-op when that rate isn't offered).  {@code Combo.select}
+     *  fires no SWT.Selection, so the rate coupling that calls this never recurses. */
+    private void selectRateItem(Combo combo, int hz) {
+        for (int i = 0; i < combo.getItemCount(); i++) {
+            if (parseLeadingInt(combo.getItem(i)) == hz) {
+                combo.select(i);
+                return;
+            }
+        }
     }
 
     /** Re-derives the Audio tab's V-scroll min size from its content's

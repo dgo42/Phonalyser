@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.sound;
+package org.edgo.audio.measure.sound.wdmks;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -28,6 +28,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.sound.DeviceRef;
+import org.edgo.audio.measure.sound.PortAudio;
 
 /**
  * Discovery for the {@link AudioBackendType#WDMKS} backend.  Constructed and
@@ -68,7 +70,7 @@ public class WdmksDeviceManager {
     private final Map<String, List<AudioFormat>> inputFormatsCache  = new ConcurrentHashMap<>();
     private final Map<String, List<AudioFormat>> outputFormatsCache = new ConcurrentHashMap<>();
 
-    WdmksDeviceManager() {}
+    public WdmksDeviceManager() {}
 
     private int wdmksHostApiIndex() {
         int idx = PortAudio.lib().Pa_HostApiTypeIdToHostApiIndex(PortAudio.paWDMKS);

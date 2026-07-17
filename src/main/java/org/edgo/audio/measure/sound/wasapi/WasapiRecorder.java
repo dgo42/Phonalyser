@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.sound;
+package org.edgo.audio.measure.sound.wasapi;
 
 import com.sun.jna.Memory;
 import com.sun.jna.Native;
@@ -27,11 +27,14 @@ import com.sun.jna.ptr.PointerByReference;
 
 import lombok.extern.log4j.Log4j2;
 
+import org.edgo.audio.measure.sound.AbstractPcmCapture;
+import org.edgo.audio.measure.sound.SpscByteArrayRing;
+
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
-import static org.edgo.audio.measure.sound.WasapiNative.*;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.*;
 
 /**
  * Stereo PCM capture via WASAPI in exclusive-event mode (shared

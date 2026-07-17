@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.sound;
+package org.edgo.audio.measure.sound.javasound;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -35,6 +35,7 @@ import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.sound.DeviceRef;
 
 /**
  * Discovery for the {@link AudioBackendType#JAVASOUND} backend.  Lists the
@@ -86,7 +87,7 @@ public final class JavaSoundDeviceManager {
     private final Map<String, List<AudioFormat>> inputFormatsCache  = new ConcurrentHashMap<>();
     private final Map<String, List<AudioFormat>> outputFormatsCache = new ConcurrentHashMap<>();
 
-    JavaSoundDeviceManager() {}
+    public JavaSoundDeviceManager() {}
 
     public List<DeviceRef> listInputDevices()  { return list(true);  }
     public List<DeviceRef> listOutputDevices() { return list(false); }

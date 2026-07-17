@@ -53,8 +53,11 @@
 
         <!-- JUnit tags excluded from the normal test run.  Slow/diagnostic
              harnesses are @Tag("exploratory"); override to "" to run them, e.g.
-             mvn -o test -Dsurefire.excludedGroups= -Dtest=FftHarmonicStabilityTest#kappaRefitAB -->
-        <surefire.excludedGroups>exploratory</surefire.excludedGroups>
+             mvn -o test -Dsurefire.excludedGroups= -Dtest=FftHarmonicStabilityTest#kappaRefitAB
+             The QA40x mock loopback IT is @Tag("qa40x-mock") (needs the native
+             mock DLL, built manually); run it alone in a fresh JVM:
+             mvn -o test "-Dsurefire.excludedGroups=" -Dtest=Qa40xMockLoopbackIT -->
+        <surefire.excludedGroups>exploratory,qa40x-mock</surefire.excludedGroups>
     </properties>
 
     <dependencyManagement>

@@ -23,6 +23,15 @@ import lombok.extern.log4j.Log4j2;
 import javax.sound.sampled.AudioFormat;
 import java.util.List;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.sound.javasound.JavaSoundDeviceManager;
+import org.edgo.audio.measure.sound.javasound.JavaSoundGenerator;
+import org.edgo.audio.measure.sound.javasound.JavaSoundRecorder;
+import org.edgo.audio.measure.sound.wasapi.WasapiDeviceManager;
+import org.edgo.audio.measure.sound.wasapi.WasapiRecorder;
+import org.edgo.audio.measure.sound.wdmks.WdmksDeviceManager;
+import org.edgo.audio.measure.sound.wdmks.WdmksGenerator;
+import org.edgo.audio.measure.sound.wdmks.WdmksRecorder;
+import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceManager;
 
 /**
  * Process-wide audio backend selection and the dispatch point used by
@@ -45,6 +54,7 @@ public final class AudioBackend {
     private volatile WasapiDeviceManager    wasapi;
     private volatile JavaSoundDeviceManager javaSound;
     private volatile CoreAudioDeviceManager coreAudio;
+    private volatile Qa40xDeviceManager     qa40x;
 
     private AudioBackend() {}
 
@@ -108,6 +118,21 @@ public final class AudioBackend {
         return local;
     }
 
+    /** Mirror of {@link #wdmks()} for the QuantAsylum QA402/QA403 (libusb) backend. */
+    private Qa40xDeviceManager qa40x() {
+        Qa40xDeviceManager local = qa40x;
+        if (local == null) {
+            synchronized (this) {
+                local = qa40x;
+                if (local == null) {
+                    local = new Qa40xDeviceManager();
+                    qa40x = local;
+                }
+            }
+        }
+        return local;
+    }
+
     /**
      * Returns the singleton instance, lazily creating it inside a synchronized
      * block on first access so concurrent callers cannot construct duplicates.
@@ -140,6 +165,7 @@ public final class AudioBackend {
             case WDMKS:     return wdmks().listInputDevices();
             case COREAUDIO: return coreAudio().listInputDevices();
             case JAVASOUND: return javaSound().listInputDevices();
+            case QA40X:     return qa40x().listInputDevices();
             case WASAPI:
             default:        return wasapi().listInputDevices();
         }
@@ -150,6 +176,7 @@ public final class AudioBackend {
             case WDMKS:     return wdmks().listOutputDevices();
             case COREAUDIO: return coreAudio().listOutputDevices();
             case JAVASOUND: return javaSound().listOutputDevices();
+            case QA40X:     return qa40x().listOutputDevices();
             case WASAPI:
             default:        return wasapi().listOutputDevices();
         }
@@ -160,6 +187,7 @@ public final class AudioBackend {
             case WDMKS:     return wdmks().getDeviceByIndex(index, isOutput);
             case COREAUDIO: return coreAudio().getDeviceByIndex(index, isOutput);
             case JAVASOUND: return javaSound().getDeviceByIndex(index, isOutput);
+            case QA40X:     return qa40x().getDeviceByIndex(index, isOutput);
             case WASAPI:
             default:        return wasapi().getDeviceByIndex(index, isOutput);
         }
@@ -170,6 +198,7 @@ public final class AudioBackend {
             case WDMKS:     return wdmks().listSupportedFormats(device, false);
             case COREAUDIO: return coreAudio().listSupportedFormats(device, false);
             case JAVASOUND: return javaSound().listSupportedFormats(device, false);
+            case QA40X:     return qa40x().listSupportedFormats(device, false);
             case WASAPI:
             default:        return wasapi().listSupportedFormats(device, false);
         }
@@ -180,6 +209,7 @@ public final class AudioBackend {
             case WDMKS:     return wdmks().listSupportedFormats(device, true);
             case COREAUDIO: return coreAudio().listSupportedFormats(device, true);
             case JAVASOUND: return javaSound().listSupportedFormats(device, true);
+            case QA40X:     return qa40x().listSupportedFormats(device, true);
             case WASAPI:
             default:        return wasapi().listSupportedFormats(device, true);
         }
@@ -199,6 +229,7 @@ public final class AudioBackend {
             case WDMKS:     return wdmks().listInputDevices();
             case COREAUDIO: return coreAudio().listInputDevices();
             case JAVASOUND: return javaSound().listInputDevices();
+            case QA40X:     return qa40x().listInputDevices();
             case WASAPI:
             default:        return wasapi().listInputDevices();
         }
@@ -209,6 +240,7 @@ public final class AudioBackend {
             case WDMKS:     return wdmks().listOutputDevices();
             case COREAUDIO: return coreAudio().listOutputDevices();
             case JAVASOUND: return javaSound().listOutputDevices();
+            case QA40X:     return qa40x().listOutputDevices();
             case WASAPI:
             default:        return wasapi().listOutputDevices();
         }
@@ -219,6 +251,7 @@ public final class AudioBackend {
             case WDMKS:     return wdmks().listSupportedFormats(device, false);
             case COREAUDIO: return coreAudio().listSupportedFormats(device, false);
             case JAVASOUND: return javaSound().listSupportedFormats(device, false);
+            case QA40X:     return qa40x().listSupportedFormats(device, false);
             case WASAPI:
             default:        return wasapi().listSupportedFormats(device, false);
         }
@@ -229,6 +262,7 @@ public final class AudioBackend {
             case WDMKS:     return wdmks().listSupportedFormats(device, true);
             case COREAUDIO: return coreAudio().listSupportedFormats(device, true);
             case JAVASOUND: return javaSound().listSupportedFormats(device, true);
+            case QA40X:     return qa40x().listSupportedFormats(device, true);
             case WASAPI:
             default:        return wasapi().listSupportedFormats(device, true);
         }
@@ -246,6 +280,8 @@ public final class AudioBackend {
                 return new JavaSoundRecorder(
                         (JavaSoundDeviceManager.JavaSoundDeviceRef) device,
                         sampleRate, bitDepth);
+            case QA40X:
+                return qa40x().openCapture((Qa40xDeviceManager.Qa40xDeviceRef) device, sampleRate);
             case WASAPI:
             default:
                 return new WasapiRecorder(wasapi(),
@@ -262,6 +298,8 @@ public final class AudioBackend {
             case COREAUDIO:
                 return new CoreAudioGenerator((CoreAudioDeviceManager.CoreAudioDeviceRef) device,
                         sampleRate, bitDepth, ditherBits);
+            case QA40X:
+                return qa40x().openPlayback((Qa40xDeviceManager.Qa40xDeviceRef) device, sampleRate, ditherBits);
             case JAVASOUND:
             case WASAPI:
             default:
@@ -286,5 +324,11 @@ public final class AudioBackend {
      *  high formats, e.g. 384&nbsp;kHz / 24-bit, the default mixer refuses). */
     public JavaSoundDeviceManager javaSoundManager() {
         return javaSound();
+    }
+
+    /** The QA40x session manager — exposed so a Preferences-committed active-range
+     *  change can be routed to the open device (see {@code Qa40xRangeController}). */
+    public Qa40xDeviceManager qa40xManager() {
+        return qa40x();
     }
 }

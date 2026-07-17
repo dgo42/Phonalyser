@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.sound;
+package org.edgo.audio.measure.sound.wasapi;
 
 import com.sun.jna.Memory;
 import com.sun.jna.Pointer;
@@ -34,8 +34,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static org.edgo.audio.measure.sound.WasapiNative.*;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.*;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.sound.DeviceRef;
 
 /**
  * Discovery for the {@link AudioBackendType#WASAPI} backend.  Constructed
@@ -83,7 +84,7 @@ public class WasapiDeviceManager {
      */
     private volatile Pointer enumerator;
 
-    WasapiDeviceManager() {}
+    public WasapiDeviceManager() {}
 
     private Pointer enumerator() {
         Pointer local = enumerator;
