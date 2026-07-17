@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phonalyser.web — Frequenzgang</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <p class="back"><a href="index.html">◀ Zurück zum Inhaltsverzeichnis</a></p>
+
+  <h1>Frequenzgang</h1>
+  <p>Diese Seite beschreibt die Bedienelemente des Frequenzgang-Analysators.  Informationen zur
+     Messmethode — ein vorgerenderter logarithmischer Sweep, der gegen die abgespielte Referenz
+     entfaltet wird, um Betrag und Phase über das gesamte Band in einem Durchlauf zu ermitteln —
+     finden Sie unter
+     <a href="theory/freq-resp.html">Funktionsprinzip ▸ Frequenzgang</a> sowie in der
+     <a href="external/sine-sweep.html">Zusammenfassung zum logarithmischen Sweep (Farina)</a>.</p>
+  <p>Der Frequenzgang befindet sich auf einem <b>eigenen Hauptreiter</b> (neben dem kombinierten
+     Generator-/Oszilloskop-/FFT-Reiter).  Er gibt einen Sweep-Sinus über das Ausgabegerät aus,
+     nimmt das Rücksignal am Eingang auf und stellt den gemessenen <b>Betrag</b> (und wahlweise die
+     <b>Phase</b>) des Prüflings als Funktion der Frequenz dar — mit optionaler RIAA-/IEC-Referenzkurve
+     sowie einer Differenzkurve (Messung minus Referenz) für Phono- und Filterarbeiten.</p>
+
+  <div class="shot">
+    <img src="img/freqresp-pane.png" alt="Frequenzgang-Bereich"/>
+    <svg class="callouts" viewBox="0 0 1292 696" preserveAspectRatio="none"
+         xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace">
+      <defs><marker id="frca" viewBox="0 0 10 10" refX="9" refY="5"
+          markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/></marker></defs>
+      <line x1="250" y1="46" x2="156" y2="47" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="330" y1="555" x2="340" y2="653" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="382" y1="555" x2="382" y2="653" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="1245" y1="130" x2="1283" y2="130" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <line x1="690" y1="555" x2="690" y2="653" stroke="#c33" stroke-width="2.5" marker-end="url(#frca)"/>
+      <circle cx="110" cy="95" r="13" fill="#c33"/>
+      <text x="110" y="100" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
+      <circle cx="250" cy="46" r="13" fill="#c33"/>
+      <text x="250" y="51" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
+      <circle cx="330" cy="555" r="13" fill="#c33"/>
+      <text x="330" y="560" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
+      <circle cx="382" cy="555" r="13" fill="#c33"/>
+      <text x="382" y="560" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
+      <circle cx="650" cy="320" r="13" fill="#c33"/>
+      <text x="650" y="325" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
+      <circle cx="1245" cy="130" r="13" fill="#c33"/>
+      <text x="1245" y="135" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
+      <circle cx="690" cy="555" r="13" fill="#c33"/>
+      <text x="690" y="560" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">7</text>
+    </svg>
+  </div>
+
+  <h2 id="freqresp-overview">Auf einen Blick</h2>
+  <ol class="features">
+    <li><b>Betragsdarstellung.</b>  Logarithmische Frequenzachse (horizontal), lineare dB-Achse
+        (vertikal).  Zeigt den linken <em>oder</em> rechten Kanal (die Schaltflächen L / R im
+        Kopfbereich sind gegenseitig ausschließend).  Siehe
+        <a href="#freqresp-buttons">Kopfbereich-Schaltflächen</a>.</li>
+    <li><b>Phasenkurve.</b>  Optionale ±180°-Kurve auf einer zweiten rechten Achse,
+        umgeschaltet über die Phase-Schaltfläche im Kopfbereich.</li>
+    <li><b>RIAA-/IEC-Referenz.</b>  Überblendung der RIAA-Wiedergabe-/Aufnahme-Kurve,
+        wahlweise mit der IEC-Tieftonkorrektur, zur Überprüfung einer Phono-Stufe —
+        <a href="#freqresp-tab-riaa">Reiter RIAA &amp; IEC</a>.</li>
+    <li><b>Vergleich (Messung − Referenz).</b>  Subtraktion der Referenz von der Messung
+        und automatische Einpassung in ein enges ±2&nbsp;dB-Fenster — die Abweichung
+        vom RIAA-Ideal, direkt ablesbar.  <a href="#freqresp-tab-riaa">Reiter RIAA &amp;
+        IEC</a>.</li>
+    <li><b>Fadenkreuz-Anzeige.</b>  Ein gestricheltes Kreuz folgt dem Mauszeiger mit einem
+        schwebenden Kasten, der Frequenz, Betrag und (bei eingeblendeter Phase) Phase sowie
+        das Vergleichs-Δ anzeigt.  <a href="#freqresp-crosshair">Fadenkreuz</a>.</li>
+    <li><b>Schwenken &amp; Zoomen.</b>  Dieselbe Rad-Konvention wie in allen
+        Phonalyser.web-Ansichten, dazu ein Rechteck-Zoom durch Ziehen mit
+        Ctrl+Z-Rückschritt — <a href="#freqresp-panzoom">Schwenken &amp;
+        Zoomen</a>.</li>
+    <li><b>Kalibrierung de-embedding.</b>  Laden Sie eine oder mehrere <code>.frc</code>-/
+        CSV-Korrekturdateien, um eine bekannte Schnittstellenantwort von der Messung
+        abzuziehen.  <a href="#freqresp-tab-calibration">Reiter Kalibrierung laden</a>.</li>
+  </ol>
+
+  <h2 id="freqresp-buttons">Kopfbereich-Schaltflächen</h2>
+  <p>Die Schaltflächenleiste befindet sich oberhalb der Darstellung.</p>
+  <table class="controls">
+    <tr><th>Schaltfläche</th><th>Funktion</th></tr>
+    <tr><td><b>L</b> (cyan)</td>
+        <td>Zeigt den Betrag des linken Kanals.  Schließt <b>R</b> aus —
+            die Auswahl einer Option blendet die andere aus.</td></tr>
+    <tr><td><b>R</b> (gelb)</td>
+        <td>Zeigt den Betrag des rechten Kanals.</td></tr>
+    <tr><td><b>Phase</b></td>
+        <td>Phasenkurve und die rechte ±180°-Achse ein-/ausblenden.</td></tr>
+    <tr><td><b>Auto-Setup</b></td>
+        <td>Passt das vertikale (Betrags-)Fenster an die sichtbare Kurve an und lässt
+            etwas Abstand oberhalb des höchsten Punktes.  Die Frequenzspanne wird
+            nicht verändert.</td></tr>
+    <tr><td><b>Maximieren</b></td>
+        <td>Setzt auf die Standardansicht zurück — volle Frequenzspanne (1&nbsp;Hz bis
+            zur Nyquist-Grenze) und +20 … −150&nbsp;dB vertikal.</td></tr>
+    <tr><td><b>Messwerte auslagern</b> (Umschalter)</td>
+        <td>Verschiebt die Messwertanzeige (die Max-/Min-Werte des Vergleichs und die
+            <a href="#freqresp-tab-unevenness">Unebenheits</a>-Ebenheitszeile) aus der
+            Ecke der Darstellung in ein kleines separates Fenster.  Erneut klicken oder
+            das Fenster schließen, um sie zurückzuholen.  Ohne vorliegende Messung hat
+            die Schaltfläche keine Wirkung.  Siehe
+            <a href="#freqresp-measure">Messwertanzeige</a>.</td></tr>
+    <tr><td><b>Assistent</b></td>
+        <td>Öffnet den geführten Kalibrierassistenten, der zuerst die
+            DAC → ADC-Schleife und anschließend den zu prüfenden Filter nacheinander
+            misst.  (Diese Schaltfläche und <b>Play</b> befinden sich in der
+            Werkzeugleiste neben den Einstellungsreitern, nicht in der
+            Kopfleiste über der Darstellung.)</td></tr>
+    <tr><td><b>Play</b> (grün)</td>
+        <td>Startet einen Mess-Sweep; während eines laufenden Sweeps ändert sich der
+            Tooltip zu „Stopp" und ein Fortschrittsdialog erscheint (siehe
+            <a href="#freqresp-measure">Messung durchführen</a>).</td></tr>
+  </table>
+
+  <h2 id="freqresp-panzoom">Schwenken &amp; Zoomen</h2>
+  <p>Im Darstellungsbereich gilt:
+     <b>Rad</b>: Betrag-(Vertikal-)Achse schwenken;
+     <b>Shift+Rad</b>: Frequenz-(Horizontal-)Achse schwenken;
+     <b>Ctrl+Rad</b>: Betragsachse zoomen (Rad nach oben = heranzoomen);
+     <b>Ctrl+Shift+Rad</b>: Frequenzachse zoomen (Rad nach oben = heranzoomen).
+     Beide Zoomfunktionen sind <em>am Cursor verankert</em> — der Wert (dB oder
+     Frequenz) unter dem Zeiger bleibt beim Skalieren fixiert.  Dies entspricht der
+     Konvention in den Oszilloskop- und FFT-Ansichten.  Jede Bildlaufleiste schwenkt
+     nur eine Achse — kein Zoomen — und ihr Schieberegler wird durch die Ansicht
+     dimensioniert, sodass er den Zoom widerspiegelt (er wächst/schrumpft beim
+     Skalieren).  Klicken Sie auf die leere Leistenbahn, um seitenweise zum Zeiger
+     zu scrollen, oder halten Sie die Taste gedrückt, bis der Regler den Cursor
+     erreicht.</p>
+  <p><b>Rechteck-Zoom.</b>  Ziehen Sie mit gedrückter linker Maustaste innerhalb der
+     Darstellung ein Gummiband-Rechteck auf; beim Loslassen wird der ausgewählte
+     Bereich auf die volle Ansicht gedehnt — Frequenz und Betrag zoomen in einer
+     einzigen Geste gemeinsam.  Auswahlen kleiner als 8 Pixel in einer der beiden
+     Richtungen werden ignoriert, damit ein versehentlicher Klick nicht zoomt.
+     Das Ziehen muss innerhalb des Darstellungsbereichs beginnen (nicht auf den
+     Achsenbeschriftungen), und das Ergebnis bleibt auf die Grenzen der Darstellung
+     beschränkt (horizontal 1&nbsp;Hz bis zur Nyquist-Grenze).  Dieselbe Geste
+     funktioniert in den Oszilloskop- und FFT-Ansichten.</p>
+  <p><b>Ctrl+Z — Schritt zurück.</b>  Jeder Rechteck-Zoom merkt sich das Fenster,
+     das er ersetzt hat; drücken Sie <b>Ctrl+Z</b> (genau Ctrl — Ctrl+Shift+Z und
+     andere Kombinationen werden ignoriert), um bis zu 32 vorherige Fenster pro
+     Ansicht zurückzugehen.  Schwenken/Zoomen per Rad wird nicht aufgezeichnet —
+     nur Rechteck-Zooms fügen Schritte hinzu.  Ctrl+Z wirkt auf die Ansicht mit
+     Tastaturfokus (klicken Sie in eine Darstellung, um sie zu fokussieren) oder,
+     wenn keine Ansicht fokussiert ist, auf die unter dem Mauszeiger; die
+     angesprochene Ansicht wird durch einen dünnen hellgrünen Rahmen an ihrem Rand
+     markiert.  Solange ein Texteingabefeld den Fokus hat, gehört Ctrl+Z der
+     eigenen Rückgängig-Funktion dieses Feldes.</p>
+
+  <h2 id="freqresp-crosshair">Fadenkreuz-Anzeige</h2>
+  <p>Wenn der Mauszeiger in den Darstellungsbereich bewegt wird, erscheinen ein
+     gestricheltes Kreuz und ein schwebender Kasten mit der <b>Frequenz</b> am Cursor
+     (begrenzt auf die Nyquist-Grenze), dem <b>Betrag (dB) in Zeilerhöhe</b> auf der
+     linken Achse (<code>y = …</code>), dem Betrag der <b>L</b>-/<b>R</b>-Kurve in dB,
+     der <b>Phase</b> in
+     Grad bei eingeblendeter Phasenkurve sowie dem <b>Vergleichs-Δ</b> im
+     Vergleichsmodus.  Die Anzeige erlischt, wenn der Zeiger den Bereich verlässt.</p>
+
+  <h2 id="freqresp-tabs">Einstellungsreiter</h2>
+  <p>Die Einstellungsleiste enthält neun Reiter, in dieser Reihenfolge:
+     <a href="#freqresp-tab-settings">Einstellungen</a>,
+     <a href="#freqresp-tab-riaa">RIAA &amp; IEC</a>,
+     <a href="#freqresp-tab-filters">Filter</a>,
+     <a href="#freqresp-tab-unevenness">Unebenheit</a>,
+     <a href="#freqresp-tab-presets">Voreinstellungen</a>,
+     <a href="#freqresp-tab-utility">Werkzeuge</a>,
+     <a href="#freqresp-tab-calibration">Kalibrierung laden…</a>,
+     <a href="#freqresp-tab-saveto">Speichern unter…</a> und
+     <a href="#freqresp-tab-loadfrom">Laden aus…</a>.  Wie andernorts zeigt die Leiste ein
+     Überlauf-Symbol <code>»</code>, wenn mehr Reiter vorhanden sind als angezeigt werden können.
+     Die Reiter Einstellungen, RIAA, Filter, Unebenheit, Kalibrierung und Voreinstellungen zeigen im
+     eingeklappten Zustand Kacheln mit den wichtigsten Werten (Werkzeuge, Speichern
+     und Laden haben keine); bewegen Sie den Mauszeiger über eine Kachel für einen
+     erläuternden Tooltip.</p>
+
+  <h3 id="freqresp-tab-settings">Einstellungen</h3>
+  <p><img src="img/FreqResp - Settings.png" alt="Reiter Einstellungen"/></p>
+  <table class="controls">
+    <tr><th>Steuerelement</th><th>Hinweise</th></tr>
+    <tr><td>Startfrequenz, Hz</td>
+        <td>Untere Grenze des Sweeps.  ≥ 1 Hz.</td></tr>
+    <tr><td>Stoppfrequenz, Hz</td>
+        <td>Obere Grenze des Sweeps, bis zur Nyquist-Grenze.</td></tr>
+    <tr><td>Amplitude (RMS)</td>
+        <td>Ausgangspegel zum DAC in Volt RMS bezogen auf die DAC-Kalibrierung;
+            der Tooltip schaltet eine dBV-Anzeige um.  Akzeptiert
+            µV / mV / V / dBV.</td></tr>
+    <tr><td>FFT-Größe (Ds)</td>
+        <td>Analyselänge der Entfaltung als Zweierpotenz von 64k bis 16M.  Längere
+            Werte liefern feinere Frequenzauflösung und bessere Rauschunterdrückung
+            auf Kosten einer längeren Sweep-Dauer; die Beschriftung zeigt die
+            resultierende Sweep-Dauer.</td></tr>
+    <tr><td>Sweep-Punkte</td>
+        <td>Anzahl der logarithmisch verteilten Ausgabepunkte, die die Entfaltung
+            liefert (8192 … 10M).  Das Rad wechselt durch Zweierpotenz-Vorgaben
+            (8192, 16384, 32768, … bis 4194304) sowie einen <b>FS/2</b>-Eintrag,
+            der der halben aktuellen Abtastrate entspricht (24000 bei 48&nbsp;kHz,
+            96000 bei 192&nbsp;kHz — er folgt dem Audioformat); jeder Wert im
+            gültigen Bereich kann auch direkt eingegeben werden.</td></tr>
+    <tr><td>Vorlauf, s</td>
+        <td>Stille-/Einregelzeit vor dem eigentlichen Sweep, damit der Signalweg
+            im eingeschwungenen Zustand ist, wenn die Messung beginnt.</td></tr>
+    <tr><td>Dither</td>
+        <td>Dither-Tiefe für den generierten Sweep, Aus oder 1–31 Bit —
+            dekorreliert den Quantisierungsfehler im abgespielten Signal.</td></tr>
+    <tr><td>Ausgabekanal</td>
+        <td><b>Beide</b>, <b>Links</b> oder <b>Rechts</b> — welche DAC-Spur der Sweep
+            ansteuert.  Das Ansteuern einer Seite gibt die andere Spur als digitale
+            Stille aus und misst nur die Antwort dieses Kanals.</td></tr>
+  </table>
+  <div class="note">Die <b>maximal analysierte Frequenz</b> (als % der Nyquist-Frequenz)
+     wird im Reiter <a href="preferences.html#prefs-freqresp">Einstellungen ▸
+     Frequenzgang</a> festgelegt, nicht hier; sie begrenzt den Bereich, in dem die
+     Sweep-Entfaltung zuverlässig ist.</div>
+
+  <h3 id="freqresp-tab-riaa">RIAA &amp; IEC</h3>
+  <p><img src="img/FreqResp - RIAA IEC.png" alt="Reiter RIAA &amp; IEC"/></p>
+  <table class="controls">
+    <tr><th>Steuerelement</th><th>Hinweise</th></tr>
+    <tr><td>RIAA-Kurve anzeigen</td>
+        <td>Überblendung der RIAA-Referenz, ausgerichtet bei 1 kHz.  Diese Option
+            aktiviert die drei nachfolgenden Steuerelemente.</td></tr>
+    <tr><td>RIAA umkehren</td>
+        <td>Umschalten der Referenz zwischen Aufnahme- (Kodierung) und Wiedergabe-
+            (Dekodierung) Kurve — wählen Sie die zum Prüfling passende.</td></tr>
+    <tr><td>IEC-Korrektur</td>
+        <td>Fügt den IEC-Tiefton-Hochpassfilter (~20 Hz) zur Referenz hinzu.</td></tr>
+    <tr><td>Vergleich (Messung − Referenz)</td>
+        <td>Stellt die geglättete Differenz zwischen Messung und RIAA-Referenz
+            um eine 0-dB-Mittellinie dar und zoomt einmalig automatisch
+            horizontal auf 20 Hz – 25 kHz, wobei sich das vertikale Fenster bis
+            auf ±2 dB an die Extremwerte der Differenz anschmiegt.  Erfordert eine
+            vorhandene Messung.  Ein blinkendes Banner zeigt die aktive Referenz an.</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-filters">Filter</h3>
+  <p><img src="img/FreqResp - Filters.png" alt="Reiter Filter"/></p>
+  <p>Zeichnet den idealen Amplitudengang eines Lehrbuch-Analogfilters über den
+     gemessenen Trace, sodass Sie auf einen Blick erkennen, wie nahe ein realer
+     Filter (oder ein Filter, den Sie gerade aufbauen) an sein Ziel herankommt.
+     Die Überlagerung ist eine <b>violette gestrichelte Kurve</b>; ein Vergleichsmodus
+     kann zusätzlich die gemessene Kurve minus diesem Ideal darstellen.  Es kann
+     immer nur eine Referenz gleichzeitig angezeigt werden — das Einschalten dieser
+     Überlagerung schaltet die <a href="#freqresp-tab-riaa">RIAA-/IEC</a>-Überlagerung
+     aus und umgekehrt.</p>
+
+  <h4>Die Überlagerung einschalten</h4>
+  <table class="controls">
+    <tr><th>Steuerelement</th><th>Hinweise</th></tr>
+    <tr><td><b>Filterkurve anzeigen</b></td>
+        <td>Zeichnet die ideale Filterantwort über den gemessenen Trace.  Dies ist
+            der Hauptschalter — jedes andere Steuerelement des Reiters bleibt inaktiv,
+            bis er gesetzt ist.  Er startet stets <b>aus</b>, wenn der Bereich geöffnet
+            wird (anders als Filtertyp, Filterantwort, Auslegungswerte und Vergleichen,
+            die alle gemerkt werden).</td></tr>
+    <tr><td><b>Vergleichen (gemessen − Filter)</b></td>
+        <td>Stellt die gemessene Antwort minus dem idealen Filter dar, geglättet und
+            so zentriert, dass ihre Mitte bei 0 dB liegt, und zoomt automatisch auf die
+            Differenz (siehe <a href="#freqresp-filter-compare">Vergleichen</a>).
+            Nur verfügbar, sobald eine Messung vorliegt — ein Versuch davor öffnet einen
+            Hinweis, zuerst einen Sweep durchzuführen.</td></tr>
+    <tr><td><b>Filtertyp</b></td>
+        <td>Die Filterfamilie, deren idealer Gang gezeichnet wird:
+            <b>Tiefpass</b>, <b>Hochpass</b>, <b>Bandpass</b> oder
+            <b>Bandsperre</b>.  Jeder Typ behält seinen eigenen vollständigen Satz an
+            Auslegungswerten (siehe <a href="#freqresp-filter-memory">Speicher pro
+            Typ</a>).</td></tr>
+    <tr><td><b>Filterantwort</b></td>
+        <td>Die Approximation, die die Ebenheit des Durchlassbereichs und die
+            Flankensteilheit formt, in Listenreihenfolge: <b>Bessel</b>,
+            <b>Butterworth</b>, <b>Tschebyscheff</b>, <b>Elliptisch</b> und
+            <b>Inverser Tschebyscheff</b>.  Der Welligkeitswert im Durchlassbereich ist
+            nur bei den drei Welligkeitsfamilien (Tschebyscheff, Elliptisch, Inverser
+            Tschebyscheff) sinnvoll — und nur dort aktiv; Bessel und Butterworth haben
+            keine einstellbare Welligkeit.</td></tr>
+  </table>
+
+  <h4>Die Gruppe Einstellungen</h4>
+  <p>Die Auslegungswerte liegen in einer umrandeten Gruppe <b>Einstellungen</b>.  Ein
+     Paar Optionsschalter wählt, <em>wie</em> der Filter angegeben wird; der Feldsatz
+     darunter passt sich entsprechend an, ohne die Layoutgröße zu ändern:</p>
+  <ul>
+    <li><b>Nach Spezifikation</b> (die Voreinstellung) — Sie geben die Durchlass- und
+        Sperrbereichsgrenzen sowie die erforderliche Dämpfung an, und die Filterordnung
+        wird für Sie abgeleitet.  In diesem Modus wird rechts neben der Gruppe eine
+        Skizze der Zielform des gewählten Typs (mit beschrifteten Grenzen und Pegeln)
+        angezeigt.</li>
+    <li><b>Nach Ordnung</b> — Sie legen Ordnung und Grenz- (bzw. Mitten-)Frequenz direkt
+        fest.  Die Skizze ist in diesem Modus ausgeblendet.</li>
+  </ul>
+  <p>Jeder Filtertyp merkt sich, welchen der beiden Modi Sie zuletzt für ihn verwendet
+     haben.</p>
+
+  <p><b>Nach Spezifikation</b> zeigt diese Felder (die mit Band/Bandsperre markierten
+     erscheinen nur bei Bandpass und Bandsperre):</p>
+  <table class="controls">
+    <tr><th>Feld</th><th>Hinweise</th></tr>
+    <tr><td>Durchlasswelligkeit (R)</td>
+        <td>Spitze-Spitze-Welligkeit im Durchlassbereich in dB (0,001 … 200).  Nur bei
+            den Welligkeitsfamilien aktiv.  Bei Inversem Tschebyscheff legt dieser Wert
+            konventionsgemäß stattdessen die Sperrbereichswelligkeit fest, auch wenn die
+            Beschriftung weiterhin Durchlassbereich lautet.</td></tr>
+    <tr><td>Sperrdämpfung (A)</td>
+        <td>Minimale Sperrbereichsdämpfung in dB, verwendet zur Ableitung der Ordnung.
+            Bei einer Bandsperre legt sie zudem fest, wie tief die gezeichnete
+            Kerbe geführt wird (siehe
+            <a href="#freqresp-filter-overlay">die Überlagerungskurve</a>).</td></tr>
+    <tr><td>Mittenfrequenz (Fc)</td>
+        <td>Nur Band/Bandsperre — die Mittenfrequenz in Hz.</td></tr>
+    <tr><td>Durchlassbereichsgrenze</td>
+        <td>Beschriftet mit <b>Durchlassbereich (Fc)</b> bei Tief-/Hochpass und
+            <b>Durchlassbereich (PB)</b> bei Bandpass / Bandsperre.  Beim Tiefpass muss
+            der Sperrbereich darüber liegen, beim Hochpass darunter.  Beim Bandpass ist
+            dies die innere Durchlassbandbreite, bei einer Bandsperre die äußere
+            Rückkehrbandbreite.</td></tr>
+    <tr><td>Sperrbereichsgrenze</td>
+        <td>Beschriftet mit <b>Sperrbereich (Fs)</b> bei Tief-/Hochpass und
+            <b>Sperrbereich (SB)</b> bei Bandpass / Bandsperre.  Beim Bandpass muss die
+            Sperrbandbreite breiter als die Durchlassbandbreite sein; bei einer
+            Bandsperre muss die Sperrbandbreite schmaler als die Rückkehrbandbreite
+            sein.</td></tr>
+  </table>
+
+  <p><b>Nach Ordnung</b> zeigt diese Felder:</p>
+  <table class="controls">
+    <tr><th>Feld</th><th>Hinweise</th></tr>
+    <tr><td>Durchlassfrequenz</td>
+        <td>Die Grenzfrequenz bei Tief-/Hochpass oder die Mittenfrequenz bei
+            Bandpass / Bandsperre, in Hz.</td></tr>
+    <tr><td>Welligkeit</td>
+        <td>Durchlasswelligkeit in dB — wiederum nur bei den Welligkeitsfamilien.</td></tr>
+    <tr><td>Ordnung</td>
+        <td>Die Filterordnung, eine ganze Zahl 1 … 20.  Höhere Ordnungen ergeben eine
+            steilere Flanke.</td></tr>
+    <tr><td>Q</td>
+        <td>Nur Band/Bandsperre — der Gütefaktor; die Bandbreite ist die Mittenfrequenz
+            geteilt durch Q.</td></tr>
+  </table>
+  <p>Alle Frequenzfelder zeigen unterhalb von 1 kHz in Hz und darüber in kHz an,
+     akzeptieren sowohl freie Eingabe als auch die Pfeil-/Rad-Schrittsteller und sind
+     auf die Nyquist-Grenze begrenzt — die Grenze folgt dem Audioformat, wenn es sich
+     ändert.</p>
+
+  <h4 id="freqresp-filter-memory">Speicher pro Typ</h4>
+  <p>Jeder der vier Filtertypen behält seinen <em>eigenen</em> vollständigen Satz an
+     Auslegungswerten und seine eigene Modusauswahl.  Das Auswählen eines Typs lädt
+     dessen Werte; das Bearbeiten eines Werts schreibt nur in den Satz des aktuellen
+     Typs.  All dies wird über Sitzungen hinweg gemerkt — Filtertyp, Filterantwort,
+     Modus, die typbezogenen Werte und der Vergleichen-Schalter — mit der einzigen
+     Ausnahme <b>Filterkurve anzeigen</b>, das stets aus beginnt.</p>
+
+  <h4 id="freqresp-filter-overlay">Die Überlagerungskurve</h4>
+  <p>Wenn Anzeigen eingeschaltet und die Auslegung gültig ist, wird der ideale
+     Amplitudengang als <b>violette gestrichelte</b> Kurve in derselben Linienbreite wie
+     der Trace gezeichnet — reiner Betrag in dB, Durchlassbereich bei etwa 0 dB, ohne
+     Phase.  Sie wird mit einem Punkt pro Bildschirmspalte abgetastet, wobei die exakte
+     Grenz- (bzw. Kerb-)Frequenz erzwungen wird, damit dieser kritische Punkt stets
+     korrekt dargestellt wird, egal wie breit die Darstellung ist.</p>
+  <p>Die Idealkurve ist <b>nicht</b> bei 1 kHz verankert (1 kHz kann tief im
+     Sperrbereich liegen).  Stattdessen wird sie an dem für jeden Typ maßgeblichen Punkt
+     mit dem gemessenen Trace zur Deckung gebracht, sodass beide dort zusammentreffen,
+     wo Sie die Übereinstimmung beurteilen würden:</p>
+  <ul>
+    <li><b>Tief-/Hochpass</b> — an der Durchlassbereichsgrenze, sodass Ideal und Messung
+        an der Grenzfrequenz zusammenfallen.</li>
+    <li><b>Bandpass</b> — an den beiden Durchlassbereichsgrenzen (Mitte ± halbe
+        Bandbreite), ersatzweise an der Mitte.</li>
+    <li><b>Bandsperre</b> — am Kerbpunkt selbst, sodass die ideale Spitze an der
+        gemessenen Spitze verankert wird.</li>
+  </ul>
+  <p>Eine echte Kerbe ist unendlich tief, daher erhält die gezeichnete Spitze einen
+     endlichen Boden: bei <b>Nach Spezifikation</b> reicht sie bis zur eingegebenen
+     <b>Sperrdämpfung (A)</b> hinab; bei <b>Nach Ordnung</b> reicht sie bis zu festen
+     120 dB unter das Plateau.  In beiden Fällen rundet die Spitze asymptotisch in diese
+     Tiefe ab, statt einen flachen Boden zu zeigen.</p>
+
+  <h4 id="freqresp-filter-compare">Vergleichen (gemessen − Filter)</h4>
+  <p>Sind <b>Filterkurve anzeigen</b> und <b>Vergleichen</b> beide eingeschaltet und
+     liegt eine Messung vor, zeigt die Darstellung die gemessene Antwort minus dem
+     idealen Filter, Punkt für Punkt.  Die Differenz wird geglättet und dann über
+     20 Hz – 25 kHz auf ihren Median zentriert, sodass ihre zentrale Tendenz 0 dB
+     ergibt, und als durchgezogene Linie gezeichnet.  Da hier der Filter die aktive
+     Referenz ist, wird diese Vergleichskurve in <b>Violett</b> gezeichnet (die
+     RIAA-Vergleichskurve ist dagegen dunkelgrün).  Ihre Glättung ist dieselbe
+     gemeinsame Einstellung, die auch der <a href="#freqresp-tab-riaa">RIAA-Vergleich</a>
+     verwendet.</p>
+  <p>Eine kleine zweizeilige Tabelle oben links liest den <b>Max</b>- und
+     <b>Min</b>-Wert der geglätteten Differenz über 20 Hz – 25 kHz ab.  Das Betreten des
+     Vergleichsmodus zoomt einmalig automatisch — horizontal auf 20 Hz – 25 kHz, vertikal
+     bis auf ±2 dB an die Extremwerte der Differenz anschmiegend — danach bleibt jedes
+     eigene Schwenken oder Zoomen erhalten.  Die Kopfschaltfläche <b>Auto-Setup</b> passt
+     ebenfalls an die Vergleichskurve an.</p>
+
+  <h3 id="freqresp-tab-unevenness">Unebenheit</h3>
+  <p><img src="img/FreqResp - Unevenness.png" alt="Reiter Unebenheit"/></p>
+  <p>Reduziert den Frequenzgang auf eine einzige Ebenheitskennzahl und markiert sie in
+     der Darstellung.  Je nach Modus ist dies entweder das breiteste Band, das innerhalb
+     einer Toleranz um einen Referenz-Höchstpunkt (oder eine Kerbe) bleibt, oder die
+     Spitze-Spitze-Streuung des Frequenzgangs über einen gewählten Frequenzbereich.</p>
+  <table class="controls">
+    <tr><th>Steuerelement</th><th>Hinweise</th></tr>
+    <tr><td><b>Aus</b></td>
+        <td>Keine Ebenheitsanzeige — es wird nichts berechnet, tabelliert oder
+            gezeichnet.  Dies ist die Voreinstellung.</td></tr>
+    <tr><td><b>Unebenheit</b> (dB-Feld)</td>
+        <td>Der Optionsschalter und sein dB-Feld in derselben Zeile.  Sie legen eine
+            zulässige Abweichung fest; die Analyse findet das breiteste Band um einen
+            Referenz-Extremwert, in dem der Frequenzgang innerhalb dieser dB-Anzahl davon
+            bleibt, und meldet die Bandgrenzen.  Das dB-Feld nimmt 0,001 … 20 dB.</td></tr>
+    <tr><td><b>Bereich</b> (Felder Start-/Stoppfrequenz)</td>
+        <td>Der mit <b>Startfrequenz</b> beschriftete Optionsschalter, mit Feldern für
+            Start- und Stoppfrequenz.  Die Analyse meldet die halbe Spitze-Spitze-Streuung
+            des Frequenzgangs innerhalb dieses Bereichs.  Das Bearbeiten einer Grenze
+            begrenzt sie so, dass sie mindestens 1 Hz Abstand zur anderen hält; beide
+            Grenzen sind auf die Nyquist-Grenze begrenzt.</td></tr>
+    <tr><td><b>Bandsperre</b></td>
+        <td>Lenkt die Analyse zu einer Senke statt zu einem Höchstpunkt (in beiden
+            aktiven Modi verfügbar, siehe unten).</td></tr>
+  </table>
+
+  <h4>Was jeder Modus misst</h4>
+  <p><b>Unebenheits-Modus.</b>  Mit <b>Bandsperre</b> aus findet die Analyse den
+     Höchstpunkt innerhalb des Audiobandes (20 Hz – 20 kHz) und wandert in beide
+     Richtungen nach außen, solange der Frequenzgang innerhalb Ihrer Toleranz unterhalb
+     dieses Höchstpunkts bleibt — die Bandgrenzen liegen dort, wo der Frequenzgang
+     erstmals so weit unter den Höchstpunkt fällt.  Mit <b>Bandsperre</b> ein findet sie
+     stattdessen den tiefsten Punkt und wandert nach außen, solange der Frequenzgang
+     innerhalb der Toleranz <em>oberhalb</em> des Minimums bleibt — die Grenzen liegen
+     dort, wo der Frequenzgang erstmals so weit über die Kerbe steigt.  (Im
+     Bandsperren-Modus wird die Kurve nur leicht entstört, nicht gemittelt, sodass eine
+     scharfe, tiefe Kerbe ihre wahre Tiefe behält und die Markierungslinien auf dem
+     gezeichneten Trace liegen.)</p>
+  <p><b>Bereichs-Modus.</b>  Die Analyse durchsucht den Frequenzgang zwischen Start und
+     Stopp, findet den höchsten und den tiefsten Punkt und meldet die <b>Hälfte</b> der
+     Streuung zwischen ihnen (das ±-Zeichen ist Teil der Anzeige).  Das Häkchen
+     <b>Bandsperre</b> wählt hier nur, auf welchem Extremum die Markierungslinie sitzt —
+     dem tiefsten Punkt bei gesetztem Häkchen, dem höchsten sonst — es ändert die
+     gemeldete Kennzahl nicht.</p>
+
+  <h4>Markierungen in der Darstellung</h4>
+  <p>Während ein Modus aktiv ist und eine Messung vorliegt, wird die Analyse als
+     <b>gepunktete</b> Linien in der Linienbreite der Überlagerung über die Darstellung
+     gezeichnet:</p>
+  <ul>
+    <li><b>Unebenheits-Modus</b> — zwei <b>grüne</b> Horizontale (eine am
+        Referenz-Extremwert, eine an der Toleranzschwelle), die das gefundene Band
+        überspannen, dazu eine <b>violette</b> Vertikale an jeder Bandgrenze über die
+        volle Höhe der Darstellung.</li>
+    <li><b>Bereichs-Modus</b> — eine <b>violette</b> Vertikale bei Start und bei Stopp,
+        dazu eine <b>grüne</b> Horizontale am interessierenden Extremum dazwischen.  Dort,
+        wo die beiden Vertikalen den Trace schneiden, wird entweder eine
+        volle-breite grüne Pegellinie (wenn die beiden Schnitthöhen bis auf einen
+        Haaresbreite übereinstimmen) oder ein kurzer grüner Strich an jeder Vertikale
+        gezeichnet.</li>
+  </ul>
+
+  <h4 id="freqresp-uneven-readout">Die Ebenheitsanzeige</h4>
+  <p>Das Ergebnis wird als kurze Zeile geschrieben, angezeigt in einer kleinen umrandeten
+     Tabelle unterhalb der Kopfschaltflächen (unter der Max-/Min-Tabelle des Vergleichs
+     gestapelt, wenn beide vorhanden sind).  Ihre Formulierung hängt vom Modus ab:</p>
+  <ul>
+    <li><b>Unebenheits-Modus</b> — „Frequenzgang ist <i>lo</i> bis <i>hi</i>, <i>x</i> dB",
+        z. B. „Frequenzgang ist 20 Hz bis 18,5 kHz, 3 dB".</li>
+    <li><b>Bereichs-Modus</b> — „±<i>x</i> dB Frequenzgang im Bereich <i>lo</i> bis
+        <i>hi</i>", z. B. „±0,42 dB Frequenzgang im Bereich 20 Hz bis 20 kHz" — hier ist
+        <i>x</i> die halbe Streuung.</li>
+  </ul>
+  <p>Dieselbe Kennzahl wird auf der Kachel des Reiters verdichtet, während die Leiste
+     eingeklappt ist: „±<i>x</i> dB" im Unebenheits-Modus, das Start-Stopp-Paar im
+     Bereichs-Modus oder „Aus".  Die gesamte Anzeige kann auch mit der Kopfschaltfläche
+     <b>Messwerte auslagern</b> in ein eigenes Fenster
+     <a href="#freqresp-measure">ausgelagert</a> werden.</p>
+
+  <div class="note">Die Ebenheitsanalyse ignoriert alles ab 95 % der Nyquist-Frequenz,
+     wo das entfaltete Signal zu schwach ist, um vertrauenswürdig zu sein.  Bei einer
+     <a href="#freqresp-tab-loadfrom">geladenen Datei</a> ist die verwendete
+     Nyquist-Frequenz jene, die in der Datei selbst aufgezeichnet ist, sodass eine
+     Aufnahme mit hoher Abtastrate, die auf einem langsameren Gerät geöffnet wird,
+     dennoch über ihre volle Spanne analysiert wird.</div>
+
+  <h3 id="freqresp-tab-presets">Voreinstellungen</h3>
+  <p><img src="img/FreqResp - Presets.png" alt="Reiter Voreinstellungen"/></p>
+  <p>Speichern und Abrufen vollständiger Einstellungen- und RIAA-Konfigurationen.</p>
+  <table class="controls">
+    <tr><th>Steuerelement</th><th>Hinweise</th></tr>
+    <tr><td>Namensfeld (Kombinationsfeld)</td>
+        <td>Neuen Voreinstellungsnamen eingeben oder vorhandenen auswählen.</td></tr>
+    <tr><td>Speichern</td>
+        <td>Speichert die aktuellen Sweep- und RIAA-Einstellungen unter diesem Namen;
+            ausgegraut, wenn die aktuellen Einstellungen bereits der gewählten
+            Voreinstellung entsprechen.</td></tr>
+    <tr><td>Laden</td>
+        <td>Wendet die gewählte Voreinstellung auf den aktiven Bereich an.</td></tr>
+    <tr><td>Löschen</td>
+        <td>Entfernt die gewählte Voreinstellung (mit Bestätigung).</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-utility">Dienstprogramm</h3>
+  <p><img src="img/FreqResp - Utility.png" alt="Reiter Dienstprogramm"/></p>
+  <table class="controls">
+    <tr><th>Schaltfläche</th><th>Funktion</th></tr>
+    <tr><td>Screenshot</td>
+        <td>Frequenzgang-Darstellung speichern oder kopieren.</td></tr>
+    <tr><td>DAC-Vollaussteuerung kalibrieren</td>
+        <td>Kalibrierungsassistent für den DAC-Referenzpegel (1 kHz / 1 V RMS).</td></tr>
+    <tr><td>ADC-Vollaussteuerung kalibrieren</td>
+        <td>Kalibrierungsassistent für den ADC-Referenzpegel (misst eine 1-kHz-
+            Referenz am Eingang).</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-calibration">Kalibrierung laden…</h3>
+  <p><img src="img/FreqResp - Load calibration.png" alt="Reiter Kalibrierung laden"/></p>
+  <p>Eine Liste von Kalibrierungszeilen.  Jede geladene, mit <b>Aktiv</b> versehene
+     <code>.frc</code>-/CSV-Datei wird de-embedded (subtrahiert) von der Messung,
+     sodass die Darstellung den Prüfling mit entfernter bekannter Schnittstellenantwort
+     zeigt.</p>
+  <table class="controls">
+    <tr><th>Steuerelement (pro Zeile)</th><th>Hinweise</th></tr>
+    <tr><td>Pfad</td>
+        <td>Die geladene Datei oder „Keine Kalibrierung geladen".</td></tr>
+    <tr><td>Aktiv</td>
+        <td>Korrektur dieser Datei aktivieren/deaktivieren ohne sie zu entladen —
+            deaktivierte Zeilen verbleiben in der Liste für eine schnelle
+            Wiederverwendung.</td></tr>
+    <tr><td>Laden</td>
+        <td>Datei-Öffnen-Schaltfläche — wählt eine <code>.frc</code>- oder
+            CSV-Korrekturdatei für diese Zeile.</td></tr>
+    <tr><td>Löschen (×)</td>
+        <td>Entlädt die Datei dieser Zeile (behält den Aktiv-Status).</td></tr>
+    <tr><td>Hinzufügen (+)</td>
+        <td>Fügt eine weitere Zeile hinzu, um eine zweite Korrektur in Reihe
+            zu schalten.</td></tr>
+    <tr><td>Entfernen (−)</td>
+        <td>Löscht diese Zeile.</td></tr>
+  </table>
+
+  <h3 id="freqresp-tab-saveto">Speichern unter…</h3>
+  <p><img src="img/FreqResp - Save to.png" alt="Reiter Speichern unter"/></p>
+  <p>Speichert die aktuelle Messung als stereo CSV (Frequenz, L/R-Betrag in
+     dB, L/R-Phase in Grad).  Die Datei zeichnet zudem die Abtastrate auf, mit der sie
+     gemessen wurde, sodass ein späteres <a href="#freqresp-tab-loadfrom">Laden aus…</a>
+     die korrekte Analysebandbreite kennt.  Die Schaltfläche „Speichern" fragt stets nach
+     einem Pfad, vorausgefüllt mit einem zeitgestempelten
+     <code>freqresp_…&period;frc</code>-Namen.  Speichern ohne vorhandene Messung meldet
+     „Zuerst einen Sweep durchführen".</p>
+  <p class="note"><b>Auto-Reload:</b> Wenn die gespeicherte Datei bereits als
+     Kalibrierungszeile im <a href="fft.html">FFT</a>-Bereich oder in diesem
+     Frequenzgang-Bereich geladen ist (siehe <a href="#freqresp-tab-calibration">Kalibrierung
+     laden…</a>), wird diese Zeile unmittelbar nach dem Speichern automatisch neu
+     eingelesen — ein erneutes Messen und Überschreiben einer Kalibrierung wird sofort
+     wirksam, ohne erneutes Durchsuchen.</p>
+
+  <h3 id="freqresp-tab-loadfrom">Laden von…</h3>
+  <p><img src="img/FreqResp - Load from.png" alt="Reiter Laden von"/></p>
+  <p>Lädt eine zuvor gespeicherte Stereo-CSV zurück in die Darstellung.  Eine geladene
+     Datei wird als bereits korrigiert behandelt (sie wird nicht neu kalibriert), und
+     ein nicht blinkendes Banner zeigt ihren Pfad oben rechts in der Darstellung an.</p>
+  <p class="note">Eine gespeicherte Datei zeichnet die Abtastrate auf, mit der sie
+     gemessen wurde, und diese aufgezeichnete Rate — nicht die Rate des Live-Geräts —
+     bestimmt die Analysebandbreite (die von der Fadenkreuz-Begrenzung und der
+     <a href="#freqresp-tab-unevenness">Unebenheits</a>-Analyse verwendete
+     Nyquist-Frequenz).  So wird eine mit hoher Abtastrate aufgenommene Datei über ihre
+     volle Spanne analysiert, selbst wenn sie auf einem langsameren Gerät geöffnet wird.
+     Nur eine ältere Datei, die keine aufgezeichnete Rate trägt, fällt auf die aktuelle
+     Geräterate zurück.</p>
+
+  <h2 id="freqresp-measure">Messung durchführen</h2>
+  <p>Drücken Sie <b>Play</b>, um den Sweep zu starten.  Aufnahme und Generator-Wiedergabe
+     werden für den Lauf übernommen, ein modaler Fortschrittsdialog zeigt einen
+     Live-RMS-gegen-Zeit-Pegel, und die Betrags- (und Phasen-)Darstellung aktualisiert
+     sich nach Abschluss der Entfaltung.  Die Gesamtdauer entspricht dem Vorlauf zuzüglich
+     der durch FFT-Größe und Abtastrate bestimmten Sweep-Dauer.  Da die Referenz der exakt
+     vorgerenderte Sweep ist, der abgespielt wurde, ergibt sich die wahre Übertragungsfunktion
+     des Prüflings, keine Schätzung — siehe
+     <a href="theory/freq-resp.html">Funktionsprinzip ▸ Frequenzgang</a>.</p>
+
+  <h3 id="freqresp-measure-readout">Messwertanzeige</h3>
+  <p>Zwei kleine Anzeigen können über der Darstellung erscheinen, sobald eine Messung
+     vorliegt:</p>
+  <ul>
+    <li>eine <b>Max-/Min</b>-Tabelle des Vergleichs, angezeigt während ein Vergleichsmodus
+        aktiv ist (<a href="#freqresp-tab-riaa">RIAA</a> oder
+        <a href="#freqresp-filter-compare">Filter</a>), die die Extremwerte der
+        Differenzkurve angibt; und</li>
+    <li>die <a href="#freqresp-uneven-readout">Unebenheits-Ebenheitszeile</a>, angezeigt
+        während ein Unebenheits-Modus aktiv ist.</li>
+  </ul>
+  <p>Beide sitzen in der Ecke der Darstellung unterhalb der Kopfschaltflächen.  Die
+     Kopfschaltfläche <b>Messwerte auslagern</b> hebt sie in ein kleines separates Fenster
+     (mit dem Titel „Messungen") oben rechts im Bereich; klicken Sie die Schaltfläche
+     erneut oder schließen Sie das Fenster, um sie zurückzuholen.  Die Schaltfläche tut
+     nichts, solange keine Messung anzuzeigen ist, und der ausgelagerte Zustand wird beim
+     Neustart auf angedockt zurückgesetzt.</p>
+
+<script src="help-viewer.js"></script>
+</body>
+</html>
