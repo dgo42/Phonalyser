@@ -135,9 +135,16 @@ public final class GeneratorController {
             // per-lane ratio (scaleR = fsLeft/fsRight), so re-push both.
             setDacFsVoltageAmpl(v);
             pushOutputRoutingToPlayback();
+            publishSignalChanged();
         });
-        onPref(prefs.dacFsVoltageAmplRightProperty(), v -> pushOutputRoutingToPlayback());
-        onPref(prefs.genOutputChannelsProperty(),     v -> pushOutputRoutingToPlayback());
+        onPref(prefs.dacFsVoltageAmplRightProperty(), v -> {
+            pushOutputRoutingToPlayback();
+            publishSignalChanged();
+        });
+        onPref(prefs.genOutputChannelsProperty(), v -> {
+            pushOutputRoutingToPlayback();
+            publishSignalChanged();
+        });
         onPref(prefs.genRectangleDutyProperty(), v -> {
             setRectangleDuty(v);
             publishSignalChanged();
@@ -483,10 +490,13 @@ public final class GeneratorController {
         running    = false;
     }
 
-    /** Live-applies the dither bit count to the running playback.  No-op if not running. */
+    /** Live-applies the dither bit count to the running playback (if any), then
+     *  signals a generator change so the FFT stats/accumulator and the scope
+     *  persistence restart on the new signal. */
     public void setDitherBits(int bits) {
         AudioPlayback ag = playback;
         if (ag != null) ag.setDitherBits(bits);
+        publishSignalChanged();
     }
 
     /** Live-applies a duty-cycle (fraction in [0.001, 0.999]) to the running rectangle generator. */
