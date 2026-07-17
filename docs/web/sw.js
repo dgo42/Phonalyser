@@ -13,7 +13,7 @@
  */
 const VERSION = '1.0.3 beta';                    // single source of truth = package.json version (build injects it)
 const CACHE = `phonalyser-${VERSION}`;
-const CORE = ['./', './index.html', './css/app.css', './favicon.svg', './manifest.webmanifest'];
+const CORE = ['./', './index.html', './css/app.css', './favicon.svg', './manifest.webmanifest', './devices.yaml'];
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();                       // a freshly-edited worker takes over promptly

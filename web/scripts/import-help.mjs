@@ -41,6 +41,22 @@ const WEB_ONLY_PAGES = [{
   },
 }];
 
+// Web-ONLY removal transform. The desktop "Calibration provided by device"
+// (calibrationFromDevice) card flag was removed from the WEB UI, so the WEB help must not
+// document it. The copy loop overwrites preferences.html from Java each import (which still
+// carries both mentions), so we strip them again every run. Two elements are removed from
+// every language's preferences.html: (a) the yaml-key <li> documenting
+// `calibrationFromDevice: true`, and (b) the card-editor properties <tr> whose label is the
+// per-language "Calibration provided by device" phrase. The strip is idempotent — importing
+// twice yields identical output, and a pass over already-stripped HTML is a no-op. Java
+// sources are never touched, only the web/help copies.
+const CFD_LABELS = 'Calibration provided by device|Kalibrierung vom Gerät bereitgestellt|Калібрування надається пристроєм';
+// Tempered lazy tokens keep each match inside a single <li>/<tr> (never spanning a sibling
+// element) and tolerate attributes/whitespace on the opening tag; the leading indentation and
+// one trailing newline are consumed so no blank line is left behind.
+const CFD_LI_RE = /[ \t]*<li\b[^>]*>(?:(?!<\/li>)[\s\S])*?calibrationFromDevice(?:(?!<\/li>)[\s\S])*?<\/li>[ \t]*\n?/g;
+const CFD_TR_RE = new RegExp(`[ \\t]*<tr\\b[^>]*>(?:(?!<\\/tr>)[\\s\\S])*?(?:${CFD_LABELS})(?:(?!<\\/tr>)[\\s\\S])*?<\\/tr>[ \\t]*\\n?`, 'g');
+
 const langs = (await readdir(SRC, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
 for (const lang of langs) {
   const srcLang = path.join(SRC, lang);
@@ -106,6 +122,19 @@ async function injectTocLinks() {
   }
 }
 await injectTocLinks();
+
+// Strip the desktop-only "Calibration provided by device" (calibrationFromDevice) mentions
+// from each language's preferences.html — the web UI no longer offers the flag.
+async function stripCfdMentions() {
+  for (const lang of langs) {
+    const file = path.join(DST, lang, 'preferences.html');
+    if (!await exists(file)) continue;
+    const orig = await readFile(file, 'utf8');
+    const html = orig.replace(CFD_LI_RE, '').replace(CFD_TR_RE, '');
+    if (html !== orig) await writeFile(file, html);
+  }
+}
+await stripCfdMentions();
 
 console.log(`imported help: ${SRC} -> ${DST}`);
 console.log(`  languages: ${langs.join(', ')}  (img/ preserved, ?hl highlighter injected)`);

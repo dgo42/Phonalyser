@@ -154,23 +154,30 @@ function exceedsCeil(dir, v, vDivMax) {
  *   - One off the rule → the on-rule channel is the base; both off → the one
  *     nearest its next rung in the zoom direction (smallest |ln(ratio)|).
  * An inactive channel is signalled by a non-positive V/div and returned unchanged;
- * a blocked zoom-out (would exceed `vDivMax`) returns the inputs.
+ * a blocked zoom-out (would exceed the channel's ceiling) returns the inputs.
  * (ScopeFormat.coupleVoltsPerDivZoom.)
+ *
+ * Per-channel ceilings (Java ScopeFormat.coupleVoltsPerDivZoom two-ceiling overload):
+ * each channel's zoom-out is capped at its OWN FS-fills-height rung — the ceiling is a
+ * pure function of that channel's full-scale, so it simply stops being shared; the
+ * block stays coupled. `rightMax` defaults to `leftMax` so equal L/R full-scales
+ * (LINKED) are byte-for-byte the single-ceiling behaviour.
  * @param {number} leftV   left V/div  (>0, or <=0 when that channel is inactive)
  * @param {number} rightV  right V/div (>0, or <=0 when inactive)
  * @param {number} dir     -1 zoom in (smaller V/div), +1 zoom out (larger)
  * @param {number[]} rule  ascending 1-2-5 ladder
- * @param {number} vDivMax zoom-out ceiling (FS fills the full grid height); <=0 = none
+ * @param {number} leftMax  left  zoom-out ceiling (FS fills the full grid height); <=0 = none
+ * @param {number} rightMax right zoom-out ceiling; defaults to leftMax (LINKED)
  * @returns {number[]} {newLeftV, newRightV}
  */
-export function coupleVoltsPerDivZoom(leftV, rightV, dir, rule, vDivMax) {
+export function coupleVoltsPerDivZoom(leftV, rightV, dir, rule, leftMax, rightMax = leftMax) {
   const leftOn = leftV > 0;
   const rightOn = rightV > 0;
   if (!leftOn && !rightOn) return [leftV, rightV];
   if (leftOn !== rightOn) {                       // single active channel (XOR)
     const cur = leftOn ? leftV : rightV;
     let next = nextVoltsPerDivRung(cur, dir, rule);
-    if (exceedsCeil(dir, next, vDivMax)) next = cur;
+    if (exceedsCeil(dir, next, leftOn ? leftMax : rightMax)) next = cur;
     return [leftOn ? next : leftV, rightOn ? next : rightV];
   }
   const lRule = onVoltsPerDivRule(leftV, rule);
@@ -206,7 +213,7 @@ export function coupleVoltsPerDivZoom(leftV, rightV, dir, rule, vDivMax) {
     newL = refLeft ? refNext : leftV * ratio;
     newR = refLeft ? rightV * ratio : refNext;
   }
-  if (exceedsCeil(dir, newL, vDivMax) || exceedsCeil(dir, newR, vDivMax)) {
+  if (exceedsCeil(dir, newL, leftMax) || exceedsCeil(dir, newR, rightMax)) {
     return [leftV, rightV];                         // zoom-out blocked at FS-fills-height
   }
   return [newL, newR];

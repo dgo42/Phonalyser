@@ -103,6 +103,18 @@ async function copyVendorMinimal() {
   }
 }
 
+// Ship the device catalog VERBATIM from the Java single source of truth. src/main/resources/
+// devices.yaml is authoritative; every build re-copies it into web/ (the dev-served source) AND
+// the build output, so any future Java-side catalog change (a new card, range, or bumped
+// contentVersion) flows into the web app automatically ("always copy"). The app fetches +
+// parses it at runtime (js/store/device-catalog.js) — it is NOT hard-coded.
+async function copyDevicesCatalog() {
+  const javaYaml = path.join(root, '..', 'src', 'main', 'resources', 'devices.yaml');
+  if (!(await exists(javaYaml))) { console.warn('  skip devices.yaml (Java source absent)'); return; }
+  await cp(javaYaml, path.join(root, 'devices.yaml'));      // web/devices.yaml (dev-served)
+  await cp(javaYaml, path.join(outDir, 'devices.yaml'));    // built output (docs/web/devices.yaml)
+}
+
 async function emitIndexHtml() {
   let html = await readFile(path.join(root, 'index.html'), 'utf8');
   // Module scripts now point at the bundled siblings in the output dir.
@@ -165,6 +177,7 @@ async function main() {
   await bundle('build-vendor.js', 'vendor.js', 'iife');   // jQuery + Bootstrap (+ Popper), tree-shaken → globals
 
   await copyStatic();
+  await copyDevicesCatalog();
   await syncSourceVersion();
   await emitIndexHtml();
   await emitServiceWorker();

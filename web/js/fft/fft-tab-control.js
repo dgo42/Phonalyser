@@ -53,7 +53,7 @@ export class FftTabControl {
    *   - tileChips: (...vals) => the `.tile` chip-span renderer (shared with the scope tiles, app.js).
    */
   constructor(engine, prefs, { host, fftView, fftViewCorrection, frcStore, getField, io,
-    restartFft, showConfirm, setStatus, tileChips }) {
+    restartFft, showConfirm, setStatus, tileChips, calibrationDialog }) {
     this.engine = engine;
     this.prefs = prefs;
     this.host = host;
@@ -66,10 +66,10 @@ export class FftTabControl {
     this._showConfirm = showConfirm;
     this._setStatus = setStatus;
     this._tileChips = tileChips;
+    // The unified ADC/DAC calibration dialog (Java CalibrationDialog), late-bound
+    // (built after this control) — () => the shared dialog instance.
+    this._calibrationDialog = calibrationDialog;
     this.fftAnalyzer = new FftAnalyzer();
-    // Fundamental Vrms snapshotted when the ADC-cal dialog OPENS — the OK rescale uses THIS
-    // (the value the dialog displayed / seeded), not a possibly-drifted fresh getLastVrms().
-    this._fftAdcCalOpenVrms = NaN;
   }
 
   // Effective FFT averages: the averages NumericStepField's canonical value (Java averagesField —
@@ -549,12 +549,10 @@ export class FftTabControl {
     // AbstractPane.renderOffscreen printing a fresh FftPane.createSnapshotClone at the
     // target size (no bitmap scaling).
     registerShotCanvasRenderer('spec', (cssW, cssH) => this.renderSpecShotCanvas(cssW, cssH));
-    // ADC calibration (Java FftTabControl.openCalibrationDialog → its OWN AdcCalibrationDialog):
-    // rescale adcFsVoltageRms so the FFT's measured fundamental Vrms matches the user-entered
-    // actual amplitude. Uses an FFT-dedicated #fftAdcCalModal (its own fields + OK, mirroring the
-    // scope's #adcCalModal / DacCalibrationDialog pattern — Java builds a fresh dialog per pane,
-    // never a shared one, so there is no cross-pane OK collision), seeded from the live
-    // fundamental Vrms (FftView.getLastVrms). No live Vrms → the localized info dialog (Java
+    // ADC calibration (Java FftTabControl.openCalibrationDialog): opens the unified two-row
+    // CalibrationDialog seeded analyzed-channel-only with the OPEN-time fundamental Vrms of the
+    // FFT's analyzed channel (FftView.getLastVrms); the dialog owns the OK write (per-channel on a
+    // bound stereo card, shared otherwise). No live Vrms → the localized info dialog (Java
     // Dialogs.info with calibrate.title / calibrate.error.noVrms), never a raw prompt.
     $('#fftAdcCalibrate').on('click', () => {
       const measured = this.fftView.getLastVrms();
@@ -562,34 +560,8 @@ export class FftTabControl {
         this._showConfirm(t('calibrate.title'), t('calibrate.error.noVrms'));
         return;
       }
-      // Snapshot the OPEN-time fundamental Vrms (Java AdcCalibrationDialog receives currentVrms
-      // at construction; the owner rescales against the DISPLAYED value). getLastVrms() can move
-      // while the dialog is open, so the OK ratio must use THIS number — not a fresh read.
-      this._fftAdcCalOpenVrms = measured;
-      $('#fftAdcCalCurrent').text(t('calibrate.current', measured.toFixed(6) + ' V'));
-      // Seed the AMPLITUDE step field with the live reading (unit lives in the input text).
-      const field = getField('fftAdcCalValue');
-      if (field) field.setValue(measured);
-      $('#fftAdcCalError').addClass('d-none');
-      window.bootstrap.Modal.getOrCreateInstance(document.getElementById('fftAdcCalModal')).show();
-    });
-    $('#fftAdcCalOk').on('click', () => {
-      const measured = this._fftAdcCalOpenVrms;   // open-time reading the dialog displayed
-      // The actual amplitude is the AMPLITUDE step field's canonical Vrms (V / mV / µV / dBV
-      // in the input text — no <select>). Commit any pending typed text, then read canonical.
-      const field = getField('fftAdcCalValue');
-      if (field) field.model.commit(field.input.value.trim());
-      const actual = field ? field.getValue() : NaN;
-      // Mirror AdcCalibrationDialog: inline error on a non-positive / unparsable value, keep
-      // the dialog open; else rescale the ADC full-scale and reflect it in the prefs field.
-      if (!(measured > 0) || !(actual > 0) || !Number.isFinite(actual)) {
-        $('#fftAdcCalError').removeClass('d-none');
-        return;
-      }
-      prefs.setAdcFsVoltageRms(prefs.adcFsVoltageRms.get() * (actual / measured));
-      prefs.save();
-      $('#adcFsVrms').val(prefs.adcFsVoltageRms.get().toFixed(6));
-      window.bootstrap.Modal.getOrCreateInstance(document.getElementById('fftAdcCalModal')).hide();
+      const dlg = this._calibrationDialog && this._calibrationDialog();
+      if (dlg) dlg.openAdc(measured, prefs.fftChannel.get());
     });
 
     // ----- FFT "Save to…" / "Load from…" -----

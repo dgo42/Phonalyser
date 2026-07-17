@@ -72,7 +72,8 @@ class UnitFamilyDef {
     const u = this.units;
     switch (this.name) {
       case 'FREQUENCY': return canonical < KILO_SWITCH_HZ ? u[0] : u[1];
-      case 'AMPLITUDE': return canonical < MICRO_SWITCH ? u[0]
+      case 'AMPLITUDE':
+      case 'VOLTAGE': return canonical < MICRO_SWITCH ? u[0]
         : canonical < MILLI_SWITCH ? u[1]
           : (canonical < HALF_UNIT_SWITCH ? u[2] : u[3]);
       case 'TIME': return canonical < HALF_UNIT_SWITCH ? u[0] : u[1];
@@ -110,6 +111,15 @@ export const UNIT_FAMILIES = {
     new Unit('unit.mv', 1e-3, false, ['mv', 'm']),
     new Unit('unit.v', 1.0, false, ['v']),
     new Unit('unit.dbv', 1.0, true, ['dbv']),
+  ]),
+  // nV / µV / mV / V — AMPLITUDE without the logarithmic dBV unit, for calibration-value
+  // entry where a dB reference makes no sense (UnitFamily.VOLTAGE). Same linear switching
+  // thresholds and V default as AMPLITUDE.
+  VOLTAGE: new UnitFamilyDef('VOLTAGE', 3, [
+    new Unit('unit.nv', 1e-9, false, ['nv', 'n']),
+    new Unit('unit.uv', 1e-6, false, ['uv', 'u', 'µ', 'μ']),
+    new Unit('unit.mv', 1e-3, false, ['mv', 'm']),
+    new Unit('unit.v', 1.0, false, ['v']),
   ]),
   TIME: new UnitFamilyDef('TIME', 1, [
     new Unit('unit.ms', 1e-3, false, ['ms']),
@@ -173,14 +183,25 @@ export class NumericStepModel {
       this.decimals = -1; this.maxDecimals = cfg.maxDecimals;
     }
     this.value = this.min;
+    // When set, the field renders empty and holds no value — the disabled, never-measured
+    // channel row in the calibration dialog (avoids the clamp-to-min "1 nV" artifact).
+    // Cleared by any value mutation (NumericStepModel.blank).
+    this.blank = false;
   }
 
   getValue() { return this.value; }
 
+  isBlank() { return this.blank; }
+
   setValue(v) {
     if (Number.isNaN(v)) return;
+    this.blank = false;
     this.value = this._clamp(this._roundSig(v));
   }
+
+  /** Puts the model into the blank state: no value, an empty rendered text. The next
+   *  setValue / wheel / arrow / successful commit leaves it (NumericStepModel.setBlank). */
+  setBlank() { this.blank = true; }
 
   setMin(min) { this.min = min; this.value = this._clamp(this.value); }
   setMax(max) { this.max = max; this.value = this._clamp(this.value); }
@@ -279,6 +300,7 @@ export class NumericStepModel {
   }
 
   text() {
+    if (this.blank) return '';
     if (!Number.isFinite(this.value)) return '∞';
     if (this._isNamedValue(this.value)) return this.namedValueLabel;
     return this._formatIn(this.value, this.currentUnit());
@@ -331,10 +353,10 @@ export class NumericStepModel {
     if (s.length > 1 && s.endsWith('.') && /[0-9]/.test(s.charAt(s.length - 2))) s = s.slice(0, -1);
     if (!Number.isFinite(this.max)) {
       const low = s.toLowerCase();
-      if (s === '∞' || low === 'inf' || low === 'infinity') { this.stickyUnit = null; this.value = Infinity; return true; }
+      if (s === '∞' || low === 'inf' || low === 'infinity') { this.stickyUnit = null; this.blank = false; this.value = Infinity; return true; }
     }
     if (this.namedValueLabel != null && s.toLowerCase() === this.namedValueLabel.trim().toLowerCase()) {
-      this.stickyUnit = null; this.value = this._clamp(this._roundSig(this.namedValue)); return true;
+      this.stickyUnit = null; this.blank = false; this.value = this._clamp(this._roundSig(this.namedValue)); return true;
     }
     const m = NUMBER_WITH_UNIT.exec(s);
     if (!m) return false;
@@ -354,6 +376,7 @@ export class NumericStepModel {
       if (unit == null) return false;
       this.stickyUnit = unit.log ? unit : null;
     }
+    this.blank = false;
     this.value = this._clamp(this._roundSig(unit.toCanonical(num)));
     return true;
   }
@@ -512,6 +535,11 @@ export class NumericStepField {
 
   setValue(v) { this.model.setValue(v); this.refresh(); }
   getValue() { return this.model.getValue(); }
+  /** Renders the field empty and holding no value — the disabled, never-measured channel
+   *  row in the calibration dialog. isBlank stays true until setValue / a committed edit
+   *  enters a value (NumericStepField.setBlank / isBlank). */
+  setBlank() { this.model.setBlank(); this.refresh(); }
+  isBlank() { return this.model.isBlank(); }
   setMin(m) { this.model.setMin(m); this.refresh(); }
   setMax(m) { this.model.setMax(m); this.refresh(); }
   setLogDisplay(on) { this.model.setLogDisplay(on); this.refresh(); }

@@ -170,15 +170,16 @@ export class GeneratorController {
   }
 
   /** The frequency the generator actually emits for the current form — faithful port of
-   *  GeneratorController.emitFrequency: RECTANGLE is sample-period-aligned (fs/round(fs/f))
-   *  so its hard +1/-1 edge always lands on a sample (no per-cycle edge jitter); SINE /
-   *  SINE_COMP / DUAL_TONE take the FFT-bin snap ONLY when snap-to-bin is on (Java
-   *  FftBinSnap.snapIfEnabled admits SINE_COMP since 4887ecb); every other form
-   *  (TRIANGLE, noise, …) emits the raw entered value. */
+   *  GeneratorController.emitFrequency: RECTANGLE (hard +1/-1 edge) and TRIANGLE (duty
+   *  corner — a derivative discontinuity with the same problem) are BOTH sample-period-
+   *  aligned (fs/round(fs/f)) so the edge/corner always lands on a sample and cannot drift
+   *  against the sample grid cycle to cycle; SINE / SINE_COMP / DUAL_TONE take the FFT-bin
+   *  snap ONLY when snap-to-bin is on (Java FftBinSnap.snapIfEnabled admits SINE_COMP since
+   *  4887ecb); every other form (noise, …) emits the raw entered value. */
   _genEmitFreq() {
     const c = this.config;
     const raw = c.toneHz;
-    if (c.form === GenSignalForm.RECTANGLE) {
+    if (c.form === GenSignalForm.RECTANGLE || c.form === GenSignalForm.TRIANGLE) {
       const outRate = this.outSampleRate || c.outRate;   // ACTUAL context rate, not the requested
       if (raw <= 0 || outRate <= 0) return raw;
       return outRate / Math.max(2, Math.round(outRate / raw));   // samplePeriodAlignedHz
@@ -304,7 +305,7 @@ export class GeneratorController {
         if (st === 'interrupted' || st === 'closed') this._reportDeviceError('AudioContext state=' + st);
       });
       // The context is granted c.outRate exactly (see the probe comment above); re-resolve the
-      // emit frequency (esp. the RECTANGLE sample-period alignment) against the ACTUAL rate.
+      // emit frequency (esp. the RECTANGLE/TRIANGLE sample-period alignment) against the ACTUAL rate.
       this.outSampleRate = this.outCtx.sampleRate;
       this.computeAnalysisFreqs();
       // Surface the hidden browser+Windows resampling. The probe rate describes the DEFAULT output
@@ -325,10 +326,18 @@ export class GeneratorController {
       }
       await this.outCtx.audioWorklet.addModule(new URL('./worklets/dds-processor.js', import.meta.url));
       this.genNode = new AudioWorkletNode(this.outCtx, 'dds-processor', {
-        outputChannelCount: [1],
+        // Stereo out: the worklet writes each lane explicitly to honour the output-lane
+        // gate (Java's interleave seam, PcmQuantizer). A mono [1] lane up-mixed by the
+        // destination could not carry per-lane values (left ≠ right for a gated / scaled
+        // lane), so this is the required web-seam adaptation of Java's PcmQuantizer point.
+        outputChannelCount: [2],
         processorOptions: {
           form: c.form, frequency: this.snapped, sampleRate: this.outCtx.sampleRate,
           amplitudeVRms: ampVrmsOf(c), dacFsVoltageAmpl: c.dacFsVoltageAmpl,
+          // Output routing (Java GeneratorController.pushOutputRoutingToPlayback): the lane
+          // gate + right-lane scale (= fsLeft/fsRight). Left keeps the mono amplitude (scale 1.0).
+          outputChannels: c.outputChannels != null ? c.outputChannels : 'BOTH',
+          rightLaneScale: c.rightLaneScale != null ? c.rightLaneScale : 1.0,
         },
       });
       // Push the remaining live parameters (duty, dual-tone tone2/split) — absent
@@ -377,6 +386,10 @@ export class GeneratorController {
       amplitudeVRms: ampVrmsOf(c), dacFsVoltageAmpl: c.dacFsVoltageAmpl,
       rectDuty: c.rectDuty, triDuty: c.triDuty,
       frequency2: this._genEmitFreq2(), dualAmp1Pct: c.amp1Pct, dualAmp2Pct: c.amp2Pct,
+      // Output routing rides every retune (Java pushOutputRoutingToPlayback): a lane-gate
+      // or DAC-full-scale edit lands on the worklet's next block.
+      outputChannels: c.outputChannels != null ? c.outputChannels : 'BOTH',
+      rightLaneScale: c.rightLaneScale != null ? c.rightLaneScale : 1.0,
     });
     this._postSweepConfig();
   }
@@ -467,7 +480,7 @@ export class GeneratorController {
    *  is pending it opens one AT {@code sampleRate} (legacy path). Uses the file lane
    *  (_fileSrc/_fileCtx) so stopFile() tears it down; NOT looped. Resolves once
    *  playback has started; returns the context's granted rate. */
-  async playSweepBuffer(buf, sampleRate) {
+  async playSweepBuffer(buf, sampleRate, opts = {}) {
     let ctx = this._pendingSweepCtx;
     this._pendingSweepCtx = null;
     if (ctx) {
@@ -490,10 +503,19 @@ export class GeneratorController {
     // sweep played at the wrong speed, breaking reference==playback and smearing H
     // into comb-noise with a huge near-Nyquist spike (division by near-zero
     // reference energy where the mis-clocked sweep no longer has content).
-    const audioBuf = ctx.createBuffer(1, buf.length, sampleRate);
+    // Output-lane gate (Java CaptureWithGenerator.runStereo → setOutputChannels):
+    // the sweep is GATE-ONLY — an un-driven lane carries digital silence, and the
+    // driven lane(s) are NEVER scaled (calibration enters only in the deconvolution
+    // math; scaling the played lane against the unscaled reference X would inject a
+    // gain error into H). BOTH keeps the legacy identical-lanes behaviour.
+    const outputChannels = opts.outputChannels || 'BOTH';
+    const mono = buf instanceof Float32Array ? buf : Float32Array.from(buf);
     // copyToChannel wants a Float32Array; the sweep is Float64 — narrow it (32-bit
     // float is the documented web-audio deviation and is what the DAC plays anyway).
-    audioBuf.copyToChannel(buf instanceof Float32Array ? buf : Float32Array.from(buf), 0);
+    const audioBuf = ctx.createBuffer(2, buf.length, sampleRate);
+    const silence = (outputChannels !== 'BOTH') ? new Float32Array(buf.length) : null;
+    audioBuf.copyToChannel(outputChannels === 'RIGHT' ? silence : mono, 0);
+    audioBuf.copyToChannel(outputChannels === 'LEFT' ? silence : mono, 1);
     const src = ctx.createBufferSource();
     src.buffer = audioBuf; src.loop = false;
     src.connect(ctx.destination);

@@ -10,11 +10,14 @@
 
 import { AudioEngine } from '../audio/backend.js';
 import { FftViewCorrection } from '../fft/fft-view-correction.js';
-import { DacCalibrationDialog } from '../generator/dac-calibration-dialog.js';
+import { CalibrationDialog } from './calibration-dialog.js';
+import { CardEditorDialog } from './card-editor-dialog.js';
 import { FftView } from '../ui/fft-view.js';
 import { ScopeView } from '../ui/scope-view.js';
 import { GenSignalForm, isDualTone } from '../generator/dds-kernel.js';
 import { Preferences } from '../store/preferences.js';
+import { DeviceProfileStore } from '../store/device-profiles.js';
+import { loadDeviceCatalog } from '../store/device-catalog.js';
 import { t, initBase, setLocale } from '../i18n/i18n.js';
 import { LOCALES } from '../i18n/locales.js';
 import { WavWriter, AiffWriter, readWav, readAiff } from '../io/wav.js';
@@ -47,6 +50,12 @@ import { Events } from '../bus/events.js';
 
 const $ = window.jQuery;
 const prefs = Preferences.instance();  // load() runs in the constructor
+// Per-card device-profile store (Java: the store lives inside Preferences). Seeds the
+// shipped devices.yaml catalog on first run + runs the once-per-contentVersion upgrade merge
+// in its constructor (Preferences.loadDevices at startup); its apply* setters push per-channel
+// full-scale into prefs at device selection (wired in PreferencesDialog). Constructed in init()
+// once the catalog YAML has been fetched + parsed (an async load — see loadDeviceCatalog).
+let deviceStore;
 const RATES = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000];
 // GenSignalForm token → localized display label for the #signalForm select.
 const formLabel = (form) => t(`generator.signalForm.${form}`);
@@ -59,11 +68,12 @@ const engine = new AudioEngine();
 const fftViewCorrection = new FftViewCorrection(engine.config);
 const fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => engine.generator.running, correction: fftViewCorrection });
 const scopeView = new ScopeView(document.getElementById('scope'), { prefs });
-let prefsModal, aboutModal, dacCalModal;
+let prefsModal, aboutModal;
 let shotModal;
 let confirmModal;
 let alertModal;   // the shared one-button alert modal (device-error surface; constructed in init's modals step)
 let prefsDialog;   // the Preferences dialog (constructed in init's modals step)
+let calibrationDialog;   // the unified ADC/DAC calibration dialog (constructed after initStepFields)
 let scopeTabControl;   // the oscilloscope settings strip (constructed in init's modals step)
 let fftTabControl;   // the FFT settings strip (constructed in init's modals step)
 let genPane;   // the generator pane (constructed in init, after initStepFields)
@@ -87,7 +97,12 @@ const onCalChange = () => {
   if (engine.fft.recording) engine.resetAnalyses();
 };
 prefs.adcFsVoltageRms.addListener(onCalChange);
+// The RIGHT-channel calibration siblings rescale R-channel measurements the same way
+// (Java FftView:460 resetStatistics also subscribes to adcFsVoltageRmsRightProperty /
+// dacFsVoltageAmplRightProperty).
+prefs.adcFsVoltageRmsRight.addListener(onCalChange);
 prefs.dacFsVoltageAmpl.addListener(onCalChange);
+prefs.dacFsVoltageAmplRight.addListener(onCalChange);
 
 // ----- generator amplitude minimum (Java AMP_MIN_VRMS) + frequency minimum -----
 const AMP_MIN_VRMS = 1e-9;
@@ -181,13 +196,12 @@ function initStepFields() {
   // Track DAC full-scale → amplitude ceiling (Bindings.onChange(... ampField::setMax)).
   prefs.dacFsVoltageAmpl.addListener((fs) => fAmp.setMax(fs));
 
-  // Calibration dialogs (DAC full-scale, scope ADC, FFT ADC): the measured/actual-amplitude
-  // field is a unit-aware AMPLITUDE step field (V / mV / µV / dBV + short forms), like the
-  // generator amplitude — replaces the old plain input + unit <select>. All three share the
-  // same config shape; each is seeded on open and read (canonical Vrms) on Calibrate.
-  mk('dacCalValue', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 1000, maxDecimals: 5 }), () => {});
-  mk('adcCalValue', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 1000, maxDecimals: 5 }), () => {});
-  mk('fftAdcCalValue', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 1000, maxDecimals: 5 }), () => {});
+  // Unified calibration dialog (Java CalibrationDialog): the two per-channel measured/actual-
+  // amplitude fields (Left / Right), unit-aware AMPLITUDE step fields (V / mV / µV / dBV + short
+  // forms), like the generator amplitude. ONE dialog serves the scope ADC, FFT ADC and generator
+  // DAC flows; each row is seeded on open and read (canonical Vrms) on Calibrate.
+  mk('calLeftValue', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 1000, maxDecimals: 5 }), () => {});
+  mk('calRightValue', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 1000, maxDecimals: 5 }), () => {});
 
   // FFT THD "Manual fundamental" reference level — unit-aware AMPLITUDE field (accepts dBV), g28.
   // onChange placeholder — FftTabControl.bind() rebinds it to the THD-settings commit path
@@ -458,8 +472,13 @@ function applyPrefsToUi() {
   const be = prefs.current();
   if (be.inputSampleRate) $('#inRate').val(String(be.inputSampleRate));
   if (be.outputSampleRate) $('#outRate').val(String(be.outputSampleRate));
-  $('#adcFsVrms').val(prefs.adcFsVoltageRms.get());
-  $('#dacFsAmpl').val(prefs.dacFsVoltageAmpl.get());
+  // Per-channel ADC/DAC full-scale readouts (info only — the crosshair Calibrate flows own them,
+  // now stored per-card). Rendered as L / R spans; kept in sync by PreferencesDialog on open + card edit.
+  const fmtFs = (v) => ((v > 0 && Number.isFinite(v)) ? v.toFixed(6) : '—');
+  $('#adcFsVrms').text(fmtFs(prefs.getAdcFsVoltageRms('L')));
+  $('#adcFsVrmsRight').text(fmtFs(prefs.getAdcFsVoltageRms('R')));
+  $('#dacFsAmpl').text(fmtFs(prefs.getDacFsVoltageAmpl('L')));
+  $('#dacFsAmplRight').text(fmtFs(prefs.getDacFsVoltageAmpl('R')));
   // Look & Feel (main-tab orientation + small icons + UI font) is applied from the saved
   // prefs in the modals step, once the PreferencesDialog instance exists.
 }
@@ -472,10 +491,8 @@ function bindPrefs() {
 
   // The audio device/rate <select>s (#inSel/#outSel/#inRate/#outRate) live inside the
   // Preferences dialog; their staged change handlers are wired by PreferencesDialog.bind().
-
-  // Calibration anchors (recompute dbvOffsetDb on ADC change; both feed engine.config).
-  $('#adcFsVrms').on('change', () => { prefs.setAdcFsVoltageRms(parseFloat($('#adcFsVrms').val())); });
-  $('#dacFsAmpl').on('change', () => { prefs.setDacFsVoltageAmpl(parseFloat($('#dacFsAmpl').val())); });
+  // The ADC/DAC full-scale is now per-card (owned by the crosshair Calibrate flows), shown as
+  // read-only per-channel spans in the Audio tab — there is no editable full-scale field to bind.
 }
 
 function readConfig() {
@@ -516,6 +533,11 @@ function readConfig() {
   // Calibration anchors from preferences (DAC full-scale scales the DDS amplitude;
   // harmonicCount widens the THD set per fftCalcMaxHarmonic).
   c.dacFsVoltageAmpl = prefs.dacFsVoltageAmpl.get();
+  // Output-lane routing (Java GeneratorController.pushOutputRoutingToPlayback): the lane
+  // gate + the right-lane scale (= fsLeft/fsRight). Left stays the mono amplitude reference
+  // (scale 1.0), so the DDS amplitude math is unchanged — only the interleave seam gates/scales.
+  c.outputChannels = prefs.genOutputChannels.get();
+  c.rightLaneScale = prefs.dacRightLaneScale();
   // Java FftAnalyzerWorker:1661 — calcMaxH = max(9, getFftCalcMaxHarmonic()) - 1, i.e. the COUNT of
   // harmonics H2..HN (the fundamental is NOT one of them). The web omitted the -1, so it filled one
   // extra harmonic H(N+1) (#19: "max harmonic to calculate included the fundamental"). The display's
@@ -539,9 +561,15 @@ function readConfig() {
   // at setup and is switched live via engine.setFftChannel from the L/R buttons.
   c.channel = prefs.fftChannel.get();
   // Scope peak-voltage anchor + IMD dBV offset (offset-invariant ratios, but the
-  // absolute dBV columns need it).
+  // absolute dBV columns need it). The dBV offset threads the ANALYZED channel so the
+  // manual-fundamental anchor resolves against the right ADC full-scale (Java
+  // FftAnalyzerWorker:2005 getDbvOffsetDb(getFftChannel())). Both channels' offsets are
+  // snapshotted so a live L↔R switch (FftController.setFftChannel) re-picks without a
+  // full re-read.
   c.adcFsVoltageRms = prefs.adcFsVoltageRms.get();
-  c.dbvOffsetDb = prefs.dbvOffsetDb;
+  c.dbvOffsetDbLeft = prefs.getDbvOffsetDb('L');
+  c.dbvOffsetDbRight = prefs.getDbvOffsetDb('R');
+  c.dbvOffsetDb = (c.channel === 'R') ? c.dbvOffsetDbRight : c.dbvOffsetDbLeft;
   // Live scope time/div sizes the captured scope window (~3× the displayed span) so
   // the trace doesn't run out before the window edge (Java ScopeView read length).
   c.scopeTimePerDiv = prefs.oscTimePerDiv.get();
@@ -791,9 +819,9 @@ const FRC_TYPE = [{ description: 'Filter calibration', accept: 'text/plain', ext
 // generator/generator-pane.js (Java GeneratorPane); they reach the io decode/save helpers +
 // WAV_TYPE through the injected `io` / WAV_TYPE deps.
 
-// ----- Calibrate DAC (Java DacCalibrationDialog + openDacCalibrationDialog) -----
-// DAC full-scale calibration dialog: generator/dac-calibration-dialog.js (constructed in init's
-// modals step once dacCalModal is live).
+// ----- Calibrate DAC (Java GeneratorPane.openDacCalibrationDialog) -----
+// The DAC full-scale calibrate flow is the unified shell/calibration-dialog.js (constructed in
+// the 'calibrationDialog' step); its bind() wires the generator #calibrateDac button.
 
 // The scope "Save to…" / "Load signal…" flows moved to ScopeTabControl; the
 // pane-side load orchestration (centre the view on the loaded signal + show the
@@ -1290,6 +1318,13 @@ async function init() {
   splash.show();
   // Refuse to run on a non-Chromium engine: show the warning and stop before any device/UI setup.
   if (!isChromium()) { splash.dismiss(); showUnsupportedBrowserOverlay(); return; }
+  // Fetch + parse the shipped devices.yaml (the Java single-source catalog, copied verbatim by
+  // the build) BEFORE building the store, so its constructor seeds / merges from it. A failed load
+  // (null) → no seed: the store still boots with the user's persisted localStorage cards. The two
+  // consumers below (calibrationDialog, PreferencesDialog) run after this await, so they get the
+  // constructed store.
+  const deviceCatalog = await loadDeviceCatalog();
+  deviceStore = new DeviceProfileStore(prefs, deviceCatalog ? { catalog: deviceCatalog } : {});
   step('initSelects', initSelects);
   // Generator pane (Java GeneratorPane): the signal-form combo + freq/amp/duty/dual-tone/
   // sweep/dither/snap/.dpd controls + Play/ON-AIR + Save-to + file player. Constructed before
@@ -1314,6 +1349,18 @@ async function init() {
   step('refreshFftLabel', () => freqRespPane.refreshFftLabel());   // localized after the bundle is loaded
   step('freqRespSeed', () => freqRespPane.seedTabs());   // builds the cal rows / preset list / RIAA enable (t() needs the bundle)
   step('initStepFields', initStepFields);   // after applyI18n so unit suffixes resolve
+  // Unified ADC/DAC calibration dialog (Java CalibrationDialog): built after initStepFields (its
+  // two per-channel fields exist now) so the scope / FFT strips can call openAdc and its bind()
+  // can wire the generator #calibrateDac button. The current-device LABEL comes from the prefs
+  // dialog's device <select> (recognition patterns match the label, not the deviceId value).
+  step('calibrationDialog', () => {
+    calibrationDialog = new CalibrationDialog(engine, prefs, deviceStore, {
+      getLeftField: () => stepFields.calLeftValue,
+      getRightField: () => stepFields.calRightValue,
+      inputLabel: () => (prefsDialog ? prefsDialog.inputDeviceLabel() : $('#inSel option:selected').text()),
+      outputLabel: () => (prefsDialog ? prefsDialog.outputDeviceLabel() : $('#outSel option:selected').text()),
+    }).bind();
+  });
   // Oscilloscope PANE (Java ScopePane): the trace canvas wiring, the two nav scrollbars,
   // the Record LED, the measurement table + pop-out, the file-mode load/scroll, and the
   // scope branch of the rAF loop (render()). Built BEFORE the scope settings strip, since
@@ -1342,6 +1389,7 @@ async function init() {
         findFullPeriodWindow, formatForName, readWav, readAiff, decodeFlac },
       WAV_TYPE, latestScope: () => latestScope, showConfirm,
       setStatus: (m) => $('#status').text(m),
+      calibrationDialog: () => calibrationDialog,
     }).bind();
   });
   step('seedScopeControls', () => scopeTabControl.seedScopeControls());
@@ -1380,6 +1428,7 @@ async function init() {
       host: fftHost, fftView, fftViewCorrection, frcStore, getField: (id) => stepFields[id],
       io: { saveFile, openFile, bytesToText, loadFrc, saveSpectrum, loadSpectrum, FFT_TYPE, FRC_TYPE },
       restartFft, showConfirm, setStatus: (m) => $('#status').text(m), tileChips,
+      calibrationDialog: () => calibrationDialog,
     }).bind();
   });
   step('seedFftControls', () => fftTabControl.seedFftControls());
@@ -1428,7 +1477,6 @@ async function init() {
         content.style.width = ''; content.style.height = '';   // drop any user resize → re-pack on reopen
       });
     })();
-    dacCalModal = new window.bootstrap.Modal(document.getElementById('dacCalModal'));
     shotModal = new window.bootstrap.Modal(document.getElementById('shotModal'));
     confirmModal = new window.bootstrap.Modal(document.getElementById('confirmModal'));
     alertModal = new window.bootstrap.Modal(document.getElementById('alertModal'));
@@ -1479,8 +1527,6 @@ async function init() {
         $('#signalForm').val(applyForm); genPane.syncFormUI();
       },
     }).bind();
-    // DAC full-scale calibration dialog (Java DacCalibrationDialog).
-    new DacCalibrationDialog(engine, prefs, { modal: dacCalModal, getField: () => stepFields.dacCalValue }).bind();
     // Tune-notch wizard (Java MainWindow Tools → Tune notch… → TuneNotchWizardDialog).
     // Static backdrop like the predistortion wizard: a live streaming session must not be
     // torn down by a stray click-away. The wizard is autonomous — it publishes
@@ -1488,10 +1534,14 @@ async function init() {
     // generator-running gate (see tune-notch-wizard.js module header).
     const tuneNotchModal = new window.bootstrap.Modal(document.getElementById('tuneNotchModal'), { backdrop: 'static', keyboard: false });
     new TuneNotchWizard(engine, prefs, { modal: tuneNotchModal }).bind();
+    // Card create / edit dialog (Java CardEditorDialog) — opened from the Preferences Audio tab's
+    // card combo / edit button. Delegates every decision to store/card-editor-logic.js.
+    const cardEditorDialog = new CardEditorDialog({ showConfirm });
     // Preferences dialog (Java PreferencesDialog): staged audio/L&F/Osc/FFT/FR prefs, commit on OK.
     prefsDialog = new PreferencesDialog(engine, prefs, {
       modal: prefsModal, RATES, stepFields, inRate, outRate, restartGenerator: () => genPane.restartGenerator(),
-      isBusy: () => busy, setBusy: (v) => { busy = v; }, fftView,
+      isBusy: () => busy, setBusy: (v) => { busy = v; }, fftView, deviceStore,
+      cardEditorDialog, showConfirm,
     }).bind();
     prefsDialog.applyLookAndFeel();   // main-tab orientation + small icons + UI font from the saved prefs
   });

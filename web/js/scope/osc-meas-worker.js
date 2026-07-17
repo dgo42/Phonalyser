@@ -24,8 +24,9 @@ const PUBLISH_INTERVAL_MS = 100;   // Java measurementLoop ~100 ms cadence
 
 const engine = new OscMeasCompute();
 // Latest publish parameters, refreshed with every feed / params message (Java worker
-// re-reads Preferences each pass): the sample rate, ±1.0→volts scale, and per-channel
-// mains mode + dual-tone form + the generator's (snap-aware) tone seeds.
+// re-reads Preferences each pass): the sample rate, per-channel ±1.0→volts scale
+// (peakVoltsL/peakVoltsR — each channel's own ADC full-scale), and per-channel mains
+// mode + dual-tone form + the generator's (snap-aware) tone seeds.
 let params = null;
 let publishTimer = null;
 
@@ -61,17 +62,17 @@ function requestFreqScan(ch, sampleRate, peakVolts) {
 /** Measures both channels over their current collection windows and posts the result. */
 function publishTick() {
   if (!params) return;
-  const { sampleRate, peakVolts, L, R } = params;
+  const { sampleRate, peakVoltsL, peakVoltsR, L, R } = params;
   const out = { resultL: null, resultR: null, leftMeanNorm: NaN, rightMeanNorm: NaN };
   if (engine.hasData('L')) {
-    out.resultL = engine.publish('L', sampleRate, peakVolts, L);
-    if (out.resultL) out.leftMeanNorm = out.resultL.vmean / peakVolts;
-    if (out.resultL && !L.dual && Number.isNaN(out.resultL.frequency)) requestFreqScan('L', sampleRate, peakVolts);
+    out.resultL = engine.publish('L', sampleRate, peakVoltsL, L);
+    if (out.resultL) out.leftMeanNorm = out.resultL.vmean / peakVoltsL;
+    if (out.resultL && !L.dual && Number.isNaN(out.resultL.frequency)) requestFreqScan('L', sampleRate, peakVoltsL);
   }
   if (engine.hasData('R')) {
-    out.resultR = engine.publish('R', sampleRate, peakVolts, R);
-    if (out.resultR) out.rightMeanNorm = out.resultR.vmean / peakVolts;
-    if (out.resultR && !R.dual && Number.isNaN(out.resultR.frequency)) requestFreqScan('R', sampleRate, peakVolts);
+    out.resultR = engine.publish('R', sampleRate, peakVoltsR, R);
+    if (out.resultR) out.rightMeanNorm = out.resultR.vmean / peakVoltsR;
+    if (out.resultR && !R.dual && Number.isNaN(out.resultR.frequency)) requestFreqScan('R', sampleRate, peakVoltsR);
   }
   if (out.resultL || out.resultR) self.postMessage(out);
 }
@@ -88,7 +89,7 @@ self.onmessage = (e) => {
     // Persist the publish parameters (per-channel), then append this batch to BOTH
     // channels' streaming pipelines. The buffers arrived as fresh transferables.
     params = {
-      sampleRate: d.sampleRate, peakVolts: d.peakVolts,
+      sampleRate: d.sampleRate, peakVoltsL: d.peakVoltsL, peakVoltsR: d.peakVoltsR,
       L: d.L, R: d.R,
     };
     const feedL = { lpfMode: d.L.lpfMode, mainsMode: d.L.mainsMode, avgSeconds: d.avgSeconds };
