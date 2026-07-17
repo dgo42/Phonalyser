@@ -270,9 +270,16 @@ export class NotchSweepEngine {
    * @param {number} dacFsVrms    DAC full-scale voltage the amplitude scales against
    * @param {number} sweepSamples loop period in samples (a power of two)
    * @param {number} fadeSamples  per-side Hann seam-fade length in samples
+   * @param {string} outputChannels which DAC lane(s) carry the sweep — 'BOTH' (legacy) /
+   *   'LEFT' / 'RIGHT'; the un-driven lane is written as digital silence
+   * @param {number} rightLaneScale right-lane full-scale scale (= fsLeft/fsRight) so a
+   *   LINKED card with distinct DAC full-scales emits the same physical level on both
+   *   lanes (Java NotchSweepEngine.start's setChannelScale(1.0, rightLaneScale)); the
+   *   left lane is never scaled
    * @throws {Error} when the input device cannot be opened
    */
-  async start(f0, f1, ampVrms, dacFsVrms, sweepSamples, fadeSamples) {
+  async start(f0, f1, ampVrms, dacFsVrms, sweepSamples, fadeSamples,
+    outputChannels = 'BOTH', rightLaneScale = 1.0) {
     this._sweepSamples = sweepSamples;
     this._fadeSamples = fadeSamples;
     this._sweepRefBuf = renderLogSweep(f0, f1, sweepSamples, this._sampleRate);
@@ -286,6 +293,7 @@ export class NotchSweepEngine {
       sweepStartHz: c.sweepStartHz, sweepEndHz: c.sweepEndHz,
       sweepDurationSec: c.sweepDurationSec, sweepLoop: c.sweepLoop,
       sweepFadeInSec: c.sweepFadeInSec, sweepFadeOutSec: c.sweepFadeOutSec,
+      outputChannels: c.outputChannels, rightLaneScale: c.rightLaneScale,
     };
     c.form = GenSignalForm.LOG_SWEEP;
     c.ampVrms = 0;   // start silent — the postGen below un-mutes with the real amplitude
@@ -294,6 +302,13 @@ export class NotchSweepEngine {
     c.sweepLoop = true;
     c.sweepFadeInSec = fadeSamples / this._sampleRate;
     c.sweepFadeOutSec = fadeSamples / this._sampleRate;
+    // Match the RIGHT lane's physical level to the LEFT-referenced digital amplitude, then
+    // gate the looping sweep to the selected DAC lane(s) — Java NotchSweepEngine.start's
+    // setChannelScale(1.0, rightLaneScale) + setOutputChannels. startGenerator reads these
+    // off the config into the worklet's processorOptions, so they apply from block 0; the
+    // pre-session values are restored by _restoreGenConfig on close (snapshot above).
+    c.outputChannels = outputChannels;
+    c.rightLaneScale = rightLaneScale;
     const startErr = await this._startGenerator();
     if (startErr) { this._restoreGenConfig(); throw new Error(startErr); }
     this._genStarted = true;
@@ -349,6 +364,21 @@ export class NotchSweepEngine {
     if (!this._running) return;
     this._sweepRefBuf = renderLogSweep(f0, f1, this._sweepSamples, this._sampleRate);
     this._postGen({ logSweep: { f0, f1, sweepSamples: this._sweepSamples, leadInSamples: 0 } });
+  }
+
+  /**
+   * Live output-lane change WITHOUT restart: pushes the gate straight to the
+   * running worklet (Java NotchSweepEngine.setOutputChannels). Only the gate is
+   * pushed live — the right-lane scale was fixed at start(). Updates the shared
+   * config too so a later worklet retune keeps the same lane. No-op before
+   * start() / after close().
+   *
+   * @param {string} outputChannels 'BOTH' | 'LEFT' | 'RIGHT'
+   */
+  setOutputChannels(outputChannels) {
+    if (!this._running) return;
+    this._config.outputChannels = outputChannels;
+    this._postGen({ outputChannels });
   }
 
   /**

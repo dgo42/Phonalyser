@@ -96,6 +96,12 @@ export class FreqRespTabControl {
     $('#frDither').val(String(this.prefs.freqRespDitherBits.get()));
     $('#frDither').on('change', () => this.prefs.freqRespDitherBits.set(parseInt($('#frDither').val(), 10) || 0));
 
+    // Output-lane gate ↔ freqRespOutputChannels (OutputChannels enum names, mirroring
+    // Java FreqRespTabControl's Bindings.combo). Both capture channels are still
+    // deconvolved; the view's L/R buttons pick which trace shows.
+    $('#frOutputChannel').val(this.prefs.freqRespOutputChannels.get());
+    $('#frOutputChannel').on('change', () => this.prefs.freqRespOutputChannels.set($('#frOutputChannel').val()));
+
     // RIAA / phase toggles read the live prefs at paint time, so a repaint is all that's
     // needed. Show RIAA is not persisted, so mirror the checkbox into the pref.
     $('#frRiaa').on('change', () => {
@@ -441,7 +447,7 @@ export class FreqRespTabControl {
    *  only — Java refreshFilterPicture). */
   refreshFilterPicture(type, mode1) {
     const src = { LOW_PASS: 'LPF', HIGH_PASS: 'HPF', BAND_PASS: 'BPF', NOTCH: 'Notch' }[type] || 'LPF';
-    this.$('#frFilterPic').attr('src', 'assets/img/' + src + '.png').css('visibility', mode1 ? '' : 'hidden');
+    this.$('#frFilterPic').attr('src', 'assets/img/' + src + '.svg').css('visibility', mode1 ? '' : 'hidden');
   }
 
   /** Filters tab tile chips (Java freqRespTabTiles FILTERS branch). */

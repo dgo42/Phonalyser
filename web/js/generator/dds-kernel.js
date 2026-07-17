@@ -904,3 +904,35 @@ export function quantizePcm(sample, bitDepth, ditherBits = 0, rng = Math.random)
   const maxVal = Math.pow(2, bitDepth - 1) - 1;
   return Math.round(v * maxVal);
 }
+
+/**
+ * The output-lane gate — which physical DAC lane(s) carry the tone. Faithful to
+ * PcmQuantizer.encode / SignalFileExporter.fillBuffer: the left lane is driven
+ * unless the gate is 'RIGHT', the right lane unless the gate is 'LEFT'; the
+ * un-selected lane is written as digital silence. Returns the two booleans so a
+ * hot caller (the DDS worklet) can hoist them once per block, allocation-free.
+ * @param {string} outputChannels 'BOTH' | 'LEFT' | 'RIGHT'
+ * @returns {{wantL: boolean, wantR: boolean}}
+ */
+export function outputLaneGate(outputChannels) {
+  return { wantL: outputChannels !== 'RIGHT', wantR: outputChannels !== 'LEFT' };
+}
+
+/**
+ * One continuous-domain sample → the two interleaved lanes [left, right] through
+ * the gate and the per-lane right-scale, matching PcmQuantizer.encode: the left
+ * lane scales by 1.0 (the mono/left full-scale is the amplitude reference), the
+ * right lane by {@code rightLaneScale} (= fsLeft/fsRight, so a LINKED card with
+ * distinct DAC full-scales emits the same physical level on both lanes); a
+ * gated-off lane is digital zero. With gate 'BOTH' and rightLaneScale 1.0 both
+ * lanes carry the identical sample (pre-feature behaviour). Non-hot-path
+ * convenience (file export, tests) — the worklet inlines the hoisted gate.
+ * @param {number} sample
+ * @param {string} outputChannels 'BOTH' | 'LEFT' | 'RIGHT'
+ * @param {number} rightLaneScale
+ * @returns {[number, number]}
+ */
+export function outputLaneSamples(sample, outputChannels, rightLaneScale) {
+  const { wantL, wantR } = outputLaneGate(outputChannels);
+  return [wantL ? sample : 0, wantR ? sample * rightLaneScale : 0];
+}

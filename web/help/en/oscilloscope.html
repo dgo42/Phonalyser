@@ -297,9 +297,8 @@
      hide under the fundamental.  The <b>DC level is preserved</b> — only the
      tone is taken out — so use <a href="#scope-acdc">AC</a> if you want the
      residual centred on zero.</p>
-  <p>The residual works with a <b>dual-tone</b> signal too.  With two
-     fundamentals the frequency measurement no longer names a single tone, so
-     the two frequencies are <b>measured from the captured signal itself</b>
+  <p>The residual works with a <b>dual-tone</b> signal too.  The two
+     frequencies are <b>measured from the captured signal itself</b>
      (seeded from the generator's values, then refined on the capture) — which
      makes the subtraction immune to the DAC and the ADC running on different
      clocks; the generator's values are used only until a measurement is
@@ -475,10 +474,34 @@
      dominates), and at the chosen size — independent of the visible window.</p>
 
   <h4 id="scope-utility-calibrate">ADC calibration</h4>
-  <p>Opens the calibration dialog which derives the
-     ADC's full-scale voltage from a known reference signal (a
-     calibrator or a precision generator) and saves it in
-     preferences.  Disabled until a capture is running.</p>
+  <p>Opens the shared ADC calibration dialog, which derives the ADC's full-scale
+     voltage from a known reference signal (a calibrator or a precision generator)
+     and writes it into the bound card's active range.  Disabled until a capture is
+     running.</p>
+  <p><img src="img/ADC calibration.png" alt="ADC calibration dialog"/></p>
+  <p>Enter the <b>actual signal amplitude</b> now present at the input, in
+     <code>nV</code> / <code>µV</code> / <code>mV</code> / <code>V</code>, and the app
+     scales the digital reading so that level reads true.  The dialog has a
+     <b>Left</b> and a <b>Right</b> row for a stereo card — <b>calibration is always
+     per channel</b>, because real converter channels never match to the last
+     part-per-million — and a single row for a Mono card.  Only the row for the
+     <b>currently measured channel</b> is live; the other channel's row is shown
+     <b>disabled and empty</b> (the shot above is a right-channel-only capture).
+     Calibrate the other channel by measuring it in turn — each row writes only its
+     own channel's active range.  A card set
+     to <a href="preferences.html#prefs-audio-card-editor">Coupling: Linked</a> is
+     calibrated per channel just the same — Linked couples only which range is
+     selected, never the measured values.</p>
+  <div class="note"><b>Windows volume is part of the calibration.</b>  Treat the
+     Windows sound-settings volume slider for this device as a calibration setting:
+     set it to <b>100</b> and never touch it again once you have calibrated.
+     Exclusive-mode WASAPI and WDM-KS bypass the Windows software mixer, but on many
+     USB interfaces that slider still programs the device's <em>internal hardware</em>
+     volume — so moving it after calibrating silently changes the full-scale you just
+     measured.  <b>Exception:</b> a few cards use the slider position to switch modes.
+     The <b>E1DA Cosmos</b>, above position 49, ties its two channels — right becomes
+     the main input and left carries the same signal 6&nbsp;dB lower.  On such a card,
+     set the slider to the position its mode needs and then keep it fixed.</div>
 
   <h3 id="scope-tab-save">Save to… tab</h3>
   <p><img src="img/Oscilloscope - Save to.png" alt="Save to tab"/></p>

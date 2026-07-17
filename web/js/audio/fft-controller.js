@@ -344,6 +344,12 @@ export class FftController {
     if (wl === this._wantLeft) return;   // no change → keep averaging
     this._wantLeft = wl;
     this.config.channel = ch;            // keep the config the read/emit consult in sync
+    // Re-pick the analyzed channel's ADC dBV offset so the manual-fundamental anchor
+    // (Java FftAnalyzerWorker:2005 getDbvOffsetDb(getFftChannel())) stays per-channel-correct
+    // on a live switch (both offsets were snapshotted at readConfig).
+    if (this.config.dbvOffsetDbRight != null) {
+      this.config.dbvOffsetDb = (ch === 'R') ? this.config.dbvOffsetDbRight : this.config.dbvOffsetDbLeft;
+    }
     this.resetAnalyses();                // fresh average from 0 (accumulator + counts + epoch bump)
   }
 

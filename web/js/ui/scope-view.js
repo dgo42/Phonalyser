@@ -28,7 +28,7 @@ import { mainsFilterOf } from '../dsp/mains/factory.js';
 // instead of re-deriving the math inline.
 import { ScopeNav, DIVISIONS_X as NAV_DIVISIONS_X, DIVISIONS_Y as NAV_DIVISIONS_Y } from '../scope/scope-nav.js';
 import { clamp01 as navClamp01 } from '../scope/scope-format.js';
-import { OscSliderId, TriggerMode, TriggerEdge, TriggerType,
+import { OscSliderId, TriggerMode, TriggerEdge, TriggerType, PersistenceMode,
          effectiveSeconds as persistenceSeconds } from '../scope/scope-enums.js';
 // GPU display persistence ("digital phosphor") — faithful port of
 // org.edgo.audio.measure.gui.scope.gl.ScopePhosphor (engine) + the kind-decision
@@ -36,6 +36,13 @@ import { OscSliderId, TriggerMode, TriggerEdge, TriggerType,
 // persistence active, routes the TRACE phase through the decayed WebGL accumulation
 // buffer and composites BACKDROP + phosphor + OVERLAY (Java compositeToScreen).
 import { ScopePhosphor, PhosphorGate } from '../scope/scope-phosphor.js';
+// Dense-trace DIGITAL PHOSPHOR (DPO) renderer — faithful port of Java
+// gui.scope.PhosphorRenderer + TraceEnvelope. THE dense renderer for the MAIN scope
+// trace: Java ScopeView.drawTrace routes every > 1 sample/px window through
+// drawDigitalPhosphor, so the web does the same (the condensed ZoomedView strip keeps its
+// own per-column min/max bars — Java ZoomedView has no phosphor). Canvas2DAlphaPainter is
+// the web replacement for MeasurementPainter.drawAlphaImage + AlphaImageScratch.
+import { PhosphorRenderer, Canvas2DAlphaPainter } from '../scope/phosphor-renderer.js';
 // Drag-select rectangular zoom + Ctrl+Z undo (Java AbstractMeasurementView's
 // installRectZoom base machinery); the scope supplies the time/volts mappings +
 // trigger preservation (Java ScopeView zoom overrides) and forwards its own
@@ -267,11 +274,6 @@ export class ScopeView {
     this._glitchCountStartMs = 0;
     this._glitchCount = 0;
     this._rateWasGlitchMode = false;
-    // Canvas X to anchor the next held-frame t/div change around, or -1 to anchor on
-    // the screen centre (Java ScopeView.heldZoomAnchorX): the wheel-zoom sets it
-    // (cursor); a t/div FIELD change leaves it -1 so the trace stays centred instead
-    // of jumping to the stale cursor position. Consumed by _drawHeldFrame.
-    this._heldZoomAnchorX = -1;
     // On-canvas drag-handle hit-boxes (Java ScopeView offsetSliderBounds /
     // triggerLevelBounds / triggerPosBounds) — refreshed every render in
     // _drawSliders, consumed by the mouse handlers. {x,y,w,h} in canvas px.
@@ -333,6 +335,15 @@ export class ScopeView {
     // one render path that drew a genuinely new captured frame. Read by _withPhosphor to
     // gate REALTIME accumulation, and exposed for parity as isLastFrameNew().
     this._lastFrameWasNew = false;
+    // ----- dense-trace digital phosphor (DPO) -----
+    // ONE renderer + ONE blit painter per view (Java ScopeView holds ONE PhosphorRenderer,
+    // reused across channels sequentially in a frame). THE dense renderer for the MAIN scope
+    // trace: every > 1 sample/px window rasterises through it (Java ScopeView.drawTrace →
+    // drawDigitalPhosphor). The pooled coverage/offscreen buffers are grown lazily on the first
+    // dense render, so a scope kept in the sparse regime and the headless node tests (whose
+    // painter has no offscreen canvas) allocate nothing here.
+    this._phosphorRenderer = new PhosphorRenderer();
+    this._dpoPainter = new Canvas2DAlphaPainter();
   }
 
   /** File-load mode accessor (Java ScopeView.setFileMode): a mode switch
@@ -615,13 +626,6 @@ export class ScopeView {
     return true;
   }
 
-  /** The wheel-zoom anchors the next held-frame t/div change around the cursor; a
-   *  t/div field change leaves it unset so the trace stays centred (Java
-   *  ScopeView.setHeldZoomAnchorForNextScale / heldZoomAnchorX). */
-  setHeldZoomAnchorForNextScale(canvasX) {
-    this._heldZoomAnchorX = canvasX;
-  }
-
   /** The pan/zoom engine with its V/div ladder kept in sync with this.vDivSeries (set
    *  by the shell after construction). The engine reads the ladder live, so refreshing
    *  the field here is enough — no rebuild. */
@@ -641,10 +645,10 @@ export class ScopeView {
     const my = e.clientY - rect.top, mx = e.clientX - rect.left;
     const H = this.cv.clientHeight || 240, W = this.cv.clientWidth || 1200;
     if (e.ctrlKey && e.shiftKey) {
-      // Anchor a held-frame re-centre on the cursor (Java ScopePane wheel handler:
-      // view.setHeldZoomAnchorForNextScale(e.x) when frozen); a t/div FIELD change
-      // leaves the anchor unset so the held trace stays centred.
-      if (this._singleHeld || this._normalFrame) this.setHeldZoomAnchorForNextScale(mx);
+      // Shift + Ctrl + wheel: t/div zoom around the mouse X. A held frame rides the same
+      // trigger-offset model as live — _zoomTimeAround updates the trigger-position
+      // fraction to keep the sample under the cursor put, so no separate frozen-frame
+      // anchor is needed (Java ScopePane wheel handler, ba42b91).
       this._zoomTimeAround(-dir, mx, W);
     }
     else if (e.ctrlKey) this._zoomVoltsAround(-dir, my, H);
@@ -662,12 +666,14 @@ export class ScopeView {
     // encodes that sign and clamps both channels at ±FS/2-at-middle. Trigger level is
     // intentionally NOT moved. An off-1-2-5 (manual) channel keeps its proportion.
     const p = this.prefs;
-    const peak = p.adcFsVoltageRms.get() * Math.SQRT2;
+    // Each channel supplies its OWN ADC full-scale (LINKED cards pass equal L/R peaks) —
+    // Java ScopeView.moveVerticalOffset getAdcPeakVolts(Channel.L)/(Channel.R).
+    const peakL = p.getAdcPeakVolts('L'), peakR = p.getAdcPeakVolts('R');
     const oldL = p.oscLeftOffsetFrac.get(), oldR = p.oscRightOffsetFrac.get();
     const off = this.nav().moveVertical(
       oldL, p.oscLeftVoltsPerDiv.get(), p.oscLeftChannelEnabled.get(),
       oldR, p.oscRightVoltsPerDiv.get(), p.oscRightChannelEnabled.get(),
-      dir, peak);
+      dir, peakL, peakR);
     if (off[0] === oldL && off[1] === oldR) return;
     p.oscLeftOffsetFrac.set(off[0]);
     p.oscRightOffsetFrac.set(off[1]);
@@ -713,15 +719,14 @@ export class ScopeView {
       this.onFileBack(st.maxCentre - next);   // fractional — onFileBack keeps the sub-sample scroll
       return;
     }
-    // Frozen (a SINGLE/NORMAL frame is held): pan the STOPPED trace ½ div per tick via
-    // the (virtual-capable) trigger offset — the same engine step as live, but only
-    // when a trigger was actually captured (f.triggerLocal finite), so _drawHeldFrame's
-    // capturedTriggerLocal branch re-derives the held window from p and scrolls the whole
-    // captured buffer (Java ScopePane.stepHorizontalOffset FROZEN branch →
-    // ScopeView.panFrozenOffset, guarded on frozen && lastTriggerAbsPos >= 0). A
-    // trigger-less (AUTO free-run) held frame has no offset to pan, so it's a no-op.
+    // Frozen (a SINGLE/NORMAL frame is held): pan the held trace ½ div per tick via the
+    // (virtual-capable) trigger offset — the same engine step as live. Every held frame
+    // now carries a real anchor (the entry snapshot supplies a synthetic one, so
+    // f.triggerLocal is never NaN), so _drawHeldFrame's single trigger-offset branch
+    // re-derives the held window from p and scrolls the whole captured buffer (Java
+    // ScopePane.stepHorizontalOffset FROZEN branch → ScopeView.panFrozenOffset).
     if (this._singleHeld || this._normalFrame) {
-      if (!this._frame || !Number.isFinite(this._frame.triggerLocal)) return;
+      if (!this._frame) return;
       const curF = p.oscTriggerPositionFrac.get();
       const nextF = this.nav().moveTriggerOffset(curF, dir);
       if (nextF === curF) return;
@@ -772,11 +777,13 @@ export class ScopeView {
     const leftEn = p.oscLeftChannelEnabled.get(), rightEn = p.oscRightChannelEnabled.get();
     if (!leftEn && !rightEn) return;
     const leftOld = p.oscLeftVoltsPerDiv.get(), rightOld = p.oscRightVoltsPerDiv.get();
-    const peak = p.adcFsVoltageRms.get() * Math.SQRT2;
+    // Per-channel zoom-out ceiling from each channel's own ADC full-scale (Java
+    // ScopeView.stepVoltsPerDivAround → ScopeNav.zoomVertical two-peak overload).
+    const peakL = p.getAdcPeakVolts('L'), peakR = p.getAdcPeakVolts('R');
     const r = this.nav().zoomVertical(
       leftOld, p.oscLeftOffsetFrac.get(), leftEn,
       rightOld, p.oscRightOffsetFrac.get(), rightEn,
-      dir, anchorFrac, peak);
+      dir, anchorFrac, peakL, peakR);
     if (leftEn && r[0] !== leftOld) { p.oscLeftVoltsPerDiv.set(r[0]); p.oscLeftOffsetFrac.set(r[2]); }
     if (rightEn && r[1] !== rightOld) { p.oscRightVoltsPerDiv.set(r[1]); p.oscRightOffsetFrac.set(r[3]); }
   }
@@ -871,10 +878,11 @@ export class ScopeView {
     // Recenter each DC-coupled channel on its OWN long-averaged DC mean so a small AC
     // signal on a large DC pedestal lands mid-screen instead of off an edge (Java
     // autoSetupOffsetFrac): DC-coupled → 0.5 + meanV/(DIVISIONS_Y·vDiv); AC-coupled → 0.5.
-    const peakVolts = p.adcFsVoltageRms.get() * Math.SQRT2;
+    // Each channel centres on its own DC mean scaled by ITS own ADC full-scale (Java
+    // autoSetupOffsetFrac getAdcPeakVolts(left ? L : R)).
     const offFor = (left, ac, vd) => {
       if (ac || !(vd > 0)) return 0.5;
-      const meanV = this._acDcMean(left) * peakVolts;
+      const meanV = this._acDcMean(left) * p.getAdcPeakVolts(left ? 'L' : 'R');
       return Number.isFinite(meanV) ? 0.5 + meanV / (DIVISIONS_Y * vd) : 0.5;
     };
     p.oscLeftOffsetFrac.set(offFor(true, p.oscLeftAcMode.get(), p.oscLeftVoltsPerDiv.get()));
@@ -1086,7 +1094,6 @@ export class ScopeView {
     const sampleRate = info.inRate;
     const peakVolts = info.peakVolts > 0 ? info.peakVolts : 1.0;
     const p = this.prefs;
-    const peakV = p ? p.adcFsVoltageRms.get() * Math.SQRT2 : 1.0;
 
     // ----- per-channel descriptors (Java drawWaveforms: showL/showR, dcL/dcR,
     // acL/acR, sincL/sincR) — built only for enabled channels. Each channel
@@ -1130,6 +1137,10 @@ export class ScopeView {
         offsetFrac: p ? p['osc' + lc + 'OffsetFrac'].get() : 0.5,
         ac, dcMean, dcOff: ac ? (Number.isFinite(acdc) ? acdc : dcMean) : 0,
         sinc: p ? p['osc' + lc + 'SincInterpEnabled'].get() : true,
+        // This channel's OWN ADC peak-volts (Java getAdcPeakVolts(Channel) — L/R full-scale);
+        // the no-prefs autoscale fallback keeps info.peakVolts. Drives every per-channel volts
+        // scaling: trace/beat vScale, ±FS lines, trigger threshold, measurement/residual.
+        peak: p ? p.getAdcPeakVolts(lc === 'Left' ? 'L' : 'R') : peakVolts,
         colorInt, hex: colorHex(colorInt),
       };
       descByName[d.ch] = d;
@@ -1185,7 +1196,7 @@ export class ScopeView {
     // READOUT_THROTTLE_MS so the full-window compute cost stays bounded. The
     // displayed-span fallback (file mode / no live window) stays in the trace
     // path below, where `trig`/`show` are known.
-    const liveMeas = this._measureLiveWindow(info, descByName, descriptors, sampleRate, peakVolts, dual);
+    const liveMeas = this._measureLiveWindow(info, descByName, descriptors, sampleRate, dual);
 
     const tDiv = p ? p.oscTimePerDiv.get() : info.period / sampleRate;
     const posFrac = p ? clamp01(p.oscTriggerPositionFrac.get()) : 0.5;
@@ -1201,7 +1212,7 @@ export class ScopeView {
 
     // Trigger level — Java: levelFrac=oscTriggerLevelFrac, the screen-Y of the
     // dashed level line on the TRIGGER channel; the normalised sample at that Y
-    // is (offsetFrac − levelFrac)·vDiv·DIVISIONS_Y / peakV. AC-coupled trigger
+    // is (offsetFrac − levelFrac)·vDiv·DIVISIONS_Y / trigger-channel peak. AC-coupled trigger
     // channel: the trace has the DC removed, so add the bias back into the
     // threshold. Dual-tone triggers on the band-limited beat envelope.
     const rising = dual ? true : (p ? p.oscTriggerEdge.get() !== TriggerEdge.FALL : true);
@@ -1214,7 +1225,10 @@ export class ScopeView {
     const levelFrac = clamp01(levelFracRaw);
     const tVDiv = trigDesc.vDiv, tOffsetFrac = trigDesc.offsetFrac;
     const tAc = trigDesc.ac, tDcOff = trigDesc.dcOff;
-    const baseLevel = (tOffsetFrac - levelFracRaw) * tVDiv * DIVISIONS_Y / peakV;
+    // Trigger threshold/hysteresis use the TRIGGER channel's OWN full-scale (Java
+    // drawWaveforms triggerPeakVolts = getAdcPeakVolts(triggerCh)).
+    const tPeak = trigDesc.peak;
+    const baseLevel = (tOffsetFrac - levelFracRaw) * tVDiv * DIVISIONS_Y / tPeak;
     // Dual-tone triggers on the reconstructed |F1−F2| beat envelope (trigBuf) but at the
     // USER's trigger level in the same normalised units as the raw trace (Java drawWaveforms:
     // effectiveData = beat, effectiveTriggerLevel = the user level unchanged). The beat is a
@@ -1225,7 +1239,7 @@ export class ScopeView {
     // regardless of where the user parked the level.
     const level = baseLevel + (tAc ? tDcOff : 0);
     const hysteresis = (p && p.oscTriggerHysteresisEnabled.get())
-      ? p.oscTriggerHysteresisDiv.get() * tVDiv / peakV : 0.0;
+      ? p.oscTriggerHysteresisDiv.get() * tVDiv / tPeak : 0.0;
     const beatHz = dual ? Math.abs(info.f2Hz - info.f1Hz) : 0;
     // Dual-tone holdoff = sr/|F1−F2| (the scope-trigger minSpacing overload): the
     // reconstructed modulator is at (F1−F2)/2, so one cycle spans 2·sr/beat samples and
@@ -1430,12 +1444,12 @@ export class ScopeView {
       let resL = null, dispL = 0, lenL = 0, resR = null, dispR = 0, lenR = 0;
       if (showL && leftResidual && lDesc) {
         resL = this._computeResidual(lDesc.procBuf, available, dispStartI, dispCount,
-          LANCZOS_PADDING, sampleRate, true, peakVolts, info);
+          LANCZOS_PADDING, sampleRate, true, lDesc.peak, info);
         dispL = this._residualDispStart; lenL = this._residualSliceLen;
       }
       if (showR && rightResidual && rDesc) {
         resR = this._computeResidual(rDesc.procBuf, available, dispStartI, dispCount,
-          LANCZOS_PADDING, sampleRate, false, peakVolts, info);
+          LANCZOS_PADDING, sampleRate, false, rDesc.peak, info);
         dispR = this._residualDispStart; lenR = this._residualSliceLen;
       }
       // At least one residual succeeded → both channels render off the shared slice: the
@@ -1474,7 +1488,7 @@ export class ScopeView {
     for (const d of descriptors) {
       const drawBuf = (drawBufs[d.ch] !== undefined) ? drawBufs[d.ch] : d.procBuf;
       const sampleToY = p
-        ? (s) => H * (d.offsetFrac - ((s - d.dcOff) * peakV) / (d.vDiv * DIVISIONS_Y))
+        ? (s) => H * (d.offsetFrac - ((s - d.dcOff) * d.peak) / (d.vDiv * DIVISIONS_Y))
         : (s) => H / 2 - s / autoMm * (H * 0.45);
       this._drawTrace(g, W, H, drawBuf, drawAvailable, drawStartSample, dispCount,
                       cols, samplesPerPx, pxPerSample, sampleToY, d.sinc, d.hex);
@@ -1494,7 +1508,7 @@ export class ScopeView {
         const beat = reconstructBeatSignal(d.procBuf, available, sampleRate, info.f1Hz, info.f2Hz, this._beatScratch);
         const beatHex = attenuateHex(d.colorInt, 0.45);
         // Java: dcOffset = 0.0 (beat is already zero-centred), sincEnabled = false, dotDiameter = 0.
-        const sampleToY = (s) => H * (d.offsetFrac - (s * peakV) / (d.vDiv * DIVISIONS_Y));
+        const sampleToY = (s) => H * (d.offsetFrac - (s * d.peak) / (d.vDiv * DIVISIONS_Y));
         this._drawTrace(g, W, H, beat, available, startSample, dispCount,
                         cols, samplesPerPx, pxPerSample, sampleToY, false, beatHex, 0);
         // Snapshot this channel's beat NOW, into a per-channel grow-only buffer — the
@@ -1546,7 +1560,7 @@ export class ScopeView {
       const mStart = Math.max(0, Math.floor(trig));
       const mLen = Math.min(available - mStart, show);
       const span = measDesc.procBuf.subarray(mStart, mStart + mLen);
-      meas = compute(span, mLen, sampleRate, peakVolts);
+      meas = compute(span, mLen, sampleRate, measDesc.peak);
       if (dual) {
         // Dual-tone has two simultaneous fundamentals — a single period/freq/duty
         // has no physical meaning, so the f row reads '---'. Drop the time-domain
@@ -1577,12 +1591,16 @@ export class ScopeView {
     // trigger freezes it (capture=true), AND an Auto→SINGLE switch can seed the
     // held frame from the last live Auto frame (C19) instead of blanking.
     // The captured trigger's position in the DRAWN-slice coordinates (residual mode
-    // re-bases the slice by startSample − drawStartSample). Only meaningful when a
-    // trigger was actually found this paint; a free-running AUTO frame stores NaN so
-    // the held view uses the t/div-zoom-around-cursor branch (Java: NaN triggerLocal).
-    const capturedTriggerLocal = foundTrigger ? (trig - (startSample - drawStartSample)) : NaN;
+    // re-bases the slice by startSample − drawStartSample). A free-running AUTO frame
+    // has no real trigger, so it stores a SYNTHETIC anchor — the sample under the
+    // (virtual-capable) trigger-position fraction — so EVERY held frame positions via
+    // the same trigger-offset branch (never NaN), pan + zoom exactly like a real trigger
+    // (Java captureSingleFrame: entryStart + entrySub + triggerPosFracReal·displaySamples).
+    const capturedTriggerLocal = foundTrigger
+      ? (trig - (startSample - drawStartSample))
+      : (drawStartSample + posFracReal * dispCount);
     this._snapshotFrame(descriptors, trigDesc, p, drawAvailable,
-                        drawStartSample, dispCount, cols, samplesPerPx, pxPerSample, peakV, meas,
+                        drawStartSample, dispCount, cols, samplesPerPx, pxPerSample, meas,
                         drawBufs, capturedTriggerLocal, beatBufs);
     if (capture) {
       if (mode === TriggerMode.SINGLE) this._singleHeld = true; else this._normalFrame = this._frame;
@@ -1630,13 +1648,17 @@ export class ScopeView {
     g.strokeRect(0.5, 0.5, W - 1, H - 1);
   }
 
-  /** Draws one channel's trace (Java drawTrace): band-limited Lanczos / linear
-   *  polyline with full-intensity edge overhang when samplesPerPx is small,
-   *  a CONNECTED per-column min/max envelope (sinc: spp>1; linear: spp>MAX_LANCZOS_DOWNSAMPLE)
-   *  above that, and filled per-sample dots when sample spacing exceeds 10 px.
-   *  `blankBeyondData` (Java field, true only on the held-frame magnify path) blanks
-   *  any envelope column whose data runs past the buffer instead of clamping it. */
-  _drawTrace(g, W, H, buf, n, startSample, windowSamples, cols, samplesPerPx, pxPerSample, sampleToY, sinc, hex, dotDiameterOverride, blankBeyondData = false) {
+  /** Draws one channel's trace (Java drawTrace): at <= 1 sample/px a band-limited Lanczos /
+   *  linear polyline with full-intensity edge overhang, and filled per-sample dots when sample
+   *  spacing exceeds 10 px. `blankBeyondData` (Java field, true only on the held-frame magnify
+   *  path) blanks any polyline/envelope column whose data runs past the buffer instead of
+   *  clamping it.
+   *  `dpoEligible` (default true) routes the DENSE (> 1 sample/px) regime through the
+   *  digital-phosphor renderer — unconditionally, mirroring Java ScopeView.drawTrace
+   *  (`if (samplesPerPx > 1.0) drawDigitalPhosphor`). The condensed/zoomed strip passes false,
+   *  so its dense columns fall to the CONNECTED per-column min/max envelope instead (Java
+   *  ZoomedView keeps per-column bars — it has no phosphor). */
+  _drawTrace(g, W, H, buf, n, startSample, windowSamples, cols, samplesPerPx, pxPerSample, sampleToY, sinc, hex, dotDiameterOverride, blankBeyondData = false, dpoEligible = true) {
     // TRACE phase: when persistence is painting, every waveform (main + held + beat)
     // is drawn into the transparent scratch canvas the phosphor buffer accumulates,
     // NOT the main canvas (Java renderTraceToScratch). _traceG is null otherwise, so
@@ -1652,12 +1674,31 @@ export class ScopeView {
     if (dispCount < 2 || width <= 0) return;
     g.strokeStyle = hex; g.fillStyle = hex;
     // One smooth point per pixel column while at most one sample per pixel (sinc) or
-    // <= MAX_LANCZOS_DOWNSAMPLE (linear); above that a CONNECTED per-column min/max
-    // envelope takes over (Java ScopeView.drawTrace `envelope` gate). The sinc envelope
-    // path reconstructs around each column's extremes; a single point/column would
-    // low-pass narrow pulses and the noise band away.
+    // <= MAX_LANCZOS_DOWNSAMPLE (linear); above that a CONNECTED per-column min/max envelope
+    // takes over. This gate governs the NON-DPO paths only — the dense (> 1 spp) MAIN trace
+    // goes to the digital phosphor below (dpoEligible); the envelope now serves the
+    // condensed/zoomed strip (dpoEligible = false, Java ZoomedView's per-column bars). The
+    // sinc envelope path reconstructs around each column's extremes; a single point/column
+    // would low-pass narrow pulses and the noise band away.
     const envelope = sinc ? (samplesPerPx > 1.0) : (samplesPerPx > MAX_LANCZOS_DOWNSAMPLE);
-    if (!envelope) {
+    if (dpoEligible && samplesPerPx > 1.0) {
+      // Digital phosphor — THE dense renderer for the MAIN scope trace. Java drawTrace routes
+      // EVERY > 1 sample/px window through drawDigitalPhosphor and returns (ScopeView.java:3937),
+      // so the web does the same for the dpoEligible (main / held / beat) traces, replacing both
+      // the min/max envelope AND the non-sinc mid-zoom polyline in the dense (> 1 spp) regime.
+      // The condensed/zoomed strip passes dpoEligible = false and keeps its min/max bars below.
+      //
+      // The DPO's value→row transform is the SAME linear map as sampleToY, recovered from the
+      // closure: sampleToY(s) = centerY − s·vScale with centerY = sampleToY(0) and vScale =
+      // sampleToY(0) − sampleToY(1) (dcOffset folded in → 0). The trace context is at
+      // CSS/logical resolution with an identity transform, so pixelScale = 1 and the coverage
+      // image blits 1:1. One renderer/painter reused across channels (Java: one per ScopeView).
+      const y0 = sampleToY(0), y1 = sampleToY(1);
+      const lineWidth = this.prefs ? this.prefs.oscLineWidth.get() : 2.0;
+      this._dpoPainter.setTarget(g, 1);
+      this._phosphorRenderer.render(this._dpoPainter, buf, n, dispStart, subSampleOffset,
+                                    dispCount, width, H, y0, y0 - y1, 0, lineWidth, hex);
+    } else if (!envelope) {
       // Java lineAttrsTrace: oscLineWidth, CAP_ROUND, JOIN_ROUND.
       g.lineWidth = this.prefs ? this.prefs.oscLineWidth.get() : 2.0;
       g.lineCap = 'round'; g.lineJoin = 'round';
@@ -1681,9 +1722,14 @@ export class ScopeView {
         pen = true;
       }
       g.stroke();
-      // High-zoom per-sample dots (Java pxPerSample > 10).
+      // High-zoom per-sample dots (Java pxPerSample > 10). Sample dots only with
+      // persistence OFF (Java ScopeView.drawWaveforms dotDiameter gate): the afterglow
+      // accumulates the trace history, so dots would pile into opaque blobs on top of it.
       const dotDiameter = (dotDiameterOverride !== undefined) ? dotDiameterOverride
-        : (this.prefs ? this.prefs.oscDotDiameter.get() : 5);
+        : (this.prefs
+          ? (this.prefs.oscPersistenceMode.get() === PersistenceMode.OFF
+            ? this.prefs.oscDotDiameter.get() : 0)
+          : 5);
       if (pxPerSample > 10.0 && dotDiameter > 0) {
         const dotShift = subSampleOffset * pxPerSample;
         const half = Math.trunc(dotDiameter / 2);
@@ -1995,7 +2041,6 @@ export class ScopeView {
     // reported to the maintainer). The offset track/slider below stays clamp01 (its
     // on-screen clamping to [0,1] is correct per spec).
     if (o) {
-      const peakVolts = (p ? p.adcFsVoltageRms.get() : 1.0) * Math.SQRT2;
       const pxPerDivY = H / DIVISIONS_Y;
       for (const ch of ['L', 'R']) {
         const fs = o.fsLine[ch];
@@ -2003,7 +2048,9 @@ export class ScopeView {
         if (!d) { fs.top.style.display = 'none'; fs.bot.style.display = 'none'; continue; }
         const mid = attenuateHex(d.colorInt, 0.5);
         const centerY = d.offsetFrac * H;
-        const vScale = peakVolts / d.vDiv * pxPerDivY;
+        // Each channel's ±FS line at its OWN full-scale (Java drawFullScaleLines
+        // getAdcPeakVolts(Channel.L)/(Channel.R)).
+        const vScale = d.peak / d.vDiv * pxPerDivY;
         const place = (el, y) => {
           if (y < 0 || y >= H) { el.style.display = 'none'; return; }
           el.style.display = '';
@@ -2273,11 +2320,11 @@ export class ScopeView {
           this.onFileBack(Math.round(rightEdgeAnchorNew - startNew));
         }
       } else {
-        // Trigger-anchored branch: when the t/div floor engages, p pins the
-        // selection's LEFT edge (Java). A held (trigger-less rendered) frame
-        // anchors at the fixed point of the window change instead.
+        // Trigger-anchored branch: when the t/div floor engages, p pins the selection's
+        // LEFT edge (Java). A held frame rides the SAME trigger-offset model (every held
+        // frame carries a real/synthetic anchor now), so setting p re-positions it too —
+        // no separate frozen-frame anchor seed (Java ScopeView rect-zoom, ba42b91).
         const tDivNew = Math.max(T_PER_DIV_MIN, span / DIVISIONS_X);
-        this._seedHeldZoomAnchor(s, tDivNew);
         p.oscTimePerDiv.set(tDivNew);
         p.oscTriggerPositionFrac.set(-s.xMin / (tDivNew * DIVISIONS_X));   // virtual-capable
       }
@@ -2307,26 +2354,6 @@ export class ScopeView {
       p.oscRightOffsetFrac.set(off);
       p.oscRightVoltsPerDiv.set(vDiv);
     }
-  }
-
-  /** Held frame (frozen snapshot): its renderer (_drawHeldFrame) ignores the
-   *  trigger-position pref and anchors a t/div change at _heldZoomAnchorX — seed
-   *  it with the FIXED POINT of the window change, anchor/width =
-   *  (newXMin − curXMin) / (curSpan − newSpan), so both a committed selection and
-   *  its Ctrl+Z inverse land exactly (a linear map and its inverse share the
-   *  fixed point). Skipped when the t/div pref won't change (nothing would
-   *  consume the anchor). Java ScopeView.seedHeldZoomAnchor — the web held-frame
-   *  renderer uses this model for NORMAL holds too, so both hold kinds seed. */
-  _seedHeldZoomAnchor(s, tDiv) {
-    if (!this._singleHeld && !this._normalFrame) return;
-    if (tDiv === this.prefs.oscTimePerDiv.get()) return;
-    const cur = this._captureZoomState();
-    const area = this._zoomableArea();
-    if (!cur || !area || area.w <= 0) return;
-    const denom = (cur.xMax - cur.xMin) - tDiv * DIVISIONS_X;
-    if (denom === 0) return;
-    const anchor = Math.round(area.w * (s.xMin - cur.xMin) / denom);
-    this._heldZoomAnchorX = Math.max(0, Math.min(area.w, anchor));
   }
 
   /** The scope plots edge-to-edge, so the selection maps linearly onto the
@@ -2428,7 +2455,7 @@ export class ScopeView {
    *  can snapshot it), or null when neither a fresh live publish nor an injected window is
    *  available (file mode) so the caller falls back to the displayed-span measurement.
    *  @returns {object|null} */
-  _measureLiveWindow(info, descByName, descriptors, sampleRate, peakVolts, dual) {
+  _measureLiveWindow(info, descByName, descriptors, sampleRate, dual) {
     const p = this.prefs;
     this._measDual = dual;   // publishMeasurement (worker-driven) has no info; snapshot the form
     let measCh = p ? p.oscMeasurementChannel.get() : (descriptors[0] && descriptors[0].ch);
@@ -2470,9 +2497,9 @@ export class ScopeView {
         mainsMode: p ? p['osc' + d.name + 'MainsSuppression'].get() : 'NONE',
         dual, f1Hz: info.f1Hz, f2Hz: info.f2Hz,
       };
-      const m = this._measEngine.measureWindow(d.ch, raw, mLen, sampleRate, peakVolts, absStart, opts);
+      const m = this._measEngine.measureWindow(d.ch, raw, mLen, sampleRate, d.peak, absStart, opts);
       if (!m) continue;
-      this._pushMeanHist(d.ch, nowNs, m.vmean / peakVolts);
+      this._pushMeanHist(d.ch, nowNs, m.vmean / d.peak);
       this._lastMeas[d.ch] = m;
     }
     const meas = this._lastMeas[measCh];
@@ -2972,7 +2999,7 @@ export class ScopeView {
    *  held frame is always available to freeze (SINGLE/NORMAL trigger) or to seed
    *  on an Auto→SINGLE switch (C19). */
   _snapshotFrame(descriptors, trigDesc, p, available,
-                 startSample, windowSamples, cols, samplesPerPx, pxPerSample, peakV, meas,
+                 startSample, windowSamples, cols, samplesPerPx, pxPerSample, meas,
                  drawBufs, triggerLocal = NaN, beatBufs = null) {
     // `available` is the DRAWN window length (= the residual slice length when residual is
     // active, else the full capture). Each channel snapshots the SUBSTITUTED buffer it was
@@ -2992,6 +3019,9 @@ export class ScopeView {
       ch: d.ch,
       snap: copyInto(i, drawnBuf(d)),
       offsetFrac: d.offsetFrac, vDiv: d.vDiv, dcOff: d.dcOff, sinc: d.sinc, hex: d.hex,
+      // Frozen fallback full-scale (no-prefs replay); the live replay re-reads the
+      // channel's own getAdcPeakVolts so a calibration change re-scales the held trace.
+      peak: d.peak,
     }));
     // Held frames DO carry the reconstructed-beat overlay (Java renderHeldCapturedFrame
     // now runs drawBeatOverlays on the captured samples, gated identically to the live
@@ -3003,7 +3033,7 @@ export class ScopeView {
       ? descriptors.map((d) => beatBufs[d.ch]).filter((b) => b)
       : [];
     this._frame = { chans, beats, available, startSample, windowSamples, cols,
-                    samplesPerPx, pxPerSample, peakV, meas,
+                    samplesPerPx, pxPerSample, meas,
                     tDivAtFreeze: p ? p.oscTimePerDiv.get() : 0,
                     // Captured trigger position in the frame's own sample coordinates
                     // (Java captureSingleFrame capturedTriggerLocal); NaN for a
@@ -3108,46 +3138,34 @@ export class ScopeView {
     const p = this.prefs;
     const liveVDiv = (ch) => p ? (p['osc' + (ch === 'L' ? 'Left' : 'Right') + 'VoltsPerDiv'].get() || 0.1) : null;
     const liveOff = (ch) => p ? p['osc' + (ch === 'L' ? 'Left' : 'Right') + 'OffsetFrac'].get() : null;
-    // Horizontal t/div zoom on a FROZEN frame (Java renderHeldCapturedFrame with the
-    // heldViewStart / lastHeldTimePerDiv / lastHeldDispCount model, 4887ecb): re-derive
-    // the displayed window from the LIVE t/div. The held view position persists on the
-    // frame object (f is replaced on every live paint, so a fresh capture re-enters the
-    // not-yet-anchored branch, like Java's entry frame). A WHEEL zoom keeps the sample
-    // under the CURSOR put (this._heldZoomAnchorX, set by the wheel handler); a t/div
-    // FIELD change leaves the anchor unset so the SCREEN CENTRE stays put instead of
-    // jumping to the stale cursor position. NOT clamped — off-buffer edges blank
-    // (blankBeyondData below), matching Java.
+    // Horizontal t/div zoom on a held frame (Java renderHeldCapturedFrame, ba42b91):
+    // re-derive the displayed window from the LIVE t/div, then position it via the
+    // (virtual-capable) LIVE trigger offset — the SAME single branch as the live model.
+    // The entry snapshot carries a SYNTHETIC anchor (f.triggerLocal is never NaN), so it
+    // rides the same branch — no separate magnify anchor: a Shift+wheel PAN moves p and
+    // scrolls the frozen trace; a t/div FIELD zoom (p unchanged) zooms around the
+    // trigger; Ctrl+Shift+wheel updates p to keep the sample under the cursor. NOT
+    // clamped — off-buffer edges blank (blankBeyondData below), matching Java.
     const tDivLive = p ? p.oscTimePerDiv.get() : f.tDivAtFreeze;
     const scale = (f.tDivAtFreeze > 0 && tDivLive > 0) ? tDivLive / f.tDivAtFreeze : 1;
     const winSamples = Math.max(2, Math.round(f.windowSamples * scale));
-    if (p && Number.isFinite(f.triggerLocal)) {
-      // A trigger was captured → position the held window via the (virtual-capable)
-      // LIVE trigger offset, exactly like the live trigger-offset model (Java
-      // renderHeldCapturedFrame capturedTriggerLocal branch): a Shift+wheel PAN moves
-      // p and scrolls the frozen trace; a t/div FIELD zoom (p unchanged) zooms around
-      // the trigger; Ctrl+Shift+wheel updates p to keep the sample under the cursor.
-      // NOT clamped here — off-buffer edges blank (blankBeyondData); only a MOVE clamps.
+    if (p) {
       const posFrac = p.oscTriggerPositionFrac.get();
       f.heldStart = f.triggerLocal - posFrac * winSamples;
-    } else if (!(f.heldTDiv > 0)) {                           // entry frame, not yet anchored
-      f.heldStart = f.startSample;
-    } else if (tDivLive !== f.heldTDiv && f.heldWin > 0) {
-      const frac = (this._heldZoomAnchorX >= 0 && W > 0)
-        ? clamp01(this._heldZoomAnchorX / W) : 0.5;
-      this._heldZoomAnchorX = -1;                             // consumed
-      const anchorSample = f.heldStart + frac * f.heldWin;    // sample under anchor before zoom
-      f.heldStart = anchorSample - frac * winSamples;         // keep it under the anchor
+    } else {
+      f.heldStart = f.startSample;      // no-prefs replay: frozen position
     }
-    f.heldTDiv = tDivLive;
-    f.heldWin = winSamples;
     const startS = f.heldStart;
     const sPerPx = winSamples / f.cols;
     const pxPerS = f.cols / winSamples;
     const drawSnap = (c) => {
       const vDiv = (c.ch && p) ? liveVDiv(c.ch) : c.vDiv;
       const offsetFrac = (c.ch && p) ? liveOff(c.ch) : c.offsetFrac;
+      // Per-channel full-scale: re-read live (a calibration re-scales the held trace),
+      // fall back to the frozen snapshot value in the no-prefs replay.
+      const peak = (c.ch && p) ? p.getAdcPeakVolts(c.ch) : c.peak;
       const dcOff = c.dcOff || 0;
-      const sampleToY = (s) => H * (offsetFrac - ((s - dcOff) * f.peakV) / (vDiv * DIVISIONS_Y));
+      const sampleToY = (s) => H * (offsetFrac - ((s - dcOff) * peak) / (vDiv * DIVISIONS_Y));
       this._drawTrace(g, W, H, c.snap, f.available, startS, winSamples,
                       f.cols, sPerPx, pxPerS, sampleToY, c.sinc, c.hex,
                       c.dotOverride, true);   // held magnify → blankBeyondData (Java renderHeldCapturedFrame)
@@ -3351,7 +3369,10 @@ export class ScopeView {
     const pxPerSample = W / dispCount;
     // Vertical map: full-scale (no V/div, no offset) — ±1.0 → ±H/2 (Java vScale).
     const sampleToY = (s) => centerY - s * vScale;
-    if (showL) this._drawTrace(g, W, H, bufL, available, dispStart, dispCount, W, samplesPerPx, pxPerSample, sampleToY, true, colorHex(p ? p.oscLeftChannelColor.get() : 0x00d7ff), 0);
-    if (showR) this._drawTrace(g, W, H, bufR, available, dispStart, dispCount, W, samplesPerPx, pxPerSample, sampleToY, true, colorHex(p ? p.oscRightChannelColor.get() : 0xffd700), 0);
+    // The condensed strip always keeps the per-column min/max envelope (dpoEligible = false):
+    // Java ZoomedView.drawTrace uses per-column min/max bars (Lanczos below 5 spp) with NO
+    // phosphor renderer, so the digital phosphor stays the MAIN scope trace's dense renderer only.
+    if (showL) this._drawTrace(g, W, H, bufL, available, dispStart, dispCount, W, samplesPerPx, pxPerSample, sampleToY, true, colorHex(p ? p.oscLeftChannelColor.get() : 0x00d7ff), 0, false, false);
+    if (showR) this._drawTrace(g, W, H, bufR, available, dispStart, dispCount, W, samplesPerPx, pxPerSample, sampleToY, true, colorHex(p ? p.oscRightChannelColor.get() : 0xffd700), 0, false, false);
   }
 }

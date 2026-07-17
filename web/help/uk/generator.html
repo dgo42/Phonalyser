@@ -32,27 +32,30 @@
           <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/>
         </marker>
       </defs>
-      <line x1="191" y1="37" x2="243" y2="17" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="205" cy="40" r="11" fill="#c33"/>
-      <text x="205" y="44" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">1</text>
-      <line x1="150" y1="18" x2="150" y2="46" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="150" cy="31" r="11" fill="#c33"/>
-      <text x="150" y="35" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">2</text>
-      <line x1="277" y1="143" x2="256" y2="143" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="291" cy="143" r="11" fill="#c33"/>
-      <text x="291" y="147" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">3</text>
-      <line x1="165" y1="179" x2="165" y2="191" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="165" cy="166" r="11" fill="#c33"/>
-      <text x="165" y="170" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">4</text>
-      <line x1="216" y1="333" x2="285" y2="347" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="205" cy="322" r="11" fill="#c33"/>
-      <text x="205" y="326" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">5</text>
-      <circle cx="165" cy="482" r="11" fill="#c33"/>
-      <text x="165" y="486" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">6</text>
-      <line x1="154" y1="555" x2="46" y2="560" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <line x1="176" y1="555" x2="287" y2="558" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="165" cy="555" r="11" fill="#c33"/>
-      <text x="165" y="559" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">7</text>
+      <line x1="289" y1="22" x2="275" y2="31" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="300" cy="15" r="13" fill="#c33"/>
+      <text x="300" y="20" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
+      <line x1="150" y1="45" x2="150" y2="53" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="150" cy="31" r="13" fill="#c33"/>
+      <text x="150" y="36" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
+      <line x1="277" y1="123" x2="207" y2="123" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="291" cy="123" r="13" fill="#c33"/>
+      <text x="291" y="128" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
+      <line x1="165" y1="157" x2="165" y2="166" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="165" cy="143" r="13" fill="#c33"/>
+      <text x="165" y="148" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
+      <line x1="164" y1="287" x2="283" y2="287" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="150" cy="287" r="13" fill="#c33"/>
+      <text x="150" y="292" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
+      <circle cx="165" cy="393" r="13" fill="#c33"/>
+      <text x="165" y="398" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
+      <line x1="152" y1="540" x2="48" y2="540" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <line x1="178" y1="540" x2="285" y2="540" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="165" cy="540" r="13" fill="#c33"/>
+      <text x="165" y="545" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">7</text>
+      <line x1="243" y1="48" x2="243" y2="39" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="243" cy="61" r="13" fill="#c33"/>
+      <text x="243" y="66" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">8</text>
     </svg>
   </div>
   <ol class="features">
@@ -81,9 +84,13 @@
         <a href="#generator-load-from">Завантажити з… + В циклі</a> відтворює файл
         (прапорець «В циклі» повторює його).</li>
     <li><b>Калібрування DAC та відтворення.</b>  Кнопка з перехрестям відкриває діалог
-        <a href="#generator-corrections">калібрування DAC</a>; зелений трикутник —
+        <a href="#generator-dac-calibrate">калібрування DAC</a>; зелений трикутник —
         це <a href="#generator-play">Відтворити / Зупинити</a>.  Запуск тону зупиняє
         відтворення файлу і навпаки.</li>
+    <li><b>Вихідний канал.</b>  Комбо <b>Обидва / Лівий / Правий</b> у рядку
+        заголовка вибирає, який канал DAC несе сигнал; невибраний канал
+        відтворює цифрову тишу —
+        <a href="#generator-output-channel">Вихідний канал</a>.</li>
   </ol>
 
   <h2>Заголовок</h2>
@@ -107,6 +114,16 @@
     <tr><td>Linear sweep</td><td>Чірп із лінійною за часом частотною рампою.</td></tr>
     <tr><td>Log sweep</td><td>Логарифмічний чірп Farina — рівна енергія на октаву.</td></tr>
   </table>
+
+  <h3 id="generator-output-channel">Вихідний канал</h3>
+  <p>Комбо у верхньому рядку заголовка — у рядку
+     <a href="#generator-form">«Форма сигналу»</a>, <b>над</b> селектором форми
+     сигналу та поряд з індикатором <a href="#generator-onair">ON&nbsp;AIR</a> —,
+     що вибирає, який канал DAC несе згенерований сигнал: <b>Обидва</b>, <b>Лівий</b>
+     або <b>Правий</b>.  Невибраний канал відтворює <b>цифрову тишу</b>, тож ви можете
+     вести лише один бік стереопристрою — чи один канал випробовуваного пристрою —
+     окремо.  Це діє <b>наживо</b>: перемикання каналів під час відтворення тону
+     набуває чинності одразу, без зупинки генератора.</p>
 
   <h3 id="generator-onair">Індикатор ON&nbsp;AIR</h3>
   <p>LED і текст <b>ON&nbsp;AIR</b> у верхньому правому куті панелі.
@@ -226,6 +243,32 @@
      1 .. <i>N</i> додає 1 .. <i>N</i> LSB (<i>N</i> = бітова глибина виходу).
      Дизеринг руйнує періодичні патерни квантування при дуже низьких рівнях
      виходу.</p>
+
+  <h3 id="generator-dac-calibrate">Калібрування DAC (кнопка з перехрестям)</h3>
+  <p>Кнопка з перехрестям у нижньому лівому куті панелі відкриває спільний діалог
+     калібрування DAC, який прив'язує шкалу <a href="#generator-amplitude">Амплітуда
+     (RMS)</a> — напругу у вольтах RMS, яку DAC видає для цифрової повної шкали, — до
+     рівня, який ви вимірюєте на виході.  Задайте генератору відому амплітуду,
+     зчитайте фактичний вихід надійним вимірювачем і введіть це показання.</p>
+  <p><img src="img/DAC calibration.png" alt="Діалог калібрування DAC"/></p>
+  <p>Введіть <b>виміряну амплітуду сигналу</b> в <code>nV</code> / <code>µV</code> /
+     <code>mV</code> / <code>V</code>.  Для стереокарти діалог має рядок <b>Лівий</b>
+     та рядок <b>Правий</b> — <b>калібрування завжди поканальне</b>, оскільки два
+     фізичні канали DAC ніколи не збігаються точно, — а для монокарти має єдиний
+     рядок; кожен рядок записує лише активний діапазон свого каналу.  Карта з
+     налаштуванням <a href="preferences.html#prefs-audio-card-editor">Зв'язок:
+     Пов'язані</a> все одно калібрується поканально — «Пов'язані» ділять лише те,
+     який діапазон вибрано.</p>
+  <div class="note"><b>Гучність Windows є частиною калібрування.</b>  Установіть
+     гучність цього вихідного пристрою в параметрах звуку Windows на <b>100</b> й
+     більше ніколи її не рухайте після калібрування: ексклюзивні режими WASAPI та
+     WDM-KS оминають програмний мікшер, але на багатьох USB-інтерфейсах цей повзунок
+     усе одно керує <em>внутрішньою апаратною</em> гучністю пристрою, тож пізніший
+     зсув беззвучно перемасштабує виміряну вами повну шкалу.  <b>Виняток:</b> карта,
+     що використовує положення повзунка для перемикання режимів — <b>E1DA Cosmos</b>
+     вище положення 49 зв'язує свої канали (правий — основний вхід, лівий несе той
+     самий сигнал на 6&nbsp;дБ нижче) — має стояти там, де вимагає її режим, і
+     лишатися там.</div>
 
   <h2 id="generator-corrections">Корекції</h2>
   <h3>Файл предспотворення (.dpd)</h3>

@@ -167,6 +167,59 @@ const SPECS = [
   { id: 'dac-predistortion', file: 'dac-predistortion-wizard.png', ready: true,
     shot: (page) => showModal(page, 'predistModal'), after: (page) => hideModal(page, 'predistModal') },
 
+  // ── Device-profile sync dialogs this round: the unified ADC/DAC Calibration dialog +
+  //    the Card editor. #calibrationModal is ONE element reused for ADC and DAC — each
+  //    opener sets its own title/prompt — so we drive the real openers and hide between shots.
+  // ADC calibration: the scope / FFT Utility crosshair only opens with a live measured Vrms
+  // (FftView.getLastVrms → its last analysis). Headless has no live signal, so seed a synthetic
+  // last result and drive the FFT ADC-calibrate handler — the SAME unified dialog the scope
+  // Utility path opens (both call openAdc with calibrate.title / calibrate.input).
+  { id: 'adc-cal', file: 'ADC calibration.png', ready: true,
+    async shot(page) {
+      await page.evaluate(() => {
+        if (window.__fftPane && window.__fftPane.view) window.__fftPane.view._last = { fundamentalLinear: 0.5 };
+        document.getElementById('fftAdcCalibrate').click();
+      });
+      await page.waitForSelector('#calibrationModal.show', { timeout: 5000 });
+      await page.waitForTimeout(400);
+      return page.$('#calibrationModal .modal-content');
+    },
+    after: async (page) => {
+      await hideModal(page, 'calibrationModal');
+      await page.evaluate(() => { if (window.__fftPane && window.__fftPane.view) window.__fftPane.view._last = null; });
+    } },
+  // DAC calibration: the generator crosshair (#calibrateDac) opens the same modal titled
+  // "DAC calibration", seeded from the configured amplitude (default 0.5 Vrms > 0) — no live
+  // signal needed.
+  { id: 'dac-cal', file: 'DAC calibration.png', ready: true,
+    async shot(page) {
+      await page.evaluate(() => document.getElementById('calibrateDac').click());
+      await page.waitForSelector('#calibrationModal.show', { timeout: 5000 });
+      await page.waitForTimeout(400);
+      return page.$('#calibrationModal .modal-content');
+    }, after: (page) => hideModal(page, 'calibrationModal') },
+  // Card editor: open Preferences → Audio (its show.bs.modal populates the card combos from the
+  // seeded catalog), select the first real card so the pencil (edit) button enables, then open
+  // the card editor on it. Clip the (stacked) card-editor modal; hide it then close Preferences.
+  { id: 'card-editor', file: 'Card editor.png', ready: true,
+    async shot(page) {
+      await openPrefs(page, 'audio');
+      await page.evaluate(() => {
+        const sel = document.getElementById('inCardSel');
+        sel.value = '0';
+        sel.dispatchEvent(new Event('change'));
+      });
+      await page.waitForTimeout(400);
+      await page.evaluate(() => {
+        document.getElementById('inCardEdit').disabled = false;   // ensure the click fires the handler
+        document.getElementById('inCardEdit').click();
+      });
+      await page.waitForSelector('#cardEditorModal.show', { timeout: 5000 });
+      await page.waitForTimeout(400);
+      return page.$('#cardEditorModal .modal-content');
+    },
+    after: async (page) => { await hideModal(page, 'cardEditorModal'); await closePrefs(page); } },
+
   // ── Preferences dialog tabs (part 2, landed). Every prefs spec closes the modal
   //    after its capture (`after`), so later specs never sit under a leftover backdrop.
   { id: 'prefs-lookfeel', file: 'Preferences Look and Feel.png', ready: true,

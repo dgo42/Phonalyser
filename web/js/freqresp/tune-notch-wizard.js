@@ -57,7 +57,7 @@ import { t } from '../i18n/i18n.js';
 import { FreqRespView } from './freqresp-view.js';
 import { FreqRespCorrectionStore } from './correction-store.js';
 import { computeFromLogSweep, binAlignedFreqs } from './deconvolve.js';
-import { makeFreqRespResult, makeStereoResult } from './stereo-result.js';
+import { makeFreqRespResult } from './stereo-result.js';
 import { waitForWorkersIdle } from './worker-idle.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
@@ -103,8 +103,9 @@ const INITIAL_MAG_BOT_DB = -140.0;
 const AUTO_FIT_PAD_DB = 2.0;
 
 // --- Notch readout overlay ------------------------------------------------------
-// Java NOTCH_TEXT_X_PX = its view MARGIN_LEFT + 5; the web view's MARGIN_LEFT is 56.
-const NOTCH_TEXT_X_PX = 61;
+/** Right-edge pad of the readout text — anchored to the chart's top-RIGHT corner so
+ *  it stays clear of the L/R buttons on the left (Java NOTCH_TEXT_RIGHT_PAD_PX). */
+const NOTCH_TEXT_RIGHT_PAD_PX = 8;
 const NOTCH_TEXT_Y_PX = 6;
 /** One-pixel white outline drawn around the black readout text. */
 const NOTCH_OUTLINE_PX = 1;
@@ -186,10 +187,18 @@ export class TuneNotchWizard {
     this._notchHz = 0;
     this._notchDb = 0;
     this._notchValid = false;
+    /** The result the notch readout was last computed from; lets _paintNotch
+     *  recompute after an L/R channel toggle (which redraws the view but not
+     *  through a fresh sweep). Java TuneNotchWizardDialog.notchSource. */
+    this._notchSource = null;
 
-    /** Latest published result, read by the target-marker overlay to colour the
-     *  marker by the attenuation at the target frequency. */
-    this._latestResult = null;
+    /** Latest deconvolved L / R results, pushed into the embedded view every grab.
+     *  Both are measured; the L/R buttons choose which one shows (default R). Read
+     *  by the notch readout + target marker via {@link _activeResult} so a mid-session
+     *  channel toggle re-drives them from the newly selected channel. Java latestLeft/
+     *  latestRight. */
+    this._latestLeft = null;
+    this._latestRight = null;
 
     // Rolling MAG_AVG_FRAMES-sweep min/max dB ring for the AVERAGED vertical
     // range so it doesn't jump frame-to-frame.
@@ -204,6 +213,7 @@ export class TuneNotchWizard {
     this._curStopHz = 0;
     this._curAmpVrms = 0;
     this._curTargetHz = 0;
+    this._curOutputChannels = 'BOTH';
 
     /** Drives the continuous sweep loop; cleared on close (Java `running`). */
     this._running = false;
@@ -273,6 +283,23 @@ export class TuneNotchWizard {
         if (this.view) this.view.render();
       });
 
+    // Output-lane gate (Java TuneNotchWizardDialog outputChannelCombo): which DAC lane(s)
+    // the notch sweep drives. Edits the COPY (written back to real on close, like the four
+    // numeric fields) and live-pushes the gate to the running engine WITHOUT a restart.
+    $('#tnOutputChannel').on('change', () => {
+      this._curOutputChannels = $('#tnOutputChannel').val();
+      this.viewPrefs.tuneNotchOutputChannels.set(this._curOutputChannels);
+      this._pushEngineOutputChannels();
+    });
+
+    // L / R channel-select buttons (Java FreqRespView.showChannelButtonsOnly): both channels
+    // are measured; the buttons toggle which trace the embedded chart shows (mutually
+    // exclusive, default R). They edit the DETACHED viewPrefs, so the main pane is untouched.
+    // A toggle redraws WITHOUT a fresh sweep — _activeResult() flips, so the notch readout /
+    // target marker / crosshair follow the newly selected trace (recomputed in _paintNotch).
+    $('#tnLeft').on('click', () => this._selectChannel(true));
+    $('#tnRight').on('click', () => this._selectChannel(false));
+
     // Tools-menu launcher (Java MainWindow tuneNotchItem → openTuneNotchDialog).
     $('#menuTuneNotch').on('click', () => this.open());
 
@@ -307,14 +334,21 @@ export class TuneNotchWizard {
     this.viewPrefs.tuneNotchStopHz.set(prefs.tuneNotchStopHz.get());
     this.viewPrefs.tuneNotchAmplitudeVrms.set(prefs.tuneNotchAmplitudeVrms.get());
     this.viewPrefs.tuneNotchTargetHz.set(prefs.tuneNotchTargetHz.get());
+    this.viewPrefs.tuneNotchOutputChannels.set(prefs.tuneNotchOutputChannels.get());
     this.startField.setValue(this.viewPrefs.tuneNotchStartHz.get());
     this.stopField.setValue(this.viewPrefs.tuneNotchStopHz.get());
     this.ampField.setValue(this.viewPrefs.tuneNotchAmplitudeVrms.get());
     this.targetField.setValue(this.viewPrefs.tuneNotchTargetHz.get());
+    this.$('#tnOutputChannel').val(this.viewPrefs.tuneNotchOutputChannels.get());
     this._curStartHz = this.startField.getValue();
     this._curStopHz = this.stopField.getValue();
     this._curAmpVrms = this.ampField.getValue();
     this._curTargetHz = this.targetField.getValue();
+    this._curOutputChannels = this.viewPrefs.tuneNotchOutputChannels.get();
+    // Reset the L/R buttons to the session default (R visible, set by
+    // _applySessionViewPrefs below) so a re-open never inherits the last toggle.
+    this.$('#tnLeft').removeClass('on');
+    this.$('#tnRight').addClass('on');
 
     // Seed the DETACHED view prefs for the notch session (R channel, [start,stop]
     // axis, wide initial window) BEFORE the first paint so it renders correctly
@@ -323,8 +357,10 @@ export class TuneNotchWizard {
     this._applySessionViewPrefs();
 
     this._open = true;
-    this._latestResult = null;
+    this._latestLeft = null;
+    this._latestRight = null;
     this._notchValid = false;
+    this._notchSource = null;
     this.view.clearResults();
     this.$('#tnStatus').text('');   // Java: the status label starts empty
     this.modal.show();
@@ -366,6 +402,35 @@ export class TuneNotchWizard {
     if (!e) return;
     const b = sweepBand(this._curStartHz, this._curStopHz);
     e.setBand(b[0], b[1]);
+  }
+
+  /** Live-pushes the current output-lane gate to the running engine so a
+   *  mid-session combo change takes effect without a restart (Java
+   *  pushEngineOutputChannels). No-op until the engine is running. */
+  _pushEngineOutputChannels() {
+    const e = this._notchEngine;
+    if (!e) return;
+    e.setOutputChannels(this._curOutputChannels);
+  }
+
+  /** Toggles which measured channel the embedded chart shows (mutually exclusive
+   *  L/R, on the DETACHED viewPrefs) and re-drives the notch readout + target
+   *  marker from the newly selected trace WITHOUT a fresh sweep — the web stand-in
+   *  for Java's L/R radio → view redraw → onNotchPaint recompute. */
+  _selectChannel(left) {
+    this.viewPrefs.freqRespLeftVisible.set(left);
+    this.viewPrefs.freqRespRightVisible.set(!left);
+    this.viewPrefs.save();
+    this.$('#tnLeft').toggleClass('on', left);
+    this.$('#tnRight').toggleClass('on', !left);
+    if (this.view) this.view.render();
+  }
+
+  /** The result of the channel the chart currently shows (viewPrefs L/R) — the
+   *  notch readout, target marker and auto-fit all follow it, so a mid-session
+   *  channel toggle re-drives them from the newly selected trace (Java activeResult). */
+  _activeResult() {
+    return this.viewPrefs.freqRespLeftVisible.get() ? this._latestLeft : this._latestRight;
   }
 
   /** Input Nyquist (the frequency fields' ceiling, Java prefs.current()
@@ -415,7 +480,13 @@ export class TuneNotchWizard {
       // lifetime of the session. (Java also reads ditherBits for its DAC dither;
       // the web capture path is float — no dither, intended divergence.)
       const dacFsVrms = prefs.dacFsVoltageAmpl.get();
-      const adcFsVrms = prefs.adcFsVoltageRms.get();
+      // Per-channel ADC full-scale: ch0 (L) deconvolves with the L scalar, ch1 (R) with
+      // the R scalar (Java getAdcFsVoltageRms(Channel.L/R)). The right-lane DAC scale
+      // (= fsLeft/fsRight) matches the RIGHT lane's physical level to the LEFT-referenced
+      // digital amplitude (Java dacRightLaneScale + NotchSweepEngine's setChannelScale).
+      const rightLaneScale = prefs.dacRightLaneScale();
+      const adcFsVrmsLeft = prefs.getAdcFsVoltageRms('L');
+      const adcFsVrmsRight = prefs.getAdcFsVoltageRms('R');
 
       // The loop period MUST be a power of two — see powerOfTwoSweepSamples (the
       // circular-FFT invariant that makes an arbitrary-phase grab safe).
@@ -457,7 +528,8 @@ export class TuneNotchWizard {
       // The wizard no longer touches engine.config or engine.startGenerator — Java's engine
       // owns its own playback line. notch.close() stops the generator + restores the config.
       const band = sweepBand(this._curStartHz, this._curStopHz);
-      await notch.start(band[0], band[1], this._curAmpVrms, dacFsVrms, sweepSamples, fadeSamples);
+      await notch.start(band[0], band[1], this._curAmpVrms, dacFsVrms, sweepSamples, fadeSamples,
+        this._curOutputChannels, rightLaneScale);
       await this._awaitSettle(notch, sweepSamples);
       if (!this._running) return;
 
@@ -482,7 +554,7 @@ export class TuneNotchWizard {
         // Deconvolve INLINE (the web is single-threaded — Java overlaps this on
         // a one-thread executor), then idle out the rest of the loop period.
         this._deconvolveAndPublish(win, sweepRef, fadeSamples, freqs, sampleRate,
-          startHz, stopHz, ampVrms, adcFsVrms);
+          startHz, stopHz, ampVrms, adcFsVrmsLeft, adcFsVrmsRight);
 
         // Spread the percentage across the loop period (progress toward the
         // next result) while waiting for the next grab.
@@ -526,47 +598,56 @@ export class TuneNotchWizard {
     }
   }
 
-  /** Deconvolves one grabbed period's L+R channels, builds the stereo result,
-   *  and pushes the R channel into the embedded view. The window is one
-   *  steady-state period (leadIn 0); |H(f)| is phase-invariant so its alignment
-   *  to the sweep-cycle start doesn't matter. Savitzky-Golay smoothing is OFF
-   *  (Java's `false` flag): the bin-aligned grid is coarse and SG rounds a
-   *  deep narrow null shallow. */
+  /** Deconvolves one grabbed period for BOTH capture channels and pushes both into
+   *  the embedded view — ch0 (L) with the L full-scale, ch1 (R) with the R full-scale
+   *  (Java deconvolveAndPublish). The output selector gates only which DAC lane carries
+   *  the stimulus, so the un-driven side's trace is flat/meaningless but still measured;
+   *  the L/R buttons let the user pick which shows (default R). The window is one
+   *  steady-state period (leadIn 0); |H(f)| is phase-invariant so its alignment to the
+   *  sweep-cycle start doesn't matter. Savitzky-Golay smoothing is OFF (Java's `false`
+   *  flag): the bin-aligned grid is coarse and SG rounds a deep narrow null shallow. */
   _deconvolveAndPublish(win, sweepRef, fade, freqs, sampleRate,
-    startHz, stopHz, ampVrms, adcFsVrms) {
+    startHz, stopHz, ampVrms, adcFsVrmsLeft, adcFsVrmsRight) {
     if (!this._running) return;
     try {
-      const calL = computeFromLogSweep(win.left, sweepRef, 0, sampleRate, freqs, ampVrms, adcFsVrms, fade, false);
-      const calR = computeFromLogSweep(win.right, sweepRef, 0, sampleRate, freqs, ampVrms, adcFsVrms, fade, false);
+      const calL = computeFromLogSweep(win.left, sweepRef, 0, sampleRate, freqs, ampVrms, adcFsVrmsLeft, fade, false);
+      const calR = computeFromLogSweep(win.right, sweepRef, 0, sampleRate, freqs, ampVrms, adcFsVrmsRight, fade, false);
       const sweepParams = {
         startHz, stopHz, sweepPoints: freqs.length,
         durationSec: SWEEP_DURATION_SEC, leadInSec: SWEEP_LEAD_IN_SEC, amplitudeVrms: ampVrms,
       };
       const left = makeFreqRespResult('L', sampleRate, calL.freqs, calL.magLin, calL.phaseRad, sweepParams, null, false);
       const right = makeFreqRespResult('R', sampleRate, calR.freqs, calR.magLin, calR.phaseRad, sweepParams, null, false);
-      const stereo = makeStereoResult(left, right);
       if (!this._running) return;
-      this._onSweepResult(stereo.right);
+      this._onSweepResult(left, right);
     } catch (e) {
       console.error('TuneNotch deconvolution failed', e);
     }
   }
 
-  /** Feeds a finished sweep into the embedded view, re-fits the magnitude axis
-   *  to the band, and refreshes the notch readout (Java onSweepResult). */
-  _onSweepResult(right) {
-    if (!this._open || !right) return;
-    this._latestResult = right;
+  /** Feeds a finished sweep into the embedded view (BOTH channels), then re-fits the
+   *  magnitude axis and refreshes the notch readout from the ACTIVE (visible) channel —
+   *  the one the L/R buttons select (default R). Java onSweepResult(left, right). */
+  _onSweepResult(left, right) {
+    if (!this._open) return;
+    this._latestLeft = left;
+    this._latestRight = right;
+    this.view.setLeftResult(left);
     this.view.setRightResult(right);
-    this._applyAutoMagWindow(right);
-    this._computeNotch(right);
+    const active = this._activeResult();
+    if (active) {
+      this._applyAutoMagWindow(active);
+      this._computeNotch(active);
+    }
     this.view.render();
   }
 
   /** Finds the deepest notch (sub-bin parabolic refinement, ported in
-   *  findDeepestNotch) and stores its frequency / depth for the overlay. */
-  _computeNotch(right) {
-    const n = findDeepestNotch(right.freqs, right.magLin);
+   *  findDeepestNotch) in {@code result} and stores its frequency / depth for the
+   *  overlay, remembering the source so a channel toggle can recompute. */
+  _computeNotch(result) {
+    this._notchSource = result;
+    const n = findDeepestNotch(result.freqs, result.magLin);
     this._notchValid = n.valid;
     if (n.valid) { this._notchHz = n.hz; this._notchDb = n.db; }
   }
@@ -631,7 +712,7 @@ export class TuneNotchWizard {
    *  landed on the target reads green; off-target or shallow reads red).
    *  Java onTargetPaint. */
   _paintTarget() {
-    const res = this._latestResult;
+    const res = this._activeResult();
     const target = this._curTargetHz;
     // Read the view's DETACHED range so the marker lands on the same log axis the
     // trace was drawn on (phase-visible delegates through to the shared pref).
@@ -672,10 +753,14 @@ export class TuneNotchWizard {
     g.restore();
   }
 
-  /** Paints the deepest-notch readout in the plot's top-left corner: black text
-   *  with a one-pixel white outline so it reads on either a light or dark
-   *  trace. Java onNotchPaint ("%.4f Hz   %.3f dB"). */
+  /** Paints the deepest-notch readout in the chart's top-RIGHT corner (clear of the
+   *  L/R buttons on the left): black text with a one-pixel white outline so it reads
+   *  on either a light or dark trace. Java onNotchPaint ("%.4f Hz   %.3f dB"). */
   _paintNotch() {
+    // Recompute when the visible channel changed (an L/R toggle redraws the view
+    // without a fresh sweep) so the readout follows the shown trace (Java onNotchPaint).
+    const active = this._activeResult();
+    if (active && active !== this._notchSource) this._computeNotch(active);
     if (!this._notchValid) return;
     const s = `${this._notchHz.toFixed(4)} ${t('unit.hz')}   ${this._notchDb.toFixed(3)} ${t('unit.db')}`;
     const g = this.view.g;
@@ -683,15 +768,17 @@ export class TuneNotchWizard {
     g.font = '11px "Segoe UI", sans-serif';
     g.textAlign = 'left';
     g.textBaseline = 'top';
+    const W = this.canvas.clientWidth || CANVAS_WIDTH_PX;
+    const textX = W - g.measureText(s).width - NOTCH_TEXT_RIGHT_PAD_PX;
     g.fillStyle = '#fff';
     for (let dx = -NOTCH_OUTLINE_PX; dx <= NOTCH_OUTLINE_PX; dx++) {
       for (let dy = -NOTCH_OUTLINE_PX; dy <= NOTCH_OUTLINE_PX; dy++) {
         if (dx === 0 && dy === 0) continue;
-        g.fillText(s, NOTCH_TEXT_X_PX + dx, NOTCH_TEXT_Y_PX + dy);
+        g.fillText(s, textX + dx, NOTCH_TEXT_Y_PX + dy);
       }
     }
     g.fillStyle = '#000';
-    g.fillText(s, NOTCH_TEXT_X_PX, NOTCH_TEXT_Y_PX);
+    g.fillText(s, textX, NOTCH_TEXT_Y_PX);
     g.restore();
   }
 
@@ -710,6 +797,7 @@ export class TuneNotchWizard {
     p.tuneNotchStopHz.set(v.tuneNotchStopHz.get());
     p.tuneNotchAmplitudeVrms.set(v.tuneNotchAmplitudeVrms.get());
     p.tuneNotchTargetHz.set(v.tuneNotchTargetHz.get());
+    p.tuneNotchOutputChannels.set(v.tuneNotchOutputChannels.get());
     p.save();
     // Wait for the in-flight loop iteration to wind down (Java sweepThread
     // .join; the loop's sleeps are ≤ STATUS_TICK_MS so this is quick). Its
@@ -720,7 +808,9 @@ export class TuneNotchWizard {
     }
     await this._teardownSession();
     // No shared view prefs to restore — the wizard's range lives in viewPrefs.
-    this._latestResult = null;
+    this._latestLeft = null;
+    this._latestRight = null;
+    this._notchSource = null;
     this._notchValid = false;
   }
 

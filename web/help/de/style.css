@@ -18,6 +18,9 @@ p, ul, ol { margin: 6px 0; }
 img { max-width: 100%; height: auto; }
 code, kbd { font-family: Consolas, Menlo, monospace; font-size: 13px;
             background: #eef; padding: 1px 5px; border-radius: 3px; }
+pre { background: #f4f4fa; border: 1px solid #dde; border-radius: 4px;
+      padding: 8px 12px; margin: 8px 0; overflow-x: auto; line-height: 1.4; }
+pre code { background: none; padding: 0; border-radius: 0; }
 .pane { border-left: 3px solid #88a; padding-left: 12px; margin: 12px 0; }
 .toc a { display: block; padding: 2px 0;
          text-decoration: underline; color: #2222CC; }

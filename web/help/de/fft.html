@@ -412,7 +412,13 @@
      synchronisiert wird — derselbe Detektor, der den Störungstrigger des
      Oszilloskops steuert (siehe
      <a href="theory/fft.html#rejection">Theorie ▸ schlechte Blöcke aus der
-     Mittelung heraushalten</a>).</p>
+     Mittelung heraushalten</a>).  Da die Rekurrenz von der Periodendauer des Tons
+     abhängt, nicht von seinem Pegel, ist die Sperre <b>von Natur aus
+     amplitudenunabhängig</b>: sie meldet einen Sprung, der schneller ist, als der Ton
+     es zulässt — eine echte Aufnahme-Klebestelle oder eine Generatorpause — bei jedem
+     Signalpegel und verwirft nur dieses eine Mittelungsfenster, während ein lediglich
+     pegelschwacher, aber kontinuierlicher Ton normal weitergemittelt wird, sodass
+     lange Mittelungen sauber bleiben.</p>
   <p><b>Für ein kleines oder nichtsinusförmiges Signal abwählen.</b>  Ein
      schwaches (SNR-armes) oder bewusst nichtsinusförmiges Signal bricht die
      Sinus-Rekurrenz-Vorhersage bei <em>jedem</em> Block, sodass das Gatter alle
@@ -483,9 +489,25 @@
      ein echtes Layout ist und kein hochskaliertes Bitmap.</p>
 
   <h4 id="fft-utility-calibrate">ADC-Kalibrierung</h4>
-  <p>Öffnet den ADC-Kalibrierungsdialog (derselbe, der auch vom Oszilloskop aus
-     erreichbar ist), um die dBV- / V-Skala gegen einen bekannten Eingangspegel
-     zu verankern.</p>
+  <p>Öffnet den gemeinsamen
+     <a href="oscilloscope.html#scope-utility-calibrate">ADC-Kalibrierungsdialog</a>,
+     um die dBV- / V-Skala gegen einen bekannten Eingangspegel zu verankern (Einheiten
+     <code>nV</code> / <code>µV</code> / <code>mV</code> / <code>V</code>).  Bei einer
+     Stereo-Karte bietet er eine Zeile Links und eine Rechts, aber nur die Zeile des
+     gerade analysierten Kanals ist aktiviert — die FFT kalibriert jeweils einen Kanal
+     — und sie schreibt nur den aktiven Bereich dieses Kanals; die andere Zeile ist
+     deaktiviert und leer.  Eine Mono-Karte zeigt eine einzelne Zeile.</p>
+  <div class="note"><b>Die Windows-Lautstärke ist Teil der Kalibrierung.</b>  Stellen
+     Sie die Lautstärke dieses Geräts in den Windows-Sound-Einstellungen auf <b>100</b>
+     und verschieben Sie sie nach der Kalibrierung nicht mehr: der Exklusivmodus von
+     WASAPI und WDM-KS umgeht den Software-Mixer, aber auf vielen USB-Schnittstellen
+     programmiert dieser Regler weiterhin die <em>interne Hardware</em>-Lautstärke des
+     Geräts, sodass ein späteres Verschieben stillschweigend den gemessenen
+     Vollausschlag neu skaliert.  <b>Ausnahme:</b> eine Karte, die die Reglerstellung
+     zum Umschalten von Modi nutzt — die <b>E1DA Cosmos</b> koppelt oberhalb von
+     Position 49 ihre Kanäle (rechts ist der Haupteingang, links trägt dasselbe Signal
+     6&nbsp;dB leiser) — muss auf der von ihrem Modus geforderten Position stehen und
+     fest bleiben.</div>
 
   <h3 id="fft-tab-calibration">Tab „Kalibrierung laden…"</h3>
   <p><img src="img/FFT - Load calibration.png" alt="Tab Kalibrierung laden"/></p>

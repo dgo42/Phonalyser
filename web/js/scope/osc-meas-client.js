@@ -23,7 +23,7 @@ export class OscMeasClient {
   /**
    * @param {object} capture      the SharedCapture — the client acquires its OWN forward reader.
    * @param {() => object|null} getParams  returns the current publish params
-   *   { sampleRate, peakVolts, avgSeconds, L:{lpfMode,mainsMode,dual,f1Hz,f2Hz}, R:{...} }
+   *   { sampleRate, peakVoltsL, peakVoltsR, avgSeconds, L:{lpfMode,mainsMode,dual,f1Hz,f2Hz}, R:{...} }
    *   or null to skip this batch (measurement off / no signal).
    * @param {(result:object)=>void} onResult  invoked with {resultL,resultR,leftMeanNorm,rightMeanNorm}.
    */
@@ -98,7 +98,9 @@ export class OscMeasClient {
     if (n <= 0) return;
     worker.postMessage({
       type: 'feed', bufL, bufR, n,
-      sampleRate: params.sampleRate, peakVolts: params.peakVolts, avgSeconds: params.avgSeconds,
+      sampleRate: params.sampleRate,
+      peakVoltsL: params.peakVoltsL, peakVoltsR: params.peakVoltsR,
+      avgSeconds: params.avgSeconds,
       L: params.L, R: params.R,
     }, [bufL.buffer, bufR.buffer]);
   }

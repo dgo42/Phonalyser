@@ -318,9 +318,8 @@
      übrig, die sich unter der Grundschwingung verbergen.  Der <b>DC-Pegel
      bleibt erhalten</b> — nur der Ton wird entfernt — daher <a href="#scope-acdc">AC</a>
      verwenden, wenn das Residuum auf null zentriert werden soll.</p>
-  <p>Das Residuum funktioniert auch mit einem <b>Zweiton</b>-Signal.  Bei zwei
-     Grundschwingungen benennt die Frequenzmessung keinen einzelnen Ton mehr,
-     daher werden die beiden Frequenzen <b>aus dem erfassten Signal selbst
+  <p>Das Residuum funktioniert auch mit einem <b>Zweiton</b>-Signal.  Die beiden
+     Frequenzen werden <b>aus dem erfassten Signal selbst
      gemessen</b> (ausgehend von den Werten des Generators und anschließend am
      erfassten Signal verfeinert) — dadurch ist die Subtraktion unempfindlich
      dagegen, dass DAC und ADC mit unterschiedlichen Takten laufen; die Werte des
@@ -515,10 +514,37 @@
      Größe — unabhängig vom sichtbaren Fenster.</p>
 
   <h4 id="scope-utility-calibrate">ADC-Kalibrierung</h4>
-  <p>Öffnet den Kalibrierungsdialog, der die Vollaussteuerungsspannung des ADC
-     aus einem bekannten Referenzsignal (einem Kalibrator oder einem
-     Präzisionsgenerator) ableitet und in den Einstellungen speichert.
-     Deaktiviert, bis eine Erfassung läuft.</p>
+  <p>Öffnet den gemeinsamen ADC-Kalibrierungsdialog, der die Vollaussteuerungsspannung
+     des ADC aus einem bekannten Referenzsignal (einem Kalibrator oder einem
+     Präzisionsgenerator) ableitet und in den aktiven Bereich der gebundenen Karte
+     schreibt.  Deaktiviert, bis eine Erfassung läuft.</p>
+  <p><img src="img/ADC calibration.png" alt="Dialog ADC-Kalibrierung"/></p>
+  <p>Geben Sie die <b>tatsächliche Signalamplitude</b> ein, die jetzt am Eingang
+     anliegt, in <code>nV</code> / <code>µV</code> / <code>mV</code> / <code>V</code>,
+     und die Anwendung skaliert den digitalen Messwert so, dass dieser Pegel korrekt
+     angezeigt wird.  Der Dialog hat eine Zeile <b>Links</b> und eine <b>Rechts</b> für
+     eine Stereo-Karte — <b>die Kalibrierung erfolgt stets pro Kanal</b>, da echte
+     Wandlerkanäle nie bis auf das letzte ppm übereinstimmen — und eine einzelne Zeile
+     für eine Mono-Karte.  Nur die Zeile des <b>gerade gemessenen Kanals</b> ist aktiv;
+     die Zeile des anderen Kanals wird <b>deaktiviert und leer</b> angezeigt
+     (die Abbildung oben zeigt eine Erfassung nur des rechten Kanals).  Kalibrieren Sie
+     den anderen Kanal, indem Sie ihn nacheinander messen — jede Zeile schreibt nur den
+     aktiven Bereich ihres eigenen Kanals.  Eine
+     Karte, die auf <a href="preferences.html#prefs-audio-card-editor">Kopplung:
+     Verknüpft</a> eingestellt ist, wird ebenso pro Kanal kalibriert — Verknüpft
+     koppelt nur, welcher Bereich ausgewählt ist, nie die gemessenen Werte.</p>
+  <div class="note"><b>Die Windows-Lautstärke ist Teil der Kalibrierung.</b>  Behandeln
+     Sie den Lautstärkeregler dieses Geräts in den Windows-Sound-Einstellungen als eine
+     Kalibrierungseinstellung: stellen Sie ihn auf <b>100</b> und rühren Sie ihn nach
+     der Kalibrierung nie wieder an.  Der Exklusivmodus von WASAPI und WDM-KS umgeht den
+     Windows-Software-Mixer, aber auf vielen USB-Schnittstellen programmiert dieser
+     Regler weiterhin die <em>interne Hardware</em>-Lautstärke des Geräts — ein
+     Verschieben nach der Kalibrierung ändert also stillschweigend den soeben gemessenen
+     Vollausschlag.  <b>Ausnahme:</b> einige wenige Karten nutzen die Reglerstellung zum
+     Umschalten von Modi.  Die <b>E1DA Cosmos</b> koppelt oberhalb von Position 49 ihre
+     beiden Kanäle — rechts wird zum Haupteingang und links trägt dasselbe Signal
+     6&nbsp;dB leiser.  Bei einer solchen Karte stellen Sie den Regler auf die von ihrem
+     Modus benötigte Position und halten ihn dann fest.</div>
 
   <h3 id="scope-tab-save">Tab „Speichern unter…"</h3>
   <p><img src="img/Oscilloscope - Save to.png" alt="Tab Speichern unter"/></p>
