@@ -30,6 +30,7 @@ import org.lwjgl.BufferUtils;
 import org.lwjgl.nanovg.NVGColor;
 import org.lwjgl.nanovg.NVGPaint;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.system.MemoryStack;
 
@@ -299,21 +300,35 @@ final class ScopePhosphor {
     }
 
     /** New captured frame: decay the phosphor by {@code exp(-dt/tau)} (skipped for the
-     *  first frame and for infinite persistence) then composite the scratch trace into it. */
+     *  first frame and for infinite persistence) then merge the scratch trace into it
+     *  <b>brightest-wins</b> (per-component max).  Source-over would re-composite the
+     *  trace's anti-aliased fringe pixels over themselves on every new frame, converging
+     *  them to full opacity — the persisted trace turned solid-edged and fat.  Under max,
+     *  a fringe pixel can never exceed its single-frame coverage, so the persisted trace
+     *  keeps exactly the anti-aliasing of a persistence-off frame while decayed history
+     *  fades underneath.  NanoVG offers no max composite op, but it also never touches
+     *  the GL <i>blend equation</i> (only the factors, which {@code GL_MAX} ignores) —
+     *  so the deposit blit runs in its own NanoVG frame bracketed by
+     *  {@code glBlendEquation(GL_MAX)} / restore {@code GL_FUNC_ADD}. */
     private void accumulate(double persistSeconds) {
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, phosphorFbo);
         GL11.glViewport(0, 0, pixelW, pixelH);
-        nvgBeginFrame(vg, logicalW, logicalH, pixelRatio);
-        painter.reset(logicalW, logicalH, pixelRatio);
         long now = System.nanoTime();
         if (persistSeconds > 0.0 && haveLastAccum) {
             double dt   = Math.min((now - lastAccumNanos) * 1e-9, MAX_DECAY_SECONDS);
             float  fade = (float) (1.0 - Math.exp(-dt / persistSeconds));
+            nvgBeginFrame(vg, logicalW, logicalH, pixelRatio);
+            painter.reset(logicalW, logicalH, pixelRatio);
             decay(fade);
+            nvgEndFrame(vg);
         }
         // (Infinite persistence, persistSeconds < 0: never decay — just keep accumulating.)
+        GL14.glBlendEquation(GL14.GL_MAX);
+        nvgBeginFrame(vg, logicalW, logicalH, pixelRatio);
+        painter.reset(logicalW, logicalH, pixelRatio);
         blitImage(scratchImg);
         nvgEndFrame(vg);
+        GL14.glBlendEquation(GL14.GL_FUNC_ADD);
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
         lastAccumNanos = now;
         haveLastAccum  = true;

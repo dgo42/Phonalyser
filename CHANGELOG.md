@@ -5,7 +5,7 @@ All notable changes to **Phonalyser** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.4] — unreleased
+## [1.1.0] — 2026-07-17
 
 ### Added
 
@@ -80,12 +80,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the residual view, the scope's per-channel mains-rejection and low-pass
   controls, and the per-card calibration setup with a worked two-card
   example — in English, German and Ukrainian.
-- **Web version catch-up.** The browser port gains scope display persistence
-  (digital phosphor, WebGL2), dual-tone FFT marker dots with F1/F2 labels
-  and pre-calibration dots, a startup splash, Java-parity preferences
-  layout with free numeric entry, an output-sample-rate probe with an
-  honest resampling warning, scope V/div down to 1 nV/div, and a web-only
-  help page on input-device sample rates (en/de/uk).
+- **Tip of the day learns the new features.** Seven new tips — the residual
+  view, the ideal-filter overlay and Compare, the Unevenness readout, per-card
+  calibration, the output-channel selectors, the DSO-grade dense rendering and
+  the discontinuity guard's off switch — in English and all 31 translations,
+  each naming the controls by that language's own UI labels. A few catalog
+  defects went with it: two English typos, a stray Cyrillic letter, and a
+  Ukrainian tip that had inverted the meaning of WASAPI exclusive mode. The
+  web app gains the Tip-of-the-day popup itself — in the Help menu, and at
+  startup under the same preference as the desktop.
+- **Web version catch-up.** The browser port now carries the full per-card
+  calibration system — cards, ranges, the card editor, the known-card catalog
+  (read 1:1 from the very `devices.yaml` the desktop ships, parsed in the
+  browser; the profile store lives in the browser's local storage and follows
+  the same upgrade-merge rules), per-channel left / right calibration through
+  the unified ADC / DAC dialog, and per-channel full-scale in every view. It
+  also gains the Left / Right / Both output-channel selectors, the DSO-grade
+  digital-phosphor dense trace renderer, scope display persistence (WebGL2)
+  with the same sample-dots-defer-to-persistence rule, the dual-tone
+  frequency-lock loop and IMD de-embedding with F1/F2 marker dots and
+  pre-calibration dots, "not measurable" (---) IMD readouts instead of
+  fictitious floor values, sample-grid-aligned rectangle AND triangle
+  generation with bracketed corrected frequency / duty labels, a startup
+  splash, Java-parity preferences in a fixed 640 × 480 dialog with free
+  numeric entry, an output-sample-rate probe with an honest resampling
+  warning, scope V/div down to 1 nV/div, and a web-only help page on
+  input-device sample rates (en / de / uk). The one desktop calibration
+  feature the web does not support is device-provided full-scale (the
+  QA40x-style flag) — a browser cannot reach a device's USB calibration
+  interface; such cards keep their catalog values.
 
 ### Changed
 
@@ -97,6 +120,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Notch tuning** now measures both channels on every pass and lets you choose
   which channel the embedded view shows (Left / Right), with the null readout
   repositioned clear of the display controls.
+- **Sample dots defer to persistence.** With display persistence active the
+  scope no longer draws the per-sample dots — repeated frame after frame they
+  piled into opaque blobs on the afterglow and buried the trace history it is
+  there to show. They return, as configured, the moment persistence is off.
+
+### Deprecated
+
+- **Shared full-scale calibration.** The single shared ADC / DAC full-scale
+  values (`adcFsVoltageRms` / `dacFsVoltageRms` in preferences.yaml) are
+  superseded by the per-card calibration profiles. They remain only as the
+  fallback for devices that have no card in `devices.yaml` and will be removed
+  in the release after this one.
 
 ### Fixed
 
@@ -112,7 +147,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its threshold to the signal amplitude, so it no longer false-triggers on clean
   tones as their frequency rises — detection is flat across frequency and
   independent of level, while still catching the real sample-loss splices it is
-  meant to reject.
+  meant to reject. A new switch on the FFT's settings tab turns the guard off
+  entirely.
 - **FFT restart after audio changes.** Changing the backend, device, sample rate
   or bit depth in Preferences now restarts the FFT analyzer instead of leaving it
   stopped.
@@ -127,9 +163,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Normal or Single with no trigger event yet, the held trace ignored horizontal
   moves (vertical worked); the held frame now pans and zooms exactly like a
   triggered one.
+- **Beat envelope on frozen captures.** A held or frozen Single / Normal
+  dual-tone capture now draws the reconstructed beat envelope over its captured
+  samples — it previously vanished the moment the trace froze.
+- **Full-scale markers at fine V/div.** The ±FS dashed lines anchor to the raw
+  (virtual-capable) channel offset, so at fine resolution they keep tracking
+  until ±FS/2 reaches the vertical middle instead of sticking early.
+- **Triangle duty on the sample grid.** A triangle's duty corner has to land on
+  a sample just like the rectangle's step edge — off an integer-sample period it
+  drifts against the grid cycle to cycle and the tone smears. The triangle now
+  runs at the nearest whole-samples-per-period frequency, the Frequency and
+  Duty cycle labels show the corrected values in brackets exactly as for the
+  rectangle, and WAV export uses the same aligned frequency so looped files
+  have no corner seam.
+- **Persistence keeps the anti-aliasing.** With display persistence on, each
+  new frame was composited into the afterglow with source-over, so a
+  stationary trace re-painted its own anti-aliased fringe pixels over
+  themselves until they saturated solid — the persisted trace turned
+  hard-edged and a fringe wider than the pen. The deposit is now
+  brightest-wins (per-component maximum): a fringe pixel can never exceed its
+  single-frame coverage, so the persisted trace keeps exactly the
+  anti-aliasing and width of a persistence-off frame while decayed history
+  fades underneath — and infinite persistence no longer saturates. Desktop
+  (OpenGL) and web (WebGL2) alike.
 - **Web.** `.frc` de-embedding now corrects dual-tone IMD product lobes too
   (readout table, marker dots and IMD power / DFD all read the corrected
-  bins), and the frequency-lock loop steers both dual tones instead of one.
+  bins), the frequency-lock loop steers both dual tones instead of one, and
+  dual tones entered high-frequency-first no longer cross the F1/F2 pairs —
+  readout rows, marker dots, intermod product formulas and both lock loops all
+  read the correctly sorted pair.
 - **IMD readout.** Intermod products whose frequency falls outside the
   measurable range — SMPTE-style pairs put 2f1 − f2 below DC, high orders
   can land beyond the spectrum — no longer show a physically impossible

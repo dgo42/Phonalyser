@@ -50,6 +50,7 @@ import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.OscSliderId;
+import org.edgo.audio.measure.enums.PersistenceMode;
 import org.edgo.audio.measure.dsp.TimeDiscontinuityDetector;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
@@ -3806,7 +3807,10 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         double peakVoltsL    = prefs.getAdcPeakVolts(Channel.L);
         double peakVoltsR    = prefs.getAdcPeakVolts(Channel.R);
         float  lineWidth     = (float) prefs.getOscLineWidth();
-        int    dotDiameter   = prefs.getOscDotDiameter();
+        // Sample dots only with persistence OFF: the afterglow accumulates the
+        // trace history, so dots would pile into opaque blobs on top of it.
+        int    dotDiameter   = prefs.getOscPersistenceMode() == PersistenceMode.OFF
+                ? prefs.getOscDotDiameter() : 0;
 
         // Residual mode: subtract the best-fit single tone from the DISPLAYED
         // slice, per channel, when this frame carries live data (frozenFrame ==

@@ -395,7 +395,7 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
     private String textKey(String s) {
         int rgb = (foreground != null)
                 ? (foreground.getRed() << 16) | (foreground.getGreen() << 8) | foreground.getBlue() : 0;
-        return s + ' ' + System.identityHashCode(font) + ' ' + rgb + ' ' + Math.round(pixelScale * 100f);
+        return s + ' ' + System.identityHashCode(font) + ' ' + rgb + ' ' + Math.round(pixelScale * 100);
     }
 
     /** Renders {@code s} with the SWT font as white-on-black, then builds an RGBA
