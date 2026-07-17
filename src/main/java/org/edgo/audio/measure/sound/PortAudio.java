@@ -229,13 +229,18 @@ public final class PortAudio {
 
     /** Library names to try in order.  JNA prepends {@code lib} and appends
      *  the platform extension automatically, so we only need the bare core
-     *  here.  The {@code _x64}-suffixed name matches the historical Windows
-     *  build of PortAudio; standard distributions on Linux/macOS use plain
+     *  here.  On Windows the arch-suffixed name matches the historical builds —
+     *  {@code portaudio_x86} on a 32-bit JVM (the legacy x86 fat jar),
+     *  {@code portaudio_x64} otherwise — with a plain {@code portaudio}
+     *  fall-back; standard distributions on Linux/macOS use plain
      *  {@code portaudio}. */
-    private static String[] candidateLibraryNames() {
+    private static String[] candidateLibraryNames() { // static-ok: pure OS/arch→libname map, native-interop
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         if (os.contains("win")) {
-            return new String[] { "portaudio_x64", "portaudio" };
+            String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+            boolean is32 = arch.equals("x86") || arch.contains("i386") || arch.contains("i686");
+            return is32 ? new String[] { "portaudio_x86", "portaudio" }
+                        : new String[] { "portaudio_x64", "portaudio" };
         }
         return new String[] { "portaudio" };
     }

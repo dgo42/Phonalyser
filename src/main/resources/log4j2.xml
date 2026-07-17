@@ -27,6 +27,10 @@
             <AppenderRef ref="Console" level="ERROR"/>
             <AppenderRef ref="File" level="WARN"/>
         </Logger>
+        <Logger name="org.edgo.audio.measure.sound.LibUsb" level="WARN" additivity="false">
+            <AppenderRef ref="Console" level="ERROR"/>
+            <AppenderRef ref="File" level="WARN"/>
+        </Logger>
         <Root level="WARN">
             <AppenderRef ref="Console" level="ERROR" />
             <AppenderRef ref="File" level="WARN" />

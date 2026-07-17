@@ -40,7 +40,7 @@ package org.edgo.audio.measure.sound;
  * full ring must keep it in its own thread-local spare rather than offering
  * it back to the pool ring it consumes from.
  */
-final class SpscByteArrayRing {
+public final class SpscByteArrayRing {
 
     private final byte[][] slots;
     private final int mask;
@@ -49,7 +49,7 @@ final class SpscByteArrayRing {
     /** Consumer-only writes; producer reads via volatile semantics. */
     private volatile long readPos;
 
-    SpscByteArrayRing(int capacity) {
+    public SpscByteArrayRing(int capacity) {
         if (Integer.bitCount(capacity) != 1) {
             throw new IllegalArgumentException("capacity must be a power of two: " + capacity);
         }
@@ -58,7 +58,7 @@ final class SpscByteArrayRing {
     }
 
     /** Producer call: returns {@code true} if accepted, {@code false} if full. */
-    boolean release(byte[] item) {
+    public boolean release(byte[] item) {
         long w = writePos;
         if (w - readPos >= slots.length) return false;
         slots[(int) (w & mask)] = item;
@@ -67,7 +67,7 @@ final class SpscByteArrayRing {
     }
 
     /** Consumer call: returns the next item or {@code null} if empty. */
-    byte[] aquire() {
+    public byte[] aquire() {
         long r = readPos;
         if (r >= writePos) return null;
         int idx = (int) (r & mask);
@@ -77,12 +77,12 @@ final class SpscByteArrayRing {
         return item;
     }
 
-    boolean isEmpty() {
+    public boolean isEmpty() {
         return readPos >= writePos;
     }
 
     /** Resets both cursors and clears slot references.  Call only while neither thread is using the ring. */
-    void clear() {
+    public void clear() {
         for (int i = 0; i < slots.length; i++) slots[i] = null;
         writePos = 0;
         readPos  = 0;

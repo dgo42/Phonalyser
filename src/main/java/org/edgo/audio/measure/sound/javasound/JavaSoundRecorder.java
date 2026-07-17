@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.sound;
+package org.edgo.audio.measure.sound.javasound;
 
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.common.Closeables;
@@ -28,6 +28,7 @@ import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.Mixer;
 import javax.sound.sampled.TargetDataLine;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.sound.AbstractPcmCapture;
 
 /**
  * Stereo PCM capture via {@code javax.sound.sampled.TargetDataLine} — the

@@ -59,3 +59,18 @@ CoreAudio backend cannot open — and since JavaSound is disabled on macOS, the
 app would have no working audio backend there. PortAudio links only macOS
 system frameworks (CoreAudio / AudioToolbox / AudioUnit), so nothing else needs
 bundling.
+
+## libusb (QA40x backend) — optional drop-in
+
+The QA40x (QuantAsylum QA402/QA403) backend loads `libusb-1.0.dylib` via the JNA
+binding (`org.edgo.audio.measure.sound.LibUsb`), the same `lib/<os>/` +
+`java.library.path` convention as the PortAudio dylib above. It is **optional**:
+without it the QA40x backend reports itself unavailable (no error). Drop an
+**arm64-capable** (or universal) `libusb-1.0.dylib` here to enable it:
+
+    brew install libusb
+    cp -L "$(brew --prefix libusb)/lib/libusb-1.0.dylib" lib/macos-arm64/
+
+`cp -L` dereferences the versioned symlink so a real file is copied. A universal
+build (both slices) works for the Intel and Apple-Silicon DMGs alike, exactly as
+described above for PortAudio. The dylib is **not** committed.

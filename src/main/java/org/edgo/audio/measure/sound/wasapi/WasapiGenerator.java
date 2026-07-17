@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.sound;
+package org.edgo.audio.measure.sound.wasapi;
 
 import com.sun.jna.Memory;
 import com.sun.jna.Native;
@@ -32,8 +32,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.PcmQuantizer;
 
-import static org.edgo.audio.measure.sound.WasapiNative.*;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.*;
 
 /**
  * Stereo PCM playback via WASAPI in exclusive-event mode (shared
