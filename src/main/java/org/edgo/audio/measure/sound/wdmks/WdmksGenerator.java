@@ -16,7 +16,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.sound;
+package org.edgo.audio.measure.sound.wdmks;
+
+import org.edgo.audio.measure.sound.AbstractPortAudioPlayback;
 
 /**
  * Stereo PCM playback via PortAudio's WDM-KS host API (callback mode).  All

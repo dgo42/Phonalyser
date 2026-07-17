@@ -32,7 +32,7 @@ import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.sound.JavaSoundDeviceManager;
+import org.edgo.audio.measure.sound.javasound.JavaSoundDeviceManager;
 import org.edgo.audio.measure.wav.PcmFileLoader;
 
 /**

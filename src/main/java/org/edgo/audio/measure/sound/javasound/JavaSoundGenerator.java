@@ -16,7 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.sound;
+package org.edgo.audio.measure.sound.javasound;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -29,6 +29,8 @@ import javax.sound.sampled.SourceDataLine;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.PcmQuantizer;
 
 /**
  * Generator that streams a {@link SignalGenerator} to the JVM's default

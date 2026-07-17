@@ -15,3 +15,6 @@ dependency-reduced-pom.xml
 buildNumber.properties
 HOWTO-RELEASE.md
 doc/store-description.txt
+src/test/lib/libusb/x64/
+src/test/lib/libusb/.vs/
+*.vcxproj.user

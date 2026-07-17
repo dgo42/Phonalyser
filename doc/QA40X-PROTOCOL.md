@@ -284,7 +284,7 @@ only begins streaming on the first data write [ASIO401 qa401.h:27-28].
 
 | Property | QA402 / QA403 | QA401 |
 |---|---|---|
-| Sample type | signed **int32**, 4 bytes | signed **int32**, 4 bytes (24-bit real precision) |
+| Sample type | signed **int32**, 4 bytes — **24-bit real precision: only the 24 MSBs carry signal, the low byte is zero padding, BOTH directions** [maintainer bench, 2026-07-17] | signed **int32**, 4 bytes (24-bit real precision) |
 | **Endianness** | **LITTLE** [PyQa40x analyzer.py:159,172; ASIO401 qa403.h:40] | **BIG** [ASIO401 qa401.h:17-18] |
 | Channels | 2 (stereo), interleaved L,R | 2, interleaved |
 | Frame | 2 ch × 4 B = **8 bytes** [ASIO401 asio401.cpp:107-109] | 8 bytes |
@@ -764,6 +764,16 @@ QA401 differences are in §8.
   additional linear multiplier on top of any Phonalyser `.frc` correction. Keep
   the QA40x on-device cal and Phonalyser's own cal as **separate, composable**
   factors, not merged.
+  **Decision (maintainer, 2026-07-17, mock-loopback bench): Phonalyser's
+  `Qa40xLevels` deliberately DROPS the §6 ADC `−6` dB differential term** — the
+  range label is treated as the usable RMS full scale on BOTH directions (one
+  shared `+3` dB peak-vs-RMS term, input mirroring the DAC). With the vendor
+  math the input clipped 9 dB below its label (a +7.9 dBV tone clipped on the
+  12 dBV range; −0.94 dBFS on the 18 dBV range where −10 dBFS is correct),
+  breaking balanced-out→balanced-in correspondence. The DAC formula is
+  unchanged (vendor math, already label-exact in RMS). Re-verify this against
+  real QA402/QA403 hardware in Phase B; the mock inverts the host math either
+  way.
 - **Thread priority + timing.** Run the transfer/event thread at max practical
   priority with ≥2 async transfers in flight per direction (§5). Treating a short
   transfer as fatal + re-open follows **ASIO401's** no-auto-recovery discipline
