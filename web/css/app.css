@@ -825,7 +825,11 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 /* ===== preferences modal ===== */
 .prefs.modal-content { background: var(--win-bg); }
 .prefs .modal-header, .prefs .modal-footer { background: var(--win-bg); border-color: var(--hdr-border); }
-.prefs .modal-body { background: var(--win-bg); max-height: 381px; }   /* fixed height = tallest tab (FFT), so switching tabs doesn't resize the dialog */
+.prefs .modal-body { background: var(--win-bg); }
+/* Fixed body height = tallest tab (FFT), so switching tabs doesn't resize the dialog.
+   Scoped to #prefsModal ONLY — .prefs is shared window styling (the card editor's
+   modal-content carries it too) and an unscoped cap clipped the card editor's body. */
+#prefsModal .modal-body { max-height: 381px; }
 /* The shared one-button alert + the confirm dialog reuse .prefs for the window theming (bg /
    header / footer borders) but hold only a short message — they must NOT inherit the
    Preferences body's fixed 381px max-height (that left a huge empty area, the "2×2km" modal).

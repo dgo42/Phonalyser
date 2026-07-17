@@ -61,13 +61,52 @@ async function openPrefs(page, panel) {
   await page.waitForTimeout(300);
   await page.click(`#prefsTabs .nav-link[data-prefs-panel="${panel}"]`);
   await page.waitForTimeout(300);
+  await drawClassicScrollbar(page);
   return page.$('#prefsModal .modal-content');
+}
+
+/** CAPTURE-ONLY classic scrollbar. Headless Chromium hard-forces OVERLAY
+ *  scrollbars (they hide when idle and ignore ::-webkit-scrollbar /
+ *  scrollbar-color styling — verified empirically), so a scrolling pane would
+ *  screenshot WITHOUT the scrollbar a real desktop Chrome on Windows shows.
+ *  When the active prefs panel genuinely overflows, overlay a DOM strip drawn
+ *  like the Windows classic bar — 17px track, arrow buttons, thumb sized and
+ *  positioned from the panel's REAL scroll metrics — and remove it after the
+ *  shot (closePrefs). The shipped app markup/CSS is untouched. */
+async function drawClassicScrollbar(page) {
+  await page.evaluate(() => {
+    document.getElementById('sbCapture')?.remove();
+    const panel = document.querySelector('#prefsModal .prefs-panel:not(.d-none)');
+    if (!panel || panel.scrollHeight <= panel.clientHeight + 2) return;
+    const host = panel.closest('.modal-content');
+    const hr = host.getBoundingClientRect();
+    const pr = panel.getBoundingClientRect();
+    const W = 17, BTN = 17;
+    const bar = document.createElement('div');
+    bar.id = 'sbCapture';
+    bar.style.cssText = `position:absolute; z-index: 3000; background:#f1f1f1;
+      left:${pr.right - hr.left - W}px; top:${pr.top - hr.top}px; width:${W}px; height:${pr.height}px;`;
+    const arrow = (up) => `<div style="height:${BTN}px; display:flex; align-items:center; justify-content:center;">
+      <svg width="9" height="9" viewBox="0 0 9 9"><path d="${up ? 'M4.5 2 L8 7 L1 7 Z' : 'M1 2 L8 2 L4.5 7 Z'}" fill="#505050"/></svg></div>`;
+    const travel = pr.height - 2 * BTN;
+    const thumbH = Math.max(20, Math.round(travel * panel.clientHeight / panel.scrollHeight));
+    const thumbY = BTN + Math.round((travel - thumbH) * (panel.scrollTop / (panel.scrollHeight - panel.clientHeight)));
+    bar.innerHTML = arrow(true) + arrow(false)
+      + `<div style="position:absolute; left:1px; right:1px; top:${thumbY}px; height:${thumbH}px; background:#c1c1c1;"></div>`;
+    bar.children[1].style.position = 'absolute';
+    bar.children[1].style.bottom = '0';
+    bar.children[1].style.left = '0';
+    bar.children[1].style.right = '0';
+    if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+    host.appendChild(bar);
+  });
 }
 
 // Close the Preferences modal after a prefs capture (spec `after` hook): a left-open
 // modal + backdrop would sit over — and swallow the clicks of — every later spec.
 async function closePrefs(page) {
   await page.evaluate(() => {
+    document.getElementById('sbCapture')?.remove();   // the capture-only scrollbar strip
     const m = window.bootstrap.Modal.getInstance(document.getElementById('prefsModal'));
     if (m) m.hide();
   });
@@ -205,8 +244,12 @@ const SPECS = [
     async shot(page) {
       await openPrefs(page, 'audio');
       await page.evaluate(() => {
+        // Pick the E1DA card BY NAME: binding re-puts the profile, which can
+        // reorder the store — index 0 then points at a different card on the
+        // next language pass (uk once seeded CUBILUX while en/de had E1DA).
         const sel = document.getElementById('inCardSel');
-        sel.value = '0';
+        const opt = [...sel.options].find((o) => o.textContent.trim() === 'E1DA Cosmos ADC');
+        sel.value = opt ? opt.value : '0';
         sel.dispatchEvent(new Event('change'));
       });
       await page.waitForTimeout(400);
@@ -269,13 +312,34 @@ const want = argv.filter((a) => !a.startsWith('--'));
 const todo = SPECS.filter((s) => (want.length ? want.includes(s.id) : true));
 
 const { s, port } = await serve();
-const browser = await chromium.launch();
+// Classic (always-visible) scrollbars: Playwright's bundled headless shell
+// draws OVERLAY scrollbars that hide when idle, so a scrolling pane (the
+// Preferences Audio tab) captures without its scrollbar. The installed desktop
+// Chrome/Edge in new-headless mode renders the same classic scrollbars a real
+// Windows browser shows — use it, preferring Chrome, falling back to Edge,
+// then to the bundled shell (shots then lack scrollbars, better than failing).
+// --headed: run a visible browser — headless Chromium (any shell/channel) forces
+// overlay scrollbars (crbug), so a shot that must show a classic scrollbar (the
+// scrolling Audio tab) needs a real headed window.
+const headed = argv.includes('--headed');
+let browser = null;
+for (const channel of ['chrome', 'msedge', undefined]) {
+  try {
+    browser = await chromium.launch({ ...(channel ? { channel } : {}), headless: !headed });
+    break;
+  } catch { /* channel not installed — try the next */ }
+}
 const ctx = await browser.newContext({ viewport: VIEW, deviceScaleFactor: 1 });
 const page = await ctx.newPage();
 // 'load' + the #scopePane wait below, NOT 'networkidle': the libflac wasm
 // loader leaves its /vendor/libflac/*.wasm response body unconsumed, so the
 // network never idles and a networkidle gate times out (the app itself is up).
 await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
+// CAPTURE-ONLY classic scrollbar: every headless Chromium mode draws OVERLAY
+// scrollbars that vanish when idle (crbug), so the scrolling Preferences Audio
+// pane would screenshot without its scrollbar — unlike real desktop Chrome on
+// Windows, which shows the classic bar. Style a webkit scrollbar (always
+// rendered) to match the Windows look; the shipped app.css is untouched.
 await page.waitForSelector('#scopePane', { timeout: 10000 }).catch(() => {});
 await page.waitForTimeout(500);   // let layout/fonts settle
 
