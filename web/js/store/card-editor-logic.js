@@ -102,10 +102,6 @@ function applyCapability(ep, want, seedFs, defaultLabel) {
  * seeded with one {@code default} range from the passed-in full-scale; a direction turned off
  * has its ranges dropped.
  *
- * The device-owned {@code calibrationFromDevice} flag is pure data with no web UI (its checkbox
- * was removed): the deep-copy carries it from the seed endpoint into the built profile unchanged,
- * so an edit round-trips it (Java sets it from a real checkbox — the web has no such control).
- *
  * @param {AudioDeviceProfile} seed
  * @param {{name:string, match:string[], wantInput:boolean, wantOutput:boolean, mono:boolean,
  *          inputCoupling:string, outputCoupling:string, inputSeedFs:number, outputSeedFs:number,

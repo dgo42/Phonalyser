@@ -18,7 +18,7 @@
 // consumes (the same key-for-key shape a persisted store carries): top-level formatVersion /
 // contentVersion ints and an audioDevices list of cards, each with name, match (a string list),
 // and input / output endpoint blocks (channels, ranges of { label, fsVrms }, activeRange,
-// activeRangeRight, calibrationFromDevice). fsVrms is a { left, right } pair OR a scalar
+// activeRangeRight). fsVrms is a { left, right } pair OR a scalar
 // shorthand (both channels); activeRange is a scalar row label (LINKED / MONO) OR a
 // { left, right } map (INDEPENDENT). Unknown keys are preserved — the store reader decides
 // what to keep. See the devices.yaml header comment for the full schema + upgrade behaviour.

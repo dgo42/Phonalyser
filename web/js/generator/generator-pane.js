@@ -414,18 +414,24 @@ export class GeneratorPane {
     // beat checkbox) hang off this event in the SCOPE layer — the generator never reaches into a
     // scope widget. The web has no closed-loop FLL trim path, so only the USER_INPUT cause is
     // emitted here; the FLL_TRIM cause is kept for fidelity with the bus contract.
+    // genDitherBits, genOutputChannels and the two DAC full-scale prefs join the list per Java's
+    // dither/routing fix (GeneratorController.setDitherBits + the dacFsVoltageAmpl/dacFsVoltageAmplRight/
+    // genOutputChannels listeners each now publishSignalChanged): a dither, output-routing or DAC-
+    // full-scale change restarts the FFT stats/accumulator and clears the scope persistence.
     for (const pref of [prefs.genSignalForm, prefs.genFrequencyHz, prefs.genDualToneFreq1Hz,
       prefs.genDualToneFreq2Hz, prefs.genSnapToFftBin, prefs.genAmplitudeVrms, prefs.genRectangleDuty,
       prefs.genTriangleDuty, prefs.genDualToneSplitPct, prefs.genSweepFreqStartHz, prefs.genSweepFreqEndHz,
-      prefs.genSweepDurationSec, prefs.genSweepFadeInSec, prefs.genSweepFadeOutSec, prefs.genSweepLoop]) {
+      prefs.genSweepDurationSec, prefs.genSweepFadeInSec, prefs.genSweepFadeOutSec, prefs.genSweepLoop,
+      prefs.genDitherBits, prefs.genOutputChannels, prefs.dacFsVoltageAmpl, prefs.dacFsVoltageAmplRight]) {
       pref.addListener(() => MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT));
     }
 
-    // Dither only affects the (future) file-render quantization, not the live worklet
-    // path — accepted Web-Audio divergence (Java live-applies dither via ag.setDitherBits on the
-    // running playback). Just keep config in sync, no restart. Registered FIRST (the desktop port wired
-    // this + the structural form handler at module load, ahead of the prefs bindings) so the
-    // jQuery fire order — config-sync / structural THEN prefs-set — is preserved exactly.
+    // Dither only affects the (future) file-render quantization, not the live worklet path — accepted
+    // Web-Audio divergence (Java live-applies dither via ag.setDitherBits on the running playback).
+    // Keep config in sync here; the FFT/scope reset rides the genDitherBits pref listener above (Java
+    // setDitherBits still publishes signalChanged even when nothing is playing). Registered FIRST (the
+    // desktop port wired this + the structural form handler at module load, ahead of the prefs
+    // bindings) so the jQuery fire order — config-sync / structural THEN prefs-set — is preserved.
     $('#dither').on('change', () => { engine.config.ditherBits = parseInt($('#dither').val(), 10) || 0; });
 
     // Signal-form change is structural (SINGLE↔DUAL_TONE changes generator structure;
