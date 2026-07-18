@@ -20,6 +20,11 @@ import {
 // installRectZoom base machinery); this view supplies the log-aware freq / dB
 // pixel↔value mappings through the injected callbacks (Java FftView overrides).
 import { RectZoom } from './rect-zoom.js';
+// Shared per-tone lobe lift (data-derived floor + lobe extent + log-domain
+// stretch) — the SAME mechanism the .frc de-embed uses (fft-compensation.js
+// correctToneLobe). Reused here to lift the manual-fundamental lobe to the user
+// value at render time, with the manual/peak ratio as the scale instead of 1/H.
+import { ToneLobeLift } from '../dsp/tone-lobe-lift.js';
 
 // Plot rect margins (Java MARGIN_LEFT/TOP/BOTTOM, right inset 2).
 const MARGIN_LEFT = 68, MARGIN_TOP = 0, MARGIN_BOTTOM = 28, MARGIN_RIGHT = 2;
@@ -28,6 +33,9 @@ const MAG_FLOOR_DBFS = -300;
 // Java drawGrid: SUB_DECADE_TICK_TARGET nice-linear majors when a LOG range < 1 decade,
 // and the FFT mag axis is built with AxisSpec.linearNice(...,10,5.0) for the dB units.
 const SUB_DECADE_TICK_TARGET = 12;
+// One shared lobe lift for the manual-fundamental render-time stretch (mirrors
+// fft-compensation.js's `const LOBE`, and Java FftView's static LOBE).
+const LOBE = new ToneLobeLift();
 const FREQ_NICE_TARGET = 10, MAG_DB_NICE_TARGET = 10, MAG_DB_MINOR_STEP = 5.0;
 
 // THD/IMD table overlay origin + gate constants (Java FftView).
@@ -544,14 +552,46 @@ export class FftView {
       if (colCnt >= 2) bars.push([px, yClip(binYTrace(colMax)), yClip(binYTrace(colMin))]);
       mids.push([px, binYTrace((colMin + colMax) / 2)]);
     };
+    // Manual-fundamental: lift the fundamental's WHOLE main lobe to the user
+    // value at RENDER TIME (Java FftView.drawSpectrum :2234-2258). Visual only —
+    // the stored spectrum (amplitudeDbFs / re / im) is NEVER touched, so THD/SNR
+    // stay on the raw measured peak (the table uses the manual value via
+    // _manualFundDbFs). It is the SAME ToneLobeLift.stretch the .frc de-embed
+    // uses, with the manual/peak ratio as the scale. Gated on the manual value
+    // being finite — NOT on whether a cal is loaded: a cal + manual compose, the
+    // stretch reads the already-de-embedded spectrum and lifts it to the manual
+    // level (Java's gate is on fundamentalTrueDbFs finite, independent of cal).
+    let lobeLo = -1, lobeHi = -1, floorLin = 0, liftFactor = 1, peakMagLin = 0;
+    const manFundDbFs = this._manualFundDbFs(result);
+    if (Number.isFinite(manFundDbFs) && Number.isFinite(result.fundamentalDbFs)
+        && Number.isFinite(result.fundamentalHzRefined) && binW > 0) {
+      const peak = Math.round(result.fundamentalHzRefined / binW);
+      const half = mag.length - 1;
+      if (peak >= 1 && peak <= half) {
+        const magLin = (k) => Math.pow(10, mag[k] / 20);   // dBFS → linear (Java mag lambda)
+        floorLin = LOBE.localFloor(magLin, peak, half);
+        const edges = LOBE.lobeBins(magLin, peak, half, floorLin);
+        lobeLo = edges[0]; lobeHi = edges[1];
+        peakMagLin = magLin(peak);
+        liftFactor = Math.pow(10, (manFundDbFs - mag[peak]) / 20);   // manual dBFS / measured peak
+      }
+    }
     g.save();
     g.beginPath(); g.rect(plot.x, plot.y, plot.width, plot.height); g.clip();
     for (let k = 1; k < mag.length; k++) {
       const f = k * binW; if (f < fMin || f > fMax) continue;
       const px = Math.round(x(f)); if (px < plot.x) continue;
       if (px !== lastPx && lastPx >= 0) { flushCol(lastPx); colMin = 300; colMax = -300; colCnt = 0; }
-      if (mag[k] < colMin) colMin = mag[k];
-      if (mag[k] > colMax) colMax = mag[k];
+      // Per-bin dBFS feeding the column envelope: RAW value, except inside the
+      // manual-fundamental lobe, where it is stretched up to the user level
+      // (Java :2299-2302). mag (= result.amplitudeDbFs) is never mutated.
+      let dbK = mag[k];
+      if (lobeLo >= 0 && k >= lobeLo && k <= lobeHi) {
+        const nm = LOBE.stretch(Math.pow(10, dbK / 20), floorLin, peakMagLin, liftFactor);
+        dbK = nm > 1e-15 ? 20 * Math.log10(nm) : -300;
+      }
+      if (dbK < colMin) colMin = dbK;
+      if (dbK > colMax) colMax = dbK;
       colCnt++; lastPx = px;
     }
     if (lastPx >= 0) flushCol(lastPx);
@@ -631,6 +671,20 @@ export class FftView {
       const fHz = result.fundamentalHzRefined || 0;
       const man = this._manualFundDbFs(result);
       const fDb = Number.isFinite(man) ? man : result.fundamentalDbFs;
+      // Manual-fundamental original-height blue dot (WEB addition — the Java fix is parallel-ongoing;
+      // the committed Java draws blue dots only under a .frc de-embed). With manual fundamental set
+      // and NO cal (preCorrectionPeaks unset), the red F dot rises to the manual value and the lobe
+      // is stretched up to meet it — mark the ORIGINAL measured height with a blue dot
+      // (BEFORE_CAL_DOT colour), painted UNDER the red dot, mirroring the de-embed's before/after
+      // pair. When a cal IS loaded the pre-correction blue dots above already cover it.
+      if (Number.isFinite(man) && !(pre && pre[0] && pre[1])
+          && Number.isFinite(result.fundamentalDbFs) && fHz >= fMin && fHz <= fMax) {
+        const bv = cv(result.fundamentalDbFs), bt = this._magToYFraction(bv, magTop, magBot, magUnit);
+        if (bt >= 0 && bt <= 1) {
+          g.fillStyle = p ? colorHex(p.fftBeforeCalDotColor.get()) : '#000080';
+          g.beginPath(); g.arc(x(fHz), y(bv), dotR, 0, 2 * Math.PI); g.fill();
+        }
+      }
       dotAt(fHz, fDb, 'F ' + this._fmtFreq(fHz));
       const hCount = Math.min(result.harmonicHz.length, result.harmonicDbFs.length, result.harmonicCount);
       for (let i = 0; i < hCount; i++) {
