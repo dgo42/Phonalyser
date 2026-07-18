@@ -334,6 +334,10 @@ export class GeneratorController {
         processorOptions: {
           form: c.form, frequency: this.snapped, sampleRate: this.outCtx.sampleRate,
           amplitudeVRms: ampVrmsOf(c), dacFsVoltageAmpl: c.dacFsVoltageAmpl,
+          // TPDF dither depth applied LIVE in the worklet (Java PcmQuantizer): added to the mono
+          // sample before the per-lane scale, so it shows on the FFT floor where the dBV view sets
+          // it. 0 = Off.
+          ditherBits: c.ditherBits != null ? c.ditherBits : 0,
           // Output routing (Java GeneratorController.pushOutputRoutingToPlayback): the lane
           // gate + right-lane scale (= fsLeft/fsRight). Left keeps the mono amplitude (scale 1.0).
           outputChannels: c.outputChannels != null ? c.outputChannels : 'BOTH',
@@ -386,6 +390,8 @@ export class GeneratorController {
       amplitudeVRms: ampVrmsOf(c), dacFsVoltageAmpl: c.dacFsVoltageAmpl,
       rectDuty: c.rectDuty, triDuty: c.triDuty,
       frequency2: this._genEmitFreq2(), dualAmp1Pct: c.amp1Pct, dualAmp2Pct: c.amp2Pct,
+      // Dither depth rides every retune (Java setDitherBits live-applies to the running playback).
+      ditherBits: c.ditherBits != null ? c.ditherBits : 0,
       // Output routing rides every retune (Java pushOutputRoutingToPlayback): a lane-gate
       // or DAC-full-scale edit lands on the worklet's next block.
       outputChannels: c.outputChannels != null ? c.outputChannels : 'BOTH',

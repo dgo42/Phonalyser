@@ -30,6 +30,14 @@ const ARROWS_GLYPH = '▲▼';
 const SERIES_SEP = '·';
 const SERIES_HINT_MAX = 7;
 
+// DITHER policy constants (1:1 with NumericStepModel). The 20 dB/decade term is
+// the existing DB_PER_DECADE.
+const DITHER_DB_PER_BIT = 6.0206;       // one TPDF bit is 6.0206 dB (RMS = 2^−(bits−1)/√6)
+const DITHER_TPDF_OFFSET_DB = 7.782;    // constant term = 20·log10(1/√6)
+const DITHER_DBV_STEP = 10.0;           // dBV-view wheel/arrow notch
+const DITHER_DBV_DECIMALS = 1;          // decimals shown for the dBV view
+const DITHER_OFF_LABEL = 'Off';         // rendered text for a disabled (0-bit) dither
+
 // Number + optional trailing unit suffix; both micro code points (µ U+00B5,
 // μ U+03BC) accepted.
 const NUMBER_WITH_UNIT = /^([+-]?[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?)\s*([%µμ\w./]*)$/;
@@ -121,6 +129,15 @@ export const UNIT_FAMILIES = {
     new Unit('unit.mv', 1e-3, false, ['mv', 'm']),
     new Unit('unit.v', 1.0, false, ['v']),
   ]),
+  // Generator dither depth: whole/fractional bits (base) or a full-scale-aware dBV VIEW of that
+  // value (UnitFamily.DITHER). The bits⇄dBV conversion is NOT the plain Unit log formula — it is
+  // full-scale- and bit-depth-aware and lives in the NumericStepModel DITHER policy (fed live
+  // full-scale + ENBW suppliers); these units carry only the suffixes and the "which view" marker.
+  // Suffix-less (digits-only) input is bits, the base unit; dBV sticks for display once typed.
+  DITHER: new UnitFamilyDef('DITHER', 0, [
+    new Unit('unit.bits', 1.0, false, ['b', 'bi', 'bit', 'bits']),
+    new Unit('unit.dbv', 1.0, true, ['d', 'db', 'dbv']),
+  ]),
   TIME: new UnitFamilyDef('TIME', 1, [
     new Unit('unit.ms', 1e-3, false, ['ms']),
     new Unit('unit.s', 1.0, false, ['s']),
@@ -150,14 +167,15 @@ export const UNIT_FAMILIES = {
 // NumericStepModel (port of NumericStepModel.java)
 // ----------------------------------------------------------------------------
 
-const POLICY = { FIXED: 'FIXED', LIST: 'LIST', PERCENT: 'PERCENT' };
+const POLICY = { FIXED: 'FIXED', LIST: 'LIST', PERCENT: 'PERCENT', DITHER: 'DITHER' };
 
 export class NumericStepModel {
   /**
-   * Three factory shapes mirroring the three Java constructors:
+   * Four factory shapes mirroring the four Java constructors:
    *   fixed:   { family, min, max, wheelStep, arrowStep, decimals }
    *   list:    { family, min, max, series:[...], maxDecimals }
    *   percent: { family, min, max, maxDecimals }
+   *   dither:  { family, maxBits, fsAmplSupplier, enbwSupplier }
    */
   constructor(cfg) {
     this.family = cfg.family;
@@ -166,7 +184,25 @@ export class NumericStepModel {
     this.stickyUnit = null;
     this.namedValue = NaN;
     this.namedValueLabel = null;
-    if (Array.isArray(cfg.series)) {
+    // DITHER-only config (null for every other policy).
+    this.fsAmplSupplier = null;
+    this.enbwSupplier = null;
+    if (cfg.maxBits !== undefined) {
+      // DITHER: 0 (Off) or [1, maxBits] bits, possibly fractional, shown as bits or a
+      // full-scale-aware dBV VIEW of the same value. fsAmplSupplier yields the live DAC PEAK
+      // full-scale (Vpeak); enbwSupplier the current FFT window's equivalent noise bandwidth
+      // (bins) — both come IN as config (never a singleton reach-in). Off sits at the TOP.
+      this.policy = POLICY.DITHER;
+      this.min = 0; this.max = cfg.maxBits;
+      this.wheelStep = 0; this.arrowStep = 0;
+      this.series = null;
+      this.decimals = -1; this.maxDecimals = DITHER_DBV_DECIMALS;
+      this.fsAmplSupplier = cfg.fsAmplSupplier;
+      this.enbwSupplier = cfg.enbwSupplier || null;
+      // The config dBV sum (fsDbv + enbwDb) that `value` was last reconciled against; reanchor()
+      // moves the bits by the config delta to hold the displayed dBV across a window / FS change.
+      this.ditherConfigDbv = this._ditherFsDbv() + this._ditherEnbwDb();
+    } else if (Array.isArray(cfg.series)) {
       this.policy = POLICY.LIST;
       this.wheelStep = 0; this.arrowStep = 0;
       this.series = cfg.series.slice();
@@ -218,6 +254,7 @@ export class NumericStepModel {
         else this.setValue(dir > 0 ? this._percentUp(this.value) : this._percentDown(this.value));
         break;
       }
+      case POLICY.DITHER: this._ditherStep(dir); break;
     }
   }
 
@@ -226,8 +263,118 @@ export class NumericStepModel {
       case POLICY.FIXED: this.setValue(this.value + dir * this.arrowStep); break;
       case POLICY.LIST: this.setValue(this._listJump(dir)); break;
       case POLICY.PERCENT: this.setValue(this._plusOneDisplayedUnit(dir)); break;
+      case POLICY.DITHER: this._ditherStep(dir); break;
     }
   }
+
+  // ---- DITHER policy (port of NumericStepModel DITHER methods) --------------
+
+  /** One dither step: dir=+1 up (fewer bits → toward Off) / −1 down (more bits).
+   *  Bits view walks whole ±1-bit steps (a fractional value keeps its fraction);
+   *  dBV view walks exactly ±10 dBV (fractional bits, no snap). Off sits at the
+   *  TOP: stepping up from 1 bit reaches Off; down from Off reaches 1 bit. */
+  _ditherStep(dir) {
+    if (this.value <= 0) { this.setValue(dir > 0 ? 0 : 1); return; }   // Off: up stays Off, down → 1 bit
+    if (this.currentUnit().log) {                                      // dBV view: exactly ±10 dBV
+      const stepped = this._ditherBitsForDbv(this._ditherDbvForBits(this.value) + dir * DITHER_DBV_STEP);
+      this.setValue(dir > 0 && stepped < 1 ? 0 : this._clampBits(stepped));
+    } else {                                                           // bits view: whole ±1-bit step
+      const nv = this.value - dir;                                     // up (+1) → fewer bits, toward Off
+      this.setValue(dir > 0 && nv < 1 ? 0 : this._clampBits(nv));
+    }
+  }
+
+  /** dBV of the DAC PEAK full-scale (Vpeak) — NOT the RMS full-scale (/√2), which
+   *  would read ~3 dB low: the TPDF dither RMS is relative to the peak full-scale. */
+  _ditherFsDbv() { return DB_PER_DECADE * Math.log10(this.fsAmplSupplier()); }
+
+  /** FFT window over-read added to the dBV view: broadband noise through the
+   *  analysis window reads 10·log10(ENBW) dB hot (= ½·DB_PER_DECADE·log10). 0 when
+   *  no ENBW supplier is wired. */
+  _ditherEnbwDb() {
+    return this.enbwSupplier == null ? 0.0 : 0.5 * DB_PER_DECADE * Math.log10(this.enbwSupplier());
+  }
+
+  /** dBV of the TPDF dither at `bits` (≥1), as it reads on the FFT noise floor. */
+  _ditherDbvForBits(bits) {
+    return -(bits - 1) * DITHER_DB_PER_BIT - DITHER_TPDF_OFFSET_DB
+      + this._ditherFsDbv() + this._ditherEnbwDb();
+  }
+
+  /** The (fractional) bit count whose TPDF dither lands at `dbv` — exact inverse
+   *  of _ditherDbvForBits, un-clamped. */
+  _ditherBitsForDbv(dbv) {
+    return 1 + (this._ditherFsDbv() + this._ditherEnbwDb() - DITHER_TPDF_OFFSET_DB - dbv) / DITHER_DB_PER_BIT;
+  }
+
+  /** Clamps a non-Off dither depth to [1, maxBits]. */
+  _clampBits(bits) { return Math.max(1.0, Math.min(this.max, bits)); }
+
+  /** Reacts to a config change (FFT-window ENBW or DAC full-scale) holding the
+   *  CURRENTLY DISPLAYED value: dBV view keeps the shown dBV and re-solves the bits
+   *  (holding the FFT-floor target); bits view (and Off) keep the bits, only the dBV
+   *  readout moves. Returns true when the stored bit count changed. */
+  reanchor() {
+    if (this.policy !== POLICY.DITHER) return false;
+    const newConfigDbv = this._ditherFsDbv() + this._ditherEnbwDb();
+    const before = this.value;
+    if (this.isLogDisplay() && this.value > 0) {
+      this.value = this._clampBits(this.value + (newConfigDbv - this.ditherConfigDbv) / DITHER_DB_PER_BIT);
+    }
+    this.ditherConfigDbv = newConfigDbv;
+    return this.value !== before;
+  }
+
+  /** Renders the current dither value: Off, a bit count, or the full-scale-aware
+   *  dBV view — per the current (sticky) display unit. */
+  _ditherText() {
+    if (this.value <= 0) return DITHER_OFF_LABEL;
+    const u = this.currentUnit();
+    if (u.log) return this._format(this._ditherDbvForBits(this.value), DITHER_DBV_DECIMALS) + ' ' + u.suffix();
+    return this._trimTrailingZeros(this._format(this.value, this.maxDecimals)) + ' ' + u.suffix();
+  }
+
+  /** The current dither value in the OTHER unit (bits⇄dBV) for a companion label;
+   *  empty for Off or a non-DITHER policy. */
+  companionText() {
+    if (this.policy !== POLICY.DITHER || this.value <= 0) return '';
+    if (this.currentUnit().log) {   // field shows dBV → label shows bits
+      return this._trimTrailingZeros(this._format(this.value, this.maxDecimals)) + ' ' + this.family.defaultUnit(this.value).suffix();
+    }
+    return this._format(this._ditherDbvForBits(this.value), DITHER_DBV_DECIMALS) + ' ' + this.family.logUnit().suffix();
+  }
+
+  /** Parses a dither entry: Off/0 → Off; a bare number or a `bits` suffix → that
+   *  bit count (clamped to [1, maxBits], 0 → Off), possibly fractional; a `dBV`
+   *  suffix → the full-scale-aware fractional bit count (sticks the dBV view). */
+  _commitDither(text) {
+    const t = String(text).trim().replace(/,/g, '.');
+    if (t === '') return false;                       // empty → unchanged (Java commitDither)
+    if (t.toLowerCase() === DITHER_OFF_LABEL.toLowerCase()) {   // "Off" — keep the current view
+      this.blank = false;
+      this.value = 0;
+      return true;
+    }
+    const m = NUMBER_WITH_UNIT.exec(t);
+    if (!m) return false;
+    const num = parseFloat(m[1]);
+    if (!Number.isFinite(num)) return false;
+    const suffix = m[2].trim();
+    const unit = suffix === '' ? this.family.defaultUnit(this.value) : this.family.match(suffix);
+    if (unit == null) return false;
+    this.blank = false;
+    if (unit.log) {   // dBV → fractional bits, dBV sticks
+      this.stickyUnit = unit;
+      this.value = this._clampBits(this._roundSig(this._ditherBitsForDbv(num)));
+    } else {          // bits (base): 0 → Off, else [1, maxBits]
+      this.stickyUnit = null;
+      this.value = num <= 0 ? 0 : this._clampBits(this._roundSig(num));
+    }
+    return true;
+  }
+
+  /** `x` rendered with `decimals` places, dot decimal separator (Locale.ROOT). */
+  _format(x, decimals) { return x.toFixed(decimals); }
 
   _logGridStep(db, dir) {
     const d = this._roundSig(db) / LOG_WHEEL_STEP_DB;
@@ -301,6 +448,7 @@ export class NumericStepModel {
 
   text() {
     if (this.blank) return '';
+    if (this.policy === POLICY.DITHER) return this._ditherText();
     if (!Number.isFinite(this.value)) return '∞';
     if (this._isNamedValue(this.value)) return this.namedValueLabel;
     return this._formatIn(this.value, this.currentUnit());
@@ -327,6 +475,12 @@ export class NumericStepModel {
       }
       case POLICY.LIST:
         return `${WHEEL_GLYPH}${ARROWS_GLYPH} ${this._seriesHint()}`;
+      case POLICY.DITHER: {
+        const u = this.currentUnit();
+        return u.log
+          ? `${WHEEL_GLYPH}${ARROWS_GLYPH} ±${DITHER_DBV_STEP} ${u.suffix()}`
+          : `${WHEEL_GLYPH}${ARROWS_GLYPH} ±1 ${u.suffix()}`;
+      }
       default: return '';
     }
   }
@@ -348,6 +502,7 @@ export class NumericStepModel {
 
   commit(text) {
     if (text == null) return false;
+    if (this.policy === POLICY.DITHER) return this._commitDither(text);
     let s = String(text).trim().replace(/,/g, '.').replace(/μ/g, 'µ');
     if (s === '') return false;
     if (s.length > 1 && s.endsWith('.') && /[0-9]/.test(s.charAt(s.length - 2))) s = s.slice(0, -1);
@@ -543,6 +698,14 @@ export class NumericStepField {
   setMin(m) { this.model.setMin(m); this.refresh(); }
   setMax(m) { this.model.setMax(m); this.refresh(); }
   setLogDisplay(on) { this.model.setLogDisplay(on); this.refresh(); }
+  isLogDisplay() { return this.model.isLogDisplay(); }
+  /** The current value in the alternate unit (a DITHER field's bits⇄dBV), for a
+   *  companion label beside the field; empty when there is no alternate view. */
+  companionText() { return this.model.companionText(); }
+  /** DITHER: re-solve for a config change (FFT-window ENBW or DAC full-scale) holding
+   *  the displayed value, then re-render. Returns true when the stored bit count
+   *  changed so the caller can persist + restart. */
+  reanchor() { const changed = this.model.reanchor(); this.refresh(); return changed; }
   setDisabled(d) {
     this.disabled = d;
     this.input.disabled = d;

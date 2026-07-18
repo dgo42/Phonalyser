@@ -42,6 +42,7 @@ import { ScopeTabControl } from '../scope/scope-tab-control.js';
 import { preserveCanvasMiddle } from '../scope/scope-format.js';
 import { FftPane } from '../fft/fft-pane.js';
 import { FftTabControl } from '../fft/fft-tab-control.js';
+import { enbwOf } from '../fft/fft-analyzer.js';
 import { GeneratorPane } from '../generator/generator-pane.js';
 import { PredistortionEngine } from '../predistortion/engine.js';
 import { writeHarmonicDpd, writeIntermodDpd } from '../io/dpd.js';
@@ -197,6 +198,32 @@ function initStepFields() {
   // Track DAC full-scale → amplitude ceiling (Bindings.onChange(... ampField::setMax)).
   prefs.dacFsVoltageAmpl.addListener((fs) => fAmp.setMax(fs));
 
+  // Dither depth: DITHER-policy NumericStepField (whole/fractional bits OR a full-scale-aware dBV
+  // VIEW of the same value) — Java GeneratorPane ditherField. fsAmplSupplier = the DAC PEAK
+  // full-scale (Vpeak); enbwSupplier = the current FFT window's equivalent noise bandwidth, so the
+  // dBV view reads as it appears on the FFT floor. maxBits = 32. The TPDF dither is applied LIVE to
+  // the generated signal in the dds worklet (Java PcmQuantizer live-apply) so it shows
+  // on the FFT floor exactly where the dBV view sets it — hence the engine push below, mirroring the
+  // amplitude field. Seed value + display unit BEFORE the change path re-enters (setValue /
+  // setLogDisplay never fire onChange). On a committed change: persist the bits + the bits/dBV display
+  // choice, push the depth to the running worklet, then re-annotate the "Dither" caption.
+  const fDither = mk('dither', new NumericStepModel({ family: F.DITHER, maxBits: 32,
+    fsAmplSupplier: () => prefs.getDacFsVoltageAmpl(), enbwSupplier: () => enbwOf(prefs.fftWindow.get()) }),
+    (v) => {
+      prefs.genDitherBits.set(v);
+      prefs.genDitherDbvDisplay.set(fDither.isLogDisplay());
+      engine.config.ditherBits = v; engine.retuneGenerator();
+      if (genPane) genPane.updateDitherLabel();
+    });
+  if (fDither) {
+    fDither.setValue(prefs.genDitherBits.get()); fDither.setLogDisplay(prefs.genDitherDbvDisplay.get());
+    // Render the "Dither" caption's companion-unit bracket NOW: initStepFields runs AFTER the first
+    // applyPrefsToUi → seedGeneratorControls (which called updateDitherLabel while the field didn't
+    // yet exist), so without this the bracket stays empty until the first change. genPane is built
+    // before initStepFields, so it's present here.
+    if (genPane) genPane.updateDitherLabel();
+  }
+
   // Unified calibration dialog (Java CalibrationDialog): the two per-channel measured/actual-
   // amplitude fields (Left / Right), unit-aware AMPLITUDE step fields (V / mV / µV / dBV + short
   // forms), like the generator amplitude. ONE dialog serves the scope ADC, FFT ADC and generator
@@ -298,6 +325,7 @@ function initStepFields() {
   bidiBind(fTone, prefs.genFrequencyHz);
   bidiBind(fTone2, prefs.genDualToneFreq2Hz);
   bidiBind(fAmp, prefs.genAmplitudeVrms);
+  bidiBind(fDither, prefs.genDitherBits);   // external genDitherBits change (reanchor persist / reload) → field
   bidiBind(fSwStart, prefs.genSweepFreqStartHz);
   bidiBind(fSwStop, prefs.genSweepFreqEndHz);
   bidiBind(fSwDur, prefs.genSweepDurationSec);
@@ -510,7 +538,7 @@ function readConfig() {
   c.amp1Pct = sfVal('amp1Pct', 50); c.amp2Pct = sfVal('amp2Pct', 50);
   const duty = (sfVal('duty', 50) || 50) / 100;
   c.rectDuty = duty; c.triDuty = duty;
-  c.ditherBits = parseInt($('#dither').val(), 10) || 0;
+  c.ditherBits = sfVal('dither', 0);   // fractional bits from the DITHER NumericStepField (0 = Off)
   // Sweep params (LINEAR_SWEEP / LOG_SWEEP) — read from the sweep fields.
   c.sweepStartHz = sfVal('sweepStart', 20);
   c.sweepEndHz = sfVal('sweepStop', 20000);
