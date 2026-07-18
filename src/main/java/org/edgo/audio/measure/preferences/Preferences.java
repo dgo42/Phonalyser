@@ -3602,6 +3602,22 @@ public final class Preferences {
         }
     }
 
+    /** True when the active input device resolves to a card whose ADC full-scale
+     *  is provided by the device itself (a QA40x) — its calibration is read-only,
+     *  so the calibrate dialog opens view-only. */
+    public synchronized boolean isAdcCalibrationFromDevice() {
+        AudioDeviceProfile p = resolveDeviceProfile(current().getInputDeviceName());
+        return p != null && p.getInput().isCalibrationFromDevice();
+    }
+
+    /** True when the active output device resolves to a card whose DAC full-scale
+     *  is provided by the device itself (a QA40x) — its calibration is read-only,
+     *  so the calibrate dialog opens view-only. */
+    public synchronized boolean isDacCalibrationFromDevice() {
+        AudioDeviceProfile p = resolveDeviceProfile(current().getOutputDeviceName());
+        return p != null && p.getOutput().isCalibrationFromDevice();
+    }
+
     /** Resolves the card for a first calibrate on an UNBOUND device: a card whose
      *  {@code match} entries already recognise {@code deviceName} (via
      *  {@link #resolveDeviceProfile}) is BOUND — the device name is

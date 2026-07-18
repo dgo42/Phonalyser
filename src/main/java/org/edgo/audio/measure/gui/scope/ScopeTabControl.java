@@ -1147,11 +1147,18 @@ public final class ScopeTabControl extends AbstractTabControl {
     private void openCalibrationDialog() {
         if (isDisposed()) return;
         Shell parent = getShell();
+        Preferences prefs = Preferences.instance();
+        if (prefs.isAdcCalibrationFromDevice()) {
+            // Device-provided (QA40x): show the built-in full-scale read-only.
+            new CalibrationDialog(parent, adcTexts(),
+                    prefs.getAdcFsVoltageRms(Channel.L), prefs.getAdcFsVoltageRms(Channel.R),
+                    true, (ch, v) -> { }).open();
+            return;
+        }
         if (view == null) {
             Dialogs.info(parent, I18n.t("calibrate.title"), I18n.t("calibrate.error.noVrms"));
             return;
         }
-        Preferences prefs = Preferences.instance();
         final Channel measCh = prefs.getOscMeasurementChannel();
         Double currentVrms = view.getLastVrms(measCh);
         if (currentVrms == null || currentVrms <= 0 || Double.isNaN(currentVrms)) {
@@ -1162,7 +1169,7 @@ public final class ScopeTabControl extends AbstractTabControl {
         final boolean stereo = isInputBoundStereo(prefs);
         Double seedL = measCh == Channel.L ? measuredVrms : null;
         Double seedR = measCh == Channel.R ? measuredVrms : null;
-        new CalibrationDialog(parent, adcTexts(), seedL, seedR, (ch, actualVrms) -> {
+        new CalibrationDialog(parent, adcTexts(), seedL, seedR, false, (ch, actualVrms) -> {
             double scale = actualVrms / measuredVrms;
             if (stereo) {
                 double newFs = prefs.getAdcFsVoltageRms(ch) * scale;

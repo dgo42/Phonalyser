@@ -831,18 +831,25 @@ public final class FftTabControl extends AbstractTabControl {
     private void openCalibrationDialog() {
         if (isDisposed()) return;
         Shell parent = getShell();
+        Preferences prefs = Preferences.instance();
+        if (prefs.isAdcCalibrationFromDevice()) {
+            // Device-provided (QA40x): show the built-in full-scale read-only.
+            new CalibrationDialog(parent, adcTexts(),
+                    prefs.getAdcFsVoltageRms(Channel.L), prefs.getAdcFsVoltageRms(Channel.R),
+                    true, (ch, v) -> { }).open();
+            return;
+        }
         Double currentVrms = (view == null) ? null : view.getLastVrms();
         if (currentVrms == null || currentVrms <= 0 || Double.isNaN(currentVrms)) {
             Dialogs.info(parent, I18n.t("calibrate.title"), I18n.t("calibrate.error.noVrms"));
             return;
         }
         final double measuredVrms = currentVrms;
-        Preferences prefs = Preferences.instance();
         final boolean stereo = isInputBoundStereo(prefs);
         final Channel measCh = prefs.getFftChannel();
         Double seedL = measCh == Channel.L ? measuredVrms : null;
         Double seedR = measCh == Channel.R ? measuredVrms : null;
-        new CalibrationDialog(parent, adcTexts(), seedL, seedR, (ch, actualVrms) -> {
+        new CalibrationDialog(parent, adcTexts(), seedL, seedR, false, (ch, actualVrms) -> {
             double scale = actualVrms / measuredVrms;
             if (stereo) {
                 double newFs = prefs.getAdcFsVoltageRms(ch) * scale;
@@ -873,7 +880,7 @@ public final class FftTabControl extends AbstractTabControl {
         Channel measCh = Preferences.instance().getFftChannel();
         Double seedL = measCh == Channel.L ? CAPTURE_ADC_VRMS : null;
         Double seedR = measCh == Channel.R ? CAPTURE_ADC_VRMS : null;
-        CalibrationDialog dlg = new CalibrationDialog(getShell(), adcTexts(), seedL, seedR, (ch, v) -> { });
+        CalibrationDialog dlg = new CalibrationDialog(getShell(), adcTexts(), seedL, seedR, false, (ch, v) -> { });
         dlg.showForCapture();
         return dlg;
     }
