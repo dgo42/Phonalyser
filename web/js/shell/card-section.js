@@ -226,19 +226,17 @@ export class CardSection {
    *  groups sharing one range label — [Left] caption + radio + label field, [Right] caption + radio
    *  + mirrored label field — with the Left/Right captions carried by every row but visible only on
    *  row 0 (an invisible caption still reserves its grid cell so the columns line up across rows).
-   *  Row 0's remove is hidden but reserves its space; a device-provided endpoint hides add + remove
-   *  and makes the label fields read-only, but keeps the radios live. The full-scale value is NOT
-   *  editable here — the crosshair Calibrate flows own it; the row only names + marks the active one(s). */
+   *  Row 0's remove is hidden but reserves its space. The full-scale value is NOT editable here —
+   *  the crosshair Calibrate flows own it; the row only names + marks the active one(s). */
   _createRangeRow($container, ep, range, isRow0) {
     const independent = ep.channels === DeviceChannelMode.INDEPENDENT;
-    const deviceProvided = ep.calibrationFromDevice;
     const $row = $('<div class="card-range-row"></div>').toggleClass('independent', independent);
 
     const activeTip = t('preferences.audio.range.active.tooltip');
     const labelTip = t('preferences.audio.range.label.tooltip');
     // An invisible caption keeps its cell (visibility:hidden, not display:none) so columns align.
     const caption = (key) => $(`<span class="range-caption small">${t(key)}</span>`).css('visibility', isRow0 ? '' : 'hidden');
-    const mkLabel = () => $(`<input type="text" class="form-control form-control-sm range-label" title="${labelTip}">`).val(range.label).prop('readonly', deviceProvided);
+    const mkLabel = () => $(`<input type="text" class="form-control form-control-sm range-label" title="${labelTip}">`).val(range.label);
 
     if (independent) $row.append(caption('scope.tab.left'));
     const $active = $(`<input type="radio" ${range.label === ep.activeRange ? 'checked' : ''} title="${activeTip}">`);
@@ -257,20 +255,17 @@ export class CardSection {
     // + / − icon buttons exactly like the FreqResp calibration rows (green/red tint reused from CSS).
     const $add = $(`<button type="button" class="fcal-add btn btn-sm btn-outline-secondary" title="${t('preferences.audio.range.add.tooltip')}"><img src="assets/icons/plus.svg" class="util-svg" alt=""></button>`);
     const $rem = $(`<button type="button" class="fcal-remove btn btn-sm btn-outline-secondary" title="${t('preferences.audio.range.remove.tooltip')}"><img src="assets/icons/minus.svg" class="util-svg" alt=""></button>`);
-    if (deviceProvided) $add.css('visibility', 'hidden');            // device-owned: no add (space reserved)
-    if (isRow0 || deviceProvided) $rem.css('visibility', 'hidden');  // row 0 / device-owned: no remove (space reserved)
+    if (isRow0) $rem.css('visibility', 'hidden');   // row 0: no remove (space reserved)
     $row.append($add, $rem);
     $container.append($row);
 
     $active.on('change', () => { if ($active.is(':checked')) this._userSetActive(ep, range, false); });
     if ($activeRight) $activeRight.on('change', () => { if ($activeRight.is(':checked')) this._userSetActive(ep, range, true); });
-    if (!deviceProvided) {
-      const rename = ($edited) => this._userRenameRange(ep, range, $edited, $label, $labelRight);
-      $label.on('change blur', () => rename($label));
-      if ($labelRight) $labelRight.on('change blur', () => rename($labelRight));
-      $add.on('click', () => this._userAddRange(ep));
-      if (!isRow0) $rem.on('click', () => this._userRemoveRange(ep, range));
-    }
+    const rename = ($edited) => this._userRenameRange(ep, range, $edited, $label, $labelRight);
+    $label.on('change blur', () => rename($label));
+    if ($labelRight) $labelRight.on('change blur', () => rename($labelRight));
+    $add.on('click', () => this._userAddRange(ep));
+    if (!isRow0) $rem.on('click', () => this._userRemoveRange(ep, range));
   }
 
   _userSetActive(ep, range, right) {

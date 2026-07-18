@@ -9,11 +9,6 @@
  * parsing, the OK profile assembly) is delegated to store/card-editor-logic.js so it stays
  * testable; this module owns only the widgets + i18n + the modal lifecycle. open() resolves the
  * assembled profile on OK, or null on Cancel / close (CardEditorDialog.open).
- *
- * WEB RESTRICTION: the "Calibration provided by device" flag has NO web UI (its checkbox was
- * removed) — the device-owned full-scale path is not implemented in the browser port. The flag is
- * pure data: it round-trips unchanged through an edit because assembleProfile deep-copies the seed
- * endpoint (which carries the flag) into the built profile.
  */
 import { t } from '../i18n/i18n.js';
 import { DeviceChannelMode } from '../store/device-enums.js';

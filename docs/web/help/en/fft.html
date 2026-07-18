@@ -255,7 +255,12 @@
 
   <h3 id="fft-thd-snr">SNR</h3>
   <p>Signal-to-noise ratio in dB.  Defined against the noise-only
-     band (above).</p>
+     band (above): the fundamental, its harmonics, <em>and</em> the
+     fundamental's leakage skirt are kept out of the noise sum — the skirt
+     exclusion widens to follow a broad or phase-noisy tone down to the floor,
+     so it never flatters the figure (see
+     <a href="theory/fft.html#metrics">Theory &#9656; Distortion &amp; noise
+     metrics</a>).</p>
 
   <h3 id="fft-thd-thd">THD H2..N</h3>
   <p>Total harmonic distortion as a percentage of the fundamental,
