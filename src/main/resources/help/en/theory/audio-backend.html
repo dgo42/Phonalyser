@@ -32,10 +32,13 @@
      other way around.  A "device is in use" message when starting a capture
      usually means a browser or media player still holds the input.</div>
 
-  <h2 id="paths">The three driver paths</h2>
+  <h2 id="paths">The driver paths</h2>
   <p>Sound hardware can be reached through several driver interfaces.
-     Phonalyser implements three and lets you pick one in Preferences; all
-     modules work identically on top of whichever is active.</p>
+     Phonalyser implements three general-purpose paths — each works with
+     practically any interface — plus one device-specific backend for the
+     QuantAsylum QA402 / QA403 analyzer (<a href="#qa40x">below</a>).  You pick
+     one in Preferences; all modules work identically on top of whichever is
+     active.</p>
   <table class="controls">
     <tr><th>Path</th><th>What it is</th><th>When to use it</th></tr>
     <tr><td><b>WASAPI</b></td>
@@ -52,6 +55,42 @@
         <td>The portable runtime audio interface.</td>
         <td>The only path on Linux and macOS; a fallback on Windows.</td></tr>
   </table>
+
+  <h2 id="qa40x">The QA40x analyzer backend</h2>
+  <p>Alongside the three general-purpose paths, Phonalyser can drive a
+     <b>QuantAsylum QA402 / QA403</b> audio analyzer directly, over USB, with
+     the vendor software closed.  This is not a driver path in front of a sound
+     card — it is a purpose-built backend for one instrument, reaching it
+     through the USB library libusb<sup><a href="#ref-libusb">[3]</a></sup> the
+     same way the manufacturer's own software does.</p>
+  <p>The QA40x is a self-contained measurement front end: an ADC and a DAC on
+     one board, each with a set of switchable full-scale <b>ranges</b> (input
+     attenuator / output level) and its own factory calibration held in the
+     device.  Two consequences for how you use it:</p>
+  <ul>
+    <li><b>One clock, so the rates are locked together.</b>  A single
+        sample-rate generator on the board feeds both the ADC and the DAC, so
+        the input and output sample rates can never differ — set one in
+        Preferences and the other follows.</li>
+    <li><b>The range <em>is</em> the calibration.</b>  Full-scale in volts
+        comes from the selected range and the device's own calibration, not
+        from a crosshair calibration you enter, so the dBV axis and the scope
+        readouts are correct the moment you pick the range.  Input and output
+        carry their own independent ranges; switching one rescales that
+        direction's full scale at once, the same range-is-calibration rule
+        holding for both.</li>
+  </ul>
+  <p>The QA40x always runs full <b>duplex</b> — it captures and plays back as one
+     session, never one direction on its own — so the generator and the analysers
+     ride the same open instrument rather than opening it twice.  Samples cross the
+     USB link as 32-bit words whose top 24 bits carry the signal (the low byte is
+     zero padding), so the effective resolution is 24-bit.</p>
+  <div class="note"><b>libusb must be present.</b>  The QA40x backend needs the
+     native libusb library; Phonalyser ships it on Windows.  Where it is absent
+     the backend simply reports itself unavailable and the other paths are
+     unaffected.  As with exclusive mode, one application owns the instrument at
+     a time — the QA402 / QA403 must not be open in the QuantAsylum software
+     while Phonalyser uses it.</div>
 
   <h2 id="how">How it works, roughly</h2>
 
@@ -195,6 +234,8 @@
         <a href="https://learn.microsoft.com/en-us/windows/win32/coreaudio/exclusive-mode-streams">Microsoft Learn: Exclusive-Mode Streams</a>.</li>
     <li id="ref-ks">The kernel-streaming layer beneath WDM-KS —
         <a href="https://learn.microsoft.com/en-us/windows-hardware/drivers/stream/kernel-streaming">Microsoft Learn: Kernel Streaming</a>.</li>
+    <li id="ref-libusb">The portable USB library the QA40x backend uses to reach
+        the analyzer — <a href="https://libusb.info/">libusb</a>.</li>
   </ol>
 
   <p class="back"><a href="index.html">◀ Theory of operation</a> ·

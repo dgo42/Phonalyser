@@ -25,7 +25,10 @@ genuine conflicts, ASIO401-only empirical values, and hardware-dependent
 unknowns; formerly single-source-PyQa40x items are marked RESOLVED under this
 rule (numbering kept stable for cross-references).
 
-Both sources are MIT; copies of both licenses live in `doc/licences/`. Citations
+Both sources are MIT; copies of both licenses live in `doc/licences/`.
+Phonalyser's runtime USB library, **libusb-1.0**, is a dependency (not a protocol
+source) and is **LGPL-2.1** — a copy lives in
+[`doc/licences/libusb-COPYING`](licences/libusb-COPYING). Citations
 are inline as `[PyQa40x <path>:<line>]` / `[ASIO401 <path>:<line>]`. The cited
 `<path>` is a **bare basename** (e.g. `qa403.cpp`, `analyzer.py`); resolve it
 against these base directories:
@@ -91,6 +94,14 @@ full/high/super speed. Determine empirically from the descriptor.
 PyQa40x is pure Python-over-libusb1 and thus already cross-platform on
 QA402/QA403; ASIO401 is Windows/WinUSB-only but its transport logic is
 OS-agnostic once mapped onto libusb async transfers.
+
+**Phonalyser uses libusb-1.0 on every OS — Windows included.** On Windows,
+libusb's WinUSB backend drives the QA402/QA403 that QuantAsylum's software has
+already bound to WinUSB, so no extra driver install is needed; Phonalyser
+**bundles `libusb-1.0` (x64 + x86)** in its Windows package. macOS needs
+`libusb-1.0.dylib` (no kernel driver — a vendor bulk device); Linux uses the
+system `libusb` plus the udev rule above. libusb is LGPL-2.1
+([`doc/licences/libusb-COPYING`](licences/libusb-COPYING)).
 
 ---
 
@@ -679,6 +690,10 @@ QA401 differences are in §8.
    correspondence with QuantAsylum [ASIO401 qa403.h:32-37]) — verify that one
    code on hardware before exposing 384 k.
 
+   *Phonalyser:* exposes **48/96/192 kHz only** — 384 kHz is deliberately not
+   offered (`Qa40xProtocol.SAMPLE_RATE_HZ`), and the equal-rate constraint would
+   preclude an input-only rate anyway, so the code-3 question is moot here.
+
 8. **[RESOLVED — vendor-authoritative]** Calibration blob format (512-byte page,
    `'<hf'` records, per-range offsets, raw↔volts formulas, §6) is PyQa40x-only
    but that IS the vendor's own code — settled per the vendor-authority rule.
@@ -689,6 +704,11 @@ QA401 differences are in §8.
    full-duplex timing constants (2 in flight, 1024-frame threshold, 1088-frame
    QA401 skip, granularities) are ASIO401 "measured empirically" values —
    re-verify on hardware.
+
+   *Phonalyser:* keeps the 100 ms settle; for output pacing it uses its own
+   bench-tuned **write-debt** model (repaid, not forfeited; `MAX_WRITE_DEBT = 32`)
+   with ≥2 reads in flight per direction, rather than adopting ASIO401's empirical
+   in-flight constants. The 1024-frame output start threshold is honoured.
 
 10. **[PARTLY MOOT] Output-channel swap + QA401 quirks.** Output L/R swap is
     corroborated by both [PyQa40x analyzer.py:115-116; ASIO401 asio401.cpp:116]
@@ -718,21 +738,29 @@ QA401 differences are in §8.
     ASIO401 discipline, not a proven device requirement — the two sources
     disagree on strictness.
 
+    *Phonalyser:* took the **PyQa40x-tolerant** path — the transport consumes the
+    actual transferred length (`LibUsbQa40xTransport`) and never treats a short
+    read as fatal.
+
 ---
 
 ## 10. Implementation notes for Phonalyser (short)
 
-- **Binding.** Add a JNA binding to `libusb-1.0` mirroring
+**Status: IMPLEMENTED (2026-07-18).** The QA40x backend described here is built
+and lives in the tree under `sound/qa40x`; the notes below are the design as
+realized.
+
+- **Binding.** The `LibUsb` JNA binding to `libusb-1.0` mirrors
   `src/main/java/org/edgo/audio/measure/sound/PortAudio.java` — a `final` class
   with a nested `Library` interface, `NativeLong` for C `unsigned long` fields,
   platform library-name resolution (`libusb-1.0.dll` / `libusb-1.0.so.0` /
-  `libusb-1.0.dylib`), and the same per-OS `lib/<os>/` drop-in convention. Only
-  bind the calls actually needed: open by VID/PID, `claim_interface`, sync
+  `libusb-1.0.dylib`), and the same per-OS `lib/<os>/` drop-in convention. It
+  binds only the calls actually needed: open by VID/PID, `claim_interface`, sync
   `bulk_transfer` (registers + cal + PyQa40x-style batch capture) and async
   `submit_transfer`/`handle_events` (ASIO401-style continuous duplex).
-- **Backend family.** Mirror the existing WDM-KS backend split
+- **Backend family.** The backend mirrors the existing WDM-KS split
   (`WdmksDeviceManager` / `WdmksRecorder` / `WdmksGenerator`): a
-  `Qa40xDeviceManager` that enumerates/opens the device and reads the cal page
+  `Qa40xDeviceManager` enumerates/opens the device and reads the cal page
   once; a `Qa40xRecorder` (ADC IN `0x82`, little-endian int32, ch1 = calibrated
   channel per the ADC-channel memory) and `Qa40xGenerator` (DAC OUT `0x02`, L/R
   swap, granularity-64 buffers) sharing the same open handle and the §5
@@ -764,23 +792,23 @@ QA401 differences are in §8.
   additional linear multiplier on top of any Phonalyser `.frc` correction. Keep
   the QA40x on-device cal and Phonalyser's own cal as **separate, composable**
   factors, not merged.
-  **Decision (maintainer, 2026-07-17, mock-loopback bench): Phonalyser's
-  `Qa40xLevels` deliberately DROPS the §6 ADC `−6` dB differential term** — the
-  range label is treated as the usable RMS full scale on BOTH directions (one
-  shared `+3` dB peak-vs-RMS term, input mirroring the DAC). With the vendor
-  math the input clipped 9 dB below its label (a +7.9 dBV tone clipped on the
-  12 dBV range; −0.94 dBFS on the 18 dBV range where −10 dBFS is correct),
-  breaking balanced-out→balanced-in correspondence. The DAC formula is
-  unchanged (vendor math, already label-exact in RMS). Re-verify this against
-  real QA402/QA403 hardware in Phase B; the mock inverts the host math either
-  way.
-- **Thread priority + timing.** Run the transfer/event thread at max practical
-  priority with ≥2 async transfers in flight per direction (§5). Treating a short
-  transfer as fatal + re-open follows **ASIO401's** no-auto-recovery discipline
-  (`winusb.cpp:111-114`); note the authoritative PyQa40x instead **tolerates**
-  short/over transfers (`np.resize` to expected) [PyQa40x stream.py:83;
-  analyzer.py:192-197], so this strictness is a design choice, not a device
-  requirement (§9 item 13) — pick per your latency/robustness goals.
+  **Levels (QuantAsylum-documented; maintainer 2026-07-18).** The FS range-switch
+  labels are the **balanced** input/output full scale, in **dBV** (not dB); the
+  **unbalanced** (single-ended) full scale is lower. Phonalyser drives a
+  **balanced→balanced** software loopback, so `Qa40xLevels` treats the range label
+  as the usable RMS full scale on BOTH directions (one shared `+3` dB peak-vs-RMS
+  term, input mirroring the DAC). The `−6` dB the vendor ADC formula subtracts is
+  exactly this **balanced-vs-unbalanced** offset, not an ADC-specific differential
+  — so dropping it is correct for the balanced path (with the raw vendor math the
+  input clipped ~9 dB below its label, breaking balanced-out→balanced-in
+  correspondence). The DAC formula is unchanged (vendor math, already label-exact
+  in RMS).
+- **Thread priority + timing.** The transfer/event thread runs at max practical
+  priority with ≥2 async reads in flight per direction (§5). Phonalyser takes the
+  **PyQa40x-tolerant** path — a short/over transfer is consumed at its actual
+  length, never fatal (§9 item 13). Output pacing is a **write-debt** model
+  (repaid, not forfeited; `MAX_WRITE_DEBT = 32`), not ASIO401's empirical
+  in-flight constants.
 - **DAC amplitude convention.** Feed the §6 DAC formula **peak** volts, not RMS:
   PyQa40x pre-scales its generated tone by √2, which is why the formula's `+3` dB
   term closes (§6, §9 item 12). A Phonalyser generator emitting RMS-scaled samples

@@ -59,20 +59,6 @@
      <code>-3 dBV</code>, <code>2 kHz</code>), or scroll the wheel, click the
      ▲/▼ arrows, or press the keyboard <kbd>↑</kbd>/<kbd>↓</kbd> keys to step.</div>
 
-  <div class="tip"><b>Skip the unit — plain digits mean the base unit.</b>
-     Type just a number and the field takes it in its base unit: <code>1000</code>
-     in a frequency field is 1000&nbsp;Hz, in an amplitude field 1000&nbsp;V, in a
-     time field 1000&nbsp;s.  And kilohertz has short forms: <code>1.5k</code>,
-     <code>1.5kh</code> and <code>1.5khz</code> all mean 1.5&nbsp;kHz.</div>
-
-  <div class="tip"><b>Drag a rectangle to zoom into exactly that region.</b>
-     In the oscilloscope, FFT and frequency-response views, drag with the left
-     button to rubber-band the area you care about — on release it stretches to
-     fill the view (the scope keeps the trigger level and position on the same
-     waveform point).  <kbd>Ctrl</kbd>+<kbd>Z</kbd> steps back through the last
-     32 zooms of the view under the pointer or with focus — a thin green border
-     marks which view will take the undo.</div>
-
   <div class="tip"><b>Sinc interpolation only matters when you're zoomed in.</b>
      The Sin/Lin switch changes the trace only when sample points are at least
      a couple of pixels apart on screen; otherwise straight lines look
@@ -118,6 +104,76 @@
      to open the help at the exact section for the control that currently has
      focus.  And the new <a href="help-index.html">Index &amp; search</a> page
      searches the whole manual.</div>
+
+  <div class="tip"><b>The residual view shows what hides under the fundamental.</b>
+     Flip a scope channel to <em>Residual</em> and it draws the captured signal
+     minus its best-fit tone — the distortion, noise and glitches buried under
+     the fundamental become visible.  Dual tone works too: both frequencies are
+     measured from the capture itself, so free-running DAC and ADC clocks cannot
+     smear the subtraction.  See <a href="oscilloscope.html">Oscilloscope</a>.</div>
+
+  <div class="tip"><b>Overlay an ideal filter on a measured response.</b>
+     The Frequency-response module's <em>Filters</em> tab anchors an ideal
+     low-pass, high-pass, band-pass or notch (Butterworth, Chebyshev, inverse
+     Chebyshev, elliptic or Bessel) to the measured curve, and <em>Compare</em>
+     plots the deviation from it — just like comparing against RIAA.  See
+     <a href="freqresp.html">Frequency response</a>.</div>
+
+  <div class="tip"><b>Let the Unevenness readout judge flatness for you.</b>
+     On the <em>Unevenness</em> tab, read the band edges where the response first
+     leaves a ±X dB corridor from its peak (or from its minimum, for a notch), or
+     the ± deviation over a chosen range — annotated on the plot, with a
+     detachable measurements window.  See
+     <a href="freqresp.html">Frequency response</a>.</div>
+
+  <div class="tip"><b>Full-scale calibration belongs to the sound card.</b>
+     Each card keeps its own profile — one row per attenuator or DIP range,
+     separate left / right values, matched by device name on every backend — so
+     switching devices or backends never mixes calibrations up.  Known cards come
+     pre-configured; your crosshair calibration refines them.  See
+     <a href="preferences.html#prefs-audio-card">Preferences ▸ Card</a>.</div>
+
+  <div class="tip"><b>Drive only the channel you are measuring.</b>
+     The generator, the frequency-response sweep and the notch tuner each have an
+     <em>Output channel</em> selector — Both, Left only or Right only — that gates
+     the driven lane live.  Handy for crosstalk checks and single-input devices.
+     See <a href="generator.html">Generator</a>.</div>
+
+  <div class="tip"><b>Zoomed far out, the scope renders like a real DSO.</b>
+     Above one sample per pixel the trace becomes a digital-phosphor image: each
+     column's dwell histogram, swept with a pen of the configured trace width —
+     narrow pulses and beat envelopes keep their true peak-to-peak at any zoom,
+     and brightness shows where the signal dwells.  See
+     <a href="theory/oscilloscope.html">Theory ▸ Oscilloscope</a>.</div>
+
+  <div class="tip"><b>Glitched captures never poison a long average.</b>
+     The FFT rejects blocks containing splices, dropouts or band-limit-violating
+     glitches before they enter the average, then re-syncs and keeps going.  For a
+     small or non-sinusoidal signal that trips the gate on every block, uncheck
+     <em>Detect time discontinuity</em> on the FFT settings tab.  See
+     <a href="theory/fft.html#rejection">Theory ▸ keeping bad blocks out</a>.</div>
+
+  <div class="tip"><b>SNR and ENOB stay honest under a wide or noisy tone.</b>
+     The noise figures exclude not only the fundamental and its harmonics but the
+     fundamental's whole leakage / phase-noise <em>skirt</em>: the excluded band
+     widens to follow a broad or jittery tone outward until its bins fall back to
+     the noise floor, so a wide skirt never inflates SNR or ENOB.
+     See <a href="theory/fft.html#metrics">Theory &#9656; Distortion &amp; noise
+     metrics</a>.</div>
+
+  <div class="tip"><b>Skip the unit — plain digits mean the base unit.</b>
+     Type just a number and the field takes it in its base unit: <code>1000</code>
+     in a frequency field is 1000&nbsp;Hz, in an amplitude field 1000&nbsp;V, in a
+     time field 1000&nbsp;s.  And kilohertz has short forms: <code>1.5k</code>,
+     <code>1.5kh</code> and <code>1.5khz</code> all mean 1.5&nbsp;kHz.</div>
+
+  <div class="tip"><b>Drag a rectangle to zoom into exactly that region.</b>
+     In the oscilloscope, FFT and frequency-response views, drag with the left
+     button to rubber-band the area you care about — on release it stretches to
+     fill the view (the scope keeps the trigger level and position on the same
+     waveform point).  <kbd>Ctrl</kbd>+<kbd>Z</kbd> steps back through the last
+     32 zooms of the view under the pointer or with focus — a thin green border
+     marks which view will take the undo.</div>
 
   <hr/>
   <p class="back"><a href="index.html">◀ Back to contents</a></p>

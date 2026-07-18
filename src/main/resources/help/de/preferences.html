@@ -55,9 +55,12 @@
     <tr><th>Einstellung</th><th>Hinweise</th></tr>
     <tr><td>Backend</td>
         <td>WASAPI (Standard, exklusiv bit-exakt), WDM-KS (niedrigste Ebene,
-            höchster Aufnahmedurchsatz) oder JavaSound (plattformübergreifend /
-            einzige Option außerhalb von Windows).  Bei Änderung wird die
-            Geräteliste neu eingelesen.</td></tr>
+            höchster Aufnahmedurchsatz), JavaSound (plattformübergreifend /
+            einzige Option außerhalb von Windows) oder <b>QA40x</b> — ein
+            QuantAsylum QA402 / QA403 Analysator, der direkt über USB angesteuert
+            wird (siehe
+            <a href="theory/audio-backend.html#qa40x">Funktionsprinzip ▸ QA40x</a>).
+            Bei Änderung wird die Geräteliste neu eingelesen.</td></tr>
     <tr><td>Eingang — Gerät / Abtastrate / Bittiefe</td>
         <td>Das Aufnahmegerät (ADC) und die genaue Abtastrate und Bittiefe, mit
             der es geöffnet wird.  16/24 Bit bei 48/96/192/384 kHz werden nahezu
@@ -71,6 +74,14 @@
      Wenn eine Liste leer ist oder ein Gerät nicht geöffnet werden kann, schließen Sie
      andere Audio-Anwendungen und öffnen Sie den Dialog erneut, um die Geräte neu
      einzulesen.</div>
+  <div class="note"><b>QA40x.</b> Das QA40x-Backend erscheint in der Liste nur,
+     wenn ein QA402 / QA403 mit dem PC verbunden ist.  Ist es ausgewählt, sind
+     Eingangs- und Ausgangsgerät der eine Analysator, und seine Eingangs- und
+     Ausgangs-<b>Abtastraten sind fest gleichgesetzt</b> (ein Hardware-Takt) —
+     stellen Sie eine ein, und die andere folgt.  Der Vollausschlag ist die
+     geräteeigene Bereichskalibrierung, daher ist eine manuelle Kalibrierung
+     nicht möglich: Der Kalibrierdialog öffnet sich schreibgeschützt und zeigt
+     lediglich den eingebauten Vollausschlag der Karte für jeden Kanal.</div>
 
   <h3 id="prefs-audio-card">Karte — Kalibrierungsprofile pro Karte</h3>
   <p>Die Vollausschlag-Kalibrierung — die Spannung in Volt RMS, die dem digitalen
