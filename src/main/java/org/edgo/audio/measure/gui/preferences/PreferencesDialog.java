@@ -94,8 +94,8 @@ import java.util.function.Consumer;
 public final class PreferencesDialog {
 
     private static final int[] DEFAULT_SAMPLE_RATES = {
-            44100, 48000, 88200, 96000, 176400, 192000,
-            352800, 384000, 705600, 768000
+            8000, 11025, 16000, 22050, 44100, 48000, 88200, 
+            96000, 176400, 192000, 352800, 384000, 705600, 768000
     };
     private static final int[] DEFAULT_BIT_DEPTHS = {16, 24, 32};
 

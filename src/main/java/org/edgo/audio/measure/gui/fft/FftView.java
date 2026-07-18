@@ -2667,9 +2667,9 @@ public final class FftView extends AbstractFreqDomainView {
         double ppm   = (expectedHz > 0) ? 1e6 * delta / expectedHz : Double.NaN;
         double osc;
         String oscName;
-        if (sampleRate > 0 && sampleRate % 44100 == 0) {
+        if (sampleRate > 0 && sampleRate % 11025 == 0) {
             osc = 22.5792e6; oscName = "22.5792 MHz";
-        } else if (sampleRate > 0 && sampleRate % 48000 == 0) {
+        } else if (sampleRate > 0 && sampleRate % 8000 == 0) {
             osc = 24.576e6;  oscName = "24.576 MHz";
         } else {
             osc = Double.NaN; oscName = "?";
@@ -2744,9 +2744,9 @@ public final class FftView extends AbstractFreqDomainView {
                     double ppm   = 1e6 * delta / expected;
                     double osc;
                     String oscName;
-                    if (r.sampleRate > 0 && r.sampleRate % 44100 == 0) {
+                    if (r.sampleRate > 0 && r.sampleRate % 11025 == 0) {
                         osc = 22.5792e6; oscName = "22.5792 MHz";
-                    } else if (r.sampleRate > 0 && r.sampleRate % 48000 == 0) {
+                    } else if (r.sampleRate > 0 && r.sampleRate % 8000 == 0) {
                         osc = 24.576e6;  oscName = "24.576 MHz";
                     } else {
                         osc = Double.NaN; oscName = "?";
