@@ -55,8 +55,11 @@
     <tr><th>Setting</th><th>Notes</th></tr>
     <tr><td>Backend</td>
         <td>WASAPI (default, exclusive bit-exact), WDM-KS (lowest-level,
-            highest capture throughput) or JavaSound (portable / only option
-            off Windows).  Changing it re-enumerates the device lists.</td></tr>
+            highest capture throughput), JavaSound (portable / only option
+            off Windows), or <b>QA40x</b> — a QuantAsylum QA402 / QA403 analyzer
+            driven directly over USB (see
+            <a href="theory/audio-backend.html#qa40x">Theory ▸ QA40x</a>).
+            Changing it re-enumerates the device lists.</td></tr>
     <tr><td>Input — Device / Sample rate / Bit depth</td>
         <td>The capture (ADC) device and the exact rate &amp; depth it opens
             at.  16/24 bit at 48/96/192/384 kHz are almost universally
@@ -69,6 +72,13 @@
   <div class="note">In exclusive mode a device admits one application at a
      time.  If a list is empty or a device won't open, close other audio apps
      and re-open the dialog to re-enumerate.</div>
+  <div class="note"><b>QA40x.</b> The QA40x backend appears in the list only when
+     a QA402 / QA403 is connected to the PC.  With it selected the input and
+     output devices are the one analyzer, and its input and output <b>sample rates
+     are locked equal</b> (one hardware clock) — set one and the other follows.
+     Full-scale is the device's own range calibration, so manual calibration is
+     not possible: the Calibrate dialog opens read-only and simply shows the
+     card's built-in full-scale for each channel.</div>
 
   <h3 id="prefs-audio-card">Card — per-card calibration profiles</h3>
   <p>Full-scale calibration — the volts RMS that map to the converter's ±1.0
