@@ -115,9 +115,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   digital-phosphor dense trace renderer, scope display persistence (WebGL2)
   with the same sample-dots-defer-to-persistence rule, the dual-tone
   frequency-lock loop and IMD de-embedding with F1/F2 marker dots and
-  pre-calibration dots, "not measurable" (---) IMD readouts instead of
+  pre-calibration dots, the manual-fundamental lobe stretch — the
+  fundamental's whole main lobe lifted to the entered level with a blue dot
+  marking the original height, "not measurable" (---) IMD readouts instead of
   fictitious floor values, sample-grid-aligned rectangle AND triangle
-  generation with bracketed corrected frequency / duty labels, a startup
+  generation with bracketed corrected frequency / duty labels, the dither
+  field entered in bits or a full-scale-aware dBV level and applied live to
+  the generated signal so it reads straight off the FFT floor, a startup
   splash, Java-parity preferences in a fixed 640 × 480 dialog with free
   numeric entry, an output-sample-rate probe with an honest resampling
   warning, scope V/div down to 1 nV/div, and a web-only help page on
@@ -224,6 +228,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   16000 and 22050 Hz — are now probed on every backend and offered wherever
   the device actually supports them (except the QA40x, whose 48 / 96 / 192 kHz
   are fixed in hardware).
+- **Blue dot missing on a manual-fundamental lobe.** With a manual fundamental
+  set (and no calibration loaded), the fundamental lobe was stretched up to the
+  entered level but the blue dot marking the original measured height was not
+  drawn. It now appears, as it already does with a calibration loaded.
 
 ## [1.0.3] — 2026-07-04
 
