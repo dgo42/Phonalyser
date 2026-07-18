@@ -118,7 +118,7 @@
   <p>sodass der Vorhersagefehler</p>
   <div class="eq"><i>e</i>[<i>i</i>] = <i>x</i>[<i>i</i>] − 2 cos <i>ω</i> · <i>x</i>[<i>i</i>−1] + <i>x</i>[<i>i</i>−2]<span class="no">(2)</span></div>
   <p>auf einem sauberen Ton bei jeder Frequenz exakt verschwindet und nur
-     übrig lässt, was der Ton nicht erklärt: den Rauschteppich,
+     übrig lässt, was der Ton nicht erklärt: das Grundrauschen,
      Restoberwellen, einen zweiten Ton.  Wenn der gemessene Kanal der
      Triggerkanal ist, wird <i>ω</i> aus dem gemessenen Grundton fixiert (der
      millihertzgenaue Wert aus dem Messpass unten); andernfalls wird der
@@ -127,7 +127,7 @@
      zulässt.</p>
   <p>Ein Abtastwert wird als unstetig markiert, wenn |<i>e</i>| das
      <b>8-Fache des mittleren |<i>e</i>| des eigenen Fensters</b>
-     überschreitet — ein Schwellenwert, der <em>auf dem Rauschteppich
+     überschreitet — ein Schwellenwert, der <em>auf dem Grundrauschen
      mitfährt</em>.  Auf einem sauberen Ton sind das etwa
      6,4 Standardabweichungen, die breitbandiges Rauschen praktisch nie
      erreicht, während ein echter Knick die Vorhersage um einen großen
@@ -142,7 +142,7 @@
      8×-Mittelwert-Schwellenwert auf etwa die halbe Signalamplitude
      (≈ 0,5 <i>A</i>), sodass jeder Glitch unterhalb eines Halbskalen-Bruchs
      unbemerkt bliebe; die abgestimmte Rekurrenz hält die Basislinie bei
-     jeder Frequenz auf dem Rauschteppich.</p>
+     jeder Frequenz auf dem Grundrauschen.</p>
   <p>Ein echter Aussetzer hat <em>zwei</em> Grenzen — den Eintritt in die
      Lücke und die Erholung danach (beobachtete USB-Aussetzer dauern
      120–160 µs) — und beide brechen die Vorhersage.  Überschwellige
@@ -181,14 +181,14 @@
      <i>n</i> Zyklen im Fenster — davon abhängt, wo das Fenster zufällig
      beginnt.  Die Streuung von <i>V</i><sub>mean</sub> skaliert dann mit der
      Signal-<em>Amplitude</em> statt mit dem Rauschen: Millivolt an
-     phasenzufälligem Wandern bei Vollaussteuerung, das einen
-     Mikrovolt-Rauschteppich völlig überdeckt.  Das Oszilloskop integriert
+     phasenzufälligem Wandern bei Vollaussteuerung, das ein
+     Mikrovolt-Grundrauschen völlig überdeckt.  Das Oszilloskop integriert
      <i>V</i><sub>mean</sub> und <i>V</i><sub>rms</sub> daher nur zwischen
      der ersten und der letzten steigenden Überschreitung des
      Halbamplituden-Mittelpunkts — eine ganze Zahl von Perioden.  An einer
      Mittelpunktsüberschreitung liegt das Signal per Definition auf seinem
      eigenen Mittelwert, sodass der Randfehler zweiter Ordnung wird und
-     <i>V</i><sub>mean</sub> sich auf den Rauschteppich einschwingt: Seine
+     <i>V</i><sub>mean</sub> sich auf das Grundrauschen einschwingt: Seine
      Standardabweichung bei einem vollausgesteuerten Signal fällt von
      Millivolt auf unter ein Mikrovolt — dieselben ≈ 0,6 µV, die es bei
      einem 1-mV-Signal zeigt.  <i>V</i><sub>pp</sub>, min und max bleiben

@@ -128,7 +128,7 @@ A few facts recur throughout; they are stated once here:
 
 ## 1. Signal Generator
 
-The signal generator synthesizes test waveforms sample-by-sample in floating point, packs them to PCM, and streams them to the DAC through one of three audio backends. The core is `SignalGenerator.java`; GUI wiring lives in `GeneratorController`/`GeneratorPane`; PCM encoding and device I/O live in the per-backend `*Generator` classes and the file exporters.
+The signal generator synthesizes test waveforms sample-by-sample in floating point, packs them to PCM, and streams them to the DAC through one of five audio backends. The core is `SignalGenerator.java`; GUI wiring lives in `GeneratorController`/`GeneratorPane`; PCM encoding and device I/O live in the per-backend `*Generator` classes and the file exporters.
 
 ### 1.1 Direct Digital Synthesis (phase-accumulator oscillator)
 
@@ -205,7 +205,7 @@ A target output in **volts RMS** is converted to the internal linear peak scale 
 
 ### 1.13 Float → PCM conversion: TPDF dither + quantization
 
-PCM packing is centralized in **`PcmQuantizer`** (`sound/PcmQuantizer.java`), owned by every playback backend (`JavaSoundGenerator`, `WasapiGenerator`, `WdmksGenerator`) so the streamed bytes are identical regardless of path; the file exporters use the same dither/quantize math:
+PCM packing is centralized in **`PcmQuantizer`** (`sound/PcmQuantizer.java`), owned by every OS-audio playback backend (`JavaSoundGenerator`, `WasapiGenerator`, `WdmksGenerator`, `CoreAudioGenerator` — the last two share `AbstractPortAudioPlayback`) so the streamed bytes are identical regardless of path; the file exporters use the same dither/quantize math. The QA40x backend bypasses this byte encoder — it emits int32 into a libusb duplex session — but mirrors the identical TPDF-dither math in `Qa40xGenerator` (see §1.15):
 
 - **TPDF dither**: `tpdfNoise = (rng.nextDouble() − rng.nextDouble()) / 2^(ditherBits−1)`. The difference of two uniform randoms is a triangular PDF spanning ±1 LSB at the chosen bit depth; added before quantization it decorrelates quantization error. `ditherBits=0` disables it; the count is live-tunable (volatile, read per sample) and capped at the output bit depth. The RNG is a render-thread-confined `SplittableRandom` (no per-sample monitor/CAS cost).
 - **Clamp + quantize**: sample is clamped to `[−1,1]`, then `pcm = round(sample · (2^(N−1)−1))` written **little-endian**; 8-bit is **signed** (`round(s·127)`) — all backends open their lines/streams in signed formats.
@@ -218,11 +218,13 @@ PCM packing is centralized in **`PcmQuantizer`** (`sound/PcmQuantizer.java`), ow
 
 ### 1.15 Per-backend output mechanics
 
-Three backends implement `AudioPlayback`; the GUI/CLI drive them identically through `AudioBackend`. All do a **~500 ms JIT warmup** of the encode hot path before the device pulls real audio (so C2 has compiled `nextSample`/encode and deopts have settled), then `resetSweepPosition()`.
+Five backends implement `AudioPlayback`; the GUI/CLI drive them identically through `AudioBackend`. All do a **~500 ms JIT warmup** of the encode/fill hot path before the device pulls real audio (so C2 has compiled `nextSample`/encode and deopts have settled), then `resetSweepPosition()`.
 
 - **JavaSound** (`JavaSoundGenerator`): blocking `SourceDataLine.write()` streaming in 4096-frame chunks; pre-fills the hardware buffer before signalling ready. The realtime scheduling is offloaded to the native mixer (zero JNA round-trips), which the comments call the gap-free path. (This is the preferred path: a direct WASAPI render loop periodically inserts a one-period flatline because it does five JNA round-trips per tick without MMCSS registration — routing DDS through JavaSound's `SourceDataLine` avoids it.)
 - **WASAPI** (`WasapiGenerator`): exclusive **event-callback** mode (shared fallback), pulling via `IAudioRenderClient::GetBuffer/ReleaseBuffer` on each event-handle wake. Pre-fills the whole HW buffer before `Start` (else exclusive mode glitches on the first tick). A render-loop supervisor tracks tick interval vs an `expectedTickNanos·1.2` underrun threshold and a `½·tick` fill budget, logging late ticks / slow fills / partial fills every 5 s. Encodes into a reusable native scratch buffer (no hot-path allocation). Considered a legacy path (see the note on JavaSound above).
 - **WDM-KS** (`WdmksGenerator`): PortAudio WDM-KS **callback mode** — `paCallback` fills the output pointer on PortAudio's realtime thread, returning `paContinue`/`paComplete` based on stop-flag and frame count, and counts `paOutputUnderflow`/`paOutputOverflow` flags (drained into rate-limited warnings). Uses the device's `defaultHighOutputLatency` and `paFramesPerBufferUnspecified` so the KS pin picks its natural size (a 0 latency or fought buffer size stalls WDM-KS after the priming callback).
+- **CoreAudio** (`CoreAudioGenerator`): PortAudio's CoreAudio host API in **callback mode** (macOS) — shares `AbstractPortAudioPlayback` with WDM-KS, so `paCallback` fills the output on PortAudio's realtime thread with the same underflow/overflow accounting. The only macOS playback path.
+- **QA40x** (`Qa40xGenerator`): unlike the OS-audio backends this is **not** a standalone render loop — the generator is a sample source attached to an always-duplex libusb session (`Qa40xDuplexEngine` over `LibUsbQa40xTransport`), so capture and playback ride one open QA402/QA403 on its single sample-rate clock (input and output rates are therefore locked equal). Samples cross USB as 32-bit words carrying 24-bit signal in the top three bytes; full-scale comes from the device's range calibration, not a crosshair calibration. The int32 sample source applies the same TPDF dither as `PcmQuantizer`, mirrored because it bypasses the byte encoder.
 
 The generator playback thread runs at `Thread.MAX_PRIORITY` to keep exclusive-mode backends ahead of GC/GUI and avoid mid-plateau dips (`GeneratorController.java:220`).
 

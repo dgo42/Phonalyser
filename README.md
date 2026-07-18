@@ -32,7 +32,8 @@ averaging and bit-exact playback/capture.
   a continuously looping sweep tracks the null in real time so you can walk it
   onto the target frequency, then de-embed the notch's response from the FFT.
 - **Multi-backend audio** — WASAPI & WDM-KS (Windows), CoreAudio (macOS),
-  JavaSound (Linux); high sample rates and 16/24/32-bit.
+  JavaSound (Linux), plus a direct **QA40x** (QuantAsylum QA402/QA403) USB
+  backend; high sample rates and 16/24/32-bit.
 - **Per-card calibration** — full-scale calibration follows the physical card
   across backends via name aliases, with a range table per attenuator / DIP
   position; the crosshair calibrations write straight into the card's active

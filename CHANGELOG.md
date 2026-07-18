@@ -5,7 +5,7 @@ All notable changes to **Phonalyser** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] — 2026-07-17
+## [1.1.0] — xxxx.xx.xx
 
 ### Added
 
@@ -59,6 +59,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ranges you have not calibrated, while never altering a row you calibrated, a
   card you created, or your active-range selections — so no calibration you made
   is ever lost.
+- **QA40x analyzer backend.** A QuantAsylum QA402 / QA403 can be driven
+  directly over USB (libusb), with the vendor software closed — a new **QA40x**
+  backend alongside WASAPI / WDM-KS / JavaSound. It runs the analyzer as one
+  always-duplex session on the device's single sample-rate clock, so the input
+  and output rates are held equal; delivers true 24-bit samples; and takes
+  full-scale from the device's own range calibration rather than a crosshair
+  calibration, so the dBV axis and scope readouts are right as soon as you pick
+  the range. Where the native libusb library is absent the backend is simply
+  reported unavailable; it ships bundled on Windows.
 - **Output-channel selection.** The signal generator, the frequency-response
   sweep and the notch tuner each gain a Left / Right / Both output selector that
   gates the driven lane live.
@@ -152,6 +161,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **FFT restart after audio changes.** Changing the backend, device, sample rate
   or bit depth in Preferences now restarts the FFT analyzer instead of leaving it
   stopped.
+- **Generator changes restart the FFT and clear the scope afterglow.** Changing
+  the dither, the output level or the output-channel selection now restarts the
+  FFT statistics and averaging accumulator and clears the scope display
+  persistence — the same reset a frequency or amplitude change already performed
+  — so an averaged measurement never mixes the previous signal with the new one.
 - **Scope channel guards.** The measurements table and the trigger source can no
   longer be pointed at a disabled channel — selecting one auto-switches to a live
   channel, and the choice survives starting a capture and applying a preset.
