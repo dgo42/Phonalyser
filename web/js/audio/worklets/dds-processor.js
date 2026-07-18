@@ -17,6 +17,7 @@ import {
   loadIntermod,
   isDualToneCorrectionFile,
   outputLaneGate,
+  tpdfNoise,
 } from '../../generator/dds-kernel.js';
 
 class DdsProcessor extends AudioWorkletProcessor {
@@ -35,6 +36,9 @@ class DdsProcessor extends AudioWorkletProcessor {
     // reproduces the pre-feature both-lanes-identical output.
     this._outputChannels = po.outputChannels != null ? po.outputChannels : 'BOTH';
     this._rightLaneScale = po.rightLaneScale != null ? po.rightLaneScale : 1.0;
+    // TPDF dither depth (bits, may be fractional; 0 = Off) applied LIVE to the mono sample before
+    // the per-lane scale — Java PcmQuantizer (the generator's live-tunable dither). Live-updatable.
+    this._ditherBits = po.ditherBits != null ? po.ditherBits : 0;
     this.port.onmessage = (e) => this._onMessage(e.data || {});
   }
 
@@ -87,6 +91,7 @@ class DdsProcessor extends AudioWorkletProcessor {
     if (d.clearCompensation) k.clearCompensation();
     if (d.outputChannels != null) this._outputChannels = d.outputChannels;
     if (d.rightLaneScale != null) this._rightLaneScale = d.rightLaneScale;
+    if (d.ditherBits != null) this._ditherBits = d.ditherBits;
   }
 
   process(_inputs, outputs) {
@@ -101,10 +106,15 @@ class DdsProcessor extends AudioWorkletProcessor {
     // un-selected lane digital zero. Gate hoisted once per block (no per-sample alloc).
     const { wantL, wantR } = outputLaneGate(this._outputChannels);
     const scaleR = this._rightLaneScale;
+    const dither = this._ditherBits;
     const ch0 = out[0];
     const ch1 = out.length > 1 ? out[1] : null;
     for (let i = 0; i < n; i++) {
-      const s = k.nextSample();
+      // TPDF dither added to the mono sample BEFORE the per-lane scale (Java PcmQuantizer:
+      // dither then scale), so both lanes carry the same physical dither and it lands on the FFT
+      // floor where the dBV view sets it. tpdfNoise is 0 for Off — guard to skip the call.
+      let s = k.nextSample();
+      if (dither > 0) s += tpdfNoise(dither);
       ch0[i] = wantL ? s : 0;
       if (ch1) ch1[i] = wantR ? s * scaleR : 0;
     }

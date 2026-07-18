@@ -327,6 +327,13 @@ for (const channel of ['chrome', 'msedge', undefined]) {
   } catch { /* channel not installed — try the next */ }
 }
 const ctx = await browser.newContext({ viewport: VIEW, deviceScaleFactor: 1 });
+// Suppress the startup Tip-of-the-day popup so it never overlaps a captured pane
+// (it docks bottom-left and would cover the generator's lower controls). Seeding
+// only showTipsAtStartup=false leaves every other pref at its default and the
+// device store (a separate key) untouched.
+await ctx.addInitScript(() => {
+  try { localStorage.setItem('phonalyser.preferences', JSON.stringify({ showTipsAtStartup: false })); } catch { /* ignore */ }
+});
 const page = await ctx.newPage();
 // 'load' + the #scopePane wait below, NOT 'networkidle': the libflac wasm
 // loader leaves its /vendor/libflac/*.wasm response body unconsumed, so the

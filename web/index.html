@@ -154,10 +154,12 @@
           <div class="numfield" id="dutyWrap"><input id="duty" class="nf-input" type="text" value="50" data-i18n-title="generator.dutyCycle.tooltip"/>
             <span class="nf-step"><button>▲</button><button>▼</button></span></div>
 
-          <label class="field-label" for="dither" data-i18n="generator.dither">Dither</label>
-          <!-- Neutral seed only; rebuildDitherCombo() regenerates the full 0..depth Off/n-bits list on init/open. -->
-          <div class="combo"><select id="dither" class="form-select form-select-sm" data-i18n-title="generator.dither.tooltip">
-            <option value="0" selected>Off</option></select></div>
+          <!-- Dither depth as a NumericStepField (DITHER policy): whole/fractional bits OR a
+               full-scale-aware dBV view; the OTHER unit is appended to #ditherLabel in brackets
+               (updateDitherLabel), mirroring #freqLabel. Built in app.js initStepFields. -->
+          <label class="field-label" id="ditherLabel" for="dither" data-i18n="generator.dither">Dither</label>
+          <div class="numfield"><input id="dither" class="nf-input" type="text" value="Off" data-i18n-title="generator.dither.tooltip"/>
+            <span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
 
           <label class="field-label" data-i18n="generator.corrections">Compensation</label>
           <div class="filefield"><input id="genCorrPath" class="nf-input" type="text" readonly placeholder=""/><label class="icon-btn mb-0" for="genCorrBrowse" data-i18n-title="generator.corrections.browse"><img src="assets/icons/folder-open.svg" class="ff-svg" alt=""></label><input id="genCorrBrowse" type="file" accept=".dpd" class="d-none"/><button id="genCorrClear" class="icon-btn" data-i18n-title="generator.corrections.clear"><img src="assets/icons/rectangle-xmark.svg" class="ff-svg svg-red" alt=""></button></div>

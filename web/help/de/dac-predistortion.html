@@ -32,7 +32,7 @@
   <div class="note"><b>Ein passives Doppel-T-Kerbfilter ist Pflicht.</b>
      Schalten Sie ein passives Doppel-T-Kerbfilter, abgestimmt auf die
      Grundwelle, zwischen den Prüfling und den ADC — sonst setzen die eigenen
-     Oberwellen des ADC den Rauschteppich und die Schleife kompensiert am Ende
+     Oberwellen des ADC das Grundrauschen und die Schleife kompensiert am Ende
      den ADC, nicht den DAC.  Stimmen Sie es zuerst mit dem
      <a href="tune-notch.html">Kerbfilter-Abgleichassistenten</a> ab.  Siehe
      <a href="theory/dac-predistortion.html#notch">Funktionsprinzip ▸ warum das
@@ -80,7 +80,7 @@
     <li><b>Konvergenz-Diagramm.</b>  Die Verzerrung jeder abgeschlossenen Runde
         auf einer logarithmischen Achse, fallend zur roten Ziellinie.</li>
     <li><b>Fortschritts-Anzeigen.</b>  Runde, Mittelungen, die aktuelle und
-        beste THD sowie SNR / SINAD / Grundwelle / Rauschteppich —
+        beste THD sowie SNR / SINAD / Grundwelle / Grundrauschen —
         <a href="#dpd-readouts">Was Sie sehen</a>.</li>
     <li><b>Mittelungen &amp; Ziel.</b>  Mittelungen pro Runde und die Ziel-THD
         zum Stoppen — <a href="#dpd-controls">Steuerelemente</a>.</li>
@@ -98,7 +98,7 @@
      wird abgewiesen.  Der Assistent betreibt die FFT mit unbegrenzter kohärenter
      Mittelung, wobei die
      <a href="fft.html#fft-tab-thd">Grundwelle vom Generator</a> genommen wird und
-     die FLL eingeschaltet ist; für den tiefsten Rauschteppich verwenden Sie das
+     die FLL eingeschaltet ist; für das tiefste Grundrauschen verwenden Sie das
      HFT248D-Fenster und lassen die Netzunterdrückung aus, und treiben einen
      sauberen Ton einige dB unter dem Vollausschlag mit auf einen Bin
      eingerasteter Grundwelle.</p>
@@ -158,7 +158,7 @@
   <p>Ein Block <b>Fortschritt</b> listet die Live-Werte auf.  Für einen Einzelton
      sind das Rundennummer, die aktuelle und die letzte Runden-THD, die bisher
      beste THD, die laufende Mittelungszahl sowie THD+N, SNR, SINAD, Grundwelle
-     und Rauschteppich (dBV).  Bei einem Zweiton-Signal minimiert die Schleife
+     und Grundrauschen (dBV).  Bei einem Zweiton-Signal minimiert die Schleife
      die Intermodulation, sodass die THD-Werte durch IMD, beste IMD und D+N
      ersetzt werden.</p>
 
