@@ -206,6 +206,7 @@ public final class HelpViewer {
             "external/sine-sweep.html",
             "tips.html",
             "credits.html",
+            "changelog.html",
             "help-index.html",
             "search-index.js",
             "lunr.min.js",
