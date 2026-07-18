@@ -466,4 +466,172 @@ class NumericStepModelTest {
         m.setValue(Double.NaN);
         assertEquals(2.5, m.getValue(), EPS, "NaN can never poison the value");
     }
+
+    // -------------------------------------------------------------------------
+    // DITHER policy — full-scale-aware bits⇄dBV, ±1-bit / ±10-dBV, Off at top
+    // -------------------------------------------------------------------------
+
+    private static final double DITHER_DB_PER_BIT = 6.0206;
+    private static final double DITHER_OFFSET_DB  = 7.782;
+
+    /** Peak full-scale = 1 Vpeak → 20·log10(1) = 0 dBV reference, and window
+     *  ENBW = 1 bin (Rectangular → no FFT over-read), so a bit's dBV is just
+     *  −(bits−1)·6.0206 − 7.782 and the conversions have a clean anchor.
+     *  (dBV anchors to the PEAK full-scale, not the RMS full-scale.) */
+    private NumericStepModel dither(int maxBits) {
+        return new NumericStepModel(UnitFamily.DITHER, maxBits, () -> 1.0, () -> 1.0);
+    }
+    private double ditherDbv(double bits) {   // fsDbv = 20·log10(1) = 0
+        return -(bits - 1) * DITHER_DB_PER_BIT - DITHER_OFFSET_DB;
+    }
+    private double ditherBits(double dbv) {    // fsDbv = 20·log10(1) = 0
+        return 1 + (-DITHER_OFFSET_DB - dbv) / DITHER_DB_PER_BIT;
+    }
+
+    @Test
+    void dither_bitsAndDbvViews_areFullScaleAwareInverses() {
+        NumericStepModel m = dither(16);
+        m.setValue(16);
+        assertFalse(m.isLogDisplay());
+        assertEquals("16 bits", m.text());
+        // Field in bits → companion shows the dBV of that whole-bit value.
+        assertEquals(String.format(Locale.ROOT, "%.1f", ditherDbv(16)) + " dBV", m.companionText());
+        // Field in dBV → companion shows the bits.
+        m.setLogDisplay(true);
+        assertTrue(m.isLogDisplay());
+        assertEquals(String.format(Locale.ROOT, "%.1f", ditherDbv(16)) + " dBV", m.text());
+        assertEquals("16 bits", m.companionText());
+    }
+
+    @Test
+    void dither_dbvEntry_storesFractionalBits_andSticksDbv() {
+        NumericStepModel m = dither(24);
+        assertTrue(m.commit("-95 dBV"));
+        assertEquals(ditherBits(-95), m.getValue(), 1e-9);
+        assertTrue(m.isLogDisplay(), "dBV entry sticks the dBV view");
+        assertTrue(m.commit("-95 db"), "short dBV alias");
+        assertEquals(ditherBits(-95), m.getValue(), 1e-9);
+    }
+
+    @Test
+    void dither_dbvAnchorsToPeakFullScale_notRms() {
+        // Regression guard: dBV anchors to the PEAK full-scale
+        // (20·log10(dacFsVoltageAmpl)) — NOT the RMS full-scale (/√2), which
+        // would read ~3 dB low and make an entered dBV land ~0.5 bit hot.
+        double fsAmpl = 2.79351;                 // realistic DAC peak full-scale (Vpeak)
+        NumericStepModel m = new NumericStepModel(UnitFamily.DITHER, 24, () -> fsAmpl, () -> 1.0);
+        assertTrue(m.commit("-100 dBV"));
+        double fsDbv   = 20 * Math.log10(fsAmpl);   // peak anchor, no /√2
+        double expBits = 1 + (fsDbv - DITHER_OFFSET_DB - (-100)) / DITHER_DB_PER_BIT;
+        assertEquals(expBits, m.getValue(), 1e-9);
+        // The RMS anchor (/√2) would give bits 3.01/6.0206 ≈ 0.5 lower.
+        double rmsBits = 1 + (fsDbv - 20 * Math.log10(Math.sqrt(2.0)) - DITHER_OFFSET_DB - (-100)) / DITHER_DB_PER_BIT;
+        assertTrue(Math.abs(m.getValue() - rmsBits) > 0.4, "must not use the RMS anchor");
+    }
+
+    @Test
+    void dither_dbvEntryAccountsForWindowEnbw() {
+        // The dBV is stated as it reads on the FFT noise floor (physical level +
+        // 10·log10(ENBW)), so hitting a given floor with a WIDER window (higher
+        // ENBW, more over-read) needs a QUIETER physical dither — i.e. more bits.
+        // Hann (1.5) vs Rectangular (1) → 10·log10(1.5) = 1.761 dB → ~0.29 bit.
+        double enbwDb = 10 * Math.log10(1.5);
+        NumericStepModel rect = new NumericStepModel(UnitFamily.DITHER, 24, () -> 1.0, () -> 1.0);
+        NumericStepModel hann = new NumericStepModel(UnitFamily.DITHER, 24, () -> 1.0, () -> 1.5);
+        assertTrue(rect.commit("-100 dBV"));
+        assertTrue(hann.commit("-100 dBV"));
+        assertEquals(enbwDb / DITHER_DB_PER_BIT, hann.getValue() - rect.getValue(), 1e-9,
+                "wider window (higher ENBW) → same FFT-floor dBV needs more bits");
+    }
+
+    @Test
+    void dither_reanchor_dbvMode_holdsDbvAndResolvesBits() {
+        // A window/full-scale change with a dBV entered keeps the shown dBV and
+        // moves the bits by the config delta (so the FFT-floor target holds).
+        double[] enbw = { 1.0 };
+        NumericStepModel m = new NumericStepModel(UnitFamily.DITHER, 30, () -> 1.0, () -> enbw[0]);
+        assertTrue(m.commit("-100 dBV"));
+        double bits0 = m.getValue();
+        enbw[0] = 1.5;                                  // Hann-width window
+        assertTrue(m.reanchor(), "dBV view re-solves the bits");
+        assertEquals(bits0 + 10 * Math.log10(1.5) / DITHER_DB_PER_BIT, m.getValue(), 1e-9,
+                "bits move by the ENBW delta → the shown dBV (FFT-floor target) is held");
+    }
+
+    @Test
+    void dither_reanchor_bitsMode_holdsBits() {
+        double[] enbw = { 1.0 };
+        NumericStepModel m = new NumericStepModel(UnitFamily.DITHER, 30, () -> 1.0, () -> enbw[0]);
+        assertTrue(m.commit("16 bits"));               // bits view = fixed physical dither
+        enbw[0] = 1.5;
+        assertFalse(m.reanchor(), "bits view holds the physical dither");
+        assertEquals(16, m.getValue(), EPS);
+    }
+
+    @Test
+    void dither_bitsEntry_clampsAndOffOnZero() {
+        NumericStepModel m = dither(16);
+        assertTrue(m.commit("12 bits"));
+        assertEquals(12, m.getValue(), EPS);
+        assertFalse(m.isLogDisplay());
+        assertTrue(m.commit("20"));        // above max → clamp to 16
+        assertEquals(16, m.getValue(), EPS);
+        assertTrue(m.commit("15.5 b"));    // fractional bits, short alias
+        assertEquals(15.5, m.getValue(), EPS);
+        assertTrue(m.commit("0"));         // 0 → Off
+        assertEquals(0, m.getValue(), EPS);
+        assertEquals("Off", m.text());
+        assertTrue(m.commit("off"));       // the word too
+        assertEquals(0, m.getValue(), EPS);
+    }
+
+    @Test
+    void dither_bitsStepping_wholeBitStepsWithOffAtTop() {
+        NumericStepModel m = dither(16);
+        m.setValue(2);
+        m.arrow(+1);                       // up → fewer bits
+        assertEquals(1, m.getValue(), EPS);
+        m.arrow(+1);                       // up from 1 bit → Off (top of range)
+        assertEquals(0, m.getValue(), EPS);
+        m.arrow(+1);                       // up from Off → stays Off
+        assertEquals(0, m.getValue(), EPS);
+        m.arrow(-1);                       // down from Off → 1 bit
+        assertEquals(1, m.getValue(), EPS);
+        m.setValue(16);
+        m.arrow(-1);                       // down at max → saturates
+        assertEquals(16, m.getValue(), EPS);
+    }
+
+    @Test
+    void dither_bitsStepping_preservesFraction() {
+        NumericStepModel m = dither(24);
+        assertTrue(m.commit("15.5 bits"));
+        m.arrow(-1);                       // down → more bits, whole-bit step
+        assertEquals(16.5, m.getValue(), EPS);
+        m.arrow(+1);
+        assertEquals(15.5, m.getValue(), EPS);
+    }
+
+    @Test
+    void dither_dbvStepping_walksExactlyTenDb() {
+        NumericStepModel m = dither(16);
+        m.setLogDisplay(true);
+        m.setValue(16);
+        m.wheel(+1);                       // +10 dBV exactly (fractional bits, no snap)
+        assertEquals(ditherBits(ditherDbv(16) + 10), m.getValue(), EPS);
+        m.setValue(16);
+        m.wheel(-1);                       // −10 dBV → more bits, clamped at max
+        assertEquals(16, m.getValue(), EPS);
+        m.setValue(1);
+        m.wheel(+1);                       // up from the loudest bit → Off
+        assertEquals(0, m.getValue(), EPS);
+    }
+
+    @Test
+    void dither_offHasNoCompanionView() {
+        NumericStepModel m = dither(16);
+        m.setValue(0);
+        assertEquals("Off", m.text());
+        assertEquals("", m.companionText(), "Off has no alternate view");
+    }
 }

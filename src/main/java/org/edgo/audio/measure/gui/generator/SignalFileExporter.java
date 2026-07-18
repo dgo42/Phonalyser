@@ -67,7 +67,7 @@ public class SignalFileExporter {
      */
     public long export(SignalGenerator generator, File outFile,
                        int sampleRate, int bitDepth,
-                       double durationSeconds, int ditherBits,
+                       double durationSeconds, double ditherBits,
                        double signalFrequencyHz,
                        double scaleL, double scaleR, OutputChannels gate) throws IOException {
         long requestedFrames = Math.max(1, Math.round(durationSeconds * sampleRate));
@@ -80,7 +80,7 @@ public class SignalFileExporter {
               :                                                   AudioFileFormat.WAV;
 
         try (PcmSink sink = openSink(fmt, outFile, sampleRate, bitDepth)) {
-            Random rng = ditherBits > 0 ? new Random() : null;
+            Random rng = ditherBits > 0.0 ? new Random() : null;
             int bytesPerSample = bitDepth / 8;
             int bytesPerFrame  = bytesPerSample * CHANNELS;
             byte[] buf = new byte[BUFFER_FRAMES * bytesPerFrame];
@@ -146,7 +146,7 @@ public class SignalFileExporter {
      * 0 for the signed N-bit encodings).
      */
     private void fillBuffer(SignalGenerator gen, byte[] buf, int frames,
-                            int bitDepth, int ditherBits, Random rng,
+                            int bitDepth, double ditherBits, Random rng,
                             double scaleL, double scaleR, OutputChannels gate) {
         int     bytesPerSample = bitDepth / 8;
         int     bytesPerFrame  = bytesPerSample * CHANNELS;
@@ -177,9 +177,11 @@ public class SignalFileExporter {
         }
     }
 
-    private double tpdfNoise(int ditherBits, Random rng) {
-        if (ditherBits == 0 || rng == null) return 0.0;
-        return (rng.nextDouble() - rng.nextDouble()) / (1L << (ditherBits - 1));
+    private double tpdfNoise(double ditherBits, Random rng) {
+        if (ditherBits <= 0.0 || rng == null) return 0.0;
+        // Math.pow(2, bits−1) equals the old 1L<<(bits−1) for whole bits, and
+        // interpolates the ±1 LSB amplitude continuously for a fractional depth.
+        return (rng.nextDouble() - rng.nextDouble()) / Math.pow(2.0, ditherBits - 1);
     }
 
     private double clamp(double v) {

@@ -175,6 +175,13 @@
      32 zooms of the view under the pointer or with focus — a thin green border
      marks which view will take the undo.</div>
 
+  <div class="tip"><b>Set dither in dBV and read it straight off the FFT floor.</b>
+     The generator's dither field takes bits or a dBV level, and the dBV already
+     includes the FFT window's noise bandwidth — so with <b>incoherent (power)
+     averaging</b> the FFT noise floor lands exactly where you set it: enter
+     &minus;100&nbsp;dBV and the floor sits at &minus;100&nbsp;dBV.  Coherent
+     averaging cancels noise and reads far lower.</div>
+
   <hr/>
   <p class="back"><a href="index.html">◀ Back to contents</a></p>
 

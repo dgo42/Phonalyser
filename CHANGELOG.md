@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   automatically on first calibrate — and switching devices or backends never
   mixes calibrations up. Cards without a profile keep using the previous shared
   values.
+- **Dither depth in bits or dBV, checkable on the FFT.** The generator's dither
+  control is a numeric field you drive in bits or directly in dBV. The dBV is
+  full-scale-aware and also carries the FFT analysis window's
+  equivalent-noise-bandwidth term, so it reads straight off the FFT noise floor
+  — enter −100 dBV and, with incoherent (power) averaging, the floor sits at
+  −100 dBV. Wheel/arrows step ±1 bit or ±10 dBV; the entered value is held when
+  you change the FFT window or recalibrate.
 - **Per-channel (left / right) calibration.** A stereo card calibrates each
   channel into its own full-scale: the calibration dialog — now one unified form
   for the ADC and the DAC, with values entered directly in nV / µV / mV / V —

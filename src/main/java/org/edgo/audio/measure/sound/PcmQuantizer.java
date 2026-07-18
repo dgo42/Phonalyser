@@ -62,9 +62,10 @@ public final class PcmQuantizer {
     private final int bitDepth;
     private final int bytesPerSample;
     private final int bytesPerFrame;
-    /** TPDF dither depth in bits; 0 = off.  Live-tunable from the UI. */
+    /** TPDF dither depth in bits (may be fractional); 0 = off.  Live-tunable
+     *  from the UI. */
     @Getter
-    private volatile int ditherBits;
+    private volatile double ditherBits;
     /** Per-lane full-scale scale factors: left is normally {@code 1.0}, right is
      *  {@code fsLeft/fsRight} so a LINKED card with distinct DAC full-scales
      *  emits the same physical level on both lanes; both {@code 1.0} when the
@@ -80,16 +81,16 @@ public final class PcmQuantizer {
      *  1.5 M calls/s with dither on. */
     private final SplittableRandom rng = new SplittableRandom();
 
-    public PcmQuantizer(int bitDepth, int ditherBits) {
+    public PcmQuantizer(int bitDepth, double ditherBits) {
         this.bitDepth       = bitDepth;
-        this.ditherBits     = Math.max(0, ditherBits);
+        this.ditherBits     = Math.max(0.0, ditherBits);
         this.bytesPerSample = bitDepth / 8;
         this.bytesPerFrame  = bytesPerSample * CHANNELS;
     }
 
-    /** Live-applies the dither bit count (clamped to ≥ 0). */
-    public void setDitherBits(int bits) {
-        this.ditherBits = Math.max(0, bits);
+    /** Live-applies the dither bit count (may be fractional; clamped to ≥ 0). */
+    public void setDitherBits(double bits) {
+        this.ditherBits = Math.max(0.0, bits);
     }
 
     /** Live-applies the per-lane full-scale scale factors (left, right). */
@@ -140,9 +141,11 @@ public final class PcmQuantizer {
     }
 
     private double tpdfNoise() {
-        int bits = ditherBits;   // single read — a live change can't shift by (0 − 1)
-        if (bits == 0) return 0.0;
-        return (rng.nextDouble() - rng.nextDouble()) / (1L << (bits - 1));
+        double bits = ditherBits;   // single read — a live change can't shift by (0 − 1)
+        if (bits <= 0.0) return 0.0;
+        // Math.pow(2, bits−1) equals the old 1L<<(bits−1) for whole bits, and
+        // interpolates the ±1 LSB amplitude continuously for a fractional depth.
+        return (rng.nextDouble() - rng.nextDouble()) / Math.pow(2.0, bits - 1);
     }
 
     private double clamp(double v) {

@@ -19,6 +19,7 @@
 package org.edgo.audio.measure.gui.widgets;
 
 import java.util.Locale;
+import java.util.function.DoubleSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -89,8 +90,21 @@ public final class NumericStepModel {
     /** LIST series longer than this are abbreviated to first·…·last. */
     private static final int SERIES_HINT_MAX = 7;
 
+    /** DITHER: dB per factor-of-10 amplitude — the dBV ↔ Vrms scale. */
+    private static final double DITHER_DB_PER_DECADE  = 20.0;
+    /** DITHER: one TPDF bit is 6.0206 dB (RMS = 2^−(bits−1)/√6) … */
+    private static final double DITHER_DB_PER_BIT     = 6.0206;
+    /** … and the constant term is 20·log10(1/√6) = −7.782 dBFS. */
+    private static final double DITHER_TPDF_OFFSET_DB = 7.782;
+    /** DITHER dBV-view wheel/arrow notch: 10 dBV, snapped to the nearest bit. */
+    private static final double DITHER_DBV_STEP       = 10.0;
+    /** Decimals shown for the DITHER dBV view. */
+    private static final int    DITHER_DBV_DECIMALS   = 1;
+    /** Rendered text for a disabled (0-bit) dither, and the parsed "off" word. */
+    private static final String DITHER_OFF_LABEL      = "Off";
+
     private enum Policy {
-        FIXED, LIST, PERCENT;
+        FIXED, LIST, PERCENT, DITHER;
 
         private Policy() {}
     }
@@ -103,6 +117,20 @@ public final class NumericStepModel {
     private final double wheelStep;   // FIXED only
     private final double arrowStep;   // FIXED only
     private double[] series;          // LIST only, kept sorted
+    /** DITHER only: live DAC peak full-scale amplitude (Vpeak) supplier — the
+     *  bits⇄dBV view is full-scale-aware, so the conversion tracks the live
+     *  calibration; injected as config (never a singleton reach-in), {@code
+     *  null} for every other policy. */
+    private final DoubleSupplier fsAmplSupplier;
+    /** DITHER only: supplier of the current FFT analysis window's equivalent
+     *  noise bandwidth (bins), or {@code null}.  The FFT reads broadband noise
+     *  10·log10(ENBW) dB hot, so the dBV view adds that term to stay checkable
+     *  against the FFT floor; injected as config, never a singleton reach-in. */
+    private final DoubleSupplier enbwSupplier;
+    /** DITHER only: the config dBV sum (fsDbv + enbwDb) that {@link #value} was
+     *  last reconciled against — {@link #reanchor} moves the bits by the config
+     *  delta to hold the displayed dBV across a window / full-scale change. */
+    private double ditherConfigDbv;
     /** ≥ 0: fixed decimal count; −1: trim mode capped at {@link #maxDecimals}. */
     private final int decimals;
     private final int maxDecimals;
@@ -133,6 +161,8 @@ public final class NumericStepModel {
         this.arrowStep  = arrowStep;
         this.decimals   = decimals;
         this.maxDecimals = decimals;
+        this.fsAmplSupplier = null;
+        this.enbwSupplier   = null;
         this.value      = min;
     }
 
@@ -151,6 +181,8 @@ public final class NumericStepModel {
         this.series     = series.clone();
         this.decimals   = -1;
         this.maxDecimals = maxDecimals;
+        this.fsAmplSupplier = null;
+        this.enbwSupplier   = null;
         this.value      = min;
     }
 
@@ -167,7 +199,33 @@ public final class NumericStepModel {
         this.arrowStep  = 0;
         this.decimals   = -1;
         this.maxDecimals = maxDecimals;
+        this.fsAmplSupplier = null;
+        this.enbwSupplier   = null;
         this.value      = min;
+    }
+
+    /** DITHER policy: a dither depth that is 0 (Off) or {@code [1, maxBits]}
+     *  bits — possibly fractional — shown as whole/fractional bits or a
+     *  full-scale-aware dBV VIEW of the same value.  {@code fsAmplSupplier}
+     *  yields the live DAC peak full-scale (Vpeak) and {@code enbwSupplier} the
+     *  current FFT window's equivalent noise bandwidth (bins), so the dBV view
+     *  matches the FFT noise floor; both come IN as config so the model never
+     *  reaches for a singleton.  Off sits at the TOP of the range (stepping up
+     *  from 1 bit reaches Off). */
+    public NumericStepModel(UnitFamily family, int maxBits,
+                            DoubleSupplier fsAmplSupplier, DoubleSupplier enbwSupplier) {
+        this.family     = family;
+        this.policy     = Policy.DITHER;
+        this.min        = 0;
+        this.max        = maxBits;
+        this.wheelStep  = 0;
+        this.arrowStep  = 0;
+        this.decimals   = -1;
+        this.maxDecimals = DITHER_DBV_DECIMALS;
+        this.fsAmplSupplier = fsAmplSupplier;
+        this.enbwSupplier   = enbwSupplier;
+        this.value      = 0;   // Off
+        this.ditherConfigDbv = ditherFsDbv() + ditherEnbwDb();
     }
 
     // -------------------------------------------------------------------------
@@ -234,6 +292,7 @@ public final class NumericStepModel {
                     setValue(dir > 0 ? percentUp(value) : percentDown(value));
                 }
                 break;
+            case DITHER:  ditherStep(dir); break;
         }
     }
 
@@ -243,7 +302,147 @@ public final class NumericStepModel {
             case FIXED:   setValue(value + dir * arrowStep); break;
             case LIST:    setValue(listJump(dir));           break;
             case PERCENT: setValue(plusOneDisplayedUnit(dir)); break;
+            case DITHER:  ditherStep(dir); break;
         }
+    }
+
+    // ---- DITHER policy ------------------------------------------------------
+
+    /** One dither step: {@code dir} = +1 up (fewer bits → toward Off) / −1 down
+     *  (more bits, quieter dither).  Bits view walks whole ±1-bit steps (a
+     *  fractional value keeps its fraction); dBV view walks exactly ±10 dBV
+     *  (fractional bits — no snap to whole bits).  Off sits at the TOP: stepping
+     *  up from 1 bit reaches Off; stepping down from Off reaches 1 bit. */
+    private void ditherStep(int dir) {
+        if (value <= 0) {                     // currently Off
+            setValue(dir > 0 ? 0 : 1);        // up stays Off; down → 1 bit
+            return;
+        }
+        if (currentUnit().log()) {            // dBV view: step exactly ±10 dBV
+            double stepped = ditherBitsForDbv(ditherDbvForBits(value) + dir * DITHER_DBV_STEP);
+            setValue(dir > 0 && stepped < 1 ? 0 : clampBits(stepped));
+        } else {                              // bits view: whole ±1-bit step
+            double nv = value - dir;          // up (+1) → fewer bits, toward Off
+            setValue(dir > 0 && nv < 1 ? 0 : clampBits(nv));
+        }
+    }
+
+    /** dBV of the DAC PEAK full-scale.  The TPDF dither is added to the
+     *  peak-normalised sample (±1 ≡ peak FS = {@code dacFsVoltageAmpl}) and its
+     *  RMS = 2^−(bits−1)/√6 is relative to that PEAK full-scale, so the dBV
+     *  reference is the peak full-scale voltage itself — NOT the RMS full-scale
+     *  ({@code /√2}), which would read ~3 dB low. */
+    private double ditherFsDbv() {
+        return DITHER_DB_PER_DECADE * Math.log10(fsAmplSupplier.getAsDouble());
+    }
+
+    /** FFT window over-read added to the dBV view: broadband noise measured
+     *  through the analysis window reads 10·log10(ENBW) dB above its true level
+     *  (a power/bandwidth ratio → ½·{@code DITHER_DB_PER_DECADE}·log10), so the
+     *  dither dBV is stated as it appears on the FFT floor (incoherent
+     *  averaging).  0 when no window supplier is wired. */
+    private double ditherEnbwDb() {
+        return enbwSupplier == null
+                ? 0.0
+                : 0.5 * DITHER_DB_PER_DECADE * Math.log10(enbwSupplier.getAsDouble());
+    }
+
+    /** dBV of the TPDF dither noise at {@code bits} bits (bits ≥ 1), stated as it
+     *  reads on the FFT noise floor (physical level + the window ENBW term). */
+    private double ditherDbvForBits(double bits) {
+        return -(bits - 1) * DITHER_DB_PER_BIT - DITHER_TPDF_OFFSET_DB
+                + ditherFsDbv() + ditherEnbwDb();
+    }
+
+    /** The (fractional) bit count whose TPDF dither lands at {@code dbv} — the
+     *  exact inverse of {@link #ditherDbvForBits}, un-clamped. */
+    private double ditherBitsForDbv(double dbv) {
+        return 1 + (ditherFsDbv() + ditherEnbwDb() - DITHER_TPDF_OFFSET_DB - dbv)
+                / DITHER_DB_PER_BIT;
+    }
+
+    /** Clamps a non-Off dither depth to {@code [1, maxBits]}. */
+    private double clampBits(double bits) {
+        return Math.max(1.0, Math.min(max, bits));
+    }
+
+    /** Reacts to a config change (FFT-window ENBW or DAC full-scale) while
+     *  holding the CURRENTLY DISPLAYED value.  In the dBV view the shown dBV is
+     *  kept and the bits move by the config delta (so the FFT-floor target is
+     *  maintained under the new window / calibration); in the bits view (and for
+     *  Off) the bits are kept and only the dBV readout moves.  Returns {@code
+     *  true} when the stored bit count changed (dBV view) so the caller can
+     *  persist the re-solved dither and restart the generator. */
+    public boolean reanchor() {
+        if (policy != Policy.DITHER) return false;
+        double newConfigDbv = ditherFsDbv() + ditherEnbwDb();
+        double before = value;
+        if (isLogDisplay() && value > 0) {
+            value = clampBits(value + (newConfigDbv - ditherConfigDbv) / DITHER_DB_PER_BIT);
+        }
+        ditherConfigDbv = newConfigDbv;
+        return value != before;
+    }
+
+    /** Renders the current dither value: {@code Off}, a bit count, or the
+     *  full-scale-aware dBV view — per the current (sticky) display unit. */
+    private String ditherText() {
+        if (value <= 0) return DITHER_OFF_LABEL;
+        Unit u = currentUnit();
+        if (u.log()) {
+            return format(ditherDbvForBits(value), DITHER_DBV_DECIMALS) + " " + u.suffix();
+        }
+        return trimTrailingZeros(format(value, maxDecimals)) + " " + u.suffix();
+    }
+
+    /** {@code x} rendered with {@code decimals} places, dot decimal separator. */
+    private String format(double x, int decimals) {
+        return String.format(Locale.ROOT, "%." + decimals + "f", x);
+    }
+
+    /** Parses a dither entry: {@code Off}/{@code 0} → Off; a bare number or a
+     *  {@code bits} suffix → that bit count (clamped to {@code [1, maxBits]},
+     *  0 → Off), possibly fractional; a {@code dBV} suffix → the full-scale-aware
+     *  fractional bit count (which sticks the dBV view). */
+    private boolean commitDither(String text) {
+        String t = text.trim().replace(',', '.');
+        if (t.isEmpty()) return false;
+        if (t.equalsIgnoreCase(DITHER_OFF_LABEL)) {   // "Off" — keep the current view
+            blank = false;
+            value = 0;
+            return true;
+        }
+        Matcher m = NUMBER_WITH_UNIT.matcher(t);
+        if (!m.matches()) return false;
+        double num;
+        try {
+            num = Double.parseDouble(m.group(1));
+        } catch (NumberFormatException ex) {
+            return false;
+        }
+        String suffix = m.group(2).trim();
+        Unit unit = suffix.isEmpty() ? family.defaultUnit(value) : family.match(suffix);
+        if (unit == null) return false;
+        blank = false;
+        if (unit.log()) {                             // dBV → fractional bits, dBV sticks
+            stickyUnit = unit;
+            value = clampBits(roundSig(ditherBitsForDbv(num)));
+        } else {                                      // bits (base): 0 → Off, else [1, maxBits]
+            stickyUnit = null;
+            value = num <= 0 ? 0 : clampBits(roundSig(num));
+        }
+        return true;
+    }
+
+    /** The current dither value in the OTHER unit — bits⇄dBV — for a companion
+     *  label beside a DITHER field; empty for Off or a non-DITHER policy (which
+     *  has no alternate view). */
+    public String companionText() {
+        if (policy != Policy.DITHER || value <= 0) return "";
+        if (currentUnit().log()) {                    // field shows dBV → label shows bits
+            return trimTrailingZeros(format(value, maxDecimals)) + " " + family.defaultUnit(value).suffix();
+        }
+        return format(ditherDbvForBits(value), DITHER_DBV_DECIMALS) + " " + family.logUnit().suffix();
     }
 
     /** Next multiple of {@link #LOG_WHEEL_STEP_DB} from {@code db} in
@@ -373,6 +572,7 @@ public final class NumericStepModel {
      *  otherwise.  Infinity renders as {@code ∞}. */
     public String text() {
         if (blank) return "";
+        if (policy == Policy.DITHER) return ditherText();
         if (Double.isInfinite(value)) return "∞";
         if (isNamedValue(value)) return namedValueLabel;
         return formatIn(value, currentUnit());
@@ -422,6 +622,12 @@ public final class NumericStepModel {
             }
             case LIST:
                 return WHEEL_GLYPH + ARROWS_GLYPH + " " + seriesHint();
+            case DITHER: {
+                Unit u = currentUnit();
+                return u.log()
+                        ? WHEEL_GLYPH + ARROWS_GLYPH + " ±" + (int) DITHER_DBV_STEP + " " + u.suffix()
+                        : WHEEL_GLYPH + ARROWS_GLYPH + " ±1 " + u.suffix();
+            }
             default:
                 return "";
         }
@@ -464,6 +670,7 @@ public final class NumericStepModel {
      *          number-with-unit of this family */
     public boolean commit(String text) {
         if (text == null) return false;
+        if (policy == Policy.DITHER) return commitDither(text);
         // Normalise: decimal comma → dot, Greek mu → micro sign (pasted
         // scientific text and Greek keyboards produce U+03BC), and drop one
         // dangling separator ("200." / "200,") the way Double.parseDouble

@@ -351,8 +351,11 @@ public final class Preferences {
      *  an explicit dBV suffix); persisted so a restart keeps the choice. */
     private final Property<Boolean> genAmplitudeDbvDisplay = bound(false);
     /** Unit the amplitude field renders in: one of {@code mV}, {@code V}, {@code dBV}, {@code dBFS}. */
-    /** Dither bits 0..N; 0 means "Off". */
-    private final Property<Integer> genDitherBits  = bound(0);
+    /** Dither depth in bits, 0..N (may be fractional); 0 means "Off". */
+    private final Property<Double> genDitherBits  = bound(0.0);
+    /** True = the generator dither field displays in dBV (the user typed an
+     *  explicit dBV suffix); persisted so a restart keeps the choice. */
+    private final Property<Boolean> genDitherDbvDisplay = bound(false);
     /** Which output lane(s) the generator drives — the encoder gate ({@code BOTH}
      *  by default = today's behaviour). */
     private final Property<OutputChannels> genOutputChannels = bound(OutputChannels.BOTH);
@@ -1779,9 +1782,11 @@ public final class Preferences {
     public void setGenAmplitudeDbvDisplay(boolean v) { genAmplitudeDbvDisplay.set(v); }
 
 
-    public int getGenDitherBits()              { return genDitherBits.get(); }
-    public void setGenDitherBits(int v)        { genDitherBits.set(v); }
-    public Property<Integer> genDitherBitsProperty() { return genDitherBits; }
+    public double getGenDitherBits()           { return genDitherBits.get(); }
+    public void setGenDitherBits(double v)     { genDitherBits.set(v); }
+    public Property<Double> genDitherBitsProperty() { return genDitherBits; }
+    public boolean isGenDitherDbvDisplay()     { return genDitherDbvDisplay.get(); }
+    public void setGenDitherDbvDisplay(boolean v) { genDitherDbvDisplay.set(v); }
 
     public OutputChannels getGenOutputChannels()       { return genOutputChannels.get(); }
     public void setGenOutputChannels(OutputChannels v) { genOutputChannels.set(v); }
@@ -2161,6 +2166,7 @@ public final class Preferences {
         root.put("genAmplitudeVrms",             genAmplitudeVrms.get());
         root.put("genAmplitudeDbvDisplay",       genAmplitudeDbvDisplay.get());
         root.put("genDitherBits",                genDitherBits.get());
+        root.put("genDitherDbvDisplay",          genDitherDbvDisplay.get());
         root.put("genOutputChannels",            genOutputChannels.get().name());
         if (genDpd.get()     != null) root.put("genDpd",     genDpd.get());
         if (genDpdDual.get() != null) root.put("genDpdDual", genDpdDual.get());
@@ -2509,7 +2515,8 @@ public final class Preferences {
         if (root.get("genDualToneSplitPct")          instanceof Number n) genDualToneSplitPct.set(n.doubleValue());
         if (root.get("genAmplitudeVrms")             instanceof Number n) genAmplitudeVrms.set(n.doubleValue());
         if (root.get("genAmplitudeDbvDisplay")       instanceof Boolean b) genAmplitudeDbvDisplay.set(b);
-        if (root.get("genDitherBits")                instanceof Number n) genDitherBits.set(n.intValue());
+        if (root.get("genDitherBits")                instanceof Number n) genDitherBits.set(n.doubleValue());
+        if (root.get("genDitherDbvDisplay")          instanceof Boolean b) genDitherDbvDisplay.set(b);
         if (root.get("genOutputChannels")            instanceof String s) genOutputChannels.set(enumOr(OutputChannels.class, s, genOutputChannels.get()));
         if (root.get("genDpd")                        instanceof String s) genDpd.set(s);
         if (root.get("genDpdDual")                    instanceof String s) genDpdDual.set(s);

@@ -62,7 +62,7 @@ public class JavaSoundGenerator implements AudioPlayback {
 
     private SourceDataLine   line;
 
-    public JavaSoundGenerator(int sampleRate, int bitDepth, int ditherBits,
+    public JavaSoundGenerator(int sampleRate, int bitDepth, double ditherBits,
                               JavaSoundDeviceManager deviceManager) {
         this(sampleRate, bitDepth, ditherBits, null, deviceManager);
     }
@@ -74,7 +74,7 @@ public class JavaSoundGenerator implements AudioPlayback {
      * @param deviceManager opens the {@link SourceDataLine} on the mixer whose
      *                      name matches {@code deviceName} (or the default).
      */
-    public JavaSoundGenerator(int sampleRate, int bitDepth, int ditherBits, String deviceName,
+    public JavaSoundGenerator(int sampleRate, int bitDepth, double ditherBits, String deviceName,
                               JavaSoundDeviceManager deviceManager) {
         this.sampleRate     = sampleRate;
         this.bitDepth       = bitDepth;
@@ -152,7 +152,7 @@ public class JavaSoundGenerator implements AudioPlayback {
     }
 
     @Override
-    public void setDitherBits(int bits) {
+    public void setDitherBits(double bits) {
         quantizer.setDitherBits(bits);
     }
 
