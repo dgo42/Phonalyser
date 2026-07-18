@@ -219,6 +219,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   −600 dBV: they read "---", a one-sided DFD3 still reports its measurable
   sideband, and the combined IMD power skips them. Fixed in the desktop
   app and the web version alike.
+- **Low sample rates were never offered.** The selectable rate list was
+  effectively floored at 44.1 kHz. The standard lower rates — 8000, 11025,
+  16000 and 22050 Hz — are now probed on every backend and offered wherever
+  the device actually supports them (except the QA40x, whose 48 / 96 / 192 kHz
+  are fixed in hardware).
 
 ## [1.0.3] — 2026-07-04
 
