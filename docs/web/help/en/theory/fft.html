@@ -459,6 +459,25 @@
      standard<sup id="cite-5"><a href="#ref-aw">[5]</a></sup> so the figure
      reflects audibility rather than raw wideband noise.</p>
 
+  <p>The phrase "their leakage zones" hides the detail that decides whether these
+     figures are honest: the band excluded around the fundamental is not a fixed
+     guard.  A wide or phase-noisy fundamental spreads a <b>skirt</b> of raised
+     bins to either side; left in the noise sum it would flatter both SNR and
+     ENOB by counting the tone's own spilled energy as noise.  So the exclusion
+     is grown to fit the skirt.  Starting at the fundamental bin the analyser
+     walks outward, bin by bin, while each neighbour still stands above the noise
+     floor, and stops at the first bin that has fallen back to it — a narrow
+     skirt is excluded narrowly, a broad one out to wherever it truly ends.  The
+     level used for that test is the spectrum's own tenth-percentile power, which
+     is immune to the very leakage being measured, so the width of the walk does
+     not depend on the chosen SNR band.  A second, bounded pass then sweeps a
+     zone of ±½·<i>f</i>₁ around the fundamental and drops any isolated
+     phase-noise bump still standing above the floor — the contiguous walk halts
+     at the first null, so a skirt broken by a dip would otherwise leak its outer
+     islands back in.  That zone is capped at half the fundamental frequency so
+     it can never reach the second harmonic at 2·<i>f</i>₁, which must stay
+     counted as distortion, not excluded as noise.</p>
+
   <h2 id="dualtone">Two-tone (intermodulation)</h2>
   <p>With two tones present, the products of interest are not harmonics of
      one tone but combinations <i>a</i>·<i>f</i>₁ + <i>b</i>·<i>f</i>₂. The
