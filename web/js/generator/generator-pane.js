@@ -92,10 +92,10 @@ export class GeneratorPane {
   seedGeneratorControls() {
     const prefs = this.prefs;
     $('#signalForm').val(prefs.genSignalForm.get());
-    // toneHz / ampDbfs / tone2Hz / amp1Pct / amp2Pct / duty are owned by their
-    // NumericStepField controllers (seeded in initStepFields); nothing to set here.
-    this.rebuildDitherCombo();
-    $('#dither').val(String(prefs.genDitherBits.get()));
+    // toneHz / ampDbfs / tone2Hz / amp1Pct / amp2Pct / duty / dither are owned by their
+    // NumericStepField controllers (seeded in initStepFields); here only the "Dither" caption's
+    // bracketed companion readout is (re)rendered.
+    this.updateDitherLabel();
     $('#outputChannel').val(prefs.genOutputChannels.get());
     $('#snap').prop('checked', prefs.genSnapToFftBin.get());
     $('#genFileLoop').prop('checked', prefs.genPlayFromLoop.get());   // Java playFromLoopBtn is two-way bound
@@ -170,16 +170,14 @@ export class GeneratorPane {
     $('#dutyLabel').text(t('generator.dutyCycle.bracket', `${(k * 100 / n).toFixed(3)} %`));
   }
 
-  // Dither combo: every integer 0..outputBitDepth (0 → "Off", n → "n bits"), faithful to Java
-  // ditherBitsFor / rebuildDitherCombo (labels hardcoded in Java too). Rebuilt lazily so a
-  // Preferences output-bit-depth change is reflected next time the combo is opened.
-  rebuildDitherCombo() {
-    const depth = Math.max(0, this.prefs.current().outputBitDepth || 24);
-    if ($('#dither option').length === depth + 1) return;   // unchanged
-    const cur = parseInt($('#dither').val(), 10) || 0;
-    let html = '';
-    for (let n = 0; n <= depth; n++) html += `<option value="${n}">${n === 0 ? 'Off' : n + ' bits'}</option>`;
-    $('#dither').html(html).val(cur <= depth ? cur : 0);
+  // "Dither" caption (Java GeneratorPane.updateDitherLabel): append the dither value in the OTHER
+  // unit in brackets — dBV when the field shows bits, bits when it shows dBV — mirroring how
+  // refreshFreqLabel annotates the Frequency caption. Off shows the plain caption. The dBV side
+  // tracks the live DAC full-scale + FFT window, so this is re-run on the reanchor listeners.
+  updateDitherLabel() {
+    const f = this._getField('dither');
+    const other = f ? f.companionText() : '';
+    $('#ditherLabel').text(other ? t('generator.dither.bracket', other) : t('generator.dither'));
   }
 
   // Compensation (.dpd) row (Java GeneratorPane corrections row): the path field + browse + clear
@@ -426,13 +424,22 @@ export class GeneratorPane {
       pref.addListener(() => MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT));
     }
 
-    // Dither only affects the (future) file-render quantization, not the live worklet path — accepted
-    // Web-Audio divergence (Java live-applies dither via ag.setDitherBits on the running playback).
-    // Keep config in sync here; the FFT/scope reset rides the genDitherBits pref listener above (Java
-    // setDitherBits still publishes signalChanged even when nothing is playing). Registered FIRST (the
-    // desktop port wired this + the structural form handler at module load, ahead of the prefs
-    // bindings) so the jQuery fire order — config-sync / structural THEN prefs-set — is preserved.
-    $('#dither').on('change', () => { engine.config.ditherBits = parseInt($('#dither').val(), 10) || 0; });
+    // A DAC recalibration or an FFT-window change shifts how the dither reads on the FFT floor.
+    // reanchor() HOLDS the entered value: in the dBV view it keeps the shown dBV and re-solves the
+    // bits (maintaining the FFT-floor target under the new full-scale / window); in the bits view it
+    // keeps the bits and only the dBV readout moves. When the bits re-solve, persist them — that
+    // restarts via the usual genDitherBits path (the publisher loop above) — then re-annotate the
+    // caption. Mirrors Java GeneratorPane's Bindings.onChange for dacFsVoltageAmplProperty +
+    // fftWindowProperty. Dither is NOT live-applied to the worklet (accepted Web-Audio divergence,
+    // like Java's live ag.setDitherBits) — readConfig reads the field fresh at each (re)start and the
+    // Save-to export path applies it via quantizePcm.
+    const reanchorDither = () => {
+      const f = this._getField('dither');
+      if (f && f.reanchor()) prefs.genDitherBits.set(f.getValue());
+      this.updateDitherLabel();
+    };
+    prefs.dacFsVoltageAmpl.addListener(reanchorDither);
+    prefs.fftWindow.addListener(reanchorDither);
 
     // Signal-form change is structural (SINGLE↔DUAL_TONE changes generator structure;
     // the kernel's form is set from processorOptions) → restart the GENERATOR only.
@@ -452,9 +459,8 @@ export class GeneratorPane {
 
     // ----- generator prefs bindings (Java GeneratorPane) -----
     $('#signalForm').on('change', () => prefs.genSignalForm.set($('#signalForm').val()));
-    // toneHz / ampDbfs prefs are written by their NumericStepField onChange handlers.
-    $('#dither').on('change', () => prefs.genDitherBits.set(parseInt($('#dither').val(), 10) || 0));
-    $('#dither').on('focus mousedown', () => this.rebuildDitherCombo());   // re-cap to output bit depth on open
+    // toneHz / ampDbfs / dither prefs are written by their NumericStepField onChange handlers
+    // (the dither field also persists genDitherDbvDisplay and re-annotates #ditherLabel).
     // Output-lane gate: persist + push the routing to the running worklet (Java
     // GeneratorController.pushOutputRoutingToPlayback on genOutputChannels change). rightLaneScale
     // is recomputed fresh (= fsLeft/fsRight); retuneGenerator is a no-op when nothing is playing.
@@ -538,7 +544,7 @@ export class GeneratorPane {
       // Export at the configured output bit depth (16/24/32), like Java exportSignal
       // (prefs.current().getOutputBitDepth()) — so a "..._16bit.wav" name truly carries 16-bit PCM.
       const bitDepth = Math.max(8, prefs.current().outputBitDepth || 24);
-      const dither = parseInt($('#dither').val(), 10) || 0;
+      const dither = sfVal('dither', 0);   // fractional bits from the DITHER NumericStepField (0 = Off)
       // RECTANGLE and TRIANGLE export at the same sample-period-aligned frequency they play at, so a
       // looped file has no edge/corner seam and the whole-period truncation lands on N samples (Java exportSignal).
       const rawHz = sfVal('toneHz', 1000);

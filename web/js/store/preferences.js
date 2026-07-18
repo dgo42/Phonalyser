@@ -416,7 +416,11 @@ export class Preferences {
     this.genDualToneSplitPct = this._bound(50.0);
     this.genAmplitudeVrms = this._bound(0.5);
     this.genAmplitudeDbvDisplay = this._bound(false);
-    this.genDitherBits = this._bound(0);
+    // Dither depth in bits (may be fractional); 0 = Off. Mirrors Java Preferences.genDitherBits (double).
+    this.genDitherBits = this._bound(0.0);
+    // True = the dither field displays in dBV (the user typed an explicit dBV suffix); persisted so a
+    // restart keeps the choice. Mirrors Java Preferences.genDitherDbvDisplay.
+    this.genDitherDbvDisplay = this._bound(false);
     // Which output lane(s) the generator drives — the encoder gate ('BOTH' by
     // default = pre-feature behaviour). Applied at the interleave seam (the DDS
     // worklet for live playback, the genSave export path), like Java's
@@ -1105,6 +1109,7 @@ export class Preferences {
     root.genAmplitudeVrms = this.genAmplitudeVrms.get();
     root.genAmplitudeDbvDisplay = this.genAmplitudeDbvDisplay.get();
     root.genDitherBits = this.genDitherBits.get();
+    root.genDitherDbvDisplay = this.genDitherDbvDisplay.get();
     root.genOutputChannels = this.genOutputChannels.get();   // persisted by enum name (Java toMap)
     if (this.genDpd.get() != null) root.genDpd = this.genDpd.get();
     if (this.genDpdDual.get() != null) root.genDpdDual = this.genDpdDual.get();
@@ -1457,7 +1462,9 @@ export class Preferences {
     if (isNum(g('genDualToneSplitPct'))) this.genDualToneSplitPct.set(g('genDualToneSplitPct'));
     if (isNum(g('genAmplitudeVrms'))) this.genAmplitudeVrms.set(g('genAmplitudeVrms'));
     if (isBool(g('genAmplitudeDbvDisplay'))) this.genAmplitudeDbvDisplay.set(g('genAmplitudeDbvDisplay'));
-    if (isNum(g('genDitherBits'))) this.genDitherBits.set(trunc(g('genDitherBits')));
+    // Fractional double now (Java int→double): NO trunc, so a fractional dither round-trips.
+    if (isNum(g('genDitherBits'))) this.genDitherBits.set(g('genDitherBits'));
+    if (isBool(g('genDitherDbvDisplay'))) this.genDitherDbvDisplay.set(g('genDitherDbvDisplay'));
     // Absent / invalid key keeps the current value (default BOTH) — old files stay on BOTH
     // (mirrors Java enumOr(OutputChannels.class, s, genOutputChannels.get())).
     if (isStr(g('genOutputChannels'))) this.genOutputChannels.set(enumOr('OutputChannels', g('genOutputChannels'), this.genOutputChannels.get()));
