@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.PortAudio;
 
@@ -145,8 +146,8 @@ public class WdmksDeviceManager {
 
     private List<AudioFormat> probeFormats(WdmksDeviceRef d, boolean output) {
         List<AudioFormat> result = new ArrayList<>();
-        int[] rates  = {44100, 48000, 88200, 96000, 176400, 192000,
-                        352800, 384000, 705600, 768000};
+        int[] rates  = {8000, 11025, 16000, 22050, 44100, 48000, 88200, 
+                        96000, 176400, 192000, 352800, 384000, 705600, 768000};
         int[] depths = {16, 24, 32};
 
         // Probe inputs at the device's real channel count (a mono input can't

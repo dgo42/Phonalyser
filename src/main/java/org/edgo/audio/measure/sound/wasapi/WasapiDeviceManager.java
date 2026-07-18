@@ -36,7 +36,9 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static org.edgo.audio.measure.sound.wasapi.WasapiNative.*;
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.DeviceRef;
+import org.edgo.audio.measure.sound.wasapi.WasapiNative.Ole32;
 
 /**
  * Discovery for the {@link AudioBackendType#WASAPI} backend.  Constructed
@@ -191,8 +193,8 @@ public class WasapiDeviceManager {
 
     private List<AudioFormat> probeFormats(WasapiDeviceRef d) {
         List<AudioFormat> result = new ArrayList<>();
-        int[] rates  = {44100, 48000, 88200, 96000, 176400, 192000,
-                        352800, 384000, 705600, 768000};
+        int[] rates  = {8000, 11025, 16000, 22050, 44100, 48000, 88200, 
+                        96000, 176400, 192000, 352800, 384000, 705600, 768000};
         int[] depths = {16, 24, 32};
 
         Pointer dev = openDevice(d.endpointId());

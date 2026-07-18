@@ -98,7 +98,7 @@ public class HistogramMode {
         }
         int sampleRate = recordMode ? Integer.parseInt(samplerateArg) : 0;
         if (recordMode && !SampleRates.isValid(sampleRate)) {
-            log.error("--samplerate must be one of: 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000");
+            log.error("--samplerate must be one of: 8000, 11025, 16000, 22050, 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000");
             System.exit(1);
         }
         int windowLength = Integer.parseInt(windowArg);
