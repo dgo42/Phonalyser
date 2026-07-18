@@ -1413,6 +1413,17 @@ public final class FftView extends AbstractFreqDomainView {
         // The fundamental dot sits on the DISPLAYED peak: the manual
         // fundamental when set (the trace's lobe is stretched to it at
         // draw time), else the measured level.
+        //
+        // With a manual fundamental and no .frc cal there is no pre-cal
+        // snapshot above, yet the lobe is stretched to the manual value and the
+        // red dot lands on it — so also drop a BLUE dot at the true MEASURED
+        // fundamental height, matching the before-cal marker the cal path draws.
+        if (before == null && Double.isFinite(r.fundamentalTrueDbFs)
+                && r.fundamentalTrueDbFs != r.fundamentalDbFs) {
+            gc.setBackground(color(ColorRole.BEFORE_CAL_DOT));
+            plotDotAt(gc, plot, r.fundamentalHzRefined, r.fundamentalDbFs,
+                    unit, freqMin, freqMax, magTop, magBot, logFreq);
+        }
         double fundDotDbFs = Double.isFinite(r.fundamentalTrueDbFs)
                 ? r.fundamentalTrueDbFs : r.fundamentalDbFs;
         gc.setBackground(color(ColorRole.HARMONIC_DOT));
