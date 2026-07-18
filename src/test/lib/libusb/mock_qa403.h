@@ -125,6 +125,7 @@ void qa403_stream(qa403_device *d, double elapsed_sec);
 int  qa403_adc_avail_frames(qa403_device *d);
 void qa403_adc_pop(qa403_device *d, int32_t *left, int32_t *right);
 
+#undef DEBUG_LOG
 /* Console protocol log (stdout, "[QA403] ..." lines, flushed each call). */
 void qa403_logf(const char *fmt, ...);
 

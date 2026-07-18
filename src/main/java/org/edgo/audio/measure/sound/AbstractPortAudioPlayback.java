@@ -116,7 +116,7 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
     };
 
     protected AbstractPortAudioPlayback(int paDeviceIndex, String deviceName, String backendLabel,
-                                        int sampleRate, int bitDepth, int ditherBits) {
+                                        int sampleRate, int bitDepth, double ditherBits) {
         this.paDeviceIndex = paDeviceIndex;
         this.deviceName    = deviceName;
         this.backendLabel  = backendLabel;
@@ -271,7 +271,7 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
     }
 
     @Override
-    public void setDitherBits(int bits) {
+    public void setDitherBits(double bits) {
         quantizer.setDitherBits(bits);
     }
 

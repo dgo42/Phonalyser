@@ -111,13 +111,16 @@ static int rate_hz(qa403_device *d)
     return QA403_RATE_HZ[d->regs[QA403_REG_SAMPLE_RATE] & 0x3];
 }
 
+#pragma warning(disable: 4100)
 void qa403_logf(const char *fmt, ...)
 {
+#ifdef DEBUG_LOG
     va_list ap;
     va_start(ap, fmt);
     vprintf(fmt, ap);
     va_end(ap);
     fflush(stdout);   /* the JVM may otherwise buffer the DLL's stdout away */
+#endif
 }
 
 static const char *reg_name(unsigned reg)

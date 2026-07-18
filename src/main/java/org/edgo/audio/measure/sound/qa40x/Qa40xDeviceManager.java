@@ -187,7 +187,7 @@ public class Qa40xDeviceManager {
     }
 
     /** Opens a playback client bound to this manager's one duplex engine. */
-    public AudioPlayback openPlayback(Qa40xDeviceRef device, int sampleRate, int ditherBits) {
+    public AudioPlayback openPlayback(Qa40xDeviceRef device, int sampleRate, double ditherBits) {
         return new Qa40xGenerator(this, sampleRate, ditherBits);
     }
 

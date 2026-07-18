@@ -27,7 +27,7 @@ package org.edgo.audio.measure.sound;
 public class CoreAudioGenerator extends AbstractPortAudioPlayback {
 
     public CoreAudioGenerator(CoreAudioDeviceManager.CoreAudioDeviceRef device,
-                              int sampleRate, int bitDepth, int ditherBits) {
+                              int sampleRate, int bitDepth, double ditherBits) {
         super(device.paDeviceIndex(), device.name(), "CoreAudio", sampleRate, bitDepth, ditherBits);
     }
 }
