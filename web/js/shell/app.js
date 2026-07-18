@@ -58,7 +58,9 @@ const prefs = Preferences.instance();  // load() runs in the constructor
 // full-scale into prefs at device selection (wired in PreferencesDialog). Constructed in init()
 // once the catalog YAML has been fetched + parsed (an async load — see loadDeviceCatalog).
 let deviceStore;
-const RATES = [8000, 11025, 16000, 22050, 32000, 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000];
+// Selectable sample rates — identical to the Java list (sound/*DeviceManager, cli/util/SampleRates):
+// 8/11.025/16/22.05 kHz + 44.1/48 kHz and their multiples up to 768 kHz. No 32 kHz (Java omits it).
+const RATES = [8000, 11025, 16000, 22050, 44100, 48000, 88200, 96000, 176400, 192000, 352800, 384000, 705600, 768000];
 // GenSignalForm token → localized display label for the #signalForm select.
 const formLabel = (form) => t(`generator.signalForm.${form}`);
 // GenSignalForm token → per-form waveform pictogram (web/assets/icons/signal-<kebab>.svg).
