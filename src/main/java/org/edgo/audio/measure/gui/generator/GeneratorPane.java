@@ -39,6 +39,7 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
+import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.OutputChannels;
@@ -1045,6 +1046,13 @@ public final class GeneratorPane extends AbstractPane {
         Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
         if (parent == null) return;
         Preferences prefs = Preferences.instance();
+        if (prefs.isDacCalibrationFromDevice()) {
+            // Device-provided (QA40x): show the built-in output full-scale (Vrms) read-only.
+            double fsL = prefs.getDacFsVoltageAmpl(Channel.L) / Math.sqrt(2.0);
+            double fsR = prefs.getDacFsVoltageAmpl(Channel.R) / Math.sqrt(2.0);
+            new CalibrationDialog(parent, dacTexts(), fsL, fsR, true, (ch, v) -> { }).open();
+            return;
+        }
         final double configuredVrms = prefs.getGenAmplitudeVrms();
         final boolean stereo = isOutputBoundStereo(prefs);
         // A stereo (LINKED / INDEPENDENT) card gets both rows, each prefilled with
@@ -1054,7 +1062,7 @@ public final class GeneratorPane extends AbstractPane {
         // the shared both-channels full-scale.  Output RMS scales linearly with FS,
         // so the true FS satisfies measured/configured = FS_true/FS_old.
         Double seedRight = stereo ? configuredVrms : null;
-        new CalibrationDialog(parent, dacTexts(), configuredVrms, seedRight, (ch, measuredVrms) -> {
+        new CalibrationDialog(parent, dacTexts(), configuredVrms, seedRight, false, (ch, measuredVrms) -> {
             if (stereo) {
                 double oldFs = prefs.getDacFsVoltageAmpl(ch);
                 double newFs = oldFs * (measuredVrms / configuredVrms);
@@ -1088,7 +1096,7 @@ public final class GeneratorPane extends AbstractPane {
         Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
         if (parent == null) return null;
         double vrms = Preferences.instance().getGenAmplitudeVrms();
-        CalibrationDialog dlg = new CalibrationDialog(parent, dacTexts(), vrms, vrms, (ch, v) -> { });
+        CalibrationDialog dlg = new CalibrationDialog(parent, dacTexts(), vrms, vrms, false, (ch, v) -> { });
         dlg.showForCapture();
         return dlg;
     }

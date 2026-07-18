@@ -86,9 +86,11 @@ public final class CalibrationDialog {
     /** Two-row (per-channel) calibration: a Left row and a Right row, each
      *  seeded with that channel's reference Vrms (a {@code null} disables the
      *  row and leaves its field blank); on OK every enabled+valid row fires
-     *  {@code onCalibrate} tagged with its {@link Channel}. */
+     *  {@code onCalibrate} tagged with its {@link Channel}.  {@code viewOnly}
+     *  shows the seeded values read-only with OK disabled — a device-provided
+     *  card (QA40x) whose built-in full-scale cannot be overwritten. */
     public CalibrationDialog(Shell parent, Texts texts, Double referenceLeftVrms, Double referenceRightVrms,
-                             ObjDoubleConsumer<Channel> onCalibrate) {
+                             boolean viewOnly, ObjDoubleConsumer<Channel> onCalibrate) {
         this.dialog  = newShell(parent, texts.titleKey());
         this.content = newContent();
 
@@ -123,6 +125,13 @@ public final class CalibrationDialog {
             dialog.close();
         };
         dialog.setDefaultButton(ok);
+
+        if (viewOnly) {
+            // Device-provided calibration (a QA40x): the rows show the card's
+            // built-in full-scale, but nothing can be committed — read-only.
+            ok.setEnabled(false);
+            for (Row r : rows) r.field.setEnabled(false);
+        }
     }
 
     private Shell newShell(Shell parent, String titleKey) {
