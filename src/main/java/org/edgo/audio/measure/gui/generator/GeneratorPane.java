@@ -104,9 +104,6 @@ public final class GeneratorPane extends AbstractPane {
     /** Amplitude floor (Vrms) — keeps log-unit (dBV) entry finite. */
     private static final double AMP_MIN_VRMS = 1e-9;
 
-    /** Current dither values shown in the combo (rebuilt when output bit depth changes). */
-    private int[] ditherBits;
-
     private final SignalFormCombo formCombo;
     private final Label           freqLabel;
     private final NumericStepField freqField;
@@ -144,7 +141,12 @@ public final class GeneratorPane extends AbstractPane {
      *  single-tone Frequency label. */
     private Label                 dualToneFreq1Label;
     private Label                 dualToneFreq2Label;
-    private final Combo           ditherCombo;
+    /** Dither depth entry — bits or a full-scale-aware dBV view of the same
+     *  value; the OTHER unit is appended to {@link #ditherLabel} in brackets. */
+    private final NumericStepField ditherField;
+    /** "Dither" caption — held so {@link #updateDitherLabel} can append the
+     *  other-unit readout in brackets (mirrors {@link #freqLabel}). */
+    private final Label           ditherLabel;
     /** Output-channel selector (Both / Left / Right) in the header row — gates
      *  which DAC lane carries the generated signal.  READ_ONLY enum combo bound
      *  to {@code Preferences#genOutputChannelsProperty()} in the dither-combo
@@ -597,21 +599,50 @@ public final class GeneratorPane extends AbstractPane {
         updateDutyFieldEnabled(initialForm);
 
         // ------------------------------------------------------------ Dither
-        // Cap the dither options at the current output bit depth (16 / 24 /
-        // 32 typically) — dither values higher than the DAC's resolution
-        // are meaningless.  Rebuild the list right before each dropdown so
-        // a bit-depth change in Preferences (made after the pane was
-        // constructed) is picked up the next time the user opens the combo.
-        addRowLabel(group, I18n.t("generator.dither"));
-        ditherCombo = new Combo(group, SWT.READ_ONLY);
-        ditherBits  = ditherBitsFor(prefs.current().getOutputBitDepth());
-        rebuildDitherCombo(prefs.getGenDitherBits());
-        ditherCombo.setLayoutData(fillH());
-        ditherCombo.setToolTipText(I18n.t("generator.dither.tooltip"));
-        ditherCombo.addListener(SWT.MouseDown, e -> refreshDitherList());
-        ditherCombo.addListener(SWT.FocusIn,   e -> refreshDitherList());
-        ditherCombo.addListener(SWT.Selection, e ->
-                prefs.setGenDitherBits(ditherBits[ditherCombo.getSelectionIndex()]));
+        // A standard numeric field (like the amplitude field): the user
+        // enters/sees the dither depth as whole/fractional bits OR a
+        // full-scale-aware dBV VIEW of the same value (0 = Off, capped at the
+        // output bit depth).  The OTHER unit is appended to the "Dither"
+        // caption in brackets — exactly like the corrected frequency on the
+        // Frequency caption — and tracks the live DAC full-scale.  Off sits at
+        // the top of the range.  The caption is a field so updateDitherLabel()
+        // can re-annotate it.
+        ditherLabel = new Label(group, SWT.NONE);
+        ditherLabel.setText(I18n.t("generator.dither"));
+        ditherLabel.setLayoutData(fillH());
+        ditherField = new NumericStepField(group, UnitFamily.DITHER,
+                prefs.current().getOutputBitDepth(), prefs::getDacFsVoltageAmpl,
+                () -> prefs.getFftWindow().enbw(), 160);
+        ditherField.setLayoutData(fillH());
+        ditherField.setToolTipText(I18n.t("generator.dither.tooltip"));
+        // Seed value + display unit BEFORE wiring the listener so the seed
+        // doesn't re-enter the pref write / signal path.
+        ditherField.setValue(prefs.getGenDitherBits());
+        ditherField.setLogDisplay(prefs.isGenDitherDbvDisplay());
+        // On a committed change, write the bit count (the existing genDitherBits
+        // → GeneratorController.setDitherBits → publishSignalChanged path is
+        // unchanged), persist the bits/dBV display choice, and re-annotate the
+        // caption with the other-unit readout.
+        ditherField.addSelectionListener(e -> {
+            prefs.setGenDitherBits(ditherField.getValue());
+            prefs.setGenDitherDbvDisplay(ditherField.isLogDisplay());
+            updateDitherLabel();
+        });
+        // A DAC recalibration or an FFT-window change shifts how the dither
+        // reads on the FFT floor.  reanchor() HOLDS the entered value: in the dBV
+        // view it keeps the shown dBV and re-solves the bits so the FFT-floor
+        // target is maintained under the new full-scale / window; in the bits
+        // view it keeps the bits and only the dBV readout moves.  When the bits
+        // re-solve, persist them — that restarts the generator via the usual
+        // genDitherBits path — then re-annotate the caption.
+        Bindings.onChange(group, prefs.dacFsVoltageAmplProperty(), v -> {
+            if (ditherField.reanchor()) prefs.setGenDitherBits(ditherField.getValue());
+            updateDitherLabel();
+        });
+        Bindings.onChange(group, prefs.fftWindowProperty(), w -> {
+            if (ditherField.reanchor()) prefs.setGenDitherBits(ditherField.getValue());
+            updateDitherLabel();
+        });
 
         // ------------------------------------------------------- Corrections
         addRowLabel(group, I18n.t("generator.corrections"));
@@ -840,6 +871,12 @@ public final class GeneratorPane extends AbstractPane {
             dualToneFreq2Field.setMax(nyquist);
             sweepStartField.setMax(nyquist);
             sweepEndField.setMax(nyquist);
+            // Output bit depth is part of the audio format — it caps the dither
+            // range (setMax re-clamps and echoes a clamped bit count back to the
+            // pref) and shifts the dBV view; refresh the field + companion label.
+            ditherField.setMax(Preferences.instance().current().getOutputBitDepth());
+            ditherField.refresh();
+            updateDitherLabel();
         };
         bus.subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
 
@@ -865,6 +902,7 @@ public final class GeneratorPane extends AbstractPane {
         // saved form, if any.
         updateFreqLabel();
         updateDutyLabel();
+        updateDitherLabel();
 
         // The injected controller survives content rebuilds — when this
         // pane is a rebuilt instance the tone / file playback may already
@@ -893,7 +931,7 @@ public final class GeneratorPane extends AbstractPane {
         sweepLoopBtn       .setData("helpAnchor", "generator.html#generator-sweep-loop");
         ampField           .setData("helpAnchor", "generator.html#generator-amplitude");
         dutyField          .setData("helpAnchor", "generator.html#generator-duty");
-        ditherCombo        .setData("helpAnchor", "generator.html#generator-dither");
+        ditherField        .setData("helpAnchor", "generator.html#generator-dither");
         correctionsField   .setData("helpAnchor", "generator.html#generator-corrections");
         durationField      .setData("helpAnchor", "generator.html#generator-duration");
         wavPathField       .setData("helpAnchor", "generator.html#generator-save-to");
@@ -1566,53 +1604,18 @@ public final class GeneratorPane extends AbstractPane {
     }
 
     /**
-     * Resolves the set of dither bit options for the given output bit
-     * depth: every integer from 0 to {@code outputBitDepth} inclusive.
-     * 0 is rendered as "Off" in the combo; values above the DAC's
-     * resolution would have no effect and are dropped.
+     * Refreshes the "Dither" caption: appends the dither value in the OTHER
+     * unit in brackets — dBV when the field shows bits, bits when it shows dBV
+     * — mirroring how {@link #updateFreqLabel} annotates the Frequency caption.
+     * Off shows the plain caption.  The dBV side tracks the live DAC full-scale,
+     * so this is re-run on calibration / output-format changes.
      */
-    private int[] ditherBitsFor(int outputBitDepth) {
-        int cap = Math.max(0, outputBitDepth);
-        int[] out = new int[cap + 1];
-        for (int i = 0; i <= cap; i++) out[i] = i;
-        return out;
-    }
-
-    /** Re-populates the dither combo with {@link #ditherBits} and selects {@code currentBits} (or 0 / "Off" if unavailable). */
-    private void rebuildDitherCombo(int currentBits) {
-        String[] items = new String[ditherBits.length];
-        for (int i = 0; i < ditherBits.length; i++) {
-            items[i] = ditherBits[i] == 0 ? "Off" : ditherBits[i] + " bits";
-        }
-        ditherCombo.setItems(items);
-        int sel = 0;
-        for (int i = 0; i < ditherBits.length; i++) {
-            if (ditherBits[i] == currentBits) { sel = i; break; }
-        }
-        ditherCombo.select(sel);
-    }
-
-    /**
-     * Refreshes the dither combo for a new output bit depth (e.g. after
-     * the user changes it in Preferences).  Re-selects the previous bit
-     * count if it still fits, otherwise falls back to "Off".
-     */
-    public void onOutputBitDepthChanged(int newOutputBitDepth) {
-        ditherBits = ditherBitsFor(newOutputBitDepth);
-        rebuildDitherCombo(Preferences.instance().getGenDitherBits());
-    }
-
-    /**
-     * Rebuilds the dither combo only when the cached output bit depth no
-     * longer matches the current preference — fired on mouse-down /
-     * focus-in so a change to output bit depth (made via Preferences after
-     * the pane was constructed) is reflected the next time the user
-     * touches the combo.
-     */
-    private void refreshDitherList() {
-        int currentDepth = Preferences.instance().current().getOutputBitDepth();
-        if (ditherBits.length == currentDepth + 1) return;     // unchanged
-        onOutputBitDepthChanged(currentDepth);
+    private void updateDitherLabel() {
+        String other = ditherField.companionText();
+        ditherLabel.setText(other.isEmpty()
+                ? I18n.t("generator.dither")
+                : I18n.t("generator.dither.bracket", other));
+        ditherLabel.getParent().layout();
     }
 
     private String nullToEmpty(String s) { return s == null ? "" : s; }

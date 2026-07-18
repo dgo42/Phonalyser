@@ -290,7 +290,7 @@ public final class AudioBackend {
         }
     }
 
-    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, int ditherBits) {
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
         switch (device.backend()) {
             case WDMKS:
                 return new WdmksGenerator((WdmksDeviceManager.WdmksDeviceRef) device,

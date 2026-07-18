@@ -283,6 +283,44 @@
      ein flaches, gutartiges Grundrauschen.  Exporte und die Entfaltungsreferenz
      werden vor dieser Stufe abgegriffen und bleiben daher die ideale Wellenform.</p>
 
+  <h2 id="dither-dbv">Dither über das erzeugte Grundrauschen einstellen</h2>
+  <p>Die Dither-Tiefe ist eine Anzahl von Bits, doch ein Spektrum zeigt einen
+     <em>Pegel</em>, keine Bitzahl — daher lässt der Generator Sie die Tiefe
+     wahlweise als Bits oder direkt in <b>dBV</b> einstellen und ablesen, ein Wert
+     auf zwei Arten betrachtet.  Die Umrechnung ist die Physik des TPDF-Rauschens
+     selbst: <i>N</i>-Bit-Dither hat einen RMS-Wert von
+     2<sup>−(<i>N</i>−1)</sup>/√6 relativ zur <em>Spitzen</em>-Vollaussteuerung,
+     sein absoluter Pegel ist also</p>
+  <div class="eq"><i>L</i><sub>dBV</sub> = −6.0206·(<i>N</i>−1) − 7.782
+      + 20·log₁₀ <i>V</i><sub>FS,pk</sub><span class="no">(11)</span></div>
+  <p>mit <i>V</i><sub>FS,pk</sub> der Spitzen-Vollaussteuerungsspannung des DAC.
+     Bezugsgröße ist die Spitzen-Vollaussteuerung, weil der Dither im
+     spitzennormierten Sample steckt — die RMS-Vollaussteuerung als Bezug würde
+     etwa 3 dB zu niedrig ablesen.  Die Vollaussteuerung ist ein pro Bereich
+     kalibrierter Wert, daher verschiebt sich der dBV-Wert mit dem Ausgangsbereich
+     und der Kartenkalibrierung genau so wie das reale Grundrauschen.</p>
+
+  <p>Ein zweiter Term sorgt dafür, dass der angegebene dBV-Wert mit dem
+     übereinstimmt, was die <a href="fft.html">FFT</a> tatsächlich anzeigt.  Ein
+     Spektrumanalysator liest <em>breitbandiges</em> Rauschen um die
+     <b>äquivalente Rauschbandbreite</b> (ENBW) des Analysefensters höher als
+     dessen wahren RMS-Wert: Ein Ton landet im Wesentlichen auf einem einzigen Bin
+     und wird über die kohärente Verstärkung des Fensters zurückgewonnen, doch
+     Rauschen verteilt sich über die breitere Rauschbandbreite des Fensters.  Der
+     Generator addiert daher 10·log₁₀(ENBW) für das aktuell in der FFT gewählte
+     Fenster — etwa 1,76 dB für ein Hann-Fenster, ~3 dB für Blackman-Harris, mehr
+     für die Flat-Tops — und löst die Tiefe neu auf, wenn Sie dieses Fenster
+     wechseln.  Das Ergebnis: Geben Sie −100 dBV ein, und das FFT-Grundrauschen
+     liegt bei −100 dBV, gleich per Konstruktion.</p>
+
+  <div class="note"><b>Nur inkohärente Mittelung.</b>  Diese Übereinstimmung setzt
+     voraus, dass die FFT <em>inkohärente (Leistungs-)Mittelung</em> verwendet.
+     Kohärente Mittelung ist darauf ausgelegt, unkorreliertes Rauschen
+     auszulöschen — sie zieht das gemessene Grundrauschen über <i>M</i> Blöcke um
+     √<i>M</i> nach unten —, sodass der Dither gegen eine kohärente Mittelung weit
+     unter seinem angegebenen dBV-Wert abgelesen wird.  Prüfen Sie eine
+     Dither-Einstellung nur mit Leistungsmittelung gegen das Spektrum.</div>
+
   <h2 id="savefile">Signal speichern — eine perfekte Referenz</h2>
   <p>Beim Speichern des Generatorausgangs in eine Datei (<b>Speichern unter…</b>
      im Generatorfenster) werden die Samples <em>direkt aus der Syntheserechnung</em>

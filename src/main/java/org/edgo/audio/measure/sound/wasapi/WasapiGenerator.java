@@ -68,7 +68,7 @@ public class WasapiGenerator implements AudioPlayback {
 
     public WasapiGenerator(WasapiDeviceManager devices,
                            WasapiDeviceManager.WasapiDeviceRef device,
-                           int sampleRate, int bitDepth, int ditherBits) {
+                           int sampleRate, int bitDepth, double ditherBits) {
         this.devices        = devices;
         this.device         = device;
         this.sampleRate     = sampleRate;
@@ -409,7 +409,7 @@ public class WasapiGenerator implements AudioPlayback {
     }
 
     @Override
-    public void setDitherBits(int bits) {
+    public void setDitherBits(double bits) {
         quantizer.setDitherBits(bits);
     }
 

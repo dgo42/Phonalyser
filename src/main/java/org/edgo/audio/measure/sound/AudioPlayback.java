@@ -48,7 +48,7 @@ public interface AudioPlayback extends AutoCloseable {
      * default).  Honoured by the in-process JavaSoundGenerator /
      * WdmksGenerator wired to the GUI.
      */
-    default void setDitherBits(int bits) {}
+    default void setDitherBits(double bits) {}
 
     /**
      * Live-updates the per-lane full-scale scale factors (left, right) — the

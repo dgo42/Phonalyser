@@ -28,7 +28,7 @@ import org.edgo.audio.measure.sound.AbstractPortAudioPlayback;
 public class WdmksGenerator extends AbstractPortAudioPlayback {
 
     public WdmksGenerator(WdmksDeviceManager.WdmksDeviceRef device,
-                          int sampleRate, int bitDepth, int ditherBits) {
+                          int sampleRate, int bitDepth, double ditherBits) {
         super(device.paDeviceIndex(), device.name(), "WDM-KS", sampleRate, bitDepth, ditherBits);
     }
 }

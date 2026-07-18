@@ -294,7 +294,7 @@ public final class GeneratorController {
 
         final int    sampleRate    = bp.getOutputSampleRate();
         final int    bitDepth      = bp.getOutputBitDepth();
-        final int    ditherBits    = prefs.getGenDitherBits();
+        final double ditherBits    = prefs.getGenDitherBits();
         final double amplitudeVRms = prefs.getGenAmplitudeVrms();
         final GenSignalForm form      = prefs.getGenSignalForm();
         // First tone frequency: the generator constructor's
@@ -343,7 +343,7 @@ public final class GeneratorController {
      * partially-opened resources are torn down before returning.
      */
     private String tryStartOnce(Preferences prefs, DeviceRef device,
-                                int sampleRate, int bitDepth, int ditherBits,
+                                int sampleRate, int bitDepth, double ditherBits,
                                 GenSignalForm form, double frequency, double amplitudeVRms,
                                 long readyTimeoutSeconds) {
         Thread old = playThread;
@@ -493,7 +493,7 @@ public final class GeneratorController {
     /** Live-applies the dither bit count to the running playback (if any), then
      *  signals a generator change so the FFT stats/accumulator and the scope
      *  persistence restart on the new signal. */
-    public void setDitherBits(int bits) {
+    public void setDitherBits(double bits) {
         AudioPlayback ag = playback;
         if (ag != null) ag.setDitherBits(bits);
         publishSignalChanged();
@@ -870,7 +870,7 @@ public final class GeneratorController {
         double  sweepDurSec = isSweep ? prefs.getGenSweepDurationSec() : 0.0;
         int    sampleRate    = prefs.current().getOutputSampleRate();
         int    bitDepth      = prefs.current().getOutputBitDepth();
-        int    ditherBits    = prefs.getGenDitherBits();
+        double ditherBits    = prefs.getGenDitherBits();
         // RECTANGLE and TRIANGLE export at the SAME integer-sample-period
         // frequency the live generator emits (fs/N) — so the file matches what
         // is heard, a looped WAV has no off-grid edge/corner seam, and the

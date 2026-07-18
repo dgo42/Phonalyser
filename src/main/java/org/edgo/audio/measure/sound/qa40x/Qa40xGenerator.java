@@ -71,17 +71,18 @@ public final class Qa40xGenerator implements AudioPlayback {
     /** Output-lane gate, honoured live in {@link #nextFrames} (default BOTH). */
     @Setter
     private volatile OutputChannels outputChannels = OutputChannels.BOTH;
-    /** TPDF dither depth in bits; 0 = off.  Honoured live in {@link #nextFrames}. */
-    private volatile int ditherBits;
+    /** TPDF dither depth in bits (may be fractional); 0 = off.  Honoured live
+     *  in {@link #nextFrames}. */
+    private volatile double ditherBits;
     private volatile boolean attached;
     /** {@link SplittableRandom}, USB-event-thread-confined (mirrors PcmQuantizer's
      *  render-thread rng); one shared across threads would be a data race. */
     private final SplittableRandom rng = new SplittableRandom();
 
-    Qa40xGenerator(Qa40xDeviceManager manager, int sampleRate, int ditherBits) {
+    Qa40xGenerator(Qa40xDeviceManager manager, int sampleRate, double ditherBits) {
         this.manager    = manager;
         this.sampleRate = sampleRate;
-        this.ditherBits = Math.max(0, ditherBits);
+        this.ditherBits = Math.max(0.0, ditherBits);
     }
 
     @Override
@@ -126,8 +127,8 @@ public final class Qa40xGenerator implements AudioPlayback {
     }
 
     @Override
-    public void setDitherBits(int bits) {
-        this.ditherBits = Math.max(0, bits);
+    public void setDitherBits(double bits) {
+        this.ditherBits = Math.max(0.0, bits);
     }
 
     @Override
@@ -192,9 +193,11 @@ public final class Qa40xGenerator implements AudioPlayback {
      * at {@code ditherBits} resolution; 0 = off.
      */
     private double tpdfNoise() {
-        int bits = ditherBits;   // single read — a live change can't shift by (0 − 1)
-        if (bits == 0) return 0.0;
-        return (rng.nextDouble() - rng.nextDouble()) / (1L << (bits - 1));
+        double bits = ditherBits;   // single read — a live change can't shift by (0 − 1)
+        if (bits <= 0.0) return 0.0;
+        // Math.pow(2, bits−1) equals the old 1L<<(bits−1) for whole bits, and
+        // interpolates the ±1 LSB amplitude continuously for a fractional depth.
+        return (rng.nextDouble() - rng.nextDouble()) / Math.pow(2.0, bits - 1);
     }
 
     private double clamp(double v) {
