@@ -91,6 +91,18 @@ const NAV_RANGE = 1_000_000;
 const COMPARE_TRACE_COLOR = '#c000c0';
 const FILTER_TRACE_COLOR = '#8e24aa';
 
+// ----- canvas overlay tables: anchored below the header button row -----
+// Java puts BOTH overlay tables just under its header buttons, at an ABSOLUTE
+// y = BTN_TOP + BTN_H + 6 from the widget top — the compare table
+// (FreqRespView:1772) and the unevenness readout (:2167) share that anchor.
+// Java's row is BTN_TOP=4 / BTN_H=22; here it is the .lr-tools DOM overlay
+// (top:5px, 22px buttons + 1px borders = 24 high), which the canvas cannot
+// measure — hence the mirrored constants. Anchoring to plot.y (=MARGIN_TOP=4)
+// instead put the text at y=10, straight through the L/R buttons.
+const BTN_TOP = 5;
+const BTN_H = 24;
+const OVERLAY_TABLE_TOP = BTN_TOP + BTN_H + 6;   // 35 px from the canvas top
+
 // ----- external measurement window layout (Java FreqRespView EXT_* constants) -----
 const EXT_LEFT_PAD = 6;
 const EXT_CONTENT_W = 320;
@@ -1158,7 +1170,7 @@ export class FreqRespView {
     g.font = '11px "Segoe UI", sans-serif';
     g.textBaseline = 'top'; g.textAlign = 'left';
     g.fillStyle = '#222';
-    const x = plot.x + 6, y = plot.y + 6, lineH = 14;
+    const x = plot.x + 6, y = OVERLAY_TABLE_TOP, lineH = 14;
     g.fillText('max: ' + formatDbReadout(this.compareSmoothedMax), x, y);
     g.fillText('min: ' + formatDbReadout(this.compareSmoothedMin), x, y + lineH);
   }
@@ -1436,7 +1448,7 @@ export class FreqRespView {
     g.fillStyle = '#222';
     const lineH = 14;
     const x = plot.x + 6;
-    const y = plot.y + 6 + (belowCompareTable ? 2 * lineH + 4 : 0);
+    const y = OVERLAY_TABLE_TOP + (belowCompareTable ? 2 * lineH + 4 : 0);
     g.fillText(text, x, y);
   }
 
