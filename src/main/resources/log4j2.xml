@@ -14,6 +14,10 @@
         </RollingFile>
     </Appenders>
     <Loggers>
+        <Logger name="org.edgo.audio.measure.sound.qa40x" level="WARN" additivity="false">
+            <AppenderRef ref="Console" level="ERROR"/>
+            <AppenderRef ref="File" level="WARN"/>
+        </Logger>
         <!-- PortAudio native-library loading logs at INFO (which DLL / folder was
              resolved) for field diagnostics, without raising the rest of the app
              above WARN. -->

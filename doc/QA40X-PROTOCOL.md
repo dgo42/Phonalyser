@@ -5,10 +5,15 @@ backend that talks to the QuantAsylum QA40x family of audio analyzers directly
 over **libusb-1.0**, without the vendor Windows software. It collects the wire
 protocol (USB identity, endpoints, register map, streaming format, on-device
 calibration, init/teardown sequencing, and hardware quirks) as **facts learned
-by reading two open-source projects**. It has **not** been verified against real
-hardware — every statement carries its source, and everything the two sources
-disagree on (or that only one source knows) is listed explicitly in
-§9 CONFLICTS / UNVERIFIED.
+by reading two open-source projects**, and — as of **2026-07-20** — augmented by
+**observing the USB register traffic** the vendor Windows app puts on the bus
+while it runs against an **RT1062 QA403 simulator** (the `QA40x_sim`
+subproject) and against a genuine analyzer. Every statement carries its source.
+Items the two open-source projects disagree on, or that only one knows, are in
+§9 CONFLICTS / UNVERIFIED; the 2026-07-20 addition (the connect handshake — §6)
+is **observed on the wire + hardware-confirmed**, but
+two things still need a **genuine QA403** and are called out in §9 item 15 (the
+balanced level/clip convention, and whether real hardware gaps at 192 k / 1 M-FFT).
 
 ## Sources
 
@@ -17,6 +22,7 @@ disagree on (or that only one source knows) is listed explicitly in
 | **PyQa40x** | <https://github.com/QuantAsylum/PyQa40x> | MIT (`doc/licences/PyQa40x-LICENSE.txt`) | © 2026 QuantAsylum | **Authoritative** — the vendor's own Python driver. Only source for on-device calibration + raw↔volts math. Covers QA402/QA403 only. |
 | **ASIO401** | <https://github.com/dechamps/ASIO401> | MIT (`doc/licences/ASIO401-LICENSE.txt`) | © 2018 Etienne Dechamps | Windows ASIO driver, developed with QuantAsylum. **Only its QA40x USB transport layer + docs are used here** (all ASIO-SDK material is ignored). Authoritative on the full-duplex streaming discipline and on the QA401. |
 | **QA blog** | <https://quantasylum.com/blogs/news/qa401-headless-linux> | vendor web page (referenced, nothing copied) | QuantAsylum | Vendor post on headless QA401 under Linux: QA401 VID/PID, the udev rule, confirms libusb, and states the app configures the QA401's **FPGA** at startup (30–60 s). |
+| **RT1062 sim bench** | `QA40x_sim` (this project) | — | — | 2026-07-20 — an RT1062 firmware QA403 simulator. Running the vendor Windows app against it (and against a genuine analyzer) put the app's **register traffic on the bus where it can be logged**: this is the source of the connect **handshake**, and it confirmed streaming behavior end-to-end — clean captures (§5/§6). Black-box bus observation only. |
 
 **Vendor-authority rule (maintainer, 2026-07-10).** PyQa40x is QuantAsylum's
 own code — a fact whose only source is PyQa40x is treated as
@@ -25,22 +31,32 @@ genuine conflicts, ASIO401-only empirical values, and hardware-dependent
 unknowns; formerly single-source-PyQa40x items are marked RESOLVED under this
 rule (numbering kept stable for cross-references).
 
+### What's new from the 2026-07-20 hardware-day (for the Phonalyser backend)
+
+New facts, all observed in the USB register traffic and confirmed on the RT1062
+sim and on genuine hardware. A **libusb backend needs none of them to stream**
+(they're for GUI-parity / richer UI), but they're now known:
+
+- **Connect handshake** (§6): the app echo-probes reg `0x00` with a nonce each
+  poll, and one-shot reads regs `0x0A/0x10/0x1B/0x1D` at connect (meaning
+  unknown; returning 0 is fine).
+- **Streaming reality check** (§5): a real-time 192 k loopback with no analog
+  buffer between DAC and ADC must NOT emit silence when the host stalls —
+  silence >~6800 frames corrupts the host FFT. (Sim-specific, but the lesson —
+  the host can stall mid-capture during heavy FFTs — is real.)
+- **Still needs a genuine QA403** (§9 item 15): (a) is the −6 dB ADC term a
+  balanced-vs-single-ended offset (so the input range clips at the dBV label,
+  Vrms) or literal (clips 9 dB low, at Vpp)? (b) does real hardware gap at
+  192 k / 1 M-FFT? Community measurement requested.
+
 Both sources are MIT; copies of both licenses live in `doc/licences/`.
 Phonalyser's runtime USB library, **libusb-1.0**, is a dependency (not a protocol
 source) and is **LGPL-2.1** — a copy lives in
 [`doc/licences/libusb-COPYING`](licences/libusb-COPYING). Citations
 are inline as `[PyQa40x <path>:<line>]` / `[ASIO401 <path>:<line>]`. The cited
 `<path>` is a **bare basename** (e.g. `qa403.cpp`, `analyzer.py`); resolve it
-against these base directories:
-
-- **ASIO401 sources** live under `tmp/qa40x-refs/ASIO401/src/asio401/ASIO401/`
-  (e.g. `[ASIO401 qa403.cpp:8]` → `…/ASIO401/src/asio401/ASIO401/qa403.cpp`).
-  The Markdown docs `CONFIGURATION.md` / `FAQ.md` / `README.md` are at the
-  ASIO401 clone root `tmp/qa40x-refs/ASIO401/`.
-- **PyQa40x sources** live under `tmp/qa40x-refs/PyQa40x/src/PyQa40x/`
-  (e.g. `[PyQa40x analyzer.py:56]` → `…/PyQa40x/src/PyQa40x/analyzer.py`).
-
-Line numbers in the cites are against these files.
+against a checkout of the corresponding upstream project (both linked under
+**Sources** above). Line numbers refer to those upstream files.
 
 The GPL `QA40x-ALSA-plug` project is deliberately **not** referenced (maintainer
 decision).
@@ -431,6 +447,23 @@ Factory cal is a **512-byte page** on the device
 `0x80|0x19` with 0, then bulkRead 4 bytes big-endian; the returned word is then
 re-serialized little-endian into the blob.)
 
+**Full connect handshake observed against the simulator (vendor Windows app,
+2026-07-20)** — the register traffic the app issues right after opening the
+interface, in order:
+- reg `0x00` written then read back twice with **random 32-bit values** (echo
+  probe — the app writes a nonce and reads it back to confirm the register
+  channel works). A conformant device must echo reg 0x00.
+- reg `0x08` = 0 (stop/reset to idle).
+- reads of regs `0x10`, `0x1D`, `0x1B`, and a write to reg `0x0A` — **purpose
+  unknown** (not in the PyQa40x/ASIO401 map; likely status/identity/version).
+  Returning 0 did not stop the app from connecting.
+- reg `0x0D` = 0x10 then 128× reg `0x19` — the cal-page read of this section.
+
+**Steady-state keepalive [RESOLVED — observed on the bus, hardware-confirmed
+2026-07-20].** Once connected, the app repeats an echo keepalive continuously
+(500 ms timer): write reg `0x00` = a nonce, then read reg `0x00` back. A libusb
+backend does not need it.
+
 ### Blob layout
 
 Records are `(int16 level, float32 value)` little-endian — `'<hf'`, **6 bytes
@@ -741,6 +774,30 @@ QA401 differences are in §8.
     *Phonalyser:* took the **PyQa40x-tolerant** path — the transport consumes the
     actual transferred length (`LibUsbQa40xTransport`) and never treats a short
     read as fatal.
+
+15. **[OPEN — awaiting real-QA403 measurement, community asked 2026-07-20] Two
+    questions the RT1062 simulator can't answer without genuine hardware:**
+    (a) **Balanced level / clip convention.** The vendor ADC formula subtracts
+    −6 dB (the sim keeps it, so the QA GUI reads 0 dBV out → 0 dBV in). The
+    consequence is the input range clips at `10^((N−6)/20)` V *peak* (6 dBV
+    range → 1.0 Vpk = 2 Vpp), NOT at the range label's 2 Vrms. Is that what a
+    real QA403 does on a balanced-out → differential-in loopback, or is the −6
+    a single-ended offset that Phonalyser's `Qa40xLevels` correctly drops for
+    the balanced path (§10)? Measure: gen 0 dBV, FFT balanced→diff, note the
+    clip voltage per input range.
+    (b) **Gaps at 192 kHz / 1 M-point FFT.** The sim (with pause-on-underrun)
+    shows NO gaps at any FFT size. Does a genuine QA403 also stay clean at
+    192 k + 1024k FFT on the same host, or does its smaller (1024-frame) HW
+    queue gap when the host stalls? This bounds how faithfully the sim's deep
+    buffering should model real hardware.
+
+14. **[RESOLVED — observed on the bus, hardware-confirmed 2026-07-20] Connect
+    handshake.** Logged from the register traffic the vendor Windows app puts on
+    the USB bus and confirmed on the RT1062 simulator: the reg `0x00` echo probe
+    at connect plus the 500 ms echo keepalive (§6). A **libusb backend needs none
+    of it** (connects/streams without).
+    Still open from the connect probe: the meaning of the one-shot connect reads
+    of regs 0x0A/0x10/0x1B/0x1D (returning 0 did not block the app) — minor.
 
 ---
 
