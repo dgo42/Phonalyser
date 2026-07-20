@@ -36,7 +36,15 @@ const DITHER_DB_PER_BIT = 6.0206;       // one TPDF bit is 6.0206 dB (RMS = 2^�
 const DITHER_TPDF_OFFSET_DB = 7.782;    // constant term = 20·log10(1/√6)
 const DITHER_DBV_STEP = 10.0;           // dBV-view wheel/arrow notch
 const DITHER_DBV_DECIMALS = 1;          // decimals shown for the dBV view
-const DITHER_OFF_LABEL = 'Off';         // rendered text for a disabled (0-bit) dither
+// The Off vocabulary, shared by every policy that has an Off state — a 0-bit
+// dither, an averages count of 1, …: the text such a value renders as, and the
+// word _isPrefixOf accepts in full or as any prefix.
+export const OFF_LABEL = 'Off';
+// The unbounded vocabulary, for a field whose max is infinite: this word is
+// accepted in full or as any prefix (i, in, inf, …).
+export const INFINITY_LABEL = 'Infinity';
+// Rendered form of an unbounded value, and the shortest way to type one.
+const INFINITY_SIGN = '∞';
 
 // Number + optional trailing unit suffix; both micro code points (µ U+00B5,
 // μ U+03BC) accepted.
@@ -328,7 +336,7 @@ export class NumericStepModel {
   /** Renders the current dither value: Off, a bit count, or the full-scale-aware
    *  dBV view — per the current (sticky) display unit. */
   _ditherText() {
-    if (this.value <= 0) return DITHER_OFF_LABEL;
+    if (this.value <= 0) return OFF_LABEL;
     const u = this.currentUnit();
     if (u.log) return this._format(this._ditherDbvForBits(this.value), DITHER_DBV_DECIMALS) + ' ' + u.suffix();
     return this._trimTrailingZeros(this._format(this.value, this.maxDecimals)) + ' ' + u.suffix();
@@ -344,13 +352,14 @@ export class NumericStepModel {
     return this._format(this._ditherDbvForBits(this.value), DITHER_DBV_DECIMALS) + ' ' + this.family.logUnit().suffix();
   }
 
-  /** Parses a dither entry: Off/0 → Off; a bare number or a `bits` suffix → that
-   *  bit count (clamped to [1, maxBits], 0 → Off), possibly fractional; a `dBV`
-   *  suffix → the full-scale-aware fractional bit count (sticks the dBV view). */
+  /** Parses a dither entry: `Off` — or any prefix of it (`o`, `of`) — and 0 → Off;
+   *  a bare number or a `bits` suffix → that bit count (clamped to [1, maxBits],
+   *  0 → Off), possibly fractional; a `dBV` suffix → the full-scale-aware
+   *  fractional bit count (sticks the dBV view). */
   _commitDither(text) {
     const t = String(text).trim().replace(/,/g, '.');
     if (t === '') return false;                       // empty → unchanged (Java commitDither)
-    if (t.toLowerCase() === DITHER_OFF_LABEL.toLowerCase()) {   // "Off" — keep the current view
+    if (this._isPrefixOf(OFF_LABEL, t)) {             // "o" / "of" / "off" — keep the current view
       this.blank = false;
       this.value = 0;
       return true;
@@ -449,7 +458,7 @@ export class NumericStepModel {
   text() {
     if (this.blank) return '';
     if (this.policy === POLICY.DITHER) return this._ditherText();
-    if (!Number.isFinite(this.value)) return '∞';
+    if (!Number.isFinite(this.value)) return INFINITY_SIGN;
     if (this._isNamedValue(this.value)) return this.namedValueLabel;
     return this._formatIn(this.value, this.currentUnit());
   }
@@ -495,7 +504,7 @@ export class NumericStepModel {
   }
 
   _seriesEntry(v) {
-    if (!Number.isFinite(v)) return '∞';
+    if (!Number.isFinite(v)) return INFINITY_SIGN;
     if (this._isNamedValue(v)) return this.namedValueLabel;
     return this._formatIn(v, this.family.displayUnit(v));
   }
@@ -506,11 +515,10 @@ export class NumericStepModel {
     let s = String(text).trim().replace(/,/g, '.').replace(/μ/g, 'µ');
     if (s === '') return false;
     if (s.length > 1 && s.endsWith('.') && /[0-9]/.test(s.charAt(s.length - 2))) s = s.slice(0, -1);
-    if (!Number.isFinite(this.max)) {
-      const low = s.toLowerCase();
-      if (s === '∞' || low === 'inf' || low === 'infinity') { this.stickyUnit = null; this.blank = false; this.value = Infinity; return true; }
+    if (!Number.isFinite(this.max) && (s === INFINITY_SIGN || this._isPrefixOf(INFINITY_LABEL, s))) {
+      this.stickyUnit = null; this.blank = false; this.value = Infinity; return true;
     }
-    if (this.namedValueLabel != null && s.toLowerCase() === this.namedValueLabel.trim().toLowerCase()) {
+    if (this._matchesNamedLabel(s)) {
       this.stickyUnit = null; this.blank = false; this.value = this._clamp(this._roundSig(this.namedValue)); return true;
     }
     const m = NUMBER_WITH_UNIT.exec(s);
@@ -548,6 +556,24 @@ export class NumericStepModel {
 
   _clamp(v) { return Math.max(this.min, Math.min(this.max, v)); }
   _isNamedValue(v) { return this.namedValueLabel != null && Math.abs(v - this.namedValue) <= Math.abs(this.namedValue) * REL_EPS; }
+
+  /** True when `t` is a non-empty, case-insensitive prefix of `word`. One shared
+   *  rule so a named state can be committed from a single keystroke — o/of/off,
+   *  i/in/inf/… — the way the unit suffixes already take a prefix. */
+  _isPrefixOf(word, t) {
+    return t.length > 0 && t.length <= word.length
+        && word.slice(0, t.length).toLowerCase() === t.toLowerCase();
+  }
+
+  /** Named-value label match: exact, or — when that named value IS the Off state —
+   *  any prefix of OFF_LABEL. Prefixes are deliberately confined to Off: for a
+   *  label like "Nyquist/2" a lone letter must never commit. */
+  _matchesNamedLabel(t) {
+    if (this.namedValueLabel == null) return false;
+    const label = this.namedValueLabel.trim();
+    return t.toLowerCase() === label.toLowerCase()
+        || (label.toLowerCase() === OFF_LABEL.toLowerCase() && this._isPrefixOf(OFF_LABEL, t));
+  }
   _roundSig(v) {
     if (v === 0 || !Number.isFinite(v)) return v;
     const scale = Math.pow(10, VALUE_SIG_DIGITS - 1 - Math.floor(Math.log10(Math.abs(v))));
