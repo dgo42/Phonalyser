@@ -65,6 +65,7 @@ import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
+import org.edgo.audio.measure.gui.widgets.NumericStepModel;
 import org.edgo.audio.measure.gui.widgets.PresetBar;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
@@ -121,6 +122,9 @@ public final class FftTabControl extends AbstractTabControl {
     /** Averages presets the field's wheel / arrows jump along; ∞ = forever. */
     private static final double[] AVERAGES_SERIES =
             { 2, 4, 8, 16, 32, 64, 128, Double.POSITIVE_INFINITY };
+    /** A single spectrum — i.e. averaging off, since the worker only accumulates
+     *  from 2 up.  Renders and parses as the shared Off label. */
+    private static final double AVERAGES_OFF          = 1;
     /** Stop-after-N bounds and wheel step (arrows step by 1). */
     private static final double STOP_AFTER_MIN        = 2;
     private static final double STOP_AFTER_MAX        = 1_000_000;
@@ -391,9 +395,12 @@ public final class FftTabControl extends AbstractTabControl {
         addLabel(g, I18n.t("fft.settings.averages"));
         // List stepper: wheel / arrow keys snap to the next / previous
         // preset (2 … 128, ∞) while manual typing still accepts any
-        // count ≥ 2 (and the ∞ / inf token, since max is unbounded).
+        // count ≥ 1 (and the ∞ / inf token, since max is unbounded).
         averagesField = new NumericStepField(g, UnitFamily.NONE,
-                AVERAGES_SERIES[0], Double.POSITIVE_INFINITY, AVERAGES_SERIES, 0, 70);
+                AVERAGES_OFF, Double.POSITIVE_INFINITY, AVERAGES_SERIES, 0, 70);
+        // 1 renders and parses as "Off" — typed in full or as any prefix
+        // (o / of / off), the same shortcut the generator's dither field takes.
+        averagesField.setNamedValue(AVERAGES_OFF, NumericStepModel.OFF_LABEL);
         averagesField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         averagesField.setToolTipText(I18n.t("fft.settings.averages.tooltip"));
         Bindings.stepField(averagesField, prefs.fftAveragesProperty());

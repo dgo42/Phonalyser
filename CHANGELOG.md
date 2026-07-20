@@ -37,8 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full-scale-aware and also carries the FFT analysis window's
   equivalent-noise-bandwidth term, so it reads straight off the FFT noise floor
   — enter −100 dBV and, with incoherent (power) averaging, the floor sits at
-  −100 dBV. Wheel/arrows step ±1 bit or ±10 dBV; the entered value is held when
-  you change the FFT window or recalibrate.
+  −100 dBV. Wheel/arrows step ±1 bit or ±10 dBV, and `Off` is typed straight in
+  as `o` / `of` / `off` rather than picked from the old drop-down; the entered
+  value is held when you change the FFT window or recalibrate.
 - **Per-channel (left / right) calibration.** A stereo card calibrates each
   channel into its own full-scale: the calibration dialog — now one unified form
   for the ADC and the DAC, with values entered directly in nV / µV / mV / V —
@@ -121,7 +122,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fictitious floor values, sample-grid-aligned rectangle AND triangle
   generation with bracketed corrected frequency / duty labels, the dither
   field entered in bits or a full-scale-aware dBV level and applied live to
-  the generated signal so it reads straight off the FFT floor, a startup
+  the generated signal so it reads straight off the FFT floor, the typed
+  named values on both numeric fields — dither `Off`, and FFT averages down
+  to a single spectrum shown as `Off` plus `∞` averaging — each taken in full
+  or in any short form (`o` / `of` / `off`, `i` / `in` / `inf`), a startup
   splash, Java-parity preferences in a fixed 640 × 480 dialog with free
   numeric entry, an output-sample-rate probe with an honest resampling
   warning, scope V/div down to 1 nV/div, and a web-only help page on
@@ -129,6 +133,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   feature the web does not support is device-provided full-scale (the
   QA40x-style flag) — a browser cannot reach a device's USB calibration
   interface; such cards keep their catalog values.
+- **FFT averages: `Off` is reachable at all, and `∞` can be typed.** The averages
+  field started at 2, so switching averaging off was not possible from the UI —
+  even though the analyser already treats fewer than two averages as no
+  averaging. The count now goes down to a single spectrum, shown as `Off`. And
+  `∞`, until now only reachable by rolling the wheel or stepping with the arrows,
+  can be typed directly. Both names are taken in full or in any short form —
+  `o` / `of` / `off` and `i` / `in` / `inf`.
 
 ### Changed
 
