@@ -98,6 +98,26 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
     private final Deque<byte[]> freeReadBuffers  = new ArrayDeque<>();
     private final Deque<byte[]> freeWriteBuffers = new ArrayDeque<>();
 
+    /** Guards the mutable stream state below.  Held ONLY for short, non-blocking
+     *  sections — <b>never</b> across a {@link Qa40xTransport#registerWrite} or a
+     *  {@link Sleeper#sleep}.  A register write is a SYNCHRONOUS bulk transfer that
+     *  needs libusb's per-context event lock, and the USB event thread holds that
+     *  same lock while it dispatches completion callbacks into this class.  Holding
+     *  this monitor across a register write therefore deadlocks the two threads:
+     *  the stopping thread waits for the event lock, the event thread waits for the
+     *  monitor, and libusb cannot even time the transfer out because it enforces
+     *  timeouts from inside the very event loop that is stuck.  Reproduced on the
+     *  bench by stopping the generator, or by changing a range mid-capture; a mock
+     *  transport can NOT reproduce it, because the second edge of the cycle is a
+     *  native lock. */
+    private final Object stateLock = new Object();
+
+    /** Serialises the start / stop / re-range register sequences so two threads can
+     *  never interleave register traffic.  The completion callbacks NEVER take it,
+     *  so they can never block behind device I/O.  Lock order is always
+     *  {@code ioLock} → {@link #stateLock}, never the reverse. */
+    private final Object ioLock = new Object();
+
     private int inputRangeDbv;
     private int outputRangeDbv;
     private int sampleRateHz;
@@ -135,20 +155,33 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
     }
 
     /** Attaches / live-swaps the generator lane's sample source; starts the stream if idle. */
-    public synchronized void attachGenerator(SampleSource generatorSource) {
-        this.source = Objects.requireNonNull(generatorSource, "generatorSource");
-        generatorAttached = true;
-        if (!streaming) {
-            startStream();
+    public void attachGenerator(SampleSource generatorSource) {
+        Objects.requireNonNull(generatorSource, "generatorSource");
+        synchronized (ioLock) {
+            boolean start;
+            synchronized (stateLock) {
+                this.source = generatorSource;
+                generatorAttached = true;
+                start = !streaming;
+            }
+            if (start) {
+                startStream();
+            }
         }
     }
 
     /** Detaches the generator lane (reverts to silence); stops the stream if it was the last client. */
-    public synchronized void detachGenerator() {
-        this.source = SILENCE;
-        generatorAttached = false;
-        if (streaming && !captureAttached) {
-            stopStream();
+    public void detachGenerator() {
+        synchronized (ioLock) {
+            boolean stop;
+            synchronized (stateLock) {
+                this.source = SILENCE;
+                generatorAttached = false;
+                stop = streaming && !captureAttached;
+            }
+            if (stop) {
+                stopStream();
+            }
         }
     }
 
@@ -160,76 +193,127 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
      * refused loudly rather than silently overwriting the first consumer, which
      * would starve one view and split the single capture lane.
      */
-    public synchronized void attachCapture(CaptureConsumer captureConsumer) {
+    public void attachCapture(CaptureConsumer captureConsumer) {
         Objects.requireNonNull(captureConsumer, "captureConsumer");
-        if (captureAttached) {
-            throw new IllegalStateException("QA40x capture lane already attached — "
-                    + "one duplex engine has a single capture consumer (scope and FFT share it "
-                    + "through SharedCapture); refusing to split the stream (doc §10)");
-        }
-        this.consumer = captureConsumer;
-        captureAttached = true;
-        if (!streaming) {
-            startStream();
+        synchronized (ioLock) {
+            boolean start;
+            synchronized (stateLock) {
+                if (captureAttached) {
+                    throw new IllegalStateException("QA40x capture lane already attached — "
+                            + "one duplex engine has a single capture consumer (scope and FFT share it "
+                            + "through SharedCapture); refusing to split the stream (doc §10)");
+                }
+                this.consumer = captureConsumer;
+                captureAttached = true;
+                start = !streaming;
+            }
+            if (start) {
+                startStream();
+            }
         }
     }
 
     /** Detaches the capture lane (reads discarded); stops the stream if it was the last client. */
-    public synchronized void detachCapture() {
-        this.consumer = null;
-        captureAttached = false;
-        if (streaming && !generatorAttached) {
-            stopStream();
+    public void detachCapture() {
+        synchronized (ioLock) {
+            boolean stop;
+            synchronized (stateLock) {
+                this.consumer = null;
+                captureAttached = false;
+                stop = streaming && !generatorAttached;
+            }
+            if (stop) {
+                stopStream();
+            }
         }
     }
 
     /** Changes the input full-scale range; a full stop + start if streaming. */
-    public synchronized void changeInputRange(int dbv) {
-        Qa40xProtocol.inputRangeCode(dbv);
-        this.inputRangeDbv = dbv;
-        restartIfStreaming();
+    public void changeInputRange(int dbv) {
+        Qa40xProtocol.inputRangeCode(dbv);          // fail fast before touching state
+        synchronized (ioLock) {
+            synchronized (stateLock) {
+                this.inputRangeDbv = dbv;
+            }
+            restartIfStreaming();
+        }
     }
 
     /** Changes the output full-scale range; a full stop + start if streaming. */
-    public synchronized void changeOutputRange(int dbv) {
+    public void changeOutputRange(int dbv) {
         Qa40xProtocol.outputRangeCode(dbv);
-        this.outputRangeDbv = dbv;
-        restartIfStreaming();
+        synchronized (ioLock) {
+            synchronized (stateLock) {
+                this.outputRangeDbv = dbv;
+            }
+            restartIfStreaming();
+        }
     }
 
     /** Changes the sample rate; a full stop + start if streaming (§8/§10). */
-    public synchronized void changeSampleRate(int hz) {
+    public void changeSampleRate(int hz) {
         Qa40xProtocol.sampleRateCode(hz);
-        this.sampleRateHz = hz;
-        restartIfStreaming();
+        synchronized (ioLock) {
+            synchronized (stateLock) {
+                this.sampleRateHz = hz;
+            }
+            restartIfStreaming();
+        }
     }
 
+    /** Caller holds {@link #ioLock} and must NOT hold {@link #stateLock}. */
     private void restartIfStreaming() {
-        if (streaming) {
+        boolean running;
+        synchronized (stateLock) {
+            running = streaming;
+        }
+        if (running) {
             stopStream();
             startStream();
         }
     }
 
+    /** Caller holds {@link #ioLock} and must NOT hold {@link #stateLock} — every
+     *  {@code registerWrite} below is a blocking bulk transfer, and the settle is a
+     *  100 ms sleep (see {@link #stateLock} for why that combination deadlocks). */
     private void startStream() {
+        int inputCode;
+        int outputCode;
+        int rateCode;
+        synchronized (stateLock) {
+            inputCode  = Qa40xProtocol.inputRangeCode(inputRangeDbv);
+            outputCode = Qa40xProtocol.outputRangeCode(outputRangeDbv);
+            rateCode   = Qa40xProtocol.sampleRateCode(sampleRateHz);
+        }
         transport.registerWrite(Qa40xProtocol.REG_RUN, Qa40xProtocol.RUN_STOP);           // recover / idle
-        transport.registerWrite(Qa40xProtocol.REG_INPUT_FS, Qa40xProtocol.inputRangeCode(inputRangeDbv));
-        transport.registerWrite(Qa40xProtocol.REG_OUTPUT_FS, Qa40xProtocol.outputRangeCode(outputRangeDbv));
-        transport.registerWrite(Qa40xProtocol.REG_SAMPLE_RATE, Qa40xProtocol.sampleRateCode(sampleRateHz));
+        transport.registerWrite(Qa40xProtocol.REG_INPUT_FS, inputCode);
+        transport.registerWrite(Qa40xProtocol.REG_OUTPUT_FS, outputCode);
+        transport.registerWrite(Qa40xProtocol.REG_SAMPLE_RATE, rateCode);
         sleeper.sleep(SETTLE_MILLIS);                                                      // ABA settle (§8)
         transport.registerWrite(Qa40xProtocol.REG_RUN, Qa40xProtocol.RUN_START);          // start
-        streaming = true;
-        writesInFlight = 0;
-        writesOwed = 0;
-        primeStream();
+        synchronized (stateLock) {
+            streaming = true;
+            writesInFlight = 0;
+            writesOwed = 0;
+            primeStream();
+        }
     }
 
+    /** Caller holds {@link #ioLock} and must NOT hold {@link #stateLock}: {@code cancelAll}
+     *  arms a completion for every in-flight transfer, and the USB event thread delivers
+     *  those into {@link #transferFailed} — which needs {@link #stateLock} — while holding
+     *  libusb's event lock, the very lock the blocking {@code registerWrite} below waits
+     *  for.  Clearing {@code streaming} first makes the completions bail out cheaply. */
     private void stopStream() {
-        streaming = false;
+        synchronized (stateLock) {
+            streaming = false;
+        }
         transport.cancelAll();                                                            // BEFORE reg8=0 (§7 step 7)
         transport.registerWrite(Qa40xProtocol.REG_RUN, Qa40xProtocol.RUN_STOP);
     }
 
+    /** Caller holds {@link #stateLock} — the submits touch the buffer pools and the
+     *  write-pacing counters, and are non-blocking (an async submit, not a bulk transfer). */
     private void primeStream() {
         for (int i = 0; i < IN_FLIGHT_TRANSFERS; i++) {
             submitRead();
@@ -266,30 +350,38 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
         }
     }
 
+    // The three completion callbacks below run on the USB event thread while libusb
+    // holds its per-context event lock.  They take ONLY stateLock — never ioLock —
+    // so a completion can never block behind a register write (see stateLock).
+
     @Override
-    public synchronized void readCompleted(byte[] buffer, int transferred) {
-        if (!streaming) {                       // a late / cancelled completion after stop
+    public void readCompleted(byte[] buffer, int transferred) {
+        synchronized (stateLock) {
+            if (!streaming) {                       // a late / cancelled completion after stop
+                returnReadBuffer(buffer);
+                return;
+            }
+            submitRead();                           // re-arm FIRST — the pipe never waits on the consumer (§5)
+            CaptureConsumer sink = consumer;
+            if (sink != null) {
+                sink.onAudio(buffer, transferred);  // ADC bytes pass through — not swapped, not inverted (§9 item 6)
+            }
             returnReadBuffer(buffer);
-            return;
+            writesOwed = Math.min(writesOwed + 1, MAX_WRITE_DEBT);
+            drainOwedWrites();                      // read-clocked, bounded, AND debt-repaying (1:1 long-run)
         }
-        submitRead();                           // re-arm FIRST — the pipe never waits on the consumer (§5)
-        CaptureConsumer sink = consumer;
-        if (sink != null) {
-            sink.onAudio(buffer, transferred);  // ADC bytes pass through — not swapped, not inverted (§9 item 6)
-        }
-        returnReadBuffer(buffer);
-        writesOwed = Math.min(writesOwed + 1, MAX_WRITE_DEBT);
-        drainOwedWrites();                      // read-clocked, bounded, AND debt-repaying (1:1 long-run)
     }
 
     @Override
-    public synchronized void writeCompleted(byte[] buffer, int transferred) {
-        if (writesInFlight > 0) {
-            writesInFlight--;                   // a drained buffer frees an in-flight slot for the next read-clocked write
-        }
-        returnWriteBuffer(buffer);
-        if (streaming) {
-            drainOwedWrites();                  // repay a write skipped while both slots were busy
+    public void writeCompleted(byte[] buffer, int transferred) {
+        synchronized (stateLock) {
+            if (writesInFlight > 0) {
+                writesInFlight--;                   // a drained buffer frees an in-flight slot for the next read-clocked write
+            }
+            returnWriteBuffer(buffer);
+            if (streaming) {
+                drainOwedWrites();                  // repay a write skipped while both slots were busy
+            }
         }
     }
 
@@ -305,10 +397,12 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
     }
 
     @Override
-    public synchronized void transferFailed(boolean read, String detail) {
+    public void transferFailed(boolean read, String detail) {
         // No auto-recovery (§5); a transfer cancelled during stop also lands here (benign).
-        if (!read && writesInFlight > 0) {
-            writesInFlight--;                   // a cancelled / failed write frees its in-flight slot
+        synchronized (stateLock) {
+            if (!read && writesInFlight > 0) {
+                writesInFlight--;               // a cancelled / failed write frees its in-flight slot
+            }
         }
         if (log.isWarnEnabled()) {
             log.warn("QA40x {} transfer failed: {}", read ? "read" : "write", detail);
