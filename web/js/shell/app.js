@@ -46,7 +46,7 @@ import { enbwOf } from '../fft/fft-analyzer.js';
 import { GeneratorPane } from '../generator/generator-pane.js';
 import { PredistortionEngine } from '../predistortion/engine.js';
 import { writeHarmonicDpd, writeIntermodDpd } from '../io/dpd.js';
-import { NumericStepField, NumericStepModel, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
+import { NumericStepField, NumericStepModel, OFF_LABEL, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 
@@ -113,6 +113,10 @@ const AMP_MIN_VRMS = 1e-9;
 const GEN_FREQ_MIN_HZ = 0.01;   // Java GeneratorPane.GEN_FREQ_MIN_HZ
 // FFT averages stepper presets — Java FftTabControl.AVERAGES_SERIES { 2, 4, 8, 16, 32, 64, 128, ∞ }.
 const FFT_AVERAGES_SERIES = [2, 4, 8, 16, 32, 64, 128, Infinity];
+// A single spectrum — i.e. averaging off, since the worker only accumulates from
+// 2 up (fft-controller ringN = max(1, averages)). Renders/parses as the shared
+// Off label — Java FftTabControl.AVERAGES_OFF.
+const FFT_AVERAGES_OFF = 1;
 const outRate = () => parseInt($('#outRate').val(), 10) || prefs.current().outputSampleRate || 384000;
 const inRate = () => parseInt($('#inRate').val(), 10) || prefs.current().inputSampleRate || 384000;   // FR fields cap at INPUT Nyquist
 
@@ -252,14 +256,19 @@ function initStepFields() {
   const fCalcMaxH = mk('thdCalcMaxH', new NumericStepModel({ family: F.NONE, min: 9, max: 50, wheelStep: 1, arrowStep: 1, decimals: 0 }), () => {});
   if (fCalcMaxH) fCalcMaxH.setValue(prefs.fftCalcMaxHarmonic.get());
 
-  // FFT "Averages" — Java averagesField: NumericStepField(UnitFamily.NONE, AVERAGES_SERIES[0]=2,
+  // FFT "Averages" — Java averagesField: NumericStepField(UnitFamily.NONE, AVERAGES_OFF=1,
   // POSITIVE_INFINITY, AVERAGES_SERIES {2,4,8,16,32,64,128,∞}, 0 decimals, width 70). LIST policy:
-  // the wheel/arrows snap along the series; ∞ is the top entry (typed as "∞"/"inf"), NOT a separate
-  // checkbox. max=Infinity lets the model accept the ∞ token (numeric-step-field.js commit()).
+  // the wheel/arrows snap along the series; ∞ is the top entry, NOT a separate checkbox. Typing
+  // accepts any count ≥ 1 plus two named tokens: "∞" or any prefix of "Infinity" (i / in / inf …),
+  // which max=Infinity enables, and any prefix of "Off" (o / of / off) → 1 (numeric-step-field.js
+  // commit()).
   // onChange placeholder — FftTabControl.bind() rebinds it to pref-write + live readConfig
   // (#7/#26: an averages change must NOT restart/reset the accumulator).
-  const fAverages = mk('averages', new NumericStepModel({ family: F.NONE, min: FFT_AVERAGES_SERIES[0],
+  const fAverages = mk('averages', new NumericStepModel({ family: F.NONE, min: FFT_AVERAGES_OFF,
     max: Infinity, series: FFT_AVERAGES_SERIES, maxDecimals: 0 }), () => {});
+  // 1 renders and parses as "Off" — typed in full or as any prefix (o / of / off),
+  // the same shortcut the generator's dither field takes.
+  if (fAverages) fAverages.model.setNamedValue(FFT_AVERAGES_OFF, OFF_LABEL);
   if (fAverages) fAverages.setValue(prefs.fftAverages.get());
 
   // FFT "Stop after N averages" count — Java stopAfterNField: NumericStepField(UnitFamily.NONE,

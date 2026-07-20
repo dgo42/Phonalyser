@@ -100,8 +100,15 @@ public final class NumericStepModel {
     private static final double DITHER_DBV_STEP       = 10.0;
     /** Decimals shown for the DITHER dBV view. */
     private static final int    DITHER_DBV_DECIMALS   = 1;
-    /** Rendered text for a disabled (0-bit) dither, and the parsed "off" word. */
-    private static final String DITHER_OFF_LABEL      = "Off";
+    /** The Off vocabulary, shared by every policy that has an Off state — a 0-bit
+     *  dither, an averages count of 1, … : the text such a value renders as, and
+     *  the word {@link #isOffWord} accepts in full or as any prefix. */
+    public static final String OFF_LABEL              = "Off";
+    /** The unbounded vocabulary, for a field whose max is infinite: this word is
+     *  accepted in full or as any prefix ({@code i}, {@code in}, {@code inf}, …). */
+    public static final String INFINITY_LABEL         = "Infinity";
+    /** Rendered form of an unbounded value, and the shortest way to type one. */
+    private static final String INFINITY_SIGN         = "∞";
 
     private enum Policy {
         FIXED, LIST, PERCENT, DITHER;
@@ -387,7 +394,7 @@ public final class NumericStepModel {
     /** Renders the current dither value: {@code Off}, a bit count, or the
      *  full-scale-aware dBV view — per the current (sticky) display unit. */
     private String ditherText() {
-        if (value <= 0) return DITHER_OFF_LABEL;
+        if (value <= 0) return OFF_LABEL;
         Unit u = currentUnit();
         if (u.log()) {
             return format(ditherDbvForBits(value), DITHER_DBV_DECIMALS) + " " + u.suffix();
@@ -400,14 +407,15 @@ public final class NumericStepModel {
         return String.format(Locale.ROOT, "%." + decimals + "f", x);
     }
 
-    /** Parses a dither entry: {@code Off}/{@code 0} → Off; a bare number or a
-     *  {@code bits} suffix → that bit count (clamped to {@code [1, maxBits]},
-     *  0 → Off), possibly fractional; a {@code dBV} suffix → the full-scale-aware
-     *  fractional bit count (which sticks the dBV view). */
+    /** Parses a dither entry: {@code Off} — or any prefix of it ({@code o},
+     *  {@code of}) — and {@code 0} → Off; a bare number or a {@code bits} suffix →
+     *  that bit count (clamped to {@code [1, maxBits]}, 0 → Off), possibly
+     *  fractional; a {@code dBV} suffix → the full-scale-aware fractional bit count
+     *  (which sticks the dBV view). */
     private boolean commitDither(String text) {
         String t = text.trim().replace(',', '.');
         if (t.isEmpty()) return false;
-        if (t.equalsIgnoreCase(DITHER_OFF_LABEL)) {   // "Off" — keep the current view
+        if (isPrefixOf(OFF_LABEL, t)) {               // "o" / "of" / "off" — keep the current view
             blank = false;
             value = 0;
             return true;
@@ -573,7 +581,7 @@ public final class NumericStepModel {
     public String text() {
         if (blank) return "";
         if (policy == Policy.DITHER) return ditherText();
-        if (Double.isInfinite(value)) return "∞";
+        if (Double.isInfinite(value)) return INFINITY_SIGN;
         if (isNamedValue(value)) return namedValueLabel;
         return formatIn(value, currentUnit());
     }
@@ -656,15 +664,17 @@ public final class NumericStepModel {
     }
 
     private String seriesEntry(double v) {
-        if (Double.isInfinite(v)) return "∞";
+        if (Double.isInfinite(v)) return INFINITY_SIGN;
         if (isNamedValue(v)) return namedValueLabel;
         return formatIn(v, family.displayUnit(v));
     }
 
-    /** Parses {@code text} (number + optional unit suffix of this family,
-     *  decimal comma accepted, {@code ∞}/{@code inf} when the field is
-     *  unbounded above), clamps, and commits.  An explicit suffix becomes the
-     *  sticky display unit; suffix-less entry reverts to automatic.
+    /** Parses {@code text} (number + optional unit suffix of this family, decimal
+     *  comma accepted, {@value #INFINITY_SIGN} or any prefix of
+     *  {@value #INFINITY_LABEL} when the field is unbounded above, and any prefix
+     *  of {@value #OFF_LABEL} when it declares Off as its named value), clamps,
+     *  and commits.  An explicit suffix becomes the sticky display unit;
+     *  suffix-less entry reverts to automatic.
      *
      *  @return {@code false} (value unchanged) when the text is not a valid
      *          number-with-unit of this family */
@@ -681,13 +691,13 @@ public final class NumericStepModel {
             t = t.substring(0, t.length() - 1);
         }
         if (Double.isInfinite(max)
-                && (t.equals("∞") || t.equalsIgnoreCase("inf") || t.equalsIgnoreCase("infinity"))) {
+                && (t.equals(INFINITY_SIGN) || isPrefixOf(INFINITY_LABEL, t))) {
             stickyUnit = null;
             blank = false;
             value = Double.POSITIVE_INFINITY;
             return true;
         }
-        if (namedValueLabel != null && t.equalsIgnoreCase(namedValueLabel.trim())) {
+        if (matchesNamedLabel(t)) {
             stickyUnit = null;
             blank = false;
             value = clamp(roundSig(namedValue));
@@ -766,6 +776,26 @@ public final class NumericStepModel {
     private boolean isNamedValue(double v) {
         return namedValueLabel != null
                 && Math.abs(v - namedValue) <= Math.abs(namedValue) * REL_EPS;
+    }
+
+    /** {@code true} when {@code t} is a non-empty, case-insensitive prefix of
+     *  {@code word}.  One shared rule so a named state can be committed from a
+     *  single keystroke — {@code o}/{@code of}/{@code off},
+     *  {@code i}/{@code in}/{@code inf}/… — the way the unit suffixes already take
+     *  a prefix. */
+    private boolean isPrefixOf(String word, String t) {
+        return !t.isEmpty() && t.length() <= word.length()
+                && word.regionMatches(true, 0, t, 0, t.length());
+    }
+
+    /** Named-value label match: exact, or — when that named value IS the Off state
+     *  — any prefix of {@value #OFF_LABEL}.  Prefixes are deliberately confined to
+     *  Off: for a label like "Nyquist/2" a lone letter must never commit. */
+    private boolean matchesNamedLabel(String t) {
+        if (namedValueLabel == null) return false;
+        String label = namedValueLabel.trim();
+        return t.equalsIgnoreCase(label)
+                || (OFF_LABEL.equalsIgnoreCase(label) && isPrefixOf(OFF_LABEL, t));
     }
 
     /** Rounds to {@link #VALUE_SIG_DIGITS} significant digits so wheel walks
