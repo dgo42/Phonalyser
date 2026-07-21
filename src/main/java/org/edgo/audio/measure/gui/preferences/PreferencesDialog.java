@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui.preferences;
 
+import lombok.Setter;
 import lombok.extern.log4j.Log4j2;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.ScrolledComposite;
@@ -45,6 +46,7 @@ import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.PersistenceMode;
+import org.edgo.audio.measure.gui.MainWindow;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.scope.gl.GpuSupport;
 import org.edgo.audio.measure.bind.Property;
@@ -53,7 +55,7 @@ import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.DeviceEndpointConfig;
 import org.edgo.audio.measure.preferences.DeviceRange;
 import org.edgo.audio.measure.preferences.Preferences;
-import org.edgo.audio.measure.gui.bus.ActiveRangeChange;
+import org.edgo.audio.measure.gui.bus.ActiveRange;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.bus.SampleRateChange;
@@ -174,6 +176,9 @@ public final class PreferencesDialog {
      *  rebuild); the other tabs stay unwrapped. */
     private ScrolledComposite audioScroll;
     private Composite audioTab;
+
+    @Setter
+    private MainWindow mainWindow;
 
     public PreferencesDialog(Shell parent) {
         this.parent = parent;
@@ -809,10 +814,39 @@ public final class PreferencesDialog {
         cancelButton.setText(I18n.t("common.cancel"));
         dialog.setDefaultButton(okButton);
 
+        // Audio-config / font / GPU snapshot of the working copy taken when the
+        // dialog opens; the OK handler recomputes each to decide what the commit
+        // must bounce (live streams) or rebuild (panes).
+        String audioBefore = audioConfigFingerprint(edit);
+        String fontsBefore = edit.getUiFontNormal() + "/" + edit.getUiFontBold();
+        BackendPrefs backend = edit.current();
+        ActiveRange inRangeBefore  = activeRange(edit, backend, true);
+        ActiveRange outRangeBefore = activeRange(edit, backend, false);
+
+        boolean gpuBefore  = edit.isUseGpuAcceleration();
+
         okButton.addListener(SWT.Selection, e -> {
+
             // Fold every control's value into the working copy `edit`.
             // --- Per-backend device / rate / depth for the shown backend.
             captureUiToActive();
+
+            String fontsAfter = edit.getUiFontNormal() + "/" + edit.getUiFontBold();
+            // A committed audio-config change bounces the live streams: STOP them
+            // now — on the current panes and the OLD backend, before the commit
+            // and the pane rebuild below — and restart after setActive (guarded by
+            // needStartAudio near the end of this handler).
+            boolean needStartAudio = false;
+            if (!audioConfigFingerprint(edit).equals(audioBefore)) {
+                mainWindow.beforeApplyBackendChanges();
+                needStartAudio = true;
+            }
+            // The GPU toggle, like fonts, takes effect by rebuilding the panes — the
+            // scope pane chooses its surface (GL vs GC) at construction.
+            if (!fontsAfter.equals(fontsBefore) || edit.isUseGpuAcceleration() != gpuBefore) {
+                mainWindow.rebuildContent();
+            }
+
             // --- Colour holders into edit.
             edit.setOscLeftChannelColor         (leftRgbHolder[0]);
             edit.setOscRightChannelColor        (rightRgbHolder[0]);
@@ -832,12 +866,14 @@ public final class PreferencesDialog {
             //  window, notch enable + base Hz already live on `edit` via their
             //  two-way binds.)
             BackendPrefs bp = edit.current();
-            // Active-range diffs, one per direction: working copy vs the still-
-            // uncommitted live store.  Computed BEFORE the commit (afterwards the
-            // two are identical), published AFTER it so subscribers read committed
-            // state — ranges reach the device only on OK (maintainer order).
-            ActiveRangeChange inRangeChange  = activeRangeChange(bp, true);
-            ActiveRangeChange outRangeChange = activeRangeChange(bp, false);
+            // Working-copy active range, one per direction (null when the selected
+            // device has no card profile).  Recomputed here BEFORE the commit and,
+            // for each direction that differs from the open-time snapshot
+            // (inRangeBefore / outRangeBefore), published AFTER the commit so
+            // subscribers read committed state — ranges reach the device only on OK
+            // (maintainer order).
+            ActiveRange inRangeAfter  = activeRange(edit, bp, true);
+            ActiveRange outRangeAfter = activeRange(edit, bp, false);
             log.info("Preferences saved: backend={}, in={} @ {} Hz / {} bits, out={} @ {} Hz / {} bits",
                     edit.getBackend(),
                     bp.getInputDeviceName()  != null ? bp.getInputDeviceName()  : "<none>",
@@ -867,8 +903,12 @@ public final class PreferencesDialog {
             // Backend / device / rate edits move the Nyquist-derived field
             // bounds — let the panes re-pull them from the committed prefs.
             bus.publish(Events.AUDIO_FORMAT_CHANGED);
-            if (inRangeChange  != null) bus.publish(Events.DEVICE_ACTIVE_RANGE_CHANGED, inRangeChange);
-            if (outRangeChange != null) bus.publish(Events.DEVICE_ACTIVE_RANGE_CHANGED, outRangeChange);
+            if (inRangeBefore != null && inRangeAfter != null && !inRangeBefore.equals(inRangeAfter)) bus.publish(Events.DEVICE_ACTIVE_RANGE_CHANGED, inRangeAfter);
+            if (outRangeBefore != null && outRangeAfter != null && !outRangeBefore.equals(outRangeAfter)) bus.publish(Events.DEVICE_ACTIVE_RANGE_CHANGED, outRangeAfter);
+
+            if (needStartAudio) {
+                mainWindow.afterApplyBackendChanges();
+            }
             dialog.close();
         });
 
@@ -890,26 +930,23 @@ public final class PreferencesDialog {
     }
 
     /**
-     * The active-range change the pending OK would commit for one direction, or
-     * {@code null} when nothing changes.  Compares the working copy's resolved
-     * card for the direction's selected device against the live (not yet
-     * committed) store — so it must run BEFORE {@code applyFromDialog()}; the
-     * matching publish happens after the commit.  The payload is generic on
-     * purpose: direction + new label only, no card identity — the subscriber
-     * consults committed state itself.
+     * The working copy's active-range label for one direction, wrapped as an
+     * {@link ActiveRange}, or {@code null} when the direction's selected
+     * device has no card profile.  Used both to publish the range after the OK
+     * commit and — with the other direction — as part of {@link
+     * #audioConfigFingerprint}.  The payload is generic on purpose: direction +
+     * label only, no card identity — the subscriber consults committed state
+     * itself.
      */
-    private ActiveRangeChange activeRangeChange(BackendPrefs bp, boolean input) {
+    private ActiveRange activeRange(Preferences prefs, BackendPrefs bp, boolean input) {
         String dev = input ? bp.getInputDeviceName() : bp.getOutputDeviceName();
         if (dev == null) return null;
-        AudioDeviceProfile edited = edit.resolveDeviceProfile(dev);
-        if (edited == null) return null;
-        DeviceEndpointConfig editedEp = input ? edited.getInput() : edited.getOutput();
-        String newLabel = editedEp == null ? null : editedEp.getActiveRange();
+        AudioDeviceProfile profile = prefs.resolveDeviceProfile(dev);
+        if (profile == null) return null;
+        DeviceEndpointConfig endPoint = input ? profile.getInput() : profile.getOutput();
+        String newLabel = endPoint == null ? null : endPoint.getActiveRange();
         if (newLabel == null) return null;
-        AudioDeviceProfile live = Preferences.instance().resolveDeviceProfile(dev);
-        DeviceEndpointConfig liveEp = live == null ? null : (input ? live.getInput() : live.getOutput());
-        String oldLabel = liveEp == null ? null : liveEp.getActiveRange();
-        return newLabel.equals(oldLabel) ? null : new ActiveRangeChange(input, newLabel);
+        return new ActiveRange(input, newLabel);
     }
 
     /** Capture support (help screenshots): builds the card editor on the Audio
@@ -1590,7 +1627,7 @@ public final class PreferencesDialog {
             Text labelField = new Text(row, SWT.BORDER);
             // The freed FS column now falls to the label — let it grab the slack.
             labelField.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-            labelField.setText(range.getLabel());
+            labelField.setText(range.displayLabelOrKey());
             labelField.setToolTipText(I18n.t("preferences.audio.range.label.tooltip"));
             labelField.setEditable(!deviceProvided);
 
@@ -1606,7 +1643,7 @@ public final class PreferencesDialog {
 
                 labelFieldRight = new Text(row, SWT.BORDER);
                 labelFieldRight.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-                labelFieldRight.setText(range.getLabel());
+                labelFieldRight.setText(range.displayLabelOrKey());
                 labelFieldRight.setToolTipText(I18n.t("preferences.audio.range.label.tooltip"));
                 labelFieldRight.setEditable(!deviceProvided);
             }
@@ -1830,6 +1867,20 @@ public final class PreferencesDialog {
         rangesContainer.setLayout(gl);
 
         return new CardSection(cardCombo, editBtn, rangesLabel, rangesContainer, input);
+    }
+
+    /** Fingerprint of the working copy's audio configuration the running streams
+     *  depend on — backend, the active backend's per-direction device / sample
+     *  rate / bit depth, and each direction's active card range.  Snapshotted
+     *  when the dialog opens and recomputed on OK: any difference bounces the
+     *  running playback / capture. */
+    private String audioConfigFingerprint(Preferences prefs) {
+        BackendPrefs bp = prefs.current();
+        ActiveRange inRangeChange  = activeRange(prefs, bp, true);
+        ActiveRange outRangeChange = activeRange(prefs, bp, false);
+        return prefs.getBackend() + "|"
+                + bp.getInputDeviceName()  + "|" + bp.getInputSampleRate()  + "|" + bp.getInputBitDepth() + "|" + inRangeChange + "|"
+                + bp.getOutputDeviceName() + "|" + bp.getOutputSampleRate() + "|" + bp.getOutputBitDepth() + "|" + outRangeChange;
     }
 
     private static final class DeviceListState {

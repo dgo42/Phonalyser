@@ -133,7 +133,7 @@ export class FreqRespView {
   /**
    * @param {HTMLCanvasElement} canvas  the #frPlot canvas
    * @param {import('../store/preferences.js').Preferences} prefs Preferences.instance()
-   * @param {import('./correction-store.js').FreqRespCorrectionStore} correctionStore loaded .frc store
+   * @param {import('../common/correction-store.js').CorrectionStore} correctionStore loaded .frc store
    * @param {{freqScroll?:HTMLCanvasElement, magScroll?:HTMLCanvasElement,
    *          onRangeChanged?:Function}} deps  (callers may also pass an unused
    *          {@code engine} key — the view now reads the input rate from prefs,

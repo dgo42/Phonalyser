@@ -164,8 +164,12 @@ public final class MainTab {
         return shell.computeSize(SWT.DEFAULT, SWT.DEFAULT, true);
     }
 
-    public void pauseForDialog() {
-        if (multifunctional != null) multifunctional.pauseForDialog();
+    public void beforeApplyBackendChanges() {
+        if (multifunctional != null) multifunctional.beforeApplyBackendChanges();
+    }
+
+    public void afterApplyBackendChanges() {
+        if (multifunctional != null) multifunctional.afterApplyBackendChanges();
     }
 
     public GeneratorPane getGenPane() {

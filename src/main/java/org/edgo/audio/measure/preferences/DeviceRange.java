@@ -46,6 +46,20 @@ public class DeviceRange {
      *  when {@code true}; the reader tolerates its absence (default {@code false}). */
     private boolean calibrated;
 
+    /** Human-facing DISPLAY label for the ranges table when it differs from the
+     *  {@link #label} KEY — e.g. a QA40x input row shows the verbose
+     *  {@code N "dBV" real N dBFS or (N−9) dBV} while the key stays plain
+     *  {@code "N dBV"}.  Backend-agnostic: any card builder may set it; ordinary
+     *  rows leave it {@code null} and fall back to {@link #label}.  NOT serialized —
+     *  device-provided cards re-derive it on every build. */
+    private String displayLabel;
+
+    /** The label to show in the ranges table: {@link #displayLabel} when set, else
+     *  the plain {@link #label} key. */
+    public String displayLabelOrKey() {
+        return displayLabel != null ? displayLabel : label;
+    }
+
     /** A fresh copy of this row — used to deep-copy an endpoint's range table so
      *  a copied profile shares no mutable row with its source (or the catalog). */
     public DeviceRange deepCopy() {
@@ -54,6 +68,7 @@ public class DeviceRange {
         c.fsLeft     = fsLeft;
         c.fsRight    = fsRight;
         c.calibrated = calibrated;
+        c.displayLabel = displayLabel;
         return c;
     }
 }

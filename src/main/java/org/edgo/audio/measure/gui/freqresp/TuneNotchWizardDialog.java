@@ -40,7 +40,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 
 import org.edgo.audio.measure.cli.util.StereoSamples;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
@@ -165,8 +165,8 @@ public final class TuneNotchWizardDialog {
     private final Shell                   parentShell;
     /** Empty, silent correction store for the embedded view — the notch
      *  session never loads / saves calibrations. */
-    private final FreqRespCorrectionStore correctionStore =
-            new FreqRespCorrectionStore("TuneNotch", null);
+    private final CorrectionStore correctionStore =
+            new CorrectionStore("TuneNotch", null);
 
     private Shell            dialog;
     private FreqRespView     view;

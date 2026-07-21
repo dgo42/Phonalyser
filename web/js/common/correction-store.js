@@ -4,7 +4,7 @@
  * GNU Affero General Public License v3 or later.
  */
 
-// Faithful port of org.edgo.audio.measure.common.FreqRespCorrectionStore — the
+// Faithful port of org.edgo.audio.measure.common.CorrectionStore — the
 // owner of one pane's loaded frequency-response correction state: an ordered list
 // of loaded .frc Entry calibrations plus the calibration wizard's direct-loopback
 // buffer. The consumer chains the divides through all entries (in order) plus the
@@ -21,7 +21,7 @@
 
 /**
  * One loaded calibration plus the file path it came from. Mirrors
- * FreqRespCorrectionStore.Entry. `withNoise` is FFT-only (the FreqResp instance
+ * CorrectionStore.Entry. `withNoise` is FFT-only (the FreqResp instance
  * always divides the whole trace and leaves it false).
  *
  * @typedef {Object} CorrectionEntry
@@ -30,7 +30,7 @@
  * @property {boolean} withNoise
  */
 
-export class FreqRespCorrectionStore {
+export class CorrectionStore {
   /**
    * @param {string} label             short identifier for log lines (e.g. "FreqResp")
    * @param {?(()=>void)} changedEvent  callback fired after every mutation, or null for a silent store

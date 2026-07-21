@@ -43,7 +43,7 @@ export class FreqRespController {
    *   (the capture/input sample rate drives the derived duration; the sweep records off it).
    * @param {import('../store/preferences.js').Preferences} prefs Preferences.instance()
    * @param {import('./freqresp-view.js').FreqRespView} view the passive canvas view the sweep drives
-   * @param {import('./correction-store.js').FreqRespCorrectionStore} correctionStore the loaded-.frc store
+   * @param {import('../common/correction-store.js').CorrectionStore} correctionStore the loaded-.frc store
    */
   constructor(engine, prefs, view, correctionStore) {
     this.engine = engine;

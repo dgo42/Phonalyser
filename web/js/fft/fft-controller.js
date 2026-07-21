@@ -11,17 +11,17 @@
  * per-frame COPY before emit (these move to the view layer, fft-view-correction.js, in a later step).
  * Reads + steers the generator's snapped/FLL state through delegating accessors (it does not own it).
  */
-import { FftAnalyzer } from '../fft/fft-analyzer.js';
-import { FftResult } from '../fft/fft-result.js';
-import { FftAccumulator } from '../fft/fft-accumulator.js';
+import { FftAnalyzer } from './fft-analyzer.js';
+import { FftResult } from './fft-result.js';
+import { FftAccumulator } from './fft-accumulator.js';
 import { isDualTone } from '../generator/dds-kernel.js';
-import { OVERRUN } from './signal-buffer-reader.js';
+import { OVERRUN } from '../audio/signal-buffer-reader.js';
 import { MainsCombFilter, DEFAULT_NOTCH_BANDWIDTH_HZ } from '../dsp/mains/comb-filter.js';
 import { mainsFilterOf } from '../dsp/mains/factory.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events, GenChangeCause } from '../bus/events.js';
 import { FrequencyFll } from '../dsp/fll.js';
-import { refinePeak, TONE_SEARCH_BINS } from '../fft/imd-analyzer.js';
+import { refinePeak, TONE_SEARCH_BINS } from './imd-analyzer.js';
 
 /** Output-pipeline drain to skip after a generator/form/frequency change, in seconds
  *  (Java OUTPUT_DRAIN_SKIP_SEC). The DAC's hardware buffer (~480 ms on the render path)
@@ -89,6 +89,9 @@ export class FftController {
     this.config = config;
     this._status = status || (() => {});
     this._fftOn = false;
+    // Whether the analyser was recording when stopCaptureForPrefs() recorded it, so
+    // startCaptureForPrefs() restarts exactly that (Java FftPane.recordWasRunningForPrefs).
+    this._recordWasRunningForPrefs = false;
     this._fftReader = null;
     this._fftReadBuf = null;
     this._fftPausedByStopN = false;
@@ -1192,5 +1195,20 @@ export class FftController {
     this._fftReader = r;
     if (r) r.seekToLatest(); else this._fftOn = false;
     return r != null;
+  }
+
+  /** Preferences-dialog audio-config bracket (Java FftPane.stopCaptureForPrefs /
+   *  startCaptureForPrefs): the analyser OWNS whether it was recording. stopCaptureForPrefs
+   *  REALLY stops — setRecording(false) tears down the worker(s) AND releases this
+   *  consumer's shared-capture ref, so the one device closes on the LAST release
+   *  (refcount), not a central hard teardown. startCaptureForPrefs REALLY restarts —
+   *  setRecording(true) rebuilds the rate-dependent analysis geometry + worker(s) and
+   *  re-acquires the ref (reopening the device at the committed config on first re-acquire). */
+  async stopCaptureForPrefs() {
+    this._recordWasRunningForPrefs = this._fftOn;
+    if (this._fftOn) await this.setRecording(false);
+  }
+  async startCaptureForPrefs() {
+    if (this._recordWasRunningForPrefs) await this.setRecording(true);
   }
 }

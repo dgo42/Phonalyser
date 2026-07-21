@@ -46,7 +46,7 @@ public final class Events {
     /** Fired once per direction by the Preferences dialog's OK for each
      *  device-provided card whose active full-scale range ACTUALLY changed
      *  (Cancel, or an unchanged range, fires nothing).  Payload:
-     *  {@link ActiveRangeChange} — the direction and the newly active range's
+     *  {@link ActiveRange} — the direction and the newly active range's
      *  label, nothing else.  Device-agnostic: any backend that owns a live range
      *  may subscribe and act on the cards it recognises.  Today's subscriber is
      *  {@code Qa40xRangeController}, which decodes the label and re-ranges the open

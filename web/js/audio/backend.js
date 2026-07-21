@@ -35,9 +35,9 @@
 import { GenSignalForm } from '../generator/dds-kernel.js';
 import { debug } from '../util/debug.js';
 import { SharedCapture } from './shared-capture.js';
-import { GeneratorController } from './generator-controller.js';
-import { ScopeController } from './scope-controller.js';
-import { FftController } from './fft-controller.js';
+import { GeneratorController } from '../generator/generator-controller.js';
+import { ScopeController } from '../scope/scope-controller.js';
+import { FftController } from '../fft/fft-controller.js';
 import { scanDevices as scanAudioDevices } from './devices.js';
 
 const HARMONIC_COUNT = 9;                  // H2..H10 default (overridable via config.harmonicCount)
@@ -327,6 +327,32 @@ export class AudioEngine {
     // line (_measCapture) and is modal, so it is never live during a device-selector change.
     if (scopeWas) await this._scope.reattach();
     if (fftWas) await this._fft.reattach();
+  }
+
+  /** Preferences-dialog bracket, phase 1 (Java MainWindow →
+   *  MultifunctionalTab.beforeApplyBackendChanges): STOP each consumer whose direction CHANGED,
+   *  before the commit, while the current devices are still open — so every line closes cleanly.
+   *  Gated per direction: the capture consumers (scope + FFT) bounce when captureChanged (each
+   *  REALLY releases its own shared-capture ref; the one shared input device closes on the LAST
+   *  release — the refcount handles it, no central teardown), and the generator bounces when
+   *  outputChanged (it closes its own output context). Web Audio's input and output are SEPARATE
+   *  devices, so an input-only change never disturbs the generator and vice-versa. Call BEFORE
+   *  committing the new device/rate to config; pair with afterApplyBackendChanges(). */
+  async beforeApplyBackendChanges(captureChanged, outputChanged) {
+    if (captureChanged) { await this._scope.stopCaptureForPrefs(); await this._fft.stopCaptureForPrefs(); }
+    if (outputChanged) await this._gen.stopPlayForPrefs();
+  }
+
+  /** Preferences-dialog bracket, phase 2 (Java afterApplyBackendChanges): RESTART exactly what was
+   *  running, on the just-committed config. Gated per direction: the capture consumers (scope + FFT)
+   *  that were live re-acquire their refs when captureChanged — the shared input device reopens on
+   *  the FIRST re-acquire at the committed config.inDeviceId / inRate (refcount handles it, no
+   *  central re-open) — and the generator restarts its playing engine (tone or retained file) when
+   *  outputChanged, reopening its own output context. Input and output are separate devices, so
+   *  each direction re-acquires only its own resource. */
+  async afterApplyBackendChanges(captureChanged, outputChanged) {
+    if (captureChanged) { await this._scope.startCaptureForPrefs(); await this._fft.startCaptureForPrefs(); }
+    if (outputChanged) await this._gen.startPlayForPrefs();
   }
 
   /** Per-batch fan-out for the dedicated MEASUREMENT capture (_measCapture): the FreqResp

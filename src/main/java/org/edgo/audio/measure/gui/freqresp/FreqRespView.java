@@ -34,7 +34,7 @@ import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Event;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.common.Lanczos;
 import org.edgo.audio.measure.dsp.FilterDesign;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
@@ -146,7 +146,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  {@link FreqRespPane} (IoC) and shared with the calibration tab.
      *  The wizard reads it through the getter. */
     @Getter
-    private final FreqRespCorrectionStore correctionStore;
+    private final CorrectionStore correctionStore;
     /** Display copies, with the currently-loaded calibration divided in (if
      *  any).  {@link #onCalibrationChanged()} keeps these in sync with the
      *  store every time the user loads / clears / wizard-applies a new
@@ -320,7 +320,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
     /** Connected view for the main FreqResp pane: bound to the global
      *  {@link Preferences#instance()}, persisting + publishing range changes
      *  like any other pane. */
-    public FreqRespView(Composite parent, FreqRespCorrectionStore correctionStore) {
+    public FreqRespView(Composite parent, CorrectionStore correctionStore) {
         this(parent, correctionStore, false, Preferences.instance());
     }
 
@@ -329,7 +329,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  embedded chart — the Tune-notch wizard's use: it drives only its own copy,
      *  never saves to disk, and never publishes {@link Events#FREQRESP_RANGE_CHANGED},
      *  so nothing it does touches the shared main-pane view. */
-    public FreqRespView(Composite parent, FreqRespCorrectionStore correctionStore, boolean isolated, Preferences prefs) {
+    public FreqRespView(Composite parent, CorrectionStore correctionStore, boolean isolated, Preferences prefs) {
         // Push prefs-driven entries (background, L/R trace, phase, RIAA)
         // through the super override map so the base allocates each
         // colour exactly once.  Common entries (grid, axis, text,
@@ -551,7 +551,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
     /** Replaces the left-channel result and triggers a repaint.  The argument
      *  is the raw measurement; the displayed copy is derived by dividing it
      *  by whichever calibration is currently active in
-     *  {@link FreqRespCorrectionStore} (when {@code applyCalibration} is on). */
+     *  {@link CorrectionStore} (when {@code applyCalibration} is on). */
     public void setLeftResult(FreqRespResult result) {
         this.rawLeftResult = result;
         this.leftResult    = applyCurrentCalibration(result);
@@ -622,7 +622,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // Loaded files already carry the calibration division baked in
         // at save time — applying it again here would double-correct.
         if (raw.isCalibrationApplied()) return raw;
-        List<FreqRespCorrectionStore.Entry> entries = correctionStore.getEntries();
+        List<CorrectionStore.Entry> entries = correctionStore.getEntries();
         StereoFreqRespCalibration direct = correctionStore.getDirect();
         boolean wantCal   = prefs.isFreqRespApplyCalibration()
                             && (!entries.isEmpty() || direct != null);
@@ -638,7 +638,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
             // Chain every loaded calibration in order — linear-mag divide,
             // phase subtract — so the final displayed values reflect the
             // composition of all loaded files.
-            for (FreqRespCorrectionStore.Entry entry : entries) {
+            for (CorrectionStore.Entry entry : entries) {
                 divideByStereoCal(entry.getCalibration(), rChan, freqs, outMag, outPhase);
             }
             // Plus the wizard's transient page-1 calibration (when set) so

@@ -24,6 +24,7 @@ import java.util.Optional;
 
 import com.sun.jna.NativeLong;
 import com.sun.jna.Pointer;
+import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.ptr.PointerByReference;
 
 import lombok.extern.log4j.Log4j2;
@@ -50,6 +51,20 @@ public final class Qa40xDeviceFinder {
 
     /** {@code libusb_free_device_list} unref flag — release the device references we did not open. */
     private static final int UNREF_DEVICES = 1;
+
+    /** The QA40x's one and only USB configuration — selected explicitly before the
+     *  claim because macOS, unlike Linux / Windows, does not auto-configure. */
+    private static final int ACTIVE_CONFIGURATION = 1;
+
+    /** Open attempts and the settle pause between them.  macOS: {@code
+     *  libusb_reset_device} drops and re-enumerates the device, so the first
+     *  configure/claim can race the re-enumeration — the interface (or the whole
+     *  device) is momentarily gone: {@code LIBUSB_ERROR_NOT_FOUND} on the claim,
+     *  or an empty device list on the next pass.  A short settle plus a fresh
+     *  open WITHOUT another reset recovers; Linux / Windows restore state
+     *  synchronously and never retry in practice. */
+    private static final int  OPEN_ATTEMPTS   = 3;
+    private static final long RESET_SETTLE_MS = 250;
 
     /** A QA40x model and its USB product ID (doc §2).  QA401 is deliberately out of scope. */
     public enum Qa40xModel {
@@ -102,11 +117,39 @@ public final class Qa40xDeviceFinder {
      * Opens the single attached QA40x exclusively: {@code reset_device} then
      * {@code claim_interface(0)} (doc §7).  Throws if {@code libusb} is absent, if
      * no device is attached, or if more than one is (the single-device rule).
+     * The reset runs only on the FIRST attempt; a retry re-opens without it —
+     * resetting again would just re-arm the macOS re-enumeration race the retry
+     * is there to escape (see {@link #OPEN_ATTEMPTS}).
      */
     public LibUsbQa40xTransport open() {
         if (!LibUsb.available()) {
             throw new IllegalStateException("libusb-1.0 not available — cannot open a QA40x device");
         }
+        IllegalStateException last = null;
+        for (int attempt = 1; attempt <= OPEN_ATTEMPTS; attempt++) {
+            try {
+                return openOnce(attempt == 1);
+            } catch (IllegalStateException e) {
+                last = e;
+                if (attempt < OPEN_ATTEMPTS) {
+                    if (log.isInfoEnabled()) {
+                        log.info("QA40x open attempt {}/{} failed ({}); settling {} ms before retry",
+                                attempt, OPEN_ATTEMPTS, e.getMessage(), RESET_SETTLE_MS);
+                    }
+                    settleBeforeRetry();
+                }
+            }
+        }
+        throw last;
+    }
+
+    /**
+     * One pass of the open dance: {@code libusb_open}, optional {@code
+     * reset_device}, configuration select, {@code claim_interface(0)}.  The
+     * handle is closed on ANY failure — an opened-but-unclaimed handle left
+     * dangling on a re-enumerating device poisons the next attempt.
+     */
+    private LibUsbQa40xTransport openOnce(boolean reset) {
         return withDeviceList((lib, devices) -> {
             Pointer match = null;
             Qa40xModel model = null;
@@ -124,13 +167,45 @@ public final class Qa40xDeviceFinder {
             PointerByReference handleRef = new PointerByReference();
             checkRc(lib.libusb_open(match, handleRef), "libusb_open");
             Pointer handle = handleRef.getValue();
-            checkRc(lib.libusb_reset_device(handle), "libusb_reset_device");
-            checkRc(lib.libusb_claim_interface(handle, LibUsbQa40xTransport.INTERFACE_0), "libusb_claim_interface(0)");
+            boolean claimed = false;
+            try {
+                if (reset) {
+                    checkRc(lib.libusb_reset_device(handle), "libusb_reset_device");
+                }
+                // macOS: unlike Linux / Windows the OS does not auto-select the
+                // device configuration — after enumeration (or the reset-induced
+                // re-enumeration above) the QA40x can sit UNCONFIGURED, and claiming
+                // interface 0 of configuration 0 fails with LIBUSB_ERROR_NOT_FOUND.
+                // Select the device's only configuration first; a no-op wherever the
+                // OS already configured it.
+                IntByReference cfg = new IntByReference();
+                checkRc(lib.libusb_get_configuration(handle, cfg), "libusb_get_configuration");
+                if (cfg.getValue() != ACTIVE_CONFIGURATION) {
+                    checkRc(lib.libusb_set_configuration(handle, ACTIVE_CONFIGURATION), "libusb_set_configuration");
+                }
+                checkRc(lib.libusb_claim_interface(handle, LibUsbQa40xTransport.INTERFACE_0), "libusb_claim_interface(0)");
+                claimed = true;
+            } finally {
+                if (!claimed) {
+                    lib.libusb_close(handle);
+                }
+            }
             log.info("Opened {} (bus {}, addr {})", model,
                     lib.libusb_get_bus_number(match)     & 0xFF,
                     lib.libusb_get_device_address(match) & 0xFF);
             return new LibUsbQa40xTransport(lib, handle);
         });
+    }
+
+    /** Waits {@link #RESET_SETTLE_MS} between open attempts; an interrupt aborts
+     *  the open (flag restored) rather than shortening the pause. */
+    private void settleBeforeRetry() {
+        try {
+            Thread.sleep(RESET_SETTLE_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for the QA40x to re-enumerate", e);
+        }
     }
 
     /** Enforces the single-device rule (doc §2/§7); pure, so it is unit-tested directly. */

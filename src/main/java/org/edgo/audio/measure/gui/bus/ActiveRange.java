@@ -18,6 +18,9 @@
 
 package org.edgo.audio.measure.gui.bus;
 
+import lombok.AllArgsConstructor;
+import lombok.Data;
+
 /**
  * Payload of {@link Events#DEVICE_ACTIVE_RANGE_CHANGED}: one direction of a
  * device-provided card whose active full-scale range changed when the Preferences
@@ -29,5 +32,9 @@ package org.edgo.audio.measure.gui.bus;
  * @param input            {@code true} for the input (capture) direction, {@code false} for output
  * @param activeRangeLabel the newly active range-row label as shown on the card
  */
-public record ActiveRangeChange(boolean input, String activeRangeLabel) {
+@Data
+@AllArgsConstructor
+public class ActiveRange {
+    private boolean input;
+    private String activeRangeLabel;
 }

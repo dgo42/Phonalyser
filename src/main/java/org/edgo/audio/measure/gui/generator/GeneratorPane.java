@@ -970,39 +970,64 @@ public final class GeneratorPane extends AbstractPane {
         }
     }
 
+    /** Which output engine was running when {@link #stopPlayForPrefs()} stopped
+     *  it, so {@link #startPlayForPrefs()} restarts exactly that one.  Owned here
+     *  — the caller does not track the pane's running state.  The DDS tone and
+     *  file playback share the output device and are mutually exclusive, so at
+     *  most one of these is set. */
+    private boolean ddsWasRunningForPrefs;
+    private boolean fileWasRunningForPrefs;
+
     /**
-     * Stops the DDS generator + file player ahead of an operation that
-     * mutates the audio backend (e.g. the Preferences dialog switching
-     * between WASAPI / WDM-KS / csjsound).  Returns a {@link Runnable}
-     * that restarts whichever of them was running before — call it once
-     * the disruptive operation completes.  If the user changed backend
-     * during the operation, the restart uses the new dispatch path.
+     * Stops the DDS generator / file player ahead of a Preferences audio-config
+     * change (e.g. switching backend between WASAPI / WDM-KS / csjsound / QA40x),
+     * remembering which one was playing.  Called BEFORE the new backend is
+     * committed — while the old backend is still active — so its output line
+     * closes cleanly instead of wedging the stop; pair with
+     * {@link #startPlayForPrefs()} after the commit.
      */
-    public Runnable pauseAroundDialog() {
-        boolean genWasRunning  = controller.isRunning();
-        boolean fileWasRunning = controller.isFilePlaying();
-        if (genWasRunning || fileWasRunning) {
+    public void stopPlayForPrefs() {
+        ddsWasRunningForPrefs  = controller.isRunning();
+        fileWasRunningForPrefs = controller.isFilePlaying();
+        if (ddsWasRunningForPrefs || fileWasRunningForPrefs) {
             stopOnAirBlink();
         }
         controller.stopEngines();
         syncPlayButtonVisuals();
         syncFilePlayVisuals();
-        return () -> {
-            if (genWasRunning) {
-                controller.start();
-                syncPlayButtonVisuals();
-                if (!controller.isRunning()) {
-                    String err = controller.getLastStartError();
-                    Dialogs.error(group.getShell(),
-                            I18n.t("generator.error.resume"),
-                            err != null ? err : I18n.t("generator.error.restartFailed"));
-                }
+    }
+
+    /**
+     * Restarts, on the newly-committed backend, whichever engine was playing
+     * when {@link #stopPlayForPrefs()} stopped it — the DDS tone, or WAV/FLAC
+     * file playback.  Both drive the selected output device, so a backend /
+     * device change disturbs either; file playback resumes from the same
+     * play-from path and loop flag held in the preferences.
+     */
+    public void startPlayForPrefs() {
+        if (ddsWasRunningForPrefs) {
+            controller.start();
+            syncPlayButtonVisuals();
+            if (!controller.isRunning()) {
+                String err = controller.getLastStartError();
+                Dialogs.error(group.getShell(),
+                        I18n.t("generator.error.resume"),
+                        err != null ? err : I18n.t("generator.error.restartFailed"));
             }
-            // File player isn't reopened automatically — it doesn't go
-            // through AudioBackend (uses default JavaSound line), so
-            // device enumeration didn't disturb it, and the user may
-            // have changed file/loop settings in the dialog anyway.
-        };
+        } else if (fileWasRunningForPrefs) {
+            Preferences prefs = Preferences.instance();
+            String path = prefs.getGenPlayFromPath();
+            if (path == null || path.isEmpty()) return;
+            controller.startFilePlayback(new File(path), prefs.isGenPlayFromLoop());
+            syncPlayButtonVisuals();
+            syncFilePlayVisuals();
+            if (!controller.isFilePlaying()) {
+                String err = controller.getFilePlayError();
+                Dialogs.error(group.getShell(),
+                        I18n.t("generator.error.playFile"),
+                        err != null ? err : I18n.t("common.error.fileOpenUnknown"));
+            }
+        }
     }
 
     /** Records the pane's current pixel width — called by the host

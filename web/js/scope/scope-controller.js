@@ -10,10 +10,10 @@
  * fundamental comes in via an injected getter (it reads the generator without owning it). No DOM.
  */
 import { isDualTone } from '../generator/dds-kernel.js';
-import { BUFFER_SECONDS } from './shared-capture.js';
+import { BUFFER_SECONDS } from '../audio/shared-capture.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
-import { OscMeasClient } from '../scope/osc-meas-client.js';
+import { OscMeasClient } from './osc-meas-client.js';
 
 // Scope window sizing (faithful to Java ScopeView.drawWaveforms line ~2007):
 //   wanted = 2·displaySamples + 2·LANCZOS_PADDING + extraLookback
@@ -52,6 +52,9 @@ export class ScopeController {
     this._getSnapped = getSnapped || (() => 0);
     this._getSnapped2 = getSnapped2 || (() => 0);
     this._scopeOn = false;
+    // Whether the scope was recording when stopCaptureForPrefs() recorded it, so
+    // startCaptureForPrefs() restarts exactly that (Java ScopePane.captureWasRunningForPrefs).
+    this._captureWasRunningForPrefs = false;
     this._scopeReader = null;
     this.scopeBufL = null;
     this.scopeBufR = null;
@@ -214,6 +217,22 @@ export class ScopeController {
     // re-attach; the client re-acquires its own reference + resets the worker's stream state).
     await this._measClient.reattach();
     return r != null;
+  }
+
+  /** Preferences-dialog audio-config bracket (Java ScopePane.stopCaptureForPrefs /
+   *  startCaptureForPrefs): the scope OWNS whether it was live, so the engine's
+   *  two-phase bounce restarts exactly what was running. stopCaptureForPrefs REALLY
+   *  stops — setRecording(false) stops the measurement client AND releases this
+   *  consumer's shared-capture ref, so the one device closes on the LAST release
+   *  (refcount), not a central hard teardown. startCaptureForPrefs REALLY restarts —
+   *  setRecording(true) re-acquires the ref (reopening the device at the committed
+   *  config on the first re-acquire) and rebuilds the rate-dependent buffers. */
+  async stopCaptureForPrefs() {
+    this._captureWasRunningForPrefs = this._scopeOn;
+    if (this._scopeOn) await this.setRecording(false);
+  }
+  async startCaptureForPrefs() {
+    if (this._captureWasRunningForPrefs) await this.setRecording(true);
   }
 
   /** Injects the prefs->publish-params provider the measurement client polls each batch

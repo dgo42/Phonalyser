@@ -11,7 +11,7 @@
  * the narrow injected `host` object — mirroring Java FftTabControl→FftPane.Host
  * (getResult / setResult / applyPrefsToUi). The FFT NumericStepFields (manual-fundamental)
  * are built in app.js's initStepFields and reached here via the injected getField; the
- * io / fftViewCorrection / frcStore / restartFft / tileChips collaborators + the shared
+ * io / fftViewCorrection / store / restartFft / tileChips collaborators + the shared
  * confirm dialog are injected too.
  */
 import { t } from '../i18n/i18n.js';
@@ -35,15 +35,16 @@ export class FftTabControl {
   /**
    * @param engine the AudioEngine (FFT structural changes restart the FFT consumer via host).
    * @param prefs  Preferences.
-   * @param deps   {host, fftView, fftViewCorrection, frcStore, getField, io, restartFft,
+   * @param deps   {host, fftView, fftViewCorrection, store, getField, io, restartFft,
    *                showConfirm, setStatus, tileChips}
    *   - host: the narrow FFT-PANE seam (Java FftTabControl.Host) —
    *       getResult() (=> latestResult, the live analyzed spectrum: Save / ADC-calibrate read it),
    *       setResult(r) (a loaded .fft spectrum → latestResult + resultDirty so the render loop paints it),
    *       applyPrefsToUi() (a preset recall re-seeds the main FFT controls: app.js applyPrefsToUi).
    *   - fftView: the FFT view (applyPrefs() re-reads colour/line/axis prefs on a preset recall).
-   *   - fftViewCorrection: the render-time FFT spectral corrections (setFrcCalibration on a .frc load).
-   *   - frcStore: the shared loaded-.frc store (render-time de-embed + predistortion calResponseAt).
+   *   - fftViewCorrection: the render-time FFT spectral corrections (reads the shared store).
+   *   - store: the shared FFT CorrectionStore (Java FftController's) — rebuildCalEntries mutates it;
+   *       both the render-time de-embed (fftViewCorrection) and the predistortion calResponseAt read it.
    *   - getField: (id) => the FFT NumericStepField (built in app.js initStepFields).
    *   - io: {saveFile, openFile, bytesToText, loadFrc, saveSpectrum, loadSpectrum, FFT_TYPE, FRC_TYPE} —
    *       the file save / load collaborators.
@@ -52,14 +53,14 @@ export class FftTabControl {
    *   - setStatus: (msg) => set the status line.
    *   - tileChips: (...vals) => the `.tile` chip-span renderer (shared with the scope tiles, app.js).
    */
-  constructor(engine, prefs, { host, fftView, fftViewCorrection, frcStore, getField, io,
+  constructor(engine, prefs, { host, fftView, fftViewCorrection, store, getField, io,
     restartFft, showConfirm, setStatus, tileChips, calibrationDialog }) {
     this.engine = engine;
     this.prefs = prefs;
     this.host = host;
     this.fftView = fftView;
     this.fftViewCorrection = fftViewCorrection;
-    this.frcStore = frcStore;
+    this.store = store;
     this._getField = getField;
     this.io = io;
     this._restartFft = restartFft;
@@ -127,7 +128,7 @@ export class FftTabControl {
     $('#thdTabSub').html(this.titledChips(...chips));
   }
   updateCalTabSub() {
-    const n = this.frcStore.length;
+    const n = this.store.getEntries().length;
     $('#calTabSub').html(n <= 0 ? '' : this._tileChips(n === 1 ? t('calibration.tile.loaded') : t('calibration.tile.loadedN', n)));
   }
   updatePresetTabSub() {
@@ -619,7 +620,7 @@ export class FftTabControl {
 
     // ----- FFT Calibration panel (Java FftTabControl.buildCalibrationTab): a multi-row .frc cascade.
     // Each row is one loaded file with Active + With-noise; all Active rows are de-embedded in sequence
-    // (fftViewCorrection.setFrcEntries). "With noise" → that row's correctAllBins: every FFT bin (noise
+    // (rebuilt into the shared store). "With noise" → that row's correctAllBins: every FFT bin (noise
     // floor incl.) corrected when on, harmonic/dot bins only when off. Row 0 is always present and hides
     // its Remove.
     //
@@ -692,16 +693,15 @@ export class FftTabControl {
       $rows.first().find('.fcal-remove').css('visibility', 'hidden');   // row 0 keeps its column, hides Remove
     };
     const rebuildCalEntries = () => {
-      const entries = [];
+      const store = this.store;
+      store.clearAll();
       $('#fftCalRows .fft-cal-row').each(function () {
         const $row = $(this), stereo = $row.data('stereo');
         if (stereo && $row.find('.fcal-active').is(':checked')) {
-          entries.push({ calibration: { left: stereo.left, right: stereo.right }, withNoise: $row.find('.fcal-noise').is(':checked') });
+          store.addEntry({ left: stereo.left, right: stereo.right },
+            $row.data('frcName') || '(unnamed)', $row.find('.fcal-noise').is(':checked'));
         }
       });
-      this.fftViewCorrection.setFrcEntries(entries);
-      this.frcStore.length = 0;
-      for (const e of entries) this.frcStore.push(e);
       this.updateCalTabSub();
       // #24 follow-up: a cal change must also apply to a STOPPED FFT (Java: the .frc
       // de-embed is a plot-time transform over the raw lastResult — a toggle there just
@@ -838,7 +838,7 @@ export class FftTabControl {
 
     // In-session .frc save live-reload (Java FftTabControl subscribes CALIBRATION_FILE_SAVED →
     // onCalibrationFileSaved): if any loaded calibration row references the just-saved file,
-    // re-apply the rows through fftViewCorrection.setFrcEntries so the new curve takes effect
+    // re-apply the rows through the shared store (rebuildCalEntries) so the new curve takes effect
     // without re-browsing. Across-reload restoration is handled by restoreCalRows() above (the
     // .frc text is persisted in the file-store, #5); this only refreshes from the in-memory rows.
     MessageBus.instance().subscribe(Events.CALIBRATION_FILE_SAVED, (path) => {

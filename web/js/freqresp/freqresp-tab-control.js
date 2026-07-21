@@ -9,7 +9,7 @@
 // Compare + enable cascade + tiles), the Presets tab (save/load/delete + list), the Utility
 // tab (screenshot + DAC/ADC-cal stubs), the Save-to / Load-from .frc tabs, and the multi-row
 // calibration loader. All DSP + the canvas view live elsewhere; this is settings wiring over
-// the shared FreqRespView + FreqRespCorrectionStore, mirroring the FftTabControl split.
+// the shared FreqRespView + CorrectionStore, mirroring the FftTabControl split.
 
 import { makeFreqRespResult } from './stereo-result.js';
 import { saveFrc, loadFrc, readSampleRateHz } from '../io/frc.js';
@@ -41,7 +41,7 @@ export class FreqRespTabControl {
    * @param {import('../audio/backend.js').AudioEngine} engine the live engine (load uses inRate)
    * @param {object} prefs Preferences.instance()
    * @param {import('./freqresp-view.js').FreqRespView} view the interactive canvas view
-   * @param {import('./correction-store.js').FreqRespCorrectionStore} correctionStore the loaded-.frc store
+   * @param {import('../common/correction-store.js').CorrectionStore} correctionStore the loaded-.frc store
    * @param {{saveFile:Function, openFile:Function, bytesToText:Function}} io file-picker glue
    * @param {import('./freqresp-controller.js').FreqRespController} controller sweep-timing owner (durationSec)
    */

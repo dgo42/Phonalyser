@@ -35,6 +35,7 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.Image;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.FillLayout;
@@ -57,7 +58,6 @@ import org.edgo.audio.measure.gui.helpviewer.UpdateChecker;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.gl.GpuSupport;
 import org.edgo.audio.measure.gui.tips.TipOfTheDayDialog;
-import org.edgo.audio.measure.preferences.BackendPrefs;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
 
@@ -78,10 +78,11 @@ import lombok.extern.log4j.Log4j2;
  *   <li><b>Language</b> — runtime locale switch (do-not-translate sentinel,
  *       always rendered as "Language" so users who can't read the current
  *       UI language can still find this menu).</li>
- *   <li><b>Tools</b> — opens the {@code PreferencesDialog}.  Pauses live
- *       capture + generator playback around the dialog (via
- *       {@link MainTab#pauseForDialog()}) so device changes don't tear
- *       running streams.</li>
+ *   <li><b>Tools</b> — opens the {@code PreferencesDialog}.  On OK, a committed
+ *       audio-config change stops live capture + generator playback before the
+ *       switch and restarts them after (via
+ *       {@link MainTab#beforeApplyBackendChanges()}) so device changes don't
+ *       tear running streams.</li>
  *   <li><b>Help</b> — multi-chapter HTML help viewer (F1 / Ctrl+F1),
  *       startup-check toggles, GitHub issue reporting, About dialog.</li>
  * </ul>
@@ -206,6 +207,18 @@ public final class MainWindow {
         }
     }
 
+    /** Stops the live streams before the Preferences dialog commits an audio
+     *  change — invoked by its OK handler while the old backend is still active. */
+    public void beforeApplyBackendChanges() {
+        if (mainTab != null) mainTab.beforeApplyBackendChanges();
+    }
+
+    /** Restarts, on the newly-committed backend, the streams stopped by
+     *  {@link #beforeApplyBackendChanges()} — invoked by the dialog's OK handler. */
+    public void afterApplyBackendChanges() {
+        if (mainTab != null) mainTab.afterApplyBackendChanges();
+    }
+
     public boolean isDisposed() {
         return shell.isDisposed();
     }
@@ -265,17 +278,6 @@ public final class MainWindow {
         // Shell, so the rebuild does not reach it.  No-op unless the language
         // actually changed and help is open.
         HelpViewer.instance().refreshLanguage();
-    }
-
-    /** The audio configuration the running streams depend on — backend +
-     *  the active backend's devices, sample rates and bit depths.  Compared
-     *  before/after the Preferences dialog: only a committed change here
-     *  bounces the running playback / capture. */
-    private String audioConfigFingerprint(Preferences prefs) {
-        BackendPrefs bp = prefs.current();
-        return prefs.getBackend() + "|"
-                + bp.getInputDeviceName()  + "|" + bp.getInputSampleRate()  + "|" + bp.getInputBitDepth() + "|"
-                + bp.getOutputDeviceName() + "|" + bp.getOutputSampleRate() + "|" + bp.getOutputBitDepth();
     }
 
     /** Builds and shows the brief splash covering a content rebuild. */
@@ -436,24 +438,9 @@ public final class MainWindow {
      *  capture, and a font change rebuilds the content in place.  Shared by the
      *  Tools menu (non-macOS) and the macOS application-menu Settings item. */
     private void openPreferencesDialog() {
-        Preferences mwPrefs = Preferences.instance();
-        String audioBefore = audioConfigFingerprint(mwPrefs);
-        String fontsBefore = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
-        boolean gpuBefore  = mwPrefs.isUseGpuAcceleration();
-        new PreferencesDialog(shell).open(() -> {
-            String fontsAfter = mwPrefs.getUiFontNormal() + "/" + mwPrefs.getUiFontBold();
-            // Bounce BEFORE a font rebuild: the resume hook belongs to the
-            // CURRENT panes — running it after rebuildContent would drive
-            // disposed widgets.
-            if (!audioConfigFingerprint(mwPrefs).equals(audioBefore)) {
-                mainTab.pauseForDialog();
-            }
-            // The GPU toggle, like fonts, takes effect by rebuilding the panes — the
-            // scope pane chooses its surface (GL vs GC) at construction.
-            if (!fontsAfter.equals(fontsBefore) || mwPrefs.isUseGpuAcceleration() != gpuBefore) {
-                rebuildContent();
-            }
-        });
+        PreferencesDialog dialog = new PreferencesDialog(shell);
+        dialog.setMainWindow(this);
+        dialog.open();
     }
 
     /** Opens the Tune-notch wizard — a continuous Farina-sweep frequency

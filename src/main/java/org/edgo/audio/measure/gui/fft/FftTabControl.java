@@ -44,7 +44,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.bind.Property;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.AlignGenerator;
@@ -153,7 +153,7 @@ public final class FftTabControl extends AbstractTabControl {
 
     /** Loaded {@code .frc} correction store, constructor-injected by
      *  {@link FftPane} (IoC) and shared with the {@link FftView}. */
-    private final FreqRespCorrectionStore correctionStore;
+    private final CorrectionStore correctionStore;
 
     /** Controller owning the {@code .fft} spectrum file round-trip (and the
      *  analyser lifecycle); constructor-injected by {@link FftPane}. */
@@ -204,7 +204,7 @@ public final class FftTabControl extends AbstractTabControl {
     private final List<FftCalRow> fftCalRows = new ArrayList<>();
 
     public FftTabControl(Composite parent, FftView view, boolean liveCapture,
-                         FreqRespCorrectionStore correctionStore,
+                         CorrectionStore correctionStore,
                          FftController controller) {
         super(parent, SWT.NONE);
         this.view = view;
@@ -1173,7 +1173,7 @@ public final class FftTabControl extends AbstractTabControl {
         Composite                composite;
         Text                     pathField;
         /** "Active" toggle — two-way bound to {@code entry.active()}; the
-         *  calibration is only added to {@link FreqRespCorrectionStore} when this
+         *  calibration is only added to {@link CorrectionStore} when this
          *  is checked AND a file is loaded. */
         Button                   activeCheck;
         /** "With noise" toggle — two-way bound to {@code entry.withNoise()};

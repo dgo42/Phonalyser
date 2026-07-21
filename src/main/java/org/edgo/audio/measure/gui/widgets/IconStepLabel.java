@@ -79,6 +79,10 @@ public final class IconStepLabel extends Canvas {
 
         addPaintListener(e -> {
             Image img = isPressed ? pressed : normal;
+            // Teardown paint: destroying the GL child window pumps the Cocoa
+            // event loop mid-shutdown, so a paint can arrive after the shared
+            // IconUtils images are disposed — skip, the widget is going away.
+            if (img.isDisposed()) return;
             Rectangle ib = img.getBounds();
             Rectangle cb = getClientArea();
             // Wipe the cell first so a smaller image swapped in over a
