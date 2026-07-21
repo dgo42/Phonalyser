@@ -50,7 +50,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.bind.Property;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
@@ -165,7 +165,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
     /** Loaded {@code .frc} correction store, constructor-injected by
      *  {@link FreqRespPane} (IoC) and shared with the {@link FreqRespView}. */
-    private final FreqRespCorrectionStore correctionStore;
+    private final CorrectionStore correctionStore;
 
     // Tab-header tiles: the shared TileTabFolder (held by AbstractTabControl as
     // toolbarTabs) owns the renderer, spacer images, tab-body collapse, hover
@@ -262,7 +262,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
     private Consumer<String> calFileSavedListener;
 
     public FreqRespTabControl(Composite parent, FreqRespView view,
-                              FreqRespCorrectionStore correctionStore) {
+                              CorrectionStore correctionStore) {
         super(parent, SWT.NONE);
         this.view = view;
         this.correctionStore = correctionStore;
@@ -1934,7 +1934,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
      *  one row per loaded entry (with row 0 always present). */
     private void rebuildRowsFromStore() {
         if (calRowsContainer == null || calRowsContainer.isDisposed()) return;
-        List<FreqRespCorrectionStore.Entry> entries = correctionStore.getEntries();
+        List<CorrectionStore.Entry> entries = correctionStore.getEntries();
         // No-op when the store's loaded entries already line up with
         // the loaded rows in the UI (in the same order).  Skipping
         // here preserves user-added empty rows when the bus event is
@@ -1955,7 +1955,7 @@ public final class FreqRespTabControl extends AbstractTabControl {
             prefs.addFreqRespCalibration(entry);
             CalRow r = createRowUi(entry);
             if (i < entries.size()) {
-                FreqRespCorrectionStore.Entry e = entries.get(i);
+                CorrectionStore.Entry e = entries.get(i);
                 r.calibration = e.getCalibration();
                 r.pathField.setText(e.getPath());
                 r.pathField.setToolTipText(e.getPath());
@@ -1968,12 +1968,12 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
     /** True when the loaded subset of {@link #calRows} (skipping empty
      *  rows) is identical, in order, to {@code entries}. */
-    private boolean loadedRowsMatch(List<FreqRespCorrectionStore.Entry> entries) {
+    private boolean loadedRowsMatch(List<CorrectionStore.Entry> entries) {
         int j = 0;
         for (CalRow r : calRows) {
             if (r.calibration == null) continue;
             if (j >= entries.size()) return false;
-            FreqRespCorrectionStore.Entry e = entries.get(j);
+            CorrectionStore.Entry e = entries.get(j);
             if (r.calibration != e.getCalibration()) return false;
             if (r.entry.getPath() == null || !r.entry.getPath().equals(e.getPath())) return false;
             j++;

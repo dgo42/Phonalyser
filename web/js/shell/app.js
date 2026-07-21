@@ -10,6 +10,7 @@
 
 import { AudioEngine } from '../audio/backend.js';
 import { FftViewCorrection } from '../fft/fft-view-correction.js';
+import { CorrectionStore } from '../common/correction-store.js';
 import { CalibrationDialog } from './calibration-dialog.js';
 import { CardEditorDialog } from './card-editor-dialog.js';
 import { FftView } from '../ui/fft-view.js';
@@ -67,9 +68,15 @@ const formLabel = (form) => t(`generator.signalForm.${form}`);
 const formIcon = (form) => `assets/icons/signal-${form.toLowerCase().replace(/_/g, '-')}.svg`;
 
 const engine = new AudioEngine();
+// The FFT side's loaded-.frc store (Java FftController owns
+// new CorrectionStore("FFT", Events.FFT_CALIBRATION_CHANGED)). FftViewCorrection READS it, the
+// predistortion bridge reads it live, and FftTabControl mutates it from the calibration rows.
+// Silent (null change callback): the sole mutator, rebuildCalEntries, does its own single re-render
+// after a clearAll()+addEntry batch, so a per-mutation callback would only re-render redundantly.
+const fftCorrectionStore = new CorrectionStore('FFT', null);
 // Render-time FFT spectral corrections (.frc de-embed + mains + IMD) — applied in the VIEW path
 // (engine.onResult below), NOT in the engine; the coherent accumulator stays raw.
-const fftViewCorrection = new FftViewCorrection(engine.config);
+const fftViewCorrection = new FftViewCorrection(engine.config, fftCorrectionStore);
 const fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => engine.generator.running, correction: fftViewCorrection });
 const scopeView = new ScopeView(document.getElementById('scope'), { prefs });
 let prefsModal, aboutModal;
@@ -1267,12 +1274,8 @@ async function renderFreqRespShot(comment, w, h, mime) {
 // The FFT Presets / Utility (screenshot + ADC calibrate) / Save / Load / Load-calibration
 // handlers moved to fft/fft-tab-control.js (Java FftTabControl): presets recall re-seeds the
 // main FFT controls via host.applyPrefsToUi; the loaded .fft spectrum flows back via
-// host.setResult; the .frc load pushes into the shared frcStore + fftViewCorrection.
-
-// Loaded .frc store, shared by the render-time FFT de-embed AND the predistortion
-// engine's calResponseAt (PredistortionHost.correctionEntries shape). Filled by the
-// FftTabControl "Load calibration…" handler (frcStore injected into the control).
-const frcStore = [];
+// host.setResult; the .frc load mutates the shared fftCorrectionStore, read by both the
+// render-time FFT de-embed (fftViewCorrection) and the predistortion engine's calResponseAt.
 
 // ============================ Frequency response ============================
 const freqRespPane = new FreqRespPane(engine, prefs, { saveFile, openFile, bytesToText });
@@ -1300,7 +1303,9 @@ async function restartPreservingConfig() {
 const predistHost = new PredistortionHost(engine, prefs, {
   getResult: () => fftPane.getResult(),
   restart: restartPreservingConfig,
-  correctionEntries: frcStore,
+  // Read the FFT store LIVE — the predistortion engine reads correctionEntries on demand, so a
+  // captured array snapshot would go stale as the calibration rows change.
+  get correctionEntries() { return fftCorrectionStore.getEntries(); },
 });
 
 
@@ -1470,7 +1475,7 @@ async function init() {
   // getResult / setResult route to the fftPane built above.
   step('fftTabControl', () => {
     fftTabControl = new FftTabControl(engine, prefs, {
-      host: fftHost, fftView, fftViewCorrection, frcStore, getField: (id) => stepFields[id],
+      host: fftHost, fftView, fftViewCorrection, store: fftCorrectionStore, getField: (id) => stepFields[id],
       io: { saveFile, openFile, bytesToText, loadFrc, saveSpectrum, loadSpectrum, FFT_TYPE, FRC_TYPE },
       restartFft, showConfirm, setStatus: (m) => $('#status').text(m), tileChips,
       calibrationDialog: () => calibrationDialog,
@@ -1584,7 +1589,7 @@ async function init() {
     const cardEditorDialog = new CardEditorDialog({ showConfirm });
     // Preferences dialog (Java PreferencesDialog): staged audio/L&F/Osc/FFT/FR prefs, commit on OK.
     prefsDialog = new PreferencesDialog(engine, prefs, {
-      modal: prefsModal, RATES, stepFields, inRate, outRate, restartGenerator: () => genPane.restartGenerator(),
+      modal: prefsModal, RATES, stepFields, inRate, outRate,
       isBusy: () => busy, setBusy: (v) => { busy = v; }, fftView, deviceStore,
       cardEditorDialog, showConfirm,
     }).bind();

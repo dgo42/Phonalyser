@@ -71,19 +71,18 @@ export class PreferencesDialog {
   /**
    * @param engine the AudioEngine (capture reopen + generator restart on a committed device/rate).
    * @param prefs  Preferences.
-   * @param deps   {modal, RATES, stepFields, inRate, outRate, restartGenerator, isBusy, setBusy, fftView}
+   * @param deps   {modal, RATES, stepFields, inRate, outRate, isBusy, setBusy, fftView}
    *               - modal: the bootstrap Modal for #prefsModal
    *               - RATES: the full output sample-rate list (input-rate fallback when native unknown)
    *               - stepFields: the NumericStepField map (FR/generator Nyquist ceilings re-pin)
    *               - inRate / outRate: () => the live input/output sample rate (Nyquist source)
-   *               - restartGenerator: () => Promise — restart the DDS after an output-device change
    *               - isBusy / setBusy: the shared re-entrancy guard accessors (capture-reopen serialize)
    *               - fftView: the FFT view (applyPrefs() on OK so it re-reads its colour/line prefs)
    *               - deviceStore: the DeviceProfileStore — apply the resolved card's per-channel
    *                 full-scale on a device selection (Java SharedCapture / GeneratorController /
    *                 PreferencesDialog applyInput|OutputDeviceProfile)
    */
-  constructor(engine, prefs, { modal, RATES, stepFields, inRate, outRate, restartGenerator, isBusy, setBusy, fftView, deviceStore, cardEditorDialog, showConfirm }) {
+  constructor(engine, prefs, { modal, RATES, stepFields, inRate, outRate, isBusy, setBusy, fftView, deviceStore, cardEditorDialog, showConfirm }) {
     this.engine = engine;
     this.prefs = prefs;
     this.modal = modal;
@@ -91,7 +90,6 @@ export class PreferencesDialog {
     this.stepFields = stepFields;
     this.inRate = inRate;
     this.outRate = outRate;
-    this.restartGenerator = restartGenerator;
     this.isBusy = isBusy;
     this.setBusy = setBusy;
     this.fftView = fftView;
@@ -164,42 +162,47 @@ export class PreferencesDialog {
     const inDev = $('#inSel').val(), outDev = $('#outSel').val();
     const inR = parseInt($('#inRate').val(), 10), outR = parseInt($('#outRate').val(), 10);
     const bp = this.prefs.current();
-    const inDevChanged  = bp.inputDeviceName  !== inDev;
-    const outDevChanged = bp.outputDeviceName !== outDev;
-    const inRateChanged  = bp.inputSampleRate  !== inR;
-    const outRateChanged = bp.outputSampleRate !== outR;
-    bp.inputDeviceName = inDev; bp.outputDeviceName = outDev;
-    if (inR)  bp.inputSampleRate  = inR;
-    if (outR) bp.outputSampleRate = outR;
-    this.prefs.save();
-    this._audioSnapshot = null;
+    const captureChanged = bp.inputDeviceName  !== inDev || bp.inputSampleRate  !== inR;
+    const outputChanged  = bp.outputDeviceName !== outDev || bp.outputSampleRate !== outR;
 
-    // Apply the committed devices' per-card per-channel full-scale (Java
-    // PreferencesDialog OK path: applyInput/OutputDeviceProfile on commit).
-    this._applyDeviceProfiles();
+    // Two-phase bracket (Java PreferencesDialog OK → MainWindow.before/afterApplyBackendChanges):
+    // STOP the live consumers each CHANGED direction owns BEFORE the commit — while the current
+    // device is still open — then COMMIT, then RESTART exactly what was running on the new config.
+    // Capture (scope+FFT) and the generator are bracketed INDEPENDENTLY: Web Audio's input and
+    // output are separate devices, so an input-only change must not disturb a playing generator
+    // (unlike Java's shared-clock backend, which bounces all three on any audio change). The whole
+    // apply runs under the busy guard so it can't overlap another reopen; unlike the old code it is
+    // never SKIPPED when busy — an OK must never be silently dropped, leaving streams at the old rate.
+    this.setBusy(true);
+    try {
+      await this.engine.beforeApplyBackendChanges(captureChanged, outputChanged);
 
-    // Re-pin the Nyquist-derived field bounds from the committed input/output rates.
-    const inNyq = this.inRate() / 2;
-    for (const id of ['frStart', 'frStop']) if (this.stepFields[id]) this.stepFields[id].setMax(inNyq);
-    const outNyq = this.outRate() / 2;
-    for (const id of ['toneHz', 'tone2Hz', 'sweepStart', 'sweepStop']) if (this.stepFields[id]) this.stepFields[id].setMax(outNyq);
+      // Commit the staged working copy → live prefs (Java applyFromDialog).
+      bp.inputDeviceName = inDev; bp.outputDeviceName = outDev;
+      if (inR)  bp.inputSampleRate  = inR;
+      if (outR) bp.outputSampleRate = outR;
+      this.prefs.save();
+      this._audioSnapshot = null;
 
-    // Apply to the live engine by BOUNCING the live consumers (Java
-    // MultifunctionalTab.pauseForDialog): re-acquire the capture on an input
-    // device/rate change, and restart a PLAYING generator on any output
-    // device/rate change so a live tone re-acquires its device at the new
-    // settings. restartGenerator() is a no-op when the generator is stopped,
-    // so anything that wasn't running stays stopped.
-    if ((inDevChanged || inRateChanged) && !this.isBusy()) {
-      this.setBusy(true);
-      try {
+      // Apply the committed devices' per-card per-channel full-scale (Java
+      // PreferencesDialog OK path: applyInput/OutputDeviceProfile on commit).
+      this._applyDeviceProfiles();
+
+      // Re-pin the Nyquist-derived field bounds from the committed input/output rates.
+      const inNyq = this.inRate() / 2;
+      for (const id of ['frStart', 'frStop']) if (this.stepFields[id]) this.stepFields[id].setMax(inNyq);
+      const outNyq = this.outRate() / 2;
+      for (const id of ['toneHz', 'tone2Hz', 'sweepStart', 'sweepStop']) if (this.stepFields[id]) this.stepFields[id].setMax(outNyq);
+
+      // Flow the committed device/rate into the live engine config so each restart re-acquires there.
+      if (captureChanged) {
         this.engine.config.inDeviceId = inDev;
         this.engine.config.inRate = inR || this.engine.config.inRate;
-        await this.engine.reopenCaptureDevice();
-      } finally { this.setBusy(false); }
-    }
-    if (outDevChanged) this.engine.config.outDeviceId = outDev;
-    if (outDevChanged || outRateChanged) await this.restartGenerator();
+      }
+      if (outputChanged) this.engine.config.outDeviceId = outDev;
+
+      await this.engine.afterApplyBackendChanges(captureChanged, outputChanged);
+    } finally { this.setBusy(false); }
   }
 
   // ----- Preferences dialog: Look&Feel / Oscilloscope / FFT / FreqResp tabs -----
@@ -522,72 +525,15 @@ export class PreferencesDialog {
 
     $('#menuPrefs').on('click', () => this.modal.show());
 
-    // #inSel change → derive #inRate from the new device's native rate FIRST (bound before the
-    // capture-reopen handler below so applyInputDeviceRate runs first — the reopen handler then
-    // reads the freshly-set #inRate). Pairs with the Scan button.
+    // #inSel change → derive #inRate from the new device's native rate (applyInputDeviceRate).
+    // Staging only: the device/rate selections apply to the live engine solely via applyAudioPrefs()
+    // on OK (there is no live reopen/restart on selection). Pairs with the Scan button.
     $('#inSel').on('change', () => this.applyInputDeviceRate());
     // A device change re-resolves the direction's card (visibly switching / clearing to "New
     // card…", offering to create one for an unrecognised device) — Java CardSection.onDeviceChanged.
     $('#inSel').on('change', () => { if (this.inputCard) this.inputCard.onDeviceChanged(); });
     $('#outSel').on('change', () => { if (this.outputCard) this.outputCard.onDeviceChanged(); });
     $('#scan').on('click', () => this.scan());
-
-    // Device / rate → the active backend's BackendPrefs (Web Audio deviceId in the
-    // device-name slots).  These four controls live inside the Preferences dialog,
-    // which STAGES edits (Java PreferencesDialog: edits a detached copy, applies on
-    // OK only).  While the dialog is open (`_staging`), the change handlers only
-    // keep the <select>'s own DOM value — they do NOT write live prefs nor reopen
-    // the device.  applyAudioPrefs() (run from the OK button) commits + applies the
-    // staged selections; a Cancel/close restores them (see the modal show/hide hooks
-    // below).  When the dialog is NOT open these handlers still apply
-    // live, matching the desktop's outside-dialog device-change paths.
-    $('#inSel').on('change', async () => {
-      if (this._staging) return;
-      prefs.current().inputDeviceName = $('#inSel').val(); prefs.save();
-      // Java SharedCapture: apply the input card's per-channel full-scale on device open.
-      if (this.deviceStore) this.deviceStore.applyInputDeviceProfile($('#inSel option:selected').text());
-      if (this.isBusy()) return;
-      this.setBusy(true);
-      try {
-        engine.config.inDeviceId = $('#inSel').val();
-        // applyInputDeviceRate (bound first) already set #inRate to the new device's native rate;
-        // a programmatic .val() doesn't fire the #inRate handler, so flow that rate into the engine
-        // and re-pin the FR Nyquist ceiling here, then reopen the capture at the right rate.
-        engine.config.inRate = parseInt($('#inRate').val(), 10) || engine.config.inRate;
-        const inNyq = this.inRate() / 2;
-        for (const id of ['frStart', 'frStop']) if (this.stepFields[id]) this.stepFields[id].setMax(inNyq);
-        await engine.reopenCaptureDevice();
-      } finally { this.setBusy(false); }
-    });
-    $('#outSel').on('change', async () => {
-      if (this._staging) return;
-      prefs.current().outputDeviceName = $('#outSel').val(); prefs.save();
-      // Java GeneratorController: apply the output card's per-channel full-scale on device open.
-      if (this.deviceStore) this.deviceStore.applyOutputDeviceProfile($('#outSel option:selected').text());
-      engine.config.outDeviceId = $('#outSel').val();
-      await this.restartGenerator();
-    });
-    $('#inRate').on('change', async () => {
-      if (this._staging) return;
-      prefs.current().inputSampleRate = parseInt($('#inRate').val(), 10); prefs.save();
-      // FR sweep is captured on the INPUT, so its start/stop ceiling is the INPUT Nyquist
-      // (Java FreqRespTabControl caps at getInputSampleRate()/2, not the output rate).
-      const inNyq = this.inRate() / 2;
-      for (const id of ['frStart', 'frStop']) if (this.stepFields[id]) this.stepFields[id].setMax(inNyq);
-      // The capture device opens at config.inRate — flow the new rate in and reopen
-      // the shared capture so a live rate change takes effect without a page reload.
-      if (this.isBusy()) return;
-      this.setBusy(true);
-      try { engine.config.inRate = parseInt($('#inRate').val(), 10); await engine.reopenCaptureDevice(); }
-      finally { this.setBusy(false); }
-    });
-    $('#outRate').on('change', () => {
-      if (this._staging) return;
-      prefs.current().outputSampleRate = parseInt($('#outRate').val(), 10); prefs.save();
-      // Generator Nyquist follows the OUTPUT rate → re-pin the generator frequency fields.
-      const nyq = this.outRate() / 2;
-      for (const id of ['toneHz', 'tone2Hz', 'sweepStart', 'sweepStop']) if (this.stepFields[id]) this.stepFields[id].setMax(nyq);
-    });
 
     $('#prefsTabs').on('click', '.nav-link', (ev) => this.prefsTab(ev.currentTarget.dataset.prefsPanel));
     $('#prefFrMaxNyq').on('input', () => this.updateFrMaxNyqHz());

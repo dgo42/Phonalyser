@@ -42,7 +42,7 @@ import org.eclipse.swt.widgets.Label;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.common.Constants;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.dsp.MainsCombFilter;
 import org.edgo.audio.measure.dsp.SpectralDiscontinuityDetector;
 import org.edgo.audio.measure.dsp.ToneLobeLift;
@@ -160,7 +160,7 @@ public final class FftView extends AbstractFreqDomainView {
     /** Loaded {@code .frc} corrections divided out of the spectrum and drawn
      *  as the overlay; constructor-injected by {@link FftPane} (IoC) and shared
      *  with the calibration tab so both see the same entries. */
-    private final FreqRespCorrectionStore correctionStore;
+    private final CorrectionStore correctionStore;
 
     /** Stage-3 instrumentation for {@link DebugSwitches#SHOW_FFT_ANALYZE_TIME}:
      *  {@code startRender} is stamped when a fresh result arrives in
@@ -389,10 +389,10 @@ public final class FftView extends AbstractFreqDomainView {
      *  {@link #calCascadeSumDb}.  Invalidation matches the static-layer
      *  fingerprint's calEntries semantics (entry identity + channel). */
     private double[] calOverlaySumDb;
-    private List<FreqRespCorrectionStore.Entry> calOverlayKeyEntries;
+    private List<CorrectionStore.Entry> calOverlayKeyEntries;
     private boolean calOverlayKeyLeft;
 
-    public FftView(Composite parent, FreqRespCorrectionStore correctionStore,
+    public FftView(Composite parent, CorrectionStore correctionStore,
                    FftController controller) {
         // Pass prefs-driven BACKGROUND + SPECTRUM through the override
         // map so the base allocates the right colour once; everything
@@ -850,11 +850,11 @@ public final class FftView extends AbstractFreqDomainView {
 
         // 3. Frequency-response (.frc) calibration — adjusts spectrum + readouts;
         //    independent of mains, never on the cal (green) line.
-        List<FreqRespCorrectionStore.Entry> calEntries = correctionStore.getEntries();
+        List<CorrectionStore.Entry> calEntries = correctionStore.getEntries();
         if (!calEntries.isEmpty()) {
             boolean wantLeft = r.channelLeft;
             r.preCorrectionPeaks = FreqRespCalHelper.capturePreCorrectionPeaks(r);
-            for (FreqRespCorrectionStore.Entry e : calEntries) {
+            for (CorrectionStore.Entry e : calEntries) {
                 FreqRespCalibration calForChan = wantLeft
                         ? e.getCalibration().left()
                         : e.getCalibration().right();
@@ -1684,7 +1684,7 @@ public final class FftView extends AbstractFreqDomainView {
         //    divides every bin by |H| at its own frequency; otherwise only each
         //    tone's data-derived lobe is stretched by 1/|H| at the tone (noise
         //    left raw) — mirroring FreqRespCalHelper.applyCompensationInPlace.
-        for (FreqRespCorrectionStore.Entry e : correctionStore.getEntries()) {
+        for (CorrectionStore.Entry e : correctionStore.getEntries()) {
             FreqRespCalibration c = r.channelLeft ? e.getCalibration().left()
                                                   : e.getCalibration().right();
             if (e.isWithNoise()) {
@@ -1965,7 +1965,7 @@ public final class FftView extends AbstractFreqDomainView {
         // top.  Only drawn when at least one calibration file is
         // loaded — same gate the THD path uses (preCorrectionPeaks
         // null vs. non-null).
-        List<FreqRespCorrectionStore.Entry> calEntries =
+        List<CorrectionStore.Entry> calEntries =
                 correctionStore.getEntries();
         if (!calEntries.isEmpty()) {
             boolean wantLeft = prefs.getFftChannel() == Channel.L;
@@ -2071,11 +2071,11 @@ public final class FftView extends AbstractFreqDomainView {
      *  {@code FftAnalyzerWorker.sumCalDb} uses for the THD-path blue
      *  dots; kept local here so the IMD path doesn't reach into the
      *  worker's private helpers. */
-    private double sumCalDbAt(List<FreqRespCorrectionStore.Entry> calEntries,
+    private double sumCalDbAt(List<CorrectionStore.Entry> calEntries,
                               boolean wantLeft, double freqHz) {
         if (!(freqHz > 0)) return 0.0;
         double sum = 0.0;
-        for (FreqRespCorrectionStore.Entry e : calEntries) {
+        for (CorrectionStore.Entry e : calEntries) {
             FreqRespCalibration cal = wantLeft
                     ? e.getCalibration().left()
                     : e.getCalibration().right();
@@ -2157,7 +2157,7 @@ public final class FftView extends AbstractFreqDomainView {
         /** Cal entry list — adding / removing a row (or flipping withNoise)
          *  would otherwise leave the overlay curve stale until the next FFT
          *  result swaps the result reference. */
-        private final List<FreqRespCorrectionStore.Entry> calEntries;
+        private final List<CorrectionStore.Entry> calEntries;
         // THD / IMD readout table inputs — the table renders into the cached
         // layer, so its visibility / mode / extraction state must invalidate
         // the image (its data identity is already covered by result + imd +
@@ -2386,7 +2386,7 @@ public final class FftView extends AbstractFreqDomainView {
                                 double freqMin, double freqMax,
                                 double magTop, double magBot,
                                 boolean logFreq) {
-        List<FreqRespCorrectionStore.Entry> entries =
+        List<CorrectionStore.Entry> entries =
                 correctionStore.getEntries();
         if (entries.isEmpty()) return;
         Preferences prefs = Preferences.instance();
@@ -2413,7 +2413,7 @@ public final class FftView extends AbstractFreqDomainView {
         // channel (their L/R cal curves are not identical).
         boolean wantLeft = prefs.getFftChannel() == Channel.L;
         double sumDbAtAnchor = 0.0;
-        for (FreqRespCorrectionStore.Entry e : entries) {
+        for (CorrectionStore.Entry e : entries) {
             FreqRespCalibration cal = wantLeft
                     ? e.getCalibration().left()
                     : e.getCalibration().right();
@@ -2481,7 +2481,7 @@ public final class FftView extends AbstractFreqDomainView {
      *  frequency grid) — see {@link #drawCalOverlay}.  Keyed on the entry
      *  list content (entries compare by identity) and the analysed
      *  channel. */
-    private double[] calCascadeSumDb(List<FreqRespCorrectionStore.Entry> entries,
+    private double[] calCascadeSumDb(List<CorrectionStore.Entry> entries,
                                      boolean wantLeft, FreqRespCalibration first) {
         if (calOverlaySumDb != null && wantLeft == calOverlayKeyLeft
                 && entries.equals(calOverlayKeyEntries)) {
@@ -2493,7 +2493,7 @@ public final class FftView extends AbstractFreqDomainView {
             double f = freqs[i];
             if (!(f > 0.0)) continue;       // skipped by the draw loop too
             double s = 0.0;
-            for (FreqRespCorrectionStore.Entry e : entries) {
+            for (CorrectionStore.Entry e : entries) {
                 FreqRespCalibration cal = wantLeft
                         ? e.getCalibration().left()
                         : e.getCalibration().right();

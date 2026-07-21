@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 /**
- * Behaviour tests for {@link FreqRespCorrectionStore}.  Verifies the
+ * Behaviour tests for {@link CorrectionStore}.  Verifies the
  * entries / direct slots' independence, the change-notifier semantics, and
  * the snapshot / restore pair used by the wizard's cancel path.
  *
@@ -46,13 +46,13 @@ class FreqRespCorrectionStoreTest {
 
     private final AtomicInteger  changes = new AtomicInteger();
     private final Consumer<Void> counter = ignored -> changes.incrementAndGet();
-    private FreqRespCorrectionStore store;
+    private CorrectionStore store;
 
     @BeforeEach
     void setup() {
         changes.set(0);
         MessageBus.instance().subscribe(TEST_EVENT, counter);
-        store = new FreqRespCorrectionStore("test", TEST_EVENT);
+        store = new CorrectionStore("test", TEST_EVENT);
     }
 
     @AfterEach
@@ -102,7 +102,7 @@ class FreqRespCorrectionStoreTest {
         store.setCurrent(originalCurrent, "/tmp/orig.csv");
         store.setDirect(originalDirect);
 
-        FreqRespCorrectionStore.Snapshot snap = store.snapshot();
+        CorrectionStore.Snapshot snap = store.snapshot();
 
         // Mutate both slots.
         StereoFreqRespCalibration tempCurrent = sampleStereo();
@@ -123,7 +123,7 @@ class FreqRespCorrectionStoreTest {
     @Test
     void snapshotRestoreIsSilentWhenCurrentDidNotMove() {
         store.setCurrent(sampleStereo(), "/tmp/x.csv");
-        FreqRespCorrectionStore.Snapshot snap = store.snapshot();
+        CorrectionStore.Snapshot snap = store.snapshot();
         store.setDirect(sampleStereo());
         changes.set(0);
 

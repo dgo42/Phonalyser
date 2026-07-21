@@ -1070,6 +1070,26 @@ public final class ScopePane extends AbstractPane {
         controller.stopCapture();
     }
 
+    /** Whether the scope was capturing when {@link #stopCaptureForPrefs()}
+     *  stopped it, so {@link #startCaptureForPrefs()} restarts exactly that.
+     *  Owned here — the caller does not track the pane's capture state. */
+    private boolean captureWasRunningForPrefs;
+
+    /** Stops capture ahead of a Preferences audio-config change (remembering
+     *  whether it was running) so the input device is released before the
+     *  backend / device / rate switch.  Pair with {@link #startCaptureForPrefs()}
+     *  after the new config is committed. */
+    public void stopCaptureForPrefs() {
+        captureWasRunningForPrefs = isCapturing();
+        if (captureWasRunningForPrefs) stopCapture();
+    }
+
+    /** Restarts capture on the newly-committed backend if it was running when
+     *  {@link #stopCaptureForPrefs()} stopped it. */
+    public void startCaptureForPrefs() {
+        if (captureWasRunningForPrefs) startCapture();
+    }
+
     /** Forwards the main event loop's realtime render tick (from
      *  {@code MultifunctionalTab}) to the controller, which owns the scope +
      *  condensed views and decides what to repaint. */

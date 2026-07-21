@@ -39,8 +39,8 @@ const DEBUG = process.argv.includes('--debug') || process.argv.includes('-d');
 const ESM = [
   ['js/shell/app.js', 'app.js'],
   ['js/shell/update.js', 'update.js'],
-  ['js/audio/fft-worker.js', 'fft-worker.js'],
-  ['js/audio/fft-pool-worker.js', 'fft-pool-worker.js'],
+  ['js/fft/fft-worker.js', 'fft-worker.js'],
+  ['js/fft/fft-pool-worker.js', 'fft-pool-worker.js'],
   ['js/scope/osc-freq-worker.js', 'osc-freq-worker.js'],
   ['js/scope/osc-meas-worker.js', 'osc-meas-worker.js'],
 ];

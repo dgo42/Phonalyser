@@ -40,7 +40,7 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 
 import org.edgo.audio.measure.common.FileVersions;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -93,7 +93,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
     private final FftView             view;
     /** Loaded {@code .frc} corrections, handed to the engine so it de-embeds
      *  their phase when computing the DAC correction. */
-    private final FreqRespCorrectionStore correctionStore;
+    private final CorrectionStore correctionStore;
 
     private Shell            dialog;
     /** The margin composite holding every widget — printed for the help
@@ -138,7 +138,7 @@ public final class PredistortionWizardDialog implements PredistortionEngine.List
 
     public PredistortionWizardDialog(Shell parent, GeneratorController gen,
                                      FftController fft, FftView view,
-                                     FreqRespCorrectionStore correctionStore) {
+                                     CorrectionStore correctionStore) {
         this.parentShell     = parent;
         this.gen             = gen;
         this.fft             = fft;

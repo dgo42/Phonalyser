@@ -10,7 +10,7 @@
  * FFTs stay off the main thread.
  * GNU AGPL v3 or later.
  */
-import { FftAnalyzer } from '../fft/fft-analyzer.js';
+import { FftAnalyzer } from './fft-analyzer.js';
 
 const analyzer = new FftAnalyzer();
 

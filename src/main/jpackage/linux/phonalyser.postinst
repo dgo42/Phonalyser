@@ -1,0 +1,54 @@
+#!/bin/sh
+# postinst script for APPLICATION_PACKAGE
+#
+# see: dh_installdeb(1)
+#
+# jpackage resource-dir override: the stock JDK 17 template (KEEP the
+# DESKTOP_COMMANDS_INSTALL token — jpackage substitutes it at build time)
+# plus the QA40x udev rule, so a fresh .deb install can open the analyzer
+# without libusb_open failing with LIBUSB_ERROR_ACCESS.  The heredoc below
+# mirrors 70-qa40x.rules next to this script — keep the two in sync.
+
+set -e
+
+# summary of how this script can be called:
+#        * <postinst> `configure' <most-recently-configured-version>
+#        * <old-postinst> `abort-upgrade' <new version>
+#        * <conflictor's-postinst> `abort-remove' `in-favour' <package>
+#          <new-version>
+#        * <postinst> `abort-remove'
+#        * <deconfigured's-postinst> `abort-deconfigure' `in-favour'
+#          <failed-install-package> <version> `removing'
+#          <conflicting-package> <version>
+# for details, see https://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+case "$1" in
+    configure)
+DESKTOP_COMMANDS_INSTALL
+
+        # QuantAsylum QA402 / QA403 (USB 16c0:4e37 / 16c0:4e39): grant desktop
+        # users access to the device node.  uaccess covers systemd desktop
+        # sessions; plugdev is the Debian/Ubuntu fallback group.
+        if [ -d /usr/lib/udev/rules.d ]; then
+            cat > /usr/lib/udev/rules.d/70-qa40x.rules <<'EOF'
+SUBSYSTEM=="usb", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="4e37", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="4e39", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+EOF
+            if command -v udevadm >/dev/null 2>&1; then
+                udevadm control --reload-rules || true
+                udevadm trigger --subsystem-match=usb || true
+            fi
+        fi
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0

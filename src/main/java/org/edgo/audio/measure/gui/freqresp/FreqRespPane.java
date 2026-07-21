@@ -35,7 +35,7 @@ import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
@@ -104,7 +104,7 @@ public final class FreqRespPane extends AbstractPane {
     /** Calibration-correction store the pane owns (IoC) and constructor-injects
      *  into the view and tab control it builds, so both see the same entries.
      *  Created before the builds run — it has no dependency on either. */
-    private final FreqRespCorrectionStore correctionStore;
+    private final CorrectionStore correctionStore;
 
     public FreqRespPane(Composite parent) {
         super(parent);
@@ -128,7 +128,7 @@ public final class FreqRespPane extends AbstractPane {
         // store first; the tab control's constructor then pushes the prefs rows
         // into it, firing FREQRESP_CALIBRATION_CHANGED — which the view handles
         // by re-deriving from the store it already holds.
-        correctionStore = new FreqRespCorrectionStore("FreqResp", Events.FREQRESP_CALIBRATION_CHANGED);
+        correctionStore = new CorrectionStore("FreqResp", Events.FREQRESP_CALIBRATION_CHANGED);
         // Build the view first so it can be injected into the controller, which
         // owns it and drives clear/populate on each finished deconvolution.
         buildPlotRow();

@@ -716,7 +716,7 @@ export class FftView {
       // visible — one per IMD dot position (F1, F2, dnL[2..5], dnH[2..5]) at dbFs + sumCalDbAt,
       // only when a calibration file is loaded (Java drawImdDots:1948-1962). Same freq/finite/mag
       // gates as imdDot; channel pick off result.channelLeft (matching the de-embed, apply()).
-      if (this.correction && this.correction.frcEntries.length) {
+      if (this.correction && this.correction.store.getEntries().length) {
         const wantLeft = result.channelLeft;
         g.fillStyle = p ? colorHex(p.fftBeforeCalDotColor.get()) : '#000080';
         const preDot = (fHz, dbfs) => {

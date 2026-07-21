@@ -357,10 +357,12 @@ public final class ScopeTabControl extends AbstractTabControl {
      *  enabling, the blanket subtree-enable above turns ON every control, so
      *  re-apply the per-control gates it clobbered: Start only in Single mode,
      *  the hysteresis selector only when hysteresis is on, Reconstructed beat
-     *  only when the generator is in dual-tone form, and the trigger-source
+     *  only when the generator is in dual-tone form, the trigger-source
      *  buttons only for a channel whose display is on (the blanket enable would
      *  otherwise re-open a hidden channel's button — and this re-corrects a
-     *  stale persisted selection the moment recording resumes). */
+     *  stale persisted selection the moment recording resumes), and the Glitch
+     *  type button only outside AUTO (glitch in AUTO makes no sense — see the
+     *  mode listener where the same gate lives). */
     public void setTriggerControlsEnabled(boolean enabled) {
         setSubtreeEnabled(triggerGroup, enabled);
         if (enabled) {
@@ -369,6 +371,9 @@ public final class ScopeTabControl extends AbstractTabControl {
             syncTriggerChannelButtons();
             if (hysteresisSel != null && !hysteresisSel.isDisposed()) {
                 hysteresisSel.setEnabled(Preferences.instance().isOscTriggerHysteresisEnabled());
+            }
+            if (typeGlitch != null && !typeGlitch.isDisposed()) {
+                typeGlitch.setEnabled(Preferences.instance().getOscTriggerMode() != TriggerMode.AUTO);
             }
         }
     }

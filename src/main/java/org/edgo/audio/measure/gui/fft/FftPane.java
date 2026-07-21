@@ -32,7 +32,7 @@ import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.common.Constants;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
@@ -195,7 +195,7 @@ public final class FftPane extends AbstractPane {
         }
         this.controller = controller;
         this.genController = genController;
-        FreqRespCorrectionStore correctionStore = controller.getCorrectionStore();
+        CorrectionStore correctionStore = controller.getCorrectionStore();
         view = new FftView(plotRow, correctionStore, controller);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);
         magScrollbar.setMinimum(0);
@@ -474,21 +474,28 @@ public final class FftPane extends AbstractPane {
         return view != null && !view.isDisposed() && view.renderRealtimeFrame();
     }
 
-    /** Pauses FFT recording for the lifetime of a modal dialog (e.g.
-     *  Preferences).  Mirrors the oscilloscope's pause-around-dialog
-     *  contract: returns a {@link Runnable} that restores the previous
-     *  recording state.  Crucial for sample-rate / device changes —
-     *  without releasing the FFT's capture reference here, the shared
-     *  audio device stays open at the OLD parameters and the user's
-     *  new settings would silently never take effect. */
-    public Runnable pauseForDialog() {
-        boolean wasRecording = recordButton != null
+    /** Whether the analyser was recording when {@link #stopCaptureForPrefs()}
+     *  stopped it, so {@link #startCaptureForPrefs()} restarts exactly that.
+     *  Owned here — the caller does not track the pane's recording state. */
+    private boolean recordWasRunningForPrefs;
+
+    /** Stops FFT recording ahead of a Preferences audio-config change,
+     *  remembering whether it was running.  Releasing the FFT's shared-capture
+     *  reference here is what lets a device / sample-rate change actually take
+     *  effect — otherwise the shared device stays open at the OLD parameters and
+     *  the new settings silently never apply.  Pair with
+     *  {@link #startCaptureForPrefs()} after the new config is committed. */
+    public void stopCaptureForPrefs() {
+        recordWasRunningForPrefs = recordButton != null
                 && !recordButton.isDisposed()
                 && recordButton.getSelection();
-        if (wasRecording) recordOff();
-        return () -> {
-            if (wasRecording) recordOn();
-        };
+        if (recordWasRunningForPrefs) recordOff();
+    }
+
+    /** Restarts FFT recording on the newly-committed backend if it was running
+     *  when {@link #stopCaptureForPrefs()} stopped it. */
+    public void startCaptureForPrefs() {
+        if (recordWasRunningForPrefs) recordOn();
     }
 
     /** Turns the Record button OFF — stops the worker (which releases its own

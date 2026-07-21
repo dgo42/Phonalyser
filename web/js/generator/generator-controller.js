@@ -11,7 +11,7 @@
  * FLL state) steers the tone by publishing GENERATOR_FREQ_TRIM; this controller subscribes and
  * applies the trim to its worklet (see _applyFllTrim).
  */
-import { GenSignalForm, isDualTone } from '../generator/dds-kernel.js';
+import { GenSignalForm, isDualTone } from './dds-kernel.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 import { debug } from '../util/debug.js';
@@ -91,6 +91,11 @@ export class GeneratorController {
     // File-player lane (monitoring convenience, NOT the measurement path).
     this._fileSrc = null;
     this._fileCtx = null;
+    // Preferences-bounce OUTPUT lifecycle (moved from GeneratorPane): which output engine was
+    // playing when stopPlayForPrefs() recorded it, so startPlayForPrefs() restarts the same one.
+    this._ddsWasRunningForPrefs = false;
+    this._fileWasRunningForPrefs = false;
+    this._lastFile = null;   // {channels, sampleRate, loop} — the last USER file played, for prefs-bounce resume
     // Output context opened by openSweepContext() but not yet handed a buffer — the
     // freqresp sweep opens it first to learn the granted output rate (so it can cap
     // the sweep band to the granted Nyquist), then plays into it via playSweepBuffer.
@@ -132,6 +137,27 @@ export class GeneratorController {
   async stopEngines() {
     await this.stopGenerator();
     await this.stopFile();
+  }
+
+  /** Preferences-dialog OUTPUT bracket, phase 1 (Java GeneratorPane.stopPlayForPrefs, now owned by the
+   *  controller): record which output engine was playing, then stop it before the commit so the old
+   *  output line closes cleanly. */
+  async stopPlayForPrefs() {
+    this._ddsWasRunningForPrefs  = this.running;
+    this._fileWasRunningForPrefs = this.filePlaying;
+    if (this._ddsWasRunningForPrefs) await this.stopGenerator();
+    else if (this._fileWasRunningForPrefs) await this.stopFile();
+  }
+
+  /** Phase 2: restart, on the just-committed output device/rate, whichever engine was playing — the DDS
+   *  tone (startGenerator reads the shared config, whose generator params are unchanged by a prefs OK) or
+   *  the retained file buffer. On a DDS restart failure startGenerator already publishes AUDIO_DEVICE_ERROR
+   *  (its _reportDeviceError) so the pane resets its visuals — this method stays UI-free. */
+  async startPlayForPrefs() {
+    if (this._ddsWasRunningForPrefs) { await this.startGenerator(); return; }
+    if (this._fileWasRunningForPrefs && this._lastFile) {
+      await this.playFileBuffer(this._lastFile.channels, this._lastFile.sampleRate, this._lastFile.loop);
+    }
   }
 
   /** Publishes AUDIO_DEVICE_ERROR (direction = output) so the shell can raise a visible alert —
@@ -324,7 +350,7 @@ export class GeneratorController {
       } else if (probeRate === 0) {
         debug(`[generator] could not probe the output device rate; if it isn't ${ctxRate} Hz the browser silently resamples ${ctxRate} Hz to it — set the Windows output device format to ${ctxRate} Hz for a clean signal`);
       }
-      await this.outCtx.audioWorklet.addModule(new URL('./worklets/dds-processor.js', import.meta.url));
+      await this.outCtx.audioWorklet.addModule(new URL('../audio/worklets/dds-processor.js', import.meta.url));
       this.genNode = new AudioWorkletNode(this.outCtx, 'dds-processor', {
         // Stereo out: the worklet writes each lane explicitly to honour the output-lane
         // gate (Java's interleave seam, PcmQuantizer). A mono [1] lane up-mixed by the
@@ -450,6 +476,9 @@ export class GeneratorController {
     this._fileCtx = ctx; this._fileSrc = src;
     if (ctx.state === 'suspended') await ctx.resume();
     src.start();
+    // Retain the last USER file so a prefs-bounce (startPlayForPrefs) can resume it on the new
+    // output device/rate. The sweep uses playSweepBuffer, which never sets _lastFile.
+    this._lastFile = { channels, sampleRate, loop: !!loop };
   }
 
   /** Opens the fresh output context the sweep will play into, requesting it AT
@@ -542,7 +571,7 @@ export class GeneratorController {
   }
 
   /** Live-toggles looping on the running file source (picked up immediately). */
-  setFilePlayLoop(loop) { if (this._fileSrc) this._fileSrc.loop = !!loop; }
+  setFilePlayLoop(loop) { if (this._fileSrc) this._fileSrc.loop = !!loop; if (this._lastFile) this._lastFile.loop = !!loop; }
 
   /** Stops file playback and tears down its context (idempotent). Also closes any
    *  sweep context that openSweepContext opened but that never received a buffer

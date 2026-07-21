@@ -72,7 +72,7 @@ import java.util.List;
  * stays idle there.
  */
 @Log4j2
-public final class FreqRespCorrectionStore {
+public final class CorrectionStore {
 
     /** Pairs a loaded calibration with the file path it came from.
      *  Both fields are non-null.  {@code @Value} supplies the all-field
@@ -92,7 +92,7 @@ public final class FreqRespCorrectionStore {
     }
 
     /** Opaque snapshot of every slot — only created by
-     *  {@link FreqRespCorrectionStore#snapshot()}. */
+     *  {@link CorrectionStore#snapshot()}. */
     public static final class Snapshot {
         private final List<Entry>               entries;
         private final StereoFreqRespCalibration direct;
@@ -121,7 +121,7 @@ public final class FreqRespCorrectionStore {
      * @param changedEvent {@code MessageBus} event published after every
      *                     mutation; {@code null} for a silent store
      */
-    public FreqRespCorrectionStore(String label, String changedEvent) {
+    public CorrectionStore(String label, String changedEvent) {
         this.label        = label;
         this.changedEvent = changedEvent;
     }

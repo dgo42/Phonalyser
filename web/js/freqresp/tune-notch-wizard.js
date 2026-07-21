@@ -55,7 +55,7 @@
 
 import { t } from '../i18n/i18n.js';
 import { FreqRespView } from './freqresp-view.js';
-import { FreqRespCorrectionStore } from './correction-store.js';
+import { CorrectionStore } from '../common/correction-store.js';
 import { computeFromLogSweep, binAlignedFreqs } from './deconvolve.js';
 import { makeFreqRespResult } from './stereo-result.js';
 import { waitForWorkersIdle } from './worker-idle.js';
@@ -170,7 +170,7 @@ export class TuneNotchWizard {
 
     /** Empty, silent correction store for the embedded view — the notch
      *  session never loads / saves calibrations. */
-    this.correctionStore = new FreqRespCorrectionStore('TuneNotch', null);
+    this.correctionStore = new CorrectionStore('TuneNotch', null);
 
     this.canvas = document.getElementById('tnPlot');
     /** @type {FreqRespView|null} built once in bind() (the modal DOM is static) */
