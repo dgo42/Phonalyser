@@ -521,6 +521,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private static final int SLIDER_TRI_HALF = 6;    // triangle perpendicular half-extent
     /** Hit-zone half-thickness in the perpendicular direction (extends past the triangle). */
     private static final int SLIDER_GRAB_HALF = 9;
+    /** Inset that keeps the triangle handles and their value labels clear of the
+     *  view edge: the active-view (focus) rectangle draws ON the border pixel, so
+     *  a marker at the edge was half-swallowed by it.  Handles and labels clamp
+     *  this far inside; the dashed tracks stay at the true position (data). */
+    private static final int MARKER_EDGE_INSET = 2;
 
     /** Hit-boxes for the three sliders — refreshed every paint, consumed by drag handlers. */
     private final Rectangle offsetSliderBounds   = new Rectangle(0, 0, 0, 0);
@@ -2072,8 +2077,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                     * DIVISIONS_Y * rightVDiv, rightVDiv);
             maxOffsetLabelW = Math.max(maxOffsetLabelW, gc.textExtent(s).x);
         }
-        int offsetLineRightEnd = w - SLIDER_TRI_LONG - 4 - lvs.x - 4;
-        int levelLineStartX    = SLIDER_TRI_LONG + 4 + maxOffsetLabelW + 4;
+        int offsetLineRightEnd = w - MARKER_EDGE_INSET - SLIDER_TRI_LONG - 4 - lvs.x - 4;
+        int levelLineStartX    = MARKER_EDGE_INSET + SLIDER_TRI_LONG + 4 + maxOffsetLabelW + 4;
 
         // ----- Trigger level: dotted horizontal cross-hair + handle on right
         // edge.  The dotted line is broken on both sides — short of the
@@ -2083,17 +2088,22 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         // static loaded signal, and an inactive slider just clutters
         // the canvas.
         if (!fileMode) {
-            int levelLabelX  = w - SLIDER_TRI_LONG - 4 - lvs.x;
-            int levelLabelY  = levelY - lvs.y / 2;
+            // Handle + label pin fully inside the view (MARKER_EDGE_INSET); the
+            // dotted level track itself stays at the true levelY.
+            int levelMarkY   = Math.max(SLIDER_TRI_HALF + MARKER_EDGE_INSET,
+                    Math.min(h - 1 - SLIDER_TRI_HALF - MARKER_EDGE_INSET, levelY));
+            int levelLabelX  = w - MARKER_EDGE_INSET - SLIDER_TRI_LONG - 4 - lvs.x;
+            int levelLabelY  = Math.max(MARKER_EDGE_INSET,
+                    Math.min(h - MARKER_EDGE_INSET - lvs.y, levelY - lvs.y / 2));
             int levelLineEnd = levelLabelX - 4;
             if (levelLineStartX < levelLineEnd) {
                 drawOutlinedDashedLine(gc, levelLineStartX, levelY,
                         levelLineEnd, levelY, LONG_DASH, levelColor);
             }
-            drawLeftPointingTriangle(gc, w - 1, levelY, levelColor);
-            triggerLevelBounds.x      = w - SLIDER_TRI_LONG - 2;
-            triggerLevelBounds.y      = levelY - SLIDER_GRAB_HALF;
-            triggerLevelBounds.width  = SLIDER_TRI_LONG + 4;
+            drawLeftPointingTriangle(gc, w - 1 - MARKER_EDGE_INSET, levelMarkY, levelColor);
+            triggerLevelBounds.x      = w - MARKER_EDGE_INSET - SLIDER_TRI_LONG - 2;
+            triggerLevelBounds.y      = levelMarkY - SLIDER_GRAB_HALF;
+            triggerLevelBounds.width  = MARKER_EDGE_INSET + SLIDER_TRI_LONG + 4;
             triggerLevelBounds.height = 2 * SLIDER_GRAB_HALF;
             gc.setForeground(levelColor);
             drawOutlinedText(gc, levelStr, levelLabelX, levelLabelY);
@@ -2170,8 +2180,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         if (otherEnabled) {
             boolean otherIsL = !activeIsL;
             drawOffsetTrack(gc, h, DASH,
-                    ScopeFormat.clamp01(otherIsL ? prefs.getOscLeftOffsetFrac()
-                                     : prefs.getOscRightOffsetFrac()),
+                    otherIsL ? prefs.getOscLeftOffsetFrac()
+                             : prefs.getOscRightOffsetFrac(),
                     otherIsL ? leftVDiv : rightVDiv,
                     otherIsL ? color(ColorRole.LEFT_TRACE) : color(ColorRole.RIGHT_TRACE),
                     otherIsL ? color(ColorRole.LEFT_CHANNEL_MID)   : color(ColorRole.RIGHT_CHANNEL_MID),
@@ -2180,8 +2190,8 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         if (activeEnabled) {
             Color c = activeIsL ? color(ColorRole.LEFT_TRACE) : color(ColorRole.RIGHT_TRACE);
             drawOffsetTrack(gc, h, DASH,
-                    ScopeFormat.clamp01(activeIsL ? prefs.getOscLeftOffsetFrac()
-                                      : prefs.getOscRightOffsetFrac()),
+                    activeIsL ? prefs.getOscLeftOffsetFrac()
+                              : prefs.getOscRightOffsetFrac(),
                     activeIsL ? leftVDiv : rightVDiv,
                     c, c, true, offsetLineRightEnd);
         } else {
@@ -2230,11 +2240,21 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                                   double offsetFrac, double vDiv,
                                   Color lineLabelColor, Color triangleColor,
                                   boolean isActive, int lineRightEnd) {
-        int offsetY     = (int) Math.round(offsetFrac * h);
+        // offsetFrac arrives RAW (virtual-capable).  The track + handle pin to the
+        // clamped on-screen position so they stay visible/grabbable, but the value
+        // label uses the REAL offset — a zoom/pan can park it far outside [0, 1],
+        // and a label computed from the clamped frac would freeze at ±5·V/div
+        // (mirrors the trigger-level label, which tracks the extended range too).
+        int offsetY     = (int) Math.round(ScopeFormat.clamp01(offsetFrac) * h);
+        // Handle + label pin fully inside the view (MARKER_EDGE_INSET); the
+        // dashed zero-line track itself stays at the true offsetY.
+        int markY       = Math.max(SLIDER_TRI_HALF + MARKER_EDGE_INSET,
+                Math.min(h - 1 - SLIDER_TRI_HALF - MARKER_EDGE_INSET, offsetY));
         String label    = ScopeFormat.formatVolts((0.5 - offsetFrac) * DIVISIONS_Y * vDiv, vDiv);
         Point ts        = gc.textExtent(label);
-        int labelX      = SLIDER_TRI_LONG + 4;
-        int labelY      = offsetY - ts.y / 2;
+        int labelX      = MARKER_EDGE_INSET + SLIDER_TRI_LONG + 4;
+        int labelY      = Math.max(MARKER_EDGE_INSET,
+                Math.min(h - MARKER_EDGE_INSET - ts.y, offsetY - ts.y / 2));
         int lineStartX  = labelX + ts.x + 4;
 
         if (lineStartX < lineRightEnd) {
@@ -2242,15 +2262,15 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                     lineDash, lineLabelColor);
         }
 
-        drawRightPointingTriangle(gc, 0, offsetY, triangleColor);
+        drawRightPointingTriangle(gc, MARKER_EDGE_INSET, markY, triangleColor);
 
         gc.setForeground(lineLabelColor);
         drawOutlinedText(gc, label, labelX, labelY);
 
         if (isActive) {
             offsetSliderBounds.x      = 0;
-            offsetSliderBounds.y      = offsetY - SLIDER_GRAB_HALF;
-            offsetSliderBounds.width  = SLIDER_TRI_LONG + 4;
+            offsetSliderBounds.y      = markY - SLIDER_GRAB_HALF;
+            offsetSliderBounds.width  = MARKER_EDGE_INSET + SLIDER_TRI_LONG + 4;
             offsetSliderBounds.height = 2 * SLIDER_GRAB_HALF;
         }
     }
@@ -2335,10 +2355,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         } else {
             // Live / frozen: times are relative to the trigger (t = 0).  Use the REAL
             // (virtual-capable) offset so the marks keep counting when a pan/zoom has
-            // carried the trigger off-screen.
+            // carried the trigger off-screen — and the window the render ACTUALLY
+            // draws (integer displaySamples, see renderedWindowSeconds), or at
+            // few-sample windows the marks skew off the trace by p × the round() gap.
             double posReal = prefs.getOscTriggerPositionFrac();
-            leftTime  = -posReal * windowTime;
-            rightTime = (1 - posReal) * windowTime;
+            double drawnWindow = renderedWindowSeconds();
+            leftTime  = -posReal * drawnWindow;
+            rightTime = (1 - posReal) * drawnWindow;
         }
         String leftTimeStr  = ScopeFormat.formatSeconds(leftTime);
         String rightTimeStr = ScopeFormat.formatSeconds(rightTime);
@@ -2513,6 +2536,10 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
             xMax = r.getWritePos() - getViewBackOffsetFrames();
             xMin = xMax - window * r.getSampleRate();
         } else {
+            // Express the window as the render draws it (integer displaySamples,
+            // see renderedWindowSeconds) so the box fractions map onto the TRACE,
+            // not the nominal t/div product the axis used to ride.
+            window = renderedWindowSeconds();
             double p = prefs.getOscTriggerPositionFrac();
             xMin = -p * window;
             xMax = (1 - p) * window;
@@ -2577,7 +2604,13 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
                     controller.setViewCenterFrames(-1.0);
                 }
                 prefs.setOscTimePerDiv(tDiv);
-                prefs.setOscTriggerPositionFrac(-s.xMin() / (tDiv * DIVISIONS_X));   // virtual-capable
+                // Solve p against the window the render will ACTUALLY draw —
+                // integer displaySamples, read back from the stored t/div — not
+                // the continuous span: the round() gap × virtual |p| slid the
+                // trace against the axis at few-sample windows (see
+                // renderedWindowSeconds).  Left edge stays pinned, incl. at the
+                // T_PER_DIV_MIN floor.
+                prefs.setOscTriggerPositionFrac(-s.xMin() / renderedWindowSeconds());   // virtual-capable
             }
         }
         prefs.save();
@@ -2591,6 +2624,27 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  match. */
     private boolean isAbsoluteWindow() {
         return fileMode || getViewBackOffsetFrames() > 0;
+    }
+
+    /** The time window the trigger-anchored render ACTUALLY draws, in seconds:
+     *  {@code round(t/div · divs · fs) / fs} — the integer displaySamples the
+     *  paint derives, not the continuous t/div product.  The two differ by up
+     *  to half a sample, harmless alone, but the trigger offset p is measured
+     *  in windows, so a virtual p (deep zoom) multiplies that gap into a
+     *  screen-scale trace-vs-axis skew (bench: p = −11 on a 4-sample window
+     *  → 15 µs).  Zoom capture/commit and the edge time marks must all express
+     *  the window THIS way.  Falls back to the continuous product when no
+     *  capture is attached or the window is under the render's 2-sample floor
+     *  (nothing is drawn there to stay aligned with). */
+    private double renderedWindowSeconds() {
+        double window = Preferences.instance().getOscTimePerDiv() * DIVISIONS_X;
+        SignalBufferReader r = reader;
+        if (r != null) {
+            int sr = r.getSampleRate();
+            int disp = (int) Math.round(window * sr);
+            if (disp >= 2) return disp / (double) sr;
+        }
+        return window;
     }
 
     /** Voltage window → V/div + offsetFrac for one channel: {@code vDiv =

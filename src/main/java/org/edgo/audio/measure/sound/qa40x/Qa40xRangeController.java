@@ -21,7 +21,7 @@ package org.edgo.audio.measure.sound.qa40x;
 import lombok.extern.log4j.Log4j2;
 
 import org.edgo.audio.measure.enums.AudioBackendType;
-import org.edgo.audio.measure.gui.bus.ActiveRangeChange;
+import org.edgo.audio.measure.gui.bus.ActiveRange;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.sound.AudioBackend;
@@ -61,25 +61,25 @@ public final class Qa40xRangeController {
         }
     }
 
-    private final Consumer<ActiveRangeChange> rangeListener = this::onActiveRangeChanged;
+    private final Consumer<ActiveRange> rangeListener = this::onActiveRangeChanged;
 
     /** Wires the singleton into the {@link MessageBus} on first construction. */
     private Qa40xRangeController() {
         MessageBus.instance().subscribe(Events.DEVICE_ACTIVE_RANGE_CHANGED, rangeListener);
     }
 
-    private void onActiveRangeChanged(ActiveRangeChange change) {
+    private void onActiveRangeChanged(ActiveRange change) {
         if (change == null) return;
         AudioBackend backend = AudioBackend.instance();
         if (backend.active() != AudioBackendType.QA40X) return;   // only QA40x re-ranges hardware
         Qa40xDeviceManager manager = backend.qa40xManager();
         String cardName = manager.cardName();
         if (cardName == null) return;                             // device not open — next open reads the store
-        int[] candidates = change.input()
+        int[] candidates = change.isInput()
                 ? Qa40xProtocol.inputRangeDbvValues()
                 : Qa40xProtocol.outputRangeDbvValues();
-        int dbv = Qa40xProtocol.rangeDbv(change.activeRangeLabel(), candidates, NO_RANGE);
+        int dbv = Qa40xProtocol.rangeDbv(change.getActiveRangeLabel(), candidates, NO_RANGE);
         if (dbv == NO_RANGE) return;                              // not a QA40x range label
-        manager.applyActiveRangeChange(backend.active(), cardName, change.input(), dbv);
+        manager.applyActiveRangeChange(backend.active(), cardName, change.isInput(), dbv);
     }
 }

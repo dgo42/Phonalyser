@@ -521,6 +521,35 @@ generated tone to peak amplitude first, or drop the `+3`.
 before scaling (§5). The `−6` on the ADC side is the differential-ADC factor, not
 a peak/RMS term.
 
+
+### Levels cheat-sheet — the input "FS dBV" is really dBFS (bench 2026-07-20)
+
+The two "dBV" scales in QA40x are **not the same unit**, which is the classic
+source of confusion:
+
+- **Output "dBV" = genuine RMS dBV.** Gen "0 dBV" = 1 Vrms per leg; balanced
+  (Out+ − Out−) = 2 Vrms = **6 dBV = 5.65 Vpp**.
+- **Input "full-scale dBV" is effectively a dBFS / peak-to-peak reference**, not
+  RMS dBV. The "N-dBV" input range clips (0 dBFS) at `10^(N/20)` **Vpp**
+  differential — i.e. the label is `N = 20·log₁₀(Vpp_clip)`. Converting to true
+  RMS: **RMS dBV at clip = N − 9 dB**, a *constant* 9 dB offset across every
+  range = **+3 (peak/RMS, √2)** + **+6 (differential ×2 / the vendor `−6`
+  term)** = `20·log₁₀(2√2)`.
+
+| Input FS "dBV" (really dBFS) | 0-dBFS clip | RMS dBV at clip |
+|---|---|---|
+| 12 | ±2 V / 4 Vpp | +3 dBV |
+| 18 | ±4 V / 8 Vpp | +9 dBV |
+
+So a balanced 0-dBV-gen → 6-dBV-differential signal (2 Vrms, 5.65 Vpp) is clean
+on the 18 range (−3 dBFS) but clipped on the 12 range (+3 dBFS). All of this
+falls straight out of the vendor ADC formula above; the surprising part (a
+"12 dBV" range clipping at +3 dBV RMS) is the only bit still wanting a genuine
+QA403 sanity-check (§9 item 15a). The RT1062 sim reproduces this exactly,
+including the **+6 dB balanced/differential doubling** (In+ − In− = 2·Out+),
+which the vendor `−6` does NOT cancel — a balanced loopback reads generated
+**+6 dB** (0 dBV out → +6 dBV measured), matching the QA doc's −10→−4 example.
+
 ---
 
 ## 7. Init / teardown — end-to-end sequence

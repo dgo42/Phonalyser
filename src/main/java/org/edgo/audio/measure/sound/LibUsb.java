@@ -214,6 +214,8 @@ public final class LibUsb {
         int  libusb_open(Pointer device, PointerByReference handle);
         void libusb_close(Pointer handle);
         int  libusb_reset_device(Pointer handle);
+        int  libusb_get_configuration(Pointer handle, IntByReference configuration);
+        int  libusb_set_configuration(Pointer handle, int configuration);
         int  libusb_claim_interface(Pointer handle, int interfaceNumber);
         int  libusb_release_interface(Pointer handle, int interfaceNumber);
 

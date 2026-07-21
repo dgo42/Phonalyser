@@ -275,9 +275,16 @@ public class Qa40xDeviceManager {
     /**
      * Creates-or-refreshes this device's card in the store from the freshly read
      * calibration page, preserving the user's active-range selections (the
-     * profile-policy survival rules).  Both endpoints are marked
-     * {@code calibrationFromDevice} so calibrate flows refuse with a WARN and the
-     * seed merge takes the values wholesale.
+     * profile-policy survival rules), and PERSISTS it to {@code devices.yaml}.  Both
+     * endpoints are marked {@code calibrationFromDevice} so calibrate flows refuse
+     * with a WARN and the seed merge takes the values wholesale.
+     *
+     * <p>Runs once per session — {@link #ensureOpen()} opens the device (and calls
+     * this) only on the first {@link #acquireEngine}, i.e. a user-started capture /
+     * playback, so the app is already running.  The persist is guarded by
+     * {@link Preferences#saveDevices()}, a no-op in transient (CLI) mode and on a
+     * detached copy, so a headless run or a test never writes the store — only a
+     * live GUI session records the device's calibration.
      */
     private void refreshDeviceCard() {
         if (calibration == null || model == null) {
@@ -287,8 +294,9 @@ public class Qa40xDeviceManager {
         Preferences prefs = Preferences.instance();
         AudioDeviceProfile card = buildProfile(cardName, calibration, prefs.findAudioDeviceProfile(cardName));
         prefs.putAudioDeviceProfile(card);
-        inputRangeDbv  = activeDbv(card.getInput(),  Qa40xProtocol.inputRangeDbvValues(),  DEFAULT_INPUT_DBV);
-        outputRangeDbv = activeDbv(card.getOutput(), Qa40xProtocol.outputRangeDbvValues(), DEFAULT_OUTPUT_DBV);
+        prefs.saveDevices();     // persist the device-read calibration; no-op in CLI / tests
+        inputRangeDbv  = Qa40xProtocol.rangeDbv(card.getInput().getActiveRange(),  Qa40xProtocol.inputRangeDbvValues(),  DEFAULT_INPUT_DBV);
+        outputRangeDbv = Qa40xProtocol.rangeDbv(card.getOutput().getActiveRange(), Qa40xProtocol.outputRangeDbvValues(), DEFAULT_OUTPUT_DBV);
     }
 
     /**
@@ -321,8 +329,12 @@ public class Qa40xDeviceManager {
         int[] dbvValues = input ? Qa40xProtocol.inputRangeDbvValues() : Qa40xProtocol.outputRangeDbvValues();
         for (int dbv : dbvValues) {
             DeviceRange row = new DeviceRange();
-            row.setLabel(rangeLabel(dbv));
+            row.setLabel(Qa40xProtocol.rangeLabel(dbv));   // plain "N dBV" — the persisted key
             if (input) {
+                // The input "N dBV" range is really an N-dBFS (Vpp-differential)
+                // reference; show its real levels in the ranges table while the key
+                // stays plain (doc §6 cheat-sheet).
+                row.setDisplayLabel(Qa40xProtocol.verboseInputLabel(dbv));
                 row.setFsLeft(Qa40xLevels.inputFullScaleRmsVolts(dbv, cal.adcLinearFactor(dbv, false)));
                 row.setFsRight(Qa40xLevels.inputFullScaleRmsVolts(dbv, cal.adcLinearFactor(dbv, true)));
             } else {
@@ -332,7 +344,7 @@ public class Qa40xDeviceManager {
             row.setCalibrated(true);         // device-owned values — never seed-refreshed away
             ep.getRanges().add(row);
         }
-        String defaultActive = rangeLabel(input ? DEFAULT_INPUT_DBV : DEFAULT_OUTPUT_DBV);
+        String defaultActive = Qa40xProtocol.rangeLabel(input ? DEFAULT_INPUT_DBV : DEFAULT_OUTPUT_DBV);
         String active = (existing != null && hasRow(ep, existing.getActiveRange()))
                 ? existing.getActiveRange() : defaultActive;
         ep.setActiveRange(active);
@@ -352,15 +364,6 @@ public class Qa40xDeviceManager {
             }
         }
         return false;
-    }
-
-    /** Resolves the endpoint's active-range label back to its range dBV, or {@code def}. */
-    private int activeDbv(DeviceEndpointConfig ep, int[] candidates, int def) {
-        return Qa40xProtocol.rangeDbv(ep.getActiveRange(), candidates, def);
-    }
-
-    private String rangeLabel(int dbv) {
-        return Qa40xProtocol.rangeLabel(dbv);
     }
 
     /** {@link DeviceRef} for one attached QA402/QA403 — a single duplex endpoint. */

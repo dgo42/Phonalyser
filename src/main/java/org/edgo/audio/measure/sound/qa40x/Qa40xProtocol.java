@@ -18,6 +18,8 @@
 
 package org.edgo.audio.measure.sound.qa40x;
 
+import java.util.Locale;
+
 import lombok.experimental.UtilityClass;
 
 /**
@@ -81,9 +83,11 @@ public class Qa40xProtocol {
     /** Input-only single-source rate that must never be driven as an output/duplex rate (§9 item 7). */
     private static final int UNSUPPORTED_384K_HZ  = 384_000;
 
-    /** Suffix of a device-card range-row label — the one place the {@code "N dBV"}
-     *  card-row encoding lives, so {@link Qa40xDeviceManager}'s card refresh and any
-     *  caller resolving a label back to a range dBV agree byte-for-byte. */
+    /** Suffix of the plain {@code "N dBV"} range-row label — the persisted KEY,
+     *  emitted by {@link #rangeLabel(int)} for BOTH directions, so
+     *  {@link Qa40xDeviceManager}'s card refresh and any caller resolving a label
+     *  back to a range dBV agree byte-for-byte.  The verbose INPUT display label is
+     *  built separately in {@link #verboseInputLabel(int)}. */
     private static final String RANGE_LABEL_SUFFIX = " dBV";
 
     /** Input full-scale ranges in dBV, ascending — a defensive copy. */
@@ -101,12 +105,24 @@ public class Qa40xProtocol {
         return SAMPLE_RATE_HZ.clone();
     }
 
-    /** The device-card range-row label for a full-scale range in dBV — {@code "N dBV"}. */
+    /** The device-card range-row label — the persisted KEY, plain {@code "N dBV"}
+     *  for both directions.  The verbose input DISPLAY (the "really N dBFS / N−9 dBV"
+     *  text) is {@link #verboseInputLabel}, carried on the row's
+     *  {@code DeviceRange.displayLabel} and shown only in the ranges table; it is
+     *  never persisted or parsed. */
     public String rangeLabel(int dbv) {
         return dbv + RANGE_LABEL_SUFFIX;
     }
 
-    /** Resolves a range-row {@link #rangeLabel(int) label} back to its dBV, searching
+    /** Verbose DISPLAY label for an input range: {@code N "dBV" real N dBFS or (N−9) dBV}.
+     *  The QA "N dBV" input range is really an N-dBFS (Vpp-differential) reference whose
+     *  true RMS full scale is {@code ≈ N − 9} dB ({@link Qa40xLevels} / doc §6
+     *  cheat-sheet).  Display only — never a card key, so nothing parses it back. */
+    public String verboseInputLabel(int dbv) {
+        return String.format(Locale.US, "%d \"dBV\" real %d dBFS or %d dBV", dbv, dbv, dbv - 9);
+    }
+
+    /** Resolves a plain range-row {@link #rangeLabel label} back to its dBV, searching
      *  {@code candidates} (an input/output {@code *RangeDbvValues()} array); returns
      *  {@code fallback} when {@code label} matches none. */
     public int rangeDbv(String label, int[] candidates, int fallback) {

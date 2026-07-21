@@ -470,6 +470,14 @@
                         <artifactId>jpackage-maven-plugin</artifactId>
                         <configuration>
                             <icon>${project.basedir}/src/main/resources/icons/phonalyser.png</icon>
+                            <!-- DEB maintainer-script overrides (phonalyser.postinst/.postrm):
+                                 install the QA40x udev rule (70-qa40x.rules) so the analyzer
+                                 opens without LIBUSB_ERROR_ACCESS.  jpackage token-substitutes
+                                 the scripts like its stock templates. -->
+                            <resourceDir>${project.basedir}/src/main/jpackage/linux</resourceDir>
+                            <!-- The QA40x backend loads the SYSTEM libusb (libusb-1.0.so.0) —
+                                 no vendored .so on Linux — so the .deb declares it. -->
+                            <linuxPackageDeps>libusb-1.0-0</linuxPackageDeps>
                         </configuration>
                     </plugin>
                 </plugins>
@@ -511,6 +519,10 @@
                         <artifactId>jpackage-maven-plugin</artifactId>
                         <configuration>
                             <icon>${project.basedir}/src/main/resources/icons/phonalyser.png</icon>
+                            <!-- Same DEB maintainer-script overrides as linux-x64 (QA40x udev rule). -->
+                            <resourceDir>${project.basedir}/src/main/jpackage/linux</resourceDir>
+                            <!-- Same system-libusb dependency as linux-x64. -->
+                            <linuxPackageDeps>libusb-1.0-0</linuxPackageDeps>
                         </configuration>
                     </plugin>
                 </plugins>
@@ -546,11 +558,12 @@
             </dependencies>
             <build>
                 <plugins>
-                    <!-- Stage the macOS PortAudio dylib (CoreAudio backend) into
-                         the jpackage payload at $APPDIR, where -Djava.library.path
-                         points at runtime.  failonerror=false so the build still
-                         succeeds while the dylib is being added; CoreAudio just
-                         won't open until libportaudio.dylib is present. -->
+                    <!-- Stage the macOS dylibs — libportaudio (CoreAudio backend) and
+                         libusb-1.0 (QA40x backend) — into the jpackage payload at
+                         $APPDIR, where -Djava.library.path / -Djna.library.path point
+                         at runtime.  failonerror=false so the build still succeeds if
+                         a dylib is missing; the matching backend just reports itself
+                         unavailable. -->
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-antrun-plugin</artifactId>
@@ -620,8 +633,8 @@
             </dependencies>
             <build>
                 <plugins>
-                    <!-- Stage the arm64 macOS PortAudio dylib into the jpackage
-                         payload at $APPDIR (see the macos-x64 profile note). -->
+                    <!-- Stage the arm64 macOS dylibs (libportaudio + libusb-1.0) into
+                         the jpackage payload at $APPDIR (see the macos-x64 profile note). -->
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-antrun-plugin</artifactId>

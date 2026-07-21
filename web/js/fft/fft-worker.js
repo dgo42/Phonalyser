@@ -14,10 +14,10 @@
  * main thread, which froze the UI at threads > 1.)
  * GNU AGPL v3 or later.
  */
-import { FftAnalyzer } from '../fft/fft-analyzer.js';
-import { FftResult } from '../fft/fft-result.js';
+import { FftAnalyzer } from './fft-analyzer.js';
+import { FftResult } from './fft-result.js';
 import { TimeDiscontinuityDetector } from '../dsp/time-discontinuity.js';
-import { FftAccumulator } from '../fft/fft-accumulator.js';
+import { FftAccumulator } from './fft-accumulator.js';
 
 const analyzer = new FftAnalyzer();
 const slot = new FftResult();   // reused pool slot — analyze/prelude/finalize write into it

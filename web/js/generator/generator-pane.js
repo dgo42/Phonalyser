@@ -68,6 +68,16 @@ export class GeneratorPane {
     const bus = MessageBus.instance();
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, () => this.onFreqRespMeasurementStarted());
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => this.onFreqRespMeasurementStopped());
+    // Output device lost / failed to open (GeneratorController._reportDeviceError, direction
+    // 'output'): the controller stays UI-free and expects the pane to reset its visuals — clear
+    // the Play / ON-AIR / file-Play indicators so they don't read "playing" while no line is open.
+    bus.subscribe(Events.AUDIO_DEVICE_ERROR, (p) => {
+      if (p && p.direction === 'output') {
+        $('#genPlay').removeClass('playing');
+        $('#onAir').removeClass('live');
+        this.setGenFileBtn(false);
+      }
+    });
   }
 
   /** FREQRESP_MEASUREMENT_STARTED handler — the controller stops both engines in its own

@@ -5,7 +5,7 @@ All notable changes to **Phonalyser** are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] — xxxx.xx.xx
+## [1.1.0] — 2026-07-21
 
 ### Added
 
@@ -75,7 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full-scale from the device's own range calibration rather than a crosshair
   calibration, so the dBV axis and scope readouts are right as soon as you pick
   the range. Where the native libusb library is absent the backend is simply
-  reported unavailable; it ships bundled on Windows.
+  reported unavailable; it ships bundled on Windows and macOS, while Linux uses
+  the distribution's own libusb — there the `.deb` installer also sets up the
+  analyzer's USB access permissions (udev) automatically, and the README
+  carries the one-file manual setup for JAR installs.
 - **Output-channel selection.** The signal generator, the frequency-response
   sweep and the notch tuner each gain a Left / Right / Both output selector that
   gates the driven lane live.
@@ -128,7 +131,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or in any short form (`o` / `of` / `off`, `i` / `in` / `inf`), a startup
   splash, Java-parity preferences in a fixed 640 × 480 dialog with free
   numeric entry, an output-sample-rate probe with an honest resampling
-  warning, scope V/div down to 1 nV/div, and a web-only help page on
+  warning, a Preferences audio-device or sample-rate change applied live to
+  the running measurement — the capture restarts on an input change, a
+  playing generator (tone or file) on an output change, at the new settings —
+  scope V/div down to 1 nV/div, and a web-only help page on
   input-device sample rates (en / de / uk). The one desktop calibration
   feature the web does not support is device-provided full-scale (the
   QA40x-style flag) — a browser cannot reach a device's USB calibration
@@ -180,9 +186,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   independent of level, while still catching the real sample-loss splices it is
   meant to reject. A new switch on the FFT's settings tab turns the guard off
   entirely.
-- **FFT restart after audio changes.** Changing the backend, device, sample rate
-  or bit depth in Preferences now restarts the FFT analyzer instead of leaving it
-  stopped.
+- **Audio changes restart what was running.** Changing the backend, device,
+  sample rate or bit depth in Preferences now stops every running module before
+  the change and brings it back on the new settings afterwards — the FFT
+  analyzer (previously left stopped), the scope capture, and a playing
+  generator, tone or file alike (previously left playing into the old device).
 - **Generator changes restart the FFT and clear the scope afterglow.** Changing
   the dither, the output level or the output-channel selection now restarts the
   FFT statistics and averaging accumulator and clears the scope display
@@ -243,6 +251,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   set (and no calibration loaded), the fundamental lobe was stretched up to the
   entered level but the blue dot marking the original measured height was not
   drawn. It now appears, as it already does with a calibration loaded.
+- **Scope rubber-band zoom at deep magnification.** At a few samples per
+  screen — where the whole view is a sin x/x reconstruction between a handful
+  of samples — the zoom box and the edge time marks were mapped over the
+  continuous time-per-division product while the trace is drawn over a
+  whole-sample window. That round-off, multiplied by a trigger parked screens
+  outside the view, slid each successive zoom sideways and let the time marks
+  disagree with the trace. Zoom capture, zoom commit and the edge marks now
+  all use the exact sample window the renderer draws, so the boxed detail
+  lands under the box at any depth and the marks match the trace.
+- **Scope handles and value labels at the view edges.** The channel-offset and
+  trigger-level triangles sat on the border pixel — half swallowed by the
+  view frame — and their voltage labels clipped when a handle reached the top
+  or bottom edge; both now stay fully visible just inside the view. The
+  offset voltage label was also computed from the clamped on-screen handle
+  position, so once a deep zoom parked the offset outside the grid the label
+  froze and wheel moves appeared to do nothing; it now reads the true offset
+  however far outside the grid it sits.
+- **Glitch trigger selectable in Auto after a capture start.** Starting the
+  scope re-enables the whole trigger toolbar, and that blanket enable
+  resurrected the Glitch type button in Auto mode — where a caught glitch
+  frame would be overwritten by the next free-run repaint, the very reason
+  the combination is blocked. The Glitch-outside-Auto gate is re-applied now.
+- **macOS: GPU scope window placement.** The GL trace window opened shifted
+  upward until the first mouse-over or resize forced a reposition, and with
+  the scope idle it did not follow the main window when dragged. It now
+  re-tracks its pane while the opening window chrome settles and on every
+  main-window move.
+- **macOS: crash on exit.** Quitting could die with "Graphic is disposed":
+  tearing down the GL scope window pumps the event loop mid-shutdown, which
+  could deliver one last paint to a toolbar arrow whose icon was already
+  disposed. That late paint is now skipped.
 
 ## [1.0.3] — 2026-07-04
 

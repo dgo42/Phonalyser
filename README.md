@@ -90,6 +90,36 @@ direct (non‑Store) downloads would need a paid code‑signing certificate, whi
 only becomes worthwhile once there's a steady download volume (a certificate's
 SmartScreen reputation builds with downloads regardless).
 
+## QA40x on Linux (USB access)
+
+Linux grants raw USB access per device, so opening a QuantAsylum QA402/QA403
+fails with `libusb_open failed: LIBUSB_ERROR_ACCESS (-3)` until a udev rule
+allows it. The **`.deb` installer sets this up automatically**; when running
+the platform JAR (or any other install), configure it once by hand:
+
+1. Create `/etc/udev/rules.d/70-qa40x.rules` (as root) with:
+
+   ```
+   SUBSYSTEM=="usb", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="4e37", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+   SUBSYSTEM=="usb", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="4e39", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+   ```
+
+   (`16c0:4e37` = QA402, `16c0:4e39` = QA403. The hex must stay lowercase —
+   udev matches are literal. The same file ships in the source tree at
+   `src/main/jpackage/linux/70-qa40x.rules`.)
+
+2. Reload the rules and replug the analyzer:
+
+   ```
+   sudo udevadm control --reload-rules
+   sudo udevadm trigger
+   ```
+
+`TAG+="uaccess"` covers desktop sessions on any systemd distro; the
+`plugdev` group is the Debian/Ubuntu fallback (add yourself with
+`sudo usermod -aG plugdev $USER` and re‑login). On distros without a
+`plugdev` group, replace `MODE="0660", GROUP="plugdev"` with `MODE="0666"`.
+
 ## Preferences & log place
 
 Phonalyser never writes inside its install directory (a packaged `.app`,

@@ -32,7 +32,7 @@ export class FreqRespWizard {
    * @param {import('./freqresp-pane.js').FreqRespPane} host the pane (sweep runner + io + confirm)
    * @param {object} prefs Preferences.instance()
    * @param {import('./freqresp-view.js').FreqRespView} view the shared view
-   * @param {import('./correction-store.js').FreqRespCorrectionStore} store the shared correction store
+   * @param {import('../common/correction-store.js').CorrectionStore} store the shared correction store
    */
   constructor(host, prefs, view, store) {
     this.host = host;
