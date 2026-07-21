@@ -56,6 +56,18 @@ public class FreqRespCalHelper {
      *  display so both rescale a tone the same way. */
     private static final ToneLobeLift LOBE = new ToneLobeLift();
 
+    /** Highest intermod order whose dual-tone products get their lobes
+     *  de-embedded (correctAllBins=false).  Mirrors {@code ImdResult.MAX_ORDER}
+     *  so the corrected product set matches exactly what {@code ImdAnalyzer}
+     *  measures; kept as a local copy to avoid a {@code dsp → gui} dependency. */
+    private static final int MAX_IMD_ORDER = 5;
+
+    /** {@code .frc} header key for the capture sample rate, as written into
+     *  the leading {@code #} comment block by {@link #saveCsv} and read back
+     *  by {@link #readSampleRateHz} so a loaded file's Nyquist comes from the
+     *  file itself, not from the live device. */
+    private static final String SAMPLE_RATE_HEADER_KEY = "sample_rate_hz";
+
     /** Compile-time switch for IR-domain time gating after delay
      *  correction.  When on, the deconvolved impulse response is
      *  windowed to {@link #IR_GATE_LENGTH_SEC} around the main peak
@@ -539,9 +551,11 @@ public class FreqRespCalHelper {
      * before the measurement; nothing in the file depends on them.
      *
      * <p>Header lines (prefixed by {@code #}) record measurement params
-     * for round-trip fidelity but the loader only needs the data rows.
+     * for round-trip fidelity; {@link #loadFrc} only needs the data rows,
+     * while {@link #readSampleRateHz} reads the capture rate back from the
+     * header block.
      */
-    public void saveCsv(StereoFreqRespCalibration stereo, String path,
+    public void saveFrc(StereoFreqRespCalibration stereo, String path,
                         int sampleRate,
                         double sweepStart, double sweepEnd,
                         int sweepPoints,
@@ -580,13 +594,13 @@ public class FreqRespCalHelper {
     }
 
     /**
-     * Reads a stereo filter calibration file written by {@link #saveCsv}.
+     * Reads a stereo filter calibration file written by {@link #saveFrc}.
      * Expects the 5-column format defined there; throws when the file is
      * empty or rows fewer than 5 columns.  Field separator is comma, but
      * legacy semicolon-separated files (older format) are also accepted
      * so old in-flight measurements still round-trip while migrating.
      */
-    public StereoFreqRespCalibration loadCsv(String path) throws IOException {
+    public StereoFreqRespCalibration loadFrc(String path) throws IOException {
         List<double[]> rows = new ArrayList<>();
         try (BufferedReader br = new BufferedReader(new FileReader(path))) {
             String line;
@@ -626,6 +640,33 @@ public class FreqRespCalHelper {
         return new StereoFreqRespCalibration(
                 new FreqRespCalibration(freqs, magL, phaseL),
                 new FreqRespCalibration(freqs, magR, phaseR));
+    }
+
+    /**
+     * Reads the capture sample rate recorded in a {@code .frc} file's leading
+     * {@code # sample_rate_hz=} header comment (written by {@link #saveFrc}).
+     * Only the header block is scanned — the scan stops at the first
+     * non-comment line.  Returns {@code 0} when the header is absent or
+     * unparseable (legacy files), so callers can fall back.
+     */
+    public int readSampleRateHz(String path) throws IOException {
+        try (BufferedReader br = new BufferedReader(new FileReader(path))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                if (!line.startsWith("#")) break;   // header block ended
+                int eq = line.indexOf('=');
+                if (eq > 0 && SAMPLE_RATE_HEADER_KEY.equals(line.substring(1, eq).trim())) {
+                    try {
+                        return Integer.parseInt(line.substring(eq + 1).trim());
+                    } catch (NumberFormatException e) {
+                        return 0;   // garbled header — treat as absent
+                    }
+                }
+            }
+        }
+        return 0;
     }
 
     /**
@@ -694,6 +735,32 @@ public class FreqRespCalHelper {
             // Second tone (dual-tone) is a fundamental, not a harmonic of F1.
             if (!Double.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0) {
                 corrected += correctToneLobe(r, cal, r.fundamental2HzRefined, half, binWidth, linPerMag, fLo, fHi, done);
+                // Dual-tone intermod PRODUCTS are discrete tones too (like the
+                // harmonics), so correcting only their lobes leaves the noise
+                // between them un-lifted — the whole-spectrum divide stays the
+                // "with noise" mode's job.  The product-frequency set is derived
+                // exactly as gui.fft.ImdAnalyzer does (its dnL/dnH loop, orders
+                // k = 2..ImdResult.MAX_ORDER = 5); the CCIF/DIN formulas are
+                // replicated locally to avoid a dsp→gui dependency:
+                //   d2L = f2 − f1,                 d2H = f1 + f2
+                //   dnL = (n−1)·f1 − (n−2)·f2,     dnH = (n−1)·f2 − (n−2)·f1  (n ≥ 3)
+                // Each product goes through correctToneLobe, which skips
+                // non-positive, out-of-cal-range or Nyquist-exceeding tones
+                // (same guards ImdAnalyzer.readBinVrms applies).
+                double f1 = r.fundamentalHzRefined;
+                double f2 = r.fundamental2HzRefined;
+                for (int k = 2; k <= MAX_IMD_ORDER; k++) {
+                    double fL, fH;
+                    if (k == 2) {
+                        fL = f2 - f1;                        // difference
+                        fH = f2 + f1;                        // sum
+                    } else {
+                        fL = (k - 1) * f1 - (k - 2) * f2;
+                        fH = (k - 1) * f2 - (k - 2) * f1;
+                    }
+                    corrected += correctToneLobe(r, cal, fL, half, binWidth, linPerMag, fLo, fHi, done);
+                    corrected += correctToneLobe(r, cal, fH, half, binWidth, linPerMag, fLo, fHi, done);
+                }
             }
         }
 

@@ -43,12 +43,39 @@ public final class Events {
      *  Nyquist, the sweep-points series' sample-rate/2 entry). */
     public static final String AUDIO_FORMAT_CHANGED = "preferences.audioFormat.changed";
 
-    /** Published by the Preferences dialog JUST BEFORE the audio backend is
-     *  switched, when the backend actually changed.  Lets a running FFT
-     *  recording stop cleanly before the old capture device is torn down, so it
-     *  can be restarted on the new backend (on {@link #AUDIO_FORMAT_CHANGED})
-     *  instead of being left dead.  No payload. */
-    public static final String AUDIO_BACKEND_CHANGING = "preferences.audioBackend.changing";
+    /** Fired once per direction by the Preferences dialog's OK for each
+     *  device-provided card whose active full-scale range ACTUALLY changed
+     *  (Cancel, or an unchanged range, fires nothing).  Payload:
+     *  {@link ActiveRange} — the direction and the newly active range's
+     *  label, nothing else.  Device-agnostic: any backend that owns a live range
+     *  may subscribe and act on the cards it recognises.  Today's subscriber is
+     *  {@code Qa40xRangeController}, which decodes the label and re-ranges the open
+     *  device — a live session restart, or the stored range for the next open. */
+    public static final String DEVICE_ACTIVE_RANGE_CHANGED = "preferences.device.activeRange.changed";
+
+    /** Fired by the Preferences dialog while a rate combo is being edited — the
+     *  user just picked a sample rate for one direction, or a (re)populate seeded
+     *  a fresh selection.  Payload: {@link SampleRateChange} (direction + rate +
+     *  the edited backend + the resolved card).  Device-agnostic: any backend or
+     *  card that constrains its two rates may subscribe and decide FROM the
+     *  payload's backend or card whether the change concerns it — the dialog edits
+     *  an UNCOMMITTED working copy, so the subscriber gates on the payload, not
+     *  live Preferences.  Today's subscriber
+     *  is {@code Qa40xRateConstraint}, which enforces the QA402/QA403's single
+     *  shared reg-9 clock (input rate == output rate) and answers, when the other
+     *  direction must follow, with {@link #PREFS_SAMPLE_RATE_SET}. */
+    public static final String PREFS_SAMPLE_RATE_CHANGED = "preferences.sampleRate.changed";
+
+    /** The other half of the {@link #PREFS_SAMPLE_RATE_CHANGED} round-trip: fired
+     *  by a rate-constraint subscriber to tell the Preferences dialog to align the
+     *  OTHER direction's rate combo.  Payload: {@link SampleRateChange} — the
+     *  direction to correct, the rate to adopt, the backend, and the echoed card.
+     *  The dialog acts
+     *  only while it is still open and the edited backend matches the payload,
+     *  selecting the combo item programmatically — a {@code Combo.select} fires no
+     *  {@code SWT.Selection}, so the correction does not re-publish
+     *  {@link #PREFS_SAMPLE_RATE_CHANGED} and the round-trip ends. */
+    public static final String PREFS_SAMPLE_RATE_SET = "preferences.sampleRate.set";
 
     /** Prefix for pane-title click events.  The full event name is
      *  built by {@link #paneTitleClick(int)} from the ID passed to

@@ -43,7 +43,7 @@ export class FreqRespController {
    *   (the capture/input sample rate drives the derived duration; the sweep records off it).
    * @param {import('../store/preferences.js').Preferences} prefs Preferences.instance()
    * @param {import('./freqresp-view.js').FreqRespView} view the passive canvas view the sweep drives
-   * @param {import('./correction-store.js').FreqRespCorrectionStore} correctionStore the loaded-.frc store
+   * @param {import('../common/correction-store.js').CorrectionStore} correctionStore the loaded-.frc store
    */
   constructor(engine, prefs, view, correctionStore) {
     this.engine = engine;
@@ -170,6 +170,12 @@ export class FreqRespController {
     const leadInSec = Math.max(0, this.prefs.freqRespLeadInSec.get());
     const amplitudeVRms = this.prefs.freqRespAmplitudeVrms.get();
     const adcFsVoltageRms = this.prefs.adcFsVoltageRms.get();
+    // Output-lane gate threaded from the pref into the playback call (Java's
+    // config field → CaptureWithGenerator.runStereo audioGen.setOutputChannels).
+    // The FreqResp sweep is gate-ONLY — it never scales lanes (Java CaptureWithGenerator
+    // calls setOutputChannels but NOT setChannelScale: "the sweep never scales lanes —
+    // calibration enters only in the deconvolution math"), so rightLaneScale stays 1.0.
+    const outputChannels = this.prefs.freqRespOutputChannels.get();
     const totalSec = this.expectedMeasurementSeconds();
 
     this.running = true;
@@ -242,7 +248,7 @@ export class FreqRespController {
       // Discard the warmup silence so the recorded + live-metered window starts CLEAN at the
       // sweep: the busy meter's time axis is [0, totalSec] from here.
       engine.resetCaptureRecording();
-      await engine.playSweepBuffer(played, sampleRate);
+      await engine.playSweepBuffer(played, sampleRate, { outputChannels });
       playStarted = true;
       // Capture wait loop, polling the cooperative cancel flag every 50 ms. Each pass also pumps
       // the live meter from the recording's freshly-arrived tail so the trace fills in AS the

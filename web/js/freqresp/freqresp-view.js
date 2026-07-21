@@ -20,6 +20,12 @@
 import { FlatScrollbar } from '../widgets/flat-scrollbar.js';
 import { interpolate } from './deconvolve.js';
 import { evalDb } from '../dsp/riaa.js';
+// Ideal-filter reference overlay (Java FreqRespView filter seam) — the FilterDesign
+// magnitude curve + the FilterType/Response/UnevenMode enums the reference + unevenness
+// pipelines read. Faithful port of org.edgo.audio.measure.gui.freqresp.FreqRespView.
+import { FilterDesign } from '../dsp/filter-design.js';
+import { FilterType, FilterResponse, hasRipple, UnevenMode } from '../dsp/filter-types.js';
+import { t } from '../i18n/i18n.js';
 // Lanczos (windowed-sinc) trace reconstruction — one band-limited sample per
 // pixel column instead of joining the data points with straight segments, so a
 // sparse span (e.g. the few bins across a deep narrow notch null) renders as the
@@ -77,11 +83,57 @@ const FREQ_MIN_FLOOR_HZ = 1.0;
 // ----- navigation scrollbars: fixed integer range, value derived via bounds -----
 const NAV_RANGE = 1_000_000;
 
+// ----- reference / annotation trace colours (Java AbstractMeasurementView palette) -----
+// COMPARE_TRACE (0x1B5E20) is the desktop's dark-green diff trace; the web port has
+// historically drawn the RIAA compare trace in magenta (#c000c0) — kept as-is here (a
+// pre-existing web divergence, not re-touched). FILTER_TRACE (0x8E24AA "lila") is the
+// ideal-filter overlay / compare colour + the unevenness vertical annotations.
+const COMPARE_TRACE_COLOR = '#c000c0';
+const FILTER_TRACE_COLOR = '#8e24aa';
+
+// ----- canvas overlay tables: anchored below the header button row -----
+// Java puts BOTH overlay tables just under its header buttons, at an ABSOLUTE
+// y = BTN_TOP + BTN_H + 6 from the widget top — the compare table
+// (FreqRespView:1772) and the unevenness readout (:2167) share that anchor.
+// Java's row is BTN_TOP=4 / BTN_H=22; here it is the .lr-tools DOM overlay
+// (top:5px, 22px buttons + 1px borders = 24 high), which the canvas cannot
+// measure — hence the mirrored constants. Anchoring to plot.y (=MARGIN_TOP=4)
+// instead put the text at y=10, straight through the L/R buttons.
+const BTN_TOP = 5;
+const BTN_H = 24;
+const OVERLAY_TABLE_TOP = BTN_TOP + BTN_H + 6;   // 35 px from the canvas top
+
+// ----- external measurement window layout (Java FreqRespView EXT_* constants) -----
+const EXT_LEFT_PAD = 6;
+const EXT_CONTENT_W = 320;
+const EXT_CONTENT_H = 84;
+
+// ----- unevenness (response-flatness) analysis constants (Java FreqRespView) -----
+/** Fraction of Nyquist above which the measured curve is IGNORED for all
+ *  unevenness analysis (weak deconvolved signal buried in noise). */
+const NYQUIST_ANALYSIS_FRACTION = 0.95;
+/** Floating-average window (grid points) for the LP/HP/BP peak walk + corner anchor. */
+const UNEVEN_SMOOTH_POINTS = 9;
+/** Running-median window (points) for NOTCH-mode analysis (depth-preserving despike). */
+const NOTCH_DESPIKE_POINTS = 3;
+/** Audio-band bounds (Hz) for the INITIAL extremum search. */
+const AUDIO_SEARCH_MIN_HZ = 20.0;
+const AUDIO_SEARCH_MAX_HZ = 20000.0;
+/** Displayed NOTCH null depth (dB below the plateau) when the design carries no
+ *  user stopband-attenuation spec (Mode 2, design-by-order). */
+const NOTCH_DISPLAY_FLOOR_DB = 120.0;
+/** Half-width (px) of the short green crossing tick drawn at each Mode-B boundary. */
+const UNEVEN_TICK_HALF_PX = 20;
+/** Two Mode-B crossing levels within this many dB are treated as equal. */
+const UNEVEN_LEVEL_EPS_DB = 0.05;
+/** Symmetric vertical pad (dB) for the compare-mode auto-zoom (autoSetupCompare). */
+const COMPARE_ZOOM_PAD_DB = 2.0;
+
 export class FreqRespView {
   /**
    * @param {HTMLCanvasElement} canvas  the #frPlot canvas
    * @param {import('../store/preferences.js').Preferences} prefs Preferences.instance()
-   * @param {import('./correction-store.js').FreqRespCorrectionStore} correctionStore loaded .frc store
+   * @param {import('../common/correction-store.js').CorrectionStore} correctionStore loaded .frc store
    * @param {{freqScroll?:HTMLCanvasElement, magScroll?:HTMLCanvasElement,
    *          onRangeChanged?:Function}} deps  (callers may also pass an unused
    *          {@code engine} key — the view now reads the input rate from prefs,
@@ -124,6 +176,33 @@ export class FreqRespView {
     this._compareDiffCacheReverse = false;
     this._compareDiffCacheIec = false;
     this._compareDiffCacheWindow = -1;
+    // Reference-source identity baked into the compare cache (Java compareDiffCacheFilterSrc /
+    // compareDiffCacheFilter): true while the ideal-filter curve is the active reference, plus the
+    // FilterDesign identity, so a source swap (RIAA ↔ filter) or filter-param nudge rebuilds the diff.
+    this._compareDiffCacheFilterSrc = false;
+    this._compareDiffCacheFilter = null;
+
+    // Ideal-filter reference state (Java filterDesign / filterParams / filterAnchorCache).
+    // filterDesign is null while the current filter params are invalid → reference unavailable.
+    this._filterDesign = null;
+    this._filterParams = null;              // last FilterParams snapshot (see _refreshFilterDesign)
+    this._filterAnchorCache = NaN;          // corner-point anchor (dB); NaN forces recompute
+    this._filterAnchorCacheDesign = null;   // the filterDesign identity the anchor was computed against
+
+    // Unevenness readout state (Java unevenLoHz/HiHz/PlusDb/ThresholdDb/ExtremumDb).
+    this._unevenLoHz = NaN;
+    this._unevenHiHz = NaN;
+    this._unevenPlusDb = NaN;
+    this._unevenThresholdDb = NaN;
+    this._unevenExtremumDb = NaN;
+
+    // External measurement tool window (Java tableExtracted — transient, not persisted).
+    // The DOM float window is owned by the pane (mirrors fft-view/fft-pane); the view exposes
+    // tableExtracted + paintExternalReadout + externalContentSize, and fires _onExternalSync so
+    // the pane can open/close/repaint the window. Isolated (wizard) views never extract.
+    this.tableExtracted = false;
+    this._onExternalSync = deps.onExternalSync || null;
+    this.isolated = !!deps.isolated;
 
     canvas.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
     canvas.addEventListener('mousemove', (e) => this._onMouseMove(e));
@@ -148,6 +227,27 @@ export class FreqRespView {
       : null;
     if (this.freqScroll) { this.freqScroll.setMinimum(0); this.freqScroll.setMaximum(NAV_RANGE); }
     if (this.magScroll) { this.magScroll.setMinimum(0); this.magScroll.setMaximum(NAV_RANGE); }
+
+    // Ideal-filter reference + unevenness pref subscriptions (Java FreqRespView
+    // Bindings.onChange block). Show carries the one-shot compare auto-zoom (fit once
+    // when the filter compare trace first becomes active). The per-type scalar params
+    // live in the Preferences params map (FilterParams.of re-reads it each paint), so
+    // the filter caches self-validate without a per-scalar subscription here.
+    prefs.freqRespShowFilter.addListener((show) => {
+      this._invalidateFilterReference();
+      if (show && prefs.freqRespFilterCompare.get() && this.hasAnyResult()) {
+        this.autoSetupCompare();
+      }
+      this.render();
+    });
+    prefs.freqRespFilterCompare.addListener(() => this.render());
+    prefs.freqRespFilterType.addListener(() => { this._invalidateFilterReference(); this.render(); });
+    prefs.freqRespFilterResponse.addListener(() => { this._invalidateFilterReference(); this.render(); });
+    prefs.freqRespUnevenMode.addListener(() => { this._recomputeUnevenness(); this.render(); });
+    prefs.freqRespUnevenNotch.addListener(() => { this._recomputeUnevenness(); this.render(); });
+    prefs.freqRespUnevenDb.addListener(() => { this._recomputeUnevenness(); this.render(); });
+    prefs.freqRespUnevenStartHz.addListener(() => { this._recomputeUnevenness(); this.render(); });
+    prefs.freqRespUnevenStopHz.addListener(() => { this._recomputeUnevenness(); this.render(); });
   }
 
   // ===========================================================================
@@ -159,6 +259,9 @@ export class FreqRespView {
     this.rawLeftResult = result;
     this.leftResult = this.applyCurrentCalibration(result);
     if (result) this.lastResultSampleRate = result.sampleRate;
+    this._invalidateFilterAnchor();  // new curve → re-anchor the filter overlay
+    this._recomputeUnevenness();     // new curve → refresh the flatness readout
+    this._syncExternalShell();       // hasAnyResult changed → open/close extracted window
     this.render();
   }
 
@@ -167,6 +270,9 @@ export class FreqRespView {
     this.rawRightResult = result;
     this.rightResult = this.applyCurrentCalibration(result);
     if (result) this.lastResultSampleRate = result.sampleRate;
+    this._invalidateFilterAnchor();  // new curve → re-anchor the filter overlay
+    this._recomputeUnevenness();     // new curve → refresh the flatness readout
+    this._syncExternalShell();       // hasAnyResult changed → open/close extracted window
     this.render();
   }
 
@@ -178,6 +284,9 @@ export class FreqRespView {
     this.rightResult = this.applyCurrentCalibration(this.rawRightResult);
     const r = this.rawLeftResult || this.rawRightResult;
     if (r) this.lastResultSampleRate = r.sampleRate;
+    this._invalidateFilterAnchor();  // new curve → re-anchor the filter overlay
+    this._recomputeUnevenness();     // new curve → refresh the flatness readout
+    this._syncExternalShell();       // hasAnyResult changed → open/close extracted window
     this.render();
   }
 
@@ -188,8 +297,9 @@ export class FreqRespView {
   onCalibrationChanged() {
     if (this.rawLeftResult) this.leftResult = this.applyCurrentCalibration(this.rawLeftResult);
     if (this.rawRightResult) this.rightResult = this.applyCurrentCalibration(this.rawRightResult);
-    const prefs = this.prefs;
-    if (prefs.freqRespCompareMode.get() && prefs.freqRespShowRiaa.get() && this.hasAnyResult()) {
+    this._invalidateFilterAnchor();  // calibrated curve changed → re-anchor the filter overlay
+    this._recomputeUnevenness();     // calibrated curve changed → refresh the readout
+    if (this._compareActive()) {
       this._recomputeCompareAnchor();
     }
     this.render();
@@ -199,8 +309,7 @@ export class FreqRespView {
    *  window pref) changes. No-op when compare / RIAA is off or no result is loaded; always
    *  redraws (FreqRespView.onCompareParamsChanged). */
   onCompareParamsChanged() {
-    const prefs = this.prefs;
-    if (prefs.freqRespCompareMode.get() && prefs.freqRespShowRiaa.get() && this.hasAnyResult()) {
+    if (this._compareActive()) {
       this._recomputeCompareAnchor();
     }
     this.render();
@@ -212,6 +321,9 @@ export class FreqRespView {
   clearResults() {
     this.rawLeftResult = this.rawRightResult = null;
     this.leftResult = this.rightResult = null;
+    this._invalidateFilterAnchor();  // no curve → drop the cached filter anchor
+    this._recomputeUnevenness();     // no curve → clear the flatness readout
+    this._syncExternalShell();       // no result → close the extracted window
     this.render();
   }
 
@@ -404,8 +516,8 @@ export class FreqRespView {
 
     this._drawGrid(g, plot, freqMin, freqMax, magTop, magBot, phaseVisible);
     // Compare mode draws the (measured − reference) subtraction curve instead of the
-    // raw traces + RIAA overlay (FreqRespView.onPaint branch).
-    const compareActive = prefs.freqRespCompareMode.get() && this.hasAnyResult() && prefs.freqRespShowRiaa.get();
+    // raw traces + reference overlay (FreqRespView.onPaint branch, via the reference seam).
+    const compareActive = this._compareActive();
     // Clip the DATA drawing to the plot rect (Java setClipping(plot)) so a trace / RIAA curve
     // that runs off the top or bottom of the dB range is cut at the frame (keeping its true
     // slope) instead of spilling over the border or flattening against the edge. Grid, axis
@@ -418,13 +530,19 @@ export class FreqRespView {
       this._drawCompareTrace(g, plot, freqMin, freqMax, magTop, magBot);
     } else {
       this._drawTraces(g, plot, freqMin, freqMax, magTop, magBot, phaseVisible);
-      if (prefs.freqRespShowRiaa.get()) {
-        this._drawRiaaOverlay(g, plot, freqMin, freqMax, magTop, magBot);
+      if (this._referenceActive()) {
+        this._drawReferenceOverlay(g, plot, freqMin, freqMax, magTop, magBot);
       }
     }
     g.restore();
-    // The compare min/max table is an overlay (not trace data) — drawn unclipped, as before.
+    // Overlay tables (not trace data) — drawn unclipped. The unevenness table stacks
+    // below the compare table when both are visible; the unevenness annotations are a
+    // dynamic overlay clipped to the plot. Faithful to FreqRespView.onPaint, the in-plot
+    // tables are NOT suppressed while extracted (unlike FftView) — the desktop draws them
+    // in both the plot and the window; the external window mirrors the same fields.
     if (compareActive) this._drawCompareMeasurementTable(g, plot);
+    this._drawUnevennessTable(g, plot, compareActive);
+    this._drawUnevennessAnnotations(g, plot, freqMin, freqMax, magTop, magBot);
     if (this._mouseInPlot) {
       this._drawCrosshair(g, plot, freqMin, freqMax, magTop, magBot, phaseVisible);
     }
@@ -679,26 +797,179 @@ export class FreqRespView {
     if (dash && dash.length) g.setLineDash([]);
   }
 
-  // ----- RIAA reference overlay (FreqRespView.drawRiaaOverlay) -----
-  _drawRiaaOverlay(g, plot, freqMin, freqMax, magTop, magBot) {
+  // ===========================================================================
+  // Reference-curve seam — ONE source of the overlaid / compared reference.
+  //
+  // Only one reference can be active at a time (the tab enforces the mutual
+  // exclusion between Show-RIAA and Show-Filter), so the RIAA and ideal-filter
+  // curves share ONE pipeline: the overlay draw, the compare diff, the compare
+  // readout, and the crosshair Δ all pull the reference dB from _referenceDb()
+  // and its colour from _referenceColorRole() (FreqRespView reference seam).
+  // ===========================================================================
+
+  /** true while a reference curve (RIAA or ideal filter) is enabled and available.
+   *  The filter source additionally requires a valid filterDesign (invalid params
+   *  ⇒ unavailable ⇒ no overlay). Mirrors FreqRespView.referenceActive. */
+  _referenceActive() {
     const prefs = this.prefs;
-    const rev = prefs.freqRespReverseRiaa.get(), iec = prefs.freqRespIecAmendment.get();
-    const anchorDb = this._riaaAnchorDb();
-    const color = colorHex(prefs.freqRespReferenceColor.get());
-    const lw = prefs.freqRespLineWidth.get();
+    if (prefs.freqRespShowRiaa.get()) return true;
+    if (prefs.freqRespShowFilter.get()) { this._refreshFilterDesign(); return this._filterDesign != null; }
+    return false;
+  }
+
+  /** true while the ACTIVE reference source's compare pref is on — RIAA uses
+   *  freqRespCompareMode, the filter uses freqRespFilterCompare (FreqRespView.referenceCompareOn). */
+  _referenceCompareOn() {
+    const prefs = this.prefs;
+    if (prefs.freqRespShowRiaa.get()) return prefs.freqRespCompareMode.get();
+    if (prefs.freqRespShowFilter.get()) return prefs.freqRespFilterCompare.get();
+    return false;
+  }
+
+  /** The CSS colour for the active reference's overlay / compare trace — the RIAA
+   *  reference-color pref for RIAA, FILTER_TRACE (lila) for the ideal filter
+   *  (FreqRespView.referenceColorRole → RIAA_TRACE / FILTER_TRACE). */
+  _referenceColorRole() {
+    return this.prefs.freqRespShowFilter.get()
+      ? FILTER_TRACE_COLOR : colorHex(this.prefs.freqRespReferenceColor.get());
+  }
+
+  /** true when the compare (diff) trace + table + Δ readout should be drawn: the
+   *  active reference is available, its compare pref is on, and a measurement is
+   *  loaded. The single gate for every compare-mode branch (FreqRespView.compareActive). */
+  _compareActive() {
+    return this._referenceCompareOn() && this._referenceActive() && this.hasAnyResult();
+  }
+
+  /** The active reference's magnitude in dB at fHz. RIAA uses the analytic curve
+   *  (normalised to 0 dB at 1 kHz). The ideal filter uses its natural
+   *  flooredFilterEvalDb (passband ≈ 0 dB) — NOT referenced to 1 kHz. In both
+   *  cases the VIEW adds the measured-@1kHz anchorDb. NaN when no reference is
+   *  active / available (FreqRespView.referenceDb). */
+  _referenceDb(fHz) {
+    const prefs = this.prefs;
+    if (prefs.freqRespShowRiaa.get()) {
+      return evalDb(fHz, prefs.freqRespReverseRiaa.get(), prefs.freqRespIecAmendment.get());
+    }
+    if (prefs.freqRespShowFilter.get()) {
+      this._refreshFilterDesign();
+      if (this._filterDesign == null) return NaN;
+      return this._flooredFilterEvalDb(fHz);
+    }
+    return NaN;
+  }
+
+  /** The ideal filter's magnitude in dB at fHz, with a leakage FLOOR added to the
+   *  NOTCH null so the (mathematically −∞) tip rounds asymptotically into −A in
+   *  POWER — no flat-bottomed plateau (FreqRespView.flooredFilterEvalDb). Precondition:
+   *  _filterDesign is non-null. */
+  _flooredFilterEvalDb(fHz) {
+    let db = this._filterDesign.evalDb(fHz);
+    if (this._filterDesign.type === FilterType.NOTCH) {
+      const atten = this._filterDesign.stopAttenDb;
+      const floorDb = Number.isFinite(atten) ? atten : NOTCH_DISPLAY_FLOOR_DB;
+      const powEval = Math.pow(10.0, db / 10.0);
+      const powFloor = Math.pow(10.0, -floorDb / 10.0);
+      db = 10.0 * Math.log10(powEval + powFloor);
+    }
+    return db;
+  }
+
+  /** (Re)builds _filterDesign from the current filter prefs when the param snapshot
+   *  has changed. Invalid params leave _filterDesign == null (FreqRespView.refreshFilterDesign). */
+  _refreshFilterDesign() {
+    const cur = FilterParams.of(this.prefs);
+    if (cur.equals(this._filterParams)) return;
+    this._filterParams = cur;
+    this._filterDesign = cur.build();
+  }
+
+  /** Forces the ideal-filter curve + compare diff to rebuild after a filter param
+   *  changed (FreqRespView.invalidateFilterReference). */
+  _invalidateFilterReference() {
+    this._filterParams = null;
+    this._compareDiffCache = null;
+    this._invalidateFilterAnchor();   // fc / bandwidth moved → the anchor region moved
+    const prefs = this.prefs;
+    if (prefs.freqRespShowFilter.get() && prefs.freqRespFilterCompare.get() && this.hasAnyResult()) {
+      this._recomputeCompareAnchor();
+    }
+  }
+
+  /** Paints the active reference curve (RIAA or ideal filter) as a dashed trace
+   *  over the measured response, in the reference's colour. Aligned at 1 kHz to
+   *  the measured curve's 1 kHz value (or 0 dB if no measurement). One sample PER
+   *  PIXEL column plus the filter's exact critical frequencies forced in as extra
+   *  samples so the null / corner renders at its TRUE value regardless of view
+   *  width (FreqRespView.drawReferenceOverlay + referenceSampleColumns). */
+  _drawReferenceOverlay(g, plot, freqMin, freqMax, magTop, magBot) {
+    const anchorDb = this._referenceAnchorDb();
+    const color = this._referenceColorRole();
+    const lw = this.prefs.freqRespLineWidth.get();
     const yOf = (d) => plot.y + (magTop - d) / (magTop - magBot) * plot.h;   // unclamped; clipped at the frame
+    const s = this._referenceSampleColumns(plot, freqMin, freqMax);
+    // Build (x, y) samples then order by x. The desktop's ColumnBucketPainter merges
+    // same-column samples by min/max so a critical (exact-fc) sample surfaces the TRUE
+    // null depth at its column; the web strokes a plain polyline, so ordering by x keeps
+    // the trace monotonic left-to-right and the extra exact-fc vertex pulls the path to
+    // the true depth within that column (same net shape).
+    const pts = new Array(s.xs.length);
+    for (let i = 0; i < s.xs.length; i++) {
+      pts[i] = { x: s.xs[i], y: yOf(anchorDb + this._referenceDb(s.fs[i])) };
+    }
+    pts.sort((a, b) => a.x - b.x);
     g.strokeStyle = color; g.lineWidth = lw; g.setLineDash([4, 4]);
     g.beginPath();
-    const step = 5;
     let started = false;
-    for (let px = 0; px <= plot.w; px += step) {
-      const f = this._xFractionToFreq(px / plot.w, freqMin, freqMax);
-      const yy = yOf(anchorDb + evalDb(f, rev, iec));
-      const xx = plot.x + px;
-      started ? g.lineTo(xx, yy) : (g.moveTo(xx, yy), started = true);
+    for (const p of pts) {
+      if (Number.isNaN(p.y)) { started = false; continue; }
+      started ? g.lineTo(p.x, p.y) : (g.moveTo(p.x, p.y), started = true);
     }
     g.stroke();
     g.setLineDash([]);
+  }
+
+  /** Parallel (column, frequency) sample arrays for the reference overlay: one
+   *  sample per pixel column (frequency = that pixel's frequency) PLUS the active
+   *  filter's critical frequencies as extra samples carrying the EXACT critical
+   *  frequency (only when the ideal filter is the reference — RIAA has none). The
+   *  critical samples keep their exact frequency for the y-eval so the null / corner
+   *  depth is a width-independent constant (FreqRespView.referenceSampleColumns).
+   *
+   *  <p>The web strokes every sample directly (no ColumnBucketPainter min/max merge),
+   *  so a critical sample is emitted as its own path point; at the exact critical
+   *  frequency the null depth is drawn true, matching the desktop's surfaced value. */
+  _referenceSampleColumns(plot, freqMin, freqMax) {
+    const width = Math.max(1, plot.w);
+    let crit = [];
+    if (this.prefs.freqRespShowFilter.get()) {
+      this._refreshFilterDesign();
+      if (this._filterDesign != null) crit = this._filterDesign.criticalFrequenciesHz();
+    }
+    const n = width + 1 + crit.length;
+    const xs = new Array(n);
+    const fs = new Array(n);
+    let m = 0;
+    for (let x = 0; x <= width; x++) {
+      xs[m] = plot.x + x;
+      fs[m] = this._xFractionToFreq(x / width, freqMin, freqMax);
+      m++;
+    }
+    for (const fCrit of crit) {
+      const frac = this._freqToXFraction(fCrit, freqMin, freqMax);
+      let x = plot.x + Math.round(frac * width);
+      xs[m] = Math.max(plot.x, Math.min(plot.x + width, x));
+      fs[m] = fCrit;
+      m++;
+    }
+    return { xs, fs };
+  }
+
+  /** Vertical alignment level (dB) for the active reference overlay: RIAA keeps
+   *  the measured-@1 kHz anchor; the ideal filter uses corner-point anchoring
+   *  (FreqRespView.referenceAnchorDb). */
+  _referenceAnchorDb() {
+    return this.prefs.freqRespShowFilter.get() ? this._filterAnchorDb() : this._riaaAnchorDb();
   }
 
   /** dB at 1 kHz of the active trace (L if visible, else R, else 0). */
@@ -707,6 +978,57 @@ export class FreqRespView {
     if (!anchor) return 0.0;
     const db = this._interpDb(anchor, 1000.0);
     return Number.isFinite(db) ? db : 0.0;
+  }
+
+  /** Alignment level (dB) for the ideal-filter overlay: the ideal curve passes
+   *  EXACTLY through the measured trace at the filter's corner frequency (NOTCH:
+   *  the plateau tip via fcHz). Cached in _filterAnchorCache keyed by the
+   *  _filterDesign identity (FreqRespView.filterAnchorDb). */
+  _filterAnchorDb() {
+    this._refreshFilterDesign();
+    if (Number.isFinite(this._filterAnchorCache) && this._filterAnchorCacheDesign === this._filterDesign) {
+      return this._filterAnchorCache;
+    }
+    this._filterAnchorCache = this._computeFilterAnchorDb();
+    this._filterAnchorCacheDesign = this._filterDesign;
+    return this._filterAnchorCache;
+  }
+
+  /** Corner-point anchoring: NOTCH anchors ONLY at fcHz (the leakage-floored tip);
+   *  the other types use the design corners then the centre fc as fallback. An
+   *  anchor "works" when both the measured value (interpolated on the floating-
+   *  average, capped curve) AND the floored filter eval are finite
+   *  (FreqRespView.computeFilterAnchorDb). */
+  _computeFilterAnchorDb() {
+    const r = this._activeChannelResult();
+    this._refreshFilterDesign();
+    if (r == null || this._filterDesign == null) return 0.0;
+    const freqs = r.freqs;
+    if (!freqs || freqs.length < 2) return 0.0;
+    const sdb = this._floatingAvgCappedDb(r);
+    let corners;
+    if (this._filterDesign.type === FilterType.NOTCH) {
+      corners = [this._filterDesign.fcHz];
+    } else {
+      const designCorners = this._filterDesign.cornerFrequenciesHz();
+      corners = designCorners.slice();
+      corners.push(this._filterDesign.fcHz);   // centre fallback
+    }
+    for (const fCorner of corners) {
+      const meas = interpFromArray(freqs, sdb, fCorner);
+      if (!Number.isFinite(meas)) continue;
+      const evalV = this._flooredFilterEvalDb(fCorner);
+      if (!Number.isFinite(evalV)) continue;
+      return meas - evalV;
+    }
+    return 0.0;
+  }
+
+  /** Drops the cached per-type filter anchor so the next overlay paint recomputes
+   *  it (FreqRespView.invalidateFilterAnchor). */
+  _invalidateFilterAnchor() {
+    this._filterAnchorCache = NaN;
+    this._filterAnchorCacheDesign = null;
   }
 
   _activeChannelResult() {
@@ -729,24 +1051,33 @@ export class FreqRespView {
    *  read identical numbers. Returns {smoothed, minDb, maxDb}. */
   _getCompareDiff(src, reverse, iec) {
     const W = Math.max(0, Math.min(100, this.prefs.freqRespCompareSmoothWindow.get()));
+    // The reference source (RIAA vs ideal filter) and the filter's full param tuple are
+    // part of the key: swapping source or nudging a filter param yields a different diff
+    // even though src/reverse/iec/window are unchanged. filterDesign identity captures the
+    // whole filter tuple (rebuilt only when a param moves — FreqRespView.getCompareDiff).
+    const filterSrc = this.prefs.freqRespShowFilter.get();
+    if (filterSrc) this._refreshFilterDesign();
     if (this._compareDiffCache
         && this._compareDiffCacheSrc === src
         && this._compareDiffCacheReverse === reverse
         && this._compareDiffCacheIec === iec
-        && this._compareDiffCacheWindow === W) {
+        && this._compareDiffCacheWindow === W
+        && this._compareDiffCacheFilterSrc === filterSrc
+        && this._compareDiffCacheFilter === this._filterDesign) {
       return this._compareDiffCache;
     }
     const freqs = src.freqs, magLin = src.magLin;
     const n = freqs.length;
     // 1. Raw (measDb − refDb) per signal point. A non-positive (notch-null) magnitude
     //    maps to a finite -300 dB (mirror FreqRespFormat.linToDb) so it is INCLUDED in
-    //    the running mean and drawn, rather than excised as a gap. The isFinite guard now
-    //    never trips but is kept defensively.
+    //    the running mean and drawn, rather than excised as a gap. NaN where the reference
+    //    itself is unavailable.
     const raw = new Float64Array(n);
     for (let i = 0; i < n; i++) {
       const measDb = magLin[i] > 0 ? 20 * Math.log10(magLin[i]) : -300;
       if (!Number.isFinite(measDb)) { raw[i] = NaN; continue; }
-      raw[i] = measDb - evalDb(freqs[i], reverse, iec);
+      const refDb = this._referenceDb(freqs[i]);
+      raw[i] = Number.isFinite(refDb) ? measDb - refDb : NaN;
     }
     // 2. Sliding mean in LOG-FREQUENCY space (1/W-octave window). W=0 disables smoothing.
     let smoothed;
@@ -800,6 +1131,8 @@ export class FreqRespView {
     this._compareDiffCacheReverse = reverse;
     this._compareDiffCacheIec = iec;
     this._compareDiffCacheWindow = W;
+    this._compareDiffCacheFilterSrc = filterSrc;
+    this._compareDiffCacheFilter = this._filterDesign;
     return diff;
   }
 
@@ -814,7 +1147,10 @@ export class FreqRespView {
     const freqs = src.freqs;
     const xOf = (f) => plot.x + this._freqToXFraction(f, freqMin, freqMax) * plot.w;
     const yOf = (d) => plot.y + (magTop - d) / (magTop - magBot) * plot.h;   // unclamped; clipped at the frame
-    g.strokeStyle = '#c000c0'; g.lineWidth = prefs.freqRespLineWidth.get(); g.setLineDash([]);
+    // Solid trace in the active reference's colour: FILTER_TRACE (lila) when the ideal
+    // filter is the reference, else the web's compare magenta (FreqRespView.drawCompareTrace).
+    const compareColor = prefs.freqRespShowFilter.get() ? FILTER_TRACE_COLOR : COMPARE_TRACE_COLOR;
+    g.strokeStyle = compareColor; g.lineWidth = prefs.freqRespLineWidth.get(); g.setLineDash([]);
     g.beginPath();
     let started = false;
     for (let i = 0; i < freqs.length; i++) {
@@ -834,7 +1170,7 @@ export class FreqRespView {
     g.font = '11px "Segoe UI", sans-serif';
     g.textBaseline = 'top'; g.textAlign = 'left';
     g.fillStyle = '#222';
-    const x = plot.x + 6, y = plot.y + 6, lineH = 14;
+    const x = plot.x + 6, y = OVERLAY_TABLE_TOP, lineH = 14;
     g.fillText('max: ' + formatDbReadout(this.compareSmoothedMax), x, y);
     g.fillText('min: ' + formatDbReadout(this.compareSmoothedMin), x, y + lineH);
   }
@@ -857,8 +1193,11 @@ export class FreqRespView {
   autoSetupCompare() {
     const prefs = this.prefs;
     if (!this._recomputeCompareAnchor()) return;
-    let newTop = this.compareSmoothedMax + MAG_HEADROOM_DB;
-    let newBot = (this.compareSmoothedMin < -1.0) ? this.compareSmoothedMin - 1.0 : -1.0;
+    // Hug the diff extrema with a symmetric COMPARE_ZOOM_PAD_DB margin in both
+    // directions (FreqRespView.autoSetupCompare) — not the generic 20 dB marker
+    // headroom, which would waste 20 dB on a ±0.5 dB trace.
+    let newTop = this.compareSmoothedMax + COMPARE_ZOOM_PAD_DB;
+    let newBot = this.compareSmoothedMin - COMPARE_ZOOM_PAD_DB;
     newTop = Math.min(MAG_TOP_ZOOM_MAX_DB, newTop);
     newBot = Math.max(MAG_BOT_MIN_DB, newBot);
     prefs.freqRespFreqMinHz.set(20.0);
@@ -868,6 +1207,401 @@ export class FreqRespView {
     prefs.save();
     this._publishRangeChanged();
     this.render();
+  }
+
+  // ===========================================================================
+  // Unevenness (response-flatness) readout (FreqRespView unevenness section)
+  // ===========================================================================
+
+  /** Recomputes the unevenness readout into _unevenLoHz / _unevenHiHz / _unevenPlusDb
+   *  from the active channel, using the curve appropriate to each mode: Mode B + the
+   *  notch Mode-A walk read the despiked-raw curve; the peak Mode-A walk reads the
+   *  floating-average curve. Both are Nyquist-capped (FreqRespView.recomputeUnevenness).
+   *  Sets all fields to NaN when the mode is OFF or no usable data exists. */
+  _recomputeUnevenness() {
+    const prefs = this.prefs;
+    this._unevenLoHz = NaN;
+    this._unevenHiHz = NaN;
+    this._unevenPlusDb = NaN;
+    this._unevenThresholdDb = NaN;
+    this._unevenExtremumDb = NaN;
+    const mode = prefs.freqRespUnevenMode.get();
+    if (mode === UnevenMode.OFF) return;
+    const r = this._activeChannelResult();
+    if (r == null) return;
+    const freqs = r.freqs, mag = r.magLin;
+    if (!freqs || !mag || freqs.length < 2) return;
+    const n = freqs.length;
+
+    if (mode === UnevenMode.RANGE) {
+      // Mode B — min/max + crossing levels read the DESPIKED-RAW curve (raw dB +
+      // 3-point median + Nyquist cap), NOT a floating average, so a narrow user range
+      // preserves the true wall depth (FreqRespView.recomputeUnevenness RANGE branch).
+      const db = this._despikedCappedDb(r);
+      const cap = this._analysisNyquistCapHz(r);
+      const startHz = prefs.freqRespUnevenStartHz.get();
+      const stopHz = Math.min(prefs.freqRespUnevenStopHz.get(), cap);
+      let minDb = Infinity, maxDb = -Infinity;
+      let loUsed = NaN, hiUsed = NaN;
+      for (let i = 0; i < n; i++) {
+        const f = freqs[i];
+        if (f < startHz || f > stopHz) continue;
+        const d = db[i];
+        if (!Number.isFinite(d)) continue;
+        if (d < minDb) minDb = d;
+        if (d > maxDb) maxDb = d;
+        if (Number.isNaN(loUsed)) loUsed = f;   // first finite in-range
+        hiUsed = f;                             // last finite in-range
+      }
+      if (!Number.isFinite(minDb) || !Number.isFinite(maxDb)) return;
+      this._unevenLoHz = loUsed;
+      this._unevenHiHz = hiUsed;
+      this._unevenPlusDb = 0.5 * (maxDb - minDb);   // half-span; i18n key carries the ±
+      // The Notch checkbox picks the range's extremum of interest for the second green
+      // line — the lowest point when checked, the highest otherwise.
+      this._unevenExtremumDb = prefs.freqRespUnevenNotch.get() ? minDb : maxDb;
+      return;
+    }
+
+    // LEVEL mode — the Notch checkbox picks the walk EXPLICITLY. The INITIAL extremum
+    // is searched only within the audio band; the walk itself runs the full array under
+    // the cap (FreqRespView.recomputeUnevenness LEVEL branch).
+    const unevenDb = prefs.freqRespUnevenDb.get();
+
+    if (prefs.freqRespUnevenNotch.get()) {
+      // NOTCH walk runs on the RAW dB curve with ONLY a 3-point running MEDIAN despike
+      // (any mean flattens a high-Q null). Still Nyquist-capped and audio-band-seeded.
+      const ndb = this._despikedCappedDb(r);
+      const minIdx = this._audioBandExtremumIdx(freqs, ndb, false);   // interior min in [20, 20k]
+      if (minIdx < 0) return;
+      const minDb = ndb[minIdx];
+      const ceilDb = minDb + unevenDb;
+      let lo = minIdx;
+      for (let i = minIdx; i >= 0; i--) {
+        if (!Number.isFinite(ndb[i]) || ndb[i] > ceilDb) break;
+        lo = i;
+      }
+      let hi = minIdx;
+      for (let i = minIdx; i < n; i++) {
+        if (!Number.isFinite(ndb[i]) || ndb[i] > ceilDb) break;
+        hi = i;
+      }
+      this._unevenLoHz = freqs[lo];
+      this._unevenHiHz = freqs[hi];
+      this._unevenPlusDb = unevenDb;
+      this._unevenThresholdDb = ceilDb;
+      this._unevenExtremumDb = minDb;
+      return;
+    }
+
+    // PEAK walk runs on the FLOATING-AVERAGE (9-point), Nyquist-capped curve. Peak find
+    // (audio band only), then walk out both ways while db ≥ peak − unevenDb.
+    const db = this._floatingAvgCappedDb(r);
+    const peakIdx = this._audioBandExtremumIdx(freqs, db, true);
+    if (peakIdx < 0) return;
+    const peakDb = db[peakIdx];
+    const floorDb = peakDb - unevenDb;
+    let lo = peakIdx;
+    for (let i = peakIdx; i >= 0; i--) {
+      if (!Number.isFinite(db[i]) || db[i] < floorDb) break;
+      lo = i;
+    }
+    let hi = peakIdx;
+    for (let i = peakIdx; i < n; i++) {
+      if (!Number.isFinite(db[i]) || db[i] < floorDb) break;
+      hi = i;
+    }
+    this._unevenLoHz = freqs[lo];
+    this._unevenHiHz = freqs[hi];
+    this._unevenPlusDb = unevenDb;
+    this._unevenThresholdDb = floorDb;
+    this._unevenExtremumDb = peakDb;
+  }
+
+  /** Index of the extreme finite value of db — MAX when wantMax, else MIN — searched
+   *  ONLY within the audio band [AUDIO_SEARCH_MIN_HZ, AUDIO_SEARCH_MAX_HZ]. NaN entries
+   *  skipped; -1 when the band holds no finite point (FreqRespView.audioBandExtremumIdx). */
+  _audioBandExtremumIdx(freqs, db, wantMax) {
+    let bestIdx = -1;
+    let best = wantMax ? -Infinity : Infinity;
+    for (let i = 0; i < db.length; i++) {
+      const f = freqs[i];
+      if (f < AUDIO_SEARCH_MIN_HZ || f > AUDIO_SEARCH_MAX_HZ) continue;
+      const d = db[i];
+      if (!Number.isFinite(d)) continue;
+      if (wantMax ? d > best : d < best) { best = d; bestIdx = i; }
+    }
+    return bestIdx;
+  }
+
+  /** The passband analysis curve: raw dB → 9-point FLOATING AVERAGE → every point at
+   *  or above the analysis Nyquist cap forced to NaN (FreqRespView.floatingAvgCappedDb). */
+  _floatingAvgCappedDb(r) {
+    const freqs = r.freqs, mag = r.magLin;
+    const n = freqs.length;
+    const raw = new Float64Array(n);
+    for (let i = 0; i < n; i++) raw[i] = linToDb(mag[i]);
+    const s = this._runningMean(raw, UNEVEN_SMOOTH_POINTS);
+    const cap = this._analysisNyquistCapHz(r);
+    for (let i = 0; i < n; i++) {
+      if (freqs[i] >= cap) s[i] = NaN;
+    }
+    return s;
+  }
+
+  /** The depth-preserving despiked analysis curve: raw dB → 3-point running MEDIAN →
+   *  analysis-Nyquist cap. Serves notch Mode-A + all of Mode-B (FreqRespView.despikedCappedDb). */
+  _despikedCappedDb(r) {
+    const freqs = r.freqs, mag = r.magLin;
+    const n = freqs.length;
+    const raw = new Float64Array(n);
+    for (let i = 0; i < n; i++) raw[i] = linToDb(mag[i]);
+    const s = this._runningMedian(raw, NOTCH_DESPIKE_POINTS);
+    const cap = this._analysisNyquistCapHz(r);
+    for (let i = 0; i < n; i++) {
+      if (freqs[i] >= cap) s[i] = NaN;
+    }
+    return s;
+  }
+
+  /** window-point (odd) running median of v, centred + end-clamped. Non-finite taps
+   *  dropped; no finite tap → NaN (FreqRespView.runningMedian). */
+  _runningMedian(v, window) {
+    const n = v.length;
+    const half = window >> 1;
+    const out = new Float64Array(n);
+    const buf = new Float64Array(window);
+    for (let i = 0; i < n; i++) {
+      let cnt = 0;
+      for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) {
+        if (Number.isFinite(v[j])) buf[cnt++] = v[j];
+      }
+      if (cnt === 0) { out[i] = NaN; continue; }
+      const w = buf.slice(0, cnt);
+      w.sort((a, b) => a - b);
+      out[i] = (cnt % 2 === 1) ? w[(cnt / 2) | 0] : 0.5 * (w[cnt / 2 - 1] + w[cnt / 2]);
+    }
+    return out;
+  }
+
+  /** window-point (odd) centred running MEAN of v, end-clamped. Non-finite taps
+   *  dropped; no finite tap → NaN (FreqRespView.runningMean). */
+  _runningMean(v, window) {
+    const n = v.length;
+    const half = window >> 1;
+    const out = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      let sum = 0.0, cnt = 0;
+      for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) {
+        if (Number.isFinite(v[j])) { sum += v[j]; cnt++; }
+      }
+      out[i] = cnt > 0 ? sum / cnt : NaN;
+    }
+    return out;
+  }
+
+  /** NYQUIST_ANALYSIS_FRACTION × the measured curve's Nyquist; analysis frequencies
+   *  at or above this are ignored. Data-derived fallback when the stamped rate is
+   *  absent or wrong for the grid (FreqRespView.analysisNyquistCapHz). */
+  _analysisNyquistCapHz(r) {
+    const sr = r.sampleRate > 0 ? r.sampleRate : this._inputSampleRate();
+    const gridTop = this._highestFiniteFreqHz(r);
+    const nyqCap = NYQUIST_ANALYSIS_FRACTION * sr * 0.5;
+    if (sr <= 0 || (Number.isFinite(gridTop) && gridTop > sr * 0.5)) {
+      return Number.isFinite(gridTop) ? NYQUIST_ANALYSIS_FRACTION * gridTop : nyqCap;
+    }
+    return nyqCap;
+  }
+
+  /** The highest frequency in r's grid backed by a finite, positive magnitude — the
+   *  real top of the loaded/measured span. NaN when none (FreqRespView.highestFiniteFreqHz). */
+  _highestFiniteFreqHz(r) {
+    const freqs = r.freqs, mag = r.magLin;
+    if (!freqs || !mag) return NaN;
+    for (let i = freqs.length - 1; i >= 0; i--) {
+      if (Number.isFinite(mag[i]) && mag[i] > 0.0 && Number.isFinite(freqs[i])) {
+        return freqs[i];
+      }
+    }
+    return NaN;
+  }
+
+  /** The unevenness readout string for the active mode, or null when no result exists.
+   *  Shared by the in-canvas table + the external window (FreqRespView.unevennessReadout). */
+  _unevennessReadout() {
+    if (!Number.isFinite(this._unevenPlusDb)) return null;
+    const db = formatDbReadout(this._unevenPlusDb);
+    const lo = formatHzReadout(this._unevenLoHz);
+    const hi = formatHzReadout(this._unevenHiHz);
+    return this.prefs.freqRespUnevenMode.get() === UnevenMode.RANGE
+      ? t('freqResp.uneven.readout.range', db, lo, hi)
+      : t('freqResp.uneven.readout', lo, hi, db);
+  }
+
+  /** Paints the unevenness readout below the header buttons. When the compare table
+   *  is visible it stacks below it (FreqRespView.drawUnevennessTable). */
+  _drawUnevennessTable(g, plot, belowCompareTable) {
+    const text = this._unevennessReadout();
+    if (text == null) return;
+    g.font = '11px "Segoe UI", sans-serif';
+    g.textBaseline = 'top'; g.textAlign = 'left';
+    g.fillStyle = '#222';
+    const lineH = 14;
+    const x = plot.x + 6;
+    const y = OVERLAY_TABLE_TOP + (belowCompareTable ? 2 * lineH + 4 : 0);
+    g.fillText(text, x, y);
+  }
+
+  /** Draws the LEVEL / RANGE unevenness annotations, only while a Mode readout is
+   *  active (_unevenPlusDb finite). GREEN = the reference (RIAA) colour role; LILA =
+   *  the FILTER colour; every line dotted at the trace line width
+   *  (FreqRespView.drawUnevennessAnnotations). */
+  _drawUnevennessAnnotations(g, plot, freqMin, freqMax, magTop, magBot) {
+    if (!Number.isFinite(this._unevenPlusDb)) return;
+    const green = colorHex(this.prefs.freqRespReferenceColor.get());
+    const lila = FILTER_TRACE_COLOR;
+    const lw = this.prefs.freqRespLineWidth.get();
+    g.save();
+    g.beginPath();
+    g.rect(plot.x, plot.y, plot.w, plot.h);
+    g.clip();
+    g.lineWidth = lw;
+    g.setLineDash([1, 3]);   // SWT.LINE_DOT
+    if (this.prefs.freqRespUnevenMode.get() === UnevenMode.RANGE) {
+      this._drawUnevennessModeB(g, plot, freqMin, freqMax, magTop, magBot, green, lila);
+    } else {
+      this._drawUnevennessModeA(g, plot, freqMin, freqMax, magTop, magBot, green, lila);
+    }
+    g.setLineDash([]);
+    g.restore();
+  }
+
+  _drawUnevennessModeA(g, plot, freqMin, freqMax, magTop, magBot, green, lila) {
+    if (!Number.isFinite(this._unevenLoHz) || !Number.isFinite(this._unevenHiHz)
+        || !Number.isFinite(this._unevenThresholdDb)) {
+      return;
+    }
+    const xLo = this._freqToX(this._unevenLoHz, plot, freqMin, freqMax);
+    const xHi = this._freqToX(this._unevenHiHz, plot, freqMin, freqMax);
+    const yTh = Math.round(this._dbToY(this._unevenThresholdDb, plot, magTop, magBot));
+    // Green horizontal at the threshold, between the two boundaries.
+    g.strokeStyle = green;
+    g.beginPath(); g.moveTo(xLo, yTh); g.lineTo(xHi, yTh); g.stroke();
+    // Second green horizontal at the walk's reference extremum, same span.
+    if (Number.isFinite(this._unevenExtremumDb)) {
+      const yEx = Math.round(this._dbToY(this._unevenExtremumDb, plot, magTop, magBot));
+      g.beginPath(); g.moveTo(xLo, yEx); g.lineTo(xHi, yEx); g.stroke();
+    }
+    // Lila verticals at each boundary, full plot height.
+    g.strokeStyle = lila;
+    g.beginPath(); g.moveTo(xLo, plot.y); g.lineTo(xLo, plot.y + plot.h); g.stroke();
+    g.beginPath(); g.moveTo(xHi, plot.y); g.lineTo(xHi, plot.y + plot.h); g.stroke();
+  }
+
+  _drawUnevennessModeB(g, plot, freqMin, freqMax, magTop, magBot, green, lila) {
+    if (!Number.isFinite(this._unevenLoHz) || !Number.isFinite(this._unevenHiHz)) return;
+    const startHz = this._unevenLoHz;
+    const stopHz = this._unevenHiHz;
+    const xStart = this._freqToX(startHz, plot, freqMin, freqMax);
+    const xStop = this._freqToX(stopHz, plot, freqMin, freqMax);
+    // Lila verticals at start + stop, full plot height.
+    g.strokeStyle = lila;
+    g.beginPath(); g.moveTo(xStart, plot.y); g.lineTo(xStart, plot.y + plot.h); g.stroke();
+    g.beginPath(); g.moveTo(xStop, plot.y); g.lineTo(xStop, plot.y + plot.h); g.stroke();
+    // Second green horizontal — the range's extremum of interest between the boundaries.
+    if (Number.isFinite(this._unevenExtremumDb)) {
+      g.strokeStyle = green;
+      const yExt = Math.round(this._dbToY(this._unevenExtremumDb, plot, magTop, magBot));
+      g.beginPath(); g.moveTo(xStart, yExt); g.lineTo(xStop, yExt); g.stroke();
+    }
+    // Crossing levels where each vertical meets the DESPIKED-RAW, capped curve.
+    const src = this._activeChannelResult();
+    if (src == null) return;
+    const freqs = src.freqs;
+    const sdb = this._despikedCappedDb(src);
+    const dbStart = interpFromArray(freqs, sdb, startHz);
+    const dbStop = interpFromArray(freqs, sdb, stopHz);
+    if (!Number.isFinite(dbStart) || !Number.isFinite(dbStop)) return;
+    g.strokeStyle = green;
+    if (Math.abs(dbStart - dbStop) <= UNEVEN_LEVEL_EPS_DB) {
+      // Equal levels → one full-width green horizontal at that level.
+      const y = Math.round(this._dbToY(0.5 * (dbStart + dbStop), plot, magTop, magBot));
+      g.beginPath(); g.moveTo(plot.x, y); g.lineTo(plot.x + plot.w, y); g.stroke();
+    } else {
+      const yStart = Math.round(this._dbToY(dbStart, plot, magTop, magBot));
+      const yStop = Math.round(this._dbToY(dbStop, plot, magTop, magBot));
+      g.beginPath(); g.moveTo(xStart - UNEVEN_TICK_HALF_PX, yStart); g.lineTo(xStart + UNEVEN_TICK_HALF_PX, yStart); g.stroke();
+      g.beginPath(); g.moveTo(xStop - UNEVEN_TICK_HALF_PX, yStop); g.lineTo(xStop + UNEVEN_TICK_HALF_PX, yStop); g.stroke();
+    }
+  }
+
+  /** Integer canvas x for frequency f (Java freqToX with round=true). */
+  _freqToX(f, plot, freqMin, freqMax) {
+    return plot.x + Math.round(this._freqToXFraction(f, freqMin, freqMax) * plot.w);
+  }
+
+  /** Y for a dB value (Java dbToYf) — unclamped; clipped at the frame. */
+  _dbToY(d, plot, magTop, magBot) {
+    return plot.y + (magTop - d) / (magTop - magBot) * plot.h;
+  }
+
+  // ===========================================================================
+  // External measurement tool window surface (FreqRespView tableExtracted /
+  // setTableExtracted / syncExternalShell / paintExternalReadout).
+  //
+  // The web port keeps the DOM float window in the pane (mirrors fft-view/fft-pane):
+  // the view owns the transient tableExtracted flag + the painter + the content size,
+  // and fires _onExternalSync so the pane can open/close/repaint its float window.
+  // ===========================================================================
+
+  /** Docks / extracts the measurement readout into its own window. */
+  setTableExtracted(extracted) {
+    if (extracted === this.tableExtracted) return;
+    this.tableExtracted = extracted;
+    this._syncExternalShell();
+    this.render();
+  }
+
+  /** Notifies the pane (which owns the DOM float window) that the extracted state or
+   *  the underlying data changed, so it can open/close/repaint. Isolated views never
+   *  extract (FreqRespView.syncExternalShell). */
+  _syncExternalShell() {
+    if (this.isolated) return;
+    if (this._onExternalSync) this._onExternalSync();
+  }
+
+  /** true when the external window should be open: extracted, not isolated, and a
+   *  measurement is loaded (FreqRespView.syncExternalShell wantOpen). */
+  externalWantOpen() {
+    return this.tableExtracted && !this.isolated && this.hasAnyResult();
+  }
+
+  /** Natural content size (CSS px) of the extracted readout (FreqRespView EXT_CONTENT_*). */
+  externalContentSize() {
+    return { width: EXT_CONTENT_W, height: EXT_CONTENT_H };
+  }
+
+  /** Paints the same active-compare min/max + unevenness readout lines the in-canvas
+   *  tables show, from the live fields, into the external window's canvas context at
+   *  vertical offset `top` (FreqRespView.paintExternalReadout). */
+  paintExternalReadout(g, top = 0) {
+    g.font = '11px "Segoe UI", sans-serif';
+    g.textBaseline = 'top'; g.textAlign = 'left';
+    g.fillStyle = '#222';
+    const x = EXT_LEFT_PAD;
+    let y = top + EXT_LEFT_PAD;
+    const lineH = 14;
+    if (this._compareActive()
+        && !Number.isNaN(this.compareSmoothedMin) && !Number.isNaN(this.compareSmoothedMax)) {
+      g.fillText('max: ' + formatDbReadout(this.compareSmoothedMax), x, y);
+      y += lineH;
+      g.fillText('min: ' + formatDbReadout(this.compareSmoothedMin), x, y);
+      y += lineH;
+    }
+    const uneven = this._unevennessReadout();
+    if (uneven != null) {
+      g.fillText(uneven, x, y);
+    }
   }
 
   // ----- crosshair (FreqRespView.drawCrosshair) -----
@@ -891,7 +1625,7 @@ export class FreqRespView {
     let magFrac = (this._mouseY - plot.y) / plot.h;
     if (magFrac < 0) magFrac = 0; if (magFrac > 1) magFrac = 1;
     lines.push('y = ' + formatDbReadout(magTop - magFrac * (magTop - magBot)));
-    const compareActive = prefs.freqRespCompareMode.get() && prefs.freqRespShowRiaa.get() && this.hasAnyResult();
+    const compareActive = this._compareActive();
     if (compareActive) {
       // Compare mode draws the smoothed (measured − reference) curve — interpolate the
       // SAME anchor-shifted array so the Δ readout agrees with what's on screen.
@@ -1133,7 +1867,7 @@ export class FreqRespView {
    *  fits whichever curve the user is currently looking at. */
   autoSetupMagnitudeRange() {
     const prefs = this.prefs;
-    if (prefs.freqRespCompareMode.get() && prefs.freqRespShowRiaa.get() && this.hasAnyResult()) {
+    if (this._compareActive()) {
       this.autoSetupCompare();
       return;
     }
@@ -1188,7 +1922,7 @@ export class FreqRespView {
     const prefs = this.prefs;
     // Compare mode draws the diff curve, not the raw traces — keep the headroom above the
     // compared-signal peak (compareSmoothedMax), not leftResult/right (FreqRespView.softMagTopDb).
-    if (prefs.freqRespCompareMode.get()) {
+    if (this._compareActive()) {
       return Number.isFinite(this.compareSmoothedMax)
         ? Math.max(topPref, this.compareSmoothedMax + MAG_HEADROOM_DB) : topPref;
     }
@@ -1339,6 +2073,26 @@ function formatPhaseReadout(deg) {
   return formatSignificant(deg, 4) + '°';
 }
 
+/** Linear magnitude → dB, non-positive → -300 (FreqRespFormat.linToDb). */
+function linToDb(linear) {
+  return linear > 0.0 ? 20.0 * Math.log10(linear) : -300.0;
+}
+
+/** Compact frequency label for the unevenness readout: sub-kHz values read in whole
+ *  Hz ("20 Hz"), ≥ 1 kHz values switch to kHz with up to three significant fraction
+ *  digits and no trailing zeros (FreqRespFormat.formatHzReadout). */
+function formatHzReadout(hz) {
+  if (!Number.isFinite(hz) || hz < 0.0) return '—';
+  if (hz < 1000.0) {
+    return hz.toFixed(0) + ' Hz';
+  }
+  let s = (hz / 1000.0).toFixed(3);
+  if (s.indexOf('.') >= 0) {
+    s = s.replace(/0+$/, '').replace(/\.$/, '');
+  }
+  return s + ' kHz';
+}
+
 /** Log-frequency linear interpolation of a value array aligned 1:1 with a freq grid
  *  (e.g. the cached smoothed-diff array). NaN when f is outside the grid or either
  *  bracketing sample is NaN. Mirrors FreqRespView.interpFromArray. */
@@ -1347,8 +2101,73 @@ function interpFromArray(freqs, vals, f) {
   if (f < freqs[0] || f > freqs[freqs.length - 1]) return NaN;
   let lo = 0, hi = freqs.length - 1;
   while (hi - lo > 1) { const mid = (lo + hi) >>> 1; if (freqs[mid] <= f) lo = mid; else hi = mid; }
-  const v0 = vals[lo], v1 = vals[hi];
+  const v0 = vals[lo];
+  // Exact grid hit → the left sample IS the answer; don't require the right neighbour
+  // (it may be NaN at the Nyquist-analysis cap boundary). Mirrors FreqRespView.interpFromArray.
+  if (freqs[lo] === f) return v0;
+  const v1 = vals[hi];
   if (Number.isNaN(v0) || Number.isNaN(v1)) return NaN;
-  const t = (Math.log(f) - Math.log(freqs[lo])) / (Math.log(freqs[hi]) - Math.log(freqs[lo]));
-  return v0 + t * (v1 - v0);
+  const frac = (Math.log(f) - Math.log(freqs[lo])) / (Math.log(freqs[hi]) - Math.log(freqs[lo]));
+  return v0 + frac * (v1 - v0);
+}
+
+/** Immutable snapshot of every filter pref that shapes the ideal-filter curve. Equality
+ *  drives the FilterDesign rebuild and extends the compare-diff cache key. build() maps
+ *  the active mode (spec vs order) to the matching FilterDesign factory. Faithful port of
+ *  FreqRespView.FilterParams. */
+class FilterParams {
+  constructor(type, response, modeOrder, rippleDb, stopAttenDb, centerHz, passHz, stopHz,
+              orderPassHz, orderRippleDb, order, q) {
+    this.type = type;
+    this.response = response;
+    this.modeOrder = modeOrder;
+    this.rippleDb = rippleDb;
+    this.stopAttenDb = stopAttenDb;
+    this.centerHz = centerHz;
+    this.passHz = passHz;
+    this.stopHz = stopHz;
+    this.orderPassHz = orderPassHz;
+    this.orderRippleDb = orderRippleDb;
+    this.order = order;
+    this.q = q;
+  }
+
+  /** The per-type params map is the single source of truth for every scalar; the type +
+   *  response selectors stay their own prefs (FreqRespView.FilterParams.of). */
+  static of(p) {
+    const type = p.freqRespFilterType.get();
+    const fp = p.getFreqRespFilterParams(type);
+    return new FilterParams(
+      type, p.freqRespFilterResponse.get(),
+      fp.modeOrder,
+      fp.rippleDb, fp.stopAttenDb,
+      fp.centerHz, fp.passHz,
+      fp.stopHz,
+      fp.orderPassHz, fp.orderRippleDb,
+      fp.order, fp.q);
+  }
+
+  /** Value equality across every scalar (Lombok @EqualsAndHashCode in Java). */
+  equals(o) {
+    return o != null
+      && this.type === o.type && this.response === o.response
+      && this.modeOrder === o.modeOrder
+      && this.rippleDb === o.rippleDb && this.stopAttenDb === o.stopAttenDb
+      && this.centerHz === o.centerHz && this.passHz === o.passHz && this.stopHz === o.stopHz
+      && this.orderPassHz === o.orderPassHz && this.orderRippleDb === o.orderRippleDb
+      && this.order === o.order && this.q === o.q;
+  }
+
+  /** Builds the design for the active mode, or null when the factory rejects the params
+   *  (out-of-range spec, degenerate band) (FreqRespView.FilterParams.build). */
+  build() {
+    try {
+      return this.modeOrder
+        ? FilterDesign.ofOrder(this.type, this.response, this.order, this.orderRippleDb, this.orderPassHz, this.q)
+        : FilterDesign.ofSpec(this.type, this.response, this.rippleDb, this.stopAttenDb,
+            this.centerHz, this.passHz, this.stopHz);
+    } catch (ex) {
+      return null;
+    }
+  }
 }

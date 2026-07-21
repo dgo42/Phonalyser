@@ -160,17 +160,103 @@ const SPECS = [
     } },
 
   // ── New help pages this sync: the Tune-notch + DAC-predistortion dialogs ─────────────
-  { id: 'tune-notch', file: 'tune-notch.png', ready: true,
-    shot: (page) => showModal(page, 'tuneNotchModal'), after: (page) => hideModal(page, 'tuneNotchModal') },
+  // tune-notch.png is NOT captured here: the Java help ships a LIVE-capture shot
+  // (a real measured notch response in the plot) that the static modal render can't
+  // match — the web help uses the Java image verbatim (copied by sync-help; per the
+  // maintainer, 2026-07-12). Re-enable only if a live web capture is ever scripted.
   { id: 'dac-predistortion', file: 'dac-predistortion-wizard.png', ready: true,
     shot: (page) => showModal(page, 'predistModal'), after: (page) => hideModal(page, 'predistModal') },
+
+  // ── Device-profile sync dialogs this round: the unified ADC/DAC Calibration dialog +
+  //    the Card editor. #calibrationModal is ONE element reused for ADC and DAC — each
+  //    opener sets its own title/prompt — so we drive the real openers and hide between shots.
+  // ADC calibration: the scope / FFT Utility crosshair only opens with a live measured Vrms
+  // (FftView.getLastVrms → its last analysis). Headless has no live signal, so seed a synthetic
+  // last result and drive the FFT ADC-calibrate handler — the SAME unified dialog the scope
+  // Utility path opens (both call openAdc with calibrate.title / calibrate.input).
+  { id: 'adc-cal', file: 'ADC calibration.png', ready: true,
+    async shot(page) {
+      await page.evaluate(() => {
+        if (window.__fftPane && window.__fftPane.view) window.__fftPane.view._last = { fundamentalLinear: 0.5 };
+        document.getElementById('fftAdcCalibrate').click();
+      });
+      await page.waitForSelector('#calibrationModal.show', { timeout: 5000 });
+      await page.waitForTimeout(400);
+      return page.$('#calibrationModal .modal-content');
+    },
+    after: async (page) => {
+      await hideModal(page, 'calibrationModal');
+      await page.evaluate(() => { if (window.__fftPane && window.__fftPane.view) window.__fftPane.view._last = null; });
+    } },
+  // DAC calibration: the generator crosshair (#calibrateDac) opens the same modal titled
+  // "DAC calibration", seeded from the configured amplitude (default 0.5 Vrms > 0) — no live
+  // signal needed.
+  { id: 'dac-cal', file: 'DAC calibration.png', ready: true,
+    async shot(page) {
+      await page.evaluate(() => document.getElementById('calibrateDac').click());
+      await page.waitForSelector('#calibrationModal.show', { timeout: 5000 });
+      await page.waitForTimeout(400);
+      return page.$('#calibrationModal .modal-content');
+    }, after: (page) => hideModal(page, 'calibrationModal') },
+  // Card editor: open Preferences → Audio (its show.bs.modal populates the card combos from the
+  // seeded catalog), select the first real card so the pencil (edit) button enables, then open
+  // the card editor on it. Clip the (stacked) card-editor modal; hide it then close Preferences.
+  { id: 'card-editor', file: 'Card editor.png', ready: true,
+    async shot(page) {
+      await openPrefs(page, 'audio');
+      await page.evaluate(() => {
+        // Pick the E1DA card BY NAME: binding re-puts the profile, which can
+        // reorder the store — index 0 then points at a different card on the
+        // next language pass (uk once seeded CUBILUX while en/de had E1DA).
+        const sel = document.getElementById('inCardSel');
+        const opt = [...sel.options].find((o) => o.textContent.trim() === 'E1DA Cosmos ADC');
+        sel.value = opt ? opt.value : '0';
+        sel.dispatchEvent(new Event('change'));
+      });
+      await page.waitForTimeout(400);
+      await page.evaluate(() => {
+        document.getElementById('inCardEdit').disabled = false;   // ensure the click fires the handler
+        document.getElementById('inCardEdit').click();
+      });
+      await page.waitForSelector('#cardEditorModal.show', { timeout: 5000 });
+      await page.waitForTimeout(400);
+      return page.$('#cardEditorModal .modal-content');
+    },
+    after: async (page) => { await hideModal(page, 'cardEditorModal'); await closePrefs(page); } },
 
   // ── Preferences dialog tabs (part 2, landed). Every prefs spec closes the modal
   //    after its capture (`after`), so later specs never sit under a leftover backdrop.
   { id: 'prefs-lookfeel', file: 'Preferences Look and Feel.png', ready: true,
     async shot(page) { return openPrefs(page, 'lookAndFeel'); }, after: closePrefs },
   { id: 'prefs-audio',    file: 'Preferences Audio.png',         ready: true,
-    async shot(page) { return openPrefs(page, 'audio'); }, after: closePrefs },
+    async shot(page) {
+      await openPrefs(page, 'audio');
+      // Stage the REAL bench pairing for the shot (headless enumerates only a
+      // bare "Default" device): bind the I2SoverUSB card on the output side
+      // (the input side is bound to the E1DA card by the card-editor spec),
+      // then relabel the two device combos with the hardware names the
+      // maintainer's live machine shows. Values/FS readouts stay the true
+      // seeded card values; only the device LABEL text is staged.
+      await page.evaluate(() => {
+        const out = document.getElementById('outCardSel');
+        const opt = [...out.options].find((o) => o.textContent.trim() === 'I2SoverUSB');
+        if (opt) { out.value = opt.value; out.dispatchEvent(new Event('change')); }
+      });
+      await page.waitForTimeout(400);
+      await page.evaluate(() => {
+        const label = (sel, text) => {
+          const o = sel.selectedOptions[0] || sel.options[0];
+          if (o) { o.textContent = text; o.selected = true; }
+        };
+        label(document.getElementById('inSel'), 'Line In (E1DA Cosmos ADC)');
+        label(document.getElementById('outSel'), 'Speakers (I2SoverUSB)');
+        // The rate combos show the (fake) capture device's native rate — stage the
+        // bench hardware's 384 kHz like the device labels.
+        label(document.getElementById('inRate'), '384000 Hz');
+        label(document.getElementById('outRate'), '384000 Hz');
+      });
+      return page.$('#prefsModal .modal-content');
+    }, after: closePrefs },
   { id: 'prefs-scope',    file: 'Preferences Oscilloscope.png',  ready: true,
     async shot(page) { return openPrefs(page, 'oscilloscope'); }, after: closePrefs },
   { id: 'prefs-fft',      file: 'Preferences FFT.png',           ready: true,
@@ -196,6 +282,8 @@ const SPECS = [
   fftTab('fft-tab-load',     'FFT - Load from.png',        'fftLoadPanel'),
   frTab('fr-tab-settings', 'FreqResp - Settings.png',         'frSettings'),
   frTab('fr-tab-riaa',     'FreqResp - RIAA IEC.png',         'frRiaaPanel'),
+  frTab('fr-tab-filters',  'FreqResp - Filters.png',          'frFilterPanel'),
+  frTab('fr-tab-uneven',   'FreqResp - Unevenness.png',       'frUnevenPanel'),
   frTab('fr-tab-presets',  'FreqResp - Presets.png',          'frPresetsPanel'),
   frTab('fr-tab-utility',  'FreqResp - Utility.png',          'frUtility'),
   frTab('fr-tab-cal',      'FreqResp - Load calibration.png', 'frCalPanel'),
@@ -212,13 +300,50 @@ const want = argv.filter((a) => !a.startsWith('--'));
 const todo = SPECS.filter((s) => (want.length ? want.includes(s.id) : true));
 
 const { s, port } = await serve();
-const browser = await chromium.launch();
+// Classic (always-visible) scrollbars: Playwright's bundled headless shell
+// draws OVERLAY scrollbars that hide when idle, so a scrolling pane (the
+// Preferences Audio tab) captures without its scrollbar. The installed desktop
+// Chrome/Edge in new-headless mode renders the same classic scrollbars a real
+// Windows browser shows — use it, preferring Chrome, falling back to Edge,
+// then to the bundled shell (shots then lack scrollbars, better than failing).
+// --headed: run a visible browser — headless Chromium (any shell/channel) forces
+// overlay scrollbars (crbug), so a shot that must show a classic scrollbar (the
+// scrolling Audio tab) needs a real headed window.
+const headed = argv.includes('--headed');
+// Headed also gets FAKE media devices: a headed browser without mic permission
+// enumerates devices with EMPTY labels, so the app's device combo comes up blank
+// and no card can bind. The fake devices give the whole pipeline something real
+// to resolve against (the audio spec re-labels the visible combo text afterwards).
+const headedArgs = ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'];
+let browser = null;
+for (const channel of ['chrome', 'msedge', undefined]) {
+  try {
+    browser = await chromium.launch({
+      ...(channel ? { channel } : {}),
+      headless: !headed,
+      args: headed ? headedArgs : [],
+    });
+    break;
+  } catch { /* channel not installed — try the next */ }
+}
 const ctx = await browser.newContext({ viewport: VIEW, deviceScaleFactor: 1 });
+// Suppress the startup Tip-of-the-day popup so it never overlaps a captured pane
+// (it docks bottom-left and would cover the generator's lower controls). Seeding
+// only showTipsAtStartup=false leaves every other pref at its default and the
+// device store (a separate key) untouched.
+await ctx.addInitScript(() => {
+  try { localStorage.setItem('phonalyser.preferences', JSON.stringify({ showTipsAtStartup: false })); } catch { /* ignore */ }
+});
 const page = await ctx.newPage();
 // 'load' + the #scopePane wait below, NOT 'networkidle': the libflac wasm
 // loader leaves its /vendor/libflac/*.wasm response body unconsumed, so the
 // network never idles and a networkidle gate times out (the app itself is up).
 await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
+// CAPTURE-ONLY classic scrollbar: every headless Chromium mode draws OVERLAY
+// scrollbars that vanish when idle (crbug), so the scrolling Preferences Audio
+// pane would screenshot without its scrollbar — unlike real desktop Chrome on
+// Windows, which shows the classic bar. Style a webkit scrollbar (always
+// rendered) to match the Windows look; the shipped app.css is untouched.
 await page.waitForSelector('#scopePane', { timeout: 10000 }).catch(() => {});
 await page.waitForTimeout(500);   // let layout/fonts settle
 

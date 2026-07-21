@@ -11,7 +11,7 @@
  * the narrow injected `host` object — mirroring Java FftTabControl→FftPane.Host
  * (getResult / setResult / applyPrefsToUi). The FFT NumericStepFields (manual-fundamental)
  * are built in app.js's initStepFields and reached here via the injected getField; the
- * io / fftViewCorrection / frcStore / restartFft / tileChips collaborators + the shared
+ * io / fftViewCorrection / store / restartFft / tileChips collaborators + the shared
  * confirm dialog are injected too.
  */
 import { t } from '../i18n/i18n.js';
@@ -35,15 +35,16 @@ export class FftTabControl {
   /**
    * @param engine the AudioEngine (FFT structural changes restart the FFT consumer via host).
    * @param prefs  Preferences.
-   * @param deps   {host, fftView, fftViewCorrection, frcStore, getField, io, restartFft,
+   * @param deps   {host, fftView, fftViewCorrection, store, getField, io, restartFft,
    *                showConfirm, setStatus, tileChips}
    *   - host: the narrow FFT-PANE seam (Java FftTabControl.Host) —
    *       getResult() (=> latestResult, the live analyzed spectrum: Save / ADC-calibrate read it),
    *       setResult(r) (a loaded .fft spectrum → latestResult + resultDirty so the render loop paints it),
    *       applyPrefsToUi() (a preset recall re-seeds the main FFT controls: app.js applyPrefsToUi).
    *   - fftView: the FFT view (applyPrefs() re-reads colour/line/axis prefs on a preset recall).
-   *   - fftViewCorrection: the render-time FFT spectral corrections (setFrcCalibration on a .frc load).
-   *   - frcStore: the shared loaded-.frc store (render-time de-embed + predistortion calResponseAt).
+   *   - fftViewCorrection: the render-time FFT spectral corrections (reads the shared store).
+   *   - store: the shared FFT CorrectionStore (Java FftController's) — rebuildCalEntries mutates it;
+   *       both the render-time de-embed (fftViewCorrection) and the predistortion calResponseAt read it.
    *   - getField: (id) => the FFT NumericStepField (built in app.js initStepFields).
    *   - io: {saveFile, openFile, bytesToText, loadFrc, saveSpectrum, loadSpectrum, FFT_TYPE, FRC_TYPE} —
    *       the file save / load collaborators.
@@ -52,20 +53,23 @@ export class FftTabControl {
    *   - setStatus: (msg) => set the status line.
    *   - tileChips: (...vals) => the `.tile` chip-span renderer (shared with the scope tiles, app.js).
    */
-  constructor(engine, prefs, { host, fftView, fftViewCorrection, frcStore, getField, io,
-    restartFft, showConfirm, setStatus, tileChips }) {
+  constructor(engine, prefs, { host, fftView, fftViewCorrection, store, getField, io,
+    restartFft, showConfirm, setStatus, tileChips, calibrationDialog }) {
     this.engine = engine;
     this.prefs = prefs;
     this.host = host;
     this.fftView = fftView;
     this.fftViewCorrection = fftViewCorrection;
-    this.frcStore = frcStore;
+    this.store = store;
     this._getField = getField;
     this.io = io;
     this._restartFft = restartFft;
     this._showConfirm = showConfirm;
     this._setStatus = setStatus;
     this._tileChips = tileChips;
+    // The unified ADC/DAC calibration dialog (Java CalibrationDialog), late-bound
+    // (built after this control) — () => the shared dialog instance.
+    this._calibrationDialog = calibrationDialog;
     this.fftAnalyzer = new FftAnalyzer();
   }
 
@@ -124,7 +128,7 @@ export class FftTabControl {
     $('#thdTabSub').html(this.titledChips(...chips));
   }
   updateCalTabSub() {
-    const n = this.frcStore.length;
+    const n = this.store.getEntries().length;
     $('#calTabSub').html(n <= 0 ? '' : this._tileChips(n === 1 ? t('calibration.tile.loaded') : t('calibration.tile.loadedN', n)));
   }
   updatePresetTabSub() {
@@ -148,7 +152,8 @@ export class FftTabControl {
   refreshStopAfterEnable() {
     const forever = !Number.isFinite(this.fftAveragesValue());
     $('#fftStopAfterNEn').prop('disabled', !forever);
-    $('#fftStopAfterN').prop('disabled', !(forever && $('#fftStopAfterNEn').is(':checked')));
+    const f = this._getField('fftStopAfterN');
+    if (f) f.setDisabled(!(forever && $('#fftStopAfterNEn').is(':checked')));
   }
 
   syncAlign() {
@@ -233,7 +238,11 @@ export class FftTabControl {
     $('#align').val(prefs.fftAlignGenerator.get() === 'FLL' ? 'fll' : 'off');
     // Stop-after-N (enable + count) and mains-suppression combo (FftTabControl).
     $('#fftStopAfterNEn').prop('checked', prefs.fftStopAfterNEnabled.get());
-    $('#fftStopAfterN').val(prefs.fftStopAfterN.get()).prop('disabled', !prefs.fftStopAfterNEnabled.get());
+    // Stop-after-N NumericStepField (Java stopAfterNField) — push the pref count into the field
+    // (setValue is silent) and grey it when the toggle is off; the full forever-AND-checked gate
+    // is recomputed by refreshStopAfterEnable() off the averages/checkbox flow.
+    const fStopN = this._getField('fftStopAfterN');
+    if (fStopN) { fStopN.setValue(prefs.fftStopAfterN.get()); fStopN.setDisabled(!prefs.fftStopAfterNEnabled.get()); }
     $('#fftMains').val(prefs.fftMainsSuppression.get());
 
     $('.fft-pane .lr.l, .fft-pane .lr.r').removeClass('on');
@@ -343,6 +352,7 @@ export class FftTabControl {
     const prefs = this.prefs;
     const engine = this.engine;
     const io = this.io;
+    const getField = (id) => this._getField(id);
     const restartFft = () => this._restartFft();
     const showConfirm = (title, message) => this._showConfirm(title, message);
 
@@ -354,31 +364,19 @@ export class FftTabControl {
     // writes prefs.fftAverages, refreshes the stop-after gate + tab tile, and restarts the FFT — so
     // there is no plain jQuery change handler here, and no ∞ checkbox (∞ is the top of the series).
     $('#coherent').on('change', () => prefs.fftCoherentAveraging.set($('#coherent').is(':checked')));
-    // Stop-after-N (enable gates the count field) and mains-suppression combo —
+    // Stop-after-N enable (gates the count field) and mains-suppression combo —
     // persisted to prefs (FftTabControl bindings); no engine restart / accumulator reset
     // (Java FftView never wires these to resetStatistics). BUT the running FftController reads
     // config.stopAfterNEnabled / config.stopAfterN every tick (fft-controller _onWorkerResult),
     // so a live toggle MUST push into engine.config — else enabling stop-after mid-run had no
     // effect until a restart (#9): the ∞-target run kept going past N because config was stale.
     // host.readConfig() refreshes the whole config snapshot from the live UI (incl. these two).
+    // The count itself is a NumericStepField (Java stopAfterNField): its model clamps to 2..1e6,
+    // the wheel jumps by 100 and arrows by 1 — its onChange is rebound below (like averages).
     $('#fftStopAfterNEn').on('change', () => {
       prefs.fftStopAfterNEnabled.set($('#fftStopAfterNEn').is(':checked'));
       this.refreshStopAfterEnable();
       if (engine.running) this.host.readConfig();
-    });
-    $('#fftStopAfterN').on('change', () => {
-      prefs.fftStopAfterN.set(Math.max(2, Math.min(1000000, parseInt($('#fftStopAfterN').val(), 10) || 10)));
-      if (engine.running) this.host.readConfig();
-    });
-    // Coarse wheel step of 100 (Java STOP_AFTER_WHEEL_STEP) — arrows still step by 1, the
-    // wheel jumps in hundreds since the count ranges up to 1,000,000.
-    $('#fftStopAfterN').on('wheel', function (ev) {
-      if ($(this).prop('disabled')) return;
-      ev.preventDefault();
-      const dir = ev.originalEvent.deltaY < 0 ? 1 : -1;
-      const cur = parseInt($(this).val(), 10) || 10;
-      const next = Math.max(2, Math.min(1000000, cur + dir * 100));
-      $(this).val(next).trigger('change');
     });
     $('#fftMains').on('change', () => prefs.fftMainsSuppression.set($('#fftMains').val()));
 
@@ -492,6 +490,17 @@ export class FftTabControl {
         if (engine.running) this.host.readConfig();
       };
     }
+    // Stop-after-N COUNT (Java stopAfterNField): NO reset — write the pref and push the live
+    // config so the running consumer sees the new N next tick (like the enable toggle above).
+    // The field model clamps to 2..1e6 (Java STOP_AFTER_MIN/MAX), so no re-clamp here. Rebind
+    // its onChange here (bind() runs after initStepFields, where it was a placeholder).
+    const fStopN = this._getField('fftStopAfterN');
+    if (fStopN) {
+      fStopN.onChange = (v) => {
+        prefs.fftStopAfterN.set(v);
+        if (engine.running) this.host.readConfig();
+      };
+    }
     // THD "Manual fundamental" VALUE (Java fftManualFundVrmsProperty → onThdSettingChanged,
     // FftView.java:478): a THD setting — never a restart/reset. The app.js-built field's
     // onChange restartFft()'d when enabled (an over-reset mid-run, and a no-op while stopped
@@ -541,12 +550,10 @@ export class FftTabControl {
     // AbstractPane.renderOffscreen printing a fresh FftPane.createSnapshotClone at the
     // target size (no bitmap scaling).
     registerShotCanvasRenderer('spec', (cssW, cssH) => this.renderSpecShotCanvas(cssW, cssH));
-    // ADC calibration (Java FftTabControl.openCalibrationDialog → its OWN AdcCalibrationDialog):
-    // rescale adcFsVoltageRms so the FFT's measured fundamental Vrms matches the user-entered
-    // actual amplitude. Uses an FFT-dedicated #fftAdcCalModal (its own fields + OK, mirroring the
-    // scope's #adcCalModal / DacCalibrationDialog pattern — Java builds a fresh dialog per pane,
-    // never a shared one, so there is no cross-pane OK collision), seeded from the live
-    // fundamental Vrms (FftView.getLastVrms). No live Vrms → the localized info dialog (Java
+    // ADC calibration (Java FftTabControl.openCalibrationDialog): opens the unified two-row
+    // CalibrationDialog seeded analyzed-channel-only with the OPEN-time fundamental Vrms of the
+    // FFT's analyzed channel (FftView.getLastVrms); the dialog owns the OK write (per-channel on a
+    // bound stereo card, shared otherwise). No live Vrms → the localized info dialog (Java
     // Dialogs.info with calibrate.title / calibrate.error.noVrms), never a raw prompt.
     $('#fftAdcCalibrate').on('click', () => {
       const measured = this.fftView.getLastVrms();
@@ -554,24 +561,8 @@ export class FftTabControl {
         this._showConfirm(t('calibrate.title'), t('calibrate.error.noVrms'));
         return;
       }
-      $('#fftAdcCalCurrent').text(t('calibrate.current', measured.toFixed(6) + ' V'));
-      $('#fftAdcCalValue').val(measured.toFixed(6));   // seed with the live reading
-      $('#fftAdcCalError').addClass('d-none');
-      window.bootstrap.Modal.getOrCreateInstance(document.getElementById('fftAdcCalModal')).show();
-    });
-    $('#fftAdcCalOk').on('click', () => {
-      const measured = this.fftView.getLastVrms();
-      const actual = parseFloat(String($('#fftAdcCalValue').val()).replace(',', '.'));
-      // Mirror AdcCalibrationDialog: inline error on a non-positive / unparsable value, keep
-      // the dialog open; else rescale the ADC full-scale and reflect it in the prefs field.
-      if (!(measured > 0) || !(actual > 0) || !Number.isFinite(actual)) {
-        $('#fftAdcCalError').removeClass('d-none');
-        return;
-      }
-      prefs.setAdcFsVoltageRms(prefs.adcFsVoltageRms.get() * (actual / measured));
-      prefs.save();
-      $('#adcFsVrms').val(prefs.adcFsVoltageRms.get().toFixed(6));
-      window.bootstrap.Modal.getOrCreateInstance(document.getElementById('fftAdcCalModal')).hide();
+      const dlg = this._calibrationDialog && this._calibrationDialog();
+      if (dlg) dlg.openAdc(measured, prefs.fftChannel.get());
     });
 
     // ----- FFT "Save to…" / "Load from…" -----
@@ -629,7 +620,7 @@ export class FftTabControl {
 
     // ----- FFT Calibration panel (Java FftTabControl.buildCalibrationTab): a multi-row .frc cascade.
     // Each row is one loaded file with Active + With-noise; all Active rows are de-embedded in sequence
-    // (fftViewCorrection.setFrcEntries). "With noise" → that row's correctAllBins: every FFT bin (noise
+    // (rebuilt into the shared store). "With noise" → that row's correctAllBins: every FFT bin (noise
     // floor incl.) corrected when on, harmonic/dot bins only when off. Row 0 is always present and hides
     // its Remove.
     //
@@ -702,16 +693,15 @@ export class FftTabControl {
       $rows.first().find('.fcal-remove').css('visibility', 'hidden');   // row 0 keeps its column, hides Remove
     };
     const rebuildCalEntries = () => {
-      const entries = [];
+      const store = this.store;
+      store.clearAll();
       $('#fftCalRows .fft-cal-row').each(function () {
         const $row = $(this), stereo = $row.data('stereo');
         if (stereo && $row.find('.fcal-active').is(':checked')) {
-          entries.push({ calibration: { left: stereo.left, right: stereo.right }, withNoise: $row.find('.fcal-noise').is(':checked') });
+          store.addEntry({ left: stereo.left, right: stereo.right },
+            $row.data('frcName') || '(unnamed)', $row.find('.fcal-noise').is(':checked'));
         }
       });
-      this.fftViewCorrection.setFrcEntries(entries);
-      this.frcStore.length = 0;
-      for (const e of entries) this.frcStore.push(e);
       this.updateCalTabSub();
       // #24 follow-up: a cal change must also apply to a STOPPED FFT (Java: the .frc
       // de-embed is a plot-time transform over the raw lastResult — a toggle there just
@@ -848,7 +838,7 @@ export class FftTabControl {
 
     // In-session .frc save live-reload (Java FftTabControl subscribes CALIBRATION_FILE_SAVED →
     // onCalibrationFileSaved): if any loaded calibration row references the just-saved file,
-    // re-apply the rows through fftViewCorrection.setFrcEntries so the new curve takes effect
+    // re-apply the rows through the shared store (rebuildCalEntries) so the new curve takes effect
     // without re-browsing. Across-reload restoration is handled by restoreCalRows() above (the
     // .frc text is persisted in the file-store, #5); this only refreshes from the in-memory rows.
     MessageBus.instance().subscribe(Events.CALIBRATION_FILE_SAVED, (path) => {

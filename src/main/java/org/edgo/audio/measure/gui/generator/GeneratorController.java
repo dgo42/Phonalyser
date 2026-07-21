@@ -130,7 +130,21 @@ public final class GeneratorController {
             setAmplitudeVrms(v);
             publishSignalChanged();
         });
-        onPref(prefs.dacFsVoltageAmplProperty(), this::setDacFsVoltageAmpl);
+        onPref(prefs.dacFsVoltageAmplProperty(), v -> {
+            // Left full-scale drives the generator's mono amplitude AND the
+            // per-lane ratio (scaleR = fsLeft/fsRight), so re-push both.
+            setDacFsVoltageAmpl(v);
+            pushOutputRoutingToPlayback();
+            publishSignalChanged();
+        });
+        onPref(prefs.dacFsVoltageAmplRightProperty(), v -> {
+            pushOutputRoutingToPlayback();
+            publishSignalChanged();
+        });
+        onPref(prefs.genOutputChannelsProperty(), v -> {
+            pushOutputRoutingToPlayback();
+            publishSignalChanged();
+        });
         onPref(prefs.genRectangleDutyProperty(), v -> {
             setRectangleDuty(v);
             publishSignalChanged();
@@ -274,10 +288,13 @@ public final class GeneratorController {
             lastStartError = I18n.t("generator.error.deviceUnavailable", deviceName);
             return;
         }
+        // Per-card FS resolution: push the selected card's active-range DAC
+        // full-scale through setDacFsVoltageAmpl; legacy scalar when unbound.
+        prefs.applyOutputDeviceProfile(device.name());
 
         final int    sampleRate    = bp.getOutputSampleRate();
         final int    bitDepth      = bp.getOutputBitDepth();
-        final int    ditherBits    = prefs.getGenDitherBits();
+        final double ditherBits    = prefs.getGenDitherBits();
         final double amplitudeVRms = prefs.getGenAmplitudeVrms();
         final GenSignalForm form      = prefs.getGenSignalForm();
         // First tone frequency: the generator constructor's
@@ -326,7 +343,7 @@ public final class GeneratorController {
      * partially-opened resources are torn down before returning.
      */
     private String tryStartOnce(Preferences prefs, DeviceRef device,
-                                int sampleRate, int bitDepth, int ditherBits,
+                                int sampleRate, int bitDepth, double ditherBits,
                                 GenSignalForm form, double frequency, double amplitudeVRms,
                                 long readyTimeoutSeconds) {
         Thread old = playThread;
@@ -405,6 +422,9 @@ public final class GeneratorController {
             return I18n.t("generator.error.openDeviceFailed", ex.getMessage());
         }
         this.playback = ag;
+        // Push the per-lane scale (scaleR = fsLeft/fsRight) and the output gate
+        // before the render thread starts — the quantizer reads them per block.
+        pushOutputRoutingToPlayback();
         final AtomicBoolean sessionStop = new AtomicBoolean(false);
         this.stopFlag = sessionStop;
 
@@ -470,10 +490,13 @@ public final class GeneratorController {
         running    = false;
     }
 
-    /** Live-applies the dither bit count to the running playback.  No-op if not running. */
-    public void setDitherBits(int bits) {
+    /** Live-applies the dither bit count to the running playback (if any), then
+     *  signals a generator change so the FFT stats/accumulator and the scope
+     *  persistence restart on the new signal. */
+    public void setDitherBits(double bits) {
         AudioPlayback ag = playback;
         if (ag != null) ag.setDitherBits(bits);
+        publishSignalChanged();
     }
 
     /** Live-applies a duty-cycle (fraction in [0.001, 0.999]) to the running rectangle generator. */
@@ -590,6 +613,17 @@ public final class GeneratorController {
     public void setDacFsVoltageAmpl(double v) {
         SignalGenerator g = generator;
         if (g != null) g.setDacFsVoltageAmpl(v);
+    }
+
+    /** Pushes the current per-lane scale + output gate to the running playback.
+     *  No-op if nothing is playing — the values ride the quantizer's defaults
+     *  (both scales 1.0, gate BOTH) until a session opens and re-pushes them. */
+    private void pushOutputRoutingToPlayback() {
+        AudioPlayback ag = playback;
+        if (ag == null) return;
+        Preferences prefs = Preferences.instance();
+        ag.setChannelScale(1.0, prefs.dacRightLaneScale());
+        ag.setOutputChannels(prefs.getGenOutputChannels());
     }
 
     /** Live-applies sweep start frequency (Hz). */
@@ -725,16 +759,18 @@ public final class GeneratorController {
     }
 
     /** The exact frequency the DDS must be driven at for {@code form}.
-     *  A RECTANGLE can only place its hard +1/−1 edge ON a sample, so it
-     *  has to run at an integer-sample-period frequency {@code fs/N} —
-     *  otherwise the edge jitters ±1 sample between cycles and the tone
-     *  smears (the scope reads the raw, off-grid value).  Every other form
-     *  is exact at any frequency: SINE / DUAL_TONE take the optional
-     *  FFT-bin snap, and TRIANGLE rides the continuous ramp sub-sample, so
-     *  both stay on their raw entered frequency. */
+     *  A RECTANGLE can only place its hard +1/−1 edge ON a sample, and a
+     *  TRIANGLE's duty corner is a derivative discontinuity with the same
+     *  problem — off an integer-sample period the edge/corner drifts
+     *  against the sample grid cycle to cycle and the tone smears.  Both
+     *  therefore run at the integer-sample-period frequency {@code fs/N},
+     *  and both duty brackets in the pane quantise against that N.  Every
+     *  other form is exact at any frequency: SINE / DUAL_TONE take the
+     *  optional FFT-bin snap and stay on their raw entered frequency
+     *  otherwise. */
     private double emitFrequency(Preferences prefs, GenSignalForm form,
                                  int sampleRate, double raw) {
-        if (form == GenSignalForm.RECTANGLE) {
+        if (form == GenSignalForm.RECTANGLE || form == GenSignalForm.TRIANGLE) {
             return samplePeriodAlignedHz(raw, sampleRate);
         }
         return FftBinSnap.snapIfEnabled(prefs, form, sampleRate, raw);
@@ -759,11 +795,12 @@ public final class GeneratorController {
         return Math.max(2, (int) Math.round(sr / f));
     }
 
-    /** Closest frequency the DDS rectangle can produce with an
-     *  integer-sample period — the pane's Frequency bracket label.  This
-     *  is the SAME value {@link #emitFrequency} drives the rectangle at,
-     *  so the displayed bracket and the emitted tone can never diverge. */
-    public double correctedRectangleHz() {
+    /** Closest frequency the period-aligned forms (RECTANGLE, TRIANGLE)
+     *  can produce with an integer-sample period — the pane's Frequency
+     *  bracket label.  This is the SAME value {@link #emitFrequency}
+     *  drives them at, so the displayed bracket and the emitted tone can
+     *  never diverge. */
+    public double correctedPeriodAlignedHz() {
         Preferences prefs = Preferences.instance();
         return samplePeriodAlignedHz(prefs.getGenFrequencyHz(),
                 prefs.current().getOutputSampleRate());
@@ -833,13 +870,13 @@ public final class GeneratorController {
         double  sweepDurSec = isSweep ? prefs.getGenSweepDurationSec() : 0.0;
         int    sampleRate    = prefs.current().getOutputSampleRate();
         int    bitDepth      = prefs.current().getOutputBitDepth();
-        int    ditherBits    = prefs.getGenDitherBits();
-        // RECTANGLE exports at the SAME integer-sample-period frequency the
-        // live generator emits (fs/N) — so the file matches what is heard,
-        // a looped WAV has no off-grid edge seam, and the integer-period
-        // truncation below lands exactly on N samples.  Every other form is
-        // exact at any frequency and is exported as entered.
-        double frequency     = (form == GenSignalForm.RECTANGLE)
+        double ditherBits    = prefs.getGenDitherBits();
+        // RECTANGLE and TRIANGLE export at the SAME integer-sample-period
+        // frequency the live generator emits (fs/N) — so the file matches what
+        // is heard, a looped WAV has no off-grid edge/corner seam, and the
+        // integer-period truncation below lands exactly on N samples.  Every
+        // other form is exact at any frequency and is exported as entered.
+        double frequency     = (form == GenSignalForm.RECTANGLE || form == GenSignalForm.TRIANGLE)
                 ? samplePeriodAlignedHz(prefs.getGenFrequencyHz(), sampleRate)
                 : prefs.getGenFrequencyHz();
         double amplitudeVRms = prefs.getGenAmplitudeVrms();
@@ -886,8 +923,11 @@ public final class GeneratorController {
             // and sweeps use 0 (raw) — a sweep's length is already fixed above
             // (one sweep, or whole sweeps when looped).
             double freqForTruncation = (form.isPeriodic() && !isSweep) ? frequency : 0.0;
+            // Mirror the live encoder: left lane scales by 1.0, right by
+            // fsLeft/fsRight, and the output gate silences the un-selected lane.
             long bytes = SignalFileExporter.export(gen, new File(path),
-                    sampleRate, bitDepth, duration, ditherBits, freqForTruncation);
+                    sampleRate, bitDepth, duration, ditherBits, freqForTruncation,
+                    1.0, prefs.dacRightLaneScale(), prefs.getGenOutputChannels());
             log.info("File saved: {} ({} bytes)", path, bytes);
             return null;
         } catch (Exception ex) {

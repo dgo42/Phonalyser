@@ -82,9 +82,12 @@ public final class ImdResult {
      *  DFD2 measurement. */
     public double diffHz;
 
-    /** DFD2 amplitude as a percentage of the fundamental reference. */
+    /** DFD2 amplitude as a percentage of the fundamental reference.
+     *  {@code NaN} when {@code f2 − f1} is outside the measurable range. */
     public double dfd2Pct;
-    /** DFD3 amplitude as a percentage of the fundamental reference. */
+    /** DFD3 amplitude as a percentage of the fundamental reference —
+     *  RMS of the measurable sidebands; {@code NaN} when both {@code 2f1 − f2}
+     *  and {@code 2f2 − f1} fall outside the spectrum. */
     public double dfd3Pct;
 
     /** IMD power ratio (combined IM products / fundamentals), in %.
@@ -101,10 +104,13 @@ public final class ImdResult {
     public final double[] dnLHz = new double[MAX_ORDER + 1];
     public final double[] dnHHz = new double[MAX_ORDER + 1];
     /** Levels of the per-order sideband products, in % of the
-     *  fundamental reference |F1| + |F2|.  Slots 0/1 unused. */
+     *  fundamental reference |F1| + |F2|.  Slots 0/1 unused.  {@code NaN}
+     *  when the product frequency is outside the measurable range (below
+     *  DC or beyond the spectrum at this sample rate). */
     public final double[] dnLPct = new double[MAX_ORDER + 1];
     public final double[] dnHPct = new double[MAX_ORDER + 1];
-    /** Same levels expressed as dBV using the FS-voltage anchor. */
+    /** Same levels expressed as dBV using the FS-voltage anchor;
+     *  {@code NaN} for unmeasurable products (the readout shows "---"). */
     public final double[] dnLDbV = new double[MAX_ORDER + 1];
     public final double[] dnHDbV = new double[MAX_ORDER + 1];
 }

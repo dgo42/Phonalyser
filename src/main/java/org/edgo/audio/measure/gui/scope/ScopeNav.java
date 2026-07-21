@@ -215,9 +215,25 @@ public final class ScopeNav {
     public double[] moveVertical(double leftOff, double leftVdiv, boolean leftOn,
                                  double rightOff, double rightVdiv, boolean rightOn,
                                  int dir, double peakVolts) {
+        return moveVertical(leftOff, leftVdiv, leftOn, rightOff, rightVdiv, rightOn,
+                dir, peakVolts, peakVolts);
+    }
+
+    /**
+     * Per-channel-full-scale twin of {@link #moveVertical(double, double, boolean,
+     * double, double, boolean, int, double)}: identical coupled move, but each channel's
+     * ±FS/2-at-middle clamp uses its OWN full-scale.  The clamp already tightens the one
+     * shared delta against each channel's own V/div in turn (the tighter wins); giving
+     * each {@code clampOffsetDelta} that channel's own {@code peakVolts} lets the ADC
+     * full-scale play the exact same per-channel role V/div already does — no new policy.
+     * With equal L/R full-scales (LINKED) this is identical to the single-peak form.
+     */
+    public double[] moveVertical(double leftOff, double leftVdiv, boolean leftOn,
+                                 double rightOff, double rightVdiv, boolean rightOn,
+                                 int dir, double leftPeak, double rightPeak) {
         double delta = -dir * halfDivOffsetStepY();
-        if (leftOn)  delta = ScopeFormat.clampOffsetDelta(delta, leftOff,  leftVdiv,  peakVolts, divisionsY);
-        if (rightOn) delta = ScopeFormat.clampOffsetDelta(delta, rightOff, rightVdiv, peakVolts, divisionsY);
+        if (leftOn)  delta = ScopeFormat.clampOffsetDelta(delta, leftOff,  leftVdiv,  leftPeak,  divisionsY);
+        if (rightOn) delta = ScopeFormat.clampOffsetDelta(delta, rightOff, rightVdiv, rightPeak, divisionsY);
         return new double[] { leftOn  ? leftOff  + delta : leftOff,
                               rightOn ? rightOff + delta : rightOff };
     }
@@ -247,10 +263,27 @@ public final class ScopeNav {
     public double[] zoomVertical(double leftVdiv, double leftOff, boolean leftOn,
                                  double rightVdiv, double rightOff, boolean rightOn,
                                  int dir, double anchorFrac, double peakVolts) {
+        return zoomVertical(leftVdiv, leftOff, leftOn, rightVdiv, rightOff, rightOn,
+                dir, anchorFrac, peakVolts, peakVolts);
+    }
+
+    /**
+     * Per-channel-full-scale twin of {@link #zoomVertical(double, double, boolean,
+     * double, double, boolean, int, double, double)}: identical coupled V/div zoom and
+     * offset re-anchoring, but each channel's zoom-out ceiling ("±FS fills the grid
+     * height") is derived from its OWN full-scale.  Mirrors the couple's existing
+     * per-channel V/div handling — the FS-fills-height rung is a pure function of that
+     * channel's full-scale, so it simply stops being shared; the zoom-out block stays
+     * coupled (either channel hitting its own ceiling blocks both).  Equal L/R full-scales
+     * (LINKED) reproduce the single-peak behaviour exactly.
+     */
+    public double[] zoomVertical(double leftVdiv, double leftOff, boolean leftOn,
+                                 double rightVdiv, double rightOff, boolean rightOn,
+                                 int dir, double anchorFrac, double leftPeak, double rightPeak) {
         double lv = leftOn  ? leftVdiv  : -1.0;
         double rv = rightOn ? rightVdiv : -1.0;
         double[] v = ScopeFormat.coupleVoltsPerDivZoom(lv, rv, dir, vDivLadder,
-                zoomOutVoltsPerDivCeiling(peakVolts));
+                zoomOutVoltsPerDivCeiling(leftPeak), zoomOutVoltsPerDivCeiling(rightPeak));
         double newLv = leftOn  ? v[0] : leftVdiv;
         double newRv = rightOn ? v[1] : rightVdiv;
         double newLo = (leftOn  && newLv != leftVdiv)

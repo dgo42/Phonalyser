@@ -24,10 +24,13 @@
  * @property {number} fallTime   seconds, 90% → 10% on falling edges (NaN if unknown)
  * @property {number} frequency  Hz (NaN if unknown)
  * @property {number} dutyCycle  fraction [0, 1] (NaN if unknown)
+ * @property {number} dualF1     Hz, dual-tone tone 1 as captured (NaN if not measured)
+ * @property {number} dualF2     Hz, dual-tone tone 2 as captured (NaN if not measured)
  */
 
-function make(vpp, vrms, vmean, period, riseTime, fallTime, frequency, dutyCycle) {
-  return { vpp, vrms, vmean, period, riseTime, fallTime, frequency, dutyCycle };
+function make(vpp, vrms, vmean, period, riseTime, fallTime, frequency, dutyCycle,
+              dualF1 = NaN, dualF2 = NaN) {
+  return { vpp, vrms, vmean, period, riseTime, fallTime, frequency, dutyCycle, dualF1, dualF2 };
 }
 
 /**
@@ -331,7 +334,7 @@ export function compute(data, n, sampleRate, peakVolts, broadband = true) {
  * @returns {SignalMeasurements}
  */
 export function withoutTimes(m) {
-  return make(m.vpp, m.vrms, m.vmean, NaN, NaN, NaN, NaN, NaN);
+  return make(m.vpp, m.vrms, m.vmean, NaN, NaN, NaN, NaN, NaN, m.dualF1, m.dualF2);
 }
 
 /**
@@ -344,7 +347,79 @@ export function withoutTimes(m) {
  */
 export function withFrequency(m, freq) {
   return make(m.vpp, m.vrms, m.vmean,
-              (freq > 0 ? 1.0 / freq : NaN), m.riseTime, m.fallTime, freq, m.dutyCycle);
+              (freq > 0 ? 1.0 / freq : NaN), m.riseTime, m.fallTime, freq, m.dutyCycle,
+              m.dualF1, m.dualF2);
+}
+
+/**
+ * Returns a copy of `m` with the two dual-tone frequencies `f1` / `f2` replaced,
+ * keeping every other field. The scope worker uses this to swap in the two tones
+ * as re-measured on the raw (as-captured) signal, so the residual fit can
+ * subtract them at their true ADC-domain frequencies rather than the generator's
+ * commanded (DAC-domain, clock-offset) values. Faithful port of
+ * SignalMeasurements.withDualTones.
+ * @param {SignalMeasurements} m
+ * @param {number} f1
+ * @param {number} f2
+ * @returns {SignalMeasurements}
+ */
+export function withDualTones(m, f1, f2) {
+  return make(m.vpp, m.vrms, m.vmean,
+              m.period, m.riseTime, m.fallTime, m.frequency, m.dutyCycle,
+              f1, f2);
+}
+
+/**
+ * Returns a copy of `m` with Vmean / Vrms recomputed over an INTEGER number of
+ * whole |F1−F2| BEAT periods of `data`, for the dual-tone case.
+ *
+ * Why: a dual tone sin(F1·t)+sin(F2·t) = 2·sin((F1+F2)/2·t)·cos((F1−F2)/2·t) has
+ * a slow |F1−F2| beat envelope on top of the carrier. The plain compute() bounds
+ * its Vmean window by the CARRIER's half-amplitude rising crossings — but those
+ * crossings do NOT fall on whole beat periods, so the window holds a fractional
+ * beat cycle whose amplitude-proportional residual jitters the mean by tens of µV
+ * tick-to-tick (the ±50 µV jump). The beat is the slowest structure in the signal;
+ * bounding the integration to whole beat periods drops that residual to the noise
+ * floor (Vmean avg < 1 µV) — the beat-envelope analogue of compute()'s whole-
+ * carrier-period bounding. Vpp is untouched (a peak, not an integral).
+ *
+ * The window is the largest integer multiple of the beat period `sampleRate/beatHz`
+ * that fits in `n`. Falls back to `m` unchanged when the beat is non-finite or when
+ * less than one whole beat period fits the buffer (nothing better to integrate over).
+ *
+ * @param {SignalMeasurements} m   the already-computed measurement (carries dualF1/F2)
+ * @param {Float32Array|Float64Array|number[]} data  the measured window samples
+ * @param {number} n           valid length of `data`
+ * @param {number} sampleRate
+ * @param {number} beatHz      |F1 − F2|, the beat frequency (Hz)
+ * @param {number} peakVolts   ±1.0 → full-scale volts
+ * @returns {SignalMeasurements}
+ */
+export function withBeatPeriodMeanRms(m, data, n, sampleRate, beatHz, peakVolts) {
+  if (!(beatHz > 0) || !(sampleRate > 0) || n < 4) return m;
+  const beatSamples = sampleRate / beatHz;
+  if (!(beatSamples >= 2)) return m;
+  // Largest whole number of beat periods that fits the window.
+  const periods = Math.floor(n / beatSamples);
+  if (periods < 1) return m;
+  // Round the fractional whole-beat span to the nearest sample boundary. The
+  // sub-sample truncation error is second-order in the residual (the signal is
+  // NOT at a fixed value at a beat boundary, unlike a carrier zero-crossing, but
+  // over `periods` whole beats the boundary error averages down as 1/periods).
+  const win = Math.min(n, Math.round(periods * beatSamples));
+  if (win < 2) return m;
+  let sum = 0, sumSq = 0;
+  for (let i = 0; i < win; i++) {
+    const v = data[i];
+    sum += v;
+    sumSq += v * v;
+  }
+  const mean = sum / win;
+  const variance = sumSq / win - mean * mean;
+  const rms = Math.sqrt(Math.max(0.0, variance));
+  return make(m.vpp, rms * peakVolts, mean * peakVolts,
+              m.period, m.riseTime, m.fallTime, m.frequency, m.dutyCycle,
+              m.dualF1, m.dualF2);
 }
 
 /**
@@ -592,16 +667,15 @@ export class MeasurementStats {
     if (windowSeconds > 0 && n > 0) {
       cutoff = ts[n - 1] - windowSeconds * NS_PER_SECOND;
     }
-    // Find the first index still within the window; drop everything before it.
+    // Find the first index still within the window — WITHOUT dropping the older
+    // entries (Java walkRecentHistory walks its ring non-destructively): widening
+    // the averaging pref back must recover the still-stored history. The hard
+    // age/size bound in push() alone trims storage.
     let start = 0;
     while (start < n && ts[start] < cutoff) start++;
-    if (start > 0) {
-      this._tNs = ts.slice(start);
-      this._vals = this._vals.slice(start);
-    }
     this._resetAccumulator();
     const vals = this._vals;
-    for (let i = 0; i < vals.length; i++) this.add(vals[i]);
+    for (let i = start; i < vals.length; i++) this.add(vals[i]);
     return { mean: this.getMean(), min: this.getMin(), max: this.getMax(), sigma: this.getSigma() };
   }
 
@@ -611,81 +685,6 @@ export class MeasurementStats {
     this._vals.length = 0;
     this._resetAccumulator();
   }
-}
-
-/**
- * Sliding-window pool of RAW per-sample statistics (Σx, Σx², N, min, max) tagged by
- * timestamp and pruned to a window, so the amplitude measurements (Vmean / Vrms / Vpp)
- * can be taken over a LONG effective window assembled from many short capture buffers.
- * The fractional-cycle DC residual that makes a short-window Vmean swing (≈ A/(N·sin(πf/fs)))
- * then averages out over the pooled N, so its σ collapses to the level Java reaches with
- * its long per-pass window.
- *
- * NOT a 1:1 port: Java's ScopeMeasurementWorker reads a fresh MEAS_MAX_SAMPLES (96000)
- * buffer each pass on a BACKGROUND thread. The web has no such thread, and reading +
- * filtering 96000 samples inline froze the render loop, so instead it accumulates the
- * statistic ACROSS the buffers that stream by, over the same oscMeasurementAverageSeconds
- * window the table stats already use (one window for everything).
- */
-export class WindowedSignalAccumulator {
-  constructor() {
-    // One chunk per measurement tick (~5 Hz) → the array stays short; objects keep
-    // add()/pool() readable without parallel-array bookkeeping.
-    this._chunks = [];   // each: { tNs, sum, sumSq, count, min, max }
-  }
-
-  /** Fold the first `n` samples of `data` (normalised [-1,+1]) into a new timestamped
-   *  chunk — one O(n) pass. Raw audio samples are finite, so no NaN guard. */
-  add(tNs, data, n) {
-    let sum = 0, sumSq = 0, min = Infinity, max = -Infinity;
-    for (let i = 0; i < n; i++) {
-      const v = data[i];
-      sum += v; sumSq += v * v;
-      if (v < min) min = v;
-      if (v > max) max = v;
-    }
-    this._chunks.push({ tNs, sum, sumSq, count: n, min, max });
-    // Hard safety bound (independent of the pool window, which may be 0 = keep-all): at the
-    // ~60 fps feed rate the array would otherwise grow without limit. Drop chunks older than
-    // 600 s — orders of magnitude beyond any real averaging window. Normally a no-op.
-    const cutoff = tNs - HISTORY_MAX_AGE_NS;
-    const c = this._chunks;
-    let start = 0;
-    while (start < c.length && c[start].tNs < cutoff) start++;
-    if (start > 0) this._chunks = c.slice(start);
-  }
-
-  /**
-   * Pool every chunk newer than `nowNs - windowSeconds` (windowSeconds <= 0 → all stored)
-   * and return amplitude measurements in volts, or null when the pool is empty. Prunes
-   * stale chunks as a side effect. `peakVolts` scales a ±1.0 sample to the full-scale ADC
-   * swing (adcFsVoltageRms·√2). variance = E[x²] − E[x]² over the pooled samples.
-   * @returns {{vmean:number, vrms:number, vpp:number, count:number} | null}
-   */
-  pool(nowNs, windowSeconds, peakVolts) {
-    const cutoff = windowSeconds > 0 ? nowNs - windowSeconds * NS_PER_SECOND : Number.NEGATIVE_INFINITY;
-    const c = this._chunks;
-    let start = 0;
-    while (start < c.length && c[start].tNs < cutoff) start++;
-    if (start > 0) this._chunks = c.slice(start);
-    const ch = this._chunks;
-    if (ch.length === 0) return null;
-    let sum = 0, sumSq = 0, count = 0, min = Infinity, max = -Infinity;
-    for (let i = 0; i < ch.length; i++) {
-      const k = ch[i];
-      sum += k.sum; sumSq += k.sumSq; count += k.count;
-      if (k.min < min) min = k.min;
-      if (k.max > max) max = k.max;
-    }
-    if (count <= 0) return null;
-    const mean = sum / count;
-    const variance = Math.max(0, sumSq / count - mean * mean);
-    return { vmean: mean * peakVolts, vrms: Math.sqrt(variance) * peakVolts,
-             vpp: (max - min) * peakVolts, count };
-  }
-
-  /** Drop all chunks (channel switch / reset). */
-  clear() { this._chunks.length = 0; }
 }
 
 // --- Number formatters (port of MeasurementRow.fmt / fmtFreq). ---------------

@@ -55,9 +55,12 @@
     <tr><th>Einstellung</th><th>Hinweise</th></tr>
     <tr><td>Backend</td>
         <td>WASAPI (Standard, exklusiv bit-exakt), WDM-KS (niedrigste Ebene,
-            höchster Aufnahmedurchsatz) oder JavaSound (plattformübergreifend /
-            einzige Option außerhalb von Windows).  Bei Änderung wird die
-            Geräteliste neu eingelesen.</td></tr>
+            höchster Aufnahmedurchsatz), JavaSound (plattformübergreifend /
+            einzige Option außerhalb von Windows) oder <b>QA40x</b> — ein
+            QuantAsylum QA402 / QA403 Analysator, der direkt über USB angesteuert
+            wird (siehe
+            <a href="theory/audio-backend.html#qa40x">Funktionsprinzip ▸ QA40x</a>).
+            Bei Änderung wird die Geräteliste neu eingelesen.</td></tr>
     <tr><td>Eingang — Gerät / Abtastrate / Bittiefe</td>
         <td>Das Aufnahmegerät (ADC) und die genaue Abtastrate und Bittiefe, mit
             der es geöffnet wird.  16/24 Bit bei 48/96/192/384 kHz werden nahezu
@@ -71,6 +74,361 @@
      Wenn eine Liste leer ist oder ein Gerät nicht geöffnet werden kann, schließen Sie
      andere Audio-Anwendungen und öffnen Sie den Dialog erneut, um die Geräte neu
      einzulesen.</div>
+  <div class="note"><b>QA40x.</b> Das QA40x-Backend erscheint in der Liste nur,
+     wenn ein QA402 / QA403 mit dem PC verbunden ist.  Ist es ausgewählt, sind
+     Eingangs- und Ausgangsgerät der eine Analysator, und seine Eingangs- und
+     Ausgangs-<b>Abtastraten sind fest gleichgesetzt</b> (ein Hardware-Takt) —
+     stellen Sie eine ein, und die andere folgt.  Der Vollausschlag ist die
+     geräteeigene Bereichskalibrierung, daher ist eine manuelle Kalibrierung
+     nicht möglich: Der Kalibrierdialog öffnet sich schreibgeschützt und zeigt
+     lediglich den eingebauten Vollausschlag der Karte für jeden Kanal.</div>
+
+  <h3 id="prefs-audio-card">Karte — Kalibrierungsprofile pro Karte</h3>
+  <p>Die Vollausschlag-Kalibrierung — die Spannung in Volt RMS, die dem digitalen
+     Vollausschlag ±1,0 des Wandlers entspricht, und damit die absolute dBV-Achse,
+     die Spannungsanzeigen des Oszilloskops und der Ausgangspegel des Generators —
+     gehört zur <em>physischen Karte</em>, nicht zum Backend und nicht zu dem
+     Gerätenamen, den ein Treiber zufällig meldet.  Ein <b>Kartenprofil</b> verknüpft
+     diese Kalibrierung mit der Karte selbst und folgt ihr über die Backends hinweg,
+     denn dieselbe Karte erscheint unter verschiedenen Namen — WASAPI umhüllt sie als
+     <code>Line (…)</code> oder <code>Speakers (…)</code>, WDM-KS meldet den bloßen
+     Namen, ALSA hängt ein Suffix <code>[plughw:…]</code> an.  Ein Profil führt eine
+     einzige Liste <b>erkannter Gerätenamen</b> — die Namen und Namensfragmente, die
+     diese Karte identifizieren — sodass eine einzige Kalibrierung ihr dient, ganz
+     gleich, wie der Treiber das Gerät benennt.</p>
+  <p>Ein Profil hält an einer Stelle fest: den <b>Namen</b> der Karte; für welche
+     Richtungen sie kalibriert ist (<b>Bereitstellung:</b> Eingang, Ausgang oder
+     beides); ob sie einen oder zwei Kanäle hat (<b>Kanäle:</b> Mono oder Stereo);
+     wie ihre beiden Kanäle je Richtung zusammenlaufen (<b>Kopplung:</b> Verknüpft
+     oder Unabhängig); ihre Liste umschaltbarer <b>Bereiche</b> (Abschwächer- /
+     Verstärkungs- / DIP-Stellungen); und den gemessenen Vollausschlag jedes
+     Bereichs — <b>stets pro Kanal gespeichert</b>, da keine zwei physischen Kanäle
+     exakt gleich kalibriert sind.</p>
+  <p>Alle Kartenprofile liegen in einer Datei <code>devices.yaml</code>, die neben
+     Ihrer <code>preferences.yaml</code> im Benutzer-Datenverzeichnis abgelegt wird
+     — nach demselben Muster der bearbeitbaren Kopien wie die Oberflächentexte und
+     die Hilfedateien, die dort beim ersten Start angelegt werden und danach Ihnen
+     gehören.  Sie wird mit fertigen Profilen für einige bekannte Schnittstellen
+     vorbelegt ausgeliefert (die <b>E1DA Cosmos ADC</b>, die <b>JLsounds
+     I2SoverUSB</b> und die <b>CUBILUX CB5</b>), und alles, was Sie in diesem Reiter
+     bearbeiten, wird dorthin zurückgeschrieben.  Die Datei ist reiner Text und von
+     Hand bearbeitbar, sodass Sie Karten auch außerhalb des Dialogs hinzufügen oder
+     anpassen können.</p>
+
+  <h4 id="prefs-audio-devices-file">Die Datei <code>devices.yaml</code> — Bearbeiten von Hand</h4>
+  <p>Die Datei liegt im Benutzer-Datenverzeichnis, neben <code>preferences.yaml</code>:</p>
+  <table>
+    <tr><th>Betriebssystem</th><th>Ort</th></tr>
+    <tr><td><b>Windows</b></td><td><code>%APPDATA%\Phonalyser\devices.yaml</code></td></tr>
+    <tr><td><b>macOS</b></td><td><code>~/Library/Application Support/Phonalyser/devices.yaml</code></td></tr>
+    <tr><td><b>Linux</b></td><td><code>~/.config/Phonalyser/devices.yaml</code></td></tr>
+  </table>
+  <p>Es ist reines YAML.  Die Datei beginnt mit einem Kopfkommentar und zwei
+     Versionsmarken, dann folgt ein Block pro Karte.  Eine kommentierte Karte mit
+     jedem Schlüssel, den die Anwendung liest:</p>
+  <pre><code>formatVersion: 1        # Kennung des Dateiformats — ändert sich nur, wenn sich das Schema selbst ändert
+contentVersion: 2       # Katalog-Generation — steuert die einmalige Upgrade-Zusammenführung pro Release (siehe unten)
+audioDevices:           # die Liste der Kartenprofile
+  - name: E1DA Cosmos ADC          # logischer Profilname im Kombinationsfeld „Karte“ (erforderlich)
+    match: [ "E1DA Cosmos ADC" ]   # erkannte Gerätenamen: Teilzeichenfolgen (ohne Groß-/Kleinschreibung), die diese Karte identifizieren
+    input:                         # ein Block je Richtung — „output:“ hat dieselbe Form
+      channels: INDEPENDENT        # MONO = ein Kanal; LINKED = zwei Kanäle, gemeinsamer Bereichsschalter; INDEPENDENT = zwei Kanäle, jeder eigener
+      ranges:                      # eine Zeile je Eingangsstufen-Stellung (Abschwächer / Verstärkung / DIP)
+        - { label: "1.7V", fsVrms: { left: 1.7, right: 1.7 }, calibrated: true }   # gemessener Vollausschlag pro Kanal; calibrated: true = diese Zeile von Ihnen gemessen (Upgrades überschreiben sie nie)
+        - { label: "3.5V", fsVrms: { left: 3.5, right: 3.5 } }                     # ein noch nicht kalibrierter Bereich — weiterhin der voreingestellte Nennwert
+      activeRange: { left: "1.7V", right: "3.5V" }   # INDEPENDENT: eine { left, right }-Zuordnung, je Kanal seine eigene aktive Zeile
+  - name: I2SoverUSB
+    match: [ "I2SoverUSB", "JLsounds" ]
+    output:
+      channels: LINKED
+      ranges:
+        - { label: "default", fsVrms: { left: 2, right: 2 } }
+      activeRange: "default"       # LINKED / MONO: ein einzelnes Label (beide Kanäle schalten gemeinsam)</code></pre>
+  <p>Was die Schlüssel bedeuten:</p>
+  <ul>
+    <li><code>match</code> ist die Liste <b>erkannter Gerätenamen</b> aus dem
+        Karteneditor: jeder Eintrag wird als Teilzeichenfolge (ohne
+        Groß-/Kleinschreibung) mit dem vom Treiber gemeldeten Gerätenamen abgeglichen,
+        und wenn mehrere Karten passen könnten, gewinnt der <b>spezifischste</b> (der
+        längste passende) Eintrag.  Das Binden eines Geräts an eine Karte hängt den
+        Namen dieses Geräts hier einfach an.</li>
+    <li><code>fsVrms</code> ist der Vollausschlag des Bereichs in Volt RMS.  Die
+        Anwendung schreibt stets das Paar <code>{ left, right }</code> — jeder Kanal
+        trägt seinen eigenen gemessenen Wert — obwohl eine einzelne Zahl für beide
+        Seiten gilt, wenn Sie eine von Hand eingeben.</li>
+    <li><code>calibrated: true</code> markiert eine Zeile, die Sie tatsächlich über
+        einen Kalibrier-Ablauf gemessen haben; die Upgrade-Zusammenführung überschreibt
+        sie nie.  Eine Zeile ohne dieses Flag ist weiterhin der voreingestellte
+        Nennwert.</li>
+    <li><code>calibrationFromDevice: true</code> (im Block <code>input:</code> oder
+        <code>output:</code> hinzufügen) markiert eine Karte, deren Vollausschlag vom
+        Instrument selbst gemeldet wird (ein Gerät der QA40x-Klasse): ihre Bereiche
+        bleiben umschaltbar, aber die Anwendung schreibt nie eine Kalibrierung hinein,
+        und <b>ihre Vollausschlagswerte werden aus dem Gerät selbst gelesen, nicht per
+        Katalog-Upgrade geliefert</b>.  Bei einer
+        gewöhnlichen Karte, die Sie selbst kalibrieren, lassen Sie den Schlüssel
+        weg.</li>
+    <li><code>activeRange</code> ist die ausgewählte Zeile.  <b>INDEPENDENT</b>
+        verwendet eine <code>{ left, right }</code>-Zuordnung (jeder Kanal seine eigene
+        Zeile); <b>LINKED</b> und <b>MONO</b> verwenden ein einzelnes Label.</li>
+  </ul>
+  <p>Bearbeiten Sie die Datei nur bei <b>geschlossener</b> Anwendung — sie wird beim
+     Start einmal gelesen und bei jedem Speichern der Anwendung neu geschrieben, sodass
+     Änderungen während des Betriebs überschrieben werden.  Einträge ohne
+     <code>name</code> (oder Bereiche ohne <code>label</code>) sowie unbekannte
+     Schlüssel werden mit einer Warnung im Protokoll übersprungen, statt das Laden
+     abzubrechen, sodass ein kleiner Fehler einen Eintrag kostet, nicht die ganze
+     Datei.  Das Löschen der Datei lässt den nächsten Start die eingebauten
+     Standardwerte erneut anlegen, was <b>alle von Ihnen hinzugefügten oder
+     kalibrierten Karten verliert</b>.</p>
+
+  <p><b>Upgrades verlieren Ihre Arbeit nie.</b>  Der vorbelegte Katalog trägt eine
+     <code>contentVersion</code>; bringt eine neue Programmversion eine höhere Nummer
+     mit, läuft die Zusammenführung <b>einmalig</b> und vermerkt danach die neue
+     Nummer, sodass sie sich nie wiederholt.  Für jede Katalogkarte findet sie Ihre
+     passende Karte — anhand des Namens <em>oder</em> eines gemeinsamen erkannten
+     Gerätenamens, sodass eine von Ihnen umbenannte Karte weiterhin gefunden wird — und
+     gleicht nur deren <b>Bereichstabelle</b> ab: ein vom Release ergänzter Bereich
+     erscheint in Ihrem Speicher, und ein Bereich, den Sie beide haben, wird auf den
+     Nenn-Vollausschlag des Release aufgefrischt — <em>außer</em> einem von Ihnen
+     kalibrierten Bereich, der seinen gemessenen Wert und sein
+     <code>calibrated</code>-Flag behält.  Eine im Release gänzlich neue Karte wird
+     komplett hinzugefügt.  Alles andere gehört Ihnen und wird nie angetastet: Ihre
+     kalibrierten Werte, die von Hand hinzugefügten Karten und Bereiche, Ihre Liste
+     erkannter Gerätenamen, Ihre Kanalmodi und Ihre Auswahl der aktiven Bereiche
+     bleiben alle erhalten.</p>
+
+  <p>Jede Richtung — <b>Eingang</b> und <b>Ausgang</b> — trägt über ihren
+     Gerätesteuerelementen ein eigenes Kombinationsfeld <b>Karte:</b>.  Binden Sie ein
+     Kartenprofil, wenn Sie eines der Folgenden benötigen:</p>
+  <ul>
+    <li>mehrere Schnittstellen, zwischen denen Sie wechseln, jede mit ihrem eigenen
+        Vollausschlag;</li>
+    <li>eine Schnittstelle mit umschaltbarer analoger Eingangsstufe — ein Abschwächer,
+        eine Verstärkungsstufe oder eine DIP-Einstellung — bei der jede Stellung
+        einen anderen Vollausschlag hat;</li>
+    <li>dieselbe Karte, erreicht über mehr als ein Backend, sodass eine einzige
+        Kalibrierung wiederverwendet statt pro Backend erneut gemessen wird.</li>
+  </ul>
+  <p>Eine einfache Soundkarte mit fester Eingangsstufe benötigt kein Profil — lassen
+     Sie ihre Auswahl im Kombinationsfeld <b>Karte:</b> leer, und sie verhält sich
+     genau so wie vor der Einführung dieser Funktion, indem sie auf den einzelnen
+     gemeinsamen Vollausschlag zurückgreift, der den Kartenprofilen vorausging.</p>
+
+  <h4 id="prefs-audio-card-combo">Das Kombinationsfeld „Karte“ und die Bearbeiten-Schaltfläche</h4>
+  <p>Das Kombinationsfeld führt jedes Kartenprofil auf, das in dieser Richtung
+     mindestens einen Bereich hat — die vorbelegten bekannten Karten eingeschlossen —
+     sowie <code>Neue Karte…</code>; ein Gerät ohne Karte zeigt eine <em>leere</em>
+     Auswahl.  Eine kleine <b>Bearbeiten-Schaltfläche (Stift)</b> neben dem
+     Kombinationsfeld öffnet den
+     <a href="#prefs-audio-card-editor">Karteneditor</a> für die ausgewählte Karte.</p>
+  <p>Das Kombinationsfeld <b>löst sich automatisch neu auf, sobald sich das Gerät
+     ändert</b>: die Anwendung gleicht den neuen Gerätenamen mit der Liste erkannter
+     Gerätenamen jeder Karte ab und wählt, wenn eine übereinstimmt, diese aus und zeigt
+     ihre Bereiche an.  Passen mehrere, gewinnt der spezifischste (der längste
+     passende) erkannte Gerätename.  Das Auswählen des Kombinationsfeld-Eintrags und
+     das Drücken von <b>OK</b> ist das, was das Gerät <em>bindet</em> — es hängt den
+     exakten Gerätenamen an die Liste erkannter Gerätenamen dieser Karte an und
+     entfernt denselben Namen aus jeder anderen Karte, sodass ein Gerät nie an zwei
+     Karten zugleich gebunden ist.</p>
+  <p>Passt <b>keine Karte</b> zum Gerät, bindet die Anwendung nicht stillschweigend
+     eine: sie bietet an, eine zu erstellen — <em>Neue Karte für „&lt;Gerät&gt;“
+     erstellen?</em> — und öffnet bei Ja den Karteneditor, vorausgefüllt aus dem
+     Gerätenamen.  Sie können auch selbst <code>Neue Karte…</code> wählen oder die
+     Auswahl leer lassen, um das Gerät ungebunden zu halten.</p>
+  <div class="note">Die Anwendung bindet niemals stillschweigend eine Karte.  Zwei
+     identische Schnittstellen melden identische Namen und sind für die Software nicht
+     unterscheidbar — nur Sie wissen, welches physische Gerät in welcher Signalkette
+     steckt, sodass eine unsichere Übereinstimmung stets zur Bestätigung angeboten
+     wird, statt von selbst angewendet zu werden.</div>
+  <p>Eine leere Auswahl hält das Gerät ungebunden: es greift auf den einzelnen
+     gemeinsamen Vollausschlag zurück, der den Kartenprofilen vorausging, und die
+     Bereichstabelle bleibt ausgeblendet.  Diese globale Kalibrierung wird <b>nur aus
+     Gründen der Abwärtskompatibilität beibehalten und im Release nach dem aktuellen
+     entfernt</b> — <b>binden Sie jedes Messgerät an eine Karte</b>, damit seine
+     Kalibrierung im Kartenprofil liegt.  Die Auswahl von <code>Neue Karte…</code>
+     erstellt ein Profil, dessen erster Bereich aus der aktuell wirksamen Kalibrierung
+     übernommen wird, sodass die neue Karte bereits auf den bisherigen Stand kalibriert
+     startet.</p>
+
+  <h4 id="prefs-audio-card-editor">Der Karteneditor</h4>
+  <p>Die Stift-Schaltfläche öffnet den Karteneditor, einen kleinen Dialog, der jede
+     Eigenschaft einer Karte enthält, außer ihren Spannungen pro Bereich (die stammen
+     ausschließlich aus den <a href="#prefs-audio-calibrate">Kalibrier-Abläufen</a>).</p>
+  <p><img src="img/Card editor.png" alt="Dialog Karteneditor"/></p>
+  <table class="controls">
+    <tr><th>Eigenschaft</th><th>Hinweise</th></tr>
+    <tr><td>Kartenname</td>
+        <td>Der logische Name, der im Kombinationsfeld „Karte“ angezeigt wird.  Muss
+            nicht leer und eindeutig sein.</td></tr>
+    <tr><td>Bereitstellung</td>
+        <td><b>Nur Eingang</b>, <b>Nur Ausgang</b> oder <b>Beides</b> — für welche
+            Richtungen diese Karte kalibriert ist.  Eine Karte erscheint nur in den
+            Kombinationsfeldern der Richtungen, die sie bereitstellt.  Das Einschränken
+            einer Karte, die in einer entfernten Richtung bereits kalibrierte Bereiche
+            trägt, fragt zuerst nach, da diese Bereiche gelöscht würden.</td></tr>
+    <tr><td>Kanäle</td>
+        <td><b>Mono</b> (ein physischer Kanal — ein einzelner Vollausschlag dient
+            beiden Seiten) oder <b>Stereo</b> (zwei Kanäle).</td></tr>
+    <tr><td>Erkannte Gerätenamen</td>
+        <td>Ein Gerätename — oder ein Fragment eines solchen — pro Zeile.  Diese Karte
+            wird gewählt, sobald irgendeine Zeile (als Teilzeichenfolge, ohne
+            Groß-/Kleinschreibung) im vom Treiber gemeldeten Gerätenamen vorkommt;
+            passen mehrere Karten, gewinnt die spezifischste Zeile.  Diese eine Liste
+            ist zugleich das Erkennungsmuster und die gebundenen Gerätenamen — das
+            Binden eines Geräts hängt seinen Namen hier einfach an.</td></tr>
+    <tr><td>Eingang / Ausgang — Kopplung</td>
+        <td>Je Richtung, wie die beiden Kanäle einer <b>Stereo</b>-Karte zusammenlaufen.
+            <b>Verknüpft</b> schaltet die Bereiche beider Kanäle gemeinsam, aber jeder
+            Kanal behält weiterhin seinen <em>eigenen</em> kalibrierten
+            Vollausschlag-Wert — die Kopplung teilt nur, welcher Bereich
+            <em>ausgewählt</em> ist, nie die gemessenen Volt.  <b>Unabhängig</b> lässt
+            jeden Kanal seinen eigenen aktiven Bereich wählen.  Eine Mono-Karte
+            ignoriert dies.</td></tr>
+    <tr><td>Eingang / Ausgang — Kalibrierung vom Gerät bereitgestellt</td>
+        <td>Für ein Instrument ankreuzen, das seinen eigenen Vollausschlag meldet (ein
+            Gerät der QA40x-Klasse).  Seine Bereiche bleiben umschaltbar, aber ihre
+            <b>Vollausschlagswerte werden aus dem Gerät selbst gelesen</b> — das
+            Instrument meldet seine eigene Kalibrierung.  Die manuellen Kalibrier-Abläufe
+            überschreiben sie nie, und auch ein <b>Katalog-Upgrade liefert die
+            Kalibrierung nicht mit</b>: die Werte stammen immer aus dem Gerät, nie aus
+            dem mitgelieferten Katalog.</td></tr>
+  </table>
+  <p>Die Gruppen Eingang und Ausgang werden entsprechend der <b>Bereitstellung</b>
+     ausgegraut — eine Karte nur für den Eingang zeigt ihre Ausgangsgruppe deaktiviert
+     und umgekehrt.</p>
+
+  <h4 id="prefs-audio-ranges">Tabelle „Bereiche“</h4>
+  <p>Ein <b>Bereich</b> ist eine Stellung der analogen Eingangsstufe der Karte — eine
+     Abschwächerstufe, eine Verstärkungsstellung, eine DIP- oder Relais-Einstellung —
+     jeweils mit ihrer eigenen Vollausschlag-Spannung.  Die Tabelle führt eine Zeile
+     pro Bereich auf:</p>
+  <table class="controls">
+    <tr><th>Spalte</th><th>Hinweise</th></tr>
+    <tr><td>Aktiv-Markierung</td>
+        <td>Wählt den einen Bereich, dessen Vollausschlag gerade in Kraft ist.  Es ist
+            immer genau ein Bereich aktiv; schalten Sie ihn passend zu der
+            Eingangsstufen-Stellung, die Sie an der Hardware eingestellt haben.</td></tr>
+    <tr><td>Bereichsname</td>
+        <td>Ein bearbeitbarer Name für den Bereich — z. B. die Abschwächer- oder
+            Verstärkungsstellung, für die er steht (<code>0 dB</code>,
+            <code>−20 dB</code>, ein DIP-Code).</td></tr>
+    <tr><td>Hinzufügen / Entfernen</td>
+        <td>Fügt einen Bereich für eine weitere Eingangsstufen-Stellung hinzu oder
+            entfernt einen.</td></tr>
+  </table>
+  <p>Die Zeile hat <em>kein</em> Feld für die Vollausschlag-Spannung.  Der
+     Vollausschlag-Wert eines Bereichs wird hier nicht eingetragen — er wird
+     ausschließlich gesetzt, indem der Fadenkreuz-Ablauf
+     <a href="#prefs-audio-calibrate">Kalibrieren</a> mit dem als aktiv markierten
+     Bereich ausgeführt wird, der den gemessenen Vollausschlag hineinschreibt.</p>
+  <p>Eine einfache Karte, die ihre Eingangsstufe nie ändert, behält eine einzige Zeile.
+     Eine umschaltbare Schnittstelle erhält eine Zeile pro Stellung, und Sie setzen die
+     Aktiv-Markierung jedes Mal um, wenn Sie die Hardware umschalten.</p>
+  <p>Wie viele Aktiv-Spalten die Tabelle zeigt, richtet sich nach den <b>Kanälen</b>
+     der Karte und der <b>Kopplung</b> je Richtung, beide im
+     <a href="#prefs-audio-card-editor">Karteneditor</a> festgelegt:</p>
+  <ul>
+    <li><b>Unabhängige</b> Stereo-Karte — die Aktiv-Markierung teilt sich in zwei
+        Spalten mit den Überschriften <b>Links</b> und <b>Rechts</b>, jede trägt genau
+        einen aktiven Bereich und ihr eigenes bearbeitbares Label, sodass die beiden
+        Kanäle ihre eigene Eingangsstufen-Stellung getrennt verfolgen.  Dies ist die
+        <b>E1DA Cosmos ADC</b>, deren linker und rechter DIP-Schalter unabhängig
+        umschalten: Stellen Sie die linke Spalte auf den Bereich passend zum linken DIP
+        und die rechte Spalte auf den Bereich passend zum rechten.  Die mitgelieferte
+        Cosmos-Karte wird in dieser Form mit jeder aufgeführten DIP-Stellung
+        ausgeliefert, ihre Bereichstabelle öffnet also mit beiden vorhandenen
+        Spalten.</li>
+    <li><b>Verknüpfte</b> Stereo-Karte oder eine <b>Mono</b>-Karte — eine einzelne
+        Aktiv-Spalte, sodass beide Kanäle die Bereiche gemeinsam umschalten.  (Eine
+        verknüpfte Karte kalibriert dennoch jeden Kanal getrennt — nur die
+        Bereich<em>auswahl</em> ist geteilt.)</li>
+  </ul>
+
+  <h4 id="prefs-audio-example">Durchgerechnetes Beispiel — zwei Karten an einem Messplatz</h4>
+  <p>Ein typischer Messplatz hat am Eingang einen <b>E1DA Cosmos ADC</b>, dessen
+     DIP-Abschwächer den Vollausschlag umschaltet, und zusätzlich eine separate
+     <b>JLsounds</b>-Karte im Einsatz.  Binden Sie jede einmal, und ihre
+     Kalibrierungen vermischen sich nie:</p>
+  <ol>
+    <li>Wählen Sie den Cosmos im Eingangs-Kombinationsfeld <b>Gerät</b>.  Sein
+        Kombinationsfeld <b>Karte:</b> wählt die bekannte Karte <b>E1DA Cosmos ADC</b>
+        voraus — ein fertiges, in <code>devices.yaml</code> vorbelegtes Profil — mit
+        einem nominalen Bereich für jede DIP-Stellung, <code>1.7V</code> bis
+        <code>43V</code>, bereits an Ort und Stelle.  Bestätigen Sie sie
+        durch Auswählen und Drücken von <b>OK</b>.  (Bei einer nicht erkannten Karte
+        würden Sie stattdessen <code>Neue Karte…</code> wählen und die Zeilen von Hand
+        hinzufügen.)</li>
+    <li>Da die Cosmos-DIPs pro Kanal schalten, zeigt seine Tabelle eine
+        Aktiv-Spalte <b>Links</b> und eine <b>Rechts</b>.  Markieren Sie in jeder
+        Spalte den Bereich passend zur DIP-Stellung dieses Kanals — die beiden
+        Spalten verfolgen die beiden Schalter unabhängig.</li>
+    <li>Kalibrieren Sie diese Bereiche über den Fadenkreuz-Ablauf
+        <a href="fft.html#fft-utility-calibrate">Kalibrieren</a> — am Oszilloskop
+        ist nur die Zeile des <b>gerade gemessenen Kanals</b> aktiv (die andere Zeile
+        ist deaktiviert und bleibt leer) und schreibt den gemessenen Vollausschlag
+        dieses Kanals in dessen aktiven Bereich; messen Sie den anderen Kanal, um
+        dessen Zeile nacheinander zu kalibrieren (die eigene Kalibrierung der FFT
+        schreibt ebenfalls nur den gerade analysierten Kanal).  Legen Sie
+        dann einen DIP um, schalten Sie die Aktiv-Spalte dieses Kanals auf die andere
+        Zeile und kalibrieren Sie erneut; die neue Messung landet im zweiten Bereich
+        dieses Kanals.</li>
+    <li>Wählen Sie später das JLsounds-Gerät: es trägt seine eigene Karte und seine
+        eigene Kalibrierung, vom Cosmos unberührt.</li>
+  </ol>
+  <p>Weil das Umlegen des DIP nichts anderes bedeutet, als umzuschalten, welcher
+     Bereich aktiv ist, und die Werte der Karte folgen statt dem Backend, vermischt
+     der Wechsel zwischen den beiden Karten — oder das erneute Öffnen des Cosmos unter
+     einem anderen Backend, sobald sein Name dort gebunden ist — ihre Vollausschläge
+     nie.</p>
+
+  <h4 id="prefs-audio-calibrate">Wie eine Kalibrierung in eine Karte geschrieben wird</h4>
+  <p>Die Fadenkreuz-Kalibrierungsabläufe verankern die Skala an einer bekannten
+     Referenz — die ADC-Kalibrierung von
+     <a href="oscilloscope.html#scope-utility-calibrate">Oszilloskop</a> und
+     <a href="fft.html#fft-utility-calibrate">FFT</a> für den Eingang und die
+     <a href="generator.html#generator-dac-calibrate">DAC-Kalibrierung des Generators</a>
+     für den Ausgang.  Jeder dieser Abläufe schreibt den gemessenen Vollausschlag in
+     den <em>aktiven Bereich der aktuell gebundenen Karte</em>.  Hat das gewählte Gerät
+     noch kein Profil, erstellt die erste Kalibrierung automatisch eines — logischer
+     Name aus dem Gerät, ein erkannter Gerätename dafür und ein übernommener
+     Bereich — sodass Sie allein durch das Kalibrieren ein Kartenprofil erhalten, ohne
+     zuvor diesen Reiter aufsuchen zu müssen.</p>
+  <p>Die Kalibrierung erfolgt <b>stets pro Kanal</b>.  Eine <b>Stereo</b>-Karte öffnet
+     den gemeinsamen zweizeiligen Dialog mit einem Feld <b>Links</b> und einem
+     <b>Rechts</b>, da keine zwei physischen Kanäle exakt gleich kalibriert sind — die
+     Kopplung teilt nur, welcher Bereich ausgewählt ist, nie die gemessenen Werte;
+     eine <b>Mono</b>-Karte zeigt eine einzelne Zeile.  Auf dem Weg über das
+     <b>Oszilloskop</b> ist nur die Zeile des <b>gerade gemessenen Kanals</b> aktiv —
+     die andere Zeile ist deaktiviert und bleibt leer, sodass Sie jeweils einen Kanal
+     kalibrieren; auf dem Weg über die <b>FFT</b> ist nur die Zeile des
+     gerade analysierten Kanals aktiviert, da die FFT jeweils einen Kanal bearbeitet;
+     der <b>DAC</b>-Weg steuert beide Zeilen an.  Jede Zeile schreibt nur den aktiven
+     Bereich ihres eigenen Kanals.</p>
+
+  <h4 id="prefs-audio-when">Wann die Werte wirksam werden</h4>
+  <p>Der Vollausschlag des aktiven Bereichs der gebundenen Karte wird zu folgenden
+     Zeitpunkten aufgelöst und angewendet: beim <b>Start der Aufnahme</b> (Eingang),
+     beim <b>Start des Generators</b> (Ausgang) und beim Schließen dieses Dialogs mit
+     <b>OK</b>.  Ab diesem Moment steuert der aufgelöste Wert die absolute dBV-Achse
+     der FFT, die Spannungsanzeigen des Oszilloskops und die Ausgangsskalierung des
+     Generators.  Ein Gerät ohne Profil greift auf den einzelnen gemeinsamen
+     Vollausschlag zurück (ein veralteter Rückfall, der entfernt wird — binden Sie
+     eine Karte), sodass sich nichts ändert, bis eine Karte gebunden oder
+     kalibriert wird.</p>
+  <p>Ein Wert wird auch <b>sofort wirksam, wenn Sie den Kalibrierdialog mit der
+     Schaltfläche <a href="#prefs-audio-calibrate">Kalibrieren</a> schließen</b>: der
+     neue Vollausschlag wird in <code>devices.yaml</code> gespeichert und über die
+     Live-Kartenbindung an jeden Verbraucher weitergegeben — die Skalierung des
+     Oszilloskops, die dBV-Achse der FFT und die Amplitudengrenze des Generators —
+     <b>ohne Neustart</b>.</p>
+  <div class="note">Jede Karte löst jeden Kanal zu seinem <em>eigenen</em> kalibrierten
+     Vollausschlag auf, sodass jede Oszilloskop-Spur und -Messung den Wert ihres eigenen
+     Kanals verwendet und die absolute dBV-Achse der FFT dem analysierten Kanal folgt.
+     Eine <b>unabhängige</b> Karte kann die beiden Kanäle zusätzlich auf
+     <em>unterschiedliche</em> Bereiche stellen; eine <b>verknüpfte</b> Karte hält beide
+     auf demselben Bereich, verwendet aber weiterhin den eigenen gemessenen Wert jedes
+     Kanals.</div>
 
   <h2 id="prefs-oscilloscope">Oszilloskop</h2>
   <p><img src="img/Preferences Oscilloscope.png" alt="Einstellungen — Reiter Oszilloskop"/></p>

@@ -17,7 +17,7 @@
 import { FreqRespController } from './freqresp-controller.js';
 import { FreqRespView } from './freqresp-view.js';
 import { FreqRespTabControl } from './freqresp-tab-control.js';
-import { FreqRespCorrectionStore } from './correction-store.js';
+import { CorrectionStore } from '../common/correction-store.js';
 import { FreqRespWizard } from './wizard.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
@@ -36,10 +36,10 @@ export class FreqRespPane {
 
     this.canvas = document.getElementById('frPlot');
 
-    // Loaded-correction store (Java FreqRespCorrectionStore): the .frc entries + wizard `direct`
+    // Loaded-correction store (Java CorrectionStore): the .frc entries + wizard `direct`
     // buffer the view divides out at render time. The change callback retraces the view AND
     // rebuilds the calibration-tab rows — both handled by the tab control's onStoreChanged.
-    this.correctionStore = new FreqRespCorrectionStore('FreqResp',
+    this.correctionStore = new CorrectionStore('FreqResp',
       () => this.tabControl.onStoreChanged());
 
     // The interactive view owns the canvas: axes, zoom/pan, crosshair, scrollbars, render-time

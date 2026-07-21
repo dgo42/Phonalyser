@@ -20,6 +20,8 @@ package org.edgo.audio.measure.enums;
 
 import lombok.Getter;
 
+import org.edgo.audio.measure.sound.LibUsb;
+
 /**
  * Selects which native audio path the application uses for capture and playback.
  *
@@ -35,12 +37,19 @@ import lombok.Getter;
  * WDM/WASAPI shared on Windows).  Use this on non-Windows builds; on Windows
  * the WASAPI exclusive path generally gives better latency and bit-exact
  * playback.
+ *
+ * <p>{@link #QA40X} drives a QuantAsylum QA402/QA403 audio analyzer directly
+ * over {@code libusb-1.0}, bypassing the vendor software.  Cross-platform
+ * wherever the native {@code libusb-1.0} binding loads (its
+ * {@link #isAvailable()} probes exactly that), not gated on the host OS like
+ * the sound-card backends.
  */
 public enum AudioBackendType {
     WASAPI("WASAPI"),
     WDMKS("WDM-KS"),
     COREAUDIO("CoreAudio"),
-    JAVASOUND("JavaSound");
+    JAVASOUND("JavaSound"),
+    QA40X("QA40x");
 
     /** Human-readable name shown in the Preferences dialog. */
     @Getter
@@ -69,9 +78,13 @@ public enum AudioBackendType {
             case "java":
             case "js":
                 parsed = JAVASOUND; break;
+            case "qa40x":
+            case "qa402":
+            case "qa403":
+                parsed = QA40X; break;
             default:
                 throw new IllegalArgumentException(
-                        "Unknown --backend: " + s + " (wasapi|wdmks|coreaudio|javasound)");
+                        "Unknown --backend: " + s + " (wasapi|wdmks|coreaudio|javasound|qa40x)");
         }
         if (!parsed.isAvailable()) {
             throw new IllegalArgumentException(
@@ -89,7 +102,10 @@ public enum AudioBackendType {
         return JAVASOUND;
     }
 
-    /** True when this backend can be opened on the running OS. */
+    /** True when this backend can be opened on the running OS — for
+     *  {@link #QA40X} that means the {@code libusb-1.0} binding loads (graceful
+     *  {@code false} when the native library is absent), independent of the host
+     *  OS; the sound-card backends stay OS-gated. */
     public boolean isAvailable() {
         String os = System.getProperty("os.name", "").toLowerCase();
         boolean windows = os.contains("win");
@@ -99,6 +115,7 @@ public enum AudioBackendType {
             case WDMKS:     return windows;
             case COREAUDIO: return mac;
             case JAVASOUND: return !mac;   // hidden on macOS — CoreAudio replaces it
+            case QA40X:     return LibUsb.available();
             default:        return false;
         }
     }

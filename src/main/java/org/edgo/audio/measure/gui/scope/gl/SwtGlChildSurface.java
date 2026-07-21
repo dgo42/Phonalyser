@@ -21,12 +21,14 @@ package org.edgo.audio.measure.gui.scope.gl;
 import java.lang.reflect.Field;
 
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Event;
+import org.eclipse.swt.widgets.Listener;
 import org.eclipse.swt.widgets.Shell;
 import org.edgo.audio.measure.gui.common.NvgMeasurementPainter;
 
@@ -127,6 +129,16 @@ public final class SwtGlChildSurface implements GlScopeSurface {
     private static final long   DOUBLE_CLICK_MS   = 300L;
     private static final int    DOUBLE_CLICK_SLOP = 4;
 
+    /** Post-open settle poll.  Cocoa finalises the shell frame asynchronously
+     *  after open, and GLFW can re-place the child at show time — a single
+     *  deferred re-track proved too early on the bench (the child sat one
+     *  titlebar high until the first render).  So for the first two seconds
+     *  the constructor re-tracks on a timer, each tick FORCING the reposition
+     *  (the {@code lastX} reset idiom from {@link #setVisible}) so a show-time
+     *  re-place can't hide behind the position cache. */
+    private static final int SETTLE_TRACK_INTERVAL_MS = 100;
+    private static final int SETTLE_TRACK_TICKS       = 20;
+
     private final Composite placeholder;
     private final Shell     shell;
 
@@ -165,7 +177,35 @@ public final class SwtGlChildSurface implements GlScopeSurface {
             installInputCallbacks();
             trackPlaceholder();
             placeholder.addListener(SWT.Resize, e -> render());
-            placeholder.addDisposeListener(e -> dispose());
+            // The child is a floating top-level window, not a real Cocoa child of
+            // the placeholder — it follows the placeholder only when something
+            // renders (renderFrame → trackPlaceholder).  Two gaps: (a) at startup
+            // the shell frame settles AFTER the one-shot placement above, and an
+            // idle scope renders nothing, so the child sat visibly too high until
+            // the first mouse-over / resize; (b) dragging the shell with an idle
+            // scope left the child behind.  (a) → the bounded settle poll (see
+            // SETTLE_TRACK_*); (b) → re-track on every shell move (cheap —
+            // repositions only on change; a shell RESIZE re-renders via the
+            // placeholder listener above).
+            Listener shellMoved = e -> trackPlaceholder();
+            shell.addListener(SWT.Move, shellMoved);
+            Runnable settleTrack = new Runnable() {
+                private int ticksLeft = SETTLE_TRACK_TICKS;
+                @Override
+                public void run() {
+                    if (placeholder.isDisposed() || window == NULL) return;
+                    lastX = Integer.MIN_VALUE;   // force reposition — see SETTLE_TRACK_* docs
+                    trackPlaceholder();
+                    if (--ticksLeft > 0) {
+                        placeholder.getDisplay().timerExec(SETTLE_TRACK_INTERVAL_MS, this);
+                    }
+                }
+            };
+            placeholder.getDisplay().timerExec(SETTLE_TRACK_INTERVAL_MS, settleTrack);
+            placeholder.addDisposeListener(e -> {
+                if (!shell.isDisposed()) shell.removeListener(SWT.Move, shellMoved);
+                dispose();
+            });
         }
     }
 
@@ -193,6 +233,13 @@ public final class SwtGlChildSurface implements GlScopeSurface {
     public void clearPersistence() {
         ScopePhosphor p = phosphor;
         if (p != null) p.clearPersistence();
+    }
+
+    @Override
+    public ImageData persistenceSnapshot() {
+        if (window == NULL || placeholder.isDisposed() || phosphor == null || vg == 0L) return null;
+        glfwMakeContextCurrent(window);
+        return phosphor.readback();
     }
 
     private void renderFrame(ScopePhosphor.Kind kind) {

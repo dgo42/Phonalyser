@@ -110,7 +110,7 @@ class PreferencesConversionTest {
     @Test
     void voltsPerSqrtHz_nullBinBwFallsBackToCache() {
         assertEquals(0.2 / Math.sqrt(BIN_BW_HZ),
-                Preferences.instance().convertFromDbFs(-20.0, MagnitudeUnit.V_SQRT_HZ, null), EPS);
+                Preferences.instance().convertFromDbFs(-20.0, MagnitudeUnit.V_SQRT_HZ, (Double) null), EPS);
     }
 
     @Test

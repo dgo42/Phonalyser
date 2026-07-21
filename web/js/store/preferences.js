@@ -76,6 +76,9 @@ function defaultUiFont(style, sizeBump) {
   return family + '|' + (size + sizeBump) + '|' + style;
 }
 
+import { FreqRespFilterTypeParams } from './freqresp-filter-type-params.js';
+import { fromNameOr as persistenceFromNameOr } from '../scope/scope-enums.js';
+
 // --- enum value sets (the legal serialised names, mirroring the Java enums) ---
 const E = {
   AudioBackendType: ['WASAPI', 'WDMKS', 'COREAUDIO', 'JAVASOUND'],
@@ -94,6 +97,10 @@ const E = {
   MagnitudeUnit: ['V', 'V_SQRT_HZ', 'DBV', 'DBFS'],
   AlignGenerator: ['NONE', 'FLL'],
   TabOrientation: ['TOP', 'LEFT'],
+  FilterType: ['LOW_PASS', 'HIGH_PASS', 'BAND_PASS', 'NOTCH'],
+  FilterResponse: ['BESSEL', 'BUTTERWORTH', 'CHEBYSHEV', 'ELLIPTIC', 'INV_CHEBYSHEV'],
+  UnevenMode: ['OFF', 'LEVEL', 'RANGE'],
+  OutputChannels: ['BOTH', 'LEFT', 'RIGHT'],
 };
 
 /** Forms whose name ends in DUAL_TONE / DUAL_TONE_COMP (GenSignalForm.isDualTone). */
@@ -197,6 +204,8 @@ export class OscPreset {
     this.rightAcMode = false;
     this.leftSincInterpEnabled = true;
     this.rightSincInterpEnabled = true;
+    this.leftResidualEnabled = false;
+    this.rightResidualEnabled = false;
     this.leftMainsSuppression = 'NONE';
     this.rightMainsSuppression = 'NONE';
     this.leftLpf = 'NONE';
@@ -259,6 +268,18 @@ export class FreqRespPreset {
     this.reverseRiaa = false;
     this.iecAmendment = false;
     this.compareMode = false;
+    // Filter overlay
+    this.showFilter = false;
+    this.filterCompare = false;
+    this.filterType = 'LOW_PASS';
+    this.filterResponse = 'BUTTERWORTH';
+    this.filterParams = FreqRespFilterTypeParams.fromType('LOW_PASS');
+    // Unevenness
+    this.unevenMode = 'OFF';
+    this.unevenNotch = false;
+    this.unevenDb = 3.0;
+    this.unevenStartHz = 20.0;
+    this.unevenStopHz = 20000.0;
   }
 }
 
@@ -344,6 +365,8 @@ export class Preferences {
     this.oscShowReconstructedBeat = this._bound(false);
     this.oscLeftSincInterpEnabled = this._bound(true);
     this.oscRightSincInterpEnabled = this._bound(true);
+    this.oscLeftResidualEnabled = this._bound(false);
+    this.oscRightResidualEnabled = this._bound(false);
     this.oscLeftMainsSuppression = this._bound('NONE');
     this.oscRightMainsSuppression = this._bound('NONE');
     this.oscLeftLpf = this._bound('NONE');
@@ -355,6 +378,10 @@ export class Preferences {
     this.oscMeasurementAverageSeconds = this._bound(5.0);
     this.oscLineWidth = this._bound(2.0);
     this.oscDotDiameter = this._bound(5);
+    // Display persistence ("digital phosphor") — GPU path only. Mode stored by enum name
+    // (PersistenceMode), manual-seconds used only when mode == MANUAL.
+    this.oscPersistenceMode = this._bound('OFF');
+    this.oscPersistenceManualSeconds = this._bound(1.0);
     this.oscLeftChannelColor = this._bound(0x00d7ff);
     this.oscRightChannelColor = this._bound(0xffd700);
 
@@ -364,8 +391,15 @@ export class Preferences {
     this.oscShowStats = this._bound(true);
     this.oscShowMeasurementTable = this._bound(true);
     this.adcFsVoltageRms = this._bound(DEFAULT_ADC_FS_VRMS);
+    // RIGHT-channel ADC full-scale — the per-channel sibling of adcFsVoltageRms;
+    // defaults to the same legacy value and mirrors it until a profile / calibration
+    // sets it (Preferences.adcFsVoltageRmsRight).
+    this.adcFsVoltageRmsRight = this._bound(DEFAULT_ADC_FS_VRMS);
     // In-memory PEAK amplitude; persisted as RMS (÷√2 on save, ×√2 on load).
     this.dacFsVoltageAmpl = this._bound(2.79351);
+    // RIGHT-channel DAC full-scale (PEAK amplitude) — the per-channel sibling of
+    // dacFsVoltageAmpl; defaults to the same value (Preferences.dacFsVoltageAmplRight).
+    this.dacFsVoltageAmplRight = this._bound(2.79351);
 
     this.oscSavePath = this._bound(null);
     this.oscSaveFolder = this._bound(null);
@@ -382,7 +416,16 @@ export class Preferences {
     this.genDualToneSplitPct = this._bound(50.0);
     this.genAmplitudeVrms = this._bound(0.5);
     this.genAmplitudeDbvDisplay = this._bound(false);
-    this.genDitherBits = this._bound(0);
+    // Dither depth in bits (may be fractional); 0 = Off. Mirrors Java Preferences.genDitherBits (double).
+    this.genDitherBits = this._bound(0.0);
+    // True = the dither field displays in dBV (the user typed an explicit dBV suffix); persisted so a
+    // restart keeps the choice. Mirrors Java Preferences.genDitherDbvDisplay.
+    this.genDitherDbvDisplay = this._bound(false);
+    // Which output lane(s) the generator drives — the encoder gate ('BOTH' by
+    // default = pre-feature behaviour). Applied at the interleave seam (the DDS
+    // worklet for live playback, the genSave export path), like Java's
+    // Preferences.genOutputChannels feeding PcmQuantizer / SignalFileExporter.
+    this.genOutputChannels = this._bound('BOTH');
     this.genDpd = this._bound(null);
     this.genDpdDual = this._bound(null);
     this.genDpdFolder = this._bound(null);
@@ -496,11 +539,19 @@ export class Preferences {
     this.freqRespFftSize = this._bound(4194304);
     this.freqRespDitherBits = this._bound(0);
     this.freqRespLeadInSec = this._bound(0.05);
+    // Which output lane(s) the sweep drives — the encoder gate ('BOTH' by default,
+    // the only behaviour before per-channel output existed). LEFT / RIGHT write
+    // digital silence to the un-driven lane; both channels are still deconvolved
+    // (Java Preferences.freqRespOutputChannels feeding CaptureWithGenerator).
+    this.freqRespOutputChannels = this._bound('BOTH');
     // Tune-notch wizard fields, persisted independently of the main FreqResp pane.
     this.tuneNotchStartHz = this._bound(900.0);
     this.tuneNotchStopHz = this._bound(1100.0);
     this.tuneNotchAmplitudeVrms = this._bound(1.0);
     this.tuneNotchTargetHz = this._bound(1000.0);
+    // Tune-notch output-lane gate ('BOTH' by default), persisted independently of the
+    // other tuneNotch* fields (Java Preferences.tuneNotchOutputChannels).
+    this.tuneNotchOutputChannels = this._bound('BOTH');
     this.freqRespLeftVisible = this._bound(true);
     this.freqRespRightVisible = this._bound(false);
     this.freqRespPhaseVisible = this._bound(false);
@@ -521,6 +572,17 @@ export class Preferences {
     this.freqRespReverseRiaa = this._bound(false);
     this.freqRespIecAmendment = this._bound(false);
     this.freqRespCompareMode = this._bound(false);
+    this.freqRespShowFilter = this._bound(false);   // never persisted (see toMap/fromMap)
+    this.freqRespFilterCompare = this._bound(false);
+    this.freqRespFilterType = this._bound('LOW_PASS');
+    this.freqRespFilterResponse = this._bound('BUTTERWORTH');
+    this.freqRespUnevenMode = this._bound('OFF');
+    this.freqRespUnevenNotch = this._bound(false);
+    this.freqRespUnevenDb = this._bound(3.0);
+    this.freqRespUnevenStartHz = this._bound(20.0);
+    this.freqRespUnevenStopHz = this._bound(20000.0);
+    /** @type {Map<string, FreqRespFilterTypeParams>} keyed by FilterType name (freqRespFilterParamsByType). */
+    this.freqRespFilterParamsByType = new Map();
     this.freqRespApplyCalibration = this._bound(true);
     /** @type {CalibrationEntry[]} */
     this.freqRespCalibrations = [];
@@ -535,8 +597,11 @@ export class Preferences {
     this.freqRespScreenshotHeight = this._bound(0);
 
     // ---- cached constants (recomputed on the relevant changes / on load) ----
-    /** dBV = dBFS + dbvOffsetDb (= 20·log10(adcFsVoltageRms)). */
+    /** dBV = dBFS + dbvOffsetDb (= 20·log10(adcFsVoltageRms)). LEFT / LINKED / legacy offset. */
     this.dbvOffsetDb = 20.0 * Math.log10(DEFAULT_ADC_FS_VRMS);
+    /** Cached RIGHT-channel dBV↔dBFS offset (= 20·log10(adcFsVoltageRmsRight)) —
+     *  the per-channel sibling of dbvOffsetDb (Preferences.dbvOffsetDbRight). */
+    this.dbvOffsetDbRight = 20.0 * Math.log10(DEFAULT_ADC_FS_VRMS);
     /** √(bin bandwidth) = √(inputSampleRate / fftLength); the V→V/√Hz divisor. */
     this.binBwSqrt = 1.0;
     // transientMode was already set from the `detached` ctor arg at the top of the
@@ -726,6 +791,53 @@ export class Preferences {
     if (this.freqRespPresets.delete(name)) this.save();
   }
 
+  /** Current filter scalars for a type (getFreqRespFilterParams); fromType defaults if none. */
+  getFreqRespFilterParams(type) {
+    if (type == null) return FreqRespFilterTypeParams.fromType('LOW_PASS');
+    const p = this.freqRespFilterParamsByType.get(type);
+    return p != null ? p : FreqRespFilterTypeParams.fromType(type);
+  }
+
+  /** Writes back a type's filter scalars and persists (putFreqRespFilterParams). */
+  putFreqRespFilterParams(type, params) {
+    if (type == null || params == null) return;
+    this.freqRespFilterParamsByType.set(type, params);
+    this.save();
+  }
+
+  /** Serialises one FreqRespFilterTypeParams to its map — the one serialization
+   *  shape, shared by the per-type map and every preset's filterParams. */
+  _writeFilterParams(p) {
+    return {
+      modeOrder: p.modeOrder,
+      rippleDb: p.rippleDb,
+      stopAttenDb: p.stopAttenDb,
+      centerHz: p.centerHz,
+      passHz: p.passHz,
+      stopHz: p.stopHz,
+      orderPassHz: p.orderPassHz,
+      orderRippleDb: p.orderRippleDb,
+      order: p.order,
+      q: p.q,
+    };
+  }
+
+  /** Deserialises one FreqRespFilterTypeParams, seeded by type's defaults and clamped. */
+  _readFilterParams(type, pm) {
+    const p = FreqRespFilterTypeParams.fromType(type);
+    if (isBool(pm.modeOrder)) p.modeOrder = pm.modeOrder;
+    if (isNum(pm.rippleDb)) p.rippleDb = Math.max(0.001, Math.min(20.0, pm.rippleDb));
+    if (isNum(pm.stopAttenDb)) p.stopAttenDb = Math.max(0.0, Math.min(200.0, pm.stopAttenDb));
+    if (isNum(pm.centerHz)) p.centerHz = Math.max(0.0, pm.centerHz);
+    if (isNum(pm.passHz)) p.passHz = Math.max(0.0, pm.passHz);
+    if (isNum(pm.stopHz)) p.stopHz = Math.max(0.0, pm.stopHz);
+    if (isNum(pm.orderPassHz)) p.orderPassHz = Math.max(0.0, pm.orderPassHz);
+    if (isNum(pm.orderRippleDb)) p.orderRippleDb = Math.max(0.001, Math.min(20.0, pm.orderRippleDb));
+    if (isNum(pm.order)) p.order = Math.max(1, Math.min(32, trunc(pm.order)));
+    if (isNum(pm.q)) p.q = Math.max(0.1, Math.min(100.0, pm.q));
+    return p;
+  }
+
   // -------------------------------------------------------------------------
   // validated setters that have side effects in the Java original
   // -------------------------------------------------------------------------
@@ -738,10 +850,57 @@ export class Preferences {
     this._recomputeDbvOffset(v);
   }
 
+  /** Sets the RIGHT ADC full-scale Vrms; rejects ≤0 and recomputes the right dBV
+   *  offset (setAdcFsVoltageRmsRight). */
+  setAdcFsVoltageRmsRight(v) {
+    if (!(v > 0.0)) return;
+    this.adcFsVoltageRmsRight.set(v);
+    this._recomputeDbvOffsetRight(v);
+  }
+
   /** Sets DAC full-scale peak amplitude; rejects ≤0 (setDacFsVoltageAmpl). */
   setDacFsVoltageAmpl(v) {
     if (!(v > 0.0)) return;
     this.dacFsVoltageAmpl.set(v);
+  }
+
+  /** Sets the RIGHT DAC full-scale peak amplitude; rejects ≤0 (setDacFsVoltageAmplRight). */
+  setDacFsVoltageAmplRight(v) {
+    if (!(v > 0.0)) return;
+    this.dacFsVoltageAmplRight.set(v);
+  }
+
+  /** The ADC full-scale RMS voltage of {@code ch}: 'R' → the right scalar, else the
+   *  left / LINKED / legacy scalar (Preferences.getAdcFsVoltageRms(Channel)). */
+  getAdcFsVoltageRms(ch = 'L') {
+    return ch === 'R' ? this.adcFsVoltageRmsRight.get() : this.adcFsVoltageRms.get();
+  }
+
+  /** The ±full-scale PEAK volts of {@code ch} (= fs(ch)·√2) —
+   *  Preferences.getAdcPeakVolts(Channel). */
+  getAdcPeakVolts(ch = 'L') {
+    return this.getAdcFsVoltageRms(ch) * SQRT2;
+  }
+
+  /** The cached dBV↔dBFS offset of {@code ch}: 'R' → dbvOffsetDbRight, else
+   *  dbvOffsetDb (Preferences.getDbvOffsetDb(Channel)). */
+  getDbvOffsetDb(ch = 'L') {
+    return ch === 'R' ? this.dbvOffsetDbRight : this.dbvOffsetDb;
+  }
+
+  /** The DAC full-scale PEAK amplitude of {@code ch}: 'R' → the right scalar, else
+   *  the left / MONO-mirror / legacy scalar (Preferences.getDacFsVoltageAmpl(Channel)). */
+  getDacFsVoltageAmpl(ch = 'L') {
+    return ch === 'R' ? this.dacFsVoltageAmplRight.get() : this.dacFsVoltageAmpl.get();
+  }
+
+  /** The per-lane RIGHT output scale — fsLeft/fsRight so a card with distinct DAC
+   *  full-scales emits the same physical level on both lanes; 1.0 when the right
+   *  full-scale is non-positive (Preferences.dacRightLaneScale). */
+  dacRightLaneScale() {
+    const leftFs = this.dacFsVoltageAmpl.get();
+    const rightFs = this.dacFsVoltageAmplRight.get();
+    return rightFs > 0.0 ? leftFs / rightFs : 1.0;
   }
 
   /** The .dpd path matching {@code form} (getGenDpd(form)). */
@@ -771,9 +930,15 @@ export class Preferences {
   // -------------------------------------------------------------------------
 
   /** Recomputes dbvOffsetDb; non-positive full-scale falls back to 0 dB
-   *  (recomputeDbvOffset). */
+   *  (recomputeDbvOffset / dbvOffsetFor). */
   _recomputeDbvOffset(fsVrms) {
     this.dbvOffsetDb = (fsVrms > 0.0) ? 20.0 * Math.log10(fsVrms) : 0.0;
+  }
+
+  /** Recomputes dbvOffsetDbRight; non-positive full-scale falls back to 0 dB
+   *  (the right sibling of _recomputeDbvOffset / dbvOffsetFor). */
+  _recomputeDbvOffsetRight(fsVrms) {
+    this.dbvOffsetDbRight = (fsVrms > 0.0) ? 20.0 * Math.log10(fsVrms) : 0.0;
   }
 
   /** Recomputes binBwSqrt from the live capture config (recomputeBinBw). */
@@ -792,15 +957,18 @@ export class Preferences {
    * @param {string} unit  MagnitudeUnit name (V | V_SQRT_HZ | DBV | DBFS).
    * @param {?number} [binBwSqrt=null]  √(bin bandwidth) of the spectrum being
    *        converted; null uses the cached live config.
+   * @param {string} [ch='L']  the analysed channel: 'R' uses dbvOffsetDbRight, else
+   *        the left / LINKED / legacy offset (Preferences.convertFromDbFs(…, Channel)).
    * @returns {number}
    */
-  convertFromDbFs(dbFs, unit, binBwSqrt = null) {
+  convertFromDbFs(dbFs, unit, binBwSqrt = null, ch = 'L') {
+    const off = this.getDbvOffsetDb(ch);
     switch (unit) {
       case 'DBFS': return dbFs;
-      case 'DBV': return dbFs + this.dbvOffsetDb;
-      case 'V': return Math.pow(10.0, (dbFs + this.dbvOffsetDb) / 20.0);
+      case 'DBV': return dbFs + off;
+      case 'V': return Math.pow(10.0, (dbFs + off) / 20.0);
       case 'V_SQRT_HZ':
-        return Math.pow(10.0, (dbFs + this.dbvOffsetDb) / 20.0)
+        return Math.pow(10.0, (dbFs + off) / 20.0)
           / (binBwSqrt != null ? binBwSqrt : this.binBwSqrt);
       default: return dbFs;
     }
@@ -912,6 +1080,8 @@ export class Preferences {
     root.oscShowReconstructedBeat = this.oscShowReconstructedBeat.get();
     root.oscLeftSincInterpEnabled = this.oscLeftSincInterpEnabled.get();
     root.oscRightSincInterpEnabled = this.oscRightSincInterpEnabled.get();
+    root.oscLeftResidualEnabled = this.oscLeftResidualEnabled.get();
+    root.oscRightResidualEnabled = this.oscRightResidualEnabled.get();
     root.oscLeftMainsSuppression = this.oscLeftMainsSuppression.get();
     root.oscRightMainsSuppression = this.oscRightMainsSuppression.get();
     root.oscLeftLpf = this.oscLeftLpf.get();
@@ -924,8 +1094,12 @@ export class Preferences {
     root.oscMeasurementChannel = this.oscMeasurementChannel.get();
     root.oscShowStats = this.oscShowStats.get();
     root.oscShowMeasurementTable = this.oscShowMeasurementTable.get();
+    // DEPRECATED shared full-scale calibration — the FALLBACK for a device with no card in the
+    // device-profile store (per-card calibration owns everything else). Kept read AND written for
+    // backwards compatibility, mirroring Java Preferences.toMap (65cd3c5). Only the left/shared
+    // scalars: adcFsVoltageRms and dacFsVoltageRms (= dacFsVoltageAmpl / √2, the on-disk RMS
+    // convention). The never-released Right siblings are deliberately NOT written (Java parity).
     root.adcFsVoltageRms = this.adcFsVoltageRms.get();
-    // Persist as RMS (ampl ÷ √2); the in-memory value is peak amplitude.
     root.dacFsVoltageRms = this.dacFsVoltageAmpl.get() / SQRT2;
     root.genSignalForm = this.genSignalForm.get();
     root.genFrequencyHz = this.genFrequencyHz.get();
@@ -935,6 +1109,8 @@ export class Preferences {
     root.genAmplitudeVrms = this.genAmplitudeVrms.get();
     root.genAmplitudeDbvDisplay = this.genAmplitudeDbvDisplay.get();
     root.genDitherBits = this.genDitherBits.get();
+    root.genDitherDbvDisplay = this.genDitherDbvDisplay.get();
+    root.genOutputChannels = this.genOutputChannels.get();   // persisted by enum name (Java toMap)
     if (this.genDpd.get() != null) root.genDpd = this.genDpd.get();
     if (this.genDpdDual.get() != null) root.genDpdDual = this.genDpdDual.get();
     if (this.genDpdFolder.get() != null) root.genDpdFolder = this.genDpdFolder.get();
@@ -965,6 +1141,8 @@ export class Preferences {
     root.oscPlayFromLoop = this.oscPlayFromLoop.get();
     root.oscLineWidth = this.oscLineWidth.get();
     root.oscDotDiameter = this.oscDotDiameter.get();
+    root.oscPersistenceMode = this.oscPersistenceMode.get();
+    root.oscPersistenceManualSeconds = this.oscPersistenceManualSeconds.get();
     root.oscLeftChannelColor = formatHtmlColor(this.oscLeftChannelColor.get());
     root.oscRightChannelColor = formatHtmlColor(this.oscRightChannelColor.get());
     if (this.screenshotFolder.get() != null) root.screenshotFolder = this.screenshotFolder.get();
@@ -980,6 +1158,8 @@ export class Preferences {
           rightAcMode: p.rightAcMode,
           leftSincInterpEnabled: p.leftSincInterpEnabled,
           rightSincInterpEnabled: p.rightSincInterpEnabled,
+          leftResidualEnabled: p.leftResidualEnabled,
+          rightResidualEnabled: p.rightResidualEnabled,
           leftMainsSuppression: p.leftMainsSuppression,
           rightMainsSuppression: p.rightMainsSuppression,
           leftLpf: p.leftLpf,
@@ -1067,10 +1247,12 @@ export class Preferences {
     root.freqRespFftSize = this.freqRespFftSize.get();
     root.freqRespDitherBits = this.freqRespDitherBits.get();
     root.freqRespLeadInSec = this.freqRespLeadInSec.get();
+    root.freqRespOutputChannels = this.freqRespOutputChannels.get();   // persisted by enum name (Java toMap)
     root.tuneNotchStartHz = this.tuneNotchStartHz.get();
     root.tuneNotchStopHz = this.tuneNotchStopHz.get();
     root.tuneNotchAmplitudeVrms = this.tuneNotchAmplitudeVrms.get();
     root.tuneNotchTargetHz = this.tuneNotchTargetHz.get();
+    root.tuneNotchOutputChannels = this.tuneNotchOutputChannels.get();   // persisted by enum name (Java toMap)
     root.freqRespLeftVisible = this.freqRespLeftVisible.get();
     root.freqRespRightVisible = this.freqRespRightVisible.get();
     root.freqRespPhaseVisible = this.freqRespPhaseVisible.get();
@@ -1090,6 +1272,15 @@ export class Preferences {
     root.freqRespReverseRiaa = this.freqRespReverseRiaa.get();
     root.freqRespIecAmendment = this.freqRespIecAmendment.get();
     root.freqRespCompareMode = this.freqRespCompareMode.get();
+    // freqRespShowFilter is intentionally NOT persisted (fresh-session default).
+    root.freqRespFilterCompare = this.freqRespFilterCompare.get();
+    root.freqRespFilterType = this.freqRespFilterType.get();
+    root.freqRespFilterResponse = this.freqRespFilterResponse.get();
+    root.freqRespUnevenMode = this.freqRespUnevenMode.get();
+    root.freqRespUnevenNotch = this.freqRespUnevenNotch.get();
+    root.freqRespUnevenDb = this.freqRespUnevenDb.get();
+    root.freqRespUnevenStartHz = this.freqRespUnevenStartHz.get();
+    root.freqRespUnevenStopHz = this.freqRespUnevenStopHz.get();
     root.freqRespApplyCalibration = this.freqRespApplyCalibration.get();
     if (this.freqRespCalibrations.length > 0) {
       root.freqRespCalibrations = this.freqRespCalibrations.map((e) => {
@@ -1156,9 +1347,27 @@ export class Preferences {
           reverseRiaa: p.reverseRiaa,
           iecAmendment: p.iecAmendment,
           compareMode: p.compareMode,
+          showFilter: p.showFilter,
+          filterCompare: p.filterCompare,
+          filterType: p.filterType,
+          filterResponse: p.filterResponse,
+          filterParams: this._writeFilterParams(p.filterParams),
+          unevenMode: p.unevenMode,
+          unevenNotch: p.unevenNotch,
+          unevenDb: p.unevenDb,
+          unevenStartHz: p.unevenStartHz,
+          unevenStopHz: p.unevenStopHz,
         };
       }
       root.freqRespPresets = frMap;
+    }
+
+    if (this.freqRespFilterParamsByType.size > 0) {
+      const fptMap = {};
+      for (const [type, v] of this.freqRespFilterParamsByType) {
+        fptMap[type] = this._writeFilterParams(v);
+      }
+      root.freqRespFilterParamsByType = fptMap;
     }
 
     const perBackendMap = {};
@@ -1223,6 +1432,8 @@ export class Preferences {
     if (isBool(g('oscShowReconstructedBeat'))) this.oscShowReconstructedBeat.set(g('oscShowReconstructedBeat'));
     if (isBool(g('oscLeftSincInterpEnabled'))) this.oscLeftSincInterpEnabled.set(g('oscLeftSincInterpEnabled'));
     if (isBool(g('oscRightSincInterpEnabled'))) this.oscRightSincInterpEnabled.set(g('oscRightSincInterpEnabled'));
+    if (isBool(g('oscLeftResidualEnabled'))) this.oscLeftResidualEnabled.set(g('oscLeftResidualEnabled'));
+    if (isBool(g('oscRightResidualEnabled'))) this.oscRightResidualEnabled.set(g('oscRightResidualEnabled'));
     if (isStr(g('oscLeftMainsSuppression'))) this.oscLeftMainsSuppression.set(enumOr('MainsSuppression', g('oscLeftMainsSuppression'), this.oscLeftMainsSuppression.get()));
     if (isStr(g('oscRightMainsSuppression'))) this.oscRightMainsSuppression.set(enumOr('MainsSuppression', g('oscRightMainsSuppression'), this.oscRightMainsSuppression.get()));
     if (isStr(g('oscLeftLpf'))) this.oscLeftLpf.set(enumOr('LpfMode', g('oscLeftLpf'), this.oscLeftLpf.get()));
@@ -1235,10 +1446,15 @@ export class Preferences {
     if (isStr(g('oscMeasurementChannel'))) this.oscMeasurementChannel.set(enumOr('Channel', g('oscMeasurementChannel'), this.oscMeasurementChannel.get()));
     if (isBool(g('oscShowStats'))) this.oscShowStats.set(g('oscShowStats'));
     if (isBool(g('oscShowMeasurementTable'))) this.oscShowMeasurementTable.set(g('oscShowMeasurementTable'));
-    if (isNum(g('adcFsVoltageRms')) && g('adcFsVoltageRms') > 0.0) this.adcFsVoltageRms.set(g('adcFsVoltageRms'));
-    this._recomputeDbvOffset(this.adcFsVoltageRms.get());
-    // Stored as RMS; convert to the in-memory peak amplitude (× √2).
-    if (isNum(g('dacFsVoltageRms')) && g('dacFsVoltageRms') > 0.0) this.dacFsVoltageAmpl.set(g('dacFsVoltageRms') * SQRT2);
+    // DEPRECATED shared full-scale fallback (unbound devices) — see _toMap(); honoured so a
+    // pre-card web document keeps its calibration (Java parity 65cd3c5). The setters validate and
+    // refresh the cached dBV offsets. ONLY the left/shared scalars are read: adcFsVoltageRms and
+    // dacFsVoltageRms. The never-released Right siblings are NOT read — the Right scalars keep
+    // their constructor defaults until a device profile / calibration sets them (Java performs no
+    // left→right mirror here either).
+    if (isNum(g('adcFsVoltageRms'))) this.setAdcFsVoltageRms(g('adcFsVoltageRms'));
+    // Stored as RMS; the setter takes the in-memory peak amplitude (× √2).
+    if (isNum(g('dacFsVoltageRms'))) this.setDacFsVoltageAmpl(g('dacFsVoltageRms') * SQRT2);
     if (isStr(g('genSignalForm'))) this.genSignalForm.set(enumOr('GenSignalForm', g('genSignalForm'), this.genSignalForm.get()));
     if (isNum(g('genFrequencyHz'))) this.genFrequencyHz.set(g('genFrequencyHz'));
     if (isNum(g('genDualToneFreq1Hz'))) this.genDualToneFreq1Hz.set(g('genDualToneFreq1Hz'));
@@ -1246,7 +1462,12 @@ export class Preferences {
     if (isNum(g('genDualToneSplitPct'))) this.genDualToneSplitPct.set(g('genDualToneSplitPct'));
     if (isNum(g('genAmplitudeVrms'))) this.genAmplitudeVrms.set(g('genAmplitudeVrms'));
     if (isBool(g('genAmplitudeDbvDisplay'))) this.genAmplitudeDbvDisplay.set(g('genAmplitudeDbvDisplay'));
-    if (isNum(g('genDitherBits'))) this.genDitherBits.set(trunc(g('genDitherBits')));
+    // Fractional double now (Java int→double): NO trunc, so a fractional dither round-trips.
+    if (isNum(g('genDitherBits'))) this.genDitherBits.set(g('genDitherBits'));
+    if (isBool(g('genDitherDbvDisplay'))) this.genDitherDbvDisplay.set(g('genDitherDbvDisplay'));
+    // Absent / invalid key keeps the current value (default BOTH) — old files stay on BOTH
+    // (mirrors Java enumOr(OutputChannels.class, s, genOutputChannels.get())).
+    if (isStr(g('genOutputChannels'))) this.genOutputChannels.set(enumOr('OutputChannels', g('genOutputChannels'), this.genOutputChannels.get()));
     if (isStr(g('genDpd'))) this.genDpd.set(g('genDpd'));
     if (isStr(g('genDpdDual'))) this.genDpdDual.set(g('genDpdDual'));
     if (isStr(g('genDpdFolder'))) this.genDpdFolder.set(g('genDpdFolder'));
@@ -1277,6 +1498,8 @@ export class Preferences {
     if (isBool(g('oscPlayFromLoop'))) this.oscPlayFromLoop.set(g('oscPlayFromLoop'));
     if (isNum(g('oscLineWidth'))) this.oscLineWidth.set(g('oscLineWidth'));
     if (isNum(g('oscDotDiameter'))) this.oscDotDiameter.set(trunc(g('oscDotDiameter')));
+    if (isStr(g('oscPersistenceMode'))) this.oscPersistenceMode.set(persistenceFromNameOr(g('oscPersistenceMode'), this.oscPersistenceMode.get()));
+    if (isNum(g('oscPersistenceManualSeconds'))) this.oscPersistenceManualSeconds.set(g('oscPersistenceManualSeconds'));
     this._loadColor(g('oscLeftChannelColor'), this.oscLeftChannelColor);
     this._loadColor(g('oscRightChannelColor'), this.oscRightChannelColor);
     if (isStr(g('screenshotFolder'))) this.screenshotFolder.set(g('screenshotFolder'));
@@ -1293,6 +1516,8 @@ export class Preferences {
         if (isBool(pm.rightAcMode)) p.rightAcMode = pm.rightAcMode;
         if (isBool(pm.leftSincInterpEnabled)) p.leftSincInterpEnabled = pm.leftSincInterpEnabled;
         if (isBool(pm.rightSincInterpEnabled)) p.rightSincInterpEnabled = pm.rightSincInterpEnabled;
+        if (isBool(pm.leftResidualEnabled)) p.leftResidualEnabled = pm.leftResidualEnabled;
+        if (isBool(pm.rightResidualEnabled)) p.rightResidualEnabled = pm.rightResidualEnabled;
         if (isStr(pm.leftMainsSuppression)) p.leftMainsSuppression = enumOr('MainsSuppression', pm.leftMainsSuppression, p.leftMainsSuppression);
         if (isStr(pm.rightMainsSuppression)) p.rightMainsSuppression = enumOr('MainsSuppression', pm.rightMainsSuppression, p.rightMainsSuppression);
         if (isStr(pm.leftLpf)) p.leftLpf = enumOr('LpfMode', pm.leftLpf, p.leftLpf);
@@ -1371,10 +1596,14 @@ export class Preferences {
     }
     if (isNum(g('freqRespDitherBits'))) this.freqRespDitherBits.set(trunc(g('freqRespDitherBits')));
     if (isNum(g('freqRespLeadInSec'))) this.freqRespLeadInSec.set(g('freqRespLeadInSec'));
+    // Absent / invalid key keeps the current value (default BOTH) — old files stay on BOTH
+    // (mirrors Java enumOr(OutputChannels.class, s, freqRespOutputChannels.get())).
+    if (isStr(g('freqRespOutputChannels'))) this.freqRespOutputChannels.set(enumOr('OutputChannels', g('freqRespOutputChannels'), this.freqRespOutputChannels.get()));
     if (isNum(g('tuneNotchStartHz'))) this.tuneNotchStartHz.set(g('tuneNotchStartHz'));
     if (isNum(g('tuneNotchStopHz'))) this.tuneNotchStopHz.set(g('tuneNotchStopHz'));
     if (isNum(g('tuneNotchAmplitudeVrms'))) this.tuneNotchAmplitudeVrms.set(g('tuneNotchAmplitudeVrms'));
     if (isNum(g('tuneNotchTargetHz'))) this.tuneNotchTargetHz.set(g('tuneNotchTargetHz'));
+    if (isStr(g('tuneNotchOutputChannels'))) this.tuneNotchOutputChannels.set(enumOr('OutputChannels', g('tuneNotchOutputChannels'), this.tuneNotchOutputChannels.get()));
     if (isBool(g('freqRespLeftVisible'))) this.freqRespLeftVisible.set(g('freqRespLeftVisible'));
     if (isBool(g('freqRespRightVisible'))) this.freqRespRightVisible.set(g('freqRespRightVisible'));
     if (isBool(g('freqRespPhaseVisible'))) this.freqRespPhaseVisible.set(g('freqRespPhaseVisible'));
@@ -1402,6 +1631,19 @@ export class Preferences {
     if (isBool(g('freqRespReverseRiaa'))) this.freqRespReverseRiaa.set(g('freqRespReverseRiaa'));
     if (isBool(g('freqRespIecAmendment'))) this.freqRespIecAmendment.set(g('freqRespIecAmendment'));
     if (isBool(g('freqRespCompareMode'))) this.freqRespCompareMode.set(g('freqRespCompareMode'));
+    // freqRespShowFilter is intentionally not loaded (fresh-session default).
+    if (isBool(g('freqRespFilterCompare'))) this.freqRespFilterCompare.set(g('freqRespFilterCompare'));
+    if (isStr(g('freqRespFilterType'))) this.freqRespFilterType.set(enumOr('FilterType', g('freqRespFilterType'), this.freqRespFilterType.get()));
+    if (isStr(g('freqRespFilterResponse'))) this.freqRespFilterResponse.set(enumOr('FilterResponse', g('freqRespFilterResponse'), this.freqRespFilterResponse.get()));
+    if (isStr(g('freqRespUnevenMode'))) this.freqRespUnevenMode.set(enumOr('UnevenMode', g('freqRespUnevenMode'), this.freqRespUnevenMode.get()));
+    if (isBool(g('freqRespUnevenNotch'))) this.freqRespUnevenNotch.set(g('freqRespUnevenNotch'));
+    if (isNum(g('freqRespUnevenDb'))) this.freqRespUnevenDb.set(Math.max(0.001, Math.min(20.0, g('freqRespUnevenDb'))));
+    if (isNum(g('freqRespUnevenStartHz'))) this.freqRespUnevenStartHz.set(g('freqRespUnevenStartHz'));
+    if (isNum(g('freqRespUnevenStopHz'))) this.freqRespUnevenStopHz.set(g('freqRespUnevenStopHz'));
+    if (this.freqRespUnevenStartHz.get() >= this.freqRespUnevenStopHz.get()) {
+      this.freqRespUnevenStartHz.set(20.0);
+      this.freqRespUnevenStopHz.set(20000.0);
+    }
     if (isBool(g('freqRespApplyCalibration'))) this.freqRespApplyCalibration.set(g('freqRespApplyCalibration'));
     if (Array.isArray(g('freqRespCalibrations'))) {
       this.freqRespCalibrations.length = 0;
@@ -1496,7 +1738,26 @@ export class Preferences {
         if (isBool(pm.reverseRiaa)) p.reverseRiaa = pm.reverseRiaa;
         if (isBool(pm.iecAmendment)) p.iecAmendment = pm.iecAmendment;
         if (isBool(pm.compareMode)) p.compareMode = pm.compareMode;
+        if (isBool(pm.showFilter)) p.showFilter = pm.showFilter;
+        if (isBool(pm.filterCompare)) p.filterCompare = pm.filterCompare;
+        if (isStr(pm.filterType)) p.filterType = enumOr('FilterType', pm.filterType, p.filterType);
+        if (isStr(pm.filterResponse)) p.filterResponse = enumOr('FilterResponse', pm.filterResponse, p.filterResponse);
+        if (asMap(pm.filterParams)) p.filterParams = this._readFilterParams(p.filterType, pm.filterParams);
+        if (isStr(pm.unevenMode)) p.unevenMode = enumOr('UnevenMode', pm.unevenMode, p.unevenMode);
+        if (isBool(pm.unevenNotch)) p.unevenNotch = pm.unevenNotch;
+        if (isNum(pm.unevenDb)) p.unevenDb = pm.unevenDb;
+        if (isNum(pm.unevenStartHz)) p.unevenStartHz = pm.unevenStartHz;
+        if (isNum(pm.unevenStopHz)) p.unevenStopHz = pm.unevenStopHz;
         this.freqRespPresets.set(key, p);
+      }
+    }
+
+    if (asMap(g('freqRespFilterParamsByType'))) {
+      this.freqRespFilterParamsByType.clear();
+      for (const [key, pm] of Object.entries(g('freqRespFilterParamsByType'))) {
+        const type = enumOr('FilterType', key, null);
+        if (type == null || !asMap(pm)) continue;
+        this.freqRespFilterParamsByType.set(type, this._readFilterParams(type, pm));
       }
     }
 

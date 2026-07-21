@@ -225,12 +225,17 @@ export class ScopeNav {
    * channel's zero line passes its ±FS/2-at-middle limit. `dir` > 0 = wheel up =
    * signal up = offset decreases (the established sign). An inactive channel
    * (on == false) is ignored for both the clamp and the result.
+   *
+   * Per-channel full-scale (Java ScopeNav.moveVertical two-peak overload): each
+   * channel's ±FS/2-at-middle clamp uses its OWN peak — the ADC full-scale plays the
+   * same per-channel role the V/div already does. `rightPeak` defaults to `leftPeak`
+   * so the LINKED (equal L/R full-scale) case is byte-for-byte the single-peak form.
    * @returns {number[]} {newLeftOffsetFrac, newRightOffsetFrac}
    */
-  moveVertical(leftOff, leftVdiv, leftOn, rightOff, rightVdiv, rightOn, dir, peakVolts) {
+  moveVertical(leftOff, leftVdiv, leftOn, rightOff, rightVdiv, rightOn, dir, leftPeak, rightPeak = leftPeak) {
     let delta = -dir * this.halfDivOffsetStepY();
-    if (leftOn) delta = clampOffsetDelta(delta, leftOff, leftVdiv, peakVolts, this.divisionsY);
-    if (rightOn) delta = clampOffsetDelta(delta, rightOff, rightVdiv, peakVolts, this.divisionsY);
+    if (leftOn) delta = clampOffsetDelta(delta, leftOff, leftVdiv, leftPeak, this.divisionsY);
+    if (rightOn) delta = clampOffsetDelta(delta, rightOff, rightVdiv, rightPeak, this.divisionsY);
     return [leftOn ? leftOff + delta : leftOff,
             rightOn ? rightOff + delta : rightOff];
   }
@@ -253,14 +258,18 @@ export class ScopeNav {
    * rule) and re-anchors each channel's offset so the voltage under `anchorFrac`
    * stays put — anchorFrac = 0.5 for the V/div control (canvas middle), mouseY/h for
    * ctrl+wheel. Zoom-out is capped at the FS-fills-height ceiling.
+   * Per-channel full-scale (Java ScopeNav.zoomVertical two-peak overload): each
+   * channel's zoom-out ceiling ("±FS fills the grid height") is derived from its OWN
+   * peak; the block stays coupled (either channel hitting its own ceiling blocks both).
+   * `rightPeak` defaults to `leftPeak` so LINKED reproduces the single-peak behaviour.
    * @param {number} dir -1 zoom in (smaller V/div), +1 zoom out (larger)
    * @returns {number[]} {newLeftVdiv, newRightVdiv, newLeftOffset, newRightOffset}
    */
-  zoomVertical(leftVdiv, leftOff, leftOn, rightVdiv, rightOff, rightOn, dir, anchorFrac, peakVolts) {
+  zoomVertical(leftVdiv, leftOff, leftOn, rightVdiv, rightOff, rightOn, dir, anchorFrac, leftPeak, rightPeak = leftPeak) {
     const lv = leftOn ? leftVdiv : -1.0;
     const rv = rightOn ? rightVdiv : -1.0;
     const v = coupleVoltsPerDivZoom(lv, rv, dir, this.vDivLadder,
-        this.zoomOutVoltsPerDivCeiling(peakVolts));
+        this.zoomOutVoltsPerDivCeiling(leftPeak), this.zoomOutVoltsPerDivCeiling(rightPeak));
     const newLv = leftOn ? v[0] : leftVdiv;
     const newRv = rightOn ? v[1] : rightVdiv;
     const newLo = (leftOn && newLv !== leftVdiv)

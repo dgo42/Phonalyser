@@ -21,7 +21,7 @@ package org.edgo.audio.measure.gui.fft.predistortion;
 import java.util.function.DoubleFunction;
 
 import org.eclipse.swt.widgets.Display;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.enums.WindowType;
@@ -127,7 +127,7 @@ public final class PredistortionEngine {
     /** Loaded {@code .frc} corrections — the engine de-embeds their phase off
      *  the raw measured phasors itself when computing the DAC correction (the
      *  store only holds the loaded files). */
-    private final FreqRespCorrectionStore correctionStore;
+    private final CorrectionStore correctionStore;
 
     private volatile boolean stopRequested;
     /** Ends only the CURRENT averaging round early (the loop continues). */
@@ -158,7 +158,7 @@ public final class PredistortionEngine {
 
     public PredistortionEngine(Display display, GeneratorController gen,
                                FftController fft, FftView view,
-                               FreqRespCorrectionStore correctionStore, Listener listener) {
+                               CorrectionStore correctionStore, Listener listener) {
         this.display         = display;
         this.gen             = gen;
         this.fft             = fft;
@@ -343,7 +343,7 @@ public final class PredistortionEngine {
     private double[] calResponseAt(double freqHz, boolean left) {
         double mag = 1.0, phase = 0.0;
         if (correctionStore != null && freqHz > 0.0) {
-            for (FreqRespCorrectionStore.Entry e : correctionStore.getEntries()) {
+            for (CorrectionStore.Entry e : correctionStore.getEntries()) {
                 FreqRespCalibration cal = left ? e.getCalibration().left()
                                                : e.getCalibration().right();
                 if (cal == null || cal.freqs.length == 0) continue;

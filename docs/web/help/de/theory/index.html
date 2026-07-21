@@ -127,7 +127,7 @@
        Spektrum und misst THD, THD+N, SNR, SINAD/ENOB sowie die einzelnen
        Harmonischen; im Zweiton-Betrieb die Intermodulationsprodukte.  Kohärente
        Mittelung hebt Signale weit unterhalb des Einzelschuss-Grundrauschens heraus;
-       Netzbrumm-Unterdrückung, Kalibrierungs-Deembedding und eine manuelle
+       Netzbrumm-Unterdrückung, Kalibrierungs-Entbetten und eine manuelle
        Grundton-Referenz behandeln praxisnahe Messaufbauten (Kerbfilter,
        Abschwächer, bekannte Quellpegel).</p>
     <p><b>Frequenzgang</b> — die Sweep-Messung.  Spielt einen logarithmischen
@@ -135,7 +135,7 @@
        Betrag und Phase über das gesamte Band in Sekunden.  Ergebnisse können
        mit RIAA-/IEC-Kurven verglichen oder als Kalibrierungsdateien gespeichert
        werden, die der FFT-Analysator später aus seinen eigenen Messungen
-       herausrechnet.</p>
+       entbettet.</p>
     <p><b>Unter allen Modulen</b> liegen die zwei Infrastrukturschichten, die
        dieses Kapitel beschreibt: das <a href="audio-backend.html">Audio-Backend</a>
        (die bitgenaue Brücke zur Sound-Hardware) und der
@@ -163,7 +163,7 @@
     <a href="derotation-accuracy.html"><b>De-Rotationsgenauigkeit</b> — wie
        präzise der Rotationswinkel je Block bekannt ist, warum sein Fehler sich
        über stundenlange Mittelungen nicht aufaddiert und wie Überlappung und
-       Fensterwahl den pro Zeiteinheit erreichbaren Grundrauschpegel bestimmen</a>
+       Fensterwahl das pro Zeiteinheit erreichbare Grundrauschen bestimmen</a>
     <a href="dac-predistortion.html"><b>DAC-Vorverzerrung</b> — Auslöschen der
        Wandlereigenen Harmonischen: warum das Twin-T-Kerbfilter zwingend erforderlich
        ist, warum dessen Temperaturdrift eine manuelle Grundtonreferenz erzwingt,
@@ -171,7 +171,7 @@
        doppelte Twin-T-Kerbfilter für Zweiton-IMD-Messungen</a>
     <a href="freq-resp.html"><b>Frequenzgang</b> — Farina-Log-Sweep-
        Dekonvolution, Entfernung der Transportverzögerung, Glättung und
-       Kalibrierungs-Deembedding</a>
+       Kalibrierungs-Entbetten</a>
     <a href="tune-notch.html"><b>Kerbfilter-Abgleich</b> — ein passives
        Twin-T-Kerbfilter live abgleichen: ein Schleifen-Sweep, dessen
        Zweierpotenz-Periode die Transformation verschiebungsinvariant macht,
@@ -194,11 +194,11 @@
   <h2>Durchgängige Designprinzipien</h2>
   <div class="pane">
     <ul>
-      <li><b>Kohärente Mittelung dringt unter den Einzelschuss-Grundrauschpegel —
+      <li><b>Kohärente Mittelung dringt unter das Einzelschuss-Grundrauschen —
           und das Rauschen setzt die Grenze.</b>  Jede tiefe Messung (Harmonische,
           Zweitonprodukte, Vorverzerrungskorrektur) summiert phasensynchron
           ausgerichtete Blöcke, sodass der Ton erhalten bleibt, während das
-          Rauschen mit 1/√<i>n</i> sinkt.  Der erreichbare Pegel wird durch das
+          Rauschen mit 1/√<i>n</i> sinkt.  Das erreichbare Grundrauschen wird durch das
           Bin-Signal-Rausch-Verhältnis und die effektive Anzahl der Mittelungen
           bestimmt — und durch keinen Trick.</li>
       <li><b>Referenz neu messen, nie integrieren.</b>  Phasenreferenzen und
@@ -221,7 +221,7 @@
           von der Laufzeit.</li>
       <li><b>Fensterfunktionen werden nach Nebenkeulendämpfung gewählt, nicht
           nach Rauschen.</b>  Oberhalb der empfohlenen Überlappung jeder
-          Fensterfunktion erreicht jedes Fenster denselben Grundrauschpegel in
+          Fensterfunktion erreicht jedes Fenster dasselbe Grundrauschen in
           derselben Messzeit, sodass die Wahl (HFT248D bei 87,5&nbsp;%) darum
           geht, die Leckage eines starken Tons von den schwachen Bins fernzuhalten
           — nicht um das Rauschen.</li>

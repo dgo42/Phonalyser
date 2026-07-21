@@ -80,7 +80,7 @@
             Fallback-κ-Schätzer und der IMD-Tonpegelverfeiner.</td>
         <td><a href="fft.html#kappa">FFT — Subbin-Frequenz</a></td></tr>
     <tr><td>Kohärente (Vektor-)Mittelung mit Lobe-De-Rotation</td>
-        <td>Phasenausgerichtete komplexe Mittelung — der Rauschpegel
+        <td>Phasenausgerichtete komplexe Mittelung — das Grundrauschen
             sinkt um 10·log₁₀M dB, während Töne stabil bleiben.</td>
         <td><a href="fft.html#coherent">FFT — kohärente Mittelung</a>;
             <a href="derotation-accuracy.html">De-Rotation Genauigkeit</a>
@@ -90,13 +90,13 @@
             Frequenzen; CCIF/DIN-Differenzfrequenzverhältnisse.</td>
         <td><a href="fft.html#dualtone">FFT — Zweikanalton</a></td></tr>
     <tr><td>Median + MAD robuste Statistik</td>
-        <td>Selbstkalibrierte Schwellwerte für den Rauschpegel und die
+        <td>Selbstkalibrierte Schwellwerte für das Grundrauschen und die
             spektralen Störungsgatter — aus den Daten gelernt, unempfindlich
             gegenüber Ausreißern.</td>
         <td><a href="fft.html#rejection">FFT — Störungsunterdrückung</a></td></tr>
     <tr><td>Tonkeulen-Streckung (ToneLobeLift)</td>
         <td>Skaliert die Hauptkeule eines Tons als vertikale Streckung, an
-            den Rauschpegel angeheftet — eine glatte Kuppel, nie ein
+            das Grundrauschen angeheftet — eine glatte Kuppel, nie ein
             flachgedeckelter gleichmäßiger Hub — für die
             <code>.frc</code>-Kalibrierung und die Pegelung der manuellen
             Grundfrequenz.</td>
@@ -121,7 +121,7 @@
             Rekurrenz des Tons selbst voraus,
             <i>d</i><sub>i</sub> ≈ 2 cos <i>ω</i> ·
             <i>d</i><sub>i−1</sub> − <i>d</i><sub>i−2</sub>; der
-            Vorhersagefehler liegt bei sauberem Signal auf dem Rauschpegel
+            Vorhersagefehler liegt bei sauberem Signal auf dem Grundrauschen
             und springt bei jeder Klebestelle oder jedem Aussetzer um
             Größenordnungen über eine 8×-Mittelwert-Schwelle — der
             Störungstrigger des Oszilloskops und das Zeitbereichs-Erfassungsgatter
@@ -248,14 +248,14 @@
      behandelt — mit den Gleichungen, den Parameterwerten und
      <code>Datei:Zeile</code>-Zitaten in den Quellcode — im
      Repository-Dokument
-     <i>docs/ALGORITHMS.md</i><sup id="cite-1c"><a href="#ref-doc">[1]</a></sup>.
+     <i>doc/ALGORITHMS.md</i><sup id="cite-1c"><a href="#ref-doc">[1]</a></sup>.
      Der Build kann es auch als PDF rendern (siehe <i>BUILD.md</i> im
      Repository).</div>
 
   <h2 id="refs">Referenzen</h2>
   <ol class="refs">
     <li id="ref-doc"><a href="#cite-1">1.</a>
-        <a href="https://github.com/dgo42/Phonalyser/blob/main/docs/ALGORITHMS.md">Phonalyser.web
+        <a href="https://github.com/dgo42/Phonalyser/blob/main/doc/ALGORITHMS.md">Phonalyser.web
         <i>ALGORITHMS.md</i></a> — der vollständige Engineering-Katalog, den
         diese Seite zusammenfasst (algorithmische Mathematik, Parameter,
         Quellenangaben).</li>

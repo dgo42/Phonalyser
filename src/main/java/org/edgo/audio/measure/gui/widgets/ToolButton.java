@@ -76,6 +76,7 @@ public final class ToolButton extends TransparentComposite {
         setCursor(getDisplay().getSystemCursor(SWT.CURSOR_HAND));
         addPaintListener(this::onPaint);
         addListener(SWT.MouseDown, e -> {
+            if (!isEnabled()) return;   // GPU path forwards clicks here directly, past SWT's disabled-input filter
             pressed = true;
             if (group != null) {
                 for (Control c : getParent().getChildren()) {   // radio: clear same-named siblings
@@ -117,7 +118,11 @@ public final class ToolButton extends TransparentComposite {
     private void paintContent(MeasurementPainter p, int x, int y, int w, int h) {
         int rw = w - 1;
         int rh = h - 1;
-        boolean active = toggled || pressed;
+        // A disabled button greys out and never shows the active fill — signalling
+        // its action is unavailable (e.g. a measurement channel that's switched off).
+        boolean enabled = isEnabled();
+        boolean active = (toggled || pressed) && enabled;
+        Color disabled = enabled ? null : getDisplay().getSystemColor(SWT.COLOR_DARK_GRAY);
         // Active label + border auto-contrast to absolute black/white by the fill's
         // brightness — theme-independent (the FFT's light bg and the scope's black bg alike).
         Color contrast = active
@@ -134,7 +139,7 @@ public final class ToolButton extends TransparentComposite {
                 p.drawRoundRectangle(x, y, rw, rh, CORNER_RADIUS, CORNER_RADIUS);
             }
         } else if (drawFrame && frameColor != null) {
-            p.setForeground(frameColor);
+            p.setForeground(disabled != null ? disabled : frameColor);
             p.drawRoundRectangle(x, y, rw, rh, CORNER_RADIUS, CORNER_RADIUS);
         }
         Image icon = (active && darkIcon != null) ? darkIcon : lightIcon;
@@ -142,7 +147,7 @@ public final class ToolButton extends TransparentComposite {
             Rectangle ib = icon.getBounds();
             p.drawImage(icon, x + (w - ib.width) / 2, y + (h - ib.height) / 2);
         } else if (label != null) {
-            Color lc = active ? contrast : contentColor;
+            Color lc = active ? contrast : (disabled != null ? disabled : contentColor);
             if (lc != null) {
                 p.setFont(getFont());   // the button's own font (e.g. the bold channel font)
                 p.setForeground(lc);
@@ -190,5 +195,13 @@ public final class ToolButton extends TransparentComposite {
             redraw();
             notifyListeners(SWT.Selection, new Event());   // notify on ANY toggle change
         }
+    }
+
+    /** Repaints on enable/disable so the greyed look tracks the state; a disabled
+     *  button also ignores clicks (see the MouseDown guard). */
+    @Override
+    public void setEnabled(boolean enabled) {
+        super.setEnabled(enabled);
+        redraw();
     }
 }

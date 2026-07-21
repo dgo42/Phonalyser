@@ -32,9 +32,11 @@ import org.edgo.audio.measure.dsp.MainsFilters;
 import org.edgo.audio.measure.dsp.MainsTimeFilter;
 import org.edgo.audio.measure.dsp.MedianFilter;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.enums.LpfMode;
 import org.edgo.audio.measure.enums.MainsSuppression;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.gui.common.FftBinSnap;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
 
 /**
@@ -80,8 +82,11 @@ public final class ScopeMeasurementWorker {
      *  flag can never be revived by the next start. */
     private volatile AtomicBoolean measThreadRunning = new AtomicBoolean(false);
 
-    @Getter
-    private volatile SignalMeasurements lastMeasResult;
+    /** Latest per-channel measurement snapshots.  The worker measures BOTH
+     *  channels every pass; the view shows the one the table's L/R selector
+     *  points at (see {@link #getLastMeasResult()}). */
+    private volatile SignalMeasurements lastMeasLeft;
+    private volatile SignalMeasurements lastMeasRight;
     @Getter
     private volatile double             lastLeftMeanNormalized;
     @Getter
@@ -89,11 +94,13 @@ public final class ScopeMeasurementWorker {
 
     private float[] measLeftBuf;
     private float[] measRightBuf;
-    /** Reusable tail-slice buffer for measuring the comb's settled region. */
+    /** Reusable tail-slice buffer for measuring the comb's settled region
+     *  (channels are processed sequentially, so one buffer serves both). */
     private float[] measTailBuf;
-    /** Reusable copy of the raw (pre-comb) selected channel, for re-measuring
-     *  the comb-located tone's frequency free of the comb's notch bias. */
-    private float[] rawSelBuf;
+    /** Reusable copy of a channel's raw (pre-comb) samples, for re-measuring
+     *  the comb-located tone's frequency free of the comb's notch bias
+     *  (sequential per-channel use, one buffer serves both). */
+    private float[] rawChanBuf;
 
     /** Off-thread broad-band frequency scan.  A weak / noisy signal needs the
      *  costly per-bin Goertzel sweep to find its fundamental; running that on
@@ -102,7 +109,8 @@ public final class ScopeMeasurementWorker {
      *  stays real-time.  {@link #freqScanBusy} coalesces overlapping requests. */
     private ExecutorService freqScanExec;
     private final AtomicBoolean freqScanBusy = new AtomicBoolean(false);
-    private volatile double asyncFrequency = Double.NaN;
+    private volatile double asyncFreqLeft  = Double.NaN;
+    private volatile double asyncFreqRight = Double.NaN;
     private float[] freqScanBuf;
 
     /** Per-channel mains-hum combs for the measured values; lazily built
@@ -121,8 +129,9 @@ public final class ScopeMeasurementWorker {
 
     /** Guards multi-field updates to the measurement history ring. */
     private final Object measHistoryLock = new Object();
-    private final SignalMeasurements[] measHistory     = new SignalMeasurements[MEAS_HISTORY_CAP];
-    private final long[]               measHistoryTime = new long[MEAS_HISTORY_CAP];
+    private final SignalMeasurements[] measHistoryLeft  = new SignalMeasurements[MEAS_HISTORY_CAP];
+    private final SignalMeasurements[] measHistoryRight = new SignalMeasurements[MEAS_HISTORY_CAP];
+    private final long[]               measHistoryTime  = new long[MEAS_HISTORY_CAP];
     private final double[]             meanHistoryLeftNorm  = new double[MEAS_HISTORY_CAP];
     private final double[]             meanHistoryRightNorm = new double[MEAS_HISTORY_CAP];
     private int measHistoryWrite;
@@ -141,7 +150,8 @@ public final class ScopeMeasurementWorker {
             // Null every slot so stale SignalMeasurements references are
             // released for GC immediately on reset (up to 1024 instances
             // would otherwise stay reachable until overwritten).
-            Arrays.fill(measHistory, null);
+            Arrays.fill(measHistoryLeft,  null);
+            Arrays.fill(measHistoryRight, null);
         }
     }
 
@@ -149,7 +159,8 @@ public final class ScopeMeasurementWorker {
      *  for setBuffer(null) / pause paths that want a "no current value"
      *  state without losing the ring. */
     public void clearLatest() {
-        lastMeasResult           = null;
+        lastMeasLeft             = null;
+        lastMeasRight            = null;
         lastLeftMeanNormalized   = 0;
         lastRightMeanNormalized  = 0;
     }
@@ -169,8 +180,10 @@ public final class ScopeMeasurementWorker {
         measThreadRunning = session;
         // Clear stale state so the first paint after start doesn't show
         // measurements from the previous session.
-        lastMeasResult = null;
-        asyncFrequency = Double.NaN;
+        lastMeasLeft   = null;
+        lastMeasRight  = null;
+        asyncFreqLeft  = Double.NaN;
+        asyncFreqRight = Double.NaN;
         clearHistory();
         if (freqScanExec == null) {
             freqScanExec = Executors.newSingleThreadExecutor(r -> {
@@ -199,19 +212,27 @@ public final class ScopeMeasurementWorker {
 
     // ─── Paint-side queries ─────────────────────────────────────────────────
 
+    /** Latest measurement snapshot of one channel.  The worker measures BOTH
+     *  channels every pass; the view shows the selected one. */
+    public SignalMeasurements getLastMeasResult(boolean leftChannel) {
+        return leftChannel ? lastMeasLeft : lastMeasRight;
+    }
+
     /**
-     * Walks the history ring backwards from the newest entry, stopping
-     * at the first one older than {@code cutoffNanos}.  Visitor is
+     * Walks one channel's history ring backwards from the newest entry,
+     * stopping at the first one older than {@code cutoffNanos}.  Visitor is
      * invoked under the history lock — keep it short.  Use to aggregate
      * stats (avg / min / max / σ) over the user's selected averaging
      * window.
      */
-    public void walkRecentHistory(long cutoffNanos, Consumer<SignalMeasurements> visitor) {
+    public void walkRecentHistory(boolean leftChannel, long cutoffNanos,
+                                  Consumer<SignalMeasurements> visitor) {
+        SignalMeasurements[] ring = leftChannel ? measHistoryLeft : measHistoryRight;
         synchronized (measHistoryLock) {
             for (int i = 0; i < measHistorySize; i++) {
                 int idx = (measHistoryWrite - 1 - i + MEAS_HISTORY_CAP) % MEAS_HISTORY_CAP;
                 if (measHistoryTime[idx] < cutoffNanos) break;
-                visitor.accept(measHistory[idx]);
+                visitor.accept(ring[idx]);
             }
         }
     }
@@ -263,23 +284,27 @@ public final class ScopeMeasurementWorker {
      */
     public void snapshotFrom(ScopeMeasurementWorker other) {
         if (other == null || other == this) return;
-        SignalMeasurements snap = other.lastMeasResult;
+        SignalMeasurements snapL = other.lastMeasLeft;
+        SignalMeasurements snapR = other.lastMeasRight;
         double leftMeanSnap  = other.lastLeftMeanNormalized;
         double rightMeanSnap = other.lastRightMeanNormalized;
         synchronized (other.measHistoryLock) {
             int cap = MEAS_HISTORY_CAP;
-            SignalMeasurements[] hist = new SignalMeasurements[cap];
-            long[]               t    = new long[cap];
-            double[]             ml   = new double[cap];
-            double[]             mr   = new double[cap];
-            System.arraycopy(other.measHistory,         0, hist, 0, cap);
+            SignalMeasurements[] hl = new SignalMeasurements[cap];
+            SignalMeasurements[] hr = new SignalMeasurements[cap];
+            long[]               t  = new long[cap];
+            double[]             ml = new double[cap];
+            double[]             mr = new double[cap];
+            System.arraycopy(other.measHistoryLeft,     0, hl,   0, cap);
+            System.arraycopy(other.measHistoryRight,    0, hr,   0, cap);
             System.arraycopy(other.measHistoryTime,     0, t,    0, cap);
             System.arraycopy(other.meanHistoryLeftNorm, 0, ml,   0, cap);
             System.arraycopy(other.meanHistoryRightNorm,0, mr,   0, cap);
             int w = other.measHistoryWrite;
             int s = other.measHistorySize;
             synchronized (this.measHistoryLock) {
-                System.arraycopy(hist, 0, this.measHistory,         0, cap);
+                System.arraycopy(hl,   0, this.measHistoryLeft,     0, cap);
+                System.arraycopy(hr,   0, this.measHistoryRight,    0, cap);
                 System.arraycopy(t,    0, this.measHistoryTime,     0, cap);
                 System.arraycopy(ml,   0, this.meanHistoryLeftNorm, 0, cap);
                 System.arraycopy(mr,   0, this.meanHistoryRightNorm,0, cap);
@@ -287,7 +312,8 @@ public final class ScopeMeasurementWorker {
                 this.measHistorySize  = s;
             }
         }
-        this.lastMeasResult           = snap;
+        this.lastMeasLeft             = snapL;
+        this.lastMeasRight            = snapR;
         this.lastLeftMeanNormalized   = leftMeanSnap;
         this.lastRightMeanNormalized  = rightMeanSnap;
     }
@@ -394,7 +420,6 @@ public final class ScopeMeasurementWorker {
         SignalBufferReader b = reader;
         if (b == null) return;
         Preferences prefs = Preferences.instance();
-        Channel selected = prefs.getOscMeasurementChannel();
         int sampleRate = b.getSampleRate();
         // Exclude the first AC_WARMUP_NANOS of captured samples from every
         // read — those contain the ADC's startup transient and would bias
@@ -417,51 +442,73 @@ public final class ScopeMeasurementWorker {
         // means, the comb, and Vpp/Vrms all see the de-spiked signal.  No-op
         // below the LPF's Nyquist gate.
         applyHfLowPass(sampleRate, avail);
-        double peakVolts = prefs.getAdcFsVoltageRms() * Math.sqrt(2.0);
-        double leftMean  = sampleMean(measLeftBuf,  avail);
-        double rightMean = sampleMean(measRightBuf, avail);
-        // Mains suppression for the measured values (Vpp/Vrms/Vmean): the
-        // raw per-channel means above are kept for AC-coupling display, but
-        // the measurement reads the de-hummed signal.  DC-preserving so
-        // Vmean stays meaningful.
-        MainsSuppression leftMode  = prefs.getOscLeftMainsSuppression();
-        MainsSuppression rightMode = prefs.getOscRightMainsSuppression();
-        MainsSuppression selMode = (selected == Channel.L) ? leftMode : rightMode;
-        // When the comb is on, the frequency is found in two steps to avoid the
-        // comb biasing it: the comb suppresses an often-dominant mains so the
-        // tone becomes the spectral peak (a reliable SEED), but its notches sit
-        // at every mains harmonic and one can land within a few Hz of the tone,
-        // and at high sample rates the comb never settles inside the window —
-        // both pull the combed frequency low.  So keep a copy of the raw
-        // (un-combed) selected channel and, once the comb gives the seed,
-        // re-measure on the RAW signal in a narrow band around it (the mains is
-        // stronger there but its harmonics are tens of Hz away, outside the
-        // band) — un-biased and free of the mains.  Copied before the comb
-        // rewrites the selected channel's buffer in place.
+        // Each channel scales by its OWN ADC full-scale (LINKED cards give equal L/R
+        // peaks), so the RIGHT channel's Vpp/Vrms/Vmean no longer inherit the LEFT
+        // full-scale; the back-conversion below divides each mean by its own peak.
+        double peakVoltsL = prefs.getAdcPeakVolts(Channel.L);
+        double peakVoltsR = prefs.getAdcPeakVolts(Channel.R);
+        // Both channels run the SAME measurement pipeline; the view shows the
+        // channel the table's L/R selector points at.  The per-channel DC
+        // means (AC-coupling offset, residual baseline) are the channels' own
+        // whole-period Vmean values — identical to the table readout.
         long absStart = b.getWritePos() - avail;
-        float[] rawSel = null;
-        if (selMode != MainsSuppression.NONE) {
-            float[] src = (selected == Channel.L) ? measLeftBuf : measRightBuf;
-            if (rawSelBuf == null || rawSelBuf.length < avail) rawSelBuf = new float[avail];
-            System.arraycopy(src, 0, rawSelBuf, 0, avail);
-            rawSel = rawSelBuf;
+        SignalMeasurements resultLeft  = measureChannel(true,  avail, sampleRate, peakVoltsL, absStart, prefs);
+        SignalMeasurements resultRight = measureChannel(false, avail, sampleRate, peakVoltsR, absStart, prefs);
+        double leftMean  = resultLeft.getVmean()  / peakVoltsL;
+        double rightMean = resultRight.getVmean() / peakVoltsR;
+        long now = System.nanoTime();
+        synchronized (measHistoryLock) {
+            measHistoryLeft [measHistoryWrite] = resultLeft;
+            measHistoryRight[measHistoryWrite] = resultRight;
+            measHistoryTime [measHistoryWrite] = now;
+            meanHistoryLeftNorm [measHistoryWrite] = leftMean;
+            meanHistoryRightNorm[measHistoryWrite] = rightMean;
+            measHistoryWrite = (measHistoryWrite + 1) % MEAS_HISTORY_CAP;
+            if (measHistorySize < MEAS_HISTORY_CAP) measHistorySize++;
         }
-        if (leftMode != MainsSuppression.NONE) {
-            MainsTimeFilter c = measFilter(true, leftMode, sampleRate);
-            c.track(measLeftBuf, avail);
+        lastLeftMeanNormalized  = leftMean;
+        lastRightMeanNormalized = rightMean;
+        lastMeasLeft  = resultLeft;
+        lastMeasRight = resultRight;
+    }
+
+    /**
+     * Runs the full measurement pipeline on one channel's already-LPF'd
+     * buffer: mains suppression (DC-preserving, with a raw copy kept for the
+     * two-step frequency measurement), comb-settle tail trim, whole-period
+     * measurement, weak-signal async frequency fallback, raw-band frequency
+     * re-pin, dual-tone time-field clearing.  Channels are processed
+     * sequentially, so the raw/tail scratch buffers are shared.
+     *
+     * <p>Two-step frequency: the comb suppresses an often-dominant mains so
+     * the tone becomes the spectral peak (a reliable SEED), but its notches
+     * sit at every mains harmonic and one can land within a few Hz of the
+     * tone, and at high sample rates the comb never settles inside the
+     * window — both pull the combed frequency low.  So the raw (un-combed)
+     * copy is re-measured in a narrow band around the seed (the mains is
+     * stronger there but its harmonics are tens of Hz away, outside the
+     * band) — un-biased and free of the mains.
+     */
+    private SignalMeasurements measureChannel(boolean left, int avail, int sampleRate,
+                                              double peakVolts, long absStart,
+                                              Preferences prefs) {
+        float[] buf = left ? measLeftBuf : measRightBuf;
+        MainsSuppression mode = left ? prefs.getOscLeftMainsSuppression()
+                                     : prefs.getOscRightMainsSuppression();
+        float[] raw = null;
+        if (mode != MainsSuppression.NONE) {
+            if (rawChanBuf == null || rawChanBuf.length < avail) rawChanBuf = new float[avail];
+            System.arraycopy(buf, 0, rawChanBuf, 0, avail);
+            raw = rawChanBuf;
+            MainsTimeFilter c = measFilter(left, mode, sampleRate);
+            c.track(buf, avail);
             // Comb: zeroed delay lines each pass → reset; adaptive filters keep state.
-            if (leftMode == MainsSuppression.IIR_COMB) c.reset();
-            c.processPreservingDc(measLeftBuf, avail, absStart);
+            if (mode == MainsSuppression.IIR_COMB) c.reset();
+            c.processPreservingDc(buf, avail, absStart);
         }
-        if (rightMode != MainsSuppression.NONE) {
-            MainsTimeFilter c = measFilter(false, rightMode, sampleRate);
-            c.track(measRightBuf, avail);
-            if (rightMode == MainsSuppression.IIR_COMB) c.reset();
-            c.processPreservingDc(measRightBuf, avail, absStart);
-        }
-        float[] data = (selected == Channel.L) ? measLeftBuf : measRightBuf;
+        float[] data = buf;
         int measLen  = avail;
-        if (selMode == MainsSuppression.IIR_COMB) {
+        if (mode == MainsSuppression.IIR_COMB) {
             // The comb's delay lines start zeroed each pass, so its head is an
             // un-suppressed pass-through that would skew Vpp/Vrms.  Measure the
             // settled tail instead (≈3 time-constants in; capped so at least
@@ -482,15 +529,19 @@ public final class ScopeMeasurementWorker {
             // costly for this thread — it would drop the 10 Hz cadence and
             // throttle the whole table.  Fold in the latest off-thread result
             // and kick a fresh scan; only f / period lag, the rest stays live.
-            double async = asyncFrequency;
+            double async = left ? asyncFreqLeft : asyncFreqRight;
             if (!Double.isNaN(async)) result = result.withFrequency(async);
-            submitFrequencyScan(data, measLen, sampleRate, peakVolts);
+            submitFrequencyScan(left, data, measLen, sampleRate, peakVolts);
         }
-        if (rawSel != null && Double.isFinite(result.getFrequency())) {
+        boolean dual = prefs.getGenSignalForm().isDualTone();
+        if (!dual && raw != null && Double.isFinite(result.getFrequency())) {
             // Re-pin the comb-located tone on the raw signal, free of the
-            // comb's notch bias, with a narrow band around the seed.
+            // comb's notch bias, with a narrow band around the seed.  Skipped
+            // in dual-tone mode: the single-value frequency is cleared by
+            // withoutTimes() below, so re-pinning it would be wasted work — the
+            // two dual-tone frequencies are measured separately just after.
             double precise = SignalMeasurements.refineFrequencyAround(
-                    rawSel, avail, sampleRate, result.getFrequency(), FREQ_REFINE_HALF_HZ);
+                    raw, avail, sampleRate, result.getFrequency(), FREQ_REFINE_HALF_HZ);
             if (Double.isFinite(precise)) result = result.withFrequency(precise);
         }
         // Dual-tone has two simultaneous fundamentals — a single Tp /
@@ -500,30 +551,55 @@ public final class ScopeMeasurementWorker {
         // happened to win the Goertzel search on this tick.  Vpp /
         // Vrms / Vmean stay intact since they're well-defined for
         // any signal mode.
-        if (prefs.getGenSignalForm().isDualTone()) {
+        if (dual) {
             result = result.withoutTimes();
+            // Measure BOTH tones as-captured for the scope's residual fit.  DAC
+            // and ADC run on independent clocks with no FLL, so the generator's
+            // commanded (FFT-bin-snapped) frequencies are exact only in the DAC
+            // domain; in the ADC capture they are off by the clock ratio (ppm).
+            // Over a fit window up to 65536 samples that error accrues phase the
+            // least-squares fit can't absorb, leaving fundamental leakage.  So
+            // seed from what the generator emits (mirroring ScopeView's source
+            // exactly) and refine each seed on the raw signal to the AS-CAPTURED
+            // frequency — the pre-comb copy when mains suppression is on (the
+            // comb's notches would bias the tones), the channel buffer itself
+            // otherwise (with suppression off it IS the raw signal, so the pair
+            // is measurable in every configuration).  ±FREQ_REFINE_HALF_HZ
+            // (2 Hz) covers ~100 ppm at 20 kHz, far above any real crystal
+            // offset; the Hann window keeps the other tone — always tens of Hz
+            // or more away — out of the narrow band.
+            float[] src = raw != null ? raw : buf;
+            int sr = (int) Math.round(sampleRate);
+            double seed1 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
+                    prefs.getGenDualToneFreq1Hz());
+            double seed2 = FftBinSnap.snapIfEnabled(prefs, GenSignalForm.DUAL_TONE, sr,
+                    prefs.getGenDualToneFreq2Hz());
+            double r1 = Double.NaN;
+            double r2 = Double.NaN;
+            if (seed1 > 0) {
+                double refined = SignalMeasurements.refineFrequencyAround(
+                        src, avail, sampleRate, seed1, FREQ_REFINE_HALF_HZ);
+                if (Double.isFinite(refined)) r1 = refined;
+            }
+            if (seed2 > 0) {
+                double refined = SignalMeasurements.refineFrequencyAround(
+                        src, avail, sampleRate, seed2, FREQ_REFINE_HALF_HZ);
+                if (Double.isFinite(refined)) r2 = refined;
+            }
+            result = result.withDualTones(r1, r2);
         }
-        long now = System.nanoTime();
-        synchronized (measHistoryLock) {
-            measHistory[measHistoryWrite] = result;
-            measHistoryTime[measHistoryWrite] = now;
-            meanHistoryLeftNorm [measHistoryWrite] = leftMean;
-            meanHistoryRightNorm[measHistoryWrite] = rightMean;
-            measHistoryWrite = (measHistoryWrite + 1) % MEAS_HISTORY_CAP;
-            if (measHistorySize < MEAS_HISTORY_CAP) measHistorySize++;
-        }
-        lastLeftMeanNormalized  = leftMean;
-        lastRightMeanNormalized = rightMean;
-        lastMeasResult = result;
+        return result;
     }
 
     /**
-     * Copies the measured window and runs the broad-band fundamental search on
-     * the {@code osc-freq-scan} thread, publishing {@link #asyncFrequency}.  A
-     * scan already in flight is left to finish, so requests never queue up —
-     * f / period just refresh at the scan's own (slower) rate.
+     * Copies the measured window and runs the broad-band fundamental search
+     * on the {@code osc-freq-scan} thread, publishing the channel's async
+     * frequency.  A scan already in flight is left to finish, so requests
+     * never queue up — f / period just refresh at the scan's own (slower)
+     * rate; when both channels are weak they take turns across ticks.
      */
-    private void submitFrequencyScan(float[] src, int n, int sampleRate, double peakVolts) {
+    private void submitFrequencyScan(boolean left, float[] src, int n, int sampleRate,
+                                     double peakVolts) {
         if (freqScanExec == null || !freqScanBusy.compareAndSet(false, true)) {
             return;
         }
@@ -534,7 +610,8 @@ public final class ScopeMeasurementWorker {
         float[] buf = freqScanBuf;
         freqScanExec.execute(() -> {
             try {
-                asyncFrequency = SignalMeasurements.from(buf, n, sampleRate, peakVolts, true).getFrequency();
+                double f = SignalMeasurements.from(buf, n, sampleRate, peakVolts, true).getFrequency();
+                if (left) asyncFreqLeft = f; else asyncFreqRight = f;
             } finally {
                 freqScanBusy.set(false);
             }

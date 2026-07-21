@@ -104,23 +104,24 @@ public final class MultifunctionalTab {
         return hSplit.computeSize(SWT.DEFAULT, SWT.DEFAULT, true);
     }
 
-    /** Re-applies an audio config (backend / device / rate / bit-depth) committed
-     *  in the Preferences dialog by BOUNCING the live capture, FFT and generator —
-     *  stop + restart so each re-acquires its device at the new settings.  Anything
-     *  that wasn't running stays stopped. */
-    public void pauseForDialog() {
-        boolean oscWasRunning = oscPane != null && oscPane.isCapturing();
-        if (oscWasRunning) oscPane.stopCapture();
-        // The FFT pane holds its own ref on SharedCapture when recording.
-        // Without releasing it here, refCount stays > 0 across the dialog,
-        // SharedCapture.acquire() short-circuits, and any sample-rate /
-        // device / bit-depth change the user just made is silently
-        // ignored (the existing buffer keeps running at the OLD rate).
-        if (oscWasRunning) oscPane.startCapture();
-        if (fftPane != null) fftPane.pauseForDialog();
-        // pauseAroundDialog() stops the generator and RETURNS its resume hook —
-        // run it now so a tone that was playing restarts on the new device.
-        if (genPane != null) genPane.pauseAroundDialog().run();
+    /** Stops every live stream (scope + FFT capture, generator playback) BEFORE
+     *  the Preferences dialog commits a backend / device / rate change — while
+     *  the OLD backend is still active — so each releases its device cleanly.
+     *  Each pane remembers its own running state; this tab does not track what
+     *  was running.  Pair with {@link #afterApplyBackendChanges()} once the new
+     *  config is committed. */
+    public void beforeApplyBackendChanges() {
+        if (oscPane != null) oscPane.stopCaptureForPrefs();
+        if (fftPane != null) fftPane.stopCaptureForPrefs();
+        if (genPane != null) genPane.stopPlayForPrefs();
+    }
+
+    /** Restarts, on the newly-committed backend, exactly the streams each pane
+     *  had running when {@link #beforeApplyBackendChanges()} stopped them. */
+    public void afterApplyBackendChanges() {
+        if (oscPane != null) oscPane.startCaptureForPrefs();
+        if (fftPane != null) fftPane.startCaptureForPrefs();
+        if (genPane != null) genPane.startPlayForPrefs();
     }
 
     /** Loop-driven realtime repaint of the live scope + FFT views, called once

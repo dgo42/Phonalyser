@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Phonalyser — Theory: Tune-notch measurement</title>
+  <link rel="icon" type="image/svg+xml" href="img/logo.svg"/>
+  <link rel="stylesheet" href="css/site.css"/>
+  <script src="js/site.js" defer></script>
+</head>
+<body>
+
+  <button class="menu-toggle" aria-label="Open menu" aria-expanded="false">&#8942;</button>
+  <div class="menu-backdrop"></div>
+
+  <!-- ============================ left menu ============================ -->
+  <aside class="sidebar">
+    <a class="brand" href="index.html">
+      <img src="img/logo.svg" alt=""/>
+      <b>Phonalyser</b>
+    </a>
+    <nav class="menu">
+      <a href="index.html">Home</a>
+      <a href="changelog.html">What's new</a>
+      <a href="screenshots.html">Screenshots</a>
+
+      <details class="submenu">
+        <summary>Download <span class="caret">▸</span></summary>
+        <a href="download.html">All downloads</a>
+        <a class="ext" href="https://github.com/dgo42/Phonalyser/releases/latest"
+           target="_blank" rel="noopener">GitHub — latest release</a>
+        <a class="ext" href="https://apps.microsoft.com/detail/9nr1w5dkw71m"
+           target="_blank" rel="noopener">Microsoft Store</a>
+        <a class="disabled" title="Reserved — coming soon">macOS <span class="soon">soon</span></a>
+      </details>
+
+      <details class="submenu">
+        <summary>Documentation <span class="caret">▸</span></summary>
+        <a href="prefs.html">Preferences &amp; log location</a>
+        <a href="translation.html">Translation</a>
+        <a href="bench.html">Measurement bench</a>
+        <a href="theory.html">Theory of operation</a>
+      </details>
+
+      <a href="privacy.html">Privacy</a>
+      <a href="web/index.html">Web version</a>
+    </nav>
+    <div class="sidebar-foot">
+      AGPL-3.0 ·
+      <a href="https://github.com/dgo42/Phonalyser" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </aside>
+
+  <!-- ============================ right column ========================= -->
+  <main class="main">
+    <header class="hero">
+      <img src="img/logo.svg" alt="Phonalyser logo"/>
+      <div>
+        <h1>Tune-notch measurement</h1>
+        <p class="sub">Theory of operation.</p>
+      </div>
+    </header>
+
+    <div class="content">
+
+<p class="back"><a href="theory.html">◀ Back to Theory of operation</a></p>
+
+  <p>A twin-T notch is a passive RC network that puts a deep null at one
+     frequency.  Phonalyser uses one as the pre-filter for its lowest-distortion
+     measurements: parked on the fundamental, it removes the big tone so the ADC
+     can be driven hard on the harmonics alone
+     (<a href="dac-predistortion.html">DAC pre-distortion</a> explains why that
+     notch is mandatory).  But a twin-T's null is only deep when its three
+     trimmed components are balanced <em>exactly</em>, and the balance drifts
+     with temperature.  The <b>tune-notch</b> tool is the live display you watch
+     while turning the trimmer: it shows the notch's own magnitude response,
+     refreshing a few times a second, so you can walk the null onto the target
+     frequency and see how deep it really goes.</p>
+
+  <p>It measures a transfer function the same way the
+     <a href="freq-resp.html">frequency-response</a> module does — a logarithmic
+     sweep in, a division out — but it is built for a continuously updating live
+     view rather than a single careful capture, and that changes how the sweep
+     is run.</p>
+
+  <h2 id="why">Why a live display, not a single sweep</h2>
+  <p>Tuning is a closed loop with a human in it: turn the trimmer a hair, see
+     the null move and deepen, turn again.  A one-shot sweep that opens the
+     device, plays, captures and closes takes on the order of a second and a
+     half of dead time between pictures — far too slow to tune by.  So the
+     tool keeps the sound device open and the sweep <em>running</em>, and simply
+     takes a fresh look at the most recent period whenever it can.  The reward
+     is a display that reacts almost as fast as your hand; the challenge is that
+     each look is grabbed at an arbitrary moment in the loop, with no start
+     marker to line it up.  The trick below is what makes that not matter.</p>
+
+  <h2 id="how">How it works</h2>
+  <p>The generator plays a short logarithmic sweep on an endless seamless loop
+     into the notch under test; the return signal is collected in a small
+     rolling buffer that always holds the last few sweep periods.  Several times
+     a second the tool grabs exactly one period's worth of samples, transforms
+     it, divides the returned spectrum by the known sweep spectrum to get the
+     notch's magnitude, and tracks the deepest point.</p>
+
+  <div class="diagram">
+  <svg viewBox="0 0 820 300" width="100%" height="300" preserveAspectRatio="xMinYMid meet"
+       xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace" font-size="12">
+    <defs>
+      <marker id="tn-arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#446"/>
+      </marker>
+    </defs>
+
+    <!-- Row 1: the live loop -->
+    <rect x="10"  y="34" width="160" height="52" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="90"  y="56" text-anchor="middle" font-weight="bold">Looping sweep</text>
+    <text x="90"  y="74" text-anchor="middle" fill="#557">seamless, Hann seams</text>
+
+    <rect x="220" y="34" width="150" height="52" rx="6" fill="#ffe9d6" stroke="#c96"/>
+    <text x="295" y="56" text-anchor="middle" font-weight="bold">Twin-T notch</text>
+    <text x="295" y="74" text-anchor="middle" fill="#965">under adjustment</text>
+
+    <rect x="420" y="34" width="90" height="52" rx="6" fill="#dfd" stroke="#7a7"/>
+    <text x="465" y="56" text-anchor="middle" font-weight="bold">ADC</text>
+    <text x="465" y="74" text-anchor="middle" fill="#575">input</text>
+
+    <rect x="560" y="34" width="170" height="52" rx="6" fill="#cdf" stroke="#88a"/>
+    <text x="645" y="56" text-anchor="middle" font-weight="bold">Rolling buffer</text>
+    <text x="645" y="74" text-anchor="middle" fill="#557">last few periods</text>
+
+    <line x1="170" y1="60" x2="218" y2="60" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+    <line x1="370" y1="60" x2="418" y2="60" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+    <line x1="510" y1="60" x2="558" y2="60" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+
+    <!-- loop-back arc over the sweep -->
+    <path d="M 90 34 L 90 16 L 645 16 L 645 32" fill="none" stroke="#88a" stroke-width="1.2"
+          stroke-dasharray="4 3" marker-end="url(#tn-arr)"/>
+
+    <!-- Row 2: each pass -->
+    <rect x="10"  y="160" width="160" height="56" rx="6" fill="#eef" stroke="#c33"/>
+    <text x="90"  y="182" text-anchor="middle" font-weight="bold">Grab one period</text>
+    <text x="90"  y="200" text-anchor="middle" fill="#a33">at any phase</text>
+
+    <rect x="220" y="160" width="150" height="56" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="295" y="182" text-anchor="middle" font-weight="bold">Circular FFT</text>
+    <text x="295" y="200" text-anchor="middle" fill="#557">period = 2ᵏ</text>
+
+    <rect x="420" y="160" width="130" height="56" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="485" y="182" text-anchor="middle" font-weight="bold">Divide</text>
+    <text x="485" y="200" text-anchor="middle" fill="#557">H = Y ⁄ X</text>
+
+    <rect x="600" y="160" width="130" height="56" rx="6" fill="#eef" stroke="#88a"/>
+    <text x="665" y="178" text-anchor="middle" font-weight="bold">Track null</text>
+    <text x="665" y="196" text-anchor="middle" fill="#557">frequency,</text>
+    <text x="665" y="210" text-anchor="middle" fill="#557">depth</text>
+
+    <path d="M 645 86 L 645 120 L 90 120 L 90 158" fill="none" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+    <line x1="170" y1="188" x2="218" y2="188" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+    <line x1="370" y1="188" x2="418" y2="188" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+    <line x1="550" y1="188" x2="598" y2="188" stroke="#446" stroke-width="1.5" marker-end="url(#tn-arr)"/>
+
+    <text x="360" y="138" fill="#557">each pass ≈ 0.2 – 0.34 s — a few times a second</text>
+
+    <!-- Row 3: result sketch -->
+    <text x="10" y="250" fill="#557">result: the notch's magnitude, a deep V at the null —</text>
+    <path d="M 470 268 L 560 268 L 605 236 L 615 285 L 625 244 L 660 258 L 740 258"
+          fill="none" stroke="#33a" stroke-width="1.5"/>
+    <line x1="615" y1="232" x2="615" y2="290" stroke="#c33" stroke-width="1" stroke-dasharray="3 2"/>
+    <text x="615" y="300" text-anchor="middle" fill="#a33">f₀</text>
+  </svg>
+  </div>
+
+  <h2 id="circular">Why no trigger is needed</h2>
+  <p>The sweep is played on a loop whose length is deliberately rounded to a
+     power of two samples,</p>
+
+  <div class="eq"><i>N</i> = nearest power of two to <i>T</i><sub>sweep</sub> ·
+     <i>f</i><sub>s</sub>&nbsp;&nbsp;(<i>T</i><sub>sweep</sub> ≈ 0.26 s)<span class="no">(1)</span></div>
+
+  <p>so that the transform of one grabbed period is a <em>circular</em> one —
+     the buffer wraps back onto itself with no gap.  A window taken at some
+     random phase of the loop is then nothing more than the same periodic sweep
+     rotated by a few samples, and the shift theorem of the transform says a
+     rotation changes only the phase of each bin, never its magnitude:</p>
+
+  <div class="eq">|&#8202;DFT{ <i>x</i>[(<i>n</i>−<i>d</i>) mod <i>N</i>] }&#8202;|
+     = |&#8202;DFT{ <i>x</i>[<i>n</i>] }&#8202;|<span class="no">(2)</span></div>
+
+  <p>Because tuning reads only magnitude, the arbitrary grab phase drops out
+     entirely — no start marker, no trigger, no alignment.  This is the whole
+     reason the live loop is allowed to be careless about <em>when</em> it
+     looks.  (Round the period to anything other than a power of two and the
+     transform is no longer circular: an unaligned window then wraps across the
+     seam and smears every bin into a spike, which is exactly the artefact this
+     avoids.)<sup id="cite-2"><a href="#ref-dft">[2]</a></sup>  The one seam that
+     does exist — where the loop rejoins its own start — is smoothed by a short
+     raised-cosine fade applied identically to the played sweep and to the
+     reference it is divided by, so the two cancel.</p>
+
+  <h2 id="null">Finding the null</h2>
+  <p>Each period is turned into the notch's magnitude response by dividing the
+     returned spectrum by the swept reference spectrum,
+     <i>H</i>(<i>f</i>) = <i>Y</i>(<i>f</i>) ⁄ <i>X</i>(<i>f</i>)
+     — the same Farina deconvolution the
+     <a href="freq-resp.html#how">frequency-response</a> chapter
+     describes<sup id="cite-1"><a href="#ref-farina">[1]</a></sup>.  The deepest
+     point of that curve is located to a fraction of a bin by fitting a parabola
+     through the lowest sample and its two neighbours, working in linear
+     magnitude (where a smooth dip really is parabolic near its bottom, unlike
+     in decibels):</p>
+
+  <div class="eq">δ = ½ · (<i>y</i><sub>−1</sub> − <i>y</i><sub>+1</sub>) ⁄
+     (<i>y</i><sub>−1</sub> − 2<i>y</i><sub>0</sub> + <i>y</i><sub>+1</sub>)&nbsp;,&nbsp;&nbsp;
+     <i>f</i><sub>null</sub> = <i>f</i><sub>i</sub> + δ · Δ<i>f</i><span class="no">(3)</span></div>
+
+  <p>The refined null frequency and depth are what you read off the display as
+     you trim.  One deliberate difference from an ordinary sweep measurement:
+     the usual smoothing that tidies a frequency-response trace is switched
+     <em>off</em> here.  On the coarse grid this quick live view uses, a
+     smoothing window would span many hertz and round several decibels off the
+     bottom of a sharp null — hiding exactly the depth you are trying to
+     maximise.  A raw, un-smoothed curve reads the true null.</p>
+
+  <div class="note"><b>After tuning, capture the notch's own response.</b>
+     A tuned twin-T is not perfectly flat away from its null, and that shape
+     would otherwise bias the harmonics you measure through it.  So the correct
+     workflow is: tune the null onto the fundamental here, then run a normal
+     frequency-response sweep of the notch and <em>save it as a calibration
+     file</em>.  The <a href="fft.html">FFT analyser</a> later de-embeds that
+     file, so only the device under test's distortion remains.  Measure the
+     notch's response first; measure distortion through it second.</div>
+
+  <h2 id="refs">References</h2>
+  <ol class="refs">
+    <li id="ref-farina"><a href="#cite-1">1.</a>
+        A. Farina, <a href="http://pcfarina.eng.unipr.it/Public/Papers/226-AES00.PDF" target="_blank" rel="noopener"><i>Simultaneous
+        measurement of impulse response and distortion with a swept-sine
+        technique</i></a>, AES 108th Convention, 2000 — the exponential sweep
+        and its deconvolution reference.</li>
+    <li id="ref-dft"><a href="#cite-2">2.</a>
+        <a href="https://en.wikipedia.org/wiki/Circular_convolution" target="_blank" rel="noopener">Circular
+        convolution and the DFT shift theorem</a> (Wikipedia) — why a circular
+        transform is shift-invariant in magnitude.</li>
+  </ol>
+
+  <p class="back"><a href="freq-resp.html">◀ Frequency response</a> ·
+     <a href="theory.html">Theory of operation</a> ·
+     next: <a href="algorithms.html">Algorithm reference ▶</a></p>
+
+    </div>
+  </main>
+
+</body>
+</html>

@@ -26,34 +26,37 @@
 
   <div class="shot">
     <img src="img/generator-pane.png" alt="Generator pane"/>
-    <svg class="callouts" viewBox="0 0 330 587" preserveAspectRatio="none"
+    <svg class="callouts" viewBox="0 0 330 507" preserveAspectRatio="none"
          xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace">
       <defs>
         <marker id="ca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
           <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/>
         </marker>
       </defs>
-      <line x1="191" y1="37" x2="243" y2="17" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="205" cy="40" r="11" fill="#c33"/>
-      <text x="205" y="44" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">1</text>
-      <line x1="150" y1="18" x2="150" y2="46" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="150" cy="31" r="11" fill="#c33"/>
-      <text x="150" y="35" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">2</text>
-      <line x1="277" y1="143" x2="256" y2="143" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="291" cy="143" r="11" fill="#c33"/>
-      <text x="291" y="147" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">3</text>
-      <line x1="165" y1="179" x2="165" y2="191" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="165" cy="166" r="11" fill="#c33"/>
-      <text x="165" y="170" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">4</text>
-      <line x1="216" y1="333" x2="285" y2="347" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="205" cy="322" r="11" fill="#c33"/>
-      <text x="205" y="326" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">5</text>
-      <circle cx="165" cy="482" r="11" fill="#c33"/>
-      <text x="165" y="486" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">6</text>
-      <line x1="154" y1="555" x2="46" y2="560" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <line x1="176" y1="555" x2="287" y2="558" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="165" cy="555" r="11" fill="#c33"/>
-      <text x="165" y="559" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">7</text>
+      <line x1="293" y1="24" x2="281" y2="37" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="302" cy="16" r="13" fill="#c33"/>
+      <text x="302" y="21" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
+      <line x1="29" y1="61" x2="47" y2="61" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="17" cy="61" r="13" fill="#c33"/>
+      <text x="17" y="66" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
+      <line x1="277" y1="119" x2="198" y2="119" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="291" cy="119" r="13" fill="#c33"/>
+      <text x="291" y="124" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
+      <line x1="301" y1="164" x2="286" y2="164" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="312" cy="164" r="13" fill="#c33"/>
+      <text x="312" y="169" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
+      <line x1="164" y1="292" x2="278" y2="292" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="150" cy="292" r="13" fill="#c33"/>
+      <text x="150" y="297" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
+      <circle cx="302" cy="402" r="13" fill="#c33"/>
+      <text x="302" y="407" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
+      <line x1="152" y1="476" x2="49" y2="476" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <line x1="178" y1="476" x2="272" y2="476" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="165" cy="476" r="13" fill="#c33"/>
+      <text x="165" y="481" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">7</text>
+      <line x1="235" y1="31" x2="214" y2="39" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="243" cy="24" r="13" fill="#c33"/>
+      <text x="243" y="29" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">8</text>
     </svg>
   </div>
   <ol class="features">
@@ -82,9 +85,13 @@
         <a href="#generator-load-from">Load from… + In loop</a> plays a file
         back (the In-loop box repeats it).</li>
     <li><b>Calibrate DAC &amp; Play.</b>  The crosshair button opens the
-        <a href="#generator-corrections">DAC calibration</a> dialog; the green
+        <a href="#generator-dac-calibrate">DAC calibration</a> dialog; the green
         triangle is <a href="#generator-play">Play / Stop</a>.  Starting the
         tone stops file playback and vice-versa.</li>
+    <li><b>Output channel.</b>  The <b>Both / Left / Right</b> combo in the
+        header row picks which DAC lane carries the signal; the unselected lane
+        plays digital silence — <a href="#generator-output-channel">Output
+        channel</a>.</li>
   </ol>
 
   <h2>Header</h2>
@@ -109,6 +116,16 @@
     <tr><td>Linear sweep</td><td>Chirp with linear-in-time frequency ramp.</td></tr>
     <tr><td>Log sweep</td><td>Farina logarithmic chirp — equal energy per octave.</td></tr>
   </table>
+
+  <h3 id="generator-output-channel">Output channel</h3>
+  <p>Combo in the top header row — in the <a href="#generator-form">Signal&nbsp;form</a>
+     label row, <b>above</b> the signal-form selector and beside the
+     <a href="#generator-onair">ON&nbsp;AIR</a> indicator — choosing which DAC lane
+     carries the generated signal: <b>Both</b>, <b>Left</b>
+     or <b>Right</b>.  The unselected lane plays <b>digital silence</b>, so you can
+     drive one side of a stereo device — or one channel of the device under test — on
+     its own.  It is <b>live</b>: switching lanes while a tone is playing takes effect
+     at once, without stopping the generator.</p>
 
   <h3 id="generator-onair">ON&nbsp;AIR indicator</h3>
   <p>An LED and the text <b>ON&nbsp;AIR</b> at the top-right of the pane.
@@ -225,12 +242,42 @@
      device — <code>x dBV = 10<sup>x/20</sup> V<sub>RMS</sub></code>.</p>
 
   <h3 id="generator-dither">Dither</h3>
-  <p>Read-only drop-down (rebuilt to match the output bit-depth on
-     open).  Selects how many LSBs of triangular dither are added
-     before quantisation.  <code>Off</code> disables dither;
-     1 .. <i>N</i> add 1 .. <i>N</i> LSBs (<i>N</i> = output bit-depth).
-     Dither breaks up periodic quantisation patterns at very low
-     output levels.</p>
+  <p>Sets how much triangular (TPDF) dither is added just before the output is
+     quantised — <code>Off</code>, or a depth from 1&nbsp;LSB up to the output
+     bit-depth.  Enter it as <b>bits</b>, or type a <code>dBV</code> suffix to
+     set it as the noise level it makes; the caption shows the other unit, and
+     the wheel/arrows step ±1&nbsp;bit (bits view) or ±10&nbsp;dBV (dBV view),
+     with <code>Off</code> at the top.</p>
+  <p>The dBV is the level the dither shows on the <a href="fft.html">FFT</a>
+     noise floor: it follows the DAC full-scale <em>and</em> the analysis window
+     chosen in the FFT, so entering, say, −100&nbsp;dBV puts the FFT floor at
+     −100&nbsp;dBV — provided the FFT uses <b>incoherent (power) averaging</b>
+     (coherent averaging cancels noise and reads far lower).  Dither breaks up
+     periodic quantisation patterns at very low output levels.</p>
+
+  <h3 id="generator-dac-calibrate">DAC calibration (crosshair button)</h3>
+  <p>The crosshair button at the bottom-left of the pane opens the shared DAC
+     calibration dialog, which anchors the <a href="#generator-amplitude">Amplitude
+     (RMS)</a> scale — the volts RMS the DAC emits for digital full-scale — against a
+     level you measure at the output.  Set the generator to a known amplitude, read
+     the actual output with a trusted meter, and enter that reading.</p>
+  <p><img src="img/DAC calibration.png" alt="DAC calibration dialog"/></p>
+  <p>Type the <b>measured signal amplitude</b> in <code>nV</code> / <code>µV</code> /
+     <code>mV</code> / <code>V</code>.  The dialog has a <b>Left</b> and a <b>Right</b>
+     row for a stereo card — <b>calibration is always per channel</b>, since two
+     physical DAC channels never match exactly — and a single row for a Mono card;
+     each row writes only its own channel's active range.  A card set to
+     <a href="preferences.html#prefs-audio-card-editor">Coupling: Linked</a> is still
+     calibrated per channel — Linked shares only which range is selected.</p>
+  <div class="note"><b>Windows volume is part of the calibration.</b>  Set the
+     Windows sound-settings volume for the output device to <b>100</b> and never move
+     it again once calibrated: exclusive-mode WASAPI and WDM-KS bypass the software
+     mixer, but on many USB interfaces that slider still programs the device's
+     <em>internal hardware</em> volume, so a later nudge silently rescales the
+     full-scale you measured.  <b>Exception:</b> a card that uses the slider position
+     to switch modes — the <b>E1DA Cosmos</b> above position 49 ties its channels
+     (right is the main input, left carries the same signal 6&nbsp;dB lower) — must
+     sit where its mode requires and stay there.</div>
 
   <h2 id="generator-corrections">Corrections</h2>
   <h3>Predistortion file (.dpd)</h3>

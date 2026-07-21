@@ -475,6 +475,28 @@
      IEC-Standard<sup id="cite-5"><a href="#ref-aw">[5]</a></sup>, sodass der Wert
      die Hörbarkeit widerspiegelt statt rohem Breitbandrauschen.</p>
 
+  <p>Die Wendung „ihre Leck-Zonen" verbirgt das Detail, das darüber entscheidet,
+     ob diese Werte ehrlich sind: Das um den Grundton ausgeschlossene Band ist
+     kein fester Schutzabstand.  Ein breiter oder phasenverrauschter Grundton
+     breitet zu beiden Seiten einen <b>Saum</b> angehobener Bins aus; in der
+     Rauschsumme belassen, würde er sowohl SNR als auch ENOB beschönigen, indem er
+     die eigene geleckte Energie des Tons als Rauschen zählt.  Daher wird der
+     Ausschluss so weit vergrößert, dass er zum Saum passt.  Beginnend beim
+     Grundton-Bin läuft der Analysator nach außen, Bin für Bin, solange jeder
+     Nachbar noch über dem Grundrauschen steht, und hält beim ersten Bin an, der
+     auf dieses zurückgefallen ist — ein schmaler Saum wird schmal ausgeschlossen,
+     ein breiter bis dorthin, wo er wirklich endet.  Der für diesen Test verwendete
+     Pegel ist die Leistung im zehnten Perzentil des Spektrums selbst, die immun
+     gegen ebenjenen gemessenen Leck-Effekt ist, sodass die Breite des Laufs nicht
+     vom gewählten SNR-Band abhängt.  Ein zweiter, begrenzter Durchlauf überstreicht
+     dann eine Zone von ±½·<i>f</i>₁ um den Grundton und verwirft jeden isolierten
+     Phasenrausch-Buckel, der noch über dem Grundrauschen steht — der zusammenhängende
+     Lauf hält beim ersten Einbruch an, sodass ein durch eine Delle unterbrochener
+     Saum seine äußeren Inseln sonst wieder in die Rauschsumme lecken ließe.  Diese
+     Zone ist auf die halbe Grundtonfrequenz begrenzt, sodass sie nie die zweite
+     Harmonische bei 2·<i>f</i>₁ erreichen kann, die als Verzerrung gezählt bleiben
+     muss, nicht als Rauschen ausgeschlossen.</p>
+
   <h2 id="dualtone">Zweiton (Intermodulation)</h2>
   <p>Bei zwei vorhandenen Tönen sind die interessierenden Produkte nicht
      Harmonische eines Tons, sondern Kombinationen <i>a</i>·<i>f</i>₁ + <i>b</i>·<i>f</i>₂.
@@ -493,7 +515,7 @@
      wird angewendet, wenn die Kurve gezeichnet wird, sodass das Umschalten einer
      Korrektur sofort neu zeichnet, ohne die Mittelung zu verwerfen:</p>
   <ul>
-    <li><b>Frequenzgang-De-Embedding</b> (nächster Abschnitt).</li>
+    <li><b>Frequenzgang-Entbetten</b> (nächster Abschnitt).</li>
     <li><b>Netzunterdrückung</b> wird hier als Frequenzbereichs-Kamm-Korrektur auf
         der geplotteten Kurve angewendet — nicht als Zeitbereichsfilter auf dem
         Akkumulator — sodass sie die gemittelten Daten selbst nie verzerrt.</li>
@@ -540,20 +562,20 @@
      <b>−81,73 dB bei 1002,23 Hz</b>: etwa 0,7 dB Korrektur über ein Drittel
      Hertz. Der geringste Fehler in der nachgeschlagenen Frequenz — oder die
      geringste Drift der Kerbe selbst — wird so zu einem großen Fehler im
-     de-embeddeten Grundtonpegel. Und die Nullstelle des Twin-T <em>driftet</em>
+     entbetteten Grundtonpegel. Und die Nullstelle des Twin-T <em>driftet</em>
      tatsächlich, um Zehntel-Hertz, während ihre Bauteile sich erwärmen und
      abkühlen, sodass der zurückgewonnene Grundton über einen langen Lauf wandert,
      obwohl die Quelle bockstabil ist.</p>
   <p>Weil jeder THD- / THD+N- / SNR-Wert auf den Grundtonpegel bezogen ist, zeigt
      sich diese Wanderung als Instabilität in den Verzerrungsmesswerten, selbst wenn
      der Prüfling sich nicht geändert hat. Die Abhilfe besteht darin, das
-     De-Embedding des Grundtons zu unterlassen und ihn <b>von Hand anzugeben</b>:
+     Entbetten des Grundtons zu unterlassen und ihn <b>von Hand anzugeben</b>:
      Seine Amplitude ist der Teil, den man tatsächlich kennt — man hat ihn am
      Generator eingestellt oder ohne Kerbe im Stromkreis gemessen —, während die
      Nullstelle des Filters der unsichere Teil ist. Mit aktiviertem
      <a href="../fft.html#fft-manual-fund">manuellem Grundton</a> werden die
      Verzerrungs-Metriken auf diesen festen, bekannten Wert bezogen, und nur die
-     Harmonischen werden de-embeddet — und sie sind robust gegen ebenjene Drift:
+     Harmonischen werden entbettet — und sie sind robust gegen ebenjene Drift:
      Bei der 2. Harmonischen (≈2004 Hz) verschiebt eine 2/3-Hz-Verschiebung der
      Kerbe die Korrektur um unter <b>0,01 dB</b>, und bei der 3. (≈3006 Hz) bleibt
      selbst eine 1-Hz-Verschiebung unter 0,01 dB, weil diese Frequenzen weit oben

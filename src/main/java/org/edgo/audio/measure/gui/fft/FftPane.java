@@ -32,12 +32,13 @@ import org.eclipse.swt.widgets.Button;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.common.Constants;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.fft.FftResult;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
+import org.edgo.audio.measure.gui.common.CalibrationDialog;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.fft.predistortion.PredistortionWizardDialog;
@@ -114,12 +115,6 @@ public final class FftPane extends AbstractPane {
     /** Counterpart to {@link #freqRespStartedListener} — re-enables the
      *  Record button once the sweep finishes (or aborts). */
     private Consumer<Void> freqRespStoppedListener;
-    /** Set when an audio-backend switch stops a RUNNING FFT recording, so it is
-     *  restarted on the new backend once that is live (AUDIO_FORMAT_CHANGED)
-     *  instead of being left stopped. */
-    private boolean        fftRecordingBeforeBackendSwitch;
-    private Consumer<Void> backendChangingListener;
-    private Consumer<Void> backendRestartListener;
 
     /**
      * Constructs the live pane around the injected app-lifetime engine —
@@ -153,6 +148,14 @@ public final class FftPane extends AbstractPane {
                 controller.getCorrectionStore());
         d.buildAndShow();
         return d;
+    }
+
+    /** Builds + shows the ADC calibration dialog in its two-row form for a help
+     *  capture (analyzed channel prefilled, the other blank/disabled) without a
+     *  live measurement, returning it so an automation script can screenshot and
+     *  dispose it.  Delegates to the toolbar {@link FftTabControl}. */
+    public CalibrationDialog openAdcCalibrationForCapture() {
+        return toolbarTabs == null ? null : toolbarTabs.openAdcCalibrationForCapture();
     }
 
     private FftPane(Composite parent, boolean liveCapture, GeneratorController genController,
@@ -192,7 +195,7 @@ public final class FftPane extends AbstractPane {
         }
         this.controller = controller;
         this.genController = genController;
-        FreqRespCorrectionStore correctionStore = controller.getCorrectionStore();
+        CorrectionStore correctionStore = controller.getCorrectionStore();
         view = new FftView(plotRow, correctionStore, controller);
         magScrollbar = new FlatScrollbar(plotRow, SWT.VERTICAL);
         magScrollbar.setMinimum(0);
@@ -310,24 +313,6 @@ public final class FftPane extends AbstractPane {
         bus.subscribe(Events.FFT_SCREENSHOT_REQUESTED,      screenshotRequestedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
         bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
-        // A backend switch tears down the capture device, so a running FFT
-        // recording always dies.  Stop it cleanly before the teardown and
-        // restart it on the new backend once that is live — the FFT resumes
-        // instead of being left stopped.
-        backendChangingListener = ignored -> {
-            if (recordButton == null || recordButton.isDisposed()) return;
-            fftRecordingBeforeBackendSwitch = isRecording();
-            if (fftRecordingBeforeBackendSwitch) recordOff();
-        };
-        backendRestartListener = ignored -> {
-            if (recordButton == null || recordButton.isDisposed()) return;
-            if (fftRecordingBeforeBackendSwitch) {
-                fftRecordingBeforeBackendSwitch = false;
-                recordOn();
-            }
-        };
-        bus.subscribe(Events.AUDIO_BACKEND_CHANGING,        backendChangingListener);
-        bus.subscribe(Events.AUDIO_FORMAT_CHANGED,          backendRestartListener);
 
         recordButton.addListener(SWT.Selection, e -> {
             if (recordButton.getSelection()) recordOn();
@@ -355,8 +340,6 @@ public final class FftPane extends AbstractPane {
             bus2.unsubscribe(Events.FFT_SCREENSHOT_REQUESTED,      screenshotRequestedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STARTED,  freqRespStartedListener);
             bus2.unsubscribe(Events.FREQRESP_MEASUREMENT_STOPPED,  freqRespStoppedListener);
-            bus2.unsubscribe(Events.AUDIO_BACKEND_CHANGING,        backendChangingListener);
-            bus2.unsubscribe(Events.AUDIO_FORMAT_CHANGED,          backendRestartListener);
         });
 
         // Re-layout once the event loop spins up.  At constructor exit
@@ -471,6 +454,11 @@ public final class FftPane extends AbstractPane {
      *  button silently un-toggles (no modal dialog in an unattended run);
      *  callers can check {@link #isRecording()}. */
     public void engageRecord() {
+        // Automation no-audio gate: a help-screenshot run started with
+        // -Dphonalyser.automation.noAudio=true must never open an audio device,
+        // so this script-driven Record is a no-op.  A user Record-button click
+        // uses the recordButton listener/recordOn() and is unaffected.
+        if (Boolean.getBoolean("phonalyser.automation.noAudio")) return;
         recordOn();
     }
 
@@ -486,21 +474,28 @@ public final class FftPane extends AbstractPane {
         return view != null && !view.isDisposed() && view.renderRealtimeFrame();
     }
 
-    /** Pauses FFT recording for the lifetime of a modal dialog (e.g.
-     *  Preferences).  Mirrors the oscilloscope's pause-around-dialog
-     *  contract: returns a {@link Runnable} that restores the previous
-     *  recording state.  Crucial for sample-rate / device changes —
-     *  without releasing the FFT's capture reference here, the shared
-     *  audio device stays open at the OLD parameters and the user's
-     *  new settings would silently never take effect. */
-    public Runnable pauseForDialog() {
-        boolean wasRecording = recordButton != null
+    /** Whether the analyser was recording when {@link #stopCaptureForPrefs()}
+     *  stopped it, so {@link #startCaptureForPrefs()} restarts exactly that.
+     *  Owned here — the caller does not track the pane's recording state. */
+    private boolean recordWasRunningForPrefs;
+
+    /** Stops FFT recording ahead of a Preferences audio-config change,
+     *  remembering whether it was running.  Releasing the FFT's shared-capture
+     *  reference here is what lets a device / sample-rate change actually take
+     *  effect — otherwise the shared device stays open at the OLD parameters and
+     *  the new settings silently never apply.  Pair with
+     *  {@link #startCaptureForPrefs()} after the new config is committed. */
+    public void stopCaptureForPrefs() {
+        recordWasRunningForPrefs = recordButton != null
                 && !recordButton.isDisposed()
                 && recordButton.getSelection();
-        if (wasRecording) recordOff();
-        return () -> {
-            if (wasRecording) recordOn();
-        };
+        if (recordWasRunningForPrefs) recordOff();
+    }
+
+    /** Restarts FFT recording on the newly-committed backend if it was running
+     *  when {@link #stopCaptureForPrefs()} stopped it. */
+    public void startCaptureForPrefs() {
+        if (recordWasRunningForPrefs) recordOn();
     }
 
     /** Turns the Record button OFF — stops the worker (which releases its own

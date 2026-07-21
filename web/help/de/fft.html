@@ -153,7 +153,7 @@
      Ihr Durchmesser ist konfigurierbar.  Wenn die
      <a href="#fft-manual-fund">manuelle Grundton-Überschreibung</a>
      aktiviert ist, wird nur der Grundton-Punkt auf den Überschreibungswert
-     angehoben; die übrigen verbleiben auf dem de-eingebetteten /
+     angehoben; die übrigen verbleiben auf dem entbetteten /
      kalibrierten dBV-Maßstab.</p>
 
   <h3 id="fft-distortion-band-dim">Verzerrungsband-Abdunkelung</h3>
@@ -243,7 +243,7 @@
   <p>Fette erste Zeile: Grundtonfrequenz (4 Dezimalstellen Hz), dBFS, dBV.
      Die dBV-Spalte zeigt in Rangfolge: die
      <a href="#fft-manual-fund">manuelle Überschreibung</a>, falls gesetzt;
-     andernfalls den de-eingebetteten (kalibrierungskorrigierten) Wert, wenn
+     andernfalls den entbetteten (kalibrierungskorrigierten) Wert, wenn
      eine <a href="#fft-tab-calibration">Kalibrierung</a> geladen ist;
      andernfalls den einfachen ADC-kalibrierten Wert.  Im Zweiston-Modus
      besteht die Kopfzeile aus zwei Zeilen — <code>F1:</code> und
@@ -274,7 +274,12 @@
 
   <h3 id="fft-thd-snr">SNR</h3>
   <p>Signal-Rausch-Verhältnis in dB.  Definiert gegenüber dem reinen
-     Rauschband (oben).</p>
+     Rauschband (oben): der Grundton, seine Harmonischen <em>und</em> der
+     Leck-Saum des Grundtons werden aus der Rauschsumme herausgehalten — der
+     Saum-Ausschluss weitet sich, um einem breiten oder phasenverrauschten Ton
+     bis hinunter zum Grundrauschen zu folgen, sodass er den Wert nie beschönigt
+     (siehe <a href="theory/fft.html#metrics">Funktionsprinzip &#9656;
+     Verzerrungs- &amp; Rausch-Metriken</a>).</p>
 
   <h3 id="fft-thd-thd">THD H2..N</h3>
   <p>Gesamtoberwellenverzerrung als Prozentsatz des Grundtons, summiert
@@ -412,7 +417,13 @@
      synchronisiert wird — derselbe Detektor, der den Störungstrigger des
      Oszilloskops steuert (siehe
      <a href="theory/fft.html#rejection">Theorie ▸ schlechte Blöcke aus der
-     Mittelung heraushalten</a>).</p>
+     Mittelung heraushalten</a>).  Da die Rekurrenz von der Periodendauer des Tons
+     abhängt, nicht von seinem Pegel, ist die Sperre <b>von Natur aus
+     amplitudenunabhängig</b>: sie meldet einen Sprung, der schneller ist, als der Ton
+     es zulässt — eine echte Aufnahme-Klebestelle oder eine Generatorpause — bei jedem
+     Signalpegel und verwirft nur dieses eine Mittelungsfenster, während ein lediglich
+     pegelschwacher, aber kontinuierlicher Ton normal weitergemittelt wird, sodass
+     lange Mittelungen sauber bleiben.</p>
   <p><b>Für ein kleines oder nichtsinusförmiges Signal abwählen.</b>  Ein
      schwaches (SNR-armes) oder bewusst nichtsinusförmiges Signal bricht die
      Sinus-Rekurrenz-Vorhersage bei <em>jedem</em> Block, sodass das Gatter alle
@@ -434,11 +445,11 @@
 
   <h4 id="fft-manual-fund">Manueller Grundton</h4>
   <p>Wenn aktiviert, behandelt der Analyser diesen Wert als dBV des Grundtons,
-     anstatt den de-eingebetteten Wert oder den des kalibrierten ADC zu
+     anstatt den entbetteten Wert oder den des kalibrierten ADC zu
      verwenden.  Der Grundton-Punkt des Diagramms und die
      <a href="#fft-thd-header">dBV-Spalte der THD-Tabellen-Kopfzeile</a>
      wechseln auf diesen Wert; andere Bins und die dBV-Werte der
-     Harmonischen-Zeilen verbleiben auf dem de-eingebetteten Wert oder dem
+     Harmonischen-Zeilen verbleiben auf dem entbetteten Wert oder dem
      kalibrierten Maßstab.  Nützlich, wenn eine externe Twin-T-Kerbfilter den
      Grundton dämpft, man seinen wahren Pegel aber kennt — warum dies THD bei
      einem driftenden Kerbfilter stabilisiert, ist unter
@@ -483,16 +494,32 @@
      ein echtes Layout ist und kein hochskaliertes Bitmap.</p>
 
   <h4 id="fft-utility-calibrate">ADC-Kalibrierung</h4>
-  <p>Öffnet den ADC-Kalibrierungsdialog (derselbe, der auch vom Oszilloskop aus
-     erreichbar ist), um die dBV- / V-Skala gegen einen bekannten Eingangspegel
-     zu verankern.</p>
+  <p>Öffnet den gemeinsamen
+     <a href="oscilloscope.html#scope-utility-calibrate">ADC-Kalibrierungsdialog</a>,
+     um die dBV- / V-Skala gegen einen bekannten Eingangspegel zu verankern (Einheiten
+     <code>nV</code> / <code>µV</code> / <code>mV</code> / <code>V</code>).  Bei einer
+     Stereo-Karte bietet er eine Zeile Links und eine Rechts, aber nur die Zeile des
+     gerade analysierten Kanals ist aktiviert — die FFT kalibriert jeweils einen Kanal
+     — und sie schreibt nur den aktiven Bereich dieses Kanals; die andere Zeile ist
+     deaktiviert und leer.  Eine Mono-Karte zeigt eine einzelne Zeile.</p>
+  <div class="note"><b>Die Windows-Lautstärke ist Teil der Kalibrierung.</b>  Stellen
+     Sie die Lautstärke dieses Geräts in den Windows-Sound-Einstellungen auf <b>100</b>
+     und verschieben Sie sie nach der Kalibrierung nicht mehr: der Exklusivmodus von
+     WASAPI und WDM-KS umgeht den Software-Mixer, aber auf vielen USB-Schnittstellen
+     programmiert dieser Regler weiterhin die <em>interne Hardware</em>-Lautstärke des
+     Geräts, sodass ein späteres Verschieben stillschweigend den gemessenen
+     Vollausschlag neu skaliert.  <b>Ausnahme:</b> eine Karte, die die Reglerstellung
+     zum Umschalten von Modi nutzt — die <b>E1DA Cosmos</b> koppelt oberhalb von
+     Position 49 ihre Kanäle (rechts ist der Haupteingang, links trägt dasselbe Signal
+     6&nbsp;dB leiser) — muss auf der von ihrem Modus geforderten Position stehen und
+     fest bleiben.</div>
 
   <h3 id="fft-tab-calibration">Tab „Kalibrierung laden…"</h3>
   <p><img src="img/FFT - Load calibration.png" alt="Tab Kalibrierung laden"/></p>
   <p>Lädt eine oder mehrere Frequenzgang-Kalibrierungsdateien
      (<code>.frc</code>, erzeugt vom Frequenzgang-Modul —
      siehe <a href="theory/freq-resp.html">Funktionsprinzip ▸ Frequenzgang</a>)
-     und de-embettet sie zur Anzeigezeit aus dem Spektrum — so spiegelt die
+     und entbettet sie zur Anzeigezeit aus dem Spektrum — so spiegelt die
      Anzeige das Gerät unter Test wider, nicht die Messkette (ein 1&nbsp;kHz
      Twin-T-Kerbfilter, ein Abschwächer, der eigene Rollabfall der Soundkarte).</p>
   <p>Jede Kalibrierung ist eine Zeile; die Schaltfläche <b>+</b> fügt eine
@@ -505,7 +532,7 @@
         (×)-Schaltfläche entlädt die Datei der Zeile, ohne die Zeile zu entfernen.</li>
     <li><b>Aktiv</b> — schaltet diese Kalibrierung ein / aus, ohne sie zu
         entladen.</li>
-    <li><b>Mit Rauschen</b> — de-embettet auch das Grundrauschen, nicht nur
+    <li><b>Mit Rauschen</b> — entbettet auch das Grundrauschen, nicht nur
         Grundton und Harmonische.</li>
   </ul>
   <p>Die Korrektur wird nur auf die angezeigte Kurve angewendet; der
@@ -519,7 +546,7 @@
   <p>Schreibt das aktuelle Spektrum in eine <code>.fft</code>-Datei.  Das Pfadfeld
      ist schreibgeschützt; eine einzelne <b>Speichern</b>-Schaltfläche öffnet den
      Dateidialog (es gibt keine separate Durchsuchen-Funktion).  Das Spektrum wird
-     mit seinen <b>de-eingebetteten</b> Harmonischen gespeichert, und der
+     mit seinen <b>entbetteten</b> Harmonischen gespeichert, und der
      Datei-Header enthält die vollständige Konfiguration, mit der die Analyse
      durchgeführt wurde — FFT-Länge, Abtastrate, Fensterfunktion, Mittelungsmodus
      und -anzahl, Kanal, das Verzerrungsband, manueller Grundton, Kalibrierung
@@ -532,7 +559,7 @@
      statischen Spektrum-Overlay — nützlich zum Vergleich von Messungen, die zu
      verschiedenen Zeiten oder unter verschiedenen Bedingungen aufgenommen wurden.
      Ein geladenes Spektrum wird genau so angezeigt, wie es gespeichert wurde:
-     die aktuellen De-Embedding- und Manueller-Grundton-Einstellungen werden
+     die aktuellen Einstellungen für Entbetten und manuellen Grundton werden
      <em>nicht</em> erneut darauf angewendet (die gespeicherte Kurve enthält
      bereits die eigenen).</p>
 

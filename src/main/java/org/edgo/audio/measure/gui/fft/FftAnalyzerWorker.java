@@ -2002,7 +2002,7 @@ public final class FftAnalyzerWorker {
         if (prefs.isFftManualFundEnabled()) {
             double v = prefs.getFftManualFundVrms();
             double dbv = (v > 0) ? 20.0 * Math.log10(v) : Double.NaN;
-            return dbv - prefs.getDbvOffsetDb();   // NaN propagates
+            return dbv - prefs.getDbvOffsetDb(prefs.getFftChannel());   // NaN propagates
         }
         return Double.NaN;
     }

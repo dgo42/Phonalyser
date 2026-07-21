@@ -48,10 +48,13 @@ final class SignalMeasurements {
     private final double fallTime;   // seconds, 90 % → 10 % on falling edges (NaN if unknown)
     private final double frequency;  // Hz (NaN if unknown)
     private final double dutyCycle;  // fraction [0, 1] (NaN if unknown)
+    private final double dualF1;     // Hz, dual-tone tone 1 as captured (NaN if not measured)
+    private final double dualF2;     // Hz, dual-tone tone 2 as captured (NaN if not measured)
 
     private SignalMeasurements(double vpp, double vrms, double vmean,
                                double period, double riseTime, double fallTime,
-                               double frequency, double dutyCycle) {
+                               double frequency, double dutyCycle,
+                               double dualF1, double dualF2) {
         this.vpp = vpp;
         this.vrms = vrms;
         this.vmean = vmean;
@@ -60,9 +63,14 @@ final class SignalMeasurements {
         this.fallTime = fallTime;
         this.frequency = frequency;
         this.dutyCycle = dutyCycle;
+        this.dualF1 = dualF1;
+        this.dualF2 = dualF2;
     }
 
-    private SignalMeasurements() { this(0, 0, 0, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN); }
+    private SignalMeasurements() {
+        this(0, 0, 0, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN,
+                Double.NaN, Double.NaN);
+    }
 
     /**
      * Computes measurements over the first {@code n} samples of {@code data}.
@@ -78,7 +86,8 @@ final class SignalMeasurements {
     static SignalMeasurements from(float[] data, int n, double sampleRate, double peakVolts,
                                    boolean broadScan) {
         if (n < 4) {
-            return new SignalMeasurements(0, 0, 0, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+            return new SignalMeasurements(0, 0, 0, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN,
+                    Double.NaN, Double.NaN);
         }
         double sum = 0;
         double sumSq = 0;
@@ -246,7 +255,8 @@ final class SignalMeasurements {
                 duty = (double) highCount / n;
             }
         }
-        return new SignalMeasurements(vpp, vrms, vmean, period, riseTime, fallTime, frequency, duty);
+        return new SignalMeasurements(vpp, vrms, vmean, period, riseTime, fallTime, frequency, duty,
+                Double.NaN, Double.NaN);
     }
 
     /**
@@ -384,7 +394,8 @@ final class SignalMeasurements {
      *  every signal mode. */
     SignalMeasurements withoutTimes() {
         return new SignalMeasurements(vpp, vrms, vmean,
-                Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN);
+                Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN,
+                dualF1, dualF2);
     }
 
     /** Returns a copy with {@code frequency} (and the matching {@code period})
@@ -392,7 +403,19 @@ final class SignalMeasurements {
      *  swap in a comb-bias-free frequency re-measured on the raw signal. */
     SignalMeasurements withFrequency(double freq) {
         return new SignalMeasurements(vpp, vrms, vmean,
-                (freq > 0 ? 1.0 / freq : Double.NaN), riseTime, fallTime, freq, dutyCycle);
+                (freq > 0 ? 1.0 / freq : Double.NaN), riseTime, fallTime, freq, dutyCycle,
+                dualF1, dualF2);
+    }
+
+    /** Returns a copy with the two dual-tone frequencies {@code f1} / {@code f2}
+     *  replaced, keeping every other field.  The scope worker uses this to swap
+     *  in the two tones as re-measured on the raw (as-captured) signal, so the
+     *  residual fit can subtract them at their true ADC-domain frequencies
+     *  rather than the generator's commanded (DAC-domain, clock-offset) values. */
+    SignalMeasurements withDualTones(double f1, double f2) {
+        return new SignalMeasurements(vpp, vrms, vmean,
+                period, riseTime, fallTime, frequency, dutyCycle,
+                f1, f2);
     }
 
     /** Re-pins an already-located fundamental {@code seedHz} to a precise

@@ -25,8 +25,9 @@ export const MAX_ORDER = 5;
 
 /** Half-width of the bin window scanned around each commanded frequency. Small
  *  enough that we never latch onto an IMD product as a fundamental, large
- *  enough to cover sample-rate / FFT-length rounding when snap is off. */
-const TONE_SEARCH_BINS = 8;
+ *  enough to cover sample-rate / FFT-length rounding when snap is off. Exported
+ *  so the FLL dual-tone steer refines each tone over the SAME window. */
+export const TONE_SEARCH_BINS = 8;
 
 /**
  * One slot of intermodulation-distortion measurements computed from a dual-tone
@@ -43,16 +44,21 @@ const TONE_SEARCH_BINS = 8;
  * @property {number} f1DbFs F1 measured peak level (dBFS) — drives markers/autoscale.
  * @property {number} f2DbFs F2 measured peak level (dBFS).
  * @property {number} diffHz f2 − f1 (Hz).
- * @property {number} dfd2Pct DFD2 (f2 − f1) amplitude, % of |F1|+|F2|.
- * @property {number} dfd3Pct DFD3 (√(|2f1−f2|²+|2f2−f1|²)), % of |F1|+|F2|.
- * @property {number} imdPwrPct Combined intermod RMS, % of |F1|+|F2|.
+ * @property {number} dfd2Pct DFD2 (f2 − f1) amplitude, % of |F1|+|F2|; NaN when
+ *   f2 − f1 is outside the measurable range.
+ * @property {number} dfd3Pct DFD3 (RMS of the measurable sidebands 2f1−f2 /
+ *   2f2−f1), % of |F1|+|F2|; NaN when both sidebands fall outside the spectrum.
+ * @property {number} imdPwrPct Combined intermod RMS, % of |F1|+|F2| (skips
+ *   unmeasurable products).
  * @property {number} tdnPct  Total distortion + noise, % (window-independent).
  * @property {Float64Array} dnLHz  Lower-sideband product frequencies (Hz), [2..MAX_ORDER].
  * @property {Float64Array} dnHHz  Upper-sideband product frequencies (Hz).
- * @property {Float64Array} dnLPct Lower-sideband levels, % of |F1|+|F2|.
- * @property {Float64Array} dnHPct Upper-sideband levels, % of |F1|+|F2|.
- * @property {Float64Array} dnLDbV Lower-sideband levels, dBV.
- * @property {Float64Array} dnHDbV Upper-sideband levels, dBV.
+ * @property {Float64Array} dnLPct Lower-sideband levels, % of |F1|+|F2|; NaN when
+ *   the product frequency is out of range (below DC or beyond the spectrum).
+ * @property {Float64Array} dnHPct Upper-sideband levels, % of |F1|+|F2|; NaN out of range.
+ * @property {Float64Array} dnLDbV Lower-sideband levels, dBV; NaN for unmeasurable
+ *   products (the readout shows "---").
+ * @property {Float64Array} dnHDbV Upper-sideband levels, dBV; NaN for unmeasurable products.
  */
 
 /**
@@ -80,6 +86,7 @@ export function analyzeImd(r, f1Cmd, f2Cmd, dbvOffsetDb) {
 
   // The smaller-index ("lower") fundamental is always F1 even if the user typed
   // them in the other order, so dnL (below F1) / dnH (above F2) stay meaningful.
+  // p1@fLow / p2@fHigh therefore carry the LOW / HIGH tone's level respectively.
   const fLow = Math.min(f1Cmd, f2Cmd);
   const fHigh = Math.max(f1Cmd, f2Cmd);
 
@@ -91,11 +98,34 @@ export function analyzeImd(r, f1Cmd, f2Cmd, dbvOffsetDb) {
   const out = newImdResult();
 
   // Frequencies come from the analyzer's clean-frame sub-bin estimate; fall
-  // back to the local peak when the estimate is unavailable.
-  out.f1Hz = (r.fundamentalHzRefined > 0.0)
-    ? r.fundamentalHzRefined : p1.freqHz;
-  out.f2Hz = (!Number.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0)
-    ? r.fundamental2HzRefined : p2.freqHz;
+  // back to the local peak when the estimate is unavailable. The refined pair
+  // arrives in ANALYZER-SLOT order (slot 1 = the detector's primary), which is
+  // the HIGHER tone when the user enters tones high-first (verified 7000/1300
+  // case). Since p1 is always the LOW tone and p2 the HIGH tone, re-pair the
+  // refined values to the sorted slots so f1Hz keeps F1 = lower and stays paired
+  // with the low tone's level. (Java ImdAnalyzer.java:99-102 substitutes in slot
+  // order too, but its Java-side inputs happen to arrive already ordered.)
+  const ref1 = r.fundamentalHzRefined;
+  const ref2 = r.fundamental2HzRefined;
+  const ref1Ok = ref1 > 0.0;
+  const ref2Ok = !Number.isNaN(ref2) && ref2 > 0.0;
+  if (ref1Ok && ref2Ok) {
+    out.f1Hz = Math.min(ref1, ref2);   // pairs with p1@fLow
+    out.f2Hz = Math.max(ref1, ref2);   // pairs with p2@fHigh
+  } else if (ref1Ok || ref2Ok) {
+    // Exactly one refined value — assign it to the slot whose peak is closer.
+    const ref = ref1Ok ? ref1 : ref2;
+    if (Math.abs(ref - p1.freqHz) <= Math.abs(ref - p2.freqHz)) {
+      out.f1Hz = ref;
+      out.f2Hz = p2.freqHz;
+    } else {
+      out.f1Hz = p1.freqHz;
+      out.f2Hz = ref;
+    }
+  } else {
+    out.f1Hz = p1.freqHz;
+    out.f2Hz = p2.freqHz;
+  }
 
   // Manual fundamental override: split the TRUE COMBINED level across the two
   // tones by their measured ratio. Only absolute dBV / V_rms outputs are
@@ -124,11 +154,19 @@ export function analyzeImd(r, f1Cmd, f2Cmd, dbvOffsetDb) {
   // positive so the % divide doesn't blow up when both tones are muted.
   const refMag = Math.max(1e-12, out.f1Mag + out.f2Mag);
 
-  // DFD2 (= f2 − f1) and DFD3 (= 2f1 − f2 / 2f2 − f1).
+  // DFD2 (= f2 − f1) and DFD3 (= 2f1 − f2 / 2f2 − f1). DFD3 is the RMS of its
+  // two sidebands; a sideband outside the measurable range (NaN) is skipped so
+  // the other still reports — SMPTE-style tone pairs routinely put 2f1 − f2
+  // below DC. Both absent → NaN (readout shows "---"). DFD2 goes NaN when its
+  // bin is out of range (readBinVrms → NaN, so the % divide propagates it).
   const dfd2Mag = readBinVrms(amplitudeDbFs, binBw, out.f2Hz - out.f1Hz, dbvOffsetDb);
   const dfd3LowMag = readBinVrms(amplitudeDbFs, binBw, 2.0 * out.f1Hz - out.f2Hz, dbvOffsetDb);
   const dfd3HighMag = readBinVrms(amplitudeDbFs, binBw, 2.0 * out.f2Hz - out.f1Hz, dbvOffsetDb);
-  const dfd3Mag = Math.sqrt(dfd3LowMag * dfd3LowMag + dfd3HighMag * dfd3HighMag);
+  let dfd3Sq = 0.0;
+  let dfd3N = 0;
+  if (Number.isFinite(dfd3LowMag)) { dfd3Sq += dfd3LowMag * dfd3LowMag; dfd3N++; }
+  if (Number.isFinite(dfd3HighMag)) { dfd3Sq += dfd3HighMag * dfd3HighMag; dfd3N++; }
+  const dfd3Mag = dfd3N > 0 ? Math.sqrt(dfd3Sq) : NaN;
   out.dfd2Pct = 100.0 * dfd2Mag / refMag;
   out.dfd3Pct = 100.0 * dfd3Mag / refMag;
 
@@ -151,12 +189,17 @@ export function analyzeImd(r, f1Cmd, f2Cmd, dbvOffsetDb) {
     out.dnHHz[k] = fH;
     out.dnLPct[k] = 100.0 * magL / refMag;
     out.dnHPct[k] = 100.0 * magH / refMag;
-    out.dnLDbV[k] = 20.0 * Math.log10(Math.max(1e-30, magL));
-    out.dnHDbV[k] = 20.0 * Math.log10(Math.max(1e-30, magH));
-    imdPwrSq += magL * magL + magH * magH;
+    // A product outside the measurable range is NaN, not a voltage; the power
+    // sum counts only measurable products.
+    out.dnLDbV[k] = magL > 0 ? 20.0 * Math.log10(magL) : NaN;
+    out.dnHDbV[k] = magH > 0 ? 20.0 * Math.log10(magH) : NaN;
+    if (Number.isFinite(magL)) imdPwrSq += magL * magL;
+    if (Number.isFinite(magH)) imdPwrSq += magH * magH;
   }
-  // Include DFD2 / DFD3 components in the combined IMD power.
-  imdPwrSq += dfd2Mag * dfd2Mag + dfd3LowMag * dfd3LowMag + dfd3HighMag * dfd3HighMag;
+  // Include DFD2 / DFD3 components in the combined IMD power (finite sidebands
+  // only; dfd3Sq already holds just the measurable ones).
+  if (Number.isFinite(dfd2Mag)) imdPwrSq += dfd2Mag * dfd2Mag;
+  imdPwrSq += dfd3Sq;
   out.imdPwrPct = 100.0 * Math.sqrt(imdPwrSq) / refMag;
 
   // TD+N as the scalar drop from total RMS to the fundamentals —
@@ -211,8 +254,10 @@ function newImdResult() {
 /** Picks the highest bin within ±searchBins of centreHz and refines its
  *  position via the standard 3-point quadratic peak-interpolation formula.
  *  Works on the raw dBFS spectrum. Returns null when centreHz falls outside
- *  the representable bin range. */
-function refinePeak(amplitudeDbFs, binBw, centreHz, searchBins) {
+ *  the representable bin range. Exported so the FLL dual-tone steer can refine
+ *  each tone off the controller-side spectrum (see fft-controller.js) without
+ *  running the full IMD product table. */
+export function refinePeak(amplitudeDbFs, binBw, centreHz, searchBins) {
   const n = amplitudeDbFs.length;
   const centre = Math.round(centreHz / binBw);
   if (centre < 1 || centre >= n - 1) return null;
@@ -239,12 +284,13 @@ function refinePeak(amplitudeDbFs, binBw, centreHz, searchBins) {
 }
 
 /** Returns the V_rms voltage at the bin nearest freqHz: the dBFS bin lifted to
- *  dBV via dbvOffsetDb, then to volts. Out-of-range frequencies return 0. */
+ *  dBV via dbvOffsetDb, then to volts. Frequencies at or below DC, or beyond the
+ *  spectrum, return NaN — the product is not measurable at this sample rate. */
 function readBinVrms(amplitudeDbFs, binBw, freqHz, dbvOffsetDb) {
-  if (!(freqHz > 0)) return 0.0;
+  if (!(freqHz > 0)) return NaN;
   const n = amplitudeDbFs.length;
   const b = Math.round(freqHz / binBw);
-  if (b < 1 || b >= n) return 0.0;
+  if (b < 1 || b >= n) return NaN;
   return Math.pow(10.0, (amplitudeDbFs[b] + dbvOffsetDb) / 20.0);
 }
 

@@ -32,16 +32,19 @@ import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.layout.GridData;
 import org.eclipse.swt.layout.GridLayout;
 import org.eclipse.swt.widgets.Button;
+import org.eclipse.swt.widgets.Combo;
 import org.eclipse.swt.widgets.Composite;
+import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 
 import org.edgo.audio.measure.cli.util.StereoSamples;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -129,8 +132,9 @@ public final class TuneNotchWizardDialog {
     private static final double AUTO_FIT_PAD_DB = 2.0;
 
     // --- Notch readout overlay -----------------------------------------------
-    /** Plot left edge in the embedded view (its {@code MARGIN_LEFT}). */
-    private static final int NOTCH_TEXT_X_PX = 73;
+    /** Right-edge pad of the readout text (anchored to the chart's top-right
+     *  corner so it stays clear of the L/R toolbar buttons on the left). */
+    private static final int NOTCH_TEXT_RIGHT_PAD_PX = 8;
     private static final int NOTCH_TEXT_Y_PX = 6;
     /** One-pixel white outline drawn around the black readout text. */
     private static final int NOTCH_OUTLINE_PX = 1;
@@ -161,8 +165,8 @@ public final class TuneNotchWizardDialog {
     private final Shell                   parentShell;
     /** Empty, silent correction store for the embedded view — the notch
      *  session never loads / saves calibrations. */
-    private final FreqRespCorrectionStore correctionStore =
-            new FreqRespCorrectionStore("TuneNotch", null);
+    private final CorrectionStore correctionStore =
+            new CorrectionStore("TuneNotch", null);
 
     private Shell            dialog;
     private FreqRespView     view;
@@ -170,6 +174,7 @@ public final class TuneNotchWizardDialog {
     private NumericStepField stopField;
     private NumericStepField ampField;
     private NumericStepField targetField;
+    private Combo            outputChannelCombo;
     private Label            statusLabel;
 
     /** UI-thread only: number of sweeps started, shown in the status line. */
@@ -181,10 +186,18 @@ public final class TuneNotchWizardDialog {
     private volatile double  notchHz;
     private volatile double  notchDb;
     private volatile boolean notchValid;
+    /** The result the notch readout fields were last computed from; lets
+     *  {@link #onNotchPaint} recompute after an L/R channel toggle (which
+     *  redraws the view but not through a fresh sweep). */
+    private FreqRespResult   notchSource;
 
-    /** Latest published result, read by the target-marker paint listener to
-     *  colour the marker by the attenuation at the target frequency. */
-    private volatile FreqRespResult latestResult;
+    /** Latest deconvolved L / R results, pushed into the embedded view every
+     *  grab.  Both are measured; the L/R toolbar buttons choose which one shows
+     *  (default R).  Read by the notch readout + target marker via
+     *  {@link #activeResult()} so a mid-session channel toggle re-drives them
+     *  from the newly selected channel on the next redraw. */
+    private volatile FreqRespResult latestLeft;
+    private volatile FreqRespResult latestRight;
 
     // Rolling 20-sweep min/max dB ring for the AVERAGED vertical range so it
     // doesn't jump frame-to-frame (UI-thread only — applyAutoMagWindow runs on
@@ -200,6 +213,7 @@ public final class TuneNotchWizardDialog {
     private volatile double  curStopHz;
     private volatile double  curAmpVrms;
     private volatile double  curTargetHz;
+    private volatile OutputChannels curOutputChannels;
 
     /** Drives the continuous sweep loop; cleared on close. */
     private volatile boolean running;
@@ -324,12 +338,25 @@ public final class TuneNotchWizardDialog {
                 FREQ_MIN_HZ, nyquist, FREQ_MAX_DECIMALS, FIELD_WIDTH_HINT);
         targetField.setValue(prefs.getTuneNotchTargetHz());
 
+        // Output-lane gate: which DAC channel(s) the notch sweep drives.  Index
+        // maps to OutputChannels {BOTH, LEFT, RIGHT} by ordinal, mirroring the
+        // generator / FreqResp-settings combos.  Both capture channels are still
+        // deconvolved; the L/R toolbar buttons pick which trace shows.
+        addLabel(row, I18n.t("tuneNotch.outputChannel"));
+        outputChannelCombo = new Combo(row, SWT.READ_ONLY);
+        outputChannelCombo.add(I18n.t("common.channel.both"));
+        outputChannelCombo.add(I18n.t("common.channel.left"));
+        outputChannelCombo.add(I18n.t("common.channel.right"));
+        outputChannelCombo.setToolTipText(I18n.t("tuneNotch.outputChannel.tooltip"));
+        outputChannelCombo.select(prefs.getTuneNotchOutputChannels().ordinal());
+
         // Seed the worker-visible mirror, then keep it current from the UI
         // thread on every edit.  Start/stop also re-anchor the chart axis.
         curStartHz  = startField.getValue();
         curStopHz   = stopField.getValue();
         curAmpVrms  = ampField.getValue();
         curTargetHz = targetField.getValue();
+        curOutputChannels = prefs.getTuneNotchOutputChannels();
 
         startField.addSelectionListener(e -> {
             curStartHz = startField.getValue();
@@ -352,11 +379,22 @@ public final class TuneNotchWizardDialog {
             prefs.setTuneNotchTargetHz(curTargetHz);
             if (view != null && !view.isDisposed()) view.redraw();
         });
+        outputChannelCombo.addListener(SWT.Selection, e -> {
+            int i = outputChannelCombo.getSelectionIndex();
+            if (i < 0) return;
+            curOutputChannels = OutputChannels.values()[i];
+            prefs.setTuneNotchOutputChannels(curOutputChannels);
+            pushEngineOutputChannels();
+        });
     }
 
     private void buildChart() {
         view = new FreqRespView(content, correctionStore, true, prefs);
-        view.setHeaderControlsVisible(false);
+        // Expose ONLY the L/R channel-select buttons (default R visible, L
+        // hidden via applySessionViewPrefs): both channels are measured, the
+        // user toggles which trace shows.  The rest of the pane's controls stay
+        // hidden — this is a bare tuning chart.
+        view.showChannelButtonsOnly();
         GridData gd = new GridData(SWT.CENTER, SWT.CENTER, true, false);
         gd.widthHint  = CHART_WIDTH_PX;
         gd.heightHint = CHART_HEIGHT_PX;
@@ -397,8 +435,9 @@ public final class TuneNotchWizardDialog {
     // shared main-pane preferences)
     // -------------------------------------------------------------------------
 
-    /** Points the dialog's detached view prefs at the notch session: show the R
-     *  (measurement / ch1) channel, set the frequency axis to [start, stop],
+    /** Points the dialog's detached view prefs at the notch session: default to
+     *  the R (measurement / ch1) channel visible (the L/R toolbar buttons let
+     *  the user switch to the L trace), set the frequency axis to [start, stop],
      *  and a wide initial magnitude window until the first sweep auto-fits it.
      *  Applied to the copy only, so the main pane's view is untouched. */
     private void applySessionViewPrefs() {
@@ -438,6 +477,15 @@ public final class TuneNotchWizardDialog {
         if (e == null) return;
         double[] b = sweepBand(curStartHz, curStopHz);
         e.setBand(b[0], b[1]);
+    }
+
+    /** Live-pushes the current output-lane gate to the running engine so a
+     *  mid-session combo change takes effect without a restart (mirrors
+     *  {@link #retuneEngineBand}). */
+    private void pushEngineOutputChannels() {
+        NotchSweepEngine e = engine;
+        if (e == null) return;
+        e.setOutputChannels(curOutputChannels);
     }
 
     // -------------------------------------------------------------------------
@@ -481,7 +529,9 @@ public final class TuneNotchWizardDialog {
         // Read the DAC/ADC voltage references + dither resolution once: they
         // don't change for the lifetime of the session.
         double dacFsVrms = prefs.getDacFsVoltageAmpl();
-        double adcFsVrms = prefs.getAdcFsVoltageRms();
+        double rightLaneScale = prefs.dacRightLaneScale();
+        double adcFsVrmsLeft  = prefs.getAdcFsVoltageRms(Channel.L);
+        double adcFsVrmsRight = prefs.getAdcFsVoltageRms(Channel.R);
         int    ditherBits = prefs.getFreqRespDitherBits();
 
         engine = new NotchSweepEngine(out, in, sampleRate, bitDepth, ditherBits);
@@ -515,7 +565,8 @@ public final class TuneNotchWizardDialog {
             // Open playback + capture ONCE; the looping generator streams until
             // close().  There is no per-sweep open/close or recording wait.
             double[] band = sweepBand(curStartHz, curStopHz);
-            engine.start(band[0], band[1], curAmpVrms, dacFsVrms, sweepSamples, fadeSamples);
+            engine.start(band[0], band[1], curAmpVrms, dacFsVrms, sweepSamples, fadeSamples,
+                    curOutputChannels, rightLaneScale);
             awaitSettle(sweepSamples);
             if (!running) return;
 
@@ -544,7 +595,7 @@ public final class TuneNotchWizardDialog {
                 // it overlaps the continuous capture.
                 deconvExecutor.submit(() -> deconvolveAndPublish(
                         window, sweepRef, fadeSamples, freqs, sampleRate,
-                        startHz, stopHz, ampVrms, adcFsVrms, ditherBits, grabMs));
+                        startHz, stopHz, ampVrms, adcFsVrmsLeft, adcFsVrmsRight, ditherBits, grabMs));
 
                 // Spread the percentage across the loop period (progress toward
                 // the next deconv result) while waiting for the next grab.
@@ -582,22 +633,27 @@ public final class TuneNotchWizardDialog {
         }
     }
 
-    /** Deconvolves one grabbed period's L+R channels (off the worker thread, on
-     *  the deconv executor), builds the {@link StereoFreqRespResult}, and pushes
-     *  the R channel into the embedded view.  The window is one steady-state
-     *  period (leadIn 0); |H(f)| is phase-invariant so its alignment to the
-     *  sweep-cycle start doesn't matter. */
+    /** Deconvolves one grabbed period (off the worker thread, on the deconv
+     *  executor) for BOTH capture channels and pushes both into the embedded
+     *  view.  ch0 is deconvolved with the L full-scale, ch1 with the R
+     *  full-scale; the output selector gates only which DAC lane carries the
+     *  stimulus, so the un-driven side's trace is flat/meaningless but still
+     *  measured — the L/R toolbar buttons let the user pick which one shows
+     *  (default R).  The window is one steady-state period (leadIn 0); |H(f)| is
+     *  phase-invariant so its alignment to the sweep-cycle start doesn't
+     *  matter. */
     private void deconvolveAndPublish(StereoSamples window, double[] sweepRef, int fade,
                                       double[] freqs, int sampleRate,
                                       double startHz, double stopHz,
-                                      double ampVrms, double adcFsVrms, int ditherBits, long grabMs) {
+                                      double ampVrms, double adcFsVrmsLeft, double adcFsVrmsRight,
+                                      int ditherBits, long grabMs) {
         if (!running) return;
         try {
             long decStart = System.nanoTime();
             FreqRespCalibration calL = FreqRespCalHelper.computeFromLogSweep(
-                    window.left(),  sweepRef, 0, sampleRate, freqs, ampVrms, adcFsVrms, fade, "L", false);
+                    window.left(),  sweepRef, 0, sampleRate, freqs, ampVrms, adcFsVrmsLeft,  fade, "L", false);
             FreqRespCalibration calR = FreqRespCalHelper.computeFromLogSweep(
-                    window.right(), sweepRef, 0, sampleRate, freqs, ampVrms, adcFsVrms, fade, "R", false);
+                    window.right(), sweepRef, 0, sampleRate, freqs, ampVrms, adcFsVrmsRight, fade, "R", false);
             long decMs = (System.nanoTime() - decStart) / 1_000_000L;
             if (log.isInfoEnabled()) {
                 log.info("TuneNotch update: grab {} ms, deconv {} ms", grabMs, decMs);
@@ -605,35 +661,50 @@ public final class TuneNotchWizardDialog {
             FreqRespSweepParams params = new FreqRespSweepParams(
                     startHz, stopHz, freqs.length,
                     SWEEP_DURATION_SEC, SWEEP_LEAD_IN_SEC, ampVrms, ditherBits);
-            FreqRespResult left  = new FreqRespResult(
-                    Channel.L, sampleRate, calL.freqs, calL.magLin, calL.phaseRad, params, null, false);
+            FreqRespResult left = new FreqRespResult(
+                    Channel.L,
+                    sampleRate, calL.freqs, calL.magLin, calL.phaseRad, params, null, false);
             FreqRespResult right = new FreqRespResult(
-                    Channel.R, sampleRate, calR.freqs, calR.magLin, calR.phaseRad, params, null, false);
-            StereoFreqRespResult stereo = new StereoFreqRespResult(left, right);
+                    Channel.R,
+                    sampleRate, calR.freqs, calR.magLin, calR.phaseRad, params, null, false);
             if (!running) return;
-            marshal(() -> onSweepResult(stereo.right()));
+            marshal(() -> onSweepResult(left, right));
         } catch (Exception ex) {
             log.error("TuneNotch deconvolution failed", ex);
         }
     }
 
-    /** Feeds a finished sweep into the embedded view, re-fits the magnitude
-     *  axis to the band, and refreshes the notch readout.  Runs on the UI
-     *  thread. */
-    private void onSweepResult(FreqRespResult right) {
-        if (dialog.isDisposed() || view.isDisposed() || right == null) return;
-        latestResult = right;
+    /** Feeds a finished sweep into the embedded view (both channels), then
+     *  re-fits the magnitude axis and refreshes the notch readout from the
+     *  ACTIVE (visible) channel — the one the L/R toolbar buttons select
+     *  (default R).  Runs on the UI thread. */
+    private void onSweepResult(FreqRespResult left, FreqRespResult right) {
+        if (dialog.isDisposed() || view.isDisposed()) return;
+        latestLeft  = left;
+        latestRight = right;
+        view.setLeftResult(left);
         view.setRightResult(right);
-        applyAutoMagWindow(right);
-        computeNotch(right);
+        FreqRespResult active = activeResult();
+        if (active != null) {
+            applyAutoMagWindow(active);
+            computeNotch(active);
+        }
         view.redraw();
     }
 
-    /** Finds the deepest notch (minimum linear magnitude) and stores its
-     *  frequency / depth for the overlay.  Runs on the UI thread. */
-    private void computeNotch(FreqRespResult right) {
-        double[] mag   = right.getMagLin();
-        double[] freqs = right.getFreqs();
+    /** The result of the channel the view currently shows (L/R radio) — the
+     *  notch readout, target marker and auto-fit all follow it, so a mid-session
+     *  channel toggle re-drives them from the newly selected trace. */
+    private FreqRespResult activeResult() {
+        return prefs.isFreqRespLeftVisible() ? latestLeft : latestRight;
+    }
+
+    /** Finds the deepest notch (minimum linear magnitude) in {@code result} and
+     *  stores its frequency / depth for the overlay.  Runs on the UI thread. */
+    private void computeNotch(FreqRespResult result) {
+        notchSource = result;
+        double[] mag   = result.getMagLin();
+        double[] freqs = result.getFreqs();
         if (mag == null || freqs == null || mag.length == 0 || mag.length != freqs.length) {
             notchValid = false;
             return;
@@ -708,15 +779,22 @@ public final class TuneNotchWizardDialog {
         statusLabel.setText(I18n.t("tuneNotch.status", sweepCount, message));
     }
 
-    /** Paints the deepest-notch readout in the plot's top-left corner: black
-     *  text with a one-pixel white outline so it reads on either a light or
-     *  dark trace.  Runs on the UI thread (the view's paint callback). */
+    /** Paints the deepest-notch readout in the chart's top-right corner
+     *  (clear of the L/R toolbar buttons on the left): black text with a
+     *  one-pixel white outline so it reads on either a light or dark trace.
+     *  Runs on the UI thread (the view's paint callback). */
     private void onNotchPaint(PaintEvent e) {
+        // Recompute when the visible channel changed (an L/R toggle redraws the
+        // view without a fresh sweep) so the readout follows the shown trace.
+        FreqRespResult active = activeResult();
+        if (active != notchSource && active != null) computeNotch(active);
         if (!notchValid) return;
         String s = String.format(Locale.US, "%.4f %s   %.3f %s",
                 notchHz, I18n.t("unit.hz"), notchDb, I18n.t("unit.db"));
         GC gc = e.gc;
         gc.setTextAntialias(SWT.ON);
+        int textX = ((Control) e.widget).getSize().x
+                - gc.textExtent(s).x - NOTCH_TEXT_RIGHT_PAD_PX;
         Display display = e.display;
         Color white = display.getSystemColor(SWT.COLOR_WHITE);
         Color black = display.getSystemColor(SWT.COLOR_BLACK);
@@ -724,11 +802,11 @@ public final class TuneNotchWizardDialog {
         for (int dx = -NOTCH_OUTLINE_PX; dx <= NOTCH_OUTLINE_PX; dx++) {
             for (int dy = -NOTCH_OUTLINE_PX; dy <= NOTCH_OUTLINE_PX; dy++) {
                 if (dx == 0 && dy == 0) continue;
-                gc.drawString(s, NOTCH_TEXT_X_PX + dx, NOTCH_TEXT_Y_PX + dy, true);
+                gc.drawString(s, textX + dx, NOTCH_TEXT_Y_PX + dy, true);
             }
         }
         gc.setForeground(black);
-        gc.drawString(s, NOTCH_TEXT_X_PX, NOTCH_TEXT_Y_PX, true);
+        gc.drawString(s, textX, NOTCH_TEXT_Y_PX, true);
     }
 
     /** Paints a {@link #TARGET_LINE_WIDTH_PX}-px dashed vertical marker at the
@@ -737,7 +815,7 @@ public final class TuneNotchWizardDialog {
      *  between (a deep notch landed on the target reads green; off-target or
      *  shallow reads red).  Runs on the UI thread (the view's paint callback). */
     private void onTargetPaint(PaintEvent e) {
-        FreqRespResult res = latestResult;
+        FreqRespResult res = activeResult();
         double target = curTargetHz;
         double fMin = prefs.getFreqRespFreqMinHz();
         double fMax = prefs.getFreqRespFreqMaxHz();
@@ -830,14 +908,16 @@ public final class TuneNotchWizardDialog {
     }
 
     /** Persists ONLY the tune-notch parameters (start / stop / amplitude /
-     *  target) from the detached copy back to the global preferences on close.
-     *  The view's range / channel edits are deliberately dropped with the copy. */
+     *  target / output channel) from the detached copy back to the global
+     *  preferences on close.  The view's range / channel edits are deliberately
+     *  dropped with the copy. */
     private void saveDialogPrefs() {
         Preferences globPrefs = Preferences.instance();
         globPrefs.setTuneNotchStartHz(prefs.getTuneNotchStartHz());
         globPrefs.setTuneNotchStopHz(prefs.getTuneNotchStopHz());
         globPrefs.setTuneNotchAmplitudeVrms(prefs.getTuneNotchAmplitudeVrms());
         globPrefs.setTuneNotchTargetHz(prefs.getTuneNotchTargetHz());
+        globPrefs.setTuneNotchOutputChannels(prefs.getTuneNotchOutputChannels());
         globPrefs.save();
     }
     // -------------------------------------------------------------------------

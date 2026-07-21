@@ -31,6 +31,7 @@ import org.edgo.audio.measure.wav.AiffWriter;
 import org.edgo.audio.measure.wav.FlacWriter;
 import org.edgo.audio.measure.wav.WavWriter;
 import org.edgo.audio.measure.enums.AudioFileFormat;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.gui.interfaces.PcmSink;
 
 /**
@@ -39,7 +40,9 @@ import org.edgo.audio.measure.gui.interfaces.PcmSink;
  * {@code .flac}, {@code .aif} / {@code .aiff}) and writes the same
  * PCM stream {@link org.edgo.audio.measure.sound.CsjsoundGenerator}
  * would produce on the wire — same fillBuffer logic, same TPDF
- * dither.  Stereo, both channels carry the same signal.
+ * dither.  Stereo; honours the per-lane full-scale scale and the
+ * Left/Right/Both output gate exactly like the live PcmQuantizer so a
+ * saved file matches what the DAC would play.
  *
  * <p>For periodic forms (sine, triangle, rectangle, …) the length is
  * truncated to an integer number of signal periods so the file loops
@@ -57,11 +60,16 @@ public class SignalFileExporter {
      * @param signalFrequencyHz pass &gt; 0 for periodic forms (file is
      *        truncated to an integer multiple of the period); pass 0 / NaN
      *        for noise / sweep where there's no period to align to.
+     * @param scaleL per-lane left full-scale scale (normally {@code 1.0}).
+     * @param scaleR per-lane right full-scale scale ({@code fsLeft/fsRight};
+     *        {@code 1.0} when the full-scales are equal or the card is mono).
+     * @param gate output-lane gate; the un-selected lane(s) are written silent.
      */
     public long export(SignalGenerator generator, File outFile,
                        int sampleRate, int bitDepth,
-                       double durationSeconds, int ditherBits,
-                       double signalFrequencyHz) throws IOException {
+                       double durationSeconds, double ditherBits,
+                       double signalFrequencyHz,
+                       double scaleL, double scaleR, OutputChannels gate) throws IOException {
         long requestedFrames = Math.max(1, Math.round(durationSeconds * sampleRate));
         long totalFrames = truncateToFullPeriods(requestedFrames, sampleRate, signalFrequencyHz);
 
@@ -72,14 +80,14 @@ public class SignalFileExporter {
               :                                                   AudioFileFormat.WAV;
 
         try (PcmSink sink = openSink(fmt, outFile, sampleRate, bitDepth)) {
-            Random rng = ditherBits > 0 ? new Random() : null;
+            Random rng = ditherBits > 0.0 ? new Random() : null;
             int bytesPerSample = bitDepth / 8;
             int bytesPerFrame  = bytesPerSample * CHANNELS;
             byte[] buf = new byte[BUFFER_FRAMES * bytesPerFrame];
             long written = 0;
             while (written < totalFrames) {
                 int frames = (int) Math.min(BUFFER_FRAMES, totalFrames - written);
-                fillBuffer(generator, buf, frames, bitDepth, ditherBits, rng);
+                fillBuffer(generator, buf, frames, bitDepth, ditherBits, rng, scaleL, scaleR, gate);
                 sink.writeRaw(buf, frames * bytesPerFrame);
                 written += frames;
             }
@@ -131,41 +139,49 @@ public class SignalFileExporter {
      * Sample-pack logic mirroring
      * {@link org.edgo.audio.measure.sound.CsjsoundGenerator}'s fillBuffer
      * so a saved file equals the bytes that would have been streamed to
-     * the DAC.  Stereo: both channels get the same sample.
+     * the DAC.  Applies the per-lane scale and the output gate exactly like
+     * the live encoder; with both scales {@code 1.0} and gate
+     * {@link OutputChannels#BOTH} both lanes get the identical sample.  A
+     * gated-off lane is written silent (offset-binary 128 for unsigned 8-bit,
+     * 0 for the signed N-bit encodings).
      */
     private void fillBuffer(SignalGenerator gen, byte[] buf, int frames,
-                            int bitDepth, int ditherBits, Random rng) {
-        int bytesPerSample = bitDepth / 8;
-        int bytesPerFrame  = bytesPerSample * CHANNELS;
+                            int bitDepth, double ditherBits, Random rng,
+                            double scaleL, double scaleR, OutputChannels gate) {
+        int     bytesPerSample = bitDepth / 8;
+        int     bytesPerFrame  = bytesPerSample * CHANNELS;
+        boolean wantL          = gate != OutputChannels.RIGHT;
+        boolean wantR          = gate != OutputChannels.LEFT;
         if (bitDepth == 8) {
             // Unsigned PCM offset-binary, silence at 128 (matches WAV
             // 8-bit convention; FLAC rejects 8-bit so this branch is
             // WAV-only by precondition).
             for (int i = 0; i < frames; i++) {
                 double sample = clamp(gen.nextSample() + tpdfNoise(ditherBits, rng));
-                byte   val    = (byte) ((int) Math.round(sample * 127.0) + 128 & 0xFF);
                 int    off    = i * bytesPerFrame;
-                buf[off]     = val;
-                buf[off + 1] = val;
+                buf[off]     = wantL ? (byte) ((int) Math.round(clamp(sample * scaleL) * 127.0) + 128 & 0xFF) : (byte) 128;
+                buf[off + 1] = wantR ? (byte) ((int) Math.round(clamp(sample * scaleR) * 127.0) + 128 & 0xFF) : (byte) 128;
             }
         } else {
             long maxVal = (1L << (bitDepth - 1)) - 1;
             for (int i = 0; i < frames; i++) {
                 double sample = clamp(gen.nextSample() + tpdfNoise(ditherBits, rng));
-                long   pcm    = (long) Math.round(sample * maxVal);
+                long   pcmL   = wantL ? (long) Math.round(clamp(sample * scaleL) * maxVal) : 0L;
+                long   pcmR   = wantR ? (long) Math.round(clamp(sample * scaleR) * maxVal) : 0L;
                 int    off    = i * bytesPerFrame;
                 for (int b = 0; b < bytesPerSample; b++) {
-                    byte bv = (byte) (pcm >> (8 * b));
-                    buf[off + b]                  = bv;
-                    buf[off + bytesPerSample + b] = bv;
+                    buf[off + b]                  = (byte) (pcmL >> (8 * b));
+                    buf[off + bytesPerSample + b] = (byte) (pcmR >> (8 * b));
                 }
             }
         }
     }
 
-    private double tpdfNoise(int ditherBits, Random rng) {
-        if (ditherBits == 0 || rng == null) return 0.0;
-        return (rng.nextDouble() - rng.nextDouble()) / (1L << (ditherBits - 1));
+    private double tpdfNoise(double ditherBits, Random rng) {
+        if (ditherBits <= 0.0 || rng == null) return 0.0;
+        // Math.pow(2, bits−1) equals the old 1L<<(bits−1) for whole bits, and
+        // interpolates the ±1 LSB amplitude continuously for a fractional depth.
+        return (rng.nextDouble() - rng.nextDouble()) / Math.pow(2.0, ditherBits - 1);
     }
 
     private double clamp(double v) {

@@ -26,34 +26,37 @@
 
   <div class="shot">
     <img src="img/generator-pane.png" alt="Generator-Fenster"/>
-    <svg class="callouts" viewBox="0 0 330 587" preserveAspectRatio="none"
+    <svg class="callouts" viewBox="0 0 330 507" preserveAspectRatio="none"
          xmlns="http://www.w3.org/2000/svg" font-family="Consolas, Menlo, monospace">
       <defs>
         <marker id="ca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
           <path d="M 0 0 L 10 5 L 0 10 z" fill="#c33"/>
         </marker>
       </defs>
-      <line x1="191" y1="37" x2="243" y2="17" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="205" cy="40" r="11" fill="#c33"/>
-      <text x="205" y="44" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">1</text>
-      <line x1="150" y1="18" x2="150" y2="46" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="150" cy="31" r="11" fill="#c33"/>
-      <text x="150" y="35" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">2</text>
-      <line x1="277" y1="143" x2="256" y2="143" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="291" cy="143" r="11" fill="#c33"/>
-      <text x="291" y="147" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">3</text>
-      <line x1="165" y1="179" x2="165" y2="191" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="165" cy="166" r="11" fill="#c33"/>
-      <text x="165" y="170" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">4</text>
-      <line x1="216" y1="333" x2="285" y2="347" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="205" cy="322" r="11" fill="#c33"/>
-      <text x="205" y="326" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">5</text>
-      <circle cx="165" cy="482" r="11" fill="#c33"/>
-      <text x="165" y="486" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">6</text>
-      <line x1="154" y1="555" x2="46" y2="560" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <line x1="176" y1="555" x2="287" y2="558" stroke="#c33" stroke-width="2" marker-end="url(#ca)"/>
-      <circle cx="165" cy="555" r="11" fill="#c33"/>
-      <text x="165" y="559" fill="#fff" font-size="13" font-weight="bold" text-anchor="middle">7</text>
+      <line x1="293" y1="24" x2="281" y2="37" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="302" cy="16" r="13" fill="#c33"/>
+      <text x="302" y="21" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">1</text>
+      <line x1="29" y1="61" x2="47" y2="61" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="17" cy="61" r="13" fill="#c33"/>
+      <text x="17" y="66" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">2</text>
+      <line x1="277" y1="119" x2="198" y2="119" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="291" cy="119" r="13" fill="#c33"/>
+      <text x="291" y="124" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">3</text>
+      <line x1="301" y1="164" x2="286" y2="164" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="312" cy="164" r="13" fill="#c33"/>
+      <text x="312" y="169" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">4</text>
+      <line x1="164" y1="292" x2="278" y2="292" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="150" cy="292" r="13" fill="#c33"/>
+      <text x="150" y="297" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">5</text>
+      <circle cx="302" cy="402" r="13" fill="#c33"/>
+      <text x="302" y="407" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">6</text>
+      <line x1="152" y1="476" x2="49" y2="476" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <line x1="178" y1="476" x2="272" y2="476" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="165" cy="476" r="13" fill="#c33"/>
+      <text x="165" y="481" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">7</text>
+      <line x1="235" y1="31" x2="214" y2="39" stroke="#c33" stroke-width="2.5" marker-end="url(#ca)"/>
+      <circle cx="243" cy="24" r="13" fill="#c33"/>
+      <text x="243" y="29" fill="#fff" font-size="15" font-weight="bold" text-anchor="middle">8</text>
     </svg>
   </div>
   <ol class="features">
@@ -82,9 +85,13 @@
         <a href="#generator-load-from">Laden von… + In Schleife</a> spielt eine
         Datei ab (das Kontrollkästchen „In Schleife" wiederholt sie).</li>
     <li><b>DAC kalibrieren &amp; Abspielen.</b>  Die Fadenkreuz-Schaltfläche öffnet
-        den <a href="#generator-corrections">DAC-Kalibrierungs</a>-Dialog; das grüne
+        den <a href="#generator-dac-calibrate">DAC-Kalibrierungs</a>-Dialog; das grüne
         Dreieck ist <a href="#generator-play">Abspielen / Stopp</a>.  Das Starten des
         Tongenerators hält den Datei-Player an und umgekehrt.</li>
+    <li><b>Ausgabekanal.</b>  Das Kombinationsfeld <b>Beide / Links / Rechts</b>
+        in der Kopfzeile wählt, welche DAC-Spur das Signal trägt; die nicht
+        gewählte Spur gibt digitale Stille aus —
+        <a href="#generator-output-channel">Ausgabekanal</a>.</li>
   </ol>
 
   <h2>Kopfbereich</h2>
@@ -108,6 +115,16 @@
     <tr><td>Linear sweep</td><td>Chirp mit zeitlinearer Frequenzrampe.</td></tr>
     <tr><td>Log sweep</td><td>Farina-Logarithmus-Chirp — gleiche Energie pro Oktave.</td></tr>
   </table>
+
+  <h3 id="generator-output-channel">Ausgabekanal</h3>
+  <p>Kombinationsfeld in der oberen Kopfzeile — in der
+     <a href="#generator-form">Signalform</a>-Zeile, <b>über</b> dem
+     Signalform-Selektor und neben der <a href="#generator-onair">ON&nbsp;AIR</a>-Anzeige —,
+     das wählt, welche DAC-Spur das erzeugte Signal trägt: <b>Beide</b>, <b>Links</b>
+     oder <b>Rechts</b>.  Die nicht gewählte Spur gibt <b>digitale Stille</b> aus, sodass
+     Sie eine Seite eines Stereo-Geräts — oder einen Kanal des Prüflings — allein
+     ansteuern können.  Es ist <b>live</b>: das Umschalten der Spur, während ein Ton
+     abgespielt wird, wirkt sofort, ohne den Generator anzuhalten.</p>
 
   <h3 id="generator-onair">ON&nbsp;AIR-Anzeige</h3>
   <p>Eine LED und der Text <b>ON&nbsp;AIR</b> oben rechts im Fenster.
@@ -230,12 +247,47 @@
      Gerät — <code>x dBV = 10<sup>x/20</sup> V<sub>RMS</sub></code>.</p>
 
   <h3 id="generator-dither">Dither</h3>
-  <p>Schreibgeschütztes Dropdown (beim Öffnen an die Ausgangs-Bittiefe angepasst).
-     Legt fest, wie viele LSBs an dreieckigem Dither vor der Quantisierung
-     hinzugefügt werden.  <code>Off</code> deaktiviert Dither;
-     1 .. <i>N</i> fügen 1 .. <i>N</i> LSBs hinzu (<i>N</i> = Ausgangs-Bittiefe).
+  <p>Legt fest, wie viel dreieckiger (TPDF-)Dither unmittelbar vor der
+     Quantisierung des Ausgangs hinzugefügt wird — <code>Off</code> oder eine Tiefe
+     von 1&nbsp;LSB bis zur Ausgangs-Bittiefe.  Geben Sie ihn als <b>Bits</b> ein
+     oder tippen Sie ein <code>dBV</code>-Suffix, um ihn als den erzeugten
+     Rauschpegel festzulegen; die Beschriftung zeigt die jeweils andere Einheit,
+     und Rad/Pfeile ändern ihn schrittweise um ±1&nbsp;Bit (Bit-Ansicht) bzw.
+     ±10&nbsp;dBV (dBV-Ansicht), mit <code>Off</code> ganz oben.</p>
+  <p>Der dBV-Wert ist der Pegel, den der Dither auf dem <a href="fft.html">FFT</a>-Grundrauschen
+     zeigt: Er folgt der DAC-Vollaussteuerung <em>und</em> dem in der FFT gewählten
+     Analysefenster, sodass die Eingabe von etwa −100&nbsp;dBV das FFT-Grundrauschen
+     auf −100&nbsp;dBV legt — sofern die FFT <b>inkohärente (Leistungs-)Mittelung</b>
+     verwendet (kohärente Mittelung löscht Rauschen aus und liest weit niedriger).
      Dither bricht periodische Quantisierungsmuster bei sehr niedrigen
      Ausgangspegeln auf.</p>
+
+  <h3 id="generator-dac-calibrate">DAC-Kalibrierung (Fadenkreuz-Schaltfläche)</h3>
+  <p>Die Fadenkreuz-Schaltfläche unten links im Fenster öffnet den gemeinsamen
+     DAC-Kalibrierungsdialog, der die Skala <a href="#generator-amplitude">Amplitude
+     (RMS)</a> — die Volt RMS, die der DAC bei digitalem Vollausschlag ausgibt — gegen
+     einen am Ausgang gemessenen Pegel verankert.  Stellen Sie den Generator auf eine
+     bekannte Amplitude, lesen Sie den tatsächlichen Ausgang mit einem
+     vertrauenswürdigen Messgerät ab und geben Sie diesen Messwert ein.</p>
+  <p><img src="img/DAC calibration.png" alt="Dialog DAC-Kalibrierung"/></p>
+  <p>Geben Sie die <b>gemessene Signalamplitude</b> in <code>nV</code> / <code>µV</code> /
+     <code>mV</code> / <code>V</code> ein.  Der Dialog hat eine Zeile <b>Links</b> und
+     eine <b>Rechts</b> für eine Stereo-Karte — <b>die Kalibrierung erfolgt stets pro
+     Kanal</b>, da zwei physische DAC-Kanäle nie exakt übereinstimmen — und eine einzelne
+     Zeile für eine Mono-Karte; jede Zeile schreibt nur den aktiven Bereich ihres eigenen
+     Kanals.  Eine Karte, die auf <a href="preferences.html#prefs-audio-card-editor">Kopplung:
+     Verknüpft</a> eingestellt ist, wird dennoch pro Kanal kalibriert — Verknüpft teilt
+     nur, welcher Bereich ausgewählt ist.</p>
+  <div class="note"><b>Die Windows-Lautstärke ist Teil der Kalibrierung.</b>  Stellen Sie
+     die Lautstärke des Ausgabegeräts in den Windows-Sound-Einstellungen auf <b>100</b>
+     und verschieben Sie sie nach der Kalibrierung nicht mehr: der Exklusivmodus von
+     WASAPI und WDM-KS umgeht den Software-Mixer, aber auf vielen USB-Schnittstellen
+     programmiert dieser Regler weiterhin die <em>interne Hardware</em>-Lautstärke des
+     Geräts, sodass ein späteres Verschieben stillschweigend den gemessenen Vollausschlag
+     neu skaliert.  <b>Ausnahme:</b> eine Karte, die die Reglerstellung zum Umschalten von
+     Modi nutzt — die <b>E1DA Cosmos</b> koppelt oberhalb von Position 49 ihre Kanäle
+     (rechts ist der Haupteingang, links trägt dasselbe Signal 6&nbsp;dB leiser) — muss
+     auf der von ihrem Modus geforderten Position stehen und dort bleiben.</div>
 
   <h2 id="generator-corrections">Korrekturen</h2>
   <h3>Predistortion-Datei (.dpd)</h3>

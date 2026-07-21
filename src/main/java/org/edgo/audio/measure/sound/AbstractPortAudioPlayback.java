@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.edgo.audio.measure.common.Closeables;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
 
 import com.sun.jna.NativeLong;
@@ -115,7 +116,7 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
     };
 
     protected AbstractPortAudioPlayback(int paDeviceIndex, String deviceName, String backendLabel,
-                                        int sampleRate, int bitDepth, int ditherBits) {
+                                        int sampleRate, int bitDepth, double ditherBits) {
         this.paDeviceIndex = paDeviceIndex;
         this.deviceName    = deviceName;
         this.backendLabel  = backendLabel;
@@ -270,8 +271,18 @@ public abstract class AbstractPortAudioPlayback implements AudioPlayback {
     }
 
     @Override
-    public void setDitherBits(int bits) {
+    public void setDitherBits(double bits) {
         quantizer.setDitherBits(bits);
+    }
+
+    @Override
+    public void setChannelScale(double left, double right) {
+        quantizer.setChannelScale(left, right);
+    }
+
+    @Override
+    public void setOutputChannels(OutputChannels channels) {
+        quantizer.setOutputChannels(channels);
     }
 
     @Override

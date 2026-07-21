@@ -20,6 +20,7 @@ package org.edgo.audio.measure.gui.widgets;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.DoubleSupplier;
 
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.graphics.Point;
@@ -92,6 +93,20 @@ public final class NumericStepField extends Composite {
                             int maxDecimals,
                             int textWidthHint) {
         this(parent, new NumericStepModel(family, min, max, maxDecimals),
+                textWidthHint);
+    }
+
+    /** DITHER-policy field: a dither depth (0 = Off … {@code maxBits} bits,
+     *  possibly fractional) shown as bits or a full-scale-aware dBV view;
+     *  {@code fsAmplSupplier} yields the live DAC peak full-scale (Vpeak) and
+     *  {@code enbwSupplier} the current FFT window's equivalent noise bandwidth
+     *  (bins), so the dBV view tracks recalibration AND reads as it appears on
+     *  the FFT floor.  Wheel/arrows step ±1 bit (bits view) or ±10 dBV (dBV
+     *  view); Off sits at the top of the range. */
+    public NumericStepField(Composite parent, UnitFamily family,
+                            int maxBits, DoubleSupplier fsAmplSupplier,
+                            DoubleSupplier enbwSupplier, int textWidthHint) {
+        this(parent, new NumericStepModel(family, maxBits, fsAmplSupplier, enbwSupplier),
                 textWidthHint);
     }
 
@@ -251,6 +266,27 @@ public final class NumericStepField extends Composite {
         afterMutation(before, model.isLogDisplay());
     }
 
+    /** Renders the field empty and holding no value — the disabled,
+     *  never-measured channel row in the calibration dialog.  {@link #isBlank}
+     *  stays true until the user (or {@link #setValue}) enters a value. */
+    public void setBlank() {
+        model.setBlank();
+        refresh();
+    }
+
+    /** True while the field is blank (empty, no value) — callers skip a blank
+     *  row instead of reading its clamped-to-min value. */
+    public boolean isBlank() {
+        return model.isBlank();
+    }
+
+    /** The current value in the alternate unit, for a companion label beside
+     *  the field (a DITHER field's bits⇄dBV); empty when there is no alternate
+     *  view (Off, or any non-DITHER field). */
+    public String companionText() {
+        return model.companionText();
+    }
+
     /** Advances one step in {@code direction} (+1 up, −1 down) from the current
      *  value — the programmatic equivalent of one mouse-wheel notch over the
      *  field, so callers that want to step the field (e.g. the scope's
@@ -314,6 +350,15 @@ public final class NumericStepField extends Composite {
     public void refresh() {
         field.setText(model.text());
         applyToolTip();   // keep the unit-dependent step hint current
+    }
+
+    /** DITHER: re-solve for a config change (FFT-window ENBW or DAC full-scale)
+     *  holding the displayed value, then re-render.  Returns {@code true} when
+     *  the stored bit count changed so the caller can persist + restart. */
+    public boolean reanchor() {
+        boolean changed = model.reanchor();
+        refresh();
+        return changed;
     }
 
     /**

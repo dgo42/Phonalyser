@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui.freqresp;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -28,16 +29,21 @@ import org.eclipse.swt.events.PaintEvent;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
+import org.eclipse.swt.graphics.LineAttributes;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Event;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.common.Lanczos;
+import org.edgo.audio.measure.dsp.FilterDesign;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.FilterResponse;
+import org.edgo.audio.measure.enums.FilterType;
+import org.edgo.audio.measure.enums.UnevenMode;
 import org.edgo.audio.measure.fft.MathUtil;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
@@ -48,7 +54,9 @@ import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.widgets.BlinkBanner;
 import org.edgo.audio.measure.gui.widgets.ToolButton;
+import org.edgo.audio.measure.gui.widgets.ToolWindow;
 import org.edgo.audio.measure.gui.widgets.Toolbar;
+import org.edgo.audio.measure.preferences.FreqRespFilterTypeParams;
 import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.EqualsAndHashCode;
@@ -106,6 +114,14 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  width, so they must never extend left over the L/R/phase/max buttons. */
     private static final int BANNER_BTN_GAP  = 8;
 
+    // --- External measurement window layout ----------------------------------
+    /** Inset of the extracted readout text from the tool-window's top-left. */
+    private static final int EXT_LEFT_PAD = 6;
+    /** Client size of the extracted measurement window — fits the two compare
+     *  min/max lines plus the (longest) unevenness readout with margins. */
+    private static final int EXT_CONTENT_W = 320;
+    private static final int EXT_CONTENT_H = 84;
+
     // --- Colours -------------------------------------------------------------
     // All FreqResp palette colours live in the AbstractMeasurementView
     // palette — accessed via color(ColorRole.X).  syncColors() pushes
@@ -130,7 +146,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  {@link FreqRespPane} (IoC) and shared with the calibration tab.
      *  The wizard reads it through the getter. */
     @Getter
-    private final FreqRespCorrectionStore correctionStore;
+    private final CorrectionStore correctionStore;
     /** Display copies, with the currently-loaded calibration divided in (if
      *  any).  {@link #onCalibrationChanged()} keeps these in sync with the
      *  store every time the user loads / clears / wizard-applies a new
@@ -210,6 +226,62 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private boolean        compareDiffCacheReverse;
     private boolean        compareDiffCacheIec;
     private int            compareDiffCacheWindow;
+    /** Reference-source identity baked into the compare cache: {@code true}
+     *  while the RIAA curve is the active reference, {@code false} while the
+     *  ideal-filter curve is.  Extends the cache key so a source swap (RIAA ↔
+     *  filter, both anchored at 1 kHz) rebuilds the diff. */
+    private boolean        compareDiffCacheFilterSrc;
+    /** Filter-param tuple baked into the compare cache — a rebuilt
+     *  {@link FilterDesign} changes reference; comparing its identity is
+     *  enough since {@link #filterDesign} is only rebuilt when a param moves. */
+    private FilterDesign   compareDiffCacheFilter;
+
+    /** Cached ideal-filter magnitude curve, rebuilt by
+     *  {@link #refreshFilterDesign()} whenever any filter pref changes.
+     *  {@code null} when the current filter params are invalid — the
+     *  reference is then unavailable and the overlay / compare is skipped. */
+    private FilterDesign   filterDesign;
+    /** Filter-param snapshot the current {@link #filterDesign} was built from;
+     *  a differing snapshot triggers a rebuild.  {@code null} forces the
+     *  first build. */
+    private FilterParams   filterParams;
+
+    /** Cached filter-overlay anchor (dB) — the level the ideal-filter curve is
+     *  aligned to on the measured signal (item 1: uniform corner-point anchoring,
+     *  so the curve passes through the measured trace at the corner frequency).
+     *  {@code NaN} forces a
+     *  recompute; invalidated by {@link #invalidateFilterAnchor()} whenever the
+     *  measurement or the active channel changes.  The filter-param axis is
+     *  self-validating: the anchor is recomputed when {@link #filterDesign}'s
+     *  identity differs from {@link #filterAnchorCacheDesign} (a param edit
+     *  rebuilds the design), so a param change routed only through a redraw
+     *  re-anchors with no invalidation call. */
+    private double         filterAnchorCache = Double.NaN;
+    /** The {@link #filterDesign} identity {@link #filterAnchorCache} was computed
+     *  against; a differing (rebuilt) design forces a re-anchor. */
+    private FilterDesign   filterAnchorCacheDesign;
+
+    /** Unevenness readout state — the boundary frequencies + the dB figure
+     *  computed by {@link #recomputeUnevenness()} from the active channel's
+     *  smoothed, Nyquist-capped dB (item 4), for the in-canvas table + the
+     *  external window.  {@code NaN} until the first successful compute (no
+     *  result, or no usable point).  The dB figure's meaning is
+     *  mode-dependent (item 5): Mode A stores the entered unevenness UNIPOLAR
+     *  (no ±); Mode B stores the HALF-span {@code (max−min)/2} rendered with ±. */
+    private double unevenLoHz   = Double.NaN;
+    private double unevenHiHz   = Double.NaN;
+    private double unevenPlusDb  = Double.NaN;
+    /** Mode-A threshold level (dB): {@code peak − unevenDb} for a passband
+     *  (LP/HP/BP) curve, {@code min + unevenDb} for a NOTCH curve.  The green
+     *  dotted horizontal annotation line sits here; {@code NaN} in Mode B or
+     *  when no Mode-A result exists. */
+    private double unevenThresholdDb = Double.NaN;
+    /** The analysis' reference extremum level (dB).  LEVEL: the peak for the
+     *  normal walk, the interior minimum for the notch walk.  RANGE: the
+     *  highest point in the range, or the lowest when the Notch checkbox is
+     *  on.  A second green dotted horizontal annotation line sits here;
+     *  {@code NaN} in OFF or when no analysis result exists. */
+    private double unevenExtremumDb = Double.NaN;
 
     /** When {@code true} this is a detached instance (the Tune-notch wizard's
      *  embedded chart): it reads/writes only its injected {@link #prefs} and
@@ -230,6 +302,16 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private ToolButton phaseBtn;
     private ToolButton autoSetupBtn;
     private ToolButton maxBtn;
+    private ToolButton externalBtn;
+
+    // --- External measurement tool window ------------------------------------
+    /** {@code true} while the measurement readout is extracted into a separate
+     *  tool window.  Transient (not persisted) — mirrors {@code FftView}. */
+    private boolean    tableExtracted;
+    /** The extracted measurement window (unevenness + active-compare readout),
+     *  or {@code null} while docked.  Only the connected (non-isolated) view
+     *  ever creates one. */
+    private ToolWindow toolWindow;
 
     // Static-layer paint cache (traceBuffer Image + fingerprint) now
     // lives in AbstractFreqDomainView.  Call paintCachedStatic(...) from
@@ -238,7 +320,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
     /** Connected view for the main FreqResp pane: bound to the global
      *  {@link Preferences#instance()}, persisting + publishing range changes
      *  like any other pane. */
-    public FreqRespView(Composite parent, FreqRespCorrectionStore correctionStore) {
+    public FreqRespView(Composite parent, CorrectionStore correctionStore) {
         this(parent, correctionStore, false, Preferences.instance());
     }
 
@@ -247,7 +329,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  embedded chart — the Tune-notch wizard's use: it drives only its own copy,
      *  never saves to disk, and never publishes {@link Events#FREQRESP_RANGE_CHANGED},
      *  so nothing it does touches the shared main-pane view. */
-    public FreqRespView(Composite parent, FreqRespCorrectionStore correctionStore, boolean isolated, Preferences prefs) {
+    public FreqRespView(Composite parent, CorrectionStore correctionStore, boolean isolated, Preferences prefs) {
         // Push prefs-driven entries (background, L/R trace, phase, RIAA)
         // through the super override map so the base allocates each
         // colour exactly once.  Common entries (grid, axis, text,
@@ -312,22 +394,33 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 color(ColorRole.TEXT), I18n.t("freqResp.button.autosetup.tooltip"));
         maxBtn = headerBar.pushButton(Icon.ARROWS_FROM_CIRCLE_DARK, Icon.ARROWS_FROM_CIRCLE_LIT,
                 color(ColorRole.TEXT), I18n.t("freqResp.button.maximize.tooltip"));
+        externalBtn = headerBar.toggleButton(Icon.WINDOW_RESTORE_DARK, Icon.WINDOW_RESTORE_LIT,
+                color(ColorRole.BUTTON_FRAME), I18n.t("freqResp.external.tooltip"), tableExtracted);
+        externalBtn.addListener(SWT.Selection, e -> {
+            if (externalBtn.isToggled() != tableExtracted) {
+                setTableExtracted(externalBtn.isToggled());
+            }
+        });
         Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
         headerBar.setBounds(MARGIN_LEFT + HEADER_BTN_INSET, BTN_TOP, hbSize.x, hbSize.y);
         headerBar.layout();
         leftBtn.addListener(SWT.Selection, e -> {
             if (leftBtn.isToggled()) {
-                prefs.setFreqRespLeftVisible(true); 
-                prefs.setFreqRespRightVisible(false); 
-                if (!isolated) prefs.save(); 
+                prefs.setFreqRespLeftVisible(true);
+                prefs.setFreqRespRightVisible(false);
+                if (!isolated) prefs.save();
+                invalidateFilterAnchor();// active channel switched → re-anchor the filter overlay
+                recomputeUnevenness();   // active channel switched → refresh the readout
                 redraw();
             }
         });
         rightBtn.addListener(SWT.Selection, e -> {
             if (rightBtn.isToggled()) {
-                prefs.setFreqRespRightVisible(true); 
-                prefs.setFreqRespLeftVisible(false); 
-                if (!isolated) prefs.save(); 
+                prefs.setFreqRespRightVisible(true);
+                prefs.setFreqRespLeftVisible(false);
+                if (!isolated) prefs.save();
+                invalidateFilterAnchor();// active channel switched → re-anchor the filter overlay
+                recomputeUnevenness();   // active channel switched → refresh the readout
                 redraw();
             }
         });
@@ -386,6 +479,33 @@ public final class FreqRespView extends AbstractFreqDomainView {
         Bindings.onChange(this, prefs.freqRespReverseRiaaProperty(), v -> { updateCompareBanner(); redraw(); });
         Bindings.onChange(this, prefs.freqRespIecAmendmentProperty(), v -> { updateCompareBanner(); redraw(); });
 
+        // Ideal-filter reference — mirror the RIAA subscriptions.  Show carries
+        // the same one-shot compare auto-zoom (fit once when the filter compare
+        // trace first becomes active); Filter-compare toggles the compare trace.
+        // The filter TYPE / RESPONSE selectors still own their own prefs, so the
+        // view subscribes to them.  The per-type scalar params live in the
+        // Preferences params map (the single source of truth) — the Filters tab
+        // writes an edited entry and calls this view's redraw() directly, and
+        // FilterParams.of() re-reads that map on the next paint, so every filter
+        // cache self-validates without a per-scalar subscription here.
+        Bindings.onChange(this, prefs.freqRespShowFilterProperty(), show -> {
+            invalidateFilterReference();
+            if (show && prefs.isFreqRespFilterCompare() && hasAnyResult()) {
+                autoSetupCompare(prefs);
+            }
+            redraw();
+        });
+        Bindings.onChange(this, prefs.freqRespFilterCompareProperty(), v -> redraw());
+        Bindings.onChange(this, prefs.freqRespFilterTypeProperty(),        v -> { invalidateFilterReference(); redraw(); });
+        Bindings.onChange(this, prefs.freqRespFilterResponseProperty(),    v -> { invalidateFilterReference(); redraw(); });
+
+        // Unevenness prefs — any change re-walks the current curve + repaints.
+        Bindings.onChange(this, prefs.freqRespUnevenModeProperty(),    v -> { recomputeUnevenness(); redraw(); });
+        Bindings.onChange(this, prefs.freqRespUnevenNotchProperty(),   v -> { recomputeUnevenness(); redraw(); });
+        Bindings.onChange(this, prefs.freqRespUnevenDbProperty(),      v -> { recomputeUnevenness(); redraw(); });
+        Bindings.onChange(this, prefs.freqRespUnevenStartHzProperty(), v -> { recomputeUnevenness(); redraw(); });
+        Bindings.onChange(this, prefs.freqRespUnevenStopHzProperty(),  v -> { recomputeUnevenness(); redraw(); });
+
         addDisposeListener(e -> {
             if (calibrationChangedListener != null) {
                 bus.unsubscribe(Events.FREQRESP_CALIBRATION_CHANGED,
@@ -399,6 +519,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
             // chanButtonFont / axisFont / readoutFont are shared instances
             // owned by Fonts — never disposed here.
             if (phaseFillGray  != null && !phaseFillGray.isDisposed())  phaseFillGray.dispose();
+            if (toolWindow != null) toolWindow.dispose();
             disposeTraceBuffer();
         });
     }
@@ -430,12 +551,15 @@ public final class FreqRespView extends AbstractFreqDomainView {
     /** Replaces the left-channel result and triggers a repaint.  The argument
      *  is the raw measurement; the displayed copy is derived by dividing it
      *  by whichever calibration is currently active in
-     *  {@link FreqRespCorrectionStore} (when {@code applyCalibration} is on). */
+     *  {@link CorrectionStore} (when {@code applyCalibration} is on). */
     public void setLeftResult(FreqRespResult result) {
         this.rawLeftResult = result;
         this.leftResult    = applyCurrentCalibration(result);
         if (result != null) lastResultSampleRate = result.getSampleRate();
         updateCompareBanner();   // hasAnyResult changed → may show/hide compare
+        invalidateFilterAnchor();// new curve → re-anchor the filter overlay
+        recomputeUnevenness();   // new curve → refresh the flatness readout
+        syncExternalShell();     // hasAnyResult changed → open/close extracted window
         redraw();                // new trace
     }
 
@@ -446,6 +570,9 @@ public final class FreqRespView extends AbstractFreqDomainView {
         this.rightResult    = applyCurrentCalibration(result);
         if (result != null) lastResultSampleRate = result.getSampleRate();
         updateCompareBanner();   // hasAnyResult changed → may show/hide compare
+        invalidateFilterAnchor();// new curve → re-anchor the filter overlay
+        recomputeUnevenness();   // new curve → refresh the flatness readout
+        syncExternalShell();     // hasAnyResult changed → open/close extracted window
         redraw();                // new trace
     }
 
@@ -466,9 +593,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  newly-smoothed trace appears even when the anchor doesn't
      *  meaningfully move. */
     public void onCompareParamsChanged() {
-        if (prefs.isFreqRespCompareMode()
-                && prefs.isFreqRespShowRiaa()
-                && hasAnyResult()) {
+        if (compareActive()) {
             recomputeCompareAnchor(prefs);
         }
         redraw();
@@ -477,6 +602,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
     public void onCalibrationChanged() {
         if (rawLeftResult  != null) this.leftResult  = applyCurrentCalibration(rawLeftResult);
         if (rawRightResult != null) this.rightResult = applyCurrentCalibration(rawRightResult);
+        invalidateFilterAnchor();// calibrated curve changed → re-anchor the filter overlay
+        recomputeUnevenness();   // calibrated curve changed → refresh the readout
         // Refresh the anchor + min/max table so they track the new
         // calibration / colour / smoothing state, but DO NOT touch the
         // freq / magnitude window — only autoSetupCompare is allowed
@@ -484,9 +611,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // actions (auto-setup button, compare-mode toggle on, Show RIAA
         // toggled on while compare is already on).  Saving Preferences
         // must never re-zoom the view.
-        if (prefs.isFreqRespCompareMode()
-                && prefs.isFreqRespShowRiaa()
-                && hasAnyResult()) {
+        if (compareActive()) {
             recomputeCompareAnchor(prefs);
         }
         redraw();
@@ -497,7 +622,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // Loaded files already carry the calibration division baked in
         // at save time — applying it again here would double-correct.
         if (raw.isCalibrationApplied()) return raw;
-        List<FreqRespCorrectionStore.Entry> entries = correctionStore.getEntries();
+        List<CorrectionStore.Entry> entries = correctionStore.getEntries();
         StereoFreqRespCalibration direct = correctionStore.getDirect();
         boolean wantCal   = prefs.isFreqRespApplyCalibration()
                             && (!entries.isEmpty() || direct != null);
@@ -513,7 +638,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
             // Chain every loaded calibration in order — linear-mag divide,
             // phase subtract — so the final displayed values reflect the
             // composition of all loaded files.
-            for (FreqRespCorrectionStore.Entry entry : entries) {
+            for (CorrectionStore.Entry entry : entries) {
                 divideByStereoCal(entry.getCalibration(), rChan, freqs, outMag, outPhase);
             }
             // Plus the wizard's transient page-1 calibration (when set) so
@@ -636,6 +761,9 @@ public final class FreqRespView extends AbstractFreqDomainView {
         this.leftResult     = null;
         this.rightResult    = null;
         updateCompareBanner();   // no result → hide the compare banner
+        invalidateFilterAnchor();// no curve → drop the cached filter anchor
+        recomputeUnevenness();   // no curve → clear the flatness readout
+        syncExternalShell();     // no result → close the extracted window
         redraw();
     }
 
@@ -695,9 +823,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  auto-setup button always fits whichever curve the user is
      *  currently looking at. */
     public void autoSetupMagnitudeRange() {
-        if (prefs.isFreqRespCompareMode()
-                && prefs.isFreqRespShowRiaa()
-                && hasAnyResult()) {
+        if (compareActive()) {
             autoSetupCompare(prefs);
             return;
         }
@@ -777,7 +903,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private double softMagTopDb(double topPref, double fLo, double fHi) {
         // Compare mode draws the diff curve, not the raw traces — keep the headroom
         // above the compared-signal peak (compareSmoothedMax), not leftResult/right.
-        if (prefs.isFreqRespCompareMode()) {
+        if (compareActive()) {
             return Double.isFinite(compareSmoothedMax)
                     ? Math.max(topPref, compareSmoothedMax + MAG_HEADROOM_DB) : topPref;
         }
@@ -807,6 +933,25 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (headerBar != null) {
             headerBar.setVisible(v);
         }
+    }
+
+    /** Keeps the header bar visible but exposes ONLY the L / R channel-select
+     *  buttons, excluding phase / auto-setup / maximize / external.  The
+     *  Tune-notch wizard uses this so the user can toggle which measured
+     *  channel (default R) the embedded chart shows via the same radio buttons
+     *  the main pane has, without the rest of the pane's controls. */
+    public void showChannelButtonsOnly() {
+        if (headerBar == null) return;
+        phaseBtn.setExcluded(true);
+        autoSetupBtn.setExcluded(true);
+        maxBtn.setExcluded(true);
+        externalBtn.setExcluded(true);
+        headerBar.setVisible(true);
+        headerBar.reflow();
+        // The bar's preferred width shrank to just the two channel buttons —
+        // re-fit its absolute bounds so no empty band captures clicks.
+        Point hbSize = headerBar.computeSize(SWT.DEFAULT, SWT.DEFAULT);
+        headerBar.setBounds(MARGIN_LEFT + HEADER_BTN_INSET, BTN_TOP, hbSize.x, hbSize.y);
     }
 
     // -------------------------------------------------------------------------
@@ -862,12 +1007,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
             drawGrid(bgc, plot, xSpec, yLeftSpec, yRightSpec,
                      color(ColorRole.GRID), color(ColorRole.AXIS), color(ColorRole.TEXT), axisFont,
                      MAJOR_TICK_LEN, MINOR_TICK_LEN, null);
-            if (prefs.isFreqRespCompareMode() && hasAnyResult() && prefs.isFreqRespShowRiaa()) {
+            if (compareActive()) {
                 drawCompareTrace(bgc, plot, fFreqMin, freqMax, magTop, magBot, prefs);
             } else {
                 drawTraces(bgc, plot, fFreqMin, freqMax, magTop, magBot);
-                if (prefs.isFreqRespShowRiaa()) {
-                    drawRiaaOverlay(bgc, plot, fFreqMin, freqMax, magTop, magBot, prefs);
+                if (referenceActive()) {
+                    drawReferenceOverlay(bgc, plot, fFreqMin, freqMax, magTop, magBot, prefs);
                 }
             }
         });
@@ -875,12 +1020,17 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // Dynamic overlays — never cached because they change per frame.  The
         // banners are self-painting widgets driven entirely by events
         // (showSourceBanner / updateCompareBanner / repositionBanners), so
-        // onPaint doesn't touch them; only the compare table is drawn here.
+        // onPaint doesn't touch them; only the compare + unevenness tables are
+        // drawn here.  The unevenness table stacks below the compare table when
+        // both are visible.
         gc.setAntialias(SWT.ON);
         gc.setTextAntialias(SWT.ON);
-        if (prefs.isFreqRespCompareMode() && hasAnyResult() && prefs.isFreqRespShowRiaa()) {
+        boolean compareTableVisible = compareActive();
+        if (compareTableVisible) {
             drawCompareMeasurementTable(gc);
         }
+        drawUnevennessTable(gc, compareTableVisible);
+        drawUnevennessAnnotations(gc, plot, freqMin, freqMax, magTop, magBot);
         if (mouseInPlot) {
             drawCrosshair(gc, plot, freqMin, freqMax, magTop, magBot, phaseVisible);
         }
@@ -980,6 +1130,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
         private final boolean iecAmendment;
         private final boolean compareMode;
         private final int compareSmoothWindow;
+        // Ideal-filter reference — the source flag, its compare flag, and the
+        // full param tuple (FilterParams equality folds in every filter pref),
+        // so a source swap or any filter-param nudge rebuilds the static layer.
+        private final boolean showFilter;
+        private final boolean filterCompare;
+        private final FilterParams filterParams;
         // Appearance prefs — included so a Preferences-dialog OK that changes
         // the width / signal / phase / reference / background invalidates the
         // static-layer cache and the trace rebuilds in the new look.
@@ -1006,6 +1162,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 prefs.isFreqRespShowRiaa(), prefs.isFreqRespReverseRiaa(),
                 prefs.isFreqRespIecAmendment(), prefs.isFreqRespCompareMode(),
                 prefs.getFreqRespCompareSmoothWindow(),
+                prefs.isFreqRespShowFilter(), prefs.isFreqRespFilterCompare(),
+                FilterParams.of(prefs),
                 prefs.getFreqRespLineWidth(),
                 prefs.getFreqRespSignalColor(), prefs.getFreqRespPhaseColor(),
                 prefs.getFreqRespReferenceColor(), prefs.getFreqRespBackgroundColor(),
@@ -1013,30 +1171,271 @@ public final class FreqRespView extends AbstractFreqDomainView {
     }
 
     // -------------------------------------------------------------------------
-    // RIAA overlay + comparison
+    // Reference-curve seam — ONE source of the overlaid / compared reference.
+    //
+    // Only one reference can be active at a time (the tab enforces the mutual
+    // exclusion between Show-RIAA and Show-Filter), so the RIAA and ideal-filter
+    // curves share ONE pipeline: the overlay draw, the compare diff, the compare
+    // readout, and the crosshair Δ all pull the reference dB from referenceDb()
+    // and its colour from referenceColorRole().  Adding a second reference kind
+    // means teaching only these seam methods, not duplicating the pipeline.
     // -------------------------------------------------------------------------
 
-    /** Paints the configured RIAA reference curve as a dashed green trace
-     *  over the measured response.  Aligned at 1 kHz to the measured
-     *  curve's 1 kHz value (or 0 dB if no measurement is loaded). */
-    private void drawRiaaOverlay(GC gc, Rectangle plot, double freqMin, double freqMax,
-                                 double magTop, double magBot, Preferences prefs) {
-        double anchorDb = riaaAnchorDb(prefs);
-        boolean reverse = prefs.isFreqRespReverseRiaa();
-        boolean iec     = prefs.isFreqRespIecAmendment();
-        // The RIAA curve is analytic — sample it every `step` px across the plot (X is
-        // always in-range, so no anchors) and feed the shared renderer for the clip and
-        // identical pen handling.
-        int step = 5;
-        int n = plot.width / step + 1;
-        paintPolyline(gc, plot, color(ColorRole.RIAA_TRACE), SWT.LINE_DASH,
-                (float) prefs.getFreqRespLineWidth(), n,
-                i -> plot.x + i * step,
-                i -> {
-                    double f = FreqRespFormat.xFractionToFreq((double) (i * step) / plot.width,
-                            freqMin, freqMax);
-                    return dbToYf(anchorDb + RiaaCurve.evalDb(f, reverse, iec), plot, magTop, magBot);
-                });
+    /** {@code true} while a reference curve (RIAA or ideal filter) is enabled
+     *  and available.  The filter source additionally requires a valid
+     *  {@link #filterDesign} (invalid params ⇒ unavailable ⇒ no overlay). */
+    private boolean referenceActive() {
+        if (prefs.isFreqRespShowRiaa()) return true;
+        if (prefs.isFreqRespShowFilter()) { refreshFilterDesign(); return filterDesign != null; }
+        return false;
+    }
+
+    /** {@code true} while the ACTIVE reference source's compare pref is on —
+     *  RIAA uses {@code freqRespCompareMode}, the filter uses
+     *  {@code freqRespFilterCompare}. */
+    private boolean referenceCompareOn() {
+        if (prefs.isFreqRespShowRiaa())   return prefs.isFreqRespCompareMode();
+        if (prefs.isFreqRespShowFilter()) return prefs.isFreqRespFilterCompare();
+        return false;
+    }
+
+    /** The colour role for the active reference's overlay / compare trace —
+     *  {@link ColorRole#RIAA_TRACE} for RIAA, {@link ColorRole#FILTER_TRACE}
+     *  for the ideal filter. */
+    private ColorRole referenceColorRole() {
+        return prefs.isFreqRespShowFilter() ? ColorRole.FILTER_TRACE : ColorRole.RIAA_TRACE;
+    }
+
+    /** {@code true} when the compare (diff) trace + table + Δ readout should be
+     *  drawn: the active reference is available, its compare pref is on, and a
+     *  measurement is loaded.  The single gate for every compare-mode branch. */
+    private boolean compareActive() {
+        return referenceCompareOn() && referenceActive() && hasAnyResult();
+    }
+
+    /** The active reference's magnitude in dB at {@code fHz}.  RIAA uses the
+     *  analytic {@link RiaaCurve}, normalised to 0 dB at 1 kHz.  The ideal
+     *  filter uses its natural {@code filterDesign.evalDb(f)} (passband ≈ 0 dB)
+     *  — NOT referenced to 1 kHz, because 1 kHz can sit deep in the stopband
+     *  (a notch centred at 1 kHz, a high-pass above it, a band-pass away from
+     *  it), where {@code evalDb(1000)} is large-negative or −∞ and would shove
+     *  the whole overlay hundreds of dB off-screen.  In both cases the VIEW
+     *  adds the measured-@1kHz {@code anchorDb}, aligning the reference's
+     *  passband to the measured level.  Returns {@code NaN} when no reference
+     *  is active / available so callers skip the point. */
+    private double referenceDb(double fHz) {
+        if (prefs.isFreqRespShowRiaa()) {
+            return RiaaCurve.evalDb(fHz, prefs.isFreqRespReverseRiaa(), prefs.isFreqRespIecAmendment());
+        }
+        if (prefs.isFreqRespShowFilter()) {
+            refreshFilterDesign();
+            if (filterDesign == null) return Double.NaN;
+            return flooredFilterEvalDb(fHz);
+        }
+        return Double.NaN;
+    }
+
+    /** The ideal filter's magnitude in dB at {@code fHz}, with a leakage FLOOR
+     *  added to the NOTCH null (item 1).  A jw-axis zero is ALWAYS a sharp V — a
+     *  hard clamp would draw a flat-bottomed plateau, which is physically wrong.
+     *  Instead the ideal (mathematically −∞) null is summed in POWER with a
+     *  constant leakage floor {@code 10^(−A/10)}:
+     *  <pre>evalWithFloorDb = 10·log10( 10^(evalDb/10) + 10^(−A/10) )</pre>
+     *  so the tip rounds asymptotically into −A (like a real finite-rejection
+     *  notch), the skirts stay asymptotically unchanged (where {@code 10^(evalDb/10)}
+     *  dominates the floor term), and there is NO flat segment.  {@code A} is the
+     *  user's {@code stopAttenDb} (Mode 1) or {@link #NOTCH_DISPLAY_FLOOR_DB}
+     *  (Mode 2, no attenuation spec).  This is the SINGLE eval seam: the dashed
+     *  overlay ({@link #referenceDb}) AND the plateau / corner anchor
+     *  ({@link #computeFilterAnchorDb}) both use it, so the floor is never
+     *  duplicated.  For Inverse-Chebyshev / Elliptic the true stopband floor
+     *  already sits near −A, so the leakage term barely reshapes it; it only
+     *  bounds the monotone families' unbounded null.
+     *
+     *  <p>Precondition: {@link #filterDesign} is non-null (every caller refreshes
+     *  it and null-checks first). */
+    private double flooredFilterEvalDb(double fHz) {
+        double db = filterDesign.evalDb(fHz);
+        if (filterDesign.getType() == FilterType.NOTCH) {
+            double atten = filterDesign.getStopAttenDb();
+            double floorDb = Double.isFinite(atten) ? atten : NOTCH_DISPLAY_FLOOR_DB;
+            double powEval  = Math.pow(10.0, db       / 10.0);
+            double powFloor = Math.pow(10.0, -floorDb / 10.0);
+            db = 10.0 * Math.log10(powEval + powFloor);
+        }
+        return db;
+    }
+
+    /** (Re)builds {@link #filterDesign} from the current filter prefs when the
+     *  param snapshot has changed.  Invalid params (thrown by the factory, or
+     *  a null result) leave {@code filterDesign == null} so the reference is
+     *  treated as unavailable. */
+    private void refreshFilterDesign() {
+        FilterParams cur = FilterParams.of(prefs);
+        if (cur.equals(filterParams)) return;
+        filterParams = cur;
+        filterDesign = cur.build();
+    }
+
+    /** Forces the ideal-filter curve + compare diff to rebuild on the next
+     *  paint after a filter param changed: drops the cached snapshot so
+     *  {@link #refreshFilterDesign()} rebuilds {@link #filterDesign}, and
+     *  invalidates the compare-diff cache so a param change while comparing
+     *  re-subtracts against the new curve.  Also refreshes the compare anchor
+     *  + min/max table when the filter is the compared reference. */
+    private void invalidateFilterReference() {
+        filterParams     = null;
+        compareDiffCache = null;
+        invalidateFilterAnchor();   // fc / bandwidth moved → the anchor region moved
+        if (prefs.isFreqRespShowFilter() && prefs.isFreqRespFilterCompare() && hasAnyResult()) {
+            recomputeCompareAnchor(prefs);
+        }
+    }
+
+    /** Immutable snapshot of every filter pref that shapes the ideal-filter
+     *  curve.  Equality drives the {@link #filterDesign} rebuild and extends
+     *  the compare-diff + static-layer cache keys.  {@code build()} maps the
+     *  active mode (spec vs order) to the matching {@link FilterDesign} factory. */
+    @RequiredArgsConstructor
+    @EqualsAndHashCode
+    private static final class FilterParams {
+        private final FilterType type;
+        private final FilterResponse response;
+        private final boolean modeOrder;
+        private final double rippleDb;
+        private final double stopAttenDb;
+        private final double centerHz;
+        private final double passHz;
+        private final double stopHz;
+        private final double orderPassHz;
+        private final double orderRippleDb;
+        private final int    order;
+        private final double q;
+
+        private static FilterParams of(Preferences p) {
+            // The per-type params map is the single source of truth for every
+            // scalar; the type + response selectors stay their own prefs.  This
+            // snapshot's equality drives every filter cache, so a map entry
+            // edited by the tab is picked up on the next paint with no
+            // invalidation call (self-validating, per the refactor).
+            FilterType type = p.getFreqRespFilterType();
+            FreqRespFilterTypeParams fp = p.getFreqRespFilterParams(type);
+            return new FilterParams(
+                    type, p.getFreqRespFilterResponse(),
+                    fp.isModeOrder(),
+                    fp.getRippleDb(), fp.getStopAttenDb(),
+                    fp.getCenterHz(), fp.getPassHz(),
+                    fp.getStopHz(),
+                    fp.getOrderPassHz(), fp.getOrderRippleDb(),
+                    fp.getOrder(), fp.getQ());
+        }
+
+        /** Builds the design for the active mode, or {@code null} when the
+         *  factory rejects the params (out-of-range spec, degenerate band). */
+        private FilterDesign build() {
+            try {
+                return modeOrder
+                        ? FilterDesign.ofOrder(type, response, order, orderRippleDb, orderPassHz, q)
+                        : FilterDesign.ofSpec(type, response, rippleDb, stopAttenDb,
+                                centerHz, passHz, stopHz);
+            } catch (RuntimeException ex) {
+                return null;
+            }
+        }
+    }
+
+    /** Paints the active reference curve (RIAA or ideal filter) as a dashed
+     *  trace over the measured response, in the reference's colour.  Aligned
+     *  at 1 kHz to the measured curve's 1 kHz value (or 0 dB if no measurement
+     *  is loaded). */
+    private void drawReferenceOverlay(GC gc, Rectangle plot, double freqMin, double freqMax,
+                                      double magTop, double magBot, Preferences prefs) {
+        double anchorDb = referenceAnchorDb(prefs);
+        // The reference is analytic, so sample it deterministically at a
+        // resolution the drawn shape can't depend on (item 2): one sample PER
+        // PIXEL column, PLUS the filter's exact critical frequencies (BP/NOTCH
+        // center, LP/HP pass edge) forced in as extra samples so the null /
+        // corner is always rendered at its TRUE value regardless of view width.
+        // Each sample carries the frequency the reference is evaluated at:
+        // per-pixel samples use the pixel's frequency, critical samples the
+        // EXACT critical frequency (fc), so the null's depth is evalDb(fc) — a
+        // width-independent constant — not evalDb(pixel-rounded-fc), which would
+        // still swing tens of dB on a 1-px resize.  ColumnBucketPainter merges
+        // same-column samples by min/max, so a critical sample sharing a pixel
+        // column with a shallow neighbour still surfaces the true null depth.
+        // paintPolyline clips to `plot`.
+        RefSamples s = referenceSampleColumns(plot, freqMin, freqMax, prefs);
+        paintPolyline(gc, plot, color(referenceColorRole()), SWT.LINE_DASH,
+                (float) prefs.getFreqRespLineWidth(), s.xs.length,
+                i -> s.xs[i],
+                i -> dbToYf(anchorDb + referenceDb(s.fs[i]), plot, magTop, magBot));
+    }
+
+    /** Parallel {@code (column, frequency)} sample arrays for the reference
+     *  overlay: {@link #xs} is the absolute canvas x column, {@link #fs} the
+     *  exact frequency the reference is evaluated at for that sample.  Same
+     *  length; index-aligned. */
+    private static final class RefSamples {
+        final int[]    xs;
+        final double[] fs;
+        RefSamples(int[] xs, double[] fs) {
+            this.xs = xs;
+            this.fs = fs;
+        }
+    }
+
+    /** Builds the reference-overlay sample list (item 2): one sample per pixel
+     *  column of {@code plot} (frequency = that pixel's frequency) PLUS the
+     *  active filter's critical frequencies as extra samples carrying the EXACT
+     *  critical frequency (only when the ideal filter is the reference and its
+     *  design is valid — RIAA has none).  The critical samples are appended, not
+     *  de-duplicated: {@link ColumnBucketPainter} merges same-column samples by
+     *  min/max, so a critical sharing a pixel column still surfaces the true
+     *  null depth {@code evalDb(fc)}.  Because that depth is a width-independent
+     *  constant, the notch null / filter corner renders at its true value no
+     *  matter how the pane is resized. */
+    private RefSamples referenceSampleColumns(Rectangle plot, double freqMin, double freqMax,
+                                              Preferences prefs) {
+        int width = Math.max(1, plot.width);
+        // Extra critical-frequency samples (filter reference only) — the EXACT
+        // fc, so the y-eval hits the true corner / null, not a pixel-rounded one.
+        double[] crit = new double[0];
+        if (prefs.isFreqRespShowFilter()) {
+            refreshFilterDesign();
+            if (filterDesign != null) {
+                crit = filterDesign.criticalFrequenciesHz();
+            }
+        }
+        int      n  = width + 1 + crit.length;
+        int[]    xs = new int[n];
+        double[] fs = new double[n];
+        int m = 0;
+        for (int x = plot.x; x <= plot.x + width; x++) {
+            xs[m] = x;
+            fs[m] = FreqRespFormat.xFractionToFreq((double) (x - plot.x) / width, freqMin, freqMax);
+            m++;
+        }
+        for (double fCrit : crit) {
+            double frac = FreqRespFormat.freqToXFraction(fCrit, freqMin, freqMax);
+            int x = plot.x + (int) Math.round(frac * width);
+            // Clamp the column to the plot span; off-screen criticals fold onto
+            // an edge column but keep their exact frequency for the y-eval.
+            xs[m] = Math.max(plot.x, Math.min(plot.x + width, x));
+            fs[m] = fCrit;
+            m++;
+        }
+        return new RefSamples(xs, fs);
+    }
+
+    /** Vertical alignment level (dB) for the active reference overlay:
+     *  RIAA keeps the measured-@1 kHz anchor; the ideal filter uses corner-point
+     *  anchoring for LP/HP/BP (so the ideal curve passes exactly through the
+     *  measured trace at the filter's corner frequency) and PLATEAU anchoring for
+     *  NOTCH (item 2 — the measured plateau outside the null band).  With no
+     *  measurement both fall back to 0 dB so the curve sits at its natural
+     *  passband level. */
+    private double referenceAnchorDb(Preferences prefs) {
+        return prefs.isFreqRespShowFilter() ? filterAnchorDb(prefs) : riaaAnchorDb(prefs);
     }
 
     /** Returns the magnitude in dB at 1 kHz of the active trace.  Prefers
@@ -1047,6 +1446,79 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (anchor == null) return 0.0;
         double db = interpDb(anchor, 1000.0);
         return Double.isFinite(db) ? db : 0.0;
+    }
+
+    /** Alignment level (dB) for the ideal-filter overlay: the ideal curve is
+     *  drawn at {@code anchor + flooredEvalDb(f)} (passband ≈ 0 dB).  For LP/HP/BP
+     *  the anchor is chosen so the curve passes EXACTLY through the measured trace
+     *  at the filter's corner frequency —
+     *  {@code anchor = measuredSmoothedDb(fCorner) − flooredFilterEvalDb(fCorner)}
+     *  — the LP/HP pass edge, or (BP) the lower band edge, then upper, then centre
+     *  as fallbacks.  For NOTCH the anchor is the measured PLATEAU mean outside the
+     *  ideal's shoulder band (item 2).  See {@link #computeFilterAnchorDb}.  Falls
+     *  back to 0 dB when no measurement is loaded, no filter design is available,
+     *  or no anchor point qualifies.  Cached in
+     *  {@link #filterAnchorCache}; the cache key is the {@link #filterDesign}
+     *  identity, and every measurement / channel / filter-param change already
+     *  invalidates it (the smoothed curve is a pure function of the measurement,
+     *  so no extra invalidation is needed). */
+    private double filterAnchorDb(Preferences prefs) {
+        // A param edit rebuilds filterDesign (refreshFilterDesign, called below);
+        // recompute the anchor when that identity moves even if the cached value
+        // is still finite, so a param change picked up only via a redraw
+        // re-anchors without an explicit invalidation call.
+        refreshFilterDesign();
+        if (Double.isFinite(filterAnchorCache) && filterAnchorCacheDesign == filterDesign) {
+            return filterAnchorCache;
+        }
+        filterAnchorCache       = computeFilterAnchorDb(prefs);
+        filterAnchorCacheDesign = filterDesign;
+        return filterAnchorCache;
+    }
+
+    private double computeFilterAnchorDb(Preferences prefs) {
+        FreqRespResult r = activeChannelResult(prefs);
+        refreshFilterDesign();
+        if (r == null || filterDesign == null) return 0.0;
+        double[] freqs = r.getFreqs();
+        if (freqs == null || freqs.length < 2) return 0.0;
+        double[] sdb = floatingAvgCappedDb(r);
+
+        // Corner-point anchoring: the ideal curve is aligned so it passes
+        // exactly through the measured trace at the filter's ANCHOR point.
+        // NOTCH anchors ONLY at the middle position — the notch point fc,
+        // where the leakage-floored eval is a finite −A, so the ideal TIP
+        // pins to the measured tip.  The other types use the design corners
+        // (FilterDesign.cornerFrequenciesHz): LP/HP → the pass edge; BP → the
+        // passband edges — tried in order, then the centre fc as the final
+        // fallback.  An anchor "works" when both the measured value
+        // (interpolated on the floating-average (9-point), capped curve,
+        // inside range + below the Nyquist cap) AND the floored filter eval
+        // are finite.
+        double[] corners;
+        if (filterDesign.getType() == FilterType.NOTCH) {
+            corners = new double[] { filterDesign.getFcHz() };
+        } else {
+            double[] designCorners = filterDesign.cornerFrequenciesHz();
+            corners = Arrays.copyOf(designCorners, designCorners.length + 1);
+            corners[designCorners.length] = filterDesign.getFcHz();   // centre fallback
+        }
+        for (double fCorner : corners) {
+            double meas = interpFromArray(freqs, sdb, fCorner);
+            if (!Double.isFinite(meas)) continue;
+            double eval = flooredFilterEvalDb(fCorner);
+            if (!Double.isFinite(eval)) continue;
+            return meas - eval;
+        }
+        return 0.0;
+    }
+
+    /** Drops the cached per-type filter anchor so the next overlay paint
+     *  recomputes it.  Called wherever the measurement, active channel, or a
+     *  filter param changes. */
+    private void invalidateFilterAnchor() {
+        filterAnchorCache       = Double.NaN;
+        filterAnchorCacheDesign = null;
     }
 
     /** The result for the channel the RIAA overlay / comparison should
@@ -1087,7 +1559,12 @@ public final class FreqRespView extends AbstractFreqDomainView {
         // values (no valid point in the smoothing window) render as gaps; the
         // NaN-aware double[] kernel skips them as taps, so valid points draw all
         // the way up to a gap instead of blanking a kernel-width around it.
-        paintDataTrace(gc, plot, freqMin, freqMax, color(ColorRole.COMPARE_TRACE), SWT.LINE_SOLID,
+        // Solid trace in the active reference's colour: dark-green COMPARE_TRACE
+        // for RIAA, FILTER_TRACE when the ideal filter is the reference.  The
+        // filter uses its own trace role; RIAA keeps the distinct compare green.
+        Color compareColor = prefs.isFreqRespShowFilter()
+                ? color(referenceColorRole()) : color(ColorRole.COMPARE_TRACE);
+        paintDataTrace(gc, plot, freqMin, freqMax, compareColor, SWT.LINE_SOLID,
                 freqs, smoothed, v -> dbToYf(v, plot, magTop, magBot));
     }
 
@@ -1116,15 +1593,25 @@ public final class FreqRespView extends AbstractFreqDomainView {
     private CompareDiff getCompareDiff(FreqRespResult src, boolean reverse, boolean iec) {
         int W = Math.max(0, Math.min(100,
                 prefs.getFreqRespCompareSmoothWindow()));
+        // The reference source (RIAA vs ideal filter) and the filter's full
+        // param tuple are part of the key: swapping source or nudging a filter
+        // param yields a different diff even though src/reverse/iec/window are
+        // unchanged.  filterDesign identity captures the whole filter tuple
+        // (it is only rebuilt when a param moves — see refreshFilterDesign).
+        boolean filterSrc = prefs.isFreqRespShowFilter();
+        if (filterSrc) refreshFilterDesign();
         if (compareDiffCache != null
                 && compareDiffCacheSrc == src
                 && compareDiffCacheReverse == reverse
                 && compareDiffCacheIec == iec
-                && compareDiffCacheWindow == W) {
+                && compareDiffCacheWindow == W
+                && compareDiffCacheFilterSrc == filterSrc
+                && compareDiffCacheFilter == filterDesign) {
             return compareDiffCache;
         }
         // 1. Raw (measDb − refDb) per signal point.  NaN for any point
-        //    whose magnitude is non-positive / non-finite.
+        //    whose magnitude is non-positive / non-finite, or where the
+        //    reference itself is unavailable.
         double[] freqs  = src.getFreqs();
         double[] magLin = src.getMagLin();
         int n = freqs.length;
@@ -1132,8 +1619,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
         for (int i = 0; i < n; i++) {
             double measDb = FreqRespFormat.linToDb(magLin[i]);
             if (!Double.isFinite(measDb)) { raw[i] = Double.NaN; continue; }
-            double refDb = RiaaCurve.evalDb(freqs[i], reverse, iec);
-            raw[i] = measDb - refDb;
+            double refDb = referenceDb(freqs[i]);
+            raw[i] = Double.isFinite(refDb) ? measDb - refDb : Double.NaN;
         }
         // 2. Sliding mean in LOG-FREQUENCY space (1/W-octave window).
         //    The previous index-based window was useless on a 192 k-
@@ -1206,11 +1693,13 @@ public final class FreqRespView extends AbstractFreqDomainView {
             if (Double.isNaN(maxDb) || v > maxDb) maxDb = v;
         }
         CompareDiff diff = new CompareDiff(smoothed, minDb, maxDb);
-        compareDiffCache         = diff;
-        compareDiffCacheSrc      = src;
-        compareDiffCacheReverse  = reverse;
-        compareDiffCacheIec      = iec;
-        compareDiffCacheWindow   = W;
+        compareDiffCache          = diff;
+        compareDiffCacheSrc       = src;
+        compareDiffCacheReverse   = reverse;
+        compareDiffCacheIec       = iec;
+        compareDiffCacheWindow    = W;
+        compareDiffCacheFilterSrc = filterSrc;
+        compareDiffCacheFilter    = filterDesign;
         return diff;
     }
 
@@ -1220,18 +1709,17 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  used ONLY for this anchor calculation; the drawn trace stays
      *  unsmoothed), takes the median of the smoothed values as the
      *  vertical anchor so the curve's central value reads 0 dB, then
-     *  fits the vertical window to the raw diff range with 10 % padding
-     *  above and below.  Called from the pane when Compare is toggled
-     *  on, or when Show RIAA is toggled on while Compare is already on. */
+     *  fits the vertical window to the diff extrema with
+     *  {@link #COMPARE_ZOOM_PAD_DB} of margin above and below.  Called
+     *  from the pane when Compare is toggled on (RIAA or filter), or
+     *  when Show RIAA is toggled on while Compare is already on. */
     public void autoSetupCompare(Preferences prefs) {
         if (!recomputeCompareAnchor(prefs)) return;
 
-        // Vertical window — keep ≥ MAG_HEADROOM_DB of headroom above the
-        // compared-signal peak so its marker never clips (the same rule the other
-        // views and modes use); below stays a tight 1 dB pad (min −1 dB) around
-        // the 0 dB anchor.
-        double newTop = compareSmoothedMax + MAG_HEADROOM_DB;
-        double newBot = (compareSmoothedMin < -1.0) ? compareSmoothedMin - 1.0 : -1.0;
+        // Vertical window — hug the diff extrema with a symmetric
+        // COMPARE_ZOOM_PAD_DB margin in both directions.
+        double newTop = compareSmoothedMax + COMPARE_ZOOM_PAD_DB;
+        double newBot = compareSmoothedMin - COMPARE_ZOOM_PAD_DB;
         newTop = Math.min(MAG_TOP_ZOOM_MAX_DB, newTop);
         newBot = Math.max(MAG_BOT_MIN_DB, newBot);
 
@@ -1287,6 +1775,600 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 x, y);
         drawOutlinedText(gc, "min: " + FreqRespFormat.formatDbReadout(compareSmoothedMin),
                 x, y + lineH);
+    }
+
+    // -------------------------------------------------------------------------
+    // Unevenness (response-flatness) readout
+    // -------------------------------------------------------------------------
+
+    /** Recomputes the unevenness readout into {@link #unevenLoHz} /
+     *  {@link #unevenHiHz} / {@link #unevenPlusDb} from the active channel, using
+     *  the curve appropriate to each mode (round-8): Mode B + the notch Mode-A walk
+     *  read the despiked-raw curve ({@link #despikedCappedDb}); the peak Mode-A walk
+     *  reads the floating-average curve ({@link #floatingAvgCappedDb}).  Both are
+     *  Nyquist-capped (item 4).
+     *
+     *  <p>{@link UnevenMode#OFF}: clears all readout fields to {@code NaN} so
+     *  nothing draws — no table, no annotations, no external-window line.
+     *
+     *  <p>{@link UnevenMode#LEVEL}: the {@link Preferences#isFreqRespUnevenNotch()
+     *  Notch} checkbox picks the walk explicitly (no shape classification).  Peak
+     *  walk (unchecked): find the highest point and walk out both ways while the
+     *  value stays within {@code unevenDb} of the peak.  Notch walk (checked): walk
+     *  out from the interior minimum while within {@code unevenDb} of it.  Report the
+     *  OUTERMOST still-inside frequencies and the entered {@code unevenDb} UNIPOLAR
+     *  (item 5 — no ±).
+     *
+     *  <p>{@link UnevenMode#RANGE}: over [startHz, stopHz] (the stop clamped to
+     *  the analysis Nyquist cap) take min/max and report the HALF-span
+     *  {@code (max−min)/2} with ± and the requested range echoed (item 5).
+     *
+     *  <p>Sets all fields to {@code NaN} when the mode is OFF or no usable data
+     *  exists. */
+    private void recomputeUnevenness() {
+        unevenLoHz  = Double.NaN;
+        unevenHiHz  = Double.NaN;
+        unevenPlusDb = Double.NaN;
+        unevenThresholdDb = Double.NaN;
+        unevenExtremumDb  = Double.NaN;
+        UnevenMode mode = prefs.getFreqRespUnevenMode();
+        if (mode == UnevenMode.OFF) return;
+        FreqRespResult r = activeChannelResult(prefs);
+        if (r == null) return;
+        double[] freqs = r.getFreqs();
+        double[] mag   = r.getMagLin();
+        if (freqs == null || mag == null || freqs.length < 2) return;
+        int n = freqs.length;
+
+        if (mode == UnevenMode.RANGE) {
+            // Mode B (round-8 item 1) — min/max + crossing levels read the
+            // DESPIKED-RAW curve (raw dB + 3-point median + Nyquist cap), NOT a
+            // floating average: a fixed-N mean is a constant-Hz window (~3.3 Hz at
+            // the FFT-bin grid), but a narrow user range (bench: 997–1010 Hz) may be
+            // shorter than even 9 grid points, and any mean over it collapses to one
+            // value (phantom full-width line at the average).  The median curve
+            // preserves the true span, so Mode-B reads the wall depth as measured.
+            double[] db   = despikedCappedDb(r);
+            // Clamp the user range to the analysis Nyquist cap (item 4) so the
+            // range min/max can't reach into the weak-signal region.
+            double cap    = analysisNyquistCapHz(r);
+            double startHz = prefs.getFreqRespUnevenStartHz();
+            double stopHz  = Math.min(prefs.getFreqRespUnevenStopHz(), cap);
+            double minDb = Double.POSITIVE_INFINITY;
+            double maxDb = Double.NEGATIVE_INFINITY;
+            double loUsed = Double.NaN;
+            double hiUsed = Double.NaN;
+            for (int i = 0; i < n; i++) {
+                double f = freqs[i];
+                if (f < startHz || f > stopHz) continue;
+                double d = db[i];
+                if (!Double.isFinite(d)) continue;
+                if (d < minDb) minDb = d;
+                if (d > maxDb) maxDb = d;
+                if (Double.isNaN(loUsed)) loUsed = f;   // first finite in-range
+                hiUsed = f;                             // last finite in-range
+            }
+            if (!Double.isFinite(minDb) || !Double.isFinite(maxDb)) return;
+            // Report the boundaries actually covered by finite (below-cap) data
+            // so the Mode-B annotation ticks land on real samples, not on the
+            // NaN'd top of the band.
+            unevenLoHz   = loUsed;
+            unevenHiHz   = hiUsed;
+            unevenPlusDb = 0.5 * (maxDb - minDb);   // item 5: half-span, i18n key carries the ±
+            // The Notch checkbox applies in RANGE mode too: it picks the range's
+            // extremum of interest for the second green line — the lowest point
+            // when checked, the highest otherwise.
+            unevenExtremumDb = prefs.isFreqRespUnevenNotch() ? minDb : maxDb;
+            return;
+        }
+
+        // LEVEL mode — the Notch checkbox (item 3) picks the walk EXPLICITLY,
+        // replacing any shape classification.  Checked: walk from the interior
+        // minimum outward through the stopband (db ≤ min + unevenDb).  Unchecked:
+        // walk from the peak outward through the passband (db ≥ peak − unevenDb).
+        // The INITIAL extremum is searched only within the audio band (item 4),
+        // while the walk itself runs the full array under the cap.
+        double unevenDb = prefs.getFreqRespUnevenDb();
+
+        if (prefs.isFreqRespUnevenNotch()) {
+            // NOTCH walk runs on the RAW dB curve with ONLY a 3-point running
+            // MEDIAN despike (item 3): ANY sliding-mean smoothing — even 1/48-oct —
+            // flattens a high-Q null by tens of dB (bench: smoothed min −67.5 vs
+            // true −81.5), so the min / threshold / boundary walks would sit on the
+            // wrong depth AND the green threshold + lila verticals derived from that
+            // curve wouldn't intersect the drawn RAW trace.  The median rejects lone
+            // spikes without touching the null depth, so every geometry point below
+            // comes from ONE curve that visually matches the blue trace.  Still
+            // Nyquist-capped and audio-band-seeded (item 4).
+            double[] ndb = despikedCappedDb(r);
+            int minIdx = audioBandExtremumIdx(freqs, ndb, false);   // interior min in [20, 20k]
+            if (minIdx < 0) return;
+            double minDb  = ndb[minIdx];
+            double ceilDb = minDb + unevenDb;
+            // Walk out from the minimum while inside the stopband; a NaN (capped
+            // / no-data) point ends the walk so a boundary never lands in the
+            // ignored region.  The walk may cross out of the audio band.
+            int lo = minIdx;
+            for (int i = minIdx; i >= 0; i--) {
+                if (!Double.isFinite(ndb[i]) || ndb[i] > ceilDb) break;
+                lo = i;
+            }
+            int hi = minIdx;
+            for (int i = minIdx; i < n; i++) {
+                if (!Double.isFinite(ndb[i]) || ndb[i] > ceilDb) break;
+                hi = i;
+            }
+            unevenLoHz        = freqs[lo];
+            unevenHiHz        = freqs[hi];
+            unevenPlusDb      = unevenDb;
+            unevenThresholdDb = ceilDb;
+            unevenExtremumDb  = minDb;
+            return;
+        }
+
+        // PEAK walk runs on the FLOATING-AVERAGE (9-point), Nyquist-capped curve
+        // (round-8 item 2): noise tamed, constant-Hz window, index-aligned.  Peak
+        // find (audio band only), then walk out both ways while db ≥ peak − unevenDb
+        // (walk may leave the audio band).
+        double[] db = floatingAvgCappedDb(r);
+        int peakIdx = audioBandExtremumIdx(freqs, db, true);
+        if (peakIdx < 0) return;
+        double peakDb = db[peakIdx];
+        double floorDb = peakDb - unevenDb;
+        int lo = peakIdx;
+        for (int i = peakIdx; i >= 0; i--) {
+            if (!Double.isFinite(db[i]) || db[i] < floorDb) break;
+            lo = i;
+        }
+        int hi = peakIdx;
+        for (int i = peakIdx; i < n; i++) {
+            if (!Double.isFinite(db[i]) || db[i] < floorDb) break;
+            hi = i;
+        }
+        unevenLoHz        = freqs[lo];
+        unevenHiHz        = freqs[hi];
+        unevenPlusDb      = unevenDb;
+        unevenThresholdDb = floorDb;
+        unevenExtremumDb  = peakDb;
+    }
+
+    /** Index of the extreme finite value of {@code db} — the MAX when
+     *  {@code wantMax}, else the MIN — searched ONLY within the audio band
+     *  [{@link #AUDIO_SEARCH_MIN_HZ}, {@link #AUDIO_SEARCH_MAX_HZ}] (item 4).
+     *  {@code freqs} is ascending and index-aligned with {@code db}; NaN entries
+     *  are skipped.  Returns {@code -1} when the band holds no finite point. */
+    private int audioBandExtremumIdx(double[] freqs, double[] db, boolean wantMax) {
+        int    bestIdx = -1;
+        double best    = wantMax ? Double.NEGATIVE_INFINITY : Double.POSITIVE_INFINITY;
+        for (int i = 0; i < db.length; i++) {
+            double f = freqs[i];
+            if (f < AUDIO_SEARCH_MIN_HZ || f > AUDIO_SEARCH_MAX_HZ) continue;
+            double d = db[i];
+            if (!Double.isFinite(d)) continue;
+            if (wantMax ? d > best : d < best) { best = d; bestIdx = i; }
+        }
+        return bestIdx;
+    }
+
+    // --- Measured-curve analysis constants (item 3) --------------------------
+    /** Fraction of Nyquist ({@code sampleRate/2}) above which the measured
+     *  curve is IGNORED for all unevenness analysis (item 4): the top few
+     *  percent carry a weak deconvolved signal buried in noise, so a spike
+     *  there must not drive the peak/min find, the Mode-A walk,
+     *  or the Mode-B crossing levels.  Both analysis curves
+     *  ({@link #floatingAvgCappedDb(FreqRespResult)} and
+     *  {@link #despikedCappedDb(FreqRespResult)}) set every point above
+     *  {@code this × sampleRate/2} to NaN so those consumers skip it. */
+    private static final double NYQUIST_ANALYSIS_FRACTION = 0.95;
+    /** Floating-average window (grid points) for the LP/HP/BP peak walk +
+     *  corner-anchor analysis (round-8 item 2).  The measurement grid is FFT-bin-
+     *  spaced (linear in Hz), so a fixed point count is a CONSTANT-Hz window
+     *  everywhere — unlike an octave fraction, which balloons to ≈2.3 kHz at
+     *  20 kHz (1/6 oct) and swamps a narrow feature.  Centred ±4, NaN-aware,
+     *  end-clamped. */
+    private static final int    UNEVEN_SMOOTH_POINTS          = 9;
+    /** Running-median window (points) for NOTCH-mode analysis (item 3): NO
+     *  sliding-mean smoothing is applied — even a 1/48-octave mean flattens a
+     *  high-Q null by tens of dB (bench: min −67.5 vs true −81.5), so the min /
+     *  threshold / boundary walks would sit on the wrong depth and the derived
+     *  green/lila annotation lines wouldn't intersect the drawn RAW trace.  A
+     *  3-point running median instead rejects lone despike spikes while leaving
+     *  the true null depth untouched, so every notch geometry point comes from
+     *  ONE curve that visually matches the blue trace. */
+    private static final int    NOTCH_DESPIKE_POINTS          = 3;
+    /** Audio-band bounds (Hz) for the INITIAL extremum search (item 4): the peak
+     *  (peak walk) and the interior minimum (notch-walk seed) are located ONLY
+     *  within [{@link #AUDIO_SEARCH_MIN_HZ},
+     *  {@link #AUDIO_SEARCH_MAX_HZ}] (clipped to the data range), so a reverse-RIAA
+     *  or otherwise rising response can't seed off a Nyquist-noise ridge and
+     *  put its peak at 143–182 kHz.  The subsequent boundary WALK may run beyond
+     *  the audio band (still under the 0.95-Nyquist cap + NaN guard). */
+    private static final double AUDIO_SEARCH_MIN_HZ =    20.0;
+    private static final double AUDIO_SEARCH_MAX_HZ = 20000.0;
+    /** Displayed NOTCH null depth (dB below the plateau) when the design carries
+     *  no user stopband-attenuation spec (Mode 2, design-by-order — {@link
+     *  FilterDesign#NO_STOP_ATTEN_SPEC}).  The ideal monotone-family null is
+     *  mathematically −∞ (clamped −1000 in {@link FilterDesign#evalDb}); this
+     *  renders it at a realistic, resolution-independent depth instead. */
+    private static final double NOTCH_DISPLAY_FLOOR_DB = 120.0;
+
+    /** The passband analysis curve for the LP/HP/BP peak walk +
+     *  corner-anchor interpolation (item 4 + round-8 item 2): the RAW dB of
+     *  {@code r} put through a {@link #UNEVEN_SMOOTH_POINTS}-point FLOATING AVERAGE
+     *  (centred running mean over a fixed number of GRID points, not an octave
+     *  fraction), then every point at or above
+     *  {@link #analysisNyquistCapHz(FreqRespResult)} forced to {@code NaN}.  The
+     *  measurement grid is FFT-bin-spaced (linear in Hz), so a fixed point count is
+     *  a constant-Hz window everywhere — an octave fraction ballooned to ≈2.3 kHz
+     *  at 20 kHz and swamped narrow features.  The mean tames noise spikes so
+     *  cross-points and extrema sit on what was measured; the Nyquist cap drops the
+     *  weak-signal, huge-noise top of the band.  NaN entries are skipped by the
+     *  extrema / median / walk loops, so the array stays index-aligned with
+     *  {@code r.getFreqs()} — callers keep their frequency lookup by the same
+     *  index.  (NOTCH analysis + Mode-B deliberately do NOT use this — any mean
+     *  flattens a high-Q null / collapses a narrow range; see
+     *  {@link #despikedCappedDb}.) */
+    private double[] floatingAvgCappedDb(FreqRespResult r) {
+        double[] freqs = r.getFreqs();
+        double[] mag   = r.getMagLin();
+        int n = freqs.length;
+        double[] raw = new double[n];
+        for (int i = 0; i < n; i++) raw[i] = FreqRespFormat.linToDb(mag[i]);
+        double[] s = runningMean(raw, UNEVEN_SMOOTH_POINTS);
+        double cap = analysisNyquistCapHz(r);
+        for (int i = 0; i < n; i++) {
+            if (freqs[i] >= cap) s[i] = Double.NaN;
+        }
+        return s;
+    }
+
+    /** The depth-preserving despiked analysis curve (item 3 + round-8 item 1): the
+     *  RAW dB of {@code r} with ONLY a {@link #NOTCH_DESPIKE_POINTS}-point running
+     *  MEDIAN despike — no sliding mean, which would flatten a high-Q null by tens
+     *  of dB.  The median rejects lone spikes while leaving the true null depth
+     *  untouched, so the min / threshold / boundary walks + the green/lila
+     *  annotation geometry all sit on ONE curve that visually matches the drawn RAW
+     *  trace.  Serves BOTH notch Mode-A (interior-min walk) AND all of Mode-B
+     *  (range min/max + start/stop crossing levels): a fixed-N mean would collapse
+     *  a narrow Mode-B range to a single value (bench: 997–1010 Hz on a notch
+     *  averaged to one level), so Mode-B reads this raw-median curve directly.
+     *  Same analysis-Nyquist cap + index alignment as
+     *  {@link #floatingAvgCappedDb(FreqRespResult)}. */
+    private double[] despikedCappedDb(FreqRespResult r) {
+        double[] freqs = r.getFreqs();
+        double[] mag   = r.getMagLin();
+        int n = freqs.length;
+        double[] raw = new double[n];
+        for (int i = 0; i < n; i++) raw[i] = FreqRespFormat.linToDb(mag[i]);
+        double[] s = runningMedian(raw, NOTCH_DESPIKE_POINTS);
+        double cap = analysisNyquistCapHz(r);
+        for (int i = 0; i < n; i++) {
+            if (freqs[i] >= cap) s[i] = Double.NaN;
+        }
+        return s;
+    }
+
+    /** {@code window}-point (odd) running median of {@code v}, centred on each
+     *  index and clamped at the ends.  Non-finite taps are dropped from the
+     *  window; a position with no finite tap yields NaN.  Rejects lone spikes
+     *  without shifting a genuine extremum — unlike a mean, the deep sample at a
+     *  high-Q null survives (item 3).  Index-aligned with {@code v}. */
+    private double[] runningMedian(double[] v, int window) {
+        int n = v.length;
+        int half = window / 2;
+        double[] out = new double[n];
+        double[] buf = new double[window];
+        for (int i = 0; i < n; i++) {
+            int cnt = 0;
+            for (int j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) {
+                if (Double.isFinite(v[j])) buf[cnt++] = v[j];
+            }
+            if (cnt == 0) { out[i] = Double.NaN; continue; }
+            double[] w = Arrays.copyOf(buf, cnt);
+            Arrays.sort(w);
+            out[i] = (cnt % 2 == 1) ? w[cnt / 2] : 0.5 * (w[cnt / 2 - 1] + w[cnt / 2]);
+        }
+        return out;
+    }
+
+    /** {@code window}-point (odd) centred running MEAN of {@code v}, clamped at
+     *  the ends (round-8 item 2).  Non-finite taps are dropped from the window; a
+     *  position with no finite tap yields NaN.  Because the measurement grid is
+     *  FFT-bin-spaced (linear in Hz), a fixed tap count is a constant-Hz window at
+     *  every frequency — unlike the log-freq octave-fraction smoother it replaced.
+     *  Sibling of {@link #runningMedian} (same window/NaN/clamp shape, mean instead
+     *  of median).  Index-aligned with {@code v}. */
+    private double[] runningMean(double[] v, int window) {
+        int n = v.length;
+        int half = window / 2;
+        double[] out = new double[n];
+        for (int i = 0; i < n; i++) {
+            double sum = 0.0;
+            int    cnt = 0;
+            for (int j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) {
+                if (Double.isFinite(v[j])) { sum += v[j]; cnt++; }
+            }
+            out[i] = cnt > 0 ? sum / cnt : Double.NaN;
+        }
+        return out;
+    }
+
+    /** {@link #NYQUIST_ANALYSIS_FRACTION} × the measured curve's Nyquist
+     *  ({@code sampleRate/2}); analysis frequencies at or above this are
+     *  ignored (item 4).  Independent of the user's display-zoom Nyquist
+     *  pref — this cap is fixed so the readout never depends on how far the
+     *  user zoomed out.
+     *
+     *  <p>Loaded {@code .frc} results carry the rate read back from the file's
+     *  own {@code sample_rate_hz} header comment (the load path calls
+     *  {@code FreqRespCalHelper.readSampleRateHz}), so the cap normally
+     *  reflects the TRUE capture rate — a 384 kHz notch file opened on a
+     *  48 kHz device analyzes over its full span.  Only a legacy headerless
+     *  file still gets the live backend's rate stamped, so keep the
+     *  data-derived guard: when {@code sr <= 0}, or the grid top runs past the
+     *  stamped {@code sr/2} (the grid proves the stamped rate wrong for this
+     *  data), fall back to the highest finite grid frequency, so even such a
+     *  file is analyzed over its real span. */
+    private double analysisNyquistCapHz(FreqRespResult r) {
+        int sr = r.getSampleRate() > 0 ? r.getSampleRate()
+                : prefs.current().getInputSampleRate();
+        double gridTop = highestFiniteFreqHz(r);
+        double nyqCap  = NYQUIST_ANALYSIS_FRACTION * sr * 0.5;
+        // Data-derived fallback: no usable rate, or the grid extends beyond the
+        // stamped Nyquist → trust the grid's own top instead of the wrong rate.
+        if (sr <= 0 || (Double.isFinite(gridTop) && gridTop > sr * 0.5)) {
+            return Double.isFinite(gridTop)
+                    ? NYQUIST_ANALYSIS_FRACTION * gridTop : nyqCap;
+        }
+        return nyqCap;
+    }
+
+    /** The highest frequency in {@code r}'s grid backed by a finite, positive
+     *  magnitude — the real top of the loaded/measured span, used to derive the
+     *  analysis cap when the stamped sample rate is absent or wrong for the data
+     *  (see {@link #analysisNyquistCapHz}).  {@code NaN} when no such point
+     *  exists. */
+    private double highestFiniteFreqHz(FreqRespResult r) {
+        double[] freqs = r.getFreqs();
+        double[] mag   = r.getMagLin();
+        if (freqs == null || mag == null) return Double.NaN;
+        for (int i = freqs.length - 1; i >= 0; i--) {
+            if (Double.isFinite(mag[i]) && mag[i] > 0.0 && Double.isFinite(freqs[i])) {
+                return freqs[i];
+            }
+        }
+        return Double.NaN;
+    }
+
+    /** Builds the unevenness readout string for the active mode, or {@code null}
+     *  when no result exists.  Shared by the in-canvas table and the external
+     *  window painter so both read identical text. */
+    private String unevennessReadout() {
+        if (!Double.isFinite(unevenPlusDb)) return null;
+        String db = FreqRespFormat.formatDbReadout(unevenPlusDb);
+        String lo = FreqRespFormat.formatHzReadout(unevenLoHz);
+        String hi = FreqRespFormat.formatHzReadout(unevenHiHz);
+        return prefs.getFreqRespUnevenMode() == UnevenMode.RANGE
+                ? I18n.t("freqResp.uneven.readout.range", db, lo, hi)
+                : I18n.t("freqResp.uneven.readout", lo, hi, db);
+    }
+
+    /** Paints the unevenness readout as an outlined-text overlay, below the
+     *  header buttons.  When the compare table is visible it stacks below it
+     *  (two lines), otherwise it takes the compare table's slot.  Drawn
+     *  whenever a result exists. */
+    private void drawUnevennessTable(GC gc, boolean belowCompareTable) {
+        String text = unevennessReadout();
+        if (text == null) return;
+        gc.setFont(readoutFont);
+        gc.setForeground(color(ColorRole.TEXT));
+        int x     = MARGIN_LEFT + 6;
+        int lineH = gc.getFontMetrics().getHeight();
+        int y     = BTN_TOP + BTN_H + 6 + (belowCompareTable ? 2 * lineH + 4 : 0);
+        drawOutlinedText(gc, text, x, y);
+    }
+
+    // --- Unevenness plot annotations (item 2, dynamic overlay) ---------------
+    /** Half-width (px) of the short green crossing tick drawn at each Mode-B
+     *  boundary; the full tick is {@code 2 × this} = 40 px. */
+    private static final int    UNEVEN_TICK_HALF_PX = 20;
+    /** Two Mode-B crossing levels within this many dB are treated as equal, so
+     *  a single full-width green line replaces the two ticks. */
+    private static final double UNEVEN_LEVEL_EPS_DB = 0.05;
+
+    /** Draws the LEVEL / RANGE unevenness annotations in the dynamic overlay
+     *  layer (item 2), only while a Mode readout is active (mode != OFF and a
+     *  measurement exists ⇒ {@link #unevenPlusDb} is finite).  GREEN = the RIAA
+     *  trace colour; LILA = the FILTER trace colour.  All geometry goes through
+     *  the live freq→x / dbToYf transforms and is clipped to {@code plot}.
+     *
+     *  <p>Every line — the GREEN horizontals AND the LILA verticals — is dotted
+     *  at the line width of the RIAA / filter curves ({@link #setTraceLineAttributes}),
+     *  so the annotations read as the same family of overlays.
+     *
+     *  <ul>
+     *    <li><b>LEVEL</b>: a GREEN horizontal at the threshold level
+     *        ({@link #unevenThresholdDb}) and a second GREEN horizontal at the
+     *        walk's reference extremum ({@link #unevenExtremumDb} — the peak, or
+     *        the notch minimum), both between the two boundary frequencies, plus a
+     *        LILA vertical at EACH boundary spanning the plot.</li>
+     *    <li><b>RANGE</b>: LILA verticals at the stored (Nyquist-capped) start +
+     *        stop; a GREEN horizontal at the range's extremum
+     *        ({@link #unevenExtremumDb}) between the boundaries; and, independent
+     *        of it, where each vertical crosses the DESPIKED-RAW, capped curve
+     *        (round-8 item 1), a 40 px GREEN horizontal tick — or, if both
+     *        crossing levels are equal (±{@link #UNEVEN_LEVEL_EPS_DB}), one
+     *        full-plot-width GREEN horizontal at that level.</li>
+     *  </ul> */
+    private void drawUnevennessAnnotations(GC gc, Rectangle plot,
+                                           double freqMin, double freqMax,
+                                           double magTop, double magBot) {
+        if (!Double.isFinite(unevenPlusDb)) return;
+        Color green = color(ColorRole.RIAA_TRACE);
+        Color lila  = color(ColorRole.FILTER_TRACE);
+        Rectangle prevClip = gc.getClipping();
+        gc.setClipping(plot);
+        LineAttributes prevAttrs = gc.getLineAttributes();
+        // Every annotation line — green horizontals AND lila verticals — is
+        // dotted at the same line width as the RIAA / filter curves (reuse the
+        // base's pooled dotted stroke), so the annotations read as the same
+        // family of overlays.
+        setTraceLineAttributes(gc, (float) prefs.getFreqRespLineWidth(), SWT.LINE_DOT);
+
+        if (prefs.getFreqRespUnevenMode() == UnevenMode.RANGE) {
+            drawUnevennessModeB(gc, plot, freqMin, freqMax, magTop, magBot, green, lila);
+        } else {
+            drawUnevennessModeA(gc, plot, freqMin, freqMax, magTop, magBot, green, lila);
+        }
+
+        gc.setLineAttributes(prevAttrs);
+        gc.setClipping(prevClip);
+    }
+
+    private void drawUnevennessModeA(GC gc, Rectangle plot,
+                                     double freqMin, double freqMax,
+                                     double magTop, double magBot,
+                                     Color green, Color lila) {
+        if (!Double.isFinite(unevenLoHz) || !Double.isFinite(unevenHiHz)
+                || !Double.isFinite(unevenThresholdDb)) {
+            return;
+        }
+        int xLo = freqToX(unevenLoHz, plot, freqMin, freqMax, true);
+        int xHi = freqToX(unevenHiHz, plot, freqMin, freqMax, true);
+        int yTh = (int) Math.round(dbToYf(unevenThresholdDb, plot, magTop, magBot));
+        // Green horizontal at the threshold, between the two boundaries.  The
+        // dotted stroke + line width are set once by the caller.
+        gc.setForeground(green);
+        gc.drawLine(xLo, yTh, xHi, yTh);
+        // Second green horizontal at the walk's reference extremum (the peak, or
+        // the notch minimum), same span — shows the extremum level itself.
+        if (Double.isFinite(unevenExtremumDb)) {
+            int yEx = (int) Math.round(dbToYf(unevenExtremumDb, plot, magTop, magBot));
+            gc.drawLine(xLo, yEx, xHi, yEx);
+        }
+        // Lila verticals at each boundary, full plot height.
+        gc.setForeground(lila);
+        gc.drawLine(xLo, plot.y, xLo, plot.y + plot.height);
+        gc.drawLine(xHi, plot.y, xHi, plot.y + plot.height);
+    }
+
+    private void drawUnevennessModeB(GC gc, Rectangle plot,
+                                     double freqMin, double freqMax,
+                                     double magTop, double magBot,
+                                     Color green, Color lila) {
+        // Boundaries follow the stored range — the stop is already clamped to the
+        // analysis Nyquist cap by recomputeUnevenness (item 4).
+        if (!Double.isFinite(unevenLoHz) || !Double.isFinite(unevenHiHz)) return;
+        double startHz = unevenLoHz;
+        double stopHz  = unevenHiHz;
+        int xStart = freqToX(startHz, plot, freqMin, freqMax, true);
+        int xStop  = freqToX(stopHz,  plot, freqMin, freqMax, true);
+        // Lila verticals at start + stop, full plot height.  The dotted stroke +
+        // line width are set once by the caller.
+        gc.setForeground(lila);
+        gc.drawLine(xStart, plot.y, xStart, plot.y + plot.height);
+        gc.drawLine(xStop,  plot.y, xStop,  plot.y + plot.height);
+        // Second green horizontal — INDEPENDENT of the crossing-level logic
+        // below: the range's extremum of interest (highest point, or lowest
+        // with the Notch checkbox on) between the two boundaries.
+        if (Double.isFinite(unevenExtremumDb)) {
+            gc.setForeground(green);
+            int yExt = (int) Math.round(dbToYf(unevenExtremumDb, plot, magTop, magBot));
+            gc.drawLine(xStart, yExt, xStop, yExt);
+        }
+        // Crossing levels where each vertical meets the DESPIKED-RAW, capped curve
+        // (round-8 item 1) — the same curve Mode-B min/max reads, so the ticks land
+        // on the real wall depth, not on a mean that collapsed the narrow range.
+        FreqRespResult src = activeChannelResult(prefs);
+        if (src == null) return;
+        double[] freqs = src.getFreqs();
+        double[] sdb   = despikedCappedDb(src);
+        double dbStart = interpFromArray(freqs, sdb, startHz);
+        double dbStop  = interpFromArray(freqs, sdb, stopHz);
+        if (!Double.isFinite(dbStart) || !Double.isFinite(dbStop)) return;
+        gc.setForeground(green);
+        if (Math.abs(dbStart - dbStop) <= UNEVEN_LEVEL_EPS_DB) {
+            // Equal levels → one full-width green horizontal at that level.
+            int y = (int) Math.round(dbToYf(0.5 * (dbStart + dbStop), plot, magTop, magBot));
+            gc.drawLine(plot.x, y, plot.x + plot.width, y);
+        } else {
+            int yStart = (int) Math.round(dbToYf(dbStart, plot, magTop, magBot));
+            int yStop  = (int) Math.round(dbToYf(dbStop,  plot, magTop, magBot));
+            gc.drawLine(xStart - UNEVEN_TICK_HALF_PX, yStart, xStart + UNEVEN_TICK_HALF_PX, yStart);
+            gc.drawLine(xStop  - UNEVEN_TICK_HALF_PX, yStop,  xStop  + UNEVEN_TICK_HALF_PX, yStop);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // External measurement tool window — the unevenness + active-compare readout
+    // extracted into a separate window.  Copies FftView's extract/sync/create/
+    // paint quartet + the redraw() override; tableExtracted is transient (as in
+    // FftView), so it resets to docked on restart.
+    // -------------------------------------------------------------------------
+
+    @Override
+    public void redraw() {
+        super.redraw();
+        if (toolWindow != null) toolWindow.redraw();
+    }
+
+    /** Docks / extracts the measurement readout into its own window. */
+    public void setTableExtracted(boolean extracted) {
+        if (extracted == tableExtracted) return;
+        tableExtracted = extracted;
+        if (externalBtn != null) externalBtn.setToggled(extracted);
+        syncExternalShell();
+        redraw();
+    }
+
+    /** Opens the tool window when extracted and a readout exists, disposes it
+     *  otherwise.  Isolated views never extract. */
+    private void syncExternalShell() {
+        boolean wantOpen = tableExtracted && !isolated && hasAnyResult();
+        if (wantOpen && toolWindow == null) {
+            createToolWindow();
+        } else if (!wantOpen && toolWindow != null) {
+            toolWindow.dispose();
+            toolWindow = null;
+        }
+    }
+
+    private void createToolWindow() {
+        ToolWindow w = new ToolWindow(this, color(ColorRole.BACKGROUND), color(ColorRole.TEXT), BTN_W, BTN_H);
+        // No FreqResp-specific title key in the cross-agent i18n set; reuse the
+        // generic "Measurements" title shared with the scope's tool window.
+        w.setTitle(I18n.t("scope.external.window.title"));
+        w.setPainter(this::paintExternalReadout);
+        w.addCloseListener(e -> setTableExtracted(false));
+        toolWindow = w;
+        w.setSize(EXT_CONTENT_W, EXT_CONTENT_H);
+        Point ws = w.getSize();
+        Rectangle pb = getShell().getBounds();
+        w.setLocation(pb.x + pb.width - ws.x - 24, pb.y + 96);
+        w.open();
+    }
+
+    /** {@link ToolWindow.ContentPainter} for the extracted window — draws the
+     *  same active-compare min/max + unevenness readout lines the in-canvas
+     *  tables show, from the live fields, so the two never diverge. */
+    private void paintExternalReadout(GC gc, int top) {
+        gc.setAntialias(SWT.ON);
+        gc.setTextAntialias(SWT.ON);
+        gc.setFont(readoutFont);
+        gc.setForeground(color(ColorRole.TEXT));
+        int x     = EXT_LEFT_PAD;
+        int y     = top + EXT_LEFT_PAD;
+        int lineH = gc.getFontMetrics().getHeight();
+        if (compareActive() && !Double.isNaN(compareSmoothedMin) && !Double.isNaN(compareSmoothedMax)) {
+            drawOutlinedText(gc, "max: " + FreqRespFormat.formatDbReadout(compareSmoothedMax), x, y);
+            y += lineH;
+            drawOutlinedText(gc, "min: " + FreqRespFormat.formatDbReadout(compareSmoothedMin), x, y);
+            y += lineH;
+        }
+        String uneven = unevennessReadout();
+        if (uneven != null) {
+            drawOutlinedText(gc, uneven, x, y);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -1543,10 +2625,8 @@ public final class FreqRespView extends AbstractFreqDomainView {
         if (magFrac < 0) magFrac = 0;
         if (magFrac > 1) magFrac = 1;
         sb.append('\n').append("y = ").append(FreqRespFormat.formatDbReadout(magTop - magFrac * (magTop - magBot)));
-        boolean compareActive = prefs.isFreqRespCompareMode()
-                && prefs.isFreqRespShowRiaa()
-                && hasAnyResult();
-        if (compareActive) {
+        boolean showCompareDelta = compareActive();
+        if (showCompareDelta) {
             // Compare mode draws the smoothed (measured − reference) curve,
             // so the readout interpolates the SAME smoothed array — anything
             // else would disagree with what the user sees on screen.
@@ -1573,7 +2653,7 @@ public final class FreqRespView extends AbstractFreqDomainView {
                 sb.append('\n').append("R = ").append(FreqRespFormat.formatDbReadout(db));
             }
         }
-        if (phaseVisible && !compareActive) {
+        if (phaseVisible && !showCompareDelta) {
             FreqRespResult phaseSrc =
                     (prefs.isFreqRespLeftVisible()  && leftResult  != null) ? leftResult
                   : (prefs.isFreqRespRightVisible() && rightResult != null) ? rightResult
@@ -1628,6 +2708,9 @@ public final class FreqRespView extends AbstractFreqDomainView {
             if (freqs[mid] <= f) lo = mid; else hi = mid;
         }
         double v0 = vals[lo];
+        // Exact grid hit → the left sample IS the answer; don't require the right
+        // neighbour (it may be NaN at the Nyquist-analysis cap boundary).
+        if (freqs[lo] == f) return v0;
         double v1 = vals[hi];
         if (Double.isNaN(v0) || Double.isNaN(v1)) return Double.NaN;
         double t = (Math.log(f) - Math.log(freqs[lo])) / (Math.log(freqs[hi]) - Math.log(freqs[lo]));
@@ -1689,6 +2772,13 @@ public final class FreqRespView extends AbstractFreqDomainView {
      *  Auto-setup fit the magnitude top — room for a correction-lifted peak to
      *  breathe without clipping at the ceiling. */
     private static final double MAG_HEADROOM_DB =   20.0;
+    /** Symmetric vertical pad (dB) for the compare-mode auto-zoom
+     *  ({@link #autoSetupCompare(Preferences)}): the diff curve is a flatness
+     *  deviation of a few dB, so the window hugs it with this margin above the
+     *  highest and below the lowest point — NOT the generic
+     *  {@link #MAG_HEADROOM_DB} marker headroom, which would waste 20 dB on a
+     *  ±0.5 dB trace. */
+    private static final double COMPARE_ZOOM_PAD_DB = 2.0;
     /** Upper bound when zooming / panning via the mouse wheel (Ctrl /
      *  Ctrl+Shift / plain wheel).  Wider than the maximize default so
      *  the user can scroll up into the "signal is louder than DAC FS"

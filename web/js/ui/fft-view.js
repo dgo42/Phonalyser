@@ -20,6 +20,11 @@ import {
 // installRectZoom base machinery); this view supplies the log-aware freq / dB
 // pixel↔value mappings through the injected callbacks (Java FftView overrides).
 import { RectZoom } from './rect-zoom.js';
+// Shared per-tone lobe lift (data-derived floor + lobe extent + log-domain
+// stretch) — the SAME mechanism the .frc de-embed uses (fft-compensation.js
+// correctToneLobe). Reused here to lift the manual-fundamental lobe to the user
+// value at render time, with the manual/peak ratio as the scale instead of 1/H.
+import { ToneLobeLift } from '../dsp/tone-lobe-lift.js';
 
 // Plot rect margins (Java MARGIN_LEFT/TOP/BOTTOM, right inset 2).
 const MARGIN_LEFT = 68, MARGIN_TOP = 0, MARGIN_BOTTOM = 28, MARGIN_RIGHT = 2;
@@ -28,6 +33,9 @@ const MAG_FLOOR_DBFS = -300;
 // Java drawGrid: SUB_DECADE_TICK_TARGET nice-linear majors when a LOG range < 1 decade,
 // and the FFT mag axis is built with AxisSpec.linearNice(...,10,5.0) for the dB units.
 const SUB_DECADE_TICK_TARGET = 12;
+// One shared lobe lift for the manual-fundamental render-time stretch (mirrors
+// fft-compensation.js's `const LOBE`, and Java FftView's static LOBE).
+const LOBE = new ToneLobeLift();
 const FREQ_NICE_TARGET = 10, MAG_DB_NICE_TARGET = 10, MAG_DB_MINOR_STEP = 5.0;
 
 // THD/IMD table overlay origin + gate constants (Java FftView).
@@ -50,10 +58,14 @@ const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const colorHex = (c) => '#' + (c & 0xffffff).toString(16).padStart(6, '0');
 
 export class FftView {
-  constructor(canvas, { prefs = null, topDb = 0, botDb = -200, genActive = () => false } = {}) {
+  constructor(canvas, { prefs = null, topDb = 0, botDb = -200, genActive = () => false, correction = null } = {}) {
     this.cv = canvas; this.g = canvas.getContext('2d');
     this.prefs = prefs;
     this.topDb = topDb; this.botDb = botDb;
+    // Java FftView.correctionStore — the loaded .frc de-embed cascade (FftViewCorrection), injected
+    // so the IMD path can draw the blue "before-cal" dots at dbFs + sumCalDbAt (drawImdDots:1952-1962).
+    // Null in tests that construct FftView without it (the blue IMD pass is then skipped).
+    this.correction = correction;
     // Java FftView.isGeneratorActive() — true while the generator is producing a
     // signal. Gates the clock-drift (ΔF / Δf1 / Δf2) rows of the distortion tables.
     this._genActive = genActive;
@@ -144,7 +156,8 @@ export class FftView {
   getLastVrms() {
     const r = this._last;
     if (!r || !Number.isFinite(r.fundamentalLinear)) return null;
-    const fs = this.prefs ? this.prefs.adcFsVoltageRms.get() : 0;
+    // The ANALYZED channel's own ADC full-scale (Java FftView:1168 getAdcFsVoltageRms(getFftChannel())).
+    const fs = this.prefs ? this.prefs.getAdcFsVoltageRms(this.prefs.fftChannel.get()) : 0;
     return fs > 0 ? r.fundamentalLinear * fs : null;
   }
 
@@ -464,11 +477,15 @@ export class FftView {
     if (logAxis && fMin < 1) fMin = 1;
     const magUnit = p ? p.fftMagUnit.get() : 'DBFS';
     const magLog = unitIsLog(magUnit);
+    // The ANALYZED channel — every dBFS→display conversion below de-references with THIS
+    // channel's ADC dBV offset (Java FftView threads prefs.getFftChannel() through every
+    // convertFromDbFs / getDbvOffsetDb call site).
+    const ch = p ? p.fftChannel.get() : 'L';
     // Java FftView (:1197-1198): magBot/magTop = prefs.convertFromDbFs(getFftMag*, unit)
     // — the 2-arity form, so V/√Hz uses the cached binBwSqrt. The per-bin TRACE uses the
     // result's binBwSqrt (convertFromDbFs(dbFs, unit, r.binBwSqrt), :2290). The axis is
     // LOG-VOLTAGE for V/V√Hz (magToYFraction maps log(v)). Dots/crosshair use cv() too.
-    const cv = (dbFs) => p ? p.convertFromDbFs(dbFs, magUnit) : dbFs;
+    const cv = (dbFs) => p ? p.convertFromDbFs(dbFs, magUnit, null, ch) : dbFs;
     const magBot = cv(p ? p.fftMagBottom.get() : this.botDb);
     const magTop = cv(p ? p.fftMagTop.get() : this.topDb);
     // Java plot rect: x=MARGIN_LEFT, y=MARGIN_TOP, width=W-MARGIN_LEFT-rightMargin(1),
@@ -521,7 +538,7 @@ export class FftView {
     // are compared in raw dBFS (every unit conversion is monotonic in dBFS), then the
     // two column extremes converted + Y-mapped — Java ColumnBucketPainter envelope.
     const binYTrace = (dbFs) => this._magToYTrace(
-      p ? p.convertFromDbFs(dbFs, magUnit, result.binBwSqrt) : dbFs, plot, magTop, magBot, magUnit);
+      p ? p.convertFromDbFs(dbFs, magUnit, result.binBwSqrt, ch) : dbFs, plot, magTop, magBot, magUnit);
     const yClip = (yPx) => Math.max(plot.y, Math.min(plot.y + plot.height, yPx));
     const bars = [];
     const mids = [];
@@ -535,14 +552,46 @@ export class FftView {
       if (colCnt >= 2) bars.push([px, yClip(binYTrace(colMax)), yClip(binYTrace(colMin))]);
       mids.push([px, binYTrace((colMin + colMax) / 2)]);
     };
+    // Manual-fundamental: lift the fundamental's WHOLE main lobe to the user
+    // value at RENDER TIME (Java FftView.drawSpectrum :2234-2258). Visual only —
+    // the stored spectrum (amplitudeDbFs / re / im) is NEVER touched, so THD/SNR
+    // stay on the raw measured peak (the table uses the manual value via
+    // _manualFundDbFs). It is the SAME ToneLobeLift.stretch the .frc de-embed
+    // uses, with the manual/peak ratio as the scale. Gated on the manual value
+    // being finite — NOT on whether a cal is loaded: a cal + manual compose, the
+    // stretch reads the already-de-embedded spectrum and lifts it to the manual
+    // level (Java's gate is on fundamentalTrueDbFs finite, independent of cal).
+    let lobeLo = -1, lobeHi = -1, floorLin = 0, liftFactor = 1, peakMagLin = 0;
+    const manFundDbFs = this._manualFundDbFs(result);
+    if (Number.isFinite(manFundDbFs) && Number.isFinite(result.fundamentalDbFs)
+        && Number.isFinite(result.fundamentalHzRefined) && binW > 0) {
+      const peak = Math.round(result.fundamentalHzRefined / binW);
+      const half = mag.length - 1;
+      if (peak >= 1 && peak <= half) {
+        const magLin = (k) => Math.pow(10, mag[k] / 20);   // dBFS → linear (Java mag lambda)
+        floorLin = LOBE.localFloor(magLin, peak, half);
+        const edges = LOBE.lobeBins(magLin, peak, half, floorLin);
+        lobeLo = edges[0]; lobeHi = edges[1];
+        peakMagLin = magLin(peak);
+        liftFactor = Math.pow(10, (manFundDbFs - mag[peak]) / 20);   // manual dBFS / measured peak
+      }
+    }
     g.save();
     g.beginPath(); g.rect(plot.x, plot.y, plot.width, plot.height); g.clip();
     for (let k = 1; k < mag.length; k++) {
       const f = k * binW; if (f < fMin || f > fMax) continue;
       const px = Math.round(x(f)); if (px < plot.x) continue;
       if (px !== lastPx && lastPx >= 0) { flushCol(lastPx); colMin = 300; colMax = -300; colCnt = 0; }
-      if (mag[k] < colMin) colMin = mag[k];
-      if (mag[k] > colMax) colMax = mag[k];
+      // Per-bin dBFS feeding the column envelope: RAW value, except inside the
+      // manual-fundamental lobe, where it is stretched up to the user level
+      // (Java :2299-2302). mag (= result.amplitudeDbFs) is never mutated.
+      let dbK = mag[k];
+      if (lobeLo >= 0 && k >= lobeLo && k <= lobeHi) {
+        const nm = LOBE.stretch(Math.pow(10, dbK / 20), floorLin, peakMagLin, liftFactor);
+        dbK = nm > 1e-15 ? 20 * Math.log10(nm) : -300;
+      }
+      if (dbK < colMin) colMin = dbK;
+      if (dbK > colMax) colMax = dbK;
       colCnt++; lastPx = px;
     }
     if (lastPx >= 0) flushCol(lastPx);
@@ -622,6 +671,20 @@ export class FftView {
       const fHz = result.fundamentalHzRefined || 0;
       const man = this._manualFundDbFs(result);
       const fDb = Number.isFinite(man) ? man : result.fundamentalDbFs;
+      // Manual-fundamental original-height blue dot (WEB addition — the Java fix is parallel-ongoing;
+      // the committed Java draws blue dots only under a .frc de-embed). With manual fundamental set
+      // and NO cal (preCorrectionPeaks unset), the red F dot rises to the manual value and the lobe
+      // is stretched up to meet it — mark the ORIGINAL measured height with a blue dot
+      // (BEFORE_CAL_DOT colour), painted UNDER the red dot, mirroring the de-embed's before/after
+      // pair. When a cal IS loaded the pre-correction blue dots above already cover it.
+      if (Number.isFinite(man) && !(pre && pre[0] && pre[1])
+          && Number.isFinite(result.fundamentalDbFs) && fHz >= fMin && fHz <= fMax) {
+        const bv = cv(result.fundamentalDbFs), bt = this._magToYFraction(bv, magTop, magBot, magUnit);
+        if (bt >= 0 && bt <= 1) {
+          g.fillStyle = p ? colorHex(p.fftBeforeCalDotColor.get()) : '#000080';
+          g.beginPath(); g.arc(x(fHz), y(bv), dotR, 0, 2 * Math.PI); g.fill();
+        }
+      }
       dotAt(fHz, fDb, 'F ' + this._fmtFreq(fHz));
       const hCount = Math.min(result.harmonicHz.length, result.harmonicDbFs.length, result.harmonicCount);
       for (let i = 0; i < hCount; i++) {
@@ -632,24 +695,111 @@ export class FftView {
     if (imd) {
       // Dual-tone: F1/F2 + per-order lower/upper intermod products d2L..dnH (Java drawImdDots).
       // Product levels are dBV → de-reference to the dBFS axis with the dBV offset. Drop dots
-      // outside the freq/mag window (no clamping, matching Java).
-      const refDbV = p ? p.dbvOffsetDb : 0;
-      g.fillStyle = '#c01c28'; g.strokeStyle = '#c01c28'; g.lineWidth = 1;
-      const imdDot = (fHz, dbfs, label) => {
+      // outside the freq/mag window (no clamping, matching Java). Same marker styling as the
+      // single-tone path — HARMONIC_DOT colour + harmonicDotDiameter for every dot (Java
+      // drawImdDots:1965 / plotDotAt:2088-2090).
+      // IMD dBV products de-reference to dBFS with the ANALYZED channel's ADC offset
+      // (Java FftController:237 imdAnalyzer.analyze(..., getDbvOffsetDb(getFftChannel()))).
+      const refDbV = p ? p.getDbvOffsetDb(p.fftChannel.get()) : 0;
+      const dotColor = p ? colorHex(p.fftHarmonicDotColor.get()) : '#ff0000';
+      const dotR = Math.max(2, (p ? p.fftHarmonicDotDiameter.get() : 9) / 2);
+      // Java plotDotAt: fill the dot in HARMONIC_DOT; the fill colour is set immediately
+      // before each arc (like the single-tone dotAt) so _dotLabel's halo strokeStyle /
+      // fillStyle can't clobber later dots. No vertical stem — Java draws none.
+      const imdDot = (fHz, dbfs) => {
         if (!(fHz >= fMin && fHz <= fMax) || !Number.isFinite(dbfs)) return;
         const v = cv(dbfs), t = this._magToYFraction(v, magTop, magBot, magUnit);
         if (t < 0 || t > 1) return;
-        const mx = x(fHz), my = y(v);
-        g.beginPath(); g.arc(mx, my, 3, 0, 2 * Math.PI); g.fill();
-        g.beginPath(); g.moveTo(mx, my); g.lineTo(mx, plot.y + plot.height); g.stroke();
-        if (label) this._dotLabel(g, label, mx, my - 7);
+        g.fillStyle = dotColor; g.beginPath(); g.arc(x(fHz), y(v), dotR, 0, 2 * Math.PI); g.fill();
       };
-      imdDot(imd.f1Hz, imd.f1DbFs, 'F1');
-      imdDot(imd.f2Hz, imd.f2DbFs, 'F2');
+      // Blue "before-cal" dots FIRST, under the red post-cal dots, so the .frc correction gap is
+      // visible — one per IMD dot position (F1, F2, dnL[2..5], dnH[2..5]) at dbFs + sumCalDbAt,
+      // only when a calibration file is loaded (Java drawImdDots:1948-1962). Same freq/finite/mag
+      // gates as imdDot; channel pick off result.channelLeft (matching the de-embed, apply()).
+      if (this.correction && this.correction.store.getEntries().length) {
+        const wantLeft = result.channelLeft;
+        g.fillStyle = p ? colorHex(p.fftBeforeCalDotColor.get()) : '#000080';
+        const preDot = (fHz, dbfs) => {
+          if (!(fHz >= fMin && fHz <= fMax) || !Number.isFinite(dbfs)) return;
+          const preDbFs = dbfs + this.correction.sumCalDbAt(wantLeft, fHz);
+          const v = cv(preDbFs), t = this._magToYFraction(v, magTop, magBot, magUnit);
+          if (t < 0 || t > 1) return;
+          g.beginPath(); g.arc(x(fHz), y(v), dotR, 0, 2 * Math.PI); g.fill();
+        };
+        preDot(imd.f1Hz, imd.f1DbFs);
+        preDot(imd.f2Hz, imd.f2DbFs);
+        if (imd.dnLHz) {
+          for (let k = 2; k < imd.dnLHz.length; k++) {
+            preDot(imd.dnLHz[k], imd.dnLDbV[k] - refDbV);
+            preDot(imd.dnHHz[k], imd.dnHDbV[k] - refDbV);
+          }
+        }
+      }
+      imdDot(imd.f1Hz, imd.f1DbFs);
+      imdDot(imd.f2Hz, imd.f2DbFs);
       if (imd.dnLHz) {
         for (let k = 2; k < imd.dnLHz.length; k++) {
-          imdDot(imd.dnLHz[k], imd.dnLDbV[k] - refDbV, 'd' + k + 'L');
-          imdDot(imd.dnHHz[k], imd.dnHDbV[k] - refDbV, 'd' + k + 'H');
+          imdDot(imd.dnLHz[k], imd.dnLDbV[k] - refDbV);
+          imdDot(imd.dnHHz[k], imd.dnHDbV[k] - refDbV);
+        }
+      }
+      // F1 / F2 labels — "F1 <freq>" / "F2 <freq>" with overlap avoidance (Java
+      // drawImdDots:1976-2031). Each label is anchored just above its own dot; when the two
+      // label boxes overlap the lower dot's label slides into the gap between the higher
+      // label's bottom and the lower dot if it fits, else stacks one line above the higher
+      // label. Both labels stay strictly above their own dots and clamp into the plot
+      // horizontally. _dotLabel draws the halo text (baseline bottom, centred on cx).
+      const dotPos = (fHz, dbfs) => {
+        if (!(fHz >= fMin && fHz <= fMax) || !Number.isFinite(dbfs)) return null;
+        const v = cv(dbfs), t = this._magToYFraction(v, magTop, magBot, magUnit);
+        if (t < 0 || t > 1) return null;
+        return { x: x(fHz), y: y(v) };
+      };
+      const pos1 = dotPos(imd.f1Hz, imd.f1DbFs);
+      const pos2 = dotPos(imd.f2Hz, imd.f2DbFs);
+      if (pos1 || pos2) {
+        const t1 = 'F1 ' + this._fmtFreq(imd.f1Hz);
+        const t2 = 'F2 ' + this._fmtFreq(imd.f2Hz);
+        // Match _dotLabel's font so measureText widths align with the rendered text.
+        g.font = '10px "Segoe UI", sans-serif';
+        const w1 = g.measureText(t1).width, w2 = g.measureText(t2).width;
+        const LBL_H = 12;         // Java ext.y — 10px label height (font + descent)
+        const margin = 4;         // dot-to-label vertical gap (Java)
+        const gap = 2;            // label-to-label vertical gap (Java)
+        let ly1 = pos1 ? pos1.y - margin - LBL_H : 0;   // label TOP y
+        let ly2 = pos2 ? pos2.y - margin - LBL_H : 0;
+        if (pos1 && pos2) {
+          const bot1 = ly1 + LBL_H, bot2 = ly2 + LBL_H;
+          const overlap = !(bot1 + gap <= ly2 || bot2 + gap <= ly1);
+          if (overlap) {
+            if (pos1.y <= pos2.y) {
+              const candTop = bot1 + gap;
+              ly2 = (candTop + LBL_H + margin <= pos2.y) ? candTop : ly1 - gap - LBL_H;
+            } else {
+              const candTop = bot2 + gap;
+              ly1 = (candTop + LBL_H + margin <= pos1.y) ? candTop : ly2 - gap - LBL_H;
+            }
+          }
+        }
+        const pR = plot.x + plot.width;
+        // Java clamps the label's LEFT edge into [plot.x, plot.x+width-ext.x]; _dotLabel
+        // centres on cx, so pass the clamped box centre. It also clamps the top to plot.y.
+        if (pos1) {
+          const lx = Math.max(plot.x, Math.min(pR - w1, pos1.x - w1 / 2));
+          this._dotLabel(g, t1, lx + w1 / 2, Math.max(plot.y, ly1) + LBL_H);
+        }
+        if (pos2) {
+          const lx = Math.max(plot.x, Math.min(pR - w2, pos2.x - w2 / 2));
+          this._dotLabel(g, t2, lx + w2 / 2, Math.max(plot.y, ly2) + LBL_H);
+        }
+      }
+      // dnL / dnH labels keep the simple above-dot placement (Java drawHarmonicLabel).
+      if (imd.dnLHz) {
+        for (let k = 2; k < imd.dnLHz.length; k++) {
+          const lp = dotPos(imd.dnLHz[k], imd.dnLDbV[k] - refDbV);
+          if (lp) this._dotLabel(g, 'd' + k + 'L', lp.x, lp.y - dotR - 4);
+          const hp = dotPos(imd.dnHHz[k], imd.dnHDbV[k] - refDbV);
+          if (hp) this._dotLabel(g, 'd' + k + 'H', hp.x, hp.y - dotR - 4);
         }
       }
     }
@@ -720,7 +870,7 @@ export class FftView {
             && bin === Math.round(result.fundamentalHzRefined / binW)) {
           dbFs = man;
         }
-        const v = this.prefs ? this.prefs.convertFromDbFs(dbFs, magUnit, result.binBwSqrt) : dbFs;
+        const v = this.prefs ? this.prefs.convertFromDbFs(dbFs, magUnit, result.binBwSqrt, this.prefs.fftChannel.get()) : dbFs;
         lines.push('|m| = ' + formatMagnitudeWithUnit(v, magUnit));
       }
     }
@@ -926,10 +1076,24 @@ export class FftView {
     return Number.isFinite(v) ? `${v.toFixed(2)} dBV` : '—';
   }
 
+  /** Java FftView.imdPctText — IMD-table percent cell; "---" when the figure is
+   *  NaN (product outside the measurable range). */
+  _imdPctText(pct) {
+    return Number.isFinite(pct) ? `${pct.toFixed(8)} %` : '---';
+  }
+
+  /** Java FftView.imdRowText — IMD-table dnL/dnH cell (dBV + percent); "---" for
+   *  a product whose frequency lies outside the measurable range at this sample
+   *  rate. */
+  _imdRowText(dbv, pct) {
+    return Number.isFinite(dbv) ? `${dbv.toFixed(2)} dBV  ${pct.toFixed(8)} %` : '     ---';
+  }
+
   /** Java FftView.noiseDb — 10·log10(noisePower) + dbvOffset; NaN when noisePower<=0. */
   _noiseDb(r) {
     if (!(r.noisePower > 0)) return NaN;
-    return 10 * Math.log10(r.noisePower) + this.prefs.dbvOffsetDb;
+    // Analyzed channel's ADC offset (Java FftView:2877 getDbvOffsetDb(getFftChannel())).
+    return 10 * Math.log10(r.noisePower) + this.prefs.getDbvOffsetDb(this.prefs.fftChannel.get());
   }
 
   /** Java FftView.thdNPct — THD+N % from the N+D ratio in dB. */
@@ -1021,10 +1185,11 @@ export class FftView {
     const tableW = 64 * charW, centreX = xLeft + tableW / 2;
 
     const thdMaxH = p.fftThdMaxHarmonic.get();
-    const dbvOff = p.dbvOffsetDb;
+    // Analyzed channel's ADC offset (Java FftView:2807 getDbvOffsetDb(getFftChannel())).
+    const dbvOff = p.getDbvOffsetDb(p.fftChannel.get());
     // dBV header column (Java drawDistortionTable :2627): the manual fundamental
     // (fundamentalTrueDbFs) when set, else the measured fundamental, both lifted by
-    // the global ADC offset. _manualFundDbFs re-gates on the live manual on/off pref.
+    // the analyzed channel's ADC offset. _manualFundDbFs re-gates on the live manual on/off pref.
     const man = this._manualFundDbFs(r);
     const fundDbV = (Number.isFinite(man) ? man : r.fundamentalDbFs) + dbvOff;
     this._monoMetrics(g, true);
@@ -1116,19 +1281,19 @@ export class FftView {
     const colGap = 2 * charW;
     const mKeyL = 8 * charW, mValL = 14 * charW, mKeyR = 7 * charW;
     const mRight = xLeft + mKeyL + mValL + colGap;
-    this.drawKv(g, xLeft, y, mKeyL, 'IMDpwr:', `${imd.imdPwrPct.toFixed(8)} %`,
-        mRight, mKeyR, 'TD+N:', `${imd.tdnPct.toFixed(8)} %`, plain);
+    this.drawKv(g, xLeft, y, mKeyL, 'IMDpwr:', this._imdPctText(imd.imdPwrPct),
+        mRight, mKeyR, 'TD+N:', this._imdPctText(imd.tdnPct), plain);
     y += lineH;
-    this.drawKv(g, xLeft, y, mKeyL, 'DFD2:', `${imd.dfd2Pct.toFixed(8)} %`,
-        mRight, mKeyR, 'DFD3:', `${imd.dfd3Pct.toFixed(8)} %`, plain);
+    this.drawKv(g, xLeft, y, mKeyL, 'DFD2:', this._imdPctText(imd.dfd2Pct),
+        mRight, mKeyR, 'DFD3:', this._imdPctText(imd.dfd3Pct), plain);
     y += lineH + 2;
 
     // ── dnL / dnH sidebands, two per row. ───────────────────────────────────
     const dKey = 5 * charW, dVal = 26 * charW;
     const dRight = xLeft + dKey + dVal + colGap;
     for (let k = 2; k <= IMD_MAX_ORDER; k++) {
-      const lKey = `d${k}L:`, lVal = `${imd.dnLDbV[k].toFixed(2)} dBV  ${imd.dnLPct[k].toFixed(8)} %`;
-      const rKey = `d${k}H:`, rVal = `${imd.dnHDbV[k].toFixed(2)} dBV  ${imd.dnHPct[k].toFixed(8)} %`;
+      const lKey = `d${k}L:`, lVal = this._imdRowText(imd.dnLDbV[k], imd.dnLPct[k]);
+      const rKey = `d${k}H:`, rVal = this._imdRowText(imd.dnHDbV[k], imd.dnHPct[k]);
       this.drawKv(g, xLeft, y, dKey, lKey, lVal, dRight, dKey, rKey, rVal, plain);
       y += lineH;
     }

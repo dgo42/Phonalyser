@@ -41,7 +41,7 @@ import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.FreqRespCalibration;
 import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.Dialogs;
@@ -63,7 +63,7 @@ import lombok.extern.log4j.Log4j2;
  * Next / Back / Cancel flow common to installer dialogs.
  *
  * <p>Cancellation discards every measurement taken inside the wizard and
- * restores the {@link FreqRespCorrectionStore} to whatever snapshot it
+ * restores the {@link CorrectionStore} to whatever snapshot it
  * was at the moment {@link #open()} ran.  An "are you sure?" ack-confirm
  * fires on cancel whenever any of the three pages has captured fresh
  * data, regardless of which page the cancel was clicked from.
@@ -73,7 +73,7 @@ public final class FreqRespWizardDialog {
 
     private final Shell        parentShell;
     private final FreqRespView hostView;
-    private final FreqRespCorrectionStore.Snapshot preWizardSnapshot;
+    private final CorrectionStore.Snapshot preWizardSnapshot;
 
     private Shell      dialog;
     private StackLayout stack;
@@ -396,7 +396,7 @@ public final class FreqRespWizardDialog {
                 FreqRespCalHelper.divideInPlace(stereoCal.right(), direct.right());
             }
             FreqRespSweepParams p = dutResult.left().getSweepParams();
-            FreqRespCalHelper.saveCsv(stereoCal,
+            FreqRespCalHelper.saveFrc(stereoCal,
                     picked, dutResult.left().getSampleRate(),
                     p.getStartHz(), p.getStopHz(), p.getSweepPoints(),
                     p.getAmplitudeVrms());
@@ -419,7 +419,7 @@ public final class FreqRespWizardDialog {
     private void doApplyCalibration() {
         if (savedCalPath == null) return;
         try {
-            StereoFreqRespCalibration cal = FreqRespCalHelper.loadCsv(savedCalPath);
+            StereoFreqRespCalibration cal = FreqRespCalHelper.loadFrc(savedCalPath);
             hostView.getCorrectionStore().setCurrent(cal, savedCalPath);
             Preferences prefs = Preferences.instance();
             prefs.setFreqRespPrimaryCalibrationPath(savedCalPath);

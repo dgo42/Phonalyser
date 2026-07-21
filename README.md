@@ -14,9 +14,17 @@ averaging and bit-exact playback/capture.
   averaging, selectable windows, and live calibration (`.frc`).
 - **Ultra-low-distortion measurements** — sub-ppm THD with a capable ADC/DAC
   (e.g. E1DA Cosmos), coherent averaging to pull the noise floor down.
-- **Oscilloscope** — triggered time-domain view with Vpp/Vrms/period/frequency stats.
-- **Frequency response** — log-sweep / multitone with deconvolution and calibration.
-- **Signal generator** — sine, dual-tone (IMD), sweep, DDS.
+- **Oscilloscope** — triggered time-domain view with Vpp/Vrms/period/frequency
+  stats, digital-phosphor persistence, glitch trigger, and a **residual view**
+  (captured signal minus a best-fit tone — single or dual — exposing the
+  distortion, noise and glitches hidden under the fundamental).
+- **Frequency response** — Farina log-sweep deconvolution with `.frc`
+  calibration, **RIAA/IEC and ideal-filter overlays** (low/high/band-pass,
+  notch × Butterworth, Chebyshev, inverse Chebyshev, elliptic, Bessel) with
+  measured-vs-ideal compare, and a **band-flatness readout** (−X dB corners
+  or ± deviation over a range).
+- **Signal generator** — sine, dual-tone (IMD), rectangle / triangle, noise,
+  sweeps — all DDS-generated.
 - **DAC pre-distortion calibration** — a closed-loop wizard that iteratively
   cancels the converter's own harmonics (and dual-tone IMD), pushing the
   playback chain's distortion far below what the DAC produces alone.
@@ -24,7 +32,12 @@ averaging and bit-exact playback/capture.
   a continuously looping sweep tracks the null in real time so you can walk it
   onto the target frequency, then de-embed the notch's response from the FFT.
 - **Multi-backend audio** — WASAPI & WDM-KS (Windows), CoreAudio (macOS),
-  JavaSound (Linux); high sample rates and 16/24/32-bit.
+  JavaSound (Linux), plus a direct **QA40x** (QuantAsylum QA402/QA403) USB
+  backend; high sample rates and 16/24/32-bit.
+- **Per-card calibration** — full-scale calibration follows the physical card
+  across backends via name aliases, with a range table per attenuator / DIP
+  position; the crosshair calibrations write straight into the card's active
+  range.
 
 ![Ultra-low-distortion FFT](doc/screenshots/fft-ultralow-thd.png)
 
@@ -77,6 +90,36 @@ direct (non‑Store) downloads would need a paid code‑signing certificate, whi
 only becomes worthwhile once there's a steady download volume (a certificate's
 SmartScreen reputation builds with downloads regardless).
 
+## QA40x on Linux (USB access)
+
+Linux grants raw USB access per device, so opening a QuantAsylum QA402/QA403
+fails with `libusb_open failed: LIBUSB_ERROR_ACCESS (-3)` until a udev rule
+allows it. The **`.deb` installer sets this up automatically**; when running
+the platform JAR (or any other install), configure it once by hand:
+
+1. Create `/etc/udev/rules.d/70-qa40x.rules` (as root) with:
+
+   ```
+   SUBSYSTEM=="usb", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="4e37", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+   SUBSYSTEM=="usb", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="4e39", TAG+="uaccess", MODE="0660", GROUP="plugdev"
+   ```
+
+   (`16c0:4e37` = QA402, `16c0:4e39` = QA403. The hex must stay lowercase —
+   udev matches are literal. The same file ships in the source tree at
+   `src/main/jpackage/linux/70-qa40x.rules`.)
+
+2. Reload the rules and replug the analyzer:
+
+   ```
+   sudo udevadm control --reload-rules
+   sudo udevadm trigger
+   ```
+
+`TAG+="uaccess"` covers desktop sessions on any systemd distro; the
+`plugdev` group is the Debian/Ubuntu fallback (add yourself with
+`sudo usermod -aG plugdev $USER` and re‑login). On distros without a
+`plugdev` group, replace `MODE="0660", GROUP="plugdev"` with `MODE="0666"`.
+
 ## Preferences & log place
 
 Phonalyser never writes inside its install directory (a packaged `.app`,
@@ -87,7 +130,7 @@ the per-user location for each OS:
 |----|-------------|------|
 | **Windows** | `%APPDATA%\Phonalyser\` | `%APPDATA%\Phonalyser\logs\` |
 | **macOS** | `~/Library/Application Support/Phonalyser/` | `~/Library/Application Support/Phonalyser/logs/` |
-| **Linux** | `$XDG_CONFIG_HOME/Phonalyser` (or `~/.config/Phonalyser`) | `/var/log/phonalyser` when writable, otherwise `…/Phonalyser/logs` |
+| **Linux** | `~/.config/Phonalyser` | `/var/log/phonalyser` when writable, otherwise `~/.config/Phonalyser/logs` |
 
 Override the base directory with `-Dapp.data.dir=<path>`.
 
@@ -102,9 +145,9 @@ built-in text. After an app upgrade, delete the dir to re-seed the new version.
 |----|-------------------|------------|
 | **Windows** | `%APPDATA%\Phonalyser\i18n\` | `%APPDATA%\Phonalyser\help\` |
 | **macOS** | `~/Library/Application Support/Phonalyser/i18n/` | `~/Library/Application Support/Phonalyser/help/` |
-| **Linux** | `$XDG_CONFIG_HOME/Phonalyser/i18n` | `$XDG_CONFIG_HOME/Phonalyser/help` |
+| **Linux** | `~/.config/Phonalyser/i18n` | `~/.config/Phonalyser/help` |
 
-(On Linux `$XDG_CONFIG_HOME` defaults to `~/.config`.) UI strings are
+UI strings are
 `messages_<lang>.properties` (e.g. `messages_de.properties`); help pages live
 under `help/<lang>/`.
 

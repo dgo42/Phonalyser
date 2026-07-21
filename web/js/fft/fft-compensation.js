@@ -22,6 +22,10 @@ import { ToneLobeLift } from '../dsp/tone-lobe-lift.js';
  *  power-domain proportional scale), mirroring the Java static LOBE. */
 const LOBE = new ToneLobeLift();
 
+/** Highest intermod order whose dual-tone products get their lobes de-embedded,
+ *  mirroring FreqRespCalHelper.MAX_IMD_ORDER (= ImdResult.MAX_ORDER = 5). */
+const MAX_IMD_ORDER = 5;
+
 /**
  * Mutates `r` in place: divides every FFT bin (within the swept range) by H(f)
  * interpolated from the per-point filter calibration, then calls
@@ -80,6 +84,35 @@ export function applyCompensationInPlace(r, cal, correctAllBins, analyzer) {
     // Second tone (dual-tone) is a fundamental, not a harmonic of F1.
     if (!Number.isNaN(r.fundamental2HzRefined) && r.fundamental2HzRefined > 0.0) {
       correctToneLobe(r, cal, r.fundamental2HzRefined, half, binWidth, linPerMag, fLo, fHi, done);
+      // Dual-tone intermod PRODUCTS are discrete tones too (like the harmonics),
+      // so correcting only their lobes leaves the noise between them un-lifted —
+      // the whole-spectrum divide stays the "with noise" mode's job. The product
+      // set is derived exactly as gui.fft.ImdAnalyzer does (its dnL/dnH loop,
+      // orders k = 2..MAX_IMD_ORDER = 5); the CCIF/DIN formulas are replicated
+      // here as in Java (FreqRespCalHelper.applyCompensationInPlace, product
+      // loop after the fundamental2 block):
+      //   d2L = f2 − f1,               d2H = f1 + f2
+      //   dnL = (n−1)·f1 − (n−2)·f2,   dnH = (n−1)·f2 − (n−2)·f1  (n ≥ 3)
+      // correctToneLobe skips non-positive, out-of-cal-range or Nyquist-exceeding
+      // tones (same guards ImdAnalyzer.readBinVrms applies).
+      // Sort the refined pair so f1 = lower / f2 = higher: the refined values
+      // may arrive in analyzer-slot order (slot 1 = the HIGHER tone when tones
+      // were entered high-first), and the unsorted pair would flip dnL/dnH so
+      // the real f2−f1 difference product goes negative and gets skipped.
+      const f1 = Math.min(r.fundamentalHzRefined, r.fundamental2HzRefined);
+      const f2 = Math.max(r.fundamentalHzRefined, r.fundamental2HzRefined);
+      for (let k = 2; k <= MAX_IMD_ORDER; k++) {
+        let fL, fH;
+        if (k === 2) {
+          fL = f2 - f1;                        // difference
+          fH = f2 + f1;                        // sum
+        } else {
+          fL = (k - 1) * f1 - (k - 2) * f2;
+          fH = (k - 1) * f2 - (k - 2) * f1;
+        }
+        correctToneLobe(r, cal, fL, half, binWidth, linPerMag, fLo, fHi, done);
+        correctToneLobe(r, cal, fH, half, binWidth, linPerMag, fLo, fHi, done);
+      }
     }
   }
 

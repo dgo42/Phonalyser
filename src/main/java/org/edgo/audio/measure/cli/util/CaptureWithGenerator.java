@@ -21,6 +21,7 @@ package org.edgo.audio.measure.cli.util;
 import lombok.experimental.UtilityClass;
 import lombok.extern.log4j.Log4j2;
 import org.edgo.audio.measure.adc.WeightedBuffer;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
 import org.edgo.audio.measure.sound.AudioBackend;
 import org.edgo.audio.measure.sound.AudioCapture;
@@ -141,6 +142,7 @@ public class CaptureWithGenerator {
      */
     public StereoSamples runStereo(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
                                    int sampleRate, int bitDepth, int ditherBits,
+                                   OutputChannels outputChannels,
                                    int duration, WeightedBuffer weights,
                                    int syncPauseSec,
                                    BooleanSupplier cancelToken,
@@ -158,6 +160,11 @@ public class CaptureWithGenerator {
 
         AudioPlayback audioGen = AudioBackend.instance().openPlayback(outDevice, sampleRate, bitDepth, ditherBits);
         audioGen.open();
+        // Gate the played sweep to the selected DAC lane(s) — LEFT / RIGHT write
+        // digital silence to the un-driven lane at the quantizer's
+        // stereo-interleave seam; BOTH drives both (legacy).  The sweep never
+        // scales lanes — calibration enters only in the deconvolution math.
+        audioGen.setOutputChannels(outputChannels);
 
         Thread genThread = new Thread(() -> {
             try {

@@ -18,15 +18,19 @@
 
 package org.edgo.audio.measure.gui.scope.gl;
 
+import org.eclipse.swt.graphics.ImageData;
+import org.eclipse.swt.graphics.PaletteData;
 import org.edgo.audio.measure.enums.Channel;
 import org.edgo.audio.measure.enums.TriggerEdge;
 import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.enums.TriggerType;
 import org.edgo.audio.measure.gui.common.NvgMeasurementPainter;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.lwjgl.BufferUtils;
 import org.lwjgl.nanovg.NVGColor;
 import org.lwjgl.nanovg.NVGPaint;
 import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL14;
 import org.lwjgl.opengl.GL30;
 import org.lwjgl.system.MemoryStack;
 
@@ -221,6 +225,52 @@ final class ScopePhosphor {
         return true;
     }
 
+    /**
+     * Reads the accumulated afterglow (the current trace + its decayed history — the
+     * TRACE layer only, on a transparent background) back into an SWT {@link ImageData}
+     * so the built-in screenshot, which renders through the CPU/GC path and never touches
+     * this GPU buffer, can composite the very same persistence the live canvas shows.
+     * Must be called with the owning GL context current (the surface makes it so).
+     * Returns {@code null} when nothing is accumulated (persistence off / not yet
+     * rendered) so the screenshot falls back to the plain trace and stays byte-identical
+     * to a persistence-off capture.
+     *
+     * <p>Two conversions bridge the GL buffer to SWT: (1) GL's framebuffer origin is
+     * bottom-left, so image row {@code y} reads framebuffer row {@code fboH-1-y};
+     * (2) NanoVG accumulates premultiplied, so each texel's colour is divided back out by
+     * its alpha, giving straight-alpha pixels whose source-over ({@code out = rgb·a +
+     * dst·(1-a)}) reproduces the GL premultiplied source-over the screen uses.
+     */
+    ImageData readback() {
+        if (phosphorFbo == 0 || !haveLastAccum || fboW <= 0 || fboH <= 0) return null;
+        ByteBuffer px = BufferUtils.createByteBuffer(fboW * fboH * 4);
+        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, phosphorFbo);
+        GL11.glReadPixels(0, 0, fboW, fboH, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, px);
+        GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
+
+        ImageData data = new ImageData(fboW, fboH, 24, new PaletteData(0xFF0000, 0x00FF00, 0x0000FF));
+        byte[] alpha = new byte[fboW * fboH];
+        for (int y = 0; y < fboH; y++) {
+            int srcRow = (fboH - 1 - y) * fboW * 4;   // flip GL bottom-up rows to top-down
+            for (int x = 0; x < fboW; x++) {
+                int i = srcRow + x * 4;
+                int r = px.get(i)     & 0xFF;
+                int g = px.get(i + 1) & 0xFF;
+                int b = px.get(i + 2) & 0xFF;
+                int a = px.get(i + 3) & 0xFF;
+                if (a != 0 && a != 255) {              // un-premultiply
+                    r = Math.min(255, r * 255 / a);
+                    g = Math.min(255, g * 255 / a);
+                    b = Math.min(255, b * 255 / a);
+                }
+                data.setPixel(x, y, (r << 16) | (g << 8) | b);
+                alpha[y * fboW + x] = (byte) a;
+            }
+        }
+        data.alphaData = alpha;
+        return data;
+    }
+
     /** Frees the framebuffers / textures / images.  Call with the GL context current. */
     void release() {
         if (scratchImg  != 0) { nvgDeleteImage(vg, scratchImg);  scratchImg  = 0; }
@@ -250,21 +300,35 @@ final class ScopePhosphor {
     }
 
     /** New captured frame: decay the phosphor by {@code exp(-dt/tau)} (skipped for the
-     *  first frame and for infinite persistence) then composite the scratch trace into it. */
+     *  first frame and for infinite persistence) then merge the scratch trace into it
+     *  <b>brightest-wins</b> (per-component max).  Source-over would re-composite the
+     *  trace's anti-aliased fringe pixels over themselves on every new frame, converging
+     *  them to full opacity — the persisted trace turned solid-edged and fat.  Under max,
+     *  a fringe pixel can never exceed its single-frame coverage, so the persisted trace
+     *  keeps exactly the anti-aliasing of a persistence-off frame while decayed history
+     *  fades underneath.  NanoVG offers no max composite op, but it also never touches
+     *  the GL <i>blend equation</i> (only the factors, which {@code GL_MAX} ignores) —
+     *  so the deposit blit runs in its own NanoVG frame bracketed by
+     *  {@code glBlendEquation(GL_MAX)} / restore {@code GL_FUNC_ADD}. */
     private void accumulate(double persistSeconds) {
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, phosphorFbo);
         GL11.glViewport(0, 0, pixelW, pixelH);
-        nvgBeginFrame(vg, logicalW, logicalH, pixelRatio);
-        painter.reset(logicalW, logicalH, pixelRatio);
         long now = System.nanoTime();
         if (persistSeconds > 0.0 && haveLastAccum) {
             double dt   = Math.min((now - lastAccumNanos) * 1e-9, MAX_DECAY_SECONDS);
             float  fade = (float) (1.0 - Math.exp(-dt / persistSeconds));
+            nvgBeginFrame(vg, logicalW, logicalH, pixelRatio);
+            painter.reset(logicalW, logicalH, pixelRatio);
             decay(fade);
+            nvgEndFrame(vg);
         }
         // (Infinite persistence, persistSeconds < 0: never decay — just keep accumulating.)
+        GL14.glBlendEquation(GL14.GL_MAX);
+        nvgBeginFrame(vg, logicalW, logicalH, pixelRatio);
+        painter.reset(logicalW, logicalH, pixelRatio);
         blitImage(scratchImg);
         nvgEndFrame(vg);
+        GL14.glBlendEquation(GL14.GL_FUNC_ADD);
         GL30.glBindFramebuffer(GL30.GL_FRAMEBUFFER, 0);
         lastAccumNanos = now;
         haveLastAccum  = true;

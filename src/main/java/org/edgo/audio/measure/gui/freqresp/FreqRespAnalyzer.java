@@ -110,6 +110,7 @@ public final class FreqRespAnalyzer {
         StereoSamples rec = cfg.getStereoCaptureProvider().captureWithProgress(
                 gen, cfg.getOutDevice(), cfg.getInDevice(),
                 cfg.getSampleRate(), cfg.getBitDepth(), cfg.getDitherBits(),
+                cfg.getOutputChannels(),
                 durationSec,
                 cancel == null ? null : cancel::isCancelled,
                 cfg.getCaptureProgress());

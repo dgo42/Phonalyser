@@ -255,7 +255,12 @@
 
   <h3 id="fft-thd-snr">SNR</h3>
   <p>Signal-to-noise ratio in dB.  Defined against the noise-only
-     band (above).</p>
+     band (above): the fundamental, its harmonics, <em>and</em> the
+     fundamental's leakage skirt are kept out of the noise sum — the skirt
+     exclusion widens to follow a broad or phase-noisy tone down to the floor,
+     so it never flatters the figure (see
+     <a href="theory/fft.html#metrics">Theory &#9656; Distortion &amp; noise
+     metrics</a>).</p>
 
   <h3 id="fft-thd-thd">THD H2..N</h3>
   <p>Total harmonic distortion as a percentage of the fundamental,
@@ -359,6 +364,18 @@
      ignored when the generator isn't running.  See
      <a href="theory/fft.html">Theory ▸ FFT analyser</a>.</p>
 
+  <h4 id="fft-align-generator">Align generator</h4>
+  <p>Combo — <b>None</b> or <b>FLL</b>.  It steers the generator onto the exact
+     centre of the FFT bin the fundamental falls in: <b>None</b> leaves the tone
+     free, while <b>FLL</b> closes a frequency-lock loop that trims the generator
+     until the tone sits dead on the bin.  It needs both
+     <a href="generator.html#generator-snap-fft-bin">snap-to-bin</a> and
+     <a href="#fft-fund-from-gen">Get fundamental from generator</a> switched on.
+     Because the lock nudges the tone's frequency, the fundamental level can shift a
+     little as it pulls in — a banner warns when it does, and the pre-alignment
+     frames already in the running average are best cleared with
+     <a href="#fft-reset">Reset</a> for a clean average.</p>
+
   <h4 id="fft-mains-suppression">Mains suppression</h4>
   <p>Combo — <b>None</b> or <b>IIR comb</b>.  The comb pre-filters the captured
      signal <em>before</em> averaging with a frequency-tracked IIR comb locked
@@ -383,7 +400,12 @@
      is discarded and the capture re-syncs — the same detector that drives the
      oscilloscope's glitch trigger (see
      <a href="theory/fft.html#rejection">Theory ▸ keeping bad blocks out of the
-     average</a>).</p>
+     average</a>).  Because the recurrence depends on the tone's period, not its
+     level, the guard is <b>amplitude-independent by design</b>: it flags a jump
+     faster than the tone allows — a real capture splice or a generator pause — at
+     any signal level, discarding just that one averaging window, while a merely
+     low-level but continuous tone is left to average normally, so long averages
+     stay clean.</p>
   <p><b>Uncheck it for a small or non-sinusoidal signal.</b>  A weak (low-SNR)
      or deliberately non-sine waveform breaks the sinusoid-recurrence prediction
      on <em>every</em> block, so the gate would reject them all and no spectrum
@@ -449,8 +471,23 @@
      scaled-up bitmap.</p>
 
   <h4 id="fft-utility-calibrate">ADC calibration</h4>
-  <p>Opens the ADC calibration dialog (the same one reached from the scope) to
-     anchor the dBV / V scale against a known input level.</p>
+  <p>Opens the shared
+     <a href="oscilloscope.html#scope-utility-calibrate">ADC calibration dialog</a>
+     to anchor the dBV / V scale against a known input level (units <code>nV</code> /
+     <code>µV</code> / <code>mV</code> / <code>V</code>).  On a stereo card it offers
+     a Left and a Right row, but only the row for the channel being analyzed is
+     enabled — the FFT calibrates one channel at a time — and it writes only that
+     channel's active range; the other row is disabled and empty.  A Mono card shows
+     a single row.</p>
+  <div class="note"><b>Windows volume is part of the calibration.</b>  Set the
+     Windows sound-settings volume for this device to <b>100</b> and never move it
+     again once calibrated: exclusive-mode WASAPI and WDM-KS bypass the software
+     mixer, but on many USB interfaces that slider still programs the device's
+     <em>internal hardware</em> volume, so nudging it afterwards silently rescales
+     the full-scale you measured.  <b>Exception:</b> a card that uses the slider
+     position to switch modes — the <b>E1DA Cosmos</b> above position 49 ties its
+     channels (right is the main input, left carries the same signal 6&nbsp;dB lower)
+     — must sit at the position its mode requires, kept fixed.</div>
 
   <h3 id="fft-tab-calibration">Load calibration… tab</h3>
   <p><img src="img/FFT - Load calibration.png" alt="Load calibration tab"/></p>

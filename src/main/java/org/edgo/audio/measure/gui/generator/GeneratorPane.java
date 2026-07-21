@@ -39,11 +39,15 @@ import org.eclipse.swt.widgets.FileDialog;
 import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.GenSignalForm;
+import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractPane;
+import org.edgo.audio.measure.gui.common.CalibrationDialog;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.FftBinSnap;
 import org.edgo.audio.measure.gui.common.Icon;
@@ -53,6 +57,7 @@ import org.edgo.audio.measure.gui.widgets.NumericStepField;
 import org.edgo.audio.measure.gui.widgets.PaneTitle;
 import org.edgo.audio.measure.gui.widgets.SignalFormCombo;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.Getter;
@@ -99,9 +104,6 @@ public final class GeneratorPane extends AbstractPane {
     /** Amplitude floor (Vrms) — keeps log-unit (dBV) entry finite. */
     private static final double AMP_MIN_VRMS = 1e-9;
 
-    /** Current dither values shown in the combo (rebuilt when output bit depth changes). */
-    private int[] ditherBits;
-
     private final SignalFormCombo formCombo;
     private final Label           freqLabel;
     private final NumericStepField freqField;
@@ -139,7 +141,17 @@ public final class GeneratorPane extends AbstractPane {
      *  single-tone Frequency label. */
     private Label                 dualToneFreq1Label;
     private Label                 dualToneFreq2Label;
-    private final Combo           ditherCombo;
+    /** Dither depth entry — bits or a full-scale-aware dBV view of the same
+     *  value; the OTHER unit is appended to {@link #ditherLabel} in brackets. */
+    private final NumericStepField ditherField;
+    /** "Dither" caption — held so {@link #updateDitherLabel} can append the
+     *  other-unit readout in brackets (mirrors {@link #freqLabel}). */
+    private final Label           ditherLabel;
+    /** Output-channel selector (Both / Left / Right) in the header row — gates
+     *  which DAC lane carries the generated signal.  READ_ONLY enum combo bound
+     *  to {@code Preferences#genOutputChannelsProperty()} in the dither-combo
+     *  style; the controller pushes the selection to the live encoder. */
+    private final Combo           outputChannelCombo;
     private final Text            correctionsField;
     private Button                corrBrowseBtn;
     private Button                corrClearBtn;
@@ -247,7 +259,7 @@ public final class GeneratorPane extends AbstractPane {
         // output device; both fade to grey when nothing is playing.
         // See {@link #startOnAirBlink} / {@link #stopOnAirBlink}.
         Composite formAndAirRow = new Composite(group, SWT.NONE);
-        GridLayout farGl = new GridLayout(3, false);  // label | LED | "ON AIR"
+        GridLayout farGl = new GridLayout(4, false);  // label | output-channel combo | LED | "ON AIR"
         farGl.marginWidth  = 0;
         farGl.marginHeight = 0;
         farGl.horizontalSpacing = 6;
@@ -257,6 +269,18 @@ public final class GeneratorPane extends AbstractPane {
         Label formLabel = new Label(formAndAirRow, SWT.NONE);
         formLabel.setText(I18n.t("generator.signalForm"));
         formLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, true, false));
+
+        // Output-channel selector (Both / Left / Right).  READ_ONLY enum combo in
+        // the dither-combo style, sat between the form caption and the ON-AIR
+        // status so it reads as "which lane is on air".  Item order matches the
+        // OutputChannels ordinals {BOTH, LEFT, RIGHT} for the ordinal bind.
+        outputChannelCombo = new Combo(formAndAirRow, SWT.READ_ONLY);
+        outputChannelCombo.add(I18n.t("common.channel.both"));
+        outputChannelCombo.add(I18n.t("common.channel.left"));
+        outputChannelCombo.add(I18n.t("common.channel.right"));
+        outputChannelCombo.setToolTipText(I18n.t("generator.outputChannel.tooltip"));
+        outputChannelCombo.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false));
+        Bindings.combo(outputChannelCombo, prefs.genOutputChannelsProperty(), OutputChannels.values());
 
         onAirRedColor    = new Color(group.getDisplay(), 0xFF, 0x00, 0x00);
         onAirRedDimColor = new Color(group.getDisplay(), 0xAA, 0x00, 0x00);
@@ -575,21 +599,50 @@ public final class GeneratorPane extends AbstractPane {
         updateDutyFieldEnabled(initialForm);
 
         // ------------------------------------------------------------ Dither
-        // Cap the dither options at the current output bit depth (16 / 24 /
-        // 32 typically) — dither values higher than the DAC's resolution
-        // are meaningless.  Rebuild the list right before each dropdown so
-        // a bit-depth change in Preferences (made after the pane was
-        // constructed) is picked up the next time the user opens the combo.
-        addRowLabel(group, I18n.t("generator.dither"));
-        ditherCombo = new Combo(group, SWT.READ_ONLY);
-        ditherBits  = ditherBitsFor(prefs.current().getOutputBitDepth());
-        rebuildDitherCombo(prefs.getGenDitherBits());
-        ditherCombo.setLayoutData(fillH());
-        ditherCombo.setToolTipText(I18n.t("generator.dither.tooltip"));
-        ditherCombo.addListener(SWT.MouseDown, e -> refreshDitherList());
-        ditherCombo.addListener(SWT.FocusIn,   e -> refreshDitherList());
-        ditherCombo.addListener(SWT.Selection, e ->
-                prefs.setGenDitherBits(ditherBits[ditherCombo.getSelectionIndex()]));
+        // A standard numeric field (like the amplitude field): the user
+        // enters/sees the dither depth as whole/fractional bits OR a
+        // full-scale-aware dBV VIEW of the same value (0 = Off, capped at the
+        // output bit depth).  The OTHER unit is appended to the "Dither"
+        // caption in brackets — exactly like the corrected frequency on the
+        // Frequency caption — and tracks the live DAC full-scale.  Off sits at
+        // the top of the range.  The caption is a field so updateDitherLabel()
+        // can re-annotate it.
+        ditherLabel = new Label(group, SWT.NONE);
+        ditherLabel.setText(I18n.t("generator.dither"));
+        ditherLabel.setLayoutData(fillH());
+        ditherField = new NumericStepField(group, UnitFamily.DITHER,
+                prefs.current().getOutputBitDepth(), prefs::getDacFsVoltageAmpl,
+                () -> prefs.getFftWindow().enbw(), 160);
+        ditherField.setLayoutData(fillH());
+        ditherField.setToolTipText(I18n.t("generator.dither.tooltip"));
+        // Seed value + display unit BEFORE wiring the listener so the seed
+        // doesn't re-enter the pref write / signal path.
+        ditherField.setValue(prefs.getGenDitherBits());
+        ditherField.setLogDisplay(prefs.isGenDitherDbvDisplay());
+        // On a committed change, write the bit count (the existing genDitherBits
+        // → GeneratorController.setDitherBits → publishSignalChanged path is
+        // unchanged), persist the bits/dBV display choice, and re-annotate the
+        // caption with the other-unit readout.
+        ditherField.addSelectionListener(e -> {
+            prefs.setGenDitherBits(ditherField.getValue());
+            prefs.setGenDitherDbvDisplay(ditherField.isLogDisplay());
+            updateDitherLabel();
+        });
+        // A DAC recalibration or an FFT-window change shifts how the dither
+        // reads on the FFT floor.  reanchor() HOLDS the entered value: in the dBV
+        // view it keeps the shown dBV and re-solves the bits so the FFT-floor
+        // target is maintained under the new full-scale / window; in the bits
+        // view it keeps the bits and only the dBV readout moves.  When the bits
+        // re-solve, persist them — that restarts the generator via the usual
+        // genDitherBits path — then re-annotate the caption.
+        Bindings.onChange(group, prefs.dacFsVoltageAmplProperty(), v -> {
+            if (ditherField.reanchor()) prefs.setGenDitherBits(ditherField.getValue());
+            updateDitherLabel();
+        });
+        Bindings.onChange(group, prefs.fftWindowProperty(), w -> {
+            if (ditherField.reanchor()) prefs.setGenDitherBits(ditherField.getValue());
+            updateDitherLabel();
+        });
 
         // ------------------------------------------------------- Corrections
         addRowLabel(group, I18n.t("generator.corrections"));
@@ -818,6 +871,12 @@ public final class GeneratorPane extends AbstractPane {
             dualToneFreq2Field.setMax(nyquist);
             sweepStartField.setMax(nyquist);
             sweepEndField.setMax(nyquist);
+            // Output bit depth is part of the audio format — it caps the dither
+            // range (setMax re-clamps and echoes a clamped bit count back to the
+            // pref) and shifts the dBV view; refresh the field + companion label.
+            ditherField.setMax(Preferences.instance().current().getOutputBitDepth());
+            ditherField.refresh();
+            updateDitherLabel();
         };
         bus.subscribe(Events.AUDIO_FORMAT_CHANGED, audioFormatListener);
 
@@ -843,6 +902,7 @@ public final class GeneratorPane extends AbstractPane {
         // saved form, if any.
         updateFreqLabel();
         updateDutyLabel();
+        updateDitherLabel();
 
         // The injected controller survives content rebuilds — when this
         // pane is a rebuilt instance the tone / file playback may already
@@ -871,7 +931,7 @@ public final class GeneratorPane extends AbstractPane {
         sweepLoopBtn       .setData("helpAnchor", "generator.html#generator-sweep-loop");
         ampField           .setData("helpAnchor", "generator.html#generator-amplitude");
         dutyField          .setData("helpAnchor", "generator.html#generator-duty");
-        ditherCombo        .setData("helpAnchor", "generator.html#generator-dither");
+        ditherField        .setData("helpAnchor", "generator.html#generator-dither");
         correctionsField   .setData("helpAnchor", "generator.html#generator-corrections");
         durationField      .setData("helpAnchor", "generator.html#generator-duration");
         wavPathField       .setData("helpAnchor", "generator.html#generator-save-to");
@@ -897,6 +957,11 @@ public final class GeneratorPane extends AbstractPane {
      *  dialog would hang an unattended run.  Callers can check
      *  {@link #isToneRunning()}. */
     public void startTone() {
+        // Automation no-audio gate: a help-screenshot run started with
+        // -Dphonalyser.automation.noAudio=true must never open an audio device,
+        // so this script-driven Play is a no-op.  A user Play-button click uses
+        // its own SWT.Selection handler and is unaffected.
+        if (Boolean.getBoolean("phonalyser.automation.noAudio")) return;
         controller.start();
         syncPlayButtonVisuals();
         syncFilePlayVisuals();
@@ -905,39 +970,64 @@ public final class GeneratorPane extends AbstractPane {
         }
     }
 
+    /** Which output engine was running when {@link #stopPlayForPrefs()} stopped
+     *  it, so {@link #startPlayForPrefs()} restarts exactly that one.  Owned here
+     *  — the caller does not track the pane's running state.  The DDS tone and
+     *  file playback share the output device and are mutually exclusive, so at
+     *  most one of these is set. */
+    private boolean ddsWasRunningForPrefs;
+    private boolean fileWasRunningForPrefs;
+
     /**
-     * Stops the DDS generator + file player ahead of an operation that
-     * mutates the audio backend (e.g. the Preferences dialog switching
-     * between WASAPI / WDM-KS / csjsound).  Returns a {@link Runnable}
-     * that restarts whichever of them was running before — call it once
-     * the disruptive operation completes.  If the user changed backend
-     * during the operation, the restart uses the new dispatch path.
+     * Stops the DDS generator / file player ahead of a Preferences audio-config
+     * change (e.g. switching backend between WASAPI / WDM-KS / csjsound / QA40x),
+     * remembering which one was playing.  Called BEFORE the new backend is
+     * committed — while the old backend is still active — so its output line
+     * closes cleanly instead of wedging the stop; pair with
+     * {@link #startPlayForPrefs()} after the commit.
      */
-    public Runnable pauseAroundDialog() {
-        boolean genWasRunning  = controller.isRunning();
-        boolean fileWasRunning = controller.isFilePlaying();
-        if (genWasRunning || fileWasRunning) {
+    public void stopPlayForPrefs() {
+        ddsWasRunningForPrefs  = controller.isRunning();
+        fileWasRunningForPrefs = controller.isFilePlaying();
+        if (ddsWasRunningForPrefs || fileWasRunningForPrefs) {
             stopOnAirBlink();
         }
         controller.stopEngines();
         syncPlayButtonVisuals();
         syncFilePlayVisuals();
-        return () -> {
-            if (genWasRunning) {
-                controller.start();
-                syncPlayButtonVisuals();
-                if (!controller.isRunning()) {
-                    String err = controller.getLastStartError();
-                    Dialogs.error(group.getShell(),
-                            I18n.t("generator.error.resume"),
-                            err != null ? err : I18n.t("generator.error.restartFailed"));
-                }
+    }
+
+    /**
+     * Restarts, on the newly-committed backend, whichever engine was playing
+     * when {@link #stopPlayForPrefs()} stopped it — the DDS tone, or WAV/FLAC
+     * file playback.  Both drive the selected output device, so a backend /
+     * device change disturbs either; file playback resumes from the same
+     * play-from path and loop flag held in the preferences.
+     */
+    public void startPlayForPrefs() {
+        if (ddsWasRunningForPrefs) {
+            controller.start();
+            syncPlayButtonVisuals();
+            if (!controller.isRunning()) {
+                String err = controller.getLastStartError();
+                Dialogs.error(group.getShell(),
+                        I18n.t("generator.error.resume"),
+                        err != null ? err : I18n.t("generator.error.restartFailed"));
             }
-            // File player isn't reopened automatically — it doesn't go
-            // through AudioBackend (uses default JavaSound line), so
-            // device enumeration didn't disturb it, and the user may
-            // have changed file/loop settings in the dialog anyway.
-        };
+        } else if (fileWasRunningForPrefs) {
+            Preferences prefs = Preferences.instance();
+            String path = prefs.getGenPlayFromPath();
+            if (path == null || path.isEmpty()) return;
+            controller.startFilePlayback(new File(path), prefs.isGenPlayFromLoop());
+            syncPlayButtonVisuals();
+            syncFilePlayVisuals();
+            if (!controller.isFilePlaying()) {
+                String err = controller.getFilePlayError();
+                Dialogs.error(group.getShell(),
+                        I18n.t("generator.error.playFile"),
+                        err != null ? err : I18n.t("common.error.fileOpenUnknown"));
+            }
+        }
     }
 
     /** Records the pane's current pixel width — called by the host
@@ -1019,19 +1109,69 @@ public final class GeneratorPane extends AbstractPane {
         Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
         if (parent == null) return;
         Preferences prefs = Preferences.instance();
+        if (prefs.isDacCalibrationFromDevice()) {
+            // Device-provided (QA40x): show the built-in output full-scale (Vrms) read-only.
+            double fsL = prefs.getDacFsVoltageAmpl(Channel.L) / Math.sqrt(2.0);
+            double fsR = prefs.getDacFsVoltageAmpl(Channel.R) / Math.sqrt(2.0);
+            new CalibrationDialog(parent, dacTexts(), fsL, fsR, true, (ch, v) -> { }).open();
+            return;
+        }
         final double configuredVrms = prefs.getGenAmplitudeVrms();
-        final double oldFs          = prefs.getDacFsVoltageAmpl();
-        new DacCalibrationDialog(parent, configuredVrms, measuredVrms -> {
-            // The DAC was commanded to output `configuredVrms` (computed
-            // against the OLD DAC full-scale) and the user measured `measuredVrms`
-            // at the output.  Output RMS scales linearly with FS, so the
-            // true FS satisfies measured/configured = FS_true/FS_old.
-            double newFs = oldFs * (measuredVrms / configuredVrms);
-            prefs.setDacFsVoltageAmpl(newFs);
-            // Writing the pref fires the dacFsVoltageRms binding, which recomputes
-            // the running generator's amplitude against the new full-scale — so the
+        final boolean stereo = isOutputBoundStereo(prefs);
+        // A stereo (LINKED / INDEPENDENT) card gets both rows, each prefilled with
+        // the single commanded amplitude (the generator drives both lanes from one
+        // amplitude), so each channel's measured output rescales its OWN DAC
+        // full-scale.  A MONO card or an unbound device is single-row (Left only) —
+        // the shared both-channels full-scale.  Output RMS scales linearly with FS,
+        // so the true FS satisfies measured/configured = FS_true/FS_old.
+        Double seedRight = stereo ? configuredVrms : null;
+        new CalibrationDialog(parent, dacTexts(), configuredVrms, seedRight, false, (ch, measuredVrms) -> {
+            if (stereo) {
+                double oldFs = prefs.getDacFsVoltageAmpl(ch);
+                double newFs = oldFs * (measuredVrms / configuredVrms);
+                prefs.storeDacCalibration(ch, newFs);
+            } else {
+                // MONO / unbound: shared both-channels full-scale (auto-creates the
+                // profile on first calibrate); also sets the FS scalar and persists.
+                double oldFs = prefs.getDacFsVoltageAmpl();
+                double newFs = oldFs * (measuredVrms / configuredVrms);
+                prefs.storeDacCalibration(newFs);
+            }
+            // The store fires the dacFsVoltageRms binding, which recomputes the
+            // running generator's amplitude against the new full-scale — so the
             // calibration takes effect immediately, without a restart.
         }).open();
+    }
+
+    /** The DAC-calibration wording (title, prompt keys, log tag) for the shared
+     *  {@link CalibrationDialog}. */
+    private CalibrationDialog.Texts dacTexts() {
+        return new CalibrationDialog.Texts("calibrate.dac.title",
+                "calibrate.dac.input", "calibrate.dac.input.tooltip", "DAC");
+    }
+
+    /** Capture support (help screenshots): builds the DAC calibration dialog in its
+     *  two-row (stereo) form with both channels prefilled at the configured amplitude
+     *  and shows it non-modally — no live measurement, no modal loop — returning it so
+     *  the automation can snapshot and dispose it.  The commit callback is a no-op:
+     *  the shot never presses Calibrate.  Mirrors {@link #openDacCalibrationDialog}. */
+    public CalibrationDialog openDacCalibrationForCapture() {
+        Shell parent = (group == null || group.isDisposed()) ? null : group.getShell();
+        if (parent == null) return null;
+        double vrms = Preferences.instance().getGenAmplitudeVrms();
+        CalibrationDialog dlg = new CalibrationDialog(parent, dacTexts(), vrms, vrms, false, (ch, v) -> { });
+        dlg.showForCapture();
+        return dlg;
+    }
+
+    /** True when the current backend's output device resolves to a bound card whose
+     *  output endpoint calibrates its two channels separately — every mode except
+     *  {@link DeviceChannelMode#MONO}.  A MONO card (one physical channel) or an
+     *  unbound device (no profile) keeps the single-row legacy flow. */
+    private boolean isOutputBoundStereo(Preferences prefs) {
+        AudioDeviceProfile p = prefs.resolveDeviceProfile(prefs.current().getOutputDeviceName());
+        return p != null && p.getOutput() != null
+                && p.getOutput().getChannels() != DeviceChannelMode.MONO;
     }
 
     // -------------------------------------------------------------------------
@@ -1040,7 +1180,7 @@ public final class GeneratorPane extends AbstractPane {
 
     /**
      * Refreshes the "Frequency" label text.  Appends a bracketed
-     * correction for forms that have one: RECTANGLE shows the
+     * correction for forms that have one: RECTANGLE and TRIANGLE show the
      * integer-sample-period frequency, SINE / compensated sine (when
      * "snap to FFT bin" is checked) show the FFT-bin-snapped frequency.
      * All other forms show plain "Frequency".
@@ -1048,8 +1188,8 @@ public final class GeneratorPane extends AbstractPane {
     private void updateFreqLabel() {
         GenSignalForm form = formCombo.getSelectedForm();
         String corrected = null;
-        if (form == GenSignalForm.RECTANGLE) {
-            corrected = formatLabelHz(controller.correctedRectangleHz());
+        if (form == GenSignalForm.RECTANGLE || form == GenSignalForm.TRIANGLE) {
+            corrected = formatLabelHz(controller.correctedPeriodAlignedHz());
         } else if ((form == GenSignalForm.SINE || form == GenSignalForm.SINE_COMP)
                    && fftSnapBtn.getSelection()) {
             corrected = formatLabelHz(controller.effectiveFrequency());
@@ -1060,18 +1200,17 @@ public final class GeneratorPane extends AbstractPane {
     }
 
     /**
-     * Refreshes the "Duty cycle" label text.  For RECTANGLE shows the
-     * one-sample-quantised duty the DDS will actually output; other
-     * forms hide the bracket (the field is also disabled in that case).
+     * Refreshes the "Duty cycle" label text.  For RECTANGLE and TRIANGLE
+     * shows the one-sample-quantised duty on the integer-sample period the
+     * DDS is driven at; other forms hide the bracket (the field is also
+     * disabled in that case).
      */
     private void updateDutyLabel() {
         GenSignalForm form = formCombo.getSelectedForm();
-        // Only RECTANGLE is sample-quantised: its +1/−1 step edge can land only
-        // ON a sample, so the emitted duty snaps to whole samples and the
-        // bracket shows the adapted value.  TRIANGLE uses real continuous-phase
-        // DDS (the samples ride the exact ramps, so the corner is sub-sample) —
-        // its duty is exact and gets the plain label, like the non-duty forms.
-        if (form != GenSignalForm.RECTANGLE) {
+        // RECTANGLE's +1/−1 step edge and TRIANGLE's duty corner both have to
+        // land ON a sample of the period-aligned grid (fs/N), so the emitted
+        // duty snaps to whole samples and the bracket shows the adapted value.
+        if (form != GenSignalForm.RECTANGLE && form != GenSignalForm.TRIANGLE) {
             dutyLabel.setText(I18n.t("generator.dutyCycle"));
             dutyLabel.getParent().layout();
             return;
@@ -1490,53 +1629,18 @@ public final class GeneratorPane extends AbstractPane {
     }
 
     /**
-     * Resolves the set of dither bit options for the given output bit
-     * depth: every integer from 0 to {@code outputBitDepth} inclusive.
-     * 0 is rendered as "Off" in the combo; values above the DAC's
-     * resolution would have no effect and are dropped.
+     * Refreshes the "Dither" caption: appends the dither value in the OTHER
+     * unit in brackets — dBV when the field shows bits, bits when it shows dBV
+     * — mirroring how {@link #updateFreqLabel} annotates the Frequency caption.
+     * Off shows the plain caption.  The dBV side tracks the live DAC full-scale,
+     * so this is re-run on calibration / output-format changes.
      */
-    private int[] ditherBitsFor(int outputBitDepth) {
-        int cap = Math.max(0, outputBitDepth);
-        int[] out = new int[cap + 1];
-        for (int i = 0; i <= cap; i++) out[i] = i;
-        return out;
-    }
-
-    /** Re-populates the dither combo with {@link #ditherBits} and selects {@code currentBits} (or 0 / "Off" if unavailable). */
-    private void rebuildDitherCombo(int currentBits) {
-        String[] items = new String[ditherBits.length];
-        for (int i = 0; i < ditherBits.length; i++) {
-            items[i] = ditherBits[i] == 0 ? "Off" : ditherBits[i] + " bits";
-        }
-        ditherCombo.setItems(items);
-        int sel = 0;
-        for (int i = 0; i < ditherBits.length; i++) {
-            if (ditherBits[i] == currentBits) { sel = i; break; }
-        }
-        ditherCombo.select(sel);
-    }
-
-    /**
-     * Refreshes the dither combo for a new output bit depth (e.g. after
-     * the user changes it in Preferences).  Re-selects the previous bit
-     * count if it still fits, otherwise falls back to "Off".
-     */
-    public void onOutputBitDepthChanged(int newOutputBitDepth) {
-        ditherBits = ditherBitsFor(newOutputBitDepth);
-        rebuildDitherCombo(Preferences.instance().getGenDitherBits());
-    }
-
-    /**
-     * Rebuilds the dither combo only when the cached output bit depth no
-     * longer matches the current preference — fired on mouse-down /
-     * focus-in so a change to output bit depth (made via Preferences after
-     * the pane was constructed) is reflected the next time the user
-     * touches the combo.
-     */
-    private void refreshDitherList() {
-        int currentDepth = Preferences.instance().current().getOutputBitDepth();
-        if (ditherBits.length == currentDepth + 1) return;     // unchanged
-        onOutputBitDepthChanged(currentDepth);
+    private void updateDitherLabel() {
+        String other = ditherField.companionText();
+        ditherLabel.setText(other.isEmpty()
+                ? I18n.t("generator.dither")
+                : I18n.t("generator.dither.bracket", other));
+        ditherLabel.getParent().layout();
     }
 
     private String nullToEmpty(String s) { return s == null ? "" : s; }

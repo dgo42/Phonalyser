@@ -16,6 +16,8 @@ import {
   loadHarmonics,
   loadIntermod,
   isDualToneCorrectionFile,
+  outputLaneGate,
+  tpdfNoise,
 } from '../../generator/dds-kernel.js';
 
 class DdsProcessor extends AudioWorkletProcessor {
@@ -29,6 +31,14 @@ class DdsProcessor extends AudioWorkletProcessor {
       amplitudeVRms: po.amplitudeVRms != null ? po.amplitudeVRms : 1.0,
       dacFsVoltageAmpl: po.dacFsVoltageAmpl != null ? po.dacFsVoltageAmpl : Math.sqrt(2.0),
     });
+    // Output-lane routing (the interleave seam — Java PcmQuantizer). Live-updatable
+    // via the port, like every other kernel tunable; the default 'BOTH' + 1.0 scale
+    // reproduces the pre-feature both-lanes-identical output.
+    this._outputChannels = po.outputChannels != null ? po.outputChannels : 'BOTH';
+    this._rightLaneScale = po.rightLaneScale != null ? po.rightLaneScale : 1.0;
+    // TPDF dither depth (bits, may be fractional; 0 = Off) applied LIVE to the mono sample before
+    // the per-lane scale — Java PcmQuantizer (the generator's live-tunable dither). Live-updatable.
+    this._ditherBits = po.ditherBits != null ? po.ditherBits : 0;
     this.port.onmessage = (e) => this._onMessage(e.data || {});
   }
 
@@ -79,6 +89,9 @@ class DdsProcessor extends AudioWorkletProcessor {
       }
     }
     if (d.clearCompensation) k.clearCompensation();
+    if (d.outputChannels != null) this._outputChannels = d.outputChannels;
+    if (d.rightLaneScale != null) this._rightLaneScale = d.rightLaneScale;
+    if (d.ditherBits != null) this._ditherBits = d.ditherBits;
   }
 
   process(_inputs, outputs) {
@@ -86,9 +99,27 @@ class DdsProcessor extends AudioWorkletProcessor {
     if (!out || out.length === 0) return true;
     const n = out[0].length;
     const k = this._kernel;
+    // Interleave seam: write both lanes explicitly (this is why the node is opened
+    // outputChannelCount [2] — a single mono lane up-mixed by the destination cannot
+    // express per-lane values). Mirrors PcmQuantizer.encode: left lane = sample unless
+    // gated to RIGHT, right lane = sample*rightLaneScale unless gated to LEFT, the
+    // un-selected lane digital zero. Gate hoisted once per block (no per-sample alloc).
+    const { wantL, wantR } = outputLaneGate(this._outputChannels);
+    const scaleR = this._rightLaneScale;
+    const dither = this._ditherBits;
     const ch0 = out[0];
-    for (let i = 0; i < n; i++) ch0[i] = k.nextSample();
-    for (let c = 1; c < out.length; c++) out[c].set(ch0); // same signal on all channels
+    const ch1 = out.length > 1 ? out[1] : null;
+    for (let i = 0; i < n; i++) {
+      // TPDF dither added to the mono sample BEFORE the per-lane scale (Java PcmQuantizer:
+      // dither then scale), so both lanes carry the same physical dither and it lands on the FFT
+      // floor where the dBV view sets it. tpdfNoise is 0 for Off — guard to skip the call.
+      let s = k.nextSample();
+      if (dither > 0) s += tpdfNoise(dither);
+      ch0[i] = wantL ? s : 0;
+      if (ch1) ch1[i] = wantR ? s * scaleR : 0;
+    }
+    // Any lanes beyond the stereo pair mirror lane 0 (the pre-feature up-mix behaviour).
+    for (let c = 2; c < out.length; c++) out[c].set(ch0);
     return true;
   }
 }

@@ -8,6 +8,28 @@
 
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
+import { NumericStepField, NumericStepModel, UNIT_FAMILIES } from '../widgets/numeric-step-field.js';
+import { CardSection } from './card-section.js';
+
+// The ten NumericStepField rows across the Osc / FFT / FreqResp tabs — min/max/wheelStep/
+// arrowStep/decimals lifted verbatim from PreferencesDialog.java (constants at :100-133, field
+// ctors at :316-596). All FIXED policy (family, min, max, wheelStep, arrowStep, decimals).
+const F = UNIT_FAMILIES;
+const PREF_FIELD_SPECS = {
+  // Oscilloscope tab
+  prefOscMeasAvg:   { model: { family: F.SECONDS, min: 0.5, max: 100, wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
+  prefOscLineWidth: { model: { family: F.PIXEL,   min: 1,   max: 5,   wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
+  prefOscDotDia:    { model: { family: F.PIXEL,   min: 3,   max: 12,  wheelStep: 1,   arrowStep: 1,   decimals: 0 } },
+  prefOscPersistManual: { model: { family: F.SECONDS, min: 0.1, max: 60, wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
+  // FFT tab
+  prefFftLineWidth: { model: { family: F.PIXEL,   min: 1,   max: 5,   wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
+  prefFftDotDia:    { model: { family: F.PIXEL,   min: 3,   max: 12,  wheelStep: 1,   arrowStep: 1,   decimals: 0 } },
+  prefFftStrongTone:{ model: { family: F.DECIBEL, min: 10,  max: 140, wheelStep: 10,  arrowStep: 1,   decimals: 1 } },
+  // FreqResp tab (prefFrMaxNyq: `pct` → its onChange keeps the live (Hz) readout in sync)
+  prefFrLineWidth:  { model: { family: F.PIXEL,   min: 1,   max: 5,   wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
+  prefFrMaxNyq:     { pct: true, model: { family: F.PERCENT, min: 83, max: 100, wheelStep: 0.5, arrowStep: 1, decimals: 1 } },
+  prefFrSmooth:     { model: { family: F.NONE,    min: 0,   max: 100, wheelStep: 1,   arrowStep: 1,   decimals: 0 } },
+};
 
 // Staged exactly like the audio controls: seeded from the live prefs on open, written to
 // prefs + applied ONLY on OK (Cancel/Esc/X leave the prefs untouched — the next open
@@ -49,16 +71,18 @@ export class PreferencesDialog {
   /**
    * @param engine the AudioEngine (capture reopen + generator restart on a committed device/rate).
    * @param prefs  Preferences.
-   * @param deps   {modal, RATES, stepFields, inRate, outRate, restartGenerator, isBusy, setBusy, fftView}
+   * @param deps   {modal, RATES, stepFields, inRate, outRate, isBusy, setBusy, fftView}
    *               - modal: the bootstrap Modal for #prefsModal
    *               - RATES: the full output sample-rate list (input-rate fallback when native unknown)
    *               - stepFields: the NumericStepField map (FR/generator Nyquist ceilings re-pin)
    *               - inRate / outRate: () => the live input/output sample rate (Nyquist source)
-   *               - restartGenerator: () => Promise — restart the DDS after an output-device change
    *               - isBusy / setBusy: the shared re-entrancy guard accessors (capture-reopen serialize)
    *               - fftView: the FFT view (applyPrefs() on OK so it re-reads its colour/line prefs)
+   *               - deviceStore: the DeviceProfileStore — apply the resolved card's per-channel
+   *                 full-scale on a device selection (Java SharedCapture / GeneratorController /
+   *                 PreferencesDialog applyInput|OutputDeviceProfile)
    */
-  constructor(engine, prefs, { modal, RATES, stepFields, inRate, outRate, restartGenerator, isBusy, setBusy, fftView }) {
+  constructor(engine, prefs, { modal, RATES, stepFields, inRate, outRate, isBusy, setBusy, fftView, deviceStore, cardEditorDialog, showConfirm }) {
     this.engine = engine;
     this.prefs = prefs;
     this.modal = modal;
@@ -66,10 +90,21 @@ export class PreferencesDialog {
     this.stepFields = stepFields;
     this.inRate = inRate;
     this.outRate = outRate;
-    this.restartGenerator = restartGenerator;
     this.isBusy = isBusy;
     this.setBusy = setBusy;
     this.fftView = fftView;
+    this.deviceStore = deviceStore;
+    // The Audio-tab per-card profile sections (Java PreferencesDialog.CardSection) — the card
+    // combo + edit button + ranges table for each direction. Built only when the device store +
+    // card editor are injected (they always are in the live app).
+    this.inputCard = (deviceStore && cardEditorDialog) ? new CardSection(prefs, deviceStore, cardEditorDialog, {
+      input: true, comboSel: '#inCardSel', editSel: '#inCardEdit', rangesSel: '#inRanges',
+      deviceLabel: () => this.inputDeviceLabel(), showConfirm, onChanged: () => this.refreshFsReadouts(),
+    }) : null;
+    this.outputCard = (deviceStore && cardEditorDialog) ? new CardSection(prefs, deviceStore, cardEditorDialog, {
+      input: false, comboSel: '#outCardSel', editSel: '#outCardEdit', rangesSel: '#outRanges',
+      deviceLabel: () => this.outputDeviceLabel(), showConfirm, onChanged: () => this.refreshFsReadouts(),
+    }) : null;
     // True while the Preferences dialog is open: its device/rate controls STAGE
     // edits (Java PreferencesDialog edits a detached copy) and apply only on OK.
     this._staging = false;
@@ -127,38 +162,47 @@ export class PreferencesDialog {
     const inDev = $('#inSel').val(), outDev = $('#outSel').val();
     const inR = parseInt($('#inRate').val(), 10), outR = parseInt($('#outRate').val(), 10);
     const bp = this.prefs.current();
-    const inDevChanged  = bp.inputDeviceName  !== inDev;
-    const outDevChanged = bp.outputDeviceName !== outDev;
-    const inRateChanged  = bp.inputSampleRate  !== inR;
-    const outRateChanged = bp.outputSampleRate !== outR;
-    bp.inputDeviceName = inDev; bp.outputDeviceName = outDev;
-    if (inR)  bp.inputSampleRate  = inR;
-    if (outR) bp.outputSampleRate = outR;
-    this.prefs.save();
-    this._audioSnapshot = null;
+    const captureChanged = bp.inputDeviceName  !== inDev || bp.inputSampleRate  !== inR;
+    const outputChanged  = bp.outputDeviceName !== outDev || bp.outputSampleRate !== outR;
 
-    // Re-pin the Nyquist-derived field bounds from the committed input/output rates.
-    const inNyq = this.inRate() / 2;
-    for (const id of ['frStart', 'frStop']) if (this.stepFields[id]) this.stepFields[id].setMax(inNyq);
-    const outNyq = this.outRate() / 2;
-    for (const id of ['toneHz', 'tone2Hz', 'sweepStart', 'sweepStop']) if (this.stepFields[id]) this.stepFields[id].setMax(outNyq);
+    // Two-phase bracket (Java PreferencesDialog OK → MainWindow.before/afterApplyBackendChanges):
+    // STOP the live consumers each CHANGED direction owns BEFORE the commit — while the current
+    // device is still open — then COMMIT, then RESTART exactly what was running on the new config.
+    // Capture (scope+FFT) and the generator are bracketed INDEPENDENTLY: Web Audio's input and
+    // output are separate devices, so an input-only change must not disturb a playing generator
+    // (unlike Java's shared-clock backend, which bounces all three on any audio change). The whole
+    // apply runs under the busy guard so it can't overlap another reopen; unlike the old code it is
+    // never SKIPPED when busy — an OK must never be silently dropped, leaving streams at the old rate.
+    this.setBusy(true);
+    try {
+      await this.engine.beforeApplyBackendChanges(captureChanged, outputChanged);
 
-    // Apply to the live engine by BOUNCING the live consumers (Java
-    // MultifunctionalTab.pauseForDialog): re-acquire the capture on an input
-    // device/rate change, and restart a PLAYING generator on any output
-    // device/rate change so a live tone re-acquires its device at the new
-    // settings. restartGenerator() is a no-op when the generator is stopped,
-    // so anything that wasn't running stays stopped.
-    if ((inDevChanged || inRateChanged) && !this.isBusy()) {
-      this.setBusy(true);
-      try {
+      // Commit the staged working copy → live prefs (Java applyFromDialog).
+      bp.inputDeviceName = inDev; bp.outputDeviceName = outDev;
+      if (inR)  bp.inputSampleRate  = inR;
+      if (outR) bp.outputSampleRate = outR;
+      this.prefs.save();
+      this._audioSnapshot = null;
+
+      // Apply the committed devices' per-card per-channel full-scale (Java
+      // PreferencesDialog OK path: applyInput/OutputDeviceProfile on commit).
+      this._applyDeviceProfiles();
+
+      // Re-pin the Nyquist-derived field bounds from the committed input/output rates.
+      const inNyq = this.inRate() / 2;
+      for (const id of ['frStart', 'frStop']) if (this.stepFields[id]) this.stepFields[id].setMax(inNyq);
+      const outNyq = this.outRate() / 2;
+      for (const id of ['toneHz', 'tone2Hz', 'sweepStart', 'sweepStop']) if (this.stepFields[id]) this.stepFields[id].setMax(outNyq);
+
+      // Flow the committed device/rate into the live engine config so each restart re-acquires there.
+      if (captureChanged) {
         this.engine.config.inDeviceId = inDev;
         this.engine.config.inRate = inR || this.engine.config.inRate;
-        await this.engine.reopenCaptureDevice();
-      } finally { this.setBusy(false); }
-    }
-    if (outDevChanged) this.engine.config.outDeviceId = outDev;
-    if (outDevChanged || outRateChanged) await this.restartGenerator();
+      }
+      if (outputChanged) this.engine.config.outDeviceId = outDev;
+
+      await this.engine.afterApplyBackendChanges(captureChanged, outputChanged);
+    } finally { this.setBusy(false); }
   }
 
   // ----- Preferences dialog: Look&Feel / Oscilloscope / FFT / FreqResp tabs -----
@@ -178,32 +222,48 @@ export class PreferencesDialog {
     seedFont(prefs.uiFontNormal.get(), '#prefUiFontFamily', '#prefUiFontSize', '#prefUiFontWBold', '#prefUiFontWItalic');
     seedFont(prefs.uiFontBold.get(), '#prefUiFontBoldFamily', '#prefUiFontBoldSize', '#prefUiFontBoldWBold', '#prefUiFontBoldWItalic');
 
-    $('#prefOscMeasAvg').val(prefs.oscMeasurementAverageSeconds.get());
-    $('#prefOscLineWidth').val(prefs.oscLineWidth.get());
-    $('#prefOscDotDia').val(prefs.oscDotDiameter.get());
-    $('#prefOscLeftColor').val(intToHex(prefs.oscLeftChannelColor.get()));
-    $('#prefOscRightColor').val(intToHex(prefs.oscRightChannelColor.get()));
-
-    $('#prefFftLineWidth').val(prefs.fftLineWidth.get());
-    $('#prefFftDotDia').val(prefs.fftHarmonicDotDiameter.get());
-    $('#prefFftStrongTone').val(prefs.fftStrongToneRelDb.get());
-    $('#prefFftLineColor').val(intToHex(prefs.fftLineColor.get()));
-    $('#prefFftBgColor').val(intToHex(prefs.fftChartBackgroundColor.get()));
-    $('#prefFftDotColor').val(intToHex(prefs.fftHarmonicDotColor.get()));
-    $('#prefFftFilterColor').val(intToHex(prefs.fftFreqRespColor.get()));
-    $('#prefFftBeforeCalColor').val(intToHex(prefs.fftBeforeCalDotColor.get()));
-    $('#prefFftCalColor').val(intToHex(prefs.fftCalOverlayColor.get()));
-
-    $('#prefFrLineWidth').val(prefs.freqRespLineWidth.get());
-    $('#prefFrMaxNyq').val((prefs.freqRespNyquistFraction.get() * 100).toFixed(1));
+    // NumericStepField rows: seed the model (auto-formats the unit-in-text). prefFrMaxNyq holds a
+    // percent (fraction × 100); the others hold their canonical pref value directly.
+    this.prefFields.prefOscMeasAvg.setValue(prefs.oscMeasurementAverageSeconds.get());
+    this.prefFields.prefOscLineWidth.setValue(prefs.oscLineWidth.get());
+    this.prefFields.prefOscDotDia.setValue(prefs.oscDotDiameter.get());
+    // Persistence mode combo + manual-seconds field (enabled only when mode == MANUAL,
+    // re-gated live on combo change; see the #prefOscPersistence handler in bind()).
+    $('#prefOscPersistence').val(prefs.oscPersistenceMode.get());
+    this.prefFields.prefOscPersistManual.setValue(prefs.oscPersistenceManualSeconds.get());
+    this.gateOscPersistManual();
+    this.prefFields.prefFftLineWidth.setValue(prefs.fftLineWidth.get());
+    this.prefFields.prefFftDotDia.setValue(prefs.fftHarmonicDotDiameter.get());
+    this.prefFields.prefFftStrongTone.setValue(prefs.fftStrongToneRelDb.get());
+    this.prefFields.prefFrLineWidth.setValue(prefs.freqRespLineWidth.get());
+    this.prefFields.prefFrMaxNyq.setValue(prefs.freqRespNyquistFraction.get() * 100);
+    this.prefFields.prefFrSmooth.setValue(prefs.freqRespCompareSmoothWindow.get());
     this.updateFrMaxNyqHz();
-    $('#prefFrSmooth').val(prefs.freqRespCompareSmoothWindow.get());
+
+    // Colour buttons: seed the native picker value, then paint the swatch + hex text.
+    this.seedColor('#prefOscLeftColor', prefs.oscLeftChannelColor.get());
+    this.seedColor('#prefOscRightColor', prefs.oscRightChannelColor.get());
+    this.seedColor('#prefFftLineColor', prefs.fftLineColor.get());
+    this.seedColor('#prefFftBgColor', prefs.fftChartBackgroundColor.get());
+    this.seedColor('#prefFftDotColor', prefs.fftHarmonicDotColor.get());
+    this.seedColor('#prefFftFilterColor', prefs.fftFreqRespColor.get());
+    this.seedColor('#prefFftBeforeCalColor', prefs.fftBeforeCalDotColor.get());
+    this.seedColor('#prefFftCalColor', prefs.fftCalOverlayColor.get());
+    this.seedColor('#prefFrSignalColor', prefs.freqRespSignalColor.get());
+    this.seedColor('#prefFrPhaseColor', prefs.freqRespPhaseColor.get());
+    this.seedColor('#prefFrRefColor', prefs.freqRespReferenceColor.get());
+    this.seedColor('#prefFrBgColor', prefs.freqRespBackgroundColor.get());
+
     $('#prefFrNotch').prop('checked', prefs.freqRespNotchEnabled.get());
     $('#prefFrNotchHz').val(String(prefs.freqRespNotchBaseHz.get()));
-    $('#prefFrSignalColor').val(intToHex(prefs.freqRespSignalColor.get()));
-    $('#prefFrPhaseColor').val(intToHex(prefs.freqRespPhaseColor.get()));
-    $('#prefFrRefColor').val(intToHex(prefs.freqRespReferenceColor.get()));
-    $('#prefFrBgColor').val(intToHex(prefs.freqRespBackgroundColor.get()));
+  }
+
+  /** Seeds one colour picker from a 0xRRGGBB int and paints its swatch + hex text. */
+  seedColor(sel, rgbInt) {
+    const inp = $(sel)[0];
+    if (!inp) return;
+    inp.value = intToHex(rgbInt);
+    this.paintColorButton(inp);
   }
 
   /** Live "(… Hz/kHz)" readout next to the Max-analysed-frequency field — mirrors
@@ -213,17 +273,37 @@ export class PreferencesDialog {
     const sr = this.inRate();
     let hz = '— Hz';
     if (sr > 0) {
-      const pct = Math.max(83, Math.min(100, parseFloat($('#prefFrMaxNyq').val()) || 100));
+      // Parse the leading number of the input text so the (Hz) readout tracks live typing
+      // (before commit) as well as stepper/commit changes — the committed "95.0 %" also leads
+      // with the number, so one parse serves both (Java nyqField selectionListener reads the value).
+      const raw = parseFloat($('#prefFrMaxNyq').val());
+      const pct = Math.max(83, Math.min(100, Number.isFinite(raw) ? raw : 100));
       const f = sr * 0.5 * (pct / 100);
       hz = (f >= 1000) ? `${(f / 1000).toFixed(2)} kHz` : `${f.toFixed(0)} Hz`;
     }
     $('#prefFrMaxNyqHz').text(`(${hz})`);
   }
 
+  /** Enables the manual-persistence field only when the combo is on "Manual" — mirrors
+   *  PreferencesDialog.java:355-357 (setEnabled + onChange re-gate). Called from seed and
+   *  from the #prefOscPersistence change handler. */
+  gateOscPersistManual() {
+    const f = this.prefFields.prefOscPersistManual;
+    if (f) f.setDisabled($('#prefOscPersistence').val() !== 'MANUAL');
+  }
+
   /** Commit all four tabs' controls to the live prefs and apply (the OK path). */
   applyPrefsTabs() {
     const prefs = this.prefs;
-    const num = (sel, fb) => { const v = parseFloat($(sel).val()); return Number.isFinite(v) ? v : fb; };
+    // Commit any pending text in each NumericStepField (Java NumericStepField commits on focus-out;
+    // on OK the user may not have blurred), then read the already-clamped canonical value — exactly
+    // the DacCalibrationDialog OK path (field.model.commit(input.value); field.getValue()).
+    const fv = (id) => {
+      const f = this.prefFields[id];
+      if (!f) return NaN;
+      f.model.commit(f.input.value.trim());
+      return f.getValue();
+    };
 
     prefs.tabOrientation.set($('#prefTabOrientation').val());
     prefs.smallIconsInMainTab.set($('#prefSmallIcons').is(':checked'));
@@ -231,15 +311,17 @@ export class PreferencesDialog {
     prefs.uiFontNormal.set(buildFont('#prefUiFontFamily', '#prefUiFontSize', '#prefUiFontWBold', '#prefUiFontWItalic'));
     prefs.uiFontBold.set(buildFont('#prefUiFontBoldFamily', '#prefUiFontBoldSize', '#prefUiFontBoldWBold', '#prefUiFontBoldWItalic'));
 
-    prefs.oscMeasurementAverageSeconds.set(Math.max(0.5, Math.min(100, num('#prefOscMeasAvg', 5))));
-    prefs.oscLineWidth.set(Math.max(1, Math.min(5, num('#prefOscLineWidth', 2))));
-    prefs.oscDotDiameter.set(Math.max(3, Math.min(12, Math.round(num('#prefOscDotDia', 5)))));
+    prefs.oscMeasurementAverageSeconds.set(fv('prefOscMeasAvg'));
+    prefs.oscLineWidth.set(fv('prefOscLineWidth'));
+    prefs.oscDotDiameter.set(Math.round(fv('prefOscDotDia')));
+    prefs.oscPersistenceMode.set($('#prefOscPersistence').val());
+    prefs.oscPersistenceManualSeconds.set(fv('prefOscPersistManual'));
     prefs.oscLeftChannelColor.set(hexToInt($('#prefOscLeftColor').val()));
     prefs.oscRightChannelColor.set(hexToInt($('#prefOscRightColor').val()));
 
-    prefs.fftLineWidth.set(Math.max(1, Math.min(5, num('#prefFftLineWidth', 1))));
-    prefs.fftHarmonicDotDiameter.set(Math.max(3, Math.min(12, Math.round(num('#prefFftDotDia', 9)))));
-    prefs.fftStrongToneRelDb.set(Math.max(10, Math.min(140, num('#prefFftStrongTone', 100))));
+    prefs.fftLineWidth.set(fv('prefFftLineWidth'));
+    prefs.fftHarmonicDotDiameter.set(Math.round(fv('prefFftDotDia')));
+    prefs.fftStrongToneRelDb.set(fv('prefFftStrongTone'));
     prefs.fftLineColor.set(hexToInt($('#prefFftLineColor').val()));
     prefs.fftChartBackgroundColor.set(hexToInt($('#prefFftBgColor').val()));
     prefs.fftHarmonicDotColor.set(hexToInt($('#prefFftDotColor').val()));
@@ -247,8 +329,8 @@ export class PreferencesDialog {
     prefs.fftBeforeCalDotColor.set(hexToInt($('#prefFftBeforeCalColor').val()));
     prefs.fftCalOverlayColor.set(hexToInt($('#prefFftCalColor').val()));
 
-    prefs.freqRespLineWidth.set(Math.max(1, Math.min(5, num('#prefFrLineWidth', 2))));
-    prefs.freqRespNyquistFraction.set(Math.max(0.83, Math.min(1, num('#prefFrMaxNyq', 100) / 100)));
+    prefs.freqRespLineWidth.set(fv('prefFrLineWidth'));
+    prefs.freqRespNyquistFraction.set(fv('prefFrMaxNyq') / 100);
     // FreqResp Nyquist fraction → freq-window clamp (Java Preferences.applyFromDialog,
     // Preferences.java:797-805): if the new max-band drops below the current right edge,
     // pull freqMaxHz (and freqMinHz if needed) in so the view re-clamps to the new ceiling.
@@ -260,7 +342,7 @@ export class PreferencesDialog {
         if (prefs.freqRespFreqMinHz.get() > maxBand) prefs.freqRespFreqMinHz.set(Math.max(1.0, maxBand * 0.5));
       }
     }
-    prefs.freqRespCompareSmoothWindow.set(Math.max(0, Math.min(100, Math.round(num('#prefFrSmooth', 6)))));
+    prefs.freqRespCompareSmoothWindow.set(Math.round(fv('prefFrSmooth')));
     prefs.freqRespNotchEnabled.set($('#prefFrNotch').is(':checked'));
     prefs.freqRespNotchBaseHz.set(parseInt($('#prefFrNotchHz').val(), 10) || 50);
     prefs.freqRespSignalColor.set(hexToInt($('#prefFrSignalColor').val()));
@@ -319,6 +401,11 @@ export class PreferencesDialog {
       if (inDev && inputs.some(d => d.id === inDev)) $('#inSel').val(inDev);
       if (outDev && outputs.some(d => d.id === outDev)) $('#outSel').val(outDev);
       this.applyInputDeviceRate();   // #inRate shows ONLY the selected device's native rate
+      // A rescan repopulates the device selects (no change event) — re-derive the card combos +
+      // range tables + FS readouts for the restored selection.
+      if (this.inputCard) this.inputCard.refresh();
+      if (this.outputCard) this.outputCard.refresh();
+      this.refreshFsReadouts();
       // Seed the live engine config from the freshly-selected devices. The pane Record
       // paths call readConfig() before opening the device, but the FreqResp sweep and the
       // Tune-notch wizard read engine.config DIRECTLY — so on a cold page (before any
@@ -332,6 +419,11 @@ export class PreferencesDialog {
         this.engine.config.outDeviceId = $('#outSel').val();
         this.engine.config.inRate = parseInt($('#inRate').val(), 10) || this.engine.config.inRate;
         this.engine.config.outRate = parseInt($('#outRate').val(), 10) || this.engine.config.outRate;
+        // Apply the resolved card's per-channel full-scale for the selected devices
+        // (Java: applyInput/OutputDeviceProfile on the initial capture / generator open).
+        // resolveDeviceProfile matches the human LABEL (substring), not the deviceId the
+        // <select> value carries — so pass the option text.
+        this._applyDeviceProfiles();
       }
       $('#status').text(`${inputs.length} input(s), ${outputs.length} output(s) found — pick devices and press ▶.`);
     } catch (e) { $('#status').text('scan failed: ' + e.message); }
@@ -359,79 +451,103 @@ export class PreferencesDialog {
     }
   }
 
+  /** Applies the resolved per-card per-channel full-scale for the currently-selected
+   *  input + output devices (Java applyInput/OutputDeviceProfile). resolveDeviceProfile
+   *  matches the human device LABEL (the option text) as a substring — the <select>
+   *  value carries the Web Audio deviceId, which the recognition patterns do not match.
+   *  A no-op when the device resolves to no card (the legacy scalars stand). */
+  _applyDeviceProfiles() {
+    if (!this.deviceStore) return;
+    this.deviceStore.applyInputDeviceProfile(this.inputDeviceLabel());
+    this.deviceStore.applyOutputDeviceProfile(this.outputDeviceLabel());
+  }
+
+  /** The human LABEL of the currently selected input / output device — the <option> text the
+   *  recognition patterns match (NOT the Web Audio deviceId the <select> value carries). The
+   *  small accessor the calibration dialog + card sections resolve the current card by. */
+  inputDeviceLabel() { return $('#inSel option:selected').text(); }
+
+  outputDeviceLabel() { return $('#outSel option:selected').text(); }
+
+  /** Re-renders the per-channel ADC/DAC full-scale readouts from the live prefs (after a card
+   *  edit / calibrate, and on dialog open). '—' for a non-positive value. */
+  refreshFsReadouts() {
+    const fmt = (v) => ((v > 0 && Number.isFinite(v)) ? v.toFixed(6) : '—');
+    $('#adcFsVrms').text(fmt(this.prefs.getAdcFsVoltageRms('L')));
+    $('#adcFsVrmsRight').text(fmt(this.prefs.getAdcFsVoltageRms('R')));
+    $('#dacFsAmpl').text(fmt(this.prefs.getDacFsVoltageAmpl('L')));
+    $('#dacFsAmplRight').text(fmt(this.prefs.getDacFsVoltageAmpl('R')));
+  }
+
+  /** Builds the ten Osc/FFT/FreqResp NumericStepFields over their `.numfield` chrome and the
+   *  twelve colour buttons' live repaint, once (the DOM is static). Mirrors PreferencesDialog's
+   *  per-field NumericStepField ctors + applyButtonColor. Values are staged/committed by
+   *  seedPrefsTabs()/applyPrefsTabs(); this only owns the widget construction + chrome. */
+  buildPrefFields() {
+    this.prefFields = {};
+    for (const [id, spec] of Object.entries(PREF_FIELD_SPECS)) {
+      const input = document.getElementById(id);
+      if (!input) continue;
+      const onChange = spec.pct ? () => this.updateFrMaxNyqHz() : null;
+      this.prefFields[id] = new NumericStepField(input, new NumericStepModel(spec.model),
+        { onChange, tooltipBase: input.title || '' });
+    }
+    // Colour buttons: repaint background + hex text live as the native picker changes, and open
+    // the picker on a click anywhere on the button (the label already forwards to its input, but
+    // the hidden 1px input isn't the click target, so trigger it explicitly).
+    $('.pref-color').each((_, el) => {
+      const inp = el.querySelector('input[type=color]');
+      $(inp).on('input change', () => this.paintColorButton(inp));
+      // The <label> natively forwards a click to its inner input; cancel that default and open
+      // the picker once ourselves so the OS colour dialog can't double-open (open→close→reopen).
+      $(el).on('click', (ev) => { if (ev.target === inp) return; ev.preventDefault(); inp.click(); });
+    });
+  }
+
+  /** Paints one colour button's swatch: background = the picked colour, centred "#RRGGBB" text
+   *  (PreferencesDialog.applyButtonColor — foreground left black, no contrast rule). */
+  paintColorButton(inp) {
+    const hex = String(inp.value || '#000000').toLowerCase();
+    const btn = inp.closest('.pref-color');
+    if (!btn) return;
+    btn.style.background = hex;
+    const span = btn.querySelector('.pref-color-hex');
+    if (span) span.textContent = hex.toUpperCase();
+  }
+
   /** Wires #menuPrefs/#prefsOk + the staged audio device/rate handlers + the tab strip. */
   bind() {
     const engine = this.engine, prefs = this.prefs;
 
+    this.buildPrefFields();
+    if (this.inputCard) this.inputCard.bind();
+    if (this.outputCard) this.outputCard.bind();
+
     $('#menuPrefs').on('click', () => this.modal.show());
 
-    // #inSel change → derive #inRate from the new device's native rate FIRST (bound before the
-    // capture-reopen handler below so applyInputDeviceRate runs first — the reopen handler then
-    // reads the freshly-set #inRate). Pairs with the Scan button.
+    // #inSel change → derive #inRate from the new device's native rate (applyInputDeviceRate).
+    // Staging only: the device/rate selections apply to the live engine solely via applyAudioPrefs()
+    // on OK (there is no live reopen/restart on selection). Pairs with the Scan button.
     $('#inSel').on('change', () => this.applyInputDeviceRate());
+    // A device change re-resolves the direction's card (visibly switching / clearing to "New
+    // card…", offering to create one for an unrecognised device) — Java CardSection.onDeviceChanged.
+    $('#inSel').on('change', () => { if (this.inputCard) this.inputCard.onDeviceChanged(); });
+    $('#outSel').on('change', () => { if (this.outputCard) this.outputCard.onDeviceChanged(); });
     $('#scan').on('click', () => this.scan());
-
-    // Device / rate → the active backend's BackendPrefs (Web Audio deviceId in the
-    // device-name slots).  These four controls live inside the Preferences dialog,
-    // which STAGES edits (Java PreferencesDialog: edits a detached copy, applies on
-    // OK only).  While the dialog is open (`_staging`), the change handlers only
-    // keep the <select>'s own DOM value — they do NOT write live prefs nor reopen
-    // the device.  applyAudioPrefs() (run from the OK button) commits + applies the
-    // staged selections; a Cancel/close restores them (see the modal show/hide hooks
-    // below).  When the dialog is NOT open these handlers still apply
-    // live, matching the desktop's outside-dialog device-change paths.
-    $('#inSel').on('change', async () => {
-      if (this._staging) return;
-      prefs.current().inputDeviceName = $('#inSel').val(); prefs.save();
-      if (this.isBusy()) return;
-      this.setBusy(true);
-      try {
-        engine.config.inDeviceId = $('#inSel').val();
-        // applyInputDeviceRate (bound first) already set #inRate to the new device's native rate;
-        // a programmatic .val() doesn't fire the #inRate handler, so flow that rate into the engine
-        // and re-pin the FR Nyquist ceiling here, then reopen the capture at the right rate.
-        engine.config.inRate = parseInt($('#inRate').val(), 10) || engine.config.inRate;
-        const inNyq = this.inRate() / 2;
-        for (const id of ['frStart', 'frStop']) if (this.stepFields[id]) this.stepFields[id].setMax(inNyq);
-        await engine.reopenCaptureDevice();
-      } finally { this.setBusy(false); }
-    });
-    $('#outSel').on('change', async () => {
-      if (this._staging) return;
-      prefs.current().outputDeviceName = $('#outSel').val(); prefs.save();
-      engine.config.outDeviceId = $('#outSel').val();
-      await this.restartGenerator();
-    });
-    $('#inRate').on('change', async () => {
-      if (this._staging) return;
-      prefs.current().inputSampleRate = parseInt($('#inRate').val(), 10); prefs.save();
-      // FR sweep is captured on the INPUT, so its start/stop ceiling is the INPUT Nyquist
-      // (Java FreqRespTabControl caps at getInputSampleRate()/2, not the output rate).
-      const inNyq = this.inRate() / 2;
-      for (const id of ['frStart', 'frStop']) if (this.stepFields[id]) this.stepFields[id].setMax(inNyq);
-      // The capture device opens at config.inRate — flow the new rate in and reopen
-      // the shared capture so a live rate change takes effect without a page reload.
-      if (this.isBusy()) return;
-      this.setBusy(true);
-      try { engine.config.inRate = parseInt($('#inRate').val(), 10); await engine.reopenCaptureDevice(); }
-      finally { this.setBusy(false); }
-    });
-    $('#outRate').on('change', () => {
-      if (this._staging) return;
-      prefs.current().outputSampleRate = parseInt($('#outRate').val(), 10); prefs.save();
-      // Generator Nyquist follows the OUTPUT rate → re-pin the generator frequency fields.
-      const nyq = this.outRate() / 2;
-      for (const id of ['toneHz', 'tone2Hz', 'sweepStart', 'sweepStop']) if (this.stepFields[id]) this.stepFields[id].setMax(nyq);
-    });
 
     $('#prefsTabs').on('click', '.nav-link', (ev) => this.prefsTab(ev.currentTarget.dataset.prefsPanel));
     $('#prefFrMaxNyq').on('input', () => this.updateFrMaxNyqHz());
+    $('#prefOscPersistence').on('change', () => this.gateOscPersistManual());
 
     $('#prefsModal').on('show.bs.modal', () => {
       this._staging = true;
       this._okClicked = false;
       this.snapshotAudioPrefs();
       this.seedPrefsTabs();
+      // Re-derive the per-card combo + range table for the current devices, and the FS readouts.
+      if (this.inputCard) this.inputCard.refresh();
+      if (this.outputCard) this.outputCard.refresh();
+      this.refreshFsReadouts();
     });
     $('#prefsOk').on('click', () => { this._okClicked = true; });
     $('#prefsModal').on('hidden.bs.modal', async () => {

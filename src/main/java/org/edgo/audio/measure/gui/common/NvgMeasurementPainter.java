@@ -19,8 +19,10 @@
 package org.edgo.audio.measure.gui.common;
 
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.swt.SWT;
@@ -98,6 +100,18 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
     private GC   measureGc;       // lazily created GC for textExtent / rasterising
     private Font measureGcFont;   // font currently set on measureGc
 
+    // --- Pooled digital-phosphor coverage images (drawAlphaImage) -------------
+    // A POOL of RGBA textures, one per drawAlphaImage call within a frame (cursor reset
+    // in reset()): NanoVG defers all draw commands to endFrame but nvgUpdateImage uploads
+    // IMMEDIATELY, so two blits sharing one texture in a frame (left + right channel, or
+    // the trace + the reconstructed-beat overlay) would both render the LAST upload — the
+    // first trace vanished.  Entries are recreated only when the plot size changes, so
+    // steady-state frames allocate no GL texture.
+    private record PhosphorImg(int img, int w, int h) { }
+    private final List<PhosphorImg> phosphorImgs = new ArrayList<>();
+    private int        phosphorImgCursor;
+    private ByteBuffer phosphorBuf;    // native RGBA staging buffer (grown on demand)
+
     // --- Tracked pen state ---------------------------------------------------
     @Getter @Setter private Color foreground;
     @Getter @Setter private Color background;
@@ -108,8 +122,10 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
             new LineAttributes(1f, SWT.CAP_FLAT, SWT.JOIN_MITER);
     @Getter @Setter private Font font;
     private final Rectangle clip = new Rectangle(0, 0, 0, 0);
-    /** Device pixels per point (2 on Retina / HiDPI); text rasterises at this zoom. */
-    private float pixelScale = 1f;
+    /** Device pixels per point (2 on Retina / HiDPI); text rasterises at this zoom, and
+     *  the phosphor rasteriser sizes its coverage buffer by it so the HiDPI framebuffer
+     *  gets crisp 1:1 device texels.  Exposed as {@code getPixelScale()} (Lombok). */
+    @Getter private float pixelScale = 1f;
 
     public NvgMeasurementPainter(long vg, Display display) {
         this.vg = vg;
@@ -131,6 +147,7 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
         clip.x = 0; clip.y = 0; clip.width = width; clip.height = height;
         nvgResetScissor(vg);
         nvgShapeAntiAlias(vg, true);
+        phosphorImgCursor = 0;   // each frame hands out pooled coverage textures afresh
     }
 
     /** Frees the rasterising GC (the cached NanoVG images go with the context's
@@ -138,6 +155,11 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
     public void dispose() {
         if (measureGc != null && !measureGc.isDisposed()) measureGc.dispose();
         measureGc = null;
+        for (PhosphorImg p : phosphorImgs) {
+            if (p.img() != 0) nvgDeleteImage(vg, p.img());
+        }
+        phosphorImgs.clear();
+        if (phosphorBuf != null) { MemoryUtil.memFree(phosphorBuf); phosphorBuf = null; }
     }
 
     // --- Pen / device state (non-trivial; simple ones are Lombok above) -------
@@ -269,6 +291,55 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
         return tex;
     }
 
+    @Override public void drawAlphaImage(byte[] alpha, int imgW, int imgH, int destX, int destY,
+                                         int drawW, int drawH, Color tint, AlphaImageScratch scratch) {
+        // scratch is the GC backend's reuse buffer; NanoVG stages into its own native
+        // phosphorBuf, so it is ignored here.
+        if (imgW <= 0 || imgH <= 0) return;
+        int pixels = imgW * imgH;
+        if (phosphorBuf == null || phosphorBuf.capacity() < pixels * 4) {
+            if (phosphorBuf != null) MemoryUtil.memFree(phosphorBuf);
+            phosphorBuf = MemoryUtil.memAlloc(pixels * 4);
+        }
+        ByteBuffer buf = phosphorBuf;
+        buf.clear();
+        byte r = (byte) (tint != null ? tint.getRed()   : 0);
+        byte g = (byte) (tint != null ? tint.getGreen() : 0);
+        byte b = (byte) (tint != null ? tint.getBlue()  : 0);
+        // Straight-alpha RGBA (no premultiply flag) — matches rasterise() above, which
+        // NanoVG source-over composites correctly; the coverage rides in the A channel.
+        for (int i = 0; i < pixels; i++) {
+            buf.put(r).put(g).put(b).put(alpha[i]);
+        }
+        buf.flip();
+        // One pooled texture PER CALL within the frame (cursor reset in reset()): the draw
+        // is deferred to endFrame but the upload is immediate, so reusing one texture for a
+        // second blit (other channel / beat overlay) would erase the first trace.
+        PhosphorImg slot = phosphorImgCursor < phosphorImgs.size()
+                ? phosphorImgs.get(phosphorImgCursor) : null;
+        if (slot == null || slot.img() == 0 || slot.w() != imgW || slot.h() != imgH) {
+            if (slot != null && slot.img() != 0) nvgDeleteImage(vg, slot.img());
+            slot = new PhosphorImg(nvgCreateImageRGBA(vg, imgW, imgH, 0, buf), imgW, imgH);
+            if (phosphorImgCursor < phosphorImgs.size()) {
+                phosphorImgs.set(phosphorImgCursor, slot);
+            } else {
+                phosphorImgs.add(slot);
+            }
+        } else {
+            nvgUpdateImage(vg, slot.img(), buf);
+        }
+        phosphorImgCursor++;
+        if (slot.img() == 0) return;
+        // The texture is DEVICE-res (imgW×imgH); draw it into the LOGICAL drawW×drawH rect
+        // so its device texels land 1:1 on the HiDPI framebuffer (crisp).  At pixelScale 1
+        // imgW==drawW and the pattern is 1:1, identical to before.
+        nvgImagePattern(vg, destX, destY, drawW, drawH, 0f, slot.img(), 1f, textPaint);
+        nvgBeginPath(vg);
+        nvgRect(vg, destX, destY, drawW, drawH);
+        nvgFillPaint(vg, textPaint);
+        nvgFill(vg);
+    }
+
     @Override public void drawText(String s, int x, int y, boolean transparent) {
         if (s == null || s.isEmpty() || display == null) return;
         CachedText t = textCache.computeIfAbsent(textKey(s), k -> rasterise(s));
@@ -324,7 +395,7 @@ public final class NvgMeasurementPainter implements MeasurementPainter {
     private String textKey(String s) {
         int rgb = (foreground != null)
                 ? (foreground.getRed() << 16) | (foreground.getGreen() << 8) | foreground.getBlue() : 0;
-        return s + ' ' + System.identityHashCode(font) + ' ' + rgb + ' ' + Math.round(pixelScale * 100f);
+        return s + ' ' + System.identityHashCode(font) + ' ' + rgb + ' ' + Math.round(pixelScale * 100);
     }
 
     /** Renders {@code s} with the SWT font as white-on-black, then builds an RGBA

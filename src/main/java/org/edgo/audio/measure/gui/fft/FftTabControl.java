@@ -44,10 +44,12 @@ import org.eclipse.swt.widgets.Label;
 import org.eclipse.swt.widgets.Shell;
 import org.eclipse.swt.widgets.Text;
 import org.edgo.audio.measure.bind.Property;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.dsp.FreqRespCalHelper;
 import org.edgo.audio.measure.dsp.StereoFreqRespCalibration;
 import org.edgo.audio.measure.enums.AlignGenerator;
+import org.edgo.audio.measure.enums.Channel;
+import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.FftOverlap;
 import org.edgo.audio.measure.enums.GenChangeCause;
 import org.edgo.audio.measure.enums.MainsSuppression;
@@ -57,15 +59,17 @@ import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
 import org.edgo.audio.measure.gui.common.AbstractTabControl;
+import org.edgo.audio.measure.gui.common.CalibrationDialog;
 import org.edgo.audio.measure.gui.common.Dialogs;
 import org.edgo.audio.measure.gui.common.Icon;
 import org.edgo.audio.measure.gui.common.IconUtils;
 import org.edgo.audio.measure.gui.i18n.I18n;
-import org.edgo.audio.measure.gui.scope.AdcCalibrationDialog;
 import org.edgo.audio.measure.gui.widgets.NumericStepField;
+import org.edgo.audio.measure.gui.widgets.NumericStepModel;
 import org.edgo.audio.measure.gui.widgets.PresetBar;
 import org.edgo.audio.measure.gui.widgets.TileTabFolder;
 import org.edgo.audio.measure.gui.widgets.UnitFamily;
+import org.edgo.audio.measure.preferences.AudioDeviceProfile;
 import org.edgo.audio.measure.preferences.CalibrationEntry;
 import org.edgo.audio.measure.preferences.FftPreset;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -118,6 +122,9 @@ public final class FftTabControl extends AbstractTabControl {
     /** Averages presets the field's wheel / arrows jump along; ∞ = forever. */
     private static final double[] AVERAGES_SERIES =
             { 2, 4, 8, 16, 32, 64, 128, Double.POSITIVE_INFINITY };
+    /** A single spectrum — i.e. averaging off, since the worker only accumulates
+     *  from 2 up.  Renders and parses as the shared Off label. */
+    private static final double AVERAGES_OFF          = 1;
     /** Stop-after-N bounds and wheel step (arrows step by 1). */
     private static final double STOP_AFTER_MIN        = 2;
     private static final double STOP_AFTER_MAX        = 1_000_000;
@@ -128,6 +135,10 @@ public final class FftTabControl extends AbstractTabControl {
     private static final double MANUAL_FUND_MAX_VRMS  = 200.0;
     /** Amplitude floor (Vrms) — keeps log-unit (dBV) entry finite. */
     private static final double AMP_MIN_VRMS          = 1e-9;
+    /** Representative measured amplitude (Vrms) prefilled into the analyzed-channel
+     *  row when the ADC calibration dialog is opened for a help screenshot, so the
+     *  two-row form renders fully without a live measurement. */
+    private static final double CAPTURE_ADC_VRMS      = 1.0;
     /** Harmonic-count bounds: THD measures H2…H9; the calc ceiling feeds the
      *  compensation workflows. */
     private static final double THD_HARM_MIN  = 2;
@@ -142,7 +153,7 @@ public final class FftTabControl extends AbstractTabControl {
 
     /** Loaded {@code .frc} correction store, constructor-injected by
      *  {@link FftPane} (IoC) and shared with the {@link FftView}. */
-    private final FreqRespCorrectionStore correctionStore;
+    private final CorrectionStore correctionStore;
 
     /** Controller owning the {@code .fft} spectrum file round-trip (and the
      *  analyser lifecycle); constructor-injected by {@link FftPane}. */
@@ -193,7 +204,7 @@ public final class FftTabControl extends AbstractTabControl {
     private final List<FftCalRow> fftCalRows = new ArrayList<>();
 
     public FftTabControl(Composite parent, FftView view, boolean liveCapture,
-                         FreqRespCorrectionStore correctionStore,
+                         CorrectionStore correctionStore,
                          FftController controller) {
         super(parent, SWT.NONE);
         this.view = view;
@@ -384,9 +395,12 @@ public final class FftTabControl extends AbstractTabControl {
         addLabel(g, I18n.t("fft.settings.averages"));
         // List stepper: wheel / arrow keys snap to the next / previous
         // preset (2 … 128, ∞) while manual typing still accepts any
-        // count ≥ 2 (and the ∞ / inf token, since max is unbounded).
+        // count ≥ 1 (and the ∞ / inf token, since max is unbounded).
         averagesField = new NumericStepField(g, UnitFamily.NONE,
-                AVERAGES_SERIES[0], Double.POSITIVE_INFINITY, AVERAGES_SERIES, 0, 70);
+                AVERAGES_OFF, Double.POSITIVE_INFINITY, AVERAGES_SERIES, 0, 70);
+        // 1 renders and parses as "Off" — typed in full or as any prefix
+        // (o / of / off), the same shortcut the generator's dither field takes.
+        averagesField.setNamedValue(AVERAGES_OFF, NumericStepModel.OFF_LABEL);
         averagesField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         averagesField.setToolTipText(I18n.t("fft.settings.averages.tooltip"));
         Bindings.stepField(averagesField, prefs.fftAveragesProperty());
@@ -812,23 +826,80 @@ public final class FftTabControl extends AbstractTabControl {
 
     /** Opens the ADC-calibration dialog using this pane's fundamental
      *  Vrms (no fallback — the scope pane has its own calibrate button).
-     *  Aborts with an info MessageBox when no live Vrms is available. */
+     *  Aborts with an info MessageBox when no live Vrms is available.
+     *
+     *  <p>Always the two-row (Left / Right) form, seeded analyzed-channel-only:
+     *  the FFT measures one channel ({@link Preferences#getFftChannel()}), so
+     *  only that row carries a measured Vrms; the other row is disabled and
+     *  blank.  On OK the entered actual Vrms rescales that channel's ADC
+     *  full-scale — a bound stereo card writes only that channel (per-channel,
+     *  leaving the other untouched), a MONO card or an unbound device writes the
+     *  shared both-channels full-scale. */
     private void openCalibrationDialog() {
         if (isDisposed()) return;
         Shell parent = getShell();
+        Preferences prefs = Preferences.instance();
+        if (prefs.isAdcCalibrationFromDevice()) {
+            // Device-provided (QA40x): show the built-in full-scale read-only.
+            new CalibrationDialog(parent, adcTexts(),
+                    prefs.getAdcFsVoltageRms(Channel.L), prefs.getAdcFsVoltageRms(Channel.R),
+                    true, (ch, v) -> { }).open();
+            return;
+        }
         Double currentVrms = (view == null) ? null : view.getLastVrms();
         if (currentVrms == null || currentVrms <= 0 || Double.isNaN(currentVrms)) {
             Dialogs.info(parent, I18n.t("calibrate.title"), I18n.t("calibrate.error.noVrms"));
             return;
         }
         final double measuredVrms = currentVrms;
-        new AdcCalibrationDialog(parent, measuredVrms, actualVrms -> {
-            Preferences prefs = Preferences.instance();
+        final boolean stereo = isInputBoundStereo(prefs);
+        final Channel measCh = prefs.getFftChannel();
+        Double seedL = measCh == Channel.L ? measuredVrms : null;
+        Double seedR = measCh == Channel.R ? measuredVrms : null;
+        new CalibrationDialog(parent, adcTexts(), seedL, seedR, false, (ch, actualVrms) -> {
             double scale = actualVrms / measuredVrms;
-            double newFs = prefs.getAdcFsVoltageRms() * scale;
-            prefs.setAdcFsVoltageRms(newFs);
-            prefs.save();
+            if (stereo) {
+                double newFs = prefs.getAdcFsVoltageRms(ch) * scale;
+                prefs.storeAdcCalibration(ch, newFs);
+            } else {
+                // MONO / unbound: shared both-channels full-scale (auto-creates the
+                // profile on first calibrate); also sets the FS scalar and persists.
+                double newFs = prefs.getAdcFsVoltageRms() * scale;
+                prefs.storeAdcCalibration(newFs);
+            }
         }).open();
+    }
+
+    /** The ADC-calibration wording (title, prompt keys, log tag) for the shared
+     *  {@link CalibrationDialog}. */
+    private CalibrationDialog.Texts adcTexts() {
+        return new CalibrationDialog.Texts("calibrate.title",
+                "calibrate.input", "calibrate.input.tooltip", "ADC");
+    }
+
+    /** Capture support (help screenshots): builds the ADC calibration dialog in the
+     *  two-row form seeded analyzed-channel-only — the {@link Preferences#getFftChannel()}
+     *  row carries a representative Vrms, the other stays blank/disabled — and shows it
+     *  non-modally (no live measurement needed), returning it so the automation can
+     *  snapshot and dispose it.  Mirrors {@link #openCalibrationDialog}. */
+    public CalibrationDialog openAdcCalibrationForCapture() {
+        if (isDisposed()) return null;
+        Channel measCh = Preferences.instance().getFftChannel();
+        Double seedL = measCh == Channel.L ? CAPTURE_ADC_VRMS : null;
+        Double seedR = measCh == Channel.R ? CAPTURE_ADC_VRMS : null;
+        CalibrationDialog dlg = new CalibrationDialog(getShell(), adcTexts(), seedL, seedR, false, (ch, v) -> { });
+        dlg.showForCapture();
+        return dlg;
+    }
+
+    /** True when the current backend's input device resolves to a bound card whose
+     *  input endpoint calibrates its two channels separately — any mode except
+     *  {@link DeviceChannelMode#MONO} — the trigger for the two-row per-channel
+     *  calibration dialog (still seeded analyzed-channel-only for the FFT).  A MONO
+     *  card or an unbound device (no profile) keeps the single-row legacy flow. */
+    private boolean isInputBoundStereo(Preferences prefs) {
+        AudioDeviceProfile p = prefs.resolveDeviceProfile(prefs.current().getInputDeviceName());
+        return p != null && p.getInput() != null && p.getInput().getChannels() != DeviceChannelMode.MONO;
     }
 
     // =========================================================================
@@ -1102,7 +1173,7 @@ public final class FftTabControl extends AbstractTabControl {
         Composite                composite;
         Text                     pathField;
         /** "Active" toggle — two-way bound to {@code entry.active()}; the
-         *  calibration is only added to {@link FreqRespCorrectionStore} when this
+         *  calibration is only added to {@link CorrectionStore} when this
          *  is checked AND a file is loaded. */
         Button                   activeCheck;
         /** "With noise" toggle — two-way bound to {@code entry.withNoise()};
@@ -1322,7 +1393,7 @@ public final class FftTabControl extends AbstractTabControl {
 
     private boolean loadFileIntoFftCalRow(FftCalRow r, String picked, boolean showErrors) {
         try {
-            StereoFreqRespCalibration cal = FreqRespCalHelper.loadCsv(picked);
+            StereoFreqRespCalibration cal = FreqRespCalHelper.loadFrc(picked);
             r.calibration = cal;
             r.entry.setPath(picked);
             r.pathField.setText(picked);

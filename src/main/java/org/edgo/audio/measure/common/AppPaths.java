@@ -43,7 +43,7 @@ import lombok.Getter;
  * <ul>
  *   <li>Windows: {@code %APPDATA%\Phonalyser}</li>
  *   <li>macOS:   {@code ~/Library/Application Support/Phonalyser}</li>
- *   <li>Linux:   {@code $XDG_CONFIG_HOME/Phonalyser} (or {@code ~/.config/Phonalyser})</li>
+ *   <li>Linux:   {@code ~/.config/Phonalyser}</li>
  * </ul>
  * Logs go under a {@code logs/} child.  The base can be overridden with
  * {@code -Dapp.data.dir=<path>} (used by the automation tests).  Singleton —
@@ -128,6 +128,33 @@ public final class AppPaths {
         }
     }
 
+    /**
+     * Copies a single bundled classpath {@code resource} to {@code target} only
+     * when {@code target} does not yet exist (first run) and the resource is
+     * present.  The single-file, classpath-source sibling of
+     * {@link #seedDirIfEmpty(Path, Path)}: {@code devices.yaml} ships as a
+     * classpath resource (so it seeds in dev too, where no external bundle dir
+     * exists), which the directory-tree copier can't read.  Tolerant — a missing
+     * resource or an I/O failure is a guarded warn, never a throw, so a broken
+     * seed can't stop the app from starting; once seeded, the user's edits are
+     * preserved (delete the target to re-seed after an upgrade).
+     */
+    public void seedFileFromClasspathIfAbsent(Path target, String resource) {
+        if (target == null || resource == null) return;
+        if (Files.exists(target)) return;   // already seeded / user-created
+        try (var in = AppPaths.class.getResourceAsStream(resource)) {
+            if (in == null) {
+                log().warn("Seed resource {} not found; {} not seeded", resource, target);
+                return;
+            }
+            Files.createDirectories(target.getParent());
+            Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
+            log().info("Seeded {} from bundled {}", target, resource);
+        } catch (IOException e) {
+            log().warn("Could not seed {} from {}: {}", target, resource, e.getMessage());
+        }
+    }
+
     private void copyInto(Path sourceRoot, Path src, Path targetRoot) {
         Path dst = targetRoot.resolve(sourceRoot.relativize(src).toString());
         try {
@@ -159,11 +186,7 @@ public final class AppPaths {
         if (os.contains("mac")) {
             return Paths.get(home, "Library", "Application Support", APP_DIR_NAME);
         }
-        String xdg = System.getenv("XDG_CONFIG_HOME");
-        Path base = (xdg != null && !xdg.isBlank())
-                ? Paths.get(xdg)
-                : Paths.get(home, ".config");
-        return base.resolve(APP_DIR_NAME);
+        return Paths.get(home, ".config", APP_DIR_NAME);
     }
 
     private Path resolveLogsDir(Path base) {

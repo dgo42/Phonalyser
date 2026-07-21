@@ -22,6 +22,7 @@ import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Image;
+import org.eclipse.swt.graphics.ImageData;
 import org.eclipse.swt.graphics.LineAttributes;
 import org.eclipse.swt.graphics.Path;
 import org.eclipse.swt.graphics.Point;
@@ -69,6 +70,11 @@ public final class GcMeasurementPainter implements MeasurementPainter {
     @Override public void  setTextAntialias(int mode)      { gc.setTextAntialias(mode); }
     @Override public void  setAdvanced(boolean advanced)   { gc.setAdvanced(advanced); }
 
+    /** Always {@code 1}: SWT maps this {@code GC} in LOGICAL coordinates (it applies the
+     *  monitor's device scale itself when the surface is realised), so the phosphor
+     *  rasteriser rendering at 1:1 here already matches the drawn size. */
+    @Override public float getPixelScale()                 { return 1f; }
+
     @Override public Font  getFont()                       { return gc.getFont(); }
     @Override public void  setFont(Font font)              { gc.setFont(font); }
 
@@ -87,6 +93,43 @@ public final class GcMeasurementPainter implements MeasurementPainter {
     @Override public void drawPolygon(int[] pointArray)                 { gc.drawPolygon(pointArray); }
     @Override public void drawImage(Image image, int x, int y)          { gc.drawImage(image, x, y); }
     @Override public void drawText(String s, int x, int y, boolean t)   { gc.drawText(s, x, y, t); }
+
+    /** Builds a 24-bit {@code ImageData} with a per-pixel alpha channel (the same
+     *  {@code ImageData} + {@code alphaData} shape {@code ScopePhosphor.readback}
+     *  produces for the screenshot), all pixels solid {@code tint}, and draws it scaled
+     *  into the logical {@code drawW×drawH} rectangle — {@code drawImage} then
+     *  alpha-composites the coverage.  The {@code imgW×imgH} source buffer is at DEVICE
+     *  resolution; at {@code pixelScale == 1} (this backend always) {@code imgW == drawW}
+     *  so the blit is 1:1 and pixel-identical to the plain {@code drawImage(img, x, y)}.
+     *
+     *  <p>Zero per-frame array churn: the packed-RGB and alpha bytes ride the
+     *  caller-owned {@code scratch} arrays (the {@code ImageData} is built AROUND them),
+     *  so only the {@code ImageData}/{@code Image} object headers allocate.  The SWT
+     *  {@code Image} handle itself MUST still be created and disposed per call — an SWT
+     *  {@code Image} cannot be pixel-updated in place. */
+    @Override public void drawAlphaImage(byte[] alpha, int imgW, int imgH, int destX, int destY,
+                                         int drawW, int drawH, Color tint, AlphaImageScratch scratch) {
+        if (imgW <= 0 || imgH <= 0) return;
+        int pixels = imgW * imgH;
+        byte[] rgb       = scratch.rgb(pixels);      // packed R,G,B — grown, reused across frames
+        byte[] alphaData = scratch.alpha(pixels);
+        byte r = (byte) tint.getRed();
+        byte g = (byte) tint.getGreen();
+        byte b = (byte) tint.getBlue();
+        for (int i = 0, j = 0; i < pixels; i++, j += 3) {
+            rgb[j]     = r;
+            rgb[j + 1] = g;
+            rgb[j + 2] = b;
+            alphaData[i] = alpha[i];
+        }
+        // ImageData wraps the pooled RGB array directly (scanlinePad 1 ⇒ bytesPerLine =
+        // imgW·3; scratch sizes it exactly imgW·imgH·3 = bytesPerLine·imgH).
+        ImageData data = new ImageData(imgW, imgH, 24, scratch.palette(), 1, rgb);
+        data.alphaData = alphaData;
+        Image img = new Image(gc.getDevice(), data);
+        gc.drawImage(img, 0, 0, imgW, imgH, destX, destY, drawW, drawH);
+        img.dispose();
+    }
 
     // --- Stroked path --------------------------------------------------------
 

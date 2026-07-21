@@ -114,6 +114,52 @@ export class ScopePane {
     const bus = MessageBus.instance();
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, () => this.onFreqRespMeasurementStarted());
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => this.onFreqRespMeasurementStopped());
+
+    // Wire the osc-meas measurement stream (owned by engine.scope): the pane has the prefs,
+    // so it supplies the per-batch publish PARAMS provider; the worker's publishes are
+    // pushed straight into the view (its publish contract, off the render thread). The
+    // controller starts/stops the worker + its own gapless ring reader with the recording.
+    this.engine.scope.setMeasParamsProvider(() => this._measParams());
+    this.engine.scope.setMeasResultSink((r) => this.view.publishMeasurement(r));
+    // A view-side clearMeasurementHistory (stats reset / channel switch) also resets the
+    // live worker's stream (spec §5) — the view can't reach the controller, so route through
+    // the pane.
+    this.view.onClearMeasurement = () => this.engine.scope.resetMeasurement();
+  }
+
+  /** The current osc-meas publish parameters read from prefs + the live config/generator
+   *  (Java ScopeMeasurementWorker re-reads Preferences each pass). Returns null when the
+   *  measurement table is off so the client skips the batch (never backlogs the cursor). */
+  _measParams() {
+    const p = this.prefs, c = this.engine.config;
+    if (!p || !p.oscShowMeasurementTable.get()) return null;
+    // Dual flag from the LIVE pref, exactly like Java ScopeMeasurementWorker.measureChannel
+    // (dual = prefs.getGenSignalForm().isDualTone()), re-read every publish pass — NOT the
+    // engine.config snapshot, which only refreshes on a generator (re)start (readConfig).
+    // A form change to DUAL_TONE updates the pref immediately (the dropdown's prefs.set),
+    // so with the snapshot the worker measured a stale single tone (the sum-crossing f)
+    // until the generator happened to restart; the live pref closes that window.
+    // Same rule for peakVolts below: read adcFsVoltageRms from the LIVE pref (Java
+    // ScopeMeasurementWorker.java:444 re-reads prefs.getAdcFsVoltageRms() each compute pass),
+    // NOT c.adcFsVoltageRms — an ADC calibration rescales the pref mid-capture, and the
+    // config snapshot would keep the stale full-scale until the next capture restart (the
+    // "reading doesn't move after calibrate → double-calibration" bug).
+    const dual = isDualTone(p.genSignalForm.get());
+    const per = (name) => ({
+      lpfMode: p['osc' + name + 'Lpf'].get(),
+      mainsMode: p['osc' + name + 'MainsSuppression'].get(),
+      dual, f1Hz: this.engine.scope.snapped, f2Hz: this.engine.scope.snapped2,
+    });
+    return {
+      sampleRate: c.inRate,
+      // Each channel scales by its OWN ADC full-scale (Java ScopeMeasurementWorker.java:448-9
+      // getAdcPeakVolts(Channel.L)/(Channel.R)); LINKED cards give equal L/R peaks. Read
+      // LIVE (getAdcPeakVolts reads the pref Property) so an ADC calibration rescales mid-
+      // capture without the stale-snapshot double-calibration bug.
+      peakVoltsL: p.getAdcPeakVolts('L'), peakVoltsR: p.getAdcPeakVolts('R'),
+      avgSeconds: p.oscMeasurementAverageSeconds.get(),
+      L: per('Left'), R: per('Right'),
+    };
   }
 
   /** Stops a running capture and grays the Record LED — fired by the Frequency Response
@@ -176,10 +222,14 @@ export class ScopePane {
       const vDiv = isLeft ? prefs.oscLeftVoltsPerDiv.get() : prefs.oscRightVoltsPerDiv.get();
       const ac = isLeft ? prefs.oscLeftAcMode.get() : prefs.oscRightAcMode.get();
       const sinc = isLeft ? prefs.oscLeftSincInterpEnabled.get() : prefs.oscRightSincInterpEnabled.get();
+      const residual = isLeft ? prefs.oscLeftResidualEnabled.get() : prefs.oscRightResidualEnabled.get();
       return led(on, chName) + this.titledChips(
         [this.shortSi(vDiv), t('scope.tile.scale', chName, this.shortSi(vDiv) + 'V')],
         [ac ? 'ac' : 'dc', t(ac ? 'scope.tile.coupling.ac' : 'scope.tile.coupling.dc', chName)],
-        [sinc ? 'sin' : 'lin', t(sinc ? 'scope.tile.interp.sin' : 'scope.tile.interp.lin', chName)]);
+        [sinc ? 'sin' : 'lin', t(sinc ? 'scope.tile.interp.sin' : 'scope.tile.interp.lin', chName)],
+        // Residual tile only when the channel's residual view is on (Java scopeTabTiles
+        // adds it conditionally as the LAST chip).
+        residual ? ['res', t('scope.tile.residual', chName)] : null);
     };
     $tiles.eq(0).html(chTile(true));
     $tiles.eq(1).html(chTile(false));
@@ -340,24 +390,17 @@ export class ScopePane {
         // zoom-out re-sizes the ~3× window (Java sizes leftBuf from t/div each paint).
         engine.config.scopeTimePerDiv = prefs.oscTimePerDiv.get();
         if (latestScope) {
-          // Attach the FIXED long measurement window (Java ScopeMeasurementWorker's
-          // MEAS_MAX_SAMPLES read from the ring) so Vrms/Vmean/Tp/f/Duty are computed
-          // over many periods regardless of t/div — stable even when the display
-          // shows < 10 periods (Vpp was already robust).
-          const mw = engine.readMeasurementWindow();
-          if (mw) {
-            latestScope.info.measBufL = mw.bufL;
-            latestScope.info.measBufR = mw.bufR;
-            latestScope.info.measAvailable = mw.available;
-            latestScope.info.measAbsStart = mw.absStart;
-          }
-          // Contiguous gap since last paint → the measurement pool (Vmean/Vrms/Vpp over the
-          // measurement-average window, every sample once). On cursor overrun drop the pool.
-          const gap = engine.readMeasurementGap();
-          if (gap && gap.overrun) scopeView.resetMeasurementPool();
-          latestScope.info.measGapL = (gap && !gap.overrun) ? gap.bufL : null;
-          latestScope.info.measGapR = (gap && !gap.overrun) ? gap.bufR : null;
-          latestScope.info.measGapLen = (gap && !gap.overrun) ? gap.count : 0;
+          // The long-window Vrms/Vmean/Tp/f/Duty measurement now runs in the osc-meas Web
+          // Worker off its OWN gapless ring reader (engine.scope, wired in the constructor)
+          // — publishing into the view via publishMeasurement on its ~100 ms cadence, off the
+          // render thread. So the render loop no longer reads a measurement window here; it
+          // just consumes the worker's latest publish (this.view.latest). The synchronous
+          // displayed-span / injected-window fallbacks stay inside the view.
+          // Generator running? (Java drawBeatOverlays gates the reconstructed-beat overlay
+          // on MessageBus.request(GENERATOR_RUNNING) — the view can't reach the bus, so the
+          // pane threads the flag in through the render info.)
+          latestScope.info.generatorRunning =
+            MessageBus.instance().request(Events.GENERATOR_RUNNING) === true;
           scopeView.render(latestScope.buf, latestScope.info);
           // Condensed overview, decimated ~5 Hz (Java CONDENSED_DECIMATION) so its
           // 1 s walk doesn't halve the main trace's cap/s.
@@ -380,6 +423,14 @@ export class ScopePane {
           this._syncCalibrateGate();
         }
       } catch (e) { console.error('scope render error', e); }     // isolated: must not kill the FFT render
+    } else if (!scopeView.fileMode && scopeView.renderFrozen()) {
+      // Stopped on a captured frame (Java ScopeView.freezeBuffer): replay the FROZEN
+      // snapshot every frame so the last trace — beat overlay included — stays on
+      // screen instead of leaving stale pixels, and so a V/div / offset drag re-scales
+      // it live. The zoomed overview has no live ring while stopped → its idle grid.
+      try {
+        scopeView.renderZoomedIdle(document.getElementById('scopeZoomed'));
+      } catch (e) { console.error('scope frozen render error', e); }
     } else if (!scopeView.fileMode && !latestScope) {
       // Not recording, not showing a loaded file, and nothing ever captured: keep the
       // empty grid + V/time marks + sliders painted so the scope is ALWAYS visible (Java
@@ -403,8 +454,17 @@ export class ScopePane {
   redrawScopeOnResize() {
     const engine = this.engine, scopeView = this.view;
     if (scopeView.fileMode && this.loadedScope) { this.renderLoadedScope(); return; }
-    // Live/stopped: replay the last captured frame through the normal render path
-    // (held-frame branches inside render() repaint the frozen trace at the new size).
+    // Stopped-with-a-frozen-frame: replay the FROZEN snapshot (Java ScopeView renders
+    // the frozen buffer, not the live ring). Feeding the stale live buffer back through
+    // the live path would re-run the AUTO free-run against a snapshot whose ring cursor
+    // is gone — draw the held frame instead. The zoomed overview has no live ring while
+    // stopped, so it drops to its idle grid.
+    if (scopeView.renderFrozen()) {
+      scopeView.renderZoomedIdle(document.getElementById('scopeZoomed'));
+      return;
+    }
+    // Live: replay the last captured frame through the normal render path (held-frame
+    // branches inside render() repaint the frozen trace at the new size).
     const latestScope = this._getLatestScope();
     if (latestScope) {
       scopeView.render(latestScope.buf, latestScope.info);
@@ -421,7 +481,12 @@ export class ScopePane {
   // applyViewState). Wired through the tab-control's host.onFileBack.
   onFileBack(back) {
     if (!this.view.fileMode || !this.loadedScope) return;
-    this.scopeFileBack = Math.max(0, Math.min(this.fileMaxBack(), Math.round(back)));
+    // Keep the back-offset FRACTIONAL end-to-end (Java ScopeNav.fileViewWindow keeps
+    // mainOffset a double): a ½-div wheel step is a fractional sample count, and
+    // rounding here would quantise the scroll + break the fractional accumulation of
+    // repeated steps. The clamp bounds are the buffer edges; the render splits the
+    // fraction into dispStart/subSampleOffset for a sub-sample scroll.
+    this.scopeFileBack = Math.max(0, Math.min(this.fileMaxBack(), back));
     this.renderLoadedScope();
   }
 
@@ -550,7 +615,9 @@ export class ScopePane {
     const prefs = this.prefs;
     const leftActive = prefs.oscLeftChannelEnabled.get() || !prefs.oscRightChannelEnabled.get();
     const vDiv = leftActive ? prefs.oscLeftVoltsPerDiv.get() : prefs.oscRightVoltsPerDiv.get();
-    const fs = prefs.adcFsVoltageRms.get() * Math.SQRT2;
+    // Full-scale pairs with the SAME channel whose V/div is used (Java ScopeView.offsetFracBounds
+    // getAdcPeakVolts(measurementReferenceChannel())).
+    const fs = prefs.getAdcPeakVolts(leftActive ? 'L' : 'R');
     // Half-range = Vfs/(DIVISIONS_Y·V/div), floored at 0.5 (ScopeFormat.offsetMoveHalfRange):
     // small V/div → wide scroll range, large V/div → clamped to [0,1].
     const half = offsetMoveHalfRange(vDiv, fs, DIVISIONS_Y);
@@ -619,7 +686,15 @@ export class ScopePane {
         scopeView.restartGlitchRate();
       }
       try { await engine.scope.setRecording(want); }   // the controller reconciles _scopeOn: false if the device failed to open
-      finally { this.syncScopeLed(); this._setBusy(false); }
+      finally {
+        // On STOP, freeze the last live frame so the stopped trace stays on screen
+        // (Java ScopeView.freezeBuffer) instead of leaving stale pixels — render()
+        // below repaints it every frame while stopped. On START the view already
+        // dropped the hold (restartGlitchRate). Only after a real stop (engine no
+        // longer recording) and not into file mode.
+        if (!this._isScopeRec() && !scopeView.fileMode) { scopeView.freeze(); this.redrawScopeOnResize(); }
+        this.syncScopeLed(); this._setBusy(false);
+      }
     });
   }
   syncScopeLed() { $('.scope-pane .led-btn').toggleClass('rec', this._isScopeRec()); }
@@ -826,14 +901,16 @@ export class ScopePane {
       if (cause === GenChangeCause.USER_INPUT) {
         this.view._clearMeasurementHistory();
         this.renderMeasurementTable();
-        // A real generator change also invalidates the held trigger anchor: the signal
-        // transition itself is a discontinuity — the glitch trigger fires on it and
-        // NORMAL would hold that transition frame forever. The reset is DELAYED so it
-        // lands after the change has flushed through the DAC → loopback → ADC path
-        // (Java genChangeListener → timerExec(GEN_CLEAR_DELAY_MS) → resetTriggerHold;
-        // the GPU-phosphor clearPersistence half is skipped — no persistence on Canvas2D).
+        // A real generator change also invalidates the held trigger anchor AND the
+        // persistence afterglow (it shows the OLD signal): the signal transition itself is
+        // a discontinuity — the glitch trigger fires on it and NORMAL would hold that
+        // transition frame forever, and with a rare glitch trigger the afterglow barely
+        // decays. Both are DELAYED so they land after the change has flushed through the
+        // DAC → loopback → ADC path (Java ScopeTabControl genChangeListener →
+        // timerExec(GEN_CLEAR_DELAY_MS) → resetTriggerHold + controller.clearPersistence).
         setTimeout(() => {
           this.view.resetTriggerHold();
+          this.view.clearPersistence();
           this.requestRedraw();
         }, GEN_CLEAR_DELAY_MS);
       }

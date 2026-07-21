@@ -870,16 +870,18 @@ function trailingZerosLow(x) {
 /**
  * TPDF (triangular-PDF) dither noise in the normalized −1…+1 sample domain, as
  * PcmQuantizer.tpdfNoise: (u1 − u2) / 2^(ditherBits−1) for two independent
- * uniform [0,1) draws, or exactly 0 when ditherBits == 0. The ±1 LSB amplitude
- * is set by the dither bit count, not the target bit depth.
- * @param {number} ditherBits TPDF dither depth in bits (0 = off)
+ * uniform [0,1) draws, or exactly 0 when ditherBits ≤ 0. The ±1 LSB amplitude
+ * is set by the dither bit count, not the target bit depth. ditherBits may be
+ * fractional — Math.pow(2, bits−1) equals the old 1<<(bits−1) for whole bits and
+ * interpolates the ±1 LSB amplitude continuously in between.
+ * @param {number} ditherBits TPDF dither depth in bits, may be fractional (0 = off)
  * @param {function():number} [rng=Math.random] uniform [0,1) source
  * @returns {number} dither value in the −1…+1 domain
  */
 export function tpdfNoise(ditherBits, rng = Math.random) {
-  const bits = ditherBits | 0;
-  if (bits === 0) return 0.0;
-  return (rng() - rng()) / (1 << (bits - 1));
+  const bits = ditherBits;
+  if (bits <= 0) return 0.0;
+  return (rng() - rng()) / Math.pow(2, bits - 1);
 }
 
 /** Clamp to [-1, 1] — PcmQuantizer.clamp. */
@@ -903,4 +905,36 @@ export function quantizePcm(sample, bitDepth, ditherBits = 0, rng = Math.random)
   if (bitDepth === 8) return Math.round(v * 127.0);
   const maxVal = Math.pow(2, bitDepth - 1) - 1;
   return Math.round(v * maxVal);
+}
+
+/**
+ * The output-lane gate — which physical DAC lane(s) carry the tone. Faithful to
+ * PcmQuantizer.encode / SignalFileExporter.fillBuffer: the left lane is driven
+ * unless the gate is 'RIGHT', the right lane unless the gate is 'LEFT'; the
+ * un-selected lane is written as digital silence. Returns the two booleans so a
+ * hot caller (the DDS worklet) can hoist them once per block, allocation-free.
+ * @param {string} outputChannels 'BOTH' | 'LEFT' | 'RIGHT'
+ * @returns {{wantL: boolean, wantR: boolean}}
+ */
+export function outputLaneGate(outputChannels) {
+  return { wantL: outputChannels !== 'RIGHT', wantR: outputChannels !== 'LEFT' };
+}
+
+/**
+ * One continuous-domain sample → the two interleaved lanes [left, right] through
+ * the gate and the per-lane right-scale, matching PcmQuantizer.encode: the left
+ * lane scales by 1.0 (the mono/left full-scale is the amplitude reference), the
+ * right lane by {@code rightLaneScale} (= fsLeft/fsRight, so a LINKED card with
+ * distinct DAC full-scales emits the same physical level on both lanes); a
+ * gated-off lane is digital zero. With gate 'BOTH' and rightLaneScale 1.0 both
+ * lanes carry the identical sample (pre-feature behaviour). Non-hot-path
+ * convenience (file export, tests) — the worklet inlines the hoisted gate.
+ * @param {number} sample
+ * @param {string} outputChannels 'BOTH' | 'LEFT' | 'RIGHT'
+ * @param {number} rightLaneScale
+ * @returns {[number, number]}
+ */
+export function outputLaneSamples(sample, outputChannels, rightLaneScale) {
+  const { wantL, wantR } = outputLaneGate(outputChannels);
+  return [wantL ? sample : 0, wantR ? sample * rightLaneScale : 0];
 }

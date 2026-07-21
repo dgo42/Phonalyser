@@ -29,7 +29,7 @@ import java.util.List;
 import java.util.Locale;
 
 import org.edgo.audio.measure.common.FileVersions;
-import org.edgo.audio.measure.common.FreqRespCorrectionStore;
+import org.edgo.audio.measure.common.CorrectionStore;
 import org.edgo.audio.measure.enums.AlignGenerator;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.fft.FftAnalyzer;
@@ -93,7 +93,7 @@ public final class FftController {
      *  the controller; its mutations publish {@link Events#FFT_CALIBRATION_CHANGED}
      *  (silent on the offscreen screenshot variant). */
     @Getter
-    private final FreqRespCorrectionStore correctionStore;
+    private final CorrectionStore correctionStore;
     /** One analyzer instance for the controller's lifetime — its internal
      *  scratch buffer (noise-floor quickselect) is only reused this way. */
     private final ImdAnalyzer imdAnalyzer = new ImdAnalyzer();
@@ -119,7 +119,7 @@ public final class FftController {
 
     public FftController(FftAnalyzerWorker worker) {
         this.worker          = worker;
-        this.correctionStore = new FreqRespCorrectionStore("FFT", Events.FFT_CALIBRATION_CHANGED);
+        this.correctionStore = new CorrectionStore("FFT", Events.FFT_CALIBRATION_CHANGED);
     }
 
     // -------------------------------------------------------------------------
@@ -234,7 +234,7 @@ public final class FftController {
         return imdAnalyzer.analyze(slot,
                 prefs.getGenDualToneFreq1Hz(),
                 prefs.getGenDualToneFreq2Hz(),
-                prefs.getDbvOffsetDb());
+                prefs.getDbvOffsetDb(prefs.getFftChannel()));
     }
 
     /** Feeds the latest FFT result into the closed-loop integrator and
@@ -545,7 +545,7 @@ public final class FftController {
             }
             pw.printf("# thd_max_harmonic=%d%n", r.harmonicCount);
             if (correctionStore != null) {
-                for (FreqRespCorrectionStore.Entry e : correctionStore.getEntries()) {
+                for (CorrectionStore.Entry e : correctionStore.getEntries()) {
                     pw.printf("# calibration=%s%s%n",
                             e.getPath(), e.isWithNoise() ? " (withNoise)" : "");
                 }

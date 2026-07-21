@@ -376,9 +376,9 @@ public class FftChartExporter {
             double ppm   = 1e6 * delta / genFreqHz;
             double osc;
             String oscName;
-            if (r.sampleRate % 44100 == 0) {
+            if (r.sampleRate % 11025 == 0) {
                 osc = 22.5792e6; oscName = "22.5792 MHz";
-            } else if (r.sampleRate % 48000 == 0) {
+            } else if (r.sampleRate % 8000 == 0) {
                 osc = 24.576e6;  oscName = "24.576 MHz";
             } else {
                 osc = Double.NaN; oscName = "?";

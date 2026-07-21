@@ -40,7 +40,16 @@ jobs:
           $required = @(
             "lib/windows/csjsound-provider.jar",
             "lib/windows/csjsound_amd64.dll",
-            "lib/windows/portaudio_x64.dll"
+            "lib/windows/portaudio_x64.dll",
+            "lib/windows/libusb-1.0_x64.dll",
+            "lib/windows/csjsound_x86.dll",
+            "lib/windows/portaudio_x86.dll",
+            "lib/windows/libusb-1.0_x86.dll",
+            # JNA-resource copies bundled INTO the fat JARs (the standalone x86
+            # legacy jar has no installer to stage lib/windows, so libusb must
+            # ride inside the jar — mirrors portaudio's win32-* resources).
+            "src/main/resources/win32-x86-64/libusb-1.0_x64.dll",
+            "src/main/resources/win32-x86/libusb-1.0_x86.dll"
           )
           $missing = $required | Where-Object { -not (Test-Path $_) }
           if ($missing) {
@@ -52,6 +61,15 @@ jobs:
       # and runs jpackage — all in one go (see <executions> in pom.xml).
       - name: Build fat JAR + EXE installer
         run: mvn -B -DskipTests package
+
+      # Legacy 32-bit Windows: a FAT JAR only (no EXE, no installer).  Built on
+      # the SAME x64 JDK — a fat jar is portable bytecode plus the x86 SWT / LWJGL
+      # jars (which Maven resolves on any JDK); a 32-bit JVM is only needed to RUN
+      # it, not to build it.  Tests are skipped: x86 SWT natives can't load on the
+      # x64 JVM, and the x64 build above already ran the suite.  Produces
+      # target/phonalyser-<version>-windows-x86.jar (pom `windows-x86` profile).
+      - name: Build x86 legacy fat JAR
+        run: mvn -B -DskipTests package -P "windows-x86,!windows-x64"
 
       # Optional: also pack an MSIX for the Microsoft Store (the Store signs it
       # for free at publish time).  GUARDED — skipped unless MSIX_IDENTITY_NAME is
@@ -93,6 +111,7 @@ jobs:
             target/installer/*.exe
             target/installer/*.msix
             target/phonalyser-*-windows.jar
+            target/phonalyser-*-windows-x86.jar
 
   # ============================================================== Linux x64
   build-linux:
@@ -167,6 +186,22 @@ jobs:
       # the runner's local ~/.m2 before the main project resolves it.
       - name: Install vendored flac-library
         run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+
+      # PortAudio + libusb dylibs are not on Maven Central — they must live
+      # under lib/macos-<arch>/.  Fail loudly if a checkout is missing them
+      # instead of producing a DMG whose CoreAudio / QA40x backend is dead
+      # (the pom stages them with failonerror=false).
+      - name: Verify macOS natives present
+        run: |
+          dir="lib/macos-${{ matrix.arch }}"
+          missing=
+          for f in libportaudio.dylib libusb-1.0.dylib; do
+            if [ ! -f "$dir/$f" ]; then
+              echo "::error::Missing $dir/$f — see $dir/README.md"
+              missing=1
+            fi
+          done
+          [ -z "$missing" ]
 
       # Both macos profiles already append -XstartOnFirstThread to
       # jpackage's javaOptions; no extra args needed here.
