@@ -14,6 +14,10 @@ Items the two open-source projects disagree on, or that only one knows, are in
 is **observed on the wire + hardware-confirmed**, but
 two things still need a **genuine QA403** and are called out in §9 item 15 (the
 balanced level/clip convention, and whether real hardware gaps at 192 k / 1 M-FFT).
+A **2026-07-22 measurement finding (§11)** grades the vendor software's
+noise/SNR estimator against constructed ground truth on the RT1062 simulator —
+magnitude (not power) spectrum averaging plus a fixed ≈0.8 dB constant flatter
+its noise readouts by 0.8–1.8 dB depending on the averaging count.
 
 ## Sources
 
@@ -899,3 +903,100 @@ realized.
   PyQa40x pre-scales its generated tone by √2, which is why the formula's `+3` dB
   term closes (§6, §9 item 12). A Phonalyser generator emitting RMS-scaled samples
   must convert to peak first or it will be ~3 dB hot.
+
+---
+
+## 11. Measurement finding — QA40x software noise/SNR estimator (2026-07-22)
+
+Cross-validation of Phonalyser against the vendor's QA40x application
+(v1.220), both driving the **same hardware simulator** (differential loopback,
+TPDF dither injected DAC-side, common to both apps), 48 kHz / FFT 64k /
+input range 42 "dBV", generator 0 dBV and -60 dBV per leg.  The stimulus is
+ideal and the reference is calculated independently of BOTH applications, so
+each app can be graded against constructed ground truth.
+
+### Ground truth method
+
+A 5 s capture (24-bit stereo WAV, `results/QA40x_sim.wav`, recorded by the
+Phonalyser capture path) evaluated offline (`results/analyze_wav.py`): DC removal,
+least-squares sine fit at the refined tone frequency, subtraction, then a
+single rectangular-window FFT of the residual and a one-sided Parseval power
+integral over 20 Hz..20 kHz.  No analysis window, no averaging, no application
+code in the loop.
+
+- Tone: 999.7559 Hz at **-54.00 dBV** (= -60 dBV per leg, differential x2 —
+  the level chain closes exactly in both apps).
+- Noise 20 Hz..20 kHz: **-103.29 dBV**; spectral density flat at
+  -179.3 dBFS/Hz in-band and 20..24 kHz (pure white dither, no shaping).
+- True SNR at this level: **109.30 dB**.
+
+### Readings against truth
+
+| Reader                        | N (dBV)              | deficit vs truth |
+|-------------------------------|----------------------|------------------|
+| offline integral (reference)  | -103.29              | —                |
+| Phonalyser (power avg, NENBW-corrected) | -103.46    | -0.17 dB         |
+| QA40x sw, averages = 1        | -104.05 .. -104.11   | -0.79 dB         |
+| QA40x sw, averages = 3        | -104.76 .. -104.79   | -1.48 dB         |
+| QA40x sw, averages = 20       | -105.10              | -1.81 dB         |
+
+Tone/RMS readouts are exact in BOTH applications at every setting; only the
+noise quantities diverge.  The QA readings are window-independent (Hann,
+flat-top, BH, rect all agree) and level-independent (0 / -60 dBV identical).
+
+### Inference (black-box; source not available)
+
+Averaging spectral **magnitudes** (|X|, then squaring) instead of **powers**
+(|X|^2) biases Rayleigh-distributed noise bins by the estimator factor
+
+    measured / true = pi/4 + (1 - pi/4) / M        (M = averages)
+
+= 0 dB at M=1, -0.67 dB at M=3, -0.99 dB at M=20 — while coherent (tone) bins
+are unaffected.  Subtracting this from the observed deficits leaves a
+**constant -0.80 +/- 0.02 dB across all M**.  Conclusion: the QA40x software
+noise path behaves exactly like **magnitude averaging plus a fixed ~0.8 dB
+constant** (the constant possibly a definition artifact — its own N+D and N-D
+tiles disagree by 0.64 dB on data whose distortion is ~30 dB below the noise).
+
+Consequences for anyone comparing analyzers against the QA40x software: its
+SNR / N readouts are flattered by 0.8..1.8 dB depending on the averaging
+count; compare at averages = 1, or against an offline integral as above.
+
+For symmetry: the same session found and fixed a Phonalyser defect of the
+same family — the noise integral had omitted the analysis window's NENBW
+division (SNR/SINAD/ENOB/THD+N pessimistic by 1.76 dB with Hann, up to
+~5.8 dB with flat-top).  After the fix Phonalyser matches the constructed
+truth within estimator scatter at every averaging count, per-bin and
+integrated.
+
+### Corroboration and re-test (added same day)
+
+QuantAsylum's release notes confirm the averaging half of this finding: QA40x
+**v1.221 (January 2026)** — "Fixed averaging bug where amplitude was being
+used instead of power for averaging... an SNR or THD calculation would be
+slightly better (by about 0.2 to 0.5 dB) than if averaging were disabled.
+Thanks to user Hans Rosenberg for detecting this very subtle bug" (video:
+"Are you measuring the right noise?", youtube.com/watch?v=1jTqRlIfdKY).  The
+measurements above were taken with **v1.220**, the last version carrying that
+bug.  Our measured magnitude of the bias (up to 1.0 dB at 20 averages,
+following pi/4 + (1 - pi/4)/M) exceeds their 0.2..0.5 dB estimate.
+
+**Re-test with v1.223** (same simulator, same settings, 14 averages) confirms
+and localizes the remainder:
+
+| v1.223 readout | dBV     | vs truth (-103.29) |
+|----------------|---------|--------------------|
+| N+D            | -103.47 | -0.18 — ON truth   |
+| N-D            | -104.09 | -0.80              |
+| SNR            | 110.09  | +0.79 flattered    |
+
+The averaging dependence is gone (v1.223 at 14 averages equals v1.220 at
+averages = 1), and N+D now matches the constructed ground truth — so the
+total-noise integral is correct.  The residual ~0.8 dB lives entirely in
+**N-D**, on a signal whose real distortion is ~30 dB below the integrated
+noise (N-D should equal N+D here, but reads 0.6 dB lower): the "minus
+distortion" step evidently discards whole exclusion ZONES around the
+fundamental and harmonics — noise included, roughly 13 % of the band —
+without rescaling the remaining sum.  SNR is built on N-D and inherits the
+flattery.  Anyone comparing against the QA40x software should therefore
+compare N+D (truth-accurate since v1.221/1.223), not SNR / N-D.
