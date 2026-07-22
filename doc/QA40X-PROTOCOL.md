@@ -917,8 +917,8 @@ each app can be graded against constructed ground truth.
 
 ### Ground truth method
 
-A 5 s capture (24-bit stereo WAV, `results/QA40x_sim.wav`, recorded by the
-Phonalyser capture path) evaluated offline (`results/analyze_wav.py`): DC removal,
+A 5 s capture (24-bit stereo WAV, `doc/QA40x/QA40x_sim.wav`, recorded by the
+Phonalyser capture path) evaluated offline (`doc/QA40x/analyze_wav.py`): DC removal,
 least-squares sine fit at the refined tone frequency, subtraction, then a
 single rectangular-window FFT of the residual and a one-sided Parseval power
 integral over 20 Hz..20 kHz.  No analysis window, no averaging, no application
