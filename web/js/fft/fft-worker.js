@@ -146,7 +146,7 @@ function postResult(r, id, t0, timeDisc, shadow) {
     snrDb: r.snrDb, sinadDb: r.sinadDb,
     snrFreqMin: r.snrFreqMin, snrFreqMax: r.snrFreqMax,
     coherentAveraging: r.coherentAveraging,
-    noisePower: r.noisePower, avgNoiseFloorDbFs: r.avgNoiseFloorDbFs,
+    noisePower: r.noisePower, windowNenbwBins: r.windowNenbwBins, avgNoiseFloorDbFs: r.avgNoiseFloorDbFs,
     imdProductA: r.imdProductA ? r.imdProductA.slice() : null,
     imdProductB: r.imdProductB ? r.imdProductB.slice() : null,
     imdProductBin: r.imdProductBin ? r.imdProductBin.slice() : null,

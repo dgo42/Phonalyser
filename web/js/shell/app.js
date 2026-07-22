@@ -495,7 +495,8 @@ function initSelects() {
 function buildLanguageMenu() {
   const active = prefs.uiLanguage.get();
   const $menu = $('#langMenu').empty();
-  for (const l of LOCALES) {
+  // English is NOT pinned first — every locale sorts alphabetically by tag (en falls between el and es).
+  for (const l of [...LOCALES].sort((a, b) => a.tag.localeCompare(b.tag))) {
     const checked = l.tag === active ? ' <i class="bi bi-check2"></i>' : '';
     $menu.append(
       `<li><button class="dropdown-item" type="button" data-lang="${l.tag}">${l.endonym}${checked}</button></li>`);
@@ -773,18 +774,34 @@ const fftHost = {
 // POP-UP WINDOW (not a tab) sized 1024×800, top-right corner aligned to the app window's
 // top-right corner, reusing the named window on re-open. Language follows the UI locale
 // (help ships en/de/uk), falling back to en. `page` defaults to the contents index.
-function openHelp(page) {
-  const supported = ['en', 'de', 'uk'];
+const HELP_LANGS = ['en', 'de', 'uk'];
+let helpWin = null;   // the open help pop-up, kept so a UI-language switch can re-navigate it
+// The help language for the current UI locale (help ships en/de/uk), falling back to en.
+function helpLang() {
   const loc = (document.documentElement.lang || 'en').slice(0, 2).toLowerCase();
-  const lang = supported.includes(loc) ? loc : 'en';
+  return HELP_LANGS.includes(loc) ? loc : 'en';
+}
+function openHelp(page) {
   const w = 783, h = 712;
   const appX = window.screenX != null ? window.screenX : (window.screenLeft || 0);
   const appY = window.screenY != null ? window.screenY : (window.screenTop || 0);
   const left = appX + window.outerWidth - 13;   // help top-LEFT corner aligned to app top-RIGHT corner - 13 pixel gap
   const top = Math.max(0, appY);
   const features = `popup=yes,width=${w},height=${h},left=${left},top=${top}`;
-  const win = window.open(`help/${lang}/${page || 'index.html'}`, 'phonalyser-help', features);
-  if (win) win.focus();
+  helpWin = window.open(`help/${helpLang()}/${page || 'index.html'}`, 'phonalyser-help', features);
+  if (helpWin) helpWin.focus();
+}
+// On a UI-language switch, re-point an ALREADY-OPEN help pop-up to the SAME page in the new
+// language (Java HelpViewer.refreshLanguage live-switches its viewer). Reads the pop-up's current
+// page from its same-origin location; leaves it alone if it navigated to an external URL.
+function refreshOpenHelp() {
+  if (!helpWin || helpWin.closed) return;
+  let path;
+  try { path = helpWin.location.pathname; } catch (e) { return; }   // external (cross-origin) page — don't yank it
+  const m = /\/help\/(?:en|de|uk)\/([^/?#]*)/.exec(path);
+  const page = (m && m[1]) ? m[1] : 'index.html';
+  helpWin.location.href = `help/${helpLang()}/${page}`;
+  helpWin.focus();
 }
 
 // Which help page matches the current context — for Ctrl+F1. Read-only DOM inspection at
@@ -851,6 +868,7 @@ $('#langMenu').on('click', '[data-lang]', async (ev) => {
   if (tag === prefs.uiLanguage.get()) return;
   prefs.uiLanguage.set(tag);
   await setLocale(tag);
+  refreshOpenHelp();   // if the help pop-up is open, switch it to the new language too
   buildLanguageMenu();   // move the check mark to the new active locale
   applyI18n();
   // Re-resolve the dynamically-built signal-form labels (hidden select + combo).

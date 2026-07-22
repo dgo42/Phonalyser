@@ -52,6 +52,16 @@ function overlapFraction(overlap) {
   return f === undefined ? 0.0 : f;
 }
 
+/** How many bins the skirt-end walk must look ahead before declaring the floor
+ *  reached (Java skirtLookAheadBins). With overlap, 1/(1-ovl) consecutive frames
+ *  share a sample, so the averaged floor wobbles across that many bins; +2 guards
+ *  the 0% case. 0%->3, 50%->4, 75%->6, 87.5%->10, 93.75%->18. */
+function skirtLookAheadBins(overlap) {
+  const denom = 1.0 - overlapFraction(overlap);
+  const framesSharing = denom > 0 ? Math.round(1.0 / denom) : 16;
+  return framesSharing + 2;
+}
+
 /** Equivalent noise bandwidth (bins) per WindowType token — verbatim from Java
  *  enums/WindowType.enbw(). Broadband noise measured through the FFT reads
  *  10·log10(ENBW) dB above its true level (the tone reads dead-on), so the
@@ -79,6 +89,10 @@ export class FftAnalyzer {
     this._cachedWindowType = null;
     /** Coherent gain (mean) of the cached window. */
     this._cachedCohGain = 0;
+    /** Normalized equivalent noise bandwidth of _cachedWindow in bins,
+     *  N·Σw²/(Σw)² (Hann 1.5); cached with the window, divides the noise
+     *  integrals (never coherent lines). */
+    this._cachedNenbw = 0;
 
     // Second-tone frequency hint (Hz); NaN disables it.
     this._secondToneHintHz = NaN;
@@ -112,8 +126,13 @@ export class FftAnalyzer {
     this._cachedWindowSize = N;
     this._cachedWindowType = type;
     let sum = 0.0;
-    for (let i = 0; i < N; i++) sum += this._cachedWindow[i];
+    let sum2 = 0.0;
+    for (let i = 0; i < N; i++) {
+      sum += this._cachedWindow[i];
+      sum2 += this._cachedWindow[i] * this._cachedWindow[i];
+    }
     this._cachedCohGain = sum / N;
+    this._cachedNenbw = N * sum2 / (sum * sum);
     return this._cachedWindow;
   }
 
@@ -211,6 +230,7 @@ export class FftAnalyzer {
     // --- Window + coherent gain (cached on (fftSize, windowType)) -------------
     const window = this._getCachedWindow(fftSize, windowType);
     const cohGain = this._cachedCohGain;
+    const nenbw = this._cachedNenbw;
 
     // --- Pre-pass peak-bin estimate (frame 0) --------------------------------
     const f0Re = new Float64Array(fftSize);
@@ -387,7 +407,7 @@ export class FftAnalyzer {
       samplesLength: samples.length,
       sampleRate, fftSize, harmonicCount, windowType, overlap,
       coherentAveraging, expectedFundHz,
-      step, frameCount, freqRes, halfSize, window, cohGain,
+      step, frameCount, freqRes, halfSize, window, cohGain, nenbw,
       kFractional, intFundBinRounded, hMax,
       f2Kappa, nProd, prodA, prodB, imdIdx,
       fundSearchMinBin, fundSearchMaxBin,
@@ -518,7 +538,7 @@ export class FftAnalyzer {
   finalize(merged, sp, snrFreqMin, snrFreqMax, fundRefDbFs, outResult) {
     const { sampleRate, fftSize, harmonicCount, windowType, overlap,
             coherentAveraging, expectedFundHz,
-            freqRes, halfSize, cohGain, kFractional,
+            freqRes, halfSize, cohGain, nenbw, kFractional,
             fundSearchMinBin, fundSearchMaxBin } = sp;
     const sumRe = merged.sumRe;
     const sumIm = merged.sumIm;
@@ -616,6 +636,7 @@ export class FftAnalyzer {
       outResult.snrDb = 300.0;
       outResult.sinadDb = 300.0;
       outResult.noisePower = 0.0;
+      outResult.windowNenbwBins = nenbw;
       outResult.awNoisePower = 0.0;
       outResult.avgNoiseFloorDbFs = fundDbFs - 300.0;
       outResult.fundamentalDynExclusionHz = 0.0;
@@ -647,19 +668,26 @@ export class FftAnalyzer {
 
     // --- Noise floor + dynamic mask extension --------------------------------
     const nf = this._computeNoiseFloorAndExtendSignalMask(
-      amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS);
+      amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS, skirtLookAheadBins(overlap));
     const medianNoisePow = nf.medianNoisePow;
     const dynWidthBins = nf.dynWidthBins;
 
     // --- SNR — integrated noise over the measurement band --------------------
     let noisePower = 0.0;
+    let bandBins = 0, countedBins = 0;
     for (let k = 1; k <= halfSize; k++) {
       const freq = k * freqRes;
-      if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) {
-        const pow = amplLinear[k] * amplLinear[k];
-        noisePower += pow;
+      if (freq >= snrLo && freq <= snrHi) {
+        bandBins++;
+        if (!isSignalBin[k]) { noisePower += amplLinear[k] * amplLinear[k]; countedBins++; }
       }
     }
+    // Excluded zones (fundamental skirt, harmonics) held noise too — estimate it as the surrounding floor by rescaling the
+    // counted sum to the full band width, instead of dropping those slots (flattered SNR by the excluded fraction; ~0.8 dB in QA40x app).
+    if (countedBins > 0) noisePower *= bandBins / countedBins;
+    // A windowed periodogram bin holds NENBW bin-widths of broadband power (Hann 1.5); summing noise bins as-is overstates
+    // the band noise by that factor — divide it back out. Coherent lines stay untouched (already cohGain-normalized).
+    noisePower /= nenbw;
     const snrDb = noisePower <= 0 ? 300.0 : 10.0 * Math.log10((refLin * refLin) / noisePower);
 
     // SINAD: signal RMS² / (noise + in-band harmonic power) — basis for ENOB.
@@ -693,6 +721,7 @@ export class FftAnalyzer {
     outResult.snrFreqMax = snrFreqMax;
     outResult.coherentAveraging = coherentAveraging;
     outResult.noisePower = noisePower;
+    outResult.windowNenbwBins = nenbw;
     outResult.awNoisePower = noisePower;
     outResult.avgNoiseFloorDbFs = avgNoiseFloorDbFs;
     outResult.fundamentalTrueDbFs = fundTrueDbFs;
@@ -819,17 +848,22 @@ export class FftAnalyzer {
     const EXCL_BINS = 4;
     const isSignalBin = this._buildSignalBinMask(halfSize, fundBin, r.harmonicBins, harmonicCount, EXCL_BINS);
     const medianNoisePow = this._computeNoiseFloorAndExtendSignalMask(
-      amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS).medianNoisePow;
+      amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS, skirtLookAheadBins(r.overlap)).medianNoisePow;
 
     // --- SNR -----------------------------------------------------------------
     let noisePower = 0.0;
+    let bandBins = 0, countedBins = 0;
     for (let k = 1; k <= halfSize; k++) {
       const freq = k * freqRes;
-      if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) {
-        const pow = amplLinear[k] * amplLinear[k];
-        noisePower += pow;
+      if (freq >= snrLo && freq <= snrHi) {
+        bandBins++;
+        if (!isSignalBin[k]) { noisePower += amplLinear[k] * amplLinear[k]; countedBins++; }
       }
     }
+    // Excluded-zone rescale + NENBW — same corrections as analyze(). NENBW read from the RESULT (stamped at analysis time) —
+    // a recompute must match the spectrum it recomputes from, not the window selected by now.
+    if (countedBins > 0) noisePower *= bandBins / countedBins;
+    if (r.windowNenbwBins > 0) noisePower /= r.windowNenbwBins;
     r.noisePower = noisePower;
     r.snrDb = noisePower <= 0 ? 300.0 : 10.0 * Math.log10((refLin * refLin) / noisePower);
     const sinadDenom = noisePower + harmPowerSum;
@@ -871,7 +905,7 @@ export class FftAnalyzer {
    *  dynamic fundamental-exclusion walk against the global 10th-percentile floor,
    *  and applies the phase-noise exclusion zone within ±fundBin/2. Mutates
    *  `isSignalBin` in place. Returns { medianNoisePow, dynWidthBins }. */
-  _computeNoiseFloorAndExtendSignalMask(amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, exclBins) {
+  _computeNoiseFloorAndExtendSignalMask(amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, exclBins, lookAheadBins) {
     if (this._scratchNoiseCand == null || this._scratchNoiseCand.length < halfSize) {
       this._scratchNoiseCand = new Float64Array(halfSize);
       this._scratchNoiseGlob = new Float64Array(halfSize);
@@ -890,15 +924,37 @@ export class FftAnalyzer {
     }
     let medianNoisePow = candidateCount > 0
       ? selectKth(candidatePow, candidateCount, Math.trunc(candidateCount / 2)) : 0.0;
-    // 10th-percentile of the full spectrum — closer to true quantization floor.
-    const globalMedianNoisePow = globalCount > 0
-      ? selectKth(globalPow, globalCount, Math.trunc(globalCount / 10)) : 0.0;
+    // Walk threshold = the GLOBAL pool's MEDIAN (band-independent). NOT the 10th percentile: only ~10% of noise bins fall
+    // below that, so L consecutive sub-threshold bins occur with ~0.1^L probability — at 87.5%+ overlap (L = 10/18) the
+    // look-ahead walk never stopped and flagged the whole band as signal (N read "—", SNR pinned at the 300 dB sentinel).
+    // Half of all noise bins sit below the median, so the walk ends within a few correlation lengths of true noise while
+    // genuine skirt bins (well above the floor) keep it going exactly as before.
+    const walkStopPow = globalCount > 0
+      ? selectKth(globalPow, globalCount, Math.trunc(globalCount / 2)) : 0.0;
 
     let dynWidthBins = exclBins;
-    if (globalMedianNoisePow > 0) {
+    if (walkStopPow > 0) {
+      // Hard cap at ±fundBin/2 (the same "can never reach H2" bound the phase-noise pass uses) so no floor statistics can
+      // ever extend the exclusion across the whole band (the rescaled noise sum needs surviving bins to estimate the zone).
+      const walkLo = Math.max(1, fundBin - Math.trunc(fundBin / 2));
+      const walkHi = Math.min(halfSize - 1, fundBin + Math.trunc(fundBin / 2));
       let dynLo = fundBin, dynHi = fundBin;
-      while (dynLo > 1 && amplLinear[dynLo - 1] * amplLinear[dynLo - 1] > globalMedianNoisePow) dynLo--;
-      while (dynHi < halfSize - 1 && amplLinear[dynHi + 1] * amplLinear[dynHi + 1] > globalMedianNoisePow) dynHi++;
+      // Ends only when lookAheadBins consecutive bins sit at/below the floor — a shorter sub-floor dip is the wobble of an
+      // overlap-averaged floor (correlated frames), not the skirt's end, and is stepped over.
+      while (dynLo > walkLo) {
+        let stepTo = -1;
+        const limit = Math.max(walkLo, dynLo - lookAheadBins);
+        for (let k = dynLo - 1; k >= limit; k--) { if (amplLinear[k] * amplLinear[k] > walkStopPow) { stepTo = k; break; } }
+        if (stepTo < 0) break;
+        dynLo = stepTo;
+      }
+      while (dynHi < walkHi) {
+        let stepTo = -1;
+        const limit = Math.min(walkHi, dynHi + lookAheadBins);
+        for (let k = dynHi + 1; k <= limit; k++) { if (amplLinear[k] * amplLinear[k] > walkStopPow) { stepTo = k; break; } }
+        if (stepTo < 0) break;
+        dynHi = stepTo;
+      }
       dynWidthBins = Math.max(fundBin - dynLo, dynHi - fundBin);
       if (dynWidthBins > exclBins) {
         for (let k = dynLo; k <= dynHi; k++) isSignalBin[k] = 1;

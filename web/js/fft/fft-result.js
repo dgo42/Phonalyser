@@ -106,6 +106,11 @@ export class FftResult {
     this.coherentAveraging = false;
     /** Sum of amplLinear[k]² for noise bins inside the SNR band (unweighted). */
     this.noisePower = 0;
+    /** Normalized equivalent noise bandwidth of the analysis window, in bins
+     *  (Hann: 1.5) — stamped at analysis time so a band-change recompute applies
+     *  the same noise-integral correction to THIS spectrum regardless of the
+     *  window selected by then. */
+    this.windowNenbwBins = 0;
     /** A-weighted noise+distortion power (all non-fundamental bins, no band limit). */
     this.awNoisePower = 0;
     /** Average noise floor: RMS amplitude of a single noise bin in dBFS. */
@@ -212,6 +217,7 @@ export class FftResult {
     c.snrFreqMax = this.snrFreqMax;
     c.coherentAveraging = this.coherentAveraging;
     c.noisePower = this.noisePower;
+    c.windowNenbwBins = this.windowNenbwBins;
     c.awNoisePower = this.awNoisePower;
     c.avgNoiseFloorDbFs = this.avgNoiseFloorDbFs;
     c.fundamentalDynExclusionHz = this.fundamentalDynExclusionHz;

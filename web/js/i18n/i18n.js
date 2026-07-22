@@ -191,6 +191,10 @@ function suffixChainForTag(tag) {
 export async function setLocale(tag) {
   if (!tag) return;
   currentTag = tag;
+  // Keep <html lang> tracking the active locale. openHelp() reads it to choose the help
+  // language (en/de/uk), and it also drives screen-reader / spell-check language. Nothing
+  // else updated it, so switching the UI language left the help stuck on the initial locale.
+  if (typeof document !== 'undefined') document.documentElement.lang = tag;
   const suffixes = suffixChainForTag(tag);
   const bundles = await Promise.all(suffixes.map(loadBundle));
   chain = bundles.filter((b) => b != null);
