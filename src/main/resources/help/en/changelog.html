@@ -13,6 +13,15 @@
   <p>The release history below is drawn from the project's canonical
      <a href="https://github.com/dgo42/Phonalyser/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md</a>.</p>
 
+  <h2><a name="v1.1.1" id="v1.1.1"></a>1.1.1 — unreleased</h2>
+    <h3>Fixed</h3>
+    <ul>
+      <li><b>Noise metrics were pessimistic by the analysis window's noise bandwidth.</b> The integrated-noise sums behind SNR, N, N+D, SINAD, ENOB and THD+N were taken over windowed spectrum bins without dividing by the window's normalized equivalent noise bandwidth (NENBW) — a windowed bin holds NENBW bin-widths of broadband power, so every noise figure read low: 1.76 dB with Hann, 3.0 dB with Blackman-Harris 4, 5.8 dB with flat-top, up to 7.5 dB with HFT248D. Tones were never affected. The factor is computed from the actual window table — exact for every window, including future ones — and stamped into each result so a later band change recomputes with the window that produced the spectrum. The same pass makes two smaller noise-accuracy corrections: the noise integral is rescaled for the excluded signal zones (the slots under the fundamental's skirt and the harmonics are estimated at the surrounding floor instead of counted as zero-noise), and the fundamental's skirt-exclusion walk is overlap-robust — it ends only after a look-ahead window sized to the frame-overlap correlation length has fallen back to the floor, instead of at the first sub-floor bin of a wobbly overlap-averaged floor. Validated against a hardware simulator whose dither power is constructed and independently computed; the Theory of operation's FFT chapter now documents the correction and tabulates every window's factor. Fixed in the desktop app and the web version alike.</li>
+      <li><b>QA40x streaming crashed the 32-bit Windows build.</b> libusb's public API is stdcall on 32-bit Windows while the binding called it as cdecl — heap corruption the moment streaming started (64-bit was never affected: the conventions coincide there). Calls and the transfer callback now use the correct convention per platform.</li>
+      <li><b>The Windows platform JARs lacked the exclusive-mode JavaSound mixers.</b> The WASAPI-exclusive JavaSound provider shipped only with the installer, so bare-JAR installs had JavaSound capped at DirectSound's 16 bits. The provider and its native library now ride inside the fat JARs and are staged automatically at startup — 24-bit / high-rate exclusive mixers work identically on the installer and JAR routes.</li>
+      <li><b>Web help ignored the UI language.</b> In the browser build, switching the app language left the in-app help stuck in English — it took the help language from the page locale, which the language switch never updated. Help now follows the UI language, and an already-open help window re-points to the same page in the new language.</li>
+    </ul>
+
   <h2><a name="v1.1.0" id="v1.1.0"></a>1.1.0 — 2026-07-21</h2>
     <h3>Added</h3>
     <ul>
