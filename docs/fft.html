@@ -502,16 +502,80 @@
      measurement band, with every signal bin (fundamental, harmonics, and
      their leakage zones) excluded from the noise sum:</p>
   <div class="eq">SNR = 10·log₁₀ ( <i>A</i><sub>1</sub>² / Σ<sub>noise</sub> <i>A</i><sub>k</sub>² )<span class="no">(5)</span></div>
+  <p>One factor in that noise sum is invisible until it bites: a windowed
+     spectrum bin does not hold one bin-width of broadband power but NENBW of
+     them — the window's <b>normalized equivalent noise bandwidth</b> (Hann:
+     1.5, flat-top: ≈3.8).  A sine is immune, its amplitude being normalized by
+     the window's coherent gain; but a noise sum taken over raw bins overstates
+     the band power by exactly that factor, and SNR, SINAD, ENOB and THD+N
+     would all read pessimistic — 1.76 dB with Hann, almost 6 dB with flat-top.
+     The analyser therefore divides the integrated noise by NENBW — and it does
+     not look the value up in a table of window names, it computes it from the
+     very window table in use:</p>
+  <div class="eq">NENBW = <i>N</i> · Σ <i>w</i><sub>n</sub>² / ( Σ <i>w</i><sub>n</sub> )²<span class="no">(6)</span></div>
+  <p>so every window — including any added in the future — carries its exact
+     factor.  The value is stamped into each result, so a later band change
+     recomputes with the window that actually produced the spectrum.  The
+     factors of the analyser's windows (computed from their tables at
+     <i>N</i> = 64k; the dependence on <i>N</i> is negligible):</p>
+  <table class="controls">
+    <tr><th>Window</th><th>NENBW (bins)</th><th>Noise-sum error if uncorrected</th></tr>
+    <tr><td>Rectangular</td><td>1.0000</td><td>0.00 dB</td></tr>
+    <tr><td>Hann</td><td>1.5000</td><td>1.76 dB</td></tr>
+    <tr><td>Blackman-Harris 4</td><td>2.0044</td><td>3.02 dB</td></tr>
+    <tr><td>Blackman-Harris 7</td><td>2.6303</td><td>4.20 dB</td></tr>
+    <tr><td>Flat-top</td><td>3.7702</td><td>5.76 dB</td></tr>
+    <tr><td>HFT144D</td><td>4.5386</td><td>6.57 dB</td></tr>
+    <tr><td>HFT248D</td><td>5.6512</td><td>7.52 dB</td></tr>
+    <tr><td>Kaiser-Bessel 24</td><td>2.8013</td><td>4.47 dB</td></tr>
+    <tr><td>Kaiser-Bessel 38</td><td>3.5072</td><td>5.45 dB</td></tr>
+    <tr><td>Dolph-Chebyshev 150 dB</td><td>2.3660</td><td>3.74 dB</td></tr>
+    <tr><td>Dolph-Chebyshev 200 dB</td><td>2.7259</td><td>4.36 dB</td></tr>
+    <tr><td>Dolph-Chebyshev 250 dB</td><td>3.0435</td><td>4.83 dB</td></tr>
+    <tr><td>Dolph-Chebyshev 300 dB</td><td>3.3310</td><td>5.23 dB</td></tr>
+  </table>
   <p><b>SINAD</b> puts <em>both</em> noise and distortion in the
      denominator, and <b>ENOB</b> — the effective number of bits — follows
      from it by the converter's ideal-quantization
      law<sup id="cite-4"><a href="#ref-enob">[4]</a></sup>:</p>
-  <div class="eq">SINAD = 10·log₁₀ ( <i>A</i><sub>1</sub>² / (Σ<sub>noise</sub> + Σ<sub>dist</sub>) )<span class="no">(6)</span></div>
-  <div class="eq">ENOB = (SINAD − 1.76) / 6.02<span class="no">(7)</span></div>
+  <div class="eq">SINAD = 10·log₁₀ ( <i>A</i><sub>1</sub>² / (Σ<sub>noise</sub> + Σ<sub>dist</sub>) )<span class="no">(7)</span></div>
+  <div class="eq">ENOB = (SINAD − 1.76) / 6.02<span class="no">(8)</span></div>
   <p>THD+N is simply the reciprocal ratio to SINAD (the same band, the same
      numerator). The THD+N noise term is A-weighted to the IEC
      standard<sup id="cite-5"><a href="#ref-aw">[5]</a></sup> so the figure
      reflects audibility rather than raw wideband noise.</p>
+
+  <p>The phrase "their leakage zones" hides the detail that decides whether these
+     figures are honest: the band excluded around the fundamental is not a fixed
+     guard.  A wide or phase-noisy fundamental spreads a <b>skirt</b> of raised
+     bins to either side; left in the noise sum it would flatter both SNR and
+     ENOB by counting the tone's own spilled energy as noise.  So the exclusion
+     is grown to fit the skirt.  Starting at the fundamental bin the analyser
+     walks outward, bin by bin, while each neighbour still stands above the noise
+     floor, and ends the walk only when a whole <b>look-ahead window</b> of bins
+     has fallen back to it — a narrow skirt is excluded narrowly, a broad one out
+     to wherever it truly ends.  The window is sized to the frame-overlap
+     correlation length, about 1/(1−overlap) bins plus margin: an
+     overlap-averaged floor wobbles on exactly that scale, so a shorter sub-floor
+     dip inside the skirt is floor texture, not the skirt's end, and is stepped
+     over.  The level used for the test is the median power of the spectrum's
+     noise bins, which is immune to the very leakage being measured, so the width
+     of the walk does not depend on the chosen SNR band; and the walk is
+     hard-capped at ±½·<i>f</i>₁, so no floor statistic can ever extend the
+     exclusion to the second harmonic.  A second, bounded pass then sweeps the
+     same ±½·<i>f</i>₁ zone around the fundamental and drops any isolated
+     phase-noise bump still standing above the floor — a skirt broken by a gap
+     longer than the look-ahead would otherwise leak its outer islands back in.
+     That zone is capped at half the fundamental frequency so it can never reach
+     the second harmonic at 2·<i>f</i>₁, which must stay counted as distortion,
+     not excluded as noise.</p>
+
+  <p>However wide the exclusions grow, they cannot deflate the noise figure,
+     because excluded bins are not counted as silence: the noise integral is
+     rescaled by the ratio of band bins to bins actually summed, which estimates
+     the noise hidden under the skirt and the harmonics at the level of the
+     surrounding floor — the only honest assumption, since the true noise under
+     a tone is unobservable.</p>
 
   <h2 id="dualtone">Two-tone (intermodulation)</h2>
   <p>With two tones present, the products of interest are not harmonics of

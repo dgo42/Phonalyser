@@ -331,6 +331,39 @@
      floor.  Exports and the deconvolution reference are taken before this
      stage, so they remain the ideal waveform.</p>
 
+  <h2 id="dither-dbv">Setting dither by the noise floor it makes</h2>
+  <p>Dither depth is a number of bits, but a spectrum shows a <em>level</em>, not
+     a bit count — so the generator lets you set and read the depth either as
+     bits or directly in <b>dBV</b>, one value seen two ways.  The conversion is
+     the physics of the TPDF noise itself: <i>N</i>-bit dither has an RMS of
+     2<sup>−(<i>N</i>−1)</sup>/√6 relative to the <em>peak</em> full scale, so
+     its absolute level is</p>
+  <div class="eq"><i>L</i><sub>dBV</sub> = −6.0206·(<i>N</i>−1) − 7.782
+      + 20·log₁₀ <i>V</i><sub>FS,pk</sub><span class="no">(11)</span></div>
+  <p>with <i>V</i><sub>FS,pk</sub> the DAC's peak full-scale voltage.  The
+     reference is the peak full scale because the dither lives in the
+     peak-normalised sample — using the RMS full scale would read about 3 dB low.
+     Full scale is a per-range, calibrated value, so the dBV shifts with the
+     output range and card calibration exactly as the real noise floor does.</p>
+
+  <p>A second term makes the stated dBV match what the
+     <a href="fft.html">FFT</a> actually displays.  A spectrum analyser reads
+     <em>broadband</em> noise higher than its true RMS by the analysis window's
+     <b>equivalent noise bandwidth</b> (ENBW): a tone lands in essentially one
+     bin and is recovered through the window's coherent gain, but noise is spread
+     across the window's wider noise bandwidth.  The generator therefore adds
+     10·log₁₀(ENBW) for the window currently chosen in the FFT — about 1.76 dB
+     for a Hann window, ~3 dB for Blackman-Harris, more for the flat-tops — and
+     re-solves the depth when you change that window.  The result: type
+     −100 dBV and the FFT noise floor sits at −100 dBV, equal by construction.</p>
+
+  <div class="note"><b>Incoherent averaging only.</b>  This match assumes the FFT
+     is using <em>incoherent (power) averaging</em>.  Coherent averaging is built
+     to cancel uncorrelated noise — it pulls the measured floor down by
+     √<i>M</i> over <i>M</i> blocks — so against a coherent average the dither
+     reads far below its stated dBV.  Check a dither setting against the spectrum
+     only with power averaging.</div>
+
   <h2 id="savefile">Saving a signal — a perfect reference</h2>
   <p>When you save the generator output to a file (<b>Save&nbsp;to…</b> on the
      generator pane), the samples are written <em>straight from the synthesis
