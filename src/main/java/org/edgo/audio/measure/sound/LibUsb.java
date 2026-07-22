@@ -19,20 +19,24 @@
 package org.edgo.audio.measure.sound;
 
 import com.sun.jna.Callback;
+import com.sun.jna.Function;
 import com.sun.jna.Library;
 import com.sun.jna.Native;
 import com.sun.jna.NativeLibrary;
 import com.sun.jna.NativeLong;
+import com.sun.jna.Platform;
 import com.sun.jna.Pointer;
 import com.sun.jna.Structure;
 import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.ptr.PointerByReference;
+import com.sun.jna.win32.StdCallLibrary;
 import lombok.extern.log4j.Log4j2;
 
 import java.io.File;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Minimal JNA binding to the {@code libusb-1.0} shared library — a common
@@ -194,9 +198,38 @@ public final class LibUsb {
      * that runs {@link Lib#libusb_handle_events_timeout_completed} when a transfer
      * completes, fails or is cancelled.  The argument points at the same
      * {@link LibUsbTransfer} memory that was submitted.  Must not throw.
+     *
+     * <p>Register it through {@link #stdcallSafe} — on 32-bit Windows libusb calls
+     * the callback {@code WINAPI} (stdcall), and a plain cdecl JNA thunk there
+     * corrupts the stack (bench: instant {@code c0000374} heap-corruption crash
+     * on Win7 x86 the moment streaming starts).
      */
     public interface TransferCallback extends Callback {
         void invoke(Pointer transfer);
+    }
+
+    /** win32-x86 variant of {@link TransferCallback}: the {@code StdCallCallback}
+     *  marker makes JNA emit a stdcall thunk, matching {@code LIBUSB_CALL}
+     *  ({@code WINAPI}) on 32-bit Windows.  Never used on other platforms. */
+    public interface TransferCallbackStdCall extends TransferCallback, StdCallLibrary.StdCallCallback {
+        @Override
+        void invoke(Pointer transfer);
+    }
+
+    /** Whether libusb's public API uses stdcall here: {@code LIBUSB_CALL} is
+     *  {@code WINAPI}, which differs from cdecl only on 32-bit Windows. */
+    private static boolean isWin32StdCall() { // static-ok: pure platform predicate, native-interop
+        return Platform.isWindows() && !Platform.is64Bit();
+    }
+
+    /** Returns {@code cb} marked with the calling convention libusb expects on
+     *  THIS platform: on 32-bit Windows a stdcall-marked delegate (see
+     *  {@link TransferCallbackStdCall}), elsewhere {@code cb} unchanged. */
+    public static TransferCallback stdcallSafe(TransferCallback cb) { // static-ok: native-interop helper, mirrors lib()
+        if (isWin32StdCall()) {
+            return (TransferCallbackStdCall) cb::invoke;
+        }
+        return cb;
     }
 
     /** The bound {@code libusb-1.0} entry points — the subset its consumers use. */
@@ -281,17 +314,30 @@ public final class LibUsb {
                     System.getProperty("java.library.path"));
         }
         UnsatisfiedLinkError last = null;
+        // libusb's public API is LIBUSB_CALL = WINAPI: stdcall on 32-bit Windows,
+        // identical to cdecl everywhere else.  JNA defaults to cdecl, which on
+        // win32-x86 unbalances the stack on EVERY call — heap corruption
+        // (c0000374) the moment streaming starts.  Select the convention per
+        // platform at the one load site (callbacks are handled by stdcallSafe).
+        Map<String, Object> options = isWin32StdCall()
+                ? Map.of(Library.OPTION_CALLING_CONVENTION, Function.ALT_CONVENTION)
+                : Map.of();
         for (String name : candidates) {
             try {
-                lib = Native.load(name, Lib.class);
+                lib = Native.load(name, Lib.class, options);
                 log.info("libusb-1.0 loaded as '{}'", name);
                 break;
             } catch (UnsatisfiedLinkError ule) {
                 last = ule;
             }
         }
-        if (lib == null && log.isInfoEnabled()) {
-            log.info("libusb-1.0 not available (tried {}): {}",
+        if (lib == null) {
+            // WARN, not INFO: the packaged log config caps this logger at WARN, and
+            // an invisible load failure cost a field round-trip (Win7 x86 bench) —
+            // the QA40x backend silently showing no devices with no trace of why.
+            // One line once per process; on Windows/macOS the library ships bundled,
+            // so failing to load it is genuinely anomalous.
+            log.warn("libusb-1.0 not available (tried {}): {}",
                     Arrays.toString(candidates), last != null ? last.getMessage() : "no candidate");
         }
     }

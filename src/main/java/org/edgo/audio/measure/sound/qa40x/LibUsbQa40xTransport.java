@@ -75,7 +75,9 @@ public final class LibUsbQa40xTransport implements Qa40xTransport {
     private static final long   CLOSE_JOIN_MS     = 2_000L;
 
     private final LibUsb.Lib lib;
-    private final LibUsb.TransferCallback transferCallback = this::onTransferComplete;
+    // stdcallSafe: on 32-bit Windows libusb invokes the callback WINAPI (stdcall);
+    // an unmarked (cdecl) JNA thunk there corrupts the stack — see LibUsb.
+    private final LibUsb.TransferCallback transferCallback = LibUsb.stdcallSafe(this::onTransferComplete);
     /** In-flight async transfers, keyed by the {@code libusb_transfer} pointer. */
     private final Map<Pointer, TransferContext> activeTransfers = new ConcurrentHashMap<>();
 
