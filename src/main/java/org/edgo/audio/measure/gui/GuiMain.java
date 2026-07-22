@@ -39,6 +39,7 @@ import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.gl.Glfw;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.javasound.CsjsoundNativePath;
 
 
 /**
@@ -75,6 +76,13 @@ public final class GuiMain {
         logCtx.getConfiguration().getRootLogger().removeAppender("Console");
         logCtx.updateLoggers();
         Logger log = LogManager.getLogger(GuiMain.class);
+
+        // Fat-jar runs: make the bundled csjsound WASAPI-exclusive JavaSound
+        // provider loadable BEFORE anything triggers the JVM's first
+        // System.loadLibrary (SWT, JNA) — java.library.path is snapshotted
+        // exactly once, at that first load.  No-op on non-Windows and on
+        // installed layouts (see CsjsoundNativePath).
+        CsjsoundNativePath.installForFatJar();
 
         // On a Wayland session SWT's GLCanvas can't obtain a GL context (GLX is
         // X11-only), so the GPU scope is unavailable there.  When GPU acceleration

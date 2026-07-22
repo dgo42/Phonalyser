@@ -49,7 +49,11 @@ jobs:
             # legacy jar has no installer to stage lib/windows, so libusb must
             # ride inside the jar — mirrors portaudio's win32-* resources).
             "src/main/resources/win32-x86-64/libusb-1.0_x64.dll",
-            "src/main/resources/win32-x86/libusb-1.0_x86.dll"
+            "src/main/resources/win32-x86/libusb-1.0_x86.dll",
+            # csjsound rides in the fat JARs too (WASAPI-exclusive JavaSound
+            # mixers on bare-JAR installs; CsjsoundNativePath stages the DLL).
+            "src/main/resources/win32-x86-64/csjsound_amd64.dll",
+            "src/main/resources/win32-x86/csjsound_x86.dll"
           )
           $missing = $required | Where-Object { -not (Test-Path $_) }
           if ($missing) {
