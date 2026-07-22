@@ -464,12 +464,47 @@
      Messband, wobei jeder Signal-Bin (Grundton, Harmonische und ihre
      Leck-Zonen) aus der Rauschsumme ausgeschlossen wird:</p>
   <div class="eq">SNR = 10·log₁₀ ( <i>A</i><sub>1</sub>² / Σ<sub>noise</sub> <i>A</i><sub>k</sub>² )<span class="no">(5)</span></div>
+  <p>Ein Faktor in dieser Rauschsumme bleibt unsichtbar, bis er zuschlägt: ein
+     gefensterter Spektrum-Bin enthält nicht eine Bin-Breite an
+     Breitbandleistung, sondern NENBW davon — die <b>normalisierte äquivalente
+     Rauschbandbreite</b> des Fensters (Hann: 1,5, Flat-Top: ≈3,8).  Ein Sinus
+     ist immun, seine Amplitude wird über die kohärente Verstärkung des
+     Fensters normalisiert; eine über rohe Bins gebildete Rauschsumme
+     überschätzt die Bandleistung jedoch um genau diesen Faktor, und SNR,
+     SINAD, ENOB und THD+N läsen allesamt zu pessimistisch — 1,76 dB bei Hann,
+     fast 6 dB bei Flat-Top.  Der Analysator teilt das integrierte Rauschen
+     deshalb durch NENBW — und schlägt den Wert nicht in einer Tabelle von
+     Fensternamen nach, sondern berechnet ihn aus der tatsächlich verwendeten
+     Fenstertabelle:</p>
+  <div class="eq">NENBW = <i>N</i> · Σ <i>w</i><sub>n</sub>² / ( Σ <i>w</i><sub>n</sub> )²<span class="no">(6)</span></div>
+  <p>So trägt jedes Fenster — auch jedes künftig hinzugefügte — seinen exakten
+     Faktor.  Der Wert wird in jedes Ergebnis eingeprägt, sodass eine spätere
+     Bandänderung mit dem Fenster nachrechnet, das das Spektrum tatsächlich
+     erzeugt hat.  Die Faktoren der Fenster des Analysators (aus ihren
+     Tabellen bei <i>N</i> = 64k berechnet; die Abhängigkeit von <i>N</i> ist
+     vernachlässigbar):</p>
+  <table class="controls">
+    <tr><th>Fenster</th><th>NENBW (Bins)</th><th>Rauschsummen-Fehler ohne Korrektur</th></tr>
+    <tr><td>Rechteck</td><td>1,0000</td><td>0,00 dB</td></tr>
+    <tr><td>Hann</td><td>1,5000</td><td>1,76 dB</td></tr>
+    <tr><td>Blackman-Harris 4</td><td>2,0044</td><td>3,02 dB</td></tr>
+    <tr><td>Blackman-Harris 7</td><td>2,6303</td><td>4,20 dB</td></tr>
+    <tr><td>Flat-Top</td><td>3,7702</td><td>5,76 dB</td></tr>
+    <tr><td>HFT144D</td><td>4,5386</td><td>6,57 dB</td></tr>
+    <tr><td>HFT248D</td><td>5,6512</td><td>7,52 dB</td></tr>
+    <tr><td>Kaiser-Bessel 24</td><td>2,8013</td><td>4,47 dB</td></tr>
+    <tr><td>Kaiser-Bessel 38</td><td>3,5072</td><td>5,45 dB</td></tr>
+    <tr><td>Dolph-Tschebyscheff 150 dB</td><td>2,3660</td><td>3,74 dB</td></tr>
+    <tr><td>Dolph-Tschebyscheff 200 dB</td><td>2,7259</td><td>4,36 dB</td></tr>
+    <tr><td>Dolph-Tschebyscheff 250 dB</td><td>3,0435</td><td>4,83 dB</td></tr>
+    <tr><td>Dolph-Tschebyscheff 300 dB</td><td>3,3310</td><td>5,23 dB</td></tr>
+  </table>
   <p><b>SINAD</b> setzt <em>sowohl</em> Rauschen als auch Verzerrung in den
      Nenner, und <b>ENOB</b> — die effektive Anzahl der Bits — folgt daraus
      über das Ideal-Quantisierungsgesetz des
      Wandlers<sup id="cite-4"><a href="#ref-enob">[4]</a></sup>:</p>
-  <div class="eq">SINAD = 10·log₁₀ ( <i>A</i><sub>1</sub>² / (Σ<sub>noise</sub> + Σ<sub>dist</sub>) )<span class="no">(6)</span></div>
-  <div class="eq">ENOB = (SINAD − 1.76) / 6.02<span class="no">(7)</span></div>
+  <div class="eq">SINAD = 10·log₁₀ ( <i>A</i><sub>1</sub>² / (Σ<sub>noise</sub> + Σ<sub>dist</sub>) )<span class="no">(7)</span></div>
+  <div class="eq">ENOB = (SINAD − 1.76) / 6.02<span class="no">(8)</span></div>
   <p>THD+N ist einfach das reziproke Verhältnis zu SINAD (dasselbe Band, derselbe
      Zähler). Der Rauschterm von THD+N ist A-bewertet nach dem
      IEC-Standard<sup id="cite-5"><a href="#ref-aw">[5]</a></sup>, sodass der Wert
@@ -483,19 +518,33 @@
      die eigene geleckte Energie des Tons als Rauschen zählt.  Daher wird der
      Ausschluss so weit vergrößert, dass er zum Saum passt.  Beginnend beim
      Grundton-Bin läuft der Analysator nach außen, Bin für Bin, solange jeder
-     Nachbar noch über dem Grundrauschen steht, und hält beim ersten Bin an, der
-     auf dieses zurückgefallen ist — ein schmaler Saum wird schmal ausgeschlossen,
-     ein breiter bis dorthin, wo er wirklich endet.  Der für diesen Test verwendete
-     Pegel ist die Leistung im zehnten Perzentil des Spektrums selbst, die immun
-     gegen ebenjenen gemessenen Leck-Effekt ist, sodass die Breite des Laufs nicht
-     vom gewählten SNR-Band abhängt.  Ein zweiter, begrenzter Durchlauf überstreicht
-     dann eine Zone von ±½·<i>f</i>₁ um den Grundton und verwirft jeden isolierten
-     Phasenrausch-Buckel, der noch über dem Grundrauschen steht — der zusammenhängende
-     Lauf hält beim ersten Einbruch an, sodass ein durch eine Delle unterbrochener
-     Saum seine äußeren Inseln sonst wieder in die Rauschsumme lecken ließe.  Diese
-     Zone ist auf die halbe Grundtonfrequenz begrenzt, sodass sie nie die zweite
-     Harmonische bei 2·<i>f</i>₁ erreichen kann, die als Verzerrung gezählt bleiben
-     muss, nicht als Rauschen ausgeschlossen.</p>
+     Nachbar noch über dem Grundrauschen steht, und beendet den Lauf erst, wenn
+     ein ganzes <b>Vorausschau-Fenster</b> von Bins auf dieses zurückgefallen ist
+     — ein schmaler Saum wird schmal ausgeschlossen, ein breiter bis dorthin, wo
+     er wirklich endet.  Das Fenster ist auf die Korrelationslänge der
+     Frame-Überlappung bemessen, etwa 1/(1−Überlappung) Bins plus Reserve: ein
+     überlappungsgemittelter Boden schwankt genau auf dieser Skala, sodass eine
+     kürzere Unter-Boden-Delle im Saum Bodentextur ist, nicht das Saumende, und
+     übersprungen wird.  Der für den Test verwendete Pegel ist die
+     Median-Leistung der Rausch-Bins des Spektrums, die immun gegen ebenjenen
+     gemessenen Leck-Effekt ist, sodass die Breite des Laufs nicht vom gewählten
+     SNR-Band abhängt; und der Lauf ist hart auf ±½·<i>f</i>₁ begrenzt, sodass
+     keine Boden-Statistik den Ausschluss je bis zur zweiten Harmonischen
+     ausdehnen kann.  Ein zweiter, begrenzter Durchlauf überstreicht dann
+     dieselbe Zone von ±½·<i>f</i>₁ um den Grundton und verwirft jeden isolierten
+     Phasenrausch-Buckel, der noch über dem Grundrauschen steht — ein durch eine
+     Lücke länger als die Vorausschau unterbrochener Saum ließe seine äußeren
+     Inseln sonst wieder in die Rauschsumme lecken.  Diese Zone ist auf die halbe
+     Grundtonfrequenz begrenzt, sodass sie nie die zweite Harmonische bei
+     2·<i>f</i>₁ erreichen kann, die als Verzerrung gezählt bleiben muss, nicht
+     als Rauschen ausgeschlossen.</p>
+
+  <p>Wie weit die Ausschlüsse auch wachsen — die Rauschzahl können sie nicht
+     drücken, denn ausgeschlossene Bins zählen nicht als Stille: Das
+     Rauschintegral wird mit dem Verhältnis der Band-Bins zu den tatsächlich
+     summierten Bins reskaliert, was das unter Saum und Harmonischen verborgene
+     Rauschen auf dem Niveau des umgebenden Bodens schätzt — die einzig ehrliche
+     Annahme, da das wahre Rauschen unter einem Ton nicht beobachtbar ist.</p>
 
   <h2 id="dualtone">Zweiton (Intermodulation)</h2>
   <p>Bei zwei vorhandenen Tönen sind die interessierenden Produkte nicht
