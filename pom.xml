@@ -6,7 +6,7 @@
 
     <groupId>org.edgo.phonalyser</groupId>
     <artifactId>phonalyser</artifactId>
-    <version>1.1.0</version>
+    <version>1.1.1</version>
     <packaging>jar</packaging>
 
     <name>Phonalyser</name>
@@ -321,6 +321,30 @@
                                     </target>
                                 </configuration>
                             </execution>
+                            <execution>
+                                <id>unpack-csjsound-provider</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <!-- The provider is a system-scoped vendored jar, which the
+                                             jar-with-dependencies descriptor EXCLUDES — unpack its classes
+                                             (and META-INF/services SPI registration) into target/classes so
+                                             the FAT JAR carries the WASAPI-exclusive JavaSound mixers too.
+                                             The native DLL rides as a win32-* resource; CsjsoundNativePath
+                                             stages it onto java.library.path at startup. -->
+                                        <unzip src="${project.basedir}/lib/windows/csjsound-provider.jar"
+                                               dest="${project.build.directory}/classes">
+                                            <patternset>
+                                                <exclude name="META-INF/MANIFEST.MF"/>
+                                                <exclude name="META-INF/maven/**"/>
+                                            </patternset>
+                                        </unzip>
+                                    </target>
+                                </configuration>
+                            </execution>
                         </executions>
                     </plugin>
                     <plugin>
@@ -430,6 +454,35 @@
                         <configuration>
                             <skip>true</skip>
                         </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>unpack-csjsound-provider</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <!-- Same as the windows-x64 profile: the system-scoped provider
+                                             jar is excluded from jar-with-dependencies — unpack it into
+                                             target/classes so the x86 FAT JAR (which has NO installer to
+                                             stage lib/windows) carries the WASAPI-exclusive JavaSound
+                                             mixers; csjsound_x86.dll rides as the win32-x86 resource. -->
+                                        <unzip src="${project.basedir}/lib/windows/csjsound-provider.jar"
+                                               dest="${project.build.directory}/classes">
+                                            <patternset>
+                                                <exclude name="META-INF/MANIFEST.MF"/>
+                                                <exclude name="META-INF/maven/**"/>
+                                            </patternset>
+                                        </unzip>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
                     </plugin>
                 </plugins>
             </build>
