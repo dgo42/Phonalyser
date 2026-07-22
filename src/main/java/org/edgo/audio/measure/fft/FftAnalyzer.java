@@ -76,6 +76,11 @@ public class FftAnalyzer {
      *  so {@code analyze} doesn't re-sum the multi-million-entry table
      *  every tick. */
     private double     cachedCohGain;
+    /** Normalized equivalent noise bandwidth of {@link #cachedWindow} in bins,
+     *  {@code N·Σw² / (Σw)²} (Hann: 1.5) — the factor by which one windowed
+     *  periodogram bin overstates a bin-width of broadband power.  Cached with
+     *  the window; divides the integrated noise sums (never coherent lines). */
+    private double     cachedNenbw;
 
     /** Cache instance to consult during {@link #analyze}; {@code null}
      *  disables caching (CLI default).  Set by the caller via
@@ -156,11 +161,14 @@ public class FftAnalyzer {
         cachedWindow     = buildWindow(N, type);
         cachedWindowSize = N;
         cachedWindowType = type;
-        double sum = 0.0;
+        double sum  = 0.0;
+        double sum2 = 0.0;
         for (double v : cachedWindow) {
-            sum += v;
+            sum  += v;
+            sum2 += v * v;
         }
         cachedCohGain = sum / N;
+        cachedNenbw   = (double) N * sum2 / (sum * sum);
         return cachedWindow;
     }
 
@@ -469,6 +477,7 @@ public class FftAnalyzer {
         // evaluations.
         double[] window  = getCachedWindow(fftSize, windowType);
         double   cohGain = cachedCohGain;   // cached with the window table
+        double   nenbw   = cachedNenbw;     // ditto — corrects the noise integrals
 
         // --- Estimate fundamental fractional bin (always, for both averaging modes) --
         // The true signal frequency is k_f × Fs/N where k_f is non-integer.
@@ -1302,6 +1311,11 @@ public class FftAnalyzer {
             outResult.freqResolution             = freqRes;
             outResult.windowType                 = windowType;
             outResult.overlap                    = overlap;
+            // The display path re-derives all stats via recomputeStats() on THIS
+            // result — it needs the window's NENBW stamped or its noise-integral
+            // correction silently no-ops (that exact miss shipped the first
+            // version of the ENBW fix as a visible no-change).
+            outResult.windowNenbwBins            = nenbw;
             outResult.fundamentalBin             = fundBin;
             outResult.fundamentalHz              = fundHz;
             outResult.fundamentalHzRefined       = fundHzRefined;
@@ -1359,7 +1373,8 @@ public class FftAnalyzer {
         // SNR = signal_power / sum(noise_bins_in_range) → bandwidth-dependent.
 
         NoiseFloor nf = computeNoiseFloorAndExtendSignalMask(
-                amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS);
+                amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS,
+                skirtLookAheadBins(overlap));
         double medianNoisePow = nf.medianNoisePow;
         int    dynWidthBins   = nf.dynWidthBins;
         if (dynWidthBins > EXCL_BINS) {
@@ -1373,13 +1388,37 @@ public class FftAnalyzer {
         // fundamental out of the noise sum.  Signal² is refLin² so an
         // external twin-T notch on H1 cannot deflate the numerator.
         double noisePower = 0.0;
+        int bandBins    = 0;
+        int countedBins = 0;
         for (int k = 1; k <= halfSize; k++) {
             double freq = k * freqRes;
-            if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) {
-                double pow = amplLinear[k] * amplLinear[k];
-                noisePower += pow;
+            if (freq >= snrLo && freq <= snrHi) {
+                bandBins++;
+                if (!isSignalBin[k]) {
+                    noisePower += amplLinear[k] * amplLinear[k];
+                    countedBins++;
+                }
             }
         }
+        // The excluded zones (fundamental skirt, harmonics) held noise too —
+        // estimate it as the surrounding floor by rescaling the counted sum to
+        // the full band width, instead of silently dropping those slots (which
+        // flattered SNR by the excluded fraction; the same effect, with far
+        // wider zones, measured 0.8 dB in the vendor QA40x app).  Exact for a
+        // flat floor, and a better estimate than zero for a structured one.
+        if (countedBins > 0) {
+            noisePower *= (double) bandBins / countedBins;
+        }
+        // A windowed periodogram bin holds NENBW bin-widths of broadband power
+        // (Hann: 1.5), so summing noise bins as-is overstates the band's noise
+        // power by exactly that factor — divide it back out.  Coherent lines
+        // (fundamental, harmonics) need NO such correction: a sine's amplitude
+        // is already window-normalized via cohGain, so refLin² and harmPowerSum
+        // stay untouched.  Without this, SNR / SINAD / ENOB / THD+N read
+        // 10·log10(NENBW) pessimistic (1.76 dB for Hann) — found against a
+        // 23-bit-TPDF-dither hardware simulator where QA40x's software matched
+        // the constructed theory value and we sat exactly one ENBW low.
+        noisePower /= nenbw;
         double snrDb;
         if (noisePower <= 0) {
             log.warn("SNR: no non-signal bins remain in measurement range");
@@ -1444,6 +1483,7 @@ public class FftAnalyzer {
         outResult.coherentAveraging          = coherentAveraging;
         outResult.noisePower                 = noisePower;
         outResult.awNoisePower               = noisePower;
+        outResult.windowNenbwBins            = nenbw;
         outResult.avgNoiseFloorDbFs          = avgNoiseFloorDbFs;
         outResult.fundamentalTrueDbFs        = fundTrueDbFs;
         outResult.fundamentalDynExclusionHz  = dynWidthBins * freqRes;
@@ -1568,17 +1608,35 @@ public class FftAnalyzer {
         // Result.fundamentalDynExclusionHz is final and was set on the
         // original analyze() pass; we only need the median noise power.
         double medianNoisePow = computeNoiseFloorAndExtendSignalMask(
-                amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS)
+                amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS,
+                skirtLookAheadBins(r.overlap))
                 .medianNoisePow;
 
         // --- SNR (signal RMS² / total unweighted noise power) ---------------
         double noisePower = 0.0;
+        int bandBins    = 0;
+        int countedBins = 0;
         for (int k = 1; k <= halfSize; k++) {
             double freq = k * freqRes;
-            if (!isSignalBin[k] && freq >= snrLo && freq <= snrHi) {
-                double pow = amplLinear[k] * amplLinear[k];
-                noisePower += pow;
+            if (freq >= snrLo && freq <= snrHi) {
+                bandBins++;
+                if (!isSignalBin[k]) {
+                    noisePower += amplLinear[k] * amplLinear[k];
+                    countedBins++;
+                }
             }
+        }
+        // Excluded-zone rescale + NENBW — same corrections as analyze(), see
+        // the comments there.
+        if (countedBins > 0) {
+            noisePower *= (double) bandBins / countedBins;
+        }
+        // Same NENBW correction as analyze() — see the comment there.  The
+        // factor is read from the RESULT (stamped at analysis time), not the
+        // current window cache: a recompute must match the spectrum it is
+        // recomputing from, whatever window is selected by now.
+        if (r.windowNenbwBins > 0) {
+            noisePower /= r.windowNenbwBins;
         }
         r.noisePower        = noisePower;
         r.snrDb             = noisePower <= 0
@@ -1972,7 +2030,7 @@ public class FftAnalyzer {
 
     /** Computes the median non-signal-bin power inside the SNR band,
      *  performs the dynamic fundamental-exclusion walk (against the
-     *  global 10th-percentile floor — leakage-immune), and applies the
+     *  global median floor, with an overlap-scaled look-ahead), and applies the
      *  phase-noise exclusion zone within ±{@code fundBin/2} of the
      *  fundamental.  Mutates {@code isSignalBin} in place to mark every
      *  bin that ends up classified as signal (window leakage + phase
@@ -1981,11 +2039,22 @@ public class FftAnalyzer {
      *  <p>Pulled out of {@link #analyze} and {@code recomputeStats}
      *  where the same ~60 lines of bookkeeping appeared verbatim.
      *  Single point of truth for the SNR/THD-N noise-floor model. */
+    /** Skirt-walk look-ahead in bins.  With frame overlap, {@code 1/(1−ovl)}
+     *  frames share any given sample, so the averaged floor wobbles with that
+     *  correlation length — a single sub-floor dip inside the skirt is then
+     *  noise texture, not the skirt's end.  +2 bins guards the 0%-overlap
+     *  case as well.  0% → 3, 50% → 4, 75% → 6, 87.5% → 10, 93.75% → 18. */
+    private int skirtLookAheadBins(FftOverlap ovl) {
+        double denom = 1.0 - (ovl != null ? ovl.fraction : 0.0);
+        int framesSharing = denom > 0 ? (int) Math.round(1.0 / denom) : 16;
+        return framesSharing + 2;
+    }
+
     private NoiseFloor computeNoiseFloorAndExtendSignalMask(
             double[] amplLinear, boolean[] isSignalBin,
             int halfSize, double freqRes,
             double snrLo, double snrHi,
-            int fundBin, int exclBins) {
+            int fundBin, int exclBins, int lookAheadBins) {
 
         // One scan collects both pools (grow-only scratch — no per-call
         // allocation):
@@ -2014,25 +2083,60 @@ public class FftAnalyzer {
         // 20-50 ms of waste per stats pass at fftSize 2 M.
         double medianNoisePow       = candidateCount > 0
                 ? selectKth(candidatePow, candidateCount, candidateCount / 2) : 0.0;
-        // 10th-percentile of the full-spectrum powers: closer to the true quantization
-        // noise floor than the median, which is pulled up by non-harmonic spurs.
-        double globalMedianNoisePow = globalCount    > 0
-                ? selectKth(globalPow, globalCount, globalCount / 10)         : 0.0;
+        // Walk threshold: the GLOBAL pool's median (band-independent, so the
+        // walk width still does not depend on the chosen SNR range).  The old
+        // tenth-percentile bar broke the look-ahead walk: only ~10 % of noise
+        // bins fall below it, so L consecutive sub-threshold bins occur with
+        // ~0.1^L probability — at 87.5 %+ overlap (L = 10/18) the walk never
+        // stopped and marked the whole band as signal (N read "—", SNR pinned
+        // at the 300 dB sentinel).  Half of all noise bins sit below the
+        // median, so the look-ahead ends within a few correlation lengths of
+        // entering true noise, while genuine skirt bins — well above the
+        // floor — keep the walk going exactly as before.
+        double walkStopPow = globalCount > 0
+                ? selectKth(globalPow, globalCount, globalCount / 2)          : 0.0;
 
         // Inter-pass — dynamic fundamental exclusion at noise floor level.
-        // Uses globalMedianNoisePow so the exclusion width is independent of the
-        // chosen SNR frequency range (narrow range bins near the fundamental are
-        // contaminated by window leakage and would give a falsely short walk).
+        // Uses the GLOBAL-pool walkStopPow so the exclusion width is independent
+        // of the chosen SNR frequency range (narrow range bins near the
+        // fundamental are contaminated by window leakage and would give a
+        // falsely short walk).
         int dynWidthBins = exclBins;
-        if (globalMedianNoisePow > 0) {
+        if (walkStopPow > 0) {
+            // The walk ends only when LOOKAHEAD consecutive bins sit at/below the
+            // floor — a shorter sub-floor dip is the wobble of an overlap-averaged
+            // floor (correlated frames), not the skirt's end, and is stepped over
+            // (the dip bins get marked as signal with the rest of the skirt).
+            // Hard cap at ±fundBin/2 — the same "can never reach H2" bound the
+            // phase-noise pass uses — so no floor statistics can ever extend the
+            // exclusion across the whole band (the rescaled noise sum estimates
+            // whatever the zone covers, but it needs surviving bins to do it).
+            int walkLo = Math.max(1, fundBin - fundBin / 2);
+            int walkHi = Math.min(halfSize - 1, fundBin + fundBin / 2);
             int dynLo = fundBin, dynHi = fundBin;
-            while (dynLo > 1
-                    && amplLinear[dynLo - 1] * amplLinear[dynLo - 1] > globalMedianNoisePow) {
-                dynLo--;
+            while (dynLo > walkLo) {
+                int stepTo = -1;
+                int limit = Math.max(walkLo, dynLo - lookAheadBins);
+                for (int k = dynLo - 1; k >= limit; k--) {
+                    if (amplLinear[k] * amplLinear[k] > walkStopPow) {
+                        stepTo = k;
+                        break;                    // nearest above-floor bin wins
+                    }
+                }
+                if (stepTo < 0) break;            // look-ahead exhausted: true skirt end
+                dynLo = stepTo;
             }
-            while (dynHi < halfSize - 1
-                    && amplLinear[dynHi + 1] * amplLinear[dynHi + 1] > globalMedianNoisePow) {
-                dynHi++;
+            while (dynHi < walkHi) {
+                int stepTo = -1;
+                int limit = Math.min(walkHi, dynHi + lookAheadBins);
+                for (int k = dynHi + 1; k <= limit; k++) {
+                    if (amplLinear[k] * amplLinear[k] > walkStopPow) {
+                        stepTo = k;
+                        break;
+                    }
+                }
+                if (stepTo < 0) break;
+                dynHi = stepTo;
             }
             dynWidthBins = Math.max(fundBin - dynLo, dynHi - fundBin);
             if (dynWidthBins > exclBins) {

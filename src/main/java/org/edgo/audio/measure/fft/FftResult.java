@@ -162,10 +162,16 @@ public class FftResult {
     public double snrFreqMax;
     /** True = coherent (complex) averaging; false = incoherent (power) averaging. */
     public boolean coherentAveraging;
-    /** Sum of amplLinear[k]^2 for noise bins inside the SNR band (unweighted). */
+    /** Sum of amplLinear[k]^2 for noise bins inside the SNR band (unweighted),
+     *  already divided by {@link #windowNenbwBins}. */
     public double noisePower;
     /** A-weighted noise+distortion power (all non-fundamental bins, no band limit). */
     public double awNoisePower;
+    /** Normalized equivalent noise bandwidth of the analysis window, in bins
+     *  (Hann: 1.5) — stamped at analysis time so a band-change recompute can
+     *  apply the same noise-integral correction to THIS spectrum regardless of
+     *  the window selected by then. */
+    public double windowNenbwBins;
     /** Average noise floor: RMS amplitude of a single noise bin converted to dBFS. */
     public double avgNoiseFloorDbFs;
     /** Pre-correction (BLUE-dot) snapshot of fundamental + harmonic
@@ -317,6 +323,7 @@ public class FftResult {
         c.coherentAveraging          = coherentAveraging;
         c.noisePower                 = noisePower;
         c.awNoisePower               = awNoisePower;
+        c.windowNenbwBins            = windowNenbwBins;
         c.avgNoiseFloorDbFs          = avgNoiseFloorDbFs;
         c.fundamentalDynExclusionHz  = fundamentalDynExclusionHz;
         c.fundamentalTrueDbFs        = fundamentalTrueDbFs;
