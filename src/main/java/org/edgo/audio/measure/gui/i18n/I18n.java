@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.gui.i18n;
 
+import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URL;
@@ -31,6 +32,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.MissingResourceException;
 import java.util.ResourceBundle;
+import java.util.stream.Stream;
 
 import org.edgo.audio.measure.common.AppPaths;
 
@@ -50,6 +52,11 @@ import lombok.extern.log4j.Log4j2;
  *   <li>{@code -Di18n.dir=<path>} system property (set by the jpackage
  *       launcher to {@code $APPDIR/i18n}).</li>
  *   <li>{@code i18n/} folder next to the running JAR / classes directory.</li>
+ *   <li>The per-user staged copy ({@code <dataDir>/i18n}): on the bare-JAR
+ *       route the bundles packed inside the fat JAR are extracted there at
+ *       startup, once per app version (see {@code GuiMain} /
+ *       {@code AppPaths.stageBundledTree}) — BEFORE this class is first
+ *       touched, because the lookup below runs once, at class load.</li>
  *   <li>Classpath fallback (e.g. dev mode where {@code src/main/resources/i18n/}
  *       is on the classpath).</li>
  * </ol>
@@ -149,6 +156,19 @@ public class I18n {
             }
         } catch (Throwable ignored) {
             // CodeSource may be null for some classloaders; fall through.
+        }
+        // Bare-JAR route: the per-user copy staged from the in-JAR bundles at
+        // startup (GuiMain -> AppPaths.stageBundledTree).  Checked last so
+        // -Di18n.dir and a folder next to the JAR keep overriding it.
+        Path staged = AppPaths.instance().i18nDir();
+        if (Files.isDirectory(staged)) {
+            try (Stream<Path> entries = Files.list(staged)) {
+                if (entries.anyMatch(p -> p.getFileName().toString().startsWith("messages"))) {
+                    return staged;
+                }
+            } catch (IOException ignored) {
+                // Unreadable staged dir — behave as if absent.
+            }
         }
         return null;
     }

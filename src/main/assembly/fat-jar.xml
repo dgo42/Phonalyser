@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fat platform JAR: the standard jar-with-dependencies layout PLUS the
+     help/ bundle.  help/** is excluded from the thin module jar (see the
+     maven-jar-plugin excludes) because the jpackage installer ships help as
+     the external $APPDIR/help and must not carry a second copy inside its
+     jar — but the bare platform JARs have no external bundle, so the fat
+     assembly re-adds help/ from target/classes here.  At startup the app
+     stages it once per version into the per-user data dir
+     (HelpViewer.stageBundledHelp). -->
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.1.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.1.0 http://maven.apache.org/xsd/assembly-2.1.0.xsd">
+    <id>fat-jar</id>
+    <formats>
+        <format>jar</format>
+    </formats>
+    <includeBaseDirectory>false</includeBaseDirectory>
+    <dependencySets>
+        <!-- Mirrors the built-in jar-with-dependencies descriptor. -->
+        <dependencySet>
+            <outputDirectory>/</outputDirectory>
+            <useProjectArtifact>true</useProjectArtifact>
+            <unpack>true</unpack>
+            <scope>runtime</scope>
+        </dependencySet>
+    </dependencySets>
+    <fileSets>
+        <!-- help/** and the i18n locale variants are excluded from the thin
+             module jar (installer ships them as external $APPDIR/help and
+             $APPDIR/i18n); the bare platform JARs carry them here and stage
+             them into the per-user data dir at startup. -->
+        <fileSet>
+            <directory>${project.build.directory}/classes</directory>
+            <outputDirectory>/</outputDirectory>
+            <includes>
+                <include>help/**</include>
+                <include>i18n/**</include>
+            </includes>
+        </fileSet>
+    </fileSets>
+</assembly>
