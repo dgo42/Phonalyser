@@ -37,9 +37,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The Windows platform JARs lacked the exclusive-mode JavaSound mixers.**
   The WASAPI-exclusive JavaSound provider shipped only with the installer, so
   bare-JAR installs had JavaSound capped at DirectSound's 16 bits. The
-  provider and its native library now ride inside the fat JARs and are staged
-  automatically at startup — 24-bit / high-rate exclusive mixers work
-  identically on the installer and JAR routes.
+  provider and its native library now ride inside the fat JARs; at startup
+  the DLL is staged next to the JAR — the one location a running JVM can
+  still load natives from — so 24-bit / high-rate exclusive mixers work
+  identically on the installer and JAR routes. (A `csjsound_*.dll` appearing
+  beside the JAR is expected; it needs the Microsoft Visual C++ runtime
+  matching the JVM's bitness.)
+- **Bare-JAR installs had no help and no UI translations.** The in-app help
+  and the locale bundles shipped only with the installer (as its external
+  `help/` and `i18n/` folders), so plain platform-JAR installs showed the
+  "help not found" dialog and an English-only language menu. Both now ride
+  inside the fat JARs and are staged once per app version into the per-user
+  data folder at startup; a `help/` or `i18n/` folder next to the JAR still
+  overrides the staged copies, so the translate-without-rebuilding workflow
+  keeps working. The installer keeps using the folders from the installation
+  package — nothing is duplicated there.
 - **Web help ignored the UI language.** In the browser build, switching the app
   language left the in-app help stuck in English — it took the help language
   from the page locale, which the language switch never updated. Help now

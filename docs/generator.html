@@ -346,16 +346,16 @@
      Full scale is a per-range, calibrated value, so the dBV shifts with the
      output range and card calibration exactly as the real noise floor does.</p>
 
-  <p>A second term makes the stated dBV match what the
-     <a href="fft.html">FFT</a> actually displays.  A spectrum analyser reads
-     <em>broadband</em> noise higher than its true RMS by the analysis window's
-     <b>equivalent noise bandwidth</b> (ENBW): a tone lands in essentially one
-     bin and is recovered through the window's coherent gain, but noise is spread
-     across the window's wider noise bandwidth.  The generator therefore adds
-     10·log₁₀(ENBW) for the window currently chosen in the FFT — about 1.76 dB
-     for a Hann window, ~3 dB for Blackman-Harris, more for the flat-tops — and
-     re-solves the depth when you change that window.  The result: type
-     −100 dBV and the FFT noise floor sits at −100 dBV, equal by construction.</p>
+  <p>Nothing else enters the conversion: the stated dBV is the dither's true
+     physical level, so it depends on no <a href="fft.html">FFT</a> setting.
+     The analyser's integrated noise metrics divide by the analysis window's
+     noise bandwidth (NENBW — see the FFT chapter), so they read that same
+     true level with any window: type −100 dBV and the measured noise reads
+     −100 dBV whether the FFT runs a rectangular, Hann or flat-top window.
+     (The raw spectrum bins themselves still sit 10·log₁₀(NENBW) above the
+     true noise density — that is the window physics the metrics correct
+     for — so check a dither setting against the noise readout, not against
+     a single bin's height.)</p>
 
   <div class="note"><b>Incoherent averaging only.</b>  This match assumes the FFT
      is using <em>incoherent (power) averaging</em>.  Coherent averaging is built
