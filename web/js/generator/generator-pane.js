@@ -183,7 +183,7 @@ export class GeneratorPane {
   // "Dither" caption (Java GeneratorPane.updateDitherLabel): append the dither value in the OTHER
   // unit in brackets — dBV when the field shows bits, bits when it shows dBV — mirroring how
   // refreshFreqLabel annotates the Frequency caption. Off shows the plain caption. The dBV side
-  // tracks the live DAC full-scale + FFT window, so this is re-run on the reanchor listeners.
+  // tracks the live DAC full-scale, so this is re-run on the dither reanchor / refresh listeners.
   updateDitherLabel() {
     const f = this._getField('dither');
     const other = f ? f.companionText() : '';
@@ -434,22 +434,27 @@ export class GeneratorPane {
       pref.addListener(() => MessageBus.instance().publish(Events.GENERATOR_SIGNAL_CHANGED, GenChangeCause.USER_INPUT));
     }
 
-    // A DAC recalibration or an FFT-window change shifts how the dither reads on the FFT floor.
-    // reanchor() HOLDS the entered value: in the dBV view it keeps the shown dBV and re-solves the
-    // bits (maintaining the FFT-floor target under the new full-scale / window); in the bits view it
-    // keeps the bits and only the dBV readout moves. When the bits re-solve, persist them — that
+    // A DAC recalibration shifts the dBV mapping. reanchor() HOLDS the entered value: in the dBV
+    // view it keeps the shown dBV and re-solves the bits under the new full-scale; in the bits view
+    // it keeps the bits and only the dBV readout moves. When the bits re-solve, persist them — that
     // restarts via the usual genDitherBits path (the publisher loop above) — then re-annotate the
-    // caption. Mirrors Java GeneratorPane's Bindings.onChange for dacFsVoltageAmplProperty +
-    // fftWindowProperty. Dither is NOT live-applied to the worklet (accepted Web-Audio divergence,
-    // like Java's live ag.setDitherBits) — readConfig reads the field fresh at each (re)start and the
-    // Save-to export path applies it via quantizePcm.
+    // caption. Mirrors Java GeneratorPane's Bindings.onChange for dacFsVoltageAmplProperty. Dither is
+    // NOT live-applied to the worklet (accepted Web-Audio divergence, like Java's live ag.setDitherBits)
+    // — readConfig reads the field fresh at each (re)start and the Save-to export path applies it via quantizePcm.
     const reanchorDither = () => {
       const f = this._getField('dither');
       if (f && f.reanchor()) prefs.genDitherBits.set(f.getValue());
       this.updateDitherLabel();
     };
     prefs.dacFsVoltageAmpl.addListener(reanchorDither);
-    prefs.fftWindow.addListener(reanchorDither);
+    // An FFT-window change NEVER touches the dither: bits and dBV are the physical level, window-
+    // invariant since the analyser's NENBW correction. A pure re-render (field text + caption) —
+    // no reanchor, no persist, no restart; the generated output stays put (the values won't change).
+    prefs.fftWindow.addListener(() => {
+      const f = this._getField('dither');
+      if (f) f.refresh();
+      this.updateDitherLabel();
+    });
 
     // Signal-form change is structural (SINGLE↔DUAL_TONE changes generator structure;
     // the kernel's form is set from processorOptions) → restart the GENERATOR only.

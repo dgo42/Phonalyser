@@ -300,18 +300,17 @@
      kalibrierter Wert, daher verschiebt sich der dBV-Wert mit dem Ausgangsbereich
      und der Kartenkalibrierung genau so wie das reale Grundrauschen.</p>
 
-  <p>Ein zweiter Term sorgt dafür, dass der angegebene dBV-Wert mit dem
-     übereinstimmt, was die <a href="fft.html">FFT</a> tatsächlich anzeigt.  Ein
-     Spektrumanalysator liest <em>breitbandiges</em> Rauschen um die
-     <b>äquivalente Rauschbandbreite</b> (ENBW) des Analysefensters höher als
-     dessen wahren RMS-Wert: Ein Ton landet im Wesentlichen auf einem einzigen Bin
-     und wird über die kohärente Verstärkung des Fensters zurückgewonnen, doch
-     Rauschen verteilt sich über die breitere Rauschbandbreite des Fensters.  Der
-     Generator addiert daher 10·log₁₀(ENBW) für das aktuell in der FFT gewählte
-     Fenster — etwa 1,76 dB für ein Hann-Fenster, ~3 dB für Blackman-Harris, mehr
-     für die Flat-Tops — und löst die Tiefe neu auf, wenn Sie dieses Fenster
-     wechseln.  Das Ergebnis: Geben Sie −100 dBV ein, und das FFT-Grundrauschen
-     liegt bei −100 dBV, gleich per Konstruktion.</p>
+  <p>Mehr geht in die Umrechnung nicht ein: Der angegebene dBV-Wert ist der
+     wahre physikalische Pegel des Dithers und hängt von keiner Einstellung der
+     <a href="fft.html">FFT</a> ab.  Die integrierten Rauschmetriken des
+     Analysators teilen durch die Rauschbandbreite des Analysefensters
+     (NENBW — siehe das FFT-Kapitel) und lesen daher mit jedem Fenster
+     denselben wahren Pegel: Geben Sie −100 dBV ein, und das gemessene Rauschen
+     liest −100 dBV — ob die FFT mit Rechteck-, Hann- oder Flat-Top-Fenster
+     läuft.  (Die rohen Spektrum-Bins selbst liegen weiterhin 10·log₁₀(NENBW)
+     über der wahren Rauschdichte — genau die Fensterphysik, die die Metriken
+     korrigieren — prüfen Sie eine Dither-Einstellung also gegen die
+     Rauschanzeige, nicht gegen die Höhe eines einzelnen Bins.)</p>
 
   <div class="note"><b>Nur inkohärente Mittelung.</b>  Diese Übereinstimmung setzt
      voraus, dass die FFT <em>inkohärente (Leistungs-)Mittelung</em> verwendet.
