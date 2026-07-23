@@ -62,24 +62,6 @@ function skirtLookAheadBins(overlap) {
   return framesSharing + 2;
 }
 
-/** Equivalent noise bandwidth (bins) per WindowType token — verbatim from Java
- *  enums/WindowType.enbw(). Broadband noise measured through the FFT reads
- *  10·log10(ENBW) dB above its true level (the tone reads dead-on), so the
- *  generator's dither dBV readout adds that term to stay checkable against the
- *  FFT noise floor. */
-const WINDOW_ENBW = {
-  RECT: 1.0, HANN: 1.5, BH4: 2.0044, BH7: 2.6303, FT: 3.7702,
-  HFT144D: 4.5386, HFT248D: 5.6512, KB24: 2.8013, KB38: 3.5072,
-  DC150: 2.3660, DC200: 2.7259, DC250: 3.0435, DC300: 3.3310,
-};
-
-/** Equivalent noise bandwidth (bins) of `windowToken`, defaulting to 1.0 for an
- *  unknown token (WindowType.enbw()). */
-export function enbwOf(windowToken) {
-  const e = WINDOW_ENBW[windowToken];
-  return e === undefined ? 1.0 : e;
-}
-
 export class FftAnalyzer {
   constructor() {
     // Cached window-function table — rebuilt only when (fftSize, windowType)
