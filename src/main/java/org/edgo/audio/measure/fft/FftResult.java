@@ -278,74 +278,105 @@ public class FftResult {
      *  worker write. */
     public FftResult deepCopy() {
         FftResult c = new FftResult();
-        c.fftSize                    = fftSize;
-        c.sampleRate                 = sampleRate;
-        c.frameCount                 = frameCount;
-        c.freqResolution             = freqResolution;
-        c.binBwSqrt                  = binBwSqrt;
-        c.windowType                 = windowType;
-        c.overlap                    = overlap;
-        c.amplitudeDbFs              = amplitudeDbFs != null ? amplitudeDbFs.clone() : null;
-        c.phaseDeg                   = phaseDeg      != null ? phaseDeg.clone()      : null;
-        c.re                         = re            != null ? re.clone()            : null;
-        c.im                         = im            != null ? im.clone()            : null;
-        c.fundamentalBin             = fundamentalBin;
-        c.fundamentalHz              = fundamentalHz;
-        c.fundamentalHzRefined       = fundamentalHzRefined;
-        c.fundamental2HzRefined      = fundamental2HzRefined;
-        c.fundamentalDbFs            = fundamentalDbFs;
-        c.fundamentalLinear          = fundamentalLinear;
-        c.mainsF0Hz                  = mainsF0Hz;
-        c.coherentKappa              = coherentKappa;
-        c.channelLeft                = channelLeft;
-        c.samplesAbsStart            = samplesAbsStart;
-        c.writePos                   = writePos;
-        c.epoch                      = epoch;
-        c.harmonicCount              = harmonicCount;
-        c.harmonicBins               = harmonicBins  != null ? harmonicBins.clone()  : null;
-        c.harmonicHz                 = harmonicHz    != null ? harmonicHz.clone()    : null;
-        c.harmonicDbFs               = harmonicDbFs  != null ? harmonicDbFs.clone()  : null;
-        c.harmonicPct                = harmonicPct   != null ? harmonicPct.clone()   : null;
-        c.rawFundRe                  = rawFundRe;
-        c.rawFundIm                  = rawFundIm;
-        c.rawPeakRe                  = rawPeakRe     != null ? rawPeakRe.clone()     : null;
-        c.rawPeakIm                  = rawPeakIm     != null ? rawPeakIm.clone()     : null;
-        c.imdProductA                = imdProductA   != null ? imdProductA.clone()   : null;
-        c.imdProductB                = imdProductB   != null ? imdProductB.clone()   : null;
-        c.imdProductBin              = imdProductBin != null ? imdProductBin.clone() : null;
-        c.thdPct                     = thdPct;
-        c.thdDb                      = thdDb;
-        c.thdNDb                     = thdNDb;
-        c.snrDb                      = snrDb;
-        c.sinadDb                    = sinadDb;
-        c.snrFreqMin                 = snrFreqMin;
-        c.snrFreqMax                 = snrFreqMax;
-        c.coherentAveraging          = coherentAveraging;
-        c.noisePower                 = noisePower;
-        c.awNoisePower               = awNoisePower;
-        c.windowNenbwBins            = windowNenbwBins;
-        c.avgNoiseFloorDbFs          = avgNoiseFloorDbFs;
-        c.fundamentalDynExclusionHz  = fundamentalDynExclusionHz;
-        c.fundamentalTrueDbFs        = fundamentalTrueDbFs;
-        c.rejectedFrames             = rejectedFrames;
-        c.rejectionTotalFrames       = rejectionTotalFrames;
-        c.rejectionPhaseCoherence    = rejectionPhaseCoherence;
-        c.rejectionDetail            = rejectionDetail;
-        c.gates                      = gates;   // immutable snapshot — share the reference
-        c.gateBlockDbFs              = gateBlockDbFs;    // debug snapshots — share (not mutated)
-        c.gateRejectDbFs             = gateRejectDbFs;
-        c.gateRejectGates            = gateRejectGates;
-        // 2-D array: clone the outer array AND each non-null row so
-        // the copy can be mutated independently of the source.
-        if (preCorrectionPeaks != null) {
-            double[][] src = preCorrectionPeaks;
-            double[][] dst = new double[src.length][];
-            for (int i = 0; i < src.length; i++) {
-                dst[i] = src[i] != null ? src[i].clone() : null;
+        c.copyFrom(this);
+        return c;
+    }
+
+    /** Reuses {@code dst} for a copy of {@code src} when the lengths already
+     *  match (straight arraycopy), else clones; {@code null} stays null. */
+    private double[] reuseCopy(double[] dst, double[] src) {
+        if (src == null) return null;
+        if (dst == null || dst.length != src.length) return src.clone();
+        System.arraycopy(src, 0, dst, 0, src.length);
+        return dst;
+    }
+
+    private int[] reuseCopy(int[] dst, int[] src) {
+        if (src == null) return null;
+        if (dst == null || dst.length != src.length) return src.clone();
+        System.arraycopy(src, 0, dst, 0, src.length);
+        return dst;
+    }
+
+    /** Copies every field of {@code src} into THIS result, reusing this
+     *  result's arrays when their lengths already match and allocating
+     *  otherwise — the in-place sibling of {@link #deepCopy()} (which
+     *  delegates here, so the field list lives once).  Lets a steady-state
+     *  consumer — the FFT view's displayed snapshot — refresh per displayed
+     *  frame without cloning ~64 MB of spectrum arrays into garbage each
+     *  time at large FFT sizes. */
+    public void copyFrom(FftResult src) {
+        FftResult c = this;
+        c.fftSize                    = src.fftSize;
+        c.sampleRate                 = src.sampleRate;
+        c.frameCount                 = src.frameCount;
+        c.freqResolution             = src.freqResolution;
+        c.binBwSqrt                  = src.binBwSqrt;
+        c.windowType                 = src.windowType;
+        c.overlap                    = src.overlap;
+        c.amplitudeDbFs              = reuseCopy(c.amplitudeDbFs, src.amplitudeDbFs);
+        c.phaseDeg                   = reuseCopy(c.phaseDeg,      src.phaseDeg);
+        c.re                         = reuseCopy(c.re,            src.re);
+        c.im                         = reuseCopy(c.im,            src.im);
+        c.fundamentalBin             = src.fundamentalBin;
+        c.fundamentalHz              = src.fundamentalHz;
+        c.fundamentalHzRefined       = src.fundamentalHzRefined;
+        c.fundamental2HzRefined      = src.fundamental2HzRefined;
+        c.fundamentalDbFs            = src.fundamentalDbFs;
+        c.fundamentalLinear          = src.fundamentalLinear;
+        c.mainsF0Hz                  = src.mainsF0Hz;
+        c.coherentKappa              = src.coherentKappa;
+        c.channelLeft                = src.channelLeft;
+        c.samplesAbsStart            = src.samplesAbsStart;
+        c.writePos                   = src.writePos;
+        c.epoch                      = src.epoch;
+        c.harmonicCount              = src.harmonicCount;
+        c.harmonicBins               = reuseCopy(c.harmonicBins,  src.harmonicBins);
+        c.harmonicHz                 = reuseCopy(c.harmonicHz,    src.harmonicHz);
+        c.harmonicDbFs               = reuseCopy(c.harmonicDbFs,  src.harmonicDbFs);
+        c.harmonicPct                = reuseCopy(c.harmonicPct,   src.harmonicPct);
+        c.rawFundRe                  = src.rawFundRe;
+        c.rawFundIm                  = src.rawFundIm;
+        c.rawPeakRe                  = reuseCopy(c.rawPeakRe,     src.rawPeakRe);
+        c.rawPeakIm                  = reuseCopy(c.rawPeakIm,     src.rawPeakIm);
+        c.imdProductA                = reuseCopy(c.imdProductA,   src.imdProductA);
+        c.imdProductB                = reuseCopy(c.imdProductB,   src.imdProductB);
+        c.imdProductBin              = reuseCopy(c.imdProductBin, src.imdProductBin);
+        c.thdPct                     = src.thdPct;
+        c.thdDb                      = src.thdDb;
+        c.thdNDb                     = src.thdNDb;
+        c.snrDb                      = src.snrDb;
+        c.sinadDb                    = src.sinadDb;
+        c.snrFreqMin                 = src.snrFreqMin;
+        c.snrFreqMax                 = src.snrFreqMax;
+        c.coherentAveraging          = src.coherentAveraging;
+        c.noisePower                 = src.noisePower;
+        c.awNoisePower               = src.awNoisePower;
+        c.windowNenbwBins            = src.windowNenbwBins;
+        c.avgNoiseFloorDbFs          = src.avgNoiseFloorDbFs;
+        c.fundamentalDynExclusionHz  = src.fundamentalDynExclusionHz;
+        c.fundamentalTrueDbFs        = src.fundamentalTrueDbFs;
+        c.rejectedFrames             = src.rejectedFrames;
+        c.rejectionTotalFrames       = src.rejectionTotalFrames;
+        c.rejectionPhaseCoherence    = src.rejectionPhaseCoherence;
+        c.rejectionDetail            = src.rejectionDetail;
+        c.gates                      = src.gates;   // immutable snapshot — share the reference
+        c.gateBlockDbFs              = src.gateBlockDbFs;    // debug snapshots — share (not mutated)
+        c.gateRejectDbFs             = src.gateRejectDbFs;
+        c.gateRejectGates            = src.gateRejectGates;
+        // 2-D array: clone the outer array AND each non-null row so the copy
+        // can be mutated independently of the source (rows are tiny peak
+        // lists — no reuse needed).
+        if (src.preCorrectionPeaks != null) {
+            double[][] rows = src.preCorrectionPeaks;
+            double[][] dst  = new double[rows.length][];
+            for (int i = 0; i < rows.length; i++) {
+                dst[i] = rows[i] != null ? rows[i].clone() : null;
             }
             c.preCorrectionPeaks = dst;
+        } else {
+            c.preCorrectionPeaks = null;
         }
-        return c;
     }
 
     /**

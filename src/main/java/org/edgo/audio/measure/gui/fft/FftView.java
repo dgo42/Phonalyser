@@ -252,7 +252,15 @@ public final class FftView extends AbstractFreqDomainView {
             finalizeResult(slot);
             startRender = System.nanoTime();
             gotFftResult = true;
-            lastResult = slot.deepCopy();
+            // In-place refresh of the displayed snapshot: a deepCopy per
+            // displayed frame is ~64 MB of garbage at paint rate at fftSize
+            // 4 M — copyFrom reuses the existing arrays when sizes match
+            // (first frame / size change still allocates).
+            if (this.lastResult == null) {
+                this.lastResult = slot.deepCopy();
+            } else {
+                this.lastResult.copyFrom(slot);
+            }
             syncDataButtons();
             // Frame / phase rejections slow the averaging — raise a sticky
             // (20 s, restarted on each fresh rejection) blinking warning with

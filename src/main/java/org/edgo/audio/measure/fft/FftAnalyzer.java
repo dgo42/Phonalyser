@@ -229,6 +229,28 @@ public class FftAnalyzer {
         return new double[size];
     }
 
+    /** Drops every retained fftSize-scaled scratch buffer and the cached
+     *  window table — at fftSize 4 M the set idles on ~300 MB after the last
+     *  {@code analyze}.  Everything reallocates on demand at the next call,
+     *  so this belongs in a stop path, never mid-run.  Callers must not have
+     *  an analysis in flight. */
+    public void releaseScratch() {
+        scratchF0Re    = scratchF0Im    = null;
+        scratchSumRe   = scratchSumIm   = null;
+        scratchFrameRe = scratchFrameIm = null;
+        scratchS0Re    = scratchS0Im    = null;
+        scratchS1Re    = scratchS1Im    = null;
+        scratchHcos    = scratchHsin    = null;
+        scratchAmplLinear = null;
+        scratchSignalMask = null;
+        scratchNoiseCand  = null;
+        scratchNoiseGlob  = null;
+        scratchImdIdx     = null;
+        cachedWindow      = null;
+        cachedWindowSize  = 0;
+        cachedWindowType  = null;
+    }
+
     /** Tries the cache for the windowed FFT of the frame starting at
      *  local sample offset {@code localStart}.  On miss, windows +
      *  FFTs from {@code samples} and stores the result.  Always leaves
