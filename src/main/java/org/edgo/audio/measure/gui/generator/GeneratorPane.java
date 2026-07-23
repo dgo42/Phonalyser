@@ -610,9 +610,14 @@ public final class GeneratorPane extends AbstractPane {
         ditherLabel = new Label(group, SWT.NONE);
         ditherLabel.setText(I18n.t("generator.dither"));
         ditherLabel.setLayoutData(fillH());
+        // The dBV view states the physical TPDF level relative to the DAC peak
+        // full-scale.  No window term: since the analyser's NENBW correction
+        // the integrated noise metrics (N, SNR, …) read the true level, so the
+        // entered dBV is window-invariant and checks against them with any
+        // analysis window.
         ditherField = new NumericStepField(group, UnitFamily.DITHER,
                 prefs.current().getOutputBitDepth(), prefs::getDacFsVoltageAmpl,
-                () -> prefs.getFftWindow().enbw(), 160);
+                160);
         ditherField.setLayoutData(fillH());
         ditherField.setToolTipText(I18n.t("generator.dither.tooltip"));
         // Seed value + display unit BEFORE wiring the listener so the seed
@@ -628,19 +633,22 @@ public final class GeneratorPane extends AbstractPane {
             prefs.setGenDitherDbvDisplay(ditherField.isLogDisplay());
             updateDitherLabel();
         });
-        // A DAC recalibration or an FFT-window change shifts how the dither
-        // reads on the FFT floor.  reanchor() HOLDS the entered value: in the dBV
-        // view it keeps the shown dBV and re-solves the bits so the FFT-floor
-        // target is maintained under the new full-scale / window; in the bits
-        // view it keeps the bits and only the dBV readout moves.  When the bits
-        // re-solve, persist them — that restarts the generator via the usual
-        // genDitherBits path — then re-annotate the caption.
+        // A DAC recalibration shifts the dBV mapping.  reanchor() HOLDS the
+        // entered value: in the dBV view it keeps the shown dBV and re-solves
+        // the bits under the new full-scale; in the bits view it keeps the bits
+        // and only the dBV readout moves.  When the bits re-solve, persist them
+        // — that restarts the generator via the usual genDitherBits path — then
+        // re-annotate the caption.
         Bindings.onChange(group, prefs.dacFsVoltageAmplProperty(), v -> {
             if (ditherField.reanchor()) prefs.setGenDitherBits(ditherField.getValue());
             updateDitherLabel();
         });
+        // An FFT-window change never touches the dither: bits and dBV are the
+        // physical level (window-invariant since the analyser's NENBW
+        // correction).  Recalculate the rendered readouts only — no reanchor,
+        // no persist, the generator output stays put.
         Bindings.onChange(group, prefs.fftWindowProperty(), w -> {
-            if (ditherField.reanchor()) prefs.setGenDitherBits(ditherField.getValue());
+            ditherField.refresh();
             updateDitherLabel();
         });
 

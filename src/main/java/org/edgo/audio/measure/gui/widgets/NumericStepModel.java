@@ -129,14 +129,9 @@ public final class NumericStepModel {
      *  calibration; injected as config (never a singleton reach-in), {@code
      *  null} for every other policy. */
     private final DoubleSupplier fsAmplSupplier;
-    /** DITHER only: supplier of the current FFT analysis window's equivalent
-     *  noise bandwidth (bins), or {@code null}.  The FFT reads broadband noise
-     *  10·log10(ENBW) dB hot, so the dBV view adds that term to stay checkable
-     *  against the FFT floor; injected as config, never a singleton reach-in. */
-    private final DoubleSupplier enbwSupplier;
-    /** DITHER only: the config dBV sum (fsDbv + enbwDb) that {@link #value} was
-     *  last reconciled against — {@link #reanchor} moves the bits by the config
-     *  delta to hold the displayed dBV across a window / full-scale change. */
+    /** DITHER only: the config dBV (the full-scale term) that {@link #value}
+     *  was last reconciled against — {@link #reanchor} moves the bits by the
+     *  config delta to hold the displayed dBV across a full-scale change. */
     private double ditherConfigDbv;
     /** ≥ 0: fixed decimal count; −1: trim mode capped at {@link #maxDecimals}. */
     private final int decimals;
@@ -169,7 +164,6 @@ public final class NumericStepModel {
         this.decimals   = decimals;
         this.maxDecimals = decimals;
         this.fsAmplSupplier = null;
-        this.enbwSupplier   = null;
         this.value      = min;
     }
 
@@ -189,7 +183,6 @@ public final class NumericStepModel {
         this.decimals   = -1;
         this.maxDecimals = maxDecimals;
         this.fsAmplSupplier = null;
-        this.enbwSupplier   = null;
         this.value      = min;
     }
 
@@ -207,20 +200,18 @@ public final class NumericStepModel {
         this.decimals   = -1;
         this.maxDecimals = maxDecimals;
         this.fsAmplSupplier = null;
-        this.enbwSupplier   = null;
         this.value      = min;
     }
 
     /** DITHER policy: a dither depth that is 0 (Off) or {@code [1, maxBits]}
      *  bits — possibly fractional — shown as whole/fractional bits or a
      *  full-scale-aware dBV VIEW of the same value.  {@code fsAmplSupplier}
-     *  yields the live DAC peak full-scale (Vpeak) and {@code enbwSupplier} the
-     *  current FFT window's equivalent noise bandwidth (bins), so the dBV view
-     *  matches the FFT noise floor; both come IN as config so the model never
-     *  reaches for a singleton.  Off sits at the TOP of the range (stepping up
-     *  from 1 bit reaches Off). */
+     *  yields the live peak full-scale (Vpeak) and comes IN as config so the
+     *  model never reaches for a singleton; the dBV is the physical TPDF
+     *  level relative to that full-scale.  Off sits at the TOP of the range
+     *  (stepping up from 1 bit reaches Off). */
     public NumericStepModel(UnitFamily family, int maxBits,
-                            DoubleSupplier fsAmplSupplier, DoubleSupplier enbwSupplier) {
+                            DoubleSupplier fsAmplSupplier) {
         this.family     = family;
         this.policy     = Policy.DITHER;
         this.min        = 0;
@@ -230,9 +221,8 @@ public final class NumericStepModel {
         this.decimals   = -1;
         this.maxDecimals = DITHER_DBV_DECIMALS;
         this.fsAmplSupplier = fsAmplSupplier;
-        this.enbwSupplier   = enbwSupplier;
         this.value      = 0;   // Off
-        this.ditherConfigDbv = ditherFsDbv() + ditherEnbwDb();
+        this.ditherConfigDbv = ditherFsDbv();
     }
 
     // -------------------------------------------------------------------------
@@ -343,28 +333,17 @@ public final class NumericStepModel {
         return DITHER_DB_PER_DECADE * Math.log10(fsAmplSupplier.getAsDouble());
     }
 
-    /** FFT window over-read added to the dBV view: broadband noise measured
-     *  through the analysis window reads 10·log10(ENBW) dB above its true level
-     *  (a power/bandwidth ratio → ½·{@code DITHER_DB_PER_DECADE}·log10), so the
-     *  dither dBV is stated as it appears on the FFT floor (incoherent
-     *  averaging).  0 when no window supplier is wired. */
-    private double ditherEnbwDb() {
-        return enbwSupplier == null
-                ? 0.0
-                : 0.5 * DITHER_DB_PER_DECADE * Math.log10(enbwSupplier.getAsDouble());
-    }
-
-    /** dBV of the TPDF dither noise at {@code bits} bits (bits ≥ 1), stated as it
-     *  reads on the FFT noise floor (physical level + the window ENBW term). */
+    /** dBV of the TPDF dither noise at {@code bits} bits (bits ≥ 1) — the
+     *  physical level relative to the peak full-scale. */
     private double ditherDbvForBits(double bits) {
         return -(bits - 1) * DITHER_DB_PER_BIT - DITHER_TPDF_OFFSET_DB
-                + ditherFsDbv() + ditherEnbwDb();
+                + ditherFsDbv();
     }
 
     /** The (fractional) bit count whose TPDF dither lands at {@code dbv} — the
      *  exact inverse of {@link #ditherDbvForBits}, un-clamped. */
     private double ditherBitsForDbv(double dbv) {
-        return 1 + (ditherFsDbv() + ditherEnbwDb() - DITHER_TPDF_OFFSET_DB - dbv)
+        return 1 + (ditherFsDbv() - DITHER_TPDF_OFFSET_DB - dbv)
                 / DITHER_DB_PER_BIT;
     }
 
@@ -373,16 +352,16 @@ public final class NumericStepModel {
         return Math.max(1.0, Math.min(max, bits));
     }
 
-    /** Reacts to a config change (FFT-window ENBW or DAC full-scale) while
-     *  holding the CURRENTLY DISPLAYED value.  In the dBV view the shown dBV is
-     *  kept and the bits move by the config delta (so the FFT-floor target is
-     *  maintained under the new window / calibration); in the bits view (and for
-     *  Off) the bits are kept and only the dBV readout moves.  Returns {@code
-     *  true} when the stored bit count changed (dBV view) so the caller can
-     *  persist the re-solved dither and restart the generator. */
+    /** Reacts to a config change (DAC full-scale) while holding the CURRENTLY
+     *  DISPLAYED value.  In the dBV view the shown dBV is kept and the bits
+     *  move by the config delta (so the entered level is maintained under the
+     *  new calibration); in the bits view (and for Off) the bits are kept and
+     *  only the dBV readout moves.  Returns {@code true} when the stored bit
+     *  count changed (dBV view) so the caller can persist the re-solved dither
+     *  and restart the generator. */
     public boolean reanchor() {
         if (policy != Policy.DITHER) return false;
-        double newConfigDbv = ditherFsDbv() + ditherEnbwDb();
+        double newConfigDbv = ditherFsDbv();
         double before = value;
         if (isLogDisplay() && value > 0) {
             value = clampBits(value + (newConfigDbv - ditherConfigDbv) / DITHER_DB_PER_BIT);

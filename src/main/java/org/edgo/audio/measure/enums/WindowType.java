@@ -24,36 +24,24 @@ import java.util.Locale;
  *  used at the CLI / yaml edge (parsed back via {@link #valueOf}) and as the compact
  *  tile label; the long display label is i18n via {@link #labelKey()}. */
 public enum WindowType {
-    RECT   (1.0),
-    HANN   (1.5),
-    BH4    (2.0044),
-    BH7    (2.6303),
-    FT     (3.7702),
-    HFT144D(4.5386),
-    HFT248D(5.6512),
-    KB24   (2.8013),
-    KB38   (3.5072),
-    DC150  (2.3660),
-    DC200  (2.7259),
-    DC250  (3.0435),
-    DC300  (3.3310);
+    RECT,
+    HANN,
+    BH4,
+    BH7,
+    FT,
+    HFT144D,
+    HFT248D,
+    KB24,
+    KB38,
+    DC150,
+    DC200,
+    DC250,
+    DC300;
 
-    /** Equivalent noise bandwidth in bins: {@code N·Σw²/(Σw)²} for this window's
-     *  actual samples (the cosine-sum windows equal the closed form
-     *  {@code (a0² + ½·Σ a_k²)/a0²}; Kaiser/Dolph-Chebyshev computed numerically).
-     *  Broadband noise measured through the FFT reads {@code 10·log10(enbw)} dB
-     *  above its true level (the tone reads dead-on), so the generator's dither
-     *  dBV readout adds that term to stay checkable against the FFT noise floor. */
-    private final double enbw;
-
-    private WindowType(double enbw) {
-        this.enbw = enbw;
-    }
-
-    /** Equivalent noise bandwidth of this window, in bins. */
-    public double enbw() {
-        return enbw;
-    }
+    // No per-window constants here: the analyser derives everything it needs
+    // (coherent gain, NENBW) from the actual window samples at run time, so a
+    // parallel hard-coded table cannot drift.  The reference NENBW values are
+    // tabulated in the Theory of operation's FFT chapter.
 
     /** i18n key for the long display label (window combo + tile tooltip). */
     public String labelKey() {

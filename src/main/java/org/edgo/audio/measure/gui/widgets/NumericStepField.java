@@ -98,15 +98,13 @@ public final class NumericStepField extends Composite {
 
     /** DITHER-policy field: a dither depth (0 = Off … {@code maxBits} bits,
      *  possibly fractional) shown as bits or a full-scale-aware dBV view;
-     *  {@code fsAmplSupplier} yields the live DAC peak full-scale (Vpeak) and
-     *  {@code enbwSupplier} the current FFT window's equivalent noise bandwidth
-     *  (bins), so the dBV view tracks recalibration AND reads as it appears on
-     *  the FFT floor.  Wheel/arrows step ±1 bit (bits view) or ±10 dBV (dBV
-     *  view); Off sits at the top of the range. */
+     *  {@code fsAmplSupplier} yields the live peak full-scale (Vpeak) so the
+     *  dBV view tracks recalibration.  Wheel/arrows step ±1 bit (bits view)
+     *  or ±10 dBV (dBV view); Off sits at the top of the range. */
     public NumericStepField(Composite parent, UnitFamily family,
                             int maxBits, DoubleSupplier fsAmplSupplier,
-                            DoubleSupplier enbwSupplier, int textWidthHint) {
-        this(parent, new NumericStepModel(family, maxBits, fsAmplSupplier, enbwSupplier),
+                            int textWidthHint) {
+        this(parent, new NumericStepModel(family, maxBits, fsAmplSupplier),
                 textWidthHint);
     }
 
@@ -352,9 +350,9 @@ public final class NumericStepField extends Composite {
         applyToolTip();   // keep the unit-dependent step hint current
     }
 
-    /** DITHER: re-solve for a config change (FFT-window ENBW or DAC full-scale)
-     *  holding the displayed value, then re-render.  Returns {@code true} when
-     *  the stored bit count changed so the caller can persist + restart. */
+    /** DITHER: re-solve for a config change (full-scale) holding the displayed
+     *  value, then re-render.  Returns {@code true} when the stored bit count
+     *  changed so the caller can persist + restart. */
     public boolean reanchor() {
         boolean changed = model.reanchor();
         refresh();
