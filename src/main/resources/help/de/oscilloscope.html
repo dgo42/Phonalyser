@@ -561,7 +561,10 @@
      von diesem Oszilloskop gespeicherte.  Dies ist ein einfacher Wellenformbe-
      trachter für die Datei: <b>kein Triggern oder Messen</b> ist für ein
      geladenes Signal verfügbar, und der FFT-Analysator läuft <b>nicht</b> über
-     das oszilloskopseitig geladene Audio.</p>
+     das oszilloskopseitig geladene Audio.  Die ganze Datei wird in den
+     Speicher dekodiert (16 Byte pro Sample-Frame); eine Datei, die nicht in
+     den Java-Heap passt, wird vorab abgelehnt — mit Angabe von benötigtem und
+     freiem Speicher.</p>
 
   <h2 id="scope-tiles">Tab-Kacheln</h2>
   <p>Die Tabs <b>Links</b>, <b>Rechts</b>, <b>Horizontal</b> und <b>Trigger</b>
