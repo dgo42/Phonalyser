@@ -1360,6 +1360,18 @@ public final class FftAnalyzerWorker {
             // both run on the UI thread and both use getAndSet(null).)
             resultPool.release(latestForUi.getAndSet(null));
             resultPool.clear();
+            // Big-buffer teardown: the sliding window, its per-tick copy, the
+            // hop stage, the IMD grid and the analyzer's scratch idle on
+            // several hundred MB at fftSize 4 M while nothing records.  All
+            // rebuild on demand at the next start (the join above guarantees
+            // no tick is in flight).
+            winBuf     = new double[0];
+            analyzeBuf = new double[0];
+            hopBuf     = new double[0];
+            winValid   = false;
+            winNeeded  = -1;
+            imdGridIdx = null;
+            analyzer.releaseScratch();
         } else {
             // A monster-FFT tick outlived the join: leave its state alone and
             // let the next start's pending reset wipe it on the worker side.
