@@ -75,6 +75,13 @@ OS/arch. macOS additionally needs `-XstartOnFirstThread` (the launcher adds it).
 To run without the script: `java -jar phonalyser-<version>-<os>.jar` — on macOS,
 `java -XstartOnFirstThread -jar …`.
 
+**32-bit Windows** — a legacy 32-bit JAR (`phonalyser-<version>-windows-x86.jar`)
+is built for 32-bit machines (lab PCs, instrument controllers). Run it with an
+explicit heap cap — a 32-bit JVM defaults to a 256 MB heap and cannot reserve
+much beyond ~1.4 GB of address space on 32-bit Windows:
+`java -Xmx1200m -jar phonalyser-<version>-windows-x86.jar`
+(the `.bat` launcher adds the flag automatically when it picks the x86 JAR).
+
 ## Code signing
 
 The installers and JARs are currently distributed **unsigned**, so the OS may
