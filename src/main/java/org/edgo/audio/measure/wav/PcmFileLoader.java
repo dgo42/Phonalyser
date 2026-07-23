@@ -20,6 +20,7 @@ package org.edgo.audio.measure.wav;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.IOException;
 import java.util.Locale;
 
 import javax.sound.sampled.AudioFormat;
@@ -90,6 +91,21 @@ public final class PcmFileLoader {
         return pcm;
     }
 
+    /** Thrown when a file's eager decode cannot fit the Java heap.  Carries
+     *  the sizes (MiB) so UI catchers can show a localized message; the
+     *  English text serves the logs. */
+    public static final class TooLargeException extends IOException {
+        /** Heap the decode would need, MiB. */
+        public final long needMb;
+        /** Heap currently free, MiB. */
+        public final long freeMb;
+        TooLargeException(String message, long needMb, long freeMb) {
+            super(message);
+            this.needMb = needMb;
+            this.freeMb = freeMb;
+        }
+    }
+
     private AudioInputStream decodeFlac(File file) throws Exception {
         StreamInfo info;
         int[][] samples;
@@ -98,6 +114,19 @@ public final class PcmFileLoader {
             info = dec.streamInfo;
             if (info.numSamples <= 0) {
                 throw new IllegalStateException("FLAC file has no STREAMINFO sample count");
+            }
+            // FLAC decodes EAGERLY into int[channels][samples] plus the packed
+            // PCM image below — refuse a file that cannot fit the heap instead
+            // of dying mid-decode with a bare OutOfMemoryError.
+            long needBytes = info.numSamples
+                    * (4L * info.numChannels + (long) (info.sampleDepth / 8) * info.numChannels);
+            Runtime rt = Runtime.getRuntime();
+            long freeBytes = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory());
+            if (needBytes > freeBytes - freeBytes / 4) {
+                throw new TooLargeException(String.format(
+                        "FLAC file too large to decode into memory: ~%d MB needed, %d MB of Java heap free — "
+                        + "use a shorter file or raise -Xmx", needBytes >> 20, freeBytes >> 20),
+                        needBytes >> 20, freeBytes >> 20);
             }
             samples = new int[info.numChannels][(int) info.numSamples];
             int off = 0;

@@ -23,6 +23,7 @@ import org.edgo.audio.measure.cli.util.StereoCaptureProgress;
 import org.edgo.audio.measure.cli.util.StereoSamples;
 import org.edgo.audio.measure.enums.OutputChannels;
 import org.edgo.audio.measure.generator.SignalGenerator;
+import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.sound.DeviceRef;
 
 import java.util.function.BooleanSupplier;
@@ -82,7 +83,22 @@ public interface StereoCaptureProvider {
      *  hardware via {@link CaptureWithGenerator#runStereo}.  Both the
      *  no-progress SAM and the {@link #captureWithProgress} variant are
      *  overridden — the latter actually forwards live block progress. */
-    static StereoCaptureProvider real() {
+    /** Localized pre-check for the sweep capture: refuses — with the real
+     *  numbers — when the two capture lanes (plus their trim copies) cannot
+     *  fit the heap, BEFORE the generator starts.  The English guard inside
+     *  {@link CaptureWithGenerator#runStereo} stays as the CLI / log
+     *  backstop; this one carries the i18n text the measurement-failed
+     *  dialog shows. */
+    default void ensureCaptureFits(int sampleRate, int durationSec) {
+        long needBytes = CaptureWithGenerator.stereoCaptureHeapBytes(sampleRate, durationSec);
+        long freeBytes = CaptureWithGenerator.heapShortfall(needBytes);
+        if (freeBytes >= 0) {
+            throw new IllegalArgumentException(I18n.t("freqResp.capture.tooLarge",
+                    needBytes >> 20, freeBytes >> 20));
+        }
+    }
+
+    static StereoCaptureProvider real() {   // static-ok: interface factory — no instance exists to hang it on
         return new StereoCaptureProvider() {
             @Override
             public StereoSamples capture(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
@@ -90,6 +106,7 @@ public interface StereoCaptureProvider {
                                          OutputChannels outputChannels,
                                          int durationSec,
                                          BooleanSupplier cancelToken) throws Exception {
+                ensureCaptureFits(sampleRate, durationSec);
                 return CaptureWithGenerator.runStereo(gen, outDevice, inDevice,
                         sampleRate, bitDepth, ditherBits, outputChannels,
                         durationSec, null, 0, cancelToken, null);
@@ -101,6 +118,7 @@ public interface StereoCaptureProvider {
                                                      int durationSec,
                                                      BooleanSupplier cancelToken,
                                                      StereoCaptureProgress progress) throws Exception {
+                ensureCaptureFits(sampleRate, durationSec);
                 return CaptureWithGenerator.runStereo(gen, outDevice, inDevice,
                         sampleRate, bitDepth, ditherBits, outputChannels,
                         durationSec, null, 0, cancelToken, progress);
