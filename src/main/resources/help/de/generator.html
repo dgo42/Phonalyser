@@ -254,13 +254,14 @@
      Rauschpegel festzulegen; die Beschriftung zeigt die jeweils andere Einheit,
      und Rad/Pfeile ändern ihn schrittweise um ±1&nbsp;Bit (Bit-Ansicht) bzw.
      ±10&nbsp;dBV (dBV-Ansicht), mit <code>Off</code> ganz oben.</p>
-  <p>Der dBV-Wert ist der Pegel, den der Dither auf dem <a href="fft.html">FFT</a>-Grundrauschen
-     zeigt: Er folgt der DAC-Vollaussteuerung <em>und</em> dem in der FFT gewählten
-     Analysefenster, sodass die Eingabe von etwa −100&nbsp;dBV das FFT-Grundrauschen
-     auf −100&nbsp;dBV legt — sofern die FFT <b>inkohärente (Leistungs-)Mittelung</b>
-     verwendet (kohärente Mittelung löscht Rauschen aus und liest weit niedriger).
-     Dither bricht periodische Quantisierungsmuster bei sehr niedrigen
-     Ausgangspegeln auf.</p>
+  <p>Der dBV-Wert ist der physikalische Pegel des Dither-Rauschens, verankert
+     an der DAC-Vollaussteuerung: Die Eingabe von etwa −100&nbsp;dBV legt das von
+     der <a href="fft.html">FFT</a> gemessene Rauschen auf −100&nbsp;dBV — mit
+     jedem Analysefenster, denn die Rauschmetriken des Analysators
+     berücksichtigen die Rauschbandbreite des Fensters — sofern die FFT
+     <b>inkohärente (Leistungs-)Mittelung</b> verwendet (kohärente Mittelung
+     löscht Rauschen aus und liest weit niedriger).  Dither bricht periodische
+     Quantisierungsmuster bei sehr niedrigen Ausgangspegeln auf.</p>
 
   <h3 id="generator-dac-calibrate">DAC-Kalibrierung (Fadenkreuz-Schaltfläche)</h3>
   <p>Die Fadenkreuz-Schaltfläche unten links im Fenster öffnet den gemeinsamen
