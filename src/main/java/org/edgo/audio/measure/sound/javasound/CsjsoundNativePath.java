@@ -21,6 +21,7 @@ package org.edgo.audio.measure.sound.javasound;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -43,34 +44,45 @@ import lombok.extern.log4j.Log4j2;
  *
  * <p>The JAR carries the DLL as a classpath resource ({@code win32-x86[-64]/},
  * the same convention as the PortAudio / libusb copies); this helper extracts
- * it to a cache dir under the system temp and PREPENDS that dir to
- * {@code java.library.path}.  That works only because the JVM snapshots the
- * property at the process's FIRST {@code System.loadLibrary} — hence the call
- * sits at the top of {@code GuiMain.main}, before SWT / JNA / the provider
- * load anything.  No-ops on non-Windows, on installed layouts (DLL already
- * reachable), and on builds without the resource.
+ * it into the process's CURRENT DIRECTORY.  That is the only directory that is
+ * both guaranteed to be on the library path and stageable at runtime: the
+ * Windows JVM launcher appends {@code "."} to {@code java.library.path} at VM
+ * init, and since JDK&nbsp;12 the path is snapshotted right there — setting the
+ * property later (the first version of this helper) is silently ignored, which
+ * left the provider without its native on every bare-JAR run.  The launcher
+ * {@code .bat} changes into the JAR's folder first, so the DLL lands next to
+ * the JAR and survives for the next start.  No-ops on non-Windows, in the dev
+ * tree (code source is a directory — use {@code lib\windows} there), on
+ * installed layouts (DLL already reachable via {@code -Djava.library.path}),
+ * and on builds without the resource.
  */
 @Log4j2
 @UtilityClass
 public class CsjsoundNativePath {
 
-    /** Cache dir (under {@code java.io.tmpdir}) the DLL is extracted into. */
-    private static final String NATIVES_DIR_NAME = "phonalyser-natives";
-
-    /** Stages the csjsound DLL and prepends its dir to {@code java.library.path};
-     *  MUST run before the JVM's first {@code System.loadLibrary} (see class doc). */
+    /** Stages the csjsound DLL into the current directory (the {@code "."}
+     *  entry of {@code java.library.path}) so the provider's
+     *  {@code System.loadLibrary} finds it — see the class doc for why no
+     *  other location works on a bare-JAR run. */
     public void installForFatJar() {
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         if (!os.contains("win")) {
             return;
         }
+        if (!runningFromJar()) {
+            return;                                  // dev tree — lib\windows serves the DLL
+        }
         String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
         String dll  = "csjsound_" + arch + ".dll";   // the exact name the provider loads
-        String sep  = File.pathSeparator;
+        Path   cwd  = Paths.get("").toAbsolutePath().normalize();
         String libraryPath = System.getProperty("java.library.path", "");
-        for (String dir : libraryPath.split(Pattern.quote(sep))) {
-            if (!dir.isBlank() && Files.exists(Paths.get(dir, dll))) {
-                return;                              // installed layout — already reachable
+        for (String dir : libraryPath.split(Pattern.quote(File.pathSeparator))) {
+            if (dir.isBlank() || !Files.exists(Paths.get(dir, dll))) continue;
+            // Reachable in an installed layout / PATH dir — nothing to stage.
+            // A copy in the CURRENT dir does not short-circuit: it may be a
+            // stale version from an earlier run, so fall through and refresh it.
+            if (!Paths.get(dir).toAbsolutePath().normalize().equals(cwd)) {
+                return;
             }
         }
         boolean is32 = arch.equals("x86") || arch.contains("i386") || arch.contains("i686");
@@ -79,9 +91,7 @@ public class CsjsoundNativePath {
             if (in == null) {
                 return;                              // not a bundled build (or exotic arch)
             }
-            Path dir = Paths.get(System.getProperty("java.io.tmpdir"), NATIVES_DIR_NAME);
-            Files.createDirectories(dir);
-            Path target = dir.resolve(dll);
+            Path target = cwd.resolve(dll);
             try {
                 Files.copy(in, target, StandardCopyOption.REPLACE_EXISTING);
             } catch (IOException locked) {
@@ -91,11 +101,23 @@ public class CsjsoundNativePath {
                     throw locked;
                 }
             }
-            System.setProperty("java.library.path", dir + sep + libraryPath);
             log.info("csjsound native staged for the fat-jar run: {}", target);
         } catch (IOException e) {
-            log.warn("Could not stage the csjsound native ({}); exclusive-mode JavaSound mixers stay unavailable: {}",
-                    resource, e.toString());
+            log.warn("Could not stage the csjsound native ({}) into {} — exclusive-mode JavaSound"
+                    + " mixers stay unavailable.  Manual fix: extract {} from the JAR next to it"
+                    + " (or into any PATH directory).  Cause: {}",
+                    resource, cwd, dll, e.toString());
+        }
+    }
+
+    /** {@code true} when the code source is a JAR file (a packaged run) rather
+     *  than the dev tree's classes directory. */
+    private boolean runningFromJar() {
+        try {
+            URI src = CsjsoundNativePath.class.getProtectionDomain().getCodeSource().getLocation().toURI();
+            return Files.isRegularFile(Paths.get(src));
+        } catch (Throwable ignored) {
+            return false;
         }
     }
 }
