@@ -150,6 +150,10 @@ public final class FilePlayController {
             }
             line.drain();
             log.info("File playback stopped: {}", file.getName());
+        } catch (PcmFileLoader.TooLargeException ex) {
+            log.warn("File playback failed: {}", ex.getMessage());
+            lastStartError = I18n.t("generator.error.playFile.tooLarge",
+                    file.getName(), ex.needMb, ex.freeMb);
         } catch (Exception ex) {
             log.warn("File playback failed: {}", ex.getMessage(), ex);
             lastStartError = ex.getMessage();

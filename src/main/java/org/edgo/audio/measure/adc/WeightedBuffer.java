@@ -147,8 +147,6 @@ public class WeightedBuffer {
         long   averageBins = 0;
         int    ringFiled   = 0;
         if (windowLength > 0) {
-            @SuppressWarnings("unused")
-            WeightedBuffer firstBuf = new WeightedBuffer(bitDepth);
             for (long pos = 0; pos < binCount; pos++) {
                 double count = histogram.getCount(pos);
                 count = filter.getOutputSample(count);

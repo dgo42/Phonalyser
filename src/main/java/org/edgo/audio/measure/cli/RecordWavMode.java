@@ -181,6 +181,19 @@ public class RecordWavMode {
         final int     totalFramesAlloc = adcCompPath != null
                 ? (int) Math.min((long) sampleRate * (durationSeconds + 1), Integer.MAX_VALUE)
                 : 0;
+        if (totalFramesAlloc > 0) {
+            // --adc-comp keeps the whole capture in memory (plus its trim
+            // copy) — refuse a duration that cannot fit instead of dying
+            // mid-capture with a bare OutOfMemoryError.
+            Runtime rt = Runtime.getRuntime();
+            long needBytes = 2L * totalFramesAlloc * Double.BYTES;
+            long freeBytes = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory());
+            if (needBytes > freeBytes - freeBytes / 4) {
+                throw new IllegalArgumentException(String.format(
+                        "--adc-comp keeps the whole capture in memory: ~%d MB needed, %d MB of Java heap free — "
+                        + "reduce --duration or raise -Xmx", needBytes >> 20, freeBytes >> 20));
+            }
+        }
         final double[] capturedCh1 = totalFramesAlloc > 0 ? new double[totalFramesAlloc] : null;
         final AtomicInteger capPos = new AtomicInteger(0);
         final long halfRange = 1L << (bitDepth - 1);

@@ -65,6 +65,9 @@ public class CaptureWithGenerator {
                        int duration, WeightedBuffer weights,
                        int syncPauseSec) throws Exception {
         int   maxSamples = (int) Math.min((long) duration * sampleRate + sampleRate, Integer.MAX_VALUE);
+        // ×2: the end-of-capture trim (Arrays.copyOf) transiently holds the
+        // buffer and its copy at once.
+        ensureHeapFits(2L * maxSamples * Double.BYTES, "The capture buffer");
         double[] samples  = new double[maxSamples];
         long    halfRange = 1L << (bitDepth - 1);
         final AtomicInteger writePos = new AtomicInteger(0);
@@ -140,6 +143,38 @@ public class CaptureWithGenerator {
      * produces both L and R samples — half the wall time of two separate
      * sweeps, and no L/R drift from conditions changing between them.
      */
+    /** Worst-case heap bytes {@link #runStereo} allocates for a capture of
+     *  {@code duration} s at {@code sampleRate}: two double lanes plus their
+     *  end-of-capture trim copies.  Public so the GUI can pre-check with a
+     *  localized message before the sweep starts — the in-method guard here
+     *  is the English backstop (CLI / logs). */
+    public long stereoCaptureHeapBytes(int sampleRate, int duration) {
+        long maxSamples = Math.min((long) duration * sampleRate + sampleRate, Integer.MAX_VALUE);
+        return 4L * maxSamples * Double.BYTES;
+    }
+
+    /** The current free-heap bytes when {@code needBytes} plus a 25 %
+     *  headroom (for the analysis that follows the capture) does NOT fit,
+     *  or {@code -1} when it fits. */
+    public long heapShortfall(long needBytes) {
+        Runtime rt = Runtime.getRuntime();
+        long freeBytes = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory());
+        return needBytes > freeBytes - freeBytes / 4 ? freeBytes : -1;
+    }
+
+    /** Refuses up-front — with the real numbers — when {@code needBytes}
+     *  cannot fit the current heap: a too-long duration otherwise dies
+     *  mid-capture with a bare OutOfMemoryError. */
+    private void ensureHeapFits(long needBytes, String what) {
+        long freeBytes = heapShortfall(needBytes);
+        if (freeBytes >= 0) {
+            throw new IllegalArgumentException(String.format(
+                    "%s needs ~%d MB but only %d MB of Java heap are free — "
+                    + "reduce the duration / sample rate, or raise -Xmx",
+                    what, needBytes >> 20, freeBytes >> 20));
+        }
+    }
+
     public StereoSamples runStereo(SignalGenerator gen, DeviceRef outDevice, DeviceRef inDevice,
                                    int sampleRate, int bitDepth, int ditherBits,
                                    OutputChannels outputChannels,
@@ -148,6 +183,7 @@ public class CaptureWithGenerator {
                                    BooleanSupplier cancelToken,
                                    StereoCaptureProgress progress) throws Exception {
         int   maxSamples = (int) Math.min((long) duration * sampleRate + sampleRate, Integer.MAX_VALUE);
+        ensureHeapFits(stereoCaptureHeapBytes(sampleRate, duration), "The stereo capture buffers");
         final double[] leftBuf  = new double[maxSamples];
         final double[] rightBuf = new double[maxSamples];
         final long    halfRange = 1L << (bitDepth - 1);
