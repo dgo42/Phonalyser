@@ -894,14 +894,18 @@
                          safety net so the app still runs if the folder is
                          missing.  See PACKAGING.md.
 
-                         The help/ directory is excluded entirely: the
-                         HTML pages + screenshots ship in an external
-                         help/ folder next to the JAR (see
-                         stage-help-external below) so users can edit /
-                         translate them without rebuilding.  In dev mode
-                         the files remain available at target/classes/help
-                         on the classpath, so HelpViewer's classpath
-                         fallback path still works there. -->
+                         The help/ directory is excluded from THIS jar — the
+                         installer ships help as the external $APPDIR/help
+                         (stage-help-external below) and must not carry a
+                         second copy inside its jar.  The FAT platform JARs
+                         re-add help/ via the custom assembly descriptor
+                         (src/main/assembly/fat-jar.xml): at startup the app
+                         stages it once per version into the per-user data
+                         dir (HelpViewer.stageBundledHelp), so bare-JAR
+                         installs have working help too.  In dev mode the
+                         files remain available at target/classes/help on
+                         the classpath, so HelpViewer's classpath fallback
+                         still works there. -->
                     <excludes>
                         <exclude>i18n/messages_*.properties</exclude>
                         <exclude>help/**</exclude>
@@ -975,9 +979,12 @@
                             <mainClass>${app.mainClass}</mainClass>
                         </manifest>
                     </archive>
-                    <descriptorRefs>
-                        <descriptorRef>jar-with-dependencies</descriptorRef>
-                    </descriptorRefs>
+                    <!-- Custom descriptor = jar-with-dependencies + the help/
+                         bundle (excluded from the thin jar; see the
+                         maven-jar-plugin excludes above). -->
+                    <descriptors>
+                        <descriptor>src/main/assembly/fat-jar.xml</descriptor>
+                    </descriptors>
                     <!-- Use a custom finalName so the fat JAR is suffixed with
                          the short platform tag (windows / linux / macos) and
                          drops the noisy '-jar-with-dependencies' assembly id. -->

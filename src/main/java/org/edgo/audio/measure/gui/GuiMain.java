@@ -35,6 +35,8 @@ import org.eclipse.swt.widgets.Display;
 import org.edgo.audio.measure.common.AppPaths;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.gui.automation.AutomationRunner;
+import org.edgo.audio.measure.gui.helpviewer.HelpViewer;
+import org.edgo.audio.measure.gui.helpviewer.Versions;
 import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.gl.Glfw;
 import org.edgo.audio.measure.preferences.Preferences;
@@ -179,6 +181,16 @@ public final class GuiMain {
         Thread.setDefaultUncaughtExceptionHandler((t, e) ->
                 log.error("Uncaught exception on thread '{}': {}", t.getName(), e.toString(), e));
 
+        // Bare platform JAR: stage the locale bundles packed inside the fat
+        // JAR into <dataDir>/i18n BEFORE the first I18n touch — I18n resolves
+        // its external dir once, at class load.  The installer sets i18n.dir
+        // ($APPDIR/i18n, extracted from the installation package) and dev runs
+        // have target/classes/i18n next to the classes; both skip here.
+        AppPaths appPaths = AppPaths.instance();
+        if (System.getProperty("i18n.dir") == null && appPaths.appAdjacentDir("i18n") == null) {
+            appPaths.stageBundledTree("i18n/", appPaths.i18nDir(), Versions.appVersion());
+        }
+
         // Apply the persisted UI language BEFORE the SWT shell is built —
         // every widget reads its labels via I18n.t() at construction time,
         // and ResourceBundle resolves them against the default Locale.
@@ -190,12 +202,17 @@ public final class GuiMain {
 
         // Seed the editable help copy now (i18n already seeds on first use) so
         // translators find <dataDir>/help populated without having to open the
-        // Help viewer first.  Only the packaged app sets help.dir (=$APPDIR/help);
-        // dev runs use the classpath, so there's nothing to seed.
+        // Help viewer first.  The installed app sets help.dir (=$APPDIR/help,
+        // extracted from the installation package) and seeds from there; a
+        // bare platform JAR carries the help bundle inside the JAR instead and
+        // stages it into <dataDir>/help once per app version.  Dev runs use
+        // the classpath (target/classes/help) — both calls no-op there.
         String helpBundle = System.getProperty("help.dir");
         if (helpBundle != null) {
             AppPaths paths = AppPaths.instance();
             paths.seedDirIfEmpty(paths.helpDir(), Paths.get(helpBundle));
+        } else {
+            HelpViewer.instance().stageBundledHelp();
         }
 
         // Synchronise the AudioBackend singleton with the YAML-persisted

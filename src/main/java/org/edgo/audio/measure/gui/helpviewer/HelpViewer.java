@@ -61,7 +61,11 @@ import java.util.Locale;
  *       in-place without rebuilding.</li>
  *   <li>{@code help/} folder next to the running JAR (or class files
  *       in dev mode).</li>
- *   <li>Classpath fallback: when neither of the above exists, the
+ *   <li>The per-user staged copy ({@code <dataDir>/help}): on the
+ *       bare-JAR route the bundle packed inside the fat JAR is
+ *       extracted here at startup, once per app version — see
+ *       {@link #stageBundledHelp()}.</li>
+ *   <li>Classpath fallback: when none of the above exists, the
  *       bundled resources at {@code /help/<lang>/...} are extracted
  *       to a temp directory.  Used in {@code mvn exec:java} / IDE
  *       runs where the help files live in {@code target/classes/help}.</li>
@@ -517,7 +521,36 @@ public final class HelpViewer {
             bases.add(user);
         }
         if (bundled != null) bases.add(bundled);
+        if (System.getProperty("help.dir") == null) {
+            // Bare-JAR route: the per-user copy staged from the in-JAR bundle
+            // at startup (stageBundledHelp).  Listed after a help/ folder next
+            // to the JAR so a user-provided folder still wins.
+            bases.add(AppPaths.instance().helpDir());
+        }
         return bases;
+    }
+
+    /**
+     * Stages the help bundled inside the fat platform JAR into the per-user
+     * help directory ({@code <dataDir>/help}), once per app version — the
+     * bare-JAR install path, called at startup from {@code GuiMain}.
+     *
+     * <p>No-op whenever an external help source exists: the installer's
+     * {@code -Dhelp.dir} (= {@code $APPDIR/help}, extracted from the
+     * installation package), a {@code help/} folder next to the JAR, or the
+     * dev-mode {@code target/classes/help}.  Those stay authoritative; the
+     * staged copy only fills the gap for bare-JAR installs.
+     *
+     * <p>On a version change the bundle files are re-extracted over the old
+     * copy (stale help is worse than lost edits of the staged copy); files
+     * the user added are left alone.  Translators whose edits must survive
+     * upgrades use a {@code help/} folder next to the JAR instead — it wins
+     * the search and is never touched.
+     */
+    public void stageBundledHelp() {
+        if (resolveExternalHelpDir() != null) return;
+        AppPaths paths = AppPaths.instance();
+        paths.stageBundledTree("help/", paths.helpDir(), Versions.appVersion());
     }
 
     /** Mirror of {@link I18n#resolveExternalDir}: tries the

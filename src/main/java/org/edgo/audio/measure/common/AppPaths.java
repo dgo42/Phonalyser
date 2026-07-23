@@ -19,10 +19,15 @@
 package org.edgo.audio.measure.common;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.Enumeration;
+import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.stream.Stream;
 
 import org.apache.logging.log4j.LogManager;
@@ -125,6 +130,89 @@ public final class AppPaths {
             log().info("Seeded {} from bundled {}", target, source);
         } catch (IOException e) {
             log().warn("Could not seed {} from {}: {}", target, source, e.getMessage());
+        }
+    }
+
+    /** Marker file recording which app version last staged a bundled tree
+     *  into its per-user directory — see {@link #stageBundledTree}. */
+    private static final String STAGED_MARKER_FILE = ".bundle-version";
+
+    /**
+     * Extracts every entry under {@code jarDirPrefix} (e.g. {@code "help/"})
+     * of the running fat JAR into {@code target}, once per app
+     * {@code version}: a {@code .bundle-version} marker inside {@code target}
+     * records the last staged version and short-circuits subsequent starts.
+     * The bare-JAR sibling of {@link #seedDirIfEmpty(Path, Path)} — used when
+     * no external bundle directory exists to seed from.
+     *
+     * <p>On a version change the bundled files are re-extracted over the old
+     * copy (stale content is worse than lost edits of the staged copy); files
+     * the user added are left alone.  No-op in dev mode (the code source is a
+     * directory) or when the JAR carries no such entries.  Tolerant — an I/O
+     * failure is a guarded warn, never a throw.
+     */
+    public void stageBundledTree(String jarDirPrefix, Path target, String version) {
+        Path jar = codeSourceJar();
+        if (jar == null) return;
+        Path root = target.toAbsolutePath().normalize();
+        Path marker = root.resolve(STAGED_MARKER_FILE);
+        try {
+            if (Files.isRegularFile(marker)
+                    && version.equals(Files.readString(marker).trim())) {
+                return;                          // this version already staged
+            }
+            int files = 0;
+            try (JarFile jf = new JarFile(jar.toFile())) {
+                Enumeration<JarEntry> entries = jf.entries();
+                while (entries.hasMoreElements()) {
+                    JarEntry entry = entries.nextElement();
+                    String name = entry.getName();
+                    if (entry.isDirectory() || !name.startsWith(jarDirPrefix)) continue;
+                    Path out = root.resolve(name.substring(jarDirPrefix.length())).normalize();
+                    if (!out.startsWith(root)) continue;       // zip-slip guard
+                    if (out.getParent() != null) Files.createDirectories(out.getParent());
+                    try (InputStream in = jf.getInputStream(entry)) {
+                        Files.copy(in, out, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    files++;
+                }
+            }
+            if (files > 0) {
+                Files.writeString(marker, version);
+                log().info("Staged bundled {} (v{}, {} files) to {}", jarDirPrefix, version, files, root);
+            }
+        } catch (IOException e) {
+            log().warn("Could not stage bundled {} to {}: {}", jarDirPrefix, root, e.getMessage());
+        }
+    }
+
+    /** An existing directory named {@code name} next to the running JAR (or
+     *  next to the classes dir in dev mode), or {@code null} when absent /
+     *  the code source is unknown. */
+    public Path appAdjacentDir(String name) {
+        try {
+            URI src = AppPaths.class.getProtectionDomain().getCodeSource().getLocation().toURI();
+            Path here = Paths.get(src);
+            Path parent = Files.isDirectory(here) ? here : here.getParent();
+            if (parent != null) {
+                Path dir = parent.resolve(name);
+                if (Files.isDirectory(dir)) return dir;
+            }
+        } catch (Throwable ignored) {
+            // CodeSource may be null for some classloaders.
+        }
+        return null;
+    }
+
+    /** The running fat JAR, or {@code null} when the code source is a
+     *  directory (dev mode) or unknown. */
+    private Path codeSourceJar() {
+        try {
+            URI src = AppPaths.class.getProtectionDomain().getCodeSource().getLocation().toURI();
+            Path here = Paths.get(src);
+            return Files.isRegularFile(here) ? here : null;
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 
