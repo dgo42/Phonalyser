@@ -23,6 +23,7 @@ import java.io.InputStream;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -160,6 +161,17 @@ public final class FreqRespTabControl extends AbstractTabControl {
     private static final String[] FFT_SIZE_LABELS = {
             "64k", "128k", "256k", "512k", "1M", "2M", "4M", "8M", "16M"
     };
+    /** Heaps below this are 32-bit-class: combo entries above
+     *  {@link #SMALL_HEAP_MAX_FFT_SIZE} are not offered.  1.5 GiB sits
+     *  between the 32-bit ceiling (~1.2–1.4 GB usable) and any serious
+     *  64-bit {@code -Xmx}. */
+    private static final long SMALL_HEAP_BYTES = 1_610_612_736L;
+    /** Largest deconvolution FFT size offered on a small heap: both channels
+     *  deconvolve in parallel over buffers padded to 2× the size at 40 B per
+     *  padded sample, so 8M already needs ~1.3 GB of transient buffers while
+     *  the 4M default (~0.9 GB peak with the capture and sweep reference)
+     *  still fits a 32-bit JVM. */
+    private static final int SMALL_HEAP_MAX_FFT_SIZE = 1 << 22;
 
     private final FreqRespView view;
 
@@ -261,11 +273,26 @@ public final class FreqRespTabControl extends AbstractTabControl {
     private Consumer<Void>   calibrationChangedListener;
     private Consumer<String> calFileSavedListener;
 
+    /** The combo's offered subset of {@link #FFT_SIZE_VALUES} /
+     *  {@link #FFT_SIZE_LABELS} — truncated at
+     *  {@link #SMALL_HEAP_MAX_FFT_SIZE} on a small heap, the full list
+     *  otherwise. */
+    private final int[]    offeredFftSizes;
+    private final String[] offeredFftSizeLabels;
+
     public FreqRespTabControl(Composite parent, FreqRespView view,
                               CorrectionStore correctionStore) {
         super(parent, SWT.NONE);
         this.view = view;
         this.correctionStore = correctionStore;
+        int sizeCap = Runtime.getRuntime().maxMemory() < SMALL_HEAP_BYTES
+                ? SMALL_HEAP_MAX_FFT_SIZE : Integer.MAX_VALUE;
+        int offered = 0;
+        while (offered < FFT_SIZE_VALUES.length && FFT_SIZE_VALUES[offered] <= sizeCap) {
+            offered++;
+        }
+        this.offeredFftSizes      = Arrays.copyOf(FFT_SIZE_VALUES, offered);
+        this.offeredFftSizeLabels = Arrays.copyOf(FFT_SIZE_LABELS, offered);
 
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 0; gl.marginHeight = 0;
@@ -653,8 +680,12 @@ public final class FreqRespTabControl extends AbstractTabControl {
         fftSizeLabel = new Label(g, SWT.NONE);
         fftSizeLabel.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         Combo fftSizeCombo = new Combo(g, SWT.READ_ONLY);
-        for (String s : FFT_SIZE_LABELS) fftSizeCombo.add(s);
-        fftSizeCombo.setToolTipText(I18n.t("freqResp.settings.fftSize.tooltip"));
+        for (String s : offeredFftSizeLabels) fftSizeCombo.add(s);
+        String sizeTip = I18n.t("freqResp.settings.fftSize.tooltip");
+        if (offeredFftSizes.length < FFT_SIZE_VALUES.length) {
+            sizeTip += "\n" + I18n.t("freqResp.settings.fftSize.heapCapped");
+        }
+        fftSizeCombo.setToolTipText(sizeTip);
         fftSizeCombo.setLayoutData(comboFillGd());
         // Index-mapped combo (selection index → FFT_SIZE_VALUES[idx] sample
         // count), so it can't use the ordinal-based Bindings.combo — the
@@ -771,17 +802,28 @@ public final class FreqRespTabControl extends AbstractTabControl {
      *  the int value array; falls back to index 0 (64k) when the pref value
      *  matches no entry, per {@link #selectFftSizeCombo}. */
     private void bindFftSizeCombo(Combo combo, Property<Integer> property) {
+        int max = offeredFftSizes[offeredFftSizes.length - 1];
+        if (property.get() > max) {
+            // Persisted on a larger-heap run (or hand-edited): the parallel
+            // deconvolution buffers cannot fit this JVM — clamp and persist.
+            log.info("FreqResp FFT size {} exceeds the heap-capped maximum {} — clamped",
+                    property.get(), max);
+            property.set(max);
+        }
         selectFftSizeCombo(combo, property.get());
         combo.addListener(SWT.Selection, e -> {
             int idx = combo.getSelectionIndex();
-            if (idx >= 0 && idx < FFT_SIZE_VALUES.length) {
-                property.set(FFT_SIZE_VALUES[idx]);
+            if (idx >= 0 && idx < offeredFftSizes.length) {
+                property.set(offeredFftSizes[idx]);
             }
         });
         Consumer<Integer> onChange = v -> {
-            if (!combo.isDisposed()) {
-                selectFftSizeCombo(combo, v);
+            if (combo.isDisposed()) return;
+            if (v > max) {
+                property.set(max);   // preset from a larger-heap run — re-fires clamped
+                return;
             }
+            selectFftSizeCombo(combo, v);
         };
         property.addListener(onChange);
         combo.addDisposeListener(e -> property.removeListener(onChange));
@@ -817,8 +859,8 @@ public final class FreqRespTabControl extends AbstractTabControl {
      *  the load-time snap rounds non-pow2 values to the next legal
      *  one, but defensive anyway. */
     private void selectFftSizeCombo(Combo combo, int currentFftSize) {
-        for (int i = 0; i < FFT_SIZE_VALUES.length; i++) {
-            if (FFT_SIZE_VALUES[i] == currentFftSize) { combo.select(i); return; }
+        for (int i = 0; i < offeredFftSizes.length; i++) {
+            if (offeredFftSizes[i] == currentFftSize) { combo.select(i); return; }
         }
         combo.select(0);
     }

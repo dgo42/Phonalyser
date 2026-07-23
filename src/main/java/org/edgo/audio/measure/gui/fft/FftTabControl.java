@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -107,6 +108,16 @@ public final class FftTabControl extends AbstractTabControl {
     private static final String[] FFT_LENGTH_LABELS = {
             "8k", "16k", "32k", "64k", "128k", "256k", "512k", "1M", "2M", "4M"
     };
+    /** Heaps below this are 32-bit-class: combo entries above
+     *  {@link #SMALL_HEAP_MAX_FFT_LENGTH} are not offered.  1.5 GiB sits
+     *  between the 32-bit ceiling (~1.2–1.4 GB usable) and any serious
+     *  64-bit {@code -Xmx}. */
+    private static final long SMALL_HEAP_BYTES = 1_610_612_736L;
+    /** Largest FFT length offered on a small heap: the 4M analysis working
+     *  set (analyzer scratch, result slots, frame cache, window buffers —
+     *  ~1.3 GB at high rates) cannot fit a 32-bit JVM, while 2M (~600 MB)
+     *  does. */
+    private static final int SMALL_HEAP_MAX_FFT_LENGTH = 2_097_152;
 
     /** Indices of the toolbar tabs.  The first {@link #NUM_CUSTOM_TABS} are
      *  custom-rendered (label + optional tile row); the Presets / Utility tabs
@@ -203,6 +214,13 @@ public final class FftTabControl extends AbstractTabControl {
     private ScrolledComposite     fftCalRowsScroll;
     private final List<FftCalRow> fftCalRows = new ArrayList<>();
 
+    /** The combo's offered subset of {@link #FFT_LENGTH_VALUES} /
+     *  {@link #FFT_LENGTH_LABELS} — truncated at
+     *  {@link #SMALL_HEAP_MAX_FFT_LENGTH} on a small heap, the full list
+     *  otherwise. */
+    private final int[]    offeredFftLengths;
+    private final String[] offeredFftLengthLabels;
+
     public FftTabControl(Composite parent, FftView view, boolean liveCapture,
                          CorrectionStore correctionStore,
                          FftController controller) {
@@ -210,6 +228,14 @@ public final class FftTabControl extends AbstractTabControl {
         this.view = view;
         this.correctionStore = correctionStore;
         this.controller = controller;
+        int lengthCap = Runtime.getRuntime().maxMemory() < SMALL_HEAP_BYTES
+                ? SMALL_HEAP_MAX_FFT_LENGTH : Integer.MAX_VALUE;
+        int offered = 0;
+        while (offered < FFT_LENGTH_VALUES.length && FFT_LENGTH_VALUES[offered] <= lengthCap) {
+            offered++;
+        }
+        this.offeredFftLengths      = Arrays.copyOf(FFT_LENGTH_VALUES, offered);
+        this.offeredFftLengthLabels = Arrays.copyOf(FFT_LENGTH_LABELS, offered);
 
         GridLayout gl = new GridLayout(1, false);
         gl.marginWidth = 0; gl.marginHeight = 0;
@@ -353,9 +379,13 @@ public final class FftTabControl extends AbstractTabControl {
 
         addLabel(g, I18n.t("fft.settings.length"));
         fftLengthCombo = new Combo(g, SWT.READ_ONLY);
-        fftLengthCombo.setItems(FFT_LENGTH_LABELS);
+        fftLengthCombo.setItems(offeredFftLengthLabels);
         fftLengthCombo.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
-        fftLengthCombo.setToolTipText(I18n.t("fft.settings.length.tooltip"));
+        String lengthTip = I18n.t("fft.settings.length.tooltip");
+        if (offeredFftLengths.length < FFT_LENGTH_VALUES.length) {
+            lengthTip += "\n" + I18n.t("fft.settings.length.heapCapped");
+        }
+        fftLengthCombo.setToolTipText(lengthTip);
         // Index-mapped combo: the selection index maps through FFT_LENGTH_VALUES
         // to the actual length, so it can't use the ordinal-based Bindings.combo.
         // The two-way mirror is hand-wired but follows the same contract: seed
@@ -559,17 +589,29 @@ public final class FftTabControl extends AbstractTabControl {
      *  length on user input, and re-selects the index when the length changes
      *  elsewhere (a preset load). */
     private void bindFftLengthCombo(Property<Integer> property) {
-        int seed = indexOfInt(FFT_LENGTH_VALUES, property.get());
+        int max = offeredFftLengths[offeredFftLengths.length - 1];
+        if (property.get() > max) {
+            // Persisted on a larger-heap run (or hand-edited): the working set
+            // cannot fit this JVM — clamp and persist, the worker follows the
+            // pref.
+            log.info("FFT length {} exceeds the heap-capped maximum {} — clamped", property.get(), max);
+            property.set(max);
+        }
+        int seed = indexOfInt(offeredFftLengths, property.get());
         fftLengthCombo.select(seed < 0 ? 3 : seed);
         fftLengthCombo.addListener(SWT.Selection, e -> {
             int i = fftLengthCombo.getSelectionIndex();
             if (i >= 0) {
-                property.set(FFT_LENGTH_VALUES[i]);
+                property.set(offeredFftLengths[i]);
             }
         });
         Consumer<Integer> onChange = v -> {
             if (fftLengthCombo.isDisposed()) return;
-            int i = indexOfInt(FFT_LENGTH_VALUES, v);
+            if (v > max) {
+                property.set(max);   // preset from a larger-heap run — re-fires clamped
+                return;
+            }
+            int i = indexOfInt(offeredFftLengths, v);
             if (i >= 0 && fftLengthCombo.getSelectionIndex() != i) {
                 fftLengthCombo.select(i);
             }
