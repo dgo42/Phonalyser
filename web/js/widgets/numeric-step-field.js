@@ -139,8 +139,8 @@ export const UNIT_FAMILIES = {
   ]),
   // Generator dither depth: whole/fractional bits (base) or a full-scale-aware dBV VIEW of that
   // value (UnitFamily.DITHER). The bits⇄dBV conversion is NOT the plain Unit log formula — it is
-  // full-scale- and bit-depth-aware and lives in the NumericStepModel DITHER policy (fed live
-  // full-scale + ENBW suppliers); these units carry only the suffixes and the "which view" marker.
+  // full-scale- and bit-depth-aware and lives in the NumericStepModel DITHER policy (fed the live
+  // full-scale supplier); these units carry only the suffixes and the "which view" marker.
   // Suffix-less (digits-only) input is bits, the base unit; dBV sticks for display once typed.
   DITHER: new UnitFamilyDef('DITHER', 0, [
     new Unit('unit.bits', 1.0, false, ['b', 'bi', 'bit', 'bits']),
@@ -183,7 +183,7 @@ export class NumericStepModel {
    *   fixed:   { family, min, max, wheelStep, arrowStep, decimals }
    *   list:    { family, min, max, series:[...], maxDecimals }
    *   percent: { family, min, max, maxDecimals }
-   *   dither:  { family, maxBits, fsAmplSupplier, enbwSupplier }
+   *   dither:  { family, maxBits, fsAmplSupplier }
    */
   constructor(cfg) {
     this.family = cfg.family;
@@ -194,22 +194,20 @@ export class NumericStepModel {
     this.namedValueLabel = null;
     // DITHER-only config (null for every other policy).
     this.fsAmplSupplier = null;
-    this.enbwSupplier = null;
     if (cfg.maxBits !== undefined) {
       // DITHER: 0 (Off) or [1, maxBits] bits, possibly fractional, shown as bits or a
-      // full-scale-aware dBV VIEW of the same value. fsAmplSupplier yields the live DAC PEAK
-      // full-scale (Vpeak); enbwSupplier the current FFT window's equivalent noise bandwidth
-      // (bins) — both come IN as config (never a singleton reach-in). Off sits at the TOP.
+      // full-scale-aware dBV VIEW of the same value. fsAmplSupplier yields the live PEAK full-scale
+      // (Vpeak) and comes IN as config (never a singleton reach-in); the dBV is the physical level
+      // relative to that full-scale. Off sits at the TOP.
       this.policy = POLICY.DITHER;
       this.min = 0; this.max = cfg.maxBits;
       this.wheelStep = 0; this.arrowStep = 0;
       this.series = null;
       this.decimals = -1; this.maxDecimals = DITHER_DBV_DECIMALS;
       this.fsAmplSupplier = cfg.fsAmplSupplier;
-      this.enbwSupplier = cfg.enbwSupplier || null;
-      // The config dBV sum (fsDbv + enbwDb) that `value` was last reconciled against; reanchor()
-      // moves the bits by the config delta to hold the displayed dBV across a window / FS change.
-      this.ditherConfigDbv = this._ditherFsDbv() + this._ditherEnbwDb();
+      // The config dBV (the full-scale term) that `value` was last reconciled against; reanchor()
+      // moves the bits by the config delta to hold the displayed dBV across a full-scale change.
+      this.ditherConfigDbv = this._ditherFsDbv();
     } else if (Array.isArray(cfg.series)) {
       this.policy = POLICY.LIST;
       this.wheelStep = 0; this.arrowStep = 0;
@@ -296,35 +294,28 @@ export class NumericStepModel {
    *  would read ~3 dB low: the TPDF dither RMS is relative to the peak full-scale. */
   _ditherFsDbv() { return DB_PER_DECADE * Math.log10(this.fsAmplSupplier()); }
 
-  /** FFT window over-read added to the dBV view: broadband noise through the
-   *  analysis window reads 10·log10(ENBW) dB hot (= ½·DB_PER_DECADE·log10). 0 when
-   *  no ENBW supplier is wired. */
-  _ditherEnbwDb() {
-    return this.enbwSupplier == null ? 0.0 : 0.5 * DB_PER_DECADE * Math.log10(this.enbwSupplier());
-  }
-
-  /** dBV of the TPDF dither at `bits` (≥1), as it reads on the FFT noise floor. */
+  /** dBV of the TPDF dither at `bits` (≥1) — the physical level relative to the peak full-scale. */
   _ditherDbvForBits(bits) {
     return -(bits - 1) * DITHER_DB_PER_BIT - DITHER_TPDF_OFFSET_DB
-      + this._ditherFsDbv() + this._ditherEnbwDb();
+      + this._ditherFsDbv();
   }
 
   /** The (fractional) bit count whose TPDF dither lands at `dbv` — exact inverse
    *  of _ditherDbvForBits, un-clamped. */
   _ditherBitsForDbv(dbv) {
-    return 1 + (this._ditherFsDbv() + this._ditherEnbwDb() - DITHER_TPDF_OFFSET_DB - dbv) / DITHER_DB_PER_BIT;
+    return 1 + (this._ditherFsDbv() - DITHER_TPDF_OFFSET_DB - dbv) / DITHER_DB_PER_BIT;
   }
 
   /** Clamps a non-Off dither depth to [1, maxBits]. */
   _clampBits(bits) { return Math.max(1.0, Math.min(this.max, bits)); }
 
-  /** Reacts to a config change (FFT-window ENBW or DAC full-scale) holding the
-   *  CURRENTLY DISPLAYED value: dBV view keeps the shown dBV and re-solves the bits
-   *  (holding the FFT-floor target); bits view (and Off) keep the bits, only the dBV
-   *  readout moves. Returns true when the stored bit count changed. */
+  /** Reacts to a config change (full-scale) holding the CURRENTLY DISPLAYED value:
+   *  dBV view keeps the shown dBV and re-solves the bits under the new full-scale;
+   *  bits view (and Off) keep the bits, only the dBV readout moves. Returns true when
+   *  the stored bit count changed. */
   reanchor() {
     if (this.policy !== POLICY.DITHER) return false;
-    const newConfigDbv = this._ditherFsDbv() + this._ditherEnbwDb();
+    const newConfigDbv = this._ditherFsDbv();
     const before = this.value;
     if (this.isLogDisplay() && this.value > 0) {
       this.value = this._clampBits(this.value + (newConfigDbv - this.ditherConfigDbv) / DITHER_DB_PER_BIT);
@@ -728,9 +719,9 @@ export class NumericStepField {
   /** The current value in the alternate unit (a DITHER field's bits⇄dBV), for a
    *  companion label beside the field; empty when there is no alternate view. */
   companionText() { return this.model.companionText(); }
-  /** DITHER: re-solve for a config change (FFT-window ENBW or DAC full-scale) holding
-   *  the displayed value, then re-render. Returns true when the stored bit count
-   *  changed so the caller can persist + restart. */
+  /** DITHER: re-solve for a config change (full-scale) holding the displayed value,
+   *  then re-render. Returns true when the stored bit count changed so the caller can
+   *  persist + restart. */
   reanchor() { const changed = this.model.reanchor(); this.refresh(); return changed; }
   setDisabled(d) {
     this.disabled = d;

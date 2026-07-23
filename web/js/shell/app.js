@@ -43,7 +43,6 @@ import { ScopeTabControl } from '../scope/scope-tab-control.js';
 import { preserveCanvasMiddle } from '../scope/scope-format.js';
 import { FftPane } from '../fft/fft-pane.js';
 import { FftTabControl } from '../fft/fft-tab-control.js';
-import { enbwOf } from '../fft/fft-analyzer.js';
 import { GeneratorPane } from '../generator/generator-pane.js';
 import { PredistortionEngine } from '../predistortion/engine.js';
 import { writeHarmonicDpd, writeIntermodDpd } from '../io/dpd.js';
@@ -213,15 +212,17 @@ function initStepFields() {
 
   // Dither depth: DITHER-policy NumericStepField (whole/fractional bits OR a full-scale-aware dBV
   // VIEW of the same value) — Java GeneratorPane ditherField. fsAmplSupplier = the DAC PEAK
-  // full-scale (Vpeak); enbwSupplier = the current FFT window's equivalent noise bandwidth, so the
-  // dBV view reads as it appears on the FFT floor. maxBits = 32. The TPDF dither is applied LIVE to
+  // full-scale (Vpeak) so the dBV view tracks recalibration. The dBV is the PHYSICAL TPDF level
+  // relative to that full-scale — window-invariant, NO FFT-window term: since the analyser's NENBW
+  // correction the integrated noise metrics (N, SNR, …) read the true level, so the entered dBV
+  // checks against them with any analysis window. maxBits = 32. The TPDF dither is applied LIVE to
   // the generated signal in the dds worklet (Java PcmQuantizer live-apply) so it shows
   // on the FFT floor exactly where the dBV view sets it — hence the engine push below, mirroring the
   // amplitude field. Seed value + display unit BEFORE the change path re-enters (setValue /
   // setLogDisplay never fire onChange). On a committed change: persist the bits + the bits/dBV display
   // choice, push the depth to the running worklet, then re-annotate the "Dither" caption.
   const fDither = mk('dither', new NumericStepModel({ family: F.DITHER, maxBits: 32,
-    fsAmplSupplier: () => prefs.getDacFsVoltageAmpl(), enbwSupplier: () => enbwOf(prefs.fftWindow.get()) }),
+    fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
     (v) => {
       prefs.genDitherBits.set(v);
       prefs.genDitherDbvDisplay.set(fDither.isLogDisplay());
