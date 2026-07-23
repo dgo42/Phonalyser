@@ -248,10 +248,11 @@
      set it as the noise level it makes; the caption shows the other unit, and
      the wheel/arrows step ±1&nbsp;bit (bits view) or ±10&nbsp;dBV (dBV view),
      with <code>Off</code> at the top.</p>
-  <p>The dBV is the level the dither shows on the <a href="fft.html">FFT</a>
-     noise floor: it follows the DAC full-scale <em>and</em> the analysis window
-     chosen in the FFT, so entering, say, −100&nbsp;dBV puts the FFT floor at
-     −100&nbsp;dBV — provided the FFT uses <b>incoherent (power) averaging</b>
+  <p>The dBV is the physical level of the dither noise, anchored to the DAC
+     full-scale: entering, say, −100&nbsp;dBV puts the noise the
+     <a href="fft.html">FFT</a> measures at −100&nbsp;dBV — with any analysis
+     window, since the analyser's noise metrics account for the window's noise
+     bandwidth — provided the FFT uses <b>incoherent (power) averaging</b>
      (coherent averaging cancels noise and reads far lower).  Dither breaks up
      periodic quantisation patterns at very low output levels.</p>
 
