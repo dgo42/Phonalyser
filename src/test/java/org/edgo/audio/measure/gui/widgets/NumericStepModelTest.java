@@ -474,12 +474,12 @@ class NumericStepModelTest {
     private static final double DITHER_DB_PER_BIT = 6.0206;
     private static final double DITHER_OFFSET_DB  = 7.782;
 
-    /** Peak full-scale = 1 Vpeak → 20·log10(1) = 0 dBV reference, and window
-     *  ENBW = 1 bin (Rectangular → no FFT over-read), so a bit's dBV is just
-     *  −(bits−1)·6.0206 − 7.782 and the conversions have a clean anchor.
-     *  (dBV anchors to the PEAK full-scale, not the RMS full-scale.) */
+    /** Peak full-scale = 1 Vpeak → 20·log10(1) = 0 dBV reference, so a bit's
+     *  dBV is just −(bits−1)·6.0206 − 7.782 and the conversions have a clean
+     *  anchor.  (dBV anchors to the PEAK full-scale, not the RMS full-scale;
+     *  the dBV is the physical TPDF level — nothing else enters the mapping.) */
     private NumericStepModel dither(int maxBits) {
-        return new NumericStepModel(UnitFamily.DITHER, maxBits, () -> 1.0, () -> 1.0);
+        return new NumericStepModel(UnitFamily.DITHER, maxBits, () -> 1.0);
     }
     private double ditherDbv(double bits) {   // fsDbv = 20·log10(1) = 0
         return -(bits - 1) * DITHER_DB_PER_BIT - DITHER_OFFSET_DB;
@@ -519,7 +519,7 @@ class NumericStepModelTest {
         // (20·log10(dacFsVoltageAmpl)) — NOT the RMS full-scale (/√2), which
         // would read ~3 dB low and make an entered dBV land ~0.5 bit hot.
         double fsAmpl = 2.79351;                 // realistic DAC peak full-scale (Vpeak)
-        NumericStepModel m = new NumericStepModel(UnitFamily.DITHER, 24, () -> fsAmpl, () -> 1.0);
+        NumericStepModel m = new NumericStepModel(UnitFamily.DITHER, 24, () -> fsAmpl);
         assertTrue(m.commit("-100 dBV"));
         double fsDbv   = 20 * Math.log10(fsAmpl);   // peak anchor, no /√2
         double expBits = 1 + (fsDbv - DITHER_OFFSET_DB - (-100)) / DITHER_DB_PER_BIT;
@@ -530,40 +530,26 @@ class NumericStepModelTest {
     }
 
     @Test
-    void dither_dbvEntryAccountsForWindowEnbw() {
-        // The dBV is stated as it reads on the FFT noise floor (physical level +
-        // 10·log10(ENBW)), so hitting a given floor with a WIDER window (higher
-        // ENBW, more over-read) needs a QUIETER physical dither — i.e. more bits.
-        // Hann (1.5) vs Rectangular (1) → 10·log10(1.5) = 1.761 dB → ~0.29 bit.
-        double enbwDb = 10 * Math.log10(1.5);
-        NumericStepModel rect = new NumericStepModel(UnitFamily.DITHER, 24, () -> 1.0, () -> 1.0);
-        NumericStepModel hann = new NumericStepModel(UnitFamily.DITHER, 24, () -> 1.0, () -> 1.5);
-        assertTrue(rect.commit("-100 dBV"));
-        assertTrue(hann.commit("-100 dBV"));
-        assertEquals(enbwDb / DITHER_DB_PER_BIT, hann.getValue() - rect.getValue(), 1e-9,
-                "wider window (higher ENBW) → same FFT-floor dBV needs more bits");
-    }
-
-    @Test
     void dither_reanchor_dbvMode_holdsDbvAndResolvesBits() {
-        // A window/full-scale change with a dBV entered keeps the shown dBV and
-        // moves the bits by the config delta (so the FFT-floor target holds).
-        double[] enbw = { 1.0 };
-        NumericStepModel m = new NumericStepModel(UnitFamily.DITHER, 30, () -> 1.0, () -> enbw[0]);
+        // A full-scale change with a dBV entered keeps the shown dBV and moves
+        // the bits by the config delta (so the entered physical level holds
+        // under the new calibration).
+        double[] fs = { 1.0 };
+        NumericStepModel m = new NumericStepModel(UnitFamily.DITHER, 30, () -> fs[0]);
         assertTrue(m.commit("-100 dBV"));
         double bits0 = m.getValue();
-        enbw[0] = 1.5;                                  // Hann-width window
+        fs[0] = 2.0;                                   // +6.02 dB full-scale
         assertTrue(m.reanchor(), "dBV view re-solves the bits");
-        assertEquals(bits0 + 10 * Math.log10(1.5) / DITHER_DB_PER_BIT, m.getValue(), 1e-9,
-                "bits move by the ENBW delta → the shown dBV (FFT-floor target) is held");
+        assertEquals(bits0 + 20 * Math.log10(2.0) / DITHER_DB_PER_BIT, m.getValue(), 1e-9,
+                "bits move by the full-scale delta → the shown dBV is held");
     }
 
     @Test
     void dither_reanchor_bitsMode_holdsBits() {
-        double[] enbw = { 1.0 };
-        NumericStepModel m = new NumericStepModel(UnitFamily.DITHER, 30, () -> 1.0, () -> enbw[0]);
+        double[] fs = { 1.0 };
+        NumericStepModel m = new NumericStepModel(UnitFamily.DITHER, 30, () -> fs[0]);
         assertTrue(m.commit("16 bits"));               // bits view = fixed physical dither
-        enbw[0] = 1.5;
+        fs[0] = 2.0;
         assertFalse(m.reanchor(), "bits view holds the physical dither");
         assertEquals(16, m.getValue(), EPS);
     }
