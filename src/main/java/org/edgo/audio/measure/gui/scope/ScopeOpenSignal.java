@@ -101,6 +101,17 @@ public final class ScopeOpenSignal {
                 lastError = I18n.t("scope.openSignal.noSampleCount", file.getName());
                 return false;
             }
+            // Heap guard: the whole file lands in memory at 16 B/frame (two
+            // double lanes) — a multi-minute high-rate capture would OOM
+            // mid-load with no way back.  Refuse up-front with real numbers.
+            long needBytes = totalFrames * 2L * Double.BYTES;
+            Runtime rt = Runtime.getRuntime();
+            long freeBytes = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory());
+            if (needBytes > freeBytes - freeBytes / 4) {
+                lastError = I18n.t("scope.openSignal.tooLarge",
+                        file.getName(), needBytes >> 20, freeBytes >> 20);
+                return false;
+            }
             // Buffer sized to the exact frame count so the entire signal
             // fits without ring-wrap; capacity must be ≥ 1 sample so the
             // builder's backing buffer doesn't reject it.
@@ -127,6 +138,12 @@ public final class ScopeOpenSignal {
             log.info("Scope open signal: {} ({} Hz, {} frames, {} s)",
                     file.getName(), sampleRate, totalFrames,
                     String.format("%.3f", totalFrames / (double) sampleRate));
+        } catch (PcmFileLoader.TooLargeException ex) {
+            // The FLAC eager decode refused before the ring guard above could
+            // run — same user answer, localized here.
+            lastError = I18n.t("scope.openSignal.tooLarge", file.getName(), ex.needMb, ex.freeMb);
+            log.warn("Scope open signal failed: {}", ex.getMessage());
+            return false;
         } catch (Exception ex) {
             lastError = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
             log.warn("Scope open signal failed: {}", lastError, ex);

@@ -62,6 +62,24 @@ public class RegressCalibrateMode {
         int       sampleRate  = reader.getSampleRate();
         int       bitDepth    = reader.getBitsPerSample();
         long      totalFrames = reader.getFrameCount();
+        // The header depth sizes the per-code tables (1 << bitDepth codes):
+        // a malformed 25–28-bit header would attempt 0.7–5 GB, 29–31 a
+        // negative array — accept only real PCM depths.
+        if (bitDepth != 8 && bitDepth != 16 && bitDepth != 24 && bitDepth != 32) {
+            throw new IllegalArgumentException("Unsupported WAV bit depth " + bitDepth
+                    + " — regression calibration accepts 8, 16, 24 or 32");
+        }
+        // Whole-WAV buffer + (at 24-bit) ~21 B per ADC code of regression
+        // tables — refuse what cannot fit instead of an OutOfMemoryError
+        // deep inside the calibration.
+        Runtime rt = Runtime.getRuntime();
+        long needBytes = totalFrames * Double.BYTES + (bitDepth == 24 ? (1L << 24) * 21L : 0L);
+        long freeBytes = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory());
+        if (needBytes > freeBytes - freeBytes / 4) {
+            throw new IllegalArgumentException(String.format(
+                    "Regression calibration needs ~%d MB (whole WAV + per-code tables) but only %d MB of Java heap are free — "
+                    + "use a shorter capture or raise -Xmx", needBytes >> 20, freeBytes >> 20));
+        }
 
         log.info("Mode      : Regression calibration");
         log.info("File      : {}", fileArg);

@@ -23,6 +23,22 @@ import lombok.experimental.UtilityClass;
 @UtilityClass
 public class PcmUtils {
 
+    /** The byte length of a whole-capture PCM image, with the {@code int}
+     *  multiply guarded: past ~268 M frames {@code frames * frameSize}
+     *  overflows and {@code new byte[…]} would die with a bare
+     *  {@link NegativeArraySizeException} — refuse with the real numbers
+     *  instead. */
+    private int pcmImageLength(int frames, int frameSize) {
+        long totalBytes = (long) frames * frameSize;
+        if (totalBytes > Integer.MAX_VALUE - 8) {
+            throw new IllegalArgumentException(String.format(
+                    "Capture too long to render as one PCM image: %,d frames × %d B/frame = %,d MB "
+                    + "exceeds Java's single-array limit — export a shorter capture",
+                    frames, frameSize, totalBytes >> 20));
+        }
+        return (int) totalBytes;
+    }
+
     /**
      * Quantises a normalized float[-1,+1] mono signal back to little-endian
      * signed-PCM bytes at {@code bitDepth}, duplicating the value into both
@@ -31,7 +47,7 @@ public class PcmUtils {
     public byte[] monoToStereoBytes(double[] samples, int bitDepth) {
         int sampleBytes = bitDepth / 8;
         int frameSize   = sampleBytes * 2;
-        byte[] out      = new byte[samples.length * frameSize];
+        byte[] out      = new byte[pcmImageLength(samples.length, frameSize)];
         long maxPos     = (1L << (bitDepth - 1)) - 1;
         long minNeg     = -(1L << (bitDepth - 1));
         for (int i = 0; i < samples.length; i++) {
@@ -59,7 +75,7 @@ public class PcmUtils {
         int n = Math.min(left.length, right.length);
         int sampleBytes = bitDepth / 8;
         int frameSize   = sampleBytes * 2;
-        byte[] out      = new byte[n * frameSize];
+        byte[] out      = new byte[pcmImageLength(n, frameSize)];
         long maxPos     = (1L << (bitDepth - 1)) - 1;
         long minNeg     = -(1L << (bitDepth - 1));
         for (int i = 0; i < n; i++) {
