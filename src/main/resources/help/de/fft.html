@@ -345,7 +345,9 @@
   <h4 id="fft-length">FFT-Länge</h4>
   <p>Zweierpotenz-Auswahlfeld von 8 k bis 4 M.  Größere Fenster liefern feinere
      Bin-Auflösung, aber langsamere Aktualisierungsrate und mehr Speicherbedarf.
-     1 M bei 384 kHz ergibt ~0,37 Hz/Bin.</p>
+     1 M bei 384 kHz ergibt ~0,37 Hz/Bin.  Bei kleinem Java-Heap
+     (32-Bit-Laufzeit) endet die Liste bei 2&nbsp;M — größere Längen passen
+     nicht in diesen Heap.</p>
 
   <h4 id="fft-window">Fensterfunktion</h4>
   <p>Auswahlfeld der Analysefensterfunktionen, bei denen Hauptkeulenbreite gegen

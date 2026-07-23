@@ -517,7 +517,10 @@
      <code>WAV</code> / <code>AIFF</code> / <code>FLAC</code>, not only files
      this scope saved.  This is a plain waveform viewer for the file:
      <b>no triggering or measurements</b> are available on a loaded signal, and
-     the FFT analyser does <b>not</b> run over the scope-loaded audio.</p>
+     the FFT analyser does <b>not</b> run over the scope-loaded audio.  The
+     whole file is decoded into memory (16 bytes per sample frame); a file
+     that cannot fit the Java heap is refused up-front, with the required and
+     free amounts shown.</p>
 
   <h2 id="scope-tiles">Tab tiles</h2>
   <p>The <b>Left</b>, <b>Right</b>, <b>Horizontal</b> and <b>Trigger</b> tabs

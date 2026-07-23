@@ -323,7 +323,8 @@
   <h4 id="fft-length">FFT length</h4>
   <p>Power-of-two combo from 8 k to 4 M.  Bigger windows give finer
      bin resolution but slower update rate and more memory.  1 M at
-     384 kHz gives ~0.37 Hz/bin.</p>
+     384 kHz gives ~0.37 Hz/bin.  On a small Java heap (a 32-bit runtime)
+     the list ends at 2&nbsp;M — larger lengths cannot fit that heap.</p>
 
   <h4 id="fft-window">Window</h4>
   <p>Combo of analysis windows, each trading main-lobe width against side-lobe

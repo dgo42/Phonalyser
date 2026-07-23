@@ -52,6 +52,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overrides the staged copies, so the translate-without-rebuilding workflow
   keeps working. The installer keeps using the folders from the installation
   package — nothing is duplicated there.
+- **Out-of-memory hardening.** After a full audit of every size-scaled
+  allocation, in three layers. Settings a small heap (a 32-bit Java) cannot
+  possibly run are no longer offered: the FFT length list there ends at 2M
+  and the frequency-response FFT size at 4M, with a larger persisted value
+  clamping itself and the combo tooltip explaining the cap. Stopping the FFT
+  now releases the analyser's working buffers (several hundred MB idled after
+  Stop at 4M), and the displayed spectrum refreshes in place instead of
+  copying ~64 MB per displayed frame at large FFT sizes — far less
+  garbage-collector pressure on every platform. And every whole-capture path
+  (the scope's Open signal, FLAC decoding, the CLI capture / export /
+  calibration modes) pre-checks the required memory and refuses with the
+  needed-vs-free numbers instead of dying mid-operation with an
+  OutOfMemoryError; malformed WAV bit depths are rejected.
 - **Web help ignored the UI language.** In the browser build, switching the app
   language left the in-app help stuck in English — it took the help language
   from the page locale, which the language switch never updated. Help now
