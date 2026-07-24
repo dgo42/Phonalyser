@@ -169,9 +169,11 @@ public class FftAnalyzeMode {
         reader.process(block -> {
             int n = pos.get();
             for (int i = 0; i < block.length && n + i < samples.length; i++) {
+                // 32-bit codes fill the int as a bit pattern (see WavReader.readSample) —
+                // widen unsigned, or positive half-waves land 2^32 low after the subtract.
                 double code = w != null
                         ? w.correctedCode(block[i]).ch1
-                        : (double) block[i].ch1;
+                        : (double) Integer.toUnsignedLong(block[i].ch1);
                 samples[n + i] = (code - halfRange) / (double) halfRange;
             }
             pos.addAndGet(block.length);
