@@ -1420,6 +1420,7 @@ public abstract class AbstractMeasurementView extends Canvas {
         switch (unit) {
             case DBFS:      return String.format(Locale.US, "%.1f dBFS", v);
             case DBV:       return String.format(Locale.US, "%.1f dBV",  v);
+            case DBR:       return String.format(Locale.US, "%.1f dBr",  v);
             case V:         return formatVoltsSi(v) + "V";
             case V_SQRT_HZ: return formatVoltsSi(v) + "V/√Hz";
             default:        return String.format(Locale.US, "%g", v);

@@ -18,6 +18,7 @@
 
 package org.edgo.audio.measure.sound.qa40x;
 
+import java.util.Arrays;
 import java.util.Locale;
 
 import lombok.experimental.UtilityClass;
@@ -36,9 +37,10 @@ import lombok.experimental.UtilityClass;
  *
  * <p><b>Code maps.</b> Input full-scale {@code code = dBV / 6} for 0..42 dBV;
  * output full-scale {@code -12/-2/+8/+18 dBV} → codes 0..3; sample rate
- * {@code 48000/96000/192000 Hz} → codes 0..2.  384 kHz is deliberately NOT
- * exposed — it is input-only single-source on QA402/QA403 and garbles the
- * outputs (§9 item 7), so it is rejected here rather than mapped.
+ * {@code 48000/96000/192000/384000 Hz} → codes 0..3.  The 384 kHz code is
+ * <b>QA403-only</b> — the QA402 has no code 3 — so the rate list is per model
+ * ({@link #sampleRatesHz(Qa40xDeviceFinder.Qa40xModel)}) while the code map
+ * itself is universal.
  */
 @UtilityClass
 public class Qa40xProtocol {
@@ -84,13 +86,14 @@ public class Qa40xProtocol {
     private static final int[] INPUT_RANGE_DBV  = {0, 6, 12, 18, 24, 30, 36, 42};
     /** Output full-scale ranges in dBV (code = index). */
     private static final int[] OUTPUT_RANGE_DBV = {-12, -2, 8, 18};
-    /** Duplex-capable sample rates in Hz (code = index). */
-    private static final int[] SAMPLE_RATE_HZ   = {48_000, 96_000, 192_000};
+    /** Sample rates in Hz (code = index).  The 384 kHz code exists on the QA403
+     *  only — see {@link #sampleRatesHz(Qa40xDeviceFinder.Qa40xModel)}. */
+    private static final int[] SAMPLE_RATE_HZ   = {48_000, 96_000, 192_000, 384_000};
 
     private static final int INPUT_RANGE_STEP_DBV = 6;
     private static final int INPUT_RANGE_MAX_DBV  = 42;
-    /** Input-only single-source rate that must never be driven as an output/duplex rate (§9 item 7). */
-    private static final int UNSUPPORTED_384K_HZ  = 384_000;
+    /** Highest rate the QA402 accepts; the 384 kHz code is QA403-only (§4). */
+    private static final int QA402_MAX_RATE_HZ    = 192_000;
 
     /** Suffix of the plain {@code "N dBV"} range-row label — the persisted KEY,
      *  emitted by {@link #rangeLabel(int)} for BOTH directions, so
@@ -109,8 +112,13 @@ public class Qa40xProtocol {
         return OUTPUT_RANGE_DBV.clone();
     }
 
-    /** Duplex-capable sample rates in Hz, ascending — a defensive copy. */
-    public int[] sampleRatesHz() {
+    /** Sample rates in Hz for {@code model}, ascending — a defensive copy.
+     *  The QA403 adds 384 kHz (reg-9 code 3) on top of the common 48/96/192;
+     *  the QA402 has no code 3 (§4). */
+    public int[] sampleRatesHz(Qa40xDeviceFinder.Qa40xModel model) {
+        if (model == Qa40xDeviceFinder.Qa40xModel.QA402) {
+            return Arrays.stream(SAMPLE_RATE_HZ).filter(hz -> hz <= QA402_MAX_RATE_HZ).toArray();
+        }
         return SAMPLE_RATE_HZ.clone();
     }
 
@@ -163,19 +171,17 @@ public class Qa40xProtocol {
                 "output full-scale range must be one of -12/-2/+8/+18 dBV: " + dbv);
     }
 
-    /** Maps a sample rate (Hz) to its reg-{@code 0x09} code; rejects 384 kHz (§9 item 7). */
+    /** Maps a sample rate (Hz) to its reg-{@code 0x09} code, 0..3 (§4).  Code 3
+     *  (384 kHz) exists on the QA403 only; the per-model rate list is
+     *  {@link #sampleRatesHz(Qa40xDeviceFinder.Qa40xModel)}. */
     public int sampleRateCode(int hz) {
         for (int i = 0; i < SAMPLE_RATE_HZ.length; i++) {
             if (SAMPLE_RATE_HZ[i] == hz) {
                 return i;
             }
         }
-        if (hz == UNSUPPORTED_384K_HZ) {
-            throw new IllegalArgumentException(
-                    "384 kHz is input-only on QA402/QA403 and is not exposed as a duplex rate (doc §9 item 7): "
-                            + hz);
-        }
-        throw new IllegalArgumentException("sample rate must be one of 48000/96000/192000 Hz: " + hz);
+        throw new IllegalArgumentException(
+                "sample rate must be one of 48000/96000/192000/384000 Hz: " + hz);
     }
 
     /** Builds the 5-byte big-endian register write frame {@code [reg][value MSB..LSB]} (§4). */

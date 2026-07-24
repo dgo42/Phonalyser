@@ -70,6 +70,11 @@ import java.util.function.Supplier;
 @Log4j2
 public final class GeneratorController {
 
+    /** Octave rows in the generator's Voss–McCartney pink-noise source — the
+     *  {@code PINK_OCTAVES + 1} summed terms set the pink forms' RMS in
+     *  {@link #rmsPerPeak}.  Mirrors the generator's own constant. */
+    private static final int PINK_OCTAVES = 16;
+
     private volatile Thread          playThread;
     private volatile SignalGenerator generator;
     private volatile AudioPlayback   playback;
@@ -570,6 +575,41 @@ public final class GeneratorController {
         } catch (IOException ex) {
             log.warn("Failed to load predistortion corrections from {}", path, ex);
         }
+    }
+
+    /** Highest output V RMS that still does NOT clip, for {@code form} at the
+     *  current DAC full scale.  The generator scales a waveform by
+     *  {@code amplitude = Vrms / (fsPeak · rawRms(form))} and clips above 1, so
+     *  digital full scale sits exactly at {@code Vrms = fsPeak · rawRms(form)} —
+     *  which is why the ceiling follows the waveform (a rectangle may go 3 dB
+     *  higher in RMS than a sine, a triangle sits between them, a dual tone
+     *  tracks its split).  The amplitude field caps itself with this, so V, dBV
+     *  and dBFS all trim to the same maximum and 0 dBFS is the top of the range. */
+    public double maxAmplitudeVrms(GenSignalForm form) {
+        return Preferences.instance().getDacFsVoltageAmpl() * rmsPerPeak(form);
+    }
+
+    /** RMS of the unit-amplitude waveform — the peak→RMS factor behind
+     *  {@link #maxAmplitudeVrms}.  Mirrors the signal generator's own raw-RMS
+     *  table (private there); keep the two in step if a waveform is added. */
+    private double rmsPerPeak(GenSignalForm form) {
+        return switch (form) {
+            case SINE, SINE_COMP, LINEAR_SWEEP, LOG_SWEEP -> 1.0 / Math.sqrt(2.0);
+            case TRIANGLE                                 -> 1.0 / Math.sqrt(3.0);
+            case RECTANGLE, WHITE_NOISE                   -> 1.0;
+            case PINK_NOISE                               -> 1.0 / Math.sqrt(PINK_OCTAVES + 1.0);
+            case PINK_NOISE_LINEAR                        -> 1.0 / Math.sqrt(3.0 * (PINK_OCTAVES + 1.0));
+            case DUAL_TONE, DUAL_TONE_COMP                -> dualToneRmsPerPeak();
+        };
+    }
+
+    /** Two-tone crest factor for the current split: the tones are uncorrelated,
+     *  so {@code RMS = √((w₁² + w₂²) / 2)} while their peaks still sum to one. */
+    private double dualToneRmsPerPeak() {
+        double w1 = Math.max(0.0, Math.min(100.0,
+                Preferences.instance().getGenDualToneSplitPct())) / 100.0;
+        double w2 = 1.0 - w1;
+        return Math.max(1e-12, Math.sqrt((w1 * w1 + w2 * w2) / 2.0));
     }
 
     /** Live-applies the second tone's frequency (Hz) for the

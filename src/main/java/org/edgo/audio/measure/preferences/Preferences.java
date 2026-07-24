@@ -292,6 +292,14 @@ public final class Preferences {
      *  off-thread consumers see the update. */
     @Getter
     private volatile double binBwSqrt = 1.0;
+    /** Cached live dBr reference level in dBFS — the DISPLAYED fundamental level of the
+     *  current FFT spectrum, stamped by the FFT paint path.  A live measurement value,
+     *  NOT persisted; consulted by {@link #convertFromDbFs} for {@link MagnitudeUnit#DBR}
+     *  ({@code dBr = dBFS − fftDbrRefDbFs}, so the fundamental reads 0 dBr).  Defaults to 0
+     *  (dBr ≡ dBFS) until a result stamps it; {@code volatile} so off-thread FFT consumers
+     *  see the update. */
+    @Setter
+    private volatile double fftDbrRefDbFs = 0.0;
     /** When {@code true}, {@link #save()} is a no-op.  Set by the CLI so a
      *  {@code --adc-fs-vrms} (or any other) value injected into Preferences for
      *  one headless run is never written back to the user's YAML.  Default
@@ -1681,6 +1689,7 @@ public final class Preferences {
         double off = getDbvOffsetDb(ch);
         switch (unit) {
             case DBFS: return dbFs;
+            case DBR:  return dbFs - fftDbrRefDbFs;
             case DBV:  return dbFs + off;
             case V:         return Math.pow(10.0, (dbFs + off) / 20.0);
             case V_SQRT_HZ: return Math.pow(10.0, (dbFs + off) / 20.0)

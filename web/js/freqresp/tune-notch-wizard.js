@@ -269,8 +269,14 @@ export class TuneNotchWizard {
         this._applyFreqAxis();
         this._retuneEngineBand();
       });
+    // fsAmplSupplier (the live DAC PEAK full scale) enables dBFS entry, as on the generator and
+    // the frequency-response sweep — 0 dBFS ≡ a full-scale SINE (AES17).
     this.ampField = mkField('tnAmp',
-      new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: prefs.dacFsVoltageAmpl.get(), maxDecimals: AMP_MAX_DECIMALS }),
+      new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS,
+        // Ceiling = the full-scale SINE Vrms (fsPeak/√2), the level at which the DDS hits digital
+        // full scale — so V, dBV and dBFS (0 dBFS) all clamp to the same maximum.
+        max: prefs.getDacFsVoltageAmpl() / Math.SQRT2, maxDecimals: AMP_MAX_DECIMALS,
+        fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
       (v) => {
         this._curAmpVrms = v;
         this.viewPrefs.tuneNotchAmplitudeVrms.set(v);   // edit the COPY; written back to real on close
@@ -326,7 +332,9 @@ export class TuneNotchWizard {
     this.startField.setMax(nyquist);
     this.stopField.setMax(nyquist);
     this.targetField.setMax(nyquist);
-    this.ampField.setMax(prefs.dacFsVoltageAmpl.get());
+    // No-clip ceiling for the wizard's SINE stimulus: fsPeak · rawRms(SINE) = fsPeak/√2, off the
+    // LIVE calibration (the raw peak value would allow √2 (+3 dB) past full scale).
+    this.ampField.setMax(prefs.getDacFsVoltageAmpl() / Math.SQRT2);
     // Re-seed the dialog COPY's tune-notch params from the shared prefs (Java
     // copyForDialog lines 760-764) so this session starts from the persisted values;
     // the fields edit the copy, and _stopSweepLoop writes them back to real on close.

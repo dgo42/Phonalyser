@@ -1874,11 +1874,13 @@ public final class FftAnalyzerWorker {
         // count), even on ticks whose display we skip below.
         completedAnalyses++;
         firstFrameDone = true;
-        // Stop-after-N: forever mode + cap enabled; counts ticks (= the "N
-        // average(s)" label).  The cross-tick accumulator deepens past 2 frames.
+        // Stop-after-N: forever mode + cap enabled.  The FftView label shows
+        // ticks − 1 (the first tick is the seed, not an average), so stop when
+        // that displayed count reaches N.  The cross-tick accumulator deepens
+        // past 2 frames.
         if (foreverMode
                 && prefs.isFftStopAfterNEnabled()
-                && completedAnalyses >= prefs.getFftStopAfterN()) {
+                && (completedAnalyses - 1) >= prefs.getFftStopAfterN()) {
             paused.set(true);
             if (display != null && !display.isDisposed()) {
                 display.asyncExec(() ->

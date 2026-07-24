@@ -18,6 +18,11 @@
 
 package org.edgo.audio.measure.sound.qa40x;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.List;
@@ -27,8 +32,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.sound.sampled.AudioFormat;
 
-import org.junit.jupiter.api.Test;
-
 import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.generator.SignalGenerator;
@@ -37,13 +40,8 @@ import org.edgo.audio.measure.preferences.DeviceEndpointConfig;
 import org.edgo.audio.measure.preferences.DeviceRange;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.DeviceRef;
-import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder.Qa40xDevice;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder.Qa40xModel;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Test;
 
 /**
  * {@link Qa40xDeviceManager} integration: the fixed format set, graceful empty
@@ -70,13 +68,14 @@ class Qa40xDeviceManagerTest {
     // --- formats + enumeration -----------------------------------------------
 
     @Test
-    void supportedFormats_areTheThreeDuplexRatesStereo24BitLittleEndian() {
+    void supportedFormats_areThePerModelRatesStereo24BitLittleEndian() {
         Qa40xDeviceManager mgr = new Qa40xDeviceManager(new FakeTransport(), INSTANT);
+        // The QA403 carries reg-9 code 3, so it adds 384 kHz (doc §4).
         DeviceRef ref = new Qa40xDeviceManager.Qa40xDeviceRef(0, "QA403", Qa40xModel.QA403);
         for (boolean output : new boolean[] {false, true}) {
             List<AudioFormat> formats = mgr.listSupportedFormats(ref, output);
-            assertEquals(3, formats.size());
-            int[] expectedRates = {48_000, 96_000, 192_000};
+            assertEquals(4, formats.size());
+            int[] expectedRates = {48_000, 96_000, 192_000, 384_000};
             for (int i = 0; i < expectedRates.length; i++) {
                 AudioFormat f = formats.get(i);
                 assertEquals(expectedRates[i], (int) f.getSampleRate());
@@ -88,6 +87,18 @@ class Qa40xDeviceManagerTest {
                 assertEquals(2, f.getChannels());
                 assertFalse(f.isBigEndian(), "QA402/QA403 samples are little-endian (doc §5)");
             }
+        }
+    }
+
+    @Test
+    void supportedFormats_omit384kOnTheQa402() {
+        // The QA402 has no reg-9 code 3, so the rate list stops at 192 kHz (doc §4).
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(new FakeTransport(), INSTANT);
+        DeviceRef ref = new Qa40xDeviceManager.Qa40xDeviceRef(0, "QA402", Qa40xModel.QA402);
+        for (boolean output : new boolean[] {false, true}) {
+            List<AudioFormat> formats = mgr.listSupportedFormats(ref, output);
+            assertEquals(3, formats.size());
+            assertEquals(192_000, (int) formats.get(formats.size() - 1).getSampleRate());
         }
     }
 

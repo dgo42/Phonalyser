@@ -435,7 +435,7 @@
               <button id="fftTablePop" class="lr ico" data-i18n-title="fft.external.tooltip"><img src="assets/icons/window-restore.svg" class="lr-svg" alt=""></button>
             </div>
             <div class="fft-meta"><span id="pctLbl" data-i18n-title="fft.fillPercent.tooltip">0%</span><span id="avgLbl" data-i18n-title="fft.avgCount.tooltip">0 average(s)</span>
-              <select id="fftMagUnit" class="form-select form-select-sm unit-sel" data-i18n-title="fft.magUnit.tooltip"><option value="V">V</option><option value="V_SQRT_HZ">V/√Hz</option><option value="DBV" selected>dBV</option><option value="DBFS">dBFS</option></select></div>
+              <select id="fftMagUnit" class="form-select form-select-sm unit-sel" data-i18n-title="fft.magUnit.tooltip"><option value="V">V</option><option value="V_SQRT_HZ">V/√Hz</option><option value="DBV" selected>dBV</option><option value="DBFS">dBFS</option><option value="DBR">dBr</option></select></div>
             <canvas id="spec" width="1200" height="440" class="fft-canvas"></canvas>
             <!-- Self-blinking discontinuity / overrun warning (Java FftView.onCaptureResync →
                  BlinkBanner): shown while the analyser re-syncs past a glitch, cleared by the
