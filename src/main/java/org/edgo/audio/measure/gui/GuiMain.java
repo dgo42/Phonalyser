@@ -317,6 +317,15 @@ public final class GuiMain {
             }
         }
         display.dispose();
+        // Give every backend manager that was created this session its exit
+        // teardown (a no-op for most; the QA40x leaves its attenuator at the
+        // fail-safe maximum and releases its USB session).  Must run HERE
+        // explicitly: the halt()/TerminateProcess below skips every hook.
+        try {
+            AudioBackend.instance().shutdown();
+        } catch (Throwable ignored) {
+            // Exit must never be blocked by audio teardown.
+        }
         // Force an immediate process exit.  Letting main() return would run the
         // JVM's GRACEFUL shutdown, which executes every registered shutdown hook
         // to completion — including the native audio hooks (PortAudio

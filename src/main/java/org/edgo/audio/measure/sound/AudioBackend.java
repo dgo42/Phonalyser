@@ -18,20 +18,19 @@
 
 package org.edgo.audio.measure.sound;
 
-import lombok.extern.log4j.Log4j2;
+import java.util.List;
 
 import javax.sound.sampled.AudioFormat;
-import java.util.List;
+
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.sound.coreaudio.CoreAudioDeviceManager;
 import org.edgo.audio.measure.sound.javasound.JavaSoundDeviceManager;
-import org.edgo.audio.measure.sound.javasound.JavaSoundGenerator;
-import org.edgo.audio.measure.sound.javasound.JavaSoundRecorder;
+import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceManager;
 import org.edgo.audio.measure.sound.wasapi.WasapiDeviceManager;
 import org.edgo.audio.measure.sound.wasapi.WasapiRecorder;
 import org.edgo.audio.measure.sound.wdmks.WdmksDeviceManager;
-import org.edgo.audio.measure.sound.wdmks.WdmksGenerator;
-import org.edgo.audio.measure.sound.wdmks.WdmksRecorder;
-import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceManager;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Process-wide audio backend selection and the dispatch point used by
@@ -119,7 +118,7 @@ public final class AudioBackend {
     }
 
     /** Mirror of {@link #wdmks()} for the QuantAsylum QA402/QA403 (libusb) backend. */
-    private Qa40xDeviceManager qa40x() {
+    private AudioDeviceManager qa40x() {
         Qa40xDeviceManager local = qa40x;
         if (local == null) {
             synchronized (this) {
@@ -156,8 +155,35 @@ public final class AudioBackend {
     }
 
     public void setActive(AudioBackendType type) {
+        AudioBackendType previous = active;
         active = type;
         log.info("Audio backend: {}", type);
+        // A deactivated backend gets its teardown at the switch, so its device
+        // never sits in a live state while another backend measures (the QA40x
+        // parks at maximum attenuation and releases its USB session; it
+        // reopens on the next activation).  No-op for a first-time set or a
+        // re-set of the same type.
+        if (previous != type) {
+            AudioDeviceManager old = managerIfCreated(previous);
+            if (old != null) {
+                old.shutdown();
+            }
+        }
+    }
+
+    /** The already-constructed manager for {@code type}, or {@code null} when
+     *  that backend was never touched this session.  NEVER constructs — the
+     *  teardown paths ({@link #setActive}, {@link #shutdown}) must not open
+     *  anything. */
+    private AudioDeviceManager managerIfCreated(AudioBackendType type) {
+        switch (type) {
+            case WDMKS:     return wdmks;
+            case COREAUDIO: return coreAudio;
+            case JAVASOUND: return javaSound;
+            case QA40X:     return qa40x;
+            case WASAPI:
+            default:        return wasapi;
+        }
     }
 
     public List<DeviceRef> listInputDevices() {
@@ -271,17 +297,13 @@ public final class AudioBackend {
     public AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth) {
         switch (device.backend()) {
             case WDMKS:
-                return new WdmksRecorder((WdmksDeviceManager.WdmksDeviceRef) device,
-                        sampleRate, bitDepth);
+                return wdmks().openCapture(device, sampleRate, bitDepth);
             case COREAUDIO:
-                return new CoreAudioRecorder((CoreAudioDeviceManager.CoreAudioDeviceRef) device,
-                        sampleRate, bitDepth);
+                return coreAudio().openCapture(device, sampleRate, bitDepth);
             case JAVASOUND:
-                return new JavaSoundRecorder(
-                        (JavaSoundDeviceManager.JavaSoundDeviceRef) device,
-                        sampleRate, bitDepth);
+                return javaSound().openCapture(device, sampleRate, bitDepth);
             case QA40X:
-                return qa40x().openCapture((Qa40xDeviceManager.Qa40xDeviceRef) device, sampleRate);
+                return qa40x().openCapture(device, sampleRate, bitDepth);
             case WASAPI:
             default:
                 return new WasapiRecorder(wasapi(),
@@ -293,13 +315,11 @@ public final class AudioBackend {
     public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
         switch (device.backend()) {
             case WDMKS:
-                return new WdmksGenerator((WdmksDeviceManager.WdmksDeviceRef) device,
-                        sampleRate, bitDepth, ditherBits);
+                return wdmks().openPlayback(device, sampleRate, bitDepth, ditherBits);
             case COREAUDIO:
-                return new CoreAudioGenerator((CoreAudioDeviceManager.CoreAudioDeviceRef) device,
-                        sampleRate, bitDepth, ditherBits);
+                return coreAudio().openPlayback(device, sampleRate, bitDepth, ditherBits);
             case QA40X:
-                return qa40x().openPlayback((Qa40xDeviceManager.Qa40xDeviceRef) device, sampleRate, ditherBits);
+                return qa40x().openPlayback(device, sampleRate, bitDepth, ditherBits);
             case JAVASOUND:
             case WASAPI:
             default:
@@ -314,8 +334,7 @@ public final class AudioBackend {
                 // The same path serves the explicit JAVASOUND backend on
                 // Linux/macOS, with the mixer being matched by name inside
                 // {@link JavaSoundDeviceManager#openOutputLine}.
-                return new JavaSoundGenerator(sampleRate, bitDepth, ditherBits,
-                        device.name(), javaSound());
+                return javaSound().openPlayback(device, sampleRate, bitDepth, ditherBits);
         }
     }
 
@@ -326,9 +345,24 @@ public final class AudioBackend {
         return javaSound();
     }
 
+    /** App-exit teardown of the ACTIVE backend's manager — the only one that
+     *  can still hold live device state, because {@link #setActive} already
+     *  shuts a backend down when it is deactivated.  See
+     *  {@link AudioDeviceManager#shutdown()} (a no-op for most backends; a
+     *  backend whose device carries state across process death overrides it).
+     *  Uses {@link #managerIfCreated}, never the lazy accessors: the exit path
+     *  must not construct anything.  Called explicitly from the exit code —
+     *  this app skips JVM shutdown hooks (see {@code GuiMain}). */
+    public void shutdown() {
+        AudioDeviceManager m = managerIfCreated(active);
+        if (m != null) {
+            m.shutdown();
+        }
+    }
+
     /** The QA40x session manager — exposed so a Preferences-committed active-range
      *  change can be routed to the open device (see {@code Qa40xRangeController}). */
-    public Qa40xDeviceManager qa40xManager() {
+    public AudioDeviceManager qa40xManager() {
         return qa40x();
     }
 }

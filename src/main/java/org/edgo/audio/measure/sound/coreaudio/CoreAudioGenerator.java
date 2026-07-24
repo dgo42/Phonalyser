@@ -16,7 +16,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.sound;
+package org.edgo.audio.measure.sound.coreaudio;
+
+import org.edgo.audio.measure.sound.AbstractPortAudioPlayback;
 
 /**
  * Stereo PCM playback via PortAudio's CoreAudio host API (macOS, callback
@@ -26,8 +28,7 @@ package org.edgo.audio.measure.sound;
  */
 public class CoreAudioGenerator extends AbstractPortAudioPlayback {
 
-    public CoreAudioGenerator(CoreAudioDeviceManager.CoreAudioDeviceRef device,
-                              int sampleRate, int bitDepth, double ditherBits) {
+    public CoreAudioGenerator(CoreAudioDeviceManager.CoreAudioDeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
         super(device.paDeviceIndex(), device.name(), "CoreAudio", sampleRate, bitDepth, ditherBits);
     }
 }

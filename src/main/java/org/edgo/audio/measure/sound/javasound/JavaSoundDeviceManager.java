@@ -18,7 +18,11 @@
 
 package org.edgo.audio.measure.sound.javasound;
 
-import lombok.extern.log4j.Log4j2;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
@@ -28,15 +32,16 @@ import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.Mixer;
 import javax.sound.sampled.SourceDataLine;
 import javax.sound.sampled.TargetDataLine;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.TreeSet;
-import java.util.concurrent.ConcurrentHashMap;
+
 import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.AudioCapture;
+import org.edgo.audio.measure.sound.AudioDeviceManager;
+import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Discovery for the {@link AudioBackendType#JAVASOUND} backend.  Lists the
@@ -52,7 +57,7 @@ import org.edgo.audio.measure.sound.DeviceRef;
  * directly.
  */
 @Log4j2
-public final class JavaSoundDeviceManager {
+public final class JavaSoundDeviceManager implements AudioDeviceManager {
 
     /** {@link DeviceRef} backed by a {@link Mixer.Info}. */
     public record JavaSoundDeviceRef(int index, String name, String description, String vendor,
@@ -186,6 +191,14 @@ public final class JavaSoundDeviceManager {
         if (!(device instanceof JavaSoundDeviceRef d)) return new ArrayList<>();
         Map<String, List<AudioFormat>> cache = output ? outputFormatsCache : inputFormatsCache;
         return cache.computeIfAbsent(d.name(), k -> probeFormats(d, output));
+    }
+
+    public AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth) {
+        return new JavaSoundRecorder((JavaSoundDeviceManager.JavaSoundDeviceRef) device, sampleRate, bitDepth);
+    }
+
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
+        return new JavaSoundGenerator(sampleRate, bitDepth, ditherBits, device.name(), this);
     }
 
     /**

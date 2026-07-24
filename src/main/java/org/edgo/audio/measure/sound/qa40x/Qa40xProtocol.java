@@ -56,6 +56,15 @@ public class Qa40xProtocol {
     /** Calibration data read port — reg {@code 0x19}, one 32-bit word per read (§6). */
     public static final int REG_CAL_READ        = 0x19;
 
+    /** Safe-state input range (doc §7 Teardown step 8, ASIO401 parity): maximum
+     *  attenuation, +42 dBV — the fail-safe relay stays engaged (Atten LED lit,
+     *  matching the vendor app), so an idle analyzer never sits at a sensitive
+     *  range.  Written whenever the stream parks (last lane detach) and at
+     *  session close. */
+    public static final int SAFE_INPUT_DBV       = 42;
+    /** Safe-state output range (doc §7 Teardown step 8): the quietest −12 dBV. */
+    public static final int SAFE_OUTPUT_DBV      = -12;
+
     /** {@link #REG_RUN} value that starts streaming (§5). */
     public static final int RUN_START            = 0x05;
     /** {@link #REG_RUN} value that stops streaming / recovers an unclean state (§5). */

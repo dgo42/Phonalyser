@@ -197,7 +197,7 @@ class Qa40xDuplexEngineTest {
     }
 
     @Test
-    void lastDetach_cancelsBeforeStopRegister() {
+    void lastDetach_cancelsBeforeStopRegister_thenParksSafeRanges() {
         FakeTransport fake = new FakeTransport();
         Qa40xDuplexEngine engine = engine(fake, millis -> { });
 
@@ -205,9 +205,14 @@ class Qa40xDuplexEngineTest {
         engine.detachCapture();
 
         assertEquals(1, fake.cancelAllCount);
-        // Teardown tail: cancelAll strictly BEFORE reg8 = 0 (§7 step 7).
-        assertEquals("cancelAll", fake.ops.get(fake.ops.size() - 2));
-        assertEquals("reg=8:0", fake.ops.get(fake.ops.size() - 1));
+        // Teardown tail: cancelAll strictly BEFORE reg8 = 0 (§7 step 7), then
+        // the idle analyzer parks at the protected ranges (§7 step 8): input
+        // +42 dBV (code 7, attenuator relay engaged) and output −12 dBV
+        // (code 0) — so a sensitive range never sits live between measurements.
+        assertEquals("cancelAll", fake.ops.get(fake.ops.size() - 4));
+        assertEquals("reg=8:0",   fake.ops.get(fake.ops.size() - 3));
+        assertEquals("reg=5:7",   fake.ops.get(fake.ops.size() - 2));
+        assertEquals("reg=6:0",   fake.ops.get(fake.ops.size() - 1));
     }
 
     @Test

@@ -42,9 +42,13 @@ import org.edgo.audio.measure.sound.LibUsb;
  * like ASIO401 it refuses to run with more than one QA40x attached (doc §2/§7) —
  * and does the {@code reset_device} + {@code claim_interface(0)} that PyQa40x does
  * on open, handing the claimed handle to a {@link LibUsbQa40xTransport}.
+ *
+ * <p>Deliberately non-final: hardware-free unit tests stub {@link #list()} so
+ * they never touch {@code libusb} (a unit test must run on any CI agent, with
+ * or without a device attached).  Production code must not subclass.
  */
 @Log4j2
-public final class Qa40xDeviceFinder {
+public class Qa40xDeviceFinder {
 
     /** Shared Van Ooijen (V-USB / LibUSB) vendor ID used by every QA40x (doc §2). */
     static final int QA_VID = 0x16C0;

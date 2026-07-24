@@ -37,6 +37,7 @@ import org.edgo.audio.measure.preferences.DeviceEndpointConfig;
 import org.edgo.audio.measure.preferences.DeviceRange;
 import org.edgo.audio.measure.sound.AudioCapture;
 import org.edgo.audio.measure.sound.DeviceRef;
+import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder.Qa40xDevice;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder.Qa40xModel;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -55,6 +56,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class Qa40xDeviceManagerTest {
 
     private static final int RATE_HZ      = 48_000;
+    /** Depth passed through the {@code AudioDeviceManager} open signatures —
+     *  the QA40x path is fixed 24-bit and ignores the requested value. */
+    private static final int BITS         = 24;
     private static final double TOL       = 1e-9;
     private static final int RECORD_BYTES = 6;
     private static final int ADC_BASE     = 24;
@@ -89,9 +93,18 @@ class Qa40xDeviceManagerTest {
 
     @Test
     void enumeration_isEmptyWithoutADevice() {
-        // No QA40x is attached in the test environment (and libusb is likely
-        // absent) → both lists degrade to empty, never throwing.
-        Qa40xDeviceManager mgr = new Qa40xDeviceManager();
+        // Deterministic and hardware-free: the finder is a collaborator, so a
+        // stub returning no devices stands in for "nothing attached / no
+        // libusb" — the manager must degrade to empty lists, never throwing.
+        // Unit tests never touch a physical device; that is what makes this
+        // runnable on any CI agent (real USB belongs to the *IT tests).
+        Qa40xDeviceFinder none = new Qa40xDeviceFinder() {
+            @Override
+            public List<Qa40xDevice> list() {
+                return List.of();
+            }
+        };
+        Qa40xDeviceManager mgr = new Qa40xDeviceManager(none);
         assertTrue(mgr.listInputDevices().isEmpty());
         assertTrue(mgr.listOutputDevices().isEmpty());
     }
@@ -164,7 +177,7 @@ class Qa40xDeviceManagerTest {
         Qa40xDeviceManager mgr = new Qa40xDeviceManager(fake, INSTANT);
 
         Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(
-                new Qa40xDeviceManager.Qa40xDeviceRef(0, "QA403", Qa40xModel.QA403), RATE_HZ, 0);
+                new Qa40xDeviceManager.Qa40xDeviceRef(0, "QA403", Qa40xModel.QA403), RATE_HZ, BITS, 0);
         gen.open();
         SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 0.1, 1.0);
         AtomicBoolean stop = new AtomicBoolean(false);
@@ -178,7 +191,7 @@ class Qa40xDeviceManagerTest {
 
         // Capture attaches to the RUNNING stream, then closes — the generator is
         // still attached, so the engine must NOT tear down.
-        AudioCapture rec = mgr.openCapture(null, RATE_HZ);
+        AudioCapture rec = mgr.openCapture(null, RATE_HZ, BITS);
         rec.open();
         rec.startRecording();
         rec.stopRecording();
@@ -186,7 +199,7 @@ class Qa40xDeviceManagerTest {
         assertEquals(0, fake.cancelAllCount, "capture close leaves the generator's stream running");
 
         // Re-open capture on the same still-running engine — still no restart.
-        AudioCapture rec2 = mgr.openCapture(null, RATE_HZ);
+        AudioCapture rec2 = mgr.openCapture(null, RATE_HZ, BITS);
         rec2.open();
         rec2.startRecording();
         assertEquals(0, fake.cancelAllCount, "reopen attaches live, no restart");
@@ -206,7 +219,7 @@ class Qa40xDeviceManagerTest {
         // a range change on a running session is a full stop + start (doc §10).
         FakeTransport fake = new FakeTransport();
         Qa40xDeviceManager mgr = new Qa40xDeviceManager(fake, INSTANT);
-        AudioCapture rec = mgr.openCapture(null, RATE_HZ);
+        AudioCapture rec = mgr.openCapture(null, RATE_HZ, BITS);
         rec.open();
         rec.startRecording();                 // engine streaming
 
@@ -226,7 +239,7 @@ class Qa40xDeviceManagerTest {
         // 0.707·MAXINT — this pins the peak convention (doc §6 / Qa40xLevels).
         FakeTransport fake = new FakeTransport();
         Qa40xDeviceManager mgr = new Qa40xDeviceManager(fake, INSTANT);
-        Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(null, RATE_HZ, 0);
+        Qa40xGenerator gen = (Qa40xGenerator) mgr.openPlayback(null, RATE_HZ, BITS, 0);
         gen.open();
 
         SignalGenerator sig = new SignalGenerator(GenSignalForm.SINE, 1_000.0, RATE_HZ, 1.0, Math.sqrt(2.0));

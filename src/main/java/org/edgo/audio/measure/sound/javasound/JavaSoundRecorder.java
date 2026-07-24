@@ -18,17 +18,21 @@
 
 package org.edgo.audio.measure.sound.javasound;
 
-import lombok.extern.log4j.Log4j2;
-import org.edgo.audio.measure.common.Closeables;
-
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.DataLine;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.Mixer;
 import javax.sound.sampled.TargetDataLine;
+
+import org.edgo.audio.measure.common.Closeables;
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.sound.AbstractPcmCapture;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.wasapi.WasapiRecorder;
+import org.edgo.audio.measure.sound.wdmks.WdmksRecorder;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Stereo PCM capture via {@code javax.sound.sampled.TargetDataLine} — the
@@ -47,8 +51,7 @@ public class JavaSoundRecorder extends AbstractPcmCapture {
     private TargetDataLine line;
     private Thread captureThread;
 
-    public JavaSoundRecorder(JavaSoundDeviceManager.JavaSoundDeviceRef device,
-                             int sampleRate, int bitDepth) {
+    public JavaSoundRecorder(JavaSoundDeviceManager.JavaSoundDeviceRef device, int sampleRate, int bitDepth) {
         super(sampleRate, bitDepth);
         this.device = device;
     }

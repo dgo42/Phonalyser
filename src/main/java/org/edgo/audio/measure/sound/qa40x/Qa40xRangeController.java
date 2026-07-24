@@ -72,7 +72,7 @@ public final class Qa40xRangeController {
         if (change == null) return;
         AudioBackend backend = AudioBackend.instance();
         if (backend.active() != AudioBackendType.QA40X) return;   // only QA40x re-ranges hardware
-        Qa40xDeviceManager manager = backend.qa40xManager();
+        Qa40xDeviceManager manager = (Qa40xDeviceManager) backend.qa40xManager();
         String cardName = manager.cardName();
         if (cardName == null) return;                             // device not open — next open reads the store
         int[] candidates = change.isInput()

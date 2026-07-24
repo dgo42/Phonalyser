@@ -16,13 +16,17 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.sound;
+package org.edgo.audio.measure.sound.coreaudio;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
 import org.edgo.audio.measure.common.Closeables;
+import org.edgo.audio.measure.sound.AbstractPcmCapture;
+import org.edgo.audio.measure.sound.PortAudio;
+import org.edgo.audio.measure.sound.SpscByteArrayRing;
+import org.edgo.audio.measure.sound.wdmks.WdmksRecorder;
 
 import com.sun.jna.Pointer;
 import com.sun.jna.ptr.PointerByReference;

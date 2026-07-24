@@ -23,8 +23,6 @@ import java.util.List;
 
 import javax.sound.sampled.AudioFormat;
 
-import lombok.extern.log4j.Log4j2;
-
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
@@ -32,10 +30,13 @@ import org.edgo.audio.measure.preferences.DeviceEndpointConfig;
 import org.edgo.audio.measure.preferences.DeviceRange;
 import org.edgo.audio.measure.preferences.Preferences;
 import org.edgo.audio.measure.sound.AudioCapture;
+import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder.Qa40xDevice;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder.Qa40xModel;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Discovery and the single always-duplex session for the {@link
@@ -65,7 +66,7 @@ import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceFinder.Qa40xModel;
  * single-source, garbles the outputs — doc §9 item 7).
  */
 @Log4j2
-public class Qa40xDeviceManager {
+public class Qa40xDeviceManager implements AudioDeviceManager {
 
     /** Bit depth advertised to the UI and delivered by {@code Qa40xRecorder}: the
      *  wire container is 32-bit LE, but only the 24 MSBs carry signal (the low byte
@@ -121,6 +122,15 @@ public class Qa40xDeviceManager {
     }
 
     /**
+     * Headless test seam: enumeration against an injected (stub) finder — no
+     * {@code libusb}, no device, no bus wiring, so it runs on any CI agent.
+     */
+    Qa40xDeviceManager(Qa40xDeviceFinder finder) {
+        this.finder  = finder;
+        this.sleeper = PRODUCTION_SLEEPER;
+    }
+
+    /**
      * Headless test seam: a pre-opened {@code transport} and an instant
      * {@code sleeper}, so the session lifecycle can be driven without a real
      * device or {@code libusb}.  The card refresh (which needs a calibration
@@ -135,10 +145,12 @@ public class Qa40xDeviceManager {
 
     // --- enumeration ---------------------------------------------------------
 
+    @Override
     public List<DeviceRef> listInputDevices() {
         return listDevices();
     }
 
+    @Override
     public List<DeviceRef> listOutputDevices() {
         return listDevices();
     }
@@ -153,6 +165,7 @@ public class Qa40xDeviceManager {
         return out;
     }
 
+    @Override
     public DeviceRef getDeviceByIndex(int index, boolean isOutput) {
         List<DeviceRef> all = listDevices();
         if (index < 0 || index >= all.size()) {
@@ -167,6 +180,7 @@ public class Qa40xDeviceManager {
      * little-endian — identical for both directions.  384&nbsp;kHz is not exposed
      * (doc §9 item 7).
      */
+    @Override
     public List<AudioFormat> listSupportedFormats(DeviceRef device, boolean output) {
         if (!(device instanceof Qa40xDeviceRef)) {
             return new ArrayList<>();
@@ -182,12 +196,14 @@ public class Qa40xDeviceManager {
     // --- session open + lane clients -----------------------------------------
 
     /** Opens a capture client bound to this manager's one duplex engine. */
-    public AudioCapture openCapture(Qa40xDeviceRef device, int sampleRate) {
+    @Override
+    public AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth) {
         return new Qa40xRecorder(this, sampleRate);
     }
 
     /** Opens a playback client bound to this manager's one duplex engine. */
-    public AudioPlayback openPlayback(Qa40xDeviceRef device, int sampleRate, double ditherBits) {
+    @Override
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
         return new Qa40xGenerator(this, sampleRate, ditherBits);
     }
 
@@ -253,6 +269,44 @@ public class Qa40xDeviceManager {
      *  or {@code null} before the device is opened — the card the range routing targets. */
     public synchronized String cardName() {
         return model == null ? null : model.name();
+    }
+
+    /**
+     * App-exit teardown: leaves the analyzer in its protected idle state
+     * (doc §7 Teardown steps 8–9) — stream stopped, input +42 dBV (maximum
+     * attenuation), output −12 dBV — then releases the transport.  Without
+     * this the device kept whatever range the last measurement used: a
+     * 0 dBV session left the input at maximum sensitivity, unprotected,
+     * after the app quit.  No-op when the device was never opened.  Never
+     * throws: the app exit path must not be blocked by an unplugged or
+     * wedged device.
+     */
+    @Override
+    public synchronized void shutdown() {
+        if (transport == null) {
+            return;
+        }
+        try {
+            transport.registerWrite(Qa40xProtocol.REG_RUN, Qa40xProtocol.RUN_STOP);
+            transport.registerWrite(Qa40xProtocol.REG_INPUT_FS,
+                    Qa40xProtocol.inputRangeCode(Qa40xProtocol.SAFE_INPUT_DBV));
+            transport.registerWrite(Qa40xProtocol.REG_OUTPUT_FS,
+                    Qa40xProtocol.outputRangeCode(Qa40xProtocol.SAFE_OUTPUT_DBV));
+            log.info("QA40x safe-state close: input +{} dBV (attenuator engaged), output {} dBV",
+                    Qa40xProtocol.SAFE_INPUT_DBV, Qa40xProtocol.SAFE_OUTPUT_DBV);
+        } catch (Throwable t) {
+            log.warn("QA40x safe-state write failed (device unplugged?): {}", t.toString());
+        }
+        try {
+            transport.close();
+        } catch (Throwable t) {
+            log.warn("QA40x transport close failed: {}", t.toString());
+        }
+        transport     = null;
+        calibration   = null;
+        model         = null;
+        engine        = null;
+        currentRateHz = 0;
     }
 
     private void ensureOpen() {
