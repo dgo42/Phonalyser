@@ -541,9 +541,19 @@
   <div class="eq">SINAD = 10·log₁₀ ( <i>A</i><sub>1</sub>² / (Σ<sub>noise</sub> + Σ<sub>dist</sub>) )<span class="no">(7)</span></div>
   <div class="eq">ENOB = (SINAD − 1.76) / 6.02<span class="no">(8)</span></div>
   <p>THD+N is simply the reciprocal ratio to SINAD (the same band, the same
-     numerator). The THD+N noise term is A-weighted to the IEC
-     standard<sup id="cite-5"><a href="#ref-aw">[5]</a></sup> so the figure
-     reflects audibility rather than raw wideband noise.</p>
+     numerator), and <b>N+D</b> is that same denominator read against the
+     fundamental — the total non-fundamental residual, shown in dB with an
+     <b>A</b> suffix (THD+N is the identical figure as a percentage).  Both
+     terms of the denominator — the integrated noise <em>and</em> the harmonic
+     distortion — are multiplied, bin by bin, by the IEC 61672 A-weighting
+     curve<sup id="cite-5"><a href="#ref-aw">[5]</a></sup> before they are
+     summed: the curve is near unity around 1&nbsp;kHz and rolls off the deep
+     bass and the extreme treble where the ear is far less sensitive, so N+D,
+     THD+N, SINAD and ENOB reflect audibility rather than raw wideband energy —
+     which is also why a converter with a rising treble noise floor scores
+     several decibels better weighted than flat.  <b>SNR</b> (5) and the
+     <b>N</b> readout are deliberately left <em>unweighted</em>; they state the
+     raw wideband noise and so carry no A.</p>
 
   <p>The phrase "their leakage zones" hides the detail that decides whether these
      figures are honest: the band excluded around the fundamental is not a fixed
