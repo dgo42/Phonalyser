@@ -45,6 +45,15 @@ const OVERLAP_FRACTION = {
   PCT_0: 0.0, PCT_50: 0.5, PCT_75: 0.75, PCT_87_5: 0.875, PCT_93_75: 0.9375,
 };
 
+/** IEC 61672 analog A-weighting; R_A(f)^2 with the +2.00 dB 1 kHz normalization
+ *  folded in, so A(1 kHz) = 0 dB. */
+const AW_POLE1_HZ = 20.6;
+const AW_POLE2_HZ = 107.7;
+const AW_POLE3_HZ = 737.9;
+const AW_POLE4_HZ = 12194.0;
+const AW_NORM_1KHZ_DB = 2.00;
+const AW_NORM_POWER = Math.pow(10.0, AW_NORM_1KHZ_DB / 10.0);
+
 /** @returns {number} overlap fraction for `overlap` (enum token or number). */
 function overlapFraction(overlap) {
   if (typeof overlap === 'number') return overlap;
@@ -75,6 +84,10 @@ export class FftAnalyzer {
      *  N·Σw²/(Σw)² (Hann 1.5); cached with the window, divides the noise
      *  integrals (never coherent lines). */
     this._cachedNenbw = 0;
+    // Cached per-bin A-weight power table — rebuilt only when (halfSize, freqRes)
+    // changes; consulted per noise bin each tick (see _aWeightTable).
+    this._cachedAweight = null;
+    this._cachedAweightFreqRes = 0.0;
 
     // Second-tone frequency hint (Hz); NaN disables it.
     this._secondToneHintHz = NaN;
@@ -631,6 +644,7 @@ export class FftAnalyzer {
     const snrHi = snrFreqMax > 0.0 ? snrFreqMax : Number.MAX_VALUE;
 
     // --- THD — H2..H9 (max 8 harmonics) within dist range --------------------
+    let awHarmPowerSum = 0.0;
     let harmPowerSum = 0.0;
     for (let h = 0; h < Math.min(harmonicCount, 8); h++) {
       if (hBins[h] > 0) {
@@ -638,6 +652,7 @@ export class FftAnalyzer {
         if (harmFreq >= snrLo && harmFreq <= snrHi) {
           const a = hLinear[h];
           harmPowerSum += a * a;
+          awHarmPowerSum += a * a * this._aWeightPower(harmFreq);
         }
       }
     }
@@ -655,25 +670,28 @@ export class FftAnalyzer {
     const dynWidthBins = nf.dynWidthBins;
 
     // --- SNR — integrated noise over the measurement band --------------------
+    const awTable = this._aWeightTable(halfSize, freqRes);
     let noisePower = 0.0;
+    let awNoisePower = 0.0;
     let bandBins = 0, countedBins = 0;
     for (let k = 1; k <= halfSize; k++) {
       const freq = k * freqRes;
       if (freq >= snrLo && freq <= snrHi) {
         bandBins++;
-        if (!isSignalBin[k]) { noisePower += amplLinear[k] * amplLinear[k]; countedBins++; }
+        if (!isSignalBin[k]) { const p = amplLinear[k] * amplLinear[k]; noisePower += p; awNoisePower += p * awTable[k]; countedBins++; }
       }
     }
     // Excluded zones (fundamental skirt, harmonics) held noise too — estimate it as the surrounding floor by rescaling the
     // counted sum to the full band width, instead of dropping those slots (flattered SNR by the excluded fraction; ~0.8 dB in QA40x app).
-    if (countedBins > 0) noisePower *= bandBins / countedBins;
+    if (countedBins > 0) { const rescale = bandBins / countedBins; noisePower *= rescale; awNoisePower *= rescale; }
     // A windowed periodogram bin holds NENBW bin-widths of broadband power (Hann 1.5); summing noise bins as-is overstates
     // the band noise by that factor — divide it back out. Coherent lines stay untouched (already cohGain-normalized).
     noisePower /= nenbw;
+    awNoisePower /= nenbw;
     const snrDb = noisePower <= 0 ? 300.0 : 10.0 * Math.log10((refLin * refLin) / noisePower);
 
     // SINAD: signal RMS² / (noise + in-band harmonic power) — basis for ENOB.
-    const sinadDenom = noisePower + harmPowerSum;
+    const sinadDenom = awNoisePower + awHarmPowerSum;
     const sinadDb = sinadDenom > 0 ? 10.0 * Math.log10((refLin * refLin) / sinadDenom) : 300.0;
     const avgNoiseFloorDbFs = medianNoisePow > 0
       ? 20.0 * Math.log10(Math.sqrt(medianNoisePow))
@@ -704,7 +722,7 @@ export class FftAnalyzer {
     outResult.coherentAveraging = coherentAveraging;
     outResult.noisePower = noisePower;
     outResult.windowNenbwBins = nenbw;
-    outResult.awNoisePower = noisePower;
+    outResult.awNoisePower = awNoisePower;
     outResult.avgNoiseFloorDbFs = avgNoiseFloorDbFs;
     outResult.fundamentalTrueDbFs = fundTrueDbFs;
     outResult.fundamentalDynExclusionHz = dynWidthBins * freqRes;
@@ -812,6 +830,7 @@ export class FftAnalyzer {
     }
 
     // --- THD (H2..H9 within SNR range) ---------------------------------------
+    let awHarmPowerSum = 0.0;
     let harmPowerSum = 0.0;
     for (let h = 0; h < Math.min(harmonicCount, 8); h++) {
       const hb = r.harmonicBins[h];
@@ -820,6 +839,7 @@ export class FftAnalyzer {
         if (freq >= snrLo && freq <= snrHi) {
           const a = hLinear[h];
           harmPowerSum += a * a;
+          awHarmPowerSum += a * a * this._aWeightPower(freq);
         }
       }
     }
@@ -833,33 +853,58 @@ export class FftAnalyzer {
       amplLinear, isSignalBin, halfSize, freqRes, snrLo, snrHi, fundBin, EXCL_BINS, skirtLookAheadBins(r.overlap)).medianNoisePow;
 
     // --- SNR -----------------------------------------------------------------
+    const awTable = this._aWeightTable(halfSize, freqRes);
     let noisePower = 0.0;
+    let awNoisePower = 0.0;
     let bandBins = 0, countedBins = 0;
     for (let k = 1; k <= halfSize; k++) {
       const freq = k * freqRes;
       if (freq >= snrLo && freq <= snrHi) {
         bandBins++;
-        if (!isSignalBin[k]) { noisePower += amplLinear[k] * amplLinear[k]; countedBins++; }
+        if (!isSignalBin[k]) { const p = amplLinear[k] * amplLinear[k]; noisePower += p; awNoisePower += p * awTable[k]; countedBins++; }
       }
     }
     // Excluded-zone rescale + NENBW — same corrections as analyze(). NENBW read from the RESULT (stamped at analysis time) —
     // a recompute must match the spectrum it recomputes from, not the window selected by now.
-    if (countedBins > 0) noisePower *= bandBins / countedBins;
-    if (r.windowNenbwBins > 0) noisePower /= r.windowNenbwBins;
+    if (countedBins > 0) { const rescale = bandBins / countedBins; noisePower *= rescale; awNoisePower *= rescale; }
+    if (r.windowNenbwBins > 0) { noisePower /= r.windowNenbwBins; awNoisePower /= r.windowNenbwBins; }
     r.noisePower = noisePower;
     r.snrDb = noisePower <= 0 ? 300.0 : 10.0 * Math.log10((refLin * refLin) / noisePower);
-    const sinadDenom = noisePower + harmPowerSum;
+    const sinadDenom = awNoisePower + awHarmPowerSum;
     r.sinadDb = sinadDenom > 0 ? 10.0 * Math.log10((refLin * refLin) / sinadDenom) : 300.0;
     r.avgNoiseFloorDbFs = medianNoisePow > 0
       ? 20.0 * Math.log10(Math.sqrt(medianNoisePow))
       : fundDbFs - 300.0;
-    r.awNoisePower = noisePower;
+    r.awNoisePower = awNoisePower;
     r.thdNDb = -r.sinadDb;
   }
 
   // ==========================================================================
   // Signal mask + noise floor
   // ==========================================================================
+
+  /** IEC 61672 analog A-weighting as a POWER weight: R_A(f)^2 with the +2.00 dB 1 kHz normalization folded in (A(1 kHz)=0 dB). */
+  _aWeightPower(freqHz) {
+    const f2 = freqHz * freqHz;
+    const ra = (AW_POLE4_HZ * AW_POLE4_HZ * f2 * f2)
+      / ((f2 + AW_POLE1_HZ * AW_POLE1_HZ)
+        * Math.sqrt((f2 + AW_POLE2_HZ * AW_POLE2_HZ) * (f2 + AW_POLE3_HZ * AW_POLE3_HZ))
+        * (f2 + AW_POLE4_HZ * AW_POLE4_HZ));
+    return ra * ra * AW_NORM_POWER;
+  }
+
+  /** Cached per-bin A-weight table (entry k = _aWeightPower(k*freqRes)); rebuilt only when the
+   *  spectrum geometry (halfSize / freqRes) changes — the noise integrals consult it per bin each tick. */
+  _aWeightTable(halfSize, freqRes) {
+    if (this._cachedAweight == null || this._cachedAweight.length !== halfSize + 1
+        || this._cachedAweightFreqRes !== freqRes) {
+      const table = new Float64Array(halfSize + 1);
+      for (let k = 0; k <= halfSize; k++) table[k] = this._aWeightPower(k * freqRes);
+      this._cachedAweight = table;
+      this._cachedAweightFreqRes = freqRes;
+    }
+    return this._cachedAweight;
+  }
 
   /** Builds the "signal bin" mask: fundamental bin + all harmonic bins, each
    *  smeared by exclBins on either side. Reused scratch (re-zeroed each call). */

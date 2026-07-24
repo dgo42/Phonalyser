@@ -63,6 +63,17 @@ public class FftAnalyzer {
      *  bins above this can't be a fundamental of interest and are ignored. */
     private static final double FUND_SEARCH_MAX_NYQUIST_FRACTION = 0.7;
 
+    /** IEC 61672 A-weighting pole frequencies (Hz) of the analog magnitude
+     *  response R_A(f), and its 1 kHz normalization:
+     *  A(f) = 20·log₁₀ R_A(f) + {@link #AW_NORM_1KHZ_DB}, so A(1 kHz) = 0 dB. */
+    private static final double AW_POLE1_HZ     = 20.6;
+    private static final double AW_POLE2_HZ     = 107.7;
+    private static final double AW_POLE3_HZ     = 737.9;
+    private static final double AW_POLE4_HZ     = 12194.0;
+    private static final double AW_NORM_1KHZ_DB = 2.00;
+    /** {@link #AW_NORM_1KHZ_DB} as a power ratio, folded into aWeightPower. */
+    private static final double AW_NORM_POWER   = Math.pow(10.0, AW_NORM_1KHZ_DB / 10.0);
+
     /** Cached window-function table — sized to {@link #cachedWindowSize}
      *  for {@link #cachedWindowType}.  analyze() is called repeatedly on
      *  the FFT worker thread with the same (fftSize, windowType) pair, so
@@ -81,6 +92,14 @@ public class FftAnalyzer {
      *  periodogram bin overstates a bin-width of broadband power.  Cached with
      *  the window; divides the integrated noise sums (never coherent lines). */
     private double     cachedNenbw;
+
+    /** Cached per-bin A-weighting table — entry k = {@link #aWeightPower}(k·freqRes)
+     *  for {@link #cachedAweightFreqRes}.  The noise integrals in analyze() and
+     *  {@link #recomputeStats} consult it for every non-signal bin each tick;
+     *  without it that is ~halfSize sqrt evaluations per call for a curve that
+     *  only changes when the spectrum geometry (fftSize / sample rate) does. */
+    private double[]   cachedAweight;
+    private double     cachedAweightFreqRes;
 
     /** Cache instance to consult during {@link #analyze}; {@code null}
      *  disables caching (CLI default).  Set by the caller via
@@ -229,6 +248,35 @@ public class FftAnalyzer {
         return new double[size];
     }
 
+    /** IEC 61672 A-weighting at {@code freqHz} as a POWER ratio (1 kHz → 1.0):
+     *  the analog magnitude R_A(f) squared, with the +{@value #AW_NORM_1KHZ_DB} dB
+     *  1 kHz normalization folded in.  Weighs the integrals behind the
+     *  A-suffixed readouts — N+D, THD+N and SINAD → ENOB — so they reflect
+     *  audibility; SNR and N stay unweighted. */
+    private double aWeightPower(double freqHz) {
+        double f2 = freqHz * freqHz;
+        double ra = (AW_POLE4_HZ * AW_POLE4_HZ * f2 * f2)
+                / ((f2 + AW_POLE1_HZ * AW_POLE1_HZ)
+                   * Math.sqrt((f2 + AW_POLE2_HZ * AW_POLE2_HZ) * (f2 + AW_POLE3_HZ * AW_POLE3_HZ))
+                   * (f2 + AW_POLE4_HZ * AW_POLE4_HZ));
+        return ra * ra * AW_NORM_POWER;
+    }
+
+    /** The cached per-bin {@link #aWeightPower} table for (halfSize, freqRes) —
+     *  rebuilt only when the spectrum geometry changes (bin 0 evaluates to 0). */
+    private double[] aWeightTable(int halfSize, double freqRes) {
+        if (cachedAweight == null || cachedAweight.length != halfSize + 1
+                || cachedAweightFreqRes != freqRes) {
+            double[] table = new double[halfSize + 1];
+            for (int k = 0; k <= halfSize; k++) {
+                table[k] = aWeightPower(k * freqRes);
+            }
+            cachedAweight        = table;
+            cachedAweightFreqRes = freqRes;
+        }
+        return cachedAweight;
+    }
+
     /** Drops every retained fftSize-scaled scratch buffer and the cached
      *  window table — at fftSize 4 M the set idles on ~300 MB after the last
      *  {@code analyze}.  Everything reallocates on demand at the next call,
@@ -249,6 +297,8 @@ public class FftAnalyzer {
         cachedWindow      = null;
         cachedWindowSize  = 0;
         cachedWindowType  = null;
+        cachedAweight        = null;
+        cachedAweightFreqRes = 0.0;
     }
 
     /** Tries the cache for the windowed FFT of the frame starting at
@@ -1366,13 +1416,17 @@ public class FftAnalyzer {
         double snrHi = snrFreqMax > 0.0 ? snrFreqMax : Double.MAX_VALUE;
 
         // --- THD — H2..H9 (max 8 harmonics) that fall within dist range ------
-        double harmPowerSum = 0.0;
+        // awHarmPowerSum carries the same powers through the IEC A-weighting
+        // curve for the A-suffixed readouts (N+D / THD+N / SINAD → ENOB).
+        double harmPowerSum   = 0.0;
+        double awHarmPowerSum = 0.0;
         for (int h = 0; h < Math.min(harmonicCount, 8); h++) {
             if (hBins[h] > 0) {
                 double harmFreq = hHz[h];
                 if (harmFreq >= snrLo && harmFreq <= snrHi) {
                     double a = hLinear[h];
-                    harmPowerSum += a * a;
+                    harmPowerSum   += a * a;
+                    awHarmPowerSum += a * a * aWeightPower(harmFreq);
                 }
             }
         }
@@ -1409,7 +1463,9 @@ public class FftAnalyzer {
         // isSignalBin; the dynamic walk above keeps window leakage from the
         // fundamental out of the noise sum.  Signal² is refLin² so an
         // external twin-T notch on H1 cannot deflate the numerator.
-        double noisePower = 0.0;
+        double[] awTable    = aWeightTable(halfSize, freqRes);
+        double noisePower   = 0.0;
+        double awNoisePower = 0.0;   // same sum through the A-weighting curve
         int bandBins    = 0;
         int countedBins = 0;
         for (int k = 1; k <= halfSize; k++) {
@@ -1417,7 +1473,9 @@ public class FftAnalyzer {
             if (freq >= snrLo && freq <= snrHi) {
                 bandBins++;
                 if (!isSignalBin[k]) {
-                    noisePower += amplLinear[k] * amplLinear[k];
+                    double p = amplLinear[k] * amplLinear[k];
+                    noisePower   += p;
+                    awNoisePower += p * awTable[k];
                     countedBins++;
                 }
             }
@@ -1429,7 +1487,9 @@ public class FftAnalyzer {
         // wider zones, measured 0.8 dB in the vendor QA40x app).  Exact for a
         // flat floor, and a better estimate than zero for a structured one.
         if (countedBins > 0) {
-            noisePower *= (double) bandBins / countedBins;
+            double rescale = (double) bandBins / countedBins;
+            noisePower   *= rescale;
+            awNoisePower *= rescale;
         }
         // A windowed periodogram bin holds NENBW bin-widths of broadband power
         // (Hann: 1.5), so summing noise bins as-is overstates the band's noise
@@ -1440,7 +1500,8 @@ public class FftAnalyzer {
         // 10·log10(NENBW) pessimistic (1.76 dB for Hann) — found against a
         // 23-bit-TPDF-dither hardware simulator where QA40x's software matched
         // the constructed theory value and we sat exactly one ENBW low.
-        noisePower /= nenbw;
+        noisePower   /= nenbw;
+        awNoisePower /= nenbw;
         double snrDb;
         if (noisePower <= 0) {
             log.warn("SNR: no non-signal bins remain in measurement range");
@@ -1452,7 +1513,11 @@ public class FftAnalyzer {
         // SINAD: signal RMS² / (noise + distortion) — denominator includes both
         // the integrated noise sum AND the in-band harmonic power, so ENOB
         // = (SINAD − 1.76)/6.02 reflects every non-fundamental contribution.
-        double sinadDenom = noisePower + harmPowerSum;
+        // The denominator is A-WEIGHTED (IEC 61672): SINAD, ENOB, THD+N and
+        // the N+D readout all carry the "A" suffix, so the figure reflects
+        // audibility; SNR and N stay unweighted (bench arbiter 2026-07-24:
+        // A-weighting is worth ~5.3 dB on an HF-rising Cosmos floor).
+        double sinadDenom = awNoisePower + awHarmPowerSum;
         double sinadDb    = sinadDenom > 0
                 ? 10.0 * Math.log10((refLin * refLin) / sinadDenom)
                 : 300.0;
@@ -1504,7 +1569,7 @@ public class FftAnalyzer {
         outResult.snrFreqMax                 = snrFreqMax;
         outResult.coherentAveraging          = coherentAveraging;
         outResult.noisePower                 = noisePower;
-        outResult.awNoisePower               = noisePower;
+        outResult.awNoisePower               = awNoisePower;
         outResult.windowNenbwBins            = nenbw;
         outResult.avgNoiseFloorDbFs          = avgNoiseFloorDbFs;
         outResult.fundamentalTrueDbFs        = fundTrueDbFs;
@@ -1606,14 +1671,18 @@ public class FftAnalyzer {
         }
 
         // --- THD (H2..H9 within SNR range) ---------------------------------
-        double harmPowerSum = 0.0;
+        // awHarmPowerSum: the same powers through the IEC A-weighting curve
+        // for the A-suffixed readouts — see analyze().
+        double harmPowerSum   = 0.0;
+        double awHarmPowerSum = 0.0;
         for (int h = 0; h < Math.min(harmonicCount, 8); h++) {
             int hb = r.harmonicBins[h];
             if (hb > 0) {
                 double freq = r.harmonicHz[h];
                 if (freq >= snrLo && freq <= snrHi) {
                     double a = hLinear[h];
-                    harmPowerSum += a * a;
+                    harmPowerSum   += a * a;
+                    awHarmPowerSum += a * a * aWeightPower(freq);
                 }
             }
         }
@@ -1635,7 +1704,9 @@ public class FftAnalyzer {
                 .medianNoisePow;
 
         // --- SNR (signal RMS² / total unweighted noise power) ---------------
-        double noisePower = 0.0;
+        double[] awTable    = aWeightTable(halfSize, freqRes);
+        double noisePower   = 0.0;
+        double awNoisePower = 0.0;   // same sum through the A-weighting curve
         int bandBins    = 0;
         int countedBins = 0;
         for (int k = 1; k <= halfSize; k++) {
@@ -1643,7 +1714,9 @@ public class FftAnalyzer {
             if (freq >= snrLo && freq <= snrHi) {
                 bandBins++;
                 if (!isSignalBin[k]) {
-                    noisePower += amplLinear[k] * amplLinear[k];
+                    double p = amplLinear[k] * amplLinear[k];
+                    noisePower   += p;
+                    awNoisePower += p * awTable[k];
                     countedBins++;
                 }
             }
@@ -1651,21 +1724,26 @@ public class FftAnalyzer {
         // Excluded-zone rescale + NENBW — same corrections as analyze(), see
         // the comments there.
         if (countedBins > 0) {
-            noisePower *= (double) bandBins / countedBins;
+            double rescale = (double) bandBins / countedBins;
+            noisePower   *= rescale;
+            awNoisePower *= rescale;
         }
         // Same NENBW correction as analyze() — see the comment there.  The
         // factor is read from the RESULT (stamped at analysis time), not the
         // current window cache: a recompute must match the spectrum it is
         // recomputing from, whatever window is selected by now.
         if (r.windowNenbwBins > 0) {
-            noisePower /= r.windowNenbwBins;
+            noisePower   /= r.windowNenbwBins;
+            awNoisePower /= r.windowNenbwBins;
         }
         r.noisePower        = noisePower;
         r.snrDb             = noisePower <= 0
                 ? 300.0
                 : 10.0 * Math.log10((refLin * refLin) / noisePower);
-        // SINAD denominator = noise + in-band harmonic power (basis for ENOB).
-        double sinadDenom = noisePower + harmPowerSum;
+        // SINAD denominator = A-WEIGHTED noise + in-band harmonic power (the
+        // basis for ENOB / THD+N / the N+D readout, all "A"-suffixed) — see
+        // the comment in analyze().  SNR above stays unweighted.
+        double sinadDenom = awNoisePower + awHarmPowerSum;
         r.sinadDb = sinadDenom > 0
                 ? 10.0 * Math.log10((refLin * refLin) / sinadDenom)
                 : 300.0;
@@ -1674,7 +1752,7 @@ public class FftAnalyzer {
                 : fundDbFs - 300.0;
 
         // THD+N is the reciprocal of SINAD: −sinadDb in dB.
-        r.awNoisePower = noisePower;
+        r.awNoisePower = awNoisePower;
         r.thdNDb       = -r.sinadDb;
     }
 

@@ -111,7 +111,7 @@ export class FftResult {
      *  the same noise-integral correction to THIS spectrum regardless of the
      *  window selected by then. */
     this.windowNenbwBins = 0;
-    /** A-weighted noise+distortion power (all non-fundamental bins, no band limit). */
+    /** IEC 61672 A-weighted sibling of noisePower — same SNR band, same zone rescale, divided by windowNenbwBins; feeds the A-suffixed N+D / THD+N / SINAD->ENOB readouts. SNR and N stay on noisePower. */
     this.awNoisePower = 0;
     /** Average noise floor: RMS amplitude of a single noise bin in dBFS. */
     this.avgNoiseFloorDbFs = 0;

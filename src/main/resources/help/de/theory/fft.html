@@ -505,10 +505,21 @@
      Wandlers<sup id="cite-4"><a href="#ref-enob">[4]</a></sup>:</p>
   <div class="eq">SINAD = 10·log₁₀ ( <i>A</i><sub>1</sub>² / (Σ<sub>noise</sub> + Σ<sub>dist</sub>) )<span class="no">(7)</span></div>
   <div class="eq">ENOB = (SINAD − 1.76) / 6.02<span class="no">(8)</span></div>
-  <p>THD+N ist einfach das reziproke Verhältnis zu SINAD (dasselbe Band, derselbe
-     Zähler). Der Rauschterm von THD+N ist A-bewertet nach dem
-     IEC-Standard<sup id="cite-5"><a href="#ref-aw">[5]</a></sup>, sodass der Wert
-     die Hörbarkeit widerspiegelt statt rohem Breitbandrauschen.</p>
+  <p>THD+N ist einfach das reziproke Verhältnis zu SINAD (dasselbe Band,
+     derselbe Zähler), und <b>N+D</b> ist genau dieser Nenner, bezogen auf den
+     Grundton — das gesamte Nicht-Grundton-Residuum, in dB mit dem Zusatz
+     <b>A</b> angezeigt (THD+N ist derselbe Wert als Prozentzahl).  Beide Terme
+     des Nenners — das integrierte Rauschen <em>und</em> die harmonische
+     Verzerrung — werden Bin für Bin mit der A-Bewertungskurve nach IEC
+     61672<sup id="cite-5"><a href="#ref-aw">[5]</a></sup> multipliziert, bevor
+     sie summiert werden: Die Kurve liegt um 1&nbsp;kHz nahe eins und fällt im
+     tiefen Bass und im äußersten Höhenbereich ab, wo das Ohr weit
+     unempfindlicher ist, sodass N+D, THD+N, SINAD und ENOB die Hörbarkeit
+     widerspiegeln statt roher Breitbandenergie — weshalb ein Wandler mit
+     ansteigendem Höhenrauschen bewertet mehrere Dezibel besser abschneidet als
+     unbewertet.  <b>SNR</b> (5) und der Messwert <b>N</b> bleiben bewusst
+     <em>unbewertet</em>; sie geben das rohe Breitbandrauschen an und tragen
+     daher kein A.</p>
 
   <p>Die Wendung „ihre Leck-Zonen" verbirgt das Detail, das darüber entscheidet,
      ob diese Werte ehrlich sind: Das um den Grundton ausgeschlossene Band ist

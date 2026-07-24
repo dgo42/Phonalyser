@@ -29,6 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dither power is constructed and independently computed; the Theory of
   operation's FFT chapter now documents the correction and tabulates every
   window's factor. Fixed in the desktop app and the web version alike.
+- **The A-weighted figures were not actually A-weighted.** N+D, THD+N and —
+  through SINAD — ENOB carry an "A" to mark the residual as weighted for
+  audibility, but the noise-and-distortion integral behind them was summed
+  flat; the IEC 61672 A-curve was never applied. It now is: both terms of the
+  SINAD denominator — the integrated noise and the harmonic distortion — are
+  scaled bin-by-bin by the A-curve before summing, so N+D, THD+N, SINAD and
+  ENOB reflect audibility rather than raw wideband energy. SNR and N stay
+  deliberately unweighted, which is why they carry no "A". On a converter with
+  a rising treble noise floor the difference is several dB — about 5 dB on an
+  E1DA Cosmos-class floor — bringing the figures into line with dedicated
+  analysers. Fixed in the desktop app and the web version alike.
 - **QA40x streaming crashed the 32-bit Windows build.** libusb's public API
   is stdcall on 32-bit Windows while the binding called it as cdecl — heap
   corruption the moment streaming started (64-bit was never affected: the
