@@ -24,6 +24,11 @@ const VALUE_SIG_DIGITS = 12;
 const PERCENT_STEP_FACTOR = 1.1;
 const LOG_WHEEL_STEP_DB = 10;
 const DB_PER_DECADE = 20.0;
+// dBFS ↔ amplitude: dB per factor-of-10 (voltage), as for dBV. Unlike dBV a dBFS entry needs
+// the LIVE full scale, so it is resolved through the injected supplier, never a fixed factor.
+const DBFS_DB_PER_DECADE = 20.0;
+// √2 — the peak↔RMS ratio anchoring 0 dBFS to a full-scale SINE (AES17).
+const ROOT_TWO = Math.sqrt(2.0);
 const PERCENT_STEP_LABEL = '10 %';
 const WHEEL_GLYPH = '⟳';
 const ARROWS_GLYPH = '▲▼';
@@ -61,10 +66,15 @@ const PARTIAL_INPUT = /^[\s+\-.,0-9a-zA-Zµμ%/∞]*$/;
 // ----------------------------------------------------------------------------
 
 /** One display/input unit: i18n suffix key, canonical factor (linear) or dB
- *  marker, and the ASCII aliases accepted on input. */
+ *  marker, the ASCII aliases accepted on input, and — for a unit stated RELATIVE
+ *  to a live full scale (dBFS) — the fsRelative marker. A full-scale-relative unit
+ *  cannot convert through `factor`/`log`: it needs the live full-scale supplier, so
+ *  the model resolves it (Java UnitFamily.Unit.fsRelative). Defaults false, leaving
+ *  every existing 4-arg declaration unchanged. */
 class Unit {
-  constructor(i18nKey, factor, log, aliases) {
+  constructor(i18nKey, factor, log, aliases, fsRelative = false) {
     this.i18nKey = i18nKey; this.factor = factor; this.log = log; this.aliases = aliases;
+    this.fsRelative = fsRelative;
   }
   suffix() { return this.i18nKey == null ? '' : t(this.i18nKey); }
   toCanonical(x) { return this.log ? Math.pow(10.0, x / DB_PER_DECADE) : x * this.factor; }
@@ -121,12 +131,16 @@ export const UNIT_FAMILIES = {
     new Unit('unit.hz', 1.0, false, ['hz']),
     new Unit('unit.khz', 1e3, false, ['khz', 'kh', 'k']),
   ]),
+  // dBFS is stated relative to the LIVE full scale, so it carries the fsRelative marker and is
+  // resolved by the model against the injected supplier (a field with no supplier refuses it —
+  // the FFT manual fundamental, an ADC-side reference far above DAC full scale).
   AMPLITUDE: new UnitFamilyDef('AMPLITUDE', 3, [
     new Unit('unit.nv', 1e-9, false, ['nv', 'n']),
     new Unit('unit.uv', 1e-6, false, ['uv', 'u', 'µ', 'μ']),
     new Unit('unit.mv', 1e-3, false, ['mv', 'm']),
     new Unit('unit.v', 1.0, false, ['v']),
-    new Unit('unit.dbv', 1.0, true, ['dbv']),
+    new Unit('unit.dbv', 1.0, true, ['dbv', 'db', 'd']),
+    new Unit('unit.dbfs', 1.0, false, ['dbfs', 'dbf'], true),
   ]),
   // nV / µV / mV / V — AMPLITUDE without the logarithmic dBV unit, for calibration-value
   // entry where a dB reference makes no sense (UnitFamily.VOLTAGE). Same linear switching
@@ -182,7 +196,7 @@ export class NumericStepModel {
    * Four factory shapes mirroring the four Java constructors:
    *   fixed:   { family, min, max, wheelStep, arrowStep, decimals }
    *   list:    { family, min, max, series:[...], maxDecimals }
-   *   percent: { family, min, max, maxDecimals }
+   *   percent: { family, min, max, maxDecimals, fsAmplSupplier? }
    *   dither:  { family, maxBits, fsAmplSupplier }
    */
   constructor(cfg) {
@@ -192,8 +206,10 @@ export class NumericStepModel {
     this.stickyUnit = null;
     this.namedValue = NaN;
     this.namedValueLabel = null;
-    // DITHER-only config (null for every other policy).
-    this.fsAmplSupplier = null;
+    // Live PEAK full scale (Vpeak), injected as config — never a singleton reach-in. Required by
+    // the DITHER policy, and OPTIONAL on an AMPLITUDE field: present ⇒ a dBFS entry is accepted,
+    // absent ⇒ refused (the FFT manual fundamental, an ADC-side reference unrelated to DAC FS).
+    this.fsAmplSupplier = cfg.fsAmplSupplier || null;
     if (cfg.maxBits !== undefined) {
       // DITHER: 0 (Off) or [1, maxBits] bits, possibly fractional, shown as bits or a
       // full-scale-aware dBV VIEW of the same value. fsAmplSupplier yields the live PEAK full-scale
@@ -204,7 +220,6 @@ export class NumericStepModel {
       this.wheelStep = 0; this.arrowStep = 0;
       this.series = null;
       this.decimals = -1; this.maxDecimals = DITHER_DBV_DECIMALS;
-      this.fsAmplSupplier = cfg.fsAmplSupplier;
       // The config dBV (the full-scale term) that `value` was last reconciled against; reanchor()
       // moves the bits by the config delta to hold the displayed dBV across a full-scale change.
       this.ditherConfigDbv = this._ditherFsDbv();
@@ -256,7 +271,10 @@ export class NumericStepModel {
       case POLICY.LIST: this.setValue(this._listJump(dir)); break;
       case POLICY.PERCENT: {
         const u = this.currentUnit();
-        if (u.log) this.setValue(u.toCanonical(this._logGridStep(u.fromCanonical(this.value), dir)));
+        // dBFS walks the same 10-dB grid as dBV, but in the dBFS domain (via the live full scale);
+        // setValue's range clamp saturates it at the field max (= 0 dBFS).
+        if (u.fsRelative) this.setValue(this._canonicalFromDbfs(this._logGridStep(this._dbfsFromCanonical(this.value), dir)));
+        else if (u.log) this.setValue(u.toCanonical(this._logGridStep(u.fromCanonical(this.value), dir)));
         else this.setValue(dir > 0 ? this._percentUp(this.value) : this._percentDown(this.value));
         break;
       }
@@ -308,6 +326,22 @@ export class NumericStepModel {
 
   /** Clamps a non-Off dither depth to [1, maxBits]. */
   _clampBits(bits) { return Math.max(1.0, Math.min(this.max, bits)); }
+
+  // ---- full-scale-relative unit (dBFS) — AMPLITUDE fields with a supplier ----
+
+  /** Canonical Vrms → dBFS against the live full scale. 0 dBFS ≡ a full-scale SINE (AES17), so
+   *  the reference is the RMS full scale (peak/√2) — form-independent, since the stored quantity
+   *  is the sine's Vrms. (Deliberately unlike the DITHER policy's PEAK anchor, a noise-floor level
+   *  with different semantics.) Only reached on the sticky-dBFS display / step path, where a
+   *  successful dBFS commit guaranteed a non-null supplier. */
+  _dbfsFromCanonical(canonical) {
+    return DBFS_DB_PER_DECADE * Math.log10(canonical * ROOT_TWO / this.fsAmplSupplier());
+  }
+
+  /** dBFS → canonical Vrms against the live full scale — the inverse of _dbfsFromCanonical. */
+  _canonicalFromDbfs(dbfs) {
+    return this.fsAmplSupplier() / ROOT_TWO * Math.pow(10.0, dbfs / DBFS_DB_PER_DECADE);
+  }
 
   /** Reacts to a config change (full-scale) holding the CURRENTLY DISPLAYED value:
    *  dBV view keeps the shown dBV and re-solves the bits under the new full-scale;
@@ -384,6 +418,7 @@ export class NumericStepModel {
 
   _plusOneDisplayedUnit(dir) {
     const u = this.currentUnit();
+    if (u.fsRelative) return this._canonicalFromDbfs(this._dbfsFromCanonical(this.value) + dir);
     if (u.log) return u.toCanonical(u.fromCanonical(this.value) + dir);
     return this.value + dir * u.factor;
   }
@@ -455,7 +490,9 @@ export class NumericStepModel {
   }
 
   _formatIn(canonical, u) {
-    const x = u.fromCanonical(canonical);
+    // A full-scale-relative unit (dBFS) is converted against the live full scale; the only caller
+    // reaching that branch is text() via a sticky dBFS currentUnit, so the supplier is non-null.
+    const x = u.fsRelative ? this._dbfsFromCanonical(canonical) : u.fromCanonical(canonical);
     const num = (this.decimals >= 0)
       ? x.toFixed(this.decimals)
       : this._trimTrailingZeros(x.toFixed(this.maxDecimals));
@@ -469,7 +506,8 @@ export class NumericStepModel {
         return `${WHEEL_GLYPH} ±${this._formatStep(this.wheelStep)}, ${ARROWS_GLYPH} ±${this._formatStep(this.arrowStep)}`;
       case POLICY.PERCENT: {
         const u = this.currentUnit();
-        if (u.log) return `${WHEEL_GLYPH} ±${LOG_WHEEL_STEP_DB} dB, ${ARROWS_GLYPH} ±1 dB`;
+        // dBV and dBFS step identically — both in dB.
+        if (u.log || u.fsRelative) return `${WHEEL_GLYPH} ±${LOG_WHEEL_STEP_DB} dB, ${ARROWS_GLYPH} ±1 dB`;
         const suffix = u.suffix();
         return `${WHEEL_GLYPH} ±${PERCENT_STEP_LABEL}, ${ARROWS_GLYPH} ±1${suffix === '' ? '' : ' ' + suffix}`;
       }
@@ -528,10 +566,21 @@ export class NumericStepModel {
       // are mV/µV only in AMPLITUDE) — there is deliberately no generic SI-prefix
       // fallback, so a frequency alias can't parse in a voltage field.
       if (unit == null) return false;
-      this.stickyUnit = unit.log ? unit : null;
+      // A full-scale-relative unit (dBFS) is resolved from the live full scale below; a field with
+      // no supplier wired (the FFT manual fundamental) refuses it BEFORE any state is mutated,
+      // leaving the value unchanged.
+      if (unit.fsRelative && this.fsAmplSupplier == null) return false;
+      // Both the log unit (dBV) and the full-scale-relative unit (dBFS) stick: the family's
+      // range-based display switching can never select either, so an explicit choice must hold.
+      // Linear units always re-enter the automatic switching, so they never stick.
+      this.stickyUnit = (unit.log || unit.fsRelative) ? unit : null;
     }
     this.blank = false;
-    this.value = this._clamp(this._roundSig(unit.toCanonical(num)));
+    // 0 dBFS ≡ full-scale SINE (AES17): the stored quantity is the sine's Vrms, so the anchor is
+    // the RMS full scale (peak/√2). The ceiling is enforced by the field's own max (set to that
+    // same full-scale-sine Vrms), so V, dBV and dBFS entries all clamp to it identically.
+    const canonical = unit.fsRelative ? this._canonicalFromDbfs(num) : unit.toCanonical(num);
+    this.value = this._clamp(this._roundSig(canonical));
     return true;
   }
 

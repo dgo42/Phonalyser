@@ -1201,6 +1201,11 @@ public final class FftView extends AbstractFreqDomainView {
                                        Math.max(1, area.height - MARGIN_TOP  - MARGIN_BOTTOM));
 
         MagnitudeUnit unit = prefs.getFftMagUnit();
+        // dBr reference = the DISPLAYED fundamental level (manual override when set, else the
+        // measured level); re-stamped every paint so the DBR axis + cursor readouts pin the
+        // fundamental to 0 dBr.  NaN (no fundamental yet) leaves the previous reference intact.
+        double dbrRefDbFs = displayedFundDbFs();
+        if (Double.isFinite(dbrRefDbFs)) prefs.setFftDbrRefDbFs(dbrRefDbFs);
         double freqMin = Math.max(0, prefs.getFftFreqMinHz());
         double freqMax = Math.max(freqMin + 1, prefs.getFftFreqMaxHz());
         // The magnitude range is stored canonically in dBFS; convert to the display unit

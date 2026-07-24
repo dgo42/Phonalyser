@@ -871,11 +871,20 @@ export class FftController {
       this._analysesDone += r.frameCount;
     }
 
-    // Stop-after-N (Java FftAnalyzerWorker): ONLY in ∞ (forever) mode, when the cap is
-    // enabled and the analysis-TICK count reaches it — pause the consumer and notify the
-    // UI so it can un-light the Record LED (FFT_RECORDING_AUTO_STOPPED → disengageRecord).
+    // Stop-after-N (Java FftAnalyzerWorker): ONLY in ∞ (forever) mode, when the cap is enabled
+    // and the count THE USER SEES reaches it — pause the consumer and notify the UI so it can
+    // un-light the Record LED (FFT_RECORDING_AUTO_STOPPED → disengageRecord).
+    //
+    // Gate on the DISPLAYED count, not the raw tick counter: the label shows
+    // Math.max(0, framesDone − 1) (emitted below; the first tick is the seed, not an average),
+    // so keying off _analysesTicks stopped one displayed average early — entering 50 stopped
+    // with "49" on screen. Java fixed the same off-by-one as (completedAnalyses − 1) >= N, where
+    // its two counters coincide; here they need not: framesDone is the accumulator depth in
+    // tick-equivalents (round(accumFrames / perTickFrames)) while _analysesTicks is a raw count,
+    // so comparing the displayed expression is correct under both.
+    const displayedAverages = Math.max(0, this.framesDone - 1);
     if (forever && this.config.stopAfterNEnabled && !this._fftPausedByStopN
-        && this._analysesTicks >= this.config.stopAfterN) {
+        && displayedAverages >= this.config.stopAfterN) {
       this._fftPausedByStopN = true;
       if (this.onFftAutoStopped) { try { this.onFftAutoStopped(); } catch (_) {} }
     }

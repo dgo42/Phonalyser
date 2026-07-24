@@ -16,7 +16,8 @@
  * here without re-reading the Java.
  */
 
-/** MagnitudeUnit.isLog() — Java enum: V(true), V_SQRT_HZ(true), DBV(false), DBFS(false). */
+/** MagnitudeUnit.isLog() — Java enum: V(true), V_SQRT_HZ(true), DBV(false), DBFS(false),
+ *  DBR(false). Every dB unit (dBr included) keeps the linear-in-dB axis. */
 export function unitIsLog(unit) {
   return unit === 'V' || unit === 'V_SQRT_HZ';
 }
@@ -70,6 +71,7 @@ export function formatMagnitudeWithUnit(v, unit) {
   if (!Number.isFinite(v)) return '—';
   switch (unit) {
     case 'DBFS':      return v.toFixed(1) + ' dBFS';
+    case 'DBR':       return v.toFixed(1) + ' dBr';
     case 'DBV':       return v.toFixed(1) + ' dBV';
     case 'V':         return formatVoltsSi(v) + 'V';
     case 'V_SQRT_HZ': return formatVoltsSi(v) + 'V/√Hz';

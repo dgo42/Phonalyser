@@ -94,7 +94,9 @@ const E = {
   WindowType: ['RECT', 'HANN', 'BH4', 'BH7', 'FT', 'HFT144D', 'HFT248D',
     'KB24', 'KB38', 'DC150', 'DC200', 'DC250', 'DC300'],
   FftOverlap: ['PCT_0', 'PCT_50', 'PCT_75', 'PCT_87_5', 'PCT_93_75'],
-  MagnitudeUnit: ['V', 'V_SQRT_HZ', 'DBV', 'DBFS'],
+  // DBR appended LAST on purpose: the combo binds by ordinal and presets persist the name,
+  // so appending is the only position that keeps old presets loading (Java MagnitudeUnit).
+  MagnitudeUnit: ['V', 'V_SQRT_HZ', 'DBV', 'DBFS', 'DBR'],
   AlignGenerator: ['NONE', 'FLL'],
   TabOrientation: ['TOP', 'LEFT'],
   FilterType: ['LOW_PASS', 'HIGH_PASS', 'BAND_PASS', 'NOTCH'],
@@ -604,6 +606,11 @@ export class Preferences {
     this.dbvOffsetDbRight = 20.0 * Math.log10(DEFAULT_ADC_FS_VRMS);
     /** √(bin bandwidth) = √(inputSampleRate / fftLength); the V→V/√Hz divisor. */
     this.binBwSqrt = 1.0;
+    /** dBr reference: the DISPLAYED fundamental level in dBFS, so DBR readings come out as
+     *  dB relative to the fundamental (which therefore sits at exactly 0 dBr). A live cached
+     *  value like binBwSqrt — NOT persisted; the FFT paint path re-stamps it every frame
+     *  (Java Preferences.fftDbrRefDbFs). */
+    this.fftDbrRefDbFs = 0.0;
     // transientMode was already set from the `detached` ctor arg at the top of the
     // constructor. When true, save() is a no-op and load()/seed are skipped, so a
     // dialog copy (copyForDialog) never touches localStorage. Do NOT reset it here —
@@ -965,6 +972,7 @@ export class Preferences {
     const off = this.getDbvOffsetDb(ch);
     switch (unit) {
       case 'DBFS': return dbFs;
+      case 'DBR': return dbFs - this.fftDbrRefDbFs;
       case 'DBV': return dbFs + off;
       case 'V': return Math.pow(10.0, (dbFs + off) / 20.0);
       case 'V_SQRT_HZ':

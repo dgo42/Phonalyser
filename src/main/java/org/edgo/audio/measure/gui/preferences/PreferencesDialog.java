@@ -1611,7 +1611,11 @@ public final class PreferencesDialog {
             // but the active-range radios stay usable (the ranges are switchable).
             boolean deviceProvided = ep.isCalibrationFromDevice();
 
-            Composite row = new Composite(rangesContainer, SWT.NONE);
+            // NO_RADIO_GROUP: in INDEPENDENT mode the row holds the Left AND the
+            // Right active radio, which are two independent one-of-N columns —
+            // SWT would otherwise auto-exclude them against each other, so all
+            // selection rules stay in the explicit per-column code below.
+            Composite row = new Composite(rangesContainer, SWT.NO_RADIO_GROUP);
             row.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
             GridLayout rl = new GridLayout(independent ? 8 : 4, false);
             rl.marginWidth = 0; rl.marginHeight = 0; rl.horizontalSpacing = 6;
@@ -1675,10 +1679,19 @@ public final class PreferencesDialog {
             r.range            = range;
             rows.add(r);
 
-            activeRadio.addListener(SWT.Selection, e -> { if (activeRadio.getSelection()) userSetActive(ep, r); });
+            // The row is NO_RADIO_GROUP, so a click TOGGLES the radio instead of
+            // selecting it — bounce back a click that would leave the column with
+            // nothing selected (no model change), and only act on a real pick.
+            activeRadio.addListener(SWT.Selection, e -> {
+                if (!activeRadio.getSelection()) { activeRadio.setSelection(true); return; }
+                userSetActive(ep, r);
+            });
             if (activeRadioRight != null) {
                 Button rr = activeRadioRight;
-                rr.addListener(SWT.Selection, e -> { if (rr.getSelection()) userSetActiveRight(ep, r); });
+                rr.addListener(SWT.Selection, e -> {
+                    if (!rr.getSelection()) { rr.setSelection(true); return; }
+                    userSetActiveRight(ep, r);
+                });
             }
             // A device-provided endpoint owns its labels + range set — only the
             // active-range radios above stay live; rename / add / remove are off.
@@ -1706,8 +1719,8 @@ public final class PreferencesDialog {
 
         private void userSetActive(DeviceEndpointConfig ep, RangeRow r) {
             ep.setActiveRange(r.range.getLabel());
-            // Each row is its own Composite, so the radios don't auto-exclude —
-            // clear the siblings by hand.
+            // Each row is its own NO_RADIO_GROUP Composite, so no radio ever
+            // auto-excludes another — this column's exclusivity is by hand.
             for (RangeRow other : rows) {
                 if (other != r && !other.activeRadio.isDisposed()) other.activeRadio.setSelection(false);
             }
@@ -1715,7 +1728,8 @@ public final class PreferencesDialog {
         }
 
         /** RIGHT-column counterpart of {@link #userSetActive} (INDEPENDENT mode):
-         *  drives {@code activeRangeRight} and clears the sibling right radios. */
+         *  drives {@code activeRangeRight} and clears the sibling right radios.
+         *  The LEFT radios are untouched — the two columns are independent. */
         private void userSetActiveRight(DeviceEndpointConfig ep, RangeRow r) {
             ep.setActiveRangeRight(r.range.getLabel());
             for (RangeRow other : rows) {

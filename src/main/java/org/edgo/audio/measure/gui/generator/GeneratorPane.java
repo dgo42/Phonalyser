@@ -551,7 +551,8 @@ public final class GeneratorPane extends AbstractPane {
         // --------------------------------------------------------- Amplitude
         addRowLabel(group, I18n.t("generator.amplitudeRms"));
         ampField = new NumericStepField(group, UnitFamily.AMPLITUDE,
-                AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl(), AMP_MAX_DECIMALS, 160);
+                AMP_MIN_VRMS, controller.maxAmplitudeVrms(initialForm), AMP_MAX_DECIMALS,
+                prefs::getDacFsVoltageAmpl, 160);
         ampField.setLayoutData(fillH());
         ampField.setToolTipText(I18n.t("generator.amplitudeRms.tooltip"));
         // The field holds canonical Vrms (unit parsing / display switching is
@@ -567,7 +568,13 @@ public final class GeneratorPane extends AbstractPane {
         // recompute the running generator's amplitude against it so the commanded
         // Vrms still holds (no restart, controller subscription) — the pane
         // only moves the field's ceiling with the new full-scale.
-        Bindings.onChange(group, prefs.dacFsVoltageAmplProperty(), ampField::setMax);
+        Bindings.onChange(group, prefs.dacFsVoltageAmplProperty(),
+                v -> ampField.setMax(controller.maxAmplitudeVrms(formCombo.getSelectedForm())));
+        // Each waveform reaches full scale at a different V RMS, so the ceiling
+        // moves with the form — re-cap here (registered after the field exists,
+        // alongside the form combo's own visual-reconfiguration listener).
+        formCombo.addSelectionListener(e ->
+                ampField.setMax(controller.maxAmplitudeVrms(formCombo.getSelectedForm())));
 
         // ----- Duty cycle (RECTANGLE or TRIANGLE) -----------------------
         // 1 to 99 percent with 3 decimal places.  Applies to RECTANGLE
@@ -1490,6 +1497,9 @@ public final class GeneratorPane extends AbstractPane {
         // The controller's split subscription live-applies both percentages
         // and publishes the FFT invalidation.
         prefs.setGenDualToneSplitPct(a1);
+        // The split sets the two-tone crest factor, hence the V RMS at which the
+        // pair reaches full scale — re-cap the amplitude field.
+        ampField.setMax(controller.maxAmplitudeVrms(formCombo.getSelectedForm()));
     }
 
     /** Flips a control's GridData.exclude flag and visibility together. */

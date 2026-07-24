@@ -100,6 +100,12 @@ public final class NumericStepModel {
     private static final double DITHER_DBV_STEP       = 10.0;
     /** Decimals shown for the DITHER dBV view. */
     private static final int    DITHER_DBV_DECIMALS   = 1;
+    /** dBFS ↔ amplitude conversion: dB per factor-of-10 (voltage), as for dBV.
+     *  A dBFS entry needs the live full-scale, so — unlike dBV — it is resolved
+     *  here in {@link #commit}, not in {@link Unit#toCanonical}. */
+    private static final double DBFS_DB_PER_DECADE    = 20.0;
+    /** √2 — the peak↔RMS ratio anchoring 0 dBFS to a full-scale SINE. */
+    private static final double ROOT_TWO              = Math.sqrt(2.0);
     /** The Off vocabulary, shared by every policy that has an Off state — a 0-bit
      *  dither, an averages count of 1, … : the text such a value renders as, and
      *  the word {@link #isOffWord} accepts in full or as any prefix. */
@@ -124,10 +130,12 @@ public final class NumericStepModel {
     private final double wheelStep;   // FIXED only
     private final double arrowStep;   // FIXED only
     private double[] series;          // LIST only, kept sorted
-    /** DITHER only: live DAC peak full-scale amplitude (Vpeak) supplier — the
-     *  bits⇄dBV view is full-scale-aware, so the conversion tracks the live
-     *  calibration; injected as config (never a singleton reach-in), {@code
-     *  null} for every other policy. */
+    /** DITHER, and dBFS-capable PERCENT (AMPLITUDE) fields: live DAC peak
+     *  full-scale amplitude (Vpeak) supplier.  DITHER's bits⇄dBV view and an
+     *  AMPLITUDE field's dBFS entry are both full-scale-aware, so the conversion
+     *  tracks the live calibration; injected as config (never a singleton
+     *  reach-in), {@code null} for every other policy and for a PERCENT field
+     *  that must refuse dBFS (the FFT manual-fundamental). */
     private final DoubleSupplier fsAmplSupplier;
     /** DITHER only: the config dBV (the full-scale term) that {@link #value}
      *  was last reconciled against — {@link #reanchor} moves the bits by the
@@ -188,9 +196,19 @@ public final class NumericStepModel {
 
     /** PERCENT policy: the "careful 10 %" wheel, ±1 displayed-unit arrows.
      *  Values render with up to {@code maxDecimals} decimals, trailing zeros
-     *  trimmed. */
+     *  trimmed.  No full-scale supplier — a dBFS entry is refused. */
     public NumericStepModel(UnitFamily family, double min, double max,
                             int maxDecimals) {
+        this(family, min, max, maxDecimals, null);
+    }
+
+    /** PERCENT policy with a live DAC peak full-scale (Vpeak) supplier so an
+     *  AMPLITUDE field accepts a dBFS entry ({@code x dBFS = fullScaleRms ·
+     *  10^(x/20)}); the supplier comes IN as config (never a singleton
+     *  reach-in).  {@code null} on a field that must refuse dBFS (the FFT
+     *  manual-fundamental).  Steps are unchanged from the plain PERCENT field. */
+    public NumericStepModel(UnitFamily family, double min, double max,
+                            int maxDecimals, DoubleSupplier fsAmplSupplier) {
         this.family     = family;
         this.policy     = Policy.PERCENT;
         this.min        = min;
@@ -199,7 +217,7 @@ public final class NumericStepModel {
         this.arrowStep  = 0;
         this.decimals   = -1;
         this.maxDecimals = maxDecimals;
-        this.fsAmplSupplier = null;
+        this.fsAmplSupplier = fsAmplSupplier;
         this.value      = min;
     }
 
@@ -285,6 +303,10 @@ public final class NumericStepModel {
                 Unit u = currentUnit();
                 if (u.log()) {
                     setValue(u.toCanonical(logGridStep(u.fromCanonical(value), dir)));
+                } else if (u.fsRelative()) {
+                    // dBFS sticks like dBV: walk the same 10-dB grid, in the
+                    // dBFS domain (via the live full-scale), back to canonical.
+                    setValue(canonicalFromDbfs(logGridStep(dbfsFromCanonical(value), dir)));
                 } else {
                     setValue(dir > 0 ? percentUp(value) : percentDown(value));
                 }
@@ -444,11 +466,14 @@ public final class NumericStepModel {
     }
 
     /** ±1 in the unit currently displayed: ±1 kHz at 192 kHz, ±1 mV at
-     *  200 mV, ±1 dB when dBV is sticky. */
+     *  200 mV, ±1 dB when dBV or dBFS is sticky. */
     private double plusOneDisplayedUnit(int dir) {
         Unit u = currentUnit();
         if (u.log()) {
             return u.toCanonical(u.fromCanonical(value) + dir);
+        }
+        if (u.fsRelative()) {
+            return canonicalFromDbfs(dbfsFromCanonical(value) + dir);
         }
         return value + dir * u.factor();
     }
@@ -566,9 +591,15 @@ public final class NumericStepModel {
     }
 
     /** Formats {@code canonical} in {@code u}: fixed decimals for FIXED policy,
-     *  up-to-{@code maxDecimals} with trailing-zero trim otherwise. */
+     *  up-to-{@code maxDecimals} with trailing-zero trim otherwise.  The
+     *  full-scale-relative unit (dBFS) is converted here against the live
+     *  supplier — {@link Unit#fromCanonical} has no full-scale — the only
+     *  caller reaching this branch is {@link #text} via a sticky dBFS
+     *  {@link #currentUnit}, so the supplier is guaranteed non-null (a dBFS
+     *  sticky requires a successful commit or {@link #setDbfsDisplay}, both of
+     *  which need it). */
     private String formatIn(double canonical, Unit u) {
-        double x = u.fromCanonical(canonical);
+        double x = u.fsRelative() ? dbfsFromCanonical(canonical) : u.fromCanonical(canonical);
         // Locale.ROOT so the decimal separator is always '.', matching the
         // dot-based parser in commit() and the canonical value contract.
         // Without it a comma-decimal UI locale (uk, de, fr, …) renders "0,5",
@@ -587,7 +618,7 @@ public final class NumericStepModel {
      * Reflects the live policy and display unit:
      * <ul>
      *   <li>FIXED → {@code ⟳ ±<wheelStep>, ▲▼ ±<arrowStep>}</li>
-     *   <li>PERCENT (linear) → {@code ⟳ ±10 %, ▲▼ ±1 <unit>}; (dBV) →
+     *   <li>PERCENT (linear) → {@code ⟳ ±10 %, ▲▼ ±1 <unit>}; (dBV/dBFS) →
      *       {@code ⟳ ±10 dB, ▲▼ ±1 dB}</li>
      *   <li>LIST → {@code ⟳▲▼ <values>} (abbreviated when long)</li>
      * </ul>
@@ -600,7 +631,7 @@ public final class NumericStepModel {
                         + ", " + ARROWS_GLYPH + " ±" + formatStep(arrowStep);
             case PERCENT: {
                 Unit u = currentUnit();
-                if (u.log()) {
+                if (u.log() || u.fsRelative()) {
                     return WHEEL_GLYPH + " ±" + (int) LOG_WHEEL_STEP_DB + " dB, " + ARROWS_GLYPH + " ±1 dB";
                 }
                 String suffix = u.suffix();
@@ -698,14 +729,32 @@ public final class NumericStepModel {
         } else {
             unit = family.match(suffix);
             if (unit == null) return false;
-            // Only the log unit (dBV) sticks: the family's range-based display
-            // switching can never select it, so an explicit choice must hold.
-            // Linear units always re-enter the automatic range switching —
-            // typing "499 mV" and stepping past 0.5 V must show volts.
-            stickyUnit = unit.log() ? unit : null;
+            // A full-scale-relative unit (dBFS) is resolved from the live DAC
+            // full-scale below; a field with no supplier wired (the FFT
+            // manual-fundamental) refuses it, leaving the value unchanged.
+            if (unit.fsRelative() && fsAmplSupplier == null) return false;
+            // Both the log unit (dBV) and the full-scale-relative unit (dBFS)
+            // stick: the family's range-based display switching can never select
+            // either, so an explicit choice must hold (entering one switches the
+            // sticky unit).  Linear units always re-enter the automatic range
+            // switching — typing "499 mV" and stepping past 0.5 V must show
+            // volts — so they never stick.
+            stickyUnit = (unit.log() || unit.fsRelative()) ? unit : null;
         }
         blank = false;
-        value = clamp(roundSig(unit.toCanonical(num)));
+        double canonical;
+        if (unit.fsRelative()) {
+            // 0 dBFS ≡ full-scale SINE (AES17): the stored quantity is the
+            // sine's Vrms, so the anchor is the RMS full scale (peak/√2),
+            // form-independent — a full-scale square legitimately enters as
+            // +3.01 dBFS.  (This deliberately differs from the dither field's
+            // PEAK anchor, a noise-floor level with different semantics — see
+            // the test dither_dbvAnchorsToPeakFullScale_notRms.)
+            canonical = canonicalFromDbfs(num);
+        } else {
+            canonical = unit.toCanonical(num);
+        }
+        value = clamp(roundSig(canonical));
         return true;
     }
 
@@ -775,6 +824,22 @@ public final class NumericStepModel {
         String label = namedValueLabel.trim();
         return t.equalsIgnoreCase(label)
                 || (OFF_LABEL.equalsIgnoreCase(label) && isPrefixOf(OFF_LABEL, t));
+    }
+
+    /** Canonical Vrms → dBFS against the live full-scale, the inverse of
+     *  {@link #canonicalFromDbfs}: 0 dBFS ≡ a full-scale SINE, so the reference
+     *  is the RMS full scale (peak/√2).  Only reached on the sticky-dBFS
+     *  display / step path, where a successful dBFS commit (or
+     *  {@link #setDbfsDisplay}) guaranteed a non-null supplier. */
+    private double dbfsFromCanonical(double canonical) {
+        return DBFS_DB_PER_DECADE * Math.log10(canonical * ROOT_TWO / fsAmplSupplier.getAsDouble());
+    }
+
+    /** dBFS → canonical Vrms against the live full-scale — the inverse of
+     *  {@link #dbfsFromCanonical} and the shared form of the {@link #commit}
+     *  conversion. */
+    private double canonicalFromDbfs(double dbfs) {
+        return fsAmplSupplier.getAsDouble() / ROOT_TWO * Math.pow(10.0, dbfs / DBFS_DB_PER_DECADE);
     }
 
     /** Rounds to {@link #VALUE_SIG_DIGITS} significant digits so wheel walks

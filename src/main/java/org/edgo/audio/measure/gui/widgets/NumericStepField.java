@@ -96,6 +96,17 @@ public final class NumericStepField extends Composite {
                 textWidthHint);
     }
 
+    /** PERCENT-policy field with a live DAC peak full-scale (Vpeak) supplier so
+     *  an AMPLITUDE field accepts a dBFS entry ({@code x dBFS = fullScaleRms ·
+     *  10^(x/20)}); wheel / arrows are unchanged from the plain PERCENT field. */
+    public NumericStepField(Composite parent, UnitFamily family,
+                            double min, double max,
+                            int maxDecimals, DoubleSupplier fsAmplSupplier,
+                            int textWidthHint) {
+        this(parent, new NumericStepModel(family, min, max, maxDecimals, fsAmplSupplier),
+                textWidthHint);
+    }
+
     /** DITHER-policy field: a dither depth (0 = Off … {@code maxBits} bits,
      *  possibly fractional) shown as bits or a full-scale-aware dBV view;
      *  {@code fsAmplSupplier} yields the live peak full-scale (Vpeak) so the

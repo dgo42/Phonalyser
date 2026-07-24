@@ -61,9 +61,9 @@ import lombok.extern.log4j.Log4j2;
  * shared reg-9 clock — the app's input/output rates are constrained equal for
  * this backend, wired in the Preferences dialog).
  *
- * <p>Supported formats are 48/96/192&nbsp;kHz, 32-bit, stereo, little-endian, in
- * both directions.  384&nbsp;kHz is deliberately NOT exposed (input-only,
- * single-source, garbles the outputs — doc §9 item 7).
+ * <p>Supported formats are 32-bit, stereo, little-endian in both directions, at
+ * 48/96/192&nbsp;kHz on either model plus 384&nbsp;kHz on the QA403 (reg-9 code 3,
+ * which the QA402 does not have — doc §4).
  */
 @Log4j2
 public class Qa40xDeviceManager implements AudioDeviceManager {
@@ -176,17 +176,17 @@ public class Qa40xDeviceManager implements AudioDeviceManager {
     }
 
     /**
-     * The fixed QA402/QA403 format set — 48/96/192&nbsp;kHz, 32-bit, stereo,
-     * little-endian — identical for both directions.  384&nbsp;kHz is not exposed
-     * (doc §9 item 7).
+     * The QA402/QA403 format set — 32-bit, stereo, little-endian, identical for
+     * both directions.  The rate list follows the model: 48/96/192&nbsp;kHz on
+     * both, plus 384&nbsp;kHz on the QA403 (reg-9 code 3, which the QA402 lacks).
      */
     @Override
     public List<AudioFormat> listSupportedFormats(DeviceRef device, boolean output) {
-        if (!(device instanceof Qa40xDeviceRef)) {
+        if (!(device instanceof Qa40xDeviceRef ref)) {
             return new ArrayList<>();
         }
         List<AudioFormat> formats = new ArrayList<>();
-        for (int rate : Qa40xProtocol.sampleRatesHz()) {
+        for (int rate : Qa40xProtocol.sampleRatesHz(ref.model())) {
             formats.add(new AudioFormat(AudioFormat.Encoding.PCM_SIGNED,
                     rate, EFFECTIVE_BITS, CHANNELS, FRAME_BYTES, rate, false));
         }
