@@ -116,6 +116,10 @@ public class WavReader {
      * Reads all frames and delivers stereo samples to the listener in blocks.
      * Samples are offset-binary (same convention as CsjsoundRecorder): unsigned 0..2^bitsPerSample-1.
      * For mono files ch1 equals ch0.
+     *
+     * <p>32-bit caveat: the unsigned value exceeds the signed int range, so the field holds it as
+     * a bit pattern. Widen with {@link Integer#toUnsignedLong} (or subtract the half-range in int
+     * arithmetic, where the overflow wraps back) before doing floating-point math on the code.
      */
     public void process(Consumer<StereoSample[]> listener) throws IOException {
         int sampleBytes       = bitsPerSample / 8;
