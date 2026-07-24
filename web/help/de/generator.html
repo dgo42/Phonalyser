@@ -75,7 +75,7 @@
         Phasenakkumulator</a>).  Siehe
         <a href="#generator-snap-fft-bin">Frequenz auf nächsten einrasten</a>.</li>
     <li><b>Amplitude (RMS).</b>  Ausgangspegel in Volt RMS bezogen auf die DAC-
-        Kalibrierung; der Einheitenselektor akzeptiert µV/mV/V und dBV —
+        Kalibrierung; der Einheitenselektor akzeptiert µV/mV/V, dBV und dBFS —
         <a href="#generator-amplitude">Amplitude (RMS)</a>.</li>
     <li><b>Korrekturen.</b>  Lädt eine Harmonischen-Kompensationsdatei, damit die
         Form <em>Kompensierter Sinus</em> die gemessene Verzerrung der Signalkette
@@ -237,14 +237,39 @@
 
   <h3 id="generator-amplitude">Amplitude (RMS)</h3>
   <p>Der Ausgangspegel, intern als Volt RMS gespeichert.  Einheiten:
-     <code>µV</code>, <code>mV</code>, <code>V</code> und <code>dBV</code>
-     (Groß-/Kleinschreibung irrelevant); eine Zahl ohne Einheit wird als Volt
-     interpretiert.  Die metrische Anzeige skaliert automatisch (µV / mV / V),
-     damit die Zahl lesbar bleibt; ein eingegebener <code>dBV</code>-Wert hält
-     das Feld in dBV (die automatische Skalierung wechselt nie selbstständig
-     auf dBV).</p>
+     <code>µV</code>, <code>mV</code>, <code>V</code>, <code>dBV</code> und
+     <code>dBFS</code> (Groß-/Kleinschreibung irrelevant); eine Zahl ohne
+     Einheit wird als Volt interpretiert.  Die metrische Anzeige skaliert
+     automatisch (µV / mV / V), damit die Zahl lesbar bleibt; ein eingegebener
+     <code>dBV</code>- oder <code>dBFS</code>-Wert hält das Feld in dieser
+     Einheit (die automatische Skalierung wechselt nie selbstständig auf eine
+     dB-Einheit), und Mausrad und Pfeiltasten verstellen ihn dann in dB —
+     10&nbsp;dB pro Rastung des Mausrads, 1&nbsp;dB pro Pfeiltaste.  Eine erneut
+     ohne Einheit eingegebene Zahl stellt das Feld wieder auf Volt.</p>
   <p class="note"><b>Hinweis:</b> dBV bezieht sich auf 1 V RMS, unabhängig vom
-     Gerät — <code>x dBV = 10<sup>x/20</sup> V<sub>RMS</sub></code>.</p>
+     Gerät — <code>x dBV = 10<sup>x/20</sup> V<sub>RMS</sub></code>.  Für diese
+     Einheit gibt es Kurzformen: <code>d</code> und <code>db</code> werden
+     ebenso akzeptiert wie <code>dbv</code>.</p>
+  <p><b>dBFS</b> bezieht sich stattdessen auf den Vollausschlag des Wandlers.
+     Geben Sie den Pegel mit dem Suffix <code>dbfs</code> ein — Kurzform
+     <code>dbf</code> —, zum Beispiel <code>-6 dbfs</code>.  Nach der
+     AES17-Konvention ist <b>0 dBFS ein Sinus mit Vollausschlag</b>, also der
+     RMS-Pegel bei Vollausschlag; die Zahl behält damit ihre Bedeutung, wenn Sie
+     die Signalform wechseln.  Der Wert wird weiterhin als Volt RMS gehalten und
+     gegen die aktuelle DAC-Kalibrierung aufgelöst: Eine Neukalibrierung des DAC
+     ändert deshalb den dBFS-Wert, der für denselben physikalischen
+     Ausgangspegel angezeigt wird.</p>
+  <p class="note"><b>Obergrenze.</b>  Das Feld endet bei dem Pegel, bei dem das
+     Signal den Vollausschlag des Wandlers gerade erreicht — darüber könnte der
+     Ausgang nur noch clippen —, das Maximum folgt also <em>der Signalform</em>:
+     Ein Rechteck darf im Effektivwert 3&nbsp;dB höher liegen als ein Sinus, ein
+     Dreieck etwas niedriger, und ein Zweiton folgt seiner eigenen
+     Amplitudenaufteilung.  Volt, dBV und dBFS werden alle auf dasselbe Maximum
+     begrenzt, sodass das obere Ende des Bereichs für einen Sinus genau
+     0&nbsp;dBFS ist.  Sie folgt der DAC-Kalibrierung und der
+     <a href="#generator-form">Signalform</a>: Der Wechsel zu einer Form mit
+     weniger Aussteuerungsreserve zieht einen bereits eingegebenen Pegel auf die
+     neue Grenze herunter.</p>
 
   <h3 id="generator-dither">Dither</h3>
   <p>Legt fest, wie viel dreieckiger (TPDF-)Dither unmittelbar vor der

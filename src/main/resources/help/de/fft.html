@@ -64,8 +64,9 @@
         <a href="theory/fft.html#coherent">Funktionsprinzip ▸ kohärente Mittelung</a>
         beschrieben ist.</li>
     <li><b>Amplitudeneinheit.</b>  Schaltet die vertikale Skala um —
-        <a href="#fft-mag-unit">dBFS / dBV / V / V/√Hz</a>.  dBFS ist die Basis;
-        die übrigen werden zur Anzeigezeit aus der ADC-Kalibrierung abgeleitet.</li>
+        <a href="#fft-mag-unit">dBFS / dBV / V / V/√Hz / dBr</a>.  dBFS ist die
+        Basis; die übrigen werden zur Anzeigezeit aus der ADC-Kalibrierung
+        abgeleitet, dBr aus dem Pegel des Grundtons selbst.</li>
     <li><b>Spektrum-Darstellung.</b>  Standardmäßig logarithmische Frequenzachse;
         <a href="#fft-harmonic-dots">Harmonischen-Punkte</a> und (bei geladener
         Kalibrierung) die <a href="theory/fft.html#cal">roten / blauen
@@ -315,11 +316,21 @@
      steigt im „Dauermodus" unbegrenzt.</p>
 
   <h3 id="fft-mag-unit">Amplitudeneinheit</h3>
-  <p>Auswahlfeld oben rechts mit vier Optionen:
-     <code>V</code>, <code>V/√Hz</code>, <code>dBV</code>, <code>dBFS</code>.
+  <p>Auswahlfeld oben rechts mit fünf Optionen:
+     <code>V</code>, <code>V/√Hz</code>, <code>dBV</code>, <code>dBFS</code>,
+     <code>dBr</code>.
      Ein Einheitenwechsel konvertiert die Achsenbeschriftungen und
      Bildlaufleistengrenzen direkt — das sichtbare Signal bleibt auf derselben
      Bildschirm-Y-Position.</p>
+  <p><code>dBr</code> ist relativ: Jeder Pegel wird auf den Grundton bezogen
+     angezeigt, sodass der Grundton selbst stets 0 dBr anzeigt und Harmonische,
+     Störlinien und Rauschen direkt als <em>dB unter dem Ton</em> ablesbar sind
+     — ohne Kopfrechnen.  Die vertikale Achse sowie die Anzeigen
+     <code>y = …</code> und <code>|m| = …</code> des Fadenkreuzes folgen
+     ebenfalls.  Als Referenz dient der angezeigte Grundton — auch ein
+     <a href="#fft-manual-fund">manuell eingegebener</a> — und er wird bei jedem
+     Neuzeichnen erneut gelesen, sodass die Skala einem driftenden
+     Grundtonpegel folgt.</p>
 
   <h3 id="fft-predistortion">DAC-Vorverzerrungsassistent (Zauberstab)</h3>
   <p>Die Zauberstab-Schaltfläche links neben der Aufnahme-Schaltfläche öffnet den
@@ -371,16 +382,21 @@
      FFT-Analyser</a>.</p>
 
   <h4 id="fft-averages">Mittelungen</h4>
-  <p>Schritt-Wahlschalter — 2, 4, 8, 16, 32, 64, 128, ∞ (dauerhaft).  Anzahl
-     der überlappten Frames, die pro veröffentlichtem Spektrum gemittelt werden.
+  <p>Schritt-Wahlschalter — Off, 1, 2, 4, 8, 16, 32, 64, 128, ∞ (dauerhaft).
+     Anzahl der überlappten Frames, die pro veröffentlichtem Spektrum gemittelt
+     werden.  Off und 1 ergeben beide ein einzelnes Spektrum — gemittelt wird
+     erst ab zwei Spektren —, sind aber zwei getrennte Raststufen, sodass Off
+     jetzt auch mit Mausrad und Pfeiltasten erreichbar ist und nicht mehr nur
+     durch Eintippen.
      Höhere Werte reduzieren die Rauschvarianz, verlangsamen aber die Reaktion.
      „Dauerhaft" akkumuliert unbegrenzt — mit
      <a href="#fft-stop-after">Stopp nach</a> kombinieren, um zu begrenzen.</p>
 
   <h4 id="fft-stop-after">Stopp nach N</h4>
   <p>Kontrollkästchen + numerisches Feld.  Wenn das Kontrollkästchen aktiviert
-     ist, pausiert der Analyser nach N Analysen (nur im Dauermittelungsmodus).
-     Zurücksetzen aktiviert ihn erneut.</p>
+     ist, pausiert der Analyser, sobald die angezeigte Anzahl der Mittelungen N
+     erreicht (nur im Dauermittelungsmodus).  Zurücksetzen aktiviert ihn
+     erneut.</p>
 
   <h4 id="fft-fund-from-gen">Grundton vom Generator beziehen</h4>
   <p>Wenn aktiviert, rastet der Analyser auf die aktuelle Frequenz des Generators

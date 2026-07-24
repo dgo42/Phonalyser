@@ -27,13 +27,13 @@
       <li><a href="oscilloscope.html#scope-utility-calibrate">ADC calibration</a> <span class="small">(Oscilloscope)</span> — <span class="small">Opens the shared ADC calibration dialog, which derives the ADC&#x27;s full-scale voltage from a known reference signal (a calibrator…</span></li>
       <li><a href="theory/algorithms.html#adc">ADC characterisation</a> <span class="small">(Theory ▸ Algorithm reference)</span> — <span class="small">Algorithm What it does here In this help Code-density histogram Bins every captured sample by its ADC code (2 bits bins) and…</span></li>
       <li><a href="fft.html#fft-align-generator">Align generator</a> <span class="small">(FFT analyser)</span> — <span class="small">Combo — None or FLL . It steers the generator onto the exact centre of the FFT bin the fundamental falls in: None leaves the tone</span></li>
-      <li><a href="generator.html#generator-amplitude">Amplitude (RMS)</a> <span class="small">(Generator)</span> — <span class="small">The output level, held internally as volts RMS. Units: µV , mV , V and dBV (case-insensitive); a number with no suffix is read as</span></li>
+      <li><a href="generator.html#generator-amplitude">Amplitude (RMS)</a> <span class="small">(Generator)</span> — <span class="small">The output level, held internally as volts RMS. Units: µV , mV , V , dBV and dBFS (case-insensitive); a number with no suffix is…</span></li>
       <li><a href="theory/generator.html#amplitude">Amplitude calibration</a> <span class="small">(Theory ▸ Signal generator)</span> — <span class="small">You set the output level in V rms . Internally one linear factor maps the unit-amplitude waveform to the normalised DAC domain: A</span></li>
       <li><a href="freqresp.html#freqresp-overview">At a glance</a> <span class="small">(Frequency response)</span> — <span class="small">Magnitude plot. Log-frequency horizontal axis, linear-dB vertical axis. Shows the Left or Right channel (the L / R header buttons</span></li>
       <li><a href="preferences.html#prefs-audio">Audio</a> <span class="small">(Preferences)</span> — <span class="small">Selects the sound back end and the input / output devices and formats — the settings that decide whether a measurement is…</span></li>
       <li><a href="fft.html#fft-autosetup">Auto-Setup</a> <span class="small">(FFT analyser)</span> — <span class="small">Frames the spectrum around the detected fundamental: frequency range ±1 decade, magnitude top = fundamental + 10 dB, bottom =…</span></li>
       <li><a href="oscilloscope.html#scope-autosetup">Auto-Setup</a> <span class="small">(Oscilloscope)</span> — <span class="small">One-shot fit: adjusts the time base so roughly 1.5 periods fit on screen, and the V/div so the trace spans ~75 % of the vertical…</span></li>
-      <li><a href="fft.html#fft-averages">Averages</a> <span class="small">(FFT analyser)</span> — <span class="small">Step selector — 2, 4, 8, 16, 32, 64, 128, ∞ (forever). Number of overlapped frames averaged per published spectrum. Higher values</span></li>
+      <li><a href="fft.html#fft-averages">Averages</a> <span class="small">(FFT analyser)</span> — <span class="small">Step selector — Off, 1, 2, 4, 8, 16, 32, 64, 128, ∞ (forever). Number of overlapped frames averaged per published spectrum. &quot;Off&quot;</span></li>
       <li><a href="fft.html#fft-averages-count">Averages count</a> <span class="small">(FFT analyser)</span> — <span class="small">e.g. 32 average(s) . Number of frames currently contributing to the displayed average. Caps at the configured Averages in…</span></li>
       <li><a href="fft.html#fft-tile-averages">Averages tile</a> <span class="small">(FFT analyser)</span> — <span class="small">Number with × suffix ( 32× ) or ∞ in forever…</span></li>
     </ul>
@@ -173,7 +173,7 @@
     </ul>
     <h3>M</h3>
     <ul>
-      <li><a href="fft.html#fft-mag-unit">Magnitude unit</a> <span class="small">(FFT analyser)</span> — <span class="small">Combo at the top-right with four choices: V , V/√Hz , dBV , dBFS . Switching unit converts the axis labels and scrollbar bounds…</span></li>
+      <li><a href="fft.html#fft-mag-unit">Magnitude unit</a> <span class="small">(FFT analyser)</span> — <span class="small">Combo at the top-right with five choices: V , V/√Hz , dBV , dBFS , dBr . Switching unit converts the axis labels and scrollbar…</span></li>
       <li><a href="oscilloscope.html#scope-mains">Mains</a> <span class="small">(Oscilloscope)</span> — <span class="small">Drop-down that applies a per-channel mains-hum rejection filter, tracked live at the line frequency (50 / 60 Hz and its…</span></li>
       <li><a href="fft.html#fft-mains-suppression">Mains suppression</a> <span class="small">(FFT analyser)</span> — <span class="small">Combo — None or IIR comb . The comb pre-filters the captured signal before averaging with a frequency-tracked IIR comb locked to…</span></li>
       <li><a href="theory/oscilloscope.html#mains">Mains-hum rejection: the tracked comb</a> <span class="small">(Theory ▸ Oscilloscope)</span> — <span class="small">Mains interference sits at the line frequency and every integer harmonic of it. A single feedback comb filter [6] places a notch…</span></li>
@@ -281,7 +281,7 @@
       <li><a href="theory/algorithms.html#stats">Statistics &amp; graphics</a> <span class="small">(Theory ▸ Algorithm reference)</span> — <span class="small">Algorithm What it does here In this help Welford&#x27;s online variance One-pass mean and σ for the live measurement statistics table.</span></li>
       <li><a href="oscilloscope.html#scope-meas-stats">Stats columns (avg / min / max / σ)</a> <span class="small">(Oscilloscope)</span> — <span class="small">Rolling-window statistics over a configurable averaging window (see Preferences → Oscilloscope → Measurement average ). σ is the…</span></li>
       <li><a href="oscilloscope.html#scope-stats-toggle">Stats columns toggle</a> <span class="small">(Oscilloscope)</span> — <span class="small">Shows / hides the avg / min / max / σ columns of the measurement table. The worker keeps computing them regardless; the toggle…</span></li>
-      <li><a href="fft.html#fft-stop-after">Stop after N</a> <span class="small">(FFT analyser)</span> — <span class="small">Checkbox + numeric field. When the checkbox is on, the analyser pauses after N analyses (Forever averages mode only). Reset…</span></li>
+      <li><a href="fft.html#fft-stop-after">Stop after N</a> <span class="small">(FFT analyser)</span> — <span class="small">Checkbox + numeric field. When the checkbox is on, the analyser pauses as soon as the on-screen averages count reaches N (Forever</span></li>
       <li><a href="generator.html#generator-sweep-stop">Stop frequency</a> <span class="small">(Generator)</span> — <span class="small">The frequency the chirp ends at (Hz /…</span></li>
       <li><a href="theory/fft.html#kappa">Sub-bin frequency and de-rotation</a> <span class="small">(Theory ▸ FFT analyser)</span> — <span class="small">Write the tone&#x27;s exact position as a fractional bin number κ. Between two blocks spaced s samples apart, bin k &#x27;s phase advances…</span></li>
       <li><a href="generator.html#generator-sweep">Sweep / chirp</a> <span class="small">(Generator)</span> — <span class="small">Visible only when Linear sweep or Log sweep is selected. Replaces the single frequency field with a block of sweep…</span></li>
@@ -387,8 +387,9 @@
     <ul>
       <li><b>AA</b> — <a href="changelog.html#">What&#x27;s new ▸ Added</a></li>
       <li><b>AC</b> — <a href="bench.html#">Measurement bench &amp; wiring ▸ How much noise is left?</a>, <a href="oscilloscope.html#scope-tab-left">Oscilloscope ▸ Left tab</a>, <a href="oscilloscope.html#scope-acdc">Oscilloscope ▸ AC / DC</a>, <a href="oscilloscope.html#scope-residual">Oscilloscope ▸ Residual</a>, <a href="oscilloscope.html#scope-tab-right">Oscilloscope ▸ Right tab</a>, <a href="oscilloscope.html#scope-tab-presets">Oscilloscope ▸ Presets tab</a></li>
-      <li><b>ADC</b> — <a href="bench.html#">Measurement bench &amp; wiring ▸ Measurement bench &amp; wiring</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="changelog.html#">What&#x27;s new ▸ Deprecated</a>, <a href="credits.html#credits-hardware">Credits ▸ Measurement hardware</a>, <a href="dac-predistortion.html#">DAC pre-distortion wizard ▸ DAC pre-distortion wizard</a>, <a href="fft.html#">FFT analyser ▸ FFT analyser</a></li>
+      <li><b>ADC</b> — <a href="bench.html#">Measurement bench &amp; wiring ▸ Measurement bench &amp; wiring</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ Deprecated</a>, <a href="credits.html#credits-hardware">Credits ▸ Measurement hardware</a>, <a href="dac-predistortion.html#">DAC pre-distortion wizard ▸ DAC pre-distortion wizard</a></li>
       <li><b>AES</b> — <a href="external/sine-sweep.html#">Further reading ▸ The exponential sine sweep in practice ▸ The exponential sine sweep in practice</a>, <a href="external/sine-sweep.html#refs">Further reading ▸ The exponential sine sweep in practice ▸ References</a>, <a href="theory/freq-resp.html#refs">Theory ▸ Frequency response ▸ References</a>, <a href="theory/generator.html#refs">Theory ▸ Signal generator ▸ References</a>, <a href="theory/tune-notch.html#refs">Theory ▸ Tune-notch measurement ▸ References</a></li>
+      <li><b>AES17</b> — <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="generator.html#generator-amplitude">Generator ▸ Amplitude (RMS)</a></li>
       <li><b>AIFF</b> — <a href="generator.html#">Generator ▸ Generator</a>, <a href="generator.html#generator-load-from">Generator ▸ Load from… + In loop</a>, <a href="oscilloscope.html#scope-tab-play">Oscilloscope ▸ Load audio tab</a></li>
       <li><b>Algorithm reference</b> — <a href="theory/index.html#">Theory ▸ Overview</a></li>
       <li><b>ALSA</b> — <a href="preferences.html#prefs-audio-card">Preferences ▸ Card — per-card calibration profiles</a></li>
@@ -403,6 +404,7 @@
     <h3>B</h3>
     <ul>
       <li><b>Band pass</b> — <a href="freqresp.html#">Frequency response</a></li>
+      <li><b>Bare-JAR</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a></li>
       <li><b>Bessel</b> — <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="fft.html#fft-window">FFT analyser ▸ Window</a>, <a href="freqresp.html#">Frequency response ▸ Turning the overlay on</a>, <a href="freqresp.html#">Frequency response</a>, <a href="theory/fft.html#resolution">Theory ▸ FFT analyser ▸ Resolution, windows, overlap</a>, <a href="theory/fft.html#metrics">Theory ▸ FFT analyser ▸ The distortion and noise metrics</a></li>
       <li><b>BH4</b> — <a href="fft.html#fft-tile-window">FFT analyser ▸ Window tile</a></li>
       <li><b>BH7</b> — <a href="fft.html#fft-tile-window">FFT analyser ▸ Window tile</a></li>
@@ -428,7 +430,7 @@
       <li><b>Channels</b> — <a href="preferences.html#">Preferences</a></li>
       <li><b>Chebyshev</b> — <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="fft.html#fft-window">FFT analyser ▸ Window</a>, <a href="freqresp.html#">Frequency response ▸ Turning the overlay on</a>, <a href="freqresp.html#">Frequency response ▸ The Settings group</a>, <a href="freqresp.html#">Frequency response</a>, <a href="oscilloscope.html#scope-lpf">Oscilloscope ▸ LPF</a></li>
       <li><b>CI</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a></li>
-      <li><b>CLI</b> — <a href="theory/audio-backend.html#who">Theory ▸ Audio backend ▸ Who uses the backend</a></li>
+      <li><b>CLI</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="theory/audio-backend.html#who">Theory ▸ Audio backend ▸ Who uses the backend</a></li>
       <li><b>Coherent (complex) averaging</b> — <a href="theory/fft.html#">Theory ▸ FFT analyser</a></li>
       <li><b>Compare</b> — <a href="freqresp.html#">Frequency response</a>, <a href="tips.html#">Tips</a></li>
       <li><b>Compare auto-zoom</b> — <a href="changelog.html#">What&#x27;s new</a></li>
@@ -469,7 +471,8 @@
       <li><b>DFD3</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a></li>
       <li><b>DFT</b> — <a href="theory/algorithms.html#spectral">Theory ▸ Algorithm reference ▸ Spectral analysis</a>, <a href="theory/dac-predistortion.html#refs">Theory ▸ DAC pre-distortion ▸ References</a>, <a href="theory/derotation-accuracy.html#refs">Theory ▸ De-rotation accuracy ▸ References</a>, <a href="theory/fft.html#refs">Theory ▸ FFT analyser ▸ References</a>, <a href="theory/oscilloscope.html#freq">Theory ▸ Oscilloscope ▸ Frequency — crossings, then Goertzel refinement</a>, <a href="theory/oscilloscope.html#refs">Theory ▸ Oscilloscope ▸ References</a></li>
       <li><b>DIN</b> — <a href="theory/algorithms.html#spectral">Theory ▸ Algorithm reference ▸ Spectral analysis</a></li>
-      <li><b>DIP</b> — <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="preferences.html#prefs-audio-card">Preferences ▸ Card — per-card calibration profiles</a>, <a href="preferences.html#prefs-audio-devices-file">Preferences ▸ The devices.yaml file — manual editing</a>, <a href="preferences.html#prefs-audio-ranges">Preferences ▸ Ranges table</a>, <a href="preferences.html#prefs-audio-example">Preferences ▸ Worked example — two cards on one bench</a>, <a href="tips.html#">Tips ▸ Tips</a></li>
+      <li><b>DIP</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="preferences.html#prefs-audio-card">Preferences ▸ Card — per-card calibration profiles</a>, <a href="preferences.html#prefs-audio-devices-file">Preferences ▸ The devices.yaml file — manual editing</a>, <a href="preferences.html#prefs-audio-ranges">Preferences ▸ Ranges table</a>, <a href="preferences.html#prefs-audio-example">Preferences ▸ Worked example — two cards on one bench</a></li>
+      <li><b>DLL</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a></li>
       <li><b>DNL</b> — <a href="theory/algorithms.html#adc">Theory ▸ Algorithm reference ▸ ADC characterisation</a></li>
       <li><b>Dolph</b> — <a href="fft.html#fft-window">FFT analyser ▸ Window</a>, <a href="theory/algorithms.html#spectral">Theory ▸ Algorithm reference ▸ Spectral analysis</a>, <a href="theory/derotation-accuracy.html#overlap">Theory ▸ De-rotation accuracy ▸ Overlap: the effective number of averages</a>, <a href="theory/derotation-accuracy.html#window">Theory ▸ De-rotation accuracy ▸ Which window — and why it is not chosen for noise</a>, <a href="theory/fft.html#resolution">Theory ▸ FFT analyser ▸ Resolution, windows, overlap</a>, <a href="theory/fft.html#metrics">Theory ▸ FFT analyser ▸ The distortion and noise metrics</a></li>
       <li><b>Dolph-Chebyshev</b> — <a href="fft.html#fft-window">FFT analyser ▸ Window</a>, <a href="theory/algorithms.html#spectral">Theory ▸ Algorithm reference ▸ Spectral analysis</a>, <a href="theory/derotation-accuracy.html#overlap">Theory ▸ De-rotation accuracy ▸ Overlap: the effective number of averages</a>, <a href="theory/derotation-accuracy.html#window">Theory ▸ De-rotation accuracy ▸ Which window — and why it is not chosen for noise</a>, <a href="theory/fft.html#resolution">Theory ▸ FFT analyser ▸ Resolution, windows, overlap</a>, <a href="theory/fft.html#metrics">Theory ▸ FFT analyser ▸ The distortion and noise metrics</a></li>
@@ -482,14 +485,13 @@
     <h3>E</h3>
     <ul>
       <li><b>E — edge</b> — <a href="oscilloscope.html#">Oscilloscope</a></li>
-      <li><b>E1DA</b> — <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="credits.html#credits-hardware">Credits ▸ Measurement hardware</a>, <a href="credits.html#">Credits</a>, <a href="fft.html#fft-utility-calibrate">FFT analyser ▸ ADC calibration</a>, <a href="generator.html#generator-dac-calibrate">Generator ▸ DAC calibration (crosshair button)</a>, <a href="oscilloscope.html#scope-utility-calibrate">Oscilloscope ▸ ADC calibration</a></li>
+      <li><b>E1DA</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="credits.html#credits-hardware">Credits ▸ Measurement hardware</a>, <a href="credits.html#">Credits</a>, <a href="fft.html#fft-utility-calibrate">FFT analyser ▸ ADC calibration</a>, <a href="generator.html#generator-dac-calibrate">Generator ▸ DAC calibration (crosshair button)</a></li>
       <li><b>E1DA Cosmos</b> — <a href="fft.html#">FFT analyser</a>, <a href="generator.html#">Generator</a>, <a href="oscilloscope.html#">Oscilloscope</a></li>
       <li><b>E1DA Cosmos ADC</b> — <a href="preferences.html#">Preferences</a></li>
       <li><b>Electric fields</b> — <a href="bench.html#">Measurement bench &amp; wiring</a></li>
       <li><b>ELF</b> — <a href="bench.html#refs">Measurement bench &amp; wiring ▸ References</a></li>
       <li><b>Elliptic</b> — <a href="freqresp.html#">Frequency response</a></li>
       <li><b>EMF</b> — <a href="bench.html#">Measurement bench &amp; wiring ▸ How much noise is left?</a>, <a href="bench.html#refs">Measurement bench &amp; wiring ▸ References</a></li>
-      <li><b>ENBW</b> — <a href="theory/generator.html#dither-dbv">Theory ▸ Signal generator ▸ Setting dither by the noise floor it makes</a></li>
       <li><b>ENOB</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ 1.0-RC1 — 2026-06-19</a>, <a href="fft.html#">FFT analyser ▸ FFT analyser</a>, <a href="index.html#">Help ▸ Modules</a>, <a href="theory/fft.html#purpose">Theory ▸ FFT analyser ▸ What it is for</a>, <a href="theory/fft.html#metrics">Theory ▸ FFT analyser ▸ The distortion and noise metrics</a></li>
       <li><b>EQ</b> — <a href="credits.html#credits-inspiration">Credits ▸ Inspiration</a>, <a href="theory/index.html#">Theory ▸ Overview ▸ Theory of operation</a></li>
       <li><b>Exception</b> — <a href="fft.html#">FFT analyser</a>, <a href="generator.html#">Generator</a>, <a href="oscilloscope.html#">Oscilloscope</a></li>
@@ -500,7 +502,7 @@
       <li><b>F1</b> — <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="fft.html#fft-thd-header">FFT analyser ▸ Header row</a>, <a href="index.html#">Help ▸ Phonalyser.web</a>, <a href="oscilloscope.html#scope-residual">Oscilloscope ▸ Residual</a>, <a href="tips.html#">Tips ▸ Tips</a></li>
       <li><b>F2</b> — <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="fft.html#fft-thd-header">FFT analyser ▸ Header row</a>, <a href="oscilloscope.html#scope-residual">Oscilloscope ▸ Residual</a></li>
       <li><b>Farina</b> — <a href="changelog.html#">What&#x27;s new ▸ 1.0-RC1 — 2026-06-19</a>, <a href="external/sine-sweep.html#">Further reading ▸ The exponential sine sweep in practice ▸ The exponential sine sweep in practice</a>, <a href="external/sine-sweep.html#">Further reading ▸ The exponential sine sweep in practice ▸ Why the exponential sweep wins</a>, <a href="external/sine-sweep.html#refs">Further reading ▸ The exponential sine sweep in practice ▸ References</a>, <a href="freqresp.html#">Frequency response ▸ Frequency response</a>, <a href="generator.html#generator-form">Generator ▸ Signal form</a></li>
-      <li><b>FFT</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="changelog.html#">What&#x27;s new ▸ 1.0-RC1 — 2026-06-19</a>, <a href="dac-predistortion.html#">DAC pre-distortion wizard ▸ DAC pre-distortion wizard</a>, <a href="dac-predistortion.html#dpd-open">DAC pre-distortion wizard ▸ Opening the wizard</a>, <a href="dac-predistortion.html#dpd-controls">DAC pre-distortion wizard ▸ Controls</a></li>
+      <li><b>FFT</b> — <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ 1.0-RC1 — 2026-06-19</a>, <a href="dac-predistortion.html#">DAC pre-distortion wizard ▸ DAC pre-distortion wizard</a>, <a href="dac-predistortion.html#dpd-open">DAC pre-distortion wizard ▸ Opening the wizard</a>, <a href="dac-predistortion.html#dpd-controls">DAC pre-distortion wizard ▸ Controls</a></li>
       <li><b>FFT analyser</b> — <a href="index.html#">Help</a>, <a href="theory/index.html#">Theory ▸ Overview</a></li>
       <li><b>FFT analysis essentials</b> — <a href="theory/index.html#">Theory ▸ Overview</a></li>
       <li><b>FFT settings</b> — <a href="dac-predistortion.html#">DAC pre-distortion wizard</a>, <a href="fft.html#">FFT analyser</a></li>
@@ -508,7 +510,7 @@
       <li><b>Filter type</b> — <a href="freqresp.html#">Frequency response</a></li>
       <li><b>Filters</b> — <a href="tips.html#">Tips</a></li>
       <li><b>FIR</b> — <a href="theory/algorithms.html#adc">Theory ▸ Algorithm reference ▸ ADC characterisation</a></li>
-      <li><b>FLAC</b> — <a href="generator.html#">Generator ▸ Generator</a>, <a href="generator.html#generator-load-from">Generator ▸ Load from… + In loop</a>, <a href="oscilloscope.html#scope-tab-play">Oscilloscope ▸ Load audio tab</a></li>
+      <li><b>FLAC</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="generator.html#">Generator ▸ Generator</a>, <a href="generator.html#generator-load-from">Generator ▸ Load from… + In loop</a>, <a href="oscilloscope.html#scope-tab-play">Oscilloscope ▸ Load audio tab</a></li>
       <li><b>FLL</b> — <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="dac-predistortion.html#dpd-open">DAC pre-distortion wizard ▸ Opening the wizard</a>, <a href="fft.html#fft-align-generator">FFT analyser ▸ Align generator</a>, <a href="fft.html#">FFT analyser</a>, <a href="howto.html#">World&#x27;s shortest HOW-TO ▸ 3 · Lock the tone</a>, <a href="theory/algorithms.html#filtering">Theory ▸ Algorithm reference ▸ Filtering &amp; estimation</a></li>
       <li><b>Format not supported</b> — <a href="theory/audio-backend.html#">Theory ▸ Audio backend</a></li>
       <li><b>Frequency response</b> — <a href="index.html#">Help</a>, <a href="theory/index.html#">Theory ▸ Overview</a></li>
@@ -544,7 +546,7 @@
     </ul>
     <h3>I</h3>
     <ul>
-      <li><b>IEC</b> — <a href="credits.html#credits-thanks">Credits ▸ With thanks</a>, <a href="freqresp.html#">Frequency response ▸ Frequency response</a>, <a href="freqresp.html#freqresp-overview">Frequency response ▸ At a glance</a>, <a href="freqresp.html#freqresp-tabs">Frequency response ▸ Settings tabs</a>, <a href="freqresp.html#freqresp-tab-riaa">Frequency response ▸ RIAA &amp; IEC</a>, <a href="freqresp.html#freqresp-tab-filters">Frequency response ▸ Filters</a></li>
+      <li><b>IEC</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="credits.html#credits-thanks">Credits ▸ With thanks</a>, <a href="freqresp.html#">Frequency response ▸ Frequency response</a>, <a href="freqresp.html#freqresp-overview">Frequency response ▸ At a glance</a>, <a href="freqresp.html#freqresp-tabs">Frequency response ▸ Settings tabs</a>, <a href="freqresp.html#freqresp-tab-riaa">Frequency response ▸ RIAA &amp; IEC</a></li>
       <li><b>IIR</b> — <a href="fft.html#fft-mains-suppression">FFT analyser ▸ Mains suppression</a>, <a href="oscilloscope.html#scope-mains">Oscilloscope ▸ Mains</a>, <a href="theory/algorithms.html#filtering">Theory ▸ Algorithm reference ▸ Filtering &amp; estimation</a></li>
       <li><b>IIR comb</b> — <a href="fft.html#">FFT analyser</a>, <a href="oscilloscope.html#">Oscilloscope</a></li>
       <li><b>IMD</b> — <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ 1.0-RC1 — 2026-06-19</a>, <a href="dac-predistortion.html#dpd-readouts">DAC pre-distortion wizard ▸ What you see</a>, <a href="theory/algorithms.html#spectral">Theory ▸ Algorithm reference ▸ Spectral analysis</a>, <a href="theory/dac-predistortion.html#imd">Theory ▸ DAC pre-distortion ▸ Measuring intermodulation — the two-tone notch</a></li>
@@ -567,6 +569,7 @@
       <li><b>JLSounds</b> — <a href="credits.html#">Credits</a>, <a href="preferences.html#">Preferences</a></li>
       <li><b>JLsounds I2SoverUSB</b> — <a href="preferences.html#">Preferences</a></li>
       <li><b>JOGL</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a></li>
+      <li><b>JVM</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a></li>
     </ul>
     <h3>K</h3>
     <ul>
@@ -606,7 +609,7 @@
       <li><b>Maximize</b> — <a href="freqresp.html#">Frequency response</a></li>
       <li><b>Mayak</b> — <a href="credits.html#">Credits</a></li>
       <li><b>MC12</b> — <a href="theory/dac-predistortion.html#drift">Theory ▸ DAC pre-distortion ▸ The notch drifts — so the fundamental must be defined manually</a></li>
-      <li><b>Microsoft</b> — <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="theory/audio-backend.html#refs">Theory ▸ Audio backend ▸ References</a></li>
+      <li><b>Microsoft</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="theory/audio-backend.html#refs">Theory ▸ Audio backend ▸ References</a></li>
       <li><b>Microsoft Store (MSIX)</b> — <a href="changelog.html#">What&#x27;s new</a></li>
       <li><b>MLS</b> — <a href="external/sine-sweep.html#">Further reading ▸ The exponential sine sweep in practice ▸ Why the exponential sweep wins</a></li>
       <li><b>MONO</b> — <a href="preferences.html#prefs-audio-devices-file">Preferences ▸ The devices.yaml file — manual editing</a>, <a href="preferences.html#">Preferences</a></li>
@@ -616,7 +619,8 @@
     </ul>
     <h3>N</h3>
     <ul>
-      <li><b>NENBW</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="theory/dac-predistortion.html#refs">Theory ▸ DAC pre-distortion ▸ References</a>, <a href="theory/derotation-accuracy.html#overlap">Theory ▸ De-rotation accuracy ▸ Overlap: the effective number of averages</a>, <a href="theory/derotation-accuracy.html#window">Theory ▸ De-rotation accuracy ▸ Which window — and why it is not chosen for noise</a>, <a href="theory/fft.html#metrics">Theory ▸ FFT analyser ▸ The distortion and noise metrics</a></li>
+      <li><b>N+D</b> — <a href="theory/fft.html#">Theory ▸ FFT analyser</a></li>
+      <li><b>NENBW</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="theory/dac-predistortion.html#refs">Theory ▸ DAC pre-distortion ▸ References</a>, <a href="theory/derotation-accuracy.html#overlap">Theory ▸ De-rotation accuracy ▸ Overlap: the effective number of averages</a>, <a href="theory/derotation-accuracy.html#window">Theory ▸ De-rotation accuracy ▸ Which window — and why it is not chosen for noise</a>, <a href="theory/fft.html#metrics">Theory ▸ FFT analyser ▸ The distortion and noise metrics</a>, <a href="theory/generator.html#dither-dbv">Theory ▸ Signal generator ▸ Setting dither by the noise floor it makes</a></li>
       <li><b>Nick Sukhov</b> — <a href="credits.html#">Credits</a></li>
       <li><b>NIEHS</b> — <a href="bench.html#refs">Measurement bench &amp; wiring ▸ References</a></li>
       <li><b>None</b> — <a href="fft.html#">FFT analyser</a>, <a href="oscilloscope.html#">Oscilloscope</a></li>
@@ -674,7 +678,7 @@
       <li><b>REW</b> — <a href="credits.html#credits-inspiration">Credits ▸ Inspiration</a>, <a href="theory/index.html#">Theory ▸ Overview ▸ Theory of operation</a></li>
       <li><b>RGBA16F</b> — <a href="theory/algorithms.html#stats">Theory ▸ Algorithm reference ▸ Statistics &amp; graphics</a></li>
       <li><b>RIAA</b> — <a href="bench.html#">Measurement bench &amp; wiring ▸ Example DUTs</a>, <a href="changelog.html#">What&#x27;s new ▸ Added</a>, <a href="freqresp.html#">Frequency response ▸ Frequency response</a>, <a href="freqresp.html#freqresp-overview">Frequency response ▸ At a glance</a>, <a href="freqresp.html#freqresp-tabs">Frequency response ▸ Settings tabs</a>, <a href="freqresp.html#freqresp-tab-riaa">Frequency response ▸ RIAA &amp; IEC</a></li>
-      <li><b>RMS</b> — <a href="external/fft-analysis.html#">Further reading ▸ FFT analysis essentials ▸ Averaging and overlap</a>, <a href="freqresp.html#freqresp-tab-settings">Frequency response ▸ Settings</a>, <a href="freqresp.html#freqresp-tab-utility">Frequency response ▸ Utility</a>, <a href="freqresp.html#freqresp-measure">Frequency response ▸ Running a measurement</a>, <a href="generator.html#">Generator ▸ Generator</a>, <a href="generator.html#generator-dualtone">Generator ▸ Dual tone (IMD)</a></li>
+      <li><b>RMS</b> — <a href="changelog.html#">What&#x27;s new ▸ Fixed</a>, <a href="external/fft-analysis.html#">Further reading ▸ FFT analysis essentials ▸ Averaging and overlap</a>, <a href="freqresp.html#freqresp-tab-settings">Frequency response ▸ Settings</a>, <a href="freqresp.html#freqresp-tab-utility">Frequency response ▸ Utility</a>, <a href="freqresp.html#freqresp-measure">Frequency response ▸ Running a measurement</a>, <a href="generator.html#">Generator ▸ Generator</a></li>
     </ul>
     <h3>S</h3>
     <ul>
