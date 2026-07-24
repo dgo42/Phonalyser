@@ -274,16 +274,39 @@ knowing PyQa40x picks 0 / +18. Choose your backend's default deliberately.
 
 | Hz | 48000 | 96000 | 192000 | 384000 |
 |---|---|---|---|---|
-| code | 0 | 1 | 2 | **3 — ASIO401-only, INPUT-only** |
+| code | 0 | 1 | 2 | **3 — QA403 only** |
 
-Code 3 (384 kHz) is **SINGLE-SOURCE (ASIO401 only)** and **INPUT-only** on
-QA402/QA403 — driving the *outputs* at 384 kHz produces garbage (hardware
-limitation) [ASIO401 FAQ.md:104-107]. PyQa40x cannot even express it: its map is
-`samplerate2reg = {48000:0, 96000:1, 192000:2}` [PyQa40x control.py:18], so
-requesting 384000 raises `KeyError` (not "garbage"). Codes 0–2 are corroborated by
-both sources [PyQa40x control.py:18; ASIO401 qa403.h:32-37]; code 3 only by
-[ASIO401 qa403.h:32-37]. Do **not** wire code 3 for output. After writing reg 9,
-insert a settling delay (§8, ABA hazard).
+Codes 0–2 are corroborated by both sources [PyQa40x control.py:18; ASIO401
+qa403.h:32-37]. Code 3 (384 kHz) is **QA403-only** — the QA402 has no code 3.
+PyQa40x cannot express it at all: its map is `samplerate2reg = {48000:0,
+96000:1, 192000:2}` [PyQa40x control.py:18], so requesting 384000 raises
+`KeyError`. After writing reg 9, insert a settling delay (§8, ABA hazard).
+
+**Code 3 provenance — the ASIO401 "input-only" caveat is superseded.** ASIO401
+documents code 3 as INPUT-only and claims that driving the *outputs* at 384 kHz
+produces garbage [ASIO401 FAQ.md:104-107; qa403.h:32-37]. A QA40x user on the
+QuantAsylum forum describes it instead as a plain rate selection, used in
+practice, with no directional caveat at all:
+
+> "384 k at the USB level: the sample rate is register 0x09, written the same
+> way, with an index rather than Hz — 0/1/2/3 → 48k/96k/192k/384k. So
+> `09 00 00 00 03` selects 384 ksps (QA403 only)." — raph29,
+> <https://forum.quantasylum.com/t/phonalyzer-for-qa40x/2343/6>
+
+That is a field report from someone running the rate, against a driver comment
+that QuantAsylum has never confirmed, so **the forum account is the one to
+follow**: code 3 is a normal rate on the QA403, both directions. Phonalyser
+exposes it accordingly (the backend runs one always-duplex session on this single
+shared clock, so an input-only rate would not be representable in any case).
+
+The 384 kHz path is exercised against the maintainer's hardware simulator; no
+QA403 is available for a direct bench check, so should output artefacts ever be
+reported at this rate, revisit the ASIO401 claim and gate the generator lane
+rather than withdraw the rate.
+
+Note the queue headroom shrinks with rate: the 1024-frame hardware queue is only
+~2.7 ms at 384 kHz and must be refreshed roughly every ~2.5 ms (§ Transfer
+sizing) [ASIO401 FAQ.md:75-78].
 
 ### Register map (QA401) — DIFFERENT, "black magic"
 
@@ -750,15 +773,19 @@ QA401 differences are in §8.
    Java backend should treat right-input inversion as **QA401-only** unless
    hardware shows QA403 also needs it. Verify.
 
-7. **[MOSTLY RESOLVED] Sample-rate register (reg 9) semantics.** Codes for
-   48/96/192 kHz are vendor-authoritative [PyQa40x control.py:18]. Only
-   **code 3 = 384 kHz (input-only)** remains ASIO401-only (obtained via private
-   correspondence with QuantAsylum [ASIO401 qa403.h:32-37]) — verify that one
-   code on hardware before exposing 384 k.
+7. **[RESOLVED] Sample-rate register (reg 9) semantics.** Codes for
+   48/96/192 kHz are vendor-authoritative [PyQa40x control.py:18]. **Code 3 =
+   384 kHz** is corroborated by a second, independent source — the QuantAsylum
+   forum thread quoted in §4 — which pins it as **QA403-only** and, unlike
+   ASIO401, attaches **no input-only caveat**; it is a field report from someone
+   actually running the rate. ASIO401's "outputs garble" claim
+   [qa403.h:32-37; FAQ.md:104-107] is treated as superseded.
 
-   *Phonalyser:* exposes **48/96/192 kHz only** — 384 kHz is deliberately not
-   offered (`Qa40xProtocol.SAMPLE_RATE_HZ`), and the equal-rate constraint would
-   preclude an input-only rate anyway, so the code-3 question is moot here.
+   *Phonalyser:* exposes **48/96/192 kHz on both models and 384 kHz on the
+   QA403** (`Qa40xProtocol.SAMPLE_RATE_HZ` + `sampleRatesHz(model)`), for both
+   lanes — the backend runs one always-duplex session on the single shared reg-9
+   clock, so an input-only rate is not representable anyway. Verified against the
+   hardware simulator; no QA403 on hand for a direct bench check.
 
 8. **[RESOLVED — vendor-authoritative]** Calibration blob format (512-byte page,
    `'<hf'` records, per-range offsets, raw↔volts formulas, §6) is PyQa40x-only
