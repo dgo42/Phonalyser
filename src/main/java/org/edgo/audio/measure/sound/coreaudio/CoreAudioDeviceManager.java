@@ -16,19 +16,27 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package org.edgo.audio.measure.sound;
+package org.edgo.audio.measure.sound.coreaudio;
 
-import lombok.extern.log4j.Log4j2;
-
-import javax.sound.sampled.AudioFormat;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+
+import javax.sound.sampled.AudioFormat;
+
 import org.edgo.audio.measure.enums.AudioBackendType;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.AudioCapture;
+import org.edgo.audio.measure.sound.AudioDeviceManager;
+import org.edgo.audio.measure.sound.AudioPlayback;
+import org.edgo.audio.measure.sound.DeviceRef;
+import org.edgo.audio.measure.sound.PortAudio;
 import org.edgo.audio.measure.sound.wdmks.WdmksDeviceManager;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Device discovery + format probing for the {@link AudioBackendType#COREAUDIO}
@@ -48,7 +56,7 @@ import org.edgo.audio.measure.sound.wdmks.WdmksDeviceManager;
  * device, not the global PortAudio index).
  */
 @Log4j2
-public class CoreAudioDeviceManager {
+public class CoreAudioDeviceManager implements AudioDeviceManager {
 
     /** {@link DeviceRef} backed by a PortAudio CoreAudio device index. */
     public record CoreAudioDeviceRef(int index, String name, String description, String vendor,
@@ -69,7 +77,7 @@ public class CoreAudioDeviceManager {
     private final Map<String, List<AudioFormat>> inputFormatsCache  = new ConcurrentHashMap<>();
     private final Map<String, List<AudioFormat>> outputFormatsCache = new ConcurrentHashMap<>();
 
-    CoreAudioDeviceManager() {}
+    public CoreAudioDeviceManager() {}
 
     private int coreAudioHostApiIndex() {
         int idx = PortAudio.lib().Pa_HostApiTypeIdToHostApiIndex(PortAudio.paCoreAudio);
@@ -139,6 +147,14 @@ public class CoreAudioDeviceManager {
         if (!(device instanceof CoreAudioDeviceRef d)) return new ArrayList<>();
         Map<String, List<AudioFormat>> cache = output ? outputFormatsCache : inputFormatsCache;
         return cache.computeIfAbsent(d.name(), k -> probeFormats(d, output));
+    }
+
+    public AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth) {
+        return new CoreAudioRecorder((CoreAudioDeviceManager.CoreAudioDeviceRef) device, sampleRate, bitDepth);
+    }
+
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
+        return new CoreAudioGenerator((CoreAudioDeviceManager.CoreAudioDeviceRef) device, sampleRate, bitDepth, ditherBits);
     }
 
     private List<AudioFormat> probeFormats(CoreAudioDeviceRef d, boolean output) {

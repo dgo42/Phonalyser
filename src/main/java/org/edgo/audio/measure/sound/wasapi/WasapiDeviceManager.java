@@ -18,15 +18,32 @@
 
 package org.edgo.audio.measure.sound.wasapi;
 
-import com.sun.jna.Memory;
-import com.sun.jna.Pointer;
-import com.sun.jna.WString;
-import com.sun.jna.ptr.IntByReference;
-import com.sun.jna.ptr.PointerByReference;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.AUDCLNT_SHAREMODE_EXCLUSIVE;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.CLSCTX_ALL;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.CLSID_MMDeviceEnumerator;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.DEVICE_STATE_ACTIVE;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.E_DATAFLOW_CAPTURE;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.E_DATAFLOW_RENDER;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.IID_IAudioClient;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.IID_IMMDeviceEnumerator;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.PKEY_Device_FriendlyName_FMTID;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.PKEY_Device_FriendlyName_PID;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.S_OK;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.VT_AC_IS_FORMAT_SUPPORTED;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.VT_COLLECTION_GET_COUNT;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.VT_COLLECTION_ITEM;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.VT_DEVICE_ACTIVATE;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.VT_DEVICE_GET_ID;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.VT_DEVICE_OPEN_PROPERTY_STORE;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.VT_ENUM_AUDIO_ENDPOINTS;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.VT_GET_DEVICE;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.VT_PROPSTORE_GET_VALUE;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.buildWaveFormatExtensible;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.callHR;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.ensureComInit;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.readAndFreeLpwstr;
+import static org.edgo.audio.measure.sound.wasapi.WasapiNative.release;
 
-import lombok.extern.log4j.Log4j2;
-
-import javax.sound.sampled.AudioFormat;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -34,11 +51,26 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static org.edgo.audio.measure.sound.wasapi.WasapiNative.*;
+import javax.sound.sampled.AudioFormat;
+
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.AudioCapture;
+import org.edgo.audio.measure.sound.AudioDeviceManager;
+import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.wasapi.WasapiNative.Ole32;
+import org.edgo.audio.measure.sound.wdmks.WdmksDeviceManager;
+import org.edgo.audio.measure.sound.wdmks.WdmksGenerator;
+import org.edgo.audio.measure.sound.wdmks.WdmksRecorder;
+
+import com.sun.jna.Memory;
+import com.sun.jna.Pointer;
+import com.sun.jna.WString;
+import com.sun.jna.ptr.IntByReference;
+import com.sun.jna.ptr.PointerByReference;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Discovery for the {@link AudioBackendType#WASAPI} backend.  Constructed
@@ -52,7 +84,7 @@ import org.edgo.audio.measure.sound.wasapi.WasapiNative.Ole32;
  * disposable-friendly even after the underlying COM objects are released.
  */
 @Log4j2
-public class WasapiDeviceManager {
+public class WasapiDeviceManager implements AudioDeviceManager {
 
     /** {@link DeviceRef} backed by a WASAPI endpoint ID (LPWSTR). */
     public record WasapiDeviceRef(int index, String name, String description, String vendor,
@@ -189,6 +221,14 @@ public class WasapiDeviceManager {
         if (!(device instanceof WasapiDeviceRef d)) return new ArrayList<>();
         Map<String, List<AudioFormat>> cache = output ? outputFormatsCache : inputFormatsCache;
         return cache.computeIfAbsent(d.endpointId(), k -> probeFormats(d));
+    }
+
+    public AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth) {
+        return new WdmksRecorder((WdmksDeviceManager.WdmksDeviceRef) device, sampleRate, bitDepth);
+    }
+
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
+        return new WdmksGenerator((WdmksDeviceManager.WdmksDeviceRef) device, sampleRate, bitDepth, ditherBits);
     }
 
     private List<AudioFormat> probeFormats(WasapiDeviceRef d) {
