@@ -44,16 +44,21 @@ public enum UnitFamily {
             new Unit("unit.hz",  1.0,   false, List.of("hz")),
             new Unit("unit.khz", 1e3,   false, List.of("khz", "kh", "k"))),
 
-    /** nV / µV / mV / V / dBV; display switches nV below 1 µV, µV below 1 mV,
-     *  mV below 0.5 V, V above.  dBV sticks for display once typed — the only
-     *  unit the range switching can never choose.  Suffix-less (digits-only)
-     *  input is V, the base unit (and clears a sticky dBV). */
+    /** nV / µV / mV / V / dBV / dBFS; display switches nV below 1 µV, µV below
+     *  1 mV, mV below 0.5 V, V above.  dBV and dBFS both stick for display once
+     *  typed — the two units the range switching can never choose; entering one
+     *  switches the sticky unit, and a suffix-less (digits-only) entry — V, the
+     *  base unit — clears it.  "d"/"db" are short aliases for dBV.  dBFS is
+     *  full-scale-relative: {@link NumericStepModel} resolves AND displays it
+     *  against a live DAC full-scale, so a field with no full-scale supplier
+     *  refuses it (the FFT manual-fundamental). */
     AMPLITUDE(3,
-            new Unit("unit.nv",  1e-9,  false, List.of("nv", "n")),
-            new Unit("unit.uv",  1e-6,  false, List.of("uv", "u", "µ", "μ")),
-            new Unit("unit.mv",  1e-3,  false, List.of("mv", "m")),
-            new Unit("unit.v",   1.0,   false, List.of("v")),
-            new Unit("unit.dbv", 1.0,   true,  List.of("dbv"))),
+            new Unit("unit.nv",   1e-9, false, List.of("nv", "n")),
+            new Unit("unit.uv",   1e-6, false, List.of("uv", "u", "µ", "μ")),
+            new Unit("unit.mv",   1e-3, false, List.of("mv", "m")),
+            new Unit("unit.v",    1.0,  false, List.of("v")),
+            new Unit("unit.dbv",  1.0,  true,  List.of("dbv", "db", "d")),
+            new Unit("unit.dbfs", 1.0,  false, List.of("dbfs", "dbf"), true)),
 
     /** nV / µV / mV / V — {@link #AMPLITUDE} without the logarithmic dBV unit,
      *  for calibration-value entry where a dB reference makes no sense.  Same
@@ -106,9 +111,19 @@ public enum UnitFamily {
     NONE(0, new Unit(null, 1.0, false, List.of()));
 
     /** One display/input unit of a family: i18n suffix key ({@code null} =
-     *  suffix-less), canonical-unit factor (linear) or the dB(V) marker, and
-     *  the locale-independent suffixes accepted on input. */
-    public record Unit(String i18nKey, double factor, boolean log, List<String> aliases) {
+     *  suffix-less), canonical-unit factor (linear) or the dB(V) marker, the
+     *  locale-independent suffixes accepted on input, and whether the unit is
+     *  full-scale-relative (dBFS) — resolved by {@link NumericStepModel} against
+     *  a live full-scale, since {@link #toCanonical} has no full-scale here. */
+    public record Unit(String i18nKey, double factor, boolean log,
+                       List<String> aliases, boolean fsRelative) {
+
+        /** A plain (non-full-scale-relative) unit — the common case for every
+         *  family except AMPLITUDE's dBFS; delegates with {@code fsRelative =
+         *  false}. */
+        public Unit(String i18nKey, double factor, boolean log, List<String> aliases) {
+            this(i18nKey, factor, log, aliases, false);
+        }
 
         /** Display suffix, resolved per current locale. */
         public String suffix() {
@@ -203,6 +218,16 @@ public enum UnitFamily {
     public Unit logUnit() {
         for (Unit u : units) {
             if (u.log()) return u;
+        }
+        return null;
+    }
+
+    /** The family's full-scale-relative unit (dBFS), or {@code null} when it
+     *  has none — used to restore a persisted dBFS display choice, the parallel
+     *  of {@link #logUnit()}. */
+    public Unit fsRelativeUnit() {
+        for (Unit u : units) {
+            if (u.fsRelative()) return u;
         }
         return null;
     }

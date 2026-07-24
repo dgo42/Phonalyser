@@ -144,6 +144,49 @@ jobs:
       - name: Build fat JAR + .deb installer
         run: mvn -B -DskipTests package
 
+      # jpackage auto-generates the .deb's Depends line from a dpkg -S scan of the
+      # libs bundled on the BUILD host.  On ubuntu-latest (now 24.04 "Noble") that
+      # scan emits time_t-transition names like libasound2t64, which don't exist on
+      # 22.04 / Debian 12 — so the .deb refuses to install there.  Rewrite each bare
+      # "<name>t64" dependency into the alternation "<name>t64 | <name>" so the
+      # package stays installable on both pre- and post-Noble systems.
+      - name: Normalize t64 deps for pre-Noble installability
+        run: |
+          set -euo pipefail
+          # The whole -R … -b round-trip runs inside ONE fakeroot session: dpkg-deb -b
+          # records the on-disk ownership, and only fakeroot keeps the extracted tree's
+          # files root:root (same reason jpackage itself needs fakeroot above).
+          cat > /tmp/fix-deb-deps.sh <<'EOS'
+          set -euo pipefail
+          deb=$(ls target/installer/*.deb)
+          echo "Patching $deb"
+          work=$(mktemp -d)
+          dpkg-deb -R "$deb" "$work"
+          echo "Depends BEFORE: $(grep '^Depends:' "$work/DEBIAN/control")"
+          # Expand every bare "<name>t64" token into "<name>t64 | <name>".  Tokens are
+          # comma-separated; a token that already carries a " | " alternative contains a
+          # space, so it fails the ^\S+t64$ anchor and is left untouched (idempotent).
+          perl -i -pe '
+            if (/^Depends:\s*/) {
+              my ($p, $v) = /^(Depends:\s*)(.*)$/;
+              my @t = split /\s*,\s*/, $v;
+              for my $x (@t) { $x =~ s/^(\S+)t64$/$1t64 | $1/; }
+              $_ = $p . join(", ", @t) . "\n";
+            }
+          ' "$work/DEBIAN/control"
+          echo "Depends AFTER:  $(grep '^Depends:' "$work/DEBIAN/control")"
+          # Self-check: fail if any bare "<name>t64" token remains without a " | " alternative.
+          if grep '^Depends:' "$work/DEBIAN/control" | grep -Pq '\S+t64(?! \| )'; then
+            echo "::error::t64 dependency left un-alternated in $deb"
+            exit 1
+          fi
+          # The -R/-b round-trip preserves DEBIAN/postinst,postrm (QA40x udev rule) and
+          # their exec bits; only DEBIAN/control was edited above.
+          dpkg-deb -b "$work" "$deb"
+          rm -rf "$work"
+          EOS
+          fakeroot bash /tmp/fix-deb-deps.sh
+
       - uses: actions/upload-artifact@v7
         with:
           name: phonalyser-linux

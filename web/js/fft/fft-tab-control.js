@@ -27,6 +27,14 @@ import { CalibrationEntry } from '../store/preferences.js';
 import { registerShotCanvasRenderer, ensureShotRenderCanvas } from '../shell/screenshot.js';
 import { TileTabs } from '../widgets/tile-tabs.js';
 import { PresetBar } from '../widgets/preset-bar.js';
+import { OFF_LABEL } from '../widgets/numeric-step-field.js';
+
+// Off is a distinct sentinel BELOW 1 so the averages dial reads Off ↔ 1 ↔ 2 ↔ 4 … 128 ↔ ∞ —
+// with Off == 1 the wheel jumped 2 → Off and 1 was unreachable. Engine behaviour is unchanged:
+// the analyser accumulates only from 2 up (fft-controller ringN = max(1, averages)), so 0 and 1
+// are both "a single spectrum". Java FftTabControl.AVERAGES_OFF / AVERAGES_SERIES.
+export const FFT_AVERAGES_OFF = 0;
+export const FFT_AVERAGES_SERIES = [FFT_AVERAGES_OFF, 1, 2, 4, 8, 16, 32, 64, 128, Infinity];
 
 // FftOverlap enum token → display %, for the FFT-settings sub-label.
 const OVERLAP_PCT = { PCT_0: '0', PCT_50: '50', PCT_75: '75', PCT_87_5: '87.5', PCT_93_75: '93.75' };
@@ -74,13 +82,19 @@ export class FftTabControl {
   }
 
   // Effective FFT averages: the averages NumericStepField's canonical value (Java averagesField —
-  // AVERAGES_SERIES {2,4,8,16,32,64,128,∞}; ∞ is the top of the series, not a separate toggle).
-  // The stop-after gate + the worker key off ∞ (Infinity).
+  // AVERAGES_SERIES {Off, 1, 2, 4, 8, 16, 32, 64, 128, ∞}; both Off and ∞ are series entries, not
+  // separate toggles). The stop-after gate + the worker key off ∞ (Infinity).
   fftAveragesValue() {
     const f = this._getField('averages');
     return f ? f.getValue() : (parseInt($('#averages').val(), 10) || 4);
   }
-  formatAverages(v) { return v === Infinity ? '∞' : String(v); }
+  // Tile text (Java FftTabControl.formatAverages): ∞ glyph, the Off label at/below the Off
+  // sentinel (0), else the plain count — so the tile and the field always agree.
+  formatAverages(v) {
+    if (v === Infinity) return '∞';
+    if (v <= FFT_AVERAGES_OFF) return OFF_LABEL;
+    return String(v);
+  }
   shortHz(hz) {
     if (hz >= 1000) { const k = hz / 1000; return (Number.isInteger(k) ? k : k.toFixed(1)) + 'k'; }
     return String(Math.round(hz));

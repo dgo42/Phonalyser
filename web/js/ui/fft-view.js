@@ -137,6 +137,16 @@ export class FftView {
     return Number.isFinite(r.fundamentalTrueDbFs) ? r.fundamentalTrueDbFs : NaN;
   }
 
+  /** The DISPLAYED fundamental level in dBFS — the manual override when set, else the
+   *  measured level (Java FftView.displayedFundDbFs). NaN when there is no fundamental yet.
+   *  This is the same reference the THD readouts and the lobe stretch use, which is why the
+   *  on-screen peak lands exactly on 0 dBr with no extra work. */
+  _displayedFundDbFs(r) {
+    if (!r) return NaN;
+    const man = this._manualFundDbFs(r);
+    return Number.isFinite(man) ? man : r.fundamentalDbFs;
+  }
+
   /** Java FftView.magCeiling: the 0 dBFS full-scale max, raised to the DISPLAYED
    *  fundamental + 20 dB when a signal is present (so a .frc lift above full scale
    *  stays reachable). No result yet → max(0, persisted mag top) so the pane's clamp
@@ -387,7 +397,8 @@ export class FftView {
 
   /** Java FftView.magUnitLabel — the axis unit caption (i18n unit.mag.*). */
   _magAxisLabel(unit) {
-    return unit === 'V' ? 'V' : unit === 'V_SQRT_HZ' ? 'V/√Hz' : unit === 'DBV' ? 'dBV' : 'dBFS';
+    return unit === 'V' ? 'V' : unit === 'V_SQRT_HZ' ? 'V/√Hz'
+      : unit === 'DBV' ? 'dBV' : unit === 'DBR' ? 'dBr' : 'dBFS';
   }
 
   /* Java AbstractFreqDomainView.freqToX (:183) — LOG: safeMin=max(1,freqMin),
@@ -450,6 +461,14 @@ export class FftView {
    *  the frame and draws the spectrum trace / dots / table only when a result exists. */
   render(result) {
     this._last = result || null;
+    // dBr reference = the DISPLAYED fundamental level (manual override when set, else the
+    // measured level); re-stamped every paint so the DBR axis + cursor readouts pin the
+    // fundamental to 0 dBr. Non-finite (no fundamental yet) leaves the previous reference
+    // intact (Java FftView.onPaint → prefs.setFftDbrRefDbFs).
+    if (this.prefs) {
+      const dbrRef = this._displayedFundDbFs(result);
+      if (Number.isFinite(dbrRef)) this.prefs.fftDbrRefDbFs = dbrRef;
+    }
     const mag = result ? result.amplitudeDbFs : null;
     const binW = result ? result.binW : this._binSize;
     const p = this.prefs;

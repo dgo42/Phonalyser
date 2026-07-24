@@ -329,8 +329,13 @@ public final class TuneNotchWizardDialog {
         stopField.setValue(prefs.getTuneNotchStopHz());
 
         addLabel(row, I18n.t("tuneNotch.amplitude"));
+        // No-clip ceiling for the wizard's sine stimulus: full scale sits at
+        // fsPeak·rawRms(sine) = fsPeak/√2.  The field holds V RMS, so capping it
+        // at the PEAK full scale would have allowed 3 dB of clipping; V, dBV and
+        // dBFS now all trim to the same maximum (0 dBFS is the top).
         ampField = new NumericStepField(row, UnitFamily.AMPLITUDE,
-                AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl(), AMP_MAX_DECIMALS, FIELD_WIDTH_HINT);
+                AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl() / Math.sqrt(2.0), AMP_MAX_DECIMALS,
+                prefs::getDacFsVoltageAmpl, FIELD_WIDTH_HINT);
         ampField.setValue(prefs.getTuneNotchAmplitudeVrms());
 
         addLabel(row, I18n.t("tuneNotch.targetHz"));

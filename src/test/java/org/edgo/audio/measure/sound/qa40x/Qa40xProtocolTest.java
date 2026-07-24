@@ -86,17 +86,28 @@ class Qa40xProtocolTest {
     }
 
     @Test
-    void sampleRateCode_mapsThreeRates() {
+    void sampleRateCode_mapsFourRates() {
         assertEquals(0, Qa40xProtocol.sampleRateCode(48_000));
         assertEquals(1, Qa40xProtocol.sampleRateCode(96_000));
         assertEquals(2, Qa40xProtocol.sampleRateCode(192_000));
+        // doc §4: code 3 is the QA403's 384 kHz — the code map itself is universal,
+        // the per-model gate lives in sampleRatesHz(model).
+        assertEquals(3, Qa40xProtocol.sampleRateCode(384_000));
     }
 
     @Test
-    void sampleRateCode_rejects384k() {
-        // doc §9 item 7: 384 kHz is input-only and must not be a duplex/output rate.
-        assertThrows(IllegalArgumentException.class, () -> Qa40xProtocol.sampleRateCode(384_000));
+    void sampleRateCode_rejectsRatesWithNoCode() {
         assertThrows(IllegalArgumentException.class, () -> Qa40xProtocol.sampleRateCode(44_100));
+        assertThrows(IllegalArgumentException.class, () -> Qa40xProtocol.sampleRateCode(768_000));
+    }
+
+    @Test
+    void sampleRatesHz_offers384kOnQa403Only() {
+        // The QA402 has no reg-9 code 3; the QA403 does (doc §4).
+        assertArrayEquals(new int[] {48_000, 96_000, 192_000},
+                Qa40xProtocol.sampleRatesHz(Qa40xDeviceFinder.Qa40xModel.QA402));
+        assertArrayEquals(new int[] {48_000, 96_000, 192_000, 384_000},
+                Qa40xProtocol.sampleRatesHz(Qa40xDeviceFinder.Qa40xModel.QA403));
     }
 
     @Test

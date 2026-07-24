@@ -130,12 +130,16 @@ public final class FftTabControl extends AbstractTabControl {
     private static final int TAB_CALIBRATION  = 4;
     private static final int NUM_CUSTOM_TABS  = 5;
 
-    /** Averages presets the field's wheel / arrows jump along; ∞ = forever. */
+    /** Off is a distinct dial position BELOW 1: both 0 and 1 mean a single
+     *  spectrum / no averaging in the engine (the worker only accumulates from
+     *  2 up), but on the dial 0 is the Off stop and 1 is a plain single count.
+     *  Heads {@link #AVERAGES_SERIES} so the wheel / arrows can reach it; renders
+     *  and parses as the shared Off label. */
+    private static final double AVERAGES_OFF          = 0;
+    /** Averages presets the field's wheel / arrows jump along, from Off up
+     *  (Off ↔ 1 ↔ 2 ↔ …); ∞ = forever. */
     private static final double[] AVERAGES_SERIES =
-            { 2, 4, 8, 16, 32, 64, 128, Double.POSITIVE_INFINITY };
-    /** A single spectrum — i.e. averaging off, since the worker only accumulates
-     *  from 2 up.  Renders and parses as the shared Off label. */
-    private static final double AVERAGES_OFF          = 1;
+            { AVERAGES_OFF, 1, 2, 4, 8, 16, 32, 64, 128, Double.POSITIVE_INFINITY };
     /** Stop-after-N bounds and wheel step (arrows step by 1). */
     private static final double STOP_AFTER_MIN        = 2;
     private static final double STOP_AFTER_MAX        = 1_000_000;
@@ -424,12 +428,13 @@ public final class FftTabControl extends AbstractTabControl {
 
         addLabel(g, I18n.t("fft.settings.averages"));
         // List stepper: wheel / arrow keys snap to the next / previous
-        // preset (2 … 128, ∞) while manual typing still accepts any
-        // count ≥ 1 (and the ∞ / inf token, since max is unbounded).
+        // preset (Off, 1, 2 … 128, ∞) while manual typing still accepts any
+        // count ≥ 0 (and the ∞ / inf token, since max is unbounded).
         averagesField = new NumericStepField(g, UnitFamily.NONE,
                 AVERAGES_OFF, Double.POSITIVE_INFINITY, AVERAGES_SERIES, 0, 70);
-        // 1 renders and parses as "Off" — typed in full or as any prefix
-        // (o / of / off), the same shortcut the generator's dither field takes.
+        // 0 renders and parses as "Off" — typed in full or as any prefix
+        // (o / of / off), the same shortcut the generator's dither field takes;
+        // 1 shows as a plain "1".
         averagesField.setNamedValue(AVERAGES_OFF, NumericStepModel.OFF_LABEL);
         averagesField.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
         averagesField.setToolTipText(I18n.t("fft.settings.averages.tooltip"));
@@ -1201,9 +1206,10 @@ public final class FftTabControl extends AbstractTabControl {
     }
 
     /** Formats an averages value — {@code +Infinity} → {@code "∞"},
-     *  finite values → plain integer string. */
+     *  a single spectrum → the Off label, finite values → plain integer string. */
     private String formatAverages(double v) {
         if (Double.isInfinite(v)) return "∞";
+        if (v <= AVERAGES_OFF) return NumericStepModel.OFF_LABEL;
         return Long.toString((long) Math.round(v));
     }
 

@@ -318,6 +318,57 @@ class NumericStepModelTest {
     }
 
     @Test
+    void amplitude_shortDbvAliases_dAndDb() {
+        // d / db / dbv all mean dBV on an AMPLITUDE field (today only "dbv"
+        // worked there); each sticks the dBV view like a full "dBV" suffix.
+        NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-6, 10, 5);
+        assertTrue(m.commit("-6 db"));
+        assertEquals(Math.pow(10, -6 / 20.0), m.getValue(), EPS);
+        assertTrue(m.isLogDisplay(), "db alias sticks like dBV");
+        assertTrue(m.commit("-6 d"));
+        assertEquals(Math.pow(10, -6 / 20.0), m.getValue(), EPS);
+        assertTrue(m.isLogDisplay(), "d alias sticks like dBV");
+    }
+
+    @Test
+    void amplitude_dbfsEntry_anchorsToRmsFullScaleSine() {
+        // dBFS is full-scale-relative: 0 dBFS ≡ a full-scale SINE, so the
+        // anchor is the RMS full scale (peak/√2).  Peak full scale = 4.0 Vpeak.
+        NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-6, 10, 5, () -> 4.0);
+        double fsRms = 4.0 / Math.sqrt(2.0);
+        assertTrue(m.commit("0 dbfs"));
+        assertEquals(fsRms, m.getValue(), EPS, "0 dBFS = full-scale sine Vrms ≈ 2.8284");
+        assertTrue(m.commit("-20 dbfs"));
+        assertEquals(fsRms * Math.pow(10, -20 / 20.0), m.getValue(), EPS, "≈ 0.28284");
+        assertTrue(m.commit("0 dbf"), "dbf alias");
+        assertEquals(fsRms, m.getValue(), EPS);
+        assertTrue(m.commit("0 DBFS"), "case-insensitive");
+        assertEquals(fsRms, m.getValue(), EPS);
+        // dBFS sticks like dBV: the family's range-based display switching can
+        // never select it, so an explicit choice has to hold — the field keeps
+        // reading in dBFS after the entry.
+        assertTrue(m.text().endsWith("dBFS"), m.text());
+        // isLogDisplay() tracks the dBV unit alone (the persisted one); dBFS is
+        // sticky via stickyUnit but is not the "log display" the flag names.
+        assertFalse(m.isLogDisplay(), "isLogDisplay tracks dBV, not dBFS");
+        // A suffix-less entry releases the sticky unit back to automatic volts.
+        assertTrue(m.commit("0.5"));
+        assertTrue(m.text().endsWith("V") && !m.text().endsWith("dBFS"), m.text());
+    }
+
+    @Test
+    void amplitude_dbfsRejectedWithoutSupplier_leavesValueUnchanged() {
+        // The FFT manual-fundamental field wires NO full-scale supplier, so it
+        // must refuse a dBFS entry and keep its value — the exclusion pins here.
+        NumericStepModel m = new NumericStepModel(UnitFamily.AMPLITUDE, 1e-6, 200, 5);
+        assertTrue(m.commit("1.5 V"));
+        assertFalse(m.commit("0 dbfs"), "dBFS refused with no full-scale supplier");
+        assertEquals(1.5, m.getValue(), EPS, "value unchanged after refusal");
+        assertFalse(m.commit("-10 dbf"), "dbf alias also refused");
+        assertEquals(1.5, m.getValue(), EPS);
+    }
+
+    @Test
     void voltage_parsesLinearUnits_rejectsDbv() {
         // VOLTAGE is AMPLITUDE without the log unit — calibration entry where a
         // dB reference makes no sense.  Same nV/µV/mV/V parsing and switching.

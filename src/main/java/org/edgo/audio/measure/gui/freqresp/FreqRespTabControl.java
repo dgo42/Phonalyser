@@ -654,9 +654,18 @@ public final class FreqRespTabControl extends AbstractTabControl {
 
         // ---- Row 2: amplitude (Vrms) + duration ----------------------------
         addLabel(g, I18n.t("freqResp.settings.amplitude"));
+        // No-clip ceiling for the sweep stimulus: the sweep is a sine, so full
+        // scale sits at fsPeak·rawRms(sweep) = fsPeak/√2 — V, dBV and dBFS all
+        // trim to it (0 dBFS is exactly the top).  The field holds V RMS, so
+        // capping it at the PEAK full scale would have allowed 3 dB of clipping.
         NumericStepField ampField = new NumericStepField(g, UnitFamily.AMPLITUDE,
-                AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl(), AMP_MAX_DECIMALS, 110);
+                AMP_MIN_VRMS, prefs.getDacFsVoltageAmpl() / Math.sqrt(2.0), AMP_MAX_DECIMALS,
+                prefs::getDacFsVoltageAmpl, 110);
         ampField.setLayoutData(comboGd());
+        // Follow a DAC recalibration — the ceiling was previously read once, at
+        // construction, and never moved again.
+        Bindings.onChange(toolbarTabs, prefs.dacFsVoltageAmplProperty(),
+                v -> ampField.setMax(v / Math.sqrt(2.0)));
         ampField.setToolTipText(I18n.t("freqResp.settings.amplitude.tooltip"));
         // Two-way bind; the floor clamp (≥ 0.0001 V) and the tab-tile refresh
         // ride an onChange so a sub-floor text entry is corrected in the pref.

@@ -30,7 +30,10 @@ public enum MagnitudeUnit {
     V        (true),
     V_SQRT_HZ(true),
     DBV      (false),
-    DBFS     (false);
+    DBFS     (false),
+    /** dB relative to the fundamental — 0 dBr is the fundamental's level.  The reference is
+     *  the cached {@code fftDbrRefDbFs} in Preferences, applied by {@code convertFromDbFs}. */
+    DBR      (false);
 
     /** Linear-amplitude units (V, V/√Hz) plot on a log magnitude axis; the dB units
      *  are already log-domain, so for them the axis stays linear in dB. */

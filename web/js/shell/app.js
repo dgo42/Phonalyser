@@ -15,7 +15,7 @@ import { CalibrationDialog } from './calibration-dialog.js';
 import { CardEditorDialog } from './card-editor-dialog.js';
 import { FftView } from '../ui/fft-view.js';
 import { ScopeView } from '../ui/scope-view.js';
-import { GenSignalForm, isDualTone } from '../generator/dds-kernel.js';
+import { GenSignalForm, isDualTone, rawRms } from '../generator/dds-kernel.js';
 import { Preferences } from '../store/preferences.js';
 import { DeviceProfileStore } from '../store/device-profiles.js';
 import { loadDeviceCatalog } from '../store/device-catalog.js';
@@ -42,7 +42,7 @@ import { ScopePane } from '../scope/scope-pane.js';
 import { ScopeTabControl } from '../scope/scope-tab-control.js';
 import { preserveCanvasMiddle } from '../scope/scope-format.js';
 import { FftPane } from '../fft/fft-pane.js';
-import { FftTabControl } from '../fft/fft-tab-control.js';
+import { FftTabControl, FFT_AVERAGES_OFF, FFT_AVERAGES_SERIES } from '../fft/fft-tab-control.js';
 import { GeneratorPane } from '../generator/generator-pane.js';
 import { PredistortionEngine } from '../predistortion/engine.js';
 import { writeHarmonicDpd, writeIntermodDpd } from '../io/dpd.js';
@@ -116,13 +116,22 @@ prefs.dacFsVoltageAmplRight.addListener(onCalChange);
 
 // ----- generator amplitude minimum (Java AMP_MIN_VRMS) + frequency minimum -----
 const AMP_MIN_VRMS = 1e-9;
+// Amplitude CEILING (no-clip), in the canonical Vrms the amplitude fields store. The DDS drives
+// amplitude = Vrms / (fsPeak · rawRms(form)) (dds-kernel), so digital full scale — the point where
+// the waveform starts to clip — is exactly Vrms = fsPeak · rawRms(form). It is therefore
+// WAVEFORM-AWARE: a sine tops out at fsPeak/√2, a rectangle at fsPeak, a triangle at fsPeak/√3, a
+// dual tone at fsPeak·√((w1²+w2²)/2), and so on. It reads the LIVE DAC full-scale calibration and
+// the LIVE form / dual-tone split on every call — never a value snapshotted at construction.
+// (Capping at the raw PEAK voltage let a sine entry run √2 (+3 dB) past full scale.) This one
+// ceiling backs all three unit views — V, dBV and dBFS (where it is exactly 0 dBFS).
+const ampMaxVrms = () => prefs.getDacFsVoltageAmpl()
+  * rawRms(prefs.genSignalForm.get(), sfVal('amp1Pct', 50) / 100, sfVal('amp2Pct', 50) / 100);
+// The frequency-response sweep and the tune-notch wizard always emit a SINE-family signal
+// (Farina sweep / sine), independent of the generator's selected form.
+const sweepAmpMaxVrms = () => prefs.getDacFsVoltageAmpl() * rawRms(GenSignalForm.LOG_SWEEP);
 const GEN_FREQ_MIN_HZ = 0.01;   // Java GeneratorPane.GEN_FREQ_MIN_HZ
-// FFT averages stepper presets — Java FftTabControl.AVERAGES_SERIES { 2, 4, 8, 16, 32, 64, 128, ∞ }.
-const FFT_AVERAGES_SERIES = [2, 4, 8, 16, 32, 64, 128, Infinity];
-// A single spectrum — i.e. averaging off, since the worker only accumulates from
-// 2 up (fft-controller ringN = max(1, averages)). Renders/parses as the shared
-// Off label — Java FftTabControl.AVERAGES_OFF.
-const FFT_AVERAGES_OFF = 1;
+// The averages dial's Off sentinel + preset series live with the FFT tab control (Java
+// FftTabControl.AVERAGES_OFF / AVERAGES_SERIES), which also renders them on the tile.
 const outRate = () => parseInt($('#outRate').val(), 10) || prefs.current().outputSampleRate || 384000;
 const inRate = () => parseInt($('#inRate').val(), 10) || prefs.current().inputSampleRate || 384000;   // FR fields cap at INPUT Nyquist
 
@@ -131,6 +140,9 @@ const inRate = () => parseInt($('#inRate').val(), 10) || prefs.current().inputSa
 const stepFields = {};
 /** Canonical value of a step field by input id (fallback when not yet built). */
 const sfVal = (id, dflt) => (stepFields[id] ? stepFields[id].getValue() : (parseFloat($('#' + id).val()) || dflt));
+// Set by initStepFields: re-applies the waveform-aware amplitude ceiling. Held here so the
+// dual-tone split fields (built later in the same pass) can trigger it from their onChange.
+let stepFieldsAmpMaxSync = () => {};
 
 // Two-way binding (Java Bindings.stepField): a field edit writes the pref (the field's own
 // onChange) AND an external pref change (preset load, DAC calibration, other generator code)
@@ -197,9 +209,11 @@ function initStepFields() {
     (v) => { prefs.genDualToneFreq2Hz.set(v); engine.config.tone2Hz = v; engine.retuneGenerator(); genPane.refreshFreqLabel(); });
   fTone2.setValue(prefs.genDualToneFreq2Hz.get());
 
-  // Amplitude: AMPLITUDE family, PERCENT policy, canonical V RMS (the headline
-  // fix — no dBFS). dBV display is sticky + persisted via genAmplitudeDbvDisplay.
-  const fAmp = mk('ampDbfs', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: prefs.dacFsVoltageAmpl.get(), maxDecimals: 5 }),
+  // Amplitude: AMPLITUDE family, PERCENT policy, canonical V RMS. dBV display is sticky +
+  // persisted via genAmplitudeDbvDisplay. fsAmplSupplier (the live DAC PEAK full scale) also
+  // enables dBFS entry — 0 dBFS ≡ a full-scale SINE (AES17), so the anchor is fsPeak/√2.
+  const fAmp = mk('ampDbfs', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: ampMaxVrms(), maxDecimals: 5,
+    fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
     (v) => {
       prefs.genAmplitudeVrms.set(v);
       prefs.genAmplitudeDbvDisplay.set(fAmp.model.isLogDisplay());
@@ -207,8 +221,14 @@ function initStepFields() {
     });
   fAmp.model.setLogDisplay(prefs.genAmplitudeDbvDisplay.get());
   fAmp.setValue(prefs.genAmplitudeVrms.get());
-  // Track DAC full-scale → amplitude ceiling (Bindings.onChange(... ampField::setMax)).
-  prefs.dacFsVoltageAmpl.addListener((fs) => fAmp.setMax(fs));
+  // Keep the no-clip ceiling live (Bindings.onChange(... ampField::setMax)): it moves with the DAC
+  // full-scale CALIBRATION and with the waveform (and its dual-tone split), so re-apply it on every
+  // input that feeds ampMaxVrms(). setMax re-clamps the current value, so switching to a form with
+  // a lower headroom (e.g. rectangle → sine) trims an now-over-scale amplitude down to the new max.
+  const syncAmpMax = () => fAmp.setMax(ampMaxVrms());
+  prefs.dacFsVoltageAmpl.addListener(syncAmpMax);
+  prefs.genSignalForm.addListener(syncAmpMax);
+  stepFieldsAmpMaxSync = syncAmpMax;   // the dual-tone split fields call it from their onChange
 
   // Dither depth: DITHER-policy NumericStepField (whole/fractional bits OR a full-scale-aware dBV
   // VIEW of the same value) — Java GeneratorPane ditherField. fsAmplSupplier = the DAC PEAK
@@ -248,6 +268,8 @@ function initStepFields() {
   // FFT THD "Manual fundamental" reference level — unit-aware AMPLITUDE field (accepts dBV), g28.
   // onChange placeholder — FftTabControl.bind() rebinds it to the THD-settings commit path
   // (pref-write + live readConfig / stopped-state recompute, #24 — NO restartFft).
+  // NO fsAmplSupplier on purpose: this is an ADC-side reference level (external levels routinely
+  // far above DAC full scale), so a dBFS figure would be meaningless — the model refuses dBFS here.
   const fManFund = mk('fftManualFund', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: 200, maxDecimals: 5 }), () => {});
   if (fManFund) { fManFund.model.setLogDisplay(prefs.fftManualFundDbvDisplay.get()); fManFund.setValue(prefs.fftManualFundVrms.get()); }
 
@@ -303,10 +325,10 @@ function initStepFields() {
     ? prefs.genTriangleDuty.get() : prefs.genRectangleDuty.get()) || 0.5) * 100);
 
   const fAmp1 = mk('amp1Pct', new NumericStepModel({ family: F.PERCENT, min: 0.001, max: 99.999, maxDecimals: 3 }),
-    (v) => genPane.applyDualToneAmpSplit('amp1Pct', v));
+    (v) => { genPane.applyDualToneAmpSplit('amp1Pct', v); stepFieldsAmpMaxSync(); });
   fAmp1.setValue(prefs.genDualToneSplitPct.get());
   const fAmp2 = mk('amp2Pct', new NumericStepModel({ family: F.PERCENT, min: 0.001, max: 99.999, maxDecimals: 3 }),
-    (v) => genPane.applyDualToneAmpSplit('amp2Pct', v));
+    (v) => { genPane.applyDualToneAmpSplit('amp2Pct', v); stepFieldsAmpMaxSync(); });
   fAmp2.setValue(100 - prefs.genDualToneSplitPct.get());
 
   // Sweep fields (LINEAR_SWEEP / LOG_SWEEP) — NumericStepField like the scope's, faithful to
@@ -363,8 +385,14 @@ function initStepFields() {
   const fStop = fr('frStop', new NumericStepModel({ family: F.FREQUENCY, min: 1, max: inRate() / 2, maxDecimals: 9 }),
     (v) => prefs.freqRespStopHz.set(v));
   if (fStop) fStop.setValue(prefs.freqRespStopHz.get());
-  const fAmpFr = fr('frAmp', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: prefs.dacFsVoltageAmpl.get(), maxDecimals: 5 }),
+  // fsAmplSupplier enables dBFS entry (as on the generator). NB: unlike the generator this field
+  // has no live setMax listener, so its max is frozen at construction — the supplier still reads live.
+  const fAmpFr = fr('frAmp', new NumericStepModel({ family: F.AMPLITUDE, min: AMP_MIN_VRMS, max: sweepAmpMaxVrms(), maxDecimals: 5,
+    fsAmplSupplier: () => prefs.getDacFsVoltageAmpl() }),
     (v) => { prefs.freqRespAmplitudeVrms.set(v); prefs.freqRespAmplitudeDbvDisplay.set(fAmpFr.model.isLogDisplay()); });
+  // Track the live DAC full-scale calibration, as the generator field does (this one previously
+  // froze its ceiling at construction).
+  if (fAmpFr) prefs.dacFsVoltageAmpl.addListener(() => fAmpFr.setMax(sweepAmpMaxVrms()));
   if (fAmpFr) { fAmpFr.model.setLogDisplay(prefs.freqRespAmplitudeDbvDisplay.get()); fAmpFr.setValue(prefs.freqRespAmplitudeVrms.get()); }
   const fLead = fr('frLeadIn', new NumericStepModel({ family: F.TIME, min: 0.05, max: 1000000, maxDecimals: 3 }),
     (v) => prefs.freqRespLeadInSec.set(v));
