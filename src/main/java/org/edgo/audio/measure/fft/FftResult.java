@@ -165,7 +165,11 @@ public class FftResult {
     /** Sum of amplLinear[k]^2 for noise bins inside the SNR band (unweighted),
      *  already divided by {@link #windowNenbwBins}. */
     public double noisePower;
-    /** A-weighted noise+distortion power (all non-fundamental bins, no band limit). */
+    /** {@link #noisePower}'s IEC 61672 A-weighted sibling: the same noise bins
+     *  weighted by the A curve before summing (same SNR band, same
+     *  excluded-zone rescale, already divided by {@link #windowNenbwBins}).
+     *  Feeds the A-suffixed readouts — N+D, THD+N, SINAD → ENOB — while SNR
+     *  and N stay on the unweighted {@link #noisePower}. */
     public double awNoisePower;
     /** Normalized equivalent noise bandwidth of the analysis window, in bins
      *  (Hann: 1.5) — stamped at analysis time so a band-change recompute can
