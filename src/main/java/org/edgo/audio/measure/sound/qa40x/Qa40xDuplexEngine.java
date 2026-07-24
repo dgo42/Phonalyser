@@ -181,6 +181,7 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
             }
             if (stop) {
                 stopStream();
+                parkSafeRanges();
             }
         }
     }
@@ -224,6 +225,7 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
             }
             if (stop) {
                 stopStream();
+                parkSafeRanges();
             }
         }
     }
@@ -310,6 +312,20 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
         }
         transport.cancelAll();                                                            // BEFORE reg8=0 (§7 step 7)
         transport.registerWrite(Qa40xProtocol.REG_RUN, Qa40xProtocol.RUN_STOP);
+    }
+
+    /** Caller holds {@link #ioLock} and must NOT hold {@link #stateLock} (blocking
+     *  bulk writes).  Parks the idle analyzer at the protected ranges (doc §7
+     *  step 8) so a sensitive range never sits live between measurements; the
+     *  next {@link #startStream} re-applies the session ranges.  Deliberately
+     *  NOT part of {@link #stopStream()}: the restart path (a range / rate
+     *  change) would otherwise clack the attenuator relay to +42 dBV and back
+     *  on every change. */
+    private void parkSafeRanges() {
+        transport.registerWrite(Qa40xProtocol.REG_INPUT_FS,
+                Qa40xProtocol.inputRangeCode(Qa40xProtocol.SAFE_INPUT_DBV));
+        transport.registerWrite(Qa40xProtocol.REG_OUTPUT_FS,
+                Qa40xProtocol.outputRangeCode(Qa40xProtocol.SAFE_OUTPUT_DBV));
     }
 
     /** Caller holds {@link #stateLock} — the submits touch the buffer pools and the

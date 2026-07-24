@@ -18,19 +18,24 @@
 
 package org.edgo.audio.measure.sound.wdmks;
 
-import lombok.extern.log4j.Log4j2;
-
-import javax.sound.sampled.AudioFormat;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+
+import javax.sound.sampled.AudioFormat;
+
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.AudioCapture;
+import org.edgo.audio.measure.sound.AudioDeviceManager;
+import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.PortAudio;
+
+import lombok.extern.log4j.Log4j2;
 
 /**
  * Discovery for the {@link AudioBackendType#WDMKS} backend.  Constructed and
@@ -43,7 +48,7 @@ import org.edgo.audio.measure.sound.PortAudio;
  * the global PortAudio index).
  */
 @Log4j2
-public class WdmksDeviceManager {
+public class WdmksDeviceManager implements AudioDeviceManager {
 
     /** {@link DeviceRef} backed by a PortAudio WDM-KS device index. */
     public record WdmksDeviceRef(int index, String name, String description, String vendor,
@@ -142,6 +147,14 @@ public class WdmksDeviceManager {
         if (!(device instanceof WdmksDeviceRef d)) return new ArrayList<>();
         Map<String, List<AudioFormat>> cache = output ? outputFormatsCache : inputFormatsCache;
         return cache.computeIfAbsent(d.name(), k -> probeFormats(d, output));
+    }
+
+    public AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth) {
+        return new WdmksRecorder((WdmksDeviceManager.WdmksDeviceRef) device, sampleRate, bitDepth);
+    }
+
+    public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
+        return new WdmksGenerator((WdmksDeviceManager.WdmksDeviceRef) device, sampleRate, bitDepth, ditherBits);
     }
 
     private List<AudioFormat> probeFormats(WdmksDeviceRef d, boolean output) {
