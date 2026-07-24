@@ -75,7 +75,7 @@
         phase accumulator</a>).  See
         <a href="#generator-snap-fft-bin">Snap frequency to nearest</a>.</li>
     <li><b>Amplitude (RMS).</b>  Output level in volts RMS against the DAC
-        calibration; the unit selector accepts µV/mV/V and dBV —
+        calibration; the unit selector accepts µV/mV/V, dBV and dBFS —
         <a href="#generator-amplitude">Amplitude (RMS)</a>.</li>
     <li><b>Corrections.</b>  Loads a harmonic-compensation file so the
         <em>compensated sine</em> form actively cancels the chain's measured
@@ -233,13 +233,35 @@
 
   <h3 id="generator-amplitude">Amplitude (RMS)</h3>
   <p>The output level, held internally as volts RMS.  Units:
-     <code>µV</code>, <code>mV</code>, <code>V</code> and <code>dBV</code>
-     (case-insensitive); a number with no suffix is read as volts.  The metric
-     display auto-rescales (µV / mV / V) so the number stays readable; typing a
-     <code>dBV</code> value keeps the field in dBV (the auto-rescaling never
-     switches to dBV on its own).</p>
+     <code>µV</code>, <code>mV</code>, <code>V</code>, <code>dBV</code> and
+     <code>dBFS</code> (case-insensitive); a number with no suffix is read as
+     volts.  The metric display auto-rescales (µV / mV / V) so the number stays
+     readable; typing a <code>dBV</code> or <code>dBFS</code> value keeps the
+     field in that unit (the auto-rescaling never switches to a dB unit on its
+     own), and the wheel and arrow keys then step it in dB —
+     10&nbsp;dB per wheel notch, 1&nbsp;dB per arrow.  Typing a plain number
+     with no suffix again returns the field to volts.</p>
   <p class="note"><b>Note:</b> dBV is referenced to 1 V RMS regardless of
-     device — <code>x dBV = 10<sup>x/20</sup> V<sub>RMS</sub></code>.</p>
+     device — <code>x dBV = 10<sup>x/20</sup> V<sub>RMS</sub></code>.  Its
+     suffix has short forms: <code>d</code> and <code>db</code> are accepted as
+     well as <code>dbv</code>.</p>
+  <p><b>dBFS</b> is referenced to the converter's full scale instead.  Type the
+     level with a <code>dbfs</code> suffix — short form <code>dbf</code> — for
+     example <code>-6 dbfs</code>.  Following the AES17 convention,
+     <b>0 dBFS is a full-scale sine</b>, that is the full-scale RMS level, so
+     the number keeps its meaning when you change the waveform.  The value is
+     still held as volts RMS and resolved against the current DAC calibration:
+     recalibrating the DAC therefore changes the dBFS figure shown for the same
+     physical output level.</p>
+  <p class="note"><b>Ceiling.</b>  The field stops at the level where the signal
+     just reaches the converter's full scale — beyond that the output could only
+     clip — so the maximum <em>follows the waveform</em>: a rectangle may sit
+     3&nbsp;dB higher in RMS than a sine, a triangle a little lower, and a dual
+     tone tracks its own amplitude split.  Volts, dBV and dBFS all trim to that
+     same maximum, so for a sine the top of the range is exactly 0&nbsp;dBFS.
+     It moves with the DAC calibration, and with the
+     <a href="#generator-form">signal form</a>: switching to a form with less
+     headroom pulls an already-entered level down to the new limit.</p>
 
   <h3 id="generator-dither">Dither</h3>
   <p>Sets how much triangular (TPDF) dither is added just before the output is

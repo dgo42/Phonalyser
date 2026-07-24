@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1.1] — unreleased
 
+### Added
+
+- **dBr — a new magnitude unit for the FFT view.** The unit selector gains dBr
+  next to V, V/√Hz, dBV and dBFS: every level is shown relative to the
+  fundamental, which therefore sits at exactly 0 dBr. The vertical axis, the
+  cursor's level readout and the magnitude readout all follow, so harmonics and
+  noise read off directly as "so many dB below the tone" with no mental
+  arithmetic. The reference is the fundamental as displayed — a manually
+  entered one included — and is re-read on every repaint, so it keeps tracking a
+  drifting level.
+- **Output amplitude can be entered in dBFS.** The generator, the
+  frequency-response sweep and the tune-notch wizard now accept an amplitude
+  typed in dBFS (`dbfs`, or the short `dbf`), relative to the converter's full
+  scale, and keep displaying it in that unit until another one is typed —
+  wheel and arrows step it in dB, as they do for dBV. 0 dBFS is a full-scale
+  **sine** (AES17), so the figure does not change meaning with the waveform.
+  The short forms `d` and `db` now work as dBV on these fields too, alongside
+  `dbv`. The FFT's manual fundamental is deliberately left out: it states an
+  ADC-side reference level that routinely exceeds the converter's full scale,
+  where a dBFS figure would be meaningless.
+
+- **384 kHz for the QA403.** The QA40x backend now offers 384 kHz alongside
+  48 / 96 / 192 kHz when the attached analyzer is a QA403 — the sample-rate
+  register has a fourth code the QA402 does not have, so the rate list follows
+  the model. Capture and generator both run at the selected rate, as at every
+  other rate: the two directions share the one hardware clock. The rate had been
+  held back on the strength of a third-party driver comment calling it
+  input-only; a QA403 user running it in practice reports otherwise, and the
+  protocol notes now record that evidence.
+
 ### Fixed
 
 - **Noise metrics were pessimistic by the analysis window's noise bandwidth.**
@@ -81,6 +111,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the page locale, which the language switch never updated. Help now
   follows the UI language, and an already-open help window re-points to the same
   page in the new language.
+- **The output amplitude could be set past full scale.** The generator,
+  frequency-response and tune-notch amplitude fields hold an RMS voltage but
+  were capped at the converter's *peak* full-scale figure — a unit mismatch
+  that allowed a level up to √2 (3 dB) above digital full scale, where the
+  signal can only clip. The ceiling is now the level at which the signal
+  actually reaches full scale, so it follows the waveform: a rectangle may go
+  3 dB higher in RMS than a sine, a triangle sits between them, and a dual
+  tone tracks its own amplitude split. It also follows the live full-scale
+  calibration — the sweep and tune-notch fields previously read it once when
+  their field was built and never again. Volts, dBV and dBFS all trim to that
+  same maximum, so 0 dBFS is exactly the top of the range. Fixed in the
+  desktop app and the web version alike.
+- **The FFT averages dial skipped Off and 1.** The wheel and the arrow keys
+  walked the preset series 2, 4, … 128, ∞, so a single spectrum — "Off" — could
+  only be typed, never dialled. The series now starts below 2: Off ↔ 1 ↔ 2 ↔ 4
+  … ↔ ∞, and the settings-tab tile spells a single spectrum "Off" the way the
+  field already did. Off and 1 mean the same thing to the analyser, which
+  averages only from two spectra up; they are simply two distinct stops on the
+  dial.
+- **"Stop after N averages" stopped one average early.** Entering 50 paused the
+  run with the on-screen counter reading 49: the check counted analysis ticks,
+  while the counter deliberately shows one less — the first tick seeds the
+  average rather than being one of them. The run now stops when the displayed
+  count reaches N.
+- **The Linux `.deb` refused to install on pre-24.04 systems.** "Depends:
+  libasound2t64 but it is not installable" — the installer's dependency list is
+  generated from the package names of the machine that builds it, and that is
+  now Ubuntu 24.04, whose time_t transition renamed a number of libraries.
+  Every such dependency is now recorded as an alternative that accepts the old
+  and the new name alike, so one `.deb` installs on 24.04 and on 22.04 /
+  Debian 12 both.
+- **Cards with independent left/right ranges could not have both channels set.**
+  In Preferences ▸ Audio a card whose channels switch range separately — the
+  E1DA Cosmos ADC's per-channel DIP switches, for instance — shows a Left and a
+  Right active-range button on every range row. The two behaved as one group, so
+  choosing a range for one channel cleared the other channel's choice and the
+  buttons no longer agreed with the stored setting. The two columns are
+  independent again, and clicking the already-active range no longer clears it.
 
 ## [1.1.0] — 2026-07-21
 

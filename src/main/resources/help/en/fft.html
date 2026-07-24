@@ -63,8 +63,9 @@
         the basis of the deep noise-floor reduction described in
         <a href="theory/fft.html#coherent">Theory ▸ coherent averaging</a>.</li>
     <li><b>Magnitude unit.</b>  Switches the vertical scale —
-        <a href="#fft-mag-unit">dBFS / dBV / V / V/√Hz</a>.  dBFS is the base;
-        the others are derived from the ADC calibration at display time.</li>
+        <a href="#fft-mag-unit">dBFS / dBV / V / V/√Hz / dBr</a>.  dBFS is the
+        base; the others are derived from the ADC calibration at display time,
+        and dBr from the fundamental's own level.</li>
     <li><b>Spectrum plot.</b>  Log-frequency by default;
         <a href="#fft-harmonic-dots">harmonic dots</a> and (with a calibration
         loaded) the <a href="theory/fft.html#cal">red / blue calibration
@@ -295,10 +296,19 @@
      keeps climbing in "forever" mode.</p>
 
   <h3 id="fft-mag-unit">Magnitude unit</h3>
-  <p>Combo at the top-right with four choices:
-     <code>V</code>, <code>V/√Hz</code>, <code>dBV</code>, <code>dBFS</code>.
+  <p>Combo at the top-right with five choices:
+     <code>V</code>, <code>V/√Hz</code>, <code>dBV</code>, <code>dBFS</code>,
+     <code>dBr</code>.
      Switching unit converts the axis labels and scrollbar bounds in
      place — the visible signal stays at the same screen Y.</p>
+  <p><code>dBr</code> is relative: every level is shown against the
+     fundamental, so the fundamental itself always reads 0 dBr and harmonics,
+     spurs and noise read directly as "dB below the tone" — no subtraction in
+     your head.  The vertical axis, the crosshair's <code>y = …</code> and
+     <code>|m| = …</code> readouts all follow.  The reference is the
+     fundamental as displayed — including a
+     <a href="#fft-manual-fund">manually entered one</a> — and it is re-read on
+     every repaint, so the scale tracks a drifting fundamental level.</p>
 
   <h3 id="fft-predistortion">DAC pre-distortion wizard (wand)</h3>
   <p>The wand button, left of the record button, opens the
@@ -346,15 +356,18 @@
      sweet spot.  See <a href="theory/fft.html">Theory ▸ FFT analyser</a>.</p>
 
   <h4 id="fft-averages">Averages</h4>
-  <p>Step selector — 2, 4, 8, 16, 32, 64, 128, ∞ (forever).  Number of
-     overlapped frames averaged per published spectrum.  Higher values reduce
+  <p>Step selector — Off, 1, 2, 4, 8, 16, 32, 64, 128, ∞ (forever).  Number of
+     overlapped frames averaged per published spectrum.  "Off" and 1 both give a
+     single spectrum — the analyser averages only from two spectra up — but they
+     are two distinct stops on the dial, so "Off" is reachable with the wheel and
+     the arrow keys instead of only by typing.  Higher values reduce
      noise variance but slow response.  "Forever" accumulates indefinitely —
      combine with <a href="#fft-stop-after">Stop after</a> to cap.</p>
 
   <h4 id="fft-stop-after">Stop after N</h4>
-  <p>Checkbox + numeric field.  When the checkbox is on, the
-     analyser pauses after N analyses (Forever averages mode only).
-     Reset re-arms it.</p>
+  <p>Checkbox + numeric field.  When the checkbox is on, the analyser pauses
+     as soon as the on-screen averages count reaches N (Forever averages mode
+     only).  Reset re-arms it.</p>
 
   <h4 id="fft-fund-from-gen">Get fundamental from generator</h4>
   <p>When on, the analyser locks onto the generator's current frequency instead
