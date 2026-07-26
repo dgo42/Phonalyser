@@ -27,6 +27,7 @@ import { Events, GenChangeCause } from '../bus/events.js';
 import { FlatScrollbar } from '../widgets/flat-scrollbar.js';
 import { offsetMoveHalfRange } from './scope-format.js';
 import { DIVISIONS_Y } from './scope-nav.js';
+import { HistogramView } from './histogram-view.js';
 
 // ----- scope navigation scrollbars (Java ScopePane vertSlider / navSlider) -----
 // Fixed integer slider range; the offsetFrac / horizontal-pan value is derived
@@ -108,6 +109,10 @@ export class ScopePane {
     // Auto-fit-once-measured latch for the live scope (set false each frame in render()).
     this.scopeAutoPending = false;
 
+    // Debug/e2e hook, mirroring FftPane: the help-screenshot capture has to reach the live
+    // histogram accumulators to pose the window with a known distribution.
+    if (typeof window !== 'undefined') window.__scopePane = this;
+
     // FreqResp measurement lifecycle (Java ScopePane freqRespStarted/StoppedListener):
     // the sweep needs the capture device exclusively — stop a running capture and gray
     // the Record LED on STARTED, re-enable it on STOPPED.
@@ -137,11 +142,39 @@ export class ScopePane {
     // pushed straight into the view (its publish contract, off the render thread). The
     // controller starts/stops the worker + its own gapless ring reader with the recording.
     this.engine.scope.setMeasParamsProvider(() => this._measParams());
-    this.engine.scope.setMeasResultSink((r) => this.view.publishMeasurement(r));
+    this.engine.scope.setMeasResultSink((r) => { this.view.publishMeasurement(r); this.renderHistogram(); });
+    // The histogram plot: its own view, fed a SNAPSHOT of the selected channel's distribution and
+    // that channel's peak volts read at PAINT time — so a recalibration relabels the axis without
+    // disturbing a single collected count.
+    this._histogramView = new HistogramView(document.getElementById('scopeHist'), {
+      snapshot: () => this.engine.scope.histogramSnapshot(this.prefs.oscHistogramChannel.get()),
+      peakVolts: () => this.prefs.getAdcPeakVolts(this.prefs.oscHistogramChannel.get()),
+      barCount: () => this.prefs.oscHistogramBins.get(),
+      // Java HistogramView's own ColorRole map: black plot, 0x3C3C3C grid + axis, 0xF0F0F0 text.
+      palette: () => ({
+        background: '#000000', grid: '#3c3c3c', axis: '#3c3c3c', text: '#f0f0f0',
+        bar: this.prefs.oscHistogramChannel.get() === 'R'
+          ? `#${this.prefs.oscRightChannelColor.get().toString(16).padStart(6, '0')}`
+          : `#${this.prefs.oscLeftChannelColor.get().toString(16).padStart(6, '0')}`,
+      }),
+    });
     // A view-side clearMeasurementHistory (stats reset / channel switch) also resets the
     // live worker's stream (spec §5) — the view can't reach the controller, so route through
     // the pane.
-    this.view.onClearMeasurement = () => this.engine.scope.resetMeasurement();
+    // A stats reset / channel switch also restarts the amplitude distribution: the same reasoning
+    // as the statistics themselves — a channel change means the counts describe a different signal.
+    this.view.onClearMeasurement = () => {
+      this.engine.scope.resetMeasurement();
+      this.engine.scope.resetHistograms();
+      this.renderHistogram();
+    };
+    // Generator start/stop IS a signal change, so the distribution restarts with it — averaging
+    // before and after together would be wrong (Java publishes GENERATOR_SIGNAL_CHANGED / USER_INPUT
+    // on a real transition for exactly this).
+    MessageBus.instance().subscribe(Events.GENERATOR_SIGNAL_CHANGED, () => {
+      this.engine.scope.resetHistograms();
+      this.renderHistogram();
+    });
   }
 
   /** The current osc-meas publish parameters read from prefs + the live config/generator
@@ -372,6 +405,10 @@ export class ScopePane {
     const showTable = prefs.oscShowMeasurementTable.get();
     const showStats = prefs.oscShowStats.get();
     $('#scopeTableToggle').toggle(signal).toggleClass('on', showTable);
+    // The histogram toggle carries the SAME signal gate as the gauge (Java syncScopeButtons puts
+    // histogramBtn and tableToggleBtn both behind tableVis = signal): with no signal there is no
+    // distribution to show, so the button only appears once the scope runs or a file is loaded.
+    $('#scopeHistogram').toggle(signal);
     const tableVis = signal && showTable;
     // L/R measurement-channel picker stays visible UNCONDITIONALLY (Java ScopeView:
     // "L/R channel-pick buttons stay visible unconditionally"); only the gauge / pop-out
@@ -541,6 +578,30 @@ export class ScopePane {
     });
     $('#scopeStatsReset').on('click', () => { scopeView._clearMeasurementHistory(); this.renderMeasurementTable(); });
 
+    // Amplitude histogram. The L/R pick sets its channel EXPLICITLY rather than toggling: an L/R
+    // pair fires on BOTH buttons — the one going on and the one going off — so a toggle lets the
+    // last handler win and the pick always lands on R. This shipped once in Java.
+    $('#scopeHistogram').on('click', () => this.setHistogramOpen(!this.prefs.oscShowHistogram.get()));
+    $('#scopeHistClose').on('click', () => this.setHistogramOpen(false));
+    $('#scopeHistL').on('click', () => { this.prefs.oscHistogramChannel.set('L'); this.renderHistogram(); });
+    $('#scopeHistR').on('click', () => { this.prefs.oscHistogramChannel.set('R'); this.renderHistogram(); });
+    // Clears ONLY the distribution — not the measurement statistics, which is why the histogram has
+    // its own reset and its own channel preference.
+    $('#scopeHistReset').on('click', () => {
+      this.engine.scope.resetHistograms();
+      this.renderHistogram();
+    });
+    // Re-aggregate on a bar-count change: display resolution only, so the collected micro-bins are
+    // re-drawn and never discarded.
+    this.prefs.oscHistogramBins.addListener(() => this.renderHistogram());
+    this.prefs.oscLeftChannelEnabled.addListener(() => this.syncHistogramButtons());
+    this.prefs.oscRightChannelEnabled.addListener(() => this.syncHistogramButtons());
+    // Restore the window the pref says was open. Without this the pref stayed true across a reload
+    // while the markup came up closed, so the toggle read "open" and its first click only cleared
+    // the flag — the window took TWO clicks to come back (maintainer, 2026-07-27).
+    this.setHistogramOpen(this.prefs.oscShowHistogram.get());
+    this.syncMeasButtons();   // apply the signal gate at once: no capture yet ⇒ no histogram button
+
     $('#scopeTablePop').on('click', () => this.setMeasTablePopped(!this.measTablePopped));
     $('#scopeWinClose').on('click', () => this.setMeasTablePopped(false));
     $('#scopeWinStatsToggle').on('click', () => {
@@ -549,6 +610,13 @@ export class ScopePane {
     });
     $('#scopeWinStatsReset').on('click', () => { scopeView._clearMeasurementHistory(); this.renderMeasurementTable(); });
     this.makeMeasWindowDraggable();
+    this.makeMeasWindowDraggable('scopeHistWindow');
+    // A resize must repaint even while the scope is stopped (no measurement publishes to
+    // ride on), else the canvas keeps the pixels it had at the old size.
+    const histCanvas = document.getElementById('scopeHist');
+    if (histCanvas && typeof ResizeObserver === 'function') {
+      new ResizeObserver(() => this.renderHistogram()).observe(histCanvas);
+    }
   }
 
   // Pop the measurement table into a titled floating window (Java createMeasurementWindow /
@@ -572,10 +640,55 @@ export class ScopePane {
     this.syncMeasButtons();
   }
 
+  // ----- amplitude histogram: window lifetime + the window's own controls -----
+  // The plot itself is HistogramView (its own class, palette, axes and paint); everything here is
+  // lifecycle and controls, which is the split Java settled on after drawing it inline was rejected.
+
+  /** Opens / closes the histogram window and persists the state. */
+  setHistogramOpen(open) {
+    this.prefs.oscShowHistogram.set(!!open);
+    $('#scopeHistWindow').toggleClass('open', !!open);
+    $('#scopeHistogram').toggleClass('on', !!open);
+    if (open) this.renderHistogram();
+  }
+
+  /**
+   * Repaints the histogram when its window is open. Called on each measurement publish (~100 ms),
+   * which is the cadence the distribution actually changes at — a frame-rate repaint would redraw
+   * an unchanged snapshot.
+   */
+  renderHistogram() {
+    if (!this.prefs.oscShowHistogram.get() || !this._histogramView) return;
+    const canvas = document.getElementById('scopeHist');
+    if (canvas) {
+      // Track the resizable body, so a dragged window buys resolution instead of stretched pixels.
+      const w = Math.max(1, Math.round(canvas.clientWidth));
+      const h = Math.max(1, Math.round(canvas.clientHeight));
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+    }
+    this._histogramView.render();
+    this.syncHistogramButtons();
+  }
+
+  /**
+   * Greys the button of a channel the scope has switched off, and if that was the channel on show,
+   * moves to the other one and persists the move — the window must never sit on a dead channel.
+   */
+  syncHistogramButtons() {
+    const prefs = this.prefs;
+    const leftOn = prefs.oscLeftChannelEnabled.get(), rightOn = prefs.oscRightChannelEnabled.get();
+    let channel = prefs.oscHistogramChannel.get();
+    if (channel === 'L' && !leftOn && rightOn) { channel = 'R'; prefs.oscHistogramChannel.set('R'); }
+    else if (channel === 'R' && !rightOn && leftOn) { channel = 'L'; prefs.oscHistogramChannel.set('L'); }
+    $('#scopeHistL').prop('disabled', !leftOn).toggleClass('on', channel === 'L');
+    $('#scopeHistR').prop('disabled', !rightOn).toggleClass('on', channel === 'R');
+  }
+
   // Drag the popped-out window by its title bar (in-page floating panel; browsers can't open
   // a native always-on-top window without a popup).
-  makeMeasWindowDraggable() {
-    const win = document.getElementById('scopeMeasWindow');
+  makeMeasWindowDraggable(id = 'scopeMeasWindow') {
+    const win = document.getElementById(id);
     if (!win) return;
     const bar = win.querySelector('.smw-titlebar');
     let dragging = false, ox = 0, oy = 0;

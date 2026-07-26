@@ -60,9 +60,6 @@ import org.edgo.audio.measure.sound.AudioDeviceManager;
 import org.edgo.audio.measure.sound.AudioPlayback;
 import org.edgo.audio.measure.sound.DeviceRef;
 import org.edgo.audio.measure.sound.wasapi.WasapiNative.Ole32;
-import org.edgo.audio.measure.sound.wdmks.WdmksDeviceManager;
-import org.edgo.audio.measure.sound.wdmks.WdmksGenerator;
-import org.edgo.audio.measure.sound.wdmks.WdmksRecorder;
 
 import com.sun.jna.Memory;
 import com.sun.jna.Pointer;

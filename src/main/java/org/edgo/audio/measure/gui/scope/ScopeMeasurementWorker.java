@@ -137,9 +137,97 @@ public final class ScopeMeasurementWorker {
     private int measHistoryWrite;
     private int measHistorySize;
 
+    /** Amplitude-occupancy accumulators, live only while the scope's histogram
+     *  window is open.  Their range tracks the signal's own extremes rather than
+     *  full scale, and is binned far finer than the drawn bars — see the
+     *  accumulator for why.  Nothing a user does to V/div, a range switch or a
+     *  recalibration invalidates the counts.  Worker-thread only. */
+    private AmplitudeHistogram histLeft, histRight;
+    /** Published for the paint thread — a snapshot, never the live accumulator. */
+    private volatile AmplitudeHistogram histSnapLeft, histSnapRight;
+    private volatile boolean histEnabled;
+    /** Reset asked for by the UI, consumed at the top of the next worker pass —
+     *  see {@link #resetHistograms()}. */
+    private volatile boolean histResetRequested;
+    /** Peak {@code |sample|} seen since the current ranging window opened, per
+     *  channel, and when it opened — see {@link #binAmplitudes}.  Worker-thread only. */
+    private double histWinPeakL;
+    private double histWinPeakR;
+    private long   histWinStartNanos;
+    /** Absolute sample position already binned.  {@link SignalBufferReader#readLatest}
+     *  hands back a whole window every pass, and consecutive windows OVERLAP by
+     *  roughly 20× at the worker's cadence — without this cursor every sample
+     *  would be counted about twenty times, and unevenly, which would bias the
+     *  distribution towards whatever the overlap happened to cover. */
+    private long histBinnedUpTo;
+
     // ─── External wiring ────────────────────────────────────────────────────
 
     public void setBuffer(SignalBufferReader r) { this.reader = r; }
+
+    /** Starts / stops amplitude binning.  Off is the default and costs nothing:
+     *  no accumulators exist and the pass skips the block entirely.  Turning it
+     *  off drops the counts — the window owns the distribution's lifetime. */
+    public void setHistogramEnabled(boolean on) {
+        if (on == histEnabled) return;
+        if (on) {
+            // The preference sets the accumulation granularity here only.  The
+            // painter re-reads it every frame, so changing it later re-draws the
+            // counts already collected instead of discarding them.
+            int bars = Math.max(2, Preferences.instance().getOscHistogramBins());
+            histLeft  = new AmplitudeHistogram(bars);
+            histRight = new AmplitudeHistogram(bars);
+            histBinnedUpTo = 0;
+        } else {
+            histLeft  = null;
+            histRight = null;
+            histSnapLeft  = null;
+            histSnapRight = null;
+        }
+        histEnabled = on;
+    }
+
+    /** Clears the accumulated distribution.  Driven from the histogram window's own
+     *  reset button, and alongside the measurement statistics whenever those are
+     *  cleared — the same events invalidate both, so the two restart together.
+     *
+     *  <p>Called from the UI thread (the histogram window's reset button).  While
+     *  the worker is running the clear is REQUESTED and performed by the worker
+     *  itself, so it can never land in the middle of an {@code add()}; the request
+     *  is consumed at the top of the next pass, one 100&nbsp;ms cadence away at
+     *  worst.  With the worker stopped nothing can be mutating the accumulators,
+     *  so the clear happens straight away rather than waiting for a pass that is
+     *  not coming. */
+    public void resetHistograms() {
+        if (measThreadRunning.get()) {
+            histResetRequested = true;
+        } else {
+            applyHistogramReset();
+        }
+    }
+
+    /** The clear itself.  Worker thread, or any thread while the worker is stopped. */
+    private void applyHistogramReset() {
+        AmplitudeHistogram l = histLeft;
+        AmplitudeHistogram r = histRight;
+        if (l != null) l.reset();
+        if (r != null) r.reset();
+        histSnapLeft   = (l != null) ? l.snapshot() : null;
+        histSnapRight  = (r != null) ? r.snapshot() : null;
+        histBinnedUpTo = 0;
+        // Open a fresh ranging window too, so a reset re-ranges onto the signal as
+        // it is NOW instead of inheriting the peak that built the old range.
+        histWinPeakL      = 0.0;
+        histWinPeakR      = 0.0;
+        histWinStartNanos = 0L;
+    }
+
+    /** The paint thread's view of a channel's distribution — a snapshot, so it
+     *  never walks an array the worker is mutating.  {@code null} until the first
+     *  pass has binned something. */
+    public AmplitudeHistogram getHistogram(Channel ch) {
+        return (ch == Channel.L) ? histSnapLeft : histSnapRight;
+    }
 
     /** Wipes accumulated history and the latest-result fields.  Safe to
      *  call from any thread; takes the history lock internally. */
@@ -415,8 +503,100 @@ public final class ScopeMeasurementWorker {
         return measRight;
     }
 
+    /**
+     * Bins the part of this pass's window that has not been binned before, into
+     * both channels' accumulators, and publishes fresh snapshots.
+     *
+     * <p>Samples are counted EXACTLY AS CAPTURED — no DC removal, no filtering.
+     * The {@code skip} below drops the overlap with the previous window so nothing
+     * is counted twice, and that is the only thing done to them.  A DC offset is
+     * part of the signal and belongs in the picture: the distribution simply sits
+     * off the centre line by however much offset there is.  Subtracting the running
+     * mean instead would be worse than useless here, because that estimate is still
+     * settling in the first seconds — the same voltage would land in different bins
+     * as it moved, smearing one distribution into two.
+     *
+     * <p>If the worker misses passes under load the unread samples are simply
+     * never binned.  That is an unbiased sub-sample and is fine for a
+     * distribution — but it does mean the total is not a count of captured
+     * samples and must not be presented as one.  Worker-thread only.
+     */
+    private void binAmplitudes(int avail, long absStart) {
+        AmplitudeHistogram l = histLeft;
+        AmplitudeHistogram r = histRight;
+        if (l == null || r == null) return;
+        // A frozen / re-anchored buffer can hand back a window that starts before
+        // what we already binned; clamp rather than re-count it.
+        long already = histBinnedUpTo - absStart;
+        // A cursor sitting BEYOND the stream's write position can only mean the
+        // positions restarted under us: every capture session (and every freeze
+        // snapshot) builds a fresh ring numbered from 0.  Re-anchor on this window
+        // and bin from the next pass — without this, binning would silently stop for
+        // as long as the previous session ran, until the new one caught up.
+        if (already > avail) {
+            histBinnedUpTo = absStart + avail;
+            return;
+        }
+        int skip = (int) Math.max(0, Math.min(avail, already));
+        double peakL = blockPeak(measLeftBuf,  skip, avail);
+        double peakR = blockPeak(measRightBuf, skip, avail);
+        // Range on the peak gathered over the scope's MEASUREMENT-AVERAGE window,
+        // not on this 100 ms block.  A block's peak is a random draw from the
+        // signal's tail, so on anything noisy it wanders enough to escape the range
+        // nearly every pass — and every escape restarts the distribution.  Over the
+        // averaging window it is the peak of some fifty blocks and barely moves, so
+        // a restart now means the level genuinely changed.
+        long now = System.nanoTime();
+        long windowNanos = (long) (Preferences.instance().getOscMeasurementAverageSeconds() * 1e9);
+        if (now - histWinStartNanos >= windowNanos) {
+            // Start the next window from this block rather than carrying the old
+            // peak, so a signal that has quietened is reflected within one window.
+            // Shrinking never re-ranges, so this cannot cost any counts.
+            histWinPeakL      = 0.0;
+            histWinPeakR      = 0.0;
+            histWinStartNanos = now;
+        }
+        if (peakL >= 0.0) {
+            if (peakL > histWinPeakL) histWinPeakL = peakL;
+            l.fit(-histWinPeakL, histWinPeakL);
+            for (int i = skip; i < avail; i++) l.add(measLeftBuf[i]);
+        }
+        if (peakR >= 0.0) {
+            if (peakR > histWinPeakR) histWinPeakR = peakR;
+            r.fit(-histWinPeakR, histWinPeakR);
+            for (int i = skip; i < avail; i++) r.add(measRightBuf[i]);
+        }
+        histBinnedUpTo = absStart + avail;
+        histSnapLeft  = l.snapshot();
+        histSnapRight = r.snapshot();
+    }
+
+    /**
+     * Largest {@code |sample|} in the block, on the samples exactly as captured.
+     * A magnitude is all the accumulator needs because its range is symmetric about
+     * zero — 0&nbsp;V is the axis centre — and taking it on the raw samples means a
+     * DC-offset signal is ranged to reach the rail it actually reaches.
+     *
+     * @return {@code -1} when the block holds nothing finite, in which case there
+     *         is nothing to bin either
+     */
+    private double blockPeak(float[] buf, int from, int to) {
+        double peak = -1.0;
+        for (int i = from; i < to; i++) {
+            double v = Math.abs(buf[i]);
+            if (Double.isFinite(v) && v > peak) peak = v;
+        }
+        return peak;
+    }
+
     /** Runs one measurement pass on the worker thread and updates the cache. */
     private void computeMeasurementOnce() {
+        // Before the reader check on purpose: the loop keeps ticking with no capture
+        // attached, so a reset asked for while stopped still lands.
+        if (histResetRequested) {
+            histResetRequested = false;
+            applyHistogramReset();
+        }
         SignalBufferReader b = reader;
         if (b == null) return;
         Preferences prefs = Preferences.instance();
@@ -438,6 +618,17 @@ public final class ScopeMeasurementWorker {
         // paint thread's AC-mode trace offset and AC-mode trigger-level shift.
         int avail = b.readLatest(measN, measLeftBuf, measRightBuf);
         if (avail < 64) return;
+        long absStart = b.getWritePos() - avail;
+        // Amplitude binning goes FIRST, on the samples exactly as captured — before
+        // the HF low-pass, before the DC mean is removed, before the mains comb.  A
+        // distribution is a statement about the signal that arrived, so anything the
+        // scope does to make the TRACE readable would be a lie in it.  The DC mean in
+        // particular is a running estimate that is still settling in the first
+        // seconds: subtracting it would bin the same voltage into different bins as
+        // the estimate moved, smearing one distribution into two.
+        if (histEnabled) {
+            binAmplitudes(avail, absStart);
+        }
         // HF spike removal (80 kHz LPF) before everything else, so the DC
         // means, the comb, and Vpp/Vrms all see the de-spiked signal.  No-op
         // below the LPF's Nyquist gate.
@@ -451,7 +642,6 @@ public final class ScopeMeasurementWorker {
         // channel the table's L/R selector points at.  The per-channel DC
         // means (AC-coupling offset, residual baseline) are the channels' own
         // whole-period Vmean values — identical to the table readout.
-        long absStart = b.getWritePos() - avail;
         SignalMeasurements resultLeft  = measureChannel(true,  avail, sampleRate, peakVoltsL, absStart, prefs);
         SignalMeasurements resultRight = measureChannel(false, avail, sampleRate, peakVoltsR, absStart, prefs);
         double leftMean  = resultLeft.getVmean()  / peakVoltsL;

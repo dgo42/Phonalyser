@@ -126,6 +126,11 @@ let mainTab;   // the main tab (the rAF render-frame driver + the 3-pane collaps
 const onCalChange = () => {
   scopeView._clearMeasurementHistory();
   if (engine && engine.fft.recording) engine.resetAnalyses();
+  // The amplitude distribution goes with the running statistics: counts gathered at a different
+  // calibration describe a different measurement, and merging them would present two populations
+  // as one distribution. (A V/div or range change does NOT come through here — those relabel the
+  // axis rather than recounting, and must keep their counts.)
+  if (engine) engine.scope.resetHistograms();
 };
 prefs.adcFsVoltageRms.addListener(onCalChange);
 // The RIGHT-channel calibration siblings rescale R-channel measurements the same way

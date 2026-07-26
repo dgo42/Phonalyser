@@ -47,6 +47,8 @@ public enum Icon {
     CHART_LIT("chart-lit.png"),
     GAUGE_HIGH_DARK("gauge-high-dark.png"),
     GAUGE_HIGH_LIT("gauge-high-lit.png"),
+    HISTOGRAM_DARK("histogram-dark.png"),
+    HISTOGRAM_LIT("histogram-lit.png"),
     WINDOW_RESTORE_DARK("window-restore-dark.png"),
     WINDOW_RESTORE_LIT("window-restore-lit.png"),
     ROTATE_LEFT_DARK("rotate-left-dark.png"),

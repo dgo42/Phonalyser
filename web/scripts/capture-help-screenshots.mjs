@@ -131,6 +131,13 @@ const frTab = (id, file, panelId) => ({ id, file, ready: true,
 // id      → CLI selector. file → help/<lang>/img/<file>. ready → capturable now.
 // shot(page) → optional async; returns an ElementHandle to clip, or null for the whole
 // 1280×768 window. Specs without shot() default to a full-window capture.
+/** The attenuator position the bench converter is physically set to, plus that position's
+ *  CALIBRATED full scale per channel. The card catalogue seeds the nominal 2.7 V; the bench's own
+ *  calibration reads 2.794 V, and it is the calibrated figure the instrument measures with — so the
+ *  histogram shot's voltage axis is labelled the way the analyzer really reads. */
+const COSMOS_INPUT_RANGE = '2.7V';
+const COSMOS_FS_VRMS = { left: 2.794405, right: 2.794613 };
+
 const SPECS = [
   { id: 'app',        file: 'multifunctional.png',  ready: true },
   { id: 'scope',      file: 'oscilloscope-pane.png', ready: true,
@@ -158,6 +165,131 @@ const SPECS = [
       await page.click('button[data-bs-target="#tab-fr"]');
       await page.waitForTimeout(800);
       return page.$('#tab-fr .fft-pane');
+    } },
+
+  // ── Amplitude-histogram window ───────────────────────────────────────────────────────
+  // A LIVE shot: the scope actually records for six seconds so the plot shows a distribution the
+  // app collected itself, through the whole real path (capture → measurement client → accumulator
+  // → view). Nothing is injected. The input is pinned to the bench converter (E1DA Cosmos ADC) —
+  // its own noise floor is the picture the help text describes; whatever happens to be the system
+  // default microphone is not.
+  { id: 'scope-histogram', file: 'scope-histogram.png', ready: true,
+    async shot(page) {
+      // The startup splash is an overlay: capture it away and this shot is a picture of the
+      // splash. It self-dismisses when the boot device scan resolves, which can outlast the
+      // harness's fixed post-load wait when this spec runs first.
+      await page.waitForSelector('#startupSplash', { state: 'hidden', timeout: 20000 }).catch(() => {});
+      // Choose the converter the way a user does: in Preferences ▸ Audio, then OK — which commits
+      // engine.config and restarts the consumers on it. Two things this must NOT do:
+      //   • reload afterwards — media device IDs are re-salted per browsing session, so a saved id
+      //     no longer resolves and the app falls back to `default` (that is how a shot ended up
+      //     recording the headset microphone at 48 kHz), and
+      //   • force a sample rate — in the browser the rate is whatever Windows has configured for
+      //     that device; the dialog's own rate list is the truth here.
+      await openPrefs(page, 'audio');
+      const bound = await page.evaluate(() => {
+        const sel = document.getElementById('inSel');
+        const opt = [...sel.options].find((o) => /Cosmos/i.test(o.textContent));
+        if (!opt) return null;
+        sel.value = opt.value;
+        sel.dispatchEvent(new Event('change'));
+        return opt.textContent.trim();
+      });
+      await page.waitForTimeout(400);          // let the dialog re-derive the device's rate list + card
+      // Put the card on the range the converter is PHYSICALLY switched to. The range only tells the
+      // app the full-scale volts, so a mismatch mislabels the voltage axis by the ratio of the two
+      // ranges — the seeded default (1.7 V) drew this bench's noise floor at half its real level.
+      // One side at a time, re-querying between: each pick re-renders the whole range list, so a
+      // second click taken from the same query would land on a detached row and be lost (which left
+      // the right channel — the one on show — still on 1.7 V).
+      for (const side of [0, 1]) {
+        const ok = await page.evaluate(({ want, i }) => {
+          const rows = [...document.querySelectorAll('#inRanges .card-range-row')];
+          const row = rows.find((r) => [...r.querySelectorAll('input[type=text]')].some((x) => x.value === want));
+          const radio = row && row.querySelectorAll('input[type=radio]')[i];
+          if (!radio) return false;
+          radio.click();
+          return true;
+        }, { want: COSMOS_INPUT_RANGE, i: side });
+        if (!ok) {
+          console.warn(`  ! input range "${COSMOS_INPUT_RANGE}" not offered by the card — axis scale unverified`);
+          break;
+        }
+        await page.waitForTimeout(250);
+      }
+      await page.click('#prefsOk');
+      await page.waitForTimeout(1200);         // commit + consumer restart
+      if (!bound) console.warn('  ! Cosmos ADC not in the input list — the shot records the default input');
+      // The card seed carries the range's NOMINAL full scale; the bench is calibrated. Only the axis
+      // labels depend on it (the accumulator counts normalised samples), so setting it here relabels
+      // the plot without touching a single count.
+      await page.evaluate((fs) => {
+        const p = window.__scopePane.prefs;
+        p.adcFsVoltageRms.set(fs.left);
+        p.adcFsVoltageRmsRight.set(fs.right);
+      }, COSMOS_FS_VRMS);
+      // Pose the window by SETTING state, never by clicking a toggle: the open state is a preference
+      // the pane restores at startup, so a click could just as well close it. Right channel because
+      // ch1 is the calibrated / attenuated input on this bench — the channel a reading is taken on.
+      await page.evaluate(() => {
+        const pane = window.__scopePane;
+        pane.prefs.oscRightChannelEnabled.set(true);
+        pane.prefs.oscHistogramChannel.set('R');
+        pane.setHistogramOpen(true);
+        pane.syncHistogramButtons();
+      });
+      await page.waitForTimeout(300);
+      await page.click('.scope-pane .led-btn');        // record
+      // Wait for REAL samples — a silent stream still fills the centre bin, so a non-zero total
+      // proves nothing; a spread of occupied bins does.
+      await page.waitForFunction(() => {
+        const h = window.__scopePane.engine.scope.histogramSnapshot('R');
+        if (!h) return false;
+        let n = 0;
+        for (let i = h.firstOccupied(); i >= 0 && i <= h.lastOccupied(); i++) if (h.getCount(i) > 0) n++;
+        return n >= 16;
+      }, null, { timeout: 30000 }).catch(() => {});
+      // Start the shown distribution from here, so it is six seconds of real signal rather than a
+      // range fitted while the line was still settling.
+      await page.evaluate(() => window.__scopePane.engine.scope.resetHistograms());
+      await page.waitForTimeout(6000);                 // collect a distribution worth showing
+      // A silent stream still draws a perfectly tidy plot — one bar at 0 V — so verify the shot is
+      // actually a distribution before it becomes a help image.
+      const occupied = await page.evaluate(() => {
+        const h = window.__scopePane.engine.scope.histogramSnapshot('R');
+        if (!h) return 0;
+        let n = 0;
+        for (let i = h.firstOccupied(); i >= 0 && i <= h.lastOccupied(); i++) if (h.getCount(i) > 0) n++;
+        return n;
+      });
+      if (occupied < 16) {
+        console.warn(`  ! histogram has only ${occupied} occupied bins — the input looks silent; `
+          + 'check that the converter is connected and not held by another application');
+      }
+      // Say WHICH device and rate the picture is of, so a fallback to some other input cannot pass
+      // unnoticed again.
+      const src = await page.evaluate(async () => {
+        const pane = window.__scopePane;
+        const cfg = pane.engine.config;
+        const devs = await navigator.mediaDevices.enumerateDevices();
+        const open = devs.find((d) => d.deviceId === cfg.inDeviceId);
+        const meas = pane.view && pane.view.latest;
+        const vrms = meas && meas.vrms ? `${(meas.vrms * 1e6).toFixed(2)} µV` : 'n/a';
+        return `${open ? open.label : cfg.inDeviceId} @ ${cfg.inRate} Hz, `
+          + `R full scale ${pane.prefs.getAdcFsVoltageRms('R').toFixed(3)} Vrms, measured ${vrms} rms`;
+      });
+      console.log(`    histogram recorded from: ${src}`);
+      return page.$('#scopeHistWindow');
+    },
+    after: async (page) => {
+      await page.click('.scope-pane .led-btn');        // stop recording again
+      await page.waitForTimeout(300);
+      await page.evaluate(() => {
+        window.__scopePane.engine.scope.resetHistograms();
+        window.__scopePane.prefs.oscHistogramChannel.set('L');   // leave the app as it was found
+        document.getElementById('scopeHistClose').click();
+      });
+      await page.waitForTimeout(200);
     } },
 
   // ── New help pages this sync: the Tune-notch + DAC-predistortion dialogs ─────────────
@@ -359,7 +491,11 @@ for (const channel of ['chrome', 'msedge', undefined]) {
     browser = await chromium.launch({
       ...(channel ? { channel } : {}),
       headless: !headed,
-      args: headed ? headedArgs : [],
+      // Auto-grant the microphone in BOTH modes: without permission enumerateDevices returns empty
+      // labels, no card binds, and a spec that has to RUN a capture has nothing to record. Only the
+      // PERMISSION prompt is faked — the fake capture DEVICE is headed-only, so the histogram shot
+      // records the real converter on the bench.
+      args: headed ? headedArgs : ['--use-fake-ui-for-media-stream'],
     });
     break;
   } catch { /* channel not installed — try the next */ }

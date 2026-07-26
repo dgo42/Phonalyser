@@ -246,6 +246,15 @@ public final class Preferences {
     private final Property<Double>         oscLineWidth         = bound(2.0);
     /** Sample-dot diameter (pixels) when the inter-sample spacing exceeds 10 px. */
     private final Property<Integer>        oscDotDiameter       = bound(5);
+    /** Bars drawn across the amplitude histogram.  Only the DISPLAY resolution —
+     *  the accumulator always bins far finer and is aggregated down to this many
+     *  bars over the occupied span, so changing it re-draws the same collected
+     *  data at a different granularity instead of discarding it. */
+    private final Property<Integer>        oscHistogramBins     = bound(50);
+    /** Channel the amplitude histogram shows.  Its own, NOT the measurement table's:
+     *  that one's subscriber clears the running statistics, so sharing it would make
+     *  picking a channel here wipe the table's avg / min / max / σ. */
+    private final Property<Channel>        oscHistogramChannel  = bound(Channel.L);
     /** Packed RGB (0xRRGGBB) of the left and right channel traces. Default left #00D7FF and right channels #FFD700 */
     private final Property<Integer>        oscLeftChannelColor  = bound(0x00D7FF);
     private final Property<Integer>        oscRightChannelColor = bound(0xFFD700);
@@ -265,6 +274,10 @@ public final class Preferences {
      *  show / hide toggle are visible; the rows and the stats / reset
      *  buttons are hidden. */
     private final Property<Boolean> oscShowMeasurementTable = bound(true);
+    /** Whether the scope's amplitude-histogram window is open.  Persisted so the
+     *  window comes back with the app; the distribution itself does not, since it
+     *  accumulates from the live capture. */
+    private final Property<Boolean> oscShowHistogram = bound(false);
     /** ADC full-scale RMS voltage — calibration constant used to translate normalised samples into volts.
      *  This scalar is the LEFT channel value, the LINKED-mode value for both channels, and the legacy
      *  fallback read by every channel-less consumer.  Persisted across launches. */
@@ -897,6 +910,7 @@ public final class Preferences {
         c.oscPersistenceManualSeconds.set(oscPersistenceManualSeconds.get());
         c.oscLineWidth.set(oscLineWidth.get());
         c.oscDotDiameter.set(oscDotDiameter.get());
+        c.oscHistogramBins.set(oscHistogramBins.get());
         c.fftLineWidth.set(fftLineWidth.get());
         c.freqRespLineWidth.set(freqRespLineWidth.get());
         c.fftHarmonicDotDiameter.set(fftHarmonicDotDiameter.get());
@@ -985,6 +999,7 @@ public final class Preferences {
         setOscPersistenceManualSeconds(edit.oscPersistenceManualSeconds.get());
         setOscLineWidth(edit.oscLineWidth.get());
         setOscDotDiameter(edit.oscDotDiameter.get());
+        setOscHistogramBins(edit.oscHistogramBins.get());
         setFftLineWidth(edit.fftLineWidth.get());
         setFreqRespLineWidth(edit.freqRespLineWidth.get());
         setFftHarmonicDotDiameter(edit.fftHarmonicDotDiameter.get());
@@ -1578,6 +1593,14 @@ public final class Preferences {
     public void setOscDotDiameter(int v)       { oscDotDiameter.set(v); }
     public Property<Integer> oscDotDiameterProperty() { return oscDotDiameter; }
 
+    public int getOscHistogramBins()           { return oscHistogramBins.get(); }
+    public void setOscHistogramBins(int v)     { oscHistogramBins.set(v); }
+    public Property<Integer> oscHistogramBinsProperty() { return oscHistogramBins; }
+
+    public Channel getOscHistogramChannel()    { return oscHistogramChannel.get(); }
+    public void setOscHistogramChannel(Channel v) { oscHistogramChannel.set(v); }
+    public Property<Channel> oscHistogramChannelProperty() { return oscHistogramChannel; }
+
     public int getOscLeftChannelColor()        { return oscLeftChannelColor.get(); }
     public void setOscLeftChannelColor(int v)  { oscLeftChannelColor.set(v); }
     public Property<Integer> oscLeftChannelColorProperty() { return oscLeftChannelColor; }
@@ -1629,6 +1652,10 @@ public final class Preferences {
     public boolean isOscShowMeasurementTable() { return oscShowMeasurementTable.get(); }
     public void setOscShowMeasurementTable(boolean v) { oscShowMeasurementTable.set(v); }
     public Property<Boolean> oscShowMeasurementTableProperty() { return oscShowMeasurementTable; }
+
+    public boolean isOscShowHistogram() { return oscShowHistogram.get(); }
+    public void setOscShowHistogram(boolean v) { oscShowHistogram.set(v); }
+    public Property<Boolean> oscShowHistogramProperty() { return oscShowHistogram; }
 
     public double getAdcFsVoltageRms()         { return adcFsVoltageRms.get(); }
     public void setAdcFsVoltageRms(double v)   {
@@ -2204,6 +2231,7 @@ public final class Preferences {
         root.put("oscMeasurementChannel",        oscMeasurementChannel.get().name());
         root.put("oscShowStats",                 oscShowStats.get());
         root.put("oscShowMeasurementTable",      oscShowMeasurementTable.get());
+        root.put("oscShowHistogram",             oscShowHistogram.get());
         // DEPRECATED shared full-scale calibration — the FALLBACK for devices with no
         // card in devices.yaml (per-card calibration owns everything else).  Kept
         // read AND written for backwards compatibility, per the help's Preferences
@@ -2248,6 +2276,8 @@ public final class Preferences {
         root.put("oscPlayFromLoop", oscPlayFromLoop.get());
         root.put("oscLineWidth",                 oscLineWidth.get());
         root.put("oscDotDiameter",               oscDotDiameter.get());
+        root.put("oscHistogramBins",             oscHistogramBins.get());
+        root.put("oscHistogramChannel",          oscHistogramChannel.get().name());
         root.put("oscLeftChannelColor",          formatHtmlColor(oscLeftChannelColor.get()));
         root.put("oscRightChannelColor",         formatHtmlColor(oscRightChannelColor.get()));
         if (screenshotWidth.get()  > 0)   root.put("screenshotWidth",  screenshotWidth.get());
@@ -2578,6 +2608,7 @@ public final class Preferences {
         if (root.get("oscMeasurementChannel")        instanceof String s) oscMeasurementChannel.set(enumOr(Channel.class, s, oscMeasurementChannel.get()));
         if (root.get("oscShowStats")                 instanceof Boolean b) oscShowStats.set(b);
         if (root.get("oscShowMeasurementTable")      instanceof Boolean b) oscShowMeasurementTable.set(b);
+        if (root.get("oscShowHistogram")             instanceof Boolean b) oscShowHistogram.set(b);
         // DEPRECATED shared full-scale fallback (unbound devices) — see toMap();
         // honoured so a pre-card preferences.yaml keeps its calibration.  The
         // setters validate and refresh the cached dBV offsets.
@@ -2621,6 +2652,8 @@ public final class Preferences {
         if (root.get("oscPlayFromLoop")              instanceof Boolean b) oscPlayFromLoop.set(b);
         if (root.get("oscLineWidth")                 instanceof Number n) oscLineWidth.set(n.doubleValue());
         if (root.get("oscDotDiameter")               instanceof Number n) oscDotDiameter.set(n.intValue());
+        if (root.get("oscHistogramBins")             instanceof Number n) oscHistogramBins.set(n.intValue());
+        if (root.get("oscHistogramChannel")          instanceof String s) oscHistogramChannel.set(enumOr(Channel.class, s, oscHistogramChannel.get()));
         Object leftColorObj  = root.get("oscLeftChannelColor");
         Object rightColorObj = root.get("oscRightChannelColor");
         if (leftColorObj  instanceof String s) oscLeftChannelColor.set(parseHtmlColor(s, oscLeftChannelColor.get()));
