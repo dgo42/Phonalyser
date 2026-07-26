@@ -51,10 +51,35 @@ public class Qa40xProtocol {
     public static final int REG_OUTPUT_FS       = 0x06;
     /** Stream / run control — reg {@code 0x08}; {@link #RUN_START}/{@link #RUN_STOP} (§4). */
     public static final int REG_RUN             = 0x08;
-    /** Sample-rate select — reg {@code 0x09}, code 0..2 (§4). */
+    /** Sample-rate select — reg {@code 0x09}, code 0..3 (§4). */
     public static final int REG_SAMPLE_RATE     = 0x09;
+    /** Front-panel I2S generator control — reg {@code 0x0A}; write
+     *  {@link #I2S_START} / {@link #I2S_STOP}, read = running flag (§4).  It
+     *  drives the expansion port's own EP-3 pair and is independent of the
+     *  analyzer's DAC/ADC loopback, so it neither disturbs nor depends on a
+     *  capture session. */
+    public static final int REG_I2S             = 0x0A;
+    /** Front-panel I2S frame width — reg {@code 0x0B}; {@link #i2sWidthCode(int)}
+     *  turns a bit depth into its value (§4). */
+    public static final int REG_I2S_WIDTH       = 0x0B;
     /** Calibration-page select — reg {@code 0x0D}; write {@link #CAL_PAGE_SELECT_VALUE} (§6). */
     public static final int REG_CAL_PAGE_SELECT = 0x0D;
+    /** Firmware build number — reg {@code 0x10}; real units report 60 (§4). */
+    public static final int REG_FIRMWARE_VERSION = 0x10;
+    /** USB bus voltage — reg {@code 0x11}, millivolts (§6 telemetry). */
+    public static final int REG_TELEM_USB_VOLTAGE = 0x11;
+    /** USB bus current — reg {@code 0x12}, milliamps (§6). */
+    public static final int REG_TELEM_USB_CURRENT = 0x12;
+    /** ISO-supply current — reg {@code 0x13}, milliamps; **QA402 only** (§6). */
+    public static final int REG_TELEM_ISO_CURRENT = 0x13;
+    /** Board temperature — reg {@code 0x16}, tenths of °C (§6). */
+    public static final int REG_TELEM_TEMPERATURE = 0x16;
+    /** Feature-bit word the app reads before building its rate menu — reg {@code 0x1B} (§4). */
+    public static final int REG_CAPABILITY       = 0x1B;
+    /** Per-model capability word — reg {@code 0x1C} (§4). */
+    public static final int REG_CAPABILITY2      = 0x1C;
+    /** Serial number — reg {@code 0x1D}, the 8 hex digits packed as a u32 (§4). */
+    public static final int REG_SERIAL_NUMBER    = 0x1D;
     /** Calibration data read port — reg {@code 0x19}, one 32-bit word per read (§6). */
     public static final int REG_CAL_READ        = 0x19;
 
@@ -71,6 +96,29 @@ public class Qa40xProtocol {
     public static final int RUN_START            = 0x05;
     /** {@link #REG_RUN} value that stops streaming / recovers an unclean state (§5). */
     public static final int RUN_STOP             = 0x00;
+
+    /** {@link #REG_I2S} value that starts the front-panel I2S generator (§4). */
+    public static final int I2S_START            = 0x01;
+    /** {@link #REG_I2S} value that stops it — also what the vendor app writes at
+     *  connect as a safe init (§6). */
+    public static final int I2S_STOP             = 0x00;
+
+    /** The two frame widths the front-panel I2S port runs at (§4); the analyzer's
+     *  own loopback is unaffected and stays at {@link #ANALYZER_BITS}. */
+    public static final int I2S_BITS_16          = 16;
+    public static final int I2S_BITS_32          = 32;
+    /** Delivered depth of the analyzer's own capture path — what the depth combo
+     *  offers while the I2S port is off. */
+    public static final int ANALYZER_BITS        = 24;
+
+    /** {@link #REG_I2S_WIDTH} value for a frame width: bit 6 set = 32-bit frames,
+     *  clear = 16-bit (§4).  Anything but {@link #I2S_BITS_16} is 32-bit, the
+     *  width the port boots at. */
+    private static final int I2S_WIDTH_32_FLAG   = 0x40;
+    private static final int I2S_WIDTH_16_FLAG   = 0x00;
+    /** {@link #REG_I2S_WIDTH} value written whenever the port is off — the same
+     *  cleared state a stopped session leaves behind. */
+    public static final int I2S_WIDTH_OFF        = 0x00;
     /** {@link #REG_CAL_PAGE_SELECT} value that selects the factory cal page (§6). */
     public static final int CAL_PAGE_SELECT_VALUE = 0x10;
 
@@ -169,6 +217,44 @@ public class Qa40xProtocol {
         }
         throw new IllegalArgumentException(
                 "output full-scale range must be one of -12/-2/+8/+18 dBV: " + dbv);
+    }
+
+    /** {@link #REG_TELEM_USB_VOLTAGE} (mV) as volts, {@code x.xxx V} (§6).  The
+     *  vendor app warns below 4.6 V. */
+    public String formatUsbVoltage(int raw) {
+        return String.format(Locale.US, "%.3f V", raw / 1000.0);
+    }
+
+    /** {@link #REG_TELEM_USB_CURRENT} / {@link #REG_TELEM_ISO_CURRENT} (mA) as
+     *  amps, {@code x.xxx A} (§6). */
+    public String formatCurrent(int raw) {
+        return String.format(Locale.US, "%.3f A", raw / 1000.0);
+    }
+
+    /** {@link #REG_TELEM_TEMPERATURE} (tenths of °C) as {@code xx.x °C} (§6). */
+    public String formatTemperature(int raw) {
+        return String.format(Locale.US, "%.1f °C", raw / 10.0);
+    }
+
+    /** A capability word as the {@code 0x…} hex the protocol notes quote (§4). */
+    public String formatCapability(int raw) {
+        return String.format(Locale.US, "0x%08X", raw);
+    }
+
+    /** {@link #REG_SERIAL_NUMBER} — the packed u32 back as its 8 hex digits (§4). */
+    public String formatSerialNumber(int raw) {
+        return String.format(Locale.US, "%08X", raw);
+    }
+
+    /** Maps an I2S frame width in bits to its reg-{@code 0x0B} value (§4). */
+    public int i2sWidthCode(int bits) {
+        return bits == I2S_BITS_16 ? I2S_WIDTH_16_FLAG : I2S_WIDTH_32_FLAG;
+    }
+
+    /** The frame widths the front-panel I2S port offers, ascending — what the
+     *  depth combo shows in place of {@link #ANALYZER_BITS} while it is on. */
+    public int[] i2sBitDepths() {
+        return new int[] { I2S_BITS_16, I2S_BITS_32 };
     }
 
     /** Maps a sample rate (Hz) to its reg-{@code 0x09} code, 0..3 (§4).  Code 3

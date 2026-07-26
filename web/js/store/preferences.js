@@ -81,7 +81,11 @@ import { fromNameOr as persistenceFromNameOr } from '../scope/scope-enums.js';
 
 // --- enum value sets (the legal serialised names, mirroring the Java enums) ---
 const E = {
-  AudioBackendType: ['WASAPI', 'WDMKS', 'COREAUDIO', 'JAVASOUND'],
+  // WEB_AUDIO and QA40X are the backends a BROWSER actually has (Java's OS backends have no
+  // counterpart here). The four OS names stay legal so a value persisted by an earlier build still
+  // loads — enumOr() gates both `backend` and every perBackend map key, and an unknown name is
+  // silently dropped, which would orphan that backend's saved device selections.
+  AudioBackendType: ['WASAPI', 'WDMKS', 'COREAUDIO', 'JAVASOUND', 'WEB_AUDIO', 'QA40X'],
   Channel: ['L', 'R'],
   TriggerEdge: ['RISE', 'FALL'],
   TriggerType: ['EDGE', 'GLITCH'],
@@ -330,6 +334,16 @@ export class Preferences {
     this.transientMode = !!detached;
     /** @type {Map<string, BackendPrefs>} keyed by AudioBackendType name. */
     this._perBackend = new Map();
+    /** Component-owned preference blocks, keyed by their key() (Java: customPrefs).
+     *  Registered by their owners (backend managers), which are built lazily — so
+     *  this fills up long after load() has run.
+     *  @type {Map<string, import('../qa40x/qa40x-preferences.js').SubPreferences>} */
+    this._customPrefs = new Map();
+    /** The `custom` section exactly as load() read it (Java: customRaw). Keeps the
+     *  block of an extension that never registered this session alive across a save,
+     *  and lets registerCustomPreferences replay a late registrant's saved values.
+     *  @type {Map<string, *>} */
+    this._customRaw = new Map();
 
     // ---- top-level scalar/enum properties (bound: a real change auto-saves) ---
     this.backend = this._bound('WASAPI');
@@ -986,6 +1000,37 @@ export class Preferences {
   // persistence
   // -------------------------------------------------------------------------
 
+  /**
+   * Registers a component-owned preference block, and immediately hands it whatever
+   * the loaded document held under its key(). That replay is the point: backend
+   * managers are built lazily, so they register long after load() ran and would
+   * otherwise never see their saved values. Registering the same key twice replaces
+   * the earlier entry (a manager rebuilt after a backend switch is not a second
+   * block). Mirrors Preferences.registerCustomPreferences.
+   *
+   * @param {?import('../qa40x/qa40x-preferences.js').SubPreferences} sub
+   */
+  registerCustomPreferences(sub) {
+    if (sub == null) return;
+    this._customPrefs.set(sub.key(), sub);
+    const stored = this._customRaw.get(sub.key());
+    if (asMap(stored)) sub.fromMap(stored);
+  }
+
+  /** Seeds every registered block's edit values from its live ones — the Preferences
+   *  dialog calls this as it opens, so an edit abandoned by a previous Cancel cannot
+   *  leak into this session (beginCustomPreferencesEdit). */
+  beginCustomPreferencesEdit() {
+    for (const sub of this._customPrefs.values()) sub.beginEdit();
+  }
+
+  /** Commits every registered block's edit values into its live ones — called only
+   *  when the Preferences dialog is closed with OK, alongside the ordinary
+   *  apply-from-dialog and before the save (commitCustomPreferencesEdit). */
+  commitCustomPreferencesEdit() {
+    for (const sub of this._customPrefs.values()) sub.commitEdit();
+  }
+
   /** Persists after a bound change — no-op while loading; debounced into a
    *  single write SAVE_COALESCE_MS after the last change (requestSave). */
   _requestSave() {
@@ -1390,6 +1435,14 @@ export class Preferences {
       };
     }
     root.perBackend = perBackendMap;
+    // Component-owned blocks. Start from what the document held so an extension that
+    // never registered this session (its backend was never selected) keeps its saved
+    // settings instead of losing them on the next save.
+    const customMap = Object.fromEntries(this._customRaw);
+    for (const sub of this._customPrefs.values()) {
+      customMap[sub.key()] = sub.toMap();
+    }
+    if (Object.keys(customMap).length > 0) root.custom = customMap;
     return root;
   }
 
@@ -1397,6 +1450,18 @@ export class Preferences {
    *  (same type gates, same clamps/migrations, same colour parsing). */
   _fromMap(root) {
     const g = (k) => root[k];
+
+    // Component-owned blocks: keep the raw section so a block whose owner has not
+    // registered yet (or never will this session) survives the next save, and feed
+    // anything already registered right away.
+    this._customRaw.clear();
+    if (asMap(g('custom'))) {
+      for (const [key, block] of Object.entries(g('custom'))) {
+        this._customRaw.set(key, block);
+        const sub = this._customPrefs.get(key);
+        if (sub != null && asMap(block)) sub.fromMap(block);
+      }
+    }
 
     if (isStr(g('uiLanguage'))) this.uiLanguage.set(g('uiLanguage'));
     if (isStr(g('tabOrientation'))) this.tabOrientation.set(enumOr('TabOrientation', g('tabOrientation'), this.tabOrientation.get()));

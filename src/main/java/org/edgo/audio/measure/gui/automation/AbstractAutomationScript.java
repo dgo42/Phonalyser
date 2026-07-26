@@ -39,6 +39,7 @@ import org.eclipse.swt.widgets.Composite;
 import org.eclipse.swt.widgets.Control;
 import org.eclipse.swt.widgets.Display;
 import org.eclipse.swt.widgets.Shell;
+import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.GenSignalForm;
 import org.edgo.audio.measure.gui.MainWindow;
 import org.edgo.audio.measure.gui.common.CalibrationDialog;
@@ -54,6 +55,10 @@ import org.edgo.audio.measure.gui.registry.UiNode;
 import org.edgo.audio.measure.gui.registry.UiRegistry;
 import org.edgo.audio.measure.gui.scope.ScopePane;
 import org.edgo.audio.measure.preferences.Preferences;
+import org.edgo.audio.measure.sound.AudioBackend;
+import org.edgo.audio.measure.sound.AudioDeviceManager;
+import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceManager;
+import org.edgo.audio.measure.sound.qa40x.Qa40xSettingsDialog;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -108,6 +113,10 @@ public abstract class AbstractAutomationScript {
      *  snapshotted via its content composite and disposed by
      *  {@link #closeCalibration()}; null otherwise. */
     private CalibrationDialog calibrationDialog;
+    /** The QA40x backend's own settings dialog opened for capture; snapshotted
+     *  via its shell and disposed by {@link #closeQa40xSettings()}; null
+     *  otherwise. */
+    private Qa40xSettingsDialog qa40xSettingsDialog;
     /** Shell of the Tune-notch wizard while {@link #openTuneNotch()} keeps it
      *  up; disposed by {@link #closeTuneNotch()}; null otherwise. */
     private Shell tuneNotchShell;
@@ -417,6 +426,42 @@ public abstract class AbstractAutomationScript {
                 snapshot(content, pngPath);
             }
         }
+    }
+
+    /** Opens the QA40x backend's own settings dialog for capture — requires the
+     *  QA40x backend selected and the analyzer attached, since the panel's values
+     *  are read off the device.  Non-modal, so {@link #screenshotQa40xSettings}
+     *  can snapshot it.  Pair with {@link #closeQa40xSettings()}. */
+    protected final void openQa40xSettings() {
+        ui(() -> {
+            AudioDeviceManager manager = AudioBackend.instance().manager(AudioBackendType.QA40X);
+            qa40xSettingsDialog = (manager instanceof Qa40xDeviceManager qa40x && preferencesShell != null)
+                    ? qa40x.openCustomPreferencesForCapture(preferencesShell)
+                    : null;
+        });
+    }
+
+    /** Snapshots the QA40x settings dialog opened by {@link #openQa40xSettings()}
+     *  to {@code pngPath} at its on-screen size (no-op if not open). */
+    protected final void screenshotQa40xSettings(String pngPath) {
+        if (qa40xSettingsDialog != null) {
+            Control content = qa40xSettingsDialog.getContent();
+            if (content != null && !content.isDisposed()) {
+                snapshot(content, pngPath);
+            }
+        }
+    }
+
+    /** Closes the QA40x settings dialog opened by {@link #openQa40xSettings()}
+     *  (no-op if none). */
+    protected final void closeQa40xSettings() {
+        ui(() -> {
+            if (qa40xSettingsDialog != null && qa40xSettingsDialog.getContent() != null
+                    && !qa40xSettingsDialog.getContent().isDisposed()) {
+                qa40xSettingsDialog.getContent().getShell().close();
+            }
+            qa40xSettingsDialog = null;
+        });
     }
 
     /** Closes the card editor opened by {@link #openInputCardEditor()} (no-op if

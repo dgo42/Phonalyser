@@ -79,6 +79,23 @@
      Full-scale is the device's own range calibration, so manual calibration is
      not possible: the Calibrate dialog opens read-only and simply shows the
      card's built-in full-scale for each channel.</div>
+  <div class="note"><b>QA40x settings.</b> With the QA40x selected, a settings
+     button appears next to the backend list — it opens the analyzer's own
+     settings, which no other backend has.  The dialog reads the instrument's
+     identity and live telemetry straight off it (firmware version, serial
+     number, USB voltage and current, ISO-supply current on the QA402, board
+     temperature and the two capability words) and switches the <b>front-panel
+     I2S expansion port</b> on or off.  The port is started before a measurement
+     session and stopped after it; its frame width comes from the
+     <b>output</b> bit depth, so while I2S is on that list offers the port's
+     <b>16 and 32 bits</b> in place of the analyzer's 24 — the input stays at 24
+     throughout.  Like every other page of the dialog these take effect only on
+     OK.  Switching the port is <b>experimental</b>: QuantAsylum documents the
+     connector itself, but not the USB registers that enable it and set its frame
+     width, so that control path is not vendor-confirmed — as the dialog itself
+     states.</div>
+  <p><img src="img/Preferences Audio QA40x.png" alt="Preferences — Audio tab with the QA40x backend selected"/></p>
+  <p><img src="img/QA40x settings.png" alt="QA40x settings dialog"/></p>
 
   <h3 id="prefs-audio-card">Card — per-card calibration profiles</h3>
   <p>Full-scale calibration — the volts RMS that map to the converter's ±1.0

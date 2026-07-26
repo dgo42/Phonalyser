@@ -5,19 +5,16 @@ backend that talks to the QuantAsylum QA40x family of audio analyzers directly
 over **libusb-1.0**, without the vendor Windows software. It collects the wire
 protocol (USB identity, endpoints, register map, streaming format, on-device
 calibration, init/teardown sequencing, and hardware quirks) as **facts learned
-by reading two open-source projects**, and — as of **2026-07-20** — augmented by
-**observing the USB register traffic** the vendor Windows app puts on the bus
-while it runs against an **RT1062 QA403 simulator** (the `QA40x_sim`
-subproject) and against a genuine analyzer. Every statement carries its source.
-Items the two open-source projects disagree on, or that only one knows, are in
-§9 CONFLICTS / UNVERIFIED; the 2026-07-20 addition (the connect handshake — §6)
-is **observed on the wire + hardware-confirmed**, but
-two things still need a **genuine QA403** and are called out in §9 item 15 (the
-balanced level/clip convention, and whether real hardware gaps at 192 k / 1 M-FFT).
-A **2026-07-22 measurement finding (§11)** grades the vendor software's
-noise/SNR estimator against constructed ground truth on the RT1062 simulator —
-magnitude (not power) spectrum averaging plus a fixed ≈0.8 dB constant flatter
-its noise readouts by 0.8–1.8 dB depending on the averaging count.
+by reading open-source projects** — PyQa40x, ASIO401, and (as of **2026-07-24**)
+raph29's `virtual-qa40x-rs` — cross-checked against an **RT1062 QA403 simulator**
+(the maintainer's `QA40x` simulator subproject, a sibling repository). Every
+statement carries its source. Items
+the sources disagree on, or that only one knows, are in §9 CONFLICTS /
+UNVERIFIED; the cal-page CRC/format, live status registers, and extended register
+map (§4, §6) come from **raph29's public USB capture of a real unit** and are
+confirmed on the simulator, but two things still need a **genuine QA403** and are
+called out in §9 item 15 (the balanced level/clip convention, and whether real
+hardware gaps at 192 k / 1 M-FFT).
 
 ## Sources
 
@@ -26,7 +23,8 @@ its noise readouts by 0.8–1.8 dB depending on the averaging count.
 | **PyQa40x** | <https://github.com/QuantAsylum/PyQa40x> | MIT (`doc/licences/PyQa40x-LICENSE.txt`) | © 2026 QuantAsylum | **Authoritative** — the vendor's own Python driver. Only source for on-device calibration + raw↔volts math. Covers QA402/QA403 only. |
 | **ASIO401** | <https://github.com/dechamps/ASIO401> | MIT (`doc/licences/ASIO401-LICENSE.txt`) | © 2018 Etienne Dechamps | Windows ASIO driver, developed with QuantAsylum. **Only its QA40x USB transport layer + docs are used here** (all ASIO-SDK material is ignored). Authoritative on the full-duplex streaming discipline and on the QA401. |
 | **QA blog** | <https://quantasylum.com/blogs/news/qa401-headless-linux> | vendor web page (referenced, nothing copied) | QuantAsylum | Vendor post on headless QA401 under Linux: QA401 VID/PID, the udev rule, confirms libusb, and states the app configures the QA401's **FPGA** at startup (30–60 s). |
-| **RT1062 sim bench** | `QA40x_sim` (this project) | — | — | 2026-07-20 — an RT1062 firmware QA403 simulator. Running the vendor Windows app against it (and against a genuine analyzer) put the app's **register traffic on the bus where it can be logged**: this is the source of the connect **handshake**, and it confirmed streaming behavior end-to-end — clean captures (§5/§6). Black-box bus observation only. |
+| **RT1062 sim bench** | `QA40x` simulator (sibling repository) | — | — | 2026-07-20 — an RT1062 firmware QA403 simulator; running the QA40x GUI against it **confirmed** the register / cal / telemetry facts end-to-end (valid cal, live telemetry, clean captures) and surfaced the connect **handshake** + streaming behavior (§5/§6). |
+| **virtual-qa40x-rs** | <https://github.com/GarageDeveloper/virtual-qa40x-rs> (v0.5.0) | MIT | © 2026 Raphaël Enrici (raph29) | 2026-07-24 — a Rust **USB/IP virtual QA402/QA403** built from a **wire capture of a real unit** (for I2S-connector support). **Authoritative on the registers the GUI reads that PyQa40x/ASIO401 never touch**: firmware version (0x10), capability (0x1B/0x1C), serial (0x1D), I2S (0x0A/0x0B + a 3rd EP pair), firmware trace (0x14/0x15), stream status (0x1E), bootloader (0x0F) — including the connect-probe reads §9 item 14 had left "purpose unknown". Cited `[raph <file>:<line>]` against `crates/vqa40x-core/src/`. |
 
 **Vendor-authority rule (maintainer, 2026-07-10).** PyQa40x is QuantAsylum's
 own code — a fact whose only source is PyQa40x is treated as
@@ -35,15 +33,28 @@ genuine conflicts, ASIO401-only empirical values, and hardware-dependent
 unknowns; formerly single-source-PyQa40x items are marked RESOLVED under this
 rule (numbering kept stable for cross-references).
 
-### What's new from the 2026-07-20 hardware-day (for the Phonalyser backend)
+### What's new: raph29's USB capture + the RT1062 sim bench
 
-New facts, all observed in the USB register traffic and confirmed on the RT1062
-sim and on genuine hardware. A **libusb backend needs none of them to stream**
-(they're for GUI-parity / richer UI), but they're now known:
+New facts from **raph29's `virtual-qa40x-rs`** — a public USB capture of a real
+QA402/QA403 (MIT) — cross-checked on the RT1062 sim. A **libusb backend needs
+none of them to stream** (they're for GUI-parity / richer UI), but they're now
+known:
 
-- **Connect handshake** (§6): the app echo-probes reg `0x00` with a nonce each
-  poll, and one-shot reads regs `0x0A/0x10/0x1B/0x1D` at connect (meaning
-  unknown; returning 0 is fine).
+- **Live status registers the GUI polls (~2 Hz), read via `0x80|reg`, BE**
+  (§6): `0x11` = USB bus **voltage in mV**, `0x12` = USB **current in mA**,
+  `0x16` = **temperature in 0.1 °C**, `0x13` = ISO current mA (QA402-only)
+  [raph analyzer.rs:241-254]. Phonalyser could surface these; harmless to ignore.
+- **Extended register map** (§4): the registers the GUI reads that PyQa40x /
+  ASIO401 never touch — firmware version `0x10`, capability `0x1B`/`0x1C`,
+  serial `0x1D`, I2S `0x0A`/`0x0B`, firmware trace `0x14`/`0x15`, stream status
+  `0x1E`, bootloader `0x0F` — are all mapped from raph29's capture. This resolves
+  the connect-probe reads (`0x0A/0x10/0x1B/0x1D`) §9 item 14 had left "unknown".
+- **Cal-page format is a self-validating page with a CRC** (§6): version/flags
+  @0, block markers `0x0023`/`0x0011` + `0xDEAD` sentinels @12/@168, the `'<hf'`
+  records at the known offsets, and a **CRC-16/BUYPASS** (poly 0x8005) over bytes
+  [0,510) stored big-endian at [510/511] [raph calpage.rs:8-24,79-97].
+  **PyQa40x/ASIO401/a libusb backend read only the records and can skip the CRC**
+  (as Phonalyser already does).
 - **Streaming reality check** (§5): a real-time 192 k loopback with no analog
   buffer between DAC and ADC must NOT emit silence when the host stalls —
   silence >~6800 frames corrupts the host FFT. (Sim-specific, but the lesson —
@@ -53,14 +64,29 @@ sim and on genuine hardware. A **libusb backend needs none of them to stream**
   Vrms) or literal (clips 9 dB low, at Vpp)? (b) does real hardware gap at
   192 k / 1 M-FFT? Community measurement requested.
 
-Both sources are MIT; copies of both licenses live in `doc/licences/`.
-Phonalyser's runtime USB library, **libusb-1.0**, is a dependency (not a protocol
-source) and is **LGPL-2.1** — a copy lives in
-[`doc/licences/libusb-COPYING`](licences/libusb-COPYING). Citations
-are inline as `[PyQa40x <path>:<line>]` / `[ASIO401 <path>:<line>]`. The cited
-`<path>` is a **bare basename** (e.g. `qa403.cpp`, `analyzer.py`); resolve it
-against a checkout of the corresponding upstream project (both linked under
-**Sources** above). Line numbers refer to those upstream files.
+All three code sources (PyQa40x, ASIO401, raph29's `virtual-qa40x-rs`) are MIT;
+copies of the PyQa40x + ASIO401 licenses live in `doc/licences/`, and raph29's is
+in [`doc/licences/virtual-qa40x-rs-LICENSE.txt`](licences/virtual-qa40x-rs-LICENSE.txt)
+(© 2026 Raphaël Enrici). Phonalyser's runtime
+USB library, **libusb-1.0**, is a dependency (not a protocol source) and is
+**LGPL-2.1** — a copy lives in
+[`doc/licences/libusb-COPYING`](licences/libusb-COPYING). Citations are inline as
+`[PyQa40x <path>:<line>]` / `[ASIO401 <path>:<line>]` / `[raph <file>:<line>]`.
+The cited `<path>` is a **bare basename** (e.g. `qa403.cpp`, `analyzer.py`);
+resolve it against these base directories:
+
+- **ASIO401 sources** live under `tmp/qa40x-refs/ASIO401/src/asio401/ASIO401/`
+  (e.g. `[ASIO401 qa403.cpp:8]` → `…/ASIO401/src/asio401/ASIO401/qa403.cpp`).
+  The Markdown docs `CONFIGURATION.md` / `FAQ.md` / `README.md` are at the
+  ASIO401 clone root `tmp/qa40x-refs/ASIO401/`.
+- **PyQa40x sources** live under `tmp/qa40x-refs/PyQa40x/src/PyQa40x/`
+  (e.g. `[PyQa40x analyzer.py:56]` → `…/PyQa40x/src/PyQa40x/analyzer.py`).
+- **raph29 sources** are cited by basename from `virtual-qa40x-rs`
+  (`crates/vqa40x-core/src/`)
+  (e.g. `[raph analyzer.rs:240]` → `…/vqa40x-core/src/analyzer.rs`); `options.rs`
+  and `calpage.rs` are in the same directory.
+
+Line numbers in the cites are against these files.
 
 The GPL `QA40x-ALSA-plug` project is deliberately **not** referenced (maintainer
 decision).
@@ -147,6 +173,14 @@ descriptively, with no Bulk check or branch). Direction is encoded in bit
 Note the audio DAC (`0x02` OUT) and ADC (`0x82` IN) **share endpoint number 2**;
 registers use endpoint 1.
 
+**Third (front-panel I2S) endpoint pair — `0x03` OUT / `0x83` IN.** raph29's
+capture shows the real unit also exposes a bulk EP-3 pair for the front-panel
+I2S generator (register `0x0A` starts it, §4): the host streams sample blocks on
+`0x03` OUT (one 2048-frame block ≈ every 42.7 ms at 48 kHz), and `0x83` IN is
+opened by the app but never observed to carry data [raph analyzer.rs:596-744].
+It is **independent of the analyzer's DAC/ADC loopback** and irrelevant to a
+Phonalyser capture backend — listed here only for completeness.
+
 ### QA401 (different pipes)
 
 ASIO401 constructs the QA401 with exactly **three** pipe IDs
@@ -232,7 +266,41 @@ register-read at all** (cal or otherwise). PyQa40x reads
 
 Sources: reg 5/6 [PyQa40x control.py:28,38], reg 8 [PyQa40x stream.py:40,48;
 ASIO401 qa403.cpp:15,28], reg 9 [PyQa40x control.py:48], reg 0xD/0x19
-[PyQa40x control.py:58-65]. Registers not listed here are unknown.
+[PyQa40x control.py:58-65]. Registers not in the extended map below are unknown.
+
+#### Extended register map — raph29 USB capture (wire-confirmed, 2026-07-24)
+
+**Source: raph29's `virtual-qa40x-rs` (MIT), built from a USB capture of a real
+unit.** These are the registers the QA40x GUI reads/writes that PyQa40x and
+ASIO401 never touch — **a libusb capture backend needs none of them**, but they
+are what a device must answer to look real to the vendor app (and they resolve
+the connect-probe reads §6/§9-item-14 previously called "unknown"). All reads use
+the `0x80|reg` path of §4, big-endian. `[raph …]` cites
+`crates/vqa40x-core/src/`.
+
+| Reg | Name | Access | Value / meaning |
+|---|---|---|---|
+| `0x00` | **Link keepalive / echo** | R/W | write a nonce, read it back — the app's register-channel health probe; a device MUST echo it [raph analyzer.rs:227,299] |
+| `0x0A` | **I2S control** | R/W | front-panel I2S: write `1` = start, `0` = stop; read = running flag. The app writes 0 at connect (safe init). Streams on the EP-3 pair (§3), not the analyzer loopback [raph analyzer.rs:360] |
+| `0x0B` | **I2S frame width** | R/W | bit 6 set (`0x40`) = 32-bit frames, else 16-bit; boots `0x40` [raph analyzer.rs:378] |
+| `0x0D` | **Page select** | W | `0x10 + 2·page` selects a flash page (page 0 = factory cal, the only one with data; others read zeros); `1` selects the firmware-trace buffer. Any write resets the `0x19`/`0x14` read pointer [raph analyzer.rs:384] |
+| `0x0F` | **Bootloader entry** | W | two-magic unlock: write `0xDEADBEEF` then `0xCAFEBABE` → reboot into the NXP KBOOT DFU bootloader (`1fc9:0022`) for a firmware flash [raph analyzer.rs:391] |
+| `0x10` | **Firmware version** | R | build number; **real units report 60** [raph analyzer.rs:240] |
+| `0x11` | USB bus voltage | R | mV (see §6 telemetry) [raph analyzer.rs:241] |
+| `0x12` | USB bus current | R | mA (see §6) [raph analyzer.rs:242] |
+| `0x13` | ISO-supply current | R | mA; **QA402-only** (QA403 shows `---`) [raph analyzer.rs:243] |
+| `0x14` | **Firmware-trace read** | R | 4 bytes/word of the trace buffer selected by `0x0D`=1; a healthy unit's trace reads all zeros [raph analyzer.rs:250] |
+| `0x15` | **Firmware-trace length** | R | trace byte length; a real unit answered **`0x418`** (empty trace) [raph analyzer.rs:249] |
+| `0x16` | temperature | R | 0.1 °C (see §6) [raph analyzer.rs:254] |
+| `0x1B` | **Capability word** | R | feature bits the app reads **at connect, before building its sample-rate menu**; real QA402 = `0x40000040` (a real QA403's value is not yet confirmed) [raph analyzer.rs:275; options.rs:76] |
+| `0x1C` | **Capability word 2** | R | per-model; QA402 = `0x02A35B03` (wire-confirmed "[MATCH]"), QA403 = `0x7F31BD30` (expected, unconfirmed) [raph options.rs:47] |
+| `0x1D` | **Serial number** | R | the serial's 8 hex digits packed as a u32 (e.g. "AB12_CD34" → `0xAB12CD34`) [raph analyzer.rs:280; options.rs:201] |
+| `0x1E` | **Stream status** | R | `0x40` for ~500 ms after a stream stop, `0x00` when idle — the app's stop/restart probe [raph analyzer.rs:281] |
+
+The bootloader (`0x0F`) and I2S (`0x0A`/`0x0B` + EP-3) paths are documented for
+completeness; a Phonalyser capture backend leaves them alone. The RT1062 sim
+answers all of the **read** registers with these values so the vendor app sees a
+fully-formed device.
 
 #### Input full-scale range codes — reg 0x05
 
@@ -303,10 +371,6 @@ The 384 kHz path is exercised against the maintainer's hardware simulator; no
 QA403 is available for a direct bench check, so should output artefacts ever be
 reported at this rate, revisit the ASIO401 claim and gate the generator lane
 rather than withdraw the rate.
-
-Note the queue headroom shrinks with rate: the 1024-frame hardware queue is only
-~2.7 ms at 384 kHz and must be refreshed roughly every ~2.5 ms (§ Transfer
-sizing) [ASIO401 FAQ.md:75-78].
 
 ### Register map (QA401) — DIFFERENT, "black magic"
 
@@ -474,22 +538,68 @@ Factory cal is a **512-byte page** on the device
 `0x80|0x19` with 0, then bulkRead 4 bytes big-endian; the returned word is then
 re-serialized little-endian into the blob.)
 
-**Full connect handshake observed against the simulator (vendor Windows app,
-2026-07-20)** — the register traffic the app issues right after opening the
-interface, in order:
-- reg `0x00` written then read back twice with **random 32-bit values** (echo
-  probe — the app writes a nonce and reads it back to confirm the register
-  channel works). A conformant device must echo reg 0x00.
+**The 512-byte page is a self-validating structure with a CRC [raph
+calpage.rs:8-97 — from a public USB capture of a real unit, confirmed on the
+RT1062 sim].** The official app rejects a page whose CRC or block markers are
+wrong as "invalid calibration data" (non-fatal — it still connects and streams).
+Neither PyQa40x nor ASIO401 checks any of this (PyQa40x's `load_calibration()`
+only `struct.unpack`s the records [PyQa40x control.py:51-67]), so a **libusb
+backend is unaffected** — but the sim reproduces the full structure so the app
+shows a valid, calibrated device.
+
+Page layout (host byte order — the wire carries each 4-byte word reversed; all
+fields LE except the CRC; 6-byte records = `int16 level + float32 value`, i.e.
+PyQa40x's `'<hf'`) [raph calpage.rs:8-24]:
+
+| offset | size | field | value |
+|---|---|---|---|
+| 0   | 4 | version / flags | **0** |
+| 4   | 4 | payload length (16-bit words) | 76 (CRC-covered) |
+| 8   | 4 | schema-id constant | 50 (CRC-covered) |
+| 12  | 4 | block marker + sentinel | **`23 00` + `AD DE`** = `0x0023`, `0xDEAD` |
+| 16  | 4 | AdcRanges | 8 |
+| 20  | 4 | DacRanges | 4 |
+| 24  | 8×12 | ADC records | L@24+12·i, R@30+12·i; level = 0,6,…,42 dBV |
+| 120 | 4×12 | DAC records | L@120+12·j, R@126+12·j; level = −12,−2,8,18 dBV |
+| 168 | 4 | end marker + sentinel | **`11 00` + `AD DE`** = `0x0011`, `0xDEAD` |
+| 172…509 | 338 | padding | zero (CRC-covered) |
+| 510 | 2 | CRC-16, **big-endian** | high @510, low @511 |
+
+(Read as LE u32s the two markers are `0xDEAD0023` @12 and `0xDEAD0011` @168.)
+The `level` int16 is the app's cal lookup key, so it must equal the exact range
+dBV values. `value` (dB→linear `10^(dB/20)`) is not range-checked on load.
+
+**CRC = CRC-16/BUYPASS** (aka CRC-16/UMTS: width 16, poly **0x8005**, init 0,
+refin/refout false, xorout 0) over the **first 510 bytes**, stored **big-endian**
+at `[510]`=high, `[511]`=low [raph calpage.rs:79-97]. A page whose last two bytes
+don't equal this CRC of the preceding 510 is rejected as invalid calibration.
+
+**Full connect handshake** — the register traffic the app issues right after
+opening the interface, in order (observed on the wire, confirmed on the sim):
+- reg `0x00` written then read back with **random 32-bit values** (echo probe —
+  the app writes a nonce and reads it back to confirm the register channel
+  works). A conformant device must echo reg 0x00 [raph analyzer.rs:227,299].
 - reg `0x08` = 0 (stop/reset to idle).
-- reads of regs `0x10`, `0x1D`, `0x1B`, and a write to reg `0x0A` — **purpose
-  unknown** (not in the PyQa40x/ASIO401 map; likely status/identity/version).
-  Returning 0 did not stop the app from connecting.
+- reads of regs `0x10` (firmware version), `0x1D` (serial), `0x1B` (capability),
+  and a write to reg `0x0A` = 0 (I2S off, safe init) — **now mapped from raph29's
+  capture** (§4 extended register map). Returning 0 for them does not stop the
+  app connecting, but the real values are known.
 - reg `0x0D` = 0x10 then 128× reg `0x19` — the cal-page read of this section.
 
-**Steady-state keepalive [RESOLVED — observed on the bus, hardware-confirmed
-2026-07-20].** Once connected, the app repeats an echo keepalive continuously
-(500 ms timer): write reg `0x00` = a nonce, then read reg `0x00` back. A libusb
-backend does not need it.
+**Steady-state poll loop + live status registers.** Once connected, the app
+repeats this loop continuously (~500 ms timer): write reg `0x00` = a nonce, read
+reg `0x00` back (echo keepalive), then read **regs `0x11`, `0x12`, `0x16`** in
+order (all via the normal `0x80|reg` big-endian read path) [raph
+analyzer.rs:241-254]. These are live status telemetry the app displays:
+
+| reg | meaning | raw units | app formula / display |
+|---|---|---|---|
+| `0x11` (17) | USB bus voltage | **millivolts** | `raw/1000` → `USB Voltage: x.xxxV`; `<4.6 V` triggers a "USB voltage is low" warning |
+| `0x12` (18) | USB bus current | **milliamps** | `raw/1000` → `USB Current: x.xxxA` |
+| `0x13` (19) | ISO-supply current | milliamps | **QA402 only**; the QA403 never reads it (shows `ISO Current: ---`) — consistent with the observed 0x11/0x12/0x16-only loop |
+| `0x16` (22) | temperature | **tenths of °C** | `raw/10` → `xx.xC` |
+
+A device returning 0 shows `0 V / 0 A`. A libusb backend ignores all of these.
 
 ### Blob layout
 
@@ -547,7 +657,6 @@ generated tone to peak amplitude first, or drop the `+3`.
 (the same values that map to reg-5 / reg-6 codes). Remember DAC L/R are swapped
 before scaling (§5). The `−6` on the ADC side is the differential-ADC factor, not
 a peak/RMS term.
-
 
 ### Levels cheat-sheet — the input "FS dBV" is really dBFS (bench 2026-07-20)
 
@@ -837,27 +946,36 @@ QA401 differences are in §8.
 
 15. **[OPEN — awaiting real-QA403 measurement, community asked 2026-07-20] Two
     questions the RT1062 simulator can't answer without genuine hardware:**
-    (a) **Balanced level / clip convention.** The vendor ADC formula subtracts
-    −6 dB (the sim keeps it, so the QA GUI reads 0 dBV out → 0 dBV in). The
-    consequence is the input range clips at `10^((N−6)/20)` V *peak* (6 dBV
-    range → 1.0 Vpk = 2 Vpp), NOT at the range label's 2 Vrms. Is that what a
-    real QA403 does on a balanced-out → differential-in loopback, or is the −6
-    a single-ended offset that Phonalyser's `Qa40xLevels` correctly drops for
-    the balanced path (§10)? Measure: gen 0 dBV, FFT balanced→diff, note the
-    clip voltage per input range.
+    (a) **Balanced level / clip convention — two candidate answers.** Does a
+    balanced-out → differential-in loopback on a real QA403 make the vendor GUI
+    read the generated level **+6 dB** (In+ − In− = 2·Out+, a differential
+    doubling the vendor's −6 dB ADC term does NOT cancel) or **+0 dB** (the −6
+    IS the balanced-vs-single-ended offset, cancelling it)? The two independent
+    reverse-engineers split: the **RT1062 sim adds the ×2 (+6)**, so 0 dBV out →
+    +6 dBV in (matching the QA doc's −10 → −4 example); **raph29's
+    `virtual-qa40x-rs` does NOT** (0 dBV out → 0 dBV in) [raph
+    analyzer.rs:479-492]. Both models are only self-consistent with the served
+    cal page, not absolute-level measurements of real hardware, so neither
+    settles it — only a **genuine QA403** does. Measure: gen 0 dBV, FFT
+    balanced→diff, note the measured level and the clip voltage per input range.
     (b) **Gaps at 192 kHz / 1 M-point FFT.** The sim (with pause-on-underrun)
     shows NO gaps at any FFT size. Does a genuine QA403 also stay clean at
     192 k + 1024k FFT on the same host, or does its smaller (1024-frame) HW
     queue gap when the host stalls? This bounds how faithfully the sim's deep
     buffering should model real hardware.
 
-14. **[RESOLVED — observed on the bus, hardware-confirmed 2026-07-20] Connect
-    handshake.** Logged from the register traffic the vendor Windows app puts on
-    the USB bus and confirmed on the RT1062 simulator: the reg `0x00` echo probe
-    at connect plus the 500 ms echo keepalive (§6). A **libusb backend needs none
-    of it** (connects/streams without).
-    Still open from the connect probe: the meaning of the one-shot connect reads
-    of regs 0x0A/0x10/0x1B/0x1D (returning 0 did not block the app) — minor.
+14. **[RESOLVED — raph29 public capture + sim, 2026-07-24] Cal-page CRC, format,
+    extended registers, and live status.** raph29's `virtual-qa40x-rs` (a USB
+    capture of a real unit, MIT) documents: the cal page is a self-validating
+    structure with block markers `0x0023`/`0x0011` (+`0xDEAD` sentinels) and a
+    **CRC-16/BUYPASS** over bytes [0,510) big-endian at [510/511] (full layout in
+    §6); the live poll reads USB voltage (0x11, mV), current (0x12, mA),
+    temperature (0x16, 0.1 °C) + QA402-only ISO current (0x13); and the connect
+    reads now map (§4 extended register map) — `0x10` firmware version, `0x1B`/
+    `0x1C` capability, `0x1D` serial, `0x0A`/`0x0B` I2S. A **libusb backend needs
+    none of it** (connects/streams without). Confirmed end-to-end on the RT1062
+    sim — the connect-probe reads §6 previously called "unknown" are no longer
+    open.
 
 ---
 
@@ -930,7 +1048,6 @@ realized.
   PyQa40x pre-scales its generated tone by √2, which is why the formula's `+3` dB
   term closes (§6, §9 item 12). A Phonalyser generator emitting RMS-scaled samples
   must convert to peak first or it will be ~3 dB hot.
-
 ---
 
 ## 11. Measurement finding — QA40x software noise/SNR estimator (2026-07-22)

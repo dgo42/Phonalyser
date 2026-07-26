@@ -27,7 +27,6 @@ import org.edgo.audio.measure.sound.coreaudio.CoreAudioDeviceManager;
 import org.edgo.audio.measure.sound.javasound.JavaSoundDeviceManager;
 import org.edgo.audio.measure.sound.qa40x.Qa40xDeviceManager;
 import org.edgo.audio.measure.sound.wasapi.WasapiDeviceManager;
-import org.edgo.audio.measure.sound.wasapi.WasapiRecorder;
 import org.edgo.audio.measure.sound.wdmks.WdmksDeviceManager;
 
 import lombok.extern.log4j.Log4j2;
@@ -306,9 +305,7 @@ public final class AudioBackend {
                 return qa40x().openCapture(device, sampleRate, bitDepth);
             case WASAPI:
             default:
-                return new WasapiRecorder(wasapi(),
-                        (WasapiDeviceManager.WasapiDeviceRef) device,
-                        sampleRate, bitDepth);
+                return wasapi().openCapture(device, sampleRate, bitDepth);
         }
     }
 
@@ -357,6 +354,23 @@ public final class AudioBackend {
         AudioDeviceManager m = managerIfCreated(active);
         if (m != null) {
             m.shutdown();
+        }
+    }
+
+    /** The manager for {@code type}, created on demand.  Unlike
+     *  {@link #managerIfCreated}, this DOES construct: the Preferences dialog
+     *  asks a backend the user has merely selected in the combo whether it
+     *  offers custom settings, which cannot wait for that backend to go active.
+     *  Construction opens no device — every manager reaches its hardware
+     *  lazily. */
+    public AudioDeviceManager manager(AudioBackendType type) {
+        switch (type) {
+            case WDMKS:     return wdmks();
+            case COREAUDIO: return coreAudio();
+            case JAVASOUND: return javaSound();
+            case QA40X:     return qa40x();
+            case WASAPI:
+            default:        return wasapi();
         }
     }
 

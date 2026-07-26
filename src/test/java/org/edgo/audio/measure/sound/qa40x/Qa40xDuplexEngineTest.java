@@ -98,6 +98,8 @@ class Qa40xDuplexEngineTest {
                 new FakeTransport.RegWrite(5, 0),   // input FS code 0
                 new FakeTransport.RegWrite(6, 3),   // output FS code 3
                 new FakeTransport.RegWrite(9, 0),   // rate code 0
+                new FakeTransport.RegWrite(11, 0),  // reg 0x0B = 0 (frame width first)
+                new FakeTransport.RegWrite(10, 0),  // reg 0x0A = 0 (front-panel I2S off)
                 new FakeTransport.RegWrite(8, 5)),  // reg8 = 5 (start)
                 fake.registerWrites);
         assertEquals(List.of(100L), sleeper.sleeps);
@@ -208,11 +210,15 @@ class Qa40xDuplexEngineTest {
         // Teardown tail: cancelAll strictly BEFORE reg8 = 0 (§7 step 7), then
         // the idle analyzer parks at the protected ranges (§7 step 8): input
         // +42 dBV (code 7, attenuator relay engaged) and output −12 dBV
-        // (code 0) — so a sensitive range never sits live between measurements.
-        assertEquals("cancelAll", fake.ops.get(fake.ops.size() - 4));
-        assertEquals("reg=8:0",   fake.ops.get(fake.ops.size() - 3));
-        assertEquals("reg=5:7",   fake.ops.get(fake.ops.size() - 2));
-        assertEquals("reg=6:0",   fake.ops.get(fake.ops.size() - 1));
+        // (code 0) — so a sensitive range never sits live between measurements —
+        // and finally the front-panel I2S port is stopped (reg 0x0A = 0), leaving
+        // it as a fresh connect finds it.
+        assertEquals("cancelAll", fake.ops.get(fake.ops.size() - 6));
+        assertEquals("reg=8:0",   fake.ops.get(fake.ops.size() - 5));
+        assertEquals("reg=5:7",   fake.ops.get(fake.ops.size() - 4));
+        assertEquals("reg=6:0",   fake.ops.get(fake.ops.size() - 3));
+        assertEquals("reg=10:0",  fake.ops.get(fake.ops.size() - 2));
+        assertEquals("reg=11:0",  fake.ops.get(fake.ops.size() - 1));
     }
 
     @Test
@@ -356,12 +362,14 @@ class Qa40xDuplexEngineTest {
 
         assertEquals(1, fake.cancelAllCount, "rate change stops the running session");
         List<FakeTransport.RegWrite> writes = fake.registerWrites;
-        List<FakeTransport.RegWrite> restart = writes.subList(writes.size() - 5, writes.size());
+        List<FakeTransport.RegWrite> restart = writes.subList(writes.size() - 7, writes.size());
         assertEquals(List.of(
                 new FakeTransport.RegWrite(8, 0),
                 new FakeTransport.RegWrite(5, 0),
                 new FakeTransport.RegWrite(6, 3),
                 new FakeTransport.RegWrite(9, 1),   // 96 kHz → code 1
+                new FakeTransport.RegWrite(11, 0),  // frame width first, cleared here
+                new FakeTransport.RegWrite(10, 0),  // then I2S control, off here
                 new FakeTransport.RegWrite(8, 5)),
                 restart);
     }

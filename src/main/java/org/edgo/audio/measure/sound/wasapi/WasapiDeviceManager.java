@@ -224,11 +224,11 @@ public class WasapiDeviceManager implements AudioDeviceManager {
     }
 
     public AudioCapture openCapture(DeviceRef device, int sampleRate, int bitDepth) {
-        return new WdmksRecorder((WdmksDeviceManager.WdmksDeviceRef) device, sampleRate, bitDepth);
+        return new WasapiRecorder(this, (WasapiDeviceManager.WasapiDeviceRef) device, sampleRate, bitDepth);
     }
 
     public AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits) {
-        return new WdmksGenerator((WdmksDeviceManager.WdmksDeviceRef) device, sampleRate, bitDepth, ditherBits);
+        return new WasapiGenerator(this, (WasapiDeviceManager.WasapiDeviceRef) device, sampleRate, bitDepth, ditherBits);
     }
 
     private List<AudioFormat> probeFormats(WasapiDeviceRef d) {

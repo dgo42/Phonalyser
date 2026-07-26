@@ -596,6 +596,37 @@
      nichts, solange keine Messung anzuzeigen ist, und der ausgelagerte Zustand wird beim
      Neustart auf angedockt zurückgesetzt.</p>
 
+  <h3 id="freqresp-measure-clipping">Welliger Verlauf — auf Übersteuerung prüfen</h3>
+  <p>Zeigt eine Kurve, die glatt sein sollte, stattdessen eine dichte, regelmäßige
+     Welligkeit — typischerweise ein geschlossenes Band von ein bis wenigen Dezibel
+     Dicke, und zwar vom unteren bis zum oberen Ende des Sweep-Bereichs etwa gleich
+     dick —, dann wird der <b>Eingang übersteuert</b>.  Die Welligkeit ist keine
+     Eigenschaft des Prüflings.</p>
+  <p>Ein Gleitsinus trennt Verzerrung und Nutzantwort in der Zeit: Jede Harmonische,
+     die das Gerät erzeugt, landet in einer eigenen Impulsantwort, ein festes
+     Intervall <em>vor</em> der linearen —
+     <i>T</i> · ln <i>N</i> / ln(<i>f</i><sub>2</sub>/<i>f</i><sub>1</sub>) für die
+     <i>N</i>-te Harmonische, mit <i>T</i> als Sweep-Dauer und
+     <i>f</i><sub>1</sub>…<i>f</i><sub>2</sub> als durchlaufenem Bereich.  Diese
+     zusätzlichen Impulse überlagern sich mit dem gewünschten und kämmen den
+     Amplitudenverlauf mit einer Periode von eins durch dieses Intervall.  Die
+     Welligkeit ist in Hertz gleichmäßig verteilt, wirkt auf der logarithmischen
+     Frequenzachse links also dünn und verdichtet sich nach rechts zu einem
+     geschlossenen Band — weshalb sie leicht mit Rauschen verwechselt wird.</p>
+  <p>Zoomen Sie hinein, bis einzelne Wellen auflösen, und messen Sie deren Abstand
+     Δ<i>f</i>; verantwortlich ist die Harmonische, deren Intervall 1/Δ<i>f</i>
+     entspricht.  Nur ungerade Ordnungen (3., 5., 7.) bedeuten symmetrisches
+     Clipping — das Signal stößt an beide Grenzen gleichermaßen.  Ein 4,9-s-Sweep
+     über 1 Hz…96 kHz legt die 3. Harmonische beispielsweise 0,47 s vor die lineare
+     Antwort, was eine Welligkeit von 2,1 Hz ergibt.</p>
+  <div class="note"><b>Die Abhilfe ist der Pegel, nicht eine Einstellung.</b>  Senken
+     Sie die <a href="#freqresp-tab-settings">Amplitude</a> des Sweeps, bis die
+     Welligkeit verschwindet; der Pegel, bei dem das geschieht, ist die tatsächliche
+     Aussteuerungsreserve des Eingangs.  Achten Sie auf Eingänge, die keinen
+     Line-Pegel führen — der Headset- oder Mikrofoneingang eines USB-Adapters kann
+     eine Größenordnung unterhalb des einen Volts übersteuern, das ein Line-Eingang
+     verträgt.</div>
+
 <script src="help-viewer.js"></script>
 </body>
 </html>

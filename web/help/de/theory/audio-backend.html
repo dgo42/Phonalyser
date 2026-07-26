@@ -34,11 +34,13 @@
      Starten einer Aufnahme bedeutet meist, dass ein Browser oder
      Media-Player noch den Eingang belegt.</div>
 
-  <h2 id="paths">Die drei Treiberpfade</h2>
+  <h2 id="paths">Die Treiberpfade</h2>
   <p>Soundhardware ist über verschiedene Treiberinterfaces erreichbar.
-     Phonalyser.web implementiert drei davon und lässt Sie in den Einstellungen
-     einen auswählen; alle Module arbeiten identisch, unabhängig davon,
-     welcher aktiv ist.</p>
+     Phonalyser.web implementiert drei Allzweckpfade — jeder funktioniert mit
+     praktisch jedem Interface — sowie ein gerätespezifisches Backend für den
+     QuantAsylum QA402 / QA403 Analysator (<a href="#qa40x">unten</a>).  Sie
+     wählen einen in den Einstellungen aus; alle Module arbeiten identisch,
+     unabhängig davon, welcher aktiv ist.</p>
   <table class="controls">
     <tr><th>Pfad</th><th>Was es ist</th><th>Wann verwenden</th></tr>
     <tr><td><b>WASAPI</b></td>
@@ -56,6 +58,44 @@
         <td>Der einzige Pfad unter Linux und macOS; ein Fallback unter
             Windows.</td></tr>
   </table>
+
+  <h2 id="qa40x">Das QA40x-Analysator-Backend</h2>
+  <p>Neben den drei Allzweckpfaden kann Phonalyser.web einen
+     <b>QuantAsylum QA402 / QA403</b>-Audioanalysator direkt über USB ansteuern,
+     bei geschlossener Herstellersoftware.  Dies ist kein Treiberpfad vor einer
+     Soundkarte — es ist ein eigens gebautes Backend für ein einzelnes
+     Instrument, das dieses über die <b>WebUSB</b>-Schnittstelle des Browsers<sup><a href="#ref-webusb">[3]</a></sup> erreicht und dabei dasselbe Herstellerprotokoll spricht wie die herstellereigene Software.</p>
+  <p>Der QA40x ist ein eigenständiges Mess-Frontend: ein ADC und ein DAC auf
+     einer Platine, jeweils mit einem Satz umschaltbarer
+     Vollausschlag-<b>Bereiche</b> (Eingangsabschwächer / Ausgangspegel) und
+     einer eigenen, im Gerät hinterlegten Werkskalibrierung.  Zwei Konsequenzen
+     für die Nutzung:</p>
+  <ul>
+    <li><b>Ein Takt, daher sind die Raten aneinander gekoppelt.</b>  Ein
+        einziger Abtastratengenerator auf der Platine speist sowohl den ADC als
+        auch den DAC, sodass sich Eingangs- und Ausgangsabtastrate niemals
+        unterscheiden können — stellen Sie eine in den Einstellungen ein, und
+        die andere folgt.  Die Liste umfasst 48 / 96 / 192 kHz sowie
+        <b>384 kHz beim QA403</b>: Das Abtastratenregister besitzt einen vierten
+        Code, den der QA402 nicht hat, sodass sich die angebotenen Raten nach dem
+        angeschlossenen Modell richten.</li>
+    <li><b>Der Bereich <em>ist</em> die Kalibrierung.</b>  Der Vollausschlag in
+        Volt ergibt sich aus dem gewählten Bereich und der geräteeigenen
+        Kalibrierung, nicht aus einer von Ihnen eingegebenen
+        Fadenkreuz-Kalibrierung, sodass die dBV-Achse und die Anzeigen des
+        Oszilloskops in dem Moment korrekt sind, in dem Sie den Bereich wählen.
+        Eingang und Ausgang tragen ihre eigenen, unabhängigen Bereiche; das
+        Umschalten des einen skaliert sofort den Vollausschlag dieser Richtung
+        neu, wobei für beide dieselbe Regel „Bereich ist Kalibrierung" gilt.</li>
+  </ul>
+  <p>Der QA40x läuft stets im vollen <b>Duplex</b>-Betrieb — er nimmt auf und
+     gibt in einer Sitzung wieder, niemals nur eine Richtung für sich allein —
+     sodass der Generator und die Analysatoren dasselbe geöffnete Instrument
+     nutzen, statt es zweimal zu öffnen.  Die Samples überqueren die
+     USB-Verbindung als 32-Bit-Wörter, deren obere 24 Bit das Signal tragen
+     (das niederwertige Byte ist Null-Auffüllung), sodass die effektive
+     Auflösung 24 Bit beträgt.</p>
+  <div class="note"><b>Was der Browser braucht.</b>  WebUSB ist nur in Chrome und Edge implementiert — Firefox und Safari unterstützen es nicht, dort erscheint das QA40x-Backend gar nicht.  Die Seite muss über <code>https://</code> oder <code>localhost</code> ausgeliefert werden, und die erste Verbindung erfordert einen Klick: Der Browser öffnet seinen eigenen Geräteauswahldialog, den nur Sie bestätigen können.  Unter Windows muss der Analysator an einen WinUSB-Klassentreiber gebunden sein — ein Schritt pro Rechner, den eine Webseite nicht für Sie ausführen kann.  Wie beim Exklusivmodus besitzt jeweils eine Anwendung das Instrument: Der QA402 / QA403 darf währenddessen weder in der QuantAsylum-Software noch in einem anderen Tab geöffnet sein.</div>
 
   <h2 id="how">Wie es funktioniert, grob umrissen</h2>
 
@@ -205,6 +245,7 @@
         <a href="https://learn.microsoft.com/en-us/windows/win32/coreaudio/exclusive-mode-streams">Microsoft Learn: Exclusive-Mode Streams</a>.</li>
     <li id="ref-ks">Die Kernel-Streaming-Ebene unterhalb von WDM-KS —
         <a href="https://learn.microsoft.com/en-us/windows-hardware/drivers/stream/kernel-streaming">Microsoft Learn: Kernel Streaming</a>.</li>
+    <li id="ref-webusb">Die Browser-Schnittstelle, über die das QA40x-Backend den Analysator erreicht — <a href="https://developer.mozilla.org/en-US/docs/Web/API/WebUSB_API">WebUSB</a>.</li>
   </ol>
 
   <p class="back"><a href="index.html">◀ Theorie des Betriebs</a> ·

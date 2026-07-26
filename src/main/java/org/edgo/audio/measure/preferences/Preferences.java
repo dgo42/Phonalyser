@@ -61,7 +61,6 @@ import org.edgo.audio.measure.enums.TriggerMode;
 import org.edgo.audio.measure.enums.TriggerType;
 import org.edgo.audio.measure.enums.UnevenMode;
 import org.edgo.audio.measure.enums.WindowType;
-import org.edgo.audio.measure.gui.preferences.PreferencesDialog;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.Yaml;
 
@@ -307,6 +306,16 @@ public final class Preferences {
     @Getter
     @Setter
     private volatile boolean transientMode;
+
+    /** Component-owned preference blocks, keyed by {@link SubPreferences#key()}.
+     *  Registered by their owners (backend managers), which are built lazily —
+     *  so this list fills up long after {@link #load()} has run. */
+    private final Map<String, SubPreferences> customPrefs = new LinkedHashMap<>();
+    /** The {@code custom} section exactly as {@link #load()} read it.  Keeps the
+     *  block of an extension that never registered this session alive across a
+     *  save, and lets {@link #registerCustomPreferences} replay a late
+     *  registrant's saved values. */
+    private final Map<String, Object> customRaw = new LinkedHashMap<>();
     /** DAC full-scale PEAK amplitude voltage (= full-scale-sine RMS × √2) — the
      *  value the generator's amplitude scale divides by, so it is kept in this
      *  amplitude form in memory (suited for the calculation).  It is PERSISTED
@@ -1013,6 +1022,40 @@ public final class Preferences {
     // -------------------------------------------------------------------------
     // YAML persistence
     // -------------------------------------------------------------------------
+
+    /**
+     * Registers a component-owned preference block, and immediately hands it
+     * whatever the loaded file held under its {@link SubPreferences#key()}.
+     * That replay is the point: backend managers are built lazily, so they
+     * register long after {@link #load()} ran and would otherwise never see
+     * their saved values.  Registering the same key twice replaces the earlier
+     * entry (a manager rebuilt after a backend switch is not a second block).
+     */
+    public synchronized void registerCustomPreferences(SubPreferences sub) {
+        if (sub == null) return;
+        customPrefs.put(sub.key(), sub);
+        if (customRaw.get(sub.key()) instanceof Map<?, ?> stored) {
+            sub.fromMap(stored);
+        }
+    }
+
+    /** Seeds every registered block's edit values from its live ones — the
+     *  Preferences dialog calls this as it opens, so an edit abandoned by a
+     *  previous Cancel cannot leak into this session. */
+    public synchronized void beginCustomPreferencesEdit() {
+        for (SubPreferences sub : customPrefs.values()) {
+            sub.beginEdit();
+        }
+    }
+
+    /** Commits every registered block's edit values into its live ones — called
+     *  only when the Preferences dialog is closed with OK, alongside
+     *  {@link #applyFromDialog}. */
+    public synchronized void commitCustomPreferencesEdit() {
+        for (SubPreferences sub : customPrefs.values()) {
+            sub.commitEdit();
+        }
+    }
 
     /** Writes the current preferences to {@link #PREFS_FILE} in the working dir.
      *  No-op in {@link #isTransientMode() transient mode} (CLI runs), so values
@@ -2453,10 +2496,33 @@ public final class Preferences {
             }
         }
         root.put("perBackend", perBackendMap);
+        // Component-owned blocks.  Start from what the file held so an extension
+        // that never registered this session (its backend was never selected)
+        // keeps its saved settings instead of losing them on the next save.
+        Map<String, Object> customMap = new LinkedHashMap<>(customRaw);
+        for (SubPreferences sp : customPrefs.values()) {
+            customMap.put(sp.key(), sp.toMap());
+        }
+        if (!customMap.isEmpty()) root.put("custom", customMap);
         return root;
     }
 
     private void fromMap(Map<?, ?> root) {
+        // Component-owned blocks: keep the raw section so a block whose owner
+        // has not registered yet (or never will this session) survives the next
+        // save, and feed anything already registered right away.
+        customRaw.clear();
+        if (root.get("custom") instanceof Map<?, ?> custom) {
+            for (Map.Entry<?, ?> e : custom.entrySet()) {
+                if (e.getKey() instanceof String k) {
+                    customRaw.put(k, e.getValue());
+                    SubPreferences sub = customPrefs.get(k);
+                    if (sub != null && e.getValue() instanceof Map<?, ?> block) {
+                        sub.fromMap(block);
+                    }
+                }
+            }
+        }
         if (root.get("uiLanguage") instanceof String s) uiLanguage.set(s);
         if (root.get("tabOrientation") instanceof String s) tabOrientation.set(enumOr(TabOrientation.class, s, tabOrientation.get()));
         if (root.get("uiFontNormal")  instanceof String s) uiFontNormal.set(s);

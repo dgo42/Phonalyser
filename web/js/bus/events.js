@@ -20,6 +20,35 @@ export const Events = Object.freeze({
    *  format (frequency ceilings at Nyquist, the sweep-points series' sample-rate/2 entry). */
   AUDIO_FORMAT_CHANGED: 'preferences.audioFormat.changed',
 
+  /** Fired once per direction by the Preferences dialog's OK for each device-provided card whose
+   *  active full-scale range ACTUALLY changed (Cancel, or an unchanged range, fires nothing).
+   *  Payload: ActiveRange — { input: boolean, activeRangeLabel: string }, the direction and the
+   *  newly active range's label, nothing else. Device-agnostic: any backend that owns a live range
+   *  may subscribe and act on the cards it recognises. Today's subscriber is Qa40xRangeController,
+   *  which decodes the label and re-ranges the open device — a live session restart, or the stored
+   *  range for the next open. */
+  DEVICE_ACTIVE_RANGE_CHANGED: 'preferences.device.activeRange.changed',
+
+  /** Fired by the Preferences dialog while a rate combo is being edited — the user just picked a
+   *  sample rate for one direction, or a (re)populate seeded a fresh selection. Payload:
+   *  SampleRateChange — { input: boolean, sampleRateHz: number, backend: string, card: ?string }
+   *  (direction + rate + the edited backend + the resolved card). Device-agnostic: any backend or
+   *  card that constrains its two rates may subscribe and decide FROM the payload's backend or card
+   *  whether the change concerns it — the dialog edits an UNCOMMITTED working copy, so the
+   *  subscriber gates on the payload, not live Preferences. Today's subscriber is
+   *  Qa40xRateConstraint, which enforces the QA402/QA403's single shared reg-9 clock (input rate ==
+   *  output rate) and answers, when the other direction must follow, with PREFS_SAMPLE_RATE_SET. */
+  PREFS_SAMPLE_RATE_CHANGED: 'preferences.sampleRate.changed',
+
+  /** The other half of the PREFS_SAMPLE_RATE_CHANGED round-trip: fired by a rate-constraint
+   *  subscriber to tell the Preferences dialog to align the OTHER direction's rate combo. Payload:
+   *  SampleRateChange — the direction to correct, the rate to adopt, the backend, and the echoed
+   *  card. The dialog acts only while it is still open and the edited backend matches the payload,
+   *  selecting the combo item programmatically — setting a <select>'s value fires no change event
+   *  (as SWT's Combo.select fires no Selection), so the correction does not re-publish
+   *  PREFS_SAMPLE_RATE_CHANGED and the round-trip ends. */
+  PREFS_SAMPLE_RATE_SET: 'preferences.sampleRate.set',
+
   /** Prefix for pane-title click events. The full name is built by paneTitleClick(id). Subscribers
    *  pick their pane by ID — one subscriber per ID. */
   PANE_TITLE_CLICK_PREFIX: 'paneTitle.click.',
