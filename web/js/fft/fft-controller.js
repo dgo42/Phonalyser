@@ -229,6 +229,12 @@ export class FftController {
 
   // ---- Generator state read + FLL-steered through delegating accessors (this._gen) ----
   get snapped() { return this._gen.snapped; }
+  /** Tone 2's emit frequency for a dual-tone form — the same bin-snap state {@link #snapped}
+   *  carries for tone 1, so the min / max that pick the dual-tone hints compare like with like
+   *  (Java reads the two GenDualToneFreq prefs side by side at FftAnalyzerWorker:1712 / :1754).
+   *  Read LIVE off the generator like ScopeController.snapped2 does: retuneGenerator refreshes
+   *  the cached gen.snapped on every live tone edit, so both values track the running DDS. */
+  get snapped2() { return this._gen._genEmitFreq2(); }
   get binW() { return this._gen.binW; }
   get genNode() { return this._gen.genNode; }
   get _genOn() { return this._gen.running; }
@@ -749,9 +755,36 @@ export class FftController {
       id: this._dispatchId++, samples: snap, sampleRate: c.inRate, fftSize: this.N,
       harmonicCount: c.harmonicCount, windowType: c.window, overlap: c.overlap,
       snrFreqMin: c.snrFreqMin || 0, snrFreqMax: c.snrFreqMax || 0, coherentAveraging: this.config.coherent,
-      expectedFundHz: c.fftFundFromGenerator ? this.snapped : NaN,   // hint vs auto-detect
+      // Generator FREQUENCY hint — gated on the generator ACTUALLY RUNNING as well as the
+      // pref, exactly as Java (FftAnalyzerWorker:1697-1714: `genActive && prefs
+      // .isFftFundFromGenerator()`, whose comment reads "genActive still gates the generator
+      // FREQUENCY hints below, which do need it"). With the generator idle the tone is
+      // EXTERNAL and its frequency is unknown, so hinting the commanded value pins the
+      // analyzer's ±10-bin fundamental search (fft-analyzer.js:241-246 / :572-583) to a
+      // nominal the captured tone need not be near — the fundamental LEVEL and the THD
+      // denominator are then read off the main lobe's skirt while the harmonic grid (which
+      // rides the measured kFractional) stays correct.
+      // …and in DUAL tone the anchor is the LOWER tone whichever box the user typed it in
+      // (Java :1709-1714 `dualTone ? Math.min(genDualToneFreq1Hz, genDualToneFreq2Hz) :
+      // genFrequencyHz`). Hinting tone 1 makes the whole measurement ENTRY-ORDER dependent:
+      // with F1 = 7 kHz / F2 = 1.1 kHz the ±10-bin search latches the UPPER tone, so
+      // fundamentalHzRefined / fundamentalDbFs report the 7 kHz tone and the harmonic grid
+      // walks 14 kHz, 21 kHz … instead of 2.2 kHz, 3.3 kHz … — a different THD off the same
+      // signal purely because the two numbers were swapped between the fields.
+      expectedFundHz: (this._genOn && c.fftFundFromGenerator)
+        ? (dual ? Math.min(this.snapped, this.snapped2) : this.snapped) : NaN,
       fundRefDbFs: this._fundRefDbFs(),   // THD manual-fundamental anchor (NaN = auto-detect)
-      multiTone: dual, secondToneHintHz: dual ? c.tone2Hz : NaN,
+      // Second-tone hint — the UPPER tone, gated on exactly the same generator-running + pref
+      // pair as the fundamental hint (Java FftAnalyzerWorker:1752-1755 `genActive && prefs
+      // .isFftFundFromGenerator() && dualTone`). Its search window is only ±2 bins
+      // (fft-analyzer.js:303-306), 5× tighter than the fundamental's, so an EXTERNAL dual tone
+      // whose upper tone sits off the commanded nominal resolves fundamental2HzRefined onto a
+      // noise bin: every IMD product frequency derives from that pair and readBinVrms reads the
+      // EXACT nearest bin, so the whole product grid then reads the noise floor. Withheld, the
+      // analyzer auto-detects the real second tone from the clean frame (fft-analyzer.js:285-301).
+      multiTone: dual,
+      secondToneHintHz: (this._genOn && c.fftFundFromGenerator && dual)
+        ? Math.max(this.snapped, this.snapped2) : NaN,
       threads: this.poolSize,   // >1 → the worker fans out to its nested pool
       // Time-domain discontinuity gate (Java: if (USE_TIME_DISCONTINUITY && accumulate)):
       // the raw window lives in the worker after this transfer, so the worker runs the

@@ -380,6 +380,15 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .scope-meas-window .smw-close { color: #000; }
 .scope-meas-window .scope-meas-table { position: static; top: auto; left: auto; z-index: auto;
   pointer-events: auto; background: transparent; margin: 2px 0; }
+/* Amplitude-histogram window: RESIZABLE (the plot re-aggregates to whatever width it is given, so
+   dragging it larger buys real resolution rather than just scaling pixels). The canvas fills the
+   body and is re-sized to it, so the paint always matches the CSS box. */
+.scope-hist-window { resize: both; overflow: hidden; min-width: 260px; min-height: 220px;
+  width: 420px; height: 356px; display: none; }
+.scope-hist-window.open { display: flex; flex-direction: column; }
+.scope-hist-window .smw-body { flex: 1; min-height: 0; padding: 4px 6px 6px;
+  border: 1px solid #606060; border-top: none; }
+.scope-hist-window canvas { display: block; width: 100%; height: 100%; }
 /* Stream-forward record progress window (Java startStreamingSave floating tool window):
    centred near the top, on top of the scope view; the user keeps watching while it records. */
 /* #1: the stream-forward record progress window is a NORMAL (light) tool window, not the

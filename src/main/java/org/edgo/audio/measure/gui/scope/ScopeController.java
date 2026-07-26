@@ -20,12 +20,18 @@ package org.edgo.audio.measure.gui.scope;
 
 import java.io.File;
 
+import org.eclipse.swt.graphics.Point;
+import org.eclipse.swt.graphics.Rectangle;
 import org.eclipse.swt.widgets.Control;
+import org.edgo.audio.measure.gui.bind.Bindings;
 import org.edgo.audio.measure.gui.bus.Events;
 import org.edgo.audio.measure.gui.bus.MessageBus;
+import org.edgo.audio.measure.gui.i18n.I18n;
 import org.edgo.audio.measure.gui.scope.gl.GlScopeSurface;
 import org.edgo.audio.measure.gui.sound.SharedCapture;
 import org.edgo.audio.measure.gui.sound.SignalBufferReader;
+import org.edgo.audio.measure.gui.registry.UiRegistry;
+import org.edgo.audio.measure.gui.widgets.ToolWindow;
 import org.edgo.audio.measure.preferences.Preferences;
 
 import lombok.Getter;
@@ -49,6 +55,12 @@ import lombok.extern.log4j.Log4j2;
  * save feature stays with its widget ({@code ScopeFileSaver} /
  * {@code StereoPcmIo} are separate engines whose orchestration reads
  * displayed view state).
+ *
+ * <p>The amplitude-histogram tool window lives here for the same reason: a
+ * window's lifecycle — created / disposed off a preference, switching the
+ * measurement worker's accumulator on and off with it, owning its reset — is
+ * orchestration.  {@link ScopeView} keeps only the header toggle that writes the
+ * preference and {@link ScopeView#paintHistogram}, which renders the plot.
  */
 @Log4j2
 public final class ScopeController {
@@ -61,6 +73,16 @@ public final class ScopeController {
     /** Horizontal scroll step of one wheel tick, in grid divisions (½ div). */
     private static final double HALF_DIV = 0.5;
 
+    /** Initial content size of the amplitude-histogram window, and where it is
+     *  parked.  Bottom-right deliberately: the extracted measurement window owns
+     *  the top-right corner and sizes itself from the font, so any offset
+     *  measured down from the top would sooner or later land on top of it. */
+    private static final int HIST_WIN_W          = 420;
+    private static final int HIST_WIN_H          = 320;
+    private static final int HIST_WIN_RIGHT_GAP  = 24;
+    private static final int HIST_WIN_BOTTOM_GAP = 48;
+    /** Registry path the histogram plot is published under, for the screenshot harness. */
+    private static final String HISTOGRAM_PATH = "multifunctional/scope/histogram";
     /** True while the scope's own Record state is on.  Does NOT reflect
      *  the shared capture device — the FFT pane can hold it open via
      *  {@code SharedCapture} while this stays {@code false}. */
@@ -91,6 +113,12 @@ public final class ScopeController {
     /** Synchronous open-signal file loader, attached with the views; {@code null}
      *  on the screenshot-only pane (no live capture, no file loading). */
     private ScopeOpenSignal loader;
+    /** The amplitude-histogram tool window — non-null only while it is open.  Window
+     *  LIFECYCLE is orchestration (which window exists, and when the accumulator
+     *  runs), so it lives here.  What the window CONTAINS is a {@link HistogramView},
+     *  which owns its own palette, buttons, channel pick and reset; the scope view
+     *  contributes only the header toggle that writes the preference. */
+    private ToolWindow histogramWindow;
     /** Fired after every {@link #applyViewState()} recompute — the pane registers
      *  its nav-scrollbar sync here ({@code viewCenterFrames} is transient controller
      *  state, not a preference, so the widget can't observe it any other way). */
@@ -184,9 +212,78 @@ public final class ScopeController {
      *  screenshot-only pane).  The pane builds all three, so they arrive here
      *  rather than via the constructor. */
     public void attachViews(ScopeView view, ZoomedView condensed, ScopeOpenSignal loader) {
+        // An open histogram window is bound to the OUTGOING view's palette and
+        // measurement worker, so drop it before re-binding to the new one.
+        disposeHistogramWindow();
         this.view      = view;
         this.condensed = condensed;
         this.loader    = loader;
+        // Histogram orchestration only for the LIVE pane: the screenshot-only pane
+        // (no loader) renders a passive copy of the scope and must never pop a tool
+        // window of its own over the real one.
+        if (loader != null) {
+            Preferences prefs = Preferences.instance();
+            // Subscriptions owned by the view's lifetime: a pane rebuild disposes it
+            // and takes them with it, then re-registers here against the replacement.
+            Bindings.onChange(view, prefs.oscShowHistogramProperty(),       show -> syncHistogramWindow());
+            // Re-open a window the preference says should be up — persisted from the
+            // last run, or carried across a pane rebuild.  Deferred: at attach time the
+            // main shell isn't laid out yet, and the window is parked off its bounds.
+            view.getDisplay().asyncExec(() -> {
+                if (this.view == view && !view.isDisposed()) syncHistogramWindow();
+            });
+        }
+    }
+
+    /** Brings the histogram window into sync with its preference: creates + opens it
+     *  when on, disposes it otherwise.  Accumulation follows the window — the worker
+     *  bins only while it is open, and the counts go with it. */
+    private void syncHistogramWindow() {
+        boolean shouldBeOpen = Preferences.instance().isOscShowHistogram();
+        if (shouldBeOpen && histogramWindow == null) {
+            createHistogramWindow();
+        } else if (!shouldBeOpen) {
+            disposeHistogramWindow();
+        }
+        view.setHistogramEnabled(shouldBeOpen);
+    }
+
+    /** Builds the amplitude-histogram window.  Everything INSIDE it — the plot, the
+     *  L/R pick, its own reset, its palette — belongs to {@link HistogramView}; what
+     *  the controller owns is the window's lifetime and where it sits.  Resizable,
+     *  unlike the measurement window: the plot scales into whatever room it is given
+     *  instead of laying out fixed-pixel columns. */
+    private void createHistogramWindow() {
+        ToolWindow w = view.newToolWindow(true, parent -> {
+            HistogramView plot = new HistogramView(parent, view.getMeasurementWorker());
+            // Make the plot addressable by path.  The screenshot harness has no other
+            // way in: a tool window exposes nothing of its insides, and printing a
+            // top-level shell comes out blank on Windows.
+            UiRegistry.instance().register(HISTOGRAM_PATH, plot);
+            return plot;
+        });
+        w.setTitle(I18n.t("scope.histogram.window.title"));
+        w.addCloseListener(e -> Preferences.instance().setOscShowHistogram(false));
+        histogramWindow = w;
+        w.setSize(HIST_WIN_W, HIST_WIN_H);
+        Point ws     = w.getSize();
+        Rectangle pb = view.getShell().getBounds();
+        w.setLocation(pb.x + pb.width  - ws.x - HIST_WIN_RIGHT_GAP,
+                      pb.y + pb.height - ws.y - HIST_WIN_BOTTOM_GAP);
+        w.open();
+    }
+
+    /** Repaints the histogram window if it is open.  Driven from the view's repaint
+     *  paths — both the CPU {@code redraw()} and the GPU overlay phase, which never
+     *  calls it — so the plot tracks a running trace instead of looking frozen. */
+    void redrawHistogram() {
+        if (histogramWindow != null) histogramWindow.redraw();
+    }
+
+    private void disposeHistogramWindow() {
+        if (histogramWindow == null) return;
+        histogramWindow.dispose();
+        histogramWindow = null;
     }
 
     /** Attaches the GPU surface the pane builds when the GPU scope is enabled; the
@@ -482,9 +579,10 @@ public final class ScopeController {
         prefs.save();
     }
 
-    /** Releases a still-held capture — called by {@code UIEngines} at
-     *  application exit. */
+    /** Releases a still-held capture and closes the tool window it owns — called by
+     *  {@code UIEngines} at application exit. */
     public void shutdown() {
         releaseCapture();
+        disposeHistogramWindow();
     }
 }

@@ -209,7 +209,10 @@
               <button id="scopeAutoSetup" class="lr ico" data-i18n-title="scope.autosetup.tooltip"><img src="assets/icons/arrows-to-circle.svg" class="lr-svg" alt=""></button>
               <!-- measurement-table header buttons (Java ScopeView header bar): gauge table-toggle,
                    stats-toggle, reset-stats, pop-out. Signal-gated in app.js. -->
-              <!-- Java header order: gauge (table), external (pop-out window), stats (chart), reset. -->
+              <!-- Java header order: histogram, gauge (table), external (pop-out window), stats (chart), reset. -->
+              <!-- Amplitude histogram: the scope contributes ONLY this toggle; the plot is its own
+                   view in its own window (scope/histogram-view.js). -->
+              <button id="scopeHistogram" class="lr ico" data-i18n-title="scope.histogram.tooltip"><img src="assets/icons/histogram.svg" class="lr-svg" alt=""></button>
               <button id="scopeTableToggle" class="lr ico" data-i18n-title="scope.stats.table.tooltip"><img src="assets/icons/gauge-high.svg" class="lr-svg" alt=""></button>
               <button id="scopeTablePop" class="lr ico" data-i18n-title="scope.external.window.tooltip"><img src="assets/icons/window-restore.svg" class="lr-svg" alt=""></button>
               <button id="scopeStatsToggle" class="lr ico" data-i18n-title="scope.stats.toggle.tooltip"><img src="assets/icons/chart-column.svg" class="lr-svg" alt=""></button>
@@ -241,6 +244,24 @@
                 <button id="scopeWinStatsReset" class="lr ico reset" data-i18n-title="scope.stats.reset.tooltip"><img src="assets/icons/rotate-left.svg" class="lr-svg" alt=""></button>
               </div>
               <div class="smw-body"></div>
+            </div>
+            <!-- Amplitude-histogram window (Java HistogramView in a tool window): how often the
+                 signal sat at each voltage — voltage up the left axis, sample count along the
+                 bottom. Its OWN view, palette, axes and paint; the scope contributes only the
+                 header toggle. The L/R pair and the reset belong to THIS window: the reset clears
+                 only the distribution, and the channel pick is a SEPARATE preference from the
+                 measurement channel, whose subscriber would wipe the table's avg/min/max/σ.
+                 Resizable; collection is unbounded while the window is open. -->
+            <div id="scopeHistWindow" class="scope-meas-window scope-hist-window">
+              <div class="smw-titlebar">
+                <span class="smw-title" data-i18n="scope.histogram.window.title">Amplitude histogram</span>
+                <button id="scopeHistClose" class="lr ico smw-close" data-i18n-title="scope.histogram.tooltip">×</button>
+              </div>
+              <div class="smw-btnrow">
+                <button id="scopeHistL" class="lr ml" data-i18n-title="scope.stats.left.tooltip">L</button><button id="scopeHistR" class="lr mr" data-i18n-title="scope.stats.right.tooltip">R</button>
+                <button id="scopeHistReset" class="lr ico reset" data-i18n-title="scope.histogram.reset.tooltip"><img src="assets/icons/rotate-left.svg" class="lr-svg" alt=""></button>
+              </div>
+              <div class="smw-body"><canvas id="scopeHist" width="420" height="300"></canvas></div>
             </div>
             <!-- Scope stream-forward record progress (Java ScopeTabControl.startStreamingSave's
                  floating non-modal tool window): shown while a capture longer than the ring
@@ -1004,6 +1025,8 @@
           <div class="numfield"><input id="prefOscLineWidth" class="nf-input" type="text" data-i18n-title="preferences.lineWidth.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
           <label data-i18n="preferences.dotDiameter">Sample dot diameter, px:</label>
           <div class="numfield"><input id="prefOscDotDia" class="nf-input" type="text" data-i18n-title="preferences.dotDiameter.tooltip"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
+          <label data-i18n="preferences.scope.histogramBins">Histogram bins</label>
+          <div class="numfield"><input id="prefOscHistBins" class="nf-input" type="text"/><span class="nf-step"><button type="button">▲</button><button type="button">▼</button></span></div>
           <label data-i18n="preferences.persistence">Display persistence:</label>
           <select id="prefOscPersistence" class="form-select form-select-sm" data-i18n-title="preferences.persistence.tooltip">
             <option value="OFF">Off</option>

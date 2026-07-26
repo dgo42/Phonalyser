@@ -120,10 +120,6 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     // dark-theme overrides + the prefs-driven trace RGBs are passed
     // to super(...) below; the derived mid colours are computed via
     // attenuate(...) and applied via setColor in syncChannelColors().
-    /** Cached RGB ints of the channel colours — used to detect pref changes. */
-    private int currentLeftRgb  = -1;
-    private int currentRightRgb = -1;
-
     /** Latest-window read cursor over the shared capture (or a wrapped frozen /
      *  file buffer).  The scope reads relative to {@code writePos}, so it never
      *  uses the cursor's read position — it just delegates readLatest /
@@ -501,6 +497,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
     private ToolButton leftBtn;
     private ToolButton rightBtn;
     private ToolButton autoSetupBtn;
+    private ToolButton histogramBtn;
     private ToolButton tableToggleBtn;
     private ToolButton externalBtn;
     private ToolButton statsToggleBtn;
@@ -616,6 +613,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         autoSetupBtn = headerBar.pushButton(Icon.ARROWS_TO_CIRCLE_LIT, Icon.ARROWS_TO_CIRCLE_DARK,
                 color(ColorRole.TEXT), I18n.t("scope.autosetup.tooltip"));
         dataSpacer = headerBar.spacer(2);
+        histogramBtn = headerBar.toggleButton(Icon.HISTOGRAM_LIT, Icon.HISTOGRAM_DARK,
+                color(ColorRole.TEXT),
+                I18n.t("scope.histogram.tooltip"), prefs.isOscShowHistogram());
         tableToggleBtn = headerBar.toggleButton(Icon.GAUGE_HIGH_LIT, Icon.GAUGE_HIGH_DARK,
                 color(ColorRole.TEXT),
                 I18n.t("scope.stats.table.tooltip"), prefs.isOscShowMeasurementTable());
@@ -664,6 +664,11 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         Bindings.onChange(this, prefs.oscLeftChannelEnabledProperty(),  en -> syncMeasurementChannelButtons());
         Bindings.onChange(this, prefs.oscRightChannelEnabledProperty(), en -> syncMeasurementChannelButtons());
         autoSetupBtn.addListener(SWT.Selection, e -> MessageBus.instance().publish(Events.SCOPE_AUTO_SETUP));
+        histogramBtn.addListener(SWT.Selection, e ->
+                prefs.setOscShowHistogram(histogramBtn.isToggled()));
+        // Only the button state is this view's business — the window the preference
+        // opens is orchestrated by ScopeController.
+        Bindings.onChange(this, prefs.oscShowHistogramProperty(), histogramBtn::setToggled);
         tableToggleBtn.addListener(SWT.Selection, e ->
                 prefs.setOscShowMeasurementTable(tableToggleBtn.isToggled()));
         Bindings.onChange(this, prefs.oscShowMeasurementTableProperty(), show -> {
@@ -953,36 +958,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      * for the unselected L/R buttons in the measurement-table header.
      */
     private void syncChannelColors() {
-        Preferences prefs = Preferences.instance();
-        int newL = prefs.getOscLeftChannelColor();
-        int newR = prefs.getOscRightChannelColor();
-        if (newL != currentLeftRgb) {
-            setColor(ColorRole.LEFT_TRACE,        newL);
-            setColor(ColorRole.LEFT_CHANNEL_MID,  attenuate(newL, 0.65));
-            setColor(ColorRole.LEFT_BEAT,         attenuate(newL, 0.45));
-            currentLeftRgb = newL;
-            recolorChannelButton(leftBtn, "L", ColorRole.LEFT_CHANNEL_MID, ColorRole.LEFT_TRACE);
-        }
-        if (newR != currentRightRgb) {
-            setColor(ColorRole.RIGHT_TRACE,       newR);
-            setColor(ColorRole.RIGHT_CHANNEL_MID, attenuate(newR, 0.65));
-            setColor(ColorRole.RIGHT_BEAT,        attenuate(newR, 0.45));
-            currentRightRgb = newR;
-            recolorChannelButton(rightBtn, "R", ColorRole.RIGHT_CHANNEL_MID, ColorRole.RIGHT_TRACE);
-        }
-    }
-
-    /**
-     * Re-points a channel header button at the freshly-allocated palette
-     * colours after {@link #syncChannelColors} disposed the previous ones.
-     * Without this the button keeps a reference to a now-disposed
-     * {@link Color} and its next paint throws "Graphic is disposed".
-     */
-    private void recolorChannelButton(ToolButton btn, String label, ColorRole midRole, ColorRole traceRole) {
-        if (btn == null) return;
-        Color mid = color(midRole);
-        btn.setLabel(label, mid);                 // content (label) colour
-        btn.setColors(mid, color(traceRole));     // frame (idle) + fill (active)
+        syncChannelPalette(leftBtn, rightBtn);
     }
 
     /**
@@ -1126,8 +1102,10 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         drawHeaderOverlay(gc);   // GPU only: the toolbar widgets are hidden, draw them via the painter
         drawRectZoomOverlay(gc, w, h);
         // The GPU loop renders through the surface, not redraw(), so the redraw() override
-        // that drives the extracted measurement window never fires — do it directly here.
+        // that drives the extracted measurement + histogram windows never fires — do it
+        // directly here, or they look frozen while the trace runs.
         if (measurementWindow != null) measurementWindow.redraw();
+        if (controller != null) controller.redrawHistogram();
     }
 
     /** Whether the most recent {@link #drawWaveforms} rendered genuinely new captured
@@ -1492,6 +1470,9 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
      *  next throttled rebuild. */
     private void clearMeasurementHistory() {
         measWorker.clearHistory();
+        // The distribution restarts with the statistics: the same events invalidate
+        // both.  Its own reset button still clears ONLY the distribution.
+        measWorker.resetHistograms();
         cachedMeasurementRows = null;
         lastBuiltMeasResult   = null;
     }
@@ -1533,6 +1514,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         boolean statsVis = extVis && !tableExtracted;
         boolean resetVis = statsVis && p.isOscShowStats();
         dataSpacer.setExcluded(!tableVis);
+        histogramBtn.setExcluded(!tableVis);
         tableToggleBtn.setExcluded(!tableVis);
         externalBtn.setExcluded(!extVis);
         statsToggleBtn.setExcluded(!statsVis);
@@ -1564,12 +1546,48 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         }
     }
 
+
+    // ─── Chrome + measurement-worker access for ScopeController ─────────────
+    // The controller orchestrates the histogram tool window's lifecycle, but the
+    // palette, the header-button geometry and the measurement worker are the
+    // view's.  The worker deliberately STAYS here: it feeds the DC means, the
+    // running statistics and the cached table rows that paint reads every frame,
+    // so moving it would drag the whole measurement path out of the view with it.
+    // The histogram window's CONTENT is a HistogramView of its own; all it needs
+    // from here is the chrome to sit in and the worker to read.
+
+    /** A tool window wearing the scope's chrome — its palette and header-button
+     *  geometry.  The caller owns what goes in it and how long it lives. */
+    ToolWindow newToolWindow(boolean resizable) {
+        return new ToolWindow(this, color(ColorRole.BACKGROUND), color(ColorRole.TEXT),
+                BTN_W, BTN_H, resizable);
+    }
+
+    /** As above, but hosting a content view the caller builds — see
+     *  {@link ToolWindow.ContentFactory}. */
+    ToolWindow newToolWindow(boolean resizable, ToolWindow.ContentFactory content) {
+        return new ToolWindow(this, color(ColorRole.BACKGROUND), color(ColorRole.TEXT),
+                BTN_W, BTN_H, resizable, content);
+    }
+
+    /** The measurement worker, for a tool window whose content reads what it
+     *  publishes — the histogram's distribution. */
+    ScopeMeasurementWorker getMeasurementWorker() {
+        return measWorker;
+    }
+
+    /** Starts / stops the worker's amplitude binning — driven by the histogram
+     *  window's open state. */
+    void setHistogramEnabled(boolean on) {
+        measWorker.setHistogramEnabled(on);
+    }
+
     /** Creates the measurements tool window: pushes its colours + the stats-toggle / reset
      *  button row (each signalling back here), then the rendered table + size + position,
      *  and opens it.  Closing it routes through {@link #setTableExtracted}(false) so the
      *  in-canvas table reappears. */
     private void createMeasurementWindow() {
-        ToolWindow w = new ToolWindow(this, color(ColorRole.BACKGROUND), color(ColorRole.TEXT), BTN_W, BTN_H);
+        ToolWindow w = newToolWindow(false);
         w.setTitle(I18n.t("scope.external.window.title"));
         // Stats-toggle re-enables the σ columns from inside the window; reset clears the
         // running statistics.  Both flow back through redraw().
@@ -1642,6 +1660,7 @@ public final class ScopeView extends AbstractMeasurementView implements GlScopeR
         if (measurementWindow != null) {
             measurementWindow.redraw();
         }
+        if (controller != null) controller.redrawHistogram();
     }
 
     /** GPU: overlay-only repaints (rubber band, focus border) re-composite the

@@ -141,6 +141,13 @@
      screen, and the V/div so the trace spans ~75 % of the vertical area.
      Uses the currently-selected channel's measured period and Vpp.</p>
 
+  <h3 id="scope-histogram">Amplitude histogram</h3>
+  <p>Opens and closes the
+     <a href="#scope-histogram-window">amplitude-histogram window</a>, which shows
+     how often the signal sat at each voltage.  The button stays pressed while the
+     window is open; closing the window releases it.  Collection runs only while
+     the window is open.</p>
+
   <h3 id="scope-gauge">Gauge (measurement-table toggle)</h3>
   <p>Toggles the entire measurement table overlay on and off.  When
      hidden, only the trace and the L / R buttons remain.</p>
@@ -160,7 +167,10 @@
   <p>Red <b>counterclockwise-arrow</b> button (the "roll back to the start"
      reset).  Clears the rolling-window statistics history that feeds the
      <code>avg / min / max / σ</code> columns, so the next frame starts a
-     fresh averaging window.  Useful after changing test conditions.</p>
+     fresh averaging window.  Useful after changing test conditions.  The
+     <a href="#scope-histogram-window">amplitude histogram</a> restarts with it —
+     the same events invalidate both — and so does starting or stopping the
+     generator.</p>
 
   <h2 id="scope-meas-table">Measurement table</h2>
   <p>Compact grid in the top-left of the trace area.  Eight rows, up to five
@@ -189,6 +199,86 @@
      Measurement average</a>).  σ is the population standard
      deviation.  The window is ~33 s at 30 fps by default; the
      <a href="#scope-reset">Reset</a> button wipes the statistics.</p>
+
+  <h2 id="scope-histogram-window">Amplitude-histogram window</h2>
+  <p>Opened by the <a href="#scope-histogram">amplitude-histogram</a> button.  It
+     answers a different question from the trace: not what the waveform looks like
+     over time, but <b>how much of its time it spends at each voltage</b>.  Voltage
+     runs up the left axis, the number of samples counted at that level runs along
+     the bottom, and each level is drawn as a horizontal bar.</p>
+
+  <p><img src="img/scope-histogram.png"
+          alt="Amplitude histogram of a quiet input: a Gaussian bell centred on 0 V,
+               a few tens of microvolts wide"/></p>
+  <p>Above: a converter's own noise floor, a few tens of microvolts wide — a clean
+     Gaussian.  A bell that is visibly not Gaussian points at something other than
+     thermal noise.</p>
+
+  <p>The shape is the reading:</p>
+  <table class="controls">
+    <tr><th>Shape</th><th>What it means</th></tr>
+    <tr><td>Two peaks at the extremes, hollow in the middle</td>
+        <td>A sine.  A sinusoid moves slowest at its turning points, so it spends
+            most of its time near ±peak — the classic bathtub.</td></tr>
+    <tr><td>A bell centred on zero</td>
+        <td>Noise.  A clean noise floor is Gaussian, and a visibly non-Gaussian
+            bell points at something other than thermal noise.</td></tr>
+    <tr><td>A tall spike at one or both ends</td>
+        <td>Clipping.  Samples pinned to the rail pile into the outermost bar.</td></tr>
+    <tr><td>Unequal bars above and below the centre</td>
+        <td>Asymmetry — a one-sided clip, or an asymmetric distortion.</td></tr>
+  </table>
+
+  <p><b>The voltage axis is relative, and its middle is always 0 V.</b>  Samples are
+     counted exactly as captured — nothing is subtracted from them and nothing is
+     filtered — and the axis is then read from the distribution's own mean.  So a DC
+     offset on the card changes what the axis is measured <i>from</i>, not which
+     level a sample is counted at, and the picture neither slides off the plot nor
+     changes shape.  Both halves are always the same height, so an asymmetric
+     waveform shows as unequal bar <i>lengths</i> above and below the middle.</p>
+
+  <p><b>The resolution follows the signal, not the converter.</b>  The voltage
+     range is sized from the signal's own peak, so a millivolt notch residual is
+     resolved just as finely as a full-scale tone.  Both axes auto-range as counts
+     accumulate, and levels so lightly populated that they would draw as a single
+     pixel are trimmed from the ends, so the distribution fills the window instead
+     of being squeezed by empty tails.</p>
+
+  <p>The window is resizable and the plot scales with it.  Its top-left corner
+     carries:</p>
+  <table class="controls">
+    <tr><th>Control</th><th>Function</th></tr>
+    <tr><td><b>L</b> / <b>R</b></td>
+        <td>Which channel is shown — one at a time.  A channel switched off in the
+            scope is greyed and cannot be picked; if it was the one being shown,
+            the window moves to the other.  The choice is remembered between
+            sessions.</td></tr>
+    <tr><td><b>Reset</b></td>
+        <td>Clears the collected distribution and nothing else — the measurement
+            table's statistics are left alone.  Use it to re-range onto a signal
+            that has become much smaller, since a shrinking signal keeps the range
+            it was given.</td></tr>
+  </table>
+
+  <p>Collection is unbounded while the window is open, so a distribution can be
+     built over minutes.  It survives a V/div change, a range switch and a
+     recalibration — recalibrating relabels the axis rather than recounting.  It
+     restarts by itself only when the level moves far enough that the old counts
+     describe a different signal, and along with the measurement statistics when
+     those are reset (see <a href="#scope-reset">Reset statistics</a>).</p>
+
+  <div class="note">
+    <p>The count along the bottom is of samples <i>binned</i>, not of every sample
+       captured: collection runs at the measurement cadence and skips blocks when
+       the machine is busy.  That is an unbiased sub-sample, so it changes how
+       fast the bars grow but not the shape they grow into.  Read the axis as
+       relative occupancy, not as a sample census.</p>
+  </div>
+
+  <p>The number of bars is set under <b>Preferences → Oscilloscope → Histogram
+     bins</b> (default 50).  It is display resolution only: the underlying
+     collection is far finer, so changing it re-draws what has already been
+     collected rather than discarding it.</p>
 
   <h2>On-screen overlays</h2>
 

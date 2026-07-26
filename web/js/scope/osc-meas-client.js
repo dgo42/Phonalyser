@@ -18,6 +18,15 @@
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
 import { OVERRUN } from '../audio/signal-buffer-reader.js';
+import { AmplitudeHistogram } from './amplitude-histogram.js';
+
+/**
+ * Micro-bin geometry for the amplitude histograms, fixed and independent of the drawn bar count.
+ * The `oscHistogramBins` preference is DISPLAY resolution only — the renderer aggregates these
+ * micro-bins down to it — so changing that preference re-draws the collected data instead of
+ * discarding it, which rebuilding the accumulator would do.
+ */
+const HISTOGRAM_ACCUMULATOR_BARS = 200;
 
 export class OscMeasClient {
   /**
@@ -39,6 +48,47 @@ export class OscMeasClient {
     // on our own reader (null while stopped) so a measurement/FreqResp sweep never triggers us.
     this._onBatch = () => this._feed();
     MessageBus.instance().subscribe(Events.CAPTURE_BATCH_AVAILABLE, this._onBatch);
+    // Amplitude histograms, one per channel, binned HERE — in the capture path, on the raw window,
+    // BEFORE the worker's DC removal / LPF / mains comb. Binning after any of those smears one
+    // distribution into two visible lobes while the estimate is still settling: the same voltage
+    // lands in different bins as the filter moves. The DC offset is resolved at PAINT time instead,
+    // by centring the plot on the distribution's own mean.
+    this._histL = new AmplitudeHistogram(HISTOGRAM_ACCUMULATOR_BARS);
+    this._histR = new AmplitudeHistogram(HISTOGRAM_ACCUMULATOR_BARS);
+    // Running peak per channel over the measurement-average window, which is what the range is
+    // sized from — never a single block's peak. One block's peak is a random draw from the
+    // signal's tail; on noise it wanders enough to escape the range nearly every pass, and every
+    // escape restarts the distribution. The window TUMBLES: at each boundary the peak restarts
+    // from the current block, so a quietened signal is reflected within one window — and since
+    // shrinking never re-ranges, that costs no counts.
+    this._peakWindow = { L: 0, R: 0, startedAtMs: 0 };
+  }
+
+  /**
+   * Clears both distributions — the histogram window's own reset button, and everything that
+   * resets the scope's running statistics.
+   *
+   * Applied immediately rather than deferred as a request: JS has one thread, so no pass can be
+   * mid-binning, and applying it here means a reset while the scope is STOPPED still lands (a
+   * deferred request would wait for a pass that never comes).
+   */
+  resetHistograms() {
+    this._histL.reset();
+    this._histR.reset();
+    this._peakWindow = { L: 0, R: 0, startedAtMs: 0 };
+  }
+
+  /**
+   * A detached copy of one channel's distribution for the renderer, or null before anything was
+   * collected. The paint runs on the frame cadence and the binning on the measurement cadence, so
+   * the snapshot is what stops a distribution changing under a half-drawn frame.
+   *
+   * @param {string} channel 'L' or 'R'
+   * @returns {?AmplitudeHistogram}
+   */
+  histogramSnapshot(channel) {
+    const h = (channel === 'R') ? this._histR : this._histL;
+    return h.getTotal() > 0 ? h.snapshot() : null;
   }
 
   /** Acquires the dedicated forward reader + spins up the worker. The reader anchors at
@@ -96,6 +146,12 @@ export class OscMeasClient {
     const n = reader.read(avail, bufL, bufR);
     if (n === OVERRUN) { reader.seekToLatest(); this._resetWorker(); return; }
     if (n <= 0) return;
+    // BIN FIRST, while the samples are still exactly as captured, and before the buffers are
+    // transferred to the worker (a transferred ArrayBuffer is detached — unreadable from here).
+    // The reader is a FORWARD cursor handing back only the contiguous NEW gap, so each sample is
+    // binned exactly once; a re-read window would count the overlap ~20× at this cadence and bias
+    // the distribution toward whatever the overlap covered.
+    this._binHistograms(bufL, bufR, n, params);
     worker.postMessage({
       type: 'feed', bufL, bufR, n,
       sampleRate: params.sampleRate,
@@ -103,6 +159,45 @@ export class OscMeasClient {
       avgSeconds: params.avgSeconds,
       L: params.L, R: params.R,
     }, [bufL.buffer, bufR.buffer]);
+  }
+
+  /**
+   * One binning pass over the raw gap: peak → windowed peak → range → count.
+   *
+   * Missing passes under load is fine — what is collected stays an unbiased sub-sample of the
+   * signal. It does mean the total is NOT a census of captured samples, so it must never be
+   * presented as one.
+   *
+   * @param {Float32Array} bufL left channel, normalised
+   * @param {Float32Array} bufR right channel, normalised
+   * @param {number} n samples valid in each buffer
+   * @param {object} params the publish params, for the averaging window length
+   */
+  _binHistograms(bufL, bufR, n, params) {
+    let peakL = 0, peakR = 0;
+    for (let i = 0; i < n; i++) {
+      const l = bufL[i] < 0 ? -bufL[i] : bufL[i];
+      const r = bufR[i] < 0 ? -bufR[i] : bufR[i];
+      if (l > peakL) peakL = l;
+      if (r > peakR) peakR = r;
+    }
+    const windowMs = Math.max(0.1, params.avgSeconds || 5.0) * 1000;
+    const now = Date.now();
+    const w = this._peakWindow;
+    if (w.startedAtMs === 0 || now - w.startedAtMs >= windowMs) {
+      w.startedAtMs = now;                 // tumble: restart the peak from THIS block
+      w.L = peakL;
+      w.R = peakR;
+    } else {
+      if (peakL > w.L) w.L = peakL;
+      if (peakR > w.R) w.R = peakR;
+    }
+    this._histL.fit(-w.L, w.L);            // false ⇒ the counts were cleared, which is intended:
+    this._histR.fit(-w.R, w.R);            // counts from a different level are a different signal
+    for (let i = 0; i < n; i++) {
+      this._histL.add(bufL[i]);
+      this._histR.add(bufR[i]);
+    }
   }
 
   /** Full teardown (page/engine dispose): drop the subscription + worker + reader. */

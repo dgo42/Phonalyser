@@ -406,6 +406,15 @@ export class Preferences {
     this.oscMeasurementChannel = this._bound('L');
     this.oscShowStats = this._bound(true);
     this.oscShowMeasurementTable = this._bound(true);
+    /** Amplitude-histogram window open state. */
+    this.oscShowHistogram = this._bound(false);
+    /** Bars the histogram DRAWS. Display resolution only: changing it re-aggregates the collected
+     *  micro-bins, and never discards a count. Dialog range 10…200, step 5. */
+    this.oscHistogramBins = this._bound(50);
+    /** Channel the histogram shows. DELIBERATELY separate from oscMeasurementChannel: that one's
+     *  subscriber clears the measurement statistics, so sharing it would make a histogram channel
+     *  pick wipe the table's avg / min / max / σ. */
+    this.oscHistogramChannel = this._bound('L');
     this.adcFsVoltageRms = this._bound(DEFAULT_ADC_FS_VRMS);
     // RIGHT-channel ADC full-scale — the per-channel sibling of adcFsVoltageRms;
     // defaults to the same legacy value and mirrors it until a profile / calibration
@@ -1146,6 +1155,9 @@ export class Preferences {
     root.oscMeasurementAverageSeconds = this.oscMeasurementAverageSeconds.get();
     root.oscMeasurementChannel = this.oscMeasurementChannel.get();
     root.oscShowStats = this.oscShowStats.get();
+    root.oscShowHistogram = this.oscShowHistogram.get();
+    root.oscHistogramBins = this.oscHistogramBins.get();
+    root.oscHistogramChannel = this.oscHistogramChannel.get();
     root.oscShowMeasurementTable = this.oscShowMeasurementTable.get();
     // DEPRECATED shared full-scale calibration — the FALLBACK for a device with no card in the
     // device-profile store (per-card calibration owns everything else). Kept read AND written for
@@ -1518,6 +1530,11 @@ export class Preferences {
     if (isNum(g('oscMeasurementAverageSeconds'))) this.oscMeasurementAverageSeconds.set(g('oscMeasurementAverageSeconds'));
     if (isStr(g('oscMeasurementChannel'))) this.oscMeasurementChannel.set(enumOr('Channel', g('oscMeasurementChannel'), this.oscMeasurementChannel.get()));
     if (isBool(g('oscShowStats'))) this.oscShowStats.set(g('oscShowStats'));
+    if (isBool(g('oscShowHistogram'))) this.oscShowHistogram.set(g('oscShowHistogram'));
+    if (isNum(g('oscHistogramBins'))) this.oscHistogramBins.set(g('oscHistogramBins'));
+    if (isStr(g('oscHistogramChannel'))) {
+      this.oscHistogramChannel.set(enumOr('Channel', g('oscHistogramChannel'), this.oscHistogramChannel.get()));
+    }
     if (isBool(g('oscShowMeasurementTable'))) this.oscShowMeasurementTable.set(g('oscShowMeasurementTable'));
     // DEPRECATED shared full-scale fallback (unbound devices) — see _toMap(); honoured so a
     // pre-card web document keeps its calibration (Java parity 65cd3c5). The setters validate and

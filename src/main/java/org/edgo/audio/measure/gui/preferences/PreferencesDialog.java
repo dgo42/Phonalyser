@@ -130,6 +130,10 @@ public final class PreferencesDialog {
     /** Dot diameters (px): 3…12 in 1-px steps. */
     private static final double DOT_DIAM_MIN_PX = 3;
     private static final double DOT_DIAM_MAX_PX = 12;
+    /** Amplitude-histogram bars: 10…200 in 5-bar steps. */
+    private static final double HIST_BINS_MIN  =  10;
+    private static final double HIST_BINS_MAX  = 200;
+    private static final double HIST_BINS_STEP =   5;
     /** Manual persistence time (s): 0.1…60 in 0.5-s steps, one decimal shown. */
     private static final double PERSIST_MANUAL_MIN_SEC  = 0.1;
     private static final double PERSIST_MANUAL_MAX_SEC  = 60;
@@ -403,6 +407,16 @@ public final class PreferencesDialog {
         dotDiameterSel.setLayoutData(comboData());
         dotDiameterSel.setToolTipText(I18n.t("preferences.dotDiameter.tooltip"));
         Bindings.stepFieldInt(dotDiameterSel, edit.oscDotDiameterProperty());
+
+        // Amplitude-histogram bars — display resolution only: the accumulator
+        // bins far finer and is aggregated down to this many bars over the
+        // occupied span, so a change re-draws the data already collected
+        // instead of discarding it.
+        gridLabel(oscTab,I18n.t("preferences.scope.histogramBins"));
+        NumericStepField histogramBinsSel = new NumericStepField(oscTab, UnitFamily.NONE,
+                HIST_BINS_MIN, HIST_BINS_MAX, HIST_BINS_STEP, HIST_BINS_STEP, 0, 90);
+        histogramBinsSel.setLayoutData(comboData());
+        Bindings.stepFieldInt(histogramBinsSel, edit.oscHistogramBinsProperty());
 
         // Display persistence ("digital phosphor", GPU path only): a preset decay time
         // plus a manual-seconds field that's enabled only when the mode is "Manual".

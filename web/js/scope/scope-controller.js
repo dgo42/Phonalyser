@@ -274,4 +274,25 @@ export class ScopeController {
   /** Re-anchors the measurement stream + drops the worker's collection / filter state
    *  (measurement-channel switch, stats reset). */
   resetMeasurement() { this._measClient.reset(); }
+
+  /**
+   * A snapshot of one channel's amplitude distribution for the histogram plot, or null before
+   * anything was collected. The binning lives in the measurement client, which is the only place
+   * that sees the raw window before the worker's DC removal / filtering.
+   *
+   * @param {string} channel 'L' or 'R'
+   * @returns {?Object}
+   */
+  histogramSnapshot(channel) { return this._measClient.histogramSnapshot(channel); }
+
+  /**
+   * Clears both amplitude distributions. Fired by the histogram window's own reset AND by
+   * everything that resets the scope's running statistics — the scope reset button, a channel
+   * change, a calibration change, and a generator start/stop, because starting IS a signal change
+   * and averaging across it would present two signals as one distribution.
+   *
+   * Deliberately NOT fired by V/div, a range switch or a recalibration: those relabel the axis,
+   * they do not recount anything.
+   */
+  resetHistograms() { this._measClient.resetHistograms(); }
 }

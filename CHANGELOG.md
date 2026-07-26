@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Amplitude histogram for the oscilloscope.** A new toolbar button opens a
+  resizable window showing how often the signal sat at each voltage — horizontal
+  bars, voltage up the left axis with 0 V always on the centre line, occupancy
+  along the bottom. A sine draws the bathtub of its two turning points, noise a
+  Gaussian bell, a clipped signal a spike where the rail is; a waveform clipped
+  on one side only shows as unequal bars about the centre. The window has its own
+  L/R pick (greyed for a channel switched off in the scope) and its own reset, so
+  clearing the distribution never disturbs the measurement table's statistics.
+  Collection is unbounded while the window is open and survives a V/div change, a
+  range switch and a recalibration — the axis is relabelled, not recounted.
+  Resolution follows the signal rather than the converter: the range is sized by
+  the signal's own peak over the measurement-average window, so a millivolt
+  residual is resolved as finely as a full-scale tone instead of collapsing into a
+  couple of bars. Bar count is configurable under Preferences ▸ Oscilloscope
+  (default 50); it is display resolution only, so changing it re-draws what has
+  already been collected instead of discarding it.
 - **dBr — a new magnitude unit for the FFT view.** The unit selector gains dBr
   next to V, V/√Hz, dBV and dBFS: every level is shown relative to the
   fundamental, which therefore sits at exactly 0 dBr. The vertical axis, the
@@ -86,6 +102,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   register map — firmware, capability, serial number, telemetry and the I2S
   control and frame-width registers — plus the third front-panel endpoint pair,
   and now cite three independent implementations rather than one.
+
+- **Web version: the amplitude histogram.** The browser port gains the
+  oscilloscope's amplitude histogram, ported class for class from the desktop —
+  the same accumulator and range fitting, the same voltage axis read relative to
+  the distribution's own mean with 0 V on the centre line, the same nice-number
+  linear axes, the window's own L / R pick and reset, the histogram button
+  appearing beside the measurement gauge once a signal is present, and the bar
+  count under Preferences ▸ Oscilloscope. It differs from the desktop in one
+  place: the window is a resizable, draggable panel inside the page, because a
+  web page cannot own a separate top-level window. Help chapter and screenshots
+  in English, German and Ukrainian.
+
+- **Web version catch-up.** Besides the QA40x backend and the histogram above,
+  the browser port picks up the rest of this release's measurement work — the dBr
+  magnitude unit with its axis, cursor readout and amplitude display, and output
+  amplitude typed in dBFS against the live full scale — and brings its
+  Preferences up to the desktop's behaviour now that there is a backend to choose:
+  devices are enumerated at startup and by Scan devices rather than on every
+  backend switch, the list names them instead of showing the browser's raw device
+  id, an input range is staged until OK confirms it and Cancel puts the previous
+  one back, changing the output range retunes the DAC full scale so the generated
+  amplitude stays where it was set, and a calibration change resets the running
+  statistics and distributions.
 
 ### Changed
 
@@ -234,6 +273,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the FFT window changed — a generator setting moving because an unrelated
   analyser setting moved. It now states the physical level of the dither it
   applies, and stays put.
+
+- **Web.** Losing the input device mid-capture went unreported: the device could
+  be unplugged or taken exclusively by another application and the scope carried
+  on drawing a flat line with the capture rate still ticking — a measurement of
+  nothing presented as a measurement. The capture source now watches the media
+  track, and losing it shows the error and stops the scope and the FFT. Also,
+  83 interface strings across 31 languages had drifted behind the desktop
+  catalogue — the preset tooltips were still English, and two Ukrainian terms did
+  not match the translation glossary — and were refreshed.
 
 ## [1.1.0] — 2026-07-21
 
