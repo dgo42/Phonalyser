@@ -598,6 +598,57 @@ public abstract class AbstractMeasurementView extends Canvas {
         palette.put(role, newColor(packedRgb));
     }
 
+    /** Packed RGBs the channel palette was last built from — used to detect a
+     *  preference change without re-allocating a Color on every paint. */
+    private int currentLeftRgb  = -1;
+    private int currentRightRgb = -1;
+
+    /**
+     * Re-points a channel header button at the freshly-allocated palette colours
+     * after {@link #syncChannelPalette} disposed the previous ones.  Without this
+     * the button keeps a reference to a now-disposed {@link Color} and its next
+     * paint throws "Graphic is disposed".
+     */
+    protected final void recolorChannelButton(ToolButton btn, String label,
+                                              ColorRole midRole, ColorRole traceRole) {
+        if (btn == null) return;
+        Color mid = color(midRole);
+        btn.setLabel(label, mid);                 // content (label) colour
+        btn.setColors(mid, color(traceRole));     // frame (idle) + fill (active)
+    }
+
+    /**
+     * (Re-)builds this view's channel colours from the user-configured
+     * preferences and re-points its own L/R buttons.  A no-op when the packed
+     * RGBs already match, so it is cheap to call on every paint.  The dim
+     * variants are fixed attenuations of the channel colour, used for the
+     * unselected buttons and the beat overlay.
+     *
+     * <p>Lives here rather than in one view because every view that draws the two
+     * capture channels needs exactly this: its OWN palette rebuilt and its OWN
+     * buttons re-pointed.  Each view passes its own pair; a view without channel
+     * buttons passes {@code null}.
+     */
+    protected final void syncChannelPalette(ToolButton leftBtn, ToolButton rightBtn) {
+        Preferences prefs = Preferences.instance();
+        int newL = prefs.getOscLeftChannelColor();
+        int newR = prefs.getOscRightChannelColor();
+        if (newL != currentLeftRgb) {
+            setColor(ColorRole.LEFT_TRACE,        newL);
+            setColor(ColorRole.LEFT_CHANNEL_MID,  attenuate(newL, 0.65));
+            setColor(ColorRole.LEFT_BEAT,         attenuate(newL, 0.45));
+            currentLeftRgb = newL;
+            recolorChannelButton(leftBtn, "L", ColorRole.LEFT_CHANNEL_MID, ColorRole.LEFT_TRACE);
+        }
+        if (newR != currentRightRgb) {
+            setColor(ColorRole.RIGHT_TRACE,       newR);
+            setColor(ColorRole.RIGHT_CHANNEL_MID, attenuate(newR, 0.65));
+            setColor(ColorRole.RIGHT_BEAT,        attenuate(newR, 0.45));
+            currentRightRgb = newR;
+            recolorChannelButton(rightBtn, "R", ColorRole.RIGHT_CHANNEL_MID, ColorRole.RIGHT_TRACE);
+        }
+    }
+
     /** Disposes every palette entry.  Subclasses call this from their
      *  own dispose handler. */
     protected final void disposePalette() {
@@ -704,6 +755,11 @@ public abstract class AbstractMeasurementView extends Canvas {
         /** Voltage with SI prefix: {@code "1.5 V"} / {@code "100 mV"} /
          *  {@code "1 µV"}.  Use on linear voltage axes (V, V/√Hz). */
         VOLTS_SI,
+        /** Plain counts, thinned with k / M above a thousand:
+         *  {@code "0"} / {@code "850"} / {@code "12 k"} / {@code "3.4 M"}.
+         *  For an occupancy axis whose full scale climbs without bound while
+         *  data accumulates — {@link #FREQ_INT} would label it in hertz. */
+        COUNT,
     }
 
     /** Spec for one axis on the grid.  Build via the static
@@ -1285,9 +1341,13 @@ public abstract class AbstractMeasurementView extends Canvas {
         else if (mant < 4)   step = 2.5   * pow;
         else if (mant < 7)   step = 5     * pow;
         else                 step = 10    * pow;
-        double first = Math.ceil(min / step) * step;
+        // Index whole multiples of the step instead of accumulating f += step.
+        // Repeated addition drifts, so on an axis that straddles zero the tick that
+        // should BE zero lands on a denormal like −3 × 10⁻¹⁹ — which an SI-prefixed
+        // label faithfully renders as "-0 f".  k · step is exact at k = 0.
+        long k0 = (long) Math.ceil(min / step);
         List<Double> out = new ArrayList<>();
-        for (double f = first; f <= max + step * 1e-9; f += step) out.add(f);
+        for (long k = k0; k * step <= max + step * 1e-9; k++) out.add(k * step);
         return toArray(out);
     }
 
@@ -1411,6 +1471,29 @@ public abstract class AbstractMeasurementView extends Canvas {
         return m + " " + prefix;
     }
 
+    /** Occupancy tick label: a plain integer up to 999, then k / M so a count
+     *  that keeps climbing never outgrows the axis gutter — {@code "850"},
+     *  {@code "12 k"}, {@code "3.4 M"}.  Trailing zeros in the mantissa are
+     *  stripped, as in {@link #formatVoltsSi}. */
+    protected String formatCount(double v) {
+        double abs = Math.abs(v);
+        if (abs < 1e3) return String.format(Locale.US, "%d", Math.round(v));
+        String prefix;
+        double scale;
+        if      (abs >= 1e9) { prefix = "G"; scale = 1e9; }
+        else if (abs >= 1e6) { prefix = "M"; scale = 1e6; }
+        else                 { prefix = "k"; scale = 1e3; }
+        double s = v / scale;
+        String m = (Math.abs(s) >= 100) ? String.format(Locale.US, "%.0f", s)
+                 : (Math.abs(s) >= 10)  ? String.format(Locale.US, "%.1f", s)
+                                        : String.format(Locale.US, "%.2f", s);
+        if (m.contains(".")) {
+            m = m.replaceAll("0+$", "");
+            if (m.endsWith(".")) m = m.substring(0, m.length() - 1);
+        }
+        return m + " " + prefix;
+    }
+
     /** Magnitude value with the unit suffix glued on — for crosshair
      *  readouts where the user sees the number and unit together.  dB
      *  units use one decimal; linear voltage units route through
@@ -1438,6 +1521,7 @@ public abstract class AbstractMeasurementView extends Canvas {
             case DB:        return formatDb(v);
             case PHASE_DEG: return formatPhaseDeg(v);
             case VOLTS_SI:  return formatVoltsSi(v);
+            case COUNT:     return formatCount(v);
             case NONE:
             default:        return "";
         }

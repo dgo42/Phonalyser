@@ -29,6 +29,8 @@
       <li><a href="oscilloscope.html#scope-utility-calibrate">ADC-Kalibrierung</a> <span class="small">(Oszilloskop)</span> — <span class="small">Öffnet den gemeinsamen ADC-Kalibrierungsdialog, der die Vollaussteuerungsspannung des ADC aus einem bekannten Referenzsignal…</span></li>
       <li><a href="generator.html#generator-amplitude">Amplitude (RMS)</a> <span class="small">(Generator)</span> — <span class="small">Der Ausgangspegel, intern als Volt RMS gespeichert. Einheiten: µV , mV , V , dBV und dBFS (Groß-/Kleinschreibung irrelevant);…</span></li>
       <li><a href="fft.html#fft-mag-unit">Amplitudeneinheit</a> <span class="small">(FFT-Analyser)</span> — <span class="small">Auswahlfeld oben rechts mit fünf Optionen: V , V/√Hz , dBV , dBFS , dBr . Ein Einheitenwechsel konvertiert die…</span></li>
+      <li><a href="oscilloscope.html#scope-histogram">Amplitudenhistogramm</a> <span class="small">(Oszilloskop)</span> — <span class="small">Öffnet und schließt das Amplitudenhistogramm-Fenster , das zeigt, wie häufig das Signal bei welcher Spannung lag. Die…</span></li>
+      <li><a href="oscilloscope.html#scope-histogram-window">Amplitudenhistogramm-Fenster</a> <span class="small">(Oszilloskop)</span> — <span class="small">Wird mit der Schaltfläche Amplitudenhistogramm geöffnet. Es beantwortet eine andere Frage als das Signalbild: nicht, wie die…</span></li>
       <li><a href="theory/generator.html#amplitude">Amplitudenkalibrierung</a> <span class="small">(Theory ▸ Theorie: Signalgenerator)</span> — <span class="small">Der Ausgangspegel wird in V rms eingestellt. Intern wird die Einheitsamplituden-Wellenform durch einen linearen Faktor in den…</span></li>
       <li><a href="preferences.html#prefs-audio">Audio</a> <span class="small">(Einstellungen)</span> — <span class="small">Legt das Audio-Backend sowie die Ein-/Ausgabegeräte und -formate fest — die Einstellungen, die darüber entscheiden, ob eine…</span></li>
       <li><a href="freqresp.html#freqresp-overview">Auf einen Blick</a> <span class="small">(Frequenzgang)</span> — <span class="small">Betragsdarstellung. Logarithmische Frequenzachse (horizontal), lineare dB-Achse (vertikal). Zeigt den linken oder rechten Kanal…</span></li>
@@ -448,6 +450,7 @@
       <li><b>Bin-Signal</b> — <a href="theory/derotation-accuracy.html#purpose">Theory ▸ Theorie: De-Rotations-Genauigkeit ▸ Die Frage, die diese Seite beantwortet</a>, <a href="theory/derotation-accuracy.html#setup">Theory ▸ Theorie: De-Rotations-Genauigkeit ▸ Das durchgerechnete Beispiel</a>, <a href="theory/index.html#">Theory ▸ Funktionsprinzip ▸ Durchgängige Designprinzipien</a></li>
       <li><b>Bin-Signal-Rausch-Verhältnis</b> — <a href="theory/derotation-accuracy.html#">Theory ▸ Theorie: De-Rotations-Genauigkeit</a></li>
       <li><b>Bin-Snapping</b> — <a href="theory/fft.html#ongrid">Theory ▸ Theorie: FFT-Analysator ▸ Den Ton auf dem Raster halten: Snap und die FLL</a></li>
+      <li><b>Bit-WAVs</b> — <a href="changelog.html#">Was ist neu ▸ Behoben</a></li>
       <li><b>Bit-Windows</b> — <a href="changelog.html#">Was ist neu ▸ Geändert</a>, <a href="changelog.html#">Was ist neu ▸ Behoben</a></li>
       <li><b>Bits</b> — <a href="generator.html#">Generator</a></li>
       <li><b>Blackman</b> — <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="external/fft-analysis.html#">Further reading ▸ Weiterführende Literatur: FFT-Analyse Grundlagen ▸ Leck-Effekt und Fensterfunktionen</a>, <a href="fft.html#fft-window">FFT-Analyser ▸ Fensterfunktion</a>, <a href="theory/algorithms.html#spectral">Theory ▸ Theorie: Algorithmen-Referenz ▸ Spektralanalyse</a>, <a href="theory/derotation-accuracy.html#overlap">Theory ▸ Theorie: De-Rotations-Genauigkeit ▸ Überlappung: die effektive Anzahl der Mittelungen</a>, <a href="theory/derotation-accuracy.html#window">Theory ▸ Theorie: De-Rotations-Genauigkeit ▸ Welche Fensterfunktion — und warum sie nicht nach dem Rauschen gewählt wird</a></li>
@@ -494,7 +497,7 @@
       <li><b>Daten</b> — <a href="theory/fft.html#">Theory ▸ Theorie: FFT-Analysator</a></li>
       <li><b>Datenstrom-Verbraucher</b> — <a href="theory/ring-buffer.html#reader">Theory ▸ Theorie: Ringpuffer &amp; Verbraucher ▸ Der Lesezeiger</a>, <a href="theory/ring-buffer.html#">Theory ▸ Theorie: Ringpuffer &amp; Verbraucher</a></li>
       <li><b>Dauerfeld</b> — <a href="oscilloscope.html#">Oszilloskop</a></li>
-      <li><b>DC</b> — <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="fft.html#fft-dist-min">FFT-Analyser ▸ Verzerrung-HP aktivieren + Frequenz</a>, <a href="oscilloscope.html#scope-meas-table">Oszilloskop ▸ Messtabelle</a>, <a href="oscilloscope.html#scope-tab-left">Oszilloskop ▸ Tab „Links&quot;</a>, <a href="oscilloscope.html#scope-acdc">Oszilloskop ▸ AC / DC</a>, <a href="oscilloscope.html#scope-residual">Oszilloskop ▸ Residuum</a></li>
+      <li><b>DC</b> — <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="fft.html#fft-dist-min">FFT-Analyser ▸ Verzerrung-HP aktivieren + Frequenz</a>, <a href="oscilloscope.html#scope-meas-table">Oszilloskop ▸ Messtabelle</a>, <a href="oscilloscope.html#scope-histogram-window">Oszilloskop ▸ Amplitudenhistogramm-Fenster</a>, <a href="oscilloscope.html#scope-tab-left">Oszilloskop ▸ Tab „Links&quot;</a>, <a href="oscilloscope.html#scope-acdc">Oszilloskop ▸ AC / DC</a></li>
       <li><b>DC-Pegel</b> — <a href="oscilloscope.html#scope-residual">Oszilloskop ▸ Residuum</a>, <a href="oscilloscope.html#scope-mains">Oszilloskop ▸ Netz</a></li>
       <li><b>DC-Pegel bleibt erhalten</b> — <a href="oscilloscope.html#">Oszilloskop</a></li>
       <li><b>DC-Pegel erhalten bleibt</b> — <a href="oscilloscope.html#">Oszilloskop</a></li>
@@ -576,6 +579,8 @@
       <li><b>FFT-Ansicht</b> — <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="theory/ring-buffer.html#overrun">Theory ▸ Theorie: Ringpuffer &amp; Verbraucher ▸ Überlauffehler: wenn ein Verbraucher zurückfällt</a></li>
       <li><b>FFT-Bin</b> — <a href="dac-predistortion.html#dpd-readouts">DAC-Vorverzerrungsassistent ▸ Was Sie sehen</a>, <a href="generator.html#">Generator ▸ Generator</a>, <a href="generator.html#generator-frequency">Generator ▸ Frequenz</a>, <a href="generator.html#generator-snap-fft-bin">Generator ▸ Frequenz auf nächsten einrasten</a>, <a href="howto.html#">Das kürzeste HOW-TO der Welt ▸ 3 · Den Ton einrasten</a>, <a href="theory/algorithms.html#filtering">Theory ▸ Theorie: Algorithmen-Referenz ▸ Filterung &amp; Schätzung</a></li>
       <li><b>FFT-Einstellungen</b> — <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent ▸ DAC-Vorverzerrungsassistent</a>, <a href="dac-predistortion.html#dpd-readouts">DAC-Vorverzerrungsassistent ▸ Was Sie sehen</a>, <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent</a>, <a href="fft.html#">FFT-Analyser ▸ FFT-Analyser</a>, <a href="fft.html#fft-tiles">FFT-Analyser ▸ Tab-Kacheln</a>, <a href="fft.html#fft-tile-length">FFT-Analyser ▸ FFT-Länge-Kachel</a></li>
+      <li><b>FFT-Fenster</b> — <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="external/fft-analysis.html#">Further reading ▸ Weiterführende Literatur: FFT-Analyse Grundlagen ▸ Leck-Effekt und Fensterfunktionen</a>, <a href="theory/generator.html#lifecycle">Theory ▸ Theorie: Signalgenerator ▸ Verhalten im laufenden Betrieb</a></li>
+      <li><b>FFT-Fensters</b> — <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="fft.html#fft-fill-percent">FFT-Analyser ▸ Füllprozentsatz</a>, <a href="generator.html#">Generator ▸ Predistortion-Datei (.dpd)</a>, <a href="theory/generator.html#dualtone">Theory ▸ Theorie: Signalgenerator ▸ Dualton</a>, <a href="tips.html#">Tipps ▸ Tipps</a></li>
       <li><b>FFT-Grundrauschen</b> — <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a>, <a href="tips.html#">Tipps ▸ Tipps</a></li>
       <li><b>FFT-Leitfaden</b> — <a href="theory/fft.html#purpose">Theory ▸ Theorie: FFT-Analysator ▸ Wozu er dient</a></li>
       <li><b>FFT-Mittelung</b> — <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a></li>
@@ -608,6 +613,7 @@
       <li><b>Gegenuhrzeigersinn-Pfeil</b> — <a href="fft.html#fft-reset">FFT-Analyser ▸ Mittelungspuffer zurücksetzen</a>, <a href="fft.html#">FFT-Analyser</a>, <a href="oscilloscope.html#scope-reset">Oszilloskop ▸ Statistik zurücksetzen</a>, <a href="oscilloscope.html#">Oszilloskop</a></li>
       <li><b>Geladene .frc -Messungen</b> — <a href="changelog.html#">Was ist neu</a></li>
       <li><b>Generator</b> — <a href="index.html#">Hilfe</a></li>
+      <li><b>Generator-Dithers</b> — <a href="changelog.html#">Was ist neu ▸ Behoben</a></li>
       <li><b>Generator-Signals</b> — <a href="oscilloscope.html#scope-persistence">Oszilloskop ▸ Nachleuchten (Afterglow)</a></li>
       <li><b>Gerät</b> — <a href="howto.html#">Das kürzeste HOW-TO der Welt</a>, <a href="preferences.html#">Einstellungen</a></li>
       <li><b>Gerät belegt</b> — <a href="theory/audio-backend.html#">Theory ▸ Theorie: Audio-Backend</a></li>
@@ -639,6 +645,7 @@
       <li><b>HFT144D</b> — <a href="fft.html#fft-window">FFT-Analyser ▸ Fensterfunktion</a>, <a href="fft.html#fft-tile-window">FFT-Analyser ▸ Fensterfunktion-Kachel</a>, <a href="theory/fft.html#metrics">Theory ▸ Theorie: FFT-Analysator ▸ Die Verzerrungs- und Rausch-Metriken</a></li>
       <li><b>HFT248D</b> — <a href="changelog.html#">Was ist neu ▸ Behoben</a>, <a href="dac-predistortion.html#dpd-open">DAC-Vorverzerrungsassistent ▸ Den Assistenten öffnen</a>, <a href="fft.html#fft-window">FFT-Analyser ▸ Fensterfunktion</a>, <a href="fft.html#fft-tile-window">FFT-Analyser ▸ Fensterfunktion-Kachel</a>, <a href="theory/dac-predistortion.html#averaging">Theory ▸ Theorie: DAC-Vorverzerrung ▸ Kohärente Mittelung: wie die schwachen Harmonischen vertrauenswürdig werden</a>, <a href="theory/dac-predistortion.html#window">Theory ▸ Theorie: DAC-Vorverzerrung ▸ Fenster und Überlappung — HFT248D bei 87.5 %</a></li>
       <li><b>High-End</b> — <a href="bench.html#">Messplatz &amp; Verkabelung ▸ Das Kabel: CAT.8-Patchkabel, kein „Audio&quot;-Koax</a></li>
+      <li><b>Histogramm-Klassen</b> — <a href="oscilloscope.html#scope-histogram-window">Oszilloskop ▸ Amplitudenhistogramm-Fenster</a></li>
       <li><b>Hochfrequenz-Bereinigung</b> — <a href="oscilloscope.html#scope-lpf">Oszilloskop ▸ LPF</a>, <a href="oscilloscope.html#">Oszilloskop</a></li>
       <li><b>Hochpass</b> — <a href="freqresp.html#">Frequenzgang</a></li>
       <li><b>Horizontal</b> — <a href="oscilloscope.html#">Oszilloskop</a></li>
@@ -994,6 +1001,7 @@
       <li><b>Ziel-THD erreicht</b> — <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent</a></li>
       <li><b>Zielmarkierung</b> — <a href="tune-notch.html#">Kerbfilter-Abgleichassistent</a></li>
       <li><b>Zoom-Engine</b> — <a href="changelog.html#">Was ist neu ▸ Hinzugefügt</a></li>
+      <li><b>Zurücksetzen</b> — <a href="oscilloscope.html#">Oszilloskop</a></li>
       <li><b>Zweiton</b> — <a href="dac-predistortion.html#">DAC-Vorverzerrungsassistent</a>, <a href="oscilloscope.html#">Oszilloskop</a></li>
     </ul>
     <h3>Ü</h3>

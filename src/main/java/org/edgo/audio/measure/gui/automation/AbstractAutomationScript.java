@@ -396,6 +396,25 @@ public abstract class AbstractAutomationScript {
         });
     }
 
+    /**
+     * Opens the scope's amplitude-histogram window and leaves it up, by setting the
+     * preference the scope watches.  Its plot registers under
+     * {@code multifunctional/scope/histogram}, so {@link #screenshot} captures it.
+     *
+     * <p>Give the scope a few seconds of real capture first: the distribution is
+     * empty until samples have been binned, and an empty plot is not worth a
+     * screenshot.  That means such a run must NOT set
+     * {@code phonalyser.automation.noAudio}.  Pair with {@link #closeHistogram()}.
+     */
+    protected final void openHistogram() {
+        ui(() -> Preferences.instance().setOscShowHistogram(true));
+    }
+
+    /** Closes the window opened by {@link #openHistogram()} (no-op if none). */
+    protected final void closeHistogram() {
+        ui(() -> Preferences.instance().setOscShowHistogram(false));
+    }
+
     /** Closes the dialog opened by {@link #openPreferences()} (no-op if none). */
     protected final void closePreferences() {
         ui(() -> {

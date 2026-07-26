@@ -34,6 +34,7 @@ const PREF_FIELD_SPECS = {
   prefOscMeasAvg:   { model: { family: F.SECONDS, min: 0.5, max: 100, wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
   prefOscLineWidth: { model: { family: F.PIXEL,   min: 1,   max: 5,   wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
   prefOscDotDia:    { model: { family: F.PIXEL,   min: 3,   max: 12,  wheelStep: 1,   arrowStep: 1,   decimals: 0 } },
+  prefOscHistBins:  { model: { family: F.NONE,    min: 10,  max: 200, wheelStep: 5,   arrowStep: 5,   decimals: 0 } },
   prefOscPersistManual: { model: { family: F.SECONDS, min: 0.1, max: 60, wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
   // FFT tab
   prefFftLineWidth: { model: { family: F.PIXEL,   min: 1,   max: 5,   wheelStep: 0.5, arrowStep: 0.5, decimals: 1 } },
@@ -339,6 +340,7 @@ export class PreferencesDialog {
     this.prefFields.prefOscMeasAvg.setValue(prefs.oscMeasurementAverageSeconds.get());
     this.prefFields.prefOscLineWidth.setValue(prefs.oscLineWidth.get());
     this.prefFields.prefOscDotDia.setValue(prefs.oscDotDiameter.get());
+    this.prefFields.prefOscHistBins.setValue(prefs.oscHistogramBins.get());
     // Persistence mode combo + manual-seconds field (enabled only when mode == MANUAL,
     // re-gated live on combo change; see the #prefOscPersistence handler in bind()).
     $('#prefOscPersistence').val(prefs.oscPersistenceMode.get());
@@ -426,6 +428,7 @@ export class PreferencesDialog {
     prefs.oscMeasurementAverageSeconds.set(fv('prefOscMeasAvg'));
     prefs.oscLineWidth.set(fv('prefOscLineWidth'));
     prefs.oscDotDiameter.set(Math.round(fv('prefOscDotDia')));
+    prefs.oscHistogramBins.set(Math.round(fv('prefOscHistBins')));
     prefs.oscPersistenceMode.set($('#prefOscPersistence').val());
     prefs.oscPersistenceManualSeconds.set(fv('prefOscPersistManual'));
     prefs.oscLeftChannelColor.set(hexToInt($('#prefOscLeftColor').val()));

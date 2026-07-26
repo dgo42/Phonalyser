@@ -330,6 +330,11 @@ public final class GeneratorController {
                 running = true;
                 log.info("Generator started (attempt {}): device={}, form={}, freq={} Hz, amp={} Vrms, rate={} Hz, depth={} bit, dither={} bit",
                         attempt, device.displayName(), form, frequency, amplitudeVRms, sampleRate, bitDepth, ditherBits);
+                // Starting IS a signal change: what the ADC sees goes from whatever
+                // was there to the generated tone, so the scope's running statistics
+                // and amplitude distribution, and the FFT's accumulator, must restart
+                // rather than average the two together.
+                publishSignalChanged();
                 return;
             }
             log.warn("Generator start attempt {}/{} failed: {}", attempt, MAX_ATTEMPTS, attemptError);
@@ -473,6 +478,7 @@ public final class GeneratorController {
      * thread to exit and the output line to drain / close before returning.
      */
     public synchronized void stop() {
+        boolean wasRunning = running;
         stopFlag.set(true);
         Thread t = playThread;
         if (t != null) {
@@ -493,6 +499,9 @@ public final class GeneratorController {
         generator  = null;
         playback   = null;
         running    = false;
+        // Same reasoning as in start(): the signal just went away.  Only on a real
+        // transition — the failed-start paths call this with nothing running.
+        if (wasRunning) publishSignalChanged();
     }
 
     /** Live-applies the dither bit count to the running playback (if any), then

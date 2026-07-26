@@ -150,6 +150,13 @@
      vertikalen Bereichs ausfüllt.  Verwendet die gemessene Periode und Vpp des
      aktuell ausgewählten Kanals.</p>
 
+  <h3 id="scope-histogram">Amplitudenhistogramm</h3>
+  <p>Öffnet und schließt das
+     <a href="#scope-histogram-window">Amplitudenhistogramm-Fenster</a>, das zeigt,
+     wie häufig das Signal bei welcher Spannung lag.  Die Schaltfläche bleibt
+     gedrückt, solange das Fenster geöffnet ist; das Schließen des Fensters gibt sie
+     wieder frei.  Die Erfassung läuft nur, solange das Fenster geöffnet ist.</p>
+
   <h3 id="scope-gauge">Messanzeige (Messtabellen-Umschalter)</h3>
   <p>Blendet die gesamte Messtabellen-Überlagerung ein und aus.  Wenn
      ausgeblendet, sind nur noch das Signal und die L / R-Schaltflächen
@@ -171,7 +178,9 @@
      zurückspulen"-Symbol).  Löscht den gleitenden Statistikverlauf, der die
      <code>avg / min / max / σ</code>-Spalten speist, sodass der nächste Frame
      ein neues Mittelungsfenster beginnt.  Nützlich nach einer Änderung der
-     Messbedingungen.</p>
+     Messbedingungen.  Das <a href="#scope-histogram-window">Amplitudenhistogramm</a>
+     startet gemeinsam damit neu — dieselben Ereignisse machen beides ungültig —,
+     und ebenso beim Starten oder Stoppen des Generators.</p>
 
   <h2 id="scope-meas-table">Messtabelle</h2>
   <p>Kompaktes Raster oben links im Signalbereich.  Acht Zeilen, bis zu fünf
@@ -201,6 +210,99 @@
      Messungsmittelung</a>).  σ ist die Grundgesamtheits-Standardabweichung.
      Das Fenster beträgt standardmäßig ~33&nbsp;s bei 30&nbsp;fps; der
      <a href="#scope-reset">Zurücksetzen</a>-Knopf löscht die Statistik.</p>
+
+  <h2 id="scope-histogram-window">Amplitudenhistogramm-Fenster</h2>
+  <p>Wird mit der Schaltfläche
+     <a href="#scope-histogram">Amplitudenhistogramm</a> geöffnet.  Es beantwortet
+     eine andere Frage als das Signalbild: nicht, wie die Wellenform über die Zeit
+     aussieht, sondern <b>wie viel ihrer Zeit sie bei welcher Spannung verbringt</b>.
+     Die Spannung läuft an der linken Achse nach oben, die Anzahl der bei diesem
+     Pegel gezählten Abtastwerte entlang der unteren Achse, und jeder Pegel wird als
+     waagerechter Balken gezeichnet.</p>
+
+  <p><img src="img/scope-histogram.png"
+          alt="Amplitudenhistogramm eines ruhigen Eingangs: eine gaußsche Glocke um
+               0 V, einige zehn Mikrovolt breit"/></p>
+  <p>Oben: das Eigenrauschen eines Wandlers, einige zehn Mikrovolt breit — eine
+     saubere Gaußverteilung.  Eine sichtbar nicht-gaußsche Glocke deutet auf etwas
+     anderes als thermisches Rauschen hin.</p>
+
+  <p>Die Form ist die Aussage:</p>
+  <table class="controls">
+    <tr><th>Form</th><th>Bedeutung</th></tr>
+    <tr><td>Zwei Spitzen an den Extremen, hohl in der Mitte</td>
+        <td>Ein Sinus.  Eine Sinusschwingung bewegt sich an ihren Umkehrpunkten am
+            langsamsten und verbringt daher die meiste Zeit nahe ±Spitze — die
+            klassische Badewannenform.</td></tr>
+    <tr><td>Eine Glocke um null</td>
+        <td>Rauschen.  Ein sauberes Grundrauschen ist gaußverteilt, und eine sichtbar
+            nicht-gaußsche Glocke deutet auf etwas anderes als thermisches Rauschen
+            hin.</td></tr>
+    <tr><td>Eine hohe Spitze an einem oder beiden Enden</td>
+        <td>Übersteuerung.  An die Aussteuerungsgrenze gepresste Abtastwerte häufen
+            sich im äußersten Balken.</td></tr>
+    <tr><td>Ungleiche Balken ober- und unterhalb der Mitte</td>
+        <td>Asymmetrie — eine einseitige Begrenzung oder eine asymmetrische
+            Verzerrung.</td></tr>
+  </table>
+
+  <p><b>Die Spannungsachse ist relativ, und ihre Mitte ist immer 0&nbsp;V.</b>  Die
+     Abtastwerte werden genau so gezählt, wie sie erfasst wurden — nichts wird von
+     ihnen abgezogen und nichts gefiltert —, und die Achse wird anschließend aus dem
+     Mittelwert der Verteilung selbst abgeleitet.  Ein DC-Offset der Karte ändert
+     daher den Bezugspunkt, <i>von dem</i> aus die Achse gemessen wird, nicht aber,
+     bei welchem Pegel ein Abtastwert gezählt wird; das Bild rutscht also weder aus
+     der Darstellung heraus noch ändert es seine Form.  Beide Hälften sind stets
+     gleich hoch, sodass sich eine asymmetrische Wellenform in ungleichen
+     Balken<i>längen</i> ober- und unterhalb der Mitte zeigt.</p>
+
+  <p><b>Die Auflösung richtet sich nach dem Signal, nicht nach dem Wandler.</b>  Der
+     Spannungsbereich wird aus der Spitze des Signals selbst bemessen, sodass ein
+     Notch-Residuum im Millivoltbereich ebenso fein aufgelöst wird wie ein Ton bei
+     Vollaussteuerung.  Beide Achsen skalieren sich automatisch, während die
+     Zählwerte auflaufen, und Pegel, die so schwach besetzt sind, dass sie nur ein
+     einziges Pixel ergäben, werden an den Enden abgeschnitten — so füllt die
+     Verteilung das Fenster, statt von leeren Ausläufern zusammengedrückt zu
+     werden.</p>
+
+  <p>Das Fenster ist in der Größe veränderbar, und die Darstellung skaliert mit.
+     Oben links trägt es:</p>
+  <table class="controls">
+    <tr><th>Bedienelement</th><th>Funktion</th></tr>
+    <tr><td><b>L</b> / <b>R</b></td>
+        <td>Welcher Kanal angezeigt wird — immer nur einer.  Ein im Oszilloskop
+            abgeschalteter Kanal ist ausgegraut und nicht wählbar; war er der gerade
+            angezeigte, wechselt das Fenster auf den anderen.  Die Wahl bleibt über
+            Sitzungen hinweg erhalten.</td></tr>
+    <tr><td><b>Zurücksetzen</b></td>
+        <td>Löscht die gesammelte Verteilung und sonst nichts — die Statistik der
+            Messtabelle bleibt unangetastet.  Damit lässt sich der Bereich neu auf
+            ein Signal einstellen, das deutlich kleiner geworden ist, denn ein
+            schrumpfendes Signal behält den einmal vergebenen Bereich.</td></tr>
+  </table>
+
+  <p>Die Erfassung läuft unbegrenzt, solange das Fenster geöffnet ist, sodass eine
+     Verteilung über Minuten aufgebaut werden kann.  Sie übersteht eine
+     V/div-Änderung, einen Bereichswechsel und eine Neukalibrierung — eine
+     Neukalibrierung beschriftet die Achse neu, statt neu zu zählen.  Von selbst
+     startet sie nur dann neu, wenn sich der Pegel so weit verschiebt, dass die alten
+     Zählwerte ein anderes Signal beschreiben, und gemeinsam mit der Messstatistik,
+     wenn diese zurückgesetzt wird (siehe
+     <a href="#scope-reset">Statistik zurücksetzen</a>).</p>
+
+  <div class="note">
+    <p>Die Zahl an der unteren Achse zählt die <i>einsortierten</i> Abtastwerte,
+       nicht jeden erfassten: die Erfassung läuft im Takt der Messungen und lässt
+       Blöcke aus, wenn die Maschine ausgelastet ist.  Das ist eine erwartungstreue
+       Stichprobe, sie ändert also, wie schnell die Balken wachsen, nicht aber die
+       Form, in die sie hineinwachsen.  Die Achse ist als relative Belegung zu lesen,
+       nicht als Zählung aller Abtastwerte.</p>
+  </div>
+
+  <p>Die Anzahl der Balken wird unter <b>Einstellungen → Oszilloskop →
+     Histogramm-Klassen</b> festgelegt (Vorgabe 50).  Sie ist reine
+     Darstellungsauflösung: die zugrunde liegende Erfassung ist weit feiner, sodass
+     eine Änderung das bereits Gesammelte neu zeichnet, statt es zu verwerfen.</p>
 
   <h2>Bildschirmüberlagerungen</h2>
 
