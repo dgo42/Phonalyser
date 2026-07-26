@@ -572,6 +572,35 @@
      a measurement to report, and the detached state resets to docked on
      restart.</p>
 
+  <h3 id="freqresp-measure-clipping">Wobbly trace — check for clipping</h3>
+  <p>A trace that should be smooth but instead carries a dense, regular ripple —
+     typically a solid band one to a few decibels thick, and about equally thick
+     from the bottom of the swept band to the top — means the <b>input is being
+     overdriven</b>.  The ripple is not a property of the device under test.</p>
+  <p>A swept sine separates distortion from the wanted response in time: every
+     harmonic the device generates lands in its own impulse response, a fixed
+     interval <em>ahead</em> of the linear one —
+     <i>T</i> · ln <i>N</i> / ln(<i>f</i><sub>2</sub>/<i>f</i><sub>1</sub>) for
+     the <i>N</i>-th harmonic, with <i>T</i> the sweep duration and
+     <i>f</i><sub>1</sub>…<i>f</i><sub>2</sub> the swept band.  Those extra
+     impulses beat against the wanted one and comb the magnitude trace at a
+     period of one over that interval.  The ripple is evenly spaced in hertz, so
+     on the logarithmic frequency axis it looks sparse at the left and packs into
+     a solid band toward the right — which is what makes it easy to mistake for
+     noise.</p>
+  <p>Zoom in until individual ripples resolve and measure their spacing
+     Δ<i>f</i>; the harmonic responsible is the one whose interval equals
+     1/Δ<i>f</i>.  Odd orders only (3rd, 5th, 7th) means symmetric clipping — the
+     signal is hitting both rails equally.  A 4.9 s sweep over 1 Hz…96 kHz, for
+     example, puts the 3rd harmonic 0.47 s ahead of the linear response, giving a
+     2.1 Hz ripple.</p>
+  <div class="note"><b>The cure is level, not settings.</b>  Lower the sweep
+     <a href="#freqresp-tab-settings">Amplitude</a> until the ripple collapses;
+     the level at which it disappears is the input's real headroom.  Watch for
+     inputs that are not line level — the headset or microphone input on a USB
+     adapter can overload an order of magnitude below the 1 V a line input
+     accepts.</div>
+
 <script src="help-viewer.js"></script>
 </body>
 </html>

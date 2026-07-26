@@ -31,23 +31,61 @@
 // filter frequency response) is subtracted at RENDER time from BOTH the trace
 // AND the THD/IMD table (fft/fft-compensation.js) — it has NOTHING to do with
 // the generator. Default (no .frc loaded) = no correction.
+//
+// BACKEND DISPATCH — this class is also the web's sound.AudioBackend: the ACTIVE
+// backend (Preferences ▸ Audio) decides WHICH device the two seams are given —
+// Web Audio (getUserMedia + the worklets) or the QA402/QA403's one always-duplex
+// WebUSB session. Java switches on its `active` field inside openCapture() /
+// openPlayback() / listInputDevices(); those three switches are scanDevices(),
+// _newCaptureSource() and _newPlaybackSink() here, and SharedCapture /
+// GeneratorController stay backend-agnostic — neither picks its own device.
 
 import { GenSignalForm } from '../generator/dds-kernel.js';
 import { debug } from '../util/debug.js';
 import { SharedCapture } from './shared-capture.js';
+import { WebAudioCaptureSource } from './web-audio-capture-source.js';
 import { GeneratorController } from '../generator/generator-controller.js';
+import { WebAudioPlaybackSink } from '../generator/web-audio-playback-sink.js';
 import { ScopeController } from '../scope/scope-controller.js';
 import { FftController } from '../fft/fft-controller.js';
-import { scanDevices as scanAudioDevices } from './devices.js';
+import { Qa40xCaptureSource } from '../qa40x/qa40x-capture-source.js';
+import { Qa40xPlaybackSink } from '../qa40x/qa40x-playback-sink.js';
+import { QA40X_BACKEND } from '../qa40x/qa40x-rate-constraint.js';
+import { scanDevicesForBackend } from './devices.js';
 
 const HARMONIC_COUNT = 9;                  // H2..H10 default (overridable via config.harmonicCount)
 /** DAC full-scale PEAK voltage (= FS-sine RMS × √2). Default when no preferences anchor. */
 const DAC_FS_VOLTAGE_AMPL = Math.sqrt(2.0);
+/** AudioBackendType.WEB_AUDIO's name — the backend every browser has, and the one assumed when
+ *  no Preferences were injected (the behaviour that predates the backend selector). */
+const WEB_AUDIO_BACKEND = 'WEB_AUDIO';
 
 
 
 export class AudioEngine {
-  constructor() {
+  /**
+   * @param deps {prefs, qa40xManager}
+   *   - prefs: the live Preferences. Read ONLY for the active backend (`prefs.backend`); every
+   *     other setting still reaches the engine through `config`. Omitted → WEB_AUDIO.
+   *   - qa40xManager: the Qa40xDeviceManager the QA40X backend runs on. Built by the shell — it
+   *     needs the device-profile store and the settings-dialog opener, neither of which belongs
+   *     in the audio layer — and injected here, so nothing in this module reaches a global. Its
+   *     finder MUST be the one the Scan click drives: WebUSB's chooser needs that click's user
+   *     activation. Omitted → the QA40X backend has no device and says so when selected.
+   *   - qa40xFinder: THAT finder, handed in a second time as the grant seam — the manager keeps
+   *     its finder private and enumerates with it (getDevices(), which never prompts), while a
+   *     Scan that carries user activation needs the same instance to raise the chooser once
+   *     (see {@link #scanDevices}). Omitted → an analyzer this origin has never been granted can
+   *     never become visible, so the QA40X backend stays empty forever.
+   */
+  constructor({ prefs = null, qa40xManager = null, qa40xFinder = null } = {}) {
+    this._prefs = prefs;
+    this._qa40x = qa40xManager;
+    this._qa40xFinder = qa40xFinder;
+    // The backend the CURRENT wiring runs on, as opposed to the one Preferences now holds: the
+    // Backend combo commits its selection LIVE (before OK), so the prefs bracket compares the two
+    // to recognise a switch, and phase 2 records the new one once it has re-wired.
+    this._appliedBackend = this.activeBackend();
     this.config = {
       inDeviceId: '', inRate: 384000,
       outDeviceId: '', outRate: 384000,
@@ -76,7 +114,13 @@ export class AudioEngine {
     // open (refCount > 0).
     // Generator (gui/generator/GeneratorController): the DDS output path + file player + the
     // analysis freqs. Holds the SHARED config by reference; the engine delegates the public API.
-    this._gen = new GeneratorController(this.config, { status: (t) => this._status(t) });
+    this._gen = new GeneratorController(this.config, {
+      status: (t) => this._status(t),
+      // The DAC for the ACTIVE backend, resolved at EVERY start — exactly as Java re-resolves
+      // AudioBackend.instance().openPlayback(device, rate, depth, dither) per start, so a backend
+      // switch between sessions needs no push-down into the controller.
+      openPlayback: (deps) => this._newPlaybackSink(deps),
+    });
     // Shared capture (gui/sound/SharedCapture): the one ref-counted ADC device + ring. Consumers
     // (scope / FFT / loopback rec) acquire()/release() their own readers; per batch it fans out to
     // _dispatchBatch so each consumer reads off its own cursor.
@@ -87,6 +131,7 @@ export class AudioEngine {
       // subscribe and self-feed off their own cursors (no central _dispatchBatch router).
       publishBatch: true,
       computeAnalysisFreqs: () => this._gen.computeAnalysisFreqs(),
+      captureSource: this._backendCaptureSource(),
     });
     // DEDICATED MEASUREMENT capture (Java CaptureWithGenerator / NotchSweepEngine each open
     // their OWN device line): the FreqResp sweep + Tune-notch wizard acquire/release THIS
@@ -98,6 +143,11 @@ export class AudioEngine {
       status: (t) => this._status(t),
       onBatch: (d) => this._dispatchMeasBatch(d),
       computeAnalysisFreqs: () => this._gen.computeAnalysisFreqs(),
+      // Its OWN device for the active backend — a second input line, device-isolated from the
+      // live one above. On the QA40x there is only ONE line: the duplex engine refuses a second
+      // capture consumer loudly, which is right, because a measurement is modal and takes the
+      // device over only once the live consumers have released it.
+      captureSource: this._backendCaptureSource(),
     });
     // Scope consumer (gui/scope/ScopeController): a latest-window reader of the shared capture.
     // Both dual-tone refine seeds read LIVE per access — tone 1 via _genEmitFreq(), tone 2 via
@@ -122,6 +172,25 @@ export class AudioEngine {
     // sweep deconvolves both ADC channels against the same reference (Java FreqRespAnalyzer's
     // single stereo pass: rec.left() / rec.right()).
     this._recChunks = null;
+
+    // App-exit teardown of the active backend's manager (Java AudioBackend.shutdown(), called from
+    // the explicit exit code): the QA40x is the one backend whose device carries state across
+    // process death, so it must be left parked at maximum input attenuation. Both events are hooked
+    // because neither fires reliably alone — a tab discard or a mobile background gives only
+    // pagehide, some desktop flows give only beforeunload — and a double call is harmless: the
+    // manager's shutdown() serializes and a parked/never-opened device is a no-op. BEST EFFORT by
+    // nature: unload does not wait for promises, so the USB writes may not complete. The switch
+    // AWAY from QA40X (afterApplyBackendChanges) is the path that parks it deterministically.
+    if (this._qa40x != null && typeof window !== 'undefined' && window.addEventListener) {
+      const park = () => { this._qa40x.shutdown(); };
+      window.addEventListener('pagehide', park);
+      window.addEventListener('beforeunload', park);
+    }
+  }
+
+  /** The AudioBackendType name currently in force (Java AudioBackend.active()). */
+  activeBackend() {
+    return this._prefs != null ? this._prefs.backend.get() : WEB_AUDIO_BACKEND;
   }
 
   /** Consumer/generator controllers. The engine constructs the shared infrastructure and exposes
@@ -261,9 +330,119 @@ export class AudioEngine {
   // #status aria-live element is still updated via onStatus for screen readers).
   _status(t) { debug('[audio]', t); if (this.onStatus) this.onStatus(t); }
 
-  /** Enumerate input/output devices, each input carrying its probed native rate. Device
-   *  enumeration is its own layer (devices.js), not part of the capture/generate engine. */
-  scanDevices() { return scanAudioDevices((t) => this._status(t)); }
+  /** Enumerate the ACTIVE backend's input/output devices, each input carrying its native rate
+   *  (Java AudioBackend.listInput/OutputDevices, which switch on the active backend). Device
+   *  enumeration is its own layer (devices.js), not part of the capture/generate engine.
+   *
+   *  @param fromUserGesture true ONLY from the Preferences ▸ Scan click, whose user activation is
+   *    what lets the QA40x path raise the WebUSB device chooser — the one way an analyzer this
+   *    origin has never been granted can become visible at all. Every other enumeration (app load,
+   *    a backend rollback) leaves it false and so lists only already-granted devices: a chooser
+   *    without activation would throw, and prompting behind the user's back is user-hostile. */
+  async scanDevices(fromUserGesture = false) {
+    // `async` so an unwired QA40x manager arrives as a REJECTION, not a synchronous throw: this
+    // method has always handed its caller a promise, and a bare .catch() must keep working.
+    const backend = this.activeBackend();
+    const manager = (backend === QA40X_BACKEND) ? this._requireQa40x() : null;
+    // Resolved synchronously, and devices.js spends no await before the chooser either: user
+    // activation is a 5-second budget the Web Audio probe (getUserMedia + ~½ s per device) would
+    // blow outright, which is why the QA40x branch grants FIRST and never probes.
+    const granter = fromUserGesture ? this._qa40xGranter(backend) : null;
+    return scanDevicesForBackend(backend, manager, (t) => this._status(t), granter);
+  }
+
+  /** The WebUSB grant seam for a scan that carries user activation: the injected finder on the
+   *  QA40X backend, null on any other. A QA40X scan with no finder wired is exactly the regression
+   *  this exists to prevent — the chooser unreachable, so a never-granted analyzer stays invisible
+   *  — and it is a wiring mistake, not a device state, hence the warning rather than a throw: an
+   *  already-granted analyzer still enumerates fine without it. */
+  _qa40xGranter(backend) {
+    if (backend !== QA40X_BACKEND) {
+      return null;
+    }
+    if (this._qa40xFinder == null) {
+      console.warn('QA40x scan carries user activation but no Qa40xDeviceFinder was injected into'
+        + ' the AudioEngine — the WebUSB chooser cannot be raised, so only analyzers this origin'
+        + ' was already granted can be listed');
+      return null;
+    }
+    return this._qa40xFinder;
+  }
+
+  /** The injected QA40x device manager, or a loud failure. Enumerating, capturing and playing on
+   *  a backend whose manager the shell never wired must fail visibly (the scan surfaces it, a
+   *  start reports it as a device error) — never silently as "no devices". */
+  _requireQa40x() {
+    if (this._qa40x == null) {
+      throw new Error('QA40x backend selected but no Qa40xDeviceManager was injected into the AudioEngine');
+    }
+    return this._qa40x;
+  }
+
+  /** The ACTIVE backend's capture device (Java AudioBackend.openCapture): the Web Audio
+   *  getUserMedia + worklet pipeline, or a client of the QA40x duplex engine's capture lane.
+   *  Both implement the one CaptureSource contract SharedCapture consumes.
+   *
+   *  WHERE THE LANE CLIENT IS BORN. Java takes two steps: AudioBackend.openCapture() switches on
+   *  the active backend, then Qa40xDeviceManager.openCapture() — whose entire body is
+   *  `new Qa40xRecorder(this, sampleRate)` — constructs the client. The web collapses both into
+   *  this one method, because the second step carries no decision: the client is built here with
+   *  the manager it drives (Java's `this`) and reads the rate at open() instead of at construction.
+   *  So Qa40xDeviceManager has NO openCapture/openPlayback, deliberately and permanently — not
+   *  pending some later module. */
+  _newCaptureSource(backend) {
+    return (backend === QA40X_BACKEND)
+      ? new Qa40xCaptureSource(this._requireQa40x())
+      : new WebAudioCaptureSource({ status: (t) => this._status(t) });
+  }
+
+  /** The ACTIVE backend's playback device (Java AudioBackend.openPlayback): the output
+   *  AudioContext + dds-processor worklet, or a client of the QA40x duplex engine's generator
+   *  lane. The QA40x sink takes no `deps` — it has no async device-loss channel to report on
+   *  (a wedged transport surfaces as a rejected start) and its status goes to the debug log.
+   *
+   *  Same collapse as {@link #_newCaptureSource}: Java's AudioBackend.openPlayback() switch plus
+   *  Qa40xDeviceManager.openPlayback()'s `new Qa40xGenerator(this, sampleRate, ditherBits)` are
+   *  this one line. Rate and dither are not constructor arguments here — the sink reads them from
+   *  the start spec (setDitherBits), so a live dither change lands without a reopen. */
+  _newPlaybackSink(deps) {
+    return (this.activeBackend() === QA40X_BACKEND)
+      ? new Qa40xPlaybackSink(this._requireQa40x())
+      : new WebAudioPlaybackSink(deps);
+  }
+
+  /**
+   * One CaptureSource per SharedCapture that holds the device of whichever backend was active at
+   * its last open(), and replaces it when the active backend has moved since. Java dispatches at
+   * the same moment — its SharedCapture.acquire() calls AudioBackend.instance().openCapture(…)
+   * per acquire — and resolving at open() is what lets a backend switch land WITHOUT replacing
+   * the SharedCapture whose ring and reader cursors the scope/FFT consumers already hold.
+   *
+   * @returns {import('./shared-capture.js').CaptureSource}
+   */
+  _backendCaptureSource() {
+    let device = null;         // the concrete device currently held (null before the first open)
+    let deviceBackend = null;
+    return {
+      open: (deviceId, sampleRateHz) => {
+        const backend = this.activeBackend();
+        if (device == null || deviceBackend !== backend) {
+          device = this._newCaptureSource(backend);
+          deviceBackend = backend;
+        }
+        return device.open(deviceId, sampleRateHz);
+      },
+      start: (onBatch) => device.start(onBatch),
+      // Null-guarded because teardown() runs stop-then-close on a FAILED acquire too, and a
+      // TypeError here would mask the open failure SharedCapture is in the middle of reporting.
+      stop: () => (device != null ? device.stop() : undefined),
+      close: () => (device != null ? device.close() : undefined),
+      /** The concrete per-backend device currently held — the dispatch's one observable. */
+      get device() { return device; },
+      get sampleRate() { return device != null ? device.sampleRate : 0; },
+      get isOpen() { return device != null && device.isOpen; },
+    };
+  }
 
   // -------------------------------------------------------------------------
   // GENERATOR — the DDS output path + file player live in GeneratorController
@@ -337,10 +516,12 @@ export class AudioEngine {
    *  release — the refcount handles it, no central teardown), and the generator bounces when
    *  outputChanged (it closes its own output context). Web Audio's input and output are SEPARATE
    *  devices, so an input-only change never disturbs the generator and vice-versa. Call BEFORE
-   *  committing the new device/rate to config; pair with afterApplyBackendChanges(). */
+   *  committing the new device/rate to config; pair with afterApplyBackendChanges().
+   *  A BACKEND change overrides the gating and bounces BOTH directions — see _backendChanged(). */
   async beforeApplyBackendChanges(captureChanged, outputChanged) {
-    if (captureChanged) { await this._scope.stopCaptureForPrefs(); await this._fft.stopCaptureForPrefs(); }
-    if (outputChanged) await this._gen.stopPlayForPrefs();
+    const backendChanged = this._backendChanged();
+    if (captureChanged || backendChanged) { await this._scope.stopCaptureForPrefs(); await this._fft.stopCaptureForPrefs(); }
+    if (outputChanged || backendChanged) await this._gen.stopPlayForPrefs();
   }
 
   /** Preferences-dialog bracket, phase 2 (Java afterApplyBackendChanges): RESTART exactly what was
@@ -349,10 +530,34 @@ export class AudioEngine {
    *  the FIRST re-acquire at the committed config.inDeviceId / inRate (refcount handles it, no
    *  central re-open) — and the generator restarts its playing engine (tone or retained file) when
    *  outputChanged, reopening its own output context. Input and output are separate devices, so
-   *  each direction re-acquires only its own resource. */
+   *  each direction re-acquires only its own resource.
+   *
+   *  A BACKEND change additionally parks the backend being left, BEFORE anything restarts: Java's
+   *  AudioBackend.setActive() shuts the deactivated manager down at the switch precisely so its
+   *  device never sits in a live state while another backend measures — for the QA40x that is the
+   *  safe-state park (input +42 dBV, output −12 dBV, transport released), and it must run after
+   *  phase 1 detached the lanes and before the new backend opens anything. */
   async afterApplyBackendChanges(captureChanged, outputChanged) {
-    if (captureChanged) { await this._scope.startCaptureForPrefs(); await this._fft.startCaptureForPrefs(); }
-    if (outputChanged) await this._gen.startPlayForPrefs();
+    const backendChanged = this._backendChanged();
+    const left = this._appliedBackend;
+    this._appliedBackend = this.activeBackend();
+    if (backendChanged && left === QA40X_BACKEND && this._qa40x != null) await this._qa40x.shutdown();
+    if (captureChanged || backendChanged) { await this._scope.startCaptureForPrefs(); await this._fft.startCaptureForPrefs(); }
+    if (outputChanged || backendChanged) await this._gen.startPlayForPrefs();
+  }
+
+  /** True while Preferences holds a different backend than the one this engine is wired for — in
+   *  which case BOTH brackets bounce BOTH directions, whatever the per-direction flags say. The
+   *  per-direction gating exists only because Web Audio has a separate input and output device;
+   *  the QA40x is ONE always-duplex device whose ADC will not stream unless the DAC is fed (the
+   *  duplex engine primes the output past its start threshold to start the stream at all), so a
+   *  single-direction bounce there is meaningless: it would leave the other lane attached to the
+   *  old backend's device, or the new device half-started. It is also the moment the device the
+   *  app is leaving has to be parked, which needs both lanes down. Java has no gating at all here
+   *  (MultifunctionalTab bounces all three on any audio change) — this is that behaviour, restored
+   *  for exactly the change that needs it. */
+  _backendChanged() {
+    return this.activeBackend() !== this._appliedBackend;
   }
 
   /** Per-batch fan-out for the dedicated MEASUREMENT capture (_measCapture): the FreqResp

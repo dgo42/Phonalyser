@@ -9,6 +9,9 @@
 // the remaining blueprint modules layer on around this engine.
 
 import { AudioEngine } from '../audio/backend.js';
+import { Qa40xDeviceFinder } from '../qa40x/qa40x-device-finder.js';
+import { Qa40xDeviceManager } from '../qa40x/qa40x-device-manager.js';
+import { QA40X_BACKEND } from '../qa40x/qa40x-rate-constraint.js';
 import { FftViewCorrection } from '../fft/fft-view-correction.js';
 import { CorrectionStore } from '../common/correction-store.js';
 import { CalibrationDialog } from './calibration-dialog.js';
@@ -35,6 +38,7 @@ import { clonePaneForShot, preloadCloneIcons, paintCloneToCanvas } from './scree
 import { PredistortionHost } from './predistortion-host.js';
 import { PredistortionWizard } from './predistortion-wizard.js';
 import { PreferencesDialog } from './preferences-dialog.js';
+import { Qa40xSettingsDialog } from '../qa40x/qa40x-settings-dialog.js';
 import { StartupSplash } from './startup-splash.js';
 import { TipDialog } from './tip-dialog.js';
 import { MainTab } from './main-tab.js';
@@ -66,7 +70,21 @@ const formLabel = (form) => t(`generator.signalForm.${form}`);
 // GenSignalForm token → per-form waveform pictogram (web/assets/icons/signal-<kebab>.svg).
 const formIcon = (form) => `assets/icons/signal-${form.toLowerCase().replace(/_/g, '-')}.svg`;
 
-const engine = new AudioEngine();
+// The audio backend (Java sound.AudioBackend) and the QA40x device manager it dispatches to.
+// Both are built in init(), NOT here: the manager needs the DeviceProfileStore, which exists only
+// once the device-catalog fetch has resolved (see `deviceStore` above).
+//
+// LATE CONSTRUCTION of the engine — not late injection into it, and not a manager supplier —
+// because that is the ownership Java has: AudioBackend OWNS its per-backend managers and hands
+// them out (AudioBackend.qa40x() / manager(type) / qa40xManager()), and the web engine takes the
+// FINISHED manager through its constructor, which is its only seam. So the engine is what waits
+// for the store, not the manager for the engine. Everything at module scope that needs the engine
+// at CONSTRUCTION time (the FFT view correction + view, the FreqResp pane, the predistortion host,
+// the three engine callbacks) is built in that same init block; everything else reaches it from a
+// callback, which cannot run earlier — the startup splash covers the UI until the load-time scan
+// settles, so no pane handler can fire in between.
+let engine;
+let qa40xManager;
 // The FFT side's loaded-.frc store (Java FftController owns
 // new CorrectionStore("FFT", Events.FFT_CALIBRATION_CHANGED)). FftViewCorrection READS it, the
 // predistortion bridge reads it live, and FftTabControl mutates it from the calibration rows.
@@ -74,9 +92,10 @@ const engine = new AudioEngine();
 // after a clearAll()+addEntry batch, so a per-mutation callback would only re-render redundantly.
 const fftCorrectionStore = new CorrectionStore('FFT', null);
 // Render-time FFT spectral corrections (.frc de-embed + mains + IMD) — applied in the VIEW path
-// (engine.onResult below), NOT in the engine; the coherent accumulator stays raw.
-const fftViewCorrection = new FftViewCorrection(engine.config, fftCorrectionStore);
-const fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => engine.generator.running, correction: fftViewCorrection });
+// (engine.onResult below), NOT in the engine; the coherent accumulator stays raw. Both take the
+// engine at construction, so both are built in init's audio-backend block (see `engine`).
+let fftViewCorrection;
+let fftView;
 const scopeView = new ScopeView(document.getElementById('scope'), { prefs });
 let prefsModal, aboutModal;
 let shotModal;
@@ -102,9 +121,11 @@ let mainTab;   // the main tab (the rAF render-frame driver + the 3-pane collaps
 // FftView wires the SAME two prefs to resetStatistics(), so the FFT cross-tick
 // average must be restarted too — else it keeps folding pre-calibration frames at
 // the old scale into the displayed spectrum. Reset the accumulator while recording.
+// `engine` is null-checked because the calibration prefs can move before init's audio-backend
+// block has run (the device-profile store applies a card's full-scale as it resolves one).
 const onCalChange = () => {
   scopeView._clearMeasurementHistory();
-  if (engine.fft.recording) engine.resetAnalyses();
+  if (engine && engine.fft.recording) engine.resetAnalyses();
 };
 prefs.adcFsVoltageRms.addListener(onCalChange);
 // The RIGHT-channel calibration siblings rescale R-channel measurements the same way
@@ -113,6 +134,24 @@ prefs.adcFsVoltageRms.addListener(onCalChange);
 prefs.adcFsVoltageRmsRight.addListener(onCalChange);
 prefs.dacFsVoltageAmpl.addListener(onCalChange);
 prefs.dacFsVoltageAmplRight.addListener(onCalChange);
+
+// A DAC full-scale move — a card RANGE switch, or a DAC re-calibration — must NOT change the
+// generated LEVEL. The amplitude the user typed is absolute volts; the DDS derives its normalised
+// amplitude as Vrms/(fsPeak·rawRms(form)), so the physical output is Vrms only while the kernel
+// knows the CURRENT full scale. engine.config.dacFsVoltageAmpl is otherwise refreshed only by
+// readConfig() (a start / a settings commit), which a range switch does not run: the worklet kept
+// the OLD full scale while the hardware moved to the new one, and the trace jumped by fsNew/fsOld
+// on every range change (maintainer report, 2026-07-25). Push the new scale — and the right-lane
+// ratio fsLeft/fsRight, which the same card edit moves — then retune, which is a no-op unless the
+// generator is running. The amplitude CEILING is a separate concern, handled by syncAmpMax.
+const syncDacFullScale = () => {
+  if (!engine) return;   // the card store can resolve a profile before init built the engine
+  engine.config.dacFsVoltageAmpl = prefs.getDacFsVoltageAmpl();
+  engine.config.rightLaneScale = prefs.dacRightLaneScale();
+  engine.retuneGenerator();
+};
+prefs.dacFsVoltageAmpl.addListener(syncDacFullScale);
+prefs.dacFsVoltageAmplRight.addListener(syncDacFullScale);
 
 // ----- generator amplitude minimum (Java AMP_MIN_VRMS) + frequency minimum -----
 const AMP_MIN_VRMS = 1e-9;
@@ -678,19 +717,23 @@ const tileChips = (...vals) => vals.filter(v => v != null && v !== '').map(v => 
 // in the FFT pane (fftPane.setResult / getResult), set from engine.onResult after the view
 // correction is applied here.
 let latestScope = null;
-// The render-time FFT spectral corrections stay applied in app.js BEFORE the result is handed to
-// the pane; the pane owns latestResult + the dirty flag (Java FftPane.controller last result).
-engine.fft.onResult = (r) => {
-  // r.channelLeft is stamped in FftController._emit (Java FftAnalyzerWorker:1872
-  // stamps it in the worker off wantLeft — the channel it ACTUALLY read). The .frc
-  // de-embed + the predistortion cal pick left()/right() off it (fft-view-correction.js).
-  fftViewCorrection.apply(r);
-  fftPane.setResult(r);
-};
-engine.scope.onScope = (buf, info) => { latestScope = { buf, info }; };
-// Stop-after-N tripped (Java FFT_RECORDING_AUTO_STOPPED → FftPane.disengageRecord):
-// the engine paused feeding; the pane tears down the FFT consumer and un-lights the Record LED.
-engine.fft.onFftAutoStopped = () => fftPane.onFftAutoStopped();
+/** Wires the three engine data callbacks — called from init's audio-backend block, since the
+ *  engine is constructed there (see `engine`). The render-time FFT spectral corrections stay
+ *  applied in app.js BEFORE the result is handed to the pane; the pane owns latestResult + the
+ *  dirty flag (Java FftPane.controller last result). */
+function bindEngineCallbacks() {
+  engine.fft.onResult = (r) => {
+    // r.channelLeft is stamped in FftController._emit (Java FftAnalyzerWorker:1872
+    // stamps it in the worker off wantLeft — the channel it ACTUALLY read). The .frc
+    // de-embed + the predistortion cal pick left()/right() off it (fft-view-correction.js).
+    fftViewCorrection.apply(r);
+    fftPane.setResult(r);
+  };
+  engine.scope.onScope = (buf, info) => { latestScope = { buf, info }; };
+  // Stop-after-N tripped (Java FFT_RECORDING_AUTO_STOPPED → FftPane.disengageRecord):
+  // the engine paused feeding; the pane tears down the FFT consumer and un-lights the Record LED.
+  engine.fft.onFftAutoStopped = () => fftPane.onFftAutoStopped();
+}
 // The MAIN rAF render loop (renderLoop: scopePane.render() + fftPane.render() each frame, each
 // pane self-gated on its OWN record state) moved to shell/main-tab.js (Java MultifunctionalTab);
 // app.js kicks it via mainTab.start() in init (after both panes are constructed).
@@ -1325,7 +1368,8 @@ async function renderFreqRespShot(comment, w, h, mime) {
 // render-time FFT de-embed (fftViewCorrection) and the predistortion engine's calResponseAt.
 
 // ============================ Frequency response ============================
-const freqRespPane = new FreqRespPane(engine, prefs, { saveFile, openFile, bytesToText });
+// Takes the engine at construction → built in init's audio-backend block (see `engine`).
+let freqRespPane;
 
 // ============================ Predistortion wizard ============================
 let predistModal;
@@ -1347,13 +1391,8 @@ async function restartPreservingConfig() {
   scopePane.syncScopeLed(); fftPane.syncFftLed();
 }
 
-const predistHost = new PredistortionHost(engine, prefs, {
-  getResult: () => fftPane.getResult(),
-  restart: restartPreservingConfig,
-  // Read the FFT store LIVE — the predistortion engine reads correctionEntries on demand, so a
-  // captured array snapshot would go stale as the calibration rows change.
-  get correctionEntries() { return fftCorrectionStore.getEntries(); },
-});
+// Takes the engine at construction → built in init's audio-backend block (see `engine`).
+let predistHost;
 
 
 
@@ -1422,6 +1461,41 @@ async function init() {
   // constructed store.
   const deviceCatalog = await loadDeviceCatalog();
   deviceStore = new DeviceProfileStore(prefs, deviceCatalog ? { catalog: deviceCatalog } : {});
+  // ----- audio backend + per-backend device managers (Java sound.AudioBackend) -----
+  // Deliberately NOT in a step(): a failing engine breaks everything downstream, so it must
+  // surface as init's own rejection rather than be swallowed as one skippable step.
+  //
+  // ONE finder instance, handed to the manager (which enumerates and opens with it) AND to the
+  // engine as the GRANT seam: only a scan that carries the Scan click's user activation may raise
+  // the WebUSB chooser, and it must be raised on the same object the later open() enumerates
+  // through (qa40x-device-finder.js: scan() prompts, list()/open() never do).
+  const qa40xFinder = new Qa40xDeviceFinder();
+  qa40xManager = new Qa40xDeviceManager({
+    prefs, deviceStore, finder: qa40xFinder,
+    // Java constructs the SWT settings dialog in place and passes it the parent Shell; the web
+    // dialog is a shell concern, so it arrives as this opener. The `parent` Java hands down is the
+    // Preferences shell — here that is the #prefsModal ELEMENT, and mounting a Bootstrap modal
+    // inside another modal's element nests the two (qa40x/qa40x-settings-dialog.js), so the settings
+    // dialog mounts on <body> and Bootstrap stacks it over Preferences.
+    openSettingsDialog: (_parent, info, i2sEnabled) => new Qa40xSettingsDialog(null, info).open(i2sEnabled),
+  });
+  // Constructing the manager is also what ARMS the QA40x bus wiring (its own constructor registers
+  // custom.qa40x with the prefs store so it loads AND saves, holds the range controller and calls
+  // Qa40xRateConstraint.instance()) — all live before the Preferences dialog can move a rate combo
+  // or commit a range. The engine hooks pagehide/beforeunload to park the analyzer, which is why it
+  // must receive the manager at CONSTRUCTION (Java AudioBackend.shutdown() on the exit path).
+  engine = new AudioEngine({ prefs, qa40xManager, qa40xFinder });
+  fftViewCorrection = new FftViewCorrection(engine.config, fftCorrectionStore);
+  fftView = new FftView(document.getElementById('spec'), { prefs, genActive: () => engine.generator.running, correction: fftViewCorrection });
+  bindEngineCallbacks();
+  freqRespPane = new FreqRespPane(engine, prefs, { saveFile, openFile, bytesToText });
+  predistHost = new PredistortionHost(engine, prefs, {
+    getResult: () => fftPane.getResult(),
+    restart: restartPreservingConfig,
+    // Read the FFT store LIVE — the predistortion engine reads correctionEntries on demand, so a
+    // captured array snapshot would go stale as the calibration rows change.
+    get correctionEntries() { return fftCorrectionStore.getEntries(); },
+  });
   step('initSelects', initSelects);
   // Generator pane (Java GeneratorPane): the signal-form combo + freq/amp/duty/dual-tone/
   // sweep/dither/snap/.dpd controls + Play/ON-AIR + Save-to + file player. Constructed before
@@ -1639,6 +1713,15 @@ async function init() {
       modal: prefsModal, RATES, stepFields, inRate, outRate,
       isBusy: () => busy, setBusy: (v) => { busy = v; }, fftView, deviceStore,
       cardEditorDialog, showConfirm,
+      // Java AudioBackend.instance().manager(type): the per-backend manager the dialog asks for the
+      // Settings button (hasCustomPreferences / openCustomPreferences) and — for a backend that
+      // enumerates its own formats — the sample-rate list. Web Audio has no manager, so it answers
+      // null and that backend keeps the native-rate probe.
+      backendManager: (name) => (name === QA40X_BACKEND ? qa40xManager : null),
+      // An audio-settings change invalidates everything accumulated at the old settings, exactly as
+      // a re-calibration does — so the OK path reuses the calibration reset: clear the scope's
+      // measurement history and restart the FFT's cross-tick average.
+      resetStatistics: onCalChange,
     }).bind();
     prefsDialog.applyLookAndFeel();   // main-tab orientation + small icons + UI font from the saved prefs
   });
@@ -1646,6 +1729,12 @@ async function init() {
   // Auto-enumerate audio devices on load (no Preferences dialog needed) — and dismiss the
   // startup splash once that scan settles (SAFETY: startup-splash also self-dismisses on a
   // 20 s timeout, so a hung permission prompt can never brick the app behind the overlay).
+  // One of the TWO places that enumerate at all (the other is the Scan click); this one carries no
+  // user gesture, so the QA40x lists only already-granted analyzers and raises no WebUSB chooser.
+  // fromUserGesture stays FALSE: there is no user activation at load, so handing the QA40x path its
+  // granter would call requestDevice() without one — it throws, scan() aborts in its catch, and the
+  // device combos are never filled (they then fall back to the persisted-id stub, which for Web
+  // Audio renders as a raw deviceId hash).
   const scanPromise = prefsDialog.scan();
   splash.dismissOnScan(scanPromise);
   // Tip of the day at startup (Java MainWindow.open: shown once the window is up when

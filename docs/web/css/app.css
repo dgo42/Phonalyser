@@ -876,7 +876,13 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 .prefs .prefs-group .row > .col { flex: 0 1 auto; }
 .prefs-group { border: 1px solid var(--field-border); border-radius: 3px; padding: 8px 10px 10px; background: #f7f7f7; }
 .prefs-group legend { float: none; width: auto; font-size: 12px; padding: 0 5px; margin: 0 0 0 6px; color: #1b1b1b; }
-.prefs-panel .scan-devices { margin-bottom: 0.25rem !important; padding-right: 16px; }
+/* Scan hugs the left edge, the backend selector the right (pushed by .ms-auto on its column), each
+   inset 10px. Bootstrap's .row negative gutter margins cancel the columns' own padding, so these
+   paddings are what actually set the inset. */
+.prefs-panel .scan-devices { margin-bottom: 0.25rem !important; padding-left: 10px; padding-right: 10px; }
+/* The per-backend settings button (Java's middle backend-row cell) shares the right-hand group with
+   the Backend label + combo: keep its label on one line so showing it cannot reflow the row. */
+.prefs-panel .scan-devices #backendSettings { white-space: nowrap; }
 /* Java PreferencesDialog GridLayout(2) via comboData()/gridLabel(): the LABEL column grabs the
    horizontal slack (gridLabel = GridData(LEFT, …, true)) while the VALUE column is a FIXED
    FIELD_WIDTH_PX=180 cell (comboData = widthHint 180, no grab), so every value widget hugs the
@@ -890,6 +896,20 @@ body.orient-left.small-icons .main-tabs .main-tab-icon { width: 28px; height: 28
 /* Long device names in the audio combos ellipsize inside the 180px cell (Java uses 180 too and
    lets the combo clip the name), so the value column stays uniform across every tab. */
 .prefs-grid > .form-select { text-overflow: ellipsis; }
+/* The QA40x settings dialog's device panel — the desktop's GridLayout(2, false). ONE label column
+   shared by all eight rows, sized to the WIDEST caption (max-content, never wrapping), and the same
+   fixed 180px value cell the Preferences tabs use. Per-row flex boxes sized each caption on its own,
+   so "Firmware version:" wrapped while the fields stretched the dialog well past the desktop's. */
+/* 66% of Bootstrap's default 500px modal — the panel is eight short read-only values and a toggle,
+   so the default box was mostly empty space. The value column and the note's wrap width come down
+   with it, or the grid would just overflow the narrower dialog. */
+#qa40xSettingsModal .modal-dialog { max-width: 330px; }
+/* The value column FILLS the remaining width, so each field's right edge lands on the body's content
+   edge — the same inset as the labels have on the left. A fixed value width left the slack on the
+   right instead, which read as a lopsided dialog. */
+.qa40x-settings-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; align-items: center; }
+.qa40x-settings-grid > label { text-align: left; font-size: 12.5px; white-space: nowrap; margin: 0; }
+.qa40x-settings-grid > .form-control { width: 100%; max-width: none; border-radius: 0; padding-top: .0625rem; padding-bottom: .0625rem; }
 /* Bare right-aligned checkbox in the value cell (Java buildCheckRow: label left grabbing, a bare
    SWT.CHECK right-aligned in column 2 — no floating label beside the box). */
 .prefs-grid > .pref-check { justify-self: end; width: auto; margin: 0; }

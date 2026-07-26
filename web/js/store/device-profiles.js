@@ -20,7 +20,8 @@
 //     key-for-key: { formatVersion, contentVersion, audioDevices } with fsVrms always
 //     a { left, right } pair (reader tolerates a scalar shorthand), activeRange a
 //     scalar row label for LINKED / MONO and a { left, right } map for INDEPENDENT,
-//     match omitted when empty, calibrated serialised only when true.
+//     match omitted when empty, calibrated / calibrationFromDevice serialised only
+//     when true.
 //   * The bundled classpath seed (devices.yaml) becomes device-catalog.js; the store
 //     seeds from it on first run and runs the same content-version-gated merge.
 //   * JSON carries no comments, so the seed's leading header comment (which the
@@ -87,6 +88,10 @@ export class DeviceEndpointConfig {
     this.activeRange = null;
     /** @type {?string} the right channel's active row label; consulted only in INDEPENDENT. */
     this.activeRangeRight = null;
+    /** True when this direction's full-scale is OWNED by the device (a QA40x): the
+     *  store never writes calibration into its ranges and the seed merge takes them
+     *  wholesale. Serialized only when true (DeviceEndpointConfig.calibrationFromDevice). */
+    this.calibrationFromDevice = false;
   }
 
   /** A deep copy (new range-row objects) — DeviceEndpointConfig.deepCopy. */
@@ -95,6 +100,7 @@ export class DeviceEndpointConfig {
     c.channels = this.channels;
     c.activeRange = this.activeRange;
     c.activeRangeRight = this.activeRangeRight;
+    c.calibrationFromDevice = this.calibrationFromDevice;
     for (const r of this.ranges) c.ranges.push(r.deepCopy());
     return c;
   }
@@ -491,7 +497,8 @@ export class DeviceProfileStore {
 
   /** Writes {@code fsVrms} as the current input device's ADC calibration (both
    *  channels, LINKED write), auto-creating / binding a card when unbound, then
-   *  applies it to both scalars and persists (Preferences.storeAdcCalibration(double)).
+   *  applies it to both scalars and persists. A device-provided endpoint is a warned
+   *  no-op (Preferences.storeAdcCalibration(double)).
    *
    *  {@code deviceLabel} is the web accommodation: the desktop reads the OS device
    *  NAME from BackendPrefs (which the recognition patterns match), but the web's
@@ -502,6 +509,10 @@ export class DeviceProfileStore {
     const deviceName = deviceLabel != null ? deviceLabel : this.prefs.current().inputDeviceName;
     let p = this.resolveDeviceProfile(deviceName);
     if (p == null) p = this._seedProfileFor(true, deviceName);
+    if (p.input.calibrationFromDevice) {
+      this._warnDeviceProvidedCalibration(p);
+      return;
+    }
     this._writeActiveRangeFs(p.input, fsVrms);
     this.putAudioDeviceProfile(p);
     this.prefs.setAdcFsVoltageRms(fsVrms);
@@ -517,6 +528,10 @@ export class DeviceProfileStore {
     let p = this.resolveDeviceProfile(deviceName);
     if (p == null) p = this._seedProfileFor(true, deviceName);
     const ep = p.input;
+    if (ep.calibrationFromDevice) {
+      this._warnDeviceProvidedCalibration(p);
+      return;
+    }
     const mono = ep.channels === DeviceChannelMode.MONO;
     this._writeActiveRangeFsChannel(ep, ch, fsVrms);
     this.putAudioDeviceProfile(p);
@@ -538,6 +553,10 @@ export class DeviceProfileStore {
     const deviceName = deviceLabel != null ? deviceLabel : this.prefs.current().outputDeviceName;
     let p = this.resolveDeviceProfile(deviceName);
     if (p == null) p = this._seedProfileFor(false, deviceName);
+    if (p.output.calibrationFromDevice) {
+      this._warnDeviceProvidedCalibration(p);
+      return;
+    }
     this._writeActiveRangeFs(p.output, fsAmpl / SQRT2);
     this.putAudioDeviceProfile(p);
     this.prefs.setDacFsVoltageAmpl(fsAmpl);
@@ -552,6 +571,10 @@ export class DeviceProfileStore {
     let p = this.resolveDeviceProfile(deviceName);
     if (p == null) p = this._seedProfileFor(false, deviceName);
     const ep = p.output;
+    if (ep.calibrationFromDevice) {
+      this._warnDeviceProvidedCalibration(p);
+      return;
+    }
     const mono = ep.channels === DeviceChannelMode.MONO;
     this._writeActiveRangeFsChannel(ep, ch, fsAmpl / SQRT2);
     this.putAudioDeviceProfile(p);
@@ -563,6 +586,12 @@ export class DeviceProfileStore {
     } else {
       this.prefs.setDacFsVoltageAmpl(fsAmpl);
     }
+  }
+
+  /** Guarded warn when a calibrate write targets a device-provided endpoint
+   *  (Preferences.warnDeviceProvidedCalibration). */
+  _warnDeviceProvidedCalibration(p) {
+    console.warn(`Ignoring calibration write — calibration is device-provided for ${p.name}`);
   }
 
   /** Resolves the card for a first calibrate on an UNBOUND device: a recognised card
@@ -709,10 +738,12 @@ export class DeviceProfileStore {
   /** Reconciles one direction's range table against the {@code seed} endpoint: each
    *  seed range is added when absent, else replaces the store row in place with the
    *  seed nominal — but a store row the user CALIBRATED carries its measured
-   *  fsLeft/fsRight + the calibrated flag into the replacement. Store rows the seed no
-   *  longer lists stay (hand-added ranges survive). (Preferences.mergeSeedRanges). */
+   *  fsLeft/fsRight + the calibrated flag into the replacement. A device-provided
+   *  endpoint always takes the seed values. Store rows the seed no longer lists stay
+   *  (hand-added ranges survive). (Preferences.mergeSeedRanges). */
   _mergeSeedRanges(storeEp, seedEp) {
     if (seedEp == null || storeEp == null) return;
+    const deviceOwned = seedEp.calibrationFromDevice;
     const storeRows = storeEp.ranges;
     for (const seedRow of seedEp.ranges) {
       const merged = seedRow.deepCopy();   // nominal seed values + format, calibrated=false
@@ -722,7 +753,7 @@ export class DeviceProfileStore {
         continue;
       }
       const storeRow = storeRows[idx];
-      if (storeRow.calibrated) {
+      if (!deviceOwned && storeRow.calibrated) {
         merged.fsLeft = storeRow.fsLeft;
         merged.fsRight = storeRow.fsRight;
         merged.calibrated = true;
@@ -770,11 +801,12 @@ export class DeviceProfileStore {
   }
 
   /** Emits one endpoint block, or undefined when it has no ranges
-   *  (Preferences.writeEndpoint). activeRange as a scalar (LINKED / MONO) or a
-   *  { left, right } map (INDEPENDENT). */
+   *  (Preferences.writeEndpoint). calibrationFromDevice emitted only when true;
+   *  activeRange as a scalar (LINKED / MONO) or a { left, right } map (INDEPENDENT). */
   _writeEndpoint(ep) {
     if (ep == null || ep.ranges.length === 0) return undefined;
     const out = { channels: ep.channels };
+    if (ep.calibrationFromDevice) out.calibrationFromDevice = true;
     out.ranges = ep.ranges.map((r) => this._writeRange(r));
     if (ep.activeRange != null) out.activeRange = this._writeActiveRange(ep);
     return out;
@@ -831,6 +863,7 @@ export class DeviceProfileStore {
   _readEndpoint(m) {
     const ep = new DeviceEndpointConfig();
     if (typeof m.channels === 'string' && isChannelMode(m.channels)) ep.channels = m.channels;
+    if (typeof m.calibrationFromDevice === 'boolean') ep.calibrationFromDevice = m.calibrationFromDevice;
     if (Array.isArray(m.ranges)) {
       for (const o of m.ranges) {
         const r = this._readRange(o);

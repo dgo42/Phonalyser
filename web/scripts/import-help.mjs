@@ -41,99 +41,6 @@ const WEB_ONLY_PAGES = [{
   },
 }];
 
-// Web-ONLY removal transform. The desktop "Calibration provided by device"
-// (calibrationFromDevice) card flag was removed from the WEB UI, so the WEB help must not
-// document it. The copy loop overwrites preferences.html from Java each import (which still
-// carries both mentions), so we strip them again every run. Two elements are removed from
-// every language's preferences.html: (a) the yaml-key <li> documenting
-// `calibrationFromDevice: true`, and (b) the card-editor properties <tr> whose label is the
-// per-language "Calibration provided by device" phrase. The strip is idempotent — importing
-// twice yields identical output, and a pass over already-stripped HTML is a no-op. Java
-// sources are never touched, only the web/help copies.
-const CFD_LABELS = 'Calibration provided by device|Kalibrierung vom Gerät bereitgestellt|Калібрування надається пристроєм';
-// Tempered lazy tokens keep each match inside a single <li>/<tr> (never spanning a sibling
-// element) and tolerate attributes/whitespace on the opening tag; the leading indentation and
-// one trailing newline are consumed so no blank line is left behind.
-const CFD_LI_RE = /[ \t]*<li\b[^>]*>(?:(?!<\/li>)[\s\S])*?calibrationFromDevice(?:(?!<\/li>)[\s\S])*?<\/li>[ \t]*\n?/g;
-const CFD_TR_RE = new RegExp(`[ \\t]*<tr\\b[^>]*>(?:(?!<\\/tr>)[\\s\\S])*?(?:${CFD_LABELS})(?:(?!<\\/tr>)[\\s\\S])*?<\\/tr>[ \\t]*\\n?`, 'g');
-
-// ── Web-ONLY removal transform: the QA40x analyzer backend ──────────────────────────────────
-// The browser port has no vendor-USB path, so the QuantAsylum QA402 / QA403 (QA40x) analyzer
-// backend is excluded from the web help ENTIRELY (established rule) — while the other desktop
-// backends (WASAPI / WDM-KS / JavaSound) are KEPT. The Java help now documents QA40x and the
-// copy loop overwrites each page from Java every import, so we strip QA40x again every run,
-// leaving the surrounding backend prose intact and grammatical. Everything anchors on the
-// language-invariant tokens (id="qa40x", QA40x, QuantAsylum, ref-libusb), so the de/uk
-// translations match too. Idempotent: a second pass over stripped HTML is a no-op, and a full
-// re-import (Java → strip) is deterministic. Java sources are never touched.
-//
-// audio-backend.html — the whole "<h2 id="qa40x"> … " chapter, up to (not including) the next <h2>.
-const QA_CHAPTER_RE = /[ \t]*<h2 id="qa40x">[\s\S]*?(?=[ \t]*<h2 )/g;
-// …the libusb reference footnote, and any citation that pointed at it (its only use is inside the
-// removed chapter, so the sup strip is normally a no-op — kept for robustness + idempotency).
-const QA_LIBUSB_LI_RE = /[ \t]*<li id="ref-libusb">[\s\S]*?<\/li>[ \t]*\n?/g;
-const QA_LIBUSB_SUP_RE = /<sup><a href="#ref-libusb">\[\d+\]<\/a><\/sup>/g;
-// preferences.html — the "<b>QA40x.</b> … " note block ("QA40x." is language-invariant).
-const QA_NOTE_RE = /[ \t]*<div class="note"><b>QA40x\.<\/b>[\s\S]*?<\/div>[ \t]*\n?/g;
-// theory/index.html — the "(… QA40x …)" aside inside the audio-backend chapter link.
-const QA_PAREN_RE = / \([^)]*QA40x[^)]*\)/g;
-// help-index.html (A-Z topic index + term index) — every <li> that names a QA40x term/topic,
-// then any letter group (<h3>X</h3><ul></ul>) that removal leaves empty (the term "Q" is
-// QA40x-only, so it would otherwise leave a dangling heading).
-const QA_INDEX_LI_RE = /[ \t]*<li\b[^>]*>(?:(?!<\/li>)[\s\S])*?(?:QA40x|QA402|QA403|QuantAsylum)(?:(?!<\/li>)[\s\S])*?<\/li>[ \t]*\n?/g;
-const QA_EMPTY_GROUP_RE = /[ \t]*<h3>[^<]*<\/h3>\s*<ul>\s*<\/ul>[ \t]*\n?/g;
-// Where a pure strip would relocate a conjunction or a count across three translations, restore
-// the maintainer-reviewed web-prior text instead of splicing (error-prone). Anchored on the
-// language-invariant markers: the id="paths" heading + its intro <p>, and the <td>Backend</td>
-// enumeration row. The .web product name is already applied by injectViewer() before this runs.
-const QA_PATHS_RE = /[ \t]*<h2 id="paths">[\s\S]*?<\/h2>\s*<p>[\s\S]*?<\/p>/;
-const QA_PATHS = {
-  en: '  <h2 id="paths">The three driver paths</h2>\n'
-    + '  <p>Sound hardware can be reached through several driver interfaces.\n'
-    + '     Phonalyser.web implements three and lets you pick one in Preferences; all\n'
-    + '     modules work identically on top of whichever is active.</p>',
-  de: '  <h2 id="paths">Die drei Treiberpfade</h2>\n'
-    + '  <p>Soundhardware ist über verschiedene Treiberinterfaces erreichbar.\n'
-    + '     Phonalyser.web implementiert drei davon und lässt Sie in den Einstellungen\n'
-    + '     einen auswählen; alle Module arbeiten identisch, unabhängig davon,\n'
-    + '     welcher aktiv ist.</p>',
-  uk: '  <h2 id="paths">Три шляхи драйверів</h2>\n'
-    + '  <p>До звукового обладнання можна звертатись через кілька драйверних\n'
-    + '     інтерфейсів.  Phonalyser.web реалізує три і дозволяє вибрати один у\n'
-    + '     налаштуваннях; усі модулі працюють однаково поверх будь-якого\n'
-    + '     активного шляху.</p>',
-};
-const QA_BACKEND_RE = /[ \t]*<tr><td>Backend<\/td>[\s\S]*?<\/tr>/;
-const QA_BACKEND = {
-  en: '    <tr><td>Backend</td>\n'
-    + '        <td>WASAPI (default, exclusive bit-exact), WDM-KS (lowest-level,\n'
-    + '            highest capture throughput) or JavaSound (portable / only option\n'
-    + '            off Windows).  Changing it re-enumerates the device lists.</td></tr>',
-  de: '    <tr><td>Backend</td>\n'
-    + '        <td>WASAPI (Standard, exklusiv bit-exakt), WDM-KS (niedrigste Ebene,\n'
-    + '            höchster Aufnahmedurchsatz) oder JavaSound (plattformübergreifend /\n'
-    + '            einzige Option außerhalb von Windows).  Bei Änderung wird die\n'
-    + '            Geräteliste neu eingelesen.</td></tr>',
-  uk: '    <tr><td>Backend</td>\n'
-    + '        <td>WASAPI (типово, ексклюзивний режим із побітовою точністю), WDM-KS (найнижчий\n'
-    + '            рівень, найвища пропускна здатність захоплення) або JavaSound (переносний /\n'
-    + '            єдиний варіант поза Windows).  Зміна значення повторно перераховує списки\n'
-    + '            пристроїв.</td></tr>',
-};
-
-// changelog.html — the QA40x analyzer backend is a desktop-only feature the web cannot run, so its
-// release-note bullet is dropped entirely. Anchored language-invariantly on the bold label, which
-// starts with the product name in every locale (en "QA40x analyzer backend", de "QA40x-Analyzer-
-// Backend", uk "QA40x …") — so `<li><b>QA40x…`. The "Web version catch-up" bullet STAYS; it only
-// loses its parenthetical "(… QA40x …)" aside via the shared QA_PAREN_RE (which strips any
-// QA40x-bearing parenthetical in any language), the restriction it describes kept, just no longer
-// named after the vendor part. The catch-up bullet's label is "Web…", never "QA40x…", so the
-// backend-bullet strip can't touch it. Anchor on QA40x appearing ANYWHERE inside the bold label
-// (`<li><b>…QA40x…</b>`) — the translated word order puts it first (en/de) or last (uk "Бекенд
-// аналізатора QA40x"), but it is always in the label. Run QA_PAREN_RE FIRST so the catch-up
-// bullet's only QA40x (a parenthetical, never in its label) is already gone.
-const QA_CHANGELOG_LI_RE = /[ \t]*<li><b>(?:(?!<\/b>)[\s\S])*?QA40x(?:(?!<\/b>)[\s\S])*?<\/b>(?:(?!<\/li>)[\s\S])*?<\/li>[ \t]*\n?/g;
-
 const langs = (await readdir(SRC, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
 for (const lang of langs) {
   const srcLang = path.join(SRC, lang);
@@ -156,13 +63,65 @@ for (const lang of langs) {
 // every page (the desktop HelpViewer injected it; static pages can't).
 const VIEWER = path.join(here, 'help-viewer.js');
 const PRODUCT_RENAME = /(?<!\/)\bPhonalyser\b(?!\.web)/g;
-async function injectViewer(dir, langRoot) {
+
+// (c) QA40x transport: the desktop reaches the analyzer through the native
+// libusb library, the browser through the WebUSB API — a real difference in how
+// the instrument is opened and in what the user must have installed, so the
+// imported chapter would otherwise send web users hunting for a libusb that does
+// not exist and never mention the Chrome/secure-context/WinUSB prerequisites.
+// Three targeted rewrites per language (the sentence, the prerequisites note and
+// the reference entry), anchored on the language-invariant #ref-libusb markers.
+// Applied BEFORE the product rename, so "Phonalyser" below still becomes
+// "Phonalyser.web". A wholesale strip of the QA40x section was the old approach
+// and was wrong: the web DOES have this backend, it just reaches it differently.
+const WEBUSB_REF = '<a href="https://developer.mozilla.org/en-US/docs/Web/API/WebUSB_API">WebUSB</a>';
+const QA40X_WEB_SUBS = {
+  en: [
+    [/(?:through the USB library)\s*libusb<sup><a href="#ref-libusb">\[3\]<\/a><\/sup>[\s\S]*?<\/p>/,
+     `through the browser's <b>WebUSB</b> interface<sup><a href="#ref-webusb">[3]</a></sup>, speaking the same vendor protocol the manufacturer's own software does.</p>`],
+    [/<div class="note"><b>libusb[\s\S]*?<\/div>/,
+     `<div class="note"><b>What the browser needs.</b>  WebUSB is implemented by Chrome and Edge only — Firefox and Safari do not support it, and the QA40x backend simply does not appear there.  The page must be served over <code>https://</code> or <code>localhost</code>, and the first connection needs a click: the browser opens its own device chooser, which only you can confirm.  On Windows the analyzer must be bound to a WinUSB-class driver — a per-machine step a web page cannot perform for you.  As with exclusive mode, one application owns the instrument at a time: the QA402 / QA403 must not be open in the QuantAsylum software, or in another tab, while Phonalyser uses it.</div>`],
+    [/<li id="ref-libusb">[\s\S]*?<\/li>/,
+     `<li id="ref-webusb">The browser API the QA40x backend uses to reach the analyzer — ${WEBUSB_REF}.</li>`],
+  ],
+  de: [
+    [/(?:über die USB-Bibliothek)\s*libusb<sup><a href="#ref-libusb">\[3\]<\/a><\/sup>[\s\S]*?<\/p>/,
+     `über die <b>WebUSB</b>-Schnittstelle des Browsers<sup><a href="#ref-webusb">[3]</a></sup> erreicht und dabei dasselbe Herstellerprotokoll spricht wie die herstellereigene Software.</p>`],
+    [/<div class="note"><b>libusb[\s\S]*?<\/div>/,
+     `<div class="note"><b>Was der Browser braucht.</b>  WebUSB ist nur in Chrome und Edge implementiert — Firefox und Safari unterstützen es nicht, dort erscheint das QA40x-Backend gar nicht.  Die Seite muss über <code>https://</code> oder <code>localhost</code> ausgeliefert werden, und die erste Verbindung erfordert einen Klick: Der Browser öffnet seinen eigenen Geräteauswahldialog, den nur Sie bestätigen können.  Unter Windows muss der Analysator an einen WinUSB-Klassentreiber gebunden sein — ein Schritt pro Rechner, den eine Webseite nicht für Sie ausführen kann.  Wie beim Exklusivmodus besitzt jeweils eine Anwendung das Instrument: Der QA402 / QA403 darf währenddessen weder in der QuantAsylum-Software noch in einem anderen Tab geöffnet sein.</div>`],
+    [/<li id="ref-libusb">[\s\S]*?<\/li>/,
+     `<li id="ref-webusb">Die Browser-Schnittstelle, über die das QA40x-Backend den Analysator erreicht — ${WEBUSB_REF}.</li>`],
+  ],
+  uk: [
+    [/(?:через USB-бібліотеку)\s*libusb<sup><a href="#ref-libusb">\[3\]<\/a><\/sup>[\s\S]*?<\/p>/,
+     `через інтерфейс <b>WebUSB</b> браузера<sup><a href="#ref-webusb">[3]</a></sup>, використовуючи той самий протокол виробника, що й його власне програмне забезпечення.</p>`],
+    [/<div class="note"><b>libusb[\s\S]*?<\/div>/,
+     `<div class="note"><b>Що потрібно браузеру.</b>  WebUSB реалізовано лише в Chrome та Edge — Firefox і Safari його не підтримують, і бекенд QA40x там просто не з'являється.  Сторінка має віддаватися через <code>https://</code> або <code>localhost</code>, а перше під'єднання потребує кліку: браузер відкриває власний діалог вибору пристрою, підтвердити який можете лише ви.  У Windows аналізатор має бути прив'язаний до драйвера класу WinUSB — це крок для кожної машини, який вебсторінка не може виконати за вас.  Як і в ексклюзивному режимі, приладом одночасно володіє одна програма: QA402 / QA403 не має бути відкритий ані в програмі QuantAsylum, ані в іншій вкладці.</div>`],
+    [/<li id="ref-libusb">[\s\S]*?<\/li>/,
+     `<li id="ref-webusb">Браузерний інтерфейс, через який бекенд QA40x звертається до аналізатора — ${WEBUSB_REF}.</li>`],
+  ],
+};
+// The Preferences page says the analyzer "appears in the list only when a
+// QA402 / QA403 is connected to the PC"; in the browser it also requires WebUSB
+// support, and the app gates the entry on exactly that.
+const QA40X_PREFS_SUBS = {
+  en: [[/connected to the PC/, 'connected and the browser supports WebUSB']],
+  de: [[/mit dem PC verbunden ist/, 'verbunden ist und der Browser WebUSB unterstützt']],
+  uk: [[/під'єднано до ПК/, "під'єднано, а браузер підтримує WebUSB"]],
+};
+
+async function injectViewer(dir, langRoot, lang) {
   for (const e of await readdir(dir, { withFileTypes: true })) {
     const full = path.join(dir, e.name);
-    if (e.isDirectory()) { await injectViewer(full, langRoot); continue; }
+    if (e.isDirectory()) { await injectViewer(full, langRoot, lang); continue; }
     if (!e.name.endsWith('.html')) continue;
     const orig = await readFile(full, 'utf8');
-    let html = orig.replace(PRODUCT_RENAME, 'Phonalyser.web');
+    let html = orig;
+    for (const [find, repl] of (QA40X_WEB_SUBS[lang] ?? [])) html = html.replace(find, repl);
+    if (e.name === 'preferences.html') {
+      for (const [find, repl] of (QA40X_PREFS_SUBS[lang] ?? [])) html = html.replace(find, repl);
+    }
+    html = html.replace(PRODUCT_RENAME, 'Phonalyser.web');
     if (!html.includes('help-viewer.js')) {
       const rel = path.relative(path.dirname(full), langRoot).replace(/\\/g, '/');
       const tag = `<script src="${rel ? rel + '/' : ''}help-viewer.js"></script>\n`;
@@ -174,7 +133,7 @@ async function injectViewer(dir, langRoot) {
 for (const lang of langs) {
   const langDir = path.join(DST, lang);
   await cp(VIEWER, path.join(langDir, 'help-viewer.js'));
-  await injectViewer(langDir, langDir);
+  await injectViewer(langDir, langDir, lang);
 }
 
 // Re-inject the TOC link(s) for every web-only page into each language's (freshly
@@ -199,52 +158,6 @@ async function injectTocLinks() {
   }
 }
 await injectTocLinks();
-
-// Strip the desktop-only "Calibration provided by device" (calibrationFromDevice) mentions
-// from each language's preferences.html — the web UI no longer offers the flag.
-async function stripCfdMentions() {
-  for (const lang of langs) {
-    const file = path.join(DST, lang, 'preferences.html');
-    if (!await exists(file)) continue;
-    const orig = await readFile(file, 'utf8');
-    const html = orig.replace(CFD_LI_RE, '').replace(CFD_TR_RE, '');
-    if (html !== orig) await writeFile(file, html);
-  }
-}
-await stripCfdMentions();
-
-// Strip the QA40x analyzer backend from the web help (see the block comment above the QA_*
-// patterns): the browser has no vendor-USB path, so QA40x is excluded while WASAPI / WDM-KS /
-// JavaSound stay. Touches each language's audio-backend, preferences, theory index and the A-Z
-// help index; every rewrite is a no-op once already stripped, so the whole pass is idempotent.
-async function stripQa40xMentions() {
-  const rewrite = async (file, fn) => {
-    if (!await exists(file)) return;
-    const orig = await readFile(file, 'utf8');
-    const html = fn(orig);
-    if (html !== orig) await writeFile(file, html);
-  };
-  for (const lang of langs) {
-    const root = path.join(DST, lang);
-    await rewrite(path.join(root, 'theory', 'audio-backend.html'), (h) => h
-      .replace(QA_CHAPTER_RE, '')
-      .replace(QA_LIBUSB_SUP_RE, '')
-      .replace(QA_LIBUSB_LI_RE, '')
-      .replace(QA_PATHS_RE, () => QA_PATHS[lang] ?? QA_PATHS.en));
-    await rewrite(path.join(root, 'preferences.html'), (h) => h
-      .replace(QA_NOTE_RE, '')
-      .replace(QA_BACKEND_RE, () => QA_BACKEND[lang] ?? QA_BACKEND.en));
-    await rewrite(path.join(root, 'theory', 'index.html'), (h) => h
-      .replace(QA_PAREN_RE, ''));
-    await rewrite(path.join(root, 'help-index.html'), (h) => h
-      .replace(QA_INDEX_LI_RE, '')
-      .replace(QA_EMPTY_GROUP_RE, ''));
-    await rewrite(path.join(root, 'changelog.html'), (h) => h
-      .replace(QA_PAREN_RE, '')          // de-name the "(… QA40x …)" aside in the Web-catch-up bullet (any language)
-      .replace(QA_CHANGELOG_LI_RE, '')); // drop the "QA40x …" backend feature bullet
-  }
-}
-await stripQa40xMentions();
 
 console.log(`imported help: ${SRC} -> ${DST}`);
 console.log(`  languages: ${langs.join(', ')}  (img/ preserved, ?hl highlighter injected)`);

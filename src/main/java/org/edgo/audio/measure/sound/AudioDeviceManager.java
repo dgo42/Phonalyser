@@ -22,6 +22,8 @@ import java.util.List;
 
 import javax.sound.sampled.AudioFormat;
 
+import org.eclipse.swt.widgets.Shell;
+
 /**
  * Common contract of the per-backend device managers (WASAPI, WDM-KS,
  * JavaSound, CoreAudio, QA40x): device discovery, format probing, and the
@@ -72,4 +74,25 @@ public interface AudioDeviceManager {
      *  {@code ditherBits} is the TPDF depth applied at quantisation
      *  ({@code 0} = off). */
     AudioPlayback openPlayback(DeviceRef device, int sampleRate, int bitDepth, double ditherBits);
+
+    /** Whether this backend has settings of its own that no other backend
+     *  shares, reached through {@link #openCustomPreferences(Shell)}.  Default
+     *  {@code false}: the Preferences dialog then shows no extra button, so a
+     *  backend without such settings implements nothing. */
+    default boolean hasCustomPreferences() {
+        return false;
+    }
+
+    /** Opens this backend's own settings dialog, modal to {@code parent}, and
+     *  returns when the user has closed it.  Default no-op, paired with
+     *  {@link #hasCustomPreferences()} returning {@code false}.
+     *
+     *  <p>This is the one place the backend layer touches the toolkit: the
+     *  settings behind such a dialog are backend-specific (a QA40x expansion
+     *  port has no meaning to WASAPI), so the alternative would be a
+     *  backend-type switch inside the Preferences dialog — the very coupling
+     *  {@link AudioDeviceManager} exists to avoid. */
+    default void openCustomPreferences(Shell parent) {
+        // No custom settings — nothing to show.
+    }
 }

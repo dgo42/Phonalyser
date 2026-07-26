@@ -5,7 +5,7 @@ Phonalyser on Windows, Linux and macOS.
 
 Two output formats are supported on every OS:
 
-* **Fat JAR** (`target/phonalyser-<version>-jar-with-dependencies.jar`) —
+* **Fat JAR** (`target/phonalyser-<version>-<platform>.jar`) —
   cross-platform-buildable, requires a Java 17+ runtime on the user's machine.
 * **Native installer** — `.exe` on Windows, `.deb` on Linux, `.dmg` on macOS.
   Bundles a JRE so the end user doesn't need Java installed.  Must be built
@@ -17,34 +17,68 @@ Two output formats are supported on every OS:
 | --------- | ------- | ----------------------------------------------------------- |
 | JDK       | 17+     | Use Temurin or Liberica; jpackage ships with the JDK.       |
 | Maven     | 3.8+    | The included `pom.xml` activates the correct OS profile automatically. |
-| PortAudio | latest  | See the OS-specific section below.                          |
 
-The Maven OS profiles in `pom.xml` (`windows-x64`, `linux-x64`,
-`linux-aarch64`, `macos-x64`, `macos-aarch64`) auto-activate based on the
-build machine and select the matching SWT artifact + extra Windows-only
-dependencies.
+That is the whole list. **The native libraries are committed to the repository**
+(§2) — nothing to download, nothing to build.
 
-## 2. Per-OS native libraries
+### Install the vendored flac-library first (once per machine)
 
-**Linux and macOS need no native libraries.**  The JAVASOUND backend
-talks to ALSA / CoreAudio through `javax.sound.sampled`, which ships
-inside the JDK that jpackage bundles.  SWT brings its own native
-widget bindings (`libswt-*.so` / `libswt-*.jnilib`) inside the
-platform-specific Maven artifact.
+Project Nayuki's FLAC library — the decode side of Play-from — is **not on
+Maven Central**. It is vendored under `deps/flac-library-java/` and has to be
+installed into your local `~/.m2` before the main project can resolve
+`io.nayuki:flac-library:1.1.0`:
 
-**Windows** uses extra natives for the WASAPI exclusive / WDM-KS audio
-paths.  Drop into [lib/windows/](lib/windows/):
+```bash
+mvn -B -ntp -f deps/flac-library-java/pom.xml install
+```
 
-* `portaudio_x64.dll` — from https://www.portaudio.com/download.html or vcpkg.
-  Required for the WDM-KS backend.
-* `csjsound-provider.jar` — from https://github.com/pavhofman/csjsound-provider.
-  Registers a JavaSound MixerProvider that exposes WASAPI exclusive mode
-  so the JAVASOUND backend can open hi-res rates (up to 768 kHz / 32-bit).
-* `csjsound_amd64.dll` — built alongside the provider; loaded by the
-  JAR above.
+```pwsh
+# equivalent, from the directory itself
+cd deps\flac-library-java
+mvn clean install
+cd ..\..
+```
 
-The build's `windows-x64` Maven profile references these as system-scoped
-dependencies; the Linux/macOS profiles do not pull anything extra.
+Every CI job does this before building; skip it on a fresh clone and the build
+fails during dependency resolution. See [BUILD.md](BUILD.md) §1.
+
+### Platform profiles
+
+The Maven OS profiles in `pom.xml` — `windows-x64`, `windows-x86`, `linux-x64`,
+`linux-aarch64`, `macos-x64`, `macos-aarch64` — select the matching SWT artifact
+plus any platform-only dependencies. **All auto-activate on `<os>` except
+`windows-x86`**, which has no activation block and must always be requested by
+hand, with the host profile deactivated:
+
+```pwsh
+mvn "-P!windows-x64,windows-x86" -DskipTests package
+```
+
+The same `-P!<host>,<target>` form cross-builds any other platform's fat JAR;
+[BUILD.md §3](BUILD.md) has the full matrix and the per-shell quoting rules.
+Native **installers** cannot be cross-built (jpackage bundles a JRE matching the
+build machine), so those come from the CI matrix — §4.
+
+## 2. Native libraries — already in the repository
+
+**Nothing to fetch or compile.** Every native the app needs is committed under
+[lib/](lib/), so a fresh clone builds on any platform straight away:
+
+| Folder | Contents |
+| ------ | -------- |
+| [lib/windows/](lib/windows/) | `portaudio_x64.dll`, `portaudio_x86.dll` (WDM-KS backend) · `csjsound-provider.jar` + `csjsound_amd64.dll`, `csjsound_x86.dll` (WASAPI-exclusive JavaSound mixers) · `libusb-1.0_x64.dll`, `libusb-1.0_x86.dll` (QA40x backend) |
+| [lib/macos-x64/](lib/macos-x64/) · [lib/macos-arm64/](lib/macos-arm64/) | `libportaudio.dylib`, `libusb-1.0.dylib` |
+
+Both Windows architectures are covered, so the `windows-x86` build finds its
+32-bit natives just as `windows-x64` finds the 64-bit ones. The Maven profiles
+reference them as system-scoped dependencies and jpackage stages them into the
+installer; each folder's `README.md` records where its binaries came from.
+
+**Linux ships no natives here.** ALSA reaches the JAVASOUND backend through
+`javax.sound.sampled` inside the bundled JDK, and the QA40x backend uses the
+distribution's own libusb — which is why the `.deb` declares it as a package
+dependency instead. SWT always brings its own widget bindings
+(`libswt-*.so` / `.jnilib` / `.dll`) inside its platform Maven artifact.
 
 ## 3. Build commands
 
@@ -54,13 +88,25 @@ dependencies; the Linux/macOS profiles do not pull anything extra.
 mvn -DskipTests package
 ```
 
-Output: `target/phonalyser-<version>-jar-with-dependencies.jar` plus
+For a platform other than the one you are building on — including **32-bit
+Windows**, whose profile never activates by itself — deactivate the host profile
+and name the target (see [BUILD.md §3](BUILD.md)):
+
+```pwsh
+mvn "-P!windows-x64,windows-x86"   -DskipTests package   # Windows 32-bit
+mvn "-P!windows-x64,linux-x64"     -DskipTests package   # Linux x86_64
+mvn "-P!windows-x64,macos-aarch64" -DskipTests package   # Apple Silicon
+```
+
+Output: `target/phonalyser-<version>-<platform>.jar` — where `<platform>` is
+`windows`, `windows-x86`, `linux` or `macos`, so several OS builds can sit in
+one release folder — plus
 a sibling `target/i18n/` folder containing the translation `.properties`
 files (kept outside the JAR so users can add new languages without
 rebuilding — see §6).  Run with:
 
 ```
-java -Djava.library.path=lib/<os> -jar target/phonalyser-<version>-jar-with-dependencies.jar
+java -Djava.library.path=lib/<os> -jar target/phonalyser-<version>-<platform>.jar
 ```
 
 `I18n` will auto-discover `i18n/` next to the JAR on disk.  To point at
@@ -70,22 +116,29 @@ inside the JAR as a safety net — only the locale variants are external).
 
 ### Native installer (jpackage)
 
-Stage the OS natives next to the fat JAR so jpackage picks them up into
-`$APPDIR`:
+Nothing to stage by hand — one command does it all:
 
 ```
-# Windows (PowerShell)
-Copy-Item lib/windows/* target/ -Force
-mvn jpackage:jpackage
-
-# Linux / macOS
-cp lib/<os>/* target/
-mvn jpackage:jpackage
+mvn -DskipTests package                       # installer for the host OS
+mvn -DskipTests package "-Djpackage.type=APP_IMAGE"   # portable folder, no installer
 ```
 
-The installer lands in `target/installer/`.  At runtime the bundled JRE
-launches with `-Djava.library.path=$APPDIR`, so the staged natives are
-found automatically.
+The `package` phase builds the fat JAR, then copies the JAR, the external
+`i18n/` and `help/` folders and the OS natives into `target/jpackage-input/`,
+and only then runs jpackage against that directory.  An earlier version of this
+page told you to `Copy-Item lib/windows/* target/` and call
+`mvn jpackage:jpackage` on its own — both are wrong now: the goal reads
+`target/jpackage-input`, not `target/`, so a bare goal invocation runs against
+an unpopulated directory and the manual copy lands where nothing looks.
+
+The result lands in `target/installer/`.  At runtime the bundled JRE launches
+with `-Djava.library.path=$APPDIR` (`$APPDIR/lib/windows` on Windows, where the
+natives are staged), so they are found automatically.
+
+> On Windows the default type is `EXE`, which makes jpackage shell out to the
+> WiX toolset.  The project does not use WiX: the release path builds
+> `APP_IMAGE` and wraps it into an MSIX separately (§4b), and the `make-*`
+> scripts pass `APP_IMAGE` for exactly this reason.
 
 ## 4. CI/CD
 
@@ -96,9 +149,9 @@ a JRE matching the build machine's CPU — **two** macOS runners:
 `macos-13` (Intel x86_64) and `macos-14` (Apple Silicon arm64).  An
 arm64-only DMG is rejected by Intel Macs (*"…is not supported on this Mac."*),
 so both are built natively and shipped; each macOS DMG is tagged with its arch
-(`Phonalyser-<ver>-x64.dmg` / `Phonalyser-<ver>-arm64.dmg`).  The Windows job
-expects the binaries to be present in `lib/windows/` (commit them or restore
-them from a private release / artifact store).
+(`Phonalyser-<ver>-x64.dmg` / `Phonalyser-<ver>-arm64.dmg`).  The natives the
+Windows and macOS jobs need are committed under `lib/` (§2), so the runners just
+check out the repository — there is nothing to restore from an artifact store.
 
 A draft GitHub release is created when the matrix finishes, with the EXE,
 DEB, both DMGs and the platform fat JARs attached.
@@ -147,17 +200,20 @@ real distribution, submit the unsigned MSIX to the Store and let Microsoft sign.
 
 ## 5. Audio backends per OS
 
-`org.edgo.audio.measure.sound.AudioBackendType` defines three backends:
+`org.edgo.audio.measure.enums.AudioBackendType` defines five backends:
 
 | Backend     | Platform              | Notes                                                                                                |
 | ----------- | --------------------- | ---------------------------------------------------------------------------------------------------- |
 | `WASAPI`    | Windows only          | Default on Windows.  Exclusive-mode capture / shared-fallback; high rates supported.                 |
 | `WDMKS`     | Windows only          | Lowest-latency path via PortAudio's WDM-KS host API.  Requires `portaudio_x64.dll`.                  |
-| `JAVASOUND` | Windows / Linux / macOS | Cross-platform `javax.sound.sampled` route.  Default on Linux / macOS; available everywhere.       |
+| `COREAUDIO` | macOS only            | PortAudio's CoreAudio host API; replaces JavaSound there.                                            |
+| `JAVASOUND` | Windows / Linux       | Cross-platform `javax.sound.sampled` route.  Hidden on macOS, where CoreAudio takes its place.       |
+| `QA40x`     | any, USB-gated        | A QuantAsylum QA402 / QA403 analyzer driven directly over USB — not a sound-card path.  Offered whenever libusb is present (§2), so it is gated on the library rather than on the OS; on Linux it also needs the udev rule from README. |
 
 The Preferences dialog filters the backend dropdown to only those that
-are usable on the running OS (`AudioBackendType.isAvailable()`), so a
-Linux / macOS build never shows WASAPI / WDM-KS as options.
+are usable (`AudioBackendType.isAvailable()`), so a Linux / macOS build never
+shows WASAPI / WDM-KS, a Windows or Linux build never shows CoreAudio, and
+QA40x appears only where libusb loaded.
 
 If the YAML-persisted backend choice is unavailable when the app starts
 (e.g. preferences carried over from a Windows machine), the GUI silently

@@ -82,6 +82,24 @@
      geräteeigene Bereichskalibrierung, daher ist eine manuelle Kalibrierung
      nicht möglich: Der Kalibrierdialog öffnet sich schreibgeschützt und zeigt
      lediglich den eingebauten Vollausschlag der Karte für jeden Kanal.</div>
+  <div class="note"><b>QA40x-Einstellungen.</b> Ist das QA40x gewählt, erscheint
+     neben der Backend-Liste eine Schaltfläche für Einstellungen — sie öffnet die
+     eigenen Einstellungen des Analysators, die kein anderes Backend hat.  Der
+     Dialog liest Identität und Live-Telemetrie direkt vom Gerät (Firmware-Version,
+     Seriennummer, USB-Spannung und -Strom, ISO-Versorgungsstrom beim QA402,
+     Platinentemperatur und die beiden Fähigkeitswörter) und schaltet den
+     <b>I2S-Erweiterungsanschluss an der Frontplatte</b> ein oder aus.  Der
+     Anschluss wird vor einer Messsitzung gestartet und danach gestoppt; seine
+     Rahmenbreite stammt aus der <b>Ausgangs-Bittiefe</b>, sodass diese Liste,
+     solange I2S an ist, die <b>16 und 32 Bit</b> des Anschlusses statt der 24 des
+     Analysators anbietet — der Eingang bleibt durchgehend bei 24.  Wie jede andere
+     Seite des Dialogs werden sie erst mit OK wirksam.  Das Schalten des Anschlusses
+     ist <b>experimentell</b>: QuantAsylum dokumentiert den Anschluss selbst, nicht
+     aber die USB-Register, die ihn einschalten und seine Rahmenbreite festlegen —
+     dieser Steuerweg ist daher nicht herstellerbestätigt, worauf der Dialog selbst
+     hinweist.</div>
+  <p><img src="img/Preferences Audio QA40x.png" alt="Einstellungen — Registerkarte Audio mit gewähltem QA40x-Backend"/></p>
+  <p><img src="img/QA40x settings.png" alt="QA40x-Einstellungsdialog"/></p>
 
   <h3 id="prefs-audio-card">Karte — Kalibrierungsprofile pro Karte</h3>
   <p>Die Vollausschlag-Kalibrierung — die Spannung in Volt RMS, die dem digitalen

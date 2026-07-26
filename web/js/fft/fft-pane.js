@@ -97,6 +97,16 @@ export class FftPane {
     // publishes FFT_CAPTURE_RESYNC with an i18n message-key on a signal discontinuity or ring
     // overrun; show the self-blinking banner while recording (cleared on the next fresh result).
     bus.subscribe(Events.FFT_CAPTURE_RESYNC, (key) => this.showWarnBanner(key));
+    // The INPUT device died mid-capture — same reaction as the scope pane: the alert alone left the
+    // analyser feeding on a dead line (silence in, averages of nothing out). Stop via the ENGINE
+    // unconditionally — NOT through onFftAutoStopped, whose _isFftRec() gate is the shell flag and
+    // exactly what a desync would leave stale (see onFreqRespMeasurementStarted above).
+    bus.subscribe(Events.AUDIO_DEVICE_ERROR, async (p) => {
+      if (p && p.direction === 'input') {
+        await this.engine.fft.setRecording(false);
+        this.syncFftLed();
+      }
+    });
   }
 
   /** Stops any in-flight FFT recording and grays the Record LED so the user can't kick it

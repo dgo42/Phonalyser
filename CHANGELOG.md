@@ -28,6 +28,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADC-side reference level that routinely exceeds the converter's full scale,
   where a dBFS figure would be meaningless.
 
+- **QA40x settings dialog.** Preferences ▸ Audio gains a settings button beside
+  the backend selector, shown for a backend that has settings of its own — for
+  now the QA40x. It reads the analyzer's identity and live telemetry straight
+  off the device: firmware version, serial number, USB voltage and current,
+  ISO-supply current (QA402 only), board temperature and the two capability
+  words. It also switches the **front-panel I2S expansion port** on and off:
+  the port is started before a measurement session and stopped after it, at the
+  frame width taken from the output bit depth — while it is on, that setting
+  offers the port's 16 and 32 bits in place of the analyzer's 24, and the input
+  stays at 24 throughout. The settings live under the backend's own section of
+  preferences.yaml and, like every other page of the dialog, take effect only
+  when it is closed with OK. Switching the port is **experimental**: QuantAsylum
+  documents the connector itself, but not the USB registers that enable it and set
+  its frame width, so that control path is not vendor-confirmed — which the dialog
+  says plainly.
+- **QA40x analyzer in the browser, over WebUSB.** The web version now drives a
+  QA402 / QA403 directly from the tab. Preferences ▸ Audio gains a backend
+  selector, and picking the analyzer asks for it over WebUSB, opens it, reads
+  its factory calibration page and builds the device card from the analyzer's
+  own levels — so device-provided full-scale, until now the one desktop
+  calibration feature a browser could not support, works here too. Capture and
+  generation run full duplex over the vendor protocol at 48 / 96 / 192 kHz —
+  plus 384 kHz on a QA403 — with the input and output rates locked equal to the
+  single hardware clock; the front-panel I2S port and the identity and telemetry
+  panel sit behind the same settings button as the desktop's; the attenuator
+  ranges are device-owned, so they cannot be renamed, added to or removed; the
+  frequency-response sweep and the file player go out through the analyzer's own
+  DAC rather than the computer's sound card, and sample-for-sample at that — its
+  converters share one clock, so a sweep is deconvolved against exactly what was
+  played, with no resampler in between; **Input and Output bit depth** appear for
+  a backend that has one — the analyzer's 24 bits, or the front-panel port's
+  16 / 32 while it is on — and stay hidden for Web Audio, whose samples reach the
+  page as float32 taken after the system mixer, with no depth to choose and none
+  to report; and the analyzer is parked at its safe ranges and handed back to
+  other applications as soon as the last module stops using it, rather than being
+  held for the life of the tab. It needs Chrome or Edge — Firefox and Safari do
+  not implement WebUSB — a page served over `https://` or `localhost`, and on
+  Windows the analyzer bound to a WinUSB-class driver, which is a per-machine
+  step a web page cannot perform for you.
 - **384 kHz for the QA403.** The QA40x backend now offers 384 kHz alongside
   48 / 96 / 192 kHz when the attached analyzer is a QA403 — the sample-rate
   register has a fourth code the QA402 does not have, so the rate list follows
@@ -36,6 +75,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   held back on the strength of a third-party driver comment calling it
   input-only; a QA403 user running it in practice reports otherwise, and the
   protocol notes now record that evidence.
+- **Documentation.** A new frequency-response section on reading a wobbly trace
+  as input clipping — why a swept sine puts each harmonic's impulse response a
+  fixed interval *ahead* of the wanted one, how that combs the magnitude curve at
+  a spacing that identifies the harmonic responsible, and why the cure is drive
+  level rather than any setting. The Preferences chapter and Theory ▸ Audio
+  backend gain the QA40x: the per-backend settings button, the telemetry panel
+  and the front-panel I2S port, with fresh screenshots. All in English, German
+  and Ukrainian. The QA40x protocol notes gain the wire-confirmed extended
+  register map — firmware, capability, serial number, telemetry and the I2S
+  control and frame-width registers — plus the third front-panel endpoint pair,
+  and now cite three independent implementations rather than one.
+
+### Changed
+
+- **Build documentation now matches what a fresh clone actually needs.**
+  `BUILD.md`, `PACKAGING.md` and `README.md` were missing the one step that
+  makes a first build fail: Project Nayuki's FLAC library is not on Maven
+  Central, is vendored under `deps/flac-library-java/`, and has to be installed
+  into the local Maven repository once before anything else — otherwise the
+  build stops at dependency resolution. The platform profiles are now listed
+  with the installer each one produces, together with the rule that building for
+  anything other than the machine you are on means deactivating the host's own
+  auto-activated profile — `mvn "-P!windows-x64,windows-x86" -DskipTests package`
+  for the 32-bit Windows JAR, the only target that never activates by itself and
+  the only one shipped as a fat JAR with no installer. The native libraries were
+  described as downloads to fetch or compile; they are committed under `lib/`
+  for both Windows architectures and both macOS ones, so there is nothing to
+  obtain.
 
 ### Fixed
 
@@ -149,6 +216,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   choosing a range for one channel cleared the other channel's choice and the
   buttons no longer agreed with the stored setting. The two columns are
   independent again, and clicking the already-active range no longer clears it.
+- **The QA40x kept its input attenuator engaged after use.** Stopping the
+  engine, switching to another backend or quitting the app all left the analyzer
+  at whatever range the last measurement had selected — a 0 dBV session left the
+  input at maximum sensitivity, unprotected, after the process had gone. The
+  device is now parked at its safe idle state — input +42 dBV (maximum
+  attenuation), output −12 dBV, stream stopped — when the backend is deactivated
+  and on the way out.
+- **`--fft-analyze` misread 32-bit WAVs.** Samples are stored offset-binary, and
+  a 32-bit code exceeds the signed-integer range, so the half-range subtraction
+  wrapped and every positive half-wave came out 2³² low. The result was not
+  subtly wrong but nonsense — THD around 102 %, SNR near 10 dB — on files the
+  app had written itself. 8/16/24-bit were never affected.
+- **The generator's dither dBV no longer carries the FFT window's noise
+  bandwidth.** The field folded the analysis window's equivalent-noise-bandwidth
+  term into the figure it displayed, so the same dither read as a different dBV
+  when the FFT window changed — a generator setting moving because an unrelated
+  analyser setting moved. It now states the physical level of the dither it
+  applies, and stays put.
 
 ## [1.1.0] — 2026-07-21
 

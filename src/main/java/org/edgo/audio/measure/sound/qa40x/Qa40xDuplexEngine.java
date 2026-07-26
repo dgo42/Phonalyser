@@ -22,6 +22,8 @@ import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.Objects;
+import java.util.function.BooleanSupplier;
+import java.util.function.IntSupplier;
 
 import lombok.extern.log4j.Log4j2;
 
@@ -94,6 +96,10 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
 
     private final Qa40xTransport transport;
     private final Sleeper sleeper;
+    /** The front-panel I2S setting, consulted at each session boundary. */
+    private final BooleanSupplier i2sEnabled;
+    /** The session's frame width in bits, written to reg 0x0B when the port is on. */
+    private final IntSupplier i2sBits;
     private final int[] scratch = new int[STEADY_FRAMES * CHANNELS];
     private final Deque<byte[]> freeReadBuffers  = new ArrayDeque<>();
     private final Deque<byte[]> freeWriteBuffers = new ArrayDeque<>();
@@ -140,10 +146,27 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
      *  discontinuity. */
     private int writesOwed;
 
+    /** Without an I2S source the front-panel generator simply stays off — the
+     *  state every session then starts and ends in. */
     public Qa40xDuplexEngine(Qa40xTransport transport, Sleeper sleeper,
                              int inputRangeDbv, int outputRangeDbv, int sampleRateHz) {
+        this(transport, sleeper, inputRangeDbv, outputRangeDbv, sampleRateHz,
+                () -> false, () -> Qa40xProtocol.I2S_BITS_32);
+    }
+
+    /**
+     * @param i2sEnabled the front-panel I2S setting, READ at each session
+     *                   boundary rather than copied — so a Preferences OK
+     *                   between sessions is picked up without any push, and a
+     *                   stale copy cannot leave the port running.
+     */
+    public Qa40xDuplexEngine(Qa40xTransport transport, Sleeper sleeper,
+                             int inputRangeDbv, int outputRangeDbv, int sampleRateHz,
+                             BooleanSupplier i2sEnabled, IntSupplier i2sBits) {
         this.transport = Objects.requireNonNull(transport, "transport");
         this.sleeper = Objects.requireNonNull(sleeper, "sleeper");
+        this.i2sEnabled = Objects.requireNonNull(i2sEnabled, "i2sEnabled");
+        this.i2sBits = Objects.requireNonNull(i2sBits, "i2sBits");
         // Fail fast on an invalid range / rate via the protocol code maps.
         Qa40xProtocol.inputRangeCode(inputRangeDbv);
         Qa40xProtocol.outputRangeCode(outputRangeDbv);
@@ -182,6 +205,7 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
             if (stop) {
                 stopStream();
                 parkSafeRanges();
+                stopI2s();
             }
         }
     }
@@ -226,6 +250,7 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
             if (stop) {
                 stopStream();
                 parkSafeRanges();
+                stopI2s();
             }
         }
     }
@@ -291,6 +316,20 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
         transport.registerWrite(Qa40xProtocol.REG_INPUT_FS, inputCode);
         transport.registerWrite(Qa40xProtocol.REG_OUTPUT_FS, outputCode);
         transport.registerWrite(Qa40xProtocol.REG_SAMPLE_RATE, rateCode);
+        // Front-panel I2S generator (§4 reg 0x0A) — driven to the CURRENT setting
+        // rather than only switched on, so the port state always matches the
+        // preference.  Written unconditionally, which also makes a restart (range
+        // or rate change) idempotent instead of interrupting the tone.
+        // Front-panel I2S, both registers still before the engine starts: the
+        // frame width (reg 0x0B, 16- or 32-bit taken from the output bit depth)
+        // is set FIRST, so the port is already on the right width at the moment
+        // the control register (reg 0x0A) starts it.  Both read 0 when off.
+        boolean i2sOn = i2sEnabled.getAsBoolean();
+        transport.registerWrite(Qa40xProtocol.REG_I2S_WIDTH,
+                i2sOn ? Qa40xProtocol.i2sWidthCode(i2sBits.getAsInt())
+                      : Qa40xProtocol.I2S_WIDTH_OFF);
+        transport.registerWrite(Qa40xProtocol.REG_I2S,
+                i2sOn ? Qa40xProtocol.I2S_START : Qa40xProtocol.I2S_STOP);
         sleeper.sleep(SETTLE_MILLIS);                                                      // ABA settle (§8)
         transport.registerWrite(Qa40xProtocol.REG_RUN, Qa40xProtocol.RUN_START);          // start
         synchronized (stateLock) {
@@ -326,6 +365,17 @@ public final class Qa40xDuplexEngine implements Qa40xTransport.TransferListener 
                 Qa40xProtocol.inputRangeCode(Qa40xProtocol.SAFE_INPUT_DBV));
         transport.registerWrite(Qa40xProtocol.REG_OUTPUT_FS,
                 Qa40xProtocol.outputRangeCode(Qa40xProtocol.SAFE_OUTPUT_DBV));
+    }
+
+    /** Caller holds {@link #ioLock} and must NOT hold {@link #stateLock}.  Stops
+     *  the front-panel I2S generator when the SESSION ends, leaving the port in
+     *  the same state a fresh connect finds it (§6 safe init).  Sits beside
+     *  {@link #parkSafeRanges()} and NOT in {@link #stopStream()} for the same
+     *  reason: a restart (range / rate change) would otherwise interrupt the I2S
+     *  tone on every change. */
+    private void stopI2s() {
+        transport.registerWrite(Qa40xProtocol.REG_I2S, Qa40xProtocol.I2S_STOP);
+        transport.registerWrite(Qa40xProtocol.REG_I2S_WIDTH, Qa40xProtocol.I2S_WIDTH_OFF);
     }
 
     /** Caller holds {@link #stateLock} — the submits touch the buffer pools and the

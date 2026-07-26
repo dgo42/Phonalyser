@@ -23,6 +23,8 @@ import java.util.List;
 
 import javax.sound.sampled.AudioFormat;
 
+import org.eclipse.swt.widgets.Shell;
+
 import org.edgo.audio.measure.enums.AudioBackendType;
 import org.edgo.audio.measure.enums.DeviceChannelMode;
 import org.edgo.audio.measure.preferences.AudioDeviceProfile;
@@ -74,11 +76,11 @@ public class Qa40xDeviceManager implements AudioDeviceManager {
      *  the pad byte so the delivered sample width equals this depth — the shared
      *  capture path strides and scales by it, so advertised MUST equal delivered
      *  (a mismatch reads every sample at the wrong offset).  The Preferences depth
-     *  combo derives its choices from this list, so 24 is the only offered depth. */
-    private static final int EFFECTIVE_BITS = 24;
+     *  combo derives its choices from the advertised format list, so this is the
+     *  only offered depth — except while the front-panel I2S port is on, when the
+     *  list carries that port's 16 / 32-bit frame widths instead. */
+    private static final int EFFECTIVE_BITS = Qa40xProtocol.ANALYZER_BITS;
     private static final int CHANNELS      = 2;
-    /** Advertised frame size — stereo at the effective (delivered) 24-bit depth. */
-    private static final int FRAME_BYTES   = (EFFECTIVE_BITS / 8) * CHANNELS;
 
     /**
      * Default active ranges when a card is first created — the vendor PyQa40x
@@ -107,6 +109,9 @@ public class Qa40xDeviceManager implements AudioDeviceManager {
     private int currentRateHz;                // 0 = engine not yet built
     private int inputRangeDbv  = DEFAULT_INPUT_DBV;
     private int outputRangeDbv = DEFAULT_OUTPUT_DBV;
+    /** This backend's own settings ({@code custom.qa40x} in preferences.yaml),
+     *  registered with Preferences by the production constructor. */
+    private final Qa40xPreferences settings = new Qa40xPreferences();
 
     public Qa40xDeviceManager() {
         this.finder    = new Qa40xDeviceFinder();
@@ -119,6 +124,10 @@ public class Qa40xDeviceManager implements AudioDeviceManager {
         // Same for the equal-rate constraint (one shared reg-9 clock, doc §10): its
         // subscription must be live before the Preferences dialog can move a rate combo.
         Qa40xRateConstraint.instance();
+        // Hand this backend's own settings block to Preferences, which replays
+        // whatever the file held for it — the manager is built lazily, long
+        // after load() ran, so registration is where the saved values arrive.
+        Preferences.instance().registerCustomPreferences(settings);
     }
 
     /**
@@ -185,10 +194,22 @@ public class Qa40xDeviceManager implements AudioDeviceManager {
         if (!(device instanceof Qa40xDeviceRef ref)) {
             return new ArrayList<>();
         }
+        // OUTPUT only: while the front-panel I2S port is on, the output depth IS
+        // that port's frame width (16 or 32) and is what reg 0x0B is written from
+        // at session start.  The INPUT is the analyzer's own capture path and
+        // always delivers 24 — the I2S port is an output and cannot change it.
+        // Read from the EDIT value so the depth combo reacts to the I2S toggle
+        // while the Preferences dialog is still open; outside a dialog session
+        // edit and live are equal.
+        int[] depths = (output && settings.isI2sEnabledEdit())
+                ? Qa40xProtocol.i2sBitDepths()
+                : new int[] { EFFECTIVE_BITS };
         List<AudioFormat> formats = new ArrayList<>();
         for (int rate : Qa40xProtocol.sampleRatesHz(ref.model())) {
-            formats.add(new AudioFormat(AudioFormat.Encoding.PCM_SIGNED,
-                    rate, EFFECTIVE_BITS, CHANNELS, FRAME_BYTES, rate, false));
+            for (int bits : depths) {
+                formats.add(new AudioFormat(AudioFormat.Encoding.PCM_SIGNED,
+                        rate, bits, CHANNELS, (bits / 8) * CHANNELS, rate, false));
+            }
         }
         return formats;
     }
@@ -216,7 +237,13 @@ public class Qa40xDeviceManager implements AudioDeviceManager {
     synchronized Qa40xDuplexEngine acquireEngine(int sampleRateHz) {
         ensureOpen();
         if (engine == null) {
-            engine = new Qa40xDuplexEngine(transport, sleeper, inputRangeDbv, outputRangeDbv, sampleRateHz);
+            // The engine reads both at each session boundary, so a Preferences OK
+            // between sessions needs no push down to it.  The I2S frame width IS
+            // the output bit depth from Preferences ▸ Audio — while the port is
+            // on, that combo offers 16 / 32 instead of the analyzer's 24.
+            engine = new Qa40xDuplexEngine(transport, sleeper, inputRangeDbv, outputRangeDbv,
+                    sampleRateHz, settings::isI2sEnabled,
+                    () -> Preferences.instance().current().getOutputBitDepth());
             currentRateHz = sampleRateHz;
         } else if (currentRateHz != sampleRateHz) {
             engine.changeSampleRate(sampleRateHz);   // one shared clock → restart (doc §10)
@@ -269,6 +296,65 @@ public class Qa40xDeviceManager implements AudioDeviceManager {
      *  or {@code null} before the device is opened — the card the range routing targets. */
     public synchronized String cardName() {
         return model == null ? null : model.name();
+    }
+
+    /** The QA40x has settings no other backend shares (the front-panel I2S
+     *  expansion port), so the Preferences dialog offers a button for them. */
+    @Override
+    public boolean hasCustomPreferences() {
+        return true;
+    }
+
+    /**
+     * Reads the identity + telemetry registers and decodes them for display
+     * (doc §4 / §6), opening the device first if no session has done so yet.
+     * Returns {@link Qa40xDeviceInfo#NONE} when nothing is attached, and
+     * degrades the same way if a read fails part-way: this feeds a read-only
+     * panel, so an absent or wedged analyzer must show dashes rather than break
+     * the dialog it is on.  The ISO-supply current exists on the QA402 only; a
+     * QA403 reports it as unavailable.
+     */
+    public synchronized Qa40xDeviceInfo readDeviceInfo() {
+        try {
+            // Opening the device is what makes the registers readable at all: the
+            // session opens lazily on the first capture, so without this the
+            // panel would only ever show values after a measurement had run.
+            // Same open the session uses — idempotent when one is already live.
+            ensureOpen();
+            boolean hasIso = model == Qa40xModel.QA402;
+            return new Qa40xDeviceInfo(
+                    Integer.toString(transport.registerRead(Qa40xProtocol.REG_FIRMWARE_VERSION)),
+                    Qa40xProtocol.formatUsbVoltage(transport.registerRead(Qa40xProtocol.REG_TELEM_USB_VOLTAGE)),
+                    Qa40xProtocol.formatCurrent(transport.registerRead(Qa40xProtocol.REG_TELEM_USB_CURRENT)),
+                    hasIso ? Qa40xProtocol.formatCurrent(transport.registerRead(Qa40xProtocol.REG_TELEM_ISO_CURRENT))
+                           : Qa40xDeviceInfo.UNAVAILABLE,
+                    Qa40xProtocol.formatTemperature(transport.registerRead(Qa40xProtocol.REG_TELEM_TEMPERATURE)),
+                    Qa40xProtocol.formatCapability(transport.registerRead(Qa40xProtocol.REG_CAPABILITY)),
+                    Qa40xProtocol.formatCapability(transport.registerRead(Qa40xProtocol.REG_CAPABILITY2)),
+                    Qa40xProtocol.formatSerialNumber(transport.registerRead(Qa40xProtocol.REG_SERIAL_NUMBER)));
+        } catch (Throwable t) {
+            log.warn("QA40x device info read failed: {}", t.toString());
+            return Qa40xDeviceInfo.NONE;
+        }
+    }
+
+    /** Opens the QA40x settings dialog.  What the user accepts stays PENDING —
+     *  it reaches the live settings (and the file) only when the Preferences
+     *  dialog itself is closed with OK, so its Cancel discards this too. */
+    @Override
+    public void openCustomPreferences(Shell parent) {
+        settings.setI2sEnabledEdit(
+                new Qa40xSettingsDialog(parent, readDeviceInfo()).open(settings.isI2sEnabledEdit()));
+    }
+
+    /** Opens the settings dialog for a HELP CAPTURE — fully populated from the
+     *  live device, but without the blocking modal loop, so the automation can
+     *  snapshot it and dispose it.  {@link #openCustomPreferences} is the normal
+     *  entry; this one never touches the settings. */
+    public Qa40xSettingsDialog openCustomPreferencesForCapture(Shell parent) {
+        Qa40xSettingsDialog capture = new Qa40xSettingsDialog(parent, readDeviceInfo());
+        capture.showForCapture(settings.isI2sEnabledEdit());
+        return capture;
     }
 
     /**

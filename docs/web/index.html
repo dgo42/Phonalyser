@@ -946,13 +946,27 @@
       </div>
 
       <div class="prefs-panel d-none" data-prefs-panel="audio">
-        <div class="row g-2 align-items-center mb-3 justify-content-end scan-devices">
+        <!-- Scan on the left, the backend selector pushed to the right (.ms-auto), both inset 10px
+             by .scan-devices. Scan enumerates devices FOR THE SELECTED BACKEND, and for QA40x that
+             click is also the user activation WebUSB's requestDevice() requires.
+             #backendSettings is the per-backend settings button of Java's three-cell backend row
+             (label | settings | combo): PreferencesDialog.refreshCustomPrefsButton shows it only for
+             a backend whose manager hasCustomPreferences() — the QA40x today — and hidden it gives
+             up its cell, so every other backend keeps the plain two-widget row. -->
+        <div class="row g-2 align-items-center mb-3 scan-devices">
           <div class="col-auto"><button id="scan" class="btn btn-sm btn-outline-secondary" data-i18n="web.preferences.scanDevices">Scan devices</button></div>
+          <div class="col-auto ms-auto d-flex align-items-center gap-1">
+            <button id="backendSettings" type="button" class="btn btn-sm btn-outline-secondary d-none"
+                    data-i18n="preferences.backend.customPrefs" data-i18n-title="preferences.backend.customPrefs.tooltip">Custom preferences</button>
+            <label for="backendSel" class="mb-0" data-i18n="preferences.backend">Backend:</label>
+            <select id="backendSel" class="form-select form-select-sm"></select>
+          </div>
         </div>
         <fieldset class="prefs-group mb-3"><legend data-i18n="preferences.input">Input</legend>
           <div class="prefs-grid">
             <label data-i18n="preferences.device">Device:</label><select id="inSel" class="form-select form-select-sm"></select>
             <label data-i18n="preferences.sampleRate">Sample rate:</label><select id="inRate" class="form-select form-select-sm"></select>
+            <label class="depth-row" data-i18n="preferences.bitDepth">Bit depth:</label><select id="inDepth" class="depth-row form-select form-select-sm"></select>
             <label data-i18n="preferences.audio.card">Card:</label>
             <div class="d-flex gap-1">
               <select id="inCardSel" class="form-select form-select-sm flex-grow-1" data-i18n-title="preferences.audio.card.tooltip"></select>
@@ -968,6 +982,7 @@
           <div class="prefs-grid">
             <label data-i18n="preferences.device">Device:</label><select id="outSel" class="form-select form-select-sm"></select>
             <label data-i18n="preferences.sampleRate">Sample rate:</label><select id="outRate" class="form-select form-select-sm"></select>
+            <label class="depth-row" data-i18n="preferences.bitDepth">Bit depth:</label><select id="outDepth" class="depth-row form-select form-select-sm"></select>
             <label data-i18n="preferences.audio.card">Card:</label>
             <div class="d-flex gap-1">
               <select id="outCardSel" class="form-select form-select-sm flex-grow-1" data-i18n-title="preferences.audio.card.tooltip"></select>
