@@ -211,6 +211,10 @@ public final class PreferencesDialog {
         // backend currently shown in the combos is edit.getBackend() — the
         // single source of truth, no separate active-backend tracking.
         edit = Preferences.instance().copyForDialog();
+        // Component-owned blocks live on their owners, not in the working copy,
+        // so give them the same session: seed their edit values now, commit them
+        // beside applyFromDialog() on OK, leave them alone on Cancel.
+        Preferences.instance().beginCustomPreferencesEdit();
 
         // --- Tab folder: Look & Feel + Audio + Oscilloscope + FFT -----------
         // A fixed content width makes the dialog the same size in every language: the field
@@ -293,11 +297,29 @@ public final class PreferencesDialog {
         // --- Backend row ---------------------------------------------------
         Composite backendRow = new Composite(audioTab, SWT.NONE);
         backendRow.setLayoutData(new GridData(SWT.FILL, SWT.CENTER, true, false));
-        GridLayout backendLayout = new GridLayout(2, false);
+        // Three columns: label | per-backend settings button | backend combo.
+        // The middle cell stays empty (and takes no width) for a backend with no
+        // settings of its own, which is every backend except the QA40x today.
+        GridLayout backendLayout = new GridLayout(3, false);
         backendLayout.marginWidth = 0;
         backendLayout.marginHeight = 0;
         backendRow.setLayout(backendLayout);
         gridLabel(backendRow,I18n.t("preferences.backend"));
+        Button customPrefsButton = new Button(backendRow, SWT.PUSH);
+        customPrefsButton.setText(I18n.t("preferences.backend.customPrefs"));
+        customPrefsButton.setToolTipText(I18n.t("preferences.backend.customPrefs.tooltip"));
+        customPrefsButton.setLayoutData(new GridData(SWT.END, SWT.CENTER, true, false));
+        customPrefsButton.addListener(SWT.Selection, e -> {
+            AudioBackend.instance().manager(edit.getBackend()).openCustomPreferences(dialog);
+            // A backend's own settings can change what it OFFERS on the output:
+            // the QA40x's front-panel I2S port swaps the depth list to its
+            // 16 / 32-bit frame widths while it is on, and back to the analyzer's
+            // 24 when it is off.  Re-read that list and fold the resulting
+            // selection into the working copy, so a depth the backend no longer
+            // offers cannot survive in the prefs.
+            refreshOutputRatesAndDepths();
+            captureUiToActive();
+        });
         Combo backendCombo = new Combo(backendRow, SWT.READ_ONLY);
         // Only list backends that work on the current OS — WASAPI / WDM-KS
         // are Windows-only.  The order in the combo is preserved so
@@ -312,6 +334,7 @@ public final class PreferencesDialog {
         int selectedIdx = availableBackends.indexOf(edit.getBackend());
         backendCombo.select(selectedIdx >= 0 ? selectedIdx : 0);
         backendCombo.setLayoutData(comboData());
+        refreshCustomPrefsButton(customPrefsButton);
 
         // --- Input group ---------------------------------------------------
         Group inputGroup = new Group(audioTab, SWT.NONE);
@@ -786,6 +809,7 @@ public final class PreferencesDialog {
             // then setBackend() makes current() the NEW backend.
             captureUiToActive();
             edit.setBackend(availableBackends.get(backendCombo.getSelectionIndex()));
+            refreshCustomPrefsButton(customPrefsButton);
             refreshDevices();
         });
         // A device pick must land in the working copy BEFORE the card section
@@ -882,6 +906,10 @@ public final class PreferencesDialog {
                     bp.getOutputSampleRate(), bp.getOutputBitDepth());
             // Single hand-off: commit the whole working copy to the live
             // singleton (which also persists once).
+            // Component-owned blocks first: applyFromDialog() ends in save(),
+            // so committing after it would write the previous values and leave
+            // the new ones on disk only after some later save.
+            Preferences.instance().commitCustomPreferencesEdit();
             Preferences.instance().applyFromDialog(edit);
             // Resolve per-card FS for the just-committed selection so the dBV
             // axis and generator scale update immediately on OK (legacy scalars
@@ -1021,6 +1049,18 @@ public final class PreferencesDialog {
         if ((idx = inputDepthCombo.getSelectionIndex()) >= 0) bp.setInputBitDepth   (parseLeadingInt(inputDepthCombo.getItem(idx)));
         if ((idx = outputRateCombo.getSelectionIndex()) >= 0) bp.setOutputSampleRate(parseLeadingInt(outputRateCombo.getItem(idx)));
         if ((idx = outputDepthCombo.getSelectionIndex())>= 0) bp.setOutputBitDepth  (parseLeadingInt(outputDepthCombo.getItem(idx)));
+    }
+
+    /** Shows the per-backend settings button only for a backend that has
+     *  settings of its own; hidden, it also gives up its grid cell so the
+     *  backend row keeps its layout. */
+    private void refreshCustomPrefsButton(Button button) {
+        boolean has = AudioBackend.instance().manager(edit.getBackend()).hasCustomPreferences();
+        button.setVisible(has);
+        if (button.getLayoutData() instanceof GridData gd) {
+            gd.exclude = !has;
+        }
+        button.getParent().layout(true, true);
     }
 
     private void refreshDevices() {

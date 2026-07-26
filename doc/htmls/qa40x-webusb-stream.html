@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>QA40x WebUSB duplex stream — scope + FFT</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, Segoe UI, Roboto, sans-serif; margin: 1.5rem; max-width: 1240px; line-height: 1.4; }
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.1rem; margin-top: 1.4rem; }
+  button { font-size: 1rem; padding: .5rem 1rem; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  label { display: inline-flex; flex-direction: column; font-size: .8rem; gap: .15rem; margin: 0 .8rem .5rem 0; }
+  select, input { font-size: .95rem; padding: .2rem .3rem; }
+  .row { display: flex; flex-wrap: wrap; align-items: flex-end; }
+  .note { background: #fffbe8; border: 1px solid #cc9; color: #553; padding: .6rem .8rem;
+          border-radius: 6px; margin: .8rem 0; }
+  .bad  { background: #ffecec; border: 1px solid #c99; color: #722; padding: .6rem .8rem;
+          border-radius: 6px; margin: .8rem 0; }
+  @media (prefers-color-scheme: dark) {
+    .note { background:#2a2810; color:#cda; border-color:#665; }
+    .bad  { background:#2e1414; color:#eba; border-color:#755; }
+  }
+  canvas { width:100%; background:#0b0b12; border:1px solid #444; border-radius:6px; display:block; margin:.4rem 0; }
+  code, #status, #readout, #stats { font-family: Consolas, Menlo, monospace; }
+  #status { font-style: italic; opacity: .85; }
+  #readout, #stats { font-size: .85rem; margin: .3rem 0; }
+  #log { font-family: Consolas, Menlo, monospace; font-size: .8rem; white-space: pre-wrap;
+         background: #8881; border: 1px solid #8884; border-radius: 6px; padding: .5rem;
+         max-height: 14rem; overflow: auto; }
+  small { opacity: .75; }
+</style>
+</head>
+<body>
+<h1>QA40x WebUSB duplex stream — scope + FFT</h1>
+
+<p>Streams the QuantAsylum QA402 / QA403 <b>full duplex over WebUSB</b>: a sine goes out the DAC,
+the ADC comes back in, and the capture is drawn as a live scope + averaged FFT — the browser
+counterpart of <code>loopback-fft.html</code>, but talking to the analyzer directly instead of
+through Web Audio. Connect a <b>loopback cable DAC → ADC</b> to see the tone.</p>
+
+<div class="note">
+The QA40x is an <b>always-duplex</b> device on one clock: the ADC does not stream unless the DAC is
+being fed, so this page always writes (silence if the tone is off). The real question it answers is
+<b>whether WebUSB sustains the bulk rate without gaps</b> — watch <b>max gap</b> and <b>drift</b>
+under “Stream health”, not just the picture.
+</div>
+
+<div id="unsupported" class="bad" hidden>
+  <b>WebUSB is not available.</b> <code>navigator.usb</code> is undefined — use Chrome or Edge over
+  https:// or http://localhost (not file://).
+</div>
+
+<div class="row">
+  <label>Sample rate<select id="rate"></select></label>
+  <label>Input range (dBV FS)<select id="inFs"></select></label>
+  <label>Output range (dBV FS)<select id="outFs"></select></label>
+  <label>Tone (Hz)<input id="freq" type="number" value="1000" step="1"/></label>
+  <label>Amplitude (dBFS)<input id="ampdb" type="number" value="-6" step="1"/></label>
+  <label>FFT size<select id="nfft">
+    <option>4096</option><option selected>32768</option><option>65536</option><option>131072</option>
+  </select></label>
+  <label>Averages<input id="avg" type="number" value="8" step="1" min="1"/></label>
+  <label>Transfers in flight<select id="depth">
+    <option>1</option><option selected>2</option><option>4</option><option>8</option>
+  </select></label>
+  <label>Frames / transfer<select id="chunk">
+    <option>512</option><option>1024</option><option selected>2048</option><option>4096</option>
+  </select></label>
+  <label class="chk"><input id="tone" type="checkbox" checked/> drive tone</label>
+</div>
+
+<p>
+  <button id="connect">Connect to QA40x…</button>
+  <button id="start" disabled>Start</button>
+  <button id="stop" disabled>Stop</button>
+  &nbsp; <span id="status">idle</span>
+</p>
+
+<div id="readout">—</div>
+<div id="stats">—</div>
+<canvas id="scope" width="1200" height="200"></canvas>
+<canvas id="spec"  width="1200" height="400"></canvas>
+
+<h2>Edge-probe matrix</h2>
+<p><small>Runs each combination for a fixed time and records the health counters — the failure edge,
+not just one lucky setting. Leave the analyzer connected and the loopback in place; each cell
+starts and stops the stream on its own.</small></p>
+<div class="row">
+  <label>Seconds / cell<input id="mSecs" type="number" value="5" min="2" step="1" style="width:6rem"/></label>
+  <label>Rates<select id="mRates">
+    <option value="all" selected>all supported</option><option value="one">only the one selected above</option>
+  </select></label>
+  <label>Depths<input id="mDepths" value="1,2,4,8" style="width:8rem"/></label>
+  <label>Frames / transfer<input id="mChunks" value="512,2048" style="width:8rem"/></label>
+  <button id="matrix" disabled>Run matrix</button>
+  <button id="matrixStop" disabled>Abort</button>
+  <button id="copy" disabled>Copy as markdown</button>
+</div>
+<table id="mtx"><thead><tr>
+  <th>rate</th><th>depth</th><th>frames/xfer</th><th>MB/s</th><th>nominal ms</th>
+  <th>max gap ms</th><th>drift ms</th><th>verdict</th>
+</tr></thead><tbody id="mBody"></tbody></table>
+
+<h2>Log</h2>
+<div id="log">—</div>
+
+<h2>Reading the result</h2>
+<ul>
+  <li><b>max gap</b> — the longest wall-clock interval between two completed IN transfers. A
+      dropout-free stream keeps this near <code>frames/transfer ÷ rate</code>; a spike far above it
+      is exactly the stall a browser backend would have to survive.</li>
+  <li><b>drift</b> — captured frames vs frames the clock should have produced since start. A
+      steady negative drift means the host is not keeping up and the device is discarding.</li>
+  <li>Depth and frames/transfer are exposed on purpose: the desktop backend keeps <b>2</b>
+      transfers of <b>2048</b> frames in flight, so those are the defaults to compare against.</li>
+</ul>
+
+<script>
+// ---------------------------------------------------------------------------
+// QA40x wire protocol (mirrors Qa40xProtocol / Qa40xDuplexEngine / LibUsbQa40xTransport)
+//   identity  VID 0x16C0, PID 0x4E37 (QA402) / 0x4E39 (QA403); interface 0
+//   registers 5-byte BIG-endian frame on EP1 OUT; read = 0x80|reg, reply 4 bytes BE on EP1 IN
+//   audio     EP2 OUT / EP2 IN, interleaved LITTLE-endian int32 stereo (two endiannesses!)
+//   start     RUN_STOP → INPUT_FS → OUTPUT_FS → SAMPLE_RATE → prime writes → RUN_START
+// WebUSB takes endpoint NUMBERS and infers direction, so 0x01/0x81 → 1 and 0x02/0x82 → 2.
+// ---------------------------------------------------------------------------
+const QA_VID = 0x16C0, MODELS = { 0x4E37: 'QA402', 0x4E39: 'QA403' };
+const IFACE = 0, REG_EP = 1, AUDIO_EP = 2, READ_FLAG = 0x80;
+const REG_RUN = 0x08, REG_SAMPLE_RATE = 0x09, REG_INPUT_FS = 0x05, REG_OUTPUT_FS = 0x06;
+const RUN_START = 0x05, RUN_STOP = 0x00;
+const CHANNELS = 2, BYTES_PER_SAMPLE = 4, FRAME_BYTES = CHANNELS * BYTES_PER_SAMPLE;
+const RATES = [48000, 96000, 192000, 384000];      // code = index; 384k is QA403-only
+const IN_FS_DBV = [0, 6, 12, 18, 24, 30, 36, 42];  // code = dBV / 6
+const OUT_FS_DBV = [-12, -2, 8, 18];               // code = index
+const INT32_FS = 2147483648;                       // 2^31
+const START_THRESHOLD_FRAMES = 1024;               // frames queued before RUN_START (§5)
+
+const $ = (id) => document.getElementById(id);
+const status = (t) => { $('status').textContent = t; };
+function log(s) { const el = $('log'); if (el.textContent === '—') el.textContent = ''; el.textContent += s + '\n'; el.scrollTop = el.scrollHeight; }
+
+let device = null, running = false, model = 'QA403';
+let rate = 48000, chunkFrames = 2048, depth = 2;
+let phase = 0, toneOn = true, toneHz = 1000, toneAmp = 0.5;
+// Outstanding transfer queues, hoisted so stopStream() can neutralise the ones still in flight
+// (a pending transferIn/Out rejects once the device stops — unhandled, that surfaces as a
+// console error and, in a matrix run, poisons the next cell).
+let inQ = [], outQ = [];
+let transferErrors = 0;
+// Run epoch. stopStream() bumps it, so a loop still parked in an await cannot resume and submit
+// a transfer into the NEXT run's queue (that stole a chunk from the following matrix cell).
+let streamGen = 0;
+
+// ---- register helpers -----------------------------------------------------
+function regFrame(reg, value) {
+  const f = new Uint8Array(5);
+  f[0] = reg & 0xff;
+  f[1] = (value >>> 24) & 0xff; f[2] = (value >>> 16) & 0xff;
+  f[3] = (value >>> 8) & 0xff;  f[4] = value & 0xff;
+  return f;
+}
+async function regWrite(reg, value) {
+  const r = await device.transferOut(REG_EP, regFrame(reg, value));
+  if (r.status !== 'ok') throw new Error(`reg write 0x${reg.toString(16)} → ${r.status}`);
+}
+async function regRead(reg) {
+  await device.transferOut(REG_EP, regFrame(reg | READ_FLAG, 0));
+  const r = await device.transferIn(REG_EP, 4);
+  if (r.status !== 'ok') throw new Error(`reg read 0x${reg.toString(16)} → ${r.status}`);
+  return r.data.getUint32(0, false);
+}
+
+// ---- DAC chunk: interleaved LE int32 stereo, phase-continuous across chunks ----
+function fillOut(buf) {
+  const dv = new DataView(buf);
+  const w = 2 * Math.PI * toneHz / rate;
+  for (let i = 0; i < chunkFrames; i++) {
+    let s = 0;
+    if (toneOn) { s = Math.sin(phase) * toneAmp; phase += w; if (phase > 2 * Math.PI) phase -= 2 * Math.PI; }
+    const v = Math.max(-1, Math.min(1, s)) * (INT32_FS - 1) | 0;
+    dv.setInt32(i * FRAME_BYTES, v, true);          // little-endian, L
+    dv.setInt32(i * FRAME_BYTES + 4, v, true);      // R
+  }
+  return buf;
+}
+
+// ---- capture ring + stats -------------------------------------------------
+const SCOPE_LEN = 1 << 13;
+let ring, ringW, ringFilled, scopeBuf, totalFrames, t0, lastInMs, maxGapMs, gapAtMs, bytesIn, hopCount;
+
+function pushSamples(dv, frames) {
+  for (let i = 0; i < frames; i++) {
+    // Channel 1 (R) is the calibrated/attenuated lane on this hardware; show it.
+    const v = dv.getInt32(i * FRAME_BYTES + 4, true) / INT32_FS;
+    ring[ringW++] = v; if (ringW === ring.length) { ringW = 0; ringFilled = true; }
+    scopeBuf[hopCount++ & (SCOPE_LEN - 1)] = v;
+  }
+}
+
+// ---- FFT worker (same kernel as loopback-fft.html) ------------------------
+const FFT_WORKER = `
+function fft(re,im){ const n=re.length;
+  for(let i=1,j=0;i<n;i++){ let bit=n>>1; for(;j&bit;bit>>=1)j^=bit; j^=bit;
+    if(i<j){ let t=re[i];re[i]=re[j];re[j]=t; t=im[i];im[i]=im[j];im[j]=t; } }
+  for(let len=2;len<=n;len<<=1){ const ang=-2*Math.PI/len,wr=Math.cos(ang),wi=Math.sin(ang),half=len>>1;
+    for(let i=0;i<n;i+=len){ let cr=1,ci=0;
+      for(let k=0;k<half;k++){ const ar=re[i+k],ai=im[i+k],br=re[i+k+half],bi=im[i+k+half];
+        const vr=br*cr-bi*ci,vi=br*ci+bi*cr; re[i+k]=ar+vr; im[i+k]=ai+vi; re[i+k+half]=ar-vr; im[i+k+half]=ai-vi;
+        const ncr=cr*wr-ci*wi; ci=cr*wi+ci*wr; cr=ncr; } } } }
+let N=0, win=null, cg=0;
+function makeWin(n){ const a0=.35875,a1=.48829,a2=.14128,a3=.01168,w=new Float64Array(n); let s=0;
+  for(let i=0;i<n;i++){ const x=2*Math.PI*i/(n-1); w[i]=a0-a1*Math.cos(x)+a2*Math.cos(2*x)-a3*Math.cos(3*x); s+=w[i]; }
+  cg=s/n; return w; }
+onmessage = e => { const d=e.data, n=d.n; if(n!==N){ N=n; win=makeWin(n); }
+  const re=new Float64Array(N), im=new Float64Array(N), s=d.samples;
+  for(let i=0;i<N;i++) re[i]=s[i]*win[i];
+  fft(re,im);
+  const half=N>>1, mag=new Float64Array(half+1);
+  for(let k=0;k<=half;k++){ mag[k]=(re[k]*re[k]+im[k]*im[k]); }
+  postMessage({mag, cg, n:N}, [mag.buffer]);
+};
+`;
+let worker = null, N = 32768, avgTarget = 8, accum = null, accN = 0, fftBusy = false, lastSpec = null;
+
+function emitFrame() {
+  if (!worker || fftBusy || !ringFilled) return;
+  const s = new Float64Array(N);
+  // Newest N samples, oldest first.
+  for (let i = 0; i < N; i++) s[i] = ring[(ringW + ring.length - N + i) % ring.length];
+  fftBusy = true;
+  worker.postMessage({ n: N, samples: s }, [s.buffer]);
+}
+function onSpectrum(d) {
+  fftBusy = false;
+  const half = d.n >> 1, cg = d.cg, mag = d.mag;
+  if (!accum || accum.length !== half + 1) { accum = new Float64Array(half + 1); accN = 0; }
+  if (accN >= avgTarget) { accum.fill(0); accN = 0; }
+  for (let k = 0; k <= half; k++) accum[k] += mag[k];
+  accN++;
+  const norm = 1 / (d.n * cg);
+  lastSpec = { half, cg, norm, db: null, n: d.n };
+  const db = new Float64Array(half + 1);
+  for (let k = 0; k <= half; k++) {
+    const a = Math.sqrt(accum[k] / accN) * 2 * norm;
+    db[k] = a > 1e-15 ? 20 * Math.log10(a) : -300;
+  }
+  lastSpec.db = db;
+  drawSpec(db, half);
+}
+
+// ---- drawing --------------------------------------------------------------
+function drawScope() {
+  const c = $('scope'), g = c.getContext('2d');
+  g.fillStyle = '#0b0b12'; g.fillRect(0, 0, c.width, c.height);
+  g.strokeStyle = '#334'; g.beginPath();
+  for (let i = 0; i <= 8; i++) { const y = i * c.height / 8; g.moveTo(0, y); g.lineTo(c.width, y); }
+  g.stroke();
+  const n = Math.min(SCOPE_LEN, 2000);
+  const start = (hopCount - n) & (SCOPE_LEN - 1);
+  g.strokeStyle = '#4fd'; g.beginPath();
+  for (let i = 0; i < n; i++) {
+    const v = scopeBuf[(start + i) & (SCOPE_LEN - 1)];
+    const x = i * c.width / n, y = c.height / 2 - v * c.height * 0.45;
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  g.stroke();
+}
+function drawSpec(db, half) {
+  const c = $('spec'), g = c.getContext('2d');
+  g.fillStyle = '#0b0b12'; g.fillRect(0, 0, c.width, c.height);
+  const top = 0, bot = -180, binW = rate / N;
+  g.strokeStyle = '#334'; g.fillStyle = '#89a'; g.font = '10px monospace'; g.beginPath();
+  for (let d = top; d >= bot; d -= 20) { const y = (top - d) / (top - bot) * c.height; g.moveTo(0, y); g.lineTo(c.width, y); g.fillText(d + ' dBFS', 4, y - 2); }
+  g.stroke();
+  const fMin = 10, fMax = rate / 2, lo = Math.log10(fMin), hi = Math.log10(fMax);
+  g.strokeStyle = '#fd4'; g.beginPath();
+  let started = false;
+  for (let k = 1; k <= half; k++) {
+    const f = k * binW; if (f < fMin) continue;
+    const x = (Math.log10(f) - lo) / (hi - lo) * c.width;
+    const y = (top - Math.max(bot, Math.min(top, db[k]))) / (top - bot) * c.height;
+    started ? g.lineTo(x, y) : (g.moveTo(x, y), started = true);
+  }
+  g.stroke();
+  // Peak readout.
+  let pk = 1; for (let k = 2; k <= half; k++) if (db[k] > db[pk]) pk = k;
+  $('readout').textContent =
+    `peak ${(pk * binW).toFixed(2)} Hz @ ${db[pk].toFixed(2)} dBFS   ·   Δf ${binW.toFixed(3)} Hz` +
+    `   ·   N ${N}   ·   avg ${accN}/${avgTarget}`;
+}
+
+function drawStats() {
+  const el = Math.max(1e-3, (performance.now() - t0) / 1000);
+  const expected = rate * el;
+  const drift = totalFrames - expected;
+  const mbps = bytesIn / el / 1e6;
+  const nominalMs = chunkFrames / rate * 1000;
+  $('stats').textContent =
+    `frames ${totalFrames}  ·  ${(totalFrames / el / 1000).toFixed(1)} kFrame/s (nominal ${(rate / 1000).toFixed(0)})` +
+    `  ·  ${mbps.toFixed(2)} MB/s  ·  drift ${drift >= 0 ? '+' : ''}${drift.toFixed(0)} frames ` +
+    `(${(drift / rate * 1000).toFixed(1)} ms)  ·  transfer ${nominalMs.toFixed(2)} ms nominal, ` +
+    `max gap ${maxGapMs.toFixed(1)} ms${gapAtMs ? ' @ t+' + (gapAtMs / 1000).toFixed(1) + ' s' : ''}`;
+}
+
+// ---- streaming ------------------------------------------------------------
+/** Snapshot of the health counters — the numbers a feasibility verdict rests on. */
+function statsSnapshot() {
+  const el = Math.max(1e-3, (performance.now() - t0) / 1000);
+  return {
+    rate, chunkFrames, depth,
+    seconds: el,
+    frames: totalFrames,
+    kFrameS: totalFrames / el / 1000,
+    mbs: bytesIn / el / 1e6,
+    driftFrames: totalFrames - rate * el,
+    driftMs: (totalFrames - rate * el) / rate * 1000,
+    nominalMs: chunkFrames / rate * 1000,
+    maxGapMs, errors: transferErrors,
+  };
+}
+
+// cfg overrides the DOM controls (the matrix runner supplies one per cell).
+async function startStream(cfg = {}) {
+  rate = cfg.rate != null ? cfg.rate : parseInt($('rate').value, 10);
+  chunkFrames = cfg.chunkFrames != null ? cfg.chunkFrames : parseInt($('chunk').value, 10);
+  depth = cfg.depth != null ? cfg.depth : parseInt($('depth').value, 10);
+  N = parseInt($('nfft').value, 10);
+  avgTarget = Math.max(1, parseInt($('avg').value, 10) || 1);
+  toneHz = parseFloat($('freq').value) || 1000;
+  toneAmp = Math.pow(10, (parseFloat($('ampdb').value) || -6) / 20);
+  toneOn = $('tone').checked;
+  const quiet = !!cfg.quiet;                 // matrix cells skip per-transfer drawing
+  // Claim the epoch and mark the run live BEFORE the first await: a stop arriving during the
+  // register writes must not be lost (it would otherwise leave a run nothing could stop).
+  const gen = ++streamGen;
+  running = true;
+  const live = () => running && streamGen === gen;
+
+  const inCode = IN_FS_DBV.indexOf(parseInt($('inFs').value, 10));
+  const outCode = OUT_FS_DBV.indexOf(parseInt($('outFs').value, 10));
+  const rateCode = RATES.indexOf(rate);
+
+  ring = new Float64Array(Math.max(N * 2, 1 << 16)); ringW = 0; ringFilled = false;
+  scopeBuf = new Float64Array(SCOPE_LEN);
+  totalFrames = 0; bytesIn = 0; hopCount = 0; maxGapMs = 0; gapAtMs = 0; accum = null; accN = 0;
+  phase = 0; transferErrors = 0; inQ = []; outQ = [];
+
+  worker = new Worker(URL.createObjectURL(new Blob([FFT_WORKER], { type: 'application/javascript' })));
+  worker.onmessage = (e) => onSpectrum(e.data);
+
+  // Start sequence — exactly the desktop engine's order.
+  log(`start: rate ${rate} (code ${rateCode}), in ${$('inFs').value} dBV (code ${inCode}), out ${$('outFs').value} dBV (code ${outCode})`);
+  await regWrite(REG_RUN, RUN_STOP);
+  await regWrite(REG_INPUT_FS, inCode);
+  await regWrite(REG_OUTPUT_FS, outCode);
+  await regWrite(REG_SAMPLE_RATE, rateCode);
+  if (!live()) return;               // stopped while we were configuring
+
+  t0 = performance.now(); lastInMs = t0;
+
+  // Prime the DAC: the device will not stream until output frames are queued.
+  const primeChunks = Math.max(depth, Math.ceil(START_THRESHOLD_FRAMES / chunkFrames));
+  for (let i = 0; i < primeChunks; i++) {
+    outQ.push(device.transferOut(AUDIO_EP, fillOut(new ArrayBuffer(chunkFrames * FRAME_BYTES))));
+  }
+  if (!quiet) log(`primed ${primeChunks} output transfer(s) (${primeChunks * chunkFrames} frames)`);
+  await regWrite(REG_RUN, RUN_START);
+  if (!quiet) log('RUN_START written');
+
+  // Writer loop — keep the queue depth outstanding, consumed in order.
+  (async () => {
+    try {
+      while (live()) {
+        const p = outQ.shift();
+        if (!p) break;
+        const r = await p;
+        if (!live()) break;                      // stopped while awaiting — do NOT resubmit
+        if (r.status !== 'ok') { transferErrors++; if (!quiet) log('! transferOut ' + r.status); break; }
+        outQ.push(device.transferOut(AUDIO_EP, fillOut(new ArrayBuffer(chunkFrames * FRAME_BYTES))));
+      }
+    } catch (e) { if (live()) { transferErrors++; if (!quiet) log('! writer: ' + e.message); } }
+  })();
+
+  // Reader loop — submit `depth` reads, then consume IN ORDER and resubmit one each time.
+  // Awaiting the queue head (rather than racing the promises) is what keeps the sample stream
+  // contiguous: USB bulk completes FIFO, but concurrent transferIn promises carry no ordering
+  // guarantee, so racing them would silently scramble the stream.
+  for (let i = 0; i < depth; i++) inQ.push(device.transferIn(AUDIO_EP, chunkFrames * FRAME_BYTES));
+  try {
+    while (live()) {
+      const p = inQ.shift();
+      if (!p) break;
+      const r = await p;
+      if (!live()) break;                        // stopped while awaiting — do NOT resubmit
+      inQ.push(device.transferIn(AUDIO_EP, chunkFrames * FRAME_BYTES));
+      if (r.status !== 'ok') { transferErrors++; if (!quiet) log('! transferIn ' + r.status); break; }
+      const now = performance.now();
+      const gap = now - lastInMs; lastInMs = now;
+      if (gap > maxGapMs) { maxGapMs = gap; gapAtMs = now - t0; }
+      const dv = r.data, frames = (dv.byteLength / FRAME_BYTES) | 0;
+      bytesIn += dv.byteLength; totalFrames += frames;
+      pushSamples(dv, frames);
+      if (!quiet) { emitFrame(); drawScope(); drawStats(); }
+    }
+  } catch (e) { if (live()) { transferErrors++; if (!quiet) log('! reader: ' + e.message); } }
+}
+
+async function stopStream(quiet = false) {
+  running = false;
+  streamGen++;                       // orphan any loop still in its await
+  // Swallow rejections on transfers still queued, so they neither surface as unhandled
+  // rejections nor leak into the next run.
+  inQ.forEach((p) => p && p.catch && p.catch(() => {}));
+  outQ.forEach((p) => p && p.catch && p.catch(() => {}));
+  inQ = []; outQ = [];
+  try { await regWrite(REG_RUN, RUN_STOP); if (!quiet) log('RUN_STOP written'); }
+  catch (e) { if (!quiet) log('! stop: ' + e.message); }
+  // CRITICAL: once the device stops sending, an outstanding bulk IN never completes — WebUSB has
+  // no per-transfer timeout, so the reader would park on its await forever (this is what wedged
+  // the matrix). Releasing the interface aborts every pending transfer; re-claiming leaves the
+  // device ready for the next run.
+  try {
+    await device.releaseInterface(IFACE);
+    await device.claimInterface(IFACE);
+  } catch (e) { if (!quiet) log('! re-claim: ' + e.message); }
+  if (worker) { worker.terminate(); worker = null; }
+}
+
+// ---- edge-probe matrix ----------------------------------------------------
+// Sweeps rate × depth × frames-per-transfer, running each cell for a fixed time and recording the
+// health counters. "Seamless" at one setting says little; the failure edge is what a real backend
+// has to budget for.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let matrixRows = [], matrixAbort = false;
+
+async function runMatrix() {
+  const secs = Math.max(2, parseFloat($('mSecs').value) || 5);
+  const rates = RATES.filter((r) => (model === 'QA402' ? r <= 192000 : true))
+    .filter((r) => $('mRates').value === 'all' || r === parseInt($('rate').value, 10));
+  const depths = $('mDepths').value.split(',').map((s) => parseInt(s, 10)).filter(Boolean);
+  const chunks = $('mChunks').value.split(',').map((s) => parseInt(s, 10)).filter(Boolean);
+  const total = rates.length * depths.length * chunks.length;
+
+  matrixRows = []; matrixAbort = false;
+  $('mBody').innerHTML = '';
+  let n = 0;
+  for (const r of rates) {
+    for (const d of depths) {
+      for (const c of chunks) {
+        if (matrixAbort) { log('matrix aborted'); status('connected'); return; }
+        n++;
+        status(`matrix ${n}/${total}: ${r} Hz, depth ${d}, ${c} frames…`);
+        let row;
+        try {
+          const done = startStream({ rate: r, depth: d, chunkFrames: c, quiet: true })
+            .catch((e) => { transferErrors++; log(`! cell ${r}/${d}/${c}: ${e.message}`); });
+          await sleep(secs * 1000);
+          row = statsSnapshot();          // snapshot BEFORE the stop perturbs the counters
+          await stopStream(true);
+          // Belt and braces: the loops exit on the epoch bump, but never let one cell wedge the sweep.
+          await Promise.race([done, sleep(2000)]);
+        } catch (e) {
+          await stopStream(true).catch(() => {});
+          row = { rate: r, depth: d, chunkFrames: c, seconds: secs, frames: 0, kFrameS: 0, mbs: 0,
+                  driftFrames: NaN, driftMs: NaN, nominalMs: c / r * 1000, maxGapMs: NaN,
+                  errors: 1, note: e.message };
+        }
+        matrixRows.push(row);
+        addMatrixRow(row);
+        await sleep(250);                    // let the device settle between cells
+      }
+    }
+  }
+  status('matrix done');
+  log(`matrix complete: ${matrixRows.length} cell(s)`);
+}
+
+/** A cell passes when it kept up (|drift| under ~1% of a second) with no transfer errors. */
+function verdict(r) {
+  if (r.errors) return ['fail', 'error'];
+  if (!isFinite(r.driftMs)) return ['fail', '—'];
+  const lostMs = Math.abs(r.driftMs);
+  if (lostMs > 10) return ['fail', `${lostMs.toFixed(0)} ms lost`];
+  if (r.maxGapMs > 4 * r.nominalMs) return ['warn', 'gap spike'];
+  return ['ok', 'seamless'];
+}
+
+function addMatrixRow(r) {
+  const [cls, why] = verdict(r);
+  const colour = cls === 'ok' ? '#1a8f1a' : cls === 'warn' ? '#b80' : '#b00';
+  $('mBody').insertAdjacentHTML('beforeend',
+    `<tr><td>${(r.rate / 1000).toFixed(0)}k</td><td>${r.depth}</td><td>${r.chunkFrames}</td>` +
+    `<td>${r.mbs.toFixed(2)}</td><td>${r.nominalMs.toFixed(2)}</td>` +
+    `<td>${isFinite(r.maxGapMs) ? r.maxGapMs.toFixed(1) : '—'}</td>` +
+    `<td>${isFinite(r.driftMs) ? (r.driftMs >= 0 ? '+' : '') + r.driftMs.toFixed(1) : '—'}</td>` +
+    `<td style="color:${colour};font-weight:600">${why}</td></tr>`);
+}
+
+/** Markdown for pasting straight into doc/QA40X-WEBUSB.md. */
+function matrixMarkdown() {
+  const head = '| rate | depth | frames/xfer | MB/s | nominal ms | max gap ms | drift ms | verdict |\n'
+             + '|---|---|---|---|---|---|---|---|\n';
+  return head + matrixRows.map((r) => {
+    const [, why] = verdict(r);
+    return `| ${(r.rate / 1000).toFixed(0)} kHz | ${r.depth} | ${r.chunkFrames} | ${r.mbs.toFixed(2)} | `
+      + `${r.nominalMs.toFixed(2)} | ${isFinite(r.maxGapMs) ? r.maxGapMs.toFixed(1) : '—'} | `
+      + `${isFinite(r.driftMs) ? (r.driftMs >= 0 ? '+' : '') + r.driftMs.toFixed(1) : '—'} | ${why} |`;
+  }).join('\n');
+}
+
+// ---- UI -------------------------------------------------------------------
+function fillSelectors(model) {
+  const rates = model === 'QA402' ? RATES.filter((r) => r <= 192000) : RATES;   // 384k is QA403-only
+  $('rate').innerHTML = rates.map((r) => `<option ${r === 48000 ? 'selected' : ''}>${r}</option>`).join('');
+  $('inFs').innerHTML = IN_FS_DBV.map((d) => `<option ${d === 6 ? 'selected' : ''}>${d}</option>`).join('');
+  $('outFs').innerHTML = OUT_FS_DBV.map((d) => `<option ${d === -12 ? 'selected' : ''}>${d}</option>`).join('');
+}
+
+$('connect').addEventListener('click', async () => {
+  try {
+    status('requesting device…');
+    device = await navigator.usb.requestDevice({
+      filters: Object.keys(MODELS).map((pid) => ({ vendorId: QA_VID, productId: Number(pid) })),
+    });
+    await device.open();
+    if (device.configuration === null) await device.selectConfiguration(1);
+    await device.claimInterface(IFACE);
+    model = MODELS[device.productId] || 'unknown';
+    fillSelectors(model);
+    log(`connected: ${model} (0x${device.productId.toString(16)}), interface ${IFACE} claimed`);
+    try {
+      const mv = await regRead(0x11), ma = await regRead(0x12), t = await regRead(0x16);
+      log(`status: ${(mv / 1000).toFixed(3)} V, ${(ma / 1000).toFixed(3)} A, ${(t / 10).toFixed(1)} °C`);
+    } catch (e) { log('(status registers unavailable: ' + e.message + ')'); }
+    $('start').disabled = false; $('matrix').disabled = false; $('connect').disabled = true;
+    status('connected');
+  } catch (e) {
+    status('failed'); log('! ' + e.name + ': ' + e.message);
+    if (e.name === 'NetworkError') log('  (interface busy — close Phonalyser / the vendor app — or not on WinUSB)');
+    if (e.name === 'SecurityError') log('  (serve over https:// or http://localhost)');
+  }
+});
+
+$('start').addEventListener('click', async () => {
+  $('start').disabled = true; $('stop').disabled = false; status('streaming');
+  try { await startStream(); } catch (e) { log('! start: ' + e.message); }
+  status(running ? 'streaming' : 'stopped');
+});
+
+$('stop').addEventListener('click', async () => {
+  $('stop').disabled = true; status('stopping…');
+  await stopStream();
+  $('start').disabled = false; status('connected');
+});
+
+$('matrix').addEventListener('click', async () => {
+  $('matrix').disabled = true; $('start').disabled = true; $('matrixStop').disabled = false;
+  try { await runMatrix(); } catch (e) { log('! matrix: ' + e.message); status('matrix failed'); }
+  $('matrix').disabled = false; $('start').disabled = false; $('matrixStop').disabled = true;
+  $('copy').disabled = matrixRows.length === 0;
+});
+
+$('matrixStop').addEventListener('click', () => { matrixAbort = true; log('abort requested…'); });
+
+$('copy').addEventListener('click', async () => {
+  const md = matrixMarkdown();
+  try { await navigator.clipboard.writeText(md); log('matrix copied to clipboard as markdown'); }
+  catch (e) { log('clipboard blocked — markdown below:\n' + md); }
+});
+
+if (!('usb' in navigator)) { $('unsupported').hidden = false; $('connect').disabled = true; status('unsupported'); }
+else fillSelectors('QA403');
+</script>
+</body>
+</html>

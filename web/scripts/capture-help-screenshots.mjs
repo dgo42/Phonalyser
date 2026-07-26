@@ -19,6 +19,7 @@ import { createReadStream, existsSync, statSync, mkdirSync } from 'node:fs';
 import { join, normalize, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { fakeQa40xUsbInit } from './fake-qa40x-usb.mjs';
 
 const WEB = normalize(join(dirname(fileURLToPath(import.meta.url)), '..'));
 const VIEW = { width: 1280, height: 768 };   // FIXED capture window (project requirement)
@@ -257,6 +258,43 @@ const SPECS = [
       });
       return page.$('#prefsModal .modal-content');
     }, after: closePrefs },
+  // The QA40x pair. A fake navigator.usb (scripts/fake-qa40x-usb.mjs, installed for every page)
+  // carries one QA403 answering the register protocol, so these two shots come from the REAL code
+  // path — the analyzer is enumerated, its calibration page read and its card built — rather than
+  // from staged DOM. Selecting the backend is what asks for the device, exactly as a user does.
+  { id: 'prefs-audio-qa40x', file: 'Preferences Audio QA40x.png', ready: true,
+    async shot(page) {
+      await openPrefs(page, 'audio');
+      await page.evaluate(() => {
+        const sel = document.getElementById('backendSel');
+        sel.value = 'QA40X';
+        sel.dispatchEvent(new Event('change'));
+      });
+      // The switch opens the analyzer, reads its cal page and rebuilds the card + range table.
+      await page.waitForTimeout(1200);
+      return page.$('#prefsModal .modal-content');
+    }, after: closePrefs },
+  { id: 'qa40x-settings', file: 'QA40x settings.png', ready: true,
+    async shot(page) {
+      await openPrefs(page, 'audio');
+      await page.evaluate(() => {
+        const sel = document.getElementById('backendSel');
+        sel.value = 'QA40X';
+        sel.dispatchEvent(new Event('change'));
+      });
+      await page.waitForTimeout(1200);
+      await page.click('#backendSettings');
+      await page.waitForTimeout(600);   // the panel reads its registers as it opens
+      // ITS OWN id, with no `.modal.show` fallback: page.$ returns the first DOM match and the
+      // Preferences modal comes earlier in the document, so a fallback clipped that instead — the
+      // settings dialog then appeared cut off, missing its I2S toggle and buttons.
+      return page.$('#qa40xSettingsModal .modal-content');
+    },
+    async after(page) {
+      await page.evaluate(() => document.querySelector('#qa40xSettingsOk')?.click());
+      await page.waitForTimeout(300);
+      return closePrefs(page);
+    } },
   { id: 'prefs-scope',    file: 'Preferences Oscilloscope.png',  ready: true,
     async shot(page) { return openPrefs(page, 'oscilloscope'); }, after: closePrefs },
   { id: 'prefs-fft',      file: 'Preferences FFT.png',           ready: true,
@@ -332,8 +370,22 @@ const ctx = await browser.newContext({ viewport: VIEW, deviceScaleFactor: 1 });
 // only showTipsAtStartup=false leaves every other pref at its default and the
 // device store (a separate key) untouched.
 await ctx.addInitScript(() => {
-  try { localStorage.setItem('phonalyser.preferences', JSON.stringify({ showTipsAtStartup: false })); } catch { /* ignore */ }
+  // SEED ONLY ON A VIRGIN PROFILE. An init script runs on EVERY navigation, so writing
+  // unconditionally overwrote the app's own saved preferences on each page.reload() — including the
+  // uiLanguage the language pass had just persisted, which is why help/de and help/uk received
+  // English pixels (maintainer, 2026-07-26). Once the app has saved a document, leave it alone: it
+  // already carries showTipsAtStartup=false, plus formatVersion, which a load requires.
+  try {
+    const KEY = 'phonalyser.preferences';
+    if (!localStorage.getItem(KEY)) {
+      localStorage.setItem(KEY, JSON.stringify({ showTipsAtStartup: false }));
+    }
+  } catch { /* ignore */ }
 });
+// One fake QA403 on navigator.usb, so the QA40x specs reach the real backend without hardware. It
+// answers registers only; audio transfers park, which is what an idle analyzer looks like. Harmless
+// to the other specs: the backend still starts on WEB_AUDIO, this only makes QA40x selectABLE.
+await ctx.addInitScript(fakeQa40xUsbInit());
 const page = await ctx.newPage();
 // 'load' + the #scopePane wait below, NOT 'networkidle': the libflac wasm
 // loader leaves its /vendor/libflac/*.wasm response body unconsumed, so the
@@ -353,12 +405,33 @@ for (const lang of LANGS) {
   // pass starts from a clean, correctly-localised state (init reads prefs.uiLanguage on load;
   // the #langMenu handler persists it via the 250ms-debounced save, so wait before reloading).
   if (lang !== 'en') {
+    // Switch through the app's OWN menu handler: it sets the pref and saves a COMPLETE preferences
+    // document (formatVersion included), which is what the next load will accept. Writing
+    // localStorage directly does not work — a document without formatVersion is rejected on load
+    // and the app silently comes up in English.
+    //
+    // WAIT for the item first: app.js builds the language menu at runtime, so firing the click
+    // before it exists is a no-op that leaves the pass in the PREVIOUS locale — which is how
+    // help/de and help/uk came to hold English pixels, byte-identical to help/en
+    // (maintainer, 2026-07-26).
+    // state:'attached' — the items live in a CLOSED dropdown, so they are present but not visible,
+    // and Playwright's default visibility wait would time out on a perfectly good element.
+    await page.waitForSelector(`#langMenu [data-lang="${lang}"]`, { state: 'attached', timeout: 10000 });
     await page.evaluate((t) => window.jQuery(`#langMenu [data-lang="${t}"]`).trigger('click'), lang);
-    await page.waitForTimeout(700);
+    // Then WAIT FOR THE SAVE, rather than guessing at the debounce: reloading too early re-reads the
+    // old locale and the pass captures the previous language's pixels.
+    await page.waitForFunction((t) => {
+      try { return JSON.parse(localStorage.getItem('phonalyser.preferences') || '{}').uiLanguage === t; }
+      catch { return false; }
+    }, lang, { timeout: 10000 });
     await page.reload({ waitUntil: 'load' });
     await page.waitForSelector('#scopePane', { timeout: 10000 }).catch(() => {});
     await page.waitForTimeout(600);   // layout/fonts settle in the new locale
   }
+  // Say which locale the APP actually came up in. A silent mismatch here writes English pixels into
+  // help/de and help/uk, which is easy to miss (the files are written, just wrong).
+  const uiLang = await page.evaluate(() => document.documentElement.lang || '(unset)');
+  if (uiLang !== lang) console.warn(`WARNING: pass '${lang}' but the app reports lang='${uiLang}'`);
   const imgDir = join(WEB, 'help', lang, 'img');
   mkdirSync(imgDir, { recursive: true });
   for (const spec of todo) {

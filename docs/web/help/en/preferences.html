@@ -55,8 +55,11 @@
     <tr><th>Setting</th><th>Notes</th></tr>
     <tr><td>Backend</td>
         <td>WASAPI (default, exclusive bit-exact), WDM-KS (lowest-level,
-            highest capture throughput) or JavaSound (portable / only option
-            off Windows).  Changing it re-enumerates the device lists.</td></tr>
+            highest capture throughput), JavaSound (portable / only option
+            off Windows), or <b>QA40x</b> — a QuantAsylum QA402 / QA403 analyzer
+            driven directly over USB (see
+            <a href="theory/audio-backend.html#qa40x">Theory ▸ QA40x</a>).
+            Changing it re-enumerates the device lists.</td></tr>
     <tr><td>Input — Device / Sample rate / Bit depth</td>
         <td>The capture (ADC) device and the exact rate &amp; depth it opens
             at.  16/24 bit at 48/96/192/384 kHz are almost universally
@@ -69,6 +72,30 @@
   <div class="note">In exclusive mode a device admits one application at a
      time.  If a list is empty or a device won't open, close other audio apps
      and re-open the dialog to re-enumerate.</div>
+  <div class="note"><b>QA40x.</b> The QA40x backend appears in the list only when
+     a QA402 / QA403 is connected and the browser supports WebUSB.  With it selected the input and
+     output devices are the one analyzer, and its input and output <b>sample rates
+     are locked equal</b> (one hardware clock) — set one and the other follows.
+     Full-scale is the device's own range calibration, so manual calibration is
+     not possible: the Calibrate dialog opens read-only and simply shows the
+     card's built-in full-scale for each channel.</div>
+  <div class="note"><b>QA40x settings.</b> With the QA40x selected, a settings
+     button appears next to the backend list — it opens the analyzer's own
+     settings, which no other backend has.  The dialog reads the instrument's
+     identity and live telemetry straight off it (firmware version, serial
+     number, USB voltage and current, ISO-supply current on the QA402, board
+     temperature and the two capability words) and switches the <b>front-panel
+     I2S expansion port</b> on or off.  The port is started before a measurement
+     session and stopped after it; its frame width comes from the
+     <b>output</b> bit depth, so while I2S is on that list offers the port's
+     <b>16 and 32 bits</b> in place of the analyzer's 24 — the input stays at 24
+     throughout.  Like every other page of the dialog these take effect only on
+     OK.  Switching the port is <b>experimental</b>: QuantAsylum documents the
+     connector itself, but not the USB registers that enable it and set its frame
+     width, so that control path is not vendor-confirmed — as the dialog itself
+     states.</div>
+  <p><img src="img/Preferences Audio QA40x.png" alt="Preferences — Audio tab with the QA40x backend selected"/></p>
+  <p><img src="img/QA40x settings.png" alt="QA40x settings dialog"/></p>
 
   <h3 id="prefs-audio-card">Card — per-card calibration profiles</h3>
   <p>Full-scale calibration — the volts RMS that map to the converter's ±1.0
@@ -142,6 +169,12 @@ audioDevices:           # the list of card profiles
     <li><code>calibrated: true</code> marks a row you actually measured through a
         Calibrate flow; the upgrade merge never overwrites it.  A row without the flag
         is still the seeded nominal.</li>
+    <li><code>calibrationFromDevice: true</code> (add it inside the <code>input:</code>
+        or <code>output:</code> block) marks a card whose full-scale is reported by
+        the instrument itself (a QA40x-class device): its ranges stay switchable, but
+        the app never writes calibration into them and <b>their full-scale values are
+        read from the device itself, not delivered by a catalog upgrade</b>.  Omit the
+        key for an ordinary card you calibrate yourself.</li>
     <li><code>activeRange</code> is the selected row.  <b>INDEPENDENT</b> uses a
         <code>{ left, right }</code> map (each channel its own row); <b>LINKED</b> and
         <b>MONO</b> use a single label.</li>
@@ -247,6 +280,13 @@ audioDevices:           # the list of card profiles
             only which range is <em>selected</em>, never the measured volts.
             <b>Independent</b> lets each channel select its own active range.  A Mono
             card ignores this.</td></tr>
+    <tr><td>Input / Output — Calibration provided by device</td>
+        <td>Tick it for an instrument that reports its own full-scale (a QA40x-class
+            device).  Its ranges stay switchable, but their <b>full-scale values are
+            read from the device itself</b> — the instrument reports its own
+            calibration.  The manual Calibrate flows never overwrite them, and a
+            <b>catalog upgrade does not deliver the calibration either</b>: the values
+            always come from the device, never from the bundled catalog.</td></tr>
   </table>
   <p>The Input and Output groups grey out to match <b>Provides</b> — an input-only
      card shows its Output group disabled, and vice-versa.</p>

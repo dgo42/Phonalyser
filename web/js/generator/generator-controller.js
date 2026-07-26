@@ -3,18 +3,23 @@
  * Copyright (C) 2026  Dimitrij Goldstein <https://github.com/dgo42>
  * GNU Affero General Public License v3 or later.
  *
- * Faithful port of gui/generator/GeneratorController. Owns the OUTPUT AudioContext + dds-processor
- * worklet (tone / sweep / dual-tone / compensated), the monitoring file-player lane, and the
- * analysis frequencies (`snapped`/`binW`/`fundBin`) that keep what is PLAYED, MEASURED and SHOWN
- * consistent. Has nothing to do with capture. The shared `config` object is held by reference, so
- * a live edit on either side is visible to both. The FFT-side frequency-lock loop (which OWNS the
- * FLL state) steers the tone by publishing GENERATOR_FREQ_TRIM; this controller subscribes and
- * applies the trim to its worklet (see _applyFllTrim).
+ * Faithful port of gui/generator/GeneratorController. Owns the generator LIFECYCLE (tone / sweep /
+ * dual-tone / compensated), the monitoring file-player lane, and the analysis frequencies
+ * (`snapped`/`binW`/`fundBin`) that keep what is PLAYED, MEASURED and SHOWN consistent. Has nothing
+ * to do with capture. The shared `config` object is held by reference, so a live edit on either side
+ * is visible to both. The FFT-side frequency-lock loop (which OWNS the FLL state) steers the tone by
+ * publishing GENERATOR_FREQ_TRIM; this controller subscribes and applies the trim to its sink (see
+ * _applyFllTrim).
+ *
+ * The DAC itself lives behind the PlaybackSink seam below — web-audio-playback-sink.js (the output
+ * AudioContext + the dds-processor worklet) or qa40x/qa40x-playback-sink.js (the QA402/QA403 duplex
+ * engine's generator lane). Same split as the desktop, where this controller asks
+ * AudioBackend.openPlayback for an AudioPlayback and never touches a device line itself.
  */
 import { GenSignalForm, isDualTone } from './dds-kernel.js';
 import { MessageBus } from '../bus/message-bus.js';
 import { Events } from '../bus/events.js';
-import { debug } from '../util/debug.js';
+import { openOutputContext, WebAudioPlaybackSink } from './web-audio-playback-sink.js';
 
 /** Converts a dBFS amplitude to the DDS kernel's V RMS scale. A full-scale sine has
  *  RMS = dacFsVoltageAmpl/√2, so ampDbfs dBFS → 10^(dBFS/20)·(dacFs/√2). */
@@ -29,49 +34,54 @@ function ampVrmsOf(c) {
   return (c.ampVrms != null) ? c.ampVrms : dbfsToVrms(c.ampDbfs, c.dacFsVoltageAmpl);
 }
 
-/** Bounded output-device-open retry — faithful to GeneratorController's MAX_ATTEMPTS /
- *  RETRY_PAUSE_MS: a measurement takeover stops the other modules then opens the DAC itself,
- *  but a just-stopped output context releases the OS device tens of ms AFTER its close()
- *  resolved, so the first open can lose the race and reject NotReadableError / AbortError even
- *  though no OTHER app holds it (a self-contention). Retry with a short pause before reporting. */
-const OPEN_MAX_ATTEMPTS = 3;
-const OPEN_RETRY_PAUSE_MS = 250;
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/**
+ * The playback sink: ONE output lane, opened per generator start and closed on stop — the web's
+ * AudioPlayback (org.edgo.audio.measure.sound.AudioPlayback). Two implementations:
+ * {@link WebAudioPlaybackSink} and qa40x/Qa40xPlaybackSink. Java splits the same two phases
+ * (open() opens the line, play(generator, …) starts producing from an already-configured
+ * SignalGenerator) and this seam keeps that split, because the emit frequency is re-resolved
+ * against the rate the device actually granted BEFORE the DDS is built.
+ *
+ * @typedef {Object} PlaybackSink
+ * @property {(spec: {sampleRate: number, deviceId: ?string}) => Promise<number>} open opens the
+ *           output lane at the requested rate; resolves to the rate actually GRANTED
+ * @property {(spec: PlaybackSpec) => Promise<void>} start builds the DDS and puts it on air;
+ *           resolves once it is producing (Java's readyLatch)
+ * @property {?{postMessage: (msg: Object) => void}} port live-control channel, MessagePort-shaped
+ *           (the dds-processor message protocol); null before start / after close
+ * @property {() => Promise<void>} close stops the signal and releases the device
+ * @property {number} sampleRate the granted rate (0 while closed)
+ */
 
-/** Opens an output AudioContext + applies the selected sink, retrying the open on a
- *  NotReadableError/AbortError contention (a self-contention while a just-stopped context is
- *  still releasing the OS DAC). Throws the last error only after the attempts are exhausted
- *  (a genuine external hold). Shared by startGenerator / openSweepContext / playSweepBuffer. */
-async function openOutputContext(options, sinkId, status) {
-  for (let attempt = 1; ; attempt++) {
-    let ctx = null;
-    try {
-      ctx = new AudioContext(options);
-      if (ctx.setSinkId && sinkId) {
-        try { await ctx.setSinkId(sinkId); } catch (e) { console.warn('setSinkId', e); }
-      }
-      // Force the device to actually engage so a busy DAC surfaces its NotReadable/Abort HERE
-      // (inside the retry) rather than asynchronously after we've reported success.
-      if (ctx.state === 'suspended') await ctx.resume();
-      return ctx;
-    } catch (e) {
-      try { if (ctx) await ctx.close(); } catch (_) { /* ignore */ }
-      const retriable = e.name === 'NotReadableError' || e.name === 'AbortError';
-      if (!retriable || attempt >= OPEN_MAX_ATTEMPTS) throw e;
-      status(`output device busy (attempt ${attempt}/${OPEN_MAX_ATTEMPTS}) — retrying…`);
-      await sleep(OPEN_RETRY_PAUSE_MS);
-    }
-  }
-}
+/**
+ * The generator description handed to {@link PlaybackSink#start} — Java's fully-configured
+ * SignalGenerator plus the three AudioPlayback tunables (dither, lane gate, per-lane scale).
+ *
+ * @typedef {Object} PlaybackSpec
+ * @property {string} form
+ * @property {number} frequency        the EMIT frequency, resolved against the granted rate
+ * @property {number} amplitudeVRms
+ * @property {number} dacFsVoltageAmpl
+ * @property {number} ditherBits
+ * @property {string} outputChannels   'BOTH' | 'LEFT' | 'RIGHT'
+ * @property {number} rightLaneScale   fsLeft/fsRight (the left lane is the amplitude reference)
+ * @property {?Object} control         one live-control message applied BEFORE the lane goes live
+ *           (duty, dual-tone tone2/split, sweep config, predistortion), so nothing ever renders
+ *           at a default value
+ */
 
 export class GeneratorController {
   /**
    * @param config the SHARED engine config object (held by reference).
-   * @param deps {status} — status: (text) => void.
+   * @param deps {status, openPlayback} — status: (text) => void; openPlayback: (deps) =>
+   *   PlaybackSink, the backend's sink factory. Called at EVERY start, exactly as Java re-resolves
+   *   AudioBackend.instance().openPlayback(device, rate, bitDepth, dither) per start — so a backend
+   *   switch between sessions needs no push-down here. Defaults to the Web Audio sink.
    */
-  constructor(config, { status } = {}) {
+  constructor(config, { status, openPlayback } = {}) {
     this.config = config;
     this._status = status || (() => {});
+    this._openPlayback = openPlayback || ((deps) => new WebAudioPlaybackSink(deps));
     this._genOn = false;
     // Reason key of the last failed start (mirror Java getLastStartError) — null on success.
     this.lastStartError = null;
@@ -79,13 +89,11 @@ export class GeneratorController {
     this.binW = 0;
     this.snapped = 0;
     this.fundBin = 1;
-    // Output (DAC) graph.
-    this.outCtx = null;
-    this.genNode = null;
+    // Output (DAC) lane — the sink opened by _openPlayback for the current session, null while
+    // idle (Java's `playback` field, likewise nulled by stop()). The teardown order and the
+    // suppression of our own close()'s statechange live INSIDE the sink, with the context.
+    this._sink = null;
     this.outSampleRate = 0;
-    // True only while WE are stopping the generator, so the context's own 'closed' statechange
-    // during stopGenerator() is not misread as an unexpected output-device failure.
-    this._closing = false;
     // FLL trim state moved to FftController (which owns the frequency-lock loop); the generator
     // only APPLIES trims via the GENERATOR_FREQ_TRIM subscription below.
     // File-player lane (monitoring convenience, NOT the measurement path).
@@ -111,7 +119,7 @@ export class GeneratorController {
     // the FreqResp sweep + Tune-notch while they wait for the DAC to go idle (Java
     // registerResponder GENERATOR_RUNNING → isProducingSignal). Reports true not only while a
     // tone/file is playing but also while ANY output context is still open, because
-    // stopGenerator()/stopFile() flip their playing flags SYNCHRONOUSLY but the outCtx.close()
+    // stopGenerator()/stopFile() flip their playing flags SYNCHRONOUSLY but the sink's close()
     // that actually releases the OS DAC resolves tens of ms later. Without this the idle-wait
     // returned as soon as the flags flipped and the takeover opened the DAC while the previous
     // context was still closing → NotReadableError (a self-contention).
@@ -170,29 +178,37 @@ export class GeneratorController {
   /** True while the generator is producing a signal (DDS tone or the WAV file player). */
   get running() { return this._genOn; }
 
-  /** True while ANY output context is still open — the DDS tone context (outCtx), the file /
+  /** True while ANY output lane is still open — the DDS tone sink (_sink), the file /
    *  sweep playback lane (_fileCtx), or a sweep context opened but not yet handed a buffer
    *  (_pendingSweepCtx). Stays true through the brief window AFTER a stop flipped the playing
    *  flag but BEFORE the context's close() resolved, so the idle-wait blocks until the OS DAC
-   *  is genuinely released, not merely until the flag flipped. */
-  get outputContextOpen() { return this.outCtx != null || this._fileCtx != null || this._pendingSweepCtx != null; }
+   *  is genuinely released, not merely until the flag flipped (stopGenerator nulls _sink only
+   *  after the sink's close() has resolved). */
+  get outputContextOpen() { return this._sink != null || this._fileCtx != null || this._pendingSweepCtx != null; }
 
-  /** Posts a live message to the DDS worklet (no-op when not running). */
+  /** The live DDS control handle — the sink's MessagePort-shaped port, so a consumer outside this
+   *  module keeps reading it exactly as it read the worklet node's: FftController's FLL gate takes
+   *  its truthiness as "the DDS is live and steerable", AudioEngine.postGen posts through
+   *  `genNode.port.postMessage`. Backed by the worklet node's real port on Web Audio and by a
+   *  direct call into the in-process kernel on the QA40x. */
+  get genNode() { return this._sink; }
+
+  /** Posts a live message to the DDS (no-op when not running). */
   postGen(msg) {
-    if (this._genOn && this.genNode) this.genNode.port.postMessage(msg);
+    if (this._genOn && this._sink) this._sink.port.postMessage(msg);
   }
 
   /** Applies an FLL frequency trim (GENERATOR_FREQ_TRIM) from the FFT consumer to the running
-   *  DDS worklet. No-op when the generator isn't running (dropped, like postGen). */
+   *  DDS. No-op when the generator isn't running (dropped, like postGen). */
   _applyFllTrim(freqHz) {
-    if (this._genOn && this.genNode) this.genNode.port.postMessage({ frequency: freqHz });
+    if (this._genOn && this._sink) this._sink.port.postMessage({ frequency: freqHz });
   }
 
-  /** Applies a SECOND-tone FLL trim (GENERATOR_FREQ_TRIM_2) to the running DDS worklet. Posts
-   *  { frequency2 } so the dds-processor kernel retunes tone 2 phase-continuously
+  /** Applies a SECOND-tone FLL trim (GENERATOR_FREQ_TRIM_2) to the running DDS. Posts
+   *  { frequency2 } so the dds kernel retunes tone 2 phase-continuously
    *  (setDualToneFrequency2), like {@link #_applyFllTrim} does tone 1. No-op when not running. */
   _applyFllTrim2(freqHz) {
-    if (this._genOn && this.genNode) this.genNode.port.postMessage({ frequency2: freqHz });
+    if (this._genOn && this._sink) this._sink.port.postMessage({ frequency2: freqHz });
   }
 
   /** The frequency the generator actually emits for the current form — faithful port of
@@ -283,7 +299,7 @@ export class GeneratorController {
     this.fundBin = Math.max(1, Math.round(this.snapped / this.binW));
   }
 
-  /** Opens the output AudioContext + dds-processor and starts the tone. Idempotent.
+  /** Opens the playback sink and starts the tone. Idempotent.
    *  Returns the i18n reason KEY of a failed start (null on success) — mirrors Java
    *  tryStartOnce, whose non-null return carries the failure reason. Also cached in
    *  {@link #lastStartError}. */
@@ -302,88 +318,43 @@ export class GeneratorController {
     this.computeAnalysisFreqs();
     this._status('opening output context + device…');
     try {
-      // Probe the OS/default-device preferred rate BEFORE opening the real context. A context
-      // created WITHOUT an explicit sampleRate reports the platform's native output rate, whereas
-      // one created WITH `sampleRate: c.outRate` is granted that rate exactly (or the constructor
-      // throws) and then the browser SILENTLY resamples the rendered stream down to whatever the
-      // Windows shared-mode mix rate of the device is — an invisible stage the native Java
-      // generator has no equivalent of. Comparing the two rates lets us surface that hidden
-      // resampling. Cheap: opened and closed immediately, never wired to anything.
-      let probeRate = 0;
-      try {
-        const probe = new AudioContext({ latencyHint: 'playback' });
-        probeRate = probe.sampleRate;
-        await probe.close();
-      } catch (_) { probeRate = 0; /* rate unknown — continue silently */ }
-      // OUTPUT context (DAC) — generator at the DAC's native rate. Opened through the
-      // bounded-retry helper so a NotReadable/Abort contention (a just-stopped context still
-      // releasing the OS DAC) is retried before it surfaces to the user.
-      this._closing = false;
-      this.outCtx = await openOutputContext({ sampleRate: c.outRate, latencyHint: 'playback' },
-        c.outDeviceId, this._status);
-      // Surface an unexpected output-device loss: the async 'AudioContext encountered an error from
-      // the audio device' fires onerror, and losing the device exclusively drops the context to
-      // 'interrupted'/'closed'. Only alert when it wasn't OUR stopGenerator().
-      this.outCtx.onerror = () => { if (!this._closing) this._reportDeviceError('AudioContext error'); };
-      this.outCtx.addEventListener('statechange', () => {
-        if (this._closing || !this.outCtx) return;
-        const st = this.outCtx.state;
-        if (st === 'interrupted' || st === 'closed') this._reportDeviceError('AudioContext state=' + st);
+      // The backend's sink, resolved per start (Java: AudioBackend.instance().openPlayback(…)).
+      this._sink = this._openPlayback({
+        status: this._status,
+        // An unexpected device loss mid-play — the sink's own close() never reports.
+        onDeviceError: (detail) => this._reportDeviceError(detail),
       });
-      // The context is granted c.outRate exactly (see the probe comment above); re-resolve the
-      // emit frequency (esp. the RECTANGLE/TRIANGLE sample-period alignment) against the ACTUAL rate.
-      this.outSampleRate = this.outCtx.sampleRate;
+      // PHASE 1 — open the line and learn the rate it GRANTED, then re-resolve the emit frequency
+      // (esp. the RECTANGLE/TRIANGLE sample-period alignment) against that ACTUAL rate before the
+      // DDS is built. This is why the sink opens and starts in two steps.
+      this.outSampleRate = await this._sink.open({ sampleRate: c.outRate, deviceId: c.outDeviceId });
       this.computeAnalysisFreqs();
-      // Surface the hidden browser+Windows resampling. The probe rate describes the DEFAULT output
-      // device only, so a hard "device runs at X Hz" claim is honest ONLY when we're on the default
-      // sink. With a specific sink selected (c.outDeviceId set, non-'default'), the probe may not
-      // describe THAT device — so we drop to a softer debug-only "cannot verify" hint rather than
-      // risk asserting a wrong rate on the status line.
-      const ctxRate = this.outCtx.sampleRate;
-      const defaultSink = !c.outDeviceId || c.outDeviceId === 'default';
-      if (probeRate > 0 && probeRate !== ctxRate && defaultSink) {
-        const msg = `WARNING: output device runs at ${probeRate} Hz — the browser silently resamples ${ctxRate} Hz to it; set the Windows output device format to ${ctxRate} Hz for a clean signal`;
-        this._status(msg);
-        debug(`[generator] ${msg}`);
-      } else if (probeRate > 0 && probeRate !== ctxRate) {
-        debug(`[generator] default device runs at ${probeRate} Hz but the selected sink's rate cannot be verified from a rate-unspecified probe; if it isn't ${ctxRate} Hz the browser silently resamples ${ctxRate} Hz to it — set the Windows output device format to ${ctxRate} Hz for a clean signal`);
-      } else if (probeRate === 0) {
-        debug(`[generator] could not probe the output device rate; if it isn't ${ctxRate} Hz the browser silently resamples ${ctxRate} Hz to it — set the Windows output device format to ${ctxRate} Hz for a clean signal`);
-      }
-      await this.outCtx.audioWorklet.addModule(new URL('../audio/worklets/dds-processor.js', import.meta.url));
-      this.genNode = new AudioWorkletNode(this.outCtx, 'dds-processor', {
-        // Stereo out: the worklet writes each lane explicitly to honour the output-lane
-        // gate (Java's interleave seam, PcmQuantizer). A mono [1] lane up-mixed by the
-        // destination could not carry per-lane values (left ≠ right for a gated / scaled
-        // lane), so this is the required web-seam adaptation of Java's PcmQuantizer point.
-        outputChannelCount: [2],
-        processorOptions: {
-          form: c.form, frequency: this.snapped, sampleRate: this.outCtx.sampleRate,
-          amplitudeVRms: ampVrmsOf(c), dacFsVoltageAmpl: c.dacFsVoltageAmpl,
-          // TPDF dither depth applied LIVE in the worklet (Java PcmQuantizer): added to the mono
-          // sample before the per-lane scale, so it shows on the FFT floor where the dBV view sets
-          // it. 0 = Off.
-          ditherBits: c.ditherBits != null ? c.ditherBits : 0,
-          // Output routing (Java GeneratorController.pushOutputRoutingToPlayback): the lane
-          // gate + right-lane scale (= fsLeft/fsRight). Left keeps the mono amplitude (scale 1.0).
-          outputChannels: c.outputChannels != null ? c.outputChannels : 'BOTH',
-          rightLaneScale: c.rightLaneScale != null ? c.rightLaneScale : 1.0,
+      // PHASE 2 — build the DDS and put it on air. Everything the kernel needs travels in ONE
+      // description, `control` carrying the parameters that are not constructor options (duty,
+      // dual-tone tone2/split, sweep config, predistortion), applied before the lane goes live —
+      // Java likewise hands play() a SignalGenerator that already has them.
+      await this._sink.start({
+        form: c.form, frequency: this.snapped,
+        amplitudeVRms: ampVrmsOf(c), dacFsVoltageAmpl: c.dacFsVoltageAmpl,
+        // TPDF dither depth applied LIVE by the sink (Java PcmQuantizer): added to the mono
+        // sample before the per-lane scale, so it shows on the FFT floor where the dBV view sets
+        // it. 0 = Off.
+        ditherBits: c.ditherBits != null ? c.ditherBits : 0,
+        // Output routing (Java GeneratorController.pushOutputRoutingToPlayback): the lane
+        // gate + right-lane scale (= fsLeft/fsRight). Left keeps the mono amplitude (scale 1.0).
+        outputChannels: c.outputChannels != null ? c.outputChannels : 'BOTH',
+        rightLaneScale: c.rightLaneScale != null ? c.rightLaneScale : 1.0,
+        control: {
+          rectDuty: c.rectDuty, triDuty: c.triDuty,
+          frequency2: this._genEmitFreq2(), dualAmp1Pct: c.amp1Pct, dualAmp2Pct: c.amp2Pct,
+          ...this._sweepConfigMsg(),   // sweep forms: linear/log config + fade/loop
+          // Compensated forms (SINE_COMP / DUAL_TONE_COMP): the loaded .dpd text, which the
+          // kernel parses (loadHarmonics / loadIntermod) and pre-distorts the output with.
+          ...(c.dpdText ? { dpdText: c.dpdText, dpdFrequency: this.snapped } : null),
         },
       });
-      // Push the remaining live parameters (duty, dual-tone tone2/split) — absent
-      // processorOptions fields the kernel already defaulted.
-      this.genNode.port.postMessage({
-        rectDuty: c.rectDuty, triDuty: c.triDuty,
-        frequency2: this._genEmitFreq2(), dualAmp1Pct: c.amp1Pct, dualAmp2Pct: c.amp2Pct,
-      });
-      this._postSweepConfig();   // sweep forms: send linear/log config + fade/loop
-      // Compensated forms (SINE_COMP / DUAL_TONE_COMP): hand the loaded .dpd text to the
-      // worklet, which parses it (loadHarmonics / loadIntermod) and pre-distorts the output.
-      if (c.dpdText) this.genNode.port.postMessage({ dpdText: c.dpdText, dpdFrequency: this.snapped });
-      this.genNode.connect(this.outCtx.destination);
-      if (this.outCtx.state === 'suspended') await this.outCtx.resume();
       this._genOn = true;
-      this._status(`generator running — out ${this.outCtx.sampleRate} Hz, tone ${this.snapped.toFixed(3)} Hz`);
+      this._status(`generator running — out ${this.outSampleRate} Hz, tone ${this.snapped.toFixed(3)} Hz`);
       return null;
     } catch (e) {
       this._status('generator start failed: ' + e.name + ' — ' + e.message);
@@ -394,24 +365,26 @@ export class GeneratorController {
     }
   }
 
-  /** Stops the tone and tears the output graph down (disconnect → suspend → close —
-   *  closing a context with a live worklet wired can crash the renderer). */
+  /** Stops the tone and releases the output lane. The sink owns the teardown order (Web Audio:
+   *  disconnect → suspend → close, since closing a context with a live worklet wired can crash
+   *  the renderer); _sink is nulled only AFTER close() resolved, so outputContextOpen still
+   *  reports the device as held while it is genuinely still closing. */
   async stopGenerator() {
     this._genOn = false;
-    this._closing = true;   // suppress the statechange our own close() will fire
-    try { if (this.genNode) this.genNode.disconnect(); } catch (_) {}
-    this.genNode = null;
-    try { if (this.outCtx) { await this.outCtx.suspend().catch(() => {}); await this.outCtx.close(); } } catch (_) {}
-    this.outCtx = null;
+    const sink = this._sink;
+    // Swallowed exactly as the old inline teardown swallowed its context errors: a wedged or
+    // unplugged device must never block the stop, and the lane is dropped either way.
+    try { if (sink) await sink.close(); } catch (_) {}
+    this._sink = null;
   }
 
   /** Live retune of generator parameters that don't change structure (no restart):
    *  amplitude, duty, second-tone frequency, dual-tone split. */
   retuneGenerator() {
-    if (!this._genOn || !this.genNode) return;
+    if (!this._genOn || !this._sink) return;
     const c = this.config;
     this.computeAnalysisFreqs();   // re-resolve the emit frequency for the (possibly edited) tone/form
-    this.genNode.port.postMessage({
+    this._sink.port.postMessage({
       frequency: this.snapped,      // primary tone — was previously dropped on live freq edits
       amplitudeVRms: ampVrmsOf(c), dacFsVoltageAmpl: c.dacFsVoltageAmpl,
       rectDuty: c.rectDuty, triDuty: c.triDuty,
@@ -419,20 +392,27 @@ export class GeneratorController {
       // Dither depth rides every retune (Java setDitherBits live-applies to the running playback).
       ditherBits: c.ditherBits != null ? c.ditherBits : 0,
       // Output routing rides every retune (Java pushOutputRoutingToPlayback): a lane-gate
-      // or DAC-full-scale edit lands on the worklet's next block.
+      // or DAC-full-scale edit lands on the sink's next block.
       outputChannels: c.outputChannels != null ? c.outputChannels : 'BOTH',
       rightLaneScale: c.rightLaneScale != null ? c.rightLaneScale : 1.0,
     });
     this._postSweepConfig();
   }
 
-  /** Sends the sweep configuration to the dds-processor for the current form (linear vs
-   *  Farina log), plus loop + Hann fade lengths. No-op for non-sweep forms. Durations →
-   *  samples at the output rate. Called from startGenerator + retuneGenerator. */
+  /** Sends the sweep configuration for the current form to the running sink. No-op for non-sweep
+   *  forms (and when nothing is running). Called from retuneGenerator; startGenerator folds the
+   *  same message into the start description instead, so the first rendered block already has it. */
   _postSweepConfig() {
-    if (!this.genNode) return;
+    if (!this._sink) return;
+    const msg = this._sweepConfigMsg();
+    if (msg) this._sink.port.postMessage(msg);
+  }
+
+  /** The sweep control message for the current form (linear vs Farina log), plus loop + Hann
+   *  fade lengths, or null for a non-sweep form. Durations → samples at the output rate. */
+  _sweepConfigMsg() {
     const c = this.config;
-    const rate = this.outSampleRate || (this.outCtx && this.outCtx.sampleRate) || c.outRate;
+    const rate = this.outSampleRate || (this._sink && this._sink.sampleRate) || c.outRate;
     const samples = Math.max(1, Math.round(c.sweepDurationSec * rate));
     let msg;
     if (c.form === GenSignalForm.LINEAR_SWEEP) {
@@ -440,10 +420,10 @@ export class GeneratorController {
     } else if (c.form === GenSignalForm.LOG_SWEEP) {
       msg = { logSweep: { f0: c.sweepStartHz, f1: c.sweepEndHz, sweepSamples: samples, leadInSamples: 0 } };
     } else {
-      return;
+      return null;
     }
     msg.sweepParams = { loop: c.sweepLoop, fadeInSamples: Math.round(c.sweepFadeInSec * rate), fadeOutSamples: Math.round(c.sweepFadeOutSec * rate) };
-    this.genNode.port.postMessage(msg);
+    return msg;
   }
 
   // ---------------------------------------------------------------------------
@@ -457,6 +437,19 @@ export class GeneratorController {
    *  Replaces any current playback. `onFileEnded` (if set) fires on natural (non-loop) end. */
   async playFileBuffer(channels, sampleRate, loop) {
     await this.stopFile();
+    // A backend whose DAC is NOT a Web Audio device plays the buffer through its own lane. The
+    // QA40x is one: building an AudioContext here sent the file to whatever Web Audio output was
+    // selected and never to the analyzer. Feature-detected rather than switched on a backend name,
+    // so the controller still knows nothing about which backend it is driving.
+    const laneSink = await this.#bufferSink(sampleRate);
+    if (laneSink) {
+      this._lastFile = { channels, sampleRate, loop: !!loop };
+      await laneSink.playBuffer(channels[0], {
+        loop: !!loop,
+        onEnded: () => { if (this.onFileEnded) this.onFileEnded(); },
+      });
+      return;
+    }
     const ctx = new AudioContext({ latencyHint: 'playback' });
     if (ctx.setSinkId && this.config.outDeviceId) {
       try { await ctx.setSinkId(this.config.outDeviceId); } catch (e) { console.warn('setSinkId', e); }
@@ -496,6 +489,14 @@ export class GeneratorController {
    *  measurement, then playSweepBuffer, then stopFile. */
   async openSweepContext(requestedRate) {
     await this.stopFile();
+    // A lane backend grants the rate it is already clocked at — the analyzer's ADC and DAC share
+    // one reg-9 register, so the sweep is authored at exactly the rate it will be played at and the
+    // caller's band-cap against grantedRate/2 is a no-op rather than a real restriction.
+    const laneSink = await this.#bufferSink(requestedRate);
+    if (laneSink) {
+      this._sweepLaneSink = laneSink;
+      return requestedRate;
+    }
     // Bounded-retry open: the FreqResp takeover stops the other modules then opens the DAC
     // here, but a just-stopped context can still be releasing the OS device — retry the
     // NotReadable/Abort contention before it surfaces as an alert (a self-contention).
@@ -516,6 +517,18 @@ export class GeneratorController {
    *  (_fileSrc/_fileCtx) so stopFile() tears it down; NOT looped. Resolves once
    *  playback has started; returns the context's granted rate. */
   async playSweepBuffer(buf, sampleRate, opts = {}) {
+    // The lane backends play the pre-rendered sweep sample-for-sample (one shared clock), so
+    // played == reference by construction — no AudioBuffer, no resampler, no rate tagging.
+    const laneSink = this._sweepLaneSink || await this.#bufferSink(sampleRate);
+    this._sweepLaneSink = null;
+    if (laneSink) {
+      await laneSink.playBuffer(buf instanceof Float32Array ? buf : Float32Array.from(buf), {
+        loop: false,
+        outputChannels: opts.outputChannels || 'BOTH',
+        onEnded: () => { if (this.onFileEnded) this.onFileEnded(); },
+      });
+      return sampleRate;
+    }
     let ctx = this._pendingSweepCtx;
     this._pendingSweepCtx = null;
     if (ctx) {
@@ -577,6 +590,13 @@ export class GeneratorController {
    *  sweep context that openSweepContext opened but that never received a buffer
    *  (an aborted measurement), so the output device is never left held open. */
   async stopFile() {
+    // The lane sinks first: closing one detaches the generator lane, which is what stops the
+    // analyzer's DAC and — on the last detach — parks and releases the device.
+    const lane = this._fileLaneSink, pendingLane = this._sweepLaneSink;
+    this._fileLaneSink = null; this._sweepLaneSink = null;
+    if (lane) { try { await lane.close(); } catch (e) { /* ignore */ } }
+    if (pendingLane && pendingLane !== lane) { try { await pendingLane.close(); } catch (e) { /* ignore */ } }
+
     const src = this._fileSrc, ctx = this._fileCtx;
     const pending = this._pendingSweepCtx;
     this._fileSrc = null; this._fileCtx = null; this._pendingSweepCtx = null;
@@ -585,5 +605,26 @@ export class GeneratorController {
     if (pending && pending !== ctx) { try { await pending.close(); } catch (e) { /* ignore */ } }
   }
 
-  get filePlaying() { return !!this._fileSrc; }
+  /**
+   * The active backend's sink IF it plays pre-rendered buffers through its own lane (the QA40x),
+   * else null for a Web Audio backend, whose file/sweep paths keep their own AudioContext code
+   * unchanged. Opened through the same injected factory a generator start uses, so the controller
+   * never learns which backend it is driving.
+   *
+   * @param {number} sampleRate the rate the buffer was authored at
+   * @returns {Promise<?Object>} the opened sink, or null when this backend has no lane player
+   */
+  async #bufferSink(sampleRate) {
+    const sink = this._openPlayback({ config: this.config, status: this._status });
+    if (typeof sink.playBuffer !== 'function') {
+      // A Web Audio sink: nothing was opened yet (the sink opens its context lazily), so there is
+      // nothing to close — just fall back to the caller's own context path.
+      return null;
+    }
+    await sink.open({ sampleRate, outDeviceId: this.config.outDeviceId });
+    this._fileLaneSink = sink;
+    return sink;
+  }
+
+  get filePlaying() { return !!this._fileSrc || !!this._fileLaneSink; }
 }

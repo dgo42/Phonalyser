@@ -1218,6 +1218,13 @@ export class FftController {
     if (this._fftOn) await this.setRecording(false);
   }
   async startCaptureForPrefs() {
-    if (this._recordWasRunningForPrefs) await this.setRecording(true);
+    if (!this._recordWasRunningForPrefs) return;
+    if (await this.setRecording(true)) return;
+    // The restart FAILED — the committed device could not be opened. setRecording(true) left the
+    // analyser off and holding nothing, but the PANE still shows Record engaged, because it owns
+    // that LED. Reuse the auto-stop notification: its subscriber already flips Record back off and
+    // reconciles the pane, which is exactly what is needed here (the same gap the scope had, where
+    // the trace froze behind a lit LED — maintainer, 2026-07-26).
+    MessageBus.instance().publish(Events.FFT_RECORDING_AUTO_STOPPED);
   }
 }

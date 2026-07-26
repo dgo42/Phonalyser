@@ -33,9 +33,13 @@ export class CardSection {
    *   - deviceLabel: () => the current device LABEL for this direction (recognition patterns match it).
    *   - showConfirm: (title, message) => Promise<boolean> — the shared confirm modal.
    *   - onChanged: () => refresh the per-channel FS readout after a store write.
+   *   - isStaging: () => true while the Preferences dialog is open. The active-range radios then
+   *     only STAGE their pick (Java edits a detached copy); commitStagedActive() writes it on OK
+   *     and discardStagedActive() drops it on Cancel. Absent → writes apply immediately, which is
+   *     what the standalone (non-dialog) use wants.
    */
   constructor(prefs, deviceStore, cardEditorDialog,
-    { input, comboSel, editSel, rangesSel, deviceLabel, showConfirm, onChanged }) {
+    { input, comboSel, editSel, rangesSel, deviceLabel, showConfirm, onChanged, isStaging }) {
     this.prefs = prefs;
     this.store = deviceStore;
     this.cardEditor = cardEditorDialog;
@@ -47,6 +51,10 @@ export class CardSection {
     this._deviceLabel = deviceLabel;
     this._showConfirm = showConfirm;
     this._onChanged = onChanged || (() => {});
+    this._isStaging = isStaging || (() => false);
+    /** The active-range pick made while the dialog is open, not yet written to the card:
+     *  { cardName, activeRange, activeRangeRight } — null when nothing is staged. */
+    this._stagedActive = null;
     /** Combo index → profile; the last index (null) is "New card…". */
     this._comboProfiles = [];
     this._selectedName = null;
@@ -198,6 +206,56 @@ export class CardSection {
     if (p != null) this.store.putAudioDeviceProfile(p);
   }
 
+  /** The selected card, or null for "New card…". */
+  _selectedProfile() {
+    return this._selectedName != null ? this.store.findAudioDeviceProfile(this._selectedName) : null;
+  }
+
+  /** The active-range label one channel SHOWS: the staged pick while the Preferences dialog holds
+   *  one, else the card's own. Every render and every staging write reads through here, so the
+   *  radios track the user's pick without it having been applied anywhere. */
+  _activeLabel(ep, right) {
+    const staged = this._stagedActive;
+    if (staged != null) return right ? staged.activeRangeRight : staged.activeRange;
+    return right ? ep.activeRangeRight : ep.activeRange;
+  }
+
+  /** Writes a staged active-range pick into the card and applies it — the Preferences OK path.
+   *  No-op when nothing was staged, so an OK that never touched a radio changes nothing. */
+  commitStagedActive() {
+    const staged = this._stagedActive;
+    this._stagedActive = null;
+    if (staged == null || staged.cardName == null) return;
+    const card = this.store.findAudioDeviceProfile(staged.cardName);
+    if (card == null) return;
+    const ep = this._endpointOf(card);
+    if (ep == null) return;
+    ep.activeRange = staged.activeRange;
+    ep.activeRangeRight = staged.activeRangeRight;
+    // Same tail the immediate (non-staged) path runs: persist the card, push the range's
+    // per-channel full-scale for the current device, refresh the readout.
+    if (ep.channels === DeviceChannelMode.INDEPENDENT) {
+      this._commitSelected();
+      const dev = this._deviceLabel();
+      if (this.input) this.store.applyInputDeviceProfileChannel(dev, 'L');
+      else this.store.applyOutputDeviceProfileChannel(dev, 'L');
+      if (this.input) this.store.applyInputDeviceProfileChannel(dev, 'R');
+      else this.store.applyOutputDeviceProfileChannel(dev, 'R');
+      this._onChanged();
+    } else {
+      this._applyAndReadout(this._deviceLabel());
+    }
+    this._rebuildTable();
+  }
+
+  /** Drops a staged active-range pick — the Preferences Cancel path. Nothing was written, so this
+   *  only has to forget it and repaint the radios from the card. */
+  discardStagedActive() {
+    if (this._stagedActive == null) return;
+    this._stagedActive = null;
+    this._rebuildTable();
+  }
+
   /** Persists the selected card and re-applies its per-channel full-scale for the current device,
    *  then refreshes the FS readout. */
   _applyAndReadout(dev) {
@@ -239,7 +297,7 @@ export class CardSection {
     const mkLabel = () => $(`<input type="text" class="form-control form-control-sm range-label" title="${labelTip}">`).val(range.label);
 
     if (independent) $row.append(caption('scope.tab.left'));
-    const $active = $(`<input type="radio" ${range.label === ep.activeRange ? 'checked' : ''} title="${activeTip}">`);
+    const $active = $(`<input type="radio" ${range.label === this._activeLabel(ep, false) ? 'checked' : ''} title="${activeTip}">`);
     const $label = mkLabel();
     $row.append($active, $label);
 
@@ -247,7 +305,7 @@ export class CardSection {
     let $labelRight = null;
     if (independent) {
       $row.append(caption('scope.tab.right'));
-      $activeRight = $(`<input type="radio" ${range.label === ep.activeRangeRight ? 'checked' : ''} title="${activeTip}">`);
+      $activeRight = $(`<input type="radio" ${range.label === this._activeLabel(ep, true) ? 'checked' : ''} title="${activeTip}">`);
       $labelRight = mkLabel();
       $row.append($activeRight, $labelRight);
     }
@@ -256,6 +314,18 @@ export class CardSection {
     const $add = $(`<button type="button" class="fcal-add btn btn-sm btn-outline-secondary" title="${t('preferences.audio.range.add.tooltip')}"><img src="assets/icons/plus.svg" class="util-svg" alt=""></button>`);
     const $rem = $(`<button type="button" class="fcal-remove btn btn-sm btn-outline-secondary" title="${t('preferences.audio.range.remove.tooltip')}"><img src="assets/icons/minus.svg" class="util-svg" alt=""></button>`);
     if (isRow0) $rem.css('visibility', 'hidden');   // row 0: no remove (space reserved)
+    // A DEVICE-OWNED range set is FIXED: the analyzer's attenuator has exactly these positions, and
+    // each label is the protocol key the backend decodes back into a register value (QA40x:
+    // "N dBV" → reg 0x05 / 0x06). Adding, removing or renaming a row would either invent a position
+    // the hardware does not have or break that decode, so the whole row is read-only except the
+    // active radio. The values come from the device's own calibration page, hence
+    // calibrationFromDevice — the same flag that makes the Calibrate flows refuse this endpoint.
+    if (ep.calibrationFromDevice) {
+      $label.prop('readonly', true);
+      if ($labelRight) $labelRight.prop('readonly', true);
+      $add.prop('disabled', true).css('visibility', 'hidden');
+      $rem.prop('disabled', true).css('visibility', 'hidden');
+    }
     $row.append($add, $rem);
     $container.append($row);
 
@@ -269,6 +339,19 @@ export class CardSection {
   }
 
   _userSetActive(ep, range, right) {
+    // While the Preferences dialog is open the pick is STAGED, not applied: it must not reach the
+    // card, the store, the full-scale prefs or the device until OK. (It used to write straight
+    // through, so the new range was live the instant the radio moved and only a Cancel undid it.)
+    if (this._isStaging()) {
+      const card = this._selectedProfile();
+      this._stagedActive = {
+        cardName: card ? card.name : null,
+        activeRange: right ? this._activeLabel(ep, false) : range.label,
+        activeRangeRight: right ? range.label : this._activeLabel(ep, true),
+      };
+      this._rebuildTable();   // the radio reflects the staged pick; nothing else moves
+      return;
+    }
     if (right) ep.activeRangeRight = range.label;
     else ep.activeRange = range.label;
     const dev = this._deviceLabel();

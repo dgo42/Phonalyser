@@ -211,12 +211,32 @@ export class ScopeController {
   async reattach() {
     const r = await this._capture.acquire();
     this._scopeReader = r;
-    if (r) { const len = this._windowLen(); this.scopeBufL = new Float32Array(len); this.scopeBufR = new Float32Array(len); }
-    else this._scopeOn = false;
+    if (r == null) {
+      // The device did not come back. Run the REAL stop — the same teardown setRecording(false)
+      // does — because _measClient.reattach() re-acquires unconditionally and would RE-OPEN the
+      // device this consumer just disowned, after which nothing could release it (setRecording(false)
+      // early-returns on !_scopeOn and never reaches the client's stop). On a QA40x that left
+      // interface 0 claimed for the life of the page.
+      //
+      // Clearing the flag ALONE is not enough, and was the first attempt at this fix: the trace
+      // froze but the scope never stopped — the Record LED stayed lit and the measurement worker
+      // kept running, which is what made the app crawl after a while (maintainer, 2026-07-26).
+      this._scopeOn = false;
+      await this._measClient.stop();     // stops the worker and releases its own capture reference
+      this._scopeReader = null;
+      await this._capture.release();     // guarded at zero, so this is safe with no ref held
+      // Tell the pane, which owns the Record LED and the control gating — reattach() is driven by
+      // the ENGINE (reopenCaptureDevice), so nothing else reconciles the UI with the engine's state.
+      MessageBus.instance().publish(Events.SCOPE_RECORDING_STOPPED);
+      return false;
+    }
+    const len = this._windowLen();
+    this.scopeBufL = new Float32Array(len);
+    this.scopeBufR = new Float32Array(len);
     // Re-anchor the measurement stream onto the fresh ring too (mirror the SignalBufferReader
     // re-attach; the client re-acquires its own reference + resets the worker's stream state).
     await this._measClient.reattach();
-    return r != null;
+    return true;
   }
 
   /** Preferences-dialog audio-config bracket (Java ScopePane.stopCaptureForPrefs /
@@ -232,7 +252,15 @@ export class ScopeController {
     if (this._scopeOn) await this.setRecording(false);
   }
   async startCaptureForPrefs() {
-    if (this._captureWasRunningForPrefs) await this.setRecording(true);
+    if (!this._captureWasRunningForPrefs) return;
+    if (await this.setRecording(true)) return;
+    // The restart FAILED — the committed device could not be opened (unplugged, held by another
+    // app, a rate it will not grant). setRecording(true) already left this consumer off and holding
+    // nothing, so the state is correct; what is missing is that the PANE still shows the scope as
+    // running, because it owns the Record LED and nothing here had told it. That is what "the trace
+    // doesn't redraw, but the scope doesn't stop" was (maintainer, 2026-07-26): a stopped controller
+    // behind a lit LED. The same publish the reattach failure uses, so both routes reconcile the UI.
+    MessageBus.instance().publish(Events.SCOPE_RECORDING_STOPPED);
   }
 
   /** Injects the prefs->publish-params provider the measurement client polls each batch

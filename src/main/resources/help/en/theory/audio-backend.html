@@ -71,7 +71,10 @@
     <li><b>One clock, so the rates are locked together.</b>  A single
         sample-rate generator on the board feeds both the ADC and the DAC, so
         the input and output sample rates can never differ — set one in
-        Preferences and the other follows.</li>
+        Preferences and the other follows.  The list is 48 / 96 / 192 kHz, plus
+        <b>384 kHz on a QA403</b>: the sample-rate register has a fourth code the
+        QA402 does not have, so the rates offered follow the model that is
+        attached.</li>
     <li><b>The range <em>is</em> the calibration.</b>  Full-scale in volts
         comes from the selected range and the device's own calibration, not
         from a crosshair calibration you enter, so the dBV axis and the scope

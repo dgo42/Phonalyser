@@ -114,6 +114,23 @@ export class ScopePane {
     const bus = MessageBus.instance();
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STARTED, () => this.onFreqRespMeasurementStarted());
     bus.subscribe(Events.FREQRESP_MEASUREMENT_STOPPED, () => this.onFreqRespMeasurementStopped());
+    // The controller stopped the capture on its own — today when a device reopen fails to
+    // re-acquire (ScopeController.reattach). The pane owns the Record LED, so it has to reconcile:
+    // without this the trace froze while the LED stayed lit, i.e. the scope LOOKED like it was
+    // still running (maintainer, 2026-07-26).
+    bus.subscribe(Events.SCOPE_RECORDING_STOPPED, () => this.syncScopeLed());
+    // The INPUT device died mid-capture (unplugged, or grabbed exclusively) — the capture source
+    // publishes the error, the shell shows the alert, and the scope must actually STOP: keeping
+    // the consumer on the dead line left the trace drawing a flat line with cap/s still ticking —
+    // a measurement of nothing presented as a measurement (maintainer, 2026-07-26). Stop via the
+    // ENGINE unconditionally, exactly as onFreqRespMeasurementStarted does — the stop releases the
+    // shared-capture ref, so the dead device line closes on the last release.
+    bus.subscribe(Events.AUDIO_DEVICE_ERROR, async (p) => {
+      if (p && p.direction === 'input') {
+        await this.engine.scope.setRecording(false);
+        this.syncScopeLed();
+      }
+    });
 
     // Wire the osc-meas measurement stream (owned by engine.scope): the pane has the prefs,
     // so it supplies the per-batch publish PARAMS provider; the worker's publishes are

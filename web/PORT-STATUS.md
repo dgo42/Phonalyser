@@ -534,7 +534,7 @@ Faithful port of `I18n` + language discovery.
    (674 keys each): added `web.browser.unsupported.title/.message` translations
    to all 31 locales, removed the orphan `preferences.lookAndFeel.recreateNote`
    (no Java counterpart) and the unreferenced `web.utility.screenshot` (de);
-   `web/test/i18n-check.mjs` passes.
+   `web/test/i18n-check.test.mjs` passes (it runs as part of `npm test`).
 
 ---
 
@@ -544,6 +544,37 @@ Faithful port of `I18n` + language discovery.
   intentionally omitted.
 - **`copyForDialog`/`applyFromDialog`** Preferences SWT-dialog helpers — not ported
   (web binds Propertys directly).
+(Per-backend custom preferences used to sit on this list. It has since landed with
+the QA40x backend — the Preferences Audio-tab settings button and the QA40x
+front-panel I2S / telemetry dialog are `qa40x/qa40x-settings-dialog.js`; see below.)
+
+### QA40x analyzer backend — ported and wired
+
+The browser drives a QuantAsylum QA402 / QA403 full duplex over **WebUSB**, with the
+vendor software closed. All **15 modules** are in under `web/js/qa40x/`:
+`qa40x-protocol`, `qa40x-levels`, `qa40x-rate-constraint`, `qa40x-calibration`,
+`qa40x-transport` (the interface), `webusb-qa40x-transport` (Java's
+`LibUsbQa40xTransport`, re-expressed on `navigator.usb`), `qa40x-duplex-engine`,
+`qa40x-device-manager`, `qa40x-device-finder`, `qa40x-device-info`,
+`qa40x-preferences`, `qa40x-range-controller`, `qa40x-settings-dialog`, and the
+capture / playback pair `qa40x-capture-source` + `qa40x-playback-sink`.
+
+Wiring: `audio/backend.js` selects the source and sink by backend type, so
+`SharedCapture` and `GeneratorController` are backend-agnostic — the same seam Java
+gets from `AudioCapture` / `AudioPlayback`. Two web-only halves complete it,
+`audio/web-audio-capture-source.js` and `generator/web-audio-playback-sink.js`.
+Rates come from the device model (`sampleRatesHz`) with input ≡ output locked to the
+one hardware clock, full scale from the analyzer's own calibration page, and the
+Preferences **Backend** combobox offers `QA40X` only where the browser exposes
+WebUSB.
+
+The desktop help's libusb prose is rewritten to the WebUSB facts on import (see the
+`QA40X_WEB_SUBS` table in `scripts/import-help.mjs`) rather than stripped, because
+the web genuinely has this backend — it just reaches the instrument differently.
+
+Browser requirements are covered in `../doc/QA40X-WEBUSB.md`: Chrome or Edge only,
+a page served over `https://` or `localhost`, a user gesture for the first
+connection, and on Windows the analyzer bound to a WinUSB-class driver.
 
 (Formerly on this list, since ported: the `MainsFilters.of` factory +
 SYNC_SUBTRACT/LMS cancellers — `dsp/mains/{factory,sync-subtract-filter,lms-filter}.js`;
@@ -553,8 +584,8 @@ FLAC encode — `io/flac.js` libflacjs WASM.)
 
 ## Summary
 
-- **10 of 10** listed subsystems are ported, faithful, and syntax-clean.
-- **10 of 10** are wired: the live app runs on the faithful engine — FFT brain +
+- **11 of 11** listed subsystems are ported, faithful, and syntax-clean.
+- **11 of 11** are wired: the live app runs on the faithful engine — FFT brain +
   IMD in the worker/pool, DDS worklet generator, scope DSP + mains cancellers
   (scope AND pre-FFT), freqresp, predistortion, file I/O, Preferences-backed
   config and full i18n (32 locales, identical key sets).
