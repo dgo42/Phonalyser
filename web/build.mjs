@@ -103,14 +103,14 @@ async function copyVendorMinimal() {
   }
 }
 
-// Ship the device catalog VERBATIM from the Java single source of truth. src/main/resources/
-// devices.yaml is authoritative; every build re-copies it into web/ (the dev-served source) AND
-// the build output, so any future Java-side catalog change (a new card, range, or bumped
-// contentVersion) flows into the web app automatically ("always copy"). The app fetches +
-// parses it at runtime (js/store/device-catalog.js) — it is NOT hard-coded.
+// Ship the device catalog VERBATIM from the Java single source of truth. modules/phonalyser-app/
+// src/main/resources/devices.yaml is authoritative; every build re-copies it into web/ (the
+// dev-served source) AND the build output, so any future Java-side catalog change (a new card,
+// range, or bumped contentVersion) flows into the web app automatically ("always copy"). The app
+// fetches + parses it at runtime (js/store/device-catalog.js) — it is NOT hard-coded.
 async function copyDevicesCatalog() {
-  const javaYaml = path.join(root, '..', 'src', 'main', 'resources', 'devices.yaml');
-  if (!(await exists(javaYaml))) { console.warn('  skip devices.yaml (Java source absent)'); return; }
+  const javaYaml = path.join(root, '..', 'modules', 'phonalyser-app', 'src', 'main', 'resources', 'devices.yaml');
+  if (!(await exists(javaYaml))) throw new Error(`devices.yaml not found at ${javaYaml} — the build must ship the catalog`);
   await cp(javaYaml, path.join(root, 'devices.yaml'));      // web/devices.yaml (dev-served)
   await cp(javaYaml, path.join(outDir, 'devices.yaml'));    // built output (docs/web/devices.yaml)
 }
