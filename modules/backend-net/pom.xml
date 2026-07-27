@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  backend-net — placeholder for the TCP/IP bridge: a headless agent (Raspberry
+  Pi, incl. Zero 2 W) that owns a local audio device and serves it over the
+  network, plus the client-side backend the desktop talks to.
+
+  It depends on phonalyser-core ONLY.  That is the whole point of the split: if
+  this module ever needs SWT or a gui.** package, the headless agent has stopped
+  being headless.  No sources yet; builds an empty jar.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.1.1</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>backend-net</artifactId>
+    <name>Phonalyser :: backend :: net (TCP/IP bridge)</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-core</artifactId>
+        </dependency>
+    </dependencies>
+</project>

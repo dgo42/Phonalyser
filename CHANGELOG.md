@@ -103,37 +103,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   control and frame-width registers — plus the third front-panel endpoint pair,
   and now cite three independent implementations rather than one.
 
-- **Web version: the amplitude histogram.** The browser port gains the
-  oscilloscope's amplitude histogram, ported class for class from the desktop —
-  the same accumulator and range fitting, the same voltage axis read relative to
-  the distribution's own mean with 0 V on the centre line, the same nice-number
+- **Web version catch-up.** Besides the QA40x backend above, the browser port
+  picks up the rest of this release's measurement work. It gains the
+  oscilloscope's **amplitude histogram**, ported class for class from the desktop
+  — the same accumulator and range fitting, the same voltage axis read relative
+  to the distribution's own mean with 0 V on the centre line, the same nice-number
   linear axes, the window's own L / R pick and reset, the histogram button
   appearing beside the measurement gauge once a signal is present, and the bar
-  count under Preferences ▸ Oscilloscope. It differs from the desktop in one
-  place: the window is a resizable, draggable panel inside the page, because a
-  web page cannot own a separate top-level window. Help chapter and screenshots
-  in English, German and Ukrainian.
-
-- **Web version catch-up.** Besides the QA40x backend and the histogram above,
-  the browser port picks up the rest of this release's measurement work — the dBr
+  count under Preferences ▸ Oscilloscope; it differs from the desktop in one
+  place, the window being a resizable, draggable panel inside the page, because a
+  web page cannot own a separate top-level window. Alongside it come the dBr
   magnitude unit with its axis, cursor readout and amplitude display, and output
-  amplitude typed in dBFS against the live full scale — and brings its
-  Preferences up to the desktop's behaviour now that there is a backend to choose:
-  devices are enumerated at startup and by Scan devices rather than on every
-  backend switch, the list names them instead of showing the browser's raw device
-  id, an input range is staged until OK confirms it and Cancel puts the previous
-  one back, changing the output range retunes the DAC full scale so the generated
-  amplitude stays where it was set, and a calibration change resets the running
-  statistics and distributions.
+  amplitude typed in dBFS against the live full scale. Its Preferences also reach
+  the desktop's behaviour now that there is a backend to choose: devices are
+  enumerated at startup and by Scan devices rather than on every backend switch,
+  the list names them instead of showing the browser's raw device id, an input
+  range is staged until OK confirms it and Cancel puts the previous one back,
+  changing the output range retunes the DAC full scale so the generated amplitude
+  stays where it was set, and a calibration change resets the running statistics
+  and distributions. Help chapter and screenshots in English, German and
+  Ukrainian.
 
 ### Changed
 
+- **The desktop application is now built as Maven modules.** What was one source
+  tree is fifteen modules under `modules/`: a core that carries the measurement
+  engine and depends on neither a GUI toolkit nor any backend, one module per
+  audio backend, the command-line front end, the shared GUI infrastructure, the
+  GUI itself, a backend's own settings panel, and a packaging module that
+  produces the fat JAR and the installer. Backends are found at runtime through
+  the service loader, so no module names a concrete backend and the dependency
+  arrows only ever point one way — which is what makes a build without any GUI
+  toolkit possible at all, the prerequisite for running Phonalyser headless as a
+  measurement agent. Nothing changes for someone installing the app; for someone
+  building it, the artefacts now appear under
+  `modules/phonalyser-app/target/` instead of `target/`, and `mvn clean install`
+  from the repository root still builds everything.
+- **A fresh clone builds with no preparatory step.** Project Nayuki's FLAC
+  library is not on Maven Central and used to have to be installed into the local
+  Maven repository by hand before the first build would resolve. It is now the
+  `modules/flac-library-java` module and the reactor builds it in order, so the
+  instruction — and the failure that followed forgetting it — are both gone. It
+  keeps its own standalone build file, so this project's style checks are not
+  applied to third-party source.
+- **Windows builds can produce the 32-bit JAR on its own.** `make-windows.cmd`
+  takes an architecture: no argument builds the 64-bit fat JAR and the
+  application image as before, `x86` builds only the 32-bit fat JAR. The 32-bit
+  target has no application image by nature — the packaging tool bundles the Java
+  runtime it is itself running on, so a 32-bit image would need a 32-bit JDK,
+  while the JAR runs on the user's own 32-bit runtime.
+
 - **Build documentation now matches what a fresh clone actually needs.**
-  `BUILD.md`, `PACKAGING.md` and `README.md` were missing the one step that
-  makes a first build fail: Project Nayuki's FLAC library is not on Maven
-  Central, is vendored under `deps/flac-library-java/`, and has to be installed
-  into the local Maven repository once before anything else — otherwise the
-  build stops at dependency resolution. The platform profiles are now listed
+  `BUILD.md`, `PACKAGING.md` and `README.md` now list the platform profiles
   with the installer each one produces, together with the rule that building for
   anything other than the machine you are on means deactivating the host's own
   auto-activated profile — `mvn "-P!windows-x64,windows-x86" -DskipTests package`
@@ -145,6 +166,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **"Play from…" ignored the selected backend and output device.** File playback
+  opened an audio line of its own and always went through JavaSound, so whatever
+  was chosen in the preferences made no difference — a QA40x user's file came out
+  of the computer's sound card. It now takes the device from the preferences and
+  opens it through the same path the generator's tone uses, at the file's own
+  sample rate and bit depth, with no resampling and no dither added to material
+  that is already quantised.
 - **Noise metrics were pessimistic by the analysis window's noise bandwidth.**
   The integrated-noise sums behind SNR, N, N+D, SINAD, ENOB and THD+N were
   taken over windowed spectrum bins without dividing by the window's

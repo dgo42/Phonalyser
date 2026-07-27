@@ -10,30 +10,16 @@ distributable installers see [PACKAGING.md](PACKAGING.md).
 | JDK   | 17+     | Temurin or Liberica; `jpackage` ships with it. |
 | Maven | 3.8+    | Picks the right OS profile automatically (§3). |
 
-### Install the vendored flac-library FIRST
+### The vendored flac-library
 
 Project Nayuki's FLAC library (the **decode** side of Play-from) is **not on
-Maven Central**. It is vendored under [deps/flac-library-java/](deps/flac-library-java/)
-and must be installed into your **local** `~/.m2` repository once, before the
-first build of the main project — otherwise Maven fails to resolve
-`io.nayuki:flac-library:1.1.0` and the build stops at dependency resolution.
-
-```pwsh
-cd deps\flac-library-java
-mvn clean install
-cd ..\..
-```
-
-Or, without changing directory (works on any OS):
-
-```bash
-mvn -B -ntp -f deps/flac-library-java/pom.xml install
-```
-
-This is exactly what CI does before every build
-([.github/workflows/release.yml](.github/workflows/release.yml)). You only need
-it **once per machine** (and again after `mvn clean` inside `deps/`, or if you
-wipe `~/.m2`).
+Maven Central**, so it is vendored in this repository as
+[modules/flac-library-java/](modules/flac-library-java/). It is an ordinary
+module of the build, listed in [modules/pom.xml](modules/pom.xml), so the
+reactor compiles it before anything that depends on it — **no separate install
+step, on any platform**. It keeps its own standalone POM rather than inheriting
+`phonalyser-parent`, so this project's checkstyle and plugin policy are not
+applied to third-party source.
 
 > This is the **only** setup step. The native libraries — PortAudio, libusb and
 > the csjsound WASAPI mixers, for both Windows architectures and both macOS

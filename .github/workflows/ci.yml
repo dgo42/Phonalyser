@@ -38,12 +38,9 @@ jobs:
           java-version: '17'
           cache: maven
 
-      # Project Nayuki's flac-library isn't on Maven Central — it's
-      # vendored under deps/flac-library-java and must be installed to
-      # the runner's local ~/.m2 before the main project resolves its
-      # dependency.  Idempotent: on cache hit the install is a no-op.
-      - name: Install vendored flac-library
-        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+      # Project Nayuki's flac-library isn't on Maven Central — it is vendored as
+      # the modules/flac-library-java module, so the reactor builds it and no
+      # separate install step is needed.
 
       # Runs the full build chain: compile → test → fat JAR → antrun copy
       # of native libs (Windows) → jpackage.  jpackage.type=APP_IMAGE
@@ -58,20 +55,26 @@ jobs:
         shell: bash
         run: mvn -B -ntp -Djpackage.type=APP_IMAGE package
 
+      # Multi-module: the installer is produced by the packaging module, which is
+      # the last one in the reactor — not by the build root.  Every module lives
+      # under modules/.
       - name: Upload app image
         uses: actions/upload-artifact@v7
         with:
           name: phonalyser-${{ matrix.os }}-app-image
-          path: target/installer/
+          path: modules/phonalyser-app/target/installer/
           retention-days: 14
 
       # Upload Surefire reports when tests fail so the failure can be
       # inspected without having to re-run locally.  `if: failure()` keeps
       # the green-build artifact list empty.
+      # Every module has its own target/, so the glob has to span them — tests now
+      # live in phonalyser-core, phonalyser-gui, phonalyser-gui-core, backend-qa40x
+      # and backend-qa40x-gui.
       - name: Upload Surefire reports on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: surefire-reports-${{ matrix.os }}
-          path: target/surefire-reports/
+          path: '**/target/surefire-reports/'
           retention-days: 14

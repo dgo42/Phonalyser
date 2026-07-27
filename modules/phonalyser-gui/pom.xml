@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  phonalyser-gui — the SWT desktop application: panes, views, controllers,
+  preferences dialog, help viewer, automation engine, and GuiMain.
+
+  Sits on top of everything per the intended layering (core -> backends/cli ->
+  gui-core -> gui).
+
+  It compiles against backend-javasound (GuiMain -> CsjsoundNativePath,
+  FilePlayController -> JavaSoundDeviceManager) and backend-qa40x (the automation
+  engine); the remaining backends are runtime-only, resolved through the service
+  registry.  It must NEVER depend on backend-qa40x-gui — that module sits above
+  this one and is found at runtime, which is what keeps a backend's own UI
+  optional instead of compiled in.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.1.1</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>phonalyser-gui</artifactId>
+    <name>Phonalyser :: GUI</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-cli</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-core</artifactId>
+        </dependency>
+        <!-- Bus, i18n, widgets, registry, bindings and the common base classes —
+             shared with backend-qa40x-gui, which must NOT depend on this module. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-gui-core</artifactId>
+        </dependency>
+        <!--dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-javasound</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-qa40x</artifactId>
+        </dependency-->
+
+        <!-- SWT, per-OS fragment chosen by the parent's OS profiles. -->
+        <dependency>
+            <groupId>org.eclipse.platform</groupId>
+            <artifactId>${swt.artifactId}</artifactId>
+        </dependency>
+
+        <!-- Runtime compilation of automation scripts handed over as .java
+             source (gui.automation.ScriptCompiler). -->
+        <dependency>
+            <groupId>org.eclipse.jdt</groupId>
+            <artifactId>ecj</artifactId>
+        </dependency>
+
+        <!-- LWJGL + NanoVG: the experimental GPU scope renderer (gui.scope.gl). -->
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-opengl</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-nanovg</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-glfw</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-opengl</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-nanovg</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-glfw</artifactId>
+            <classifier>${lwjgl.natives}</classifier>
+            <scope>runtime</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>version.properties</exclude>
+                </excludes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>version.properties</include>
+                </includes>
+            </resource>
+        </resources>
+        <plugins>
+            <!-- The help tree ships as an external folder next to the installed app
+                 ($APPDIR/help), so it is kept out of this jar; phonalyser-app re-adds
+                 it to the FAT jar, where there is no external bundle to fall back on.
+                 The locale bundles get the same treatment one module down, in
+                 phonalyser-gui-core, which is where I18n and its bundles live. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>help/**</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
