@@ -25,11 +25,8 @@ jobs:
           java-version: '17'
           cache: maven
 
-      # Project Nayuki's flac-library isn't on Maven Central — it's
-      # vendored under deps/flac-library-java and must be installed to
-      # the runner's local ~/.m2 before the main project resolves it.
-      - name: Install vendored flac-library
-        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+      # Project Nayuki's flac-library isn't on Maven Central — it is vendored as
+      # the modules/flac-library-java module, so the reactor builds it.
 
       # csjsound-provider.jar and the native DLLs are not on Maven Central -
       # they must already live under lib/windows/.  Fail loudly if a checkout
@@ -48,12 +45,13 @@ jobs:
             # JNA-resource copies bundled INTO the fat JARs (the standalone x86
             # legacy jar has no installer to stage lib/windows, so libusb must
             # ride inside the jar — mirrors portaudio's win32-* resources).
-            "src/main/resources/win32-x86-64/libusb-1.0_x64.dll",
-            "src/main/resources/win32-x86/libusb-1.0_x86.dll",
+            # Each DLL sits in the module whose backend loads it.
+            "modules/backend-qa40x/src/main/resources/win32-x86-64/libusb-1.0_x64.dll",
+            "modules/backend-qa40x/src/main/resources/win32-x86/libusb-1.0_x86.dll",
             # csjsound rides in the fat JARs too (WASAPI-exclusive JavaSound
             # mixers on bare-JAR installs; CsjsoundNativePath stages the DLL).
-            "src/main/resources/win32-x86-64/csjsound_amd64.dll",
-            "src/main/resources/win32-x86/csjsound_x86.dll"
+            "modules/backend-javasound/src/main/resources/win32-x86-64/csjsound_amd64.dll",
+            "modules/backend-javasound/src/main/resources/win32-x86/csjsound_x86.dll"
           )
           $missing = $required | Where-Object { -not (Test-Path $_) }
           if ($missing) {
@@ -61,8 +59,9 @@ jobs:
             exit 1
           }
 
-      # `mvn package` builds the fat JAR, stages it into target/jpackage-input/,
-      # and runs jpackage — all in one go (see <executions> in pom.xml).
+      # `mvn package` builds the fat JAR, stages it into
+      # modules/phonalyser-app/target/jpackage-input/,
+      # and runs jpackage — all in one go (see <executions> in that module's pom).
       - name: Build fat JAR + EXE installer
         run: mvn -B -DskipTests package
 
@@ -71,7 +70,7 @@ jobs:
       # jars (which Maven resolves on any JDK); a 32-bit JVM is only needed to RUN
       # it, not to build it.  Tests are skipped: x86 SWT natives can't load on the
       # x64 JVM, and the x64 build above already ran the suite.  Produces
-      # target/phonalyser-<version>-windows-x86.jar (pom `windows-x86` profile).
+      # modules/phonalyser-app/target/phonalyser-<version>-windows-x86.jar (pom `windows-x86` profile).
       - name: Build x86 legacy fat JAR
         run: mvn -B -DskipTests package -P "windows-x86,!windows-x64"
 
@@ -85,7 +84,7 @@ jobs:
         shell: pwsh
         run: |
           mvn -B -DskipTests package "-Djpackage.type=APP_IMAGE"
-          $app = "target/installer/Phonalyser"
+          $app = "modules/phonalyser-app/target/installer/Phonalyser"
           if (-not (Test-Path $app)) { throw "app-image not found at $app" }
           if (-not (Get-ChildItem src/main/packaging/msix/assets/*.png -ErrorAction SilentlyContinue)) {
             throw "No Store logos in src/main/packaging/msix/assets/ (see that folder's README.txt)."
@@ -105,17 +104,17 @@ jobs:
           $makeappx = (Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin" -Recurse -Filter makeappx.exe |
                        Where-Object FullName -match '\\x64\\' | Sort-Object FullName -Descending | Select-Object -First 1).FullName
           if (-not $makeappx) { throw "makeappx.exe not found (Windows SDK)" }
-          & $makeappx pack /d $app /p "target/installer/Phonalyser-$ver.msix" /o
+          & $makeappx pack /d $app /p "modules/phonalyser-app/target/installer/Phonalyser-$ver.msix" /o
 
       # The installer is shipped UNSIGNED (see README.md -> "Code signing").
       - uses: actions/upload-artifact@v7
         with:
           name: phonalyser-windows
           path: |
-            target/installer/*.exe
-            target/installer/*.msix
-            target/phonalyser-*-windows.jar
-            target/phonalyser-*-windows-x86.jar
+            modules/phonalyser-app/target/installer/*.exe
+            modules/phonalyser-app/target/installer/*.msix
+            modules/phonalyser-app/target/phonalyser-*-windows.jar
+            modules/phonalyser-app/target/phonalyser-*-windows-x86.jar
 
   # ============================================================== Linux x64
   build-linux:
@@ -130,11 +129,8 @@ jobs:
           java-version: '17'
           cache: maven
 
-      # Project Nayuki's flac-library isn't on Maven Central — it's
-      # vendored under deps/flac-library-java and must be installed to
-      # the runner's local ~/.m2 before the main project resolves it.
-      - name: Install vendored flac-library
-        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+      # Project Nayuki's flac-library isn't on Maven Central — it is vendored as
+      # the modules/flac-library-java module, so the reactor builds it.
 
       - name: Install fakeroot (needed by jpackage for .deb)
         run: |
@@ -158,7 +154,7 @@ jobs:
           # files root:root (same reason jpackage itself needs fakeroot above).
           cat > /tmp/fix-deb-deps.sh <<'EOS'
           set -euo pipefail
-          deb=$(ls target/installer/*.deb)
+          deb=$(ls modules/phonalyser-app/target/installer/*.deb)
           echo "Patching $deb"
           work=$(mktemp -d)
           dpkg-deb -R "$deb" "$work"
@@ -191,8 +187,8 @@ jobs:
         with:
           name: phonalyser-linux
           path: |
-            target/installer/*.deb
-            target/phonalyser-*-linux.jar
+            modules/phonalyser-app/target/installer/*.deb
+            modules/phonalyser-app/target/phonalyser-*-linux.jar
 
   # ===================================================== macOS x64 + Apple Silicon
   # Ship a DMG per architecture.  Both legs run on the Apple-Silicon macos-14
@@ -228,11 +224,8 @@ jobs:
           architecture: ${{ matrix.jdk }}
           cache: maven
 
-      # Project Nayuki's flac-library isn't on Maven Central — it's
-      # vendored under deps/flac-library-java and must be installed to
-      # the runner's local ~/.m2 before the main project resolves it.
-      - name: Install vendored flac-library
-        run: mvn -B -ntp -f deps/flac-library-java/pom.xml install
+      # Project Nayuki's flac-library isn't on Maven Central — it is vendored as
+      # the modules/flac-library-java module, so the reactor builds it.
 
       # PortAudio + libusb dylibs are not on Maven Central — they must live
       # under lib/macos-<arch>/.  Fail loudly if a checkout is missing them
@@ -260,7 +253,7 @@ jobs:
       # release page.
       - name: Tag the DMG with its architecture
         run: |
-          cd target/installer
+          cd modules/phonalyser-app/target/installer
           for f in *.dmg; do
             mv "$f" "${f%.dmg}-${{ matrix.arch }}.dmg"
           done
@@ -269,8 +262,8 @@ jobs:
         with:
           name: phonalyser-macos-${{ matrix.arch }}
           path: |
-            target/installer/*.dmg
-            target/phonalyser-*-macos*.jar
+            modules/phonalyser-app/target/installer/*.dmg
+            modules/phonalyser-app/target/phonalyser-*-macos*.jar
 
   # ============================================================== Release
   release:

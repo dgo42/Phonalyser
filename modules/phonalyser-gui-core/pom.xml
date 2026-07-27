@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  phonalyser-gui-core — shared SWT infrastructure, usable by EVERY GUI module.
+
+  Holds what more than one GUI module needs and what is not the application
+  itself: the message bus, i18n, the widget toolkit, the automation component
+  registry, the property bindings, and the common helpers and base classes
+  (Dialogs, Fonts, Icon, ColorUtil, AbstractPane, AbstractTabControl, the
+  measurement painters, ...).  It also owns BackendSettingsUi — the service
+  contract by which a backend offers its own settings panel — and the registry
+  that indexes it.
+
+  This module exists so a backend's UI module does NOT have to depend on
+  phonalyser-gui.  backend-qa40x-gui needs the bus, i18n, Dialogs and the
+  settings contract; before this module it reached them by depending on the
+  whole application, which put a backend's UI above the app that hosts it.  Now:
+
+      phonalyser-core
+        └── phonalyser-gui-core        (SWT infrastructure)
+             ├── phonalyser-gui        (the application: panes, views, MainWindow)
+             └── backend-qa40x-gui     (a backend's own UI)
+
+  Nothing here may import a pane, a view, a controller or MainWindow — that is
+  what keeps the two consumers independent of each other.  Verified when the
+  packages were moved: none of them referenced the application layer.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.1.1</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>phonalyser-gui-core</artifactId>
+    <name>Phonalyser :: GUI core</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-core</artifactId>
+        </dependency>
+
+        <!-- SWT, per-OS fragment chosen by the parent's OS profiles. -->
+        <dependency>
+            <groupId>org.eclipse.platform</groupId>
+            <artifactId>${swt.artifactId}</artifactId>
+        </dependency>
+
+        <!-- The NanoVG measurement painter in gui.common draws through LWJGL. -->
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-opengl</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-nanovg</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-glfw</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- The translation bundles live here because I18n does — a resource
+                 belongs with the code that reads it, and moving I18n out of the
+                 application module without them left it unable to load any locale.
+                 The locale VARIANTS ship as an external $APPDIR/i18n folder so users
+                 can drop in a translation without rebuilding; the English default
+                 stays inside the jar as the fallback that guarantees the app starts. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>i18n/messages_*.properties</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

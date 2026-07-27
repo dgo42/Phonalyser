@@ -21,26 +21,12 @@ Two output formats are supported on every OS:
 That is the whole list. **The native libraries are committed to the repository**
 (§2) — nothing to download, nothing to build.
 
-### Install the vendored flac-library first (once per machine)
+### The vendored flac-library
 
 Project Nayuki's FLAC library — the decode side of Play-from — is **not on
-Maven Central**. It is vendored under `deps/flac-library-java/` and has to be
-installed into your local `~/.m2` before the main project can resolve
-`io.nayuki:flac-library:1.1.0`:
-
-```bash
-mvn -B -ntp -f deps/flac-library-java/pom.xml install
-```
-
-```pwsh
-# equivalent, from the directory itself
-cd deps\flac-library-java
-mvn clean install
-cd ..\..
-```
-
-Every CI job does this before building; skip it on a fresh clone and the build
-fails during dependency resolution. See [BUILD.md](BUILD.md) §1.
+Maven Central**, so it is vendored as the `modules/flac-library-java` module and
+built by the reactor along with everything else. Nothing to install by hand.
+See [BUILD.md](BUILD.md) §1.
 
 ### Platform profiles
 
