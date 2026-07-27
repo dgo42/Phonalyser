@@ -1,12 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Fat platform JAR: the standard jar-with-dependencies layout PLUS the
-     help/ bundle.  help/** is excluded from the thin module jar (see the
-     maven-jar-plugin excludes) because the jpackage installer ships help as
-     the external $APPDIR/help and must not carry a second copy inside its
-     jar — but the bare platform JARs have no external bundle, so the fat
-     assembly re-adds help/ from target/classes here.  At startup the app
-     stages it once per version into the per-user data dir
-     (HelpViewer.stageBundledHelp). -->
+     help/ bundle and the i18n locale variants.
+
+     help/** and i18n/messages_*.properties are excluded from the GUI module's
+     thin jar (see its maven-jar-plugin excludes) because the jpackage installer
+     ships them as the external $APPDIR/help and $APPDIR/i18n and must not carry
+     a second copy inside the jar.  The bare platform JARs have no external
+     bundle, so this assembly re-adds them; at startup the app stages help once
+     per version into the per-user data dir (HelpViewer.stageBundledHelp).
+
+     MULTI-MODULE NOTE: this descriptor is consumed by phonalyser-app, which has
+     no sources of its own, so target/classes there is empty.  The two fileSets
+     therefore read the resources straight out of the GUI module's source tree
+     rather than out of a build directory.
+
+     META-INF/services is merged across every unpacked jar: the backend and
+     settings-UI providers are discovered by ServiceLoader, and without the
+     handler one module's provider file would silently overwrite another's. -->
 <assembly xmlns="http://maven.apache.org/ASSEMBLY/2.1.0"
           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
           xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.1.0 http://maven.apache.org/xsd/assembly-2.1.0.xsd">
@@ -15,8 +25,15 @@
         <format>jar</format>
     </formats>
     <includeBaseDirectory>false</includeBaseDirectory>
+    <containerDescriptorHandlers>
+        <containerDescriptorHandler>
+            <handlerName>metaInf-services</handlerName>
+        </containerDescriptorHandler>
+    </containerDescriptorHandlers>
     <dependencySets>
-        <!-- Mirrors the built-in jar-with-dependencies descriptor. -->
+        <!-- Mirrors the built-in jar-with-dependencies descriptor.  In the
+             multi-module build this unpacks every reactor module (core,
+             backends, cli, gui, qa40x-gui) plus the third-party jars. -->
         <dependencySet>
             <outputDirectory>/</outputDirectory>
             <useProjectArtifact>true</useProjectArtifact>
@@ -25,15 +42,20 @@
         </dependencySet>
     </dependencySets>
     <fileSets>
-        <!-- help/** and the i18n locale variants are excluded from the thin
-             module jar (installer ships them as external $APPDIR/help and
-             $APPDIR/i18n); the bare platform JARs carry them here and stage
-             them into the per-user data dir at startup. -->
+        <!-- help/ belongs to the application module; the locale bundles belong to
+             gui-core, where I18n reads them.  Each is taken from the module that
+             owns it rather than from one combined resource tree. -->
         <fileSet>
-            <directory>${project.build.directory}/classes</directory>
+            <directory>${project.basedir}/../phonalyser-gui/src/main/resources</directory>
             <outputDirectory>/</outputDirectory>
             <includes>
                 <include>help/**</include>
+            </includes>
+        </fileSet>
+        <fileSet>
+            <directory>${project.basedir}/../phonalyser-gui-core/src/main/resources</directory>
+            <outputDirectory>/</outputDirectory>
+            <includes>
                 <include>i18n/**</include>
             </includes>
         </fileSet>

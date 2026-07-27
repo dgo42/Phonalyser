@@ -1,7 +1,7 @@
 /*
  * Phonalyser web — (re-)import the Java HTML help into the web app.
  *
- * The Java help under ../src/main/resources/help is the source of truth for the help
+ * The Java help under ../modules/phonalyser-gui/src/main/resources/help is the source of truth for the help
  * STRUCTURE + theory text. The web keeps its OWN copy under web/help/ so it can diverge
  * exactly where the web UI differs from the desktop app:
  *   • screenshots are re-captured from the running WEB app (img/*.png — see
@@ -20,7 +20,8 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));       // web/scripts
-const SRC = path.resolve(here, '../../src/main/resources/help'); // Java help (source of truth)
+// Java help (source of truth).  It ships with the GUI module, hence modules/.
+const SRC = path.resolve(here, '../../modules/phonalyser-gui/src/main/resources/help');
 const DST = path.resolve(here, '../help');                       // web/help (web's copy)
 
 const exists = async (p) => { try { await access(p); return true; } catch { return false; } };

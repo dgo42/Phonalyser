@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  backend-qa40x-gui — the QA40x's own UI surface: the settings dialog (I2S,
+  telemetry) plus the range controller and rate constraint, which react to
+  MessageBus events published by the preferences dialog.
+
+  It sits ABOVE both backend-qa40x (whose Qa40xPreferences / Qa40xDeviceInfo /
+  Qa40xDeviceManager it uses) and phonalyser-gui (whose Dialogs, I18n and bus it
+  uses).  That direction is the whole trick: the QA40x driver stays headless and
+  its UI is an optional layer on top, discovered at runtime rather than
+  compiled into the driver.
+
+  Because phonalyser-gui must NOT depend on this module (that would be a cycle),
+  the settings UI has to be found by ServiceLoader, not by a direct reference.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.edgo.phonalyser</groupId>
+        <artifactId>phonalyser-parent</artifactId>
+        <version>1.1.1</version>
+        <relativePath>../phonalyser-parent</relativePath>
+    </parent>
+
+    <artifactId>backend-qa40x-gui</artifactId>
+    <name>Phonalyser :: backend :: QA40x (UI)</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>backend-qa40x</artifactId>
+        </dependency>
+        <!-- The SHARED GUI infrastructure only — never phonalyser-gui itself.
+             A backend's UI must not sit on top of the whole application: that
+             would make the app a prerequisite of one of its own plug-ins, and
+             would stop phonalyser-gui ever depending on this module. -->
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>phonalyser-gui-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.platform</groupId>
+            <artifactId>${swt.artifactId}</artifactId>
+        </dependency>
+    </dependencies>
+</project>

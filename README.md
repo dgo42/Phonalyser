@@ -169,15 +169,12 @@ resulting induced-noise budget — is described in
 
 Requires JDK 17 and Maven.
 
-**On a fresh clone, install the vendored FLAC library first** — it is not on
-Maven Central, so without this the very first build fails while resolving
-`io.nayuki:flac-library`:
+`mvn -DskipTests package` from the repository root builds everything. Project
+Nayuki's FLAC library is not on Maven Central, but it is vendored as the
+`modules/flac-library-java` module and built by the reactor, so a fresh clone
+needs no preparatory step.
 
-```bash
-mvn -B -ntp -f deps/flac-library-java/pom.xml install
-```
-
-Then `mvn -DskipTests package`. See [BUILD.md](BUILD.md) for the full build and
+See [BUILD.md](BUILD.md) for the full build and
 run instructions — including cross-building other platforms and the 32-bit
 Windows JAR — and [PACKAGING.md](PACKAGING.md) for per-platform packaging
 (jpackage).
